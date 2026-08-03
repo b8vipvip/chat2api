@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>chat2api</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <h1>chat2api</h1>
+    <div id="status" class="status">读取状态中…</div>
+    <label>服务地址<input id="serverUrl" placeholder="https://api.example.com"></label>
+    <label>配对码<input id="pairingCode" type="password" placeholder="CHAT2API_PAIRING_CODE"></label>
+    <label>扩展名称<input id="extensionName" placeholder="My Chrome"></label>
+    <button id="pair">配对并连接</button>
+    <button id="connect" class="secondary">重新连接</button>
+    <hr>
+    <div id="binding">尚未绑定 ChatGPT 标签页</div>
+    <button id="bind" class="secondary">绑定当前 ChatGPT 标签页</button>
+    <button id="unbind" class="secondary">取消绑定</button>
+    <pre id="message"></pre>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

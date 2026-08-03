@@ -1,0 +1,9 @@
+services:
+  chat2api:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${CHAT2API_PORT:-8765}:${CHAT2API_PORT:-8765}"
+    volumes:
+      - ./data:/app/data
