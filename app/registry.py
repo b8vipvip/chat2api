@@ -174,12 +174,12 @@ class ClientRegistry:
         return result
 
     def supports_model(self, client_id: str, model_id: str) -> bool:
-        if model_id == "chatgpt-web":
-            return True
-        models = self.client_models(client_id)
-        if not models:
-            return True
-        return any(item.get("id") == model_id for item in models)
+        # The model catalog is discovered from a changing web UI and can be
+        # empty or stale. Treat it as advisory: every non-empty model ID is
+        # forwarded to the extension, which verifies availability and selects
+        # the model at request time.
+        _ = client_id
+        return bool(str(model_id or "").strip())
 
     def model_catalog(self, online_only: bool = True) -> list[dict[str, Any]]:
         catalog: dict[str, dict[str, Any]] = {
