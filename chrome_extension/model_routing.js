@@ -14,14 +14,31 @@
     await sendExtensionStatus(false);
   }
 
+  async function sendModelPrepare(tabId, model) {
+    try {
+      const response = await chrome.tabs.sendMessage(tabId, {
+        type: "chat2api.model.prepare.v2",
+        model,
+      });
+      if (response) return response;
+    } catch (_) {}
+
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content_model.js"],
+    });
+    await sleep(150);
+    return chrome.tabs.sendMessage(tabId, {
+      type: "chat2api.model.prepare.v2",
+      model,
+    });
+  }
+
   async function prepareRequestedModel(tab, requestedModel) {
     const model = String(requestedModel || "chatgpt-web").trim() || "chatgpt-web";
     if (model === "chatgpt-web") return { model, prepared: false };
 
-    const response = await chrome.tabs.sendMessage(tab.id, {
-      type: "chat2api.model.prepare.v2",
-      model,
-    });
+    const response = await sendModelPrepare(tab.id, model);
     if (!response?.ok) {
       throw new Error(response?.error || `Unable to select requested ChatGPT model: ${model}`);
     }
