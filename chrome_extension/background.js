@@ -1,5 +1,6 @@
 const DEFAULTS = {
-  serverUrl: "http://127.0.0.1:8765",
+  serverUrl: "https://chat2api.mv3.cn",
+  pairingCode: "",
   clientId: "",
   clientToken: "",
   extensionName: "Chrome",
@@ -180,12 +181,14 @@ function scheduleReconnect() {
 }
 
 async function pair({ serverUrl, pairingCode, extensionName }) {
-  const cleanServer = String(serverUrl || DEFAULTS.serverUrl).replace(/\/$/, "");
+  const cleanServer = String(serverUrl || DEFAULTS.serverUrl).trim().replace(/\/$/, "");
+  const savedPairingCode = String(pairingCode || "");
+  const savedExtensionName = String(extensionName || "Chrome").trim() || "Chrome";
   const response = await fetch(`${cleanServer}/api/extensions/register`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-Pairing-Code": pairingCode || "" },
+    headers: { "Content-Type": "application/json", "X-Pairing-Code": savedPairingCode },
     body: JSON.stringify({
-      name: extensionName || "Chrome",
+      name: savedExtensionName,
       browser_name: "Chrome",
       version: chrome.runtime.getManifest().version,
       metadata: { runtime_id: chrome.runtime.id },
@@ -199,7 +202,8 @@ async function pair({ serverUrl, pairingCode, extensionName }) {
   const result = await response.json();
   await chrome.storage.local.set({
     serverUrl: cleanServer,
-    extensionName: extensionName || "Chrome",
+    pairingCode: savedPairingCode,
+    extensionName: savedExtensionName,
     clientId: result.client_id,
     clientToken: result.token,
     pairedAt: new Date().toISOString(),
