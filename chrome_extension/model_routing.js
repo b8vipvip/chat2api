@@ -24,8 +24,6 @@
     });
   }
 
-  // Automatic connection/binding status updates must not open the model menu.
-  // Manual refresh and request routing explicitly invoke the model controller.
   sendExtensionStatus = async function sendCachedStatusOnly() {
     return sendCachedExtensionStatus();
   };
@@ -64,6 +62,7 @@
       modelsUpdatedAt: Date.now(),
       lastRequestedModel: requestedModel || "chatgpt-web",
       lastModelSelectionError: "",
+      modelRouterVersion: data?.router_version || "0.3.2",
     });
     await sendCachedExtensionStatus();
   }
@@ -71,7 +70,7 @@
   async function sendModelPrepare(tabId, model) {
     try {
       const response = await chrome.tabs.sendMessage(tabId, {
-        type: "chat2api.model.prepare.v2",
+        type: "chat2api.model.prepare.v3",
         model,
       });
       if (response) return response;
@@ -79,11 +78,11 @@
 
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ["content_model.js"],
+      files: ["content_model_v3.js"],
     });
-    await sleep(150);
+    await sleep(180);
     return chrome.tabs.sendMessage(tabId, {
-      type: "chat2api.model.prepare.v2",
+      type: "chat2api.model.prepare.v3",
       model,
     });
   }
