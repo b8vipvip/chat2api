@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.1.2";
+  const VERSION = "0.2.0";
   const STATE_KEY = "__CHAT2API_CONTENT__";
   const previous = globalThis[STATE_KEY];
   if (previous?.version === VERSION && !previous?.stopped) return;
@@ -20,6 +20,24 @@
     const rect = element.getBoundingClientRect();
     const style = getComputedStyle(element);
     return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+  }
+
+  function normalizedLabel(value) {
+    return String(value || "")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/[✓✔︎✔√]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function elementLabel(element) {
+    return normalizedLabel(
+      element?.getAttribute?.("aria-label") ||
+      element?.getAttribute?.("data-value") ||
+      element?.innerText ||
+      element?.textContent ||
+      "",
+    );
   }
 
   function findComposer() {
@@ -140,6 +158,258 @@
       ],
       /send prompt|发送提示|发送消息/i,
     );
+  }
+
+  const REASONING_ALIASES = {
+    auto: ["智能", "自动", "auto", "automatic"],
+    instant: ["极速", "即时", "instant", "fast"],
+    medium: ["中", "medium"],
+    high: ["高", "high"],
+    xhigh: ["极高", "extra high", "xhigh"],
+    pro: ["pro"],
+  };
+
+  const FAMILY_ALIASES = {
+    "gpt-5.6-sol": ["gpt-5.6 sol", "gpt 5.6 sol", "5.6 sol"],
+    "gpt-5.5": ["gpt-5.5", "gpt 5.5", "5.5"],
+    "gpt-5.3": ["gpt-5.3", "gpt 5.3", "5.3"],
+    o3: ["o3"],
+  };
+
+  function canonicalReasoning(label) {
+    const normalized = normalizedLabel(label).toLowerCase();
+    for (const [id, aliases] of Object.entries(REASONING_ALIASES)) {
+      if (aliases.some(alias => normalized === alias || normalized.startsWith(`${alias} `))) return id;
+    }
+    return "";
+  }
+
+  function canonicalFamily(label) {
+    const normalized = normalizedLabel(label).toLowerCase();
+    for (const [id, aliases] of Object.entries(FAMILY_ALIASES)) {
+      if (aliases.some(alias => normalized === alias || normalized.includes(alias))) return id;
+    }
+    const generic = normalized.match(/\b(gpt[- ]?\d+(?:\.\d+)?(?:\s+sol)?|o\d+)\b/i)?.[1] || "";
+    return generic
+      .toLowerCase()
+      .replace(/\s+/g, "-")
+      .replace(/^gpt(?=\d)/, "gpt-");
+  }
+
+  function isModelishLabel(label) {
+    return Boolean(canonicalFamily(label) || canonicalReasoning(label));
+  }
+
+  function modelPickerButton() {
+    const selectors = [
+      "button[data-testid*='model']",
+      "button[aria-label*='model' i]",
+      "button[aria-label*='模型']",
+      "button[aria-haspopup='menu']",
+      "button[aria-haspopup='listbox']",
+    ];
+    const candidates = [];
+    const seen = new Set();
+    for (const selector of selectors) {
+      for (const element of document.querySelectorAll(selector)) {
+        if (seen.has(element) || !visible(element) || element.disabled) continue;
+        seen.add(element);
+        const label = elementLabel(element);
+        const rect = element.getBoundingClientRect();
+        const score =
+          (isModelishLabel(label) ? 100 : 0) +
+          (/model|模型/i.test(element.getAttribute("aria-label") || "") ? 80 : 0) +
+          (rect.bottom > window.innerHeight * 0.55 ? 20 : 0);
+        candidates.push({ element, score });
+      }
+    }
+    candidates.sort((left, right) => right.score - left.score);
+    return candidates[0]?.score > 0 ? candidates[0].element : null;
+  }
+
+  function menuItems() {
+    const selectors = [
+      "[role='menuitem']",
+      "[role='menuitemradio']",
+      "[role='option']",
+      "[data-radix-collection-item]",
+      "[data-headlessui-state]",
+    ];
+    const result = [];
+    const seen = new Set();
+    for (const selector of selectors) {
+      for (const element of document.querySelectorAll(selector)) {
+        if (seen.has(element) || !visible(element)) continue;
+        const label = elementLabel(element);
+        if (!label || !isModelishLabel(label)) continue;
+        seen.add(element);
+        result.push(element);
+      }
+    }
+    for (const element of document.querySelectorAll("button")) {
+      if (seen.has(element) || !visible(element) || element.disabled) continue;
+      const label = elementLabel(element);
+      if (!label || !isModelishLabel(label)) continue;
+      const overlay = element.closest("[role='menu'], [role='listbox'], [data-radix-menu-content], [data-headlessui-state='open']");
+      if (!overlay) continue;
+      seen.add(element);
+      result.push(element);
+    }
+    return result;
+  }
+
+  async function openModelMenu() {
+    const picker = modelPickerButton();
+    if (!picker) throw new Error("ChatGPT model picker was not found");
+    picker.click();
+    const items = await waitFor(() => {
+      const found = menuItems();
+      return found.length ? found : null;
+    }, 4000, 100);
+    if (!items) throw new Error("ChatGPT model menu did not open");
+    return { picker, items };
+  }
+
+  function selectedMenuItem(items) {
+    return items.find(item =>
+      item.getAttribute("aria-checked") === "true" ||
+      item.getAttribute("aria-selected") === "true" ||
+      /selected|checked/i.test(item.getAttribute("data-state") || ""),
+    ) || null;
+  }
+
+  function escapeMenus() {
+    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
+  }
+
+  function modelEntry(family, reasoning, label, selected = false) {
+    const id = reasoning ? `${family}-${reasoning}` : family;
+    return {
+      id,
+      label,
+      family,
+      reasoning: reasoning || null,
+      selected,
+      capabilities: ["text"],
+    };
+  }
+
+  async function discoverModels() {
+    const picker = modelPickerButton();
+    const pickerLabel = elementLabel(picker);
+    let familyFromPicker = canonicalFamily(pickerLabel);
+    let reasoningFromPicker = canonicalReasoning(pickerLabel);
+    const result = new Map();
+    result.set("chatgpt-web", {
+      id: "chatgpt-web",
+      label: "ChatGPT current/default model",
+      family: null,
+      reasoning: null,
+      selected: true,
+      capabilities: ["text"],
+    });
+
+    try {
+      const opened = await openModelMenu();
+      const items = opened.items;
+      const selected = selectedMenuItem(items);
+      const selectedLabel = elementLabel(selected);
+      familyFromPicker ||= canonicalFamily(selectedLabel);
+      reasoningFromPicker ||= canonicalReasoning(selectedLabel);
+
+      const families = new Map();
+      const reasonings = new Map();
+      for (const item of items) {
+        const label = elementLabel(item);
+        const family = canonicalFamily(label);
+        const reasoning = canonicalReasoning(label);
+        if (family) families.set(family, label);
+        if (reasoning) reasonings.set(reasoning, label);
+      }
+
+      for (const [family, label] of families) {
+        result.set(family, modelEntry(family, "", label, family === familyFromPicker && !reasoningFromPicker));
+      }
+      if (familyFromPicker) {
+        for (const [reasoning, label] of reasonings) {
+          const id = `${familyFromPicker}-${reasoning}`;
+          result.set(id, modelEntry(
+            familyFromPicker,
+            reasoning,
+            `${FAMILY_ALIASES[familyFromPicker]?.[0] || familyFromPicker} / ${label}`,
+            reasoning === reasoningFromPicker,
+          ));
+        }
+      }
+      escapeMenus();
+    } catch (error) {
+      console.debug("chat2api model discovery unavailable", error);
+    }
+
+    return {
+      models: [...result.values()],
+      current_model: familyFromPicker
+        ? `${familyFromPicker}${reasoningFromPicker ? `-${reasoningFromPicker}` : ""}`
+        : "chatgpt-web",
+      picker_label: pickerLabel,
+    };
+  }
+
+  function requestedModelParts(modelId) {
+    const id = String(modelId || "").trim().toLowerCase();
+    if (!id || id === "chatgpt-web") return { family: "", reasoning: "" };
+    for (const family of Object.keys(FAMILY_ALIASES).sort((a, b) => b.length - a.length)) {
+      if (id === family) return { family, reasoning: "" };
+      if (id.startsWith(`${family}-`)) return { family, reasoning: id.slice(family.length + 1) };
+    }
+    return { family: id, reasoning: "" };
+  }
+
+  async function clickMenuChoice(predicate, timeout = 3500) {
+    const item = await waitFor(() => menuItems().find(candidate => predicate(elementLabel(candidate), candidate)) || null, timeout, 100);
+    if (!item) return null;
+    item.click();
+    await delay(350);
+    return item;
+  }
+
+  async function selectModel(modelId) {
+    const { family, reasoning } = requestedModelParts(modelId);
+    if (!family && !reasoning) return { selected: false, model: "chatgpt-web" };
+
+    const familyAliases = FAMILY_ALIASES[family] || [family];
+    await openModelMenu();
+    const familyItem = await clickMenuChoice(label => {
+      const normalized = normalizedLabel(label).toLowerCase();
+      return familyAliases.some(alias => normalized === alias || normalized.includes(alias));
+    });
+    if (!familyItem) {
+      escapeMenus();
+      throw new Error(`Requested model family is not available in ChatGPT: ${family}`);
+    }
+
+    const submenuClicked = await clickMenuChoice((label, item) => {
+      const normalized = normalizedLabel(label).toLowerCase();
+      return item !== familyItem && familyAliases.some(alias => normalized === alias || normalized.includes(alias)) && visible(item);
+    }, 800);
+    if (submenuClicked) await delay(250);
+    escapeMenus();
+
+    if (reasoning) {
+      await openModelMenu();
+      const aliases = REASONING_ALIASES[reasoning] || [reasoning];
+      const reasoningClicked = await clickMenuChoice(label => {
+        const normalized = normalizedLabel(label).toLowerCase();
+        return aliases.some(alias => normalized === alias || normalized.startsWith(`${alias} `));
+      });
+      escapeMenus();
+      if (!reasoningClicked) {
+        throw new Error(`Requested reasoning level is not available in ChatGPT: ${reasoning}`);
+      }
+    }
+
+    await delay(500);
+    return { selected: true, model: modelId, ...(await discoverModels()) };
   }
 
   function assistantNodes() {
@@ -329,6 +599,12 @@
     const prompt = String(message.prompt || "").trim();
     if (!prompt) throw new Error("Prompt is empty");
     if (isGenerating()) throw new Error("ChatGPT is already generating a response");
+
+    const requestedModel = String(message.options?.model || "chatgpt-web");
+    if (requestedModel && requestedModel !== "chatgpt-web") {
+      await selectModel(requestedModel);
+    }
+
     const before = assistantNodes();
     const active = {
       requestId: message.requestId,
@@ -365,6 +641,18 @@
     if (message.type === "chat2api.ping") {
       sendResponse({ ok: true, version: VERSION });
       return false;
+    }
+    if (message.type === "chat2api.models.discover") {
+      discoverModels()
+        .then(data => sendResponse({ ok: true, data }))
+        .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
+      return true;
+    }
+    if (message.type === "chat2api.model.select") {
+      selectModel(message.model)
+        .then(data => sendResponse({ ok: true, data }))
+        .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
+      return true;
     }
     if (message.type === "chat2api.request") {
       runRequest(message).catch(error => emit({

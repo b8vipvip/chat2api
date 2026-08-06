@@ -14,13 +14,24 @@ async function persistForm() {
   });
 }
 
+function renderModels(settings) {
+  const models = Array.isArray(settings.models) ? settings.models : [];
+  const current = settings.currentModel || "chatgpt-web";
+  if (!models.length) {
+    $("models").textContent = "尚未读取模型；绑定标签页后点击“刷新可用模型”。";
+    return;
+  }
+  const labels = models
+    .filter(item => item?.id && item.id !== "chatgpt-web")
+    .map(item => `${item.id === current || item.selected ? "✓ " : ""}${item.id}`);
+  $("models").textContent = labels.length ? `可用模型：${labels.join("、")}` : "当前仅报告默认模型 chatgpt-web";
+}
+
 async function refresh() {
   const response = await send({ type: "popup.status" });
   if (!response?.ok) return;
   const { settings, tabs } = response;
 
-  // Only initialize editable fields once. Periodic status refreshes must not
-  // overwrite text while the user is typing or pasting configuration values.
   if (!formInitialized) {
     $("serverUrl").value = settings.serverUrl || DEFAULT_SERVER_URL;
     $("pairingCode").value = settings.pairingCode || "";
@@ -33,6 +44,7 @@ async function refresh() {
   status.className = `status ${settings.socketState === "connected" ? "connected" : settings.socketState === "error" ? "error" : ""}`;
   const bound = tabs.find(tab => tab.id === settings.boundTabId);
   $("binding").textContent = bound ? `已绑定：${bound.title || bound.url}` : `未绑定；当前检测到 ${tabs.length} 个 ChatGPT 标签页`;
+  renderModels(settings);
   if (settings.socketError) $("message").textContent = settings.socketError;
 }
 
@@ -54,7 +66,9 @@ $("pair").addEventListener("click", async () => {
     extensionName: $("extensionName").value.trim(),
   });
   if (!response?.ok) $("message").textContent = response?.error || "配对失败";
-  else $("message").textContent = "配对成功，配置已保存在本机扩展存储中。";
+  else $("message").textContent = response.data?.reused
+    ? "已复用现有客户端身份并重新连接。"
+    : "配对成功，配置已保存在本机扩展存储中。";
   await refresh();
 });
 
@@ -68,6 +82,15 @@ $("connect").addEventListener("click", async () => {
 $("bind").addEventListener("click", async () => {
   const response = await send({ type: "popup.bind" });
   if (!response?.ok) $("message").textContent = response?.error || "绑定失败";
+  else $("message").textContent = "绑定成功，正在读取此账号可用模型。";
+  await refresh();
+});
+
+$("discoverModels").addEventListener("click", async () => {
+  $("message").textContent = "正在打开模型菜单并读取可用选项…";
+  const response = await send({ type: "popup.discoverModels" });
+  if (!response?.ok) $("message").textContent = response?.error || "模型读取失败";
+  else $("message").textContent = `模型读取完成，共 ${response.data?.models?.length || 0} 项。`;
   await refresh();
 });
 
