@@ -17,8 +17,10 @@ class Settings(BaseSettings):
     port: int = Field(default=8765, alias="CHAT2API_PORT")
     api_key: str = Field(default="change-me", alias="CHAT2API_API_KEY")
     pairing_code: str = Field(default="change-me-pairing", alias="CHAT2API_PAIRING_CODE")
+    public_url: str = Field(default="", alias="CHAT2API_PUBLIC_URL")
     data_dir: Path = Field(default=Path("data"), alias="CHAT2API_DATA_DIR")
     request_timeout_seconds: int = Field(default=300, alias="CHAT2API_REQUEST_TIMEOUT_SECONDS")
+    desktop_wake_timeout_seconds: int = Field(default=45, alias="CHAT2API_DESKTOP_WAKE_TIMEOUT_SECONDS")
     allowed_origins: str = Field(default="*", alias="CHAT2API_ALLOWED_ORIGINS")
 
     @property
@@ -27,6 +29,10 @@ class Settings(BaseSettings):
         if not value or value == "*":
             return ["*"]
         return [item.strip() for item in value.split(",") if item.strip()]
+
+    def resolved_public_url(self, request_base_url: str) -> str:
+        configured = self.public_url.strip().rstrip("/")
+        return configured or request_base_url.rstrip("/")
 
 
 @lru_cache(maxsize=1)
