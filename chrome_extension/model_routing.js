@@ -1,6 +1,60 @@
 (() => {
   const baseHandleServerMessage = handleServerMessage;
 
+  async function sendCachedExtensionStatus() {
+    const settings = await config();
+    const tabs = await chatTabs();
+    let bound = null;
+    if (Number.isInteger(settings.boundTabId)) {
+      bound = tabs.find(tab => tab.id === settings.boundTabId) || null;
+    }
+    return trySendSocket({
+      type: "extension.status",
+      metadata: {
+        extension_version: chrome.runtime.getManifest().version,
+        tab_count: tabs.length,
+        bound_tab_id: bound?.id || null,
+        bound_url: bound?.url || "",
+        bound_title: bound?.title || "",
+        models: Array.isArray(settings.models) ? settings.models : [],
+        current_model: settings.currentModel || "chatgpt-web",
+        capabilities: ["text", "model-selection"],
+      },
+    });
+  }
+
+  // Automatic connection/binding status updates must not open the model menu.
+  // Manual refresh already performs discovery first, and request routing below
+  // performs model verification/selection before the prompt is submitted.
+  sendExtensionStatus = async function sendCachedStatusOnly() {
+    return sendCachedExtensionStatus();
+  };
+
+  function hasLaunchMarker(value = "") {
+    try {
+      return Boolean(new URL(value).searchParams.get("chat2api_launch"));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function waitForMarkedTabBinding(timeoutMs = 10000) {
+    const tabs = await chatTabs();
+    if (!tabs.some(tab => hasLaunchMarker(tab.pendingUrl || tab.url || ""))) return null;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const settings = await config();
+      if (Number.isInteger(settings.boundTabId)) {
+        try {
+          const tab = await chrome.tabs.get(settings.boundTabId);
+          if (isChatGptUrl(tab.url || tab.pendingUrl || "")) return tab;
+        } catch (_) {}
+      }
+      await sleep(200);
+    }
+    return null;
+  }
+
   async function persistSelectedModel(data, requestedModel) {
     const models = Array.isArray(data?.models) ? data.models : [];
     const currentModel = data?.current_model || requestedModel || "chatgpt-web";
@@ -11,7 +65,7 @@
       lastRequestedModel: requestedModel || "chatgpt-web",
       lastModelSelectionError: "",
     });
-    await sendExtensionStatus(false);
+    await sendCachedExtensionStatus();
   }
 
   async function sendModelPrepare(tabId, model) {
@@ -53,7 +107,8 @@
 
     const requestedModel = String(message.options?.model || "chatgpt-web").trim() || "chatgpt-web";
     try {
-      const tab = await resolveTargetTab();
+      const markedTab = await waitForMarkedTabBinding();
+      const tab = markedTab || await resolveTargetTab();
       await ensureContent(tab.id);
       const prepared = await prepareRequestedModel(tab, requestedModel);
       const response = await chrome.tabs.sendMessage(tab.id, {
