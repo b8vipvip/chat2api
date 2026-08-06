@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "chat2api Chrome Bridge",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Turns a logged-in ChatGPT browser tab into a remotely callable, streaming API bridge.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "tabs", "scripting", "alarms"],
