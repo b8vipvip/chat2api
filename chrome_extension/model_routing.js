@@ -19,7 +19,7 @@
     if (model === "chatgpt-web") return { model, prepared: false };
 
     const response = await chrome.tabs.sendMessage(tab.id, {
-      type: "chat2api.model.select",
+      type: "chat2api.model.prepare.v2",
       model,
     });
     if (!response?.ok) {
