@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import platform
+import secrets
 import subprocess
 import sys
 import threading
@@ -16,7 +17,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 DEFAULT_PORT = 8791
 
 
@@ -69,8 +70,6 @@ class ClientConfig:
     api_key: str = ""
     agent_name: str = platform.node() or "Desktop"
     chrome_path: str = ""
-    extension_dir: str = ""
-    profile_dir: str = ""
     local_bridge_port: int = DEFAULT_PORT
 
     @classmethod
@@ -78,6 +77,9 @@ class ClientConfig:
         if not path.exists():
             return cls()
         payload = json.loads(path.read_text(encoding="utf-8"))
+        # Old v0.2 files may contain extension_dir/profile_dir. They are
+        # deliberately ignored because v0.3 only drives the user's existing
+        # Chrome profile and an already-installed extension.
         return cls(**{key: value for key, value in payload.items() if key in cls.__dataclass_fields__})
 
     def save(self, path: Path) -> None:
@@ -87,16 +89,6 @@ class ClientConfig:
             os.chmod(path, 0o600)
         except OSError:
             pass
-
-    def resolved_extension_dir(self) -> Path:
-        if self.extension_dir:
-            return Path(self.extension_dir).expanduser().resolve()
-        return (Path(__file__).resolve().parents[1] / "chrome_extension").resolve()
-
-    def resolved_profile_dir(self) -> Path:
-        if self.profile_dir:
-            return Path(self.profile_dir).expanduser().resolve()
-        return (default_data_dir() / "chrome-profile").resolve()
 
 
 class ApiClient:
@@ -134,7 +126,7 @@ class ApiClient:
                 "name": self.config.agent_name,
                 "platform": platform.platform(),
                 "version": VERSION,
-                "metadata": {"python": platform.python_version()},
+                "metadata": {"python": platform.python_version(), "chrome_mode": "existing-profile"},
             },
         )
         return str(result["agent_id"])
@@ -167,7 +159,7 @@ class BootstrapState:
 
 
 class BootstrapHandler(BaseHTTPRequestHandler):
-    server_version = "chat2api-local-bridge/0.2"
+    server_version = "chat2api-local-bridge/0.3"
 
     def do_OPTIONS(self) -> None:
         self.send_response(204)
@@ -219,7 +211,11 @@ class DesktopClient:
         self.bootstrap_state = BootstrapState()
         self.chrome_process: subprocess.Popen[bytes] | None = None
         self.bridge = LocalBridgeServer(config.local_bridge_port, self.bootstrap_state)
-        self.bridge_thread = threading.Thread(target=self.bridge.serve_forever, name="chat2api-local-bridge", daemon=True)
+        self.bridge_thread = threading.Thread(
+            target=self.bridge.serve_forever,
+            name="chat2api-local-bridge",
+            daemon=True,
+        )
 
     def start_bridge(self) -> None:
         self.bridge_thread.start()
@@ -227,33 +223,31 @@ class DesktopClient:
 
     def prepare_bootstrap(self) -> dict[str, Any]:
         payload = self.api.bootstrap()
-        payload["auto_bind"] = True
+        launch_token = secrets.token_urlsafe(18)
+        payload.update(
+            {
+                "auto_bind": False,
+                "chrome_mode": "existing-profile",
+                "launch_token": launch_token,
+                "launch_url": (
+                    "https://chatgpt.com/?chat2api_launch="
+                    + urllib.parse.quote(launch_token, safe="")
+                ),
+            }
+        )
         self.bootstrap_state.activate(payload)
         return payload
 
     def launch_chrome(self) -> None:
         payload = self.prepare_bootstrap()
         chrome = find_chrome(self.config.chrome_path)
-        extension_dir = self.config.resolved_extension_dir()
-        profile_dir = self.config.resolved_profile_dir()
-        if not (extension_dir / "manifest.json").exists():
-            raise FileNotFoundError(f"Chrome extension directory is invalid: {extension_dir}")
-        profile_dir.mkdir(parents=True, exist_ok=True)
-        command = [
-            str(chrome),
-            f"--user-data-dir={profile_dir}",
-            f"--disable-extensions-except={extension_dir}",
-            f"--load-extension={extension_dir}",
-            "--no-first-run",
-            "--no-default-browser-check",
-            "--new-window",
-            "https://chatgpt.com/",
-        ]
-        print(f"Launching Chrome profile: {profile_dir}")
-        print(f"Extension: {extension_dir}")
+        launch_url = str(payload["launch_url"])
+        command = [str(chrome), "--new-window", launch_url]
+        print("Opening the existing Chrome profile and a new ChatGPT automation window.")
         self.chrome_process = subprocess.Popen(command)
         print(f"Bootstrap is active for {payload.get('expires_in_seconds', 120)} seconds.")
-        print("Log in to ChatGPT once in this dedicated profile. Later API requests can wake it automatically.")
+        print("The chat2api extension must already be installed in this Chrome profile.")
+        print("ChatGPT sign-in is managed manually by the user; chat2api never stores the ChatGPT password.")
 
     def run(self, launch_now: bool = False) -> None:
         self.start_bridge()
@@ -291,12 +285,9 @@ def configure(args: argparse.Namespace) -> int:
         config.agent_name = args.agent_name
     if args.chrome_path:
         config.chrome_path = args.chrome_path
-    if args.extension_dir:
-        config.extension_dir = args.extension_dir
-    if args.profile_dir:
-        config.profile_dir = args.profile_dir
     config.save(path)
     print(f"Saved desktop client configuration: {path}")
+    print("Existing Chrome mode is enabled. Install the chat2api extension in Chrome once and sign in to ChatGPT manually.")
     print("The API key is stored locally; protect this file like a password.")
     return 0
 
@@ -310,21 +301,23 @@ def run_client(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="chat2api local desktop launcher")
+    parser = argparse.ArgumentParser(description="chat2api existing-Chrome desktop launcher")
     parser.add_argument("--config", help="Path to client.json")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    configure_parser = subparsers.add_parser("configure", help="Save server and Chrome settings")
+    configure_parser = subparsers.add_parser("configure", help="Save server and existing Chrome settings")
     configure_parser.add_argument("--server-url")
     configure_parser.add_argument("--api-key")
     configure_parser.add_argument("--agent-name")
     configure_parser.add_argument("--chrome-path")
-    configure_parser.add_argument("--extension-dir")
-    configure_parser.add_argument("--profile-dir")
     configure_parser.set_defaults(func=configure)
 
     run_parser = subparsers.add_parser("run", help="Wait for server wake requests")
-    run_parser.add_argument("--launch-now", action="store_true", help="Open the dedicated Chrome profile immediately")
+    run_parser.add_argument(
+        "--launch-now",
+        action="store_true",
+        help="Open a new ChatGPT window in the existing Chrome profile immediately",
+    )
     run_parser.set_defaults(func=run_client)
     return parser
 
