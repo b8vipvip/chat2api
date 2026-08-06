@@ -20,6 +20,14 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _model_id(item: Any) -> str:
+    if isinstance(item, str):
+        return item.strip()
+    if isinstance(item, dict):
+        return str(item.get("id") or "").strip()
+    return ""
+
+
 @dataclass
 class PersistedClient:
     client_id: str
@@ -52,7 +60,6 @@ class ClientRegistry:
                 item = PersistedClient(**raw)
                 self.clients[item.client_id] = item
         except (OSError, ValueError, TypeError):
-            # A broken registry must not prevent the server from starting.
             self.clients = {}
 
     async def save(self) -> None:
@@ -73,7 +80,7 @@ class ClientRegistry:
                 version=version,
                 token_hash=token_hash(token),
                 created_at=utc_now(),
-                metadata=metadata,
+                metadata=dict(metadata),
             )
             await self.save()
             return client_id, token
@@ -106,8 +113,14 @@ class ClientRegistry:
         if not client:
             return
         client.last_seen_at = utc_now()
+        changed = False
         if metadata:
-            client.metadata.update(metadata)
+            for key, value in metadata.items():
+                if client.metadata.get(key) != value:
+                    client.metadata[key] = value
+                    changed = True
+        if changed:
+            await self.save()
 
     async def send(self, client_id: str, payload: dict[str, Any]) -> None:
         websocket = self.sockets.get(client_id)
@@ -133,6 +146,76 @@ class ClientRegistry:
         if len(online) > 1:
             raise LookupError("Multiple extensions are online; provide client_id or X-Chat2API-Client")
         return online[0]
+
+    def client_models(self, client_id: str) -> list[dict[str, Any]]:
+        client = self.clients.get(client_id)
+        if not client:
+            return []
+        models = client.metadata.get("models")
+        if not isinstance(models, list):
+            return []
+        result: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw in models:
+            if isinstance(raw, str):
+                item = {"id": raw, "label": raw, "capabilities": ["text"]}
+            elif isinstance(raw, dict):
+                item = dict(raw)
+            else:
+                continue
+            model_id = _model_id(item)
+            if not model_id or model_id in seen:
+                continue
+            seen.add(model_id)
+            item["id"] = model_id
+            item.setdefault("label", model_id)
+            item.setdefault("capabilities", ["text"])
+            result.append(item)
+        return result
+
+    def supports_model(self, client_id: str, model_id: str) -> bool:
+        if model_id == "chatgpt-web":
+            return True
+        models = self.client_models(client_id)
+        if not models:
+            return True
+        return any(item.get("id") == model_id for item in models)
+
+    def model_catalog(self, online_only: bool = True) -> list[dict[str, Any]]:
+        catalog: dict[str, dict[str, Any]] = {
+            "chatgpt-web": {
+                "id": "chatgpt-web",
+                "object": "model",
+                "created": 0,
+                "owned_by": "chat2api",
+                "label": "ChatGPT current/default model",
+                "capabilities": ["text"],
+                "clients": [],
+            }
+        }
+        client_ids = self.online_client_ids() if online_only else list(self.clients)
+        for client_id in client_ids:
+            for model in self.client_models(client_id):
+                model_id = str(model["id"])
+                entry = catalog.setdefault(
+                    model_id,
+                    {
+                        "id": model_id,
+                        "object": "model",
+                        "created": 0,
+                        "owned_by": "chat2api",
+                        "label": model.get("label") or model_id,
+                        "capabilities": model.get("capabilities") or ["text"],
+                        "family": model.get("family"),
+                        "reasoning": model.get("reasoning"),
+                        "clients": [],
+                    },
+                )
+                if client_id not in entry["clients"]:
+                    entry["clients"].append(client_id)
+                if model.get("selected"):
+                    entry["selected_on"] = client_id
+        return sorted(catalog.values(), key=lambda item: (item["id"] != "chatgpt-web", item["id"]))
 
     def summaries(self) -> list[dict[str, Any]]:
         return [
