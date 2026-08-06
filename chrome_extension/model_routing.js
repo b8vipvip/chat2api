@@ -1,5 +1,6 @@
 (() => {
   const baseHandleServerMessage = handleServerMessage;
+  const baseDiscoverModels = discoverModels;
 
   async function sendCachedExtensionStatus() {
     const settings = await config();
@@ -24,8 +25,7 @@
   }
 
   // Automatic connection/binding status updates must not open the model menu.
-  // Manual refresh already performs discovery first, and request routing below
-  // performs model verification/selection before the prompt is submitted.
+  // Manual refresh and request routing explicitly invoke the model controller.
   sendExtensionStatus = async function sendCachedStatusOnly() {
     return sendCachedExtensionStatus();
   };
@@ -87,6 +87,26 @@
       model,
     });
   }
+
+  discoverModels = async function discoverModelsWithNestedMenu(tab, force = false) {
+    const settings = await config();
+    if (!force && settings.modelsUpdatedAt && Date.now() - Number(settings.modelsUpdatedAt) < 300000) {
+      return {
+        models: Array.isArray(settings.models) ? settings.models : [],
+        current_model: settings.currentModel || "chatgpt-web",
+      };
+    }
+    try {
+      await ensureContent(tab.id);
+      const response = await sendModelPrepare(tab.id, settings.currentModel || "chatgpt-web");
+      if (!response?.ok) throw new Error(response?.error || "Model discovery failed");
+      await persistSelectedModel(response.data || {}, response.data?.current_model || settings.currentModel || "chatgpt-web");
+      return response.data || {};
+    } catch (error) {
+      await chrome.storage.local.set({ lastModelSelectionError: String(error?.message || error) });
+      return baseDiscoverModels(tab, force);
+    }
+  };
 
   async function prepareRequestedModel(tab, requestedModel) {
     const model = String(requestedModel || "chatgpt-web").trim() || "chatgpt-web";
