@@ -1,8 +1,9 @@
 (() => {
-  const VERSION = "0.1.0";
+  const VERSION = "0.1.2";
   const STATE_KEY = "__CHAT2API_CONTENT__";
-  if (globalThis[STATE_KEY]?.version === VERSION) return;
-  globalThis[STATE_KEY]?.stop?.();
+  const previous = globalThis[STATE_KEY];
+  if (previous?.version === VERSION && !previous?.stopped) return;
+  try { previous?.stop?.(); } catch (_) {}
 
   const state = {
     version: VERSION,
@@ -50,7 +51,15 @@
   }
 
   function stopButton() {
-    return findButton(["button[data-testid='stop-button']"], /stop generating|停止生成/i);
+    return findButton(
+      [
+        "button[data-testid='stop-button']",
+        "button[aria-label='Stop streaming']",
+        "button[aria-label='Stop generating']",
+        "button[aria-label*='停止生成']",
+      ],
+      /stop streaming|stop generating|停止生成|停止回答/i,
+    );
   }
 
   function isGenerating() {
@@ -151,9 +160,79 @@
     return result;
   }
 
+  function normalizeText(value) {
+    return String(value || "")
+      .replace(/[\u200B-\u200D\uFEFF]/g, "")
+      .replace(/\r\n?/g, "\n")
+      .replace(/[ \t]+\n/g, "\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+  }
+
+  function isTransientLine(value) {
+    const text = normalizeText(value)
+      .replace(/[.。…·:：]+$/g, "")
+      .trim()
+      .toLowerCase();
+    if (!text) return true;
+    return (
+      /^(正在)?(思考|分析|推理|生成|处理|搜索|浏览)(中)?$/.test(text) ||
+      /^(thinking|analyzing|reasoning|generating|working|searching|browsing)( now)?$/.test(text) ||
+      /^(working on it|just a moment|one moment|please wait)$/.test(text) ||
+      /^(thought|思考了?)\s*(for\s*)?\d+(\.\d+)?\s*(seconds?|秒)$/.test(text)
+    );
+  }
+
+  function cleanAssistantText(value) {
+    const normalized = normalizeText(value);
+    if (!normalized) return "";
+    const lines = normalized.split("\n").map(line => line.trim());
+    while (lines.length > 1 && isTransientLine(lines[0])) lines.shift();
+    while (lines.length > 1 && /^(copy|复制|good response|bad response|重新生成|regenerate)$/i.test(lines[lines.length - 1])) {
+      lines.pop();
+    }
+    return normalizeText(lines.join("\n"));
+  }
+
+  function isTransientText(value) {
+    const text = normalizeText(value);
+    if (!text) return true;
+    const lines = text.split("\n").map(line => line.trim()).filter(Boolean);
+    return Boolean(lines.length) && lines.every(isTransientLine);
+  }
+
   function nodeText(node) {
-    const preferred = node?.querySelector(".markdown, [class*='markdown'], [data-message-content]");
-    return (preferred?.innerText || node?.innerText || node?.textContent || "").trim().replace(/\n{3,}/g, "\n\n");
+    if (!node) return "";
+    const preferredSelectors = [
+      "[data-message-content]",
+      ".markdown",
+      "[class*='markdown']",
+    ];
+    for (const selector of preferredSelectors) {
+      const candidates = [...node.querySelectorAll(selector)].filter(visible);
+      for (let index = candidates.length - 1; index >= 0; index -= 1) {
+        const text = cleanAssistantText(candidates[index].innerText || candidates[index].textContent || "");
+        if (text && !isTransientText(text)) return text;
+      }
+    }
+
+    const clone = node.cloneNode(true);
+    clone.querySelectorAll([
+      "button",
+      "svg",
+      "nav",
+      "footer",
+      "[aria-hidden='true']",
+      "[data-testid*='copy']",
+      "[data-testid*='feedback']",
+      "[data-testid*='action']",
+    ].join(",")).forEach(element => element.remove());
+    const fallback = cleanAssistantText(clone.innerText || clone.textContent || "");
+    return isTransientText(fallback) ? "" : fallback;
+  }
+
+  function rawNodeText(node) {
+    return cleanAssistantText(node?.innerText || node?.textContent || "");
   }
 
   function nodeIdentity(node) {
@@ -169,42 +248,75 @@
     }
   }
 
+  async function updateCapturedText(active, text, lastText) {
+    if (!text || text === lastText) return lastText;
+    if (text.startsWith(lastText)) {
+      const delta = text.slice(lastText.length);
+      if (delta) await emit({ type: "chat.delta", request_id: active.requestId, delta });
+    } else {
+      await emit({ type: "chat.snapshot", request_id: active.requestId, text });
+    }
+    return text;
+  }
+
   async function monitor(active) {
     const timeoutMs = Math.max(5000, Number(active.options.timeout_seconds || 300) * 1000);
     const startedAt = Date.now();
+    const completionQuietMs = 1800;
+    const finalVerificationMs = 500;
     let responseStarted = false;
     let lastText = "";
+    let lastIdentity = "";
     let stableSince = 0;
+    let substantiveSince = 0;
+
     while (!active.cancelled && Date.now() - startedAt < timeoutMs) {
       const nodes = assistantNodes();
       const latest = nodes[nodes.length - 1];
-      const isNewNode = nodes.length > active.baselineCount || (latest && nodeIdentity(latest) && nodeIdentity(latest) !== active.baselineIdentity);
+      const identity = nodeIdentity(latest);
+      const isNewNode = nodes.length > active.baselineCount || (latest && identity && identity !== active.baselineIdentity);
+      const rawText = isNewNode ? rawNodeText(latest) : "";
+      const transient = Boolean(rawText && isTransientText(rawText));
       const text = isNewNode ? nodeText(latest) : "";
-      if ((isNewNode && text) || isGenerating()) {
+      const generating = isGenerating();
+
+      if (isNewNode || transient || generating) {
         if (!responseStarted) {
           responseStarted = true;
           await emit({ type: "chat.started", request_id: active.requestId });
         }
       }
-      if (text && text !== lastText) {
-        if (text.startsWith(lastText)) {
-          const delta = text.slice(lastText.length);
-          if (delta) await emit({ type: "chat.delta", request_id: active.requestId, delta });
-        } else {
-          await emit({ type: "chat.snapshot", request_id: active.requestId, text });
+
+      if (text) {
+        const previousText = lastText;
+        lastText = await updateCapturedText(active, text, lastText);
+        if (lastText !== previousText || identity !== lastIdentity) {
+          stableSince = Date.now();
+          if (!substantiveSince) substantiveSince = stableSince;
+          lastIdentity = identity;
         }
-        lastText = text;
-        stableSince = Date.now();
       }
-      if (responseStarted && lastText && !isGenerating()) {
-        if (!stableSince) stableSince = Date.now();
-        if (Date.now() - stableSince >= 900) {
-          await emit({ type: "chat.completed", request_id: active.requestId, text: lastText });
-          return;
+
+      if (responseStarted && lastText && !generating && !transient) {
+        const quietFor = stableSince ? Date.now() - stableSince : 0;
+        const substantiveFor = substantiveSince ? Date.now() - substantiveSince : 0;
+        if (quietFor >= completionQuietMs && substantiveFor >= completionQuietMs) {
+          await delay(finalVerificationMs);
+          const finalNodes = assistantNodes();
+          const finalNode = finalNodes[finalNodes.length - 1];
+          const finalRaw = rawNodeText(finalNode);
+          const finalText = nodeText(finalNode);
+          if (!isGenerating() && finalText && !isTransientText(finalRaw)) {
+            lastText = await updateCapturedText(active, finalText, lastText);
+            await emit({ type: "chat.completed", request_id: active.requestId, text: lastText });
+            return;
+          }
+          stableSince = Date.now();
         }
       }
       await delay(120);
     }
+
     if (active.cancelled) {
       await emit({ type: "chat.cancelled", request_id: active.requestId, reason: "Cancelled by API client" });
     } else {
@@ -269,10 +381,11 @@
     }
     return false;
   };
+
   state.listener = listener;
   state.stop = () => {
     state.stopped = true;
-    chrome.runtime.onMessage.removeListener(listener);
+    try { chrome.runtime.onMessage.removeListener(listener); } catch (_) {}
   };
   chrome.runtime.onMessage.addListener(listener);
 })();
