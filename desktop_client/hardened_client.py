@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import json
-import os
 import sys
 import time
 from typing import Any
 
 from . import client as base
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 
 
 class SecureBootstrapHandler(base.BootstrapHandler):
-    server_version = "chat2api-local-bridge/0.2.1"
+    server_version = "chat2api-local-bridge/0.3.0"
 
     def _allowed_origin(self) -> str:
         origin = self.headers.get("Origin", "").strip()
@@ -60,14 +58,6 @@ class DesktopClient(base.DesktopClient):
             super().__init__(config)
         finally:
             base.BootstrapHandler = original_handler
-
-    def launch_chrome(self) -> None:
-        if self.chrome_process is not None and self.chrome_process.poll() is None:
-            payload = self.prepare_bootstrap()
-            print("Dedicated Chrome is already running; refreshed the short-lived extension bootstrap window.")
-            print(f"Bootstrap is active for {payload.get('expires_in_seconds', 120)} seconds.")
-            return
-        super().launch_chrome()
 
     def run(self, launch_now: bool = False) -> None:
         self.start_bridge()
