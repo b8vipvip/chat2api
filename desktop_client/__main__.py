@@ -1,3 +1,3 @@
-from .client import main
+from .hardened_client import main
 
 raise SystemExit(main())
