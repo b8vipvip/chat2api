@@ -15,18 +15,19 @@
     const deadline = Date.now() + timeoutMs;
     let lastError = null;
     while (Date.now() < deadline) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 2500);
       try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 2500);
         const response = await fetch(LOCAL_BOOTSTRAP_URL, {
           cache: "no-store",
           signal: controller.signal,
         });
-        clearTimeout(timer);
         if (response.ok) return response.json();
         lastError = new Error(`Local bootstrap returned HTTP ${response.status}`);
       } catch (error) {
         lastError = error;
+      } finally {
+        clearTimeout(timer);
       }
       await sleep(500);
     }
@@ -97,16 +98,19 @@
       await ensureBootstrapConfiguration(data);
       const ready = await waitForReadyTab(tab.id);
       await ensureContent(ready.id);
+      const settings = await config();
       await chrome.storage.local.set({
         boundTabId: ready.id,
         autoBind: false,
-        modelsUpdatedAt: 0,
+        models: Array.isArray(settings.models) ? settings.models : [],
+        currentModel: settings.currentModel || "chatgpt-web",
+        modelsUpdatedAt: Date.now(),
         lastLaunchToken: token,
         lastLaunchAt: new Date().toISOString(),
         lastLaunchBindingError: "",
       });
       await removeMarker(ready.id);
-      await sendExtensionStatus(true);
+      await sendExtensionStatus(false);
       return true;
     })().catch(async error => {
       await chrome.storage.local.set({
