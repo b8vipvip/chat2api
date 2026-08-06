@@ -15,7 +15,15 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from .broker import RequestBroker, RequestState
 from .config import Settings, get_settings
-from .models import ChatCompletionRequest, ClientSummary, ExtensionRegistration, ExtensionRegistrationResult
+from .desktop import DesktopAgentHub
+from .models import (
+    ChatCompletionRequest,
+    ClientSummary,
+    DesktopAgentRegistration,
+    DesktopAgentRegistrationResult,
+    ExtensionRegistration,
+    ExtensionRegistrationResult,
+)
 from .prompting import build_prompt
 from .registry import ClientRegistry
 
@@ -26,6 +34,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     config = settings or get_settings()
     registry = ClientRegistry(config.data_dir)
     broker = RequestBroker()
+    desktop_agents = DesktopAgentHub()
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -38,13 +47,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(
         title="chat2api",
-        version="0.1.0",
+        version="0.2.0",
         description="OpenAI-compatible bridge from a remote API to a logged-in ChatGPT browser tab.",
         lifespan=lifespan,
     )
     app.state.settings = config
     app.state.registry = registry
     app.state.broker = broker
+    app.state.desktop_agents = desktop_agents
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.origins,
@@ -65,11 +75,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/")
     async def root() -> dict[str, str]:
-        return {"name": "chat2api", "status": "ok", "docs": "/docs"}
+        return {"name": "chat2api", "status": "ok", "docs": "/docs", "version": "0.2.0"}
 
     @app.get("/healthz")
     async def health() -> dict[str, object]:
-        return {"status": "ok", "online_extensions": len(registry.online_client_ids())}
+        return {
+            "status": "ok",
+            "online_extensions": len(registry.online_client_ids()),
+            "online_desktop_agents": desktop_agents.online_count(),
+        }
 
     @app.post("/api/extensions/register", response_model=ExtensionRegistrationResult)
     async def register_extension(
@@ -85,34 +99,80 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def clients() -> list[dict[str, object]]:
         return registry.summaries()
 
-    @app.get("/v1/models", dependencies=[Depends(require_api_key)])
-    async def models() -> dict[str, object]:
+    @app.post(
+        "/api/desktop/register",
+        response_model=DesktopAgentRegistrationResult,
+        dependencies=[Depends(require_api_key)],
+    )
+    async def register_desktop_agent(body: DesktopAgentRegistration) -> DesktopAgentRegistrationResult:
+        agent = await desktop_agents.register(body.name, body.platform, body.version, body.metadata)
+        return DesktopAgentRegistrationResult(agent_id=agent.agent_id)
+
+    @app.get("/api/desktop/bootstrap", dependencies=[Depends(require_api_key)])
+    async def desktop_bootstrap(request: Request) -> dict[str, object]:
         return {
-            "object": "list",
-            "data": [
-                {
-                    "id": "chatgpt-web",
-                    "object": "model",
-                    "created": 0,
-                    "owned_by": "chat2api",
-                }
-            ],
+            "server_url": config.resolved_public_url(str(request.base_url)),
+            "pairing_code": config.pairing_code,
+            "extension_name": "chat2api Desktop Chrome",
+            "local_bridge_port": 8791,
+            "auto_bind": True,
+            "expires_in_seconds": 120,
         }
 
-    def resolve_client(body: ChatCompletionRequest, header_client: str | None) -> str:
+    @app.get("/api/desktop/commands/{agent_id}", dependencies=[Depends(require_api_key)])
+    async def desktop_commands(agent_id: str, timeout: int = Query(default=25, ge=1, le=30)) -> dict[str, object]:
         try:
-            return registry.resolve_client(body.client_id or header_client)
+            return await desktop_agents.wait(agent_id, timeout)
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
-        except ConnectionError as error:
-            raise HTTPException(status_code=503, detail=str(error)) from error
+
+    @app.get("/v1/models", dependencies=[Depends(require_api_key)])
+    async def models() -> dict[str, object]:
+        return {"object": "list", "data": registry.model_catalog(online_only=True)}
+
+    def resolve_client_now(requested: str | None) -> str:
+        try:
+            return registry.resolve_client(requested)
+        except KeyError as error:
+            raise HTTPException(status_code=404, detail=str(error)) from error
         except LookupError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except ConnectionError as error:
+            raise error
+
+    async def resolve_client_with_wakeup(requested: str | None) -> str:
+        try:
+            return resolve_client_now(requested)
+        except ConnectionError as initial_error:
+            awakened = await desktop_agents.wake("api_request", requested)
+            if not awakened:
+                raise HTTPException(status_code=503, detail=str(initial_error)) from initial_error
+
+            deadline = asyncio.get_running_loop().time() + config.desktop_wake_timeout_seconds
+            last_error: Exception = initial_error
+            while asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.5)
+                try:
+                    return resolve_client_now(requested)
+                except ConnectionError as error:
+                    last_error = error
+                    continue
+                except HTTPException:
+                    raise
+            raise HTTPException(
+                status_code=503,
+                detail=f"Desktop client was notified, but the Chrome extension did not become ready: {last_error}",
+            ) from last_error
 
     def completion_id() -> str:
         return "chatcmpl-" + uuid.uuid4().hex
 
-    def chunk_payload(response_id: str, model: str, delta: dict[str, object], finish_reason: str | None = None) -> dict[str, object]:
+    def chunk_payload(
+        response_id: str,
+        model: str,
+        delta: dict[str, object],
+        finish_reason: str | None = None,
+    ) -> dict[str, object]:
         return {
             "id": response_id,
             "object": "chat.completion.chunk",
@@ -185,7 +245,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request: Request,
         x_chat2api_client: str | None = Header(default=None),
     ):
-        client_id = resolve_client(body, x_chat2api_client)
+        requested_client = body.client_id or x_chat2api_client
+        client_id = await resolve_client_with_wakeup(requested_client)
+        if not registry.supports_model(client_id, body.model):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model {body.model!r} is not reported as available on client {client_id}",
+            )
+
         request_id = "req_" + uuid.uuid4().hex
         try:
             state = await broker.create(request_id, client_id)
@@ -202,7 +269,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "type": "chat.request",
                     "request_id": request_id,
                     "prompt": prompt,
-                    "options": {"auto_switch_text": True, "timeout_seconds": timeout_seconds},
+                    "options": {
+                        "auto_switch_text": True,
+                        "timeout_seconds": timeout_seconds,
+                        "model": body.model,
+                    },
                 },
             )
         except Exception as error:
@@ -254,7 +325,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await websocket.accept()
         await registry.attach(client_id, websocket)
         try:
-            await websocket.send_json({"type": "server.hello", "client_id": client_id, "version": "0.1.0"})
+            await websocket.send_json({"type": "server.hello", "client_id": client_id, "version": "0.2.0"})
             while True:
                 message = await websocket.receive_json()
                 message_type = message.get("type")
@@ -280,7 +351,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             active_request = broker.client_requests.get(client_id)
             if active_request:
-                await broker.publish(active_request, {"type": "chat.error", "request_id": active_request, "error": "Chrome extension disconnected"})
+                await broker.publish(
+                    active_request,
+                    {"type": "chat.error", "request_id": active_request, "error": "Chrome extension disconnected"},
+                )
             await registry.detach(client_id, websocket)
 
     return app
