@@ -74,8 +74,9 @@
   }
 
   async function bindLaunchTab(tab) {
-    if (!tab?.id || !isChatGptUrl(tab.url || tab.pendingUrl || "")) return false;
-    const token = launchTokenFromUrl(tab.pendingUrl || tab.url || "");
+    const candidateUrl = tab?.pendingUrl || tab?.url || "";
+    if (!tab?.id || !isChatGptUrl(candidateUrl)) return false;
+    const token = launchTokenFromUrl(candidateUrl);
     if (!token) return false;
     if (launchTasks.has(tab.id)) return launchTasks.get(tab.id);
 
