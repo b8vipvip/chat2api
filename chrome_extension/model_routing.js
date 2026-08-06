@@ -62,7 +62,7 @@
       modelsUpdatedAt: Date.now(),
       lastRequestedModel: requestedModel || "chatgpt-web",
       lastModelSelectionError: "",
-      modelRouterVersion: data?.router_version || "0.3.2",
+      modelRouterVersion: data?.router_version || "0.3.3",
     });
     await sendCachedExtensionStatus();
   }
@@ -70,7 +70,7 @@
   async function sendModelPrepare(tabId, model) {
     try {
       const response = await chrome.tabs.sendMessage(tabId, {
-        type: "chat2api.model.prepare.v3",
+        type: "chat2api.model.prepare.v4",
         model,
       });
       if (response) return response;
@@ -78,11 +78,11 @@
 
     await chrome.scripting.executeScript({
       target: { tabId },
-      files: ["content_model_v3.js"],
+      files: ["content_model_v4.js"],
     });
     await sleep(180);
     return chrome.tabs.sendMessage(tabId, {
-      type: "chat2api.model.prepare.v3",
+      type: "chat2api.model.prepare.v4",
       model,
     });
   }
