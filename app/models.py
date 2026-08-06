@@ -17,6 +17,18 @@ class ExtensionRegistrationResult(BaseModel):
     token: str
 
 
+class DesktopAgentRegistration(BaseModel):
+    name: str = Field(default="Desktop", min_length=1, max_length=120)
+    platform: str = Field(default="unknown", max_length=80)
+    version: str = Field(default="unknown", max_length=40)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class DesktopAgentRegistrationResult(BaseModel):
+    agent_id: str
+    poll_timeout_seconds: int = 25
+
+
 class ChatMessage(BaseModel):
     role: Literal["system", "developer", "user", "assistant", "tool"]
     content: Any
