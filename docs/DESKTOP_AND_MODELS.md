@@ -36,7 +36,7 @@ cd D:\AI\chat2api
 git pull --ff-only
 ```
 
-Open `chrome://extensions/`, reload **chat2api Chrome Bridge**, and confirm version `0.3.1`.
+Open `chrome://extensions/`, reload **chat2api Chrome Bridge**, and confirm version `0.3.2`.
 
 ## Configure the desktop client
 
@@ -79,7 +79,7 @@ The desktop client opens a URL containing a short-lived random marker:
 https://chatgpt.com/?chat2api_launch=<one-time-token>
 ```
 
-Only the installed Chrome extension can read the matching bootstrap payload from `127.0.0.1:8791`. The extension now retries the binding until the page and local bridge are both ready. After verifying the token, it binds that exact tab and removes the marker from the address bar without reloading the page.
+Only the installed Chrome extension can read the matching bootstrap payload from `127.0.0.1:8791`. The extension retries the binding until the page and local bridge are both ready. After verifying the token, it binds that exact tab and removes the marker from the address bar without reloading the page.
 
 ## Request-driven models
 
@@ -93,7 +93,9 @@ The `model` field in each API request is the source of truth:
 }
 ```
 
-The server forwards the requested model to the Chrome extension. The extension opens the current ChatGPT model menu, verifies the requested family/reasoning level, selects it, and only then submits the prompt. If the option is unavailable, the API receives a clear browser error.
+The server forwards the requested model to the Chrome extension. The extension opens the current ChatGPT model menu, verifies the requested family/reasoning level, selects it, and only then submits the prompt. If the option is unavailable, the API receives a browser error containing the choices that were visible to the extension.
+
+Version 0.3.2 adds a text-compatible picker for the current ChatGPT menu. It searches visible popover text, walks to the nearest clickable ancestor, distinguishes the top-level reasoning choices from the model-family submenu, and supports menu items that do not expose stable ARIA or Radix attributes.
 
 `GET /v1/models` remains useful as a discovered catalog, but it is advisory rather than a prerequisite. The model menu can change by account, plan, rollout, and page version, so an older catalog no longer blocks a new request before the extension has a chance to verify it.
 
