@@ -21,6 +21,7 @@ chat2api server
 existing Chrome profile + installed chat2api extension
         |
         | precisely binds/creates the target ChatGPT tab
+        | waits for the unified composer and its model button
         | opens the current model picker, verifies and selects model
         | reports the resulting model catalog back to the server
         v
@@ -36,7 +37,7 @@ cd D:\AI\chat2api
 git pull --ff-only
 ```
 
-Open `chrome://extensions/`, reload **chat2api Chrome Bridge**, and confirm version `0.3.2`.
+Open `chrome://extensions/`, reload **chat2api Chrome Bridge**, and confirm version `0.3.3`.
 
 ## Configure the desktop client
 
@@ -81,6 +82,8 @@ https://chatgpt.com/?chat2api_launch=<one-time-token>
 
 Only the installed Chrome extension can read the matching bootstrap payload from `127.0.0.1:8791`. The extension retries the binding until the page and local bridge are both ready. After verifying the token, it binds that exact tab and removes the marker from the address bar without reloading the page.
 
+Binding can complete before the newly opened ChatGPT page has finished rendering its input controls. Model execution therefore has a separate readiness gate: the extension waits up to 30 seconds for `form[data-type="unified-composer"]`, the prompt input, and the composer model pill before it touches the page.
+
 ## Request-driven models
 
 The `model` field in each API request is the source of truth:
@@ -93,9 +96,11 @@ The `model` field in each API request is the source of truth:
 }
 ```
 
-The server forwards the requested model to the Chrome extension. The extension opens the current ChatGPT model menu, verifies the requested family/reasoning level, selects it, and only then submits the prompt. If the option is unavailable, the API receives a browser error containing the choices that were visible to the extension.
+The server forwards the requested model to the Chrome extension. The extension waits for the ChatGPT composer, opens the model menu from the model pill inside that composer, verifies the requested family/reasoning level, selects it, and only then submits the prompt. It never uses account, download, voice, attachment, or sidebar menu buttons as model-picker candidates.
 
-Version 0.3.2 adds a text-compatible picker for the current ChatGPT menu. It searches visible popover text, walks to the nearest clickable ancestor, distinguishes the top-level reasoning choices from the model-family submenu, and supports menu items that do not expose stable ARIA or Radix attributes.
+If the option is unavailable, the API receives a browser error containing the choices that were visible to the extension.
+
+Version 0.3.3 scopes model-button detection to the unified composer and waits for a fully rendered new-chat page. The text-compatible menu parser from 0.3.2 remains in place for current labels such as `GPT-5.6 Sol`, `GPT-5.5`, `GPT-5.3`, `o3`, `智能`, `极速 5.5`, `中`, and `高`.
 
 `GET /v1/models` remains useful as a discovered catalog, but it is advisory rather than a prerequisite. The model menu can change by account, plan, rollout, and page version, so an older catalog no longer blocks a new request before the extension has a chance to verify it.
 
