@@ -18,13 +18,15 @@ function renderModels(settings) {
   const models = Array.isArray(settings.models) ? settings.models : [];
   const current = settings.currentModel || "chatgpt-web";
   if (!models.length) {
-    $("models").textContent = "尚未读取模型；绑定标签页后点击“刷新可用模型”。";
+    $("models").textContent = "模型目录尚未读取。API 调用仍会把 model 下发到扩展并现场识别、选择；“刷新可用模型”只用于提前查看目录。";
     return;
   }
   const labels = models
     .filter(item => item?.id && item.id !== "chatgpt-web")
     .map(item => `${item.id === current || item.selected ? "✓ " : ""}${item.id}`);
-  $("models").textContent = labels.length ? `可用模型：${labels.join("、")}` : "当前仅报告默认模型 chatgpt-web";
+  $("models").textContent = labels.length
+    ? `已识别模型：${labels.join("、")}。API 请求会按 model 参数现场选择。`
+    : "当前仅报告默认模型 chatgpt-web；指定 model 时扩展仍会现场尝试选择。";
 }
 
 async function refresh() {
@@ -43,9 +45,14 @@ async function refresh() {
   status.textContent = `${settings.socketState || "disconnected"}${settings.clientId ? ` · ${settings.clientId}` : " · 未配对"}`;
   status.className = `status ${settings.socketState === "connected" ? "connected" : settings.socketState === "error" ? "error" : ""}`;
   const bound = tabs.find(tab => tab.id === settings.boundTabId);
-  $("binding").textContent = bound ? `已绑定：${bound.title || bound.url}` : `未绑定；当前检测到 ${tabs.length} 个 ChatGPT 标签页`;
+  $("binding").textContent = bound
+    ? `已绑定：${bound.title || bound.url}`
+    : `未绑定；当前检测到 ${tabs.length} 个 ChatGPT 标签页。桌面唤醒或 API 请求会自动精确绑定/创建目标页。`;
   renderModels(settings);
+
   if (settings.socketError) $("message").textContent = settings.socketError;
+  else if (settings.lastLaunchBindingError) $("message").textContent = `自动绑定重试中：${settings.lastLaunchBindingError}`;
+  else if (settings.lastModelSelectionError) $("message").textContent = `上次模型选择失败：${settings.lastModelSelectionError}`;
 }
 
 for (const id of ["serverUrl", "pairingCode", "extensionName"]) {
@@ -82,15 +89,15 @@ $("connect").addEventListener("click", async () => {
 $("bind").addEventListener("click", async () => {
   const response = await send({ type: "popup.bind" });
   if (!response?.ok) $("message").textContent = response?.error || "绑定失败";
-  else $("message").textContent = "绑定成功，正在读取此账号可用模型。";
+  else $("message").textContent = "绑定成功。模型会在刷新目录或 API 请求时自动识别。";
   await refresh();
 });
 
 $("discoverModels").addEventListener("click", async () => {
-  $("message").textContent = "正在打开模型菜单并读取可用选项…";
+  $("message").textContent = "正在打开模型菜单并读取当前账号可用选项…";
   const response = await send({ type: "popup.discoverModels" });
   if (!response?.ok) $("message").textContent = response?.error || "模型读取失败";
-  else $("message").textContent = `模型读取完成，共 ${response.data?.models?.length || 0} 项。`;
+  else $("message").textContent = `模型目录更新完成，共 ${response.data?.models?.length || 0} 项。API 调用不依赖手动刷新。`;
   await refresh();
 });
 
