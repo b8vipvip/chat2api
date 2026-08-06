@@ -1,5 +1,14 @@
 (() => {
   const MODEL_ROUTER_VERSION = "0.3.1";
+  const STATE_KEY = "__CHAT2API_MODEL_ROUTER__";
+  const previous = globalThis[STATE_KEY];
+  if (previous?.version === MODEL_ROUTER_VERSION) return;
+  try {
+    if (previous?.listener) chrome.runtime.onMessage.removeListener(previous.listener);
+  } catch (_) {}
+  const routerState = { version: MODEL_ROUTER_VERSION, listener: null };
+  globalThis[STATE_KEY] = routerState;
+
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   function visible(element) {
@@ -145,65 +154,68 @@
   }
 
   function looksLikeSubmenuTrigger(element) {
-    return Boolean(
-      element?.getAttribute?.("aria-haspopup") ||
-      element?.querySelector?.("svg") ||
-      /[>›»→]$/.test(labelOf(element)),
+    const aria = String(element?.getAttribute?.("aria-haspopup") || "").toLowerCase();
+    const chevron = element?.querySelector?.(
+      "[data-icon='chevron-right'], [data-testid*='chevron'], svg[aria-label*='right' i], svg[aria-label*='chevron' i]",
     );
+    return Boolean(aria === "menu" || aria === "listbox" || chevron || /[>›»→]$/.test(labelOf(element)));
   }
 
   function findChoice(items, aliases, excluded = null) {
     return items.find(item => item !== excluded && matchesAliases(labelOf(item), aliases)) || null;
   }
 
+  function familyItems(items) {
+    return items.filter(item =>
+      Object.values(FAMILY_ALIASES).some(aliases => matchesAliases(labelOf(item), aliases)),
+    );
+  }
+
   function findFamilySubmenuTrigger(items, targetFamily) {
     const targetAliases = FAMILY_ALIASES[targetFamily] || [targetFamily];
     const directTarget = findChoice(items, targetAliases);
     if (directTarget && looksLikeSubmenuTrigger(directTarget)) return directTarget;
-
-    return items.find(item => {
-      if (!looksLikeSubmenuTrigger(item)) return false;
-      const label = labelOf(item);
-      return Object.values(FAMILY_ALIASES).some(aliases => matchesAliases(label, aliases));
-    }) || null;
+    const candidates = familyItems(items);
+    const explicit = candidates.filter(looksLikeSubmenuTrigger);
+    return explicit[explicit.length - 1] || candidates[candidates.length - 1] || null;
   }
 
   async function chooseFamily(family) {
     if (!family) return;
     const aliases = FAMILY_ALIASES[family] || [family];
     const opened = await openPicker();
-    let items = opened.items;
-    let direct = findChoice(items, aliases);
+    const direct = findChoice(opened.items, aliases);
 
-    if (direct && !looksLikeSubmenuTrigger(direct)) {
+    if (direct) {
       direct.click();
-      await delay(450);
+      await delay(250);
+      const nested = await waitFor(() => {
+        const current = interactiveMenuItems();
+        return findChoice(current, aliases, direct);
+      }, 1200, 100);
+      if (nested) {
+        nested.click();
+        await delay(450);
+      }
       return;
     }
 
-    const submenuTrigger = direct || findFamilySubmenuTrigger(items, family);
+    const submenuTrigger = findFamilySubmenuTrigger(opened.items, family);
     if (!submenuTrigger) {
       escapeMenus();
       throw new Error(`Requested model family is not available in ChatGPT: ${family}`);
     }
 
     submenuTrigger.click();
-    items = await waitFor(() => {
+    const nested = await waitFor(() => {
       const current = interactiveMenuItems();
-      const target = findChoice(current, aliases, submenuTrigger);
-      return target ? current : null;
+      return findChoice(current, aliases, submenuTrigger);
     }, 4000, 100);
-    if (!items) {
-      escapeMenus();
-      throw new Error(`ChatGPT model family submenu did not expose: ${family}`);
-    }
-
-    direct = findChoice(items, aliases, submenuTrigger);
-    if (!direct) {
+    if (!nested) {
       escapeMenus();
       throw new Error(`Requested model family is not available in ChatGPT: ${family}`);
     }
-    direct.click();
+    nested.click();
     await delay(500);
   }
 
@@ -291,13 +303,20 @@
       escapeMenus();
 
       for (const [family, label] of families) {
-        if (!result.has(family)) result.set(family, modelRecord(family, "", label, family === requestedFamily && !requestedReasoning));
+        if (!result.has(family)) {
+          result.set(family, modelRecord(family, "", label, family === requestedFamily && !requestedReasoning));
+        }
       }
       if (requestedFamily) {
         for (const [reasoning, label] of reasonings) {
           const id = `${requestedFamily}-${reasoning}`;
           if (!result.has(id)) {
-            result.set(id, modelRecord(requestedFamily, reasoning, `${requestedFamily} / ${label}`, reasoning === requestedReasoning));
+            result.set(id, modelRecord(
+              requestedFamily,
+              reasoning,
+              `${requestedFamily} / ${label}`,
+              reasoning === requestedReasoning,
+            ));
           }
         }
       }
@@ -323,11 +342,14 @@
     return discoverAfterSelection(model);
   }
 
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  const listener = (message, _sender, sendResponse) => {
     if (message.type !== "chat2api.model.prepare.v2") return false;
     prepareModel(message.model)
       .then(data => sendResponse({ ok: true, data }))
       .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
-  });
+  };
+
+  routerState.listener = listener;
+  chrome.runtime.onMessage.addListener(listener);
 })();
