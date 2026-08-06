@@ -8,5 +8,6 @@ button.secondary { background: #ececf1; color: #202123; }
 .status { padding: 8px; border-radius: 7px; background: #ececf1; }
 .status.connected { background: #dff7ed; color: #075f46; }
 .status.error { background: #fde8e8; color: #9b1c1c; }
+.model-list { margin-top: 8px; padding: 8px; border-radius: 7px; background: #fff; border: 1px solid #ddd; font-size: 12px; overflow-wrap: anywhere; }
 hr { margin: 16px 0; border: 0; border-top: 1px solid #ddd; }
 pre { white-space: pre-wrap; color: #9b1c1c; max-width: 330px; }
