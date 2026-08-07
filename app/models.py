@@ -52,7 +52,10 @@ class ChatMessage(BaseModel):
 class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    model: str = "chatgpt-web"
+    # "default" is the zero-touch fast path: use whatever model/reasoning
+    # the bound ChatGPT composer currently has selected and do not open model UI.
+    # "chatgpt-web" remains accepted as a backwards-compatible alias.
+    model: str = "default"
     messages: list[ChatMessage]
     stream: bool = False
     client_id: str | None = None
