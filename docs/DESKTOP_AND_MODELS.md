@@ -1,34 +1,48 @@
 # Existing Chrome desktop automation and request-driven model selection
 
-chat2api v0.3 uses only the user's existing Chrome profile. The dedicated Chrome profile mode, `--user-data-dir`, `--load-extension`, and automatic extension loading have been removed.
+chat2api uses the user's existing Chrome profile. Install the extension manually once and keep ChatGPT signed in yourself; chat2api does not store the ChatGPT password, cookies, or verification codes.
 
-## Prerequisites
+## Model routing strategy (0.3.4)
 
-1. Install `chrome_extension` manually once through `chrome://extensions/`.
-2. Sign in to ChatGPT manually in that same Chrome profile.
-3. Keep the ChatGPT login state under your own control. chat2api does not store a ChatGPT password, cookies, or verification codes.
+`model` is request-driven. The fast path is `default`:
 
-## Architecture
-
-```text
-OpenAI-compatible request (model + messages)
-        |
-        v
-chat2api server
-        |
-        | forwards requested model without relying on a stale model cache
-        v
-existing Chrome profile + installed chat2api extension
-        |
-        | precisely binds/creates the target ChatGPT tab
-        | waits for the unified composer and its model button
-        | opens the current model picker, verifies and selects model
-        | reports the resulting model catalog back to the server
-        v
-ChatGPT web
+```json
+{
+  "model": "default",
+  "messages": [{"role": "user", "content": "Hello"}],
+  "stream": true
+}
 ```
 
-When Chrome and the extension are already online, the extension executes the request directly. If there is no valid bound tab, it creates and binds a fresh ChatGPT tab automatically. Other ChatGPT tabs may remain open.
+`default` means: use whatever model and reasoning level the bound ChatGPT composer currently has selected. The extension does **not** open or modify any model UI. `chatgpt-web` remains a backwards-compatible alias for the same zero-touch behavior. If `model` is omitted, the server now defaults to `default`.
+
+For an explicit model such as `gpt-5.6-sol-high`, the extension:
+
+1. Waits up to 30 seconds for the unified composer and prompt input to become usable.
+2. Selects the model family first (`GPT-5.6 Sol`, `GPT-5.5`, `GPT-5.3`, `o3`).
+3. Selects reasoning strength second.
+4. Only then submits the prompt.
+
+The model-family path is scoped to the composer menu and follows the current `高级 / Advanced -> 模型 / Model -> family` structure with visible-text fallbacks and post-action verification.
+
+Reasoning selection is deliberately hybrid:
+
+- First try the ChatGPT shortcut `Ctrl+Shift+M`.
+- If the shortcut opens a reasoning slider, set it by position (`instant` low, `medium` center, `high` high).
+- If that is unavailable, open the composer pill directly.
+- If the slider still is unavailable, fall back to `高级 / Advanced -> 思考强度 / 思考程度 -> 极速 / 中 / 高`.
+
+This minimizes dependence on any single DOM structure. Synthetic shortcut events are best-effort because a future ChatGPT build may require trusted keyboard events; the DOM/slider/menu paths remain as fallbacks.
+
+## Existing Chrome and automatic binding
+
+The desktop client opens a short-lived launch URL in the existing Chrome profile:
+
+```text
+https://chatgpt.com/?chat2api_launch=<one-time-token>
+```
+
+The extension validates the local bootstrap token, binds that exact tab, then removes the marker. Binding no longer waits for Chrome's `tab.status == complete`; it retries until the ChatGPT page controller is injectable/responding. Composer readiness is handled separately by the model controller. This avoids false `Timed out waiting for the new ChatGPT tab` errors on slowly rendered ChatGPT SPA pages.
 
 ## Update
 
@@ -37,78 +51,35 @@ cd D:\AI\chat2api
 git pull --ff-only
 ```
 
-Open `chrome://extensions/`, reload **chat2api Chrome Bridge**, and confirm version `0.3.3`.
+Open `chrome://extensions/`, reload **chat2api Chrome Bridge**, and confirm version `0.3.4`.
 
-## Configure the desktop client
-
-```powershell
-cd D:\AI\chat2api
-.\scripts\configure_desktop_client.ps1 `
-  -ServerUrl "https://chat2api.mv3.cn" `
-  -ApiKey "YOUR_CHAT2API_API_KEY"
-```
-
-The client saves its configuration in:
-
-```text
-%LOCALAPPDATA%\chat2api\client.json
-```
-
-Old `extension_dir` and `profile_dir` fields are ignored and removed the next time the configuration is saved.
-
-## First run
-
-Make sure the extension is installed and ChatGPT is already signed in, then run:
-
-```powershell
-.\scripts\run_desktop_client.ps1 -LaunchNow
-```
-
-This opens a new window in the existing Chrome profile. It does not create another profile and does not load an extension from the command line.
-
-Normal background operation:
-
-```powershell
-.\scripts\run_desktop_client.ps1
-```
-
-## Automatic binding
-
-The desktop client opens a URL containing a short-lived random marker:
-
-```text
-https://chatgpt.com/?chat2api_launch=<one-time-token>
-```
-
-Only the installed Chrome extension can read the matching bootstrap payload from `127.0.0.1:8791`. The extension retries the binding until the page and local bridge are both ready. After verifying the token, it binds that exact tab and removes the marker from the address bar without reloading the page.
-
-Binding can complete before the newly opened ChatGPT page has finished rendering its input controls. Model execution therefore has a separate readiness gate: the extension waits up to 30 seconds for `form[data-type="unified-composer"]`, the prompt input, and the composer model pill before it touches the page.
-
-## Request-driven models
-
-The `model` field in each API request is the source of truth:
-
-```json
-{
-  "model": "gpt-5.6-sol-high",
-  "messages": [{"role": "user", "content": "Hello"}],
-  "stream": true
-}
-```
-
-The server forwards the requested model to the Chrome extension. The extension waits for the ChatGPT composer, opens the model menu from the model pill inside that composer, verifies the requested family/reasoning level, selects it, and only then submits the prompt. It never uses account, download, voice, attachment, or sidebar menu buttons as model-picker candidates.
-
-If the option is unavailable, the API receives a browser error containing the choices that were visible to the extension.
-
-Version 0.3.3 scopes model-button detection to the unified composer and waits for a fully rendered new-chat page. The text-compatible menu parser from 0.3.2 remains in place for current labels such as `GPT-5.6 Sol`, `GPT-5.5`, `GPT-5.3`, `o3`, `智能`, `极速 5.5`, `中`, and `高`.
-
-`GET /v1/models` remains useful as a discovered catalog, but it is advisory rather than a prerequisite. The model menu can change by account, plan, rollout, and page version, so an older catalog no longer blocks a new request before the extension has a chance to verify it.
-
-The extension popup button **Refresh available models** only refreshes the preview catalog. API calls do not require clicking it first.
+Because the API request default changed to `default`, update/rebuild the server as well:
 
 ```bash
-curl https://chat2api.mv3.cn/v1/models \
-  -H "Authorization: Bearer YOUR_CHAT2API_API_KEY"
+cd /opt/chat2api
+git pull --ff-only
+docker compose -f docker-compose.server.yml up -d --build
 ```
 
-Web model selection remains experimental because it depends on the current ChatGPT page structure.
+## Example IDs
+
+- `default` — zero-touch current ChatGPT selection
+- `chatgpt-web` — compatibility alias for `default`
+- `gpt-5.6-sol`
+- `gpt-5.6-sol-instant`
+- `gpt-5.6-sol-medium`
+- `gpt-5.6-sol-high`
+- `gpt-5.5`
+- `gpt-5.5-instant`
+- `gpt-5.5-medium`
+- `gpt-5.5-high`
+- `gpt-5.3`
+- `o3`
+
+Actual availability depends on what the signed-in ChatGPT account exposes at that moment.
+
+## Model discovery
+
+`GET /v1/models` is advisory. The web UI changes by account, rollout and page version, so API execution does not depend on a stale cached catalog. Manual **Refresh available models** performs discovery only; normal explicit requests select and verify the requested model at execution time without doing a second full discovery pass.
+
+Web model selection remains experimental because it depends on the current ChatGPT web application. The code intentionally uses semantic anchors, multiple fallbacks and post-action verification so UI changes fail explicitly instead of silently selecting the wrong control.
