@@ -2,157 +2,139 @@
 
 把一个已登录 ChatGPT 的 Chrome 标签页转换为可远程调用、支持流式输出的 OpenAI 兼容 API。
 
-本项目参考了 `b8vipvip/ALiver` 中 `chrome_extension` 的页面控制思路：在扩展中定位 ChatGPT 输入框、写入文本、点击发送，并监听助手回复。chat2api 将其拆分为独立服务端和 Chrome 扩展，并增加远程鉴权、客户端配对、请求路由、SSE 流式返回、取消与超时控制。
+> 这是浏览器自动化桥接，不是 OpenAI 官方 API。ChatGPT 页面结构变化可能导致选择器失效；请只在你自己的浏览器和账号上使用，并保护 API Key、配对码和扩展令牌。
 
-> 注意：这是浏览器自动化桥接，不是 OpenAI 官方 API。ChatGPT 页面结构变化可能导致选择器失效；使用时应遵守 ChatGPT 服务条款、账号限制和所在地法律。不要把浏览器会话 Cookie、扩展令牌或配对码交给第三方。
+## 当前能力
 
-## 架构
+- `POST /v1/chat/completions`，支持流式和非流式。
+- `model: "default"` 零操作路径：完全不碰模型 UI，直接使用 ChatGPT 当前选择。
+- 指定模型家族与思考强度，例如 `gpt-5.6-sol-high`。
+- 当前模型状态缓存 + composer 思考强度检测；相同模型连续请求可跳过模型菜单。
+- 手动点击 composer 模型/思考控件后自动使缓存失效，下一次指定模型重新验证。
+- 浏览器回传 `actual_family`、`actual_reasoning`、`actual_model`、是否零操作、是否切换模型/思考强度。
+- 请求耗时诊断：标签页就绪、状态检测、模型选择、首 token、生成、总耗时。
+- Token 统计：ChatGPT 网页不提供官方 usage，因此使用 `chat2api-heuristic-v1` 估算并明确标注 `estimated=true`。
+- 管理面板 `/admin`：扩展/桌面客户端、模型目录、最近请求、耗时、token、错误。
+- 请求历史保存到 `data/request_history.jsonl`。
+- Chrome 现有 Profile 模式：ChatGPT 登录由用户自己维护。
 
-```text
-远程程序 / OpenAI SDK
-        |
-        | HTTPS: /v1/chat/completions (stream=true/false)
-        v
-chat2api FastAPI 服务
-        |
-        | WSS: chat.request / chat.delta / chat.completed
-        v
-Chrome 扩展 -> ChatGPT 网页（自动退出语音模式并切换文本输入）
-```
-
-## 功能
-
-- OpenAI 兼容 `POST /v1/chat/completions`
-- SSE 流式响应（`stream: true`）
-- 非流式完整响应
-- 多扩展注册；通过 `client_id` 或 `X-Chat2API-Client` 选择目标浏览器
-- 只有一个扩展在线时可自动选择
-- 扩展自动切换到文本模式、填写并发送远程文本
-- 页面回复增量捕获、超时、取消、断线错误回传
-- API Key、独立配对码、扩展独立令牌
-- Docker 与 Windows PowerShell 启动脚本
-
-## 1. 启动服务端
+## 服务端部署
 
 ```bash
 cp .env.example .env
-# 必须编辑 .env，修改 CHAT2API_API_KEY 和 CHAT2API_PAIRING_CODE
+# 修改 CHAT2API_API_KEY / CHAT2API_PAIRING_CODE
 docker compose up -d --build
 ```
 
-Windows 本地开发：
+公网部署请放在 HTTPS/WSS 反向代理后，并关闭 SSE 缓冲，例如 Nginx `proxy_buffering off;`。
 
-```powershell
-Copy-Item .env.example .env
-notepad .env
-.\scripts\run_dev.ps1
-```
+启动后：
 
-启动后访问：
+- `/docs`：OpenAPI 文档
+- `/healthz`：健康状态
+- `/admin`：管理面板
 
-- `http://127.0.0.1:8765/docs`
-- `http://127.0.0.1:8765/healthz`
+管理面板本身不直接泄露数据；打开后输入 `CHAT2API_API_KEY`，浏览器只把它保存在当前标签页的 `sessionStorage`，面板数据接口仍使用 Bearer 鉴权。
 
-远程部署必须放在 HTTPS 反向代理后面，使扩展使用 `wss://`。推荐仅开放 443，并限制防火墙来源。
-
-## 2. 安装 Chrome 扩展
+## Chrome 扩展
 
 1. 打开 `chrome://extensions/`。
-2. 开启“开发者模式”。
-3. 点击“加载已解压的扩展程序”。
-4. 选择本仓库的 `chrome_extension` 目录。
-5. 打开并登录 `https://chatgpt.com/`。
-6. 点击扩展图标，填写服务地址、`.env` 中的配对码和扩展名称。
-7. 点击“配对并连接”。
-8. 若同时打开多个 ChatGPT 标签页，在目标页点击“绑定当前 ChatGPT 标签页”。
+2. 开启开发者模式。
+3. 加载仓库中的 `chrome_extension`。
+4. 手动登录 ChatGPT。
+5. 配对 chat2api 服务端并绑定目标标签页，或运行桌面客户端自动创建/绑定新聊天页。
 
-## 3. 远程调用
+## API 调用
 
-非流式：
+默认模型，不触碰任何模型 UI：
 
 ```bash
-curl http://127.0.0.1:8765/v1/chat/completions \
+curl -N https://YOUR_HOST/v1/chat/completions \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "chatgpt-web",
-    "messages": [{"role": "user", "content": "用一句话介绍你自己"}],
-    "stream": false
-  }'
-```
-
-流式：
-
-```bash
-curl -N http://127.0.0.1:8765/v1/chat/completions \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "chatgpt-web",
-    "messages": [{"role": "user", "content": "写一个三句话的小故事"}],
+    "model": "default",
+    "messages": [{"role":"user","content":"你好"}],
     "stream": true
   }'
 ```
 
-Python OpenAI SDK：
+`model` 可以省略，省略时同样使用 `default`。`chatgpt-web` 保留为兼容别名。
 
-```python
-from openai import OpenAI
+指定模型：
 
-client = OpenAI(
-    api_key="YOUR_API_KEY",
-    base_url="http://127.0.0.1:8765/v1",
-)
-
-stream = client.chat.completions.create(
-    model="chatgpt-web",
-    messages=[{"role": "user", "content": "你好"}],
-    stream=True,
-)
-for chunk in stream:
-    print(chunk.choices[0].delta.content or "", end="", flush=True)
+```json
+{
+  "model": "gpt-5.6-sol-high",
+  "messages": [{"role":"user","content":"请只回复测试成功"}],
+  "stream": true
+}
 ```
 
-## 多浏览器选择
+如果当前标签页已经处于同一个模型和思考强度，扩展会走 `state-match-zero-op`，不再重新打开模型菜单。
 
-查询已注册客户端：
+## usage 与诊断
+
+非流式响应包含标准数字字段：
+
+```json
+"usage": {
+  "prompt_tokens": 12,
+  "completion_tokens": 8,
+  "total_tokens": 20
+}
+```
+
+同时 `chat2api` 字段会明确说明这些 token 是估算值，并返回模型与耗时诊断：
+
+```json
+"chat2api": {
+  "diagnostics": {
+    "requested_model": "gpt-5.6-sol-high",
+    "actual_family": "gpt-5.6-sol",
+    "actual_reasoning": "high",
+    "zero_op": true,
+    "model_switched": false,
+    "reasoning_switched": false,
+    "state_source": "session-cache+composer"
+  },
+  "timings": {
+    "first_token_ms": 12000,
+    "model_selection_ms": 0,
+    "total_ms": 15000
+  },
+  "token_usage": {
+    "estimated": true,
+    "estimator": "chat2api-heuristic-v1"
+  }
+}
+```
+
+流式响应在最终 `finish_reason: "stop"` chunk 中携带同样的 `usage` 与 `chat2api` 诊断。
+
+## 管理 API
 
 ```bash
-curl http://127.0.0.1:8765/api/clients \
+curl https://YOUR_HOST/api/admin/overview \
   -H "Authorization: Bearer YOUR_API_KEY"
 ```
 
-调用时添加顶层 `client_id`，或请求头：
+包含在线扩展、桌面客户端、模型目录、聚合统计与最近 100 个请求。请求历史 API：
 
 ```text
-X-Chat2API-Client: ext_xxxxx
+GET /api/admin/requests?limit=100
 ```
 
-## 消息历史模式
+## 安全
 
-默认 `prompt_mode=last_user`：发送 system/developer 指令和最后一条 user 消息，适合让浏览器中的同一个 ChatGPT 会话继续保持上下文。
-
-设置 `prompt_mode=full` 会把传入的全部消息序列化后一次性发送，适合无状态 API 调用，但会在长期使用中增加重复上下文。
-
-## 安全建议
-
-- `CHAT2API_API_KEY` 与 `CHAT2API_PAIRING_CODE` 必须使用不同的高强度随机值。
-- 公网使用 HTTPS/WSS，不要直接暴露 8765 明文端口。
-- 反向代理关闭缓冲，否则 SSE 看起来会“假流式”；Nginx 可设置 `proxy_buffering off`。
-- 只在你自己的 Chrome 与 ChatGPT 账号上安装扩展。
-- `data/clients.json` 保存扩展令牌的 SHA-256 哈希，但仍应限制服务器文件权限。
-- 当前每个扩展同一时间只处理一个请求，避免多个远程调用写入同一网页会话。
-
-## 测试
-
-```bash
-python -m pip install -e ".[dev]"
-pytest -q
-```
+- API Key 与 pairing code 使用不同随机值。
+- 不要直接公网暴露 8765；推荐只监听 `127.0.0.1:8765` 后由 Nginx 转发。
+- 不要分享 ChatGPT Cookie、扩展令牌或桌面客户端配置。
+- `data/clients.json` 保存扩展令牌哈希；`data/request_history.jsonl` 保存请求元数据、模型、耗时和 token 统计，不保存完整 prompt/response 正文。
 
 ## 已知限制
 
-- ChatGPT 前端 DOM 或按钮文案调整后，可能需要更新 `chrome_extension/content.js` 的选择器。
-- 当前仅支持文本输入与文本输出，不处理图片、文件或工具调用。
-- 页面生成过程中出现大幅文本重写时，流式增量可能不完全等同于最终文本；非流式结果以最终页面文本为准。
-- usage 中 token 数暂时返回 0，因为网页端没有可靠的 token 计数接口。
+- Token 为本地估算，不是 ChatGPT 官方 token usage。
+- 模型家族在网页中不总是直接显示，因此“相同模型零操作”依赖当前标签页会话缓存；用户手动操作 composer 模型控件会主动使缓存失效。
+- ChatGPT DOM、菜单结构或文案变化后仍可能需要兼容更新，但模型选择已限制在 composer 范围并采用多级 fallback。
+- 当前仍以文本输入/文本输出为主，图片与 Live 语音通道后续独立实现。
