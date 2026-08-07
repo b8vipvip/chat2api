@@ -110,12 +110,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         x_api_key: str | None = Header(default=None),
     ) -> ApiPrincipal:
         supplied = supplied_token(authorization, x_api_key)
-        if not supplied or not config.api_key or not secrets.compare_digest(supplied, config.api_key):
+        if not supplied:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing administrator API key")
+        if config.api_key and secrets.compare_digest(supplied, config.api_key):
+            return master_principal()
+        managed = await api_keys.authenticate(supplied)
+        if managed:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Administrator key required. Use CHAT2API_API_KEY from the server .env file.",
+                detail="Managed API keys cannot access administrator endpoints",
             )
-        return master_principal()
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid administrator API key")
 
     @app.get("/")
     async def root() -> dict[str, str]:
