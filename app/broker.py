@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -12,6 +13,24 @@ class RequestState:
     queue: asyncio.Queue[dict[str, Any]] = field(default_factory=asyncio.Queue)
     final_future: asyncio.Future[str] | None = None
     text: str = ""
+    created_mono: float = field(default_factory=time.perf_counter)
+    browser_started_mono: float | None = None
+    first_token_mono: float | None = None
+    completed_mono: float | None = None
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    def timings(self) -> dict[str, float | None]:
+        end = self.completed_mono or time.perf_counter()
+        return {
+            "browser_started_ms": round((self.browser_started_mono - self.created_mono) * 1000, 1) if self.browser_started_mono else None,
+            "first_token_ms": round((self.first_token_mono - self.created_mono) * 1000, 1) if self.first_token_mono else None,
+            "generation_ms": round((end - self.first_token_mono) * 1000, 1) if self.first_token_mono else None,
+            "total_ms": round((end - self.created_mono) * 1000, 1),
+            "model_selection_ms": self.diagnostics.get("model_selection_ms"),
+            "state_detect_ms": self.diagnostics.get("state_detect_ms"),
+            "tab_ready_ms": self.diagnostics.get("tab_ready_ms"),
+            "routing_ms": self.diagnostics.get("routing_ms"),
+        }
 
 
 class RequestBroker:
@@ -34,8 +53,6 @@ class RequestBroker:
         async with self.lock:
             state = self.requests.pop(request_id, None)
             if state and state.final_future and state.final_future.done() and not state.final_future.cancelled():
-                # Streaming requests use the event queue and never await final_future.
-                # Reading the exception here prevents an unhandled-future warning.
                 state.final_future.exception()
             if state and self.client_requests.get(state.client_id) == request_id:
                 self.client_requests.pop(state.client_id, None)
@@ -45,17 +62,31 @@ class RequestBroker:
         if not state:
             return False
         event_type = event.get("type")
-        if event_type == "chat.delta":
+        now = time.perf_counter()
+        if event_type == "chat.diagnostics":
+            diagnostics = event.get("diagnostics")
+            if isinstance(diagnostics, dict):
+                state.diagnostics.update(diagnostics)
+        elif event_type == "chat.started":
+            state.browser_started_mono = state.browser_started_mono or now
+            diagnostics = event.get("diagnostics")
+            if isinstance(diagnostics, dict):
+                state.diagnostics.update(diagnostics)
+        elif event_type == "chat.delta":
+            state.first_token_mono = state.first_token_mono or now
             delta = str(event.get("delta") or "")
             state.text += delta
         elif event_type == "chat.snapshot":
+            state.first_token_mono = state.first_token_mono or now
             state.text = str(event.get("text") or state.text)
         elif event_type == "chat.completed":
+            state.completed_mono = now
             final = str(event.get("text") or state.text)
             state.text = final
             if state.final_future and not state.final_future.done():
                 state.final_future.set_result(final)
         elif event_type in {"chat.error", "chat.cancelled"}:
+            state.completed_mono = now
             message = str(event.get("error") or event.get("reason") or "Request failed")
             if state.final_future and not state.final_future.done():
                 state.final_future.set_exception(RuntimeError(message))
