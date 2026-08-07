@@ -16,6 +16,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8,<10", "httpx>=0.27,<1.0"]
 
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["desktop_client*", "chrome_extension*", "tests*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
