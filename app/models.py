@@ -29,6 +29,16 @@ class DesktopAgentRegistrationResult(BaseModel):
     poll_timeout_seconds: int = 25
 
 
+class ApiKeyCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    expires_in_days: int | None = Field(default=None, ge=1, le=3650)
+
+
+class ApiKeyUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    enabled: bool | None = None
+
+
 class ChatMessage(BaseModel):
     role: Literal["system", "developer", "user", "assistant", "tool"]
     content: Any
