@@ -27,5 +27,14 @@ jobs:
           node --check chrome_extension/content_model_v6.js
           node --check chrome_extension/model_routing.js
           node --check chrome_extension/background.js
+          python - <<'PY'
+          import re
+          from pathlib import Path
+          from app.admin import ADMIN_HTML
+          match = re.search(r"<script>(.*)</script>", ADMIN_HTML, re.S)
+          assert match, "admin console script not found"
+          Path("/tmp/chat2api-admin.js").write_text(match.group(1), encoding="utf-8")
+          PY
+          node --check /tmp/chat2api-admin.js
       - name: Tests
         run: pytest -q
