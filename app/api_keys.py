@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import secrets
@@ -8,6 +9,8 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from cryptography.fernet import Fernet, InvalidToken
 
 
 def utc_now() -> str:
@@ -30,6 +33,13 @@ def _expired(expires_at: str | None) -> bool:
         return True
 
 
+def _fernet(master_secret: str) -> Fernet | None:
+    if not master_secret:
+        return None
+    key = base64.urlsafe_b64encode(hashlib.sha256(master_secret.encode("utf-8")).digest())
+    return Fernet(key)
+
+
 @dataclass(slots=True)
 class ApiPrincipal:
     key_id: str
@@ -38,12 +48,7 @@ class ApiPrincipal:
     scopes: tuple[str, ...]
 
     def as_dict(self) -> dict[str, Any]:
-        return {
-            "key_id": self.key_id,
-            "name": self.name,
-            "kind": self.kind,
-            "scopes": list(self.scopes),
-        }
+        return {"key_id": self.key_id, "name": self.name, "kind": self.kind, "scopes": list(self.scopes)}
 
 
 @dataclass
@@ -58,9 +63,10 @@ class ManagedApiKey:
     enabled: bool = True
     revoked_at: str | None = None
     scopes: list[str] | None = None
+    token_ciphertext: str | None = None
 
     def public(self) -> dict[str, Any]:
-        scopes = self.scopes or ["chat", "models"]
+        scopes = self.scopes or ["chat", "models", "files", "images"]
         return {
             "key_id": self.key_id,
             "name": self.name,
@@ -73,21 +79,24 @@ class ManagedApiKey:
             "expired": _expired(self.expires_at),
             "revoked_at": self.revoked_at,
             "scopes": scopes,
+            "secret_recoverable": bool(self.token_ciphertext),
         }
 
 
 class ApiKeyStore:
     """Persistent managed API keys.
 
-    CHAT2API_API_KEY stays outside this store and acts as the administrator/master
-    credential. Managed keys are deliberately limited to the public /v1 surface.
-    Only hashes are persisted; the full token is returned once at creation time.
+    Authentication always uses a SHA-256 hash. For administrator convenience the
+    original secret can also be stored encrypted at rest using a key derived from
+    CHAT2API_API_KEY. Old v0.4 keys without ciphertext remain valid but cannot be
+    revealed; create a new key if a recoverable copy is needed.
     """
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, master_secret: str = "") -> None:
         self.path = data_dir / "api_keys.json"
         self.keys: dict[str, ManagedApiKey] = {}
         self.lock = asyncio.Lock()
+        self.cipher = _fernet(master_secret)
 
     async def load(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -116,6 +125,7 @@ class ApiKeyStore:
         clean_name = str(name or "").strip() or "API Key"
         raw = "sk-chat2api-" + secrets.token_urlsafe(32)
         key_id = "key_" + secrets.token_urlsafe(9).replace("-", "").replace("_", "")
+        ciphertext = self.cipher.encrypt(raw.encode("utf-8")).decode("ascii") if self.cipher else None
         item = ManagedApiKey(
             key_id=key_id,
             name=clean_name[:120],
@@ -123,7 +133,8 @@ class ApiKeyStore:
             prefix=raw[:20],
             created_at=utc_now(),
             expires_at=expires_at,
-            scopes=["chat", "models"],
+            scopes=["chat", "models", "files", "images"],
+            token_ciphertext=ciphertext,
         )
         async with self.lock:
             self.keys[key_id] = item
@@ -146,7 +157,7 @@ class ApiKeyStore:
             key_id=matched.key_id,
             name=matched.name,
             kind="managed",
-            scopes=tuple(matched.scopes or ["chat", "models"]),
+            scopes=tuple(matched.scopes or ["chat", "models", "files", "images"]),
         )
 
     def list_public(self) -> list[dict[str, Any]]:
@@ -155,6 +166,19 @@ class ApiKeyStore:
     def get_public(self, key_id: str) -> dict[str, Any] | None:
         item = self.keys.get(key_id)
         return item.public() if item else None
+
+    def reveal(self, key_id: str) -> str:
+        item = self.keys.get(key_id)
+        if not item:
+            raise KeyError("Unknown API key")
+        if not item.token_ciphertext:
+            raise ValueError("This key predates encrypted secret storage and cannot be revealed")
+        if not self.cipher:
+            raise ValueError("Server master key is unavailable for decryption")
+        try:
+            return self.cipher.decrypt(item.token_ciphertext.encode("ascii")).decode("utf-8")
+        except (InvalidToken, ValueError) as error:
+            raise ValueError("Stored API key secret cannot be decrypted with the current master key") from error
 
     async def update(self, key_id: str, *, name: str | None = None, enabled: bool | None = None) -> dict[str, Any]:
         async with self.lock:
@@ -181,5 +205,6 @@ class ApiKeyStore:
             if not item.revoked_at:
                 item.revoked_at = utc_now()
             item.enabled = False
+            item.token_ciphertext = None
             await self.save()
             return item.public()
