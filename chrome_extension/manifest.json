@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "chat2api Chrome Bridge",
-  "version": "0.3.5",
-  "description": "Turns a logged-in ChatGPT browser tab into a remotely callable, streaming API bridge.",
+  "version": "0.4.0",
+  "description": "Turns a logged-in ChatGPT browser tab into a remotely callable text, multimodal and image-generation API bridge.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "tabs", "scripting", "alarms"],
   "host_permissions": [
@@ -12,13 +12,8 @@
     "https://www.chatgpt.com/*",
     "https://chat.openai.com/*"
   ],
-  "background": {
-    "service_worker": "background_entry.js"
-  },
-  "action": {
-    "default_title": "chat2api",
-    "default_popup": "popup.html"
-  },
+  "background": { "service_worker": "background_entry.js" },
+  "action": { "default_title": "chat2api", "default_popup": "popup.html" },
   "content_scripts": [
     {
       "matches": [
@@ -26,7 +21,16 @@
         "https://www.chatgpt.com/*",
         "https://chat.openai.com/*"
       ],
-      "js": ["content.js", "content_model.js", "content_model_v3.js", "content_model_v4.js", "content_model_v5.js", "content_model_v6.js"],
+      "js": [
+        "content.js",
+        "content_model.js",
+        "content_model_v3.js",
+        "content_model_v4.js",
+        "content_model_v5.js",
+        "content_model_v6.js",
+        "content_multimodal.js",
+        "content_image.js"
+      ],
       "run_at": "document_idle"
     }
   ]
