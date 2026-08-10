@@ -33,6 +33,7 @@ jobs:
           node --check chrome_extension/content_voice_v2.js
           node --check chrome_extension/content_dictation.js
           node --check chrome_extension/content_dictation_v3.js
+          node --check chrome_extension/content_dictation_v4.js
           node --check chrome_extension/voice_main.js
           node --check chrome_extension/voice_main_v2.js
           node --check chrome_extension/content_bootstrap.js
