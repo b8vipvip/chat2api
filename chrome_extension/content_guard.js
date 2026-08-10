@@ -1,5 +1,5 @@
 (() => {
-  const KEY = "__CHAT2API_GUARD_V1__";
+  const KEY = "__CHAT2API_GUARD_V2__";
   if (globalThis[KEY]) return;
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   const state = { active: null };
@@ -22,16 +22,22 @@
     return String(el?.innerText || el?.textContent || "").replace(/\s+/g, " ").trim();
   }
 
+  function assistantCount() {
+    return [...document.querySelectorAll("[data-message-author-role='assistant']")].filter(visible).length;
+  }
+
+  function generating() {
+    return [...document.querySelectorAll("button")].some(button => {
+      if (!visible(button)) return false;
+      const label = `${button.getAttribute("aria-label") || ""} ${textOf(button)}`;
+      return /stop generating|stop streaming|停止生成|停止回答/i.test(label);
+    });
+  }
+
   function detectError() {
     const roots = recentRoots();
     const candidates = [];
-    const selectors = [
-      "[role='alert']",
-      "[data-testid*='error']",
-      "[class*='error']",
-      "[class*='text-red']",
-      "button",
-    ];
+    const selectors = ["[role='alert']", "[data-testid*='error']", "[class*='error']", "[class*='text-red']", "button"];
     for (const root of roots) {
       for (const selector of selectors) {
         for (const el of root.querySelectorAll(selector)) {
@@ -63,24 +69,35 @@
   async function watch(active) {
     const started = Date.now();
     const timeout = Math.max(15000, Number(active.timeoutSeconds || 300) * 1000);
+    let completedQuietSince = 0;
     while (state.active === active && Date.now() - started < timeout) {
+      const now = Date.now();
       const found = detectError();
       if (found) {
-        active.errorCount += 1;
-        await emit({
-          type: "chat.diagnostics",
-          request_id: active.requestId,
-          diagnostics: {
-            ui_error_detected: true,
-            ui_error_count: active.errorCount,
-            ui_error_text: found.text,
-            ui_retry_count: active.retryCount,
-          },
-        });
-        const now = Date.now();
+        completedQuietSince = 0;
+        if (found.text !== active.lastErrorText) {
+          active.lastErrorText = found.text;
+          active.errorCount += 1;
+          await emit({
+            type: "chat.diagnostics",
+            request_id: active.requestId,
+            diagnostics: {
+              ui_error_detected: true,
+              ui_error_count: active.errorCount,
+              ui_error_text: found.text,
+              ui_retry_count: active.retryCount,
+            },
+          });
+        }
+        if (now < active.retryGraceUntil) {
+          await delay(250);
+          continue;
+        }
         if (found.retry && active.retryCount < active.maxRetries && now - active.lastRetryAt > 1500) {
           active.retryCount += 1;
           active.lastRetryAt = now;
+          active.retryGraceUntil = now + 7000;
+          active.lastErrorText = "";
           found.retry.click();
           await emit({
             type: "chat.diagnostics",
@@ -90,18 +107,27 @@
               ui_retry_last_reason: found.text,
             },
           });
-          await delay(1200);
+          await delay(900);
           continue;
         }
-        if (!found.retry || active.retryCount >= active.maxRetries) {
-          await emit({
-            type: "chat.error",
-            request_id: active.requestId,
-            error: `ChatGPT UI error: ${found.text}`,
-          });
+        await emit({
+          type: "chat.error",
+          request_id: active.requestId,
+          error: `ChatGPT UI error: ${found.text}`,
+        });
+        if (state.active === active) state.active = null;
+        return;
+      }
+
+      const responsePresent = assistantCount() > active.baselineAssistantCount;
+      if (responsePresent && !generating()) {
+        completedQuietSince ||= now;
+        if (now - completedQuietSince > 3200) {
           if (state.active === active) state.active = null;
           return;
         }
+      } else {
+        completedQuietSince = 0;
       }
       await delay(250);
     }
@@ -115,7 +141,10 @@
         maxRetries: Math.max(0, Math.min(2, Number(message.options?.ui_retry_count ?? 1))),
         retryCount: 0,
         errorCount: 0,
+        baselineAssistantCount: assistantCount(),
         lastRetryAt: 0,
+        retryGraceUntil: 0,
+        lastErrorText: "",
       };
       state.active = active;
       watch(active).catch(() => {});
