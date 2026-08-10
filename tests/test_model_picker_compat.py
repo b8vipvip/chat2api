@@ -35,8 +35,11 @@ def test_request_router_preflights_before_model_selection_and_attachments() -> N
     assert "state-match-zero-op" in source
     assert 'type:"chat.diagnostics"' in source
     assert "chat2api.attach.prepare" in source
-    assert source.index("preflightRequest(tab.id,message)") < source.index("prepareRequestedModel(tab,requestedModel)")
-    assert source.index("prepareRequestedModel(tab,requestedModel)") < source.index("prepareAttachments(tab.id,message.attachments||[])")
+    handler = source[source.index("handleServerMessage = async function handleRequestDrivenModelRouting"):]
+    preflight_at = handler.index("preflightRequest(tab.id,message)")
+    model_at = handler.index("prepareRequestedModel(tab,requestedModel)")
+    attachments_at = handler.index("prepareAttachments(tab.id,message.attachments||[])")
+    assert preflight_at < model_at < attachments_at
 
 
 def test_request_controller_waits_for_send_and_v3_recovers_stale_drafts() -> None:
