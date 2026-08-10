@@ -73,7 +73,15 @@ class ClientRegistry:
         async with self.lock:
             client_id = "ext_" + secrets.token_urlsafe(9).replace("-", "").replace("_", "")
             token = secrets.token_urlsafe(32)
-            self.clients[client_id] = PersistedClient(client_id=client_id, name=name, browser_name=browser_name, version=version, token_hash=token_hash(token), created_at=utc_now(), metadata=dict(metadata))
+            self.clients[client_id] = PersistedClient(
+                client_id=client_id,
+                name=name,
+                browser_name=browser_name,
+                version=version,
+                token_hash=token_hash(token),
+                created_at=utc_now(),
+                metadata=dict(metadata),
+            )
             await self.save()
             return client_id, token
 
@@ -134,7 +142,7 @@ class ClientRegistry:
             return requested
         online = self.online_client_ids()
         if not online:
-            raise ConnectionError("No Chrome extension is online")
+            raise ConnectionError("No Chrome extension is online. Open Chrome with the paired chat2api extension.")
         if len(online) > 1:
             raise LookupError("Multiple extensions are online; provide client_id or X-Chat2API-Client")
         return online[0]
@@ -171,23 +179,60 @@ class ClientRegistry:
 
     def model_catalog(self, online_only: bool = True) -> list[dict[str, Any]]:
         catalog: dict[str, dict[str, Any]] = {
-            "default": {"id": "default", "object": "model", "created": 0, "owned_by": "chat2api", "label": "ChatGPT current selection (zero-touch)", "capabilities": ["text"], "clients": []},
-            "chatgpt-web": {"id": "chatgpt-web", "object": "model", "created": 0, "owned_by": "chat2api", "label": "Compatibility alias for default", "capabilities": ["text"], "clients": []},
+            "default": {
+                "id": "default", "object": "model", "created": 0, "owned_by": "chat2api",
+                "label": "ChatGPT current selection (zero-touch)",
+                "capabilities": ["text", "vision", "file-understanding"], "clients": [],
+            },
+            "chatgpt-web": {
+                "id": "chatgpt-web", "object": "model", "created": 0, "owned_by": "chat2api",
+                "label": "Compatibility alias for default",
+                "capabilities": ["text", "vision", "file-understanding"], "clients": [],
+            },
+            "gpt-image": {
+                "id": "gpt-image", "object": "model", "created": 0, "owned_by": "chat2api",
+                "label": "ChatGPT Images browser route",
+                "capabilities": ["image-generation", "image-reference"], "clients": [],
+            },
         }
         client_ids = self.online_client_ids() if online_only else list(self.clients)
         for client_id in client_ids:
-            for base_id in ("default", "chatgpt-web"):
+            for base_id in ("default", "chatgpt-web", "gpt-image"):
                 if client_id not in catalog[base_id]["clients"]:
                     catalog[base_id]["clients"].append(client_id)
             for model in self.client_models(client_id):
                 model_id = str(model["id"])
-                entry = catalog.setdefault(model_id, {"id": model_id, "object": "model", "created": 0, "owned_by": "chat2api", "label": model.get("label") or model_id, "capabilities": model.get("capabilities") or ["text"], "family": model.get("family"), "reasoning": model.get("reasoning"), "clients": []})
+                entry = catalog.setdefault(
+                    model_id,
+                    {
+                        "id": model_id,
+                        "object": "model",
+                        "created": 0,
+                        "owned_by": "chat2api",
+                        "label": model.get("label") or model_id,
+                        "capabilities": model.get("capabilities") or ["text"],
+                        "family": model.get("family"),
+                        "reasoning": model.get("reasoning"),
+                        "clients": [],
+                    },
+                )
                 if client_id not in entry["clients"]:
                     entry["clients"].append(client_id)
                 if model.get("selected"):
                     entry["selected_on"] = client_id
-        order = {"default": 0, "chatgpt-web": 1}
-        return sorted(catalog.values(), key=lambda item: (order.get(str(item["id"]), 2), str(item["id"])))
+        order = {"default": 0, "chatgpt-web": 1, "gpt-image": 2}
+        return sorted(catalog.values(), key=lambda item: (order.get(str(item["id"]), 3), str(item["id"])))
 
     def summaries(self) -> list[dict[str, Any]]:
-        return [{"client_id": item.client_id, "name": item.name, "version": item.version, "online": item.client_id in self.sockets, "busy": item.client_id in self.busy_clients, "last_seen_at": item.last_seen_at, "metadata": item.metadata} for item in self.clients.values()]
+        return [
+            {
+                "client_id": item.client_id,
+                "name": item.name,
+                "version": item.version,
+                "online": item.client_id in self.sockets,
+                "busy": item.client_id in self.busy_clients,
+                "last_seen_at": item.last_seen_at,
+                "metadata": item.metadata,
+            }
+            for item in self.clients.values()
+        ]
