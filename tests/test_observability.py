@@ -68,6 +68,27 @@ def test_admin_console_contains_runtime_and_control_sections() -> None:
         assert text in ADMIN_HTML
 
 
+def test_playground_supports_test_keys_without_exposing_them_in_reports() -> None:
+    assert 'id="testKeySelect"' in ADMIN_HTML
+    assert 'id="testKeyInput"' in ADMIN_HTML
+    assert "管理员 CHAT2API_API_KEY（默认）" in ADMIN_HTML
+    assert "resolveTestCredential" in ADMIN_HTML
+    assert "手动粘贴" in ADMIN_HTML
+    assert "key:testToken" in ADMIN_HTML
+    assert "api_key_label:credential.label" in ADMIN_HTML
+    assert "api_key_source:credential.source" in ADMIN_HTML
+    assert "api_key_token" not in ADMIN_HTML
+
+
+def test_playground_reports_are_history_actions_not_a_permanent_panel() -> None:
+    assert 'id="testReport"' not in ADMIN_HTML
+    assert 'id="reportDialog"' in ADMIN_HTML
+    assert "查看报告" in ADMIN_HTML
+    assert "下载 JSON" in ADMIN_HTML
+    assert "downloadTest" in ADMIN_HTML
+    assert "downloadReportObject" in ADMIN_HTML
+
+
 def test_server_exposes_multimodal_diagnostics_and_admin_routes() -> None:
     source = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8")
     assert '@app.get("/admin")' in source
