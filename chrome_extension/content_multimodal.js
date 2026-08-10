@@ -103,6 +103,39 @@
     ).length;
   }
 
+  function normalizedNames(names = []) {
+    return [...new Set((Array.isArray(names) ? names : []).map(name => String(name || "").trim()).filter(Boolean))];
+  }
+
+  function attachmentRemoveButtons() {
+    const root = attachmentSurface();
+    if (!root) return [];
+    return [...root.querySelectorAll("button")].filter(button => {
+      if (!visible(button) || button.disabled) return false;
+      const label = `${button.dataset.testid || ""} ${button.getAttribute("aria-label") || ""} ${button.title || ""} ${textOf(button)}`;
+      return /remove file|remove attachment|删除文件|移除文件|移除附件|attachment-remove|file-remove/i.test(label);
+    });
+  }
+
+  async function removeAttachmentsByName(names = []) {
+    const targets = normalizedNames(names);
+    if (!targets.length) return { removed: 0, requested: 0 };
+    let removed = 0;
+    for (const button of attachmentRemoveButtons()) {
+      const container = button.closest("[data-testid*='attachment'],[data-testid*='file-chip'],li,div") || button.parentElement || button;
+      const haystack = `${textOf(container)} ${button.getAttribute("aria-label") || ""} ${button.title || ""}`;
+      const matched = targets.some(name => {
+        const stem = name.replace(/\.[^.]+$/, "");
+        return haystack.includes(name) || (stem.length >= 8 && haystack.includes(stem));
+      });
+      if (!matched) continue;
+      button.click();
+      removed += 1;
+      await delay(180);
+    }
+    return { removed, requested: targets.length };
+  }
+
   function fileVisible(name, beforeCount) {
     const root = attachmentSurface();
     if (!root) return false;
@@ -194,8 +227,6 @@
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
 
-    // Do not blindly retry the same file. ChatGPT may already have accepted it while
-    // its chip is still rendering; a second dispatch is what causes the duplicate-file modal.
     const deadline = Date.now() + 45000;
     let duplicateRecovered = false;
     let duplicateDialogClosed = false;
@@ -268,7 +299,7 @@
     };
   }
 
-  globalThis[KEY] = { attach, recoverDuplicateDialogs, state };
+  globalThis[KEY] = { attach, recoverDuplicateDialogs, removeAttachmentsByName, attachmentCount, state };
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "chat2api.attach.prepare") {
       attach(message.attachments || [])
@@ -278,6 +309,10 @@
     }
     if (message.type === "chat2api.attach.dismissDuplicate") {
       recoverDuplicateDialogs().then(() => sendResponse({ ok: true })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
+      return true;
+    }
+    if (message.type === "chat2api.attach.cleanup") {
+      removeAttachmentsByName(message.names || []).then(data => sendResponse({ ok: true, data })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
       return true;
     }
     return false;
