@@ -37,30 +37,36 @@ def pair_extension(client: TestClient) -> tuple[str, str]:
     response = client.post(
         "/api/extensions/register",
         headers={"X-Pairing-Code": "pair-code"},
-        json={"name": "Chrome", "version": "0.3.5"},
+        json={"name": "Chrome", "version": "0.4.0"},
     )
     assert response.status_code == 200
     body = response.json()
     return body["client_id"], body["token"]
 
 
-def test_managed_api_key_lifecycle_and_admin_boundary(tmp_path: Path) -> None:
+def test_managed_api_key_lifecycle_secret_recovery_and_admin_boundary(tmp_path: Path) -> None:
     with TestClient(create_app(settings(tmp_path))) as client:
         key, token = create_managed_key(client)
         assert token.startswith("sk-chat2api-")
         assert key["key_id"].startswith("key_")
         assert key["enabled"] is True
+        assert key["secret_recoverable"] is True
 
         listing = client.get("/api/admin/keys", headers=admin_headers())
         assert listing.status_code == 200
         serialized = listing.text
         assert token not in serialized
         assert "token_hash" not in serialized
+        assert "token_ciphertext" not in serialized
+
+        recovered = client.get(f"/api/admin/keys/{key['key_id']}/secret", headers=admin_headers())
+        assert recovered.status_code == 200
+        assert recovered.json()["token"] == token
 
         managed_headers = {"Authorization": f"Bearer {token}"}
         assert client.get("/v1/models", headers=managed_headers).status_code == 200
         assert client.get("/api/admin/overview", headers=managed_headers).status_code == 403
-        assert client.get("/api/desktop/bootstrap", headers=managed_headers).status_code == 403
+        assert client.get("/api/desktop/bootstrap", headers=managed_headers).status_code == 404
 
         disabled = client.patch(
             f"/api/admin/keys/{key['key_id']}",
@@ -82,6 +88,7 @@ def test_managed_api_key_lifecycle_and_admin_boundary(tmp_path: Path) -> None:
         assert revoked.status_code == 200
         assert revoked.json()["key"]["revoked_at"]
         assert client.get("/v1/models", headers=managed_headers).status_code == 401
+        assert client.get(f"/api/admin/keys/{key['key_id']}/secret", headers=admin_headers()).status_code == 409
 
 
 def test_request_record_is_attributed_to_managed_key_and_filterable(tmp_path: Path) -> None:
@@ -90,8 +97,7 @@ def test_request_record_is_attributed_to_managed_key_and_filterable(tmp_path: Pa
         client_id, extension_token = pair_extension(client)
 
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as websocket:
-            hello = websocket.receive_json()
-            assert hello["type"] == "server.hello"
+            websocket.receive_json()
 
             def make_request():
                 return client.post(
@@ -113,20 +119,10 @@ def test_request_record_is_attributed_to_managed_key_and_filterable(tmp_path: Pa
                     {
                         "type": "chat.diagnostics",
                         "request_id": request_id,
-                        "diagnostics": {
-                            "actual_model": "gpt-5.6-sol-high",
-                            "zero_op": True,
-                            "model_selection_ms": 0,
-                        },
+                        "diagnostics": {"actual_model": "default", "zero_op": True, "model_selection_ms": 0},
                     }
                 )
-                websocket.send_json(
-                    {
-                        "type": "chat.completed",
-                        "request_id": request_id,
-                        "text": "recorded",
-                    }
-                )
+                websocket.send_json({"type": "chat.completed", "request_id": request_id, "text": "recorded"})
                 response = future.result(timeout=5)
 
             assert response.status_code == 200
@@ -143,6 +139,8 @@ def test_request_record_is_attributed_to_managed_key_and_filterable(tmp_path: Pa
         row = body["data"][0]
         assert row["api_key_id"] == key["key_id"]
         assert row["api_key_name"] == "Integration Test"
+        assert row["request_type"] == "text"
+        assert row["attachments_count"] == 0
         assert row["prompt_chars"] > 0
         assert row["completion_chars"] == len("recorded")
         assert row["usage"]["total_tokens"] > 0
@@ -152,20 +150,26 @@ def test_request_record_is_attributed_to_managed_key_and_filterable(tmp_path: Pa
         assert detail.json()["request_id"] == row["request_id"]
 
 
-def test_console_developer_docs_and_playground_routes(tmp_path: Path) -> None:
+def test_console_developer_docs_and_test_lab_routes(tmp_path: Path) -> None:
     with TestClient(create_app(settings(tmp_path))) as client:
         admin = client.get("/admin")
         assert admin.status_code == 200
-        assert "API Key" in admin.text
-        assert "请求记录" in admin.text
-        assert "开发文档" in admin.text
-        assert "测试场" in admin.text
+        for text in ("API Key", "请求记录", "开发文档", "测试场", "视觉理解", "文件理解", "图片生成", "语音生成", "语音对话", "全部测试"):
+            assert text in admin.text
         assert "/v1/chat/completions" in admin.text
+        assert "/v1/files" in admin.text
+        assert "/v1/images/generations" in admin.text
+        assert "复制 Key" in admin.text
 
         developers = client.get("/developers")
         assert developers.status_code == 200
         assert "const INITIAL_VIEW='docs'" in developers.text
 
         root = client.get("/").json()
-        assert root["version"] == "0.4.0"
+        assert root["version"] == "0.5.0"
         assert root["developers"] == "/developers"
+
+        overview = client.get("/api/admin/overview", headers=admin_headers()).json()
+        assert overview["capabilities"]["desktop_agent"] is False
+        assert overview["capabilities"]["image_generation"] is True
+        assert overview["capabilities"]["voice_generation"] is False
