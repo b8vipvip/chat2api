@@ -24,6 +24,8 @@ def test_telemetry_store_persists_filters_and_key_stats(tmp_path: Path) -> None:
             {
                 "request_id": "req_1",
                 "status": "completed",
+                "request_type": "multimodal",
+                "attachments_count": 1,
                 "api_key_id": "key_a",
                 "api_key_name": "App A",
                 "requested_model": "default",
@@ -33,7 +35,7 @@ def test_telemetry_store_persists_filters_and_key_stats(tmp_path: Path) -> None:
         )
         reloaded = TelemetryStore(tmp_path, max_items=10)
         await reloaded.load()
-        assert reloaded.recent(1)[0]["request_id"] == "req_1"
+        assert reloaded.recent(1)[0]["request_type"] == "multimodal"
         assert reloaded.get("req_1")["api_key_id"] == "key_a"
         assert reloaded.query(key_id="key_a", status="completed")["total"] == 1
         assert reloaded.key_stats()["key_a"]["estimated_tokens"] == 5
@@ -52,19 +54,30 @@ def test_admin_console_contains_runtime_and_control_sections() -> None:
         "请求记录",
         "开发文档",
         "测试场",
+        "视觉理解",
+        "文件理解",
+        "图片生成",
+        "语音生成",
+        "语音对话",
+        "全部测试",
         "/api/admin/overview",
         "/v1/chat/completions",
+        "/v1/files",
+        "/v1/images/generations",
     ):
         assert text in ADMIN_HTML
 
 
-def test_server_exposes_diagnostics_usage_and_admin_routes() -> None:
+def test_server_exposes_multimodal_diagnostics_and_admin_routes() -> None:
     source = (Path(__file__).resolve().parents[1] / "app" / "main.py").read_text(encoding="utf-8")
     assert '@app.get("/admin")' in source
     assert '@app.get("/developers")' in source
     assert '@app.get("/api/admin/overview"' in source
     assert '@app.get("/api/admin/keys"' in source
     assert '@app.get("/api/admin/requests/{request_id}"' in source
+    assert '@app.post("/v1/files")' in source
+    assert '@app.post("/v1/images/generations")' in source
+    assert '@app.post("/api/admin/tests"' in source
     assert '"chat.diagnostics"' in source
-    assert '"usage": usage' in source
+    assert '"image.diagnostics"' in source
     assert "token_usage" in source
