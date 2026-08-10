@@ -43,7 +43,8 @@
         "content_image.js",
         "content_voice.js",
         "content_voice_v2.js",
-        "content_dictation.js"
+        "content_dictation.js",
+        "content_dictation_v3.js"
       ],
       "run_at": "document_idle"
     }
