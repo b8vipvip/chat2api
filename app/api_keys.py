@@ -66,7 +66,7 @@ class ManagedApiKey:
     token_ciphertext: str | None = None
 
     def public(self) -> dict[str, Any]:
-        scopes = self.scopes or ["chat", "models", "files", "images"]
+        scopes = self.scopes or ["chat", "models", "files", "images", "audio"]
         return {
             "key_id": self.key_id,
             "name": self.name,
@@ -133,7 +133,7 @@ class ApiKeyStore:
             prefix=raw[:20],
             created_at=utc_now(),
             expires_at=expires_at,
-            scopes=["chat", "models", "files", "images"],
+            scopes=["chat", "models", "files", "images", "audio"],
             token_ciphertext=ciphertext,
         )
         async with self.lock:
@@ -157,7 +157,7 @@ class ApiKeyStore:
             key_id=matched.key_id,
             name=matched.name,
             kind="managed",
-            scopes=tuple(matched.scopes or ["chat", "models", "files", "images"]),
+            scopes=tuple(matched.scopes or ["chat", "models", "files", "images", "audio"]),
         )
 
     def list_public(self) -> list[dict[str, Any]]:
