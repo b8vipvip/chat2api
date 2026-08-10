@@ -24,6 +24,7 @@ jobs:
         run: |
           node --check chrome_extension/content.js
           node --check chrome_extension/content_request_v2.js
+          node --check chrome_extension/content_request_v3.js
           node --check chrome_extension/content_model_v5.js
           node --check chrome_extension/content_model_v6.js
           node --check chrome_extension/content_multimodal.js
@@ -47,6 +48,7 @@ jobs:
           node --check app/admin_v6.js
           node --check app/admin_v7.js
           node --check app/admin_v8.js
+          node --check app/admin_v9.js
           python - <<'PY'
           import re
           from pathlib import Path
