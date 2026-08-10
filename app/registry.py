@@ -194,10 +194,21 @@ class ClientRegistry:
                 "label": "ChatGPT Images browser route",
                 "capabilities": ["image-generation", "image-reference"], "clients": [],
             },
+            "gpt-live": {
+                "id": "gpt-live", "object": "model", "created": 0, "owned_by": "chat2api",
+                "label": "ChatGPT Voice / GPT-Live route",
+                "capabilities": ["voice-generation", "voice-conversation", "text"], "clients": [],
+            },
+            "gpt-live-mini": {
+                "id": "gpt-live-mini", "object": "model", "created": 0, "owned_by": "chat2api",
+                "label": "ChatGPT Voice / GPT-Live mini route",
+                "capabilities": ["voice-generation", "voice-conversation", "text"], "clients": [],
+            },
         }
         client_ids = self.online_client_ids() if online_only else list(self.clients)
+        base_ids = ("default", "chatgpt-web", "gpt-image", "gpt-live", "gpt-live-mini")
         for client_id in client_ids:
-            for base_id in ("default", "chatgpt-web", "gpt-image"):
+            for base_id in base_ids:
                 if client_id not in catalog[base_id]["clients"]:
                     catalog[base_id]["clients"].append(client_id)
             for model in self.client_models(client_id):
@@ -220,8 +231,8 @@ class ClientRegistry:
                     entry["clients"].append(client_id)
                 if model.get("selected"):
                     entry["selected_on"] = client_id
-        order = {"default": 0, "chatgpt-web": 1, "gpt-image": 2}
-        return sorted(catalog.values(), key=lambda item: (order.get(str(item["id"]), 3), str(item["id"])))
+        order = {"default": 0, "chatgpt-web": 1, "gpt-image": 2, "gpt-live": 3, "gpt-live-mini": 4}
+        return sorted(catalog.values(), key=lambda item: (order.get(str(item["id"]), 5), str(item["id"])))
 
     def summaries(self) -> list[dict[str, Any]]:
         return [

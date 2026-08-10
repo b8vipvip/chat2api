@@ -6,4 +6,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 RUN mkdir -p /app/data
 EXPOSE 8765
-CMD ["sh", "-c", "uvicorn app.main:app --host ${CHAT2API_HOST:-0.0.0.0} --port ${CHAT2API_PORT:-8765}"]
+CMD ["sh", "-c", "uvicorn app.entry:app --host ${CHAT2API_HOST:-0.0.0.0} --port ${CHAT2API_PORT:-8765}"]
