@@ -8,7 +8,7 @@ EXTENSION = ROOT / "chrome_extension"
 
 def test_manifest_loads_hybrid_and_multimodal_controllers() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.6.3"
+    assert manifest["version"] == "0.6.4"
     scripts = [name for block in manifest["content_scripts"] for name in block["js"]]
     assert "voice_main.js" in scripts
     assert "voice_main_v2.js" in scripts
@@ -22,6 +22,7 @@ def test_manifest_loads_hybrid_and_multimodal_controllers() -> None:
     assert "content_voice_v2.js" in scripts
     assert "content_dictation.js" in scripts
     assert "content_dictation_v3.js" in scripts
+    assert "content_dictation_v4.js" in scripts
 
 
 def test_request_router_uses_state_probe_before_v5_selection_and_attachments() -> None:
@@ -46,12 +47,16 @@ def test_request_controller_waits_for_send_ready_and_confirms_submission() -> No
     assert source.index("await submitAndConfirm(active, composer)") < source.index("await monitor(active)")
 
 
-def test_image_router_targets_chatgpt_images() -> None:
+def test_image_router_reuses_bound_tab_and_restores_chat() -> None:
     source = (EXTENSION / "image_routing.js").read_text(encoding="utf-8")
     assert 'IMAGES_URL = "https://chatgpt.com/images/"' in source
-    assert 'message.type!=="image.request"' in source
+    assert 'message.type !== "image.request"' in source
     assert "chat2api.image.request" in source
     assert "chat2api.attach.prepare" in source
+    assert "reuse-bound-tab" in source
+    assert "restoreImageSession" in source
+    assert "imageRestorePromise" in source
+    assert "chrome.tabs.create" not in source
 
 
 def test_v6_state_cache_invalidates_on_manual_composer_control() -> None:
