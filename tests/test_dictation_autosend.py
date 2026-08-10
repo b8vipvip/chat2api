@@ -17,11 +17,13 @@ def test_dictation_v4_auto_submits_after_graceful_finish() -> None:
     assert "send_confirmed: true" in source
     assert "auto_send: true" in source
     assert 'sent: true' in source
-    # v4 deliberately waits for ChatGPT to finish Dictation and publish the text
-    # before stopping the synthetic microphone and auto-sending the transcription.
-    assert source.index('diagnostic(active, "transcription-ready"') < source.index("await stopSyntheticMic(active)")
-    assert source.index("await stopSyntheticMic(active)") < source.index("await autoSend(active, text)")
-    assert source.index("await autoSend(active, text)") < source.index('type: "image.completed"')
+    # v4 has an earlier stopSyntheticMic call in its failure cleanup branch. Verify
+    # the success-path stop that occurs after transcription-ready and before auto-send.
+    transcription_at = source.index('diagnostic(active, "transcription-ready"')
+    success_stop_at = source.index("await stopSyntheticMic(active)", transcription_at)
+    autosend_at = source.index("await autoSend(active, text)", success_stop_at)
+    completed_at = source.index('type: "image.completed"', autosend_at)
+    assert transcription_at < success_stop_at < autosend_at < completed_at
 
 
 def test_audio_router_targets_dictation_v4_only_for_new_requests() -> None:
