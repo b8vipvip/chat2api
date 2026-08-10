@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "chat2api Chrome Bridge",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Turns a logged-in ChatGPT browser tab into a remotely callable text, multimodal, image-generation, Voice and Dictation API bridge.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "tabs", "scripting", "alarms"],
@@ -21,7 +21,7 @@
         "https://www.chatgpt.com/*",
         "https://chat.openai.com/*"
       ],
-      "js": ["voice_main.js"],
+      "js": ["voice_main.js", "voice_main_v2.js"],
       "run_at": "document_start",
       "world": "MAIN"
     },
@@ -43,7 +43,8 @@
         "content_image.js",
         "content_voice.js",
         "content_voice_v2.js",
-        "content_dictation.js"
+        "content_dictation.js",
+        "content_dictation_v3.js"
       ],
       "run_at": "document_idle"
     }
