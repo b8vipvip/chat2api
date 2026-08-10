@@ -8,7 +8,7 @@ EXTENSION = ROOT / "chrome_extension"
 
 def test_manifest_loads_hybrid_and_multimodal_controllers() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.5.0"
+    assert manifest["version"] == "0.6.0"
     scripts = [name for block in manifest["content_scripts"] for name in block["js"]]
     assert "voice_main.js" in scripts
     assert "content_model_v5.js" in scripts
@@ -17,6 +17,8 @@ def test_manifest_loads_hybrid_and_multimodal_controllers() -> None:
     assert "content_guard.js" in scripts
     assert "content_image.js" in scripts
     assert "content_voice.js" in scripts
+    assert "content_voice_v2.js" in scripts
+    assert "content_dictation.js" in scripts
 
 
 def test_request_router_uses_state_probe_before_v5_selection_and_attachments() -> None:

@@ -6,4 +6,5 @@ importScripts(
   "model_routing.js",
   "image_routing.js",
   "voice_routing.js",
+  "audio_routing_v2.js",
 );
