@@ -210,6 +210,7 @@
         request_id: active.requestId,
         diagnostics: {
           images_page: true,
+          image_controller: "image-v2",
           submission_confirmed: true,
           submission_strategy: submitted.strategy,
           submission_reason: submitted.reason,
@@ -233,6 +234,7 @@
             images: [captured],
             diagnostics: {
               images_page: true,
+              image_controller: "image-v2",
               submission_confirmed: true,
               generated_node_count: candidates.length,
               capture_ms: Math.round(performance.now() - started),
@@ -247,7 +249,7 @@
             request_id: active.requestId,
             stage: "generating",
             elapsed_ms: Math.round(performance.now() - started),
-            diagnostics: { submission_confirmed: true, generated_node_count: candidates.length },
+            diagnostics: { image_controller: "image-v2", submission_confirmed: true, generated_node_count: candidates.length },
           });
         }
         await delay(500);
@@ -261,16 +263,16 @@
   }
 
   const listener = (message, _sender, sendResponse) => {
-    if (message.type === "chat2api.image.ping") {
+    if (message.type === "chat2api.image.ping.v2") {
       sendResponse({ ok: true, controller: "image-v2" });
       return false;
     }
-    if (message.type === "chat2api.image.request") {
+    if (message.type === "chat2api.image.request.v2") {
       run(message).catch(error => emit({ type: "image.error", request_id: message.requestId, error: String(error?.message || error) }));
       sendResponse({ ok: true, controller: "image-v2" });
       return false;
     }
-    if (message.type === "chat2api.image.cancel") {
+    if (message.type === "chat2api.image.cancel.v2") {
       if (state.active && state.active.requestId === message.requestId) state.active.cancelled = true;
       sendResponse({ ok: true, controller: "image-v2" });
       return false;
