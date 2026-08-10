@@ -6,11 +6,9 @@
   async function sendCachedExtensionStatus() {
     const settings = await config(); const tabs = await chatTabs(); let bound = null;
     if (Number.isInteger(settings.boundTabId)) bound = tabs.find(tab => tab.id === settings.boundTabId) || null;
-    return trySendSocket({type:"extension.status",metadata:{extension_version:chrome.runtime.getManifest().version,tab_count:tabs.length,bound_tab_id:bound?.id||null,bound_url:bound?.url||"",bound_title:bound?.title||"",models:Array.isArray(settings.models)?settings.models:[],current_model:settings.currentModel||"default",capabilities:["text","model-selection","diagnostics","estimated-token-usage"]}});
+    return trySendSocket({type:"extension.status",metadata:{extension_version:chrome.runtime.getManifest().version,tab_count:tabs.length,bound_tab_id:bound?.id||null,bound_url:bound?.url||"",bound_title:bound?.title||"",models:Array.isArray(settings.models)?settings.models:[],current_model:settings.currentModel||"default",capabilities:["text","vision","file-understanding","image-generation","model-selection","diagnostics","estimated-token-usage"]}});
   }
   sendExtensionStatus = async function(){ return sendCachedExtensionStatus(); };
-  function hasLaunchMarker(value=""){try{return Boolean(new URL(value).searchParams.get("chat2api_launch"));}catch(_){return false;}}
-  async function waitForMarkedTabBinding(timeoutMs=12000){const tabs=await chrome.tabs.query({url:CHATGPT_URLS});if(!tabs.some(tab=>hasLaunchMarker(tab.pendingUrl||tab.url||"")))return null;const deadline=Date.now()+timeoutMs;while(Date.now()<deadline){const settings=await config();if(Number.isInteger(settings.boundTabId)){try{const tab=await chrome.tabs.get(settings.boundTabId);if(isChatGptUrl(tab.url||tab.pendingUrl||""))return tab;}catch(_){}}await sleep(200);}return null;}
   async function persistSelectedModel(data,requestedModel){const settings=await config();const models=Array.isArray(data?.models)&&data.models.length?data.models:(settings.models||[]);const currentModel=data?.current_model||data?.actual_model||requestedModel||"default";await chrome.storage.local.set({models,currentModel,modelsUpdatedAt:Date.now(),lastRequestedModel:requestedModel||"default",lastModelSelectionError:"",modelRouterVersion:data?.router_version||"0.3.5",modelSelectionStrategy:data?.selection_strategy||"",lastModelDiagnostics:data||{}});await sendCachedExtensionStatus();}
   async function sendWithScript(tabId,message,files){try{const response=await chrome.tabs.sendMessage(tabId,message);if(response)return response;}catch(_){}await chrome.scripting.executeScript({target:{tabId},files});await sleep(160);return chrome.tabs.sendMessage(tabId,message);}
   const probeState=(tabId,model)=>sendWithScript(tabId,{type:"chat2api.model.probe.v6",model},["content_model_v6.js"]);
@@ -29,10 +27,17 @@
     const diagnostics={...(response.data||{}),...after,requested_model:model,requested_family:after.requested_family||requestedFamily,requested_reasoning:after.requested_reasoning||requestedReasoning,zero_op:false,model_switched:!before.actual_family||before.actual_family!==after.actual_family,reasoning_switched:Boolean(requestedReasoning)&&before.actual_reasoning!==after.actual_reasoning,state_source:after.state_source||"post-selection-commit",state_detect_ms:before.state_detect_ms??stateDetectMs,model_selection_ms:Date.now()-selectionStarted,model_prepare_ms:Date.now()-totalStarted,selection_strategy:(response.data||{}).selection_strategy||"hybrid-v5+state-v6"};await persistSelectedModel(diagnostics,model);return{model,prepared:true,executionModel:"chatgpt-web",data:diagnostics,diagnostics};
   }
 
+  async function prepareAttachments(tabId, attachments) {
+    if (!Array.isArray(attachments) || !attachments.length) return {};
+    const response = await sendWithScript(tabId,{type:"chat2api.attach.prepare",attachments},["content_multimodal.js"]);
+    if (!response?.ok) throw new Error(response?.error || "Unable to attach files to ChatGPT");
+    return response.data || {};
+  }
+
   handleServerMessage = async function handleRequestDrivenModelRouting(message){
     if(message.type!=="chat.request")return baseHandleServerMessage(message);
     const requestedModel=String(message.options?.model||"default").trim()||"default";const routingStarted=Date.now();
-    try{const markedTab=await waitForMarkedTabBinding();const tab=markedTab||await resolveTargetTab();const tabReadyMs=Date.now()-routingStarted;await ensureContent(tab.id);const prepared=await prepareRequestedModel(tab,requestedModel);const diagnostics={...(prepared.diagnostics||{}),tab_ready_ms:tabReadyMs,routing_ms:Date.now()-routingStarted,tab_id:tab.id};
+    try{const tab=await resolveTargetTab();const tabReadyMs=Date.now()-routingStarted;await ensureContent(tab.id);const prepared=await prepareRequestedModel(tab,requestedModel);const attachmentDiagnostics=await prepareAttachments(tab.id,message.attachments||[]);const diagnostics={...(prepared.diagnostics||{}),...attachmentDiagnostics,tab_ready_ms:tabReadyMs,routing_ms:Date.now()-routingStarted,tab_id:tab.id};
       await trySendSocket({type:"chat.diagnostics",request_id:message.request_id,diagnostics});
       const response=await chrome.tabs.sendMessage(tab.id,{type:"chat2api.request",requestId:message.request_id,prompt:message.prompt,options:{...(message.options||{}),model:prepared.executionModel,requested_model:requestedModel,model_prepared:prepared.prepared,model_selection_strategy:diagnostics.selection_strategy,chat2api_diagnostics:diagnostics}});if(!response?.ok)throw new Error(response?.error||"ChatGPT tab rejected the request");
     }catch(error){const text=String(error?.message||error);await chrome.storage.local.set({lastRequestedModel:requestedModel,lastModelSelectionError:text});await trySendSocket({type:"chat.error",request_id:message.request_id,error:text});}

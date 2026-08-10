@@ -30,6 +30,7 @@ class RequestState:
             "state_detect_ms": self.diagnostics.get("state_detect_ms"),
             "tab_ready_ms": self.diagnostics.get("tab_ready_ms"),
             "routing_ms": self.diagnostics.get("routing_ms"),
+            "attachment_prepare_ms": self.diagnostics.get("attachment_prepare_ms"),
         }
 
 
@@ -53,7 +54,10 @@ class RequestBroker:
         async with self.lock:
             state = self.requests.pop(request_id, None)
             if state and state.final_future and state.final_future.done() and not state.final_future.cancelled():
-                state.final_future.exception()
+                try:
+                    state.final_future.exception()
+                except asyncio.CancelledError:
+                    pass
             if state and self.client_requests.get(state.client_id) == request_id:
                 self.client_requests.pop(state.client_id, None)
 
@@ -63,11 +67,11 @@ class RequestBroker:
             return False
         event_type = event.get("type")
         now = time.perf_counter()
-        if event_type == "chat.diagnostics":
+        if event_type in {"chat.diagnostics", "image.diagnostics"}:
             diagnostics = event.get("diagnostics")
             if isinstance(diagnostics, dict):
                 state.diagnostics.update(diagnostics)
-        elif event_type == "chat.started":
+        elif event_type in {"chat.started", "image.started"}:
             state.browser_started_mono = state.browser_started_mono or now
             diagnostics = event.get("diagnostics")
             if isinstance(diagnostics, dict):
@@ -85,7 +89,9 @@ class RequestBroker:
             state.text = final
             if state.final_future and not state.final_future.done():
                 state.final_future.set_result(final)
-        elif event_type in {"chat.error", "chat.cancelled"}:
+        elif event_type == "image.completed":
+            state.completed_mono = now
+        elif event_type in {"chat.error", "chat.cancelled", "image.error", "image.cancelled"}:
             state.completed_mono = now
             message = str(event.get("error") or event.get("reason") or "Request failed")
             if state.final_future and not state.final_future.done():

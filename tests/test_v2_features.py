@@ -19,20 +19,17 @@ def settings(tmp_path: Path) -> Settings:
 
 
 def pair(client: TestClient) -> tuple[str, str]:
-    response = client.post("/api/extensions/register", headers={"X-Pairing-Code": "pair-code"}, json={"name": "Chrome", "version": "0.3.5"})
+    response = client.post("/api/extensions/register", headers={"X-Pairing-Code": "pair-code"}, json={"name": "Chrome", "version": "0.4.0"})
     assert response.status_code == 200
     body = response.json()
     return body["client_id"], body["token"]
 
 
-def test_desktop_bootstrap_is_authenticated(tmp_path: Path) -> None:
+def test_desktop_runtime_is_removed(tmp_path: Path) -> None:
     with TestClient(create_app(settings(tmp_path))) as client:
-        assert client.get("/api/desktop/bootstrap").status_code == 401
-        response = client.get("/api/desktop/bootstrap", headers={"Authorization": "Bearer test-key"})
-        assert response.status_code == 200
-        assert response.json()["server_url"] == "https://chat2api.example.test"
-        assert response.json()["pairing_code"] == "pair-code"
-        assert response.json()["auto_bind"] is True
+        assert client.get("/api/desktop/bootstrap").status_code == 404
+        health = client.get("/healthz").json()
+        assert "online_desktop_agents" not in health
 
 
 def test_dynamic_model_catalog_from_extension_status(tmp_path: Path) -> None:
@@ -46,6 +43,8 @@ def test_dynamic_model_catalog_from_extension_status(tmp_path: Path) -> None:
             models = {item["id"]: item for item in response.json()["data"]}
             assert "default" in models
             assert "chatgpt-web" in models
+            assert "gpt-image" in models
+            assert "vision" in models["default"]["capabilities"]
             assert models["gpt-5.6-sol-high"]["clients"] == [client_id]
             assert models["gpt-5.6-sol-high"]["selected_on"] == client_id
 

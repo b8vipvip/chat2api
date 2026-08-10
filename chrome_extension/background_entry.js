@@ -1,7 +1,7 @@
 importScripts(
   "background.js",
   "background_hardening.js",
-  "existing_chrome.js",
-  "launch_retry.js",
+  "browser_tabs.js",
   "model_routing.js",
+  "image_routing.js",
 );

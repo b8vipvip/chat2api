@@ -6,15 +6,17 @@ ROOT = Path(__file__).resolve().parents[1]
 EXTENSION = ROOT / "chrome_extension"
 
 
-def test_manifest_loads_hybrid_model_controller() -> None:
+def test_manifest_loads_hybrid_and_multimodal_controllers() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.3.5"
+    assert manifest["version"] == "0.4.0"
     scripts = manifest["content_scripts"][0]["js"]
     assert "content_model_v5.js" in scripts
     assert "content_model_v6.js" in scripts
+    assert "content_multimodal.js" in scripts
+    assert "content_image.js" in scripts
 
 
-def test_request_router_uses_state_probe_before_v5_selection() -> None:
+def test_request_router_uses_state_probe_before_v5_selection_and_attachments() -> None:
     source = (EXTENSION / "model_routing.js").read_text(encoding="utf-8")
     assert "chat2api.model.probe.v6" in source
     assert "chat2api.model.commit.v6" in source
@@ -22,6 +24,15 @@ def test_request_router_uses_state_probe_before_v5_selection() -> None:
     assert 'DEFAULT_MODEL_IDS = new Set(["default", "chatgpt-web", ""])' in source
     assert "state-match-zero-op" in source
     assert 'type:"chat.diagnostics"' in source
+    assert "chat2api.attach.prepare" in source
+
+
+def test_image_router_targets_chatgpt_images() -> None:
+    source = (EXTENSION / "image_routing.js").read_text(encoding="utf-8")
+    assert 'IMAGES_URL = "https://chatgpt.com/images/"' in source
+    assert 'message.type!=="image.request"' in source
+    assert "chat2api.image.request" in source
+    assert "chat2api.attach.prepare" in source
 
 
 def test_v6_state_cache_invalidates_on_manual_composer_control() -> None:
