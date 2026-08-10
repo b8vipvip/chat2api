@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .diagnostics import current_trace_id
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -35,6 +37,9 @@ class TelemetryStore:
 
     async def append(self, item: dict[str, Any]) -> None:
         record = dict(item)
+        trace_id = current_trace_id.get()
+        if trace_id:
+            record.setdefault("trace_id", trace_id)
         record.setdefault("recorded_at", utc_now())
         async with self.lock:
             self.items.append(record)
@@ -82,6 +87,7 @@ class TelemetryStore:
                     str(value or "")
                     for value in (
                         row.get("request_id"),
+                        row.get("trace_id"),
                         row.get("client_id"),
                         row.get("requested_model"),
                         actual_model,
