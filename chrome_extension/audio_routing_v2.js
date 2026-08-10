@@ -7,7 +7,7 @@
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
-        files: ["voice_main.js"],
+        files: ["voice_main.js", "voice_main_v2.js"],
         world: "MAIN",
         injectImmediately: true,
       });
