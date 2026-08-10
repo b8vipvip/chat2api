@@ -70,12 +70,12 @@
         const tab = await resolveTargetTab();
         await ensureAudioControllers(tab.id);
         const response = await chrome.tabs.sendMessage(tab.id, {
-          type: "chat2api.dictation.request",
+          type: "chat2api.dictation.request.v2",
           requestId: message.request_id,
           audio: message.audio || null,
           options: message.options || {},
         });
-        if (!response?.ok) throw new Error(response?.error || "Dictation controller rejected the request");
+        if (!response?.ok) throw new Error(response?.error || "Dictation v2 controller rejected the request");
       } catch (error) {
         await sendBrowserError(message.request_id, "dictation", error);
       }
@@ -86,7 +86,7 @@
       try {
         const tab = await resolveTargetTab();
         await ensureAudioControllers(tab.id);
-        await chrome.tabs.sendMessage(tab.id, { type: "chat2api.dictation.cancel", requestId: message.request_id });
+        await chrome.tabs.sendMessage(tab.id, { type: "chat2api.dictation.cancel.v2", requestId: message.request_id });
       } catch (error) {
         await trySendSocket({
           type: "image.cancelled",
@@ -114,6 +114,7 @@
           "voice-generation",
           "voice-conversation",
           "dictation",
+          "dictation-auto-send",
           "audio-transcription",
           "gpt-live",
           "gpt-dictation",
