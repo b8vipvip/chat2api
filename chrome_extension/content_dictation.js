@@ -1,5 +1,5 @@
 (() => {
-  const KEY = "__CHAT2API_DICTATION_CONTENT_V1__";
+  const KEY = "__CHAT2API_DICTATION_CONTENT_V2__";
   if (globalThis[KEY]) return;
 
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -36,6 +36,10 @@
     if (!input) return "";
     if (input instanceof HTMLInputElement || input instanceof HTMLTextAreaElement) return String(input.value || "").trim();
     return String(input.innerText || input.textContent || "").replace(/\s+/g, " ").trim();
+  }
+
+  function userMessageCount() {
+    return document.querySelectorAll("[data-message-author-role='user']").length;
   }
 
   async function emit(event) {
@@ -123,6 +127,13 @@
     return buttons.find(button => /(停止听写|结束听写|完成听写|stop dictat|stop recording|停止录音|done dictat)/i.test(labelOf(button))) || null;
   }
 
+  function sendButton() {
+    const root = composerRoot() || document;
+    const buttons = [...root.querySelectorAll("button")].filter(button => visible(button) && !button.disabled);
+    return buttons.find(button => button.dataset.testid === "send-button") ||
+      buttons.find(button => /(发送提示|发送消息|发送|send prompt|send message|submit)/i.test(labelOf(button))) || null;
+  }
+
   function pageError() {
     const roots = [...document.querySelectorAll("[role='alert'], article[data-testid^='conversation-turn']")].filter(visible).slice(-4);
     for (const root of roots) {
@@ -130,6 +141,64 @@
       if (/(出了点问题|发生错误|something went wrong|network error|请重试|please retry)/i.test(text)) return text.slice(0, 500);
     }
     return "";
+  }
+
+  async function autoSendTranscription(active, text) {
+    const input = await waitFor(composerInput, 6000, 100);
+    if (!input) throw new Error("Dictation transcription is ready but the ChatGPT composer is unavailable for auto-send");
+    const beforeUsers = userMessageCount();
+    const current = composerText();
+    if (!current || current !== text) {
+      throw new Error("Dictation transcription changed before auto-send; refusing to send an unexpected composer value");
+    }
+
+    const button = await waitFor(sendButton, 5000, 100);
+    let strategy = "enter-key";
+    if (button) {
+      strategy = button.dataset.testid === "send-button" ? "send-button-testid" : "send-button-label";
+      button.click();
+    } else {
+      input.focus();
+      input.dispatchEvent(new KeyboardEvent("keydown", {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true,
+      }));
+      input.dispatchEvent(new KeyboardEvent("keyup", {
+        key: "Enter",
+        code: "Enter",
+        keyCode: 13,
+        which: 13,
+        bubbles: true,
+        cancelable: true,
+      }));
+    }
+    await diagnostic(active, "send-triggered", {
+      auto_send: true,
+      send_strategy: strategy,
+      transcript_chars: text.length,
+    });
+
+    const confirmed = await waitFor(() => {
+      const composerCleared = composerText() === "";
+      const newUserMessage = userMessageCount() > beforeUsers;
+      return (composerCleared || newUserMessage) ? { composerCleared, newUserMessage } : null;
+    }, 10000, 120);
+    if (!confirmed) {
+      const error = pageError();
+      throw new Error(error ? `ChatGPT rejected Dictation auto-send: ${error}` : "Dictation transcription was produced but automatic send could not be confirmed");
+    }
+    await diagnostic(active, "send-confirmed", {
+      auto_send: true,
+      send_strategy: strategy,
+      send_confirmed: true,
+      composer_cleared: Boolean(confirmed.composerCleared),
+      user_message_observed: Boolean(confirmed.newUserMessage),
+    });
+    return strategy;
   }
 
   async function runDictation(message) {
@@ -146,7 +215,7 @@
     const started = performance.now();
 
     try {
-      await diagnostic(active, "request-received");
+      await diagnostic(active, "request-received", { auto_send: true });
       if (!message.audio?.file_id) throw new Error("Dictation requires an audio input file");
       const audio = await fetchAudio(message.audio);
       if (!audio?.base64) throw new Error("Dictation audio download returned no data");
@@ -158,9 +227,12 @@
       });
       const prepared = await waitMain(active.requestId, item => item.type === "voice.prepared", 5000);
       if (!prepared) throw new Error("MAIN-world audio bridge did not acknowledge Dictation preparation");
-      await diagnostic(active, "main-prepared", { audio_bytes: Number(audio.size || 0) });
+      await diagnostic(active, "main-prepared", { audio_bytes: Number(audio.size || 0), auto_send: true });
 
       const before = composerText();
+      if (before) {
+        throw new Error("ChatGPT composer already contains a manual draft; gpt-dictation will not auto-send over existing text");
+      }
       const trigger = await waitFor(dictationTrigger, 15000, 150);
       if (!trigger) {
         const labels = [...(composerRoot() || document).querySelectorAll("button")].filter(visible).map(labelOf).filter(Boolean).slice(0, 40);
@@ -168,9 +240,9 @@
       }
       active.trigger = trigger.button;
       active.triggerLabel = trigger.label;
-      await diagnostic(active, "trigger-found", { dictation_trigger_label: trigger.label });
+      await diagnostic(active, "trigger-found", { dictation_trigger_label: trigger.label, auto_send: true });
       trigger.button.click();
-      await diagnostic(active, "trigger-clicked");
+      await diagnostic(active, "trigger-clicked", { auto_send: true });
 
       const mic = await waitMain(active.requestId, item => item.type === "voice.mic.synthetic", 15000);
       if (!mic) {
@@ -186,13 +258,14 @@
           dictation_stage: "recording",
           dictation_trigger_label: active.triggerLabel,
           synthetic_mic_seen: true,
+          auto_send: true,
         },
       });
 
       postMain("voice.input.play", active);
       const inputStarted = await waitMain(active.requestId, item => item.type === "voice.input.started" || item.type === "voice.input.error", 8000);
       if (!inputStarted || inputStarted.type === "voice.input.error") throw new Error(inputStarted?.error || "Unable to play audio into ChatGPT Dictation");
-      await diagnostic(active, "input-started", { input_duration_ms: inputStarted.duration_ms || null });
+      await diagnostic(active, "input-started", { input_duration_ms: inputStarted.duration_ms || null, auto_send: true });
       const inputEnded = await waitMain(
         active.requestId,
         item => item.type === "voice.input.ended" || item.type === "voice.input.error",
@@ -204,7 +277,7 @@
       const stop = stopDictationButton();
       if (stop) stop.click();
       else if (active.trigger && document.contains(active.trigger) && visible(active.trigger)) active.trigger.click();
-      await diagnostic(active, "stop-clicked", { stop_button_found: Boolean(stop) });
+      await diagnostic(active, "stop-clicked", { stop_button_found: Boolean(stop), auto_send: true });
 
       const timeoutMs = Math.max(15000, Number(active.timeoutSeconds) * 1000);
       const deadline = Date.now() + timeoutMs;
@@ -214,7 +287,7 @@
         const error = pageError();
         if (error) throw new Error(`ChatGPT Dictation UI error: ${error}`);
         const current = composerText();
-        if (current && current !== before) {
+        if (current) {
           if (current !== text) {
             text = current;
             stableAt = Date.now();
@@ -224,8 +297,13 @@
         await delay(120);
       }
       if (active.cancelled) throw new Error("Dictation request cancelled");
-      if (!text || text === before) throw new Error("Timed out waiting for ChatGPT Dictation transcription text");
+      if (!text) throw new Error("Timed out waiting for ChatGPT Dictation transcription text");
+      await diagnostic(active, "transcription-ready", {
+        transcript_chars: text.length,
+        auto_send: true,
+      });
 
+      const sendStrategy = await autoSendTranscription(active, text);
       const diagnostics = {
         route: "chatgpt-dictation",
         dictation_stage: "completed",
@@ -233,10 +311,13 @@
         synthetic_mic_seen: true,
         input_duration_ms: inputEnded.duration_ms || inputStarted.duration_ms || null,
         transcript_chars: text.length,
+        auto_send: true,
+        send_confirmed: true,
+        send_strategy: sendStrategy,
         total_browser_ms: Math.round((performance.now() - started) * 10) / 10,
       };
       await emit({ type: "image.diagnostics", kind: "dictation", request_id: active.requestId, diagnostics });
-      await emit({ type: "image.completed", kind: "dictation", request_id: active.requestId, text });
+      await emit({ type: "image.completed", kind: "dictation", request_id: active.requestId, text, sent: true });
     } finally {
       postMain("voice.reset", active);
       state.mainEvents.delete(active.requestId);
@@ -252,17 +333,17 @@
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message.type === "chat2api.dictation.request") {
+    if (message.type === "chat2api.dictation.request.v2") {
       runDictation(message).catch(error => emit({
         type: "image.error",
         kind: "dictation",
         request_id: message.requestId,
         error: String(error?.message || error),
       }));
-      sendResponse({ ok: true, controller: "dictation-v1" });
+      sendResponse({ ok: true, controller: "dictation-v2", auto_send: true });
       return false;
     }
-    if (message.type === "chat2api.dictation.cancel") {
+    if (message.type === "chat2api.dictation.cancel.v2") {
       cancelDictation(message.requestId).then(() => sendResponse({ ok: true }));
       return true;
     }

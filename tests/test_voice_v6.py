@@ -192,12 +192,13 @@ def test_extension_contains_visual_error_guard_and_voice_bridge() -> None:
     main_world = (root / "chrome_extension" / "voice_main.js").read_text(encoding="utf-8")
     routing = (root / "chrome_extension" / "voice_routing.js").read_text(encoding="utf-8")
     audio_routing = (root / "chrome_extension" / "audio_routing_v2.js").read_text(encoding="utf-8")
-    assert '"version": "0.6.0"' in manifest
+    assert '"version": "0.6.1"' in manifest
     assert '"world": "MAIN"' in manifest
     assert "出了点问题" in guard and "ui_retry_count" in guard and "chat.error" in guard
     assert "chat2api.voice.request" in voice
     assert "voice_stage" in voice_v2 and "启动语音功能" in voice_v2 and "chat2api.voice.request.v2" in voice_v2
-    assert "听写" in dictation and "chat2api.dictation.request" in dictation
+    assert "听写" in dictation and "chat2api.dictation.request.v2" in dictation
+    assert "autoSendTranscription" in dictation and "send-confirmed" in dictation and "auto_send" in dictation
     assert "RTCPeerConnection" in main_world and "MediaRecorder" in main_world and "getUserMedia" in main_world
     assert "voice.request" in routing and "voice-generation" in routing
-    assert "dictation.request" in audio_routing and "chat2api.voice.request.v2" in audio_routing
+    assert "dictation.request" in audio_routing and "chat2api.dictation.request.v2" in audio_routing
