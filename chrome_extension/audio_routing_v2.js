@@ -2,6 +2,14 @@
   const baseHandleServerMessage = handleServerMessage;
   const baseSendExtensionStatus = sendExtensionStatus;
 
+  async function activateAudioTab(tab) {
+    if (!tab?.id) return tab;
+    try { await chrome.tabs.update(tab.id, { active: true }); } catch (_) {}
+    try { if (Number.isInteger(tab.windowId)) await chrome.windows.update(tab.windowId, { focused: true }); } catch (_) {}
+    await sleep(180);
+    try { return await chrome.tabs.get(tab.id); } catch (_) { return tab; }
+  }
+
   async function ensureAudioControllers(tabId) {
     await ensureContent(tabId);
     try {
@@ -15,10 +23,15 @@
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
-        files: ["content_voice_v2.js", "content_dictation_v3.js"],
+        files: ["content_voice_v2.js", "content_dictation_v3.js", "content_dictation_v4.js"],
       });
     } catch (_) {}
     await sleep(120);
+  }
+
+  async function resolveActiveAudioTab() {
+    const tab = await resolveTargetTab();
+    return activateAudioTab(tab);
   }
 
   async function sendBrowserError(requestId, kind, error) {
@@ -33,7 +46,7 @@
   handleServerMessage = async function handleAudioServerMessageV2(message) {
     if (message.type === "voice.request") {
       try {
-        const tab = await resolveTargetTab();
+        const tab = await resolveActiveAudioTab();
         await ensureAudioControllers(tab.id);
         const response = await chrome.tabs.sendMessage(tab.id, {
           type: "chat2api.voice.request.v2",
@@ -51,7 +64,7 @@
 
     if (message.type === "voice.cancel") {
       try {
-        const tab = await resolveTargetTab();
+        const tab = await resolveActiveAudioTab();
         await ensureAudioControllers(tab.id);
         await chrome.tabs.sendMessage(tab.id, { type: "chat2api.voice.cancel.v2", requestId: message.request_id });
       } catch (error) {
@@ -67,15 +80,15 @@
 
     if (message.type === "dictation.request") {
       try {
-        const tab = await resolveTargetTab();
+        const tab = await resolveActiveAudioTab();
         await ensureAudioControllers(tab.id);
         const response = await chrome.tabs.sendMessage(tab.id, {
-          type: "chat2api.dictation.request.v3",
+          type: "chat2api.dictation.request.v4",
           requestId: message.request_id,
           audio: message.audio || null,
           options: message.options || {},
         });
-        if (!response?.ok) throw new Error(response?.error || "Dictation v3 controller rejected the request");
+        if (!response?.ok) throw new Error(response?.error || "Dictation v4 controller rejected the request");
       } catch (error) {
         await sendBrowserError(message.request_id, "dictation", error);
       }
@@ -84,9 +97,9 @@
 
     if (message.type === "dictation.cancel") {
       try {
-        const tab = await resolveTargetTab();
+        const tab = await resolveActiveAudioTab();
         await ensureAudioControllers(tab.id);
-        await chrome.tabs.sendMessage(tab.id, { type: "chat2api.dictation.cancel.v3", requestId: message.request_id });
+        await chrome.tabs.sendMessage(tab.id, { type: "chat2api.dictation.cancel.v4", requestId: message.request_id });
       } catch (error) {
         await trySendSocket({
           type: "image.cancelled",
