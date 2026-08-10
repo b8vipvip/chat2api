@@ -111,10 +111,12 @@
         });
       }
     })();
-    imageRestorePromise = task.finally(() => {
-      if (imageRestorePromise === task) imageRestorePromise = null;
+    let wrapped = null;
+    wrapped = task.finally(() => {
+      if (imageRestorePromise === wrapped) imageRestorePromise = null;
     });
-    return imageRestorePromise;
+    imageRestorePromise = wrapped;
+    return wrapped;
   }
 
   // Any request that follows image generation must wait until the same tab has returned
