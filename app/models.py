@@ -31,7 +31,7 @@ class FileUploadRequest(BaseModel):
     filename: str = Field(min_length=1, max_length=180)
     mime_type: str | None = Field(default=None, max_length=160)
     data_base64: str = Field(min_length=1)
-    purpose: Literal["vision", "file-understanding", "image-reference", "chat2api"] = "chat2api"
+    purpose: Literal["vision", "file-understanding", "image-reference", "voice-input", "chat2api"] = "chat2api"
 
 
 class AttachmentRef(BaseModel):
