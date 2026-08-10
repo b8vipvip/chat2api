@@ -8,10 +8,11 @@ EXTENSION = ROOT / "chrome_extension"
 
 def test_manifest_loads_hybrid_and_multimodal_controllers() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.6.2"
+    assert manifest["version"] == "0.6.3"
     scripts = [name for block in manifest["content_scripts"] for name in block["js"]]
     assert "voice_main.js" in scripts
     assert "voice_main_v2.js" in scripts
+    assert "content_request_v2.js" in scripts
     assert "content_model_v5.js" in scripts
     assert "content_model_v6.js" in scripts
     assert "content_multimodal.js" in scripts
@@ -32,6 +33,17 @@ def test_request_router_uses_state_probe_before_v5_selection_and_attachments() -
     assert "state-match-zero-op" in source
     assert 'type:"chat.diagnostics"' in source
     assert "chat2api.attach.prepare" in source
+
+
+def test_request_controller_waits_for_send_ready_and_confirms_submission() -> None:
+    source = (EXTENSION / "content_request_v2.js").read_text(encoding="utf-8")
+    assert "waitForSendReady" in source
+    assert "buttonReady" in source
+    assert "ready-timeout" in source
+    assert "submission_confirmed" in source
+    assert "send_attempts" in source
+    assert "ChatGPT send action was not confirmed" in source
+    assert source.index("await submitAndConfirm(active, composer)") < source.index("await monitor(active)")
 
 
 def test_image_router_targets_chatgpt_images() -> None:
