@@ -149,7 +149,7 @@ def test_extension_contains_visual_error_guard_and_voice_bridge() -> None:
     routing = (root / "chrome_extension" / "voice_routing.js").read_text(encoding="utf-8")
     audio_routing = (root / "chrome_extension" / "audio_routing_v2.js").read_text(encoding="utf-8")
     multimodal = (root / "chrome_extension" / "content_multimodal.js").read_text(encoding="utf-8")
-    assert '"version": "0.6.2"' in manifest
+    assert '"version": "0.6.3"' in manifest
     assert '"world": "MAIN"' in manifest
     assert "出了点问题" in guard and "ui_retry_count" in guard and "chat.error" in guard
     assert "chat2api.voice.request" in voice
