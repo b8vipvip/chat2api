@@ -34,7 +34,7 @@ def pair_extension(client: TestClient) -> tuple[str, str]:
     response = client.post(
         "/api/extensions/register",
         headers={"X-Pairing-Code": "pair-code"},
-        json={"name": "Chrome", "version": "0.6.2"},
+        json={"name": "Chrome", "version": "0.6.4"},
     )
     assert response.status_code == 200
     body = response.json()
@@ -144,20 +144,26 @@ def test_extension_contains_visual_error_guard_and_voice_bridge() -> None:
     voice = (root / "chrome_extension" / "content_voice.js").read_text(encoding="utf-8")
     voice_v2 = (root / "chrome_extension" / "content_voice_v2.js").read_text(encoding="utf-8")
     dictation_v3 = (root / "chrome_extension" / "content_dictation_v3.js").read_text(encoding="utf-8")
+    dictation_v4 = (root / "chrome_extension" / "content_dictation_v4.js").read_text(encoding="utf-8")
     main_world = (root / "chrome_extension" / "voice_main.js").read_text(encoding="utf-8")
     main_world_v2 = (root / "chrome_extension" / "voice_main_v2.js").read_text(encoding="utf-8")
     routing = (root / "chrome_extension" / "voice_routing.js").read_text(encoding="utf-8")
     audio_routing = (root / "chrome_extension" / "audio_routing_v2.js").read_text(encoding="utf-8")
+    image_routing = (root / "chrome_extension" / "image_routing.js").read_text(encoding="utf-8")
     multimodal = (root / "chrome_extension" / "content_multimodal.js").read_text(encoding="utf-8")
-    assert '"version": "0.6.3"' in manifest
+    assert '"version": "0.6.4"' in manifest
     assert '"world": "MAIN"' in manifest
+    assert "content_dictation_v4.js" in manifest
     assert "出了点问题" in guard and "ui_retry_count" in guard and "chat.error" in guard
     assert "chat2api.voice.request" in voice
     assert "voice_stage" in voice_v2 and "启动语音功能" in voice_v2 and "chat2api.voice.request.v2" in voice_v2
     assert "chat2api.dictation.request.v3" in dictation_v3
-    assert "voice.mic.stop" in dictation_v3 and "send-confirmed" in dictation_v3 and "auto_send" in dictation_v3
+    assert "chat2api.dictation.request.v4" in dictation_v4
+    assert "dictation-ui-ended" in dictation_v4 and "transcription-ready" in dictation_v4 and "send-confirmed" in dictation_v4
     assert "voice.mic.stopped" in main_world_v2
     assert "RTCPeerConnection" in main_world and "MediaRecorder" in main_world and "getUserMedia" in main_world
     assert "voice.request" in routing and "voice-generation" in routing
-    assert "chat2api.dictation.request.v3" in audio_routing
-    assert "uploadErrorFor" in multimodal and "uploadOne" in multimodal and "attachment_verified" in multimodal
+    assert "chat2api.dictation.request.v4" in audio_routing and "activateAudioTab" in audio_routing
+    assert "reuse-bound-tab" in image_routing and "restoreImageSession" in image_routing
+    assert "duplicate_upload_dialog" in multimodal and "attachment_retry_suppressed" in multimodal
+    assert "uploadOne" in multimodal and "attachment_verified" in multimodal
