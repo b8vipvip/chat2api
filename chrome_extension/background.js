@@ -6,32 +6,25 @@ const DEFAULTS = {
   extensionName: "Chrome",
   boundTabId: null,
   autoBind: false,
-  localBootstrapEnabled: true,
   socketState: "disconnected",
   socketError: "",
   models: [],
-  currentModel: "chatgpt-web",
+  currentModel: "default",
   modelsUpdatedAt: 0,
 };
-const LOCAL_BOOTSTRAP_URL = "http://127.0.0.1:8791/bootstrap";
 const CHATGPT_URLS = ["https://chatgpt.com/*", "https://www.chatgpt.com/*", "https://chat.openai.com/*"];
 let socket = null;
 let reconnectTimer = null;
 let reconnectAttempt = 0;
 let keepAliveTimer = null;
-let bootstrapInFlight = null;
 let modelDiscoveryInFlight = null;
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-async function config() {
-  return chrome.storage.local.get(DEFAULTS);
-}
-
+async function config() { return chrome.storage.local.get(DEFAULTS); }
 async function updateState(socketState, socketError = "") {
   await chrome.storage.local.set({ socketState, socketError, socketUpdatedAt: new Date().toISOString() });
 }
-
 function wsUrl(serverUrl, clientId, token) {
   const url = new URL(serverUrl);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
@@ -39,31 +32,24 @@ function wsUrl(serverUrl, clientId, token) {
   url.search = `?token=${encodeURIComponent(token)}`;
   return url.toString();
 }
-
 function isChatGptUrl(value = "") {
-  try {
-    return ["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(new URL(value).hostname);
-  } catch (_) {
-    return false;
-  }
+  try { return ["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(new URL(value).hostname); }
+  catch (_) { return false; }
 }
-
 async function chatTabs() {
   const tabs = await chrome.tabs.query({ url: CHATGPT_URLS });
-  return tabs.filter(tab => Number.isInteger(tab.id) && isChatGptUrl(tab.url || ""));
+  return tabs.filter(tab => Number.isInteger(tab.id) && isChatGptUrl(tab.url || tab.pendingUrl || ""));
 }
-
 async function ensureContent(tabId) {
   try {
     const response = await chrome.tabs.sendMessage(tabId, { type: "chat2api.ping" });
     if (response?.ok) return;
   } catch (_) {}
-  await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
-  await sleep(150);
+  await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js", "content_multimodal.js"] });
+  await sleep(180);
   const response = await chrome.tabs.sendMessage(tabId, { type: "chat2api.ping" });
   if (!response?.ok) throw new Error("ChatGPT page controller did not respond. Reload the tab.");
 }
-
 async function maybeAutoBind() {
   const settings = await config();
   if (Number.isInteger(settings.boundTabId) || !settings.autoBind) return null;
@@ -73,13 +59,12 @@ async function maybeAutoBind() {
   await chrome.storage.local.set({ boundTabId: tabs[0].id });
   return tabs[0];
 }
-
 async function resolveTargetTab() {
   const settings = await config();
   if (Number.isInteger(settings.boundTabId)) {
     try {
       const tab = await chrome.tabs.get(settings.boundTabId);
-      if (isChatGptUrl(tab.url || "")) return tab;
+      if (isChatGptUrl(tab.url || tab.pendingUrl || "")) return tab;
     } catch (_) {}
     await chrome.storage.local.set({ boundTabId: null });
   }
@@ -87,38 +72,29 @@ async function resolveTargetTab() {
   const refreshed = await config();
   if (Number.isInteger(refreshed.boundTabId)) {
     const tab = await chrome.tabs.get(refreshed.boundTabId);
-    if (isChatGptUrl(tab.url || "")) return tab;
+    if (isChatGptUrl(tab.url || tab.pendingUrl || "")) return tab;
   }
   const tabs = await chatTabs();
   if (!tabs.length) throw new Error("No ChatGPT tab is open.");
   if (tabs.length > 1) throw new Error("Multiple ChatGPT tabs are open. Bind the target tab in the extension popup.");
   return tabs[0];
 }
-
-function socketReady() {
-  return Boolean(socket && socket.readyState === WebSocket.OPEN);
-}
-
+function socketReady() { return Boolean(socket && socket.readyState === WebSocket.OPEN); }
 async function sendSocket(payload) {
   if (!socketReady()) throw new Error("Server WebSocket is not connected");
   socket.send(JSON.stringify(payload));
 }
-
 async function trySendSocket(payload) {
   if (!socketReady()) return false;
-  try {
-    socket.send(JSON.stringify(payload));
-    return true;
-  } catch (_) {
-    return false;
-  }
+  try { socket.send(JSON.stringify(payload)); return true; }
+  catch (_) { return false; }
 }
 
 async function discoverModels(tab, force = false) {
-  if (!tab?.id) return { models: [], current_model: "chatgpt-web" };
+  if (!tab?.id) return { models: [], current_model: "default" };
   const settings = await config();
   if (!force && settings.modelsUpdatedAt && Date.now() - Number(settings.modelsUpdatedAt) < 300000) {
-    return { models: settings.models || [], current_model: settings.currentModel || "chatgpt-web" };
+    return { models: settings.models || [], current_model: settings.currentModel || "default" };
   }
   if (modelDiscoveryInFlight) return modelDiscoveryInFlight;
   modelDiscoveryInFlight = (async () => {
@@ -129,17 +105,15 @@ async function discoverModels(tab, force = false) {
       const data = response.data || {};
       await chrome.storage.local.set({
         models: Array.isArray(data.models) ? data.models : [],
-        currentModel: data.current_model || "chatgpt-web",
+        currentModel: data.current_model || "default",
         modelsUpdatedAt: Date.now(),
         modelDiscoveryError: "",
       });
       return data;
     } catch (error) {
       await chrome.storage.local.set({ modelDiscoveryError: String(error?.message || error) });
-      return { models: settings.models || [], current_model: settings.currentModel || "chatgpt-web" };
-    } finally {
-      modelDiscoveryInFlight = null;
-    }
+      return { models: settings.models || [], current_model: settings.currentModel || "default" };
+    } finally { modelDiscoveryInFlight = null; }
   })();
   return modelDiscoveryInFlight;
 }
@@ -148,14 +122,10 @@ async function sendExtensionStatus(forceModelDiscovery = false) {
   const settings = await config();
   const tabs = await chatTabs();
   let bound = null;
-  if (Number.isInteger(settings.boundTabId)) {
-    bound = tabs.find(tab => tab.id === settings.boundTabId) || null;
-  }
-  if (!bound && settings.autoBind && tabs.length === 1) {
-    bound = await maybeAutoBind();
-  }
-  let modelData = { models: settings.models || [], current_model: settings.currentModel || "chatgpt-web" };
-  if (bound) modelData = await discoverModels(bound, forceModelDiscovery);
+  if (Number.isInteger(settings.boundTabId)) bound = tabs.find(tab => tab.id === settings.boundTabId) || null;
+  if (!bound && settings.autoBind && tabs.length === 1) bound = await maybeAutoBind();
+  let modelData = { models: settings.models || [], current_model: settings.currentModel || "default" };
+  if (bound && forceModelDiscovery) modelData = await discoverModels(bound, true);
   await trySendSocket({
     type: "extension.status",
     metadata: {
@@ -165,8 +135,8 @@ async function sendExtensionStatus(forceModelDiscovery = false) {
       bound_url: bound?.url || "",
       bound_title: bound?.title || "",
       models: modelData.models || [],
-      current_model: modelData.current_model || "chatgpt-web",
-      capabilities: ["text", "model-selection"],
+      current_model: modelData.current_model || "default",
+      capabilities: ["text", "vision", "file-understanding", "image-generation", "model-selection", "diagnostics", "estimated-token-usage"],
     },
   });
 }
@@ -181,6 +151,7 @@ async function handleServerMessage(message) {
         type: "chat2api.request",
         requestId: message.request_id,
         prompt: message.prompt,
+        attachments: message.attachments || [],
         options: message.options || {},
       });
       if (!response?.ok) throw new Error(response?.error || "ChatGPT tab rejected the request");
@@ -206,7 +177,6 @@ async function pair({ serverUrl, pairingCode, extensionName, force = false, auto
   const savedExtensionName = String(extensionName || "Chrome").trim() || "Chrome";
   const existing = await config();
   const sameServer = cleanServer === String(existing.serverUrl || "").replace(/\/$/, "");
-
   if (!force && sameServer && existing.clientId && existing.clientToken) {
     await chrome.storage.local.set({
       serverUrl: cleanServer,
@@ -218,16 +188,10 @@ async function pair({ serverUrl, pairingCode, extensionName, force = false, auto
     await connectSocket();
     return { client_id: existing.clientId, reused: true };
   }
-
   const response = await fetch(`${cleanServer}/api/extensions/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Pairing-Code": savedPairingCode },
-    body: JSON.stringify({
-      name: savedExtensionName,
-      browser_name: "Chrome",
-      version: chrome.runtime.getManifest().version,
-      metadata: { runtime_id: chrome.runtime.id },
-    }),
+    body: JSON.stringify({ name: savedExtensionName, browser_name: "Chrome", version: chrome.runtime.getManifest().version, metadata: { runtime_id: chrome.runtime.id } }),
   });
   if (!response.ok) {
     let detail = `${response.status} ${response.statusText}`;
@@ -249,76 +213,26 @@ async function pair({ serverUrl, pairingCode, extensionName, force = false, auto
   return result;
 }
 
-async function tryLocalBootstrap() {
-  if (bootstrapInFlight) return bootstrapInFlight;
-  bootstrapInFlight = (async () => {
-    const settings = await config();
-    if (!settings.localBootstrapEnabled || (settings.clientId && settings.clientToken)) return false;
-    try {
-      const response = await fetch(LOCAL_BOOTSTRAP_URL, { cache: "no-store" });
-      if (!response.ok) return false;
-      const data = await response.json();
-      if (!data.server_url || !data.pairing_code) return false;
-      await pair({
-        serverUrl: data.server_url,
-        pairingCode: data.pairing_code,
-        extensionName: data.extension_name || "chat2api Desktop Chrome",
-        force: true,
-        autoBind: data.auto_bind !== false,
-      });
-      return true;
-    } catch (_) {
-      return false;
-    } finally {
-      bootstrapInFlight = null;
-    }
-  })();
-  return bootstrapInFlight;
-}
-
 async function connectSocket() {
   clearTimeout(reconnectTimer);
   clearInterval(keepAliveTimer);
-  let settings = await config();
-  if (!settings.clientId || !settings.clientToken) {
-    await tryLocalBootstrap();
-    settings = await config();
-  }
-  if (!settings.clientId || !settings.clientToken) {
-    await updateState("unpaired");
-    return;
-  }
+  const settings = await config();
+  if (!settings.clientId || !settings.clientToken) { await updateState("unpaired"); return; }
   if (socket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(socket.readyState)) return;
   await updateState("connecting");
-  try {
-    socket = new WebSocket(wsUrl(settings.serverUrl, settings.clientId, settings.clientToken));
-  } catch (error) {
-    await updateState("error", String(error?.message || error));
-    scheduleReconnect();
-    return;
-  }
+  try { socket = new WebSocket(wsUrl(settings.serverUrl, settings.clientId, settings.clientToken)); }
+  catch (error) { await updateState("error", String(error?.message || error)); scheduleReconnect(); return; }
   socket.onopen = async () => {
     reconnectAttempt = 0;
     await updateState("connected");
-    await sendSocket({
-      type: "extension.hello",
-      metadata: {
-        extension_version: chrome.runtime.getManifest().version,
-        runtime_id: chrome.runtime.id,
-      },
-    });
+    await sendSocket({ type: "extension.hello", metadata: { extension_version: chrome.runtime.getManifest().version, runtime_id: chrome.runtime.id } });
     await maybeAutoBind();
-    await sendExtensionStatus(true);
-    keepAliveTimer = setInterval(() => {
-      trySendSocket({ type: "heartbeat", ts: Date.now() });
-    }, 20000);
+    await sendExtensionStatus(false);
+    keepAliveTimer = setInterval(() => trySendSocket({ type: "heartbeat", ts: Date.now() }), 20000);
   };
   socket.onmessage = event => {
-    try {
-      handleServerMessage(JSON.parse(event.data)).catch(console.error);
-    } catch (error) {
-      console.warn("chat2api invalid server message", error);
-    }
+    try { handleServerMessage(JSON.parse(event.data)).catch(console.error); }
+    catch (error) { console.warn("chat2api invalid server message", error); }
   };
   socket.onerror = () => updateState("error", "WebSocket connection error");
   socket.onclose = event => {
@@ -327,36 +241,42 @@ async function connectSocket() {
     scheduleReconnect();
   };
 }
-
 function scheduleReconnect() {
   clearTimeout(reconnectTimer);
   reconnectAttempt += 1;
-  const delay = Math.min(30000, 1000 * 2 ** Math.min(reconnectAttempt, 5));
-  reconnectTimer = setTimeout(() => connectSocket().catch(console.error), delay);
+  reconnectTimer = setTimeout(() => connectSocket().catch(console.error), Math.min(30000, 1000 * 2 ** Math.min(reconnectAttempt, 5)));
 }
 
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === "chat2api.event") {
-    trySendSocket(message.event).then(sent => sendResponse({ ok: sent }));
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  return btoa(binary);
+}
+async function fetchAttachment(fileId) {
+  const settings = await config();
+  if (!settings.clientId || !settings.clientToken) throw new Error("Extension is not paired");
+  const url = `${String(settings.serverUrl).replace(/\/$/, "")}/api/extensions/files/${encodeURIComponent(fileId)}?client_id=${encodeURIComponent(settings.clientId)}&token=${encodeURIComponent(settings.clientToken)}`;
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error(`Attachment ${fileId} download failed: HTTP ${response.status}`);
+  const filename = response.headers.get("X-Chat2API-Filename") || fileId;
+  const mimeType = response.headers.get("Content-Type") || "application/octet-stream";
+  const buffer = await response.arrayBuffer();
+  return { file_id: fileId, filename, mime_type: mimeType, size: buffer.byteLength, base64: arrayBufferToBase64(buffer) };
+}
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "chat2api.event") { trySendSocket(message.event).then(sent => sendResponse({ ok: sent })); return true; }
+  if (message.type === "chat2api.attachment.fetch") {
+    fetchAttachment(message.fileId).then(data => sendResponse({ ok: true, data })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
-  if (message.type === "popup.status") {
-    Promise.all([config(), chatTabs()]).then(([settings, tabs]) => sendResponse({ ok: true, settings, tabs }));
-    return true;
-  }
-  if (message.type === "popup.pair") {
-    pair(message).then(data => sendResponse({ ok: true, data })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
-    return true;
-  }
-  if (message.type === "popup.connect") {
-    connectSocket().then(() => sendResponse({ ok: true })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
-    return true;
-  }
+  if (message.type === "popup.status") { Promise.all([config(), chatTabs()]).then(([settings, tabs]) => sendResponse({ ok: true, settings, tabs })); return true; }
+  if (message.type === "popup.pair") { pair(message).then(data => sendResponse({ ok: true, data })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) })); return true; }
+  if (message.type === "popup.connect") { connectSocket().then(() => sendResponse({ ok: true })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) })); return true; }
   if (message.type === "popup.discoverModels") {
-    resolveTargetTab()
-      .then(tab => discoverModels(tab, true))
-      .then(data => sendExtensionStatus(true).then(() => sendResponse({ ok: true, data })))
-      .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
+    resolveTargetTab().then(tab => discoverModels(tab, true)).then(data => sendExtensionStatus(false).then(() => sendResponse({ ok: true, data }))).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
   if (message.type === "popup.bind") {
@@ -365,39 +285,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       if (!tab?.id || !isChatGptUrl(tab.url || "")) throw new Error("The active tab is not ChatGPT");
       await ensureContent(tab.id);
       await chrome.storage.local.set({ boundTabId: tab.id, autoBind: false, modelsUpdatedAt: 0 });
-      await sendExtensionStatus(true);
+      await sendExtensionStatus(false);
       sendResponse({ ok: true, tab: { id: tab.id, title: tab.title, url: tab.url } });
     }).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
     return true;
   }
   if (message.type === "popup.unbind") {
-    chrome.storage.local.set({ boundTabId: null }).then(async () => {
-      await sendExtensionStatus();
-      sendResponse({ ok: true });
-    });
+    chrome.storage.local.set({ boundTabId: null }).then(async () => { await sendExtensionStatus(false); sendResponse({ ok: true }); });
     return true;
   }
   return false;
 });
-
-chrome.tabs.onRemoved.addListener(tabId => {
-  config().then(settings => {
-    if (settings.boundTabId === tabId) chrome.storage.local.set({ boundTabId: null });
-  });
-});
-chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
-  if (changeInfo.status !== "complete") return;
-  maybeAutoBind().then(() => sendExtensionStatus()).catch(() => {});
-});
+chrome.tabs.onRemoved.addListener(tabId => { config().then(settings => { if (settings.boundTabId === tabId) chrome.storage.local.set({ boundTabId: null }); }); });
+chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => { if (changeInfo.status === "complete") maybeAutoBind().then(() => sendExtensionStatus(false)).catch(() => {}); });
 chrome.alarms.create("chat2api-keepalive", { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener(alarm => {
   if (alarm.name !== "chat2api-keepalive") return;
-  if (socketReady()) {
-    trySendSocket({ type: "heartbeat", ts: Date.now() });
-    sendExtensionStatus().catch(() => {});
-  } else {
-    connectSocket().catch(() => {});
-  }
+  if (socketReady()) { trySendSocket({ type: "heartbeat", ts: Date.now() }); sendExtensionStatus(false).catch(() => {}); }
+  else connectSocket().catch(() => {});
 });
 chrome.runtime.onInstalled.addListener(() => connectSocket().catch(console.error));
 chrome.runtime.onStartup.addListener(() => connectSocket().catch(console.error));
