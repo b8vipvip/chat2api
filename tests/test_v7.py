@@ -36,7 +36,7 @@ def pair_extension(client: TestClient) -> tuple[str, str]:
     response = client.post(
         "/api/extensions/register",
         headers={"X-Pairing-Code": "pair-code"},
-        json={"name": "Chrome", "version": "0.6.2"},
+        json={"name": "Chrome", "version": "0.6.4"},
     )
     assert response.status_code == 200
     body = response.json()
@@ -157,23 +157,25 @@ def test_admin_v7_removes_request_detail_and_adds_default_asset_tests() -> None:
     assert '["text", "vision", "file", "image_generation", "voice_generation", "voice_conversation", "dictation"]' in source
 
 
-def test_audio_router_prefers_voice_v2_and_dictation_v3() -> None:
+def test_audio_router_prefers_voice_v2_and_dictation_v4() -> None:
     root = Path(__file__).resolve().parents[1]
     routing = (root / "chrome_extension" / "audio_routing_v2.js").read_text(encoding="utf-8")
     voice_v2 = (root / "chrome_extension" / "content_voice_v2.js").read_text(encoding="utf-8")
-    dictation_v3 = (root / "chrome_extension" / "content_dictation_v3.js").read_text(encoding="utf-8")
+    dictation_v4 = (root / "chrome_extension" / "content_dictation_v4.js").read_text(encoding="utf-8")
     main_v2 = (root / "chrome_extension" / "voice_main_v2.js").read_text(encoding="utf-8")
     assert "chat2api.voice.request.v2" in routing
-    assert "chat2api.dictation.request.v3" in routing
+    assert "chat2api.dictation.request.v4" in routing
     assert "content_voice_v2.js" in routing
-    assert "content_dictation_v3.js" in routing
+    assert "content_dictation_v4.js" in routing
+    assert "activateAudioTab" in routing
     assert "ui-ready" in voice_v2
     assert "prompt-sent" in voice_v2
     assert "input-started" in voice_v2
     assert "remote-track" in voice_v2
     assert voice_v2.index("await openVoice(active)") < voice_v2.index("await sendTypedPrompt(active, prompt)")
-    assert "听写" in dictation_v3
-    assert "voice.mic.synthetic" in dictation_v3
-    assert "voice.input.play" in dictation_v3
-    assert "voice.mic.stop" in dictation_v3
+    assert "听写" in dictation_v4
+    assert "voice.mic.synthetic" in dictation_v4
+    assert "voice.input.play" in dictation_v4
+    assert "voice.mic.stop" in dictation_v4
+    assert "dictation-ui-ended" in dictation_v4
     assert "voice.mic.stopped" in main_v2
