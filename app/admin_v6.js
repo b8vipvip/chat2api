@@ -1,6 +1,19 @@
 (() => {
   const oldQuality = quality;
   const oldOneTest = oneTest;
+  const oldFillModels = fillModels;
+
+  const brandSmall = document.querySelector(".brand small");
+  if (brandSmall) brandSmall.textContent = "Server Console · v0.6";
+
+  fillModels = function fillModelsV6() {
+    oldFillModels();
+    const select = $("testModel");
+    if (!select) return;
+    [...select.options].forEach(option => {
+      if (/^gpt-live(?:-|$)/i.test(option.value)) option.remove();
+    });
+  };
 
   function b64ToFile(name, mime, base64) {
     const raw = atob(String(base64 || ""));
