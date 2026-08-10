@@ -4,4 +4,5 @@ importScripts(
   "browser_tabs.js",
   "model_routing.js",
   "image_routing.js",
+  "voice_routing.js",
 );
