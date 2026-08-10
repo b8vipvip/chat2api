@@ -17,18 +17,6 @@ class ExtensionRegistrationResult(BaseModel):
     token: str
 
 
-class DesktopAgentRegistration(BaseModel):
-    name: str = Field(default="Desktop", min_length=1, max_length=120)
-    platform: str = Field(default="unknown", max_length=80)
-    version: str = Field(default="unknown", max_length=40)
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class DesktopAgentRegistrationResult(BaseModel):
-    agent_id: str
-    poll_timeout_seconds: int = 25
-
-
 class ApiKeyCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     expires_in_days: int | None = Field(default=None, ge=1, le=3650)
@@ -37,6 +25,17 @@ class ApiKeyCreate(BaseModel):
 class ApiKeyUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     enabled: bool | None = None
+
+
+class FileUploadRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=180)
+    mime_type: str | None = Field(default=None, max_length=160)
+    data_base64: str = Field(min_length=1)
+    purpose: Literal["vision", "file-understanding", "image-reference", "chat2api"] = "chat2api"
+
+
+class AttachmentRef(BaseModel):
+    file_id: str = Field(min_length=1, max_length=120)
 
 
 class ChatMessage(BaseModel):
@@ -58,19 +57,36 @@ class ChatMessage(BaseModel):
             return "\n".join(item for item in parts if item).strip()
         return str(self.content or "").strip()
 
+    def referenced_file_ids(self) -> list[str]:
+        if not isinstance(self.content, list):
+            return []
+        result: list[str] = []
+        for part in self.content:
+            if not isinstance(part, dict):
+                continue
+            kind = str(part.get("type") or "")
+            if kind in {"file", "input_file"}:
+                value = part.get("file_id") or (part.get("file") or {}).get("file_id")
+                if value:
+                    result.append(str(value))
+            elif kind in {"image_url", "input_image"}:
+                value = part.get("image_url")
+                if isinstance(value, dict):
+                    value = value.get("url")
+                if isinstance(value, str) and value.startswith("file_"):
+                    result.append(value)
+        return result
+
 
 class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
-
-    # "default" is the zero-touch fast path: use whatever model/reasoning
-    # the bound ChatGPT composer currently has selected and do not open model UI.
-    # "chatgpt-web" remains accepted as a backwards-compatible alias.
     model: str = "default"
     messages: list[ChatMessage]
     stream: bool = False
     client_id: str | None = None
     prompt_mode: Literal["last_user", "full"] = "last_user"
     timeout: int | None = Field(default=None, ge=5, le=900)
+    attachments: list[AttachmentRef] = Field(default_factory=list, max_length=4)
 
     @field_validator("messages")
     @classmethod
@@ -80,6 +96,36 @@ class ChatCompletionRequest(BaseModel):
         if not any(item.role == "user" and item.text() for item in value):
             raise ValueError("messages must contain a non-empty user message")
         return value
+
+    def all_file_ids(self) -> list[str]:
+        result = [item.file_id for item in self.attachments]
+        for message in self.messages:
+            result.extend(message.referenced_file_ids())
+        return list(dict.fromkeys(result))
+
+
+class ImageGenerationRequest(BaseModel):
+    model: Literal["gpt-image"] = "gpt-image"
+    prompt: str = Field(min_length=1, max_length=12000)
+    n: int = Field(default=1, ge=1, le=1)
+    size: str | None = Field(default=None, max_length=40)
+    response_format: Literal["url", "b64_json"] = "b64_json"
+    client_id: str | None = None
+    timeout: int | None = Field(default=None, ge=30, le=900)
+    attachments: list[AttachmentRef] = Field(default_factory=list, max_length=4)
+
+
+class TestRunCreate(BaseModel):
+    run_id: str = Field(min_length=1, max_length=120)
+    test_type: str = Field(min_length=1, max_length=80)
+    status: Literal["passed", "warning", "failed", "skipped"]
+    model: str | None = Field(default=None, max_length=120)
+    started_at: str | None = None
+    finished_at: str | None = None
+    duration_ms: float | None = Field(default=None, ge=0)
+    summary: str = Field(default="", max_length=4000)
+    results: list[dict[str, Any]] = Field(default_factory=list)
+    quality: dict[str, Any] = Field(default_factory=dict)
 
 
 class ClientSummary(BaseModel):
