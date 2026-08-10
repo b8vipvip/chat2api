@@ -27,6 +27,16 @@
     const diagnostics={...(response.data||{}),...after,requested_model:model,requested_family:after.requested_family||requestedFamily,requested_reasoning:after.requested_reasoning||requestedReasoning,zero_op:false,model_switched:!before.actual_family||before.actual_family!==after.actual_family,reasoning_switched:Boolean(requestedReasoning)&&before.actual_reasoning!==after.actual_reasoning,state_source:after.state_source||"post-selection-commit",state_detect_ms:before.state_detect_ms??stateDetectMs,model_selection_ms:Date.now()-selectionStarted,model_prepare_ms:Date.now()-totalStarted,selection_strategy:(response.data||{}).selection_strategy||"hybrid-v5+state-v6"};await persistSelectedModel(diagnostics,model);return{model,prepared:true,executionModel:"chatgpt-web",data:diagnostics,diagnostics};
   }
 
+  async function preflightRequest(tabId, message) {
+    const response = await sendWithScript(
+      tabId,
+      { type: "chat2api.request.preflight", requestId: message.request_id, prompt: message.prompt || "" },
+      ["content_request_v2.js", "content_multimodal.js", "content_request_v3.js"],
+    );
+    if (!response?.ok) throw new Error(response?.error || "ChatGPT composer preflight failed");
+    return response.data || {};
+  }
+
   async function prepareAttachments(tabId, attachments) {
     if (!Array.isArray(attachments) || !attachments.length) return {};
     const response = await sendWithScript(tabId,{type:"chat2api.attach.prepare",attachments},["content_multimodal.js"]);
@@ -37,9 +47,17 @@
   handleServerMessage = async function handleRequestDrivenModelRouting(message){
     if(message.type!=="chat.request")return baseHandleServerMessage(message);
     const requestedModel=String(message.options?.model||"default").trim()||"default";const routingStarted=Date.now();
-    try{const tab=await resolveTargetTab();const tabReadyMs=Date.now()-routingStarted;await ensureContent(tab.id);const prepared=await prepareRequestedModel(tab,requestedModel);const attachmentDiagnostics=await prepareAttachments(tab.id,message.attachments||[]);const diagnostics={...(prepared.diagnostics||{}),...attachmentDiagnostics,tab_ready_ms:tabReadyMs,routing_ms:Date.now()-routingStarted,tab_id:tab.id};
+    try{
+      const tab=await resolveTargetTab();
+      const tabReadyMs=Date.now()-routingStarted;
+      await ensureContent(tab.id);
+      const preflightDiagnostics=await preflightRequest(tab.id,message);
+      const prepared=await prepareRequestedModel(tab,requestedModel);
+      const attachmentDiagnostics=await prepareAttachments(tab.id,message.attachments||[]);
+      const diagnostics={...(prepared.diagnostics||{}),...preflightDiagnostics,...attachmentDiagnostics,tab_ready_ms:tabReadyMs,routing_ms:Date.now()-routingStarted,tab_id:tab.id};
       await trySendSocket({type:"chat.diagnostics",request_id:message.request_id,diagnostics});
-      const response=await chrome.tabs.sendMessage(tab.id,{type:"chat2api.request",requestId:message.request_id,prompt:message.prompt,options:{...(message.options||{}),model:prepared.executionModel,requested_model:requestedModel,model_prepared:prepared.prepared,model_selection_strategy:diagnostics.selection_strategy,chat2api_diagnostics:diagnostics}});if(!response?.ok)throw new Error(response?.error||"ChatGPT tab rejected the request");
+      const response=await chrome.tabs.sendMessage(tab.id,{type:"chat2api.request",requestId:message.request_id,prompt:message.prompt,options:{...(message.options||{}),model:prepared.executionModel,requested_model:requestedModel,model_prepared:prepared.prepared,model_selection_strategy:diagnostics.selection_strategy,chat2api_diagnostics:diagnostics}});
+      if(!response?.ok)throw new Error(response?.error||"ChatGPT tab rejected the request");
     }catch(error){const text=String(error?.message||error);await chrome.storage.local.set({lastRequestedModel:requestedModel,lastModelSelectionError:text});await trySendSocket({type:"chat.error",request_id:message.request_id,error:text});}
   };
 })();
