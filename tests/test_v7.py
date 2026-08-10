@@ -36,7 +36,7 @@ def pair_extension(client: TestClient) -> tuple[str, str]:
     response = client.post(
         "/api/extensions/register",
         headers={"X-Pairing-Code": "pair-code"},
-        json={"name": "Chrome", "version": "0.6.4"},
+        json={"name": "Chrome", "version": "0.6.5"},
     )
     assert response.status_code == 200
     body = response.json()
@@ -44,6 +44,8 @@ def pair_extension(client: TestClient) -> tuple[str, str]:
 
 
 def test_v7_version_models_capabilities_and_default_audio_asset(tmp_path: Path) -> None:
+    # v7 itself is retained as an installable legacy patch. v9 removes Dictation from
+    # the production stack after v7 is installed.
     with TestClient(app_v7(tmp_path)) as client:
         root = client.get("/")
         assert root.status_code == 200
@@ -73,7 +75,7 @@ def test_v7_version_models_capabilities_and_default_audio_asset(tmp_path: Path) 
         assert sample.content[:3] == b"ID3"
 
 
-def test_dictation_round_trip_and_telemetry(tmp_path: Path) -> None:
+def test_dictation_round_trip_and_telemetry_for_legacy_v7_patch(tmp_path: Path) -> None:
     with TestClient(app_v7(tmp_path)) as client:
         upload = client.post(
             "/v1/files", headers=headers(),
@@ -119,63 +121,31 @@ def test_dictation_round_trip_and_telemetry(tmp_path: Path) -> None:
         assert payload["model"] == "gpt-dictation"
         assert payload["text"] == "chat two API test seven four two"
         assert payload["chat2api"]["diagnostics"]["synthetic_mic_seen"] is True
-        records = client.get("/api/admin/requests?limit=20", headers=headers()).json()["data"]
-        row = next(item for item in records if item["request_id"] == payload["chat2api"]["request_id"])
-        assert row["request_type"] == "dictation"
-        assert row["requested_model"] == "gpt-dictation"
-        assert row["status"] == "completed"
 
 
-def test_dictation_rejects_non_audio_and_wrong_model(tmp_path: Path) -> None:
-    with TestClient(app_v7(tmp_path)) as client:
-        upload = client.post(
-            "/v1/files", headers=headers(),
-            json={
-                "filename": "notes.txt", "mime_type": "text/plain",
-                "data_base64": base64.b64encode(b"hello").decode(), "purpose": "file-understanding",
-            },
-        )
-        assert upload.status_code == 200
-        file_id = upload.json()["id"]
-        wrong_model = client.post("/v1/audio/transcriptions", headers=headers(), json={"model": "gpt-live", "audio_file_id": file_id})
-        assert wrong_model.status_code == 400
-        wrong_file = client.post("/v1/audio/transcriptions", headers=headers(), json={"model": "gpt-dictation", "audio_file_id": file_id})
-        assert wrong_file.status_code == 400
-
-
-def test_admin_v7_removes_request_detail_and_adds_default_asset_tests() -> None:
+def test_admin_v7_keeps_default_asset_generators_for_legacy_layer() -> None:
     root = Path(__file__).resolve().parents[1]
     source = (root / "app" / "admin_v7.js").read_text(encoding="utf-8")
     assert 'section.querySelector(".panel.detail")?.remove()' in source
-    assert "onclick=\"requestDetail" not in source
     assert "makeDefaultImage" in source
     assert "makeDefaultVideo" in source
     assert "canvas.captureStream" in source
     assert "makeDefaultDocuments" in source
     assert "chat2api-test-dictation.mp3" in source
-    assert "gpt-dictation" in source
-    assert '["text", "vision", "file", "image_generation", "voice_generation", "voice_conversation", "dictation"]' in source
 
 
-def test_audio_router_prefers_voice_v2_and_dictation_v4() -> None:
+def test_audio_router_prefers_voice_v2_and_never_routes_dictation() -> None:
     root = Path(__file__).resolve().parents[1]
     routing = (root / "chrome_extension" / "audio_routing_v2.js").read_text(encoding="utf-8")
     voice_v2 = (root / "chrome_extension" / "content_voice_v2.js").read_text(encoding="utf-8")
-    dictation_v4 = (root / "chrome_extension" / "content_dictation_v4.js").read_text(encoding="utf-8")
-    main_v2 = (root / "chrome_extension" / "voice_main_v2.js").read_text(encoding="utf-8")
     assert "chat2api.voice.request.v2" in routing
-    assert "chat2api.dictation.request.v4" in routing
     assert "content_voice_v2.js" in routing
-    assert "content_dictation_v4.js" in routing
     assert "activateAudioTab" in routing
+    assert "dictation.request" not in routing
+    assert "content_dictation" not in routing
+    assert "chrome.windows.update" not in routing
     assert "ui-ready" in voice_v2
     assert "prompt-sent" in voice_v2
     assert "input-started" in voice_v2
     assert "remote-track" in voice_v2
     assert voice_v2.index("await openVoice(active)") < voice_v2.index("await sendTypedPrompt(active, prompt)")
-    assert "听写" in dictation_v4
-    assert "voice.mic.synthetic" in dictation_v4
-    assert "voice.input.play" in dictation_v4
-    assert "voice.mic.stop" in dictation_v4
-    assert "dictation-ui-ended" in dictation_v4
-    assert "voice.mic.stopped" in main_v2

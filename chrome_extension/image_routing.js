@@ -5,19 +5,21 @@
   const imageSessions = new Map();
   let imageRestorePromise = null;
 
-  async function activateTab(tab) {
+  async function activateTabInOwnWindow(tab) {
     if (!tab?.id) return tab;
     try { await chrome.tabs.update(tab.id, { active: true }); } catch (_) {}
-    try { if (Number.isInteger(tab.windowId)) await chrome.windows.update(tab.windowId, { focused: true }); } catch (_) {}
-    return tab;
+    try { return await chrome.tabs.get(tab.id); } catch (_) { return tab; }
   }
 
   async function ensureImageController(tabId) {
-    try { const response = await chrome.tabs.sendMessage(tabId, { type: "chat2api.image.ping" }); if (response?.ok) return; } catch (_) {}
+    try {
+      const response = await chrome.tabs.sendMessage(tabId, { type: "chat2api.image.ping.v2" });
+      if (response?.ok && response?.controller === "image-v2") return;
+    } catch (_) {}
     await chrome.scripting.executeScript({ target: { tabId }, files: ["content_multimodal.js", "content_image.js"] });
-    await sleep(200);
-    const response = await chrome.tabs.sendMessage(tabId, { type: "chat2api.image.ping" });
-    if (!response?.ok) throw new Error("ChatGPT Images controller did not respond");
+    await sleep(220);
+    const response = await chrome.tabs.sendMessage(tabId, { type: "chat2api.image.ping.v2" });
+    if (!response?.ok || response?.controller !== "image-v2") throw new Error("ChatGPT Images v2 controller did not respond");
   }
 
   async function waitForImages(tabId, timeoutMs = 30000) {
@@ -38,18 +40,14 @@
   }
 
   async function imageTab(requestId) {
-    // Reuse the already-bound automation tab. Creating a second active Images tab left
-    // subsequent Voice/Dictation work running against a background chat tab, which is
-    // unreliable for microphone/Voice UI activation.
     const tab = await baseResolveTargetTabForImages();
     if (!tab?.id) throw new Error("No bound ChatGPT tab is available for image generation");
     const originalUrl = tab.url || tab.pendingUrl || "https://chatgpt.com/";
-    await activateTab(tab);
-    let current = tab;
+    await activateTabInOwnWindow(tab);
     if (!(originalUrl || "").includes("/images")) {
-      current = await chrome.tabs.update(tab.id, { url: IMAGES_URL, active: true });
+      await chrome.tabs.update(tab.id, { url: IMAGES_URL, active: true });
     }
-    current = await waitForImages(tab.id);
+    const current = await waitForImages(tab.id);
     imageSessions.set(requestId, {
       requestId,
       tabId: tab.id,
@@ -68,7 +66,6 @@
       const restoreUrl = session.originalUrl && isChatGptUrl(session.originalUrl) ? session.originalUrl : "https://chatgpt.com/";
       try {
         await chrome.tabs.update(session.tabId, { url: restoreUrl, active: true });
-        try { if (Number.isInteger(session.windowId)) await chrome.windows.update(session.windowId, { focused: true }); } catch (_) {}
         const deadline = Date.now() + 30000;
         let ready = null;
         while (Date.now() < deadline) {
@@ -91,6 +88,7 @@
           request_id: requestId,
           diagnostics: {
             image_tab_strategy: "reuse-bound-tab",
+            image_window_focus_strategy: "tab-active-only",
             image_restore_reason: reason,
             image_restore_ok: true,
             image_restore_ms: Date.now() - session.startedAt,
@@ -103,6 +101,7 @@
           request_id: requestId,
           diagnostics: {
             image_tab_strategy: "reuse-bound-tab",
+            image_window_focus_strategy: "tab-active-only",
             image_restore_reason: reason,
             image_restore_ok: false,
             image_restore_error: String(error?.message || error),
@@ -119,8 +118,6 @@
     return wrapped;
   }
 
-  // Any request that follows image generation must wait until the same tab has returned
-  // to the normal ChatGPT conversation. This makes "全部测试" deterministic.
   resolveTargetTab = async function resolveAfterImages() {
     if (imageRestorePromise) await imageRestorePromise;
     return baseResolveTargetTabForImages();
@@ -148,13 +145,14 @@
       try {
         const session = imageSessions.get(message.request_id);
         const tab = session ? await chrome.tabs.get(session.tabId) : await imageTab(message.request_id);
-        await chrome.tabs.sendMessage(tab.id, { type: "chat2api.image.cancel", requestId: message.request_id });
+        await chrome.tabs.sendMessage(tab.id, { type: "chat2api.image.cancel.v2", requestId: message.request_id });
       } catch (error) {
         await trySendSocket({ type: "image.cancelled", request_id: message.request_id, reason: String(error?.message || error) });
         await restoreImageSession(message.request_id, "cancel-error");
       }
       return;
     }
+
     const started = Date.now();
     try {
       const tab = await imageTab(message.request_id);
@@ -164,16 +162,17 @@
         tab_id: tab.id,
         tab_ready_ms: Date.now() - started,
         image_tab_strategy: "reuse-bound-tab",
+        image_window_focus_strategy: "tab-active-only",
         ...refs,
       };
       await trySendSocket({ type: "image.diagnostics", request_id: message.request_id, diagnostics });
       const response = await chrome.tabs.sendMessage(tab.id, {
-        type: "chat2api.image.request",
+        type: "chat2api.image.request.v2",
         requestId: message.request_id,
         prompt: message.prompt,
         options: message.options || {},
       });
-      if (!response?.ok) throw new Error(response?.error || "ChatGPT Images rejected the request");
+      if (!response?.ok || response?.controller !== "image-v2") throw new Error(response?.error || "ChatGPT Images v2 controller rejected the request");
     } catch (error) {
       await trySendSocket({ type: "image.error", request_id: message.request_id, error: String(error?.message || error) });
       await restoreImageSession(message.request_id, "request-error");

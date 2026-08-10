@@ -4,10 +4,20 @@
 
   async function activateAudioTab(tab) {
     if (!tab?.id) return tab;
+    let windowFocused = null;
+    try {
+      if (Number.isInteger(tab.windowId)) windowFocused = Boolean((await chrome.windows.get(tab.windowId))?.focused);
+    } catch (_) {}
     try { await chrome.tabs.update(tab.id, { active: true }); } catch (_) {}
-    try { if (Number.isInteger(tab.windowId)) await chrome.windows.update(tab.windowId, { focused: true }); } catch (_) {}
     await sleep(180);
-    try { return await chrome.tabs.get(tab.id); } catch (_) { return tab; }
+    try {
+      const current = await chrome.tabs.get(tab.id);
+      current.chat2apiWindowFocusedBefore = windowFocused;
+      return current;
+    } catch (_) {
+      tab.chat2apiWindowFocusedBefore = windowFocused;
+      return tab;
+    }
   }
 
   async function ensureAudioControllers(tabId) {
@@ -15,7 +25,7 @@
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
-        files: ["voice_main.js", "voice_main_v2.js"],
+        files: ["voice_main.js"],
         world: "MAIN",
         injectImmediately: true,
       });
@@ -23,7 +33,7 @@
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
-        files: ["content_voice_v2.js", "content_dictation_v3.js", "content_dictation_v4.js"],
+        files: ["content_voice_v2.js"],
       });
     } catch (_) {}
     await sleep(120);
@@ -48,6 +58,17 @@
       try {
         const tab = await resolveActiveAudioTab();
         await ensureAudioControllers(tab.id);
+        await trySendSocket({
+          type: "image.diagnostics",
+          kind: "voice",
+          request_id: message.request_id,
+          diagnostics: {
+            audio_tab_id: tab.id,
+            audio_window_id: tab.windowId ?? null,
+            audio_window_focus_strategy: "tab-active-only",
+            audio_window_was_focused: tab.chat2apiWindowFocusedBefore,
+          },
+        });
         const response = await chrome.tabs.sendMessage(tab.id, {
           type: "chat2api.voice.request.v2",
           requestId: message.request_id,
@@ -78,39 +99,6 @@
       return;
     }
 
-    if (message.type === "dictation.request") {
-      try {
-        const tab = await resolveActiveAudioTab();
-        await ensureAudioControllers(tab.id);
-        const response = await chrome.tabs.sendMessage(tab.id, {
-          type: "chat2api.dictation.request.v4",
-          requestId: message.request_id,
-          audio: message.audio || null,
-          options: message.options || {},
-        });
-        if (!response?.ok) throw new Error(response?.error || "Dictation v4 controller rejected the request");
-      } catch (error) {
-        await sendBrowserError(message.request_id, "dictation", error);
-      }
-      return;
-    }
-
-    if (message.type === "dictation.cancel") {
-      try {
-        const tab = await resolveActiveAudioTab();
-        await ensureAudioControllers(tab.id);
-        await chrome.tabs.sendMessage(tab.id, { type: "chat2api.dictation.cancel.v4", requestId: message.request_id });
-      } catch (error) {
-        await trySendSocket({
-          type: "image.cancelled",
-          kind: "dictation",
-          request_id: message.request_id,
-          reason: String(error?.message || error),
-        });
-      }
-      return;
-    }
-
     return baseHandleServerMessage(message);
   };
 
@@ -126,14 +114,10 @@
           "image-generation",
           "voice-generation",
           "voice-conversation",
-          "dictation",
-          "dictation-auto-send",
-          "audio-transcription",
           "gpt-live",
-          "gpt-dictation",
           "model-selection",
           "diagnostics",
-          "estimated-token-usage",
+          "estimated-token-usage"
         ],
       },
     });
