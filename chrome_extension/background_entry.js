@@ -1,5 +1,6 @@
 importScripts(
   "background.js",
+  "content_bootstrap.js",
   "background_hardening.js",
   "browser_tabs.js",
   "model_routing.js",
