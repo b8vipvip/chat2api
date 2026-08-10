@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import secrets
 import time
 import uuid
@@ -66,6 +67,7 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
     telemetry = app.state.telemetry
     api_keys = app.state.api_keys
     file_store = app.state.file_store
+    app.version = PATCH_VERSION
 
     async def require_audio_key(
         authorization: str | None = Header(default=None),
@@ -102,11 +104,12 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             except asyncio.TimeoutError:
                 continue
             event_type = str(event.get("type") or "")
-            # Voice uses the already-supported image.* broker event namespace in v0.6.
             if event_type == "image.completed" and event.get("kind") == "voice":
                 return event
             if event_type in {"image.error", "image.cancelled"} and event.get("kind") == "voice":
                 raise RuntimeError(str(event.get("error") or event.get("reason") or "Voice request failed"))
+            if event_type in {"chat.error", "chat.cancelled"}:
+                raise RuntimeError(str(event.get("error") or event.get("reason") or "Chrome extension disconnected"))
         raise asyncio.TimeoutError
 
     async def record_voice(
@@ -206,6 +209,10 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 },
             }
         except asyncio.TimeoutError as error:
+            try:
+                await registry.send(selected_client, {"type": "voice.cancel", "request_id": request_id})
+            except Exception:
+                pass
             state.completed_mono = time.perf_counter()
             await record_voice(
                 request_id=request_id, response_id=response_id, client_id=selected_client,
@@ -272,7 +279,33 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
     @app.middleware("http")
     async def inject_v6_console(request: Request, call_next):
         response = await call_next(request)
-        if request.url.path not in {"/admin", "/developers"}:
+        path = request.url.path
+        if path in {"/", "/healthz", "/api/admin/overview"} and "application/json" in response.headers.get("content-type", ""):
+            body = b""
+            async for chunk in response.body_iterator:
+                body += chunk
+            try:
+                payload = json.loads(body or b"{}")
+                payload["version"] = PATCH_VERSION
+                if path == "/api/admin/overview":
+                    capabilities = payload.setdefault("capabilities", {})
+                    capabilities["voice_generation"] = True
+                    capabilities["voice_conversation"] = True
+                    capabilities["gpt_live"] = True
+                    for row in payload.get("api_keys", []):
+                        if row.get("key_id") == "master" and "audio" not in row.get("scopes", []):
+                            row.setdefault("scopes", []).append("audio")
+                headers = {k: v for k, v in response.headers.items() if k.lower() not in {"content-length", "content-type"}}
+                return Response(
+                    json.dumps(payload, ensure_ascii=False),
+                    status_code=response.status_code,
+                    media_type="application/json",
+                    headers=headers,
+                )
+            except Exception:
+                return Response(body, status_code=response.status_code, media_type=response.headers.get("content-type", "application/json"))
+
+        if path not in {"/admin", "/developers"}:
             return response
         content_type = response.headers.get("content-type", "")
         if "text/html" not in content_type:
