@@ -25,8 +25,13 @@ jobs:
           node --check chrome_extension/content.js
           node --check chrome_extension/content_model_v5.js
           node --check chrome_extension/content_model_v6.js
+          node --check chrome_extension/content_multimodal.js
+          node --check chrome_extension/content_image.js
           node --check chrome_extension/model_routing.js
+          node --check chrome_extension/image_routing.js
+          node --check chrome_extension/browser_tabs.js
           node --check chrome_extension/background.js
+          node --check chrome_extension/background_hardening.js
           python - <<'PY'
           import re
           from pathlib import Path
