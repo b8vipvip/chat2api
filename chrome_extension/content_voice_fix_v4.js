@@ -4,7 +4,7 @@
 
   const AUTOMATION_DRAFT_KEY = "chat2apiLastAutomationDraftV2";
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const state = { observer: null, activeUntil: 0, last: null };
+  const state = { last: null };
   globalThis[KEY] = state;
 
   function visible(el) {
@@ -51,11 +51,15 @@
     if (text) document.execCommand("insertText", false, text);
     else document.execCommand("delete", false);
     if (!text && normalize(el.textContent || "")) el.replaceChildren();
-    el.dispatchEvent(new InputEvent("input", {
-      bubbles: true,
-      inputType: text ? "insertText" : "deleteContentBackward",
-      data: text || null,
-    }));
+    try {
+      el.dispatchEvent(new InputEvent("input", {
+        bubbles: true,
+        inputType: text ? "insertText" : "deleteContentBackward",
+        data: text || null,
+      }));
+    } catch (_) {
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }
   }
 
   async function sha256(text) {
@@ -105,7 +109,7 @@
     while (Date.now() < clearDeadline && composerText(input)) await delay(100);
     if (composerText(input)) throw new Error("Voice preflight matched the stale automation draft but could not clear it");
     const removed = await removeComposerAttachments();
-    await delay(350);
+    await delay(250);
     return {
       stale_automation_draft_cleared: true,
       stale_automation_request_id: record.request_id || null,
@@ -145,29 +149,20 @@
   function annotate(item) {
     if (!item?.button) return null;
     const button = item.button;
-    if (!button.dataset.chat2apiVoiceOriginalAria) button.dataset.chat2apiVoiceOriginalAria = button.getAttribute("aria-label") || "";
+    // Marker-only annotation. Rewriting aria-label while observing aria-label
+    // created a self-triggering MutationObserver loop for roughly 45 seconds.
     button.dataset.chat2apiVoiceTrigger = "v4";
-    button.setAttribute("aria-label", `启动语音功能 chat2api voice ${item.label}`.trim());
-    state.last = { label: item.label, testid: button.dataset.testid || "", at: Date.now() };
-    return state.last;
+    const snapshot = {
+      label: normalize(item.label).slice(0, 160),
+      testid: String(button.dataset.testid || "").slice(0, 120),
+      at: Date.now(),
+      annotation_strategy: "dataset-only",
+    };
+    state.last = snapshot;
+    return snapshot;
   }
-
-  function keepAnnotated() {
-    if (Date.now() > state.activeUntil) return;
-    const item = strictTrigger();
-    if (item) annotate(item);
-  }
-
-  state.observer = new MutationObserver(() => keepAnnotated());
-  state.observer.observe(document.documentElement, {
-    childList: true,
-    subtree: true,
-    attributes: true,
-    attributeFilter: ["aria-label", "data-testid", "disabled"],
-  });
 
   async function prepare(timeout = 25000) {
-    state.activeUntil = Date.now() + Math.max(timeout + 15000, 45000);
     const cleanup = await cleanupKnownAutomationDraft();
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
