@@ -40,14 +40,16 @@ chat2api 的产品运行环境、控制台、测试报告与扩展运行日志�
 - `medium` → ChatGPT `中`
 - `high` → ChatGPT `高`
 
-未指定 `reasoning_effort` 时允许 ChatGPT 保持页面默认的 `智能/自动` 推理状态；`智能/自动` 只作为页面状态识别值，不新增为公开 API 推理强度。
+**所有 OpenAI 兼容文本入口都必须采用确定性的默认推理强度。** 调用方未传 `reasoning_effort`，或 Responses API 未传 `reasoning.effort` 时，服务端统一归一为 `medium`，扩展必须按 ChatGPT 页面“中”执行，不得继承当前页面已有的推理强度。
+
+网页端的 `智能/自动` 只保留为兼容旧页面或手工操作状态的防御性识别值，不是公开 API 推理强度，也不能作为省略参数时的默认行为。
 
 扩展路由原则：
 
 1. 优先被动读取当前 composer DOM 与可信同页缓存；模型和推理强度均匹配时必须走 zero-op，不重新打开菜单。
 2. ChatGPT 可能把当前状态合并显示为 `5.5 高` 之类的 composer pill；被动探测必须能同时从该控件识别模型和推理强度。
 3. 模型 UI 切换后，旧选择器二次打开菜单可能看不到已选模型。若 composer DOM 已明确证明目标模型，应使用被动 DOM 恢复验证，不能仅因菜单二次验证失败而中止请求。
-4. GPT-5.6 Sol 当前还可能在成功 family 切换后把组合控件从例如 `5.5 极速` 收缩为仅 `极速`；未指定推理强度时也可能收缩为仅 `智能/自动`。只有同时满足“切换前 family 已可信确认”“请求的目标 family 与旧 family 不同”“捕获到精确目标 family 点击”“composer 控件发生了可观察的 combined → reasoning-only 变化”时，才允许把该变化作为目标 family 的恢复证据。控件未变化时不得推断成功。
+4. GPT-5.6 Sol 当前还可能在成功 family 切换后把组合控件从例如 `5.5 极速` 收缩为仅 `极速`；旧页面或手工状态下也可能出现仅 `智能/自动`。只有同时满足“切换前 family 已可信确认”“请求的目标 family 与旧 family 不同”“捕获到精确目标 family 点击”“composer 控件发生了可观察的 combined → reasoning-only 变化”时，才允许把该变化作为目标 family 的恢复证据。控件未变化时不得推断成功。
 5. 推理强度不一致时优先走快捷键、键盘和原生 range 等 no-click 路径；只有这些路径均不可用时才 click fallback。
 6. **推理滑块不得假定只有三个键盘步进。** `极速` 可用 `Home`，`高` 可用 `End`；`中` 必须从边界逐步移动，并根据 `aria-valuetext`、滑块状态或 composer 实际显示确认已经到 `中` 后才能结束选择。不得再使用“Home + 固定一次 ArrowRight = medium”这样的硬编码。
 7. 在模型和推理强度最终验证通过之前不得发送 prompt；验证通过后必须继续进入 request controller，不能因为已经完成模型切换而漏掉 prompt 注入。
@@ -75,11 +77,14 @@ chat2api 的产品运行环境、控制台、测试报告与扩展运行日志�
 - Python compile；
 - 所有扩展 JavaScript `node --check`；
 - pytest 全量通过；
+- Chat Completions 省略 `reasoning_effort` 时必须向扩展发送 `medium`；
+- Responses API 省略 `reasoning.effort` 时必须向扩展发送 `medium`，并在响应中报告 `reasoning.effort=medium`；
+- Legacy Completions 省略推理参数时同样必须使用 `medium`；
 - 同模型同强度 zero-op；
 - 同模型不同强度能够切换后继续发送 prompt；
 - `gpt-5.5` 与 `gpt-5.6-sol` 的 `极速 / 中 / 高` 均有静态或集成回归覆盖；
 - 不同模型切换完成后能够继续设置推理强度并发送 prompt；
-- family 切换后若 composer 只剩推理强度标签（包括默认 `智能/自动`），恢复逻辑不得把“未发生任何 UI 变化”的失败点击误判为成功；
+- family 切换后若 composer 只剩推理强度标签（包括旧页面的 `智能/自动`），恢复逻辑不得把“未发生任何 UI 变化”的失败点击误判为成功；
 - 服务端控制台的北京时间不得被浏览器再次加 8 小时；
 - 扩展 popup 显示的版本必须来自 manifest；
 - 请求诊断中的 `server_version` 必须等于当前服务端 patch 版本；
