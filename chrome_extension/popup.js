@@ -1,5 +1,7 @@
 const $ = id => document.getElementById(id);
 const DEFAULT_SERVER_URL = "https://chat2api.mv3.cn";
+const TEXT_MODELS = ["gpt-5.6-sol", "gpt-5.5"];
+const REASONING_LABELS = { instant: "极速", medium: "中", high: "高", low: "极速" };
 let formInitialized = false;
 
 async function send(message) { return chrome.runtime.sendMessage(message); }
@@ -11,14 +13,13 @@ async function persistForm() {
   });
 }
 function renderModels(settings) {
-  const models = Array.isArray(settings.models) ? settings.models : [];
-  const current = settings.currentModel || "default";
-  if (!models.length) {
-    $("models").textContent = "模型目录尚未读取。API 调用会把 model 下发到扩展并现场识别、选择；“刷新可用模型”只用于提前查看目录。";
-    return;
-  }
-  const labels = models.filter(item => item?.id && item.id !== "chatgpt-web").map(item => `${item.id === current || item.selected ? "✓ " : ""}${item.id}`);
-  $("models").textContent = labels.length ? `已识别模型：${labels.join("、")}。API 请求会按 model 参数现场选择。` : "当前使用默认模型；指定 model 时扩展会现场尝试选择。";
+  const models = Array.isArray(settings.models) && settings.models.length
+    ? settings.models.filter(item => TEXT_MODELS.includes(item?.id))
+    : TEXT_MODELS.map(id => ({ id }));
+  const current = TEXT_MODELS.includes(settings.currentModel) ? settings.currentModel : null;
+  const reasoning = REASONING_LABELS[settings.currentReasoning] || settings.currentReasoning || "未知";
+  const labels = models.map(item => `${item.id === current || item.selected ? "✓ " : ""}${item.id}`);
+  $("models").textContent = `文本模型：${labels.join("、")}。当前模型：${current || "尚未被动确认"}；推理强度：${reasoning}。API 请求会先被动识别页面状态，匹配时零切换直接执行。`;
 }
 async function refresh() {
   const response = await send({ type: "popup.status" });
@@ -37,7 +38,7 @@ async function refresh() {
   $("binding").textContent = bound ? `已绑定：${bound.title || bound.url}` : `未绑定；当前检测到 ${tabs.length} 个 ChatGPT 标签页。API 请求会复用唯一标签页，或由扩展自动创建新的 ChatGPT 标签页。`;
   renderModels(settings);
   if (settings.socketError) $("message").textContent = settings.socketError;
-  else if (settings.lastModelSelectionError) $("message").textContent = `上次模型选择失败：${settings.lastModelSelectionError}`;
+  else if (settings.lastModelSelectionError) $("message").textContent = `上次模型/推理强度选择失败：${settings.lastModelSelectionError}`;
 }
 for (const id of ["serverUrl", "pairingCode", "extensionName"]) {
   $(id).addEventListener("input", () => persistForm().catch(error => { $("message").textContent = `保存配置失败：${String(error?.message || error)}`; }));
@@ -51,8 +52,14 @@ $("pair").addEventListener("click", async () => {
   await refresh();
 });
 $("connect").addEventListener("click", async () => { await persistForm(); const response = await send({ type: "popup.connect" }); if (!response?.ok) $("message").textContent = response?.error || "连接失败"; await refresh(); });
-$("bind").addEventListener("click", async () => { const response = await send({ type: "popup.bind" }); if (!response?.ok) $("message").textContent = response?.error || "绑定失败"; else $("message").textContent = "绑定成功。模型会在刷新目录或 API 请求时自动识别。"; await refresh(); });
-$("discoverModels").addEventListener("click", async () => { $("message").textContent = "正在打开模型菜单并读取当前账号可用选项…"; const response = await send({ type: "popup.discoverModels" }); if (!response?.ok) $("message").textContent = response?.error || "模型读取失败"; else $("message").textContent = `模型目录更新完成，共 ${response.data?.models?.length || 0} 项。API 调用不依赖手动刷新。`; await refresh(); });
+$("bind").addEventListener("click", async () => { const response = await send({ type: "popup.bind" }); if (!response?.ok) $("message").textContent = response?.error || "绑定失败"; else $("message").textContent = "绑定成功。后续会被动识别模型与推理强度，不需要打开模型菜单。"; await refresh(); });
+$("discoverModels").addEventListener("click", async () => {
+  $("message").textContent = "正在被动读取当前页面模型/推理状态，不会打开模型菜单…";
+  const response = await send({ type: "popup.discoverModels" });
+  if (!response?.ok) $("message").textContent = response?.error || "模型状态读取失败";
+  else $("message").textContent = `状态刷新完成。当前模型：${response.data?.current_model || "尚未确认"}；推理强度：${REASONING_LABELS[response.data?.current_reasoning] || response.data?.current_reasoning || "尚未确认"}。`;
+  await refresh();
+});
 $("unbind").addEventListener("click", async () => { await send({ type: "popup.unbind" }); await refresh(); });
 refresh().catch(error => { $("message").textContent = String(error); });
 setInterval(() => refresh().catch(() => {}), 2000);
