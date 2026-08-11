@@ -14,4 +14,5 @@ importScripts(
   "background_logging.js",
   "conversation_routing.js",
   "conversation_dispatch.js",
+  "audio_routing_live.js",
 );
