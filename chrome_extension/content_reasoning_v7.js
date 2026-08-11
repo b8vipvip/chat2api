@@ -76,7 +76,17 @@
       labelOf(slider),
       labelOf(currentPill()),
     ].filter(Boolean);
+    let parent = slider.parentElement;
+    for (let depth = 0; parent && depth < 4; depth += 1, parent = parent.parentElement) {
+      const text = labelOf(parent);
+      if (text && text.length <= 160) values.push(text);
+    }
     return values.join(" ");
+  }
+
+  function sliderNumber(slider, name) {
+    const value = Number(slider?.getAttribute?.(name));
+    return Number.isFinite(value) ? value : null;
   }
 
   function choiceFor(level) {
@@ -178,17 +188,31 @@
     }
 
     // ChatGPT sliders are not guaranteed to have exactly three keyboard stops.
-    // Walk from Home until the UI itself reports the requested medium state.
+    // Discover their numeric range when possible, then walk from Home to the
+    // midpoint while continuously checking the UI's own medium label.
     key(slider, "Home", "Home");
     await delay(100);
     if (matches(sliderStateText(slider), level) || matches(labelOf(currentPill()), level)) return true;
+
+    let min = sliderNumber(slider, "aria-valuemin");
+    let max = sliderNumber(slider, "aria-valuemax");
+    if (min === null) min = sliderNumber(slider, "aria-valuenow");
+    if (max === null) {
+      key(slider, "End", "End");
+      await delay(100);
+      max = sliderNumber(slider, "aria-valuenow");
+      key(slider, "Home", "Home");
+      await delay(100);
+    }
+    const midpoint = min !== null && max !== null && max > min ? min + (max - min) / 2 : null;
+
     for (let i = 0; i < MAX_SLIDER_STEPS; i += 1) {
       key(slider, "ArrowRight", "ArrowRight");
       await delay(90);
       if (matches(sliderStateText(slider), level) || matches(labelOf(currentPill()), level)) return true;
-      const now = Number(slider.getAttribute?.("aria-valuenow"));
-      const max = Number(slider.getAttribute?.("aria-valuemax"));
-      if (Number.isFinite(now) && Number.isFinite(max) && now >= max) break;
+      const now = sliderNumber(slider, "aria-valuenow");
+      if (midpoint !== null && now !== null && now >= midpoint) return true;
+      if (max !== null && now !== null && now >= max) break;
     }
     return false;
   }
