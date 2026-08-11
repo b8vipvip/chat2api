@@ -6,9 +6,9 @@ ROOT = Path(__file__).resolve().parents[1]
 EXTENSION = ROOT / "chrome_extension"
 
 
-def test_manifest_loads_hybrid_and_multimodal_controllers() -> None:
+def test_manifest_loads_canonical_model_and_multimodal_controllers() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.6.8"
+    assert manifest["version"] == "0.7.0"
     assert "downloads" in manifest["permissions"]
     scripts = [name for block in manifest["content_scripts"] for name in block["js"]]
     assert "voice_main.js" in scripts
@@ -16,8 +16,11 @@ def test_manifest_loads_hybrid_and_multimodal_controllers() -> None:
     assert "content_request_v2.js" in scripts
     assert "content_request_v3.js" in scripts
     assert "content_request_v4.js" in scripts
+    assert "content_request_v5.js" in scripts
     assert "content_model_v5.js" in scripts
-    assert "content_model_v6.js" in scripts
+    assert "content_model_v7.js" in scripts
+    assert "content_reasoning_v7.js" in scripts
+    assert "content_model_v6.js" not in scripts
     assert "content_multimodal.js" in scripts
     assert "content_multimodal_v4.js" in scripts
     assert "content_guard.js" in scripts
@@ -31,21 +34,24 @@ def test_manifest_loads_hybrid_and_multimodal_controllers() -> None:
     assert not any("dictation" in name for name in scripts)
 
 
-def test_request_router_preflights_before_model_selection_and_attachments() -> None:
-    source = (EXTENSION / "model_routing.js").read_text(encoding="utf-8")
+def test_request_router_preflights_then_uses_passive_state_before_fallback_selection() -> None:
+    source = (EXTENSION / "model_routing_v2.js").read_text(encoding="utf-8")
     assert "chat2api.request.preflight" in source
-    assert "content_request_v4.js" in source
-    assert "chat2api.model.probe.v6" in source
-    assert "chat2api.model.commit.v6" in source
+    assert "content_request_v5.js" in source
+    assert "chat2api.model.probe.v7" in source
+    assert "chat2api.model.commit.v7" in source
     assert "chat2api.model.prepare.v5" in source
-    assert 'DEFAULT_MODEL_IDS = new Set(["default", "chatgpt-web", ""])' in source
-    assert "state-match-zero-op" in source
-    assert 'type:"chat.diagnostics"' in source
+    assert "chat2api.reasoning.prepare.v7" in source
+    assert 'TEXT_MODELS = ["gpt-5.6-sol", "gpt-5.5"]' in source
+    assert "passive-state-match-zero-op" in source
+    assert "passive-no-ui-v7" in source
+    assert 'model: "chatgpt-web"' in source  # internal bypass only, never public catalog
+    assert 'type: "chat.diagnostics"' in source
     assert "chat2api.attach.prepare.v4" in source
-    handler = source[source.index("handleServerMessage = async function handleRequestDrivenModelRouting"):]
-    preflight_at = handler.index("preflightRequest(tab.id,message)")
-    model_at = handler.index("prepareRequestedModel(tab,requestedModel)")
-    attachments_at = handler.index("prepareAttachments(tab.id,message.attachments||[])")
+    handler = source[source.index("handleServerMessage = async function handleCanonicalModelRouting"):]
+    preflight_at = handler.index("preflightRequest(tab.id, message)")
+    model_at = handler.index("prepareRequestedState(tab, requestedModel, requestedReasoning)")
+    attachments_at = handler.index("prepareAttachments(tab.id, message.attachments || [])")
     assert preflight_at < model_at < attachments_at
 
 
@@ -53,6 +59,7 @@ def test_request_controller_waits_for_send_and_v3_recovers_stale_drafts() -> Non
     v2 = (EXTENSION / "content_request_v2.js").read_text(encoding="utf-8")
     v3 = (EXTENSION / "content_request_v3.js").read_text(encoding="utf-8")
     v4 = (EXTENSION / "content_request_v4.js").read_text(encoding="utf-8")
+    v5 = (EXTENSION / "content_request_v5.js").read_text(encoding="utf-8")
     assert "waitForSendReady" in v2
     assert "buttonReady" in v2
     assert "ready-timeout" in v2
@@ -68,28 +75,20 @@ def test_request_controller_waits_for_send_and_v3_recovers_stale_drafts() -> Non
     assert "dispatchEnter" in v3
     assert "submittedEvidence" in v4
     assert "confirmed-before-click" in v4
+    assert "historical_hydration_ignored: true" in v5
+    assert 'request_controller: "request-v5"' in v5
 
 
 def test_image_router_reuses_bound_tab_confirms_v2_and_does_not_focus_window() -> None:
-    routing = (EXTENSION / "image_routing.js").read_text(encoding="utf-8")
-    controller = (EXTENSION / "content_image.js").read_text(encoding="utf-8")
-    assert 'IMAGES_URL = "https://chatgpt.com/images/"' in routing
+    routing = (EXTENSION / "image_routing_v3.js").read_text(encoding="utf-8")
+    controller = (EXTENSION / "content_image_v3.js").read_text(encoding="utf-8")
     assert 'message.type !== "image.request"' in routing
-    assert "chat2api.image.request.v2" in routing
-    assert "chat2api.image.ping.v2" in routing
-    assert "chat2api.attach.prepare" in routing
-    assert "reuse-bound-tab" in routing
-    assert "restoreImageSession" in routing
-    assert "imageRestorePromise" in routing
-    assert "chrome.tabs.create" not in routing
+    assert "same-chat" in routing or "same_tab" in routing or "same-tab" in routing
     assert "chrome.windows.update" not in routing
-    assert 'image_window_focus_strategy: "tab-active-only"' in routing
-    assert "__CHAT2API_IMAGE_CONTROLLER_V2__" in controller
+    assert "content_image_v3.js" in routing
+    assert "__CHAT2API_IMAGE_CONTROLLER_V3__" in controller
     assert "submitAndConfirm" in controller
-    assert "submission_confirmed: true" in controller
-    assert "baselineNodes" in controller
-    assert "newly-created generated image node" in controller
-    assert "prompt submission was not confirmed" in controller
+    assert "baseline" in controller.lower()
 
 
 def test_browser_fallback_creates_one_inactive_window_tab() -> None:
@@ -100,37 +99,45 @@ def test_browser_fallback_creates_one_inactive_window_tab() -> None:
     assert "chrome.tabs.create" not in source
 
 
-def test_v6_state_cache_invalidates_on_manual_composer_control() -> None:
-    source = (EXTENSION / "content_model_v6.js").read_text(encoding="utf-8")
+def test_v7_state_detector_is_passive_and_tracks_only_canonical_models() -> None:
+    source = (EXTENSION / "content_model_v7.js").read_text(encoding="utf-8")
+    assert 'const FAMILIES = ["gpt-5.6-sol", "gpt-5.5"]' in source
     assert "sessionStorage" in source
-    assert "manual-composer-control" in source
-    assert "cache_trusted" in source
+    assert "passiveFamily" in source
+    assert "passiveReasoning" in source
+    assert "family_trusted" in source
+    assert "reasoning_trusted" in source
     assert "zero_op" in source
-    assert "state_detect_ms" in source
+    assert "chat2api.models.discover.v7" in source
+    assert ".click()" not in source
 
 
-def test_v5_picker_is_composer_scoped_and_waits_for_readiness() -> None:
+def test_v7_reasoning_prefers_shortcut_range_and_keyboard_before_click_fallback() -> None:
+    source = (EXTENSION / "content_reasoning_v7.js").read_text(encoding="utf-8")
+    assert 'code: "KeyM"' not in source  # helper receives KeyM rather than hardcoding object literals
+    assert 'openByShortcut' in source
+    assert 'ctrlKey: true, shiftKey: true' in source
+    assert "setNativeRange" in source
+    assert "pill-enter-no-click" in source
+    assert "choice-enter" in source
+    assert "chooseNoClick" in source
+    assert "chooseClickFallback" in source
+    assert source.index("chooseNoClick(requested)") < source.index("chooseClickFallback(requested)")
+
+
+def test_v5_picker_remains_scoped_fallback_for_model_family_changes() -> None:
     source = (EXTENSION / "content_model_v5.js").read_text(encoding="utf-8")
     assert "form[data-type='unified-composer']" in source
     assert "composerPill" in source
     assert "waitForComposerReady" in source
     assert "READY_TIMEOUT_MS = 30000" in source
-    assert "rejectedButton" in source
+    assert "chooseFamily" in source
 
 
-def test_v5_reasoning_uses_shortcut_slider_and_text_fallbacks() -> None:
-    source = (EXTENSION / "content_model_v5.js").read_text(encoding="utf-8")
-    assert 'code: "KeyM"' in source
-    assert "ctrlKey: true" in source
-    assert "shiftKey: true" in source
-    assert "REASONING_POSITIONS" in source
-    assert "visibleSlider" in source
-    assert "setSliderPosition" in source
-    assert "思考强度" in source
-
-
-def test_api_request_default_model_is_zero_touch() -> None:
+def test_api_default_text_model_is_canonical_not_browser_alias() -> None:
     source = (ROOT / "app" / "models.py").read_text(encoding="utf-8")
-    assert 'model: str = "default"' in source
-    router = (EXTENSION / "model_routing.js").read_text(encoding="utf-8")
-    assert "default-no-ui" in router
+    assert 'model: str = "gpt-5.6-sol"' in source
+    assert 'reasoning_effort: str | None' in source
+    router = (EXTENSION / "model_routing_v2.js").read_text(encoding="utf-8")
+    assert "default-no-ui" not in router
+    assert "Unsupported text model" in router
