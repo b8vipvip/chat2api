@@ -162,11 +162,23 @@
       lastRequestedModel: model,
       lastRequestedReasoning: reasoning || null,
       lastModelSelectionError: "",
-      modelRouterVersion: "0.4.0",
+      modelRouterVersion: "0.4.1",
       modelSelectionStrategy: data?.selection_strategy || "",
       lastModelDiagnostics: data || {},
     });
     await sendCanonicalStatus({ current_model: model, current_reasoning: reasoning || data?.actual_reasoning || null });
+  }
+
+  async function waitForPassiveFamily(tabId, model, reasoning, timeoutMs = 2200) {
+    const deadline = Date.now() + timeoutMs;
+    let last = null;
+    while (Date.now() < deadline) {
+      const response = await probeState(tabId, model, reasoning);
+      last = response?.data || null;
+      if (response?.ok && last?.family_match && last?.family_trusted) return { ok: true, data: last };
+      await sleep(140);
+    }
+    return { ok: false, data: last };
   }
 
   async function prepareRequestedState(tab, requestedModel, requestedReasoning) {
@@ -200,6 +212,7 @@
 
     const selectionStarted = Date.now();
     let familyResponse = null;
+    let familyRecovery = null;
     let reasoningResponse = null;
     let modelSwitched = false;
     let reasoningSwitched = false;
@@ -209,12 +222,23 @@
     try {
       if (!(before.family_match && before.family_trusted)) {
         familyResponse = await prepareFamily(tab.id, model);
-        if (!familyResponse?.ok) throw new Error(familyResponse?.error || `Unable to select requested ChatGPT model: ${model}`);
         modelSwitched = true;
         familyUsedClick = true;
+        if (!familyResponse?.ok) {
+          // v5 verifies the selected family by reopening the menu. Current
+          // ChatGPT sometimes hides the selected family on that second open,
+          // even though the combined composer pill already changed to e.g.
+          // "5.5 高". Recover from that false negative using passive v7 DOM
+          // evidence before aborting the whole request.
+          familyRecovery = await waitForPassiveFamily(tab.id, model, reasoning);
+          if (!familyRecovery.ok) {
+            throw new Error(familyResponse?.error || `Unable to select requested ChatGPT model: ${model}`);
+          }
+        }
       }
 
-      if (reasoning && !(before.reasoning_match && before.reasoning_trusted)) {
+      const postFamily = familyRecovery?.data || (await probeState(tab.id, model, reasoning))?.data || before;
+      if (reasoning && !(postFamily.reasoning_match && postFamily.reasoning_trusted)) {
         reasoningResponse = await prepareReasoning(tab.id, reasoning);
         if (!reasoningResponse?.ok) throw new Error(reasoningResponse?.error || `Unable to select requested reasoning level: ${reasoning}`);
         reasoningSwitched = Boolean(reasoningResponse.data?.reasoning_switched ?? true);
@@ -243,11 +267,13 @@
       family_used_click: familyUsedClick,
       reasoning_used_click: reasoningUsedClick,
       used_click: familyUsedClick || reasoningUsedClick,
+      family_verification_recovered: Boolean(familyRecovery?.ok),
+      family_original_error: familyRecovery?.ok ? (familyResponse?.error || null) : null,
       state_detect_ms: before.state_detect_ms ?? stateDetectMs,
       model_selection_ms: Date.now() - selectionStarted,
       model_prepare_ms: Date.now() - totalStarted,
       selection_strategy: modelSwitched
-        ? `family-ui-fallback${reasoningStrategy ? `+${reasoningStrategy}` : ""}`
+        ? `family-ui-fallback${familyRecovery?.ok ? "+passive-recovery" : ""}${reasoningStrategy ? `+${reasoningStrategy}` : ""}`
         : (reasoningStrategy || "reasoning-only"),
       reasoning_selection_strategy: reasoningStrategy,
     };
