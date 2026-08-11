@@ -1,23 +1,25 @@
 (() => {
-  const KEY = "__CHAT2API_BACKGROUND_LOGGING_V2__";
+  const KEY = "__CHAT2API_BACKGROUND_LOGGING_V3__";
   if (globalThis[KEY]) return;
 
   const HISTORY_KEY = "chat2apiRuntimeLogV1";
-  const CHUNK_KEY = "chat2apiRuntimeChunkV2";
+  const LEGACY_CHUNK_KEY = "chat2apiRuntimeChunkV2";
+  const CURRENT_CHUNK_KEY = "chat2apiRuntimeChunkV3";
+  const CHUNK_INDEX_KEY = "chat2apiRuntimeChunkIndexV3";
+  const CHUNK_PREFIX = "chat2apiRuntimeChunkFileV3:";
   const AUTOMATION_DRAFT_KEY = "chat2apiLastAutomationDraftV2";
   const MAX_ENTRIES = 3000;
   const TARGET_BYTES = 200 * 1024;
-  const DISK_FLUSH_MS = 5000;
+  const MAX_ARCHIVED_CHUNKS = 64;
   const encoder = new TextEncoder();
   const state = {
     entries: [],
     loaded: false,
     flushTimer: null,
-    diskTimer: null,
-    diskDirty: false,
-    diskError: "",
     queue: Promise.resolve(),
     chunk: null,
+    chunkIndex: [],
+    storageError: "",
   };
   globalThis[KEY] = state;
 
@@ -67,27 +69,71 @@
     };
   }
 
+  function normalizeIndex(value) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    const rows = [];
+    for (const item of value) {
+      const day = String(item?.day || "");
+      const part = Math.max(1, Number(item?.part || 1));
+      if (!/^\d{8}$/.test(day)) continue;
+      const id = `${day}:${part}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      rows.push({
+        day,
+        part,
+        bytes: Math.max(0, Number(item?.bytes || 0)),
+        lines: Math.max(0, Number(item?.lines || 0)),
+        saved_at: item?.saved_at || null,
+      });
+    }
+    rows.sort((a, b) => a.day.localeCompare(b.day) || a.part - b.part);
+    return rows.slice(-MAX_ARCHIVED_CHUNKS);
+  }
+
+  function chunkStorageKey(day, part) {
+    return `${CHUNK_PREFIX}${day}:${String(part).padStart(6, "0")}`;
+  }
+
+  function chunkFilename(chunk = state.chunk) {
+    return `chat2api-runtime-${chunk.day}-part-${String(chunk.part).padStart(6, "0")}.log`;
+  }
+
   async function ensureLoaded() {
     if (state.loaded) return;
     try {
-      const data = await chrome.storage.local.get([HISTORY_KEY, CHUNK_KEY]);
+      const data = await chrome.storage.local.get([HISTORY_KEY, LEGACY_CHUNK_KEY, CURRENT_CHUNK_KEY, CHUNK_INDEX_KEY]);
       state.entries = Array.isArray(data[HISTORY_KEY]) ? data[HISTORY_KEY].slice(-MAX_ENTRIES) : [];
-      state.chunk = normalizeChunk(data[CHUNK_KEY]);
-    } catch (_) {
+      state.chunk = normalizeChunk(data[CURRENT_CHUNK_KEY] || data[LEGACY_CHUNK_KEY]);
+      state.chunkIndex = normalizeIndex(data[CHUNK_INDEX_KEY]);
+      state.loaded = true;
+      if (!data[CURRENT_CHUNK_KEY] && data[LEGACY_CHUNK_KEY]) {
+        await chrome.storage.local.set({ [CURRENT_CHUNK_KEY]: state.chunk, [CHUNK_INDEX_KEY]: state.chunkIndex });
+        await chrome.storage.local.remove(LEGACY_CHUNK_KEY);
+      }
+    } catch (error) {
       state.entries = [];
       state.chunk = newChunk();
+      state.chunkIndex = [];
+      state.storageError = String(error?.message || error);
+      state.loaded = true;
     }
-    state.loaded = true;
   }
 
   async function persistNow() {
     await ensureLoaded();
     try {
+      state.chunk.last_saved_at = new Date().toISOString();
       await chrome.storage.local.set({
         [HISTORY_KEY]: state.entries.slice(-MAX_ENTRIES),
-        [CHUNK_KEY]: state.chunk,
+        [CURRENT_CHUNK_KEY]: state.chunk,
+        [CHUNK_INDEX_KEY]: state.chunkIndex,
       });
-    } catch (_) {}
+      state.storageError = "";
+    } catch (error) {
+      state.storageError = String(error?.message || error);
+    }
   }
 
   function scheduleFlush() {
@@ -98,46 +144,49 @@
     }, 700);
   }
 
-  function chunkFilename(chunk = state.chunk) {
-    return `chat2api-logs/chat2api-runtime-${chunk.day}-part-${String(chunk.part).padStart(6, "0")}.log`;
-  }
-
-  async function saveChunkSnapshot() {
+  async function archiveCurrentChunk() {
     await ensureLoaded();
-    if (!state.chunk?.lines?.length || !chrome.downloads?.download) return null;
-    const text = state.chunk.lines.join("\n") + "\n";
-    const url = `data:text/plain;charset=utf-8,${encodeURIComponent(text)}`;
+    if (!state.chunk?.lines?.length) return null;
+    const savedAt = new Date().toISOString();
+    const key = chunkStorageKey(state.chunk.day, state.chunk.part);
+    const archived = {
+      day: state.chunk.day,
+      part: state.chunk.part,
+      lines: state.chunk.lines.slice(),
+      bytes: state.chunk.bytes,
+      saved_at: savedAt,
+    };
     try {
-      const downloadId = await chrome.downloads.download({
-        url,
-        filename: chunkFilename(),
-        saveAs: false,
-        conflictAction: "overwrite",
+      await chrome.storage.local.set({ [key]: archived });
+      const id = `${archived.day}:${archived.part}`;
+      state.chunkIndex = state.chunkIndex.filter(item => `${item.day}:${item.part}` !== id);
+      state.chunkIndex.push({
+        day: archived.day,
+        part: archived.part,
+        bytes: archived.bytes,
+        lines: archived.lines.length,
+        saved_at: savedAt,
       });
-      state.chunk.last_saved_at = new Date().toISOString();
-      state.diskDirty = false;
-      state.diskError = "";
-      scheduleFlush();
-      return downloadId;
+      state.chunkIndex.sort((a, b) => a.day.localeCompare(b.day) || a.part - b.part);
+      const overflow = state.chunkIndex.length - MAX_ARCHIVED_CHUNKS;
+      if (overflow > 0) {
+        const removed = state.chunkIndex.splice(0, overflow);
+        await chrome.storage.local.remove(removed.map(item => chunkStorageKey(item.day, item.part)));
+      }
+      await chrome.storage.local.set({ [CHUNK_INDEX_KEY]: state.chunkIndex });
+      state.storageError = "";
+      return archived;
     } catch (error) {
-      state.diskError = String(error?.message || error);
+      state.storageError = String(error?.message || error);
       return null;
     }
-  }
-
-  function scheduleDiskSave() {
-    state.diskDirty = true;
-    if (state.diskTimer) return;
-    state.diskTimer = setTimeout(() => {
-      state.diskTimer = null;
-      state.queue = state.queue.then(() => saveChunkSnapshot()).catch(() => {});
-    }, DISK_FLUSH_MS);
   }
 
   async function rolloverForDayIfNeeded() {
     const today = localDay();
     if (state.chunk.day === today) return;
-    if (state.chunk.lines.length) await saveChunkSnapshot();
+    await persistNow();
+    await archiveCurrentChunk();
     state.chunk = newChunk(today, 1);
     await persistNow();
   }
@@ -155,8 +204,8 @@
     state.entries.push(entry);
     if (state.entries.length > MAX_ENTRIES) state.entries.splice(0, state.entries.length - MAX_ENTRIES);
 
-    // JSONL keeps every runtime event on exactly one complete line. We append the
-    // whole line first and only then roll the file, so a record is never cut in half.
+    // JSONL keeps every runtime event on exactly one complete line. The whole
+    // record is appended before the 200 KiB rollover check, so no event is split.
     const line = JSON.stringify(entry);
     state.chunk.lines.push(line);
     state.chunk.bytes += bytesOf(line + "\n");
@@ -164,12 +213,10 @@
 
     if (state.chunk.bytes >= TARGET_BYTES) {
       await persistNow();
-      await saveChunkSnapshot();
+      await archiveCurrentChunk();
       const nextPart = state.chunk.part + 1;
       state.chunk = newChunk(state.chunk.day, nextPart);
       await persistNow();
-    } else {
-      scheduleDiskSave();
     }
     return entry;
   }
@@ -199,6 +246,41 @@
         },
       });
     } catch (_) {}
+  }
+
+  async function exportStoredChunks() {
+    await ensureLoaded();
+    await persistNow();
+    const keys = state.chunkIndex.map(item => chunkStorageKey(item.day, item.part));
+    const stored = keys.length ? await chrome.storage.local.get(keys) : {};
+    const chunks = [];
+    for (const meta of state.chunkIndex) {
+      const value = stored[chunkStorageKey(meta.day, meta.part)];
+      const chunk = normalizeChunk(value);
+      if (!chunk.lines.length) continue;
+      chunks.push({
+        filename: chunkFilename(chunk),
+        day: chunk.day,
+        part: chunk.part,
+        bytes: chunk.bytes,
+        lines: chunk.lines.length,
+        saved_at: value?.saved_at || meta.saved_at || null,
+        text: chunk.lines.join("\n") + "\n",
+      });
+    }
+    if (state.chunk.lines.length) {
+      chunks.push({
+        filename: chunkFilename(state.chunk),
+        day: state.chunk.day,
+        part: state.chunk.part,
+        bytes: state.chunk.bytes,
+        lines: state.chunk.lines.length,
+        saved_at: state.chunk.last_saved_at,
+        current: true,
+        text: state.chunk.lines.join("\n") + "\n",
+      });
+    }
+    return chunks;
   }
 
   const baseHandleServerMessage = typeof handleServerMessage === "function" ? handleServerMessage : null;
@@ -254,27 +336,32 @@
 
     if (message?.type === "popup.logs.export") {
       state.queue.then(async () => {
-        await ensureLoaded();
-        await saveChunkSnapshot();
+        const chunks = await exportStoredChunks();
         const settings = await chrome.storage.local.get(["clientId", "extensionName", "boundTabId", "socketState", "currentModel", "lastRequestedModel"]);
         sendResponse({
           ok: true,
           data: {
             report_type: "chat2api-extension-runtime-log",
-            report_version: 2,
+            report_version: 3,
             generated_at: new Date().toISOString(),
             extension_version: chrome.runtime.getManifest().version,
             settings: clean(settings),
             auto_local_log: {
-              enabled: Boolean(chrome.downloads?.download),
+              enabled: true,
+              backend: "chrome.storage.local",
+              silent_persistence: true,
+              automatic_downloads: false,
               target_bytes: TARGET_BYTES,
-              current_file: chunkFilename(),
+              max_archived_chunks: MAX_ARCHIVED_CHUNKS,
+              current_chunk: chunkFilename(),
               current_bytes: state.chunk.bytes,
               current_lines: state.chunk.lines.length,
+              archived_chunks: state.chunkIndex.length,
               last_saved_at: state.chunk.last_saved_at,
-              last_error: state.diskError || null,
+              last_error: state.storageError || null,
               format: "JSONL; one complete JSON event per line; rollover occurs only after a complete line",
             },
+            chunks,
             entries: state.entries.slice(),
           },
         });
@@ -285,12 +372,19 @@
     if (message?.type === "popup.logs.clear") {
       state.queue.then(async () => {
         await ensureLoaded();
-        const nextPart = state.chunk.day === localDay() ? state.chunk.part + 1 : 1;
+        const archiveKeys = state.chunkIndex.map(item => chunkStorageKey(item.day, item.part));
+        if (archiveKeys.length) await chrome.storage.local.remove(archiveKeys);
         state.entries = [];
-        state.chunk = newChunk(localDay(), nextPart);
-        state.diskDirty = false;
-        await chrome.storage.local.set({ [HISTORY_KEY]: [], [CHUNK_KEY]: state.chunk });
-        sendResponse({ ok: true, note: "Downloaded log files are not deleted; only the extension cache/current chunk was reset." });
+        state.chunkIndex = [];
+        state.chunk = newChunk(localDay(), 1);
+        state.storageError = "";
+        await chrome.storage.local.set({
+          [HISTORY_KEY]: [],
+          [CURRENT_CHUNK_KEY]: state.chunk,
+          [CHUNK_INDEX_KEY]: [],
+        });
+        await chrome.storage.local.remove(LEGACY_CHUNK_KEY);
+        sendResponse({ ok: true, note: "Silent locally stored runtime logs were cleared. Manually exported files are not deleted." });
       }).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
       return true;
     }
@@ -298,10 +392,11 @@
   });
 
   ensureLoaded().then(async () => {
-    if (state.chunk.lines.length) scheduleDiskSave();
     await append("background", "service-worker-ready", {
       extension_version: chrome.runtime.getManifest().version,
       auto_local_log: true,
+      storage_backend: "chrome.storage.local",
+      automatic_downloads: false,
       log_target_bytes: TARGET_BYTES,
       log_format: "jsonl-complete-record-rollover",
     });
