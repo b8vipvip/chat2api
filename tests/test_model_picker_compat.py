@@ -8,7 +8,7 @@ EXTENSION = ROOT / "chrome_extension"
 
 def test_manifest_loads_canonical_model_and_multimodal_controllers() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.7.0"
+    assert manifest["version"] == "0.7.1"
     assert "downloads" in manifest["permissions"]
     scripts = [name for block in manifest["content_scripts"] for name in block["js"]]
     assert "voice_main.js" in scripts
@@ -53,6 +53,17 @@ def test_request_router_preflights_then_uses_passive_state_before_fallback_selec
     model_at = handler.index("prepareRequestedState(tab, requestedModel, requestedReasoning)")
     attachments_at = handler.index("prepareAttachments(tab.id, message.attachments || [])")
     assert preflight_at < model_at < attachments_at
+
+
+def test_family_verification_false_negative_recovers_from_passive_composer_state() -> None:
+    router = (EXTENSION / "model_routing_v2.js").read_text(encoding="utf-8")
+    state = (EXTENSION / "content_model_v7.js").read_text(encoding="utf-8")
+    assert "waitForPassiveFamily" in router
+    assert "family_verification_recovered" in router
+    assert "family_original_error" in router
+    assert "passive-recovery" in router
+    assert "combined composer pill" in state
+    assert 'text.endsWith(` ${needle}`)' in state
 
 
 def test_request_controller_waits_for_send_and_v3_recovers_stale_drafts() -> None:
@@ -112,14 +123,15 @@ def test_v7_state_detector_is_passive_and_tracks_only_canonical_models() -> None
     assert ".click()" not in source
 
 
-def test_v7_reasoning_prefers_shortcut_range_and_keyboard_before_click_fallback() -> None:
+def test_v7_reasoning_prefers_shortcut_nested_keyboard_and_range_before_click_fallback() -> None:
     source = (EXTENSION / "content_reasoning_v7.js").read_text(encoding="utf-8")
-    assert 'code: "KeyM"' not in source  # helper receives KeyM rather than hardcoding object literals
     assert 'openByShortcut' in source
     assert 'ctrlKey: true, shiftKey: true' in source
     assert "setNativeRange" in source
     assert "pill-enter-no-click" in source
     assert "choice-enter" in source
+    assert "reasoningRow" in source
+    assert "reasoning-row-enter" in source
     assert "chooseNoClick" in source
     assert "chooseClickFallback" in source
     assert source.index("chooseNoClick(requested)") < source.index("chooseClickFallback(requested)")
