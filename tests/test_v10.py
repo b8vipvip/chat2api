@@ -61,9 +61,9 @@ def test_production_entry_installs_v10_after_v9() -> None:
     assert source.index("install_v9_patch(app)") < source.index("install_v10_patch(app)")
 
 
-def test_extension_066_loads_request_image_voice_and_runtime_log_controllers() -> None:
+def test_extension_loads_v10_request_image_voice_and_runtime_log_controllers() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.6.6"
+    assert manifest["version"] == "0.6.7"
     scripts = manifest["content_scripts"][1]["js"]
     for name in [
         "content_multimodal_v4.js",
