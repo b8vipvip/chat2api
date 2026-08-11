@@ -61,24 +61,29 @@ def app_v14(tmp_path: Path):
 def test_v14_health_console_and_development_time_standard(tmp_path: Path) -> None:
     with TestClient(app_v14(tmp_path)) as client:
         health = client.get("/healthz").json()
-        assert health["version"] == "0.14.0"
+        assert health["version"] == "0.14.1"
         assert health["timezone"] == "Asia/Shanghai"
         assert health["utc_offset"] == "+08:00"
         overview = client.get("/api/admin/overview", headers=headers()).json()
-        assert overview["version"] == "0.14.0"
+        assert overview["version"] == "0.14.1"
         assert overview["capabilities"]["beijing_time_standard"] is True
         assert overview["capabilities"]["reasoning_family_recovery"] is True
+        assert overview["capabilities"]["adaptive_reasoning_slider"] is True
+        assert overview["capabilities"]["beijing_console_no_double_conversion"] is True
         html = client.get("/admin").text
         assert "/assets/chat2api-v14.js" in html
         script = client.get("/assets/chat2api-v14.js")
         assert script.status_code == 200
         assert "Asia/Shanghai" in script.text
+        assert "v0.14.1" in script.text
 
     docs = (ROOT / "docs" / "DEVELOPMENT.md").read_text(encoding="utf-8")
     assert "Asia/Shanghai" in docs
     assert "Date.now()" in docs
     assert "performance.now()" in docs
     assert "不能仅因菜单二次验证失败而中止请求" in docs
+    assert "不得假定只有三个键盘步进" in docs
+    assert "不得把已经是北京时间" in docs
 
 
 def test_beijing_time_helpers_convert_legacy_utc() -> None:
@@ -119,7 +124,7 @@ def test_persistent_stores_write_and_normalize_beijing_times(tmp_path: Path) -> 
 
         registry = ClientRegistry(tmp_path)
         await registry.load()
-        client_id, _token = await registry.register("Chrome", "Chrome", "0.7.1", {})
+        client_id, _token = await registry.register("Chrome", "Chrome", "0.7.2", {})
         assert registry.clients[client_id].created_at.endswith("+08:00")
 
     asyncio.run(run())
@@ -127,7 +132,7 @@ def test_persistent_stores_write_and_normalize_beijing_times(tmp_path: Path) -> 
 
 def test_extension_runtime_log_uses_beijing_time_as_canonical() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.7.1"
+    assert manifest["version"] == "0.7.2"
     background = (EXTENSION / "background_logging.js").read_text(encoding="utf-8")
     popup = (EXTENSION / "popup_logging.js").read_text(encoding="utf-8")
     entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")
@@ -141,23 +146,51 @@ def test_extension_runtime_log_uses_beijing_time_as_canonical() -> None:
     assert '"background_time_v14.js"' in entry
     assert "chat2apiBeijingIso" in time_overlay
     assert "Date.now() + RUN_IDLE_MS" in background
-    assert "performance.now()" not in background or True
 
 
-def test_extension_recovers_selected_family_then_continues_reasoning_and_prompt_route() -> None:
+def test_extension_recovers_family_transitions_and_uses_adaptive_reasoning() -> None:
     router = (EXTENSION / "model_routing_v2.js").read_text(encoding="utf-8")
     detector = (EXTENSION / "content_model_v7.js").read_text(encoding="utf-8")
+    transition = (EXTENSION / "content_model_transition_v15.js").read_text(encoding="utf-8")
     reasoning = (EXTENSION / "content_reasoning_v7.js").read_text(encoding="utf-8")
+    manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
+    scripts = manifest["content_scripts"][1]["js"]
+    bootstrap = (EXTENSION / "content_bootstrap.js").read_text(encoding="utf-8")
 
     assert "waitForPassiveFamily" in router
     assert "family_verification_recovered" in router
-    assert "family_original_error" in router
     assert "postFamily" in router
     assert "prepareReasoning(tab.id, reasoning)" in router
     assert router.index("prepareRequestedState(tab, requestedModel, requestedReasoning)") < router.index("chrome.tabs.sendMessage(tab.id")
     assert "combined composer pill" in detector
-    assert "reasoningRow" in reasoning
-    assert "reasoning-row-enter" in reasoning
+    assert "family-transition-inference-v15" in transition
+    assert "combined->reasoning-only transition" in transition
+    assert 'message?.type !== "chat2api.model.prepare.v5"' in transition
+    assert "content_model_transition_v15.js" in scripts
+    assert '"content_model_transition_v15.js"' in bootstrap
+
+    assert "MAX_SLIDER_STEPS = 32" in reasoning
+    assert 'key(slider, "Home", "Home")' in reasoning
+    assert 'key(slider, "End", "End")' in reasoning
+    assert 'key(slider, "ArrowRight", "ArrowRight")' in reasoning
+    assert "slider-keyboard-adaptive" in reasoning
+    assert 'controller: "reasoning-v7.2"' in reasoning
+
+
+def test_admin_console_does_not_double_convert_beijing_time() -> None:
+    source = (ROOT / "app" / "admin_v10.js").read_text(encoding="utf-8")
+    assert 'raw.replace(" ", "T") + "Z"' not in source
+    assert "canonicalBeijingTime" in source
+    assert "时间（北京时间）" in source
+    assert "Asia/Shanghai" in source
+
+
+def test_extension_popup_shows_manifest_version() -> None:
+    html = (EXTENSION / "popup.html").read_text(encoding="utf-8")
+    script = (EXTENSION / "popup.js").read_text(encoding="utf-8")
+    assert 'id="versionInfo"' in html
+    assert "chrome.runtime.getManifest().version" in script
+    assert "Chrome Bridge · v" in script
 
 
 def test_production_entry_installs_v14_after_v13() -> None:
