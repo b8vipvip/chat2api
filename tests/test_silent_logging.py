@@ -10,31 +10,45 @@ def test_runtime_logs_persist_silently_without_automatic_downloads() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
     assert "storage" in manifest["permissions"]
     assert "unlimitedStorage" in manifest["permissions"]
+    assert "alarms" in manifest["permissions"]
 
     source = (EXTENSION / "background_logging.js").read_text(encoding="utf-8")
-    assert 'CURRENT_CHUNK_KEY = "chat2apiRuntimeChunkV3"' in source
-    assert 'CHUNK_INDEX_KEY = "chat2apiRuntimeChunkIndexV3"' in source
-    assert 'CHUNK_PREFIX = "chat2apiRuntimeChunkFileV3:"' in source
+    assert 'ACTIVE_RUNS_KEY = "chat2apiRuntimeActiveRunsV4"' in source
+    assert 'RUN_INDEX_KEY = "chat2apiRuntimeRunIndexV4"' in source
+    assert 'RUN_PART_PREFIX = "chat2apiRuntimeRunPartV4:"' in source
+    assert "RUN_IDLE_MS = 120000" in source
     assert "TARGET_BYTES = 200 * 1024" in source
-    assert "MAX_ARCHIVED_CHUNKS = 64" in source
+    assert "MAX_FINALIZED_RUNS = 64" in source
     assert "chrome.storage.local.set" in source
-    assert "archiveCurrentChunk" in source
-    assert "exportStoredChunks" in source
+    assert "archiveCurrentPart" in source
+    assert "exportStoredRuns" in source
     assert 'backend: "chrome.storage.local"' in source
     assert "silent_persistence: true" in source
     assert "automatic_downloads: false" in source
+    assert "sessionized_by_api_key: true" in source
     assert "chrome.downloads.download" not in source
-    assert "saveChunkSnapshot" not in source
 
 
-def test_rollover_archives_only_after_a_complete_jsonl_record() -> None:
+def test_rollover_archives_before_adding_a_line_that_would_split_a_part() -> None:
     source = (EXTENSION / "background_logging.js").read_text(encoding="utf-8")
-    append_at = source.index("state.chunk.lines.push(line)")
-    bytes_at = source.index('state.chunk.bytes += bytesOf(line + "\\n")')
-    threshold_at = source.index("if (state.chunk.bytes >= TARGET_BYTES)")
-    archive_at = source.index("await archiveCurrentChunk();", threshold_at)
-    assert append_at < bytes_at < threshold_at < archive_at
-    assert "no event is split" in source
+    threshold_at = source.index("run.current_bytes + lineBytes > TARGET_BYTES")
+    archive_at = source.index("await archiveCurrentPart(run);", threshold_at)
+    append_at = source.index("run.current_lines.push(line)", archive_at)
+    assert threshold_at < archive_at < append_at
+    assert "never split across two ~200 KiB parts" in source
+
+
+def test_runtime_logs_are_sessionized_by_api_key_and_finalize_after_idle() -> None:
+    source = (EXTENSION / "background_logging.js").read_text(encoding="utf-8")
+    assert 'message?.routing?.api_key_id || "unrouted"' in source
+    assert 'message?.routing?.api_key_kind || "unknown"' in source
+    assert '"request_start"' in source
+    assert '"request_end"' in source
+    assert "active_request_ids" in source
+    assert "scheduleRunFinalize(run)" in source
+    assert "chrome.alarms.create(alarmName(run.run_id), { when: run.idle_deadline })" in source
+    assert 'finalizeRun(runId, "idle-120s")' in source
+    assert "state.activeRuns.get(keyId)" in source
 
 
 def test_popup_export_remains_explicit_user_action() -> None:
@@ -43,4 +57,5 @@ def test_popup_export_remains_explicit_user_action() -> None:
     assert 'download.addEventListener("click"' in popup
     assert 'type: "popup.logs.export"' in popup
     assert 'message?.type === "popup.logs.export"' in background
-    assert "chunks," in background
+    assert "runs: exported.runs" in background
+    assert "chunks: exported.chunks" in background

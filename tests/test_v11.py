@@ -80,20 +80,24 @@ def test_extension_067_enables_downloads_and_v4_voice_route() -> None:
     assert '"content_voice_fix_v4.js"' in bootstrap
 
 
-def test_runtime_log_v2_rolls_only_after_complete_jsonl_record() -> None:
+def test_runtime_log_v4_rolls_only_at_complete_jsonl_records_and_sessionizes_runs() -> None:
     source = (EXTENSION / "background_logging.js").read_text(encoding="utf-8")
     assert "TARGET_BYTES = 200 * 1024" in source
-    assert 'format: "JSONL; one complete JSON event per line; rollover occurs only after a complete line"' in source
-    assert 'state.chunk.lines.join("\\n") + "\\n"' in source
-    assert 'CURRENT_CHUNK_KEY = "chat2apiRuntimeChunkV3"' in source
-    assert 'CHUNK_INDEX_KEY = "chat2apiRuntimeChunkIndexV3"' in source
-    assert "archiveCurrentChunk" in source
+    assert "RUN_IDLE_MS = 120000" in source
+    assert 'ACTIVE_RUNS_KEY = "chat2apiRuntimeActiveRunsV4"' in source
+    assert 'RUN_INDEX_KEY = "chat2apiRuntimeRunIndexV4"' in source
+    assert 'RUN_PART_PREFIX = "chat2apiRuntimeRunPartV4:"' in source
+    assert "archiveCurrentPart" in source
     assert "chrome.storage.local.set" in source
+    assert "chrome.alarms.create" in source
     assert "chrome.downloads.download" not in source
-    append_at = source.index("state.chunk.lines.push(line)")
-    threshold_at = source.index("if (state.chunk.bytes >= TARGET_BYTES)")
-    rollover_at = source.index("state.chunk = newChunk(state.chunk.day, nextPart)")
-    assert append_at < threshold_at < rollover_at
+    assert 'message?.routing?.api_key_id || "unrouted"' in source
+    assert '"request_start"' in source and '"request_end"' in source
+    assert "sessionized_by_api_key: true" in source
+    threshold_at = source.index("run.current_bytes + lineBytes > TARGET_BYTES")
+    archive_at = source.index("await archiveCurrentPart(run);", threshold_at)
+    append_at = source.index("run.current_lines.push(line)", archive_at)
+    assert threshold_at < archive_at < append_at
 
 
 def test_runtime_log_tracks_only_fingerprint_for_automation_draft() -> None:
