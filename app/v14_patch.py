@@ -13,7 +13,7 @@ from . import diagnostics as diagnostics_module
 from .timezone_utils import BEIJING_TZ, beijing_now_iso, to_beijing_iso
 
 
-PATCH_VERSION = "0.14.1"
+PATCH_VERSION = "0.14.2"
 TIMEZONE_NAME = "Asia/Shanghai"
 UTC_OFFSET = "+08:00"
 _TIME_KEYS = {
@@ -86,18 +86,25 @@ def install_v14_patch(app: FastAPI) -> FastAPI:
             except Exception:
                 return Response(raw, status_code=response.status_code, media_type="application/json")
             payload = _normalize_json_times(payload)
-            if isinstance(payload, dict) and path in {"/", "/healthz", "/api/admin/overview"}:
-                payload["version"] = PATCH_VERSION
-                payload["timezone"] = TIMEZONE_NAME
-                payload["utc_offset"] = UTC_OFFSET
-                if path == "/api/admin/overview":
-                    capabilities = payload.setdefault("capabilities", {})
-                    if isinstance(capabilities, dict):
-                        capabilities["beijing_time_standard"] = True
-                        capabilities["timestamp_timezone"] = TIMEZONE_NAME
-                        capabilities["reasoning_family_recovery"] = True
-                        capabilities["adaptive_reasoning_slider"] = True
-                        capabilities["beijing_console_no_double_conversion"] = True
+            if isinstance(payload, dict):
+                if path in {"/", "/healthz", "/api/admin/overview"}:
+                    payload["version"] = PATCH_VERSION
+                    payload["timezone"] = TIMEZONE_NAME
+                    payload["utc_offset"] = UTC_OFFSET
+                    if path == "/api/admin/overview":
+                        capabilities = payload.setdefault("capabilities", {})
+                        if isinstance(capabilities, dict):
+                            capabilities["beijing_time_standard"] = True
+                            capabilities["timestamp_timezone"] = TIMEZONE_NAME
+                            capabilities["reasoning_family_recovery"] = True
+                            capabilities["adaptive_reasoning_slider"] = True
+                            capabilities["beijing_console_no_double_conversion"] = True
+                            capabilities["automatic_reasoning_family_recovery"] = True
+                if path.startswith("/api/admin/requests/") and path.endswith("/log"):
+                    # v11 originally introduced this export and stamped its own
+                    # historical version. The outer/current patch must replace it
+                    # so diagnostics report the server actually serving the request.
+                    payload["server_version"] = PATCH_VERSION
             headers = {k: v for k, v in response.headers.items() if k.lower() not in {"content-length", "content-type"}}
             if path.startswith("/api/admin/") or path in {"/", "/healthz"}:
                 headers["Cache-Control"] = "no-store"
