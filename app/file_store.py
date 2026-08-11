@@ -6,13 +6,15 @@ import mimetypes
 import re
 import secrets
 from dataclasses import dataclass, asdict
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .timezone_utils import beijing_now_iso, to_beijing_iso
+
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    """Backward-compatible helper name; canonical timestamps are Asia/Shanghai."""
+    return beijing_now_iso()
 
 
 def safe_name(value: str) -> str:
@@ -39,7 +41,7 @@ class StoredFile:
             "filename": self.filename,
             "mime_type": self.mime_type,
             "bytes": self.size,
-            "created_at": self.created_at,
+            "created_at": to_beijing_iso(self.created_at) or self.created_at,
             "purpose": self.purpose,
         }
 
@@ -57,11 +59,15 @@ class FileStore:
             return
         try:
             payload = json.loads(self.index_path.read_text(encoding="utf-8"))
-            self.items = {
-                row["file_id"]: StoredFile(**row)
-                for row in payload.get("files", [])
-                if isinstance(row, dict) and row.get("file_id")
-            }
+            self.items = {}
+            for row in payload.get("files", []):
+                if not isinstance(row, dict) or not row.get("file_id"):
+                    continue
+                value = dict(row)
+                if value.get("created_at"):
+                    value["created_at"] = to_beijing_iso(value["created_at"]) or value["created_at"]
+                item = StoredFile(**value)
+                self.items[item.file_id] = item
         except (OSError, ValueError, TypeError, KeyError):
             self.items = {}
 
