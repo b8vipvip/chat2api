@@ -38,6 +38,18 @@ def test_voice_v4_annotation_does_not_rewrite_observed_aria_label() -> None:
     assert "activeUntil" not in source
 
 
+def test_voice_conversation_waits_for_transport_before_playing_prepared_audio() -> None:
+    source = (EXTENSION / "voice_main.js").read_text(encoding="utf-8")
+    assert "waitForRemoteTrackBeforeInput" in source
+    assert "while (!state.remoteTrackSeen" in source
+    assert "Voice transport did not become ready before prepared input playback" in source
+    wait_at = source.index("const transportWaitMs = await waitForRemoteTrackBeforeInput")
+    start_at = source.index("source.start();", wait_at)
+    assert wait_at < start_at
+    assert "transport_ready: true" in source
+    assert "transport_wait_ms: transportWaitMs" in source
+
+
 def test_runtime_log_export_adds_browser_local_timestamps_without_changing_storage_clock() -> None:
     popup = (EXTENSION / "popup_logging.js").read_text(encoding="utf-8")
     background = (EXTENSION / "background_logging.js").read_text(encoding="utf-8")
