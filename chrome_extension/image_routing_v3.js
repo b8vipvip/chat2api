@@ -10,7 +10,7 @@
       const ping = await chrome.tabs.sendMessage(tabId, { type: "chat2api.image.ping.v3" });
       if (ping?.ok && ping.controller === "image-v3") return;
     } catch (_) {}
-    await chrome.scripting.executeScript({ target: { tabId }, files: ["content_multimodal.js", "content_image_v3.js", "content_runtime_log.js"] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ["content_multimodal.js", "content_multimodal_v4.js", "content_image_v3.js", "content_runtime_log.js"] });
     await sleep(240);
     const ping = await chrome.tabs.sendMessage(tabId, { type: "chat2api.image.ping.v3" });
     if (!ping?.ok || ping.controller !== "image-v3") throw new Error("ChatGPT Images v3 controller did not respond");
@@ -109,7 +109,7 @@
 
   async function prepareReferences(tabId, attachments) {
     if (!Array.isArray(attachments) || !attachments.length) return {};
-    const response = await chrome.tabs.sendMessage(tabId, { type: "chat2api.attach.prepare", attachments });
+    const response = await chrome.tabs.sendMessage(tabId, { type: "chat2api.attach.prepare.v4", attachments });
     if (!response?.ok) throw new Error(response?.error || "Unable to attach reference files on ChatGPT Images");
     return response.data || {};
   }
