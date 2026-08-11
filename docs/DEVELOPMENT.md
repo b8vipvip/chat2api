@@ -54,6 +54,17 @@ chat2api 的产品运行环境、控制台、测试报告与扩展运行日志�
 6. **推理滑块不得假定只有三个键盘步进。** `极速` 可用 `Home`，`高` 可用 `End`；`中` 必须从边界逐步移动，并根据 `aria-valuetext`、滑块状态或 composer 实际显示确认已经到 `中` 后才能结束选择。不得再使用“Home + 固定一次 ArrowRight = medium”这样的硬编码。
 7. 在模型和推理强度最终验证通过之前不得发送 prompt；验证通过后必须继续进入 request controller，不能因为已经完成模型切换而漏掉 prompt 注入。
 
+## 控制台模型广场
+
+- 控制台必须提供独立的 **模型广场** 导航页面，集中介绍 chat2api 已发布的文本、多模态、图片与语音模型。
+- 页面采用模型卡片形式展示模型 ID、定位说明、输入/输出类型、能力标签、推理强度、默认推理参数、支持 API、适用场景和最小调用示例。
+- 页面必须使用 `/v1/models` 的实时结果标记“当前可用 / 未在线”，不能只依赖硬编码状态；Chrome Bridge 离线时允许展示已发布模型，但必须明确当前未在线。
+- 支持按模型 ID、能力、使用场景搜索，并支持“全部 / 文本与多模态 / 图片 / 语音”分类筛选。
+- 模型卡片必须提供复制模型 ID 和复制最小调用示例的快捷操作。
+- 只展示 chat2api 能可靠声明的数据。**没有可靠来源的价格、上下文窗口、吞吐、限速、基准分数等字段不得编造。**
+- `gpt-5.6-sol` / `gpt-5.5` 的默认推理强度必须显示为 `medium`（中）；模型广场与 `/v1/models` 对外元数据保持一致。
+- 页面应保持响应式布局，在窄屏下自动由双列卡片切换为单列，不影响控制台其它页面。
+
 ## Chrome 扩展版本显示
 
 - 扩展 popup 必须直接显示 `chrome.runtime.getManifest().version`，方便现场确认浏览器实际加载的 Bridge 版本。
@@ -72,14 +83,16 @@ chat2api 的产品运行环境、控制台、测试报告与扩展运行日志�
 
 ## 回归要求
 
-涉及模型路由、推理强度、时间字段或运行日志的改动，提交前至少验证：
+涉及模型路由、推理强度、时间字段、模型广场或运行日志的改动，提交前至少验证：
 
 - Python compile；
-- 所有扩展 JavaScript `node --check`；
+- 所有扩展和控制台 JavaScript `node --check`；
 - pytest 全量通过；
 - Chat Completions 省略 `reasoning_effort` 时必须向扩展发送 `medium`；
 - Responses API 省略 `reasoning.effort` 时必须向扩展发送 `medium`，并在响应中报告 `reasoning.effort=medium`；
 - Legacy Completions 省略推理参数时同样必须使用 `medium`；
+- 模型广场导航、搜索、分类筛选、实时 `/v1/models` 状态读取和复制按钮均有静态或集成覆盖；
+- 模型广场至少覆盖 `gpt-5.6-sol`、`gpt-5.5`、`gpt-image`、`gpt-live`、`gpt-live-mini`；
 - 同模型同强度 zero-op；
 - 同模型不同强度能够切换后继续发送 prompt；
 - `gpt-5.5` 与 `gpt-5.6-sol` 的 `极速 / 中 / 高` 均有静态或集成回归覆盖；

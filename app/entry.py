@@ -9,6 +9,7 @@ from .v12_patch import install_v12_patch
 from .v13_patch import install_v13_patch
 from .v14_patch import install_v14_patch
 from .v15_patch import install_v15_patch
+from .v16_patch import install_v16_patch
 
 install_voice_patch(app)
 install_v7_patch(app)
@@ -20,3 +21,4 @@ install_v12_patch(app)
 install_v13_patch(app)
 install_v14_patch(app)
 install_v15_patch(app)
+install_v16_patch(app)
