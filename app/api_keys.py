@@ -6,15 +6,17 @@ import hashlib
 import json
 import secrets
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 
+from .timezone_utils import beijing_now, beijing_now_iso, parse_datetime, to_beijing_iso
+
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    """Backward-compatible helper name; canonical chat2api timestamps are Asia/Shanghai."""
+    return beijing_now_iso()
 
 
 def token_hash(token: str) -> str:
@@ -24,13 +26,10 @@ def token_hash(token: str) -> str:
 def _expired(expires_at: str | None) -> bool:
     if not expires_at:
         return False
-    try:
-        value = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        return value <= datetime.now(timezone.utc)
-    except ValueError:
+    value = parse_datetime(expires_at)
+    if value is None:
         return True
+    return value <= beijing_now()
 
 
 def _fernet(master_secret: str) -> Fernet | None:
@@ -71,13 +70,13 @@ class ManagedApiKey:
             "key_id": self.key_id,
             "name": self.name,
             "prefix": self.prefix,
-            "created_at": self.created_at,
-            "expires_at": self.expires_at,
-            "last_used_at": self.last_used_at,
+            "created_at": to_beijing_iso(self.created_at) or self.created_at,
+            "expires_at": to_beijing_iso(self.expires_at) if self.expires_at else None,
+            "last_used_at": to_beijing_iso(self.last_used_at) if self.last_used_at else None,
             "enabled": bool(self.enabled and not self.revoked_at and not _expired(self.expires_at)),
             "configured_enabled": self.enabled,
             "expired": _expired(self.expires_at),
-            "revoked_at": self.revoked_at,
+            "revoked_at": to_beijing_iso(self.revoked_at) if self.revoked_at else None,
             "scopes": scopes,
             "secret_recoverable": bool(self.token_ciphertext),
         }
@@ -88,8 +87,8 @@ class ApiKeyStore:
 
     Authentication always uses a SHA-256 hash. For administrator convenience the
     original secret can also be stored encrypted at rest using a key derived from
-    CHAT2API_API_KEY. Old v0.4 keys without ciphertext remain valid but cannot be
-    revealed; create a new key if a recoverable copy is needed.
+    CHAT2API_API_KEY. Old keys remain valid. Human-readable timestamps are stored
+    and returned in Asia/Shanghai (+08:00).
     """
 
     def __init__(self, data_dir: Path, master_secret: str = "") -> None:
@@ -132,7 +131,7 @@ class ApiKeyStore:
             token_hash=token_hash(raw),
             prefix=raw[:20],
             created_at=utc_now(),
-            expires_at=expires_at,
+            expires_at=to_beijing_iso(expires_at) if expires_at else None,
             scopes=["chat", "models", "files", "images", "audio"],
             token_ciphertext=ciphertext,
         )

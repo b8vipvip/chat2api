@@ -31,7 +31,10 @@
 
   function matches(value, level) {
     const text = normalize(value);
-    return (ALIASES[level] || []).some(alias => text === normalize(alias) || text.startsWith(`${normalize(alias)} `));
+    return (ALIASES[level] || []).some(alias => {
+      const needle = normalize(alias);
+      return text === needle || text.startsWith(`${needle} `) || text.endsWith(` ${needle}`);
+    });
   }
 
   function composerRoot() {
@@ -42,9 +45,9 @@
   function currentPill() {
     const root = composerRoot();
     if (!root) return null;
-    return [...root.querySelectorAll("button,[role='button']")]
-      .filter(visible)
-      .find(element => Object.keys(ALIASES).some(level => matches(labelOf(element), level))) || null;
+    const candidates = [...root.querySelectorAll("button,[role='button']")].filter(visible);
+    const combined = candidates.find(element => /(?:gpt|5\.[0-9])/i.test(labelOf(element)) && Object.keys(ALIASES).some(level => matches(labelOf(element), level)));
+    return combined || candidates.find(element => Object.keys(ALIASES).some(level => matches(labelOf(element), level))) || null;
   }
 
   function openSurfaces() {
@@ -68,6 +71,21 @@
     for (const root of roots) {
       for (const element of root.querySelectorAll("button,[role='menuitem'],[role='menuitemradio'],[role='option'],[data-radix-collection-item],[tabindex]")) {
         if (visible(element) && matches(labelOf(element), level)) return element;
+      }
+    }
+    return null;
+  }
+
+  function reasoningRow() {
+    const roots = openSurfaces();
+    for (const root of roots) {
+      for (const element of root.querySelectorAll("button,[role='menuitem'],[role='menuitemradio'],[role='option'],[data-radix-collection-item],[tabindex],div")) {
+        if (!visible(element)) continue;
+        const text = normalize(labelOf(element));
+        if (!text || text.length > 100) continue;
+        if (/思考强度|推理强度|reasoning|thinking/.test(text)) {
+          return element.closest("button,[role='menuitem'],[role='menuitemradio'],[role='option'],[data-radix-collection-item],[tabindex]") || element;
+        }
       }
     }
     return null;
@@ -140,21 +158,46 @@
     return true;
   }
 
+  async function activateNoClick(element) {
+    if (!element) return false;
+    element.focus?.();
+    key(element, "Enter", "Enter");
+    await delay(250);
+    return true;
+  }
+
   async function chooseNoClick(level) {
     const opened = await openNoClick();
     if (!opened) return null;
-    const slider = visibleSlider();
+    let slider = visibleSlider();
     if (slider) {
       await setSliderNoClick(slider, level);
       key(document, "Escape", "Escape");
       return { strategy: `${opened.strategy}+slider-keyboard`, used_click: false };
     }
-    const choice = choiceFor(level);
+    let choice = choiceFor(level);
     if (choice) {
-      choice.focus?.();
-      key(choice, "Enter", "Enter");
-      await delay(300);
+      await activateNoClick(choice);
       return { strategy: `${opened.strategy}+choice-enter`, used_click: false };
+    }
+
+    const row = reasoningRow();
+    if (row) {
+      await activateNoClick(row);
+      const nested = await waitFor(() => visibleSlider() || choiceFor(level), 1600, 80);
+      if (nested) {
+        slider = visibleSlider();
+        if (slider) {
+          await setSliderNoClick(slider, level);
+          key(document, "Escape", "Escape");
+          return { strategy: `${opened.strategy}+reasoning-row-enter+slider-keyboard`, used_click: false };
+        }
+        choice = choiceFor(level);
+        if (choice) {
+          await activateNoClick(choice);
+          return { strategy: `${opened.strategy}+reasoning-row-enter+choice-enter`, used_click: false };
+        }
+      }
     }
     key(document, "Escape", "Escape");
     return null;
@@ -166,27 +209,33 @@
     pill.click();
     const opened = await waitFor(() => visibleSlider() || openSurfaces()[0] || null, 2500, 100);
     if (!opened) throw new Error("ChatGPT reasoning menu did not open");
-    const slider = visibleSlider();
+    let slider = visibleSlider();
     if (slider && slider instanceof HTMLInputElement) {
       setNativeRange(slider, level);
       key(document, "Escape", "Escape");
       await delay(300);
       return { strategy: "click-open+native-range", used_click: true };
     }
-    const choice = await waitFor(() => choiceFor(level), 2000, 100);
+    let choice = choiceFor(level);
+    if (!choice) {
+      const row = reasoningRow();
+      if (row) {
+        row.click();
+        await delay(250);
+        slider = await waitFor(() => visibleSlider(), 1000, 80);
+        if (slider && slider instanceof HTMLInputElement) {
+          setNativeRange(slider, level);
+          key(document, "Escape", "Escape");
+          await delay(300);
+          return { strategy: "click-open+reasoning-row+native-range", used_click: true };
+        }
+        choice = await waitFor(() => choiceFor(level), 1800, 100);
+      }
+    }
     if (!choice) throw new Error(`Requested reasoning level is not available: ${level}`);
     choice.click();
     await delay(300);
-    return { strategy: "click-fallback", used_click: true };
-  }
-
-  async function probe(level) {
-    try {
-      const response = await chrome.runtime.sendMessage({ type: "chat2api.model.local.probe.v7", reasoning_level: level });
-      return response?.data || null;
-    } catch (_) {
-      return null;
-    }
+    return { strategy: "click-fallback+nested-choice", used_click: true };
   }
 
   async function prepare(level) {
@@ -211,8 +260,8 @@
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "chat2api.reasoning.prepare.v7") {
       prepare(message.reasoning_level)
-        .then(data => sendResponse({ ok: true, data, controller: "reasoning-v7" }))
-        .catch(error => sendResponse({ ok: false, error: String(error?.message || error), controller: "reasoning-v7" }));
+        .then(data => sendResponse({ ok: true, data, controller: "reasoning-v7.1" }))
+        .catch(error => sendResponse({ ok: false, error: String(error?.message || error), controller: "reasoning-v7.1" }));
       return true;
     }
     return false;

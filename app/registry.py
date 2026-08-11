@@ -5,15 +5,17 @@ import hashlib
 import json
 import secrets
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import WebSocket
 
+from .timezone_utils import beijing_now_iso, to_beijing_iso
+
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    """Backward-compatible helper name; canonical timestamps are Asia/Shanghai."""
+    return beijing_now_iso()
 
 
 def token_hash(token: str) -> str:
@@ -57,7 +59,14 @@ class ClientRegistry:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
             for raw in payload.get("clients", []):
-                item = PersistedClient(**raw)
+                if not isinstance(raw, dict):
+                    continue
+                value = dict(raw)
+                if value.get("created_at"):
+                    value["created_at"] = to_beijing_iso(value["created_at"]) or value["created_at"]
+                if value.get("last_seen_at"):
+                    value["last_seen_at"] = to_beijing_iso(value["last_seen_at"]) or value["last_seen_at"]
+                item = PersistedClient(**value)
                 self.clients[item.client_id] = item
         except (OSError, ValueError, TypeError):
             self.clients = {}
@@ -242,7 +251,7 @@ class ClientRegistry:
                 "version": item.version,
                 "online": item.client_id in self.sockets,
                 "busy": item.client_id in self.busy_clients,
-                "last_seen_at": item.last_seen_at,
+                "last_seen_at": to_beijing_iso(item.last_seen_at) if item.last_seen_at else None,
                 "metadata": item.metadata,
             }
             for item in self.clients.values()

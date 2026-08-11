@@ -1,5 +1,5 @@
 (() => {
-  const KEY = "__CHAT2API_BACKGROUND_LOGGING_V4__";
+  const KEY = "__CHAT2API_BACKGROUND_LOGGING_V5__";
   if (globalThis[KEY]) return;
 
   const HISTORY_KEY = "chat2apiRuntimeLogV1";
@@ -55,9 +55,35 @@
   }
 
   const bytesOf = value => encoder.encode(String(value || "")).byteLength;
-  const nowIso = () => new Date().toISOString();
   const requestTypes = new Set(["chat.request", "image.request", "voice.request"]);
   const terminalTypes = new Set(["chat.completed", "chat.error", "chat.cancelled", "image.completed", "image.error", "image.cancelled"]);
+
+  function beijingIso(value = Date.now()) {
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) return null;
+    const shifted = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+    const p = (number, width = 2) => String(number).padStart(width, "0");
+    return `${shifted.getUTCFullYear()}-${p(shifted.getUTCMonth() + 1)}-${p(shifted.getUTCDate())}` +
+      `T${p(shifted.getUTCHours())}:${p(shifted.getUTCMinutes())}:${p(shifted.getUTCSeconds())}.${p(shifted.getUTCMilliseconds(), 3)}+08:00`;
+  }
+
+  const nowIso = () => beijingIso(Date.now());
+
+  function normalizeEntry(value) {
+    if (!value || typeof value !== "object") return value;
+    const entry = { ...value };
+    if (entry.at) entry.at = beijingIso(entry.at) || entry.at;
+    return entry;
+  }
+
+  function normalizeJsonLine(line) {
+    try {
+      const value = JSON.parse(String(line || ""));
+      return JSON.stringify(normalizeEntry(value));
+    } catch (_) {
+      return String(line || "");
+    }
+  }
 
   function runPartKey(runId, partIndex) {
     return `${RUN_PART_PREFIX}${runId}:${String(partIndex).padStart(6, "0")}`;
@@ -98,16 +124,18 @@
 
   function normalizeRun(value) {
     if (!value || typeof value !== "object" || !value.run_id) return null;
-    const currentLines = Array.isArray(value.current_lines) ? value.current_lines.map(item => String(item || "")).filter(Boolean) : [];
+    const currentLines = Array.isArray(value.current_lines)
+      ? value.current_lines.map(normalizeJsonLine).filter(Boolean)
+      : [];
     const activeIds = Array.isArray(value.active_request_ids) ? value.active_request_ids.map(String).filter(Boolean) : [];
     const requestIds = Array.isArray(value.request_ids) ? value.request_ids.map(String).filter(Boolean) : [];
     return {
       run_id: String(value.run_id),
       api_key_id: String(value.api_key_id || "unrouted"),
       api_key_kind: String(value.api_key_kind || "unknown"),
-      started_at: value.started_at || nowIso(),
-      last_activity_at: value.last_activity_at || value.started_at || nowIso(),
-      ended_at: value.ended_at || null,
+      started_at: beijingIso(value.started_at) || value.started_at || nowIso(),
+      last_activity_at: beijingIso(value.last_activity_at || value.started_at) || nowIso(),
+      ended_at: value.ended_at ? (beijingIso(value.ended_at) || value.ended_at) : null,
       idle_deadline: Number(value.idle_deadline || 0) || null,
       request_count: Math.max(0, Number(value.request_count || requestIds.length || 0)),
       active_request_ids: [...new Set(activeIds)],
@@ -134,8 +162,8 @@
         run_id: runId,
         api_key_id: String(item?.api_key_id || "unrouted"),
         api_key_kind: String(item?.api_key_kind || "unknown"),
-        started_at: item?.started_at || null,
-        ended_at: item?.ended_at || null,
+        started_at: item?.started_at ? (beijingIso(item.started_at) || item.started_at) : null,
+        ended_at: item?.ended_at ? (beijingIso(item.ended_at) || item.ended_at) : null,
         request_count: Math.max(0, Number(item?.request_count || 0)),
         part_count: Math.max(0, Number(item?.part_count || 0)),
         total_lines: Math.max(0, Number(item?.total_lines || 0)),
@@ -181,7 +209,7 @@
     if (state.loaded) return;
     try {
       const data = await chrome.storage.local.get([HISTORY_KEY, ACTIVE_RUNS_KEY, RUN_INDEX_KEY]);
-      state.entries = Array.isArray(data[HISTORY_KEY]) ? data[HISTORY_KEY].slice(-MAX_ENTRIES) : [];
+      state.entries = (Array.isArray(data[HISTORY_KEY]) ? data[HISTORY_KEY] : []).slice(-MAX_ENTRIES).map(normalizeEntry);
       state.runIndex = normalizeRunIndex(data[RUN_INDEX_KEY]);
       for (const item of Array.isArray(data[ACTIVE_RUNS_KEY]) ? data[ACTIVE_RUNS_KEY] : []) {
         const run = normalizeRun(item);
@@ -255,19 +283,14 @@
     };
     const line = JSON.stringify(entry);
     const lineBytes = bytesOf(line + "\n");
-
-    // Roll before appending the next complete JSONL line. A single event is
-    // therefore never split across two ~200 KiB parts.
     if (run.current_lines.length && run.current_bytes + lineBytes > TARGET_BYTES) {
       await archiveCurrentPart(run);
     }
-
     run.current_lines.push(line);
     run.current_bytes += lineBytes;
     run.total_lines += 1;
     run.total_bytes += lineBytes;
     run.last_activity_at = entry.at;
-
     state.entries.push(entry);
     if (state.entries.length > MAX_ENTRIES) state.entries.splice(0, state.entries.length - MAX_ENTRIES);
     scheduleFlush();
@@ -309,10 +332,7 @@
       type: message.type,
       model: message?.options?.model || message?.model || null,
       attachment_count: Array.isArray(message?.attachments) ? message.attachments.length : (message?.audio ? 1 : 0),
-      routing: {
-        api_key_id: keyId,
-        api_key_kind: keyKind,
-      },
+      routing: { api_key_id: keyId, api_key_kind: keyKind },
     }, "info", requestId);
     await persistNow();
     return run;
@@ -335,18 +355,12 @@
     const run = runById(runId);
     if (!run || run.finalized || run.active_request_ids.length) return false;
     if (run.idle_deadline && reason !== "manual" && run.idle_deadline > Date.now()) return false;
-
-    await appendToRun(run, "background", "run_finalized", {
-      reason,
-      idle_ms: RUN_IDLE_MS,
-      request_count: run.request_count,
-    });
+    await appendToRun(run, "background", "run_finalized", { reason, idle_ms: RUN_IDLE_MS, request_count: run.request_count });
     await archiveCurrentPart(run);
     run.finalized = true;
     run.ended_at = nowIso();
     run.idle_deadline = null;
     try { await chrome.alarms.clear(alarmName(run.run_id)); } catch (_) {}
-
     const summary = {
       run_id: run.run_id,
       api_key_id: run.api_key_id,
@@ -361,10 +375,8 @@
     state.runIndex = state.runIndex.filter(item => item.run_id !== run.run_id);
     state.runIndex.push(summary);
     state.runIndex.sort((a, b) => String(a.ended_at || "").localeCompare(String(b.ended_at || "")));
-
     for (const requestId of run.request_ids) state.requestToRun.delete(requestId);
     state.activeRuns.delete(run.api_key_id);
-
     while (state.runIndex.length > MAX_FINALIZED_RUNS) {
       const removed = state.runIndex.shift();
       if (!removed) break;
@@ -393,10 +405,11 @@
     const prompt = String(message?.prompt || "").trim();
     if (!prompt) return;
     try {
+      const compact = prompt.replace(/\s+/g, " ").trim();
       await chrome.storage.local.set({
         [AUTOMATION_DRAFT_KEY]: {
-          sha256: await sha256(prompt.replace(/\s+/g, " ").trim()),
-          chars: prompt.replace(/\s+/g, " ").trim().length,
+          sha256: await sha256(compact),
+          chars: compact.length,
           request_id: message.request_id || null,
           at: nowIso(),
         },
@@ -413,15 +426,16 @@
     for (let part = 1; part <= count; part += 1) {
       const value = stored[runPartKey(meta.run_id, part)];
       if (!value?.lines?.length) continue;
+      const lines = value.lines.map(normalizeJsonLine);
       parts.push({
         filename: `chat2api-runtime-${meta.run_id}-part-${String(part).padStart(6, "0")}.log`,
         run_id: meta.run_id,
         api_key_id: meta.api_key_id,
         part,
         bytes: Number(value.bytes || 0),
-        lines: value.lines.length,
-        saved_at: value.saved_at || null,
-        text: value.lines.join("\n") + "\n",
+        lines: lines.length,
+        saved_at: beijingIso(value.saved_at) || value.saved_at || null,
+        text: lines.join("\n") + "\n",
       });
     }
     return parts;
@@ -437,11 +451,13 @@
       const key = `${LEGACY_CHUNK_PREFIX}${item.day}:${String(item.part || 1).padStart(6, "0")}`;
       const value = stored[key];
       if (!Array.isArray(value?.lines) || !value.lines.length) continue;
-      chunks.push({ legacy: true, day: item.day, part: item.part, lines: value.lines.length, bytes: value.bytes || 0, text: value.lines.join("\n") + "\n" });
+      const lines = value.lines.map(normalizeJsonLine);
+      chunks.push({ legacy: true, day: item.day, part: item.part, lines: lines.length, bytes: value.bytes || 0, text: lines.join("\n") + "\n" });
     }
     const current = data[LEGACY_CURRENT_CHUNK_KEY] || data[LEGACY_CHUNK_KEY];
     if (Array.isArray(current?.lines) && current.lines.length) {
-      chunks.push({ legacy: true, current: true, day: current.day, part: current.part, lines: current.lines.length, bytes: current.bytes || 0, text: current.lines.join("\n") + "\n" });
+      const lines = current.lines.map(normalizeJsonLine);
+      chunks.push({ legacy: true, current: true, day: current.day, part: current.part, lines: lines.length, bytes: current.bytes || 0, text: lines.join("\n") + "\n" });
     }
     return chunks;
   }
@@ -451,17 +467,16 @@
     await persistNow();
     const runs = [];
     const chunks = [];
-
     for (const meta of state.runIndex) {
       const parts = await readRunParts(meta);
       chunks.push(...parts);
       runs.push({ ...meta, finalized: true, parts });
     }
-
     for (const run of state.activeRuns.values()) {
       const archivedMeta = { run_id: run.run_id, api_key_id: run.api_key_id, api_key_kind: run.api_key_kind, part_count: run.archived_parts };
       const parts = await readRunParts(archivedMeta);
       if (run.current_lines.length) {
+        const currentLines = run.current_lines.map(normalizeJsonLine);
         const current = {
           filename: `chat2api-runtime-${run.run_id}-part-${String(run.current_part).padStart(6, "0")}.log`,
           run_id: run.run_id,
@@ -469,9 +484,9 @@
           part: run.current_part,
           current: true,
           bytes: run.current_bytes,
-          lines: run.current_lines.length,
-          saved_at: run.last_activity_at,
-          text: run.current_lines.join("\n") + "\n",
+          lines: currentLines.length,
+          saved_at: beijingIso(run.last_activity_at) || run.last_activity_at,
+          text: currentLines.join("\n") + "\n",
         };
         parts.push(current);
       }
@@ -485,11 +500,11 @@
         request_count: run.request_count,
         active_request_count: run.active_request_ids.length,
         idle_deadline: run.idle_deadline,
+        idle_deadline_beijing: run.idle_deadline ? beijingIso(run.idle_deadline) : null,
         finalized: false,
         parts,
       });
     }
-
     return { runs, chunks, legacy_chunks: await exportLegacyChunks() };
   }
 
@@ -501,7 +516,6 @@
       let startedRun = null;
       if (requestTypes.has(message?.type)) startedRun = await startRequest(message);
       else if (requestId) await appendForRequest(requestId, "background", "server-message", { type: message?.type || "", request_id: requestId });
-
       if (startedRun) {
         await appendToRun(startedRun, "background", "server-message", {
           type: message?.type || "",
@@ -510,7 +524,6 @@
           attachment_count: Array.isArray(message?.attachments) ? message.attachments.length : 0,
         }, "info", requestId);
       }
-
       try {
         const result = await baseHandleServerMessage(message);
         if (requestId) await appendForRequest(requestId, "background", "server-message-dispatched", { type: message?.type || "", request_id: requestId });
@@ -573,13 +586,15 @@
     if (message?.type === "popup.logs.export") {
       state.queue.then(async () => {
         const exported = await exportStoredRuns();
-        const settings = await chrome.storage.local.get(["clientId", "extensionName", "boundTabId", "socketState", "currentModel", "lastRequestedModel"]);
+        const settings = await chrome.storage.local.get(["clientId", "extensionName", "boundTabId", "socketState", "currentModel", "currentReasoning", "lastRequestedModel", "lastRequestedReasoning"]);
         sendResponse({
           ok: true,
           data: {
             report_type: "chat2api-extension-runtime-log",
-            report_version: 4,
+            report_version: 5,
             generated_at: nowIso(),
+            timezone: "Asia/Shanghai",
+            utc_offset_minutes: 480,
             extension_version: chrome.runtime.getManifest().version,
             settings: clean(settings),
             auto_local_log: {
@@ -594,12 +609,13 @@
               active_runs: state.activeRuns.size,
               finalized_runs: state.runIndex.length,
               last_error: state.storageError || null,
-              format: "JSONL; one complete JSON event per line; each API-key run is independent and finalizes after 120 seconds idle",
+              timestamp_timezone: "Asia/Shanghai",
+              format: "JSONL; one complete JSON event per line; human-readable timestamps are Asia/Shanghai (+08:00); each API-key run finalizes after 120 seconds idle",
             },
             runs: exported.runs,
             chunks: exported.chunks,
             legacy_chunks: exported.legacy_chunks,
-            entries: state.entries.slice(),
+            entries: state.entries.map(normalizeEntry),
           },
         });
       }).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));

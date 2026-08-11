@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_MODEL_STATE_V7__";
   if (globalThis[KEY]) return;
 
-  const VERSION = "0.4.0";
+  const VERSION = "0.4.1";
   const CACHE_KEY = "chat2api:model-state:v2";
   const AUTO_KEY = "__CHAT2API_MODEL_AUTOMATION_V7__";
   const FAMILIES = ["gpt-5.6-sol", "gpt-5.5"];
@@ -55,7 +55,10 @@
   function reasoningFromText(value) {
     const text = normalize(value);
     for (const [level, aliases] of Object.entries(REASONING_ALIASES)) {
-      if (aliases.some(alias => text === normalize(alias) || text.startsWith(`${normalize(alias)} `))) return level;
+      if (aliases.some(alias => {
+        const needle = normalize(alias);
+        return text === needle || text.startsWith(`${needle} `) || text.endsWith(` ${needle}`);
+      })) return level;
     }
     return "";
   }
@@ -83,7 +86,8 @@
       .filter(item => item.level);
     if (!candidates.length) return { reasoning: "", source: "none" };
     const exact = candidates.find(item => normalize(item.text) === normalize((REASONING_ALIASES[item.level] || [])[0]));
-    const item = exact || candidates[0];
+    const combined = candidates.find(item => familyFromText(item.text));
+    const item = exact || combined || candidates[0];
     return { reasoning: item.level, source: "composer-dom", label: item.text };
   }
 
@@ -109,6 +113,15 @@
         const family = values.map(familyFromText).find(Boolean) || "";
         if (family) rows.push({ family, source: "composer-dom", label: values.find(value => familyFromText(value) === family) || "" });
       }
+    }
+    // ChatGPT currently often renders a single combined composer pill such as
+    // "5.5 高". It may not expose model-specific attributes, so scan visible
+    // composer controls as passive evidence too.
+    for (const element of root.querySelectorAll("button,[role='button'],[aria-label],[data-value]")) {
+      if (!visible(element)) continue;
+      const text = labelOf(element);
+      const family = familyFromText(text);
+      if (family) rows.push({ family, source: "composer-dom", label: text });
     }
     const unique = [...new Set(rows.map(item => item.family))];
     if (unique.length === 1) return rows.find(item => item.family === unique[0]);
@@ -168,6 +181,8 @@
       state_source: `${current.family_source}+${current.reasoning_source}`,
       family_source: current.family_source,
       reasoning_source: current.reasoning_source,
+      family_label: current.family_label,
+      reasoning_label: current.reasoning_label,
       state_detect_ms: Math.round((performance.now() - started) * 10) / 10,
     };
   }

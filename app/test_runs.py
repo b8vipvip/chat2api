@@ -2,13 +2,23 @@ from __future__ import annotations
 
 import json
 from collections import deque
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .timezone_utils import beijing_now_iso, to_beijing_iso
+
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    """Backward-compatible helper name; canonical timestamps are Asia/Shanghai."""
+    return beijing_now_iso()
+
+
+def normalize_times(item: dict[str, Any]) -> dict[str, Any]:
+    row = dict(item)
+    for key in ("recorded_at", "started_at", "finished_at", "created_at", "updated_at"):
+        if row.get(key):
+            row[key] = to_beijing_iso(row[key]) or row[key]
+    return row
 
 
 class TestRunStore:
@@ -25,12 +35,12 @@ class TestRunStore:
                 if line.strip():
                     row = json.loads(line)
                     if isinstance(row, dict):
-                        self.items.append(row)
+                        self.items.append(normalize_times(row))
         except (OSError, ValueError, TypeError):
             self.items.clear()
 
     async def append(self, item: dict[str, Any]) -> dict[str, Any]:
-        row = dict(item)
+        row = normalize_times(item)
         row.setdefault("recorded_at", utc_now())
         self.items.append(row)
         self.path.parent.mkdir(parents=True, exist_ok=True)

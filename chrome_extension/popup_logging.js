@@ -4,47 +4,52 @@
   const message = document.getElementById("message");
   if (!download || !clear) return;
 
-  function stamp() {
-    const d = new Date();
-    const p = value => String(value).padStart(2, "0");
-    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+  function beijingParts(value = Date.now()) {
+    const d = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(d.getTime())) return null;
+    return new Date(d.getTime() + 8 * 60 * 60 * 1000);
   }
 
-  function localIso(value) {
+  function stamp() {
+    const d = beijingParts();
+    const p = value => String(value).padStart(2, "0");
+    return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}-${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`;
+  }
+
+  function beijingIso(value) {
     if (value == null || value === "") return null;
     const d = value instanceof Date ? value : new Date(value);
     if (Number.isNaN(d.getTime())) return null;
-    const p = (number, width = 2) => String(Math.abs(number)).padStart(width, "0");
-    const offsetMinutes = -d.getTimezoneOffset();
-    const sign = offsetMinutes >= 0 ? "+" : "-";
-    const offsetHours = Math.floor(Math.abs(offsetMinutes) / 60);
-    const offsetRemainder = Math.abs(offsetMinutes) % 60;
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}${sign}${p(offsetHours)}:${p(offsetRemainder)}`;
+    const shifted = new Date(d.getTime() + 8 * 60 * 60 * 1000);
+    const p = (number, width = 2) => String(number).padStart(width, "0");
+    return `${shifted.getUTCFullYear()}-${p(shifted.getUTCMonth() + 1)}-${p(shifted.getUTCDate())}` +
+      `T${p(shifted.getUTCHours())}:${p(shifted.getUTCMinutes())}:${p(shifted.getUTCSeconds())}.${p(shifted.getUTCMilliseconds(), 3)}+08:00`;
   }
 
-  function addLocalTimes(data) {
+  function normalizeBeijingTimes(data) {
     if (!data || typeof data !== "object") return data;
-    data.generated_at_local = localIso(data.generated_at);
+    if (data.generated_at) data.generated_at = beijingIso(data.generated_at) || data.generated_at;
+    data.timezone = "Asia/Shanghai";
+    data.utc_offset_minutes = 480;
     data.time_display = {
-      canonical_timezone: "UTC",
-      local_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "browser-local",
-      utc_offset_minutes: -new Date().getTimezoneOffset(),
-      note: "Fields ending in Z are canonical UTC. *_local fields are browser-local time.",
+      canonical_timezone: "Asia/Shanghai",
+      utc_offset_minutes: 480,
+      note: "All human-readable chat2api timestamps use Beijing time (+08:00). Epoch millisecond deadlines and monotonic duration fields are timezone-independent.",
     };
 
     for (const run of Array.isArray(data.runs) ? data.runs : []) {
-      run.started_at_local = localIso(run.started_at);
-      run.ended_at_local = localIso(run.ended_at);
-      if (run.idle_deadline) run.idle_deadline_local = localIso(run.idle_deadline);
+      if (run.started_at) run.started_at = beijingIso(run.started_at) || run.started_at;
+      if (run.ended_at) run.ended_at = beijingIso(run.ended_at) || run.ended_at;
+      if (run.idle_deadline) run.idle_deadline_beijing = beijingIso(run.idle_deadline);
       for (const part of Array.isArray(run.parts) ? run.parts : []) {
-        part.saved_at_local = localIso(part.saved_at);
+        if (part.saved_at) part.saved_at = beijingIso(part.saved_at) || part.saved_at;
       }
     }
     for (const chunk of Array.isArray(data.chunks) ? data.chunks : []) {
-      chunk.saved_at_local = localIso(chunk.saved_at);
+      if (chunk.saved_at) chunk.saved_at = beijingIso(chunk.saved_at) || chunk.saved_at;
     }
     for (const entry of Array.isArray(data.entries) ? data.entries : []) {
-      entry.at_local = localIso(entry.at);
+      if (entry.at) entry.at = beijingIso(entry.at) || entry.at;
     }
     return data;
   }
@@ -56,7 +61,7 @@
       message.textContent = response?.error || "运行日志导出失败";
       return;
     }
-    const data = addLocalTimes(response.data || {});
+    const data = normalizeBeijingTimes(response.data || {});
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -66,7 +71,7 @@
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    message.textContent = `运行日志已导出，共 ${Array.isArray(data.entries) ? data.entries.length : 0} 条；已附加浏览器本地时间。`;
+    message.textContent = `运行日志已导出，共 ${Array.isArray(data.entries) ? data.entries.length : 0} 条；时间统一为北京时间。`;
   });
 
   clear.addEventListener("click", async () => {
