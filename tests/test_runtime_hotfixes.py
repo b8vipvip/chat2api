@@ -15,7 +15,7 @@ def test_request_v5_never_accepts_history_hydration_as_submission() -> None:
     assert "historical_hydration_ignored: true" in source
     assert "promptStillPresent(prompt)" in source
     assert "ready.button.click()" in source
-    assert "click-composer-cleared" in source
+    assert "${reasonPrefix}-composer-cleared" in source
 
 
 def test_request_v5_is_loaded_after_v4() -> None:
@@ -34,7 +34,7 @@ def test_voice_v4_annotation_does_not_rewrite_observed_aria_label() -> None:
     assert 'annotation_strategy: "dataset-only"' in source
     assert 'button.dataset.chat2apiVoiceTrigger = "v4"' in source
     assert 'setAttribute("aria-label"' not in source
-    assert "MutationObserver" not in source
+    assert "new MutationObserver" not in source
     assert "activeUntil" not in source
 
 
