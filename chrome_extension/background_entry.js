@@ -3,7 +3,7 @@ importScripts(
   "content_bootstrap.js",
   "background_hardening.js",
   "browser_tabs.js",
-  "model_routing.js",
+  "model_routing_v2.js",
   "image_routing.js",
   "voice_routing.js",
   "audio_routing_v2.js",

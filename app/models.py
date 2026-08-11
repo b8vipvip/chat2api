@@ -80,13 +80,17 @@ class ChatMessage(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     model_config = ConfigDict(extra="allow")
-    model: str = "default"
+    model: str = "gpt-5.6-sol"
     messages: list[ChatMessage]
     stream: bool = False
     client_id: str | None = None
     prompt_mode: Literal["last_user", "full"] = "last_user"
     timeout: int | None = Field(default=None, ge=5, le=900)
     attachments: list[AttachmentRef] = Field(default_factory=list, max_length=4)
+    reasoning_effort: str | None = Field(default=None, max_length=40)
+    reasoning: dict[str, Any] | None = None
+    max_completion_tokens: int | None = Field(default=None, ge=1)
+    max_tokens: int | None = Field(default=None, ge=1)
 
     @field_validator("messages")
     @classmethod

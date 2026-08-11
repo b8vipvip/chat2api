@@ -1,13 +1,17 @@
 (() => {
   const baseEnsureContent = ensureContent;
 
-  ensureContent = async function ensureChat2apiContentV11(tabId) {
+  ensureContent = async function ensureChat2apiContentV13(tabId) {
     await baseEnsureContent(tabId);
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
         files: [
           "content_request_v2.js",
+          "content_model_v5.js",
+          "content_model_cache_migrate_v7.js",
+          "content_model_v7.js",
+          "content_reasoning_v7.js",
           "content_multimodal.js",
           "content_request_v3.js",
           "content_multimodal_v4.js",

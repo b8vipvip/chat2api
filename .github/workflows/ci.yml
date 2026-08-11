@@ -29,6 +29,9 @@ jobs:
           node --check chrome_extension/content_request_v5.js
           node --check chrome_extension/content_model_v5.js
           node --check chrome_extension/content_model_v6.js
+          node --check chrome_extension/content_model_cache_migrate_v7.js
+          node --check chrome_extension/content_model_v7.js
+          node --check chrome_extension/content_reasoning_v7.js
           node --check chrome_extension/content_multimodal.js
           node --check chrome_extension/content_multimodal_v4.js
           node --check chrome_extension/content_guard.js
@@ -46,6 +49,7 @@ jobs:
           node --check chrome_extension/voice_main_v2.js
           node --check chrome_extension/content_bootstrap.js
           node --check chrome_extension/model_routing.js
+          node --check chrome_extension/model_routing_v2.js
           node --check chrome_extension/image_routing.js
           node --check chrome_extension/image_routing_v3.js
           node --check chrome_extension/voice_routing.js
@@ -67,6 +71,7 @@ jobs:
           node --check app/admin_v10.js
           node --check app/admin_v11.js
           node --check app/admin_v12.js
+          node --check app/admin_v13.js
           python - <<'PY'
           import re
           from pathlib import Path
