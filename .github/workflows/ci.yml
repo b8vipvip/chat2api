@@ -58,6 +58,7 @@ jobs:
           node --check chrome_extension/audio_routing_v4.js
           node --check chrome_extension/browser_tabs.js
           node --check chrome_extension/background.js
+          node --check chrome_extension/background_time_v14.js
           node --check chrome_extension/background_hardening.js
           node --check chrome_extension/background_logging.js
           node --check chrome_extension/conversation_routing.js
@@ -72,6 +73,7 @@ jobs:
           node --check app/admin_v11.js
           node --check app/admin_v12.js
           node --check app/admin_v13.js
+          node --check app/admin_v14.js
           python - <<'PY'
           import re
           from pathlib import Path
