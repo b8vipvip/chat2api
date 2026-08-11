@@ -89,6 +89,15 @@
     return Object.keys(FAMILY_ALIASES).find(family => value === family || value.startsWith(`${family}-`)) || "";
   }
 
+  function familyFromClickedNode(node) {
+    let current = node instanceof Element ? node : null;
+    for (let depth = 0; current && depth < 7; depth += 1, current = current.parentElement) {
+      const family = familyFromText(labelOf(current));
+      if (family) return family;
+    }
+    return "";
+  }
+
   function commitFamily(family, reasoning, source) {
     const cache = readCache();
     writeCache({
@@ -110,7 +119,7 @@
     }
 
     const current = stateControl();
-    if (current.family === pending.target) {
+    if (current.family === pending.target && pending.target_clicked) {
       commitFamily(pending.target, current.reasoning, "family-dom-confirmed-v15");
       state.pending = null;
       return;
@@ -121,12 +130,13 @@
     // that state the legacy v5 controller has already clicked the exact target
     // family but its second menu-open verification cannot see a family label.
     // Treat the observable combined->reasoning-only transition as trusted
-    // evidence only when we knew the previous family and it differs from the
-    // requested target. A failed click that leaves "5.5 极速" unchanged will
-    // not satisfy these conditions.
+    // evidence only when we knew the previous family, captured the exact target
+    // family click, and the composer actually changed. A failed click that
+    // leaves "5.5 极速" unchanged will not satisfy these conditions.
     const changed = normalize(current.label) && normalize(current.label) !== normalize(pending.before_label);
     const reasoningOnly = Boolean(current.reasoning && !current.family);
     if (
+      pending.target_clicked &&
       pending.before_family &&
       pending.before_family !== pending.target &&
       changed &&
@@ -136,6 +146,16 @@
       state.pending = null;
     }
   }
+
+  document.addEventListener("click", event => {
+    const pending = state.pending;
+    if (!pending) return;
+    const clicked = familyFromClickedNode(event.target);
+    if (clicked !== pending.target) return;
+    pending.target_clicked = true;
+    pending.target_clicked_at = Date.now();
+    queueMicrotask(maybeCaptureTransition);
+  }, true);
 
   chrome.runtime.onMessage.addListener(message => {
     if (message?.type !== "chat2api.model.prepare.v5") return false;
@@ -147,9 +167,10 @@
       target,
       before_family: current.family || (!cache.dirty_family ? String(cache.family || "") : ""),
       before_label: current.label || "",
+      target_clicked: false,
+      target_clicked_at: null,
       started_at: Date.now(),
     };
-    queueMicrotask(maybeCaptureTransition);
     return false;
   });
 
