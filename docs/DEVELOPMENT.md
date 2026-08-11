@@ -11,6 +11,7 @@ chat2api 的产品运行环境、控制台、测试报告与扩展运行日志�
 - Chrome 扩展的状态时间、运行日志 `at`、run 的 `started_at` / `ended_at` / `last_activity_at`、日志 part 的 `saved_at`、日志导出 `generated_at` 统一使用北京时间。
 - 读取旧版本 UTC (`Z` / `+00:00`) 持久化时间时，应在加载或对外输出时转换为 `Asia/Shanghai`，不能要求用户手工加 8 小时。
 - 前端展示和导出的日志文件不得把浏览器所在时区当作 chat2api 的产品时区；即使浏览器运行在其它地区，chat2api 的产品时间仍固定为北京时间。
+- **服务端控制台不得把已经是北京时间的无时区表格字符串再次当作 UTC 解析。** 例如服务端已经显示 `2026-08-11 19:55:12` 时，前端必须原样作为北京时间展示，禁止追加 `Z` 后再由浏览器换算，否则会错误变成次日 `03:55:12`。
 - Python 代码优先使用 `app/timezone_utils.py` 的 `beijing_now_iso()` / `to_beijing_iso()`。
 - Chrome 扩展需要生成时间字符串时使用固定 `+08:00` 的 Beijing helper，不使用浏览器本地时区推导产品时间。
 
@@ -44,8 +45,15 @@ chat2api 的产品运行环境、控制台、测试报告与扩展运行日志�
 1. 优先被动读取当前 composer DOM 与可信同页缓存；模型和推理强度均匹配时必须走 zero-op，不重新打开菜单。
 2. ChatGPT 可能把当前状态合并显示为 `5.5 高` 之类的 composer pill；被动探测必须能同时从该控件识别模型和推理强度。
 3. 模型 UI 切换后，旧选择器二次打开菜单可能看不到已选模型。若 composer DOM 已明确证明目标模型，应使用被动 DOM 恢复验证，不能仅因菜单二次验证失败而中止请求。
-4. 推理强度不一致时优先走快捷键、键盘和原生 range 等 no-click 路径；只有这些路径均不可用时才 click fallback。
-5. 在模型和推理强度最终验证通过之前不得发送 prompt；验证通过后必须继续进入 request controller，不能因为已经完成模型切换而漏掉 prompt 注入。
+4. GPT-5.6 Sol 当前还可能在成功 family 切换后把组合控件从例如 `5.5 极速` 收缩为仅 `极速`。只有同时满足“切换前 family 已可信确认”“请求的目标 family 与旧 family 不同”“v5 已进入精确目标 family 选择流程”“composer 控件发生了可观察的 combined → reasoning-only 变化”时，才允许把该变化作为目标 family 的恢复证据。控件未变化时不得推断成功。
+5. 推理强度不一致时优先走快捷键、键盘和原生 range 等 no-click 路径；只有这些路径均不可用时才 click fallback。
+6. **推理滑块不得假定只有三个键盘步进。** `极速` 可用 `Home`，`高` 可用 `End`；`中` 必须从边界逐步移动，并根据 `aria-valuetext`、滑块状态或 composer 实际显示确认已经到 `中` 后才能结束选择。不得再使用“Home + 固定一次 ArrowRight = medium”这样的硬编码。
+7. 在模型和推理强度最终验证通过之前不得发送 prompt；验证通过后必须继续进入 request controller，不能因为已经完成模型切换而漏掉 prompt 注入。
+
+## Chrome 扩展版本显示
+
+- 扩展 popup 必须直接显示 `chrome.runtime.getManifest().version`，方便现场确认浏览器实际加载的 Bridge 版本。
+- 版本显示不得从硬编码文本读取，以免 manifest 已升级但 popup 仍显示旧版本。
 
 ## 运行日志
 
@@ -63,6 +71,10 @@ chat2api 的产品运行环境、控制台、测试报告与扩展运行日志�
 - pytest 全量通过；
 - 同模型同强度 zero-op；
 - 同模型不同强度能够切换后继续发送 prompt；
+- `gpt-5.5` 与 `gpt-5.6-sol` 的 `极速 / 中 / 高` 均有静态或集成回归覆盖；
 - 不同模型切换完成后能够继续设置推理强度并发送 prompt；
+- family 切换后若 composer 只剩推理强度标签，恢复逻辑不得把“未发生任何 UI 变化”的失败点击误判为成功；
+- 服务端控制台的北京时间不得被浏览器再次加 8 小时；
+- 扩展 popup 显示的版本必须来自 manifest；
 - 新生成/导出的时间字段包含 `+08:00`；
 - 120 秒 idle 封账仍按真实 120 秒执行。

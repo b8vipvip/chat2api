@@ -65,9 +65,9 @@ def test_production_entry_installs_v11_after_v10() -> None:
     assert source.index("install_v10_patch(app)") < source.index("install_v11_patch(app)")
 
 
-def test_extension_071_enables_downloads_and_v4_voice_route() -> None:
+def test_extension_072_enables_downloads_and_v4_voice_route() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.7.1"
+    assert manifest["version"] == "0.7.2"
     assert "downloads" in manifest["permissions"]
     scripts = manifest["content_scripts"][1]["js"]
     assert "content_voice_fix_v4.js" in scripts

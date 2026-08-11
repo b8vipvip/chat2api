@@ -52,7 +52,7 @@ def test_v10_version_and_console_script(tmp_path: Path) -> None:
         assert '/assets/chat2api-v10.js' in html
         script = client.get("/assets/chat2api-v10.js")
         assert script.status_code == 200
-        assert "浏览器本地时间" in script.text
+        assert "时间（北京时间）" in script.text
 
 
 def test_production_entry_installs_v10_after_v9() -> None:
@@ -63,7 +63,7 @@ def test_production_entry_installs_v10_after_v9() -> None:
 
 def test_extension_loads_v10_request_image_voice_and_runtime_log_controllers() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.7.1"
+    assert manifest["version"] == "0.7.2"
     scripts = manifest["content_scripts"][1]["js"]
     for name in [
         "content_multimodal_v4.js",
@@ -150,11 +150,11 @@ def test_extension_runtime_logs_are_downloadable_and_redacted() -> None:
     assert "chat2api-extension-runtime" in popup
 
 
-def test_admin_v10_converts_naive_utc_display_and_explains_vision_subtests() -> None:
+def test_admin_v10_preserves_beijing_display_and_explains_vision_subtests() -> None:
     source = (ROOT / "app" / "admin_v10.js").read_text(encoding="utf-8")
-    assert 'raw.replace(" ", "T") + "Z"' in source
-    assert "date.getHours()" in source
-    assert "时间（本地）" in source
-    assert "浏览器本地时间" in source
+    assert 'raw.replace(" ", "T") + "Z"' not in source
+    assert "canonicalBeijingTime" in source
+    assert "时间（北京时间）" in source
+    assert "Asia/Shanghai" in source
     assert "图片" in source and "视频" in source
     assert "result.subtests" in source

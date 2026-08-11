@@ -6,10 +6,11 @@
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   const ALIASES = {
     instant: ["极速", "instant", "fast", "low", "minimal"],
-    medium: ["中", "medium"],
+    medium: ["中", "中等", "medium"],
     high: ["高", "high", "xhigh"],
   };
   const RATIOS = { instant: 0.05, medium: 0.5, high: 0.95 };
+  const MAX_SLIDER_STEPS = 32;
 
   const normalize = value => String(value || "")
     .replace(/[✓✔︎✔√]/g, "")
@@ -63,6 +64,29 @@
     const sliders = [...document.querySelectorAll("input[type='range'],[role='slider']")].filter(visible);
     const surfaces = openSurfaces();
     return sliders.find(slider => surfaces.some(surface => surface.contains(slider))) || sliders[0] || null;
+  }
+
+  function sliderStateText(slider) {
+    if (!slider) return "";
+    const values = [
+      slider.getAttribute?.("aria-valuetext"),
+      slider.getAttribute?.("data-value"),
+      slider.getAttribute?.("aria-label"),
+      slider.getAttribute?.("title"),
+      labelOf(slider),
+      labelOf(currentPill()),
+    ].filter(Boolean);
+    let parent = slider.parentElement;
+    for (let depth = 0; parent && depth < 4; depth += 1, parent = parent.parentElement) {
+      const text = labelOf(parent);
+      if (text && text.length <= 160) values.push(text);
+    }
+    return values.join(" ");
+  }
+
+  function sliderNumber(slider, name) {
+    const value = Number(slider?.getAttribute?.(name));
+    return Number.isFinite(value) ? value : null;
   }
 
   function choiceFor(level) {
@@ -150,12 +174,47 @@
       await delay(300);
       return true;
     }
+
     slider.focus?.();
+    if (level === "instant") {
+      key(slider, "Home", "Home");
+      await delay(180);
+      return matches(sliderStateText(slider), level) || matches(labelOf(currentPill()), level);
+    }
+    if (level === "high") {
+      key(slider, "End", "End");
+      await delay(180);
+      return matches(sliderStateText(slider), level) || matches(labelOf(currentPill()), level);
+    }
+
+    // ChatGPT sliders are not guaranteed to have exactly three keyboard stops.
+    // Discover their numeric range when possible, then walk from Home to the
+    // midpoint while continuously checking the UI's own medium label.
     key(slider, "Home", "Home");
-    const steps = level === "instant" ? 0 : level === "medium" ? 1 : 2;
-    for (let i = 0; i < steps; i += 1) key(slider, "ArrowRight", "ArrowRight");
-    await delay(300);
-    return true;
+    await delay(100);
+    if (matches(sliderStateText(slider), level) || matches(labelOf(currentPill()), level)) return true;
+
+    let min = sliderNumber(slider, "aria-valuemin");
+    let max = sliderNumber(slider, "aria-valuemax");
+    if (min === null) min = sliderNumber(slider, "aria-valuenow");
+    if (max === null) {
+      key(slider, "End", "End");
+      await delay(100);
+      max = sliderNumber(slider, "aria-valuenow");
+      key(slider, "Home", "Home");
+      await delay(100);
+    }
+    const midpoint = min !== null && max !== null && max > min ? min + (max - min) / 2 : null;
+
+    for (let i = 0; i < MAX_SLIDER_STEPS; i += 1) {
+      key(slider, "ArrowRight", "ArrowRight");
+      await delay(90);
+      if (matches(sliderStateText(slider), level) || matches(labelOf(currentPill()), level)) return true;
+      const now = sliderNumber(slider, "aria-valuenow");
+      if (midpoint !== null && now !== null && now >= midpoint) return true;
+      if (max !== null && now !== null && now >= max) break;
+    }
+    return false;
   }
 
   async function activateNoClick(element) {
@@ -171,9 +230,13 @@
     if (!opened) return null;
     let slider = visibleSlider();
     if (slider) {
-      await setSliderNoClick(slider, level);
+      const matched = await setSliderNoClick(slider, level);
       key(document, "Escape", "Escape");
-      return { strategy: `${opened.strategy}+slider-keyboard`, used_click: false };
+      await delay(120);
+      if (matched || matches(labelOf(currentPill()), level)) {
+        return { strategy: `${opened.strategy}+slider-keyboard-adaptive`, used_click: false };
+      }
+      return null;
     }
     let choice = choiceFor(level);
     if (choice) {
@@ -188,9 +251,13 @@
       if (nested) {
         slider = visibleSlider();
         if (slider) {
-          await setSliderNoClick(slider, level);
+          const matched = await setSliderNoClick(slider, level);
           key(document, "Escape", "Escape");
-          return { strategy: `${opened.strategy}+reasoning-row-enter+slider-keyboard`, used_click: false };
+          await delay(120);
+          if (matched || matches(labelOf(currentPill()), level)) {
+            return { strategy: `${opened.strategy}+reasoning-row-enter+slider-keyboard-adaptive`, used_click: false };
+          }
+          return null;
         }
         choice = choiceFor(level);
         if (choice) {
@@ -210,11 +277,13 @@
     const opened = await waitFor(() => visibleSlider() || openSurfaces()[0] || null, 2500, 100);
     if (!opened) throw new Error("ChatGPT reasoning menu did not open");
     let slider = visibleSlider();
-    if (slider && slider instanceof HTMLInputElement) {
-      setNativeRange(slider, level);
-      key(document, "Escape", "Escape");
-      await delay(300);
-      return { strategy: "click-open+native-range", used_click: true };
+    if (slider) {
+      const matched = await setSliderNoClick(slider, level);
+      if (matched || matches(labelOf(currentPill()), level)) {
+        key(document, "Escape", "Escape");
+        await delay(180);
+        return { strategy: slider instanceof HTMLInputElement ? "click-open+native-range" : "click-open+slider-keyboard-adaptive", used_click: true };
+      }
     }
     let choice = choiceFor(level);
     if (!choice) {
@@ -223,11 +292,13 @@
         row.click();
         await delay(250);
         slider = await waitFor(() => visibleSlider(), 1000, 80);
-        if (slider && slider instanceof HTMLInputElement) {
-          setNativeRange(slider, level);
-          key(document, "Escape", "Escape");
-          await delay(300);
-          return { strategy: "click-open+reasoning-row+native-range", used_click: true };
+        if (slider) {
+          const matched = await setSliderNoClick(slider, level);
+          if (matched || matches(labelOf(currentPill()), level)) {
+            key(document, "Escape", "Escape");
+            await delay(180);
+            return { strategy: "click-open+reasoning-row+slider-keyboard-adaptive", used_click: true };
+          }
         }
         choice = await waitFor(() => choiceFor(level), 1800, 100);
       }
@@ -260,8 +331,8 @@
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "chat2api.reasoning.prepare.v7") {
       prepare(message.reasoning_level)
-        .then(data => sendResponse({ ok: true, data, controller: "reasoning-v7.1" }))
-        .catch(error => sendResponse({ ok: false, error: String(error?.message || error), controller: "reasoning-v7.1" }));
+        .then(data => sendResponse({ ok: true, data, controller: "reasoning-v7.2" }))
+        .catch(error => sendResponse({ ok: false, error: String(error?.message || error), controller: "reasoning-v7.2" }));
       return true;
     }
     return false;

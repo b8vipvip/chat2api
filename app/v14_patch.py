@@ -13,7 +13,7 @@ from . import diagnostics as diagnostics_module
 from .timezone_utils import BEIJING_TZ, beijing_now_iso, to_beijing_iso
 
 
-PATCH_VERSION = "0.14.0"
+PATCH_VERSION = "0.14.1"
 TIMEZONE_NAME = "Asia/Shanghai"
 UTC_OFFSET = "+08:00"
 _TIME_KEYS = {
@@ -96,6 +96,8 @@ def install_v14_patch(app: FastAPI) -> FastAPI:
                         capabilities["beijing_time_standard"] = True
                         capabilities["timestamp_timezone"] = TIMEZONE_NAME
                         capabilities["reasoning_family_recovery"] = True
+                        capabilities["adaptive_reasoning_slider"] = True
+                        capabilities["beijing_console_no_double_conversion"] = True
             headers = {k: v for k, v in response.headers.items() if k.lower() not in {"content-length", "content-type"}}
             if path.startswith("/api/admin/") or path in {"/", "/healthz"}:
                 headers["Cache-Control"] = "no-store"

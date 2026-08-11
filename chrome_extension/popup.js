@@ -2,6 +2,7 @@ const $ = id => document.getElementById(id);
 const DEFAULT_SERVER_URL = "https://chat2api.mv3.cn";
 const TEXT_MODELS = ["gpt-5.6-sol", "gpt-5.5"];
 const REASONING_LABELS = { instant: "极速", medium: "中", high: "高", low: "极速" };
+const EXTENSION_VERSION = chrome.runtime.getManifest().version;
 let formInitialized = false;
 
 async function send(message) { return chrome.runtime.sendMessage(message); }
@@ -22,6 +23,7 @@ function renderModels(settings) {
   $("models").textContent = `文本模型：${labels.join("、")}。当前模型：${current || "尚未被动确认"}；推理强度：${reasoning}。API 请求会先被动识别页面状态，匹配时零切换直接执行。`;
 }
 async function refresh() {
+  $("versionInfo").textContent = `Chrome Bridge · v${EXTENSION_VERSION}`;
   const response = await send({ type: "popup.status" });
   if (!response?.ok) return;
   const { settings, tabs } = response;
@@ -61,5 +63,6 @@ $("discoverModels").addEventListener("click", async () => {
   await refresh();
 });
 $("unbind").addEventListener("click", async () => { await send({ type: "popup.unbind" }); await refresh(); });
+$("versionInfo").textContent = `Chrome Bridge · v${EXTENSION_VERSION}`;
 refresh().catch(error => { $("message").textContent = String(error); });
 setInterval(() => refresh().catch(() => {}), 2000);
