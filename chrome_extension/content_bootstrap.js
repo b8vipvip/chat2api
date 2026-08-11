@@ -12,6 +12,7 @@
           "content_request_v3.js",
           "content_multimodal_v4.js",
           "content_request_v4.js",
+          "content_request_v5.js",
           "content_guard.js",
           "content_voice.js",
           "content_voice_v2.js",
