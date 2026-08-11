@@ -8,7 +8,7 @@ EXTENSION = ROOT / "chrome_extension"
 
 def test_manifest_loads_canonical_model_and_multimodal_controllers() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.7.1"
+    assert manifest["version"] == "0.7.2"
     assert "downloads" in manifest["permissions"]
     scripts = [name for block in manifest["content_scripts"] for name in block["js"]]
     assert "voice_main.js" in scripts
@@ -19,6 +19,7 @@ def test_manifest_loads_canonical_model_and_multimodal_controllers() -> None:
     assert "content_request_v5.js" in scripts
     assert "content_model_v5.js" in scripts
     assert "content_model_v7.js" in scripts
+    assert "content_model_transition_v15.js" in scripts
     assert "content_reasoning_v7.js" in scripts
     assert "content_model_v6.js" not in scripts
     assert "content_multimodal.js" in scripts
@@ -58,12 +59,14 @@ def test_request_router_preflights_then_uses_passive_state_before_fallback_selec
 def test_family_verification_false_negative_recovers_from_passive_composer_state() -> None:
     router = (EXTENSION / "model_routing_v2.js").read_text(encoding="utf-8")
     state = (EXTENSION / "content_model_v7.js").read_text(encoding="utf-8")
+    transition = (EXTENSION / "content_model_transition_v15.js").read_text(encoding="utf-8")
     assert "waitForPassiveFamily" in router
     assert "family_verification_recovered" in router
     assert "family_original_error" in router
     assert "passive-recovery" in router
     assert "combined composer pill" in state
     assert 'text.endsWith(` ${needle}`)' in state
+    assert "family-transition-inference-v15" in transition
 
 
 def test_request_controller_waits_for_send_and_v3_recovers_stale_drafts() -> None:
@@ -134,6 +137,8 @@ def test_v7_reasoning_prefers_shortcut_nested_keyboard_and_range_before_click_fa
     assert "reasoning-row-enter" in source
     assert "chooseNoClick" in source
     assert "chooseClickFallback" in source
+    assert "MAX_SLIDER_STEPS = 32" in source
+    assert "slider-keyboard-adaptive" in source
     assert source.index("chooseNoClick(requested)") < source.index("chooseClickFallback(requested)")
 
 
