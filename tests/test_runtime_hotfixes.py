@@ -50,12 +50,15 @@ def test_voice_conversation_waits_for_transport_before_playing_prepared_audio() 
     assert "transport_wait_ms: transportWaitMs" in source
 
 
-def test_runtime_log_export_adds_browser_local_timestamps_without_changing_storage_clock() -> None:
+def test_runtime_log_export_uses_beijing_time_as_canonical_clock() -> None:
     popup = (EXTENSION / "popup_logging.js").read_text(encoding="utf-8")
     background = (EXTENSION / "background_logging.js").read_text(encoding="utf-8")
-    assert "function localIso" in popup
-    assert "generated_at_local" in popup
-    assert "entry.at_local" in popup
-    assert "started_at_local" in popup
-    assert 'canonical_timezone: "UTC"' in popup
-    assert "new Date().toISOString()" in background
+    assert "function beijingIso" in popup
+    assert 'canonical_timezone: "Asia/Shanghai"' in popup
+    assert "utc_offset_minutes: 480" in popup
+    assert "generated_at_local" not in popup
+    assert "entry.at_local" not in popup
+    assert 'timezone: "Asia/Shanghai"' in background
+    assert 'timestamp_timezone: "Asia/Shanghai"' in background
+    assert "+08:00" in background
+    assert "new Date().toISOString()" not in background
