@@ -11,6 +11,7 @@
     instant: ["极速", "instant", "fast", "minimal", "low"],
     medium: ["中", "中等", "medium"],
     high: ["高", "high", "xhigh"],
+    auto: ["智能", "自动", "auto", "automatic"],
   };
   const state = { pending: null, observer: null };
   globalThis[KEY] = state;
@@ -125,14 +126,12 @@
       return;
     }
 
-    // GPT-5.6 Sol currently may collapse the combined control from e.g.
-    // "5.5 极速" to only "极速" after a successful family selection. In
-    // that state the legacy v5 controller has already clicked the exact target
-    // family but its second menu-open verification cannot see a family label.
-    // Treat the observable combined->reasoning-only transition as trusted
-    // evidence only when we knew the previous family, captured the exact target
-    // family click, and the composer actually changed. A failed click that
-    // leaves "5.5 极速" unchanged will not satisfy these conditions.
+    // GPT-5.6 Sol may collapse the combined control from e.g. "5.5 极速"
+    // to only a reasoning label after a successful family selection. That
+    // reasoning-only label can be 极速/中/高 or the default 智能/自动 state.
+    // Treat the transition as trusted evidence only when we knew the previous
+    // family, captured the exact target-family click, and the composer changed.
+    // A failed click that leaves the old composer control unchanged is rejected.
     const changed = normalize(current.label) && normalize(current.label) !== normalize(pending.before_label);
     const reasoningOnly = Boolean(current.reasoning && !current.family);
     if (
