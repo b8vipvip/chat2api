@@ -43,6 +43,7 @@
         "content_request_v3.js",
         "content_multimodal_v4.js",
         "content_request_v4.js",
+        "content_request_v5.js",
         "content_guard.js",
         "content_image.js",
         "content_image_v3.js",
