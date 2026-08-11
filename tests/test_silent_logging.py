@@ -35,7 +35,8 @@ def test_rollover_archives_before_adding_a_line_that_would_split_a_part() -> Non
     archive_at = source.index("await archiveCurrentPart(run);", threshold_at)
     append_at = source.index("run.current_lines.push(line)", archive_at)
     assert threshold_at < archive_at < append_at
-    assert "never split across two ~200 KiB parts" in source
+    assert "JSON.stringify(entry)" in source
+    assert 'bytesOf(line + "\\n")' in source
 
 
 def test_runtime_logs_are_sessionized_by_api_key_and_finalize_after_idle() -> None:
