@@ -26,6 +26,7 @@ jobs:
           node --check chrome_extension/content_request_v2.js
           node --check chrome_extension/content_request_v3.js
           node --check chrome_extension/content_request_v4.js
+          node --check chrome_extension/content_request_v5.js
           node --check chrome_extension/content_model_v5.js
           node --check chrome_extension/content_model_v6.js
           node --check chrome_extension/content_multimodal.js
