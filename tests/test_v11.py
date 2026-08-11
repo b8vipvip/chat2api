@@ -85,15 +85,15 @@ def test_runtime_log_v2_rolls_only_after_complete_jsonl_record() -> None:
     assert "TARGET_BYTES = 200 * 1024" in source
     assert 'format: "JSONL; one complete JSON event per line; rollover occurs only after a complete line"' in source
     assert 'state.chunk.lines.join("\\n") + "\\n"' in source
-    assert 'conflictAction: "overwrite"' in source
-    assert 'filename: chunkFilename()' in source
-    assert 'chat2api-logs/chat2api-runtime-' in source
+    assert 'CURRENT_CHUNK_KEY = "chat2apiRuntimeChunkV3"' in source
+    assert 'CHUNK_INDEX_KEY = "chat2apiRuntimeChunkIndexV3"' in source
+    assert "archiveCurrentChunk" in source
+    assert "chrome.storage.local.set" in source
+    assert "chrome.downloads.download" not in source
     append_at = source.index("state.chunk.lines.push(line)")
     threshold_at = source.index("if (state.chunk.bytes >= TARGET_BYTES)")
     rollover_at = source.index("state.chunk = newChunk(state.chunk.day, nextPart)")
     assert append_at < threshold_at < rollover_at
-    assert "DISK_FLUSH_MS = 5000" in source
-    assert "scheduleDiskSave" in source
 
 
 def test_runtime_log_tracks_only_fingerprint_for_automation_draft() -> None:
