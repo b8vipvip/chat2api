@@ -6,7 +6,7 @@
   async function sendCachedExtensionStatus() {
     const settings = await config(); const tabs = await chatTabs(); let bound = null;
     if (Number.isInteger(settings.boundTabId)) bound = tabs.find(tab => tab.id === settings.boundTabId) || null;
-    return trySendSocket({type:"extension.status",metadata:{extension_version:chrome.runtime.getManifest().version,tab_count:tabs.length,bound_tab_id:bound?.id||null,bound_url:bound?.url||"",bound_title:bound?.title||"",models:Array.isArray(settings.models)?settings.models:[],current_model:settings.currentModel||"default",capabilities:["text","vision","file-understanding","image-generation","model-selection","diagnostics","estimated-token-usage"]}});
+    return trySendSocket({type:"extension.status",metadata:{extension_version:chrome.runtime.getManifest().version,tab_count:tabs.length,bound_tab_id:bound?.id||null,bound_url:bound?.url||"",bound_title:bound?.title||"",models:Array.isArray(settings.models)?settings.models:[],current_model:settings.currentModel||"default",capabilities:["text","vision","file-understanding","image-generation","model-selection","diagnostics","estimated-token-usage","extension-runtime-log"]}});
   }
   sendExtensionStatus = async function(){ return sendCachedExtensionStatus(); };
   async function persistSelectedModel(data,requestedModel){const settings=await config();const models=Array.isArray(data?.models)&&data.models.length?data.models:(settings.models||[]);const currentModel=data?.current_model||data?.actual_model||requestedModel||"default";await chrome.storage.local.set({models,currentModel,modelsUpdatedAt:Date.now(),lastRequestedModel:requestedModel||"default",lastModelSelectionError:"",modelRouterVersion:data?.router_version||"0.3.5",modelSelectionStrategy:data?.selection_strategy||"",lastModelDiagnostics:data||{}});await sendCachedExtensionStatus();}
@@ -31,7 +31,7 @@
     const response = await sendWithScript(
       tabId,
       { type: "chat2api.request.preflight", requestId: message.request_id, prompt: message.prompt || "" },
-      ["content_request_v2.js", "content_multimodal.js", "content_request_v3.js"],
+      ["content_request_v2.js", "content_multimodal.js", "content_request_v3.js", "content_multimodal_v4.js", "content_request_v4.js", "content_runtime_log.js"],
     );
     if (!response?.ok) throw new Error(response?.error || "ChatGPT composer preflight failed");
     return response.data || {};
@@ -39,7 +39,7 @@
 
   async function prepareAttachments(tabId, attachments) {
     if (!Array.isArray(attachments) || !attachments.length) return {};
-    const response = await sendWithScript(tabId,{type:"chat2api.attach.prepare",attachments},["content_multimodal.js"]);
+    const response = await sendWithScript(tabId,{type:"chat2api.attach.prepare.v4",attachments},["content_multimodal.js","content_multimodal_v4.js","content_runtime_log.js"]);
     if (!response?.ok) throw new Error(response?.error || "Unable to attach files to ChatGPT");
     return response.data || {};
   }

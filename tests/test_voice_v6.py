@@ -34,7 +34,7 @@ def pair_extension(client: TestClient) -> tuple[str, str]:
     response = client.post(
         "/api/extensions/register",
         headers={"X-Pairing-Code": "pair-code"},
-        json={"name": "Chrome", "version": "0.6.5"},
+        json={"name": "Chrome", "version": "0.6.6"},
     )
     assert response.status_code == 200
     body = response.json()
@@ -149,7 +149,7 @@ def test_extension_contains_visual_error_guard_voice_and_nonfocusing_routing() -
     image_routing = (root / "chrome_extension" / "image_routing.js").read_text(encoding="utf-8")
     multimodal = (root / "chrome_extension" / "content_multimodal.js").read_text(encoding="utf-8")
     request_v3 = (root / "chrome_extension" / "content_request_v3.js").read_text(encoding="utf-8")
-    assert '"version": "0.6.5"' in manifest
+    assert '"version": "0.6.6"' in manifest
     assert '"world": "MAIN"' in manifest
     assert "content_request_v3.js" in manifest
     assert "dictation" not in manifest.lower()
