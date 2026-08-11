@@ -8,33 +8,38 @@ EXTENSION = ROOT / "chrome_extension"
 
 def test_manifest_loads_hybrid_and_multimodal_controllers() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.6.5"
+    assert manifest["version"] == "0.6.6"
     scripts = [name for block in manifest["content_scripts"] for name in block["js"]]
     assert "voice_main.js" in scripts
     assert "voice_main_v2.js" not in scripts
     assert "content_request_v2.js" in scripts
     assert "content_request_v3.js" in scripts
+    assert "content_request_v4.js" in scripts
     assert "content_model_v5.js" in scripts
     assert "content_model_v6.js" in scripts
     assert "content_multimodal.js" in scripts
+    assert "content_multimodal_v4.js" in scripts
     assert "content_guard.js" in scripts
     assert "content_image.js" in scripts
+    assert "content_image_v3.js" in scripts
     assert "content_voice.js" in scripts
     assert "content_voice_v2.js" in scripts
+    assert "content_voice_fix_v3.js" in scripts
+    assert "content_runtime_log.js" in scripts
     assert not any("dictation" in name for name in scripts)
 
 
 def test_request_router_preflights_before_model_selection_and_attachments() -> None:
     source = (EXTENSION / "model_routing.js").read_text(encoding="utf-8")
     assert "chat2api.request.preflight" in source
-    assert "content_request_v3.js" in source
+    assert "content_request_v4.js" in source
     assert "chat2api.model.probe.v6" in source
     assert "chat2api.model.commit.v6" in source
     assert "chat2api.model.prepare.v5" in source
     assert 'DEFAULT_MODEL_IDS = new Set(["default", "chatgpt-web", ""])' in source
     assert "state-match-zero-op" in source
     assert 'type:"chat.diagnostics"' in source
-    assert "chat2api.attach.prepare" in source
+    assert "chat2api.attach.prepare.v4" in source
     handler = source[source.index("handleServerMessage = async function handleRequestDrivenModelRouting"):]
     preflight_at = handler.index("preflightRequest(tab.id,message)")
     model_at = handler.index("prepareRequestedModel(tab,requestedModel)")
@@ -45,6 +50,7 @@ def test_request_router_preflights_before_model_selection_and_attachments() -> N
 def test_request_controller_waits_for_send_and_v3_recovers_stale_drafts() -> None:
     v2 = (EXTENSION / "content_request_v2.js").read_text(encoding="utf-8")
     v3 = (EXTENSION / "content_request_v3.js").read_text(encoding="utf-8")
+    v4 = (EXTENSION / "content_request_v4.js").read_text(encoding="utf-8")
     assert "waitForSendReady" in v2
     assert "buttonReady" in v2
     assert "ready-timeout" in v2
@@ -58,6 +64,8 @@ def test_request_controller_waits_for_send_and_v3_recovers_stale_drafts() -> Non
     assert "manual or unknown draft" in v3
     assert "enter-fallback" in v3
     assert "dispatchEnter" in v3
+    assert "submittedEvidence" in v4
+    assert "confirmed-before-click" in v4
 
 
 def test_image_router_reuses_bound_tab_confirms_v2_and_does_not_focus_window() -> None:
