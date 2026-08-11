@@ -2,14 +2,25 @@
   const brandSmall = document.querySelector(".brand small");
   if (brandSmall) brandSmall.textContent = "Server Console · v0.10";
 
-  function pad(value) { return String(value).padStart(2, "0"); }
-
-  function localFromNaiveUtc(text) {
+  function canonicalBeijingTime(text) {
     const raw = String(text || "").trim();
-    if (!/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)) return null;
-    const date = new Date(raw.replace(" ", "T") + "Z");
+    // Since v0.14, naive table timestamps are already rendered from canonical
+    // Asia/Shanghai values. Never append "Z" here: doing so treats Beijing
+    // wall-clock time as UTC and adds another eight hours in +08 browsers.
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(raw)) return raw;
+    if (!/^\d{4}-\d{2}-\d{2}T/.test(raw)) return null;
+    const date = new Date(raw);
     if (Number.isNaN(date.getTime())) return null;
-    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+    try {
+      return new Intl.DateTimeFormat("sv-SE", {
+        timeZone: "Asia/Shanghai",
+        year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit",
+        hour12: false,
+      }).format(date);
+    } catch (_) {
+      return raw.replace("T", " ").replace(/(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/, "");
+    }
   }
 
   function convertTableTimes() {
@@ -18,18 +29,18 @@
       if (!body) continue;
       for (const row of body.querySelectorAll("tr")) {
         const cell = row.querySelector("td:first-child");
-        if (!cell || cell.dataset.chat2apiLocalTime === "1") continue;
-        const converted = localFromNaiveUtc(cell.textContent);
+        if (!cell || cell.dataset.chat2apiBeijingTime === "1") continue;
+        const converted = canonicalBeijingTime(cell.textContent);
         if (!converted) continue;
         cell.textContent = converted;
-        cell.dataset.chat2apiLocalTime = "1";
-        cell.title = "浏览器本地时间（服务端原始记录使用 UTC ISO 时间）";
+        cell.dataset.chat2apiBeijingTime = "1";
+        cell.title = "北京时间（Asia/Shanghai，UTC+08:00）";
       }
     }
     document.querySelectorAll("#recentBody,#rqBody,#testHistory").forEach(body => {
       const table = body.closest("table");
       const first = table?.querySelector("thead th:first-child");
-      if (first && first.textContent.trim() === "时间") first.textContent = "时间（本地）";
+      if (first && (first.textContent.trim() === "时间" || first.textContent.trim() === "时间（本地）")) first.textContent = "时间（北京时间）";
     });
   }
 
