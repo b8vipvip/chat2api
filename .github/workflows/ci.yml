@@ -25,13 +25,18 @@ jobs:
           node --check chrome_extension/content.js
           node --check chrome_extension/content_request_v2.js
           node --check chrome_extension/content_request_v3.js
+          node --check chrome_extension/content_request_v4.js
           node --check chrome_extension/content_model_v5.js
           node --check chrome_extension/content_model_v6.js
           node --check chrome_extension/content_multimodal.js
+          node --check chrome_extension/content_multimodal_v4.js
           node --check chrome_extension/content_guard.js
           node --check chrome_extension/content_image.js
+          node --check chrome_extension/content_image_v3.js
           node --check chrome_extension/content_voice.js
           node --check chrome_extension/content_voice_v2.js
+          node --check chrome_extension/content_voice_fix_v3.js
+          node --check chrome_extension/content_runtime_log.js
           node --check chrome_extension/content_dictation.js
           node --check chrome_extension/content_dictation_v3.js
           node --check chrome_extension/content_dictation_v4.js
@@ -40,15 +45,21 @@ jobs:
           node --check chrome_extension/content_bootstrap.js
           node --check chrome_extension/model_routing.js
           node --check chrome_extension/image_routing.js
+          node --check chrome_extension/image_routing_v3.js
           node --check chrome_extension/voice_routing.js
           node --check chrome_extension/audio_routing_v2.js
+          node --check chrome_extension/audio_routing_v3.js
           node --check chrome_extension/browser_tabs.js
           node --check chrome_extension/background.js
           node --check chrome_extension/background_hardening.js
+          node --check chrome_extension/background_logging.js
+          node --check chrome_extension/popup.js
+          node --check chrome_extension/popup_logging.js
           node --check app/admin_v6.js
           node --check app/admin_v7.js
           node --check app/admin_v8.js
           node --check app/admin_v9.js
+          node --check app/admin_v10.js
           python - <<'PY'
           import re
           from pathlib import Path
