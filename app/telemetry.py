@@ -3,15 +3,23 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import deque
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .diagnostics import current_trace_id
+from .timezone_utils import beijing_now_iso, to_beijing_iso
 
 
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    """Backward-compatible helper name; canonical timestamps are Asia/Shanghai."""
+    return beijing_now_iso()
+
+
+def _normalize_record_time(row: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(row)
+    if normalized.get("recorded_at"):
+        normalized["recorded_at"] = to_beijing_iso(normalized["recorded_at"]) or normalized["recorded_at"]
+    return normalized
 
 
 class TelemetryStore:
@@ -31,7 +39,7 @@ class TelemetryStore:
                     continue
                 item = json.loads(line)
                 if isinstance(item, dict):
-                    self.items.append(item)
+                    self.items.append(_normalize_record_time(item))
         except (OSError, ValueError, TypeError):
             self.items.clear()
 
@@ -40,7 +48,10 @@ class TelemetryStore:
         trace_id = current_trace_id.get()
         if trace_id:
             record.setdefault("trace_id", trace_id)
-        record.setdefault("recorded_at", utc_now())
+        if record.get("recorded_at"):
+            record["recorded_at"] = to_beijing_iso(record["recorded_at"]) or record["recorded_at"]
+        else:
+            record["recorded_at"] = utc_now()
         async with self.lock:
             self.items.append(record)
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -163,4 +174,5 @@ class TelemetryStore:
             "avg_first_token_ms": round(sum(first_token_values) / len(first_token_values), 1) if first_token_values else None,
             "token_estimator": "chat2api-heuristic-v1",
             "token_usage_is_estimated": True,
+            "timestamp_timezone": "Asia/Shanghai",
         }
