@@ -2,6 +2,7 @@
   const KEY = "__CHAT2API_VOICE_MAIN_V1__";
   if (globalThis[KEY]) return;
 
+  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   const state = {
     requestId: null,
     mode: "speech",
@@ -13,6 +14,7 @@
     recorderChunks: [],
     recorderMime: "",
     remoteTrackSeen: false,
+    remoteTrackSeenAt: 0,
     recordingStartedAt: 0,
     lastSoundAt: 0,
     soundStarted: false,
@@ -83,6 +85,7 @@
   function attachRemoteTrack(track) {
     if (!track || track.kind !== "audio") return;
     state.remoteTrackSeen = true;
+    state.remoteTrackSeenAt = performance.now();
     post("voice.remote.track", { track_state: track.readyState || "live" });
     if (state.recorder && state.recorder.state !== "inactive") return;
     try {
@@ -169,8 +172,23 @@
     } catch (_) {}
   }
 
+  async function waitForRemoteTrackBeforeInput(timeoutMs = 8000) {
+    const startedAt = performance.now();
+    const deadline = Date.now() + Math.max(1000, Number(timeoutMs || 8000));
+    while (!state.remoteTrackSeen && Date.now() < deadline) await delay(50);
+    if (!state.remoteTrackSeen) {
+      throw new Error("Voice transport did not become ready before prepared input playback");
+    }
+    // The track event is the first reliable sign that SDP/WebRTC negotiation is
+    // complete. Give the peer connection a small settling window so a short test
+    // clip cannot finish before the outbound microphone sender is fully live.
+    await delay(250);
+    return Math.round((performance.now() - startedAt) * 10) / 10;
+  }
+
   async function playPreparedInput() {
     if (!state.preparedInput?.base64) throw new Error("No prepared voice input");
+    const transportWaitMs = await waitForRemoteTrackBeforeInput(8000);
     const stream = await ensureSyntheticMic();
     const context = state.micContext;
     try { await context.resume(); } catch (_) {}
@@ -178,9 +196,18 @@
     const source = context.createBufferSource();
     source.buffer = buffer;
     source.connect(state.micDestination);
-    source.onended = () => post("voice.input.ended", { duration_ms: Math.round(buffer.duration * 1000) });
+    source.onended = () => post("voice.input.ended", {
+      duration_ms: Math.round(buffer.duration * 1000),
+      transport_wait_ms: transportWaitMs,
+      transport_ready: true,
+    });
     source.start();
-    post("voice.input.started", { duration_ms: Math.round(buffer.duration * 1000), mime_type: state.preparedInput.mime_type || "" });
+    post("voice.input.started", {
+      duration_ms: Math.round(buffer.duration * 1000),
+      mime_type: state.preparedInput.mime_type || "",
+      transport_wait_ms: transportWaitMs,
+      transport_ready: true,
+    });
     return stream;
   }
 
@@ -192,6 +219,7 @@
       state.mode = message.mode || "speech";
       state.preparedInput = message.input_base64 ? { base64: message.input_base64, mime_type: message.input_mime || "" } : null;
       state.remoteTrackSeen = false;
+      state.remoteTrackSeenAt = 0;
       state.soundStarted = false;
       state.lastSoundAt = 0;
       post("voice.prepared", { mode: state.mode, has_input: Boolean(state.preparedInput) });
