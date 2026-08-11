@@ -123,7 +123,7 @@ def test_voice_v3_strict_trigger_rejects_attachment_button() -> None:
     assert "添加文件" in source
     assert "composer-plus" in source
     assert '"chat2api.voice.trigger.prepare.v3"' in source
-    assert "score += 400" in source
+    assert "value += 400" in source
     assert "return -10000" in source
 
     routing = (ROOT / "chrome_extension" / "audio_routing_v3.js").read_text(encoding="utf-8")
