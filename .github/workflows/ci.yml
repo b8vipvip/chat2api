@@ -55,6 +55,8 @@ jobs:
           node --check chrome_extension/background.js
           node --check chrome_extension/background_hardening.js
           node --check chrome_extension/background_logging.js
+          node --check chrome_extension/conversation_routing.js
+          node --check chrome_extension/conversation_dispatch.js
           node --check chrome_extension/popup.js
           node --check chrome_extension/popup_logging.js
           node --check app/admin_v6.js
@@ -63,6 +65,7 @@ jobs:
           node --check app/admin_v9.js
           node --check app/admin_v10.js
           node --check app/admin_v11.js
+          node --check app/admin_v12.js
           python - <<'PY'
           import re
           from pathlib import Path

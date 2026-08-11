@@ -11,4 +11,6 @@ importScripts(
   "audio_routing_v3.js",
   "audio_routing_v4.js",
   "background_logging.js",
+  "conversation_routing.js",
+  "conversation_dispatch.js",
 );
