@@ -8,7 +8,8 @@ EXTENSION = ROOT / "chrome_extension"
 
 def test_manifest_loads_hybrid_and_multimodal_controllers() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.6.6"
+    assert manifest["version"] == "0.6.7"
+    assert "downloads" in manifest["permissions"]
     scripts = [name for block in manifest["content_scripts"] for name in block["js"]]
     assert "voice_main.js" in scripts
     assert "voice_main_v2.js" not in scripts
@@ -25,6 +26,7 @@ def test_manifest_loads_hybrid_and_multimodal_controllers() -> None:
     assert "content_voice.js" in scripts
     assert "content_voice_v2.js" in scripts
     assert "content_voice_fix_v3.js" in scripts
+    assert "content_voice_fix_v4.js" in scripts
     assert "content_runtime_log.js" in scripts
     assert not any("dictation" in name for name in scripts)
 

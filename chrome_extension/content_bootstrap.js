@@ -1,7 +1,7 @@
 (() => {
   const baseEnsureContent = ensureContent;
 
-  ensureContent = async function ensureChat2apiContentV10(tabId) {
+  ensureContent = async function ensureChat2apiContentV11(tabId) {
     await baseEnsureContent(tabId);
     try {
       await chrome.scripting.executeScript({
@@ -16,6 +16,7 @@
           "content_voice.js",
           "content_voice_v2.js",
           "content_voice_fix_v3.js",
+          "content_voice_fix_v4.js",
           "content_runtime_log.js"
         ],
       });
