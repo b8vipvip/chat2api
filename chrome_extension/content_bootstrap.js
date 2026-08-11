@@ -9,6 +9,7 @@
         files: [
           "content_request_v2.js",
           "content_model_v5.js",
+          "content_model_cache_migrate_v7.js",
           "content_model_v7.js",
           "content_reasoning_v7.js",
           "content_multimodal.js",
