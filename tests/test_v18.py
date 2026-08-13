@@ -166,13 +166,17 @@ def test_pairing_and_extension_history_can_be_deleted(tmp_path: Path) -> None:
         delete_pairing = client.delete(f"/api/admin/pairing-codes/{pairing_id}")
         assert delete_pairing.status_code == 200
         assert delete_pairing.json()["deleted"] is True
+        assert delete_pairing.json()["version"] == "0.18.0"
         after_pairing_delete = client.get("/api/admin/extensions").json()
         assert all(row["pairing_id"] != pairing_id for row in after_pairing_delete["pairing_codes"])
         assert any(row["client_id"] == client_id for row in after_pairing_delete["clients"])
 
         delete_client = client.delete(f"/api/admin/extensions/{client_id}")
         assert delete_client.status_code == 200
-        assert delete_client.json() == {"deleted": True, "client_id": client_id}
+        delete_payload = delete_client.json()
+        assert delete_payload["deleted"] is True
+        assert delete_payload["client_id"] == client_id
+        assert delete_payload["version"] == "0.18.0"
         assert client_id not in app.state.registry.clients
         assert "key_demo" not in app.state.registry.api_key_routes
         after_client_delete = client.get("/api/admin/extensions").json()
