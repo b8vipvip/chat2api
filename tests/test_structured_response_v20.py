@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 
@@ -16,6 +17,11 @@ def test_structured_overlays_load_after_existing_completion_controller_without_v
     assert "content_format_v20.js" in scripts
     assert scripts.index("content_completion_v6.js") < scripts.index("content_reasoning_transport_v20.js")
     assert scripts.index("content_reasoning_transport_v20.js") < scripts.index("content_format_v20.js")
+
+
+def test_structured_overlay_javascript_syntax() -> None:
+    for name in ["content_reasoning_transport_v20.js", "content_format_v20.js"]:
+        subprocess.run(["node", "--check", str(EXTENSION / name)], check=True)
 
 
 def test_structured_capture_preserves_headings_paragraphs_lists_quotes_and_code() -> None:
