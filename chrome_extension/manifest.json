@@ -48,6 +48,8 @@
         "content_request_v4.js",
         "content_request_v5.js",
         "content_completion_v6.js",
+        "content_reasoning_transport_v20.js",
+        "content_format_v20.js",
         "content_guard.js",
         "content_image.js",
         "content_image_v3.js",
