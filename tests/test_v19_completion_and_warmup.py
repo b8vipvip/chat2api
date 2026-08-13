@@ -136,18 +136,30 @@ def test_completion_recovery_is_conservative_and_loaded_after_request_v5() -> No
     assert manifest["version"] == "0.7.5"
 
 
-def test_warm_pool_claims_only_first_unsaved_route_and_uses_composer_readiness() -> None:
+def test_warm_pool_reuses_closed_routes_as_fresh_chat_and_refills_on_claim() -> None:
     source = (EXTENSION / "conversation_warm_pool_v2.js").read_text(encoding="utf-8")
+    routing = (EXTENSION / "conversation_routing.js").read_text(encoding="utf-8")
     entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")
 
     assert "composerReady" in source
     assert 'document.querySelector(selector)' in source
     assert 'strategy: "composer-controller-ready"' in source
     assert 'conversation_strategy: "claim-prewarmed-window"' in source
-    assert "if (route?.conversation_id) return null" in source
+    assert "if (route?.conversation_id) return null" not in source
+    assert "resetForWarmClaim" in source
+    assert '"prewarmed-after-closed-window"' in source
+    assert "scheduleWarm(350)" in source
+    assert "conversation_fresh_after_closed_window" in source
+    assert "conversation_warm_replenish_on_claim" in source
     assert "chat2apiConversationWarmPoolV2" in source
     assert 'changes.socketState?.newValue === "connected"' in source
     assert "tab.status" not in source
+
+    assert "IDLE_CLOSE_MS = 300000" in routing
+    assert "resetClosedRoute" in routing
+    assert "reopen-saved-conversation" not in routing
+    assert '"closed-window-new-chat"' in routing
+
     assert entry.index('"conversation_routing.js"') < entry.index('"conversation_warm_pool_v2.js"')
     assert entry.index('"conversation_warm_pool_v2.js"') < entry.index('"conversation_dispatch.js"')
 
