@@ -200,7 +200,7 @@ def test_v18_console_semantics_and_version() -> None:
     assert "row.connection_status" not in source
     assert "from .v18_patch import install_v18_patch" in entry
     assert entry.index("install_v17_1_patch(app)") < entry.index("install_v18_patch(app)")
-    assert manifest["version"] == "0.7.4"
+    assert manifest["version"] == "0.7.5"
 
 
 def test_v18_health_reports_current_server_version(tmp_path: Path) -> None:

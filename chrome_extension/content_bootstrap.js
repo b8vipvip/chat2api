@@ -18,6 +18,7 @@
           "content_multimodal_v4.js",
           "content_request_v4.js",
           "content_request_v5.js",
+          "content_completion_v6.js",
           "content_guard.js",
           "content_voice.js",
           "content_voice_v2.js",

@@ -8,7 +8,7 @@ EXTENSION = ROOT / "chrome_extension"
 
 def test_manifest_loads_canonical_model_and_multimodal_controllers() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.7.4"
+    assert manifest["version"] == "0.7.5"
     assert "downloads" in manifest["permissions"]
     scripts = [name for block in manifest["content_scripts"] for name in block["js"]]
     assert "voice_main.js" in scripts
