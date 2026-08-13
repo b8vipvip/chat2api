@@ -9,6 +9,7 @@ class ExtensionRegistration(BaseModel):
     name: str = Field(default="Chrome", min_length=1, max_length=120)
     browser_name: str = Field(default="Chrome", max_length=80)
     version: str = Field(default="unknown", max_length=40)
+    device_id: str = Field(min_length=8, max_length=160)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -138,5 +139,9 @@ class ClientSummary(BaseModel):
     version: str
     online: bool
     busy: bool
+    connection_enabled: bool = True
+    device_id: str | None = None
+    pairing_id: str | None = None
+    bound_api_keys: int = 0
     last_seen_at: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
