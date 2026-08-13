@@ -236,6 +236,28 @@ class ClientRegistry:
                 pass
         return item
 
+    async def delete_client(self, client_id: str) -> PersistedClient:
+        """Delete one persisted extension identity and any sticky routes to it."""
+        async with self.lock:
+            item = self.clients.pop(client_id, None)
+            if not item:
+                raise KeyError("Unknown client_id")
+            socket = self.sockets.pop(client_id, None)
+            self.socket_locks.pop(client_id, None)
+            self.busy_clients.discard(client_id)
+            self.api_key_routes = {
+                key_id: routed_client
+                for key_id, routed_client in self.api_key_routes.items()
+                if routed_client != client_id
+            }
+            await self.save()
+        if socket:
+            try:
+                await socket.close(code=4004, reason="Extension history deleted by administrator")
+            except RuntimeError:
+                pass
+        return item
+
     async def send(self, client_id: str, payload: dict[str, Any]) -> None:
         client = self.clients.get(client_id)
         if not client or not client.connection_enabled:
