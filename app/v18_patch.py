@@ -67,18 +67,11 @@ def install_v18_patch(app: FastAPI) -> FastAPI:
         path = request.url.path
         content_type = response.headers.get("content-type", "")
 
-        json_paths = {
-            "/",
-            "/healthz",
-            "/api/admin/overview",
-            "/api/admin/auth/login",
-            "/api/admin/auth/session",
-            "/api/admin/extensions",
-        }
         should_rewrite_json = (
             "application/json" in content_type
             and (
-                path in json_paths
+                path in {"/", "/healthz"}
+                or path.startswith("/api/admin/")
                 or (path.startswith("/api/admin/requests/") and path.endswith("/log"))
             )
         )
