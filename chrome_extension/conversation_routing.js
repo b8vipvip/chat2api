@@ -4,7 +4,7 @@
 
   const STORAGE_KEY = "chat2apiConversationRoutesV1";
   const NEW_CHAT_URL = "https://chatgpt.com/";
-  const IDLE_CLOSE_MS = 120000;
+  const IDLE_CLOSE_MS = 300000;
   const SLOW_LOAD_MS = 8000;
   const HARD_SLOW_LOAD_MS = 15000;
   const MAX_TURNS = 32;
@@ -82,6 +82,31 @@
     if (Number(route.attachment_count || 0) >= MAX_ATTACHMENTS) return `attachments>=${MAX_ATTACHMENTS}`;
     if (Number(route.slow_load_strikes || 0) >= 2) return "slow_load_strikes>=2";
     return null;
+  }
+
+  function resetClosedRoute(route, reason = "closed-window-new-chat") {
+    if (!route) return false;
+    const hadSession = Boolean(
+      route.conversation_id ||
+      route.conversation_url ||
+      Number(route.turn_count || 0) ||
+      Number(route.text_chars || 0) ||
+      Number(route.attachment_count || 0) ||
+      Number.isInteger(route.tab_id) ||
+      Number.isInteger(route.window_id)
+    );
+    route.conversation_id = null;
+    route.conversation_url = null;
+    route.turn_count = 0;
+    route.text_chars = 0;
+    route.attachment_count = 0;
+    route.slow_load_strikes = 0;
+    route.last_open_ms = null;
+    if (hadSession) {
+      route.generation = Number(route.generation || 1) + 1;
+      route.last_rotation_reason = reason;
+    }
+    return hadSession;
   }
 
   async function waitForChatReady(tabId, timeoutMs = 30000) {
@@ -212,8 +237,12 @@
       return chrome.tabs.get(existing.id).catch(() => existing);
     }
 
+    // A closed/missing browser window ends that browser conversation session. Never
+    // reopen a saved /c/... URL on the next API call; start a fresh ChatGPT chat.
+    resetClosedRoute(route, "closed-window-new-chat");
     route.tab_id = null;
     route.window_id = null;
+    route.inflight_request_id = null;
     route.close_after = null;
     if (state.openings.has(key)) return state.openings.get(key);
     const promise = openWindowForRoute(key, route).finally(() => state.openings.delete(key));
@@ -278,7 +307,7 @@
     };
     state.activeRequests.set(message.request_id, meta);
     await persist();
-    await emitDiagnostics(message, route, tab, hadLiveTab ? "reuse-live-window" : (route.conversation_id ? "reopen-saved-conversation" : "new-chat-window"));
+    await emitDiagnostics(message, route, tab, hadLiveTab ? "reuse-live-window" : "new-chat-window");
     return tab;
   }
 
@@ -378,6 +407,7 @@
       let changed = false;
       for (const route of Object.values(state.routes)) {
         if (route?.tab_id !== tabId) continue;
+        resetClosedRoute(route, "window-closed-new-chat-next-request");
         route.tab_id = null;
         route.window_id = null;
         route.inflight_request_id = null;
@@ -393,6 +423,7 @@
       let changed = false;
       for (const route of Object.values(state.routes)) {
         if (route?.window_id !== windowId) continue;
+        resetClosedRoute(route, "window-closed-new-chat-next-request");
         route.tab_id = null;
         route.window_id = null;
         route.inflight_request_id = null;
@@ -423,6 +454,7 @@
         return;
       }
       try { await chrome.windows.remove(windowId); } catch (_) {}
+      resetClosedRoute(route, "idle-window-closed-new-chat-next-request");
       route.tab_id = null;
       route.window_id = null;
       route.inflight_request_id = null;
