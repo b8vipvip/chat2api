@@ -1,5 +1,6 @@
 importScripts(
   "background.js",
+  "background_device_v17.js",
   "background_time_v14.js",
   "content_bootstrap.js",
   "background_hardening.js",

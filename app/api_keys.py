@@ -32,11 +32,30 @@ def _expired(expires_at: str | None) -> bool:
     return value <= beijing_now()
 
 
-def _fernet(master_secret: str) -> Fernet | None:
-    if not master_secret:
+def _fernet(secret: str) -> Fernet | None:
+    if not secret:
         return None
-    key = base64.urlsafe_b64encode(hashlib.sha256(master_secret.encode("utf-8")).digest())
+    key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
     return Fernet(key)
+
+
+def load_or_create_data_secret(data_dir: Path) -> str:
+    """Return a server-local encryption secret independent of admin credentials."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    path = data_dir / "data_secret.key"
+    if path.exists():
+        value = path.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    value = secrets.token_urlsafe(48)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(value, encoding="utf-8")
+    temporary.replace(path)
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return value
 
 
 @dataclass(slots=True)
@@ -83,19 +102,18 @@ class ManagedApiKey:
 
 
 class ApiKeyStore:
-    """Persistent managed API keys.
+    """Persistent business API keys.
 
-    Authentication always uses a SHA-256 hash. For administrator convenience the
-    original secret can also be stored encrypted at rest using a key derived from
-    CHAT2API_API_KEY. Old keys remain valid. Human-readable timestamps are stored
-    and returned in Asia/Shanghai (+08:00).
+    API authentication uses SHA-256 hashes. Recoverable key secrets are encrypted
+    with a server-local data secret stored under CHAT2API_DATA_DIR; administrator
+    username/password changes therefore never invalidate managed API key ciphertext.
     """
 
-    def __init__(self, data_dir: Path, master_secret: str = "") -> None:
+    def __init__(self, data_dir: Path, data_secret: str = "") -> None:
         self.path = data_dir / "api_keys.json"
         self.keys: dict[str, ManagedApiKey] = {}
         self.lock = asyncio.Lock()
-        self.cipher = _fernet(master_secret)
+        self.cipher = _fernet(data_secret)
 
     async def load(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -119,6 +137,36 @@ class ApiKeyStore:
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(self.path)
+
+    async def migrate_cipher_from(self, legacy_secret: str) -> int:
+        """Re-encrypt legacy CHAT2API_API_KEY ciphertext with the data secret.
+
+        Already-migrated entries are left untouched. Failure to decrypt a specific
+        historical entry does not revoke that API key; it only remains unrecoverable.
+        """
+        legacy = _fernet(str(legacy_secret or ""))
+        if not legacy or not self.cipher:
+            return 0
+        migrated = 0
+        async with self.lock:
+            for item in self.keys.values():
+                if not item.token_ciphertext:
+                    continue
+                try:
+                    # If current data secret already decrypts it, it is migrated.
+                    self.cipher.decrypt(item.token_ciphertext.encode("ascii"))
+                    continue
+                except Exception:
+                    pass
+                try:
+                    raw = legacy.decrypt(item.token_ciphertext.encode("ascii"))
+                except (InvalidToken, ValueError):
+                    continue
+                item.token_ciphertext = self.cipher.encrypt(raw).decode("ascii")
+                migrated += 1
+            if migrated:
+                await self.save()
+        return migrated
 
     async def create(self, name: str, expires_at: str | None = None) -> tuple[dict[str, Any], str]:
         clean_name = str(name or "").strip() or "API Key"
@@ -173,11 +221,11 @@ class ApiKeyStore:
         if not item.token_ciphertext:
             raise ValueError("This key predates encrypted secret storage and cannot be revealed")
         if not self.cipher:
-            raise ValueError("Server master key is unavailable for decryption")
+            raise ValueError("Server data encryption key is unavailable")
         try:
             return self.cipher.decrypt(item.token_ciphertext.encode("ascii")).decode("utf-8")
         except (InvalidToken, ValueError) as error:
-            raise ValueError("Stored API key secret cannot be decrypted with the current master key") from error
+            raise ValueError("Stored API key secret cannot be decrypted with the current data key") from error
 
     async def update(self, key_id: str, *, name: str | None = None, enabled: bool | None = None) -> dict[str, Any]:
         async with self.lock:

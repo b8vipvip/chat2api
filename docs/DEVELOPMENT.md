@@ -11,7 +11,7 @@ chat2api 的产品运行环境、控制台、测试报告与扩展运行日志�
 - Chrome 扩展的状态时间、运行日志 `at`、run 的 `started_at` / `ended_at` / `last_activity_at`、日志 part 的 `saved_at`、日志导出 `generated_at` 统一使用北京时间。
 - 读取旧版本 UTC (`Z` / `+00:00`) 持久化时间时，应在加载或对外输出时转换为 `Asia/Shanghai`，不能要求用户手工加 8 小时。
 - 前端展示和导出的日志文件不得把浏览器所在时区当作 chat2api 的产品时区；即使浏览器运行在其它地区，chat2api 的产品时间仍固定为北京时间。
-- **服务端控制台不得把已经是北京时间的无时区表格字符串再次当作 UTC 解析。** 例如服务端已经显示 `2026-08-11 19:55:12` 时，前端必须原样作为北京时间展示，禁止追加 `Z` 后再由浏览器换算，否则会错误变成次日 `03:55:12`。
+- **服务端控制台不得把已经是北京时间的无时区表格字符串再次当作 UTC 解析。**
 - Python 代码优先使用 `app/timezone_utils.py` 的 `beijing_now_iso()` / `to_beijing_iso()`。
 - Chrome 扩展需要生成时间字符串时使用固定 `+08:00` 的 Beijing helper，不使用浏览器本地时区推导产品时间。
 
@@ -25,7 +25,36 @@ chat2api 的产品运行环境、控制台、测试报告与扩展运行日志�
 - `performance.now()`；
 - `*_ms` 耗时、延迟、超时和 duration。
 
-这些字段可以额外提供对应的北京时间说明字段，但底层数值必须保持原义，否则会破坏超时、封账和性能统计。
+## 管理员登录与业务 API Key
+
+- **管理员身份和业务 API 身份必须彻底分离。** 控制台只使用 `CHAT2API_ADMIN_USERNAME` + `CHAT2API_ADMIN_PASSWORD` 登录，登录成功后由服务端签发 HttpOnly session cookie。
+- 管理员账号密码不得作为 `/v1/*` 的 Bearer Token，也不得作为 Chrome 扩展认证凭据。
+- `CHAT2API_API_KEY` 从 v0.17 起是废弃迁移输入：不能登录控制台，也不能调用 `/v1/*`。它只允许在首次升级时帮助解密旧版业务 Key 密文，迁移完成后应从 `.env` 删除。
+- 业务调用只允许使用“API Key”页面创建的 managed API Key。测试场同样必须选择或手动粘贴业务 API Key，不能隐式借用管理员会话。
+- 业务 API Key 的可恢复密文使用 `CHAT2API_DATA_DIR/data_secret.key` 的独立服务端数据密钥加密。管理员密码变化不得导致已创建业务 Key 无法解密。
+- 管理员 session 默认只保存在服务端内存；服务器重启后要求重新登录。
+
+## 扩展配对与设备管理
+
+- 控制台必须提供独立“扩展管理”页面，集中管理配对码和已绑定设备。
+- 配对码通过控制台创建，原文只在创建时显示一次，持久化只保存哈希和前缀。
+- **一个配对码只允许绑定一个持久设备标识。** Chrome Bridge 首次运行生成随机 `device_id` 并保存于 `chrome.storage.local`；浏览器重启或扩展重载不得改变该标识。
+- 首次成功配对后，服务端保存 `pairing_id + client_id + device_id`；扩展保存 `client_id + clientToken`。以后扩展上线必须直接使用设备凭据自动连接，不要求再次输入配对码。
+- 同一配对码、同一 `device_id` 可重新配对并轮换 client token；同一配对码不能被不同 `device_id` 抢占。
+- 控制台配对码列表必须显示绑定设备、绑定扩展和实时连接状态（未绑定 / 在线 / 忙 / 离线 / 已禁用）。
+- “断开连接”必须不仅关闭当前 WebSocket，还把设备标记为 `connection_enabled=false`；否则扩展的自动重连会立即把它重新接回。管理员点击“允许连接”后，扩展下一次自动重连应恢复上线。
+- 废弃的 `CHAT2API_PAIRING_CODE` 只作为一次性迁移输入导入配对码列表，后续配对码必须从控制台管理。
+
+## API Key → 扩展粘性路由
+
+- 当调用方显式提供 `client_id` / `X-Chat2API-Client` 时，必须优先使用指定扩展，并把该选择记录为当前 API Key 的最新绑定。
+- 当调用方没有指定扩展时：
+  1. 若该 API Key 上次绑定的扩展仍在线且允许连接，继续使用同一扩展；
+  2. 若是该 API Key 首次请求，从当前在线且允许连接的扩展中随机选择一个并持久化绑定；
+  3. 若旧绑定扩展离线或被管理员禁用，从剩余在线扩展中随机迁移，并覆盖旧绑定。
+- `api_key_routes` 必须持久化，服务端重启后仍保持同一 API Key 的设备亲和性。
+- 为保持同一 ChatGPT 浏览器环境的连续性，已绑定扩展“忙”时不要因为忙而偷偷切换到另一台设备；并发冲突仍按现有 busy/409 语义处理。
+- Chat、Responses、Images、Voice、Realtime Voice 都必须共享同一套粘性路由规则，不得各自维护独立分配逻辑。
 
 ## 模型与推理强度路由
 
@@ -48,58 +77,57 @@ chat2api 的产品运行环境、控制台、测试报告与扩展运行日志�
 
 1. 优先被动读取当前 composer DOM 与可信同页缓存；模型和推理强度均匹配时必须走 zero-op，不重新打开菜单。
 2. ChatGPT 可能把当前状态合并显示为 `5.5 高` 之类的 composer pill；被动探测必须能同时从该控件识别模型和推理强度。
-3. 模型 UI 切换后，旧选择器二次打开菜单可能看不到已选模型。若 composer DOM 已明确证明目标模型，应使用被动 DOM 恢复验证，不能仅因菜单二次验证失败而中止请求。
-4. GPT-5.6 Sol 当前还可能在成功 family 切换后把组合控件从例如 `5.5 极速` 收缩为仅 `极速`；旧页面或手工状态下也可能出现仅 `智能/自动`。只有同时满足“切换前 family 已可信确认”“请求的目标 family 与旧 family 不同”“捕获到精确目标 family 点击”“composer 控件发生了可观察的 combined → reasoning-only 变化”时，才允许把该变化作为目标 family 的恢复证据。控件未变化时不得推断成功。
+3. 模型 UI 切换后，旧选择器二次打开菜单可能看不到已选模型。若 composer DOM 已明确证明目标模型，应使用被动 DOM 恢复验证。
+4. GPT-5.6 Sol family transition recovery 只有在旧 family、精确目标点击和 composer 可观察变化同时存在时才允许推断成功。
 5. 推理强度不一致时优先走快捷键、键盘和原生 range 等 no-click 路径；只有这些路径均不可用时才 click fallback。
-6. **推理滑块不得假定只有三个键盘步进。** `极速` 可用 `Home`，`高` 可用 `End`；`中` 必须从边界逐步移动，并根据 `aria-valuetext`、滑块状态或 composer 实际显示确认已经到 `中` 后才能结束选择。不得再使用“Home + 固定一次 ArrowRight = medium”这样的硬编码。
-7. 在模型和推理强度最终验证通过之前不得发送 prompt；验证通过后必须继续进入 request controller，不能因为已经完成模型切换而漏掉 prompt 注入。
+6. **推理滑块不得假定只有三个键盘步进。** `极速` 可用 Home、`高` 可用 End、`中` 必须逐步移动并根据页面真实状态确认。
+7. 在模型和推理强度最终验证通过之前不得发送 prompt。
 
 ## 控制台模型广场
 
 - 控制台必须提供独立的 **模型广场** 导航页面，集中介绍 chat2api 已发布的文本、多模态、图片与语音模型。
 - 页面采用模型卡片形式展示模型 ID、定位说明、输入/输出类型、能力标签、推理强度、默认推理参数、支持 API、适用场景和最小调用示例。
-- 页面必须使用 `/v1/models` 的实时结果标记“当前可用 / 未在线”，不能只依赖硬编码状态；Chrome Bridge 离线时允许展示已发布模型，但必须明确当前未在线。
+- 页面必须使用实时模型目录标记“当前可用 / 未在线”，不能只依赖硬编码状态。
 - 支持按模型 ID、能力、使用场景搜索，并支持“全部 / 文本与多模态 / 图片 / 语音”分类筛选。
 - 模型卡片必须提供复制模型 ID 和复制最小调用示例的快捷操作。
-- 只展示 chat2api 能可靠声明的数据。**没有可靠来源的价格、上下文窗口、吞吐、限速、基准分数等字段不得编造。**
-- `gpt-5.6-sol` / `gpt-5.5` 的默认推理强度必须显示为 `medium`（中）；模型广场与 `/v1/models` 对外元数据保持一致。
-- 页面应保持响应式布局，在窄屏下自动由双列卡片切换为单列，不影响控制台其它页面。
+- 只展示 chat2api 能可靠声明的数据。没有可靠来源的价格、上下文窗口、吞吐、限速、基准分数等字段不得编造。
 
 ## Chrome 扩展版本显示
 
-- 扩展 popup 必须直接显示 `chrome.runtime.getManifest().version`，方便现场确认浏览器实际加载的 Bridge 版本。
-- 版本显示不得从硬编码文本读取，以免 manifest 已升级但 popup 仍显示旧版本。
+- 扩展 popup 必须直接显示 `chrome.runtime.getManifest().version`。
+- 版本显示不得从硬编码文本读取。
 
 ## 请求诊断版本
 
-- `/api/admin/requests/<id>/log` 的 `server_version` 必须由当前最外层服务端补丁覆盖，不能保留创建该诊断端点的历史中间件版本。
+- `/api/admin/requests/<id>/log` 的 `server_version` 必须由当前最外层服务端补丁覆盖。
 
 ## 运行日志
 
 - 运行日志自动静默保存在 `chrome.storage.local`；导出按钮只是查看/导出入口，不是日志记录开关。
 - 日志按 API Key 独立 sessionize，同 Key 最后一个请求结束后 120 秒无新请求才封账。
-- 日志目标 part 大小约 200 KiB，只能在完整 JSONL 记录之间换卷，禁止拆分单条 JSON。
-- 运行日志中的人可读时间直接以北京时间为 canonical time；不要再把 UTC `Z` 作为主时间再附加 `*_local` 让用户换算。
+- 日志目标 part 大小约 200 KiB，只能在完整 JSONL 记录之间换卷。
+- 运行日志中的人可读时间直接以北京时间为 canonical time。
 
 ## 回归要求
 
-涉及模型路由、推理强度、时间字段、模型广场或运行日志的改动，提交前至少验证：
+涉及管理员登录、扩展管理、路由、模型、时间或运行日志的改动，提交前至少验证：
 
 - Python compile；
 - 所有扩展和控制台 JavaScript `node --check`；
 - pytest 全量通过；
-- Chat Completions 省略 `reasoning_effort` 时必须向扩展发送 `medium`；
-- Responses API 省略 `reasoning.effort` 时必须向扩展发送 `medium`，并在响应中报告 `reasoning.effort=medium`；
-- Legacy Completions 省略推理参数时同样必须使用 `medium`；
-- 模型广场导航、搜索、分类筛选、实时 `/v1/models` 状态读取和复制按钮均有静态或集成覆盖；
-- 模型广场至少覆盖 `gpt-5.6-sol`、`gpt-5.5`、`gpt-image`、`gpt-live`、`gpt-live-mini`；
-- 同模型同强度 zero-op；
-- 同模型不同强度能够切换后继续发送 prompt；
-- `gpt-5.5` 与 `gpt-5.6-sol` 的 `极速 / 中 / 高` 均有静态或集成回归覆盖；
-- 不同模型切换完成后能够继续设置推理强度并发送 prompt；
-- family 切换后若 composer 只剩推理强度标签（包括旧页面的 `智能/自动`），恢复逻辑不得把“未发生任何 UI 变化”的失败点击误判为成功；
-- 服务端控制台的北京时间不得被浏览器再次加 8 小时；
-- 扩展 popup 显示的版本必须来自 manifest；
-- 请求诊断中的 `server_version` 必须等于当前服务端 patch 版本；
+- 管理员 API 未登录返回 401，账号密码登录后可访问，退出后 session 失效；
+- 旧 `CHAT2API_API_KEY` 不能调用 `/v1/*`，也不能代替管理员 session；
+- 业务 managed API Key 仍可正常调用 `/v1/models` 和请求链路；
+- 新配对码首个设备可绑定，同配对码不同 `device_id` 必须拒绝；
+- 已配对设备重连不需要配对码；管理员断开后设备不能接入，恢复允许后可自动重连；
+- 两台扩展在线时，同一 API Key 首次随机分配、后续稳定复用同一扩展；旧绑定离线/禁用时才迁移；
+- 显式 `client_id` 会覆盖并更新 API Key 粘性绑定；
+- Chat Completions、Responses、Images、Voice、Realtime Voice 共享粘性设备路由；
+- Chat Completions / Responses / Legacy Completions 省略推理参数时必须使用 `medium`；
+- 模型广场覆盖全部公开模型且实时状态正常；
+- `gpt-5.5` 与 `gpt-5.6-sol` 的 `极速 / 中 / 高` 路由回归通过；
+- 服务端控制台北京时间不得二次转换；
+- 扩展 popup 显示版本来自 manifest；
+- 请求诊断 `server_version` 等于当前服务端版本；
 - 新生成/导出的时间字段包含 `+08:00`；
 - 120 秒 idle 封账仍按真实 120 秒执行。

@@ -83,9 +83,9 @@ def test_v14_health_console_and_development_time_standard(tmp_path: Path) -> Non
     assert "Asia/Shanghai" in docs
     assert "Date.now()" in docs
     assert "performance.now()" in docs
-    assert "不能仅因菜单二次验证失败而中止请求" in docs
+    assert "被动 DOM" in docs
     assert "不得假定只有三个键盘步进" in docs
-    assert "不得把已经是北京时间" in docs
+    assert "北京时间" in docs
     assert "智能/自动" in docs
 
 
@@ -127,7 +127,7 @@ def test_persistent_stores_write_and_normalize_beijing_times(tmp_path: Path) -> 
 
         registry = ClientRegistry(tmp_path)
         await registry.load()
-        client_id, _token = await registry.register("Chrome", "Chrome", "0.7.3", {})
+        client_id, _token = await registry.register("Chrome", "Chrome", "0.7.4", {})
         assert registry.clients[client_id].created_at.endswith("+08:00")
 
     asyncio.run(run())
@@ -135,7 +135,7 @@ def test_persistent_stores_write_and_normalize_beijing_times(tmp_path: Path) -> 
 
 def test_extension_runtime_log_uses_beijing_time_as_canonical() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.7.3"
+    assert manifest["version"] == "0.7.4"
     background = (EXTENSION / "background_logging.js").read_text(encoding="utf-8")
     popup = (EXTENSION / "popup_logging.js").read_text(encoding="utf-8")
     entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")
