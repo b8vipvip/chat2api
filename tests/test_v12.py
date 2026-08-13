@@ -77,7 +77,9 @@ def test_v12_version_capabilities_and_console_script(tmp_path: Path) -> None:
         assert script.status_code == 200
         assert "32 个完成回合" in script.text
         assert "96,000" in script.text
-        assert "120 秒" in script.text
+        assert "300 秒" in script.text
+        assert "不再恢复旧的" in script.text
+        assert "立即在后台补建新的备用窗口" in script.text
 
 
 def test_chat_request_sends_non_secret_stable_master_key_identity(tmp_path: Path) -> None:
@@ -149,7 +151,11 @@ def test_extension_074_has_per_key_conversation_budget_and_idle_close() -> None:
     assert "MAX_ATTACHMENTS = 16" in routing
     assert "SLOW_LOAD_MS = 8000" in routing
     assert "HARD_SLOW_LOAD_MS = 15000" in routing
-    assert "IDLE_CLOSE_MS = 120000" in routing
+    assert "IDLE_CLOSE_MS = 300000" in routing
+    assert "resetClosedRoute" in routing
+    assert '"closed-window-new-chat"' in routing
+    assert '"window-closed-new-chat-next-request"' in routing
+    assert '"idle-window-closed-new-chat-next-request"' in routing
     assert "chrome.windows.create({ url: requestedUrl, focused: false" in routing
     assert "chrome.windows.remove(windowId)" in routing
     assert "conversation_url" in routing and "conversation_id" in routing
