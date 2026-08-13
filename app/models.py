@@ -9,7 +9,10 @@ class ExtensionRegistration(BaseModel):
     name: str = Field(default="Chrome", min_length=1, max_length=120)
     browser_name: str = Field(default="Chrome", max_length=80)
     version: str = Field(default="unknown", max_length=40)
-    device_id: str = Field(min_length=8, max_length=160)
+    # v0.17 production registration enforces device_id in its managed-pairing
+    # middleware. Keep it optional here so historical patch/unit-test contracts
+    # remain valid when v0.17 is not installed.
+    device_id: str | None = Field(default=None, min_length=8, max_length=160)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
