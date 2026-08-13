@@ -56,6 +56,30 @@
     };
   }
 
+  function resetForWarmClaim(route) {
+    if (!route) return false;
+    const hadClosedSession = Boolean(
+      route.conversation_id ||
+      route.conversation_url ||
+      Number(route.turn_count || 0) ||
+      Number(route.text_chars || 0) ||
+      Number(route.attachment_count || 0) ||
+      Number.isInteger(route.tab_id) ||
+      Number.isInteger(route.window_id)
+    );
+    route.conversation_id = null;
+    route.conversation_url = null;
+    route.turn_count = 0;
+    route.text_chars = 0;
+    route.attachment_count = 0;
+    route.slow_load_strikes = 0;
+    route.last_open_ms = null;
+    route.inflight_request_id = null;
+    route.close_after = null;
+    if (hadClosedSession) route.generation = Number(route.generation || 1) + 1;
+    return hadClosedSession;
+  }
+
   async function tabExists(tabId) {
     if (!Number.isInteger(tabId)) return null;
     try {
@@ -205,7 +229,10 @@
     if (!router?.routes) return null;
     let route = router.routes[key];
     if (route && await liveRouteTab(route)) return null;
-    if (route?.conversation_id) return null;
+
+    route = route || freshRoute(key);
+    const freshAfterClosedWindow = resetForWarmClaim(route);
+    router.routes[key] = route;
 
     const warm = await ensureWarmWindow().catch(() => null);
     if (!warm) return null;
@@ -215,7 +242,6 @@
       return null;
     }
 
-    route = route || freshRoute(key);
     route.tab_id = tab.id;
     route.window_id = tab.windowId;
     route.window_owned = true;
@@ -224,13 +250,18 @@
     route.last_open_ms = 0;
     route.prewarm_claimed_at = Date.now();
     route.prewarm_load_ms = Number(warm.load_ms || 0);
-    route.last_rotation_reason = "prewarmed-first-request";
-    router.routes[key] = route;
+    route.last_rotation_reason = freshAfterClosedWindow
+      ? "prewarmed-after-closed-window"
+      : "prewarmed-first-request";
 
     state.warm = null;
     await chrome.storage.local.remove(STORAGE_KEY).catch(() => {});
     if (message?.request_id) state.claimedRequests.add(message.request_id);
-    return { tab, warm, route };
+
+    // The claimed page is now a routed conversation. Refill the one-slot warm pool
+    // immediately in the background instead of waiting for this request to finish.
+    scheduleWarm(350);
+    return { tab, warm, route, freshAfterClosedWindow };
   }
 
   globalThis.resolveTargetTabForRequest = async function resolvePrewarmedConversation(message) {
@@ -251,6 +282,8 @@
           conversation_prewarm_hit: true,
           conversation_prewarm_load_ms: claimed.warm.load_ms,
           conversation_prewarm_ready_age_ms: stableAge,
+          conversation_fresh_after_closed_window: claimed.freshAfterClosedWindow,
+          conversation_warm_replenish_on_claim: true,
           routed_tab_id: tab?.id ?? null,
           routed_window_id: tab?.windowId ?? null,
         },
@@ -264,6 +297,7 @@
     const event = message.event || {};
     if (!["chat.completed", "chat.error", "chat.cancelled", "image.completed", "image.error", "image.cancelled"].includes(event.type)) return false;
     if (event.request_id) state.claimedRequests.delete(event.request_id);
+    // Safety refill in case a previous warm-up attempt failed while the request ran.
     scheduleWarm(1400);
     return false;
   });
