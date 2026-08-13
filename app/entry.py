@@ -13,6 +13,7 @@ from .v15_patch import install_v15_patch
 from .v16_patch import install_v16_patch
 from .v17_patch import install_v17_patch
 from .v17_crypto_patch import install_v17_crypto_patch
+from .v17_route_migration_patch import install_v17_route_migration_patch
 from .v17_finalize_patch import install_v17_finalize_patch
 
 install_voice_patch(app)
@@ -29,4 +30,5 @@ install_v15_patch(app)
 install_v16_patch(app)
 install_v17_patch(app)
 install_v17_crypto_patch(app)
+install_v17_route_migration_patch(app)
 install_v17_finalize_patch(app)
