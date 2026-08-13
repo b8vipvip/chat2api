@@ -8,7 +8,7 @@ EXTENSION = ROOT / "chrome_extension"
 
 def test_manifest_loads_canonical_model_and_multimodal_controllers() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.7.3"
+    assert manifest["version"] == "0.7.4"
     assert "downloads" in manifest["permissions"]
     scripts = [name for block in manifest["content_scripts"] for name in block["js"]]
     assert "voice_main.js" in scripts
@@ -46,7 +46,7 @@ def test_request_router_preflights_then_uses_passive_state_before_fallback_selec
     assert 'TEXT_MODELS = ["gpt-5.6-sol", "gpt-5.5"]' in source
     assert "passive-state-match-zero-op" in source
     assert "passive-no-ui-v7" in source
-    assert 'model: "chatgpt-web"' in source  # internal bypass only, never public catalog
+    assert 'model: "chatgpt-web"' in source
     assert 'type: "chat.diagnostics"' in source
     assert "chat2api.attach.prepare.v4" in source
     handler = source[source.index("handleServerMessage = async function handleCanonicalModelRouting"):]
