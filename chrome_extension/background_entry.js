@@ -6,6 +6,7 @@ importScripts(
   "background_hardening.js",
   "browser_tabs.js",
   "model_routing_v2.js",
+  "background_account_v20.js",
   "image_routing.js",
   "voice_routing.js",
   "audio_routing_v2.js",
