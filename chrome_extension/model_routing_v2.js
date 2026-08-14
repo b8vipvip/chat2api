@@ -1,6 +1,7 @@
 (() => {
   const baseHandleServerMessageV13 = handleServerMessage;
   const TEXT_MODELS = ["gpt-5.6-sol", "gpt-5.5"];
+  const MINI_MODEL = "gpt-5.5-mini";
   const STATIC_MODELS = TEXT_MODELS.map(id => ({
     id,
     label: id === "gpt-5.6-sol" ? "GPT-5.6 Sol" : "GPT-5.5",
@@ -22,8 +23,25 @@
 
   function normalizeModel(value) {
     const model = String(value || "gpt-5.6-sol").trim().toLowerCase();
-    if (!TEXT_MODELS.includes(model)) throw new Error(`Unsupported text model: ${model}. Use gpt-5.6-sol or gpt-5.5.`);
+    if (model === MINI_MODEL) return model;
+    if (!TEXT_MODELS.includes(model)) throw new Error(`Unsupported text model: ${model}. Use gpt-5.6-sol, gpt-5.5 or ${MINI_MODEL}.`);
     return model;
+  }
+
+  async function accountProfileForRouting(force = false) {
+    try {
+      if (typeof globalThis.chat2apiDetectAccountProfileV20 === "function") {
+        const profile = await globalThis.chat2apiDetectAccountProfileV20(force);
+        if (profile) return profile;
+      }
+    } catch (_) {}
+    const settings = await config();
+    return {
+      account_type: String(settings.accountType || "unknown").toLowerCase(),
+      confidence: String(settings.accountDetectionConfidence || "low"),
+      strategy: String(settings.accountDetectionStrategy || "storage-fallback"),
+      detector: "account-v20-storage",
+    };
   }
 
   async function sendWithScript(tabId, message, files) {
@@ -162,7 +180,7 @@
       lastRequestedModel: model,
       lastRequestedReasoning: reasoning || null,
       lastModelSelectionError: "",
-      modelRouterVersion: "0.4.1",
+      modelRouterVersion: "0.5.0",
       modelSelectionStrategy: data?.selection_strategy || "",
       lastModelDiagnostics: data || {},
     });
@@ -184,6 +202,7 @@
   async function prepareRequestedState(tab, requestedModel, requestedReasoning) {
     const totalStarted = Date.now();
     const model = normalizeModel(requestedModel);
+    if (model === MINI_MODEL) throw new Error("gpt-5.5-mini must use the Free-account routing path");
     const reasoning = requestedReasoning || "";
     await ensureModelControllers(tab.id);
 
@@ -225,11 +244,6 @@
         modelSwitched = true;
         familyUsedClick = true;
         if (!familyResponse?.ok) {
-          // v5 verifies the selected family by reopening the menu. Current
-          // ChatGPT sometimes hides the selected family on that second open,
-          // even though the combined composer pill already changed to e.g.
-          // "5.5 高". Recover from that false negative using passive v7 DOM
-          // evidence before aborting the whole request.
           familyRecovery = await waitForPassiveFamily(tab.id, model, reasoning);
           if (!familyRecovery.ok) {
             throw new Error(familyResponse?.error || `Unable to select requested ChatGPT model: ${model}`);
@@ -304,25 +318,79 @@
 
   handleServerMessage = async function handleCanonicalModelRouting(message) {
     if (message.type !== "chat.request") return baseHandleServerMessageV13(message);
-    const requestedModel = normalizeModel(message.options?.model || "gpt-5.6-sol");
-    const requestedReasoning = reasoningLevel(message.options || {});
+    const logicalRequestedModel = normalizeModel(message.options?.model || "gpt-5.6-sol");
+    const logicalRequestedReasoning = reasoningLevel(message.options || {});
     const routingStarted = Date.now();
 
+    let accountProfile = null;
+    let effectiveModel = logicalRequestedModel;
+    let effectiveReasoning = logicalRequestedReasoning;
+    let freeNativeMini = false;
+
     try {
+      if (logicalRequestedModel === MINI_MODEL) {
+        accountProfile = await accountProfileForRouting(true);
+        freeNativeMini = String(accountProfile?.account_type || "unknown").toLowerCase() === "free";
+        if (freeNativeMini) {
+          effectiveModel = MINI_MODEL;
+          effectiveReasoning = "";
+        } else {
+          effectiveModel = "gpt-5.5";
+          effectiveReasoning = "instant";
+        }
+      }
+
       const tab = await resolveTargetTab();
       const tabReadyMs = Date.now() - routingStarted;
       await ensureContent(tab.id);
       const preflightDiagnostics = await preflightRequest(tab.id, message);
-      const prepared = await prepareRequestedState(tab, requestedModel, requestedReasoning);
+      const prepared = freeNativeMini
+        ? {
+            prepared: false,
+            diagnostics: {
+              requested_model: MINI_MODEL,
+              requested_reasoning: null,
+              effective_model: MINI_MODEL,
+              effective_reasoning: null,
+              account_type: "free",
+              account_detection_strategy: accountProfile?.strategy || null,
+              account_detection_confidence: accountProfile?.confidence || null,
+              free_model_ui_bypassed: true,
+              zero_op: true,
+              model_switched: false,
+              reasoning_switched: false,
+              used_click: false,
+              selection_strategy: "free-account-default-mini-no-ui-selection",
+              model_selection_ms: 0,
+              model_prepare_ms: 0,
+            },
+          }
+        : await prepareRequestedState(tab, effectiveModel, effectiveReasoning);
       const attachmentDiagnostics = await prepareAttachments(tab.id, message.attachments || []);
       const diagnostics = {
         ...(prepared.diagnostics || {}),
         ...preflightDiagnostics,
         ...attachmentDiagnostics,
+        logical_requested_model: logicalRequestedModel,
+        logical_requested_reasoning: logicalRequestedReasoning || null,
+        effective_model: effectiveModel,
+        effective_reasoning: effectiveReasoning || null,
+        mini_route: logicalRequestedModel === MINI_MODEL
+          ? (freeNativeMini ? "free-native" : "gpt-5.5-instant-fallback")
+          : null,
+        account_type: accountProfile?.account_type || prepared.diagnostics?.account_type || null,
         tab_ready_ms: tabReadyMs,
         routing_ms: Date.now() - routingStarted,
         tab_id: tab.id,
       };
+      await chrome.storage.local.set({
+        lastRequestedModel: logicalRequestedModel,
+        lastRequestedReasoning: logicalRequestedReasoning || null,
+        lastEffectiveModel: effectiveModel,
+        lastEffectiveReasoning: effectiveReasoning || null,
+        lastModelSelectionError: "",
+        lastModelDiagnostics: diagnostics,
+      });
       await trySendSocket({ type: "chat.diagnostics", request_id: message.request_id, diagnostics });
       const response = await chrome.tabs.sendMessage(tab.id, {
         type: "chat2api.request",
@@ -331,8 +399,11 @@
         options: {
           ...(message.options || {}),
           model: "chatgpt-web",
-          requested_model: requestedModel,
-          requested_reasoning: requestedReasoning || null,
+          requested_model: logicalRequestedModel,
+          requested_reasoning: logicalRequestedReasoning || null,
+          effective_model: effectiveModel,
+          effective_reasoning: effectiveReasoning || null,
+          mini_route: diagnostics.mini_route,
           model_prepared: prepared.prepared,
           model_selection_strategy: diagnostics.selection_strategy,
           chat2api_diagnostics: diagnostics,
@@ -342,8 +413,10 @@
     } catch (error) {
       const text = String(error?.message || error);
       await chrome.storage.local.set({
-        lastRequestedModel: requestedModel,
-        lastRequestedReasoning: requestedReasoning || null,
+        lastRequestedModel: logicalRequestedModel,
+        lastRequestedReasoning: logicalRequestedReasoning || null,
+        lastEffectiveModel: effectiveModel,
+        lastEffectiveReasoning: effectiveReasoning || null,
         lastModelSelectionError: text,
       });
       await trySendSocket({ type: "chat.error", request_id: message.request_id, error: text });
