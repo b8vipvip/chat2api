@@ -2,27 +2,22 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import secrets
+import time
 import uuid
 from contextlib import suppress
 from typing import Any
 
-from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
 from .api_keys import ApiPrincipal
 
 LIVE_PROTOCOL_VERSION = "chat2api-live-v1"
 SUPPORTED_MODELS = {"gpt-live", "gpt-live-mini"}
-
-
-def _master_principal() -> ApiPrincipal:
-    return ApiPrincipal(
-        key_id="master",
-        name="CHAT2API_API_KEY",
-        kind="master",
-        scopes=("admin", "chat", "models", "files", "images", "audio"),
-    )
+MODEL_ALIASES = {"gpt-live-mini": "gpt-live"}
+REALTIME_SESSION_TTL_SECONDS = 60
 
 
 def _bearer(headers: Any) -> str:
@@ -32,18 +27,21 @@ def _bearer(headers: Any) -> str:
     return str(headers.get("x-api-key") or "").strip()
 
 
+def _token_hash(value: str) -> str:
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
 def install_live_voice_patch(app: FastAPI) -> FastAPI:
-    settings = app.state.settings
     registry = app.state.registry
     broker = app.state.broker
     api_keys = app.state.api_keys
+    realtime_sessions: dict[str, tuple[float, ApiPrincipal]] = {}
+    realtime_sessions_lock = asyncio.Lock()
 
-    async def authenticate(websocket: WebSocket) -> ApiPrincipal | None:
-        supplied = _bearer(websocket.headers)
+    async def authenticate_managed_token(token: str) -> ApiPrincipal | None:
+        supplied = str(token or "").strip()
         if not supplied:
             return None
-        if settings.api_key and secrets.compare_digest(supplied, settings.api_key):
-            return _master_principal()
         principal = await api_keys.authenticate(supplied)
         if not principal:
             return None
@@ -51,17 +49,84 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             return None
         return principal
 
-    def resolve_client(requested: str | None) -> str:
-        return registry.resolve_client(requested)
+    async def issue_realtime_session(principal: ApiPrincipal) -> str:
+        value = "rt-chat2api-" + secrets.token_urlsafe(32)
+        digest = _token_hash(value)
+        now = time.monotonic()
+        async with realtime_sessions_lock:
+            expired = [key for key, (deadline, _) in realtime_sessions.items() if deadline <= now]
+            for key in expired:
+                realtime_sessions.pop(key, None)
+            realtime_sessions[digest] = (now + REALTIME_SESSION_TTL_SECONDS, principal)
+        return value
+
+    async def consume_realtime_session(token: str) -> ApiPrincipal | None:
+        digest = _token_hash(token)
+        now = time.monotonic()
+        async with realtime_sessions_lock:
+            item = realtime_sessions.pop(digest, None)
+            expired = [key for key, (deadline, _) in realtime_sessions.items() if deadline <= now]
+            for key in expired:
+                realtime_sessions.pop(key, None)
+        if not item:
+            return None
+        deadline, principal = item
+        return principal if deadline > now else None
+
+    async def authenticate_websocket(websocket: WebSocket, session_token: str | None) -> ApiPrincipal | None:
+        supplied = _bearer(websocket.headers)
+        if supplied:
+            return await authenticate_managed_token(supplied)
+        if session_token:
+            return await consume_realtime_session(session_token)
+        return None
+
+    def resolve_idle_client(requested: str | None, principal: ApiPrincipal) -> str:
+        registry.set_routing_key(principal.key_id)
+        if requested:
+            selected = registry.resolve_client(requested)
+            if selected in registry.busy_clients:
+                raise LookupError("Requested Chrome extension is busy")
+            return selected
+
+        online = registry.online_client_ids()
+        if not online:
+            raise ConnectionError("No Chrome extension is online. Open Chrome with a paired chat2api extension.")
+        idle = [client_id for client_id in online if client_id not in registry.busy_clients]
+        if not idle:
+            raise LookupError("All online Chrome extensions are busy")
+        previous = registry.route_for_key(principal.key_id)
+        if previous in idle:
+            return previous
+        selected = secrets.choice(idle)
+        # Resolve explicitly so the existing registry persists the API-key sticky route.
+        return registry.resolve_client(selected)
+
+    @app.post("/v1/audio/realtime/sessions")
+    async def create_live_voice_session(request: Request) -> dict[str, object]:
+        principal = await authenticate_managed_token(_bearer(request.headers))
+        if principal is None:
+            raise HTTPException(status_code=401, detail="Invalid or unauthorized managed API key")
+        token = await issue_realtime_session(principal)
+        return {
+            "object": "realtime.session_token",
+            "protocol": LIVE_PROTOCOL_VERSION,
+            "expires_in": REALTIME_SESSION_TTL_SECONDS,
+            "session_token": token,
+            "websocket_path": f"/v1/audio/realtime?session_token={token}",
+            "input_audio_format": "pcm16le-16000-mono",
+            "output_audio_format": "pcm16le-24000-mono",
+        }
 
     @app.websocket("/v1/audio/realtime")
     async def live_voice_socket(
         websocket: WebSocket,
         client_id: str | None = Query(default=None),
+        session_token: str | None = Query(default=None),
     ) -> None:
-        principal = await authenticate(websocket)
+        principal = await authenticate_websocket(websocket, session_token)
         if principal is None:
-            await websocket.close(code=4401, reason="Invalid or unauthorized API key")
+            await websocket.close(code=4401, reason="Invalid or unauthorized API key/session token")
             return
         await websocket.accept()
 
@@ -72,6 +137,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         relay_task: asyncio.Task[None] | None = None
         started = False
         finished = False
+        requested_model = "gpt-live"
+        effective_model = "gpt-live"
 
         async def send_json(payload: dict[str, object]) -> None:
             if finished:
@@ -95,12 +162,18 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     continue
                 event_type = str(event.get("live_event") or "")
                 if event_type == "session.ready":
-                    await send_json({
+                    payload: dict[str, object] = {
                         "type": "session.ready",
                         "session_id": session_id,
                         "protocol": LIVE_PROTOCOL_VERSION,
-                        "model": str(event.get("model") or "gpt-live"),
-                    })
+                        "model": requested_model,
+                        "effective_model": effective_model,
+                        "input_audio_format": "pcm16le-16000-mono",
+                        "output_audio_format": "pcm16le-24000-mono",
+                    }
+                    if requested_model != effective_model:
+                        payload["model_alias_of"] = effective_model
+                    await send_json(payload)
                 elif event_type == "input.speech_started":
                     await send_json({"type": "input_audio_buffer.speech_started"})
                 elif event_type == "input.speech_stopped":
@@ -186,12 +259,13 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             if start.get("type") != "session.start":
                 await send_json({"type": "error", "code": "SESSION_START_REQUIRED", "message": "First frame must be session.start"})
                 return
-            model = str(start.get("model") or "gpt-live").strip().lower()
-            if model not in SUPPORTED_MODELS:
-                await send_json({"type": "error", "code": "UNSUPPORTED_MODEL", "message": f"Unsupported Live model: {model}"})
+            requested_model = str(start.get("model") or "gpt-live").strip().lower()
+            if requested_model not in SUPPORTED_MODELS:
+                await send_json({"type": "error", "code": "UNSUPPORTED_MODEL", "message": f"Unsupported Live model: {requested_model}"})
                 return
+            effective_model = MODEL_ALIASES.get(requested_model, requested_model)
             requested_client = str(start.get("client_id") or client_id or "").strip() or None
-            selected_client = resolve_client(requested_client)
+            selected_client = resolve_idle_client(requested_client, principal)
             state = await broker.create(request_id, selected_client)
             registry.busy_clients.add(selected_client)
             await registry.send(
@@ -201,7 +275,9 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     "request_id": request_id,
                     "session_id": session_id,
                     "options": {
-                        "model": model,
+                        "model": effective_model,
+                        "requested_model": requested_model,
+                        "model_alias_of": effective_model if requested_model != effective_model else None,
                         "instructions": str(start.get("instructions") or "")[:12000],
                         "input_sample_rate": 16000,
                         "output_sample_rate": 24000,

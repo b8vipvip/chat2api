@@ -1,5 +1,5 @@
 (() => {
-  const KEY = "__CHAT2API_VOICE_LIVE_CONTENT_V1__";
+  const KEY = "__CHAT2API_VOICE_LIVE_CONTENT_V2__";
   if (globalThis[KEY]) return;
 
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -158,14 +158,13 @@
       requestId: message.requestId,
       sessionId: message.sessionId,
       model: message.options?.model || "gpt-live",
+      requestedModel: message.options?.requested_model || message.options?.model || "gpt-live",
       stopped: false,
     };
     state.active = active;
     state.mainEvents = [];
     state.currentResponseId = null;
     try {
-      // Reuse the existing MAIN-world getUserMedia interception so ChatGPT Voice
-      // receives a synthetic microphone, then add a live PCM feeder/capture tap.
       postMain("voice.prepare", active, { mode: "live" });
       postMain("voice.live.prepare", active);
       const prepared = await waitFor(() => state.mainEvents.find(item => item.type === "voice.live.prepared"), 5000, 50);
@@ -176,9 +175,14 @@
         type: "image.started",
         kind: "voice-live",
         request_id: active.requestId,
-        diagnostics: { route: "chatgpt-gpt-live-stream", protocol: "pcm16-16k-in-24k-out" },
+        diagnostics: {
+          route: "chatgpt-gpt-live-stream",
+          protocol: "pcm16-16k-in-24k-out",
+          requested_model: active.requestedModel,
+          effective_model: active.model,
+        },
       });
-      await emitLive(active, "session.ready", { model: active.model });
+      await emitLive(active, "session.ready", { model: active.model, requested_model: active.requestedModel });
     } catch (error) {
       await stopLive(active, false);
       throw error;
@@ -205,7 +209,11 @@
     state.mainEvents.push(item);
     if (state.mainEvents.length > 500) state.mainEvents.splice(0, 250);
     const active = state.active;
-    if (item.type === "voice.live.response.started") {
+    if (item.type === "voice.live.input.speech_started") {
+      emitLive(active, "input.speech_started").catch(() => {});
+    } else if (item.type === "voice.live.input.speech_stopped") {
+      emitLive(active, "input.speech_stopped").catch(() => {});
+    } else if (item.type === "voice.live.response.started") {
       state.currentResponseId = item.response_id || null;
       state.lastAssistantText = latestRoleText("assistant");
       emitLive(active, "response.created", { response_id: item.response_id }).catch(() => {});

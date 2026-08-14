@@ -86,8 +86,6 @@ def business_token(client: TestClient) -> str:
 
 
 def test_v19_nonstream_request_body_reaches_existing_api_routes(tmp_path: Path) -> None:
-    # v19 reads the request body in middleware so it can distinguish streaming from
-    # non-streaming calls. The cached body must still be available to FastAPI/Pydantic.
     with TestClient(app_v19(tmp_path)) as client:
         token = business_token(client)
         response = client.post(
@@ -133,7 +131,7 @@ def test_completion_recovery_is_conservative_and_loaded_after_request_v5() -> No
     assert 'button.style.visibility = "hidden"' in source
     assert scripts.index("content_request_v5.js") < scripts.index("content_completion_v6.js")
     assert '"content_completion_v6.js"' in bootstrap
-    assert manifest["version"] == "0.7.5"
+    assert manifest["version"] == "0.7.6"
 
 
 def test_warm_pool_reuses_closed_routes_as_fresh_chat_and_refills_on_claim() -> None:

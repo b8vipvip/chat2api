@@ -12,7 +12,7 @@ EXTENSION = ROOT / "chrome_extension"
 def test_structured_overlays_load_after_existing_completion_controller_without_version_bump() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.7.5"
+    assert manifest["version"] == "0.7.6"
     assert "content_reasoning_transport_v20.js" in scripts
     assert "content_format_v20.js" in scripts
     assert scripts.index("content_completion_v6.js") < scripts.index("content_reasoning_transport_v20.js")

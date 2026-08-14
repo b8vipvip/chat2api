@@ -140,7 +140,7 @@ def test_managed_key_request_routes_by_key_id_not_secret(tmp_path: Path) -> None
 
 def test_extension_074_has_per_key_conversation_budget_and_idle_close() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.7.5"
+    assert manifest["version"] == "0.7.6"
     assert "alarms" in manifest["permissions"]
 
     routing = (EXTENSION / "conversation_routing.js").read_text(encoding="utf-8")

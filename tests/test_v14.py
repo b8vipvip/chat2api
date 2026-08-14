@@ -135,7 +135,7 @@ def test_persistent_stores_write_and_normalize_beijing_times(tmp_path: Path) -> 
 
 def test_extension_runtime_log_uses_beijing_time_as_canonical() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.7.5"
+    assert manifest["version"] == "0.7.6"
     background = (EXTENSION / "background_logging.js").read_text(encoding="utf-8")
     popup = (EXTENSION / "popup_logging.js").read_text(encoding="utf-8")
     entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")

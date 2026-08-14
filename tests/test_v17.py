@@ -132,7 +132,6 @@ def test_admin_account_session_replaces_master_api_key(tmp_path: Path) -> None:
         wrong = client.post("/api/admin/auth/login", json={"username": "owner", "password": "wrong"})
         assert wrong.status_code == 401
 
-        # The historical master secret is no longer a business or administrator API key.
         old_master = client.get("/v1/models", headers={"Authorization": "Bearer legacy-master-key"})
         assert old_master.status_code == 401
         old_admin = client.get("/api/admin/overview", headers={"Authorization": "Bearer legacy-master-key"})
@@ -272,8 +271,6 @@ def test_same_api_key_random_first_assignment_then_sticky_reuse_and_explicit_ove
 
 
 def test_route_history_migration_uses_latest_request_record(tmp_path: Path) -> None:
-    # Build one app to persist clients, then simulate pre-v17 request history with no
-    # api_key_routes map. The next app startup must restore the last-used extension.
     app = app_v17(tmp_path)
     with TestClient(app) as client:
         login(client)
@@ -303,7 +300,7 @@ def test_route_history_migration_uses_latest_request_record(tmp_path: Path) -> N
 
 def test_extension_and_console_static_contracts() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.7.5"
+    assert manifest["version"] == "0.7.6"
     entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")
     device = (EXTENSION / "background_device_v17.js").read_text(encoding="utf-8")
     admin = (ROOT / "app" / "admin_v17.js").read_text(encoding="utf-8")

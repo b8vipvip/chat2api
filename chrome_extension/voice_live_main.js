@@ -1,5 +1,5 @@
 (() => {
-  const KEY = "__CHAT2API_VOICE_LIVE_MAIN_V1__";
+  const KEY = "__CHAT2API_VOICE_LIVE_MAIN_V2__";
   if (globalThis[KEY]) return;
 
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -9,6 +9,9 @@
     prepared: false,
     inputNextAt: 0,
     inputSources: new Set(),
+    inputSpeaking: false,
+    inputLastSoundAt: 0,
+    inputSpeechTimer: null,
     remoteContext: null,
     remoteSource: null,
     remoteProcessor: null,
@@ -42,9 +45,7 @@
   function encodeBase64(bytes) {
     let binary = "";
     const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-    }
+    for (let i = 0; i < bytes.length; i += chunk) binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
     return btoa(binary);
   }
 
@@ -81,6 +82,44 @@
     return bytes;
   }
 
+  function rmsOf(samples) {
+    if (!samples.length) return 0;
+    let sum = 0;
+    for (let i = 0; i < samples.length; i += 1) sum += samples[i] * samples[i];
+    return Math.sqrt(sum / samples.length);
+  }
+
+  function updateInputSpeech(samples) {
+    const now = Date.now();
+    const audible = rmsOf(samples) > 0.012;
+    if (audible) {
+      live.inputLastSoundAt = now;
+      if (!live.inputSpeaking) {
+        live.inputSpeaking = true;
+        post("voice.live.input.speech_started");
+      }
+    }
+  }
+
+  function startInputSpeechTimer() {
+    clearInterval(live.inputSpeechTimer);
+    live.inputSpeechTimer = setInterval(() => {
+      if (!live.prepared || !live.inputSpeaking || !live.inputLastSoundAt) return;
+      if (Date.now() - live.inputLastSoundAt < 600) return;
+      live.inputSpeaking = false;
+      live.inputLastSoundAt = 0;
+      post("voice.live.input.speech_stopped");
+    }, 120);
+  }
+
+  function stopInputSpeechTimer() {
+    clearInterval(live.inputSpeechTimer);
+    live.inputSpeechTimer = null;
+    if (live.inputSpeaking) post("voice.live.input.speech_stopped");
+    live.inputSpeaking = false;
+    live.inputLastSoundAt = 0;
+  }
+
   async function waitForSyntheticMic(timeoutMs = 12000) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -100,6 +139,7 @@
     const bytes = decodeBase64(encoded);
     if (bytes.byteLength < 2) return;
     const samples = pcm16ToFloat(bytes);
+    updateInputSpeech(samples);
     const context = state.micContext;
     const buffer = context.createBuffer(1, samples.length, Number(sourceRate || 16000));
     buffer.copyToChannel(samples, 0);
@@ -112,13 +152,6 @@
     live.inputSources.add(source);
     source.onended = () => live.inputSources.delete(source);
     source.start(startAt);
-  }
-
-  function rmsOf(samples) {
-    if (!samples.length) return 0;
-    let sum = 0;
-    for (let i = 0; i < samples.length; i += 1) sum += samples[i] * samples[i];
-    return Math.sqrt(sum / samples.length);
   }
 
   function newResponseId() {
@@ -226,6 +259,7 @@
     live.prepared = false;
     live.suppressed = false;
     live.inputNextAt = 0;
+    stopInputSpeechTimer();
     for (const source of [...live.inputSources]) {
       try { source.stop(); } catch (_) {}
     }
@@ -244,6 +278,8 @@
       live.sessionId = message.session_id || null;
       live.prepared = true;
       live.inputNextAt = 0;
+      live.seq = 0;
+      startInputSpeechTimer();
       watchRemoteRecorder().catch(() => {});
       post("voice.live.prepared");
     } else if (message.type === "voice.live.audio.push" && message.request_id === live.requestId) {
