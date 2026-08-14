@@ -28,6 +28,9 @@ jobs:
           node --check chrome_extension/content_request_v4.js
           node --check chrome_extension/content_request_v5.js
           node --check chrome_extension/content_completion_v6.js
+          node --check chrome_extension/content_reasoning_transport_v20.js
+          node --check chrome_extension/content_format_v20.js
+          node --check chrome_extension/content_account_v20.js
           node --check chrome_extension/content_model_v5.js
           node --check chrome_extension/content_model_v6.js
           node --check chrome_extension/content_model_cache_migrate_v7.js
@@ -62,6 +65,7 @@ jobs:
           node --check chrome_extension/browser_tabs.js
           node --check chrome_extension/background.js
           node --check chrome_extension/background_device_v17.js
+          node --check chrome_extension/background_account_v20.js
           node --check chrome_extension/background_time_v14.js
           node --check chrome_extension/background_hardening.js
           node --check chrome_extension/background_logging.js
@@ -84,6 +88,7 @@ jobs:
           node --check app/admin_v17.js
           node --check app/admin_v17_1.js
           node --check app/admin_v18.js
+          node --check app/admin_v20.js
           python - <<'PY'
           import re
           from pathlib import Path

@@ -34,20 +34,23 @@ chat2api 的产品运行环境、控制台、测试报告与扩展运行日志�
 - 业务 API Key 的可恢复密文使用 `CHAT2API_DATA_DIR/data_secret.key` 的独立服务端数据密钥加密。管理员密码变化不得导致已创建业务 Key 无法解密。
 - 管理员 session 默认只保存在服务端内存；服务器重启后要求重新登录。
 
-## 扩展配对与设备管理
+## 扩展配对与扩展管理
 
-- 控制台必须提供独立“扩展管理”页面，集中管理配对码和已绑定设备。
+- 控制台必须提供独立“扩展管理”页面，集中管理配对码和已绑定扩展；扩展记录区域统一命名为 **扩展列表**，不再使用“绑定设备”作为区域标题。
 - 配对码通过控制台创建，原文只在创建时显示一次，持久化只保存哈希和前缀。
 - **一个配对码只允许绑定一个持久设备标识。** Chrome Bridge 首次运行生成随机 `device_id` 并保存于 `chrome.storage.local`；浏览器重启或扩展重载不得改变该标识。
 - 首次成功配对后，服务端保存 `pairing_id + client_id + device_id`；扩展保存 `client_id + clientToken`。以后扩展上线必须直接使用设备凭据自动连接，不要求再次输入配对码。
 - 同一配对码、同一 `device_id` 可重新配对并轮换 client token；同一配对码不能被不同 `device_id` 抢占。
 - 控制台配对码列表必须显示绑定设备、绑定扩展和实时连接状态（未绑定 / 在线 / 忙 / 离线 / 已禁用）。
+- 扩展列表必须显示扩展最近一次上报的 ChatGPT 账户类型：`Free` / `付费` / `未识别`。
+- Chrome Bridge 必须在首次配对、WebSocket hello 和后续状态上报时被动识别当前 ChatGPT 账户类型；不得为了识别账户类型点击账户菜单，不得上传邮箱、昵称等无关个人信息。
+- 账户类型发生变化后，应在后续状态上报中自动更新服务端元数据，不要求重新生成 `device_id` 或重新配对。
 - “断开连接”必须不仅关闭当前 WebSocket，还把设备标记为 `connection_enabled=false`；否则扩展的自动重连会立即把它重新接回。管理员点击“允许连接”后，扩展下一次自动重连应恢复上线。
 - 废弃的 `CHAT2API_PAIRING_CODE` 只作为一次性迁移输入导入配对码列表，后续配对码必须从控制台管理。
 
 ## API Key → 扩展粘性路由
 
-- 当调用方显式提供 `client_id` / `X-Chat2API-Client` 时，必须优先使用指定扩展，并把该选择记录为当前 API Key 的最新绑定。
+- 当调用方显式提供 `client_id` / `X-Chat2API-Client` 时，必须优先使用指定扩展，并把该选择记录为当前 API Key 的最新绑定；模型专用的 Free mini 路由除外，见下文。
 - 当调用方没有指定扩展时：
   1. 若该 API Key 上次绑定的扩展仍在线且允许连接，继续使用同一扩展；
   2. 若是该 API Key 首次请求，从当前在线且允许连接的扩展中随机选择一个并持久化绑定；
@@ -55,25 +58,38 @@ chat2api 的产品运行环境、控制台、测试报告与扩展运行日志�
 - `api_key_routes` 必须持久化，服务端重启后仍保持同一 API Key 的设备亲和性。
 - 为保持同一 ChatGPT 浏览器环境的连续性，已绑定扩展“忙”时不要因为忙而偷偷切换到另一台设备；并发冲突仍按现有 busy/409 语义处理。
 - Chat、Responses、Images、Voice、Realtime Voice 都必须共享同一套粘性路由规则，不得各自维护独立分配逻辑。
+- **`gpt-5.5-mini` 的 Free 优先选择属于模型专用路由，不得覆盖普通付费文本模型的 API Key 粘性绑定。** 一次 mini 请求不能把后续 `gpt-5.5` / `gpt-5.6-sol` 错误粘到 Free 扩展。
 
 ## 模型与推理强度路由
 
-公开文本模型 ID 只使用：
+公开文本模型 ID 使用：
 
 - `gpt-5.6-sol`
 - `gpt-5.5`
+- `gpt-5.5-mini`：ChatGPT Free 账户逻辑模型
 
-推理强度使用 OpenAI 风格：
+`gpt-5.6-sol` / `gpt-5.5` 的推理强度使用 OpenAI 风格：
 
 - `low` → ChatGPT `极速`
 - `medium` → ChatGPT `中`
 - `high` → ChatGPT `高`
 
-**所有 OpenAI 兼容文本入口都必须采用确定性的默认推理强度。** 调用方未传 `reasoning_effort`，或 Responses API 未传 `reasoning.effort` 时，服务端统一归一为 `medium`，扩展必须按 ChatGPT 页面“中”执行，不得继承当前页面已有的推理强度。
+**所有可选择推理强度的 OpenAI 兼容文本入口都必须采用确定性的默认推理强度。** 对 `gpt-5.6-sol` / `gpt-5.5`，调用方未传 `reasoning_effort`，或 Responses API 未传 `reasoning.effort` 时，服务端统一归一为 `medium`，扩展必须按 ChatGPT 页面“中”执行，不得继承当前页面已有的推理强度。
+
+`gpt-5.5-mini` 是例外：Free 页面没有可选择的模型 family / 推理强度控件，因此该逻辑模型不暴露独立推理强度语义。调用方即使传入 `reasoning_effort`，Free 原生路径也不得尝试操作不存在的模型或推理 UI。
+
+### `gpt-5.5-mini` 路由
+
+1. 请求 `gpt-5.5-mini` 时，优先从当前在线、空闲且已识别为 `free` 的扩展中随机选择。
+2. 选中 Free 扩展后，直接使用当前 Free 页面默认模型，**不打开、不点击、不验证模型 family 或推理强度菜单**；只执行 composer preflight、附件准备和消息发送。
+3. 当前没有可用 Free 扩展时，从其它在线、空闲扩展中随机选择一个，并在扩展侧实际执行 `gpt-5.5 + low/极速`。
+4. 无论 Free 原生还是付费回退，对外 OpenAI-compatible 响应中的 `model` 都保持调用方请求的 `gpt-5.5-mini`；实际回退细节只能放在 chat2api diagnostics / metadata 中。
+5. 已明确识别为 Free 的扩展不得承接 `gpt-5.5` / `gpt-5.6-sol` 的可选模型请求；`unknown` 为兼容旧扩展可暂按非 Free 候选处理，但扩展应尽快刷新账户识别状态。
+6. Free 扩展状态上报只声明 `gpt-5.5-mini` 默认文本模型，并移除 `model-selection`、`reasoning-selection`、`passive-model-state` 能力标记。
 
 网页端的 `智能/自动` 只保留为兼容旧页面或手工操作状态的防御性识别值，不是公开 API 推理强度，也不能作为省略参数时的默认行为。
 
-扩展路由原则：
+普通付费模型扩展路由原则：
 
 1. 优先被动读取当前 composer DOM 与可信同页缓存；模型和推理强度均匹配时必须走 zero-op，不重新打开菜单。
 2. ChatGPT 可能把当前状态合并显示为 `5.5 高` 之类的 composer pill；被动探测必须能同时从该控件识别模型和推理强度。
@@ -120,10 +136,13 @@ chat2api 的产品运行环境、控制台、测试报告与扩展运行日志�
 - 业务 managed API Key 仍可正常调用 `/v1/models` 和请求链路；
 - 新配对码首个设备可绑定，同配对码不同 `device_id` 必须拒绝；
 - 已配对设备重连不需要配对码；管理员断开后设备不能接入，恢复允许后可自动重连；
-- 两台扩展在线时，同一 API Key 首次随机分配、后续稳定复用同一扩展；旧绑定离线/禁用时才迁移；
-- 显式 `client_id` 会覆盖并更新 API Key 粘性绑定；
-- Chat Completions、Responses、Images、Voice、Realtime Voice 共享粘性设备路由；
-- Chat Completions / Responses / Legacy Completions 省略推理参数时必须使用 `medium`；
+- 配对/hello/状态上报会更新 `account_type`，扩展列表能显示 Free / 付费 / 未识别；
+- `gpt-5.5-mini` 有空闲 Free 扩展时优先 Free 且不操作模型/推理 UI；没有 Free 时回退 `gpt-5.5 + low/极速`；
+- mini 路由不会覆盖普通付费文本模型的 API Key 粘性绑定；付费模型不会被路由到明确的 Free 扩展；
+- 两台普通扩展在线时，同一 API Key 首次随机分配、后续稳定复用同一扩展；旧绑定离线/禁用时才迁移；
+- 显式 `client_id` 会覆盖并更新普通 API Key 粘性绑定；
+- Chat Completions、Responses、Images、Voice、Realtime Voice 共享普通粘性设备路由；
+- Chat Completions / Responses / Legacy Completions 的 `gpt-5.5` / `gpt-5.6-sol` 省略推理参数时必须使用 `medium`；
 - 模型广场覆盖全部公开模型且实时状态正常；
 - `gpt-5.5` 与 `gpt-5.6-sol` 的 `极速 / 中 / 高` 路由回归通过；
 - 服务端控制台北京时间不得二次转换；
