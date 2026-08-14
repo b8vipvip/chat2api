@@ -51,9 +51,13 @@ def test_request_router_preflights_then_uses_passive_state_before_fallback_selec
     assert "chat2api.attach.prepare.v4" in source
     handler = source[source.index("handleServerMessage = async function handleCanonicalModelRouting"):]
     preflight_at = handler.index("preflightRequest(tab.id, message)")
-    model_at = handler.index("prepareRequestedState(tab, requestedModel, requestedReasoning)")
+    model_at = handler.index("prepareRequestedState(tab, effectiveModel, effectiveReasoning)")
     attachments_at = handler.index("prepareAttachments(tab.id, message.attachments || [])")
     assert preflight_at < model_at < attachments_at
+    assert 'free_model_ui_bypassed: true' in handler
+    assert 'selection_strategy: "free-account-default-mini-no-ui-selection"' in handler
+    assert 'effectiveModel = "gpt-5.5"' in handler
+    assert 'effectiveReasoning = "instant"' in handler
 
 
 def test_family_verification_false_negative_recovers_from_passive_composer_state() -> None:
