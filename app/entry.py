@@ -19,6 +19,7 @@ from .v17_1_patch import install_v17_1_patch
 from .v18_patch import install_v18_patch
 from .v19_patch import install_v19_patch
 from .v20_patch import install_v20_patch
+from .v20_1_patch import install_v20_1_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -40,3 +41,4 @@ install_v17_1_patch(app)
 install_v18_patch(app)
 install_v19_patch(app)
 install_v20_patch(app)
+install_v20_1_patch(app)
