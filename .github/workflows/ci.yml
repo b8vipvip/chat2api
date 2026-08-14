@@ -46,12 +46,14 @@ jobs:
           node --check chrome_extension/content_voice_v2.js
           node --check chrome_extension/content_voice_fix_v3.js
           node --check chrome_extension/content_voice_fix_v4.js
+          node --check chrome_extension/content_voice_live.js
           node --check chrome_extension/content_runtime_log.js
           node --check chrome_extension/content_dictation.js
           node --check chrome_extension/content_dictation_v3.js
           node --check chrome_extension/content_dictation_v4.js
           node --check chrome_extension/voice_main.js
           node --check chrome_extension/voice_main_v2.js
+          node --check chrome_extension/voice_live_main.js
           node --check chrome_extension/content_bootstrap.js
           node --check chrome_extension/model_routing.js
           node --check chrome_extension/model_routing_v2.js
@@ -90,6 +92,7 @@ jobs:
           node --check app/admin_v18.js
           node --check app/admin_v20.js
           node --check app/admin_v20_1.js
+          node --check app/admin_v20_2.js
           python - <<'PY'
           import re
           from pathlib import Path
