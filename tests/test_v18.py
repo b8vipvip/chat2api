@@ -145,8 +145,6 @@ def test_pairing_codes_can_be_copied_without_plaintext_disk_storage(tmp_path: Pa
         assert revealed.json()["code"] == pairing_code
         assert revealed.json()["rotated"] is False
 
-        # v0.17 console-created pairings were hash-only. First copy safely rotates
-        # such a record instead of pretending the original secret is recoverable.
         app.state.pairings.items[pairing_id].code_ciphertext = None
         rotated = client.get(f"/api/admin/pairing-codes/{pairing_id}/secret")
         assert rotated.status_code == 200
@@ -200,7 +198,7 @@ def test_v18_console_semantics_and_version() -> None:
     assert "row.connection_status" not in source
     assert "from .v18_patch import install_v18_patch" in entry
     assert entry.index("install_v17_1_patch(app)") < entry.index("install_v18_patch(app)")
-    assert manifest["version"] == "0.7.5"
+    assert manifest["version"] == "0.7.6"
 
 
 def test_v18_health_reports_current_server_version(tmp_path: Path) -> None:
