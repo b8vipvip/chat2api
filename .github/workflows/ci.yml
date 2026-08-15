@@ -99,6 +99,7 @@ jobs:
           node --check app/admin_v20.js
           node --check app/admin_v20_1.js
           node --check app/admin_v20_2.js
+          node --check app/admin_v20_3.js
           python - <<'PY'
           import re
           from pathlib import Path
