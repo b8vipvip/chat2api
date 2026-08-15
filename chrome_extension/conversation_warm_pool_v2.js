@@ -258,11 +258,9 @@
     await chrome.storage.local.remove(STORAGE_KEY).catch(() => {});
     if (message?.request_id) state.claimedRequests.add(message.request_id);
 
-    // Do not create another Chrome window while this request is actively using the
-    // claimed warm window. The extension is already busy, so an immediate refill
-    // cannot serve another request and only looks like routing opened a fresh window.
-    // The terminal-event listener below replenishes the one-slot pool after the
-    // current interaction completes/errors/cancels.
+    // The claimed page is now a routed conversation. Refill the one-slot warm pool
+    // immediately in the background instead of waiting for this request to finish.
+    scheduleWarm(350);
     return { tab, warm, route, freshAfterClosedWindow };
   }
 
@@ -285,8 +283,7 @@
           conversation_prewarm_load_ms: claimed.warm.load_ms,
           conversation_prewarm_ready_age_ms: stableAge,
           conversation_fresh_after_closed_window: claimed.freshAfterClosedWindow,
-          conversation_warm_replenish_on_claim: false,
-          conversation_warm_replenish_after_terminal: true,
+          conversation_warm_replenish_on_claim: true,
           routed_tab_id: tab?.id ?? null,
           routed_window_id: tab?.windowId ?? null,
         },
@@ -299,10 +296,9 @@
     if (message?.type !== "chat2api.event") return false;
     const event = message.event || {};
     if (!["chat.completed", "chat.error", "chat.cancelled", "image.completed", "image.error", "image.cancelled"].includes(event.type)) return false;
-    const claimed = Boolean(event.request_id && state.claimedRequests.delete(event.request_id));
-    // Replenish only after the claimed interaction has ended. For non-claimed
-    // requests this also acts as a safety refill if an earlier warm-up failed.
-    scheduleWarm(claimed ? 900 : 1400);
+    if (event.request_id) state.claimedRequests.delete(event.request_id);
+    // Safety refill in case a previous warm-up attempt failed while the request ran.
+    scheduleWarm(1400);
     return false;
   });
 
