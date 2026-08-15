@@ -96,8 +96,8 @@ def test_extension_refreshes_every_ten_minutes_and_prepares_model_reasoning() ->
     source = (EXTENSION / "model_affinity_v23.js").read_text(encoding="utf-8")
     entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")
     assert "periodInMinutes: 10" in source
-    assert '"/api/extensions/model-affinity"' not in source  # path is composed without leaking token in query
     assert "/api/extensions/model-affinity" in source
+    assert "?token=" not in source
     assert '"X-Extension-Client-ID"' in source
     assert '"X-Extension-Token"' in source
     assert "chat2api.model.prepare.v5" in source
@@ -121,7 +121,13 @@ def test_warm_pool_keeps_two_affinity_slots_and_matches_requests_first() -> None
     assert "conversation_warm_pool_slots: MAX_WARM_SLOTS" in source
 
 
-def test_entry_installs_v20_3_patch_after_v20_2() -> None:
+def test_entry_installs_v20_3_patch_after_v20_2_and_docs_overlay() -> None:
     source = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
+    patch = (ROOT / "app" / "v20_3_patch.py").read_text(encoding="utf-8")
+    admin = (ROOT / "app" / "admin_v20_3.js").read_text(encoding="utf-8")
     assert "from .v20_3_patch import install_v20_3_patch" in source
     assert source.index("install_v20_2_patch(app)") < source.index("install_v20_3_patch(app)")
+    assert '"0.20.3"' in patch
+    assert "/assets/chat2api-v20-3.js" in patch
+    assert "每 10 分钟" in admin
+    assert "Server Console · v${VERSION}" in admin
