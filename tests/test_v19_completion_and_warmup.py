@@ -134,7 +134,7 @@ def test_completion_recovery_is_conservative_and_loaded_after_request_v5() -> No
     assert manifest["version"] == "0.7.6"
 
 
-def test_warm_pool_claims_existing_window_and_refills_only_after_terminal_event() -> None:
+def test_warm_pool_reuses_closed_routes_as_fresh_chat_and_refills_on_claim() -> None:
     source = (EXTENSION / "conversation_warm_pool_v2.js").read_text(encoding="utf-8")
     routing = (EXTENSION / "conversation_routing.js").read_text(encoding="utf-8")
     entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")
@@ -146,21 +146,12 @@ def test_warm_pool_claims_existing_window_and_refills_only_after_terminal_event(
     assert "if (route?.conversation_id) return null" not in source
     assert "resetForWarmClaim" in source
     assert '"prewarmed-after-closed-window"' in source
-    assert "scheduleWarm(350)" not in source
+    assert "scheduleWarm(350)" in source
     assert "conversation_fresh_after_closed_window" in source
-    assert "conversation_warm_replenish_on_claim: false" in source
-    assert "conversation_warm_replenish_after_terminal: true" in source
-    assert "const claimed = Boolean(event.request_id && state.claimedRequests.delete(event.request_id))" in source
-    assert "scheduleWarm(claimed ? 900 : 1400)" in source
+    assert "conversation_warm_replenish_on_claim" in source
     assert "chat2apiConversationWarmPoolV2" in source
     assert 'changes.socketState?.newValue === "connected"' in source
     assert "tab.status" not in source
-
-    claim_at = source.index("state.claimedRequests.add")
-    return_at = source.index("return { tab, warm, route, freshAfterClosedWindow }", claim_at)
-    terminal_at = source.index("chrome.runtime.onMessage.addListener")
-    refill_at = source.index("scheduleWarm(claimed ? 900 : 1400)", terminal_at)
-    assert claim_at < return_at < terminal_at < refill_at
 
     assert "IDLE_CLOSE_MS = 300000" in routing
     assert "resetClosedRoute" in routing
