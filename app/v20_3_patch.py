@@ -48,17 +48,19 @@ def _row_combo(row: dict[str, Any]) -> tuple[str, str | None] | None:
 
 def _top_affinity(rows: list[dict[str, Any]], limit: int = 2) -> list[dict[str, Any]]:
     counts: Counter[tuple[str, str | None]] = Counter()
-    last_seen: dict[tuple[str, str | None], int] = {}
-    for index, row in enumerate(reversed(rows)):
+    newest_index: dict[tuple[str, str | None], int] = {}
+    # TelemetryStore.recent() is newest-first, so the smallest index is the
+    # most recent occurrence and is a useful tie-break when frequencies match.
+    for index, row in enumerate(rows):
         combo = _row_combo(row)
         if not combo:
             continue
         counts[combo] += 1
-        last_seen.setdefault(combo, index)
+        newest_index.setdefault(combo, index)
 
     ranked = sorted(
         counts,
-        key=lambda combo: (-counts[combo], last_seen.get(combo, 10**9), combo[0], combo[1] or ""),
+        key=lambda combo: (-counts[combo], newest_index.get(combo, 10**9), combo[0], combo[1] or ""),
     )[: max(1, min(int(limit), 2))]
     return [
         {
