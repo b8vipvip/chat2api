@@ -43,13 +43,21 @@
         try { await chrome.tabs.update(tab.id, { active: true }); } catch (_) {}
         await ensureLiveContent(tab.id);
         liveTabs.set(requestId, tab.id);
-        const response = await chrome.tabs.sendMessage(tab.id, {
+
+        // Starting ChatGPT Voice can take many seconds while the page establishes
+        // WebRTC. Do not hold the global routed-dispatch chain for that whole time;
+        // the tab binding is already fixed, so other worker tabs may start requests.
+        chrome.tabs.sendMessage(tab.id, {
           type: "chat2api.voice.live.start",
           requestId,
           sessionId: message.session_id,
           options: message.options || {},
+        }).then(response => {
+          if (!response?.ok) throw new Error(response?.error || "GPT-Live tab rejected the live session");
+        }).catch(error => {
+          liveTabs.delete(requestId);
+          reportError(requestId, error).catch(() => {});
         });
-        if (!response?.ok) throw new Error(response?.error || "GPT-Live tab rejected the live session");
       } catch (error) {
         liveTabs.delete(requestId);
         await reportError(requestId, error);
@@ -72,6 +80,14 @@
           sampleRate: message.sample_rate || 16000,
         });
         if (!response?.ok) throw new Error(response?.error || "Live audio chunk was rejected");
+      } else if (type === "voice.live.text") {
+        const response = await chrome.tabs.sendMessage(tabId, {
+          type: "chat2api.voice.live.text",
+          requestId,
+          itemId: message.item_id || "",
+          text: message.text || "",
+        });
+        if (!response?.ok) throw new Error(response?.error || "Live text input was rejected");
       } else if (type === "voice.live.cancel_response") {
         await chrome.tabs.sendMessage(tabId, { type: "chat2api.voice.live.cancel", requestId });
       } else if (type === "voice.live.stop") {
