@@ -17,6 +17,7 @@ importScripts(
   "audio_routing_v4.js",
   "background_logging.js",
   "model_affinity_v23.js",
+  "model_contract_v25.js",
   "conversation_routing.js",
   "conversation_warm_pool_v2.js",
   "conversation_workers_v24.js",
