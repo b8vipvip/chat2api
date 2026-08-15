@@ -68,6 +68,20 @@ async def _response_bytes(response) -> bytes:
     return b"".join(chunks)
 
 
+def _json_response_from_raw(response, raw: bytes) -> Response:
+    headers = {
+        key: value
+        for key, value in response.headers.items()
+        if key.lower() not in {"content-length", "content-type"}
+    }
+    return Response(
+        raw,
+        status_code=response.status_code,
+        media_type="application/json",
+        headers=headers,
+    )
+
+
 def install_v21_patch(app: FastAPI) -> FastAPI:
     broker = app.state.broker
     registry = app.state.registry
@@ -219,11 +233,33 @@ def install_v21_patch(app: FastAPI) -> FastAPI:
             request_ids = active_request_ids(client_id)
             await base_detach(client_id, websocket)
             for request_id in request_ids:
-                await broker.publish(request_id, {
-                    "type": "chat.error",
-                    "request_id": request_id,
-                    "error": "Chrome extension disconnected",
-                })
+                if request_id.startswith("imgreq_"):
+                    event = {
+                        "type": "image.error",
+                        "request_id": request_id,
+                        "error": "Chrome extension disconnected",
+                    }
+                elif request_id.startswith("voicereq_"):
+                    event = {
+                        "type": "image.error",
+                        "kind": "voice",
+                        "request_id": request_id,
+                        "error": "Chrome extension disconnected",
+                    }
+                elif request_id.startswith("live_"):
+                    event = {
+                        "type": "image.error",
+                        "kind": "voice-live",
+                        "request_id": request_id,
+                        "error": "Chrome extension disconnected",
+                    }
+                else:
+                    event = {
+                        "type": "chat.error",
+                        "request_id": request_id,
+                        "error": "Chrome extension disconnected",
+                    }
+                await broker.publish(request_id, event)
 
         registry.detach = detach_all_requests
         registry._chat2api_v21_detach = True
@@ -243,9 +279,11 @@ def install_v21_patch(app: FastAPI) -> FastAPI:
         path = request.url.path
         content_type = response.headers.get("content-type", "")
 
-        raw = None
+        raw: bytes | None = None
+        consumed_json = False
         if response.status_code == 409 and "application/json" in content_type:
             raw = await _response_bytes(response)
+            consumed_json = True
             try:
                 payload = json.loads(raw.decode("utf-8"))
             except Exception:
@@ -267,7 +305,7 @@ def install_v21_patch(app: FastAPI) -> FastAPI:
             try:
                 payload = json.loads(raw.decode("utf-8"))
             except Exception:
-                return Response(raw, status_code=response.status_code, media_type="application/json")
+                return _json_response_from_raw(response, raw)
             if isinstance(payload, dict):
                 payload["version"] = PATCH_VERSION
                 if "server_version" in payload or path.endswith("/log"):
@@ -308,6 +346,11 @@ def install_v21_patch(app: FastAPI) -> FastAPI:
             headers["Cache-Control"] = "no-store"
             return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
 
+        # If we inspected a non-capacity 409 body, the original body iterator has
+        # already been consumed. Rebuild it verbatim instead of accidentally
+        # returning an empty response.
+        if consumed_json and raw is not None:
+            return _json_response_from_raw(response, raw)
         return response
 
     return app
