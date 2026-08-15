@@ -50,6 +50,7 @@ jobs:
           node --check chrome_extension/content_voice_fix_v3.js
           node --check chrome_extension/content_voice_fix_v4.js
           node --check chrome_extension/content_voice_live.js
+          node --check chrome_extension/content_voice_live_text_v24.js
           node --check chrome_extension/content_runtime_log.js
           node --check chrome_extension/content_dictation.js
           node --check chrome_extension/content_dictation_v3.js
@@ -79,6 +80,7 @@ jobs:
           node --check chrome_extension/background_logging.js
           node --check chrome_extension/conversation_routing.js
           node --check chrome_extension/conversation_warm_pool_v2.js
+          node --check chrome_extension/conversation_workers_v24.js
           node --check chrome_extension/conversation_dispatch.js
           node --check chrome_extension/popup.js
           node --check chrome_extension/popup_logging.js
@@ -100,6 +102,7 @@ jobs:
           node --check app/admin_v20_1.js
           node --check app/admin_v20_2.js
           node --check app/admin_v20_3.js
+          node --check app/admin_v21.js
           python - <<'PY'
           import re
           from pathlib import Path
