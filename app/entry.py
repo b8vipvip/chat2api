@@ -24,6 +24,7 @@ from .v20_2_patch import install_v20_2_patch
 from .v20_3_patch import install_v20_3_patch
 from .v21_patch import install_v21_patch
 from .v21_routing_patch import install_v21_routing_patch
+from .v21_1_patch import install_v21_1_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -50,3 +51,4 @@ install_v20_2_patch(app)
 install_v20_3_patch(app)
 install_v21_patch(app)
 install_v21_routing_patch(app)
+install_v21_1_patch(app)
