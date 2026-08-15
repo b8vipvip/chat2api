@@ -8,6 +8,7 @@ importScripts(
   "browser_tabs.js",
   "model_routing_v2.js",
   "background_account_v20.js",
+  "model_prefetch_fast_v21.js",
   "image_routing.js",
   "voice_routing.js",
   "audio_routing_v2.js",
@@ -17,7 +18,6 @@ importScripts(
   "background_logging.js",
   "conversation_routing.js",
   "conversation_warm_pool_v2.js",
-  "model_prefetch_fast_v21.js",
   "conversation_dispatch.js",
   "audio_routing_live.js",
 );
