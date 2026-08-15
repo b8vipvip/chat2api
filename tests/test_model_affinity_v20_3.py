@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -52,20 +51,23 @@ def test_top_affinity_counts_model_and_reasoning_combinations() -> None:
 def test_extension_affinity_endpoint_uses_extension_headers_not_query_token(tmp_path: Path) -> None:
     app = create_app(settings(tmp_path))
     install_v20_3_patch(app)
-    asyncio.run(app.state.telemetry.append({
-        "request_id": "req-a",
-        "status": "completed",
-        "requested_model": "gpt-5.6-sol",
-        "diagnostics": {"requested_reasoning": "high"},
-    }))
-    asyncio.run(app.state.telemetry.append({
-        "request_id": "req-b",
-        "status": "completed",
-        "requested_model": "gpt-5.6-sol",
-        "diagnostics": {"requested_reasoning": "high"},
-    }))
 
     with TestClient(app) as client:
+        # Add fixtures after lifespan startup so TelemetryStore.load() cannot read the
+        # same persisted rows back a second time and inflate the counts.
+        app.state.telemetry.items.append({
+            "request_id": "req-a",
+            "status": "completed",
+            "requested_model": "gpt-5.6-sol",
+            "diagnostics": {"requested_reasoning": "high"},
+        })
+        app.state.telemetry.items.append({
+            "request_id": "req-b",
+            "status": "completed",
+            "requested_model": "gpt-5.6-sol",
+            "diagnostics": {"requested_reasoning": "high"},
+        })
+
         registered = client.post(
             "/api/extensions/register",
             headers={"X-Pairing-Code": "test-pair-code"},
