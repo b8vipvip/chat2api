@@ -1,10 +1,13 @@
 (() => {
-  const VERSION = "0.21.1";
+  const VERSION = "0.21.2";
   const DEFAULT_LIMIT = 3;
   const MIN_LIMIT = 1;
   const MAX_LIMIT = 32;
   const brandSmall = document.querySelector(".brand small");
   if (brandSmall) brandSmall.textContent = `Server Console · v${VERSION}`;
+
+  let booted = false;
+  let loadInFlight = null;
 
   function ensurePanel() {
     const container = document.querySelector("#view-overview .panels");
@@ -42,27 +45,33 @@
   function setState(text, className = "muted") {
     const node = stateNode();
     if (!node) return;
-    node.textContent = text;
-    node.className = className;
+    if (node.textContent !== text) node.textContent = text;
+    if (node.className !== className) node.className = className;
   }
 
   async function loadConfig() {
     ensurePanel();
-    try {
-      const response = await fetch("/api/admin/concurrency", { cache: "no-store", credentials: "same-origin" });
-      if (!response.ok) {
-        if (response.status === 401) setState("登录控制台后可读取配置", "muted");
-        else setState(`读取失败 HTTP ${response.status}`, "bad");
-        return;
+    if (loadInFlight) return loadInFlight;
+    loadInFlight = (async () => {
+      try {
+        const response = await fetch("/api/admin/concurrency", { cache: "no-store", credentials: "same-origin" });
+        if (!response.ok) {
+          if (response.status === 401) setState("登录控制台后可读取配置", "muted");
+          else setState(`读取失败 HTTP ${response.status}`, "bad");
+          return;
+        }
+        const payload = await response.json();
+        const value = Number(payload.max_concurrency || DEFAULT_LIMIT);
+        const input = inputNode();
+        if (input && input.value !== String(value)) input.value = String(value);
+        setState(`当前上限：${value}`, "ok");
+      } catch (error) {
+        setState(`读取失败：${String(error?.message || error)}`, "bad");
+      } finally {
+        loadInFlight = null;
       }
-      const payload = await response.json();
-      const value = Number(payload.max_concurrency || DEFAULT_LIMIT);
-      const input = inputNode();
-      if (input) input.value = String(value);
-      setState(`当前上限：${value}`, "ok");
-    } catch (error) {
-      setState(`读取失败：${String(error?.message || error)}`, "bad");
-    }
+    })();
+    return loadInFlight;
   }
 
   async function saveConfig() {
@@ -86,7 +95,7 @@
         return;
       }
       const applied = Number(payload.max_concurrency || value);
-      if (input) input.value = String(applied);
+      if (input && input.value !== String(applied)) input.value = String(applied);
       setState(`已保存并生效：${applied}`, "ok");
     } catch (error) {
       setState(`保存失败：${String(error?.message || error)}`, "bad");
@@ -127,20 +136,39 @@
     block.dataset.unifiedConcurrencyV211 = "1";
   }
 
+  function patchVisibleView(view) {
+    if (view === "overview") {
+      ensurePanel();
+      loadConfig();
+    } else if (view === "docs") {
+      patchDocs();
+    }
+  }
+
   function boot() {
+    if (booted) return;
+    booted = true;
     ensurePanel();
     patchDocs();
     loadConfig();
-    const connect = document.getElementById("connect");
-    const refresh = document.getElementById("refresh");
-    connect?.addEventListener("click", () => setTimeout(loadConfig, 500));
-    refresh?.addEventListener("click", () => setTimeout(loadConfig, 300));
+
+    document.getElementById("connect")?.addEventListener("click", () => {
+      setTimeout(() => { ensurePanel(); loadConfig(); }, 350);
+    });
+    document.getElementById("refresh")?.addEventListener("click", () => {
+      setTimeout(() => { ensurePanel(); loadConfig(); }, 200);
+    });
+    document.querySelectorAll(".nav button[data-view]").forEach(button => {
+      button.addEventListener("click", () => {
+        const view = String(button.dataset.view || "");
+        setTimeout(() => patchVisibleView(view), 0);
+      });
+    });
   }
 
-  boot();
-  const root = document.querySelector(".content") || document.body;
-  if (root) new MutationObserver(() => {
-    ensurePanel();
-    patchDocs();
-  }).observe(root, { childList: true, subtree: true });
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", boot, { once: true });
+  } else {
+    boot();
+  }
 })();
