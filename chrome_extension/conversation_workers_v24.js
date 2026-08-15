@@ -3,7 +3,9 @@
   if (globalThis[KEY]) return;
 
   const ROUTER_KEY = "__CHAT2API_CONVERSATION_ROUTING_V1__";
-  const MAX_WORKERS_PER_KEY = 3;
+  const MAX_WORKERS_PER_KEY = 3; // Historical/default contract; runtime value is server-driven.
+  const MIN_WORKERS_PER_KEY = 1;
+  const HARD_MAX_WORKERS_PER_KEY = 32;
   const baseResolver = globalThis.resolveTargetTabForRequest;
   if (typeof baseResolver !== "function") return;
 
@@ -18,6 +20,14 @@
     const routing = message?.routing || {};
     const value = routing.logical_api_key_id || routing.api_key_id;
     return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+
+  function workerLimit(message) {
+    const supplied = Number(message?.routing?.worker_limit);
+    const value = Number.isFinite(supplied) && supplied > 0 ? Math.floor(supplied) : Number(state.maxWorkers || MAX_WORKERS_PER_KEY);
+    const limited = Math.max(MIN_WORKERS_PER_KEY, Math.min(HARD_MAX_WORKERS_PER_KEY, value || MAX_WORKERS_PER_KEY));
+    state.maxWorkers = limited;
+    return limited;
   }
 
   function workerRouteKey(baseKey, index) {
@@ -43,17 +53,26 @@
     const existing = state.requestRoutes.get(requestId);
     if (existing) return existing;
 
+    const limit = workerLimit(message);
     const router = globalThis[ROUTER_KEY];
     const routes = router?.routes && typeof router.routes === "object" ? router.routes : {};
-    for (let index = 1; index <= MAX_WORKERS_PER_KEY; index += 1) {
+    for (let index = 1; index <= limit; index += 1) {
       const routeKey = workerRouteKey(baseKey, index);
       const route = routes[routeKey];
       if (routeIsBusy(router, route, requestId)) continue;
-      const selected = { requestId, baseKey, routeKey, workerIndex: index, tabId: null, windowId: null };
+      const selected = {
+        requestId,
+        baseKey,
+        routeKey,
+        workerIndex: index,
+        workerLimit: limit,
+        tabId: null,
+        windowId: null,
+      };
       state.requestRoutes.set(requestId, selected);
       return selected;
     }
-    throw new Error(`All ${MAX_WORKERS_PER_KEY} conversation workers are busy for this API key`);
+    throw new Error(`All ${limit} conversation workers are busy for this API key`);
   }
 
   state.requestTarget = function requestTarget(requestId) {
@@ -69,7 +88,7 @@
       logical_api_key_id: selected.baseKey,
       api_key_id: selected.routeKey,
       worker_index: selected.workerIndex,
-      worker_limit: MAX_WORKERS_PER_KEY,
+      worker_limit: selected.workerLimit,
     };
 
     try {
@@ -82,11 +101,12 @@
         kind: message.type === "voice.request" || message.type === "voice.live.start" ? "voice" : undefined,
         request_id: requestIdOf(message),
         diagnostics: {
-          extension_worker_router: "per-api-key-v24",
+          extension_worker_router: "per-api-key-v24-server-limit",
           extension_worker_index: selected.workerIndex,
-          extension_worker_limit: MAX_WORKERS_PER_KEY,
+          extension_worker_limit: selected.workerLimit,
           extension_worker_route_key: selected.routeKey,
           extension_worker_logical_api_key_id: selected.baseKey,
+          extension_worker_limit_source: Number(message?.routing?.worker_limit) > 0 ? "server-routing" : "default",
           routed_tab_id: selected.tabId,
           routed_window_id: selected.windowId,
         },
