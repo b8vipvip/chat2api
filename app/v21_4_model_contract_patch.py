@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -12,6 +13,7 @@ from . import v13_patch
 
 PATCH_VERSION = "0.21.4"
 MINI_MODEL = "gpt-5.5-mini"
+ADMIN_ASSET = "/assets/chat2api-model-contract-v21-4.js"
 MODEL_KEYS = {
     "id",
     "model",
@@ -113,11 +115,35 @@ def install_v21_4_model_contract_patch(app: FastAPI) -> FastAPI:
     registry.send = send_with_canonical_model_ids
     registry._chat2api_v21_4_model_contract = True
 
+    @app.get(ADMIN_ASSET)
+    async def admin_v21_4_js() -> Response:
+        path = Path(__file__).with_name("admin_v21_4.js")
+        return Response(
+            path.read_text(encoding="utf-8"),
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+        )
+
     @app.middleware("http")
     async def v21_4_model_contract_response(request: Request, call_next):
         response = await call_next(request)
         path = request.url.path
         content_type = response.headers.get("content-type", "")
+
+        if path in {"/admin", "/developers"} and "text/html" in content_type:
+            raw = await _response_bytes(response)
+            text = raw.decode("utf-8", errors="replace")
+            marker = f'<script src="{ADMIN_ASSET}"></script>'
+            if marker not in text:
+                text = text.replace("</body>", marker + "</body>")
+            headers = {
+                key: value
+                for key, value in response.headers.items()
+                if key.lower() not in {"content-length", "content-type"}
+            }
+            headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
+
         if "application/json" not in content_type:
             return response
         if not (
