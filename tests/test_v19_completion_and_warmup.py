@@ -139,9 +139,10 @@ def test_warm_pool_reuses_closed_routes_as_fresh_chat_and_refills_on_claim() -> 
     routing = (EXTENSION / "conversation_routing.js").read_text(encoding="utf-8")
     entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")
 
-    assert "composerReady" in source
-    assert 'document.querySelector(selector)' in source
-    assert 'strategy: "composer-controller-ready"' in source
+    assert "pageReadiness" in source
+    assert "model_picker" in source
+    assert "requestRequiresModelPicker" in source
+    assert '"composer+model-controller-ready"' in source
     assert 'conversation_strategy: "claim-prewarmed-window"' in source
     assert "if (route?.conversation_id) return null" not in source
     assert "resetForWarmClaim" in source
@@ -149,7 +150,8 @@ def test_warm_pool_reuses_closed_routes_as_fresh_chat_and_refills_on_claim() -> 
     assert "scheduleWarm(350)" in source
     assert "conversation_fresh_after_closed_window" in source
     assert "conversation_warm_replenish_on_claim" in source
-    assert "chat2apiConversationWarmPoolV2" in source
+    assert "conversation_prewarm_bypassed" in source
+    assert "CLAIM_WAIT_MS = 1800" in source
     assert 'changes.socketState?.newValue === "connected"' in source
     assert "tab.status" not in source
 

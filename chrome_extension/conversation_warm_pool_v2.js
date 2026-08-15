@@ -6,11 +6,14 @@
   const STORAGE_KEY = "chat2apiConversationWarmPoolV2";
   const WARM_URL = "https://chatgpt.com/";
   const READY_TIMEOUT_MS = 45000;
+  const CLAIM_WAIT_MS = 1800;
+  const REQUEST_READY_WAIT_MS = 1400;
   const state = {
     warm: null,
     opening: null,
     replenishTimer: null,
     claimedRequests: new Set(),
+    bypassReasons: new Map(),
   };
   globalThis[KEY] = state;
 
@@ -21,6 +24,20 @@
   function routeKey(message) {
     const value = message?.routing?.api_key_id;
     return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+
+  function requestedModel(message) {
+    return String(message?.options?.model || message?.model || "").trim().toLowerCase();
+  }
+
+  async function cachedAccountType() {
+    try {
+      const stored = await chrome.storage.local.get({ accountType: "unknown" });
+      const value = String(stored.accountType || "unknown").toLowerCase();
+      return ["free", "paid"].includes(value) ? value : "unknown";
+    } catch (_) {
+      return "unknown";
+    }
   }
 
   async function routerState(timeoutMs = 4000) {
@@ -91,29 +108,79 @@
     }
   }
 
-  async function composerReady(tabId) {
+  async function pageReadiness(tabId) {
     try {
       const results = await chrome.scripting.executeScript({
         target: { tabId },
         func: () => {
-          const selector = "#prompt-textarea, textarea[placeholder], div[contenteditable='true'][data-lexical-editor='true'], div[contenteditable='true'].ProseMirror";
-          const node = document.querySelector(selector);
-          if (!node) return false;
-          const rect = node.getBoundingClientRect();
-          const style = getComputedStyle(node);
-          return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+          const visible = element => {
+            if (!element) return false;
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || 1) > 0;
+          };
+          const composerSelectors = [
+            "#prompt-textarea",
+            "textarea[placeholder]",
+            "div[contenteditable='true'][data-lexical-editor='true']",
+            "div[contenteditable='true'].ProseMirror",
+          ];
+          const composer = composerSelectors.some(selector => [...document.querySelectorAll(selector)].some(visible));
+          const root = [...document.querySelectorAll("form[data-type='unified-composer'], form")]
+            .find(form => visible(form) && form.querySelector("#prompt-textarea,textarea,[contenteditable='true']")) || document;
+          const rejected = element => /send|submit|voice|microphone|mic|audio|attach|upload|file|tool|添加|附件|上传|语音|麦克风|发送/i.test(
+            `${element?.getAttribute?.("aria-label") || ""} ${element?.getAttribute?.("data-testid") || ""} ${element?.innerText || element?.textContent || ""}`,
+          );
+          const pickerSelectors = [
+            "button[class*='composer-pill'][aria-haspopup='menu']",
+            "button[class*='composer-pill'][aria-haspopup='listbox']",
+            "button[data-testid*='model' i]",
+            "button[aria-label*='model' i]",
+            "button[aria-label*='模型']",
+            "button[aria-haspopup='menu']",
+            "button[aria-haspopup='listbox']",
+          ];
+          let modelPicker = false;
+          for (const selector of pickerSelectors) {
+            const found = [...root.querySelectorAll(selector)].find(element => visible(element) && !element.disabled && !rejected(element));
+            if (found) {
+              modelPicker = true;
+              break;
+            }
+          }
+          return { composer, model_picker: modelPicker, document_ready: document.readyState !== "loading" };
         },
       });
-      return Boolean(results?.[0]?.result);
+      return results?.[0]?.result || { composer: false, model_picker: false, document_ready: false };
     } catch (_) {
-      return false;
+      return { composer: false, model_picker: false, document_ready: false };
     }
   }
 
-  async function waitWarmReady(tabId, timeoutMs = READY_TIMEOUT_MS) {
+  function requestRequiresModelPicker(message, accountType) {
+    if (message?.type !== "chat.request") return false;
+    const model = requestedModel(message);
+    if (model === "gpt-5.5-mini" && accountType === "free") return false;
+    return true;
+  }
+
+  async function warmReadyForRequest(tabId, message) {
+    const accountType = await cachedAccountType();
+    const readiness = await pageReadiness(tabId);
+    const requirePicker = requestRequiresModelPicker(message, accountType);
+    return {
+      ok: Boolean(readiness.composer && (!requirePicker || readiness.model_picker)),
+      account_type: accountType,
+      require_model_picker: requirePicker,
+      ...readiness,
+    };
+  }
+
+  async function waitWarmReady(tabId, timeoutMs = READY_TIMEOUT_MS, requireModelPicker = false) {
     const started = Date.now();
     const deadline = started + timeoutMs;
     let lastError = null;
+    let lastReadiness = null;
     while (Date.now() < deadline) {
       const tab = await tabExists(tabId);
       if (!tab) {
@@ -121,16 +188,20 @@
         continue;
       }
       try {
-        if (await composerReady(tabId)) {
+        lastReadiness = await pageReadiness(tabId);
+        if (lastReadiness.composer && (!requireModelPicker || lastReadiness.model_picker)) {
           await ensureContent(tabId);
-          return { tab: await chrome.tabs.get(tabId), load_ms: Date.now() - started };
+          return { tab: await chrome.tabs.get(tabId), load_ms: Date.now() - started, readiness: lastReadiness };
         }
       } catch (error) {
         lastError = error;
       }
       await sleepWarm(220);
     }
-    throw lastError || new Error("Timed out prewarming the ChatGPT composer");
+    const suffix = lastReadiness
+      ? ` (composer=${Boolean(lastReadiness.composer)}, model_picker=${Boolean(lastReadiness.model_picker)}, require_model_picker=${Boolean(requireModelPicker)})`
+      : "";
+    throw lastError || new Error(`Timed out prewarming the ChatGPT composer${suffix}`);
   }
 
   async function clearStoredWarm() {
@@ -154,8 +225,16 @@
       return null;
     }
     try {
-      const ready = await waitWarmReady(value.tab_id, 8000);
-      state.warm = { ...value, tab_id: ready.tab.id, window_id: ready.tab.windowId, recovered: true };
+      const accountType = await cachedAccountType();
+      const ready = await waitWarmReady(value.tab_id, 8000, accountType === "paid");
+      state.warm = {
+        ...value,
+        tab_id: ready.tab.id,
+        window_id: ready.tab.windowId,
+        recovered: true,
+        account_type: accountType,
+        model_picker_ready: Boolean(ready.readiness?.model_picker),
+      };
       return state.warm;
     } catch (_) {
       await clearStoredWarm();
@@ -165,6 +244,8 @@
 
   async function createWarmWindow() {
     const createdAt = Date.now();
+    const accountType = await cachedAccountType();
+    const requireModelPicker = accountType === "paid";
     const created = await chrome.windows.create({ url: WARM_URL, focused: false, type: "normal" });
     if (!created?.id) throw new Error("Chrome did not create the ChatGPT warm-up window");
     let tab = Array.isArray(created.tabs) ? created.tabs.find(item => Number.isInteger(item.id)) : null;
@@ -175,14 +256,16 @@
     if (!tab?.id) throw new Error("The ChatGPT warm-up window contains no usable tab");
 
     try {
-      const ready = await waitWarmReady(tab.id);
+      const ready = await waitWarmReady(tab.id, READY_TIMEOUT_MS, requireModelPicker);
       const warm = {
         tab_id: ready.tab.id,
         window_id: ready.tab.windowId,
         created_at_ms: createdAt,
         ready_at_ms: Date.now(),
         load_ms: ready.load_ms,
-        strategy: "composer-controller-ready",
+        strategy: requireModelPicker ? "composer+model-controller-ready" : "composer-controller-ready",
+        account_type: accountType,
+        model_picker_ready: Boolean(ready.readiness?.model_picker),
       };
       state.warm = warm;
       await chrome.storage.local.set({ [STORAGE_KEY]: warm });
@@ -224,6 +307,37 @@
     return tabExists(route.tab_id);
   }
 
+  async function boundedWarmCandidate(message) {
+    const started = Date.now();
+    let warm = state.warm;
+    if (!warm) {
+      const pending = ensureWarmWindow().catch(() => null);
+      warm = await Promise.race([
+        pending,
+        sleepWarm(CLAIM_WAIT_MS).then(() => null),
+      ]);
+      if (!warm) {
+        return { warm: null, reason: "warm-opening-exceeded-claim-budget", wait_ms: Date.now() - started };
+      }
+    }
+
+    const deadline = Date.now() + REQUEST_READY_WAIT_MS;
+    let readiness = null;
+    while (Date.now() <= deadline) {
+      const tab = await tabExists(warm.tab_id);
+      if (!tab) return { warm: null, reason: "warm-tab-missing", wait_ms: Date.now() - started };
+      readiness = await warmReadyForRequest(warm.tab_id, message);
+      if (readiness.ok) return { warm, readiness, reason: null, wait_ms: Date.now() - started };
+      await sleepWarm(140);
+    }
+    return {
+      warm: null,
+      readiness,
+      reason: readiness?.require_model_picker ? "warm-model-controller-not-ready" : "warm-composer-not-ready",
+      wait_ms: Date.now() - started,
+    };
+  }
+
   async function claimWarmWindow(key, message) {
     const router = await routerState();
     if (!router?.routes) return null;
@@ -234,8 +348,22 @@
     const freshAfterClosedWindow = resetForWarmClaim(route);
     router.routes[key] = route;
 
-    const warm = await ensureWarmWindow().catch(() => null);
-    if (!warm) return null;
+    const candidate = await boundedWarmCandidate(message);
+    const warm = candidate.warm;
+    if (!warm) {
+      if (message?.request_id) {
+        state.bypassReasons.set(message.request_id, {
+          reason: candidate.reason || "warm-not-claimable",
+          wait_ms: Number(candidate.wait_ms || 0),
+          account_type: candidate.readiness?.account_type || null,
+          composer_ready: Boolean(candidate.readiness?.composer),
+          model_picker_ready: Boolean(candidate.readiness?.model_picker),
+          require_model_picker: Boolean(candidate.readiness?.require_model_picker),
+        });
+      }
+      return null;
+    }
+
     const tab = await tabExists(warm.tab_id);
     if (!tab) {
       await clearStoredWarm();
@@ -261,7 +389,7 @@
     // The claimed page is now a routed conversation. Refill the one-slot warm pool
     // immediately in the background instead of waiting for this request to finish.
     scheduleWarm(350);
-    return { tab, warm, route, freshAfterClosedWindow };
+    return { tab, warm, route, freshAfterClosedWindow, readiness: candidate.readiness, claim_wait_ms: candidate.wait_ms };
   }
 
   globalThis.resolveTargetTabForRequest = async function resolvePrewarmedConversation(message) {
@@ -282,8 +410,33 @@
           conversation_prewarm_hit: true,
           conversation_prewarm_load_ms: claimed.warm.load_ms,
           conversation_prewarm_ready_age_ms: stableAge,
+          conversation_prewarm_claim_wait_ms: claimed.claim_wait_ms,
+          conversation_prewarm_account_type: claimed.readiness?.account_type || claimed.warm.account_type || null,
+          conversation_prewarm_model_picker_ready: Boolean(claimed.readiness?.model_picker),
           conversation_fresh_after_closed_window: claimed.freshAfterClosedWindow,
           conversation_warm_replenish_on_claim: true,
+          routed_tab_id: tab?.id ?? null,
+          routed_window_id: tab?.windowId ?? null,
+        },
+      }).catch(() => {});
+    } else if (message?.request_id && state.bypassReasons.has(message.request_id)) {
+      const bypass = state.bypassReasons.get(message.request_id);
+      state.bypassReasons.delete(message.request_id);
+      const eventType = message.type === "chat.request" ? "chat.diagnostics" : "image.diagnostics";
+      await trySendSocket({
+        type: eventType,
+        kind: message.type === "voice.request" ? "voice" : (message.type === "image.request" ? "image" : undefined),
+        request_id: message.request_id,
+        diagnostics: {
+          conversation_router: "per-key-v1+warm-pool-v2",
+          conversation_prewarm_hit: false,
+          conversation_prewarm_bypassed: true,
+          conversation_prewarm_bypass_reason: bypass?.reason || "unknown",
+          conversation_prewarm_claim_wait_ms: Number(bypass?.wait_ms || 0),
+          conversation_prewarm_account_type: bypass?.account_type || null,
+          conversation_prewarm_composer_ready: Boolean(bypass?.composer_ready),
+          conversation_prewarm_model_picker_ready: Boolean(bypass?.model_picker_ready),
+          conversation_prewarm_require_model_picker: Boolean(bypass?.require_model_picker),
           routed_tab_id: tab?.id ?? null,
           routed_window_id: tab?.windowId ?? null,
         },
@@ -296,7 +449,10 @@
     if (message?.type !== "chat2api.event") return false;
     const event = message.event || {};
     if (!["chat.completed", "chat.error", "chat.cancelled", "image.completed", "image.error", "image.cancelled"].includes(event.type)) return false;
-    if (event.request_id) state.claimedRequests.delete(event.request_id);
+    if (event.request_id) {
+      state.claimedRequests.delete(event.request_id);
+      state.bypassReasons.delete(event.request_id);
+    }
     // Safety refill in case a previous warm-up attempt failed while the request ran.
     scheduleWarm(1400);
     return false;
