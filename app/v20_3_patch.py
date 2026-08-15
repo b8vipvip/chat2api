@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -112,38 +113,58 @@ def install_v20_3_patch(app: FastAPI) -> FastAPI:
             "version": PATCH_VERSION,
         }
 
+    @app.get("/assets/chat2api-v20-3.js")
+    async def admin_v20_3_js() -> Response:
+        path = Path(__file__).with_name("admin_v20_3.js")
+        return Response(path.read_text(encoding="utf-8"), media_type="application/javascript", headers={"Cache-Control": "no-store"})
+
     @app.middleware("http")
     async def v20_3_version_metadata(request: Request, call_next):
         response = await call_next(request)
         path = request.url.path
         content_type = response.headers.get("content-type", "")
-        if "application/json" not in content_type or not (
+
+        if "application/json" in content_type and (
             path in {"/", "/healthz", "/api/admin/overview"}
             or path.startswith("/api/admin/")
         ):
-            return response
+            raw = await _response_bytes(response)
+            try:
+                payload = json.loads(raw.decode("utf-8"))
+            except Exception:
+                return Response(raw, status_code=response.status_code, media_type="application/json")
+            if isinstance(payload, dict):
+                payload["version"] = PATCH_VERSION
+                if "server_version" in payload or path.endswith("/log"):
+                    payload["server_version"] = PATCH_VERSION
+                if path == "/api/admin/overview":
+                    capabilities = payload.setdefault("capabilities", {})
+                    if isinstance(capabilities, dict):
+                        capabilities["model_affinity_warm_pool"] = True
+                        capabilities["model_affinity_interval_seconds"] = 600
+                        capabilities["model_affinity_slots"] = 2
+            headers = {
+                key: value
+                for key, value in response.headers.items()
+                if key.lower() not in {"content-length", "content-type"}
+            }
+            headers["Cache-Control"] = "no-store"
+            return JSONResponse(payload, status_code=response.status_code, headers=headers)
 
-        raw = await _response_bytes(response)
-        try:
-            payload = json.loads(raw.decode("utf-8"))
-        except Exception:
-            return Response(raw, status_code=response.status_code, media_type="application/json")
-        if isinstance(payload, dict):
-            payload["version"] = PATCH_VERSION
-            if "server_version" in payload or path.endswith("/log"):
-                payload["server_version"] = PATCH_VERSION
-            if path == "/api/admin/overview":
-                capabilities = payload.setdefault("capabilities", {})
-                if isinstance(capabilities, dict):
-                    capabilities["model_affinity_warm_pool"] = True
-                    capabilities["model_affinity_interval_seconds"] = 600
-                    capabilities["model_affinity_slots"] = 2
-        headers = {
-            key: value
-            for key, value in response.headers.items()
-            if key.lower() not in {"content-length", "content-type"}
-        }
-        headers["Cache-Control"] = "no-store"
-        return JSONResponse(payload, status_code=response.status_code, headers=headers)
+        if path in {"/admin", "/developers"} and "text/html" in content_type:
+            raw = await _response_bytes(response)
+            text = raw.decode("utf-8", errors="replace")
+            marker = '<script src="/assets/chat2api-v20-3.js"></script>'
+            if marker not in text:
+                text = text.replace("</body>", marker + "</body>")
+            headers = {
+                key: value
+                for key, value in response.headers.items()
+                if key.lower() not in {"content-length", "content-type"}
+            }
+            headers["Cache-Control"] = "no-store"
+            return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
+
+        return response
 
     return app
