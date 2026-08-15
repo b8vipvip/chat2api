@@ -19,6 +19,7 @@ importScripts(
   "model_affinity_v23.js",
   "conversation_routing.js",
   "conversation_warm_pool_v2.js",
+  "conversation_workers_v24.js",
   "conversation_dispatch.js",
   "audio_routing_live.js",
 );
