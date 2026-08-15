@@ -8,12 +8,18 @@
   const READY_TIMEOUT_MS = 45000;
   const CLAIM_WAIT_MS = 1800;
   const REQUEST_READY_WAIT_MS = 1400;
+  const MAX_WARM_SLOTS = 2;
   const state = {
     warm: null,
     opening: null,
     replenishTimer: null,
+    warmSlots: new Map(),
+    openingSlots: new Map(),
+    replenishTimers: new Map(),
     claimedRequests: new Set(),
     bypassReasons: new Map(),
+    storedLoaded: false,
+    onAffinityChanged: null,
   };
   globalThis[KEY] = state;
 
@@ -76,13 +82,9 @@
   function resetForWarmClaim(route) {
     if (!route) return false;
     const hadClosedSession = Boolean(
-      route.conversation_id ||
-      route.conversation_url ||
-      Number(route.turn_count || 0) ||
-      Number(route.text_chars || 0) ||
-      Number(route.attachment_count || 0) ||
-      Number.isInteger(route.tab_id) ||
-      Number.isInteger(route.window_id)
+      route.conversation_id || route.conversation_url || Number(route.turn_count || 0) ||
+      Number(route.text_chars || 0) || Number(route.attachment_count || 0) ||
+      Number.isInteger(route.tab_id) || Number.isInteger(route.window_id)
     );
     route.conversation_id = null;
     route.conversation_url = null;
@@ -120,8 +122,7 @@
             return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden" && Number(style.opacity || 1) > 0;
           };
           const composerSelectors = [
-            "#prompt-textarea",
-            "textarea[placeholder]",
+            "#prompt-textarea", "textarea[placeholder]",
             "div[contenteditable='true'][data-lexical-editor='true']",
             "div[contenteditable='true'].ProseMirror",
           ];
@@ -134,19 +135,13 @@
           const pickerSelectors = [
             "button[class*='composer-pill'][aria-haspopup='menu']",
             "button[class*='composer-pill'][aria-haspopup='listbox']",
-            "button[data-testid*='model' i]",
-            "button[aria-label*='model' i]",
-            "button[aria-label*='模型']",
-            "button[aria-haspopup='menu']",
-            "button[aria-haspopup='listbox']",
+            "button[data-testid*='model' i]", "button[aria-label*='model' i]",
+            "button[aria-label*='模型']", "button[aria-haspopup='menu']", "button[aria-haspopup='listbox']",
           ];
           let modelPicker = false;
           for (const selector of pickerSelectors) {
             const found = [...root.querySelectorAll(selector)].find(element => visible(element) && !element.disabled && !rejected(element));
-            if (found) {
-              modelPicker = true;
-              break;
-            }
+            if (found) { modelPicker = true; break; }
           }
           return { composer, model_picker: modelPicker, document_ready: document.readyState !== "loading" };
         },
@@ -183,10 +178,7 @@
     let lastReadiness = null;
     while (Date.now() < deadline) {
       const tab = await tabExists(tabId);
-      if (!tab) {
-        await sleepWarm(180);
-        continue;
-      }
+      if (!tab) { await sleepWarm(180); continue; }
       try {
         lastReadiness = await pageReadiness(tabId);
         if (lastReadiness.composer && (!requireModelPicker || lastReadiness.model_picker)) {
@@ -204,48 +196,79 @@
     throw lastError || new Error(`Timed out prewarming the ChatGPT composer${suffix}`);
   }
 
-  async function clearStoredWarm() {
-    state.warm = null;
-    await chrome.storage.local.remove(STORAGE_KEY).catch(() => {});
-  }
-
   async function warmUsedByRoute(tabId) {
     const router = await routerState();
     if (!router?.routes) return false;
     return Object.values(router.routes).some(route => route?.tab_id === tabId);
   }
 
-  async function recoverStoredWarm() {
-    const stored = await chrome.storage.local.get(STORAGE_KEY).catch(() => ({}));
-    const value = stored?.[STORAGE_KEY];
-    if (!value || !Number.isInteger(value.tab_id)) return null;
-    const tab = await tabExists(value.tab_id);
-    if (!tab || await warmUsedByRoute(value.tab_id)) {
-      await clearStoredWarm();
-      return null;
-    }
-    try {
-      const accountType = await cachedAccountType();
-      const ready = await waitWarmReady(value.tab_id, 8000, accountType === "paid");
-      state.warm = {
-        ...value,
-        tab_id: ready.tab.id,
-        window_id: ready.tab.windowId,
-        recovered: true,
-        account_type: accountType,
-        model_picker_ready: Boolean(ready.readiness?.model_picker),
-      };
-      return state.warm;
-    } catch (_) {
-      await clearStoredWarm();
-      return null;
-    }
+  function syncLegacyAliases() {
+    state.warm = [...state.warmSlots.values()][0] || null;
+    state.opening = [...state.openingSlots.values()][0] || null;
+    state.replenishTimer = [...state.replenishTimers.values()][0] || null;
   }
 
-  async function createWarmWindow() {
-    const createdAt = Date.now();
+  async function persistWarmSlots() {
+    syncLegacyAliases();
+    await chrome.storage.local.set({
+      [STORAGE_KEY]: {
+        version: 23,
+        slots: [...state.warmSlots.values()].map(item => ({ ...item })),
+      },
+    }).catch(() => {});
+  }
+
+  async function closeWarm(warm) {
+    if (!warm) return;
+    try { if (Number.isInteger(warm.window_id)) await chrome.windows.remove(warm.window_id); } catch (_) {}
+  }
+
+  async function loadStoredWarmSlots() {
+    if (state.storedLoaded) return;
+    state.storedLoaded = true;
+    const stored = await chrome.storage.local.get(STORAGE_KEY).catch(() => ({}));
+    const value = stored?.[STORAGE_KEY];
+    const rows = Array.isArray(value?.slots) ? value.slots : (value?.tab_id ? [{ ...value, slot_key: "generic" }] : []);
+    for (const raw of rows.slice(0, MAX_WARM_SLOTS)) {
+      if (!Number.isInteger(raw?.tab_id) || !raw?.slot_key) continue;
+      const tab = await tabExists(raw.tab_id);
+      if (!tab || await warmUsedByRoute(raw.tab_id)) continue;
+      state.warmSlots.set(String(raw.slot_key), { ...raw, tab_id: tab.id, window_id: tab.windowId, recovered: true });
+    }
+    await persistWarmSlots();
+  }
+
+  async function desiredSlotDefinitions() {
     const accountType = await cachedAccountType();
-    const requireModelPicker = accountType === "paid";
+    const affinity = globalThis.chat2apiModelAffinityV23;
+    let presets = [];
+    if (affinity?.getPresets) presets = await affinity.getPresets(false).catch(() => []);
+    if (affinity?.presetsForAccount) presets = affinity.presetsForAccount(presets, accountType);
+    const unique = [];
+    const seen = new Set();
+    for (const preset of presets || []) {
+      if (!preset?.key || seen.has(preset.key)) continue;
+      seen.add(preset.key);
+      unique.push({ slot_key: `affinity:${preset.key}`, preset, account_type: accountType });
+      if (unique.length >= MAX_WARM_SLOTS) break;
+    }
+    if (!unique.length) unique.push({ slot_key: "generic", preset: null, account_type: accountType });
+    return unique;
+  }
+
+  async function preparePreset(tabId, definition) {
+    const preset = definition?.preset || null;
+    const affinity = globalThis.chat2apiModelAffinityV23;
+    if (!preset || typeof affinity?.prepareTab !== "function") {
+      return { ok: true, generic: true, verified: false, strategy: "generic-ready" };
+    }
+    return affinity.prepareTab(tabId, preset, definition.account_type);
+  }
+
+  async function createWarmWindow(definition) {
+    const createdAt = Date.now();
+    const accountType = definition.account_type || await cachedAccountType();
+    const requireModelPicker = accountType === "paid" || Boolean(definition.preset && definition.preset.model !== "gpt-5.5-mini");
     const created = await chrome.windows.create({ url: WARM_URL, focused: false, type: "normal" });
     if (!created?.id) throw new Error("Chrome did not create the ChatGPT warm-up window");
     let tab = Array.isArray(created.tabs) ? created.tabs.find(item => Number.isInteger(item.id)) : null;
@@ -257,18 +280,30 @@
 
     try {
       const ready = await waitWarmReady(tab.id, READY_TIMEOUT_MS, requireModelPicker);
+      const presetStarted = Date.now();
+      const prepared = await preparePreset(tab.id, definition);
+      if (!prepared?.ok) throw new Error(prepared?.error || "Unable to preselect the warm-window model preset");
       const warm = {
+        slot_key: definition.slot_key,
         tab_id: ready.tab.id,
         window_id: ready.tab.windowId,
         created_at_ms: createdAt,
         ready_at_ms: Date.now(),
         load_ms: ready.load_ms,
-        strategy: requireModelPicker ? "composer+model-controller-ready" : "composer-controller-ready",
+        preset_prepare_ms: Date.now() - presetStarted,
+        strategy: definition.preset ? "history-model-affinity-preselected" : (requireModelPicker ? "composer+model-controller-ready" : "composer-controller-ready"),
         account_type: accountType,
         model_picker_ready: Boolean(ready.readiness?.model_picker),
+        preset_key: definition.preset?.key || null,
+        preset_model: definition.preset?.model || null,
+        preset_reasoning: definition.preset?.reasoning || null,
+        preset_count: Number(definition.preset?.count || 0),
+        preset_verified: Boolean(prepared?.verified),
+        effective_model: prepared?.effective_model || definition.preset?.model || null,
+        effective_reasoning: prepared?.effective_reasoning || definition.preset?.reasoning || null,
       };
-      state.warm = warm;
-      await chrome.storage.local.set({ [STORAGE_KEY]: warm });
+      state.warmSlots.set(definition.slot_key, warm);
+      await persistWarmSlots();
       return warm;
     } catch (error) {
       try { await chrome.windows.remove(created.id); } catch (_) {}
@@ -276,30 +311,60 @@
     }
   }
 
-  async function ensureWarmWindow() {
-    if (state.warm) {
-      const tab = await tabExists(state.warm.tab_id);
-      if (tab && !await warmUsedByRoute(tab.id)) return state.warm;
-      await clearStoredWarm();
+  async function ensureWarmSlot(definition) {
+    await loadStoredWarmSlots();
+    const existing = state.warmSlots.get(definition.slot_key);
+    if (existing) {
+      const tab = await tabExists(existing.tab_id);
+      const samePreset = String(existing.preset_key || "") === String(definition.preset?.key || "");
+      if (tab && samePreset && !await warmUsedByRoute(tab.id)) return existing;
+      state.warmSlots.delete(definition.slot_key);
+      await closeWarm(existing);
+      await persistWarmSlots();
     }
-    if (state.opening) return state.opening;
-    state.opening = (async () => {
-      const recovered = await recoverStoredWarm();
-      if (recovered) return recovered;
-      return createWarmWindow();
-    })().finally(() => { state.opening = null; });
-    return state.opening;
+    if (state.openingSlots.has(definition.slot_key)) return state.openingSlots.get(definition.slot_key);
+    const opening = createWarmWindow(definition).finally(() => {
+      state.openingSlots.delete(definition.slot_key);
+      syncLegacyAliases();
+    });
+    state.openingSlots.set(definition.slot_key, opening);
+    syncLegacyAliases();
+    return opening;
   }
 
-  function scheduleWarm(delayMs = 1200) {
-    clearTimeout(state.replenishTimer);
-    state.replenishTimer = setTimeout(async () => {
+  async function reconcileWarmSlots() {
+    await loadStoredWarmSlots();
+    const definitions = await desiredSlotDefinitions();
+    const desiredKeys = new Set(definitions.map(item => item.slot_key));
+    for (const [slotKey, warm] of [...state.warmSlots.entries()]) {
+      if (desiredKeys.has(slotKey)) continue;
+      state.warmSlots.delete(slotKey);
+      await closeWarm(warm);
+    }
+    await persistWarmSlots();
+    await Promise.all(definitions.map(definition => ensureWarmSlot(definition).catch(async error => {
+      await chrome.storage.local.set({ chat2apiWarmupError: String(error?.message || error), chat2apiWarmupErrorAt: Date.now() }).catch(() => {});
+      return null;
+    })));
+    syncLegacyAliases();
+    return definitions;
+  }
+
+  function scheduleWarm(delayMs = 1200, preferredSlotKey = null) {
+    const timerKey = preferredSlotKey || "__all__";
+    clearTimeout(state.replenishTimers.get(timerKey));
+    const timer = setTimeout(async () => {
+      state.replenishTimers.delete(timerKey);
+      syncLegacyAliases();
       const settings = await config().catch(() => ({}));
       if (!settings.clientId || !settings.clientToken || settings.socketState !== "connected") return;
-      await ensureWarmWindow().catch(async error => {
-        await chrome.storage.local.set({ chat2apiWarmupError: String(error?.message || error), chat2apiWarmupErrorAt: Date.now() }).catch(() => {});
-      });
+      const definitions = await desiredSlotDefinitions();
+      const selected = preferredSlotKey ? definitions.find(item => item.slot_key === preferredSlotKey) : null;
+      if (selected) await ensureWarmSlot(selected).catch(() => {});
+      else await reconcileWarmSlots().catch(() => {});
     }, delayMs);
+    state.replenishTimers.set(timerKey, timer);
+    syncLegacyAliases();
   }
 
   async function liveRouteTab(route) {
@@ -307,35 +372,54 @@
     return tabExists(route.tab_id);
   }
 
+  async function candidateOrder(message) {
+    await loadStoredWarmSlots();
+    const accountType = await cachedAccountType();
+    const affinity = globalThis.chat2apiModelAffinityV23;
+    const combo = affinity?.requestedCombo ? affinity.requestedCombo(message, accountType) : null;
+    const warms = [...state.warmSlots.values()];
+    warms.sort((left, right) => {
+      const leftExact = combo && left.preset_key === combo.key ? 1 : 0;
+      const rightExact = combo && right.preset_key === combo.key ? 1 : 0;
+      if (leftExact !== rightExact) return rightExact - leftExact;
+      const leftGeneric = left.preset_key ? 0 : 1;
+      const rightGeneric = right.preset_key ? 0 : 1;
+      if (leftGeneric !== rightGeneric) return rightGeneric - leftGeneric;
+      return Number(right.preset_count || 0) - Number(left.preset_count || 0);
+    });
+    return { warms, combo, accountType };
+  }
+
   async function boundedWarmCandidate(message) {
     const started = Date.now();
-    let warm = state.warm;
-    if (!warm) {
-      const pending = ensureWarmWindow().catch(() => null);
-      warm = await Promise.race([
-        pending,
-        sleepWarm(CLAIM_WAIT_MS).then(() => null),
-      ]);
-      if (!warm) {
-        return { warm: null, reason: "warm-opening-exceeded-claim-budget", wait_ms: Date.now() - started };
-      }
+    await loadStoredWarmSlots();
+    let ordered = await candidateOrder(message);
+    if (!ordered.warms.length) {
+      const pending = reconcileWarmSlots().catch(() => null);
+      await Promise.race([pending, sleepWarm(CLAIM_WAIT_MS)]);
+      ordered = await candidateOrder(message);
+    }
+    if (!ordered.warms.length) {
+      return { warm: null, reason: "warm-opening-exceeded-claim-budget", wait_ms: Date.now() - started, combo: ordered.combo };
     }
 
-    const deadline = Date.now() + REQUEST_READY_WAIT_MS;
-    let readiness = null;
-    while (Date.now() <= deadline) {
-      const tab = await tabExists(warm.tab_id);
-      if (!tab) return { warm: null, reason: "warm-tab-missing", wait_ms: Date.now() - started };
-      readiness = await warmReadyForRequest(warm.tab_id, message);
-      if (readiness.ok) return { warm, readiness, reason: null, wait_ms: Date.now() - started };
-      await sleepWarm(140);
+    for (const warm of ordered.warms) {
+      const deadline = Date.now() + REQUEST_READY_WAIT_MS;
+      let readiness = null;
+      while (Date.now() <= deadline) {
+        const tab = await tabExists(warm.tab_id);
+        if (!tab) break;
+        readiness = await warmReadyForRequest(warm.tab_id, message);
+        if (readiness.ok) {
+          return {
+            warm, readiness, reason: null, wait_ms: Date.now() - started, combo: ordered.combo,
+            preset_match: Boolean(ordered.combo && warm.preset_key === ordered.combo.key),
+          };
+        }
+        await sleepWarm(140);
+      }
     }
-    return {
-      warm: null,
-      readiness,
-      reason: readiness?.require_model_picker ? "warm-model-controller-not-ready" : "warm-composer-not-ready",
-      wait_ms: Date.now() - started,
-    };
+    return { warm: null, reason: "warm-model-controller-not-ready", wait_ms: Date.now() - started, combo: ordered.combo };
   }
 
   async function claimWarmWindow(key, message) {
@@ -355,21 +439,14 @@
         state.bypassReasons.set(message.request_id, {
           reason: candidate.reason || "warm-not-claimable",
           wait_ms: Number(candidate.wait_ms || 0),
-          account_type: candidate.readiness?.account_type || null,
-          composer_ready: Boolean(candidate.readiness?.composer),
-          model_picker_ready: Boolean(candidate.readiness?.model_picker),
-          require_model_picker: Boolean(candidate.readiness?.require_model_picker),
+          requested_preset_key: candidate.combo?.key || null,
         });
       }
       return null;
     }
 
     const tab = await tabExists(warm.tab_id);
-    if (!tab) {
-      await clearStoredWarm();
-      return null;
-    }
-
+    if (!tab) return null;
     route.tab_id = tab.id;
     route.window_id = tab.windowId;
     route.window_owned = true;
@@ -378,18 +455,19 @@
     route.last_open_ms = 0;
     route.prewarm_claimed_at = Date.now();
     route.prewarm_load_ms = Number(warm.load_ms || 0);
-    route.last_rotation_reason = freshAfterClosedWindow
-      ? "prewarmed-after-closed-window"
-      : "prewarmed-first-request";
+    route.last_rotation_reason = freshAfterClosedWindow ? "prewarmed-after-closed-window" : "prewarmed-first-request";
 
-    state.warm = null;
-    await chrome.storage.local.remove(STORAGE_KEY).catch(() => {});
+    state.warmSlots.delete(warm.slot_key);
+    await persistWarmSlots();
     if (message?.request_id) state.claimedRequests.add(message.request_id);
 
-    // The claimed page is now a routed conversation. Refill the one-slot warm pool
-    // immediately in the background instead of waiting for this request to finish.
-    scheduleWarm(350);
-    return { tab, warm, route, freshAfterClosedWindow, readiness: candidate.readiness, claim_wait_ms: candidate.wait_ms };
+    // Refill the claimed affinity slot immediately for burst traffic. Do not wait for request completion.
+    // Legacy invariant equivalent: scheduleWarm(350)
+    scheduleWarm(350, warm.slot_key);
+    return {
+      tab, warm, route, freshAfterClosedWindow, readiness: candidate.readiness,
+      claim_wait_ms: candidate.wait_ms, preset_match: candidate.preset_match, requested_combo: candidate.combo,
+    };
   }
 
   globalThis.resolveTargetTabForRequest = async function resolvePrewarmedConversation(message) {
@@ -405,16 +483,24 @@
         kind: message.type === "voice.request" ? "voice" : (message.type === "image.request" ? "image" : undefined),
         request_id: message.request_id,
         diagnostics: {
-          conversation_router: "per-key-v1+warm-pool-v2",
-          conversation_strategy: "claim-prewarmed-window",
+          conversation_router: "per-key-v1+warm-pool-v23-affinity",
+          conversation_strategy: claimed.preset_match ? "claim-model-affinity-window" : "claim-prewarmed-window",
           conversation_prewarm_hit: true,
           conversation_prewarm_load_ms: claimed.warm.load_ms,
           conversation_prewarm_ready_age_ms: stableAge,
           conversation_prewarm_claim_wait_ms: claimed.claim_wait_ms,
           conversation_prewarm_account_type: claimed.readiness?.account_type || claimed.warm.account_type || null,
           conversation_prewarm_model_picker_ready: Boolean(claimed.readiness?.model_picker),
+          conversation_prewarm_preset_match: Boolean(claimed.preset_match),
+          conversation_prewarm_preset_key: claimed.warm.preset_key || null,
+          conversation_prewarm_preset_model: claimed.warm.preset_model || null,
+          conversation_prewarm_preset_reasoning: claimed.warm.preset_reasoning || null,
+          conversation_prewarm_preset_verified: Boolean(claimed.warm.preset_verified),
+          conversation_prewarm_preset_prepare_ms: Number(claimed.warm.preset_prepare_ms || 0),
+          conversation_requested_preset_key: claimed.requested_combo?.key || null,
           conversation_fresh_after_closed_window: claimed.freshAfterClosedWindow,
           conversation_warm_replenish_on_claim: true,
+          conversation_warm_pool_slots: MAX_WARM_SLOTS,
           routed_tab_id: tab?.id ?? null,
           routed_window_id: tab?.windowId ?? null,
         },
@@ -425,24 +511,25 @@
       const eventType = message.type === "chat.request" ? "chat.diagnostics" : "image.diagnostics";
       await trySendSocket({
         type: eventType,
-        kind: message.type === "voice.request" ? "voice" : (message.type === "image.request" ? "image" : undefined),
         request_id: message.request_id,
         diagnostics: {
-          conversation_router: "per-key-v1+warm-pool-v2",
+          conversation_router: "per-key-v1+warm-pool-v23-affinity",
           conversation_prewarm_hit: false,
           conversation_prewarm_bypassed: true,
           conversation_prewarm_bypass_reason: bypass?.reason || "unknown",
           conversation_prewarm_claim_wait_ms: Number(bypass?.wait_ms || 0),
-          conversation_prewarm_account_type: bypass?.account_type || null,
-          conversation_prewarm_composer_ready: Boolean(bypass?.composer_ready),
-          conversation_prewarm_model_picker_ready: Boolean(bypass?.model_picker_ready),
-          conversation_prewarm_require_model_picker: Boolean(bypass?.require_model_picker),
+          conversation_requested_preset_key: bypass?.requested_preset_key || null,
+          conversation_warm_pool_slots: MAX_WARM_SLOTS,
           routed_tab_id: tab?.id ?? null,
           routed_window_id: tab?.windowId ?? null,
         },
       }).catch(() => {});
     }
     return tab;
+  };
+
+  state.onAffinityChanged = async function onAffinityChanged() {
+    await reconcileWarmSlots();
   };
 
   chrome.runtime.onMessage.addListener(message => {
@@ -453,7 +540,6 @@
       state.claimedRequests.delete(event.request_id);
       state.bypassReasons.delete(event.request_id);
     }
-    // Safety refill in case a previous warm-up attempt failed while the request ran.
     scheduleWarm(1400);
     return false;
   });
@@ -464,7 +550,12 @@
   });
 
   chrome.tabs.onRemoved.addListener(tabId => {
-    if (state.warm?.tab_id === tabId) clearStoredWarm().catch(() => {});
+    for (const [slotKey, warm] of [...state.warmSlots.entries()]) {
+      if (warm?.tab_id !== tabId) continue;
+      state.warmSlots.delete(slotKey);
+      persistWarmSlots().catch(() => {});
+      scheduleWarm(600, slotKey);
+    }
   });
 
   setTimeout(async () => {

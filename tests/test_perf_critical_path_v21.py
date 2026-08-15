@@ -20,11 +20,12 @@ def test_warm_pool_has_bounded_claim_and_paid_model_readiness() -> None:
     assert "warm-model-controller-not-ready" in source
     assert "requestRequiresModelPicker" in source
     assert 'model === "gpt-5.5-mini" && accountType === "free"' in source
-    assert 'strategy: requireModelPicker ? "composer+model-controller-ready" : "composer-controller-ready"' in source
+    assert '"composer+model-controller-ready"' in source
+    assert '"composer-controller-ready"' in source
     assert "conversation_prewarm_bypassed" in source
     assert "conversation_prewarm_claim_wait_ms" in source
-    # Concurrent-request behavior remains intentional: claim A, refill B immediately.
-    assert "scheduleWarm(350)" in source
+    # Concurrent-request behavior remains intentional: claim A, refill its slot immediately.
+    assert "scheduleWarm(350, warm.slot_key)" in source
 
 
 def test_fast_family_prefetch_is_best_effort_and_canonical_router_remains_owner() -> None:
@@ -52,7 +53,7 @@ def test_send_click_fast_enter_requires_strong_ignored_click_signal() -> None:
     assert "FAST_FALLBACK_MS = 1200" in source
     assert "prompt-present+not-generating+send-ready" in source
     assert "submit_fast_enter_fallback" in source
-    assert "promptStillPresent" not in source  # overlay performs its own independent guard
+    assert "promptStillPresent" not in source
     assert "stopButton()" in source
     assert "buttonReady(button)" in source
 
@@ -100,7 +101,7 @@ def test_bootstrap_injects_perf_scripts_for_existing_tabs() -> None:
         assert f'"{name}"' in bootstrap
 
 
-def test_openai_http_api_surface_is_untouched_by_extension_only_patch() -> None:
+def test_openai_http_api_surface_is_untouched_by_performance_patch() -> None:
     main = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
     assert '@app.post("/v1/chat/completions")' in main
     assert 'media_type="text/event-stream"' in main

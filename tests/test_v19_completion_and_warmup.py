@@ -143,11 +143,12 @@ def test_warm_pool_reuses_closed_routes_as_fresh_chat_and_refills_on_claim() -> 
     assert "model_picker" in source
     assert "requestRequiresModelPicker" in source
     assert '"composer+model-controller-ready"' in source
-    assert 'conversation_strategy: "claim-prewarmed-window"' in source
+    assert '"claim-prewarmed-window"' in source
+    assert '"claim-model-affinity-window"' in source
     assert "if (route?.conversation_id) return null" not in source
     assert "resetForWarmClaim" in source
     assert '"prewarmed-after-closed-window"' in source
-    assert "scheduleWarm(350)" in source
+    assert "scheduleWarm(350, warm.slot_key)" in source
     assert "conversation_fresh_after_closed_window" in source
     assert "conversation_warm_replenish_on_claim" in source
     assert "conversation_prewarm_bypassed" in source

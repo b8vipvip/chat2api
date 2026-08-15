@@ -27,11 +27,14 @@ jobs:
           node --check chrome_extension/content_request_v3.js
           node --check chrome_extension/content_request_v4.js
           node --check chrome_extension/content_request_v5.js
+          node --check chrome_extension/content_request_perf_v21.js
           node --check chrome_extension/content_completion_v6.js
+          node --check chrome_extension/content_completion_fast_v21.js
           node --check chrome_extension/content_reasoning_transport_v20.js
           node --check chrome_extension/content_format_v20.js
           node --check chrome_extension/content_account_v20.js
           node --check chrome_extension/content_model_v5.js
+          node --check chrome_extension/content_model_fast_v21.js
           node --check chrome_extension/content_model_v6.js
           node --check chrome_extension/content_model_cache_migrate_v7.js
           node --check chrome_extension/content_model_v7.js
@@ -57,6 +60,8 @@ jobs:
           node --check chrome_extension/content_bootstrap.js
           node --check chrome_extension/model_routing.js
           node --check chrome_extension/model_routing_v2.js
+          node --check chrome_extension/model_prefetch_fast_v21.js
+          node --check chrome_extension/model_affinity_v23.js
           node --check chrome_extension/image_routing.js
           node --check chrome_extension/image_routing_v3.js
           node --check chrome_extension/voice_routing.js
@@ -70,6 +75,7 @@ jobs:
           node --check chrome_extension/background_account_v20.js
           node --check chrome_extension/background_time_v14.js
           node --check chrome_extension/background_hardening.js
+          node --check chrome_extension/background_socket_singleflight_v21.js
           node --check chrome_extension/background_logging.js
           node --check chrome_extension/conversation_routing.js
           node --check chrome_extension/conversation_warm_pool_v2.js
@@ -93,6 +99,7 @@ jobs:
           node --check app/admin_v20.js
           node --check app/admin_v20_1.js
           node --check app/admin_v20_2.js
+          node --check app/admin_v20_3.js
           python - <<'PY'
           import re
           from pathlib import Path
