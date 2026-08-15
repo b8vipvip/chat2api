@@ -3,7 +3,7 @@
   if (globalThis[KEY]) return;
 
   const baseHandleServerMessage = handleServerMessage;
-  const state = { attempts: 0, successes: 0, failures: 0 };
+  const state = { attempts: 0, successes: 0, failures: 0, lastTabId: null };
   globalThis[KEY] = state;
 
   const SUPPORTED = new Set(["gpt-5.6-sol", "gpt-5.5"]);
@@ -17,12 +17,19 @@
     const model = requestedModel(message);
     if (!SUPPORTED.has(model)) return null;
 
-    const settings = await config().catch(() => ({}));
-    const current = String(settings.currentModel || "").trim().toLowerCase();
-    if (current === model) return { skipped: true, reason: "cached-family-match" };
-
     const tab = await resolveTargetTab();
     if (!tab?.id) return { skipped: true, reason: "no-target-tab" };
+
+    const settings = await config().catch(() => ({}));
+    const current = String(settings.currentModel || "").trim().toLowerCase();
+    const sameTab = state.lastTabId === tab.id;
+    state.lastTabId = tab.id;
+
+    // currentModel is extension-global storage. It is reliable as a skip hint only
+    // while the routed tab is unchanged. A newly claimed warm tab may still be on
+    // ChatGPT's default family even when storage remembers the previous tab's model.
+    if (sameTab && current === model) return { skipped: true, reason: "same-tab-cached-family-match" };
+
     await ensureContent(tab.id);
 
     state.attempts += 1;
@@ -59,6 +66,8 @@
           model_prefetch_attempted: true,
           model_prefetch_requested_model: model,
           model_prefetch_cached_model_before: current || null,
+          model_prefetch_same_tab_as_previous: sameTab,
+          model_prefetch_tab_id: tab.id,
           model_prefetch_elapsed_ms: elapsedMs,
           model_prefetch_selected: Boolean(response?.data?.selected),
           model_prefetch_already_visible: Boolean(response?.data?.already_visible),
