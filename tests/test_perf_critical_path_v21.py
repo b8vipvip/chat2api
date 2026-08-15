@@ -42,8 +42,9 @@ def test_fast_family_prefetch_is_best_effort_and_canonical_router_remains_owner(
     assert "model_prefetch_fast_v21" in background
     assert "prepareRequestedState" in routing
     assert "probeState" in routing
-    assert entry.index('"conversation_warm_pool_v2.js"') < entry.index('"model_prefetch_fast_v21.js"')
-    assert entry.index('"model_prefetch_fast_v21.js"') < entry.index('"conversation_dispatch.js"')
+    assert entry.index('"model_routing_v2.js"') < entry.index('"model_prefetch_fast_v21.js"')
+    assert entry.index('"model_prefetch_fast_v21.js"') < entry.index('"background_logging.js"')
+    assert entry.index('"background_logging.js"') < entry.index('"conversation_dispatch.js"')
 
 
 def test_send_click_fast_enter_requires_strong_ignored_click_signal() -> None:
