@@ -14,24 +14,34 @@
   const brandSmall = document.querySelector(".brand small");
   if (brandSmall) brandSmall.textContent = `Server Console · v${VERSION}`;
 
+  function setText(node, value) {
+    if (node && node.textContent !== value) node.textContent = value;
+  }
+
+  function setHtml(node, value) {
+    if (node && node.innerHTML !== value) node.innerHTML = value;
+  }
+
   function patchLiveCard(id, { kicker, summary, badges, useCases, sample }) {
     const cards = [...document.querySelectorAll("#view-models .modelCard")];
     const card = cards.find(item => item.querySelector(".modelCardId")?.textContent.trim() === id);
     if (!card) return;
-    const eyebrow = card.querySelector(".modelPlazaEyebrow");
-    if (eyebrow) eyebrow.textContent = `语音 · ${kicker}`;
-    const summaryNode = card.querySelector(".modelCardSummary");
-    if (summaryNode) summaryNode.textContent = summary;
-    const badgeNode = card.querySelector(".modelBadges");
-    if (badgeNode) badgeNode.innerHTML = badges.map(text => `<span class="modelBadge">${esc(text)}</span>`).join("");
-    const useNode = card.querySelector(".modelUseCases");
-    if (useNode) useNode.innerHTML = useCases.map(text => `<span class="modelUseCase">${esc(text)}</span>`).join("");
+
+    setText(card.querySelector(".modelPlazaEyebrow"), `语音 · ${kicker}`);
+    setText(card.querySelector(".modelCardSummary"), summary);
+
+    const badgeHtml = badges.map(text => `<span class="modelBadge">${esc(text)}</span>`).join("");
+    setHtml(card.querySelector(".modelBadges"), badgeHtml);
+
+    const useCaseHtml = useCases.map(text => `<span class="modelUseCase">${esc(text)}</span>`).join("");
+    setHtml(card.querySelector(".modelUseCases"), useCaseHtml);
+
     const apiList = card.querySelector(".modelApiList");
     if (apiList && ![...apiList.querySelectorAll(".modelEndpoint")].some(node => node.textContent.includes("/v1/audio/realtime"))) {
       apiList.insertAdjacentHTML("afterbegin", '<span class="modelEndpoint">WS /v1/audio/realtime</span>');
     }
-    const pre = card.querySelector("details pre");
-    if (pre) pre.textContent = `WS /v1/audio/realtime\n${JSON.stringify(sample, null, 2)}`;
+
+    setText(card.querySelector("details pre"), `WS /v1/audio/realtime\n${JSON.stringify(sample, null, 2)}`);
   }
 
   function patchModelPlaza() {
@@ -53,7 +63,15 @@
 
   const modelView = document.getElementById("view-models");
   if (modelView) {
-    const observer = new MutationObserver(() => patchModelPlaza());
+    let patchScheduled = false;
+    const observer = new MutationObserver(() => {
+      if (patchScheduled) return;
+      patchScheduled = true;
+      setTimeout(() => {
+        patchScheduled = false;
+        patchModelPlaza();
+      }, 0);
+    });
     observer.observe(modelView, { childList: true, subtree: true });
     patchModelPlaza();
   }
@@ -77,10 +95,10 @@
       const model = row.querySelector("code")?.textContent?.trim();
       if (model === "gpt-live") {
         const cells = row.querySelectorAll("td");
-        if (cells[1]) cells[1].textContent = "实时双向语音主模型 / 语音生成 / 语音对话";
+        setText(cells[1], "实时双向语音主模型 / 语音生成 / 语音对话");
       } else if (model === "gpt-live-mini") {
         const cells = row.querySelectorAll("td");
-        if (cells[1]) cells[1].textContent = "gpt-live 兼容别名；当前使用同一 ChatGPT Voice 实时链路";
+        setText(cells[1], "gpt-live 兼容别名；当前使用同一 ChatGPT Voice 实时链路");
       }
     }
 
