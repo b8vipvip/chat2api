@@ -30,6 +30,14 @@
     });
   }
 
+  async function resolveLiveWorkerTab(message) {
+    const routed = globalThis.chat2apiResolveRoutedWorkerTabV24;
+    if (message?.routing?.api_key_id && typeof routed === "function") {
+      return routed(message);
+    }
+    return resolveTargetTab();
+  }
+
   handleServerMessage = async function handleLiveVoiceServerMessage(message) {
     const type = String(message?.type || "");
     if (!type.startsWith("voice.live.")) return baseHandleServerMessage(message);
@@ -38,15 +46,15 @@
 
     if (type === "voice.live.start") {
       try {
-        const tab = await resolveTargetTab();
+        const tab = await resolveLiveWorkerTab(message);
         if (!tab?.id) throw new Error("No ChatGPT tab is available for GPT-Live");
         try { await chrome.tabs.update(tab.id, { active: true }); } catch (_) {}
         await ensureLiveContent(tab.id);
         liveTabs.set(requestId, tab.id);
 
         // Starting ChatGPT Voice can take many seconds while the page establishes
-        // WebRTC. Do not hold the global routed-dispatch chain for that whole time;
-        // the tab binding is already fixed, so other worker tabs may start requests.
+        // WebRTC. Worker allocation above is serialized, but after the tab is bound
+        // we deliberately do not hold that dispatch lock for the WebRTC startup.
         chrome.tabs.sendMessage(tab.id, {
           type: "chat2api.voice.live.start",
           requestId,
