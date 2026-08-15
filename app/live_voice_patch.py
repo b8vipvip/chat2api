@@ -18,6 +18,7 @@ LIVE_PROTOCOL_VERSION = "chat2api-live-v1"
 SUPPORTED_MODELS = {"gpt-live", "gpt-live-mini"}
 MODEL_ALIASES = {"gpt-live-mini": "gpt-live"}
 REALTIME_SESSION_TTL_SECONDS = 60
+LIVE_CAPACITY_WEIGHT = 2
 
 
 def _bearer(headers: Any) -> str:
@@ -29,6 +30,38 @@ def _bearer(headers: Any) -> str:
 
 def _token_hash(value: str) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def _input_text_from_control(control: Any) -> str:
+    if not isinstance(control, dict):
+        return ""
+    control_type = str(control.get("type") or "")
+    if control_type == "input_text":
+        return str(control.get("text") or "").strip()
+    if control_type != "conversation.item.create":
+        return ""
+    item = control.get("item")
+    if not isinstance(item, dict) or str(item.get("role") or "user") != "user":
+        return ""
+    content = item.get("content")
+    if isinstance(content, str):
+        return content.strip()
+    if not isinstance(content, list):
+        return ""
+    parts: list[str] = []
+    for part in content:
+        if isinstance(part, str):
+            if part.strip():
+                parts.append(part.strip())
+            continue
+        if not isinstance(part, dict):
+            continue
+        if str(part.get("type") or "") not in {"input_text", "text"}:
+            continue
+        value = str(part.get("text") or part.get("input_text") or "").strip()
+        if value:
+            parts.append(value)
+    return "\n".join(parts).strip()
 
 
 def install_live_voice_patch(app: FastAPI) -> FastAPI:
@@ -81,20 +114,29 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             return await consume_realtime_session(session_token)
         return None
 
+    def can_accept(client_id: str, weight: int = LIVE_CAPACITY_WEIGHT) -> bool:
+        checker = getattr(broker, "can_accept", None)
+        if callable(checker):
+            try:
+                return bool(checker(client_id, weight))
+            except Exception:
+                return False
+        return client_id not in registry.busy_clients
+
     def resolve_idle_client(requested: str | None, principal: ApiPrincipal) -> str:
         registry.set_routing_key(principal.key_id)
         if requested:
             selected = registry.resolve_client(requested)
-            if selected in registry.busy_clients:
-                raise LookupError("Requested Chrome extension is busy")
+            if not can_accept(selected, LIVE_CAPACITY_WEIGHT):
+                raise LookupError("Requested Chrome extension has no GPT-Live capacity")
             return selected
 
         online = registry.online_client_ids()
         if not online:
             raise ConnectionError("No Chrome extension is online. Open Chrome with a paired chat2api extension.")
-        idle = [client_id for client_id in online if client_id not in registry.busy_clients]
+        idle = [client_id for client_id in online if can_accept(client_id, LIVE_CAPACITY_WEIGHT)]
         if not idle:
-            raise LookupError("All online Chrome extensions are busy")
+            raise LookupError("All online Chrome extensions are at GPT-Live capacity")
         previous = registry.route_for_key(principal.key_id)
         if previous in idle:
             return previous
@@ -116,6 +158,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             "websocket_path": f"/v1/audio/realtime?session_token={token}",
             "input_audio_format": "pcm16le-16000-mono",
             "output_audio_format": "pcm16le-24000-mono",
+            "supports": ["binary_pcm_input", "binary_pcm_output", "input_text", "conversation.item.create", "barge_in"],
         }
 
     @app.websocket("/v1/audio/realtime")
@@ -170,6 +213,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "effective_model": effective_model,
                         "input_audio_format": "pcm16le-16000-mono",
                         "output_audio_format": "pcm16le-24000-mono",
+                        "supports": ["input_text", "conversation.item.create"],
                     }
                     if requested_model != effective_model:
                         payload["model_alias_of"] = effective_model
@@ -178,6 +222,12 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     await send_json({"type": "input_audio_buffer.speech_started"})
                 elif event_type == "input.speech_stopped":
                     await send_json({"type": "input_audio_buffer.speech_stopped"})
+                elif event_type == "input.text.sent":
+                    await send_json({
+                        "type": "input_text.sent",
+                        "item_id": str(event.get("item_id") or ""),
+                        "text": str(event.get("text") or ""),
+                    })
                 elif event_type == "transcript.final":
                     text = str(event.get("text") or "").strip()
                     if text:
@@ -274,6 +324,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     "type": "voice.live.start",
                     "request_id": request_id,
                     "session_id": session_id,
+                    "routing": {"api_key_id": principal.key_id},
                     "options": {
                         "model": effective_model,
                         "requested_model": requested_model,
@@ -312,13 +363,40 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     control = json.loads(text)
                 except Exception:
                     continue
-                control_type = control.get("type")
+                control_type = str(control.get("type") or "")
                 if control_type == "response.cancel":
                     await registry.send(selected_client, {
                         "type": "voice.live.cancel_response",
                         "request_id": request_id,
                         "session_id": session_id,
                     })
+                elif control_type in {"input_text", "conversation.item.create"}:
+                    input_text = _input_text_from_control(control)
+                    if not input_text:
+                        await send_json({
+                            "type": "error",
+                            "code": "INVALID_INPUT_TEXT",
+                            "message": "Text control must contain a non-empty user input_text value",
+                            "retryable": False,
+                        })
+                        continue
+                    if len(input_text) > 12000:
+                        await send_json({
+                            "type": "error",
+                            "code": "INPUT_TEXT_TOO_LONG",
+                            "message": "Live text input is limited to 12000 characters",
+                            "retryable": False,
+                        })
+                        continue
+                    item_id = str(control.get("item_id") or (control.get("item") or {}).get("id") or f"item_{uuid.uuid4().hex}")
+                    await registry.send(selected_client, {
+                        "type": "voice.live.text",
+                        "request_id": request_id,
+                        "session_id": session_id,
+                        "item_id": item_id,
+                        "text": input_text,
+                    })
+                    await send_json({"type": "input_text.queued", "item_id": item_id, "text": input_text})
                 elif control_type == "session.finish":
                     break
                 elif control_type == "ping":
