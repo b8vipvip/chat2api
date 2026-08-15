@@ -24,15 +24,34 @@
     }
   }
 
-  async function routedDispatch(message) {
+  async function resolveRoutedTab(message) {
     const resolver = globalThis.resolveTargetTabForRequest;
-    if (typeof resolver !== "function") return baseHandleServerMessage(message);
-    const tab = await resolver(message);
+    const tab = typeof resolver === "function"
+      ? await resolver(message)
+      : await baseResolveTargetTab();
     if (!tab?.id) throw new Error("Per-key conversation router returned no usable ChatGPT tab");
     if (message?.request_id) {
       state.requestTabs.set(String(message.request_id), { tabId: tab.id, windowId: tab.windowId });
     }
     await chrome.storage.local.set({ boundTabId: tab.id, autoBind: false, modelsUpdatedAt: 0 });
+    return tab;
+  }
+
+  function enqueueDispatch(taskFactory) {
+    const task = state.chain.then(taskFactory);
+    state.chain = task.catch(() => {});
+    return task;
+  }
+
+  // GPT Live is loaded outside this handler so it can stream many audio/control
+  // frames without walking the generic dispatch chain. Its start phase still must
+  // use exactly the same serialized worker allocation as chat/image/voice requests.
+  globalThis.chat2apiResolveRoutedWorkerTabV24 = function resolveExternalRoutedWorkerTab(message) {
+    return enqueueDispatch(() => resolveRoutedTab(message));
+  };
+
+  async function routedDispatch(message) {
+    const tab = await resolveRoutedTab(message);
     return withCurrentTab(tab, () => baseHandleServerMessage(message));
   }
 
@@ -55,9 +74,7 @@
 
     // Serialize only route allocation / page dispatch. Content scripts return as soon
     // as work starts, so generations continue independently in their own worker tabs.
-    const task = state.chain.then(() => isRoutedRequest ? routedDispatch(message) : dispatchKnownRequest(message));
-    state.chain = task.catch(() => {});
-    return task;
+    return enqueueDispatch(() => isRoutedRequest ? routedDispatch(message) : dispatchKnownRequest(message));
   };
 
   chrome.runtime.onMessage.addListener(message => {
