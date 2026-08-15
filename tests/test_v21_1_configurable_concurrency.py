@@ -28,13 +28,16 @@ def test_v211_static_contracts() -> None:
     assert '"image_request_weight": 1' in patch
     assert '"live_voice_request_weight": 1' in patch
 
-    assert 'const VERSION = "0.21.1"' in admin
+    assert 'const VERSION = "0.21.2"' in admin
     assert "并发设置" in admin
     assert "单扩展最大并发" in admin
     assert 'fetch("/api/admin/concurrency"' in admin
     assert 'method: "PUT"' in admin
     assert "所有任务统一按 1 个并发计数" in admin
     assert "同时运行 3 个图片任务、3 个 GPT Live Session" in admin
+    assert "MutationObserver" not in admin
+    assert "let booted = false" in admin
+    assert "let loadInFlight = null" in admin
 
     assert "MAX_WORKERS_PER_KEY = 3" in workers
     assert "function workerLimit(message)" in workers
@@ -43,7 +46,9 @@ def test_v211_static_contracts() -> None:
     assert 'extension_worker_limit_source: Number(message?.routing?.worker_limit) > 0 ? "server-routing" : "default"' in workers
 
     assert "from .v21_1_patch import install_v21_1_patch" in entry
+    assert "from .v21_2_patch import install_v21_2_patch" in entry
     assert entry.index("install_v21_routing_patch(app)") < entry.index("install_v21_1_patch(app)")
+    assert entry.index("install_v21_1_patch(app)") < entry.index("install_v21_2_patch(app)")
     assert "node --check app/admin_v21_1.js" in ci
 
 
