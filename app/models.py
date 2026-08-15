@@ -5,6 +5,12 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+def normalize_model_id(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    return "-".join(value.strip().split()).lower()
+
+
 class ExtensionRegistration(BaseModel):
     name: str = Field(default="Chrome", min_length=1, max_length=120)
     browser_name: str = Field(default="Chrome", max_length=80)
@@ -96,6 +102,11 @@ class ChatCompletionRequest(BaseModel):
     max_completion_tokens: int | None = Field(default=None, ge=1)
     max_tokens: int | None = Field(default=None, ge=1)
 
+    @field_validator("model", mode="before")
+    @classmethod
+    def normalize_model(cls, value: Any) -> Any:
+        return normalize_model_id(value)
+
     @field_validator("messages")
     @classmethod
     def validate_messages(cls, value: list[ChatMessage]) -> list[ChatMessage]:
@@ -134,6 +145,11 @@ class TestRunCreate(BaseModel):
     summary: str = Field(default="", max_length=4000)
     results: list[dict[str, Any]] = Field(default_factory=list)
     quality: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def normalize_test_model(cls, value: Any) -> Any:
+        return normalize_model_id(value)
 
 
 class ClientSummary(BaseModel):

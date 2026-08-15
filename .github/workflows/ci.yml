@@ -63,6 +63,7 @@ jobs:
           node --check chrome_extension/model_routing_v2.js
           node --check chrome_extension/model_prefetch_fast_v21.js
           node --check chrome_extension/model_affinity_v23.js
+          node --check chrome_extension/model_contract_v25.js
           node --check chrome_extension/image_routing.js
           node --check chrome_extension/image_routing_v3.js
           node --check chrome_extension/voice_routing.js
@@ -105,6 +106,7 @@ jobs:
           node --check app/admin_v21.js
           node --check app/admin_v21_1.js
           node --check app/admin_v21_3.js
+          node --check app/admin_v21_4.js
           python - <<'PY'
           import re
           from pathlib import Path
