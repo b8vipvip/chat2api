@@ -61,5 +61,5 @@ def test_readme_uses_current_version_contract_and_voice_status():
     assert f"Python package：`{PACKAGE_VERSION}`" in readme
     assert f"Server runtime / console：`{SERVER_RUNTIME_VERSION}`" in readme
     assert f"Chrome Bridge：`{CHROME_BRIDGE_VERSION}`" in readme
-    assert "`GET /version`" in readme
+    assert "GET /version" in readme
     assert "语音生成、语音对话尚未实现" not in readme
