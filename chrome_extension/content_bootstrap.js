@@ -16,6 +16,7 @@
           "content_model_v7.js",
           "content_model_transition_v15.js",
           "content_reasoning_v7.js",
+          "content_page_smoke_v22.js",
           "content_multimodal.js",
           "content_request_v3.js",
           "content_multimodal_v4.js",
