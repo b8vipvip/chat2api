@@ -20,6 +20,11 @@ async function runtimeStatus() {
     networkProbeStatus: "unknown",
     networkCountryCode: "",
     networkProbeError: "",
+    chatgptLoginState: "unknown",
+    chatgptLoginConfidence: "low",
+    chatgptLoginStrategy: "unknown",
+    chatgptLoginComposerReady: false,
+    chatgptLoginCheckedAt: 0,
   });
 }
 function renderModels(settings) {
@@ -46,6 +51,16 @@ function networkLabel(settings) {
   if (status === "error") return "外网检测失败 · 请求时仍可按需创建窗口";
   return "网络区域待检测";
 }
+function renderLogin(settings) {
+  const state = String(settings.chatgptLoginState || "unknown");
+  const strategy = String(settings.chatgptLoginStrategy || "unknown");
+  const ready = state === "ready" && settings.chatgptLoginComposerReady === true;
+  if (ready) $("loginStatus").textContent = "ChatGPT：已登录，可用 · Composer 已确认";
+  else if (state === "login_required") $("loginStatus").textContent = "ChatGPT：需要登录 · 请在可见窗口完成登录/CAPTCHA/2FA";
+  else if (state === "checking") $("loginStatus").textContent = "ChatGPT：正在检测登录状态…";
+  else $("loginStatus").textContent = `ChatGPT：登录状态未确认${strategy === "no-chatgpt-tab" ? " · 当前没有 ChatGPT 页面" : ""}`;
+  $("openLogin").hidden = ready || state === "checking";
+}
 async function refresh() {
   const [response, localRuntime] = await Promise.all([
     send({ type: "popup.status" }),
@@ -64,6 +79,7 @@ async function refresh() {
   const status = $("status");
   status.textContent = `${settings.socketState || "disconnected"}${settings.clientId ? ` · ${settings.clientId}` : " · 未配对"} · ${networkLabel(settings)}`;
   status.className = `status ${settings.socketState === "connected" ? "connected" : settings.socketState === "error" ? "error" : ""}`;
+  renderLogin(settings);
   const bound = tabs.find(tab => tab.id === settings.boundTabId);
   $("binding").textContent = bound ? `已绑定：${bound.title || bound.url}` : `未绑定；当前检测到 ${tabs.length} 个 ChatGPT 标签页。API 请求会复用唯一标签页，或由扩展自动创建新的 ChatGPT 标签页。`;
   renderModels(settings);
@@ -74,6 +90,22 @@ async function refresh() {
 for (const id of ["serverUrl", "pairingCode", "extensionName"]) {
   $(id).addEventListener("input", () => persistForm().catch(error => { $("message").textContent = `保存配置失败：${String(error?.message || error)}`; }));
 }
+$("openLogin").addEventListener("click", async () => {
+  $("message").textContent = "正在打开 ChatGPT 登录窗口…";
+  const response = await send({ type: "popup.login.open" });
+  if (!response?.ok) $("message").textContent = response?.error || "打开登录窗口失败";
+  else $("message").textContent = response.data?.existing ? "已切换到现有 ChatGPT 登录窗口，请手动完成登录。" : "已打开 ChatGPT 登录窗口，请手动完成登录。";
+  await refresh();
+});
+$("refreshLogin").addEventListener("click", async () => {
+  $("message").textContent = "正在被动检测 ChatGPT 登录状态…";
+  const response = await send({ type: "popup.login.refresh" });
+  if (!response?.ok) $("message").textContent = response?.error || "登录状态检测失败";
+  else if (response.data?.state === "ready") $("message").textContent = "ChatGPT 登录状态正常，Composer 已确认可用。";
+  else if (response.data?.state === "login_required") $("message").textContent = "检测到 ChatGPT 需要登录，请打开登录窗口手动完成认证。";
+  else $("message").textContent = "暂未确认 ChatGPT 登录状态，可打开登录窗口继续检查。";
+  await refresh();
+});
 $("pair").addEventListener("click", async () => {
   $("message").textContent = "";
   await persistForm();
