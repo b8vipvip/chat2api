@@ -1,108 +1,141 @@
 # chat2api
 
-把已登录 ChatGPT 的 Chrome 页面转换为可远程调用、支持流式输出的浏览器 API 桥。
+把已登录 ChatGPT 的 Chrome 页面转换为可远程调用的浏览器 API 桥，提供 OpenAI 风格文本接口、多模态、图片、普通 Voice 和 GPT Live 实时语音能力。
 
-> 这是浏览器自动化桥接，不是 OpenAI 官方 API。ChatGPT 页面结构变化可能导致选择器失效；请只在你自己的浏览器和账号上使用，并保护 API Key、配对码和扩展令牌。
+> chat2api 是浏览器自动化桥接，不是 OpenAI 官方 API。ChatGPT 页面结构、模型菜单、上传控件、Images 或 Voice UI 变化都可能影响浏览器侧执行。请只在你自己的浏览器和账号上使用，并保护管理员密码、业务 API Key、扩展配对码和扩展令牌。
 
-## 当前版本
+## 当前版本契约
 
-- 服务端：`0.5.0`
-- Chrome 扩展：`0.4.0`
-- Windows 桌面客户端：已从当前运行链路移除/暂停开发
+chat2api 有多个独立兼容面，不再用一个版本号混合表示全部组件：
 
-当前只需要两部分：
+- Python package：`0.7.1`
+- Server runtime / console：`0.21.4`
+- Chrome Bridge：`0.7.6`
+- Realtime Voice protocol：`chat2api-live-v1`
+- 生产入口：`app.entry:app`
 
-```text
-chat2api server  <--- WebSocket --->  Chrome + chat2api extension + logged-in ChatGPT
-```
-
-Chrome 必须已经启动且扩展在线。API 请求本身可以让扩展创建新的 ChatGPT / ChatGPT Images 标签页，但不能在 Chrome 整个进程关闭时自行启动浏览器；此时服务端返回 503。
-
-## 当前能力
-
-- `POST /v1/chat/completions`：文本、视觉理解、文件理解，支持流式和非流式。
-- `POST /v1/files`：把图片、PDF、文本和其它 ChatGPT 可接受文件传到服务端，再由扩展注入网页上传控件。
-- OpenAI 风格 `image_url` 的 base64 `data:` URL 可直接作为聊天输入图片。
-- `POST /v1/images/generations`：`model: "gpt-image"`，自动路由到 `https://chatgpt.com/images/`。
-- 图片生成支持可选参考图片附件；优先返回 `b64_json`，页面资源无法直接读取时保留 URL fallback 与诊断。
-- `model: "default"` 零操作路径：不碰模型 UI，直接使用 ChatGPT 当前选择。
-- 指定模型和思考强度，例如 `gpt-5.6-sol-high`；相同模型连续请求可走零操作快速路径。
-- Token 使用量采用 `chat2api-heuristic-v1` 本地估算，并明确标记 `estimated=true`。
-- 服务端控制台 `/admin`：概览、API Key、请求记录、开发文档、自动测试场。
-- 语音生成、语音对话尚未实现；测试场会明确标记 `skipped`，不会伪装成功。
-
-## 服务端部署
-
-```bash
-cp .env.example .env
-# 修改 CHAT2API_API_KEY / CHAT2API_PAIRING_CODE
-docker compose up -d --build
-```
-
-公网部署请放在 HTTPS/WSS 反向代理后，并关闭 SSE 缓冲，例如 Nginx：
-
-```nginx
-proxy_buffering off;
-add_header X-Accel-Buffering no;
-```
-
-入口：
-
-- `/admin`：服务端控制台
-- `/developers`：开发文档
-- `/docs`：FastAPI Swagger/OpenAPI
-- `/healthz`：健康状态
-
-## Chrome 扩展
-
-1. 打开 `chrome://extensions/`。
-2. 开启开发者模式。
-3. 加载仓库中的 `chrome_extension`。
-4. 在这个 Chrome Profile 手动登录 ChatGPT。
-5. 扩展里填写服务地址和 `CHAT2API_PAIRING_CODE`，点击“配对并连接”。
-6. 可以手动绑定一个 ChatGPT 标签页；未绑定时 API 请求也可以由扩展创建新的 ChatGPT 标签页。
-
-不再需要运行：
-
-```powershell
-.\scripts\run_desktop_client.ps1
-```
-
-旧 desktop_client / scripts 文件可以暂留在仓库用于历史参考，但服务端和扩展 0.5/0.4 的主链路都不依赖它们。
-
-## API Key
-
-`.env` 中 `CHAT2API_API_KEY` 是管理员主密钥。普通应用请在 `/admin` → **API Key** 中创建独立业务 Key。
-
-新建业务 Key：
+生产服务提供机器可读版本接口：
 
 ```text
-sk-chat2api-xxxxxxxxxxxxxxxx
+GET /version
 ```
 
-鉴权始终通过 SHA-256 哈希比较。为了满足管理页刷新后仍能重新复制 Key，0.5.0 起还会保存一份 **Fernet 加密密文**，加密密钥由管理员主密钥派生。管理页面重新复制时才由服务端解密。
+完整版本规则见 `docs/VERSIONING.md`。
 
-注意：
+**不要把 `app/main.py` 中历史基础层的 `APP_VERSION` 当作生产运行时版本。** Docker 和正式部署入口均使用 `app.entry:app`，由它安装当前全部兼容层后形成最终运行时。
 
-- `data/api_keys.json` 不保存明文 Key。
-- 0.4.0 以前创建的 Key 没有加密密文，无法恢复明文，但仍可正常鉴权；需要可复制副本时请新建 Key。
-- 如果修改 `CHAT2API_API_KEY`，旧 Key 的哈希鉴权不受影响，但原来的加密副本将无法用新主密钥解密。
-- 撤销 Key 时密文副本也会清除。
+## 当前架构
 
-## 文本调用
+当前主运行链只需要服务端和 Chrome Bridge：
+
+```text
+External App / Bot / SDK
+        |
+        | HTTP / SSE / WebSocket
+        v
+chat2api Server (app.entry:app)
+        |
+        | authenticated WebSocket
+        v
+Chrome + chat2api extension + logged-in ChatGPT
+        |
+        v
+ChatGPT Web / Images / Voice / WebRTC
+```
+
+Windows `desktop_client` 已退出当前主运行链并保留作历史参考。Chrome 进程必须已经运行，扩展必须在线，ChatGPT 页面必须处于已登录状态；如果没有可用扩展，服务端会返回离线/容量错误，而不会自行启动整个 Chrome 进程。
+
+## 当前公开模型
+
+文本与多模态：
+
+```text
+gpt-5.6-sol
+gpt-5.5
+gpt-5.5-mini
+```
+
+图片：
+
+```text
+gpt-image
+```
+
+语音：
+
+```text
+gpt-live
+gpt-live-mini
+```
+
+`gpt-live-mini` 当前是 `gpt-live` 的兼容别名，两者使用同一条 ChatGPT Voice / WebRTC 浏览器执行链路；当前不声明 mini 在速度、音质、成本或资源占用上存在独立差异。
+
+`default` 和 `chatgpt-web` 已不再作为公开文本模型 ID。调用方应显式使用当前模型目录中的 canonical ID。
+
+所有公开 GPT 模型 ID 会规范为小写、连字符形式，例如：
+
+```text
+GPT-5.5 Mini  -> gpt-5.5-mini
+GPT-5.6 Sol   -> gpt-5.6-sol
+```
+
+## 文本 / Responses / Completions
+
+当前提供：
+
+```text
+POST /v1/chat/completions
+POST /v1/responses
+POST /v1/completions
+GET  /v1/models
+GET  /v1/models/{id}
+```
+
+`gpt-5.6-sol` 和 `gpt-5.5` 支持 OpenAI 风格推理强度：
+
+```text
+low     -> ChatGPT 极速
+medium  -> ChatGPT 中
+high    -> ChatGPT 高
+```
+
+调用方省略 reasoning 时，当前运行时统一使用 `medium`，不继承浏览器页面上一次手工留下的推理强度。
+
+示例：
 
 ```bash
 curl -N https://YOUR_HOST/v1/chat/completions \
-  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Authorization: Bearer YOUR_MANAGED_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "model":"default",
+    "model":"gpt-5.6-sol",
+    "reasoning_effort":"medium",
     "messages":[{"role":"user","content":"你好"}],
     "stream":true
   }'
 ```
 
-## 视觉理解 / 文件理解
+## GPT-5.5 Mini / Free 账户路由
+
+`gpt-5.5-mini` 是面向 ChatGPT Free 账户的逻辑模型，并声明：
+
+```text
+text
+vision
+file-understanding
+```
+
+路由规则：
+
+1. 有在线、空闲、已识别为 Free 的扩展时，优先使用 Free 扩展。
+2. Free 原生路径直接使用页面默认模型，不打开模型或 reasoning UI。
+3. 没有可用 Free 扩展时，可路由到其它可用扩展，实际执行 `gpt-5.5 + low/极速`。
+4. 无论 Free 原生还是付费回退，对外响应模型 ID 都保持 `gpt-5.5-mini`；实际执行细节放在 chat2api diagnostics 中。
+5. Mini 的模型专用路由不会覆盖普通付费模型的 API Key -> Extension 粘性绑定。
+
+更多规则见 `docs/FREE_ACCOUNT_ROUTING.md`。
+
+## 文件、视觉与多模态
 
 先上传文件：
 
@@ -110,51 +143,33 @@ curl -N https://YOUR_HOST/v1/chat/completions \
 BASE64_DATA="$(base64 -w0 photo.png)"
 
 curl https://YOUR_HOST/v1/files \
-  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Authorization: Bearer YOUR_MANAGED_API_KEY" \
   -H "Content-Type: application/json" \
   -d "{\"filename\":\"photo.png\",\"mime_type\":\"image/png\",\"data_base64\":\"${BASE64_DATA}\",\"purpose\":\"vision\"}"
 ```
 
-返回：
+然后在 Chat Completions 中引用：
 
 ```json
 {
-  "id": "file_xxx",
-  "filename": "photo.png",
-  "mime_type": "image/png"
-}
-```
-
-再调用聊天：
-
-```json
-{
-  "model": "default",
-  "messages": [{"role":"user","content":"请分析附件内容"}],
-  "attachments": [{"file_id":"file_xxx"}],
+  "model": "gpt-5.5-mini",
+  "messages": [
+    {"role": "user", "content": "请分析附件内容"}
+  ],
+  "attachments": [
+    {"file_id": "file_xxx"}
+  ],
   "stream": true
 }
 ```
 
-每个请求当前最多 4 个附件，每个文件最大 20 MiB。图片/PDF/文本文档等是否最终可被理解，仍取决于 ChatGPT 当前网页账号和该文件类型是否接受。
+OpenAI 风格 `image_url` 的 base64 `data:` URL 也可作为图片输入。为避免服务端 SSRF，chat2api 不主动抓取任意远程 `http(s)` 图片 URL；请使用 base64 data URL 或 `/v1/files`。
 
-图片还支持：
-
-```json
-{
-  "role": "user",
-  "content": [
-    {"type":"text","text":"描述这张图"},
-    {"type":"image_url","image_url":{"url":"data:image/png;base64,..."}}
-  ]
-}
-```
-
-为避免服务端 SSRF，当前不主动抓取任意远程 `http(s)` 图片 URL；请使用 base64 data URL 或 `/v1/files`。
+当前是否能理解某种具体文件/视频格式，最终仍取决于登录账号对应 ChatGPT Web 的当前能力。视频传输存在，但不作为稳定能力承诺。
 
 ## 图片生成
 
-模型 ID：
+模型：
 
 ```text
 gpt-image
@@ -162,9 +177,15 @@ gpt-image
 
 接口：
 
+```text
+POST /v1/images/generations
+```
+
+示例：
+
 ```bash
 curl https://YOUR_HOST/v1/images/generations \
-  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Authorization: Bearer YOUR_MANAGED_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{
     "model":"gpt-image",
@@ -173,127 +194,276 @@ curl https://YOUR_HOST/v1/images/generations \
   }'
 ```
 
-执行链：
+支持可选参考图片附件。浏览器能读取新生成图片字节时优先返回 `b64_json`；无法读取时保留 URL fallback 和诊断信息。当前 `n` 固定为 1。
+
+## 普通 Voice
+
+文本生成语音：
 
 ```text
-API request
-→ Chrome extension
-→ reuse/create https://chatgpt.com/images/
-→ wait for #prompt-textarea
-→ optional reference upload
-→ send prompt
-→ monitor new generated image
-→ capture image bytes when possible
-→ return b64_json / URL fallback
+POST /v1/audio/speech
 ```
 
-参考图：先 `/v1/files` 上传，然后：
+单轮音频输入 / Voice 输出：
+
+```text
+POST /v1/audio/conversations
+```
+
+两者都通过 Chrome 中真实 ChatGPT Voice / WebRTC 执行并返回捕获的音频与 transcript。普通 Voice 与 GPT Live 都需要扩展在线、ChatGPT Voice 可用以及浏览器允许建立 WebRTC。
+
+## GPT Live 实时双向语音
+
+实时入口：
+
+```text
+WS /v1/audio/realtime
+```
+
+协议：
+
+```text
+chat2api-live-v1
+```
+
+Native / Android / iOS / Desktop WebSocket 客户端可以在握手时使用 managed API Key：
+
+```text
+Authorization: Bearer YOUR_MANAGED_API_KEY
+```
+
+浏览器原生 `WebSocket` 不能设置 Authorization Header，因此先调用：
+
+```text
+POST /v1/audio/realtime/sessions
+```
+
+取得 60 秒一次性的 session token，再连接：
+
+```text
+wss://HOST/v1/audio/realtime?session_token=rt-chat2api-...
+```
+
+会话第一帧：
 
 ```json
 {
-  "model":"gpt-image",
-  "prompt":"参考这张图，生成一个新版本",
-  "attachments":[{"file_id":"file_xxx"}],
-  "response_format":"b64_json"
+  "type": "session.start",
+  "model": "gpt-live",
+  "instructions": "请进行自然、简短的实时语音对话"
 }
 ```
 
-当前 `n` 固定为 1。图片页面 DOM / 资源加载方式变化时可能需要继续适配。
-
-## usage 与诊断
-
-文本/多模态请求会返回估算 usage：
-
-```json
-"usage": {
-  "prompt_tokens": 12,
-  "completion_tokens": 8,
-  "total_tokens": 20
-}
-```
-
-并返回：
-
-```json
-"chat2api": {
-  "diagnostics": {
-    "actual_model": "gpt-5.6-sol-high",
-    "zero_op": true,
-    "attachments_count": 1,
-    "attachment_prepare_ms": 430
-  },
-  "timings": {
-    "first_token_ms": 12000,
-    "model_selection_ms": 0,
-    "attachment_prepare_ms": 430,
-    "total_ms": 15000
-  },
-  "token_usage": {
-    "estimated": true,
-    "estimator": "chat2api-heuristic-v1"
-  }
-}
-```
-
-## 自动测试场
-
-`/admin` → **测试场** 支持下拉选择：
-
-- 文本
-- 视觉理解
-- 文件理解
-- 图片生成
-- 语音生成
-- 语音对话
-- 全部测试
-
-测试场会自动：
-
-1. 运行标准化测试用例。
-2. 监测 HTTP/浏览器错误。
-3. 记录首 Token、总耗时、usage 和 diagnostics。
-4. 检测首包 > 30 秒、总耗时 > 90 秒、无正文、缺诊断等质量问题。
-5. 生成 passed / warning / failed / skipped 结论。
-6. 把报告保存到 `data/test_runs.jsonl`。
-7. 在“测试记录”中查看历史报告。
-
-语音两项当前会显示 `skipped / 尚未实现语音桥接`，用于让“全部测试”如实反映能力缺口。
-
-## 请求记录与持久化
+音频格式：
 
 ```text
-data/clients.json           扩展注册信息与扩展令牌哈希
-data/api_keys.json          业务 Key 哈希、加密副本与元数据
-data/request_history.jsonl  请求模型、类型、附件数、Token、耗时、错误
-data/test_runs.jsonl        自动测试报告
-data/files/                 API 上传的临时/持久附件
+上行：PCM16 little-endian / mono / 16000 Hz
+下行：PCM16 little-endian / mono / 24000 Hz
 ```
 
-请求历史默认不保存完整 Prompt 或 ChatGPT 回复正文，只记录字符数和诊断。
+活动中的 GPT Live 会话还支持文本控制输入：
 
-## 安全
+```json
+{"type":"input_text","text":"把刚才内容整理成三点"}
+```
 
-- 管理员主 Key 与 pairing code 使用不同随机值。
-- 不要直接公网暴露 8765；推荐只监听 `127.0.0.1:8765`，由 Nginx HTTPS/WSS 代理。
-- 普通应用使用独立业务 Key，不分发管理员主密钥。
-- 服务端不会主动抓取任意远程图片 URL，避免 SSRF。
-- 扩展下载附件使用独立扩展 token，不需要接触业务 API Key。
-- 不保存 ChatGPT Cookie、邮箱密码或验证码。
+也支持 OpenAI 风格的 `conversation.item.create` 输入形状、`response.cancel`、barge-in、ping 和 session finish。
 
-## CI
+**`chat2api-live-v1` 是 chat2api 自己的协议，目前不是 OpenAI Realtime API wire-compatible 协议。** 详细说明见 `docs/REALTIME_VOICE.md`。
 
-PR 会自动执行：
+## 扩展并发与 Conversation Workers
+
+服务端采用统一并发计数：文本、视觉、文件、图片、普通 Voice 和 GPT Live 每个活动请求都占 1 个并发槽。
+
+默认：
+
+```text
+max_concurrency = 3
+```
+
+控制台可配置范围：
+
+```text
+1 - 32
+```
+
+配置持久化到：
+
+```text
+data/concurrency.json
+```
+
+服务端把当前 worker limit 下发给 Chrome Bridge；同一逻辑 API Key 可以分配多个独立 conversation worker/tab，降低同扩展并发请求互相覆盖的风险。
+
+降低并发值不会取消已经开始的请求，新请求会等待容量；提高并发值会立即让后续请求使用新的容量上限。
+
+## Model Affinity 与 Warm Pool
+
+服务端根据最近请求历史统计常用文本 `model + reasoning` 组合，并向扩展提供最多两个 affinity preset。
+
+Chrome Bridge 默认每 10 分钟刷新 affinity，并为高频组合准备最多两个 warm slot。请求到达时优先命中已准备且被动验证通过的精确组合，以减少冷页面加载和模型 UI 操作。
+
+最终发送 prompt 前，模型和 reasoning 的真实页面状态验证仍然是权威结果；预热或缓存不能绕过最终验证。
+
+## 管理员、API Key 与扩展配对
+
+从 v0.17 起，管理员身份、业务 API Key 和扩展身份已经分离。
+
+管理员控制台使用：
+
+```text
+CHAT2API_ADMIN_USERNAME
+CHAT2API_ADMIN_PASSWORD
+```
+
+登录后由服务端签发 HttpOnly session cookie。
+
+业务 `/v1/*` 调用只使用控制台创建的 managed API Key。旧的 `CHAT2API_API_KEY` 不再作为管理员或业务调用凭据，只保留作一次升级迁移输入。
+
+扩展配对码也在管理员控制台创建和管理。首次成功配对后扩展保存自己的 `device_id`、`client_id` 和 client token，后续浏览器重启/扩展重载使用设备凭据自动重连。
+
+`CHAT2API_PAIRING_CODE` 同样只保留作旧版本一次性迁移输入。
+
+## API Key -> Extension 粘性路由
+
+普通请求默认保持业务 API Key 对 Chrome Extension 的粘性：
+
+1. 第一次请求从可用扩展中选择一台并记录。
+2. 后续继续使用同一扩展，保持浏览器环境连续性。
+3. 原扩展离线/禁用时才迁移到其它可用扩展。
+4. 显式 `client_id` / `X-Chat2API-Client` 可以指定扩展。
+5. `gpt-5.5-mini` 的 Free 优先路由是独立的模型专用规则，不污染普通付费模型粘性绑定。
+
+Chat、Responses、Images、Voice 和 Realtime Voice 共用同一套路由基础。
+
+## 部署
+
+复制环境配置：
+
+```bash
+cp .env.example .env
+```
+
+至少设置强管理员密码和公网地址，然后：
+
+```bash
+docker compose up -d --build
+```
+
+Docker 生产入口为：
+
+```text
+uvicorn app.entry:app
+```
+
+公网部署请放在 HTTPS/WSS 反向代理后。SSE 建议关闭代理缓冲；GPT Live 还要求代理支持 WebSocket Upgrade，并避免把长连接按普通短 HTTP 超时强制断开。
+
+入口：
+
+```text
+/admin       服务端控制台
+/developers  开发文档
+/docs        FastAPI Swagger/OpenAPI
+/healthz     健康状态
+/version     版本契约
+```
+
+## Chrome Bridge
+
+1. 打开 `chrome://extensions/`。
+2. 开启开发者模式。
+3. 加载仓库中的 `chrome_extension`。
+4. 在该 Chrome Profile 手动登录 ChatGPT。
+5. 登录 `/admin` 创建扩展配对码。
+6. 在扩展 popup 填写服务地址和配对码完成首次配对。
+7. 配对成功后使用设备凭据自动重连，不需要每次重新输入配对码。
+
+扩展 popup 的版本显示直接读取 `chrome.runtime.getManifest().version`，不要通过硬编码文字判断当前扩展版本。
+
+## 请求记录、诊断与测试场
+
+请求记录和自动测试会持续记录：
+
+- request / response ID
+- API Key ID（不保存原始 secret）
+- 模型和请求类型
+- 附件数量
+- 首 Token / 总耗时等 timings
+- 浏览器 diagnostics
+- 估算 usage
+- 错误信息
+
+默认不保存完整用户 Prompt 或 ChatGPT 回复正文。
+
+主要数据：
+
+```text
+data/api_keys.json
+data/request_history.jsonl
+data/test_runs.jsonl
+data/files/
+data/concurrency.json
+```
+
+Chrome Bridge 自身运行日志静默保存在 `chrome.storage.local`，按 API Key sessionize，并以完整 JSONL 记录边界分卷；手动导出只是查看/诊断入口，不是日志记录开关。
+
+## Token usage
+
+ChatGPT Web 不提供可作为 OpenAI 官方账单 usage 的权威 token 计数，因此 chat2api 使用本地 `chat2api-heuristic-v1` 估算。
+
+响应中的标准数字字段会填充，但 metadata 会明确标记：
+
+```json
+{
+  "estimated": true,
+  "estimator": "chat2api-heuristic-v1"
+}
+```
+
+不要把它当作 OpenAI 官方计费数据。
+
+## 时间标准
+
+chat2api 的人可读运行时间、控制台时间、测试报告和扩展运行日志统一使用 Asia/Shanghai（北京时间，UTC+08:00）。耗时、Unix epoch、`performance.now()` 等绝对/单调计时不进行时区换算。
+
+详细开发要求见 `docs/DEVELOPMENT.md`。
+
+## CI / 回归
+
+仓库的 CI 和回归测试覆盖方向包括：
 
 - Python compile
-- Chrome 扩展关键 JavaScript `node --check`
-- 管理控制台内联 JavaScript `node --check`
 - pytest
+- Chrome Extension 关键 JavaScript `node --check`
+- Admin Console JavaScript `node --check`
+- 模型路由和 reasoning
+- Free account routing
+- 多模态
+- GPT Live
+- worker dispatch
+- model affinity / warm pool
+- 并发配置
+- 性能关键路径
+- 版本契约
+
+版本相关改动必须保持 `tests/test_runtime_contract.py` 通过，防止 `app.__version__`、`pyproject.toml`、Chrome manifest、Live protocol 和 README 再次漂移。
 
 ## 已知限制
 
-- Token 是本地估算，不是 ChatGPT 官方 token usage。
-- ChatGPT DOM、模型菜单、上传控件和 Images 页面变化后可能需要适配。
-- 视频文件可以通过 `/v1/files` 传输，但是否接受和是否进行视频理解取决于当前 ChatGPT 网页能力；尚未把它标记为稳定能力。
-- 图片生成的最终图片抓取依赖页面中新生成资源；若浏览器无法直接读取其字节，会返回 URL fallback 和诊断。
-- Chrome 进程必须已经打开；当前版本不再提供桌面客户端自动启动 Chrome。
-- 语音生成和实时语音对话尚未实现。
+- 这是 ChatGPT Web 自动化桥，不是官方 OpenAI API；DOM/UI 改版是主要兼容风险。
+- GPT Live 当前使用 `chat2api-live-v1`，不是 OpenAI Realtime wire-compatible。
+- Chrome 整个进程关闭时，当前服务端不会自行启动浏览器；至少一个已配对扩展必须在线。
+- 图片结果抓取依赖浏览器页面中新生成的资源，不能读字节时可能返回 URL fallback。
+- 视频文件可上传，但视频理解仍不作为稳定能力保证。
+- Token usage 为本地估算。
+- 历史 `v7...v21.4` patch stack 仍存在；新代码应优先进入正式模块，避免继续无边界叠加全局 middleware / wrapper / MutationObserver。
+
+## 开发原则
+
+1. 生产行为以 `app.entry:app` 为准，不只看 `app/main.py`。
+2. 修改旧函数前检查后续 patch 是否重新 wrapper/覆盖。
+3. Chrome background script 的加载顺序属于运行逻辑的一部分。
+4. 任何模型快速路径都不能绕过发送前最终 model/reasoning 验证。
+5. 不新增观察整个控制台并在 callback 中反复重写 DOM 的无限 MutationObserver。
+6. 新功能同时补 pytest、关键 JS syntax check 和运行 diagnostics。
+7. 稳定能力逐步从历史 patch stack 收敛到正式模块，而不是继续无限新增 patch。
