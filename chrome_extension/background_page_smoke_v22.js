@@ -22,7 +22,10 @@
     await ensureContent(tab.id);
     const settings = await config();
     const expectedModel = canonicalModel(settings.currentModel);
-    const expectedReasoning = canonicalReasoning(settings.currentReasoning);
+    // Reasoning is only a meaningful stored expectation when the model itself
+    // is canonical and probeable. This avoids stale paid-account reasoning
+    // state creating a false smoke failure on Free Mini / unknown-model routes.
+    const expectedReasoning = expectedModel ? canonicalReasoning(settings.currentReasoning) : "";
 
     const smokeResponse = await chrome.tabs.sendMessage(tab.id, {
       type: "chat2api.page.smoke.v22",
