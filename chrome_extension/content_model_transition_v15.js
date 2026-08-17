@@ -93,8 +93,8 @@
   }
 
   function readCache() {
-    try { return JSON.parse(sessionStorage.getItem(CACHE_KEY) || "null") || {}; }
-    catch (_) { return {}; }
+    try { return JSON.parse(sessionStorage.getItem(CACHE_KEY) || "null") || {};
+    } catch (_) { return {}; }
   }
 
   function writeCache(value) {
@@ -143,6 +143,12 @@
       return;
     }
 
+    // GPT-5.6 Sol may collapse the combined control from e.g. "5.5 极速"
+    // to a reasoning-only label after a successful family switch. That label can
+    // be 极速/中/高 or the default 智能/自动. Trust this transition only when the
+    // previous family was known, the exact target-family click was captured, and
+    // the composer control actually changed; a failed click that leaves the old
+    // control unchanged must not be promoted into trusted model state.
     const changed = normalize(current.label) && normalize(current.label) !== normalize(pending.before_label);
     const reasoningOnly = Boolean(current.reasoning && !current.family);
     if (
