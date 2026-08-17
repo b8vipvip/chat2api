@@ -6,7 +6,7 @@
 
 The Page Adapter is deliberately read-only. It centralizes ChatGPT DOM discovery but must not click controls, dispatch keyboard input, install page-wide observers or own feature state machines.
 
-The Page Driver is the next boundary. It is allowed to become the common orchestration layer for model/reasoning writes, but migration is intentionally incremental. Phase 3 starts with verification and error classification only; the proven reasoning keyboard/slider/click implementation remains in `content_reasoning_v7.js`.
+The Page Driver is the next boundary. Migration is intentionally incremental: it first established passive verification/error classification, then Phase 7 moves exactly one low-level write primitive—keyboard event dispatch—behind the Driver. High-level model/reasoning algorithms remain feature-owned.
 
 Global API:
 
@@ -17,12 +17,12 @@ globalThis.__CHAT2API_PAGE_DRIVER_V22__
 Current internal driver version:
 
 ```text
-22.2.0
+22.3.0
 ```
 
-## Phase 3 responsibilities
+## Verification responsibilities
 
-The driver currently owns:
+The driver owns:
 
 ```text
 currentState
@@ -60,25 +60,39 @@ The driver exposes the diagnostic runtime message:
 chat2api.page.verify.v22
 ```
 
+## Phase 7 explicit keyboard primitive
+
+Phase 7 adds:
+
+```text
+dispatchKey(target, name, code, extra)
+```
+
+This primitive only dispatches one `keydown` followed by one `keyup` with the same event fields the historical reasoning controller already used. It is stateless and call-only: Page Driver never invokes it autonomously, chooses no keys, opens no menus, installs no timers, and has no click logic.
+
+`content_reasoning_v7.js` now prefers `PageDriver.dispatchKey(...)`, but retains the exact local `KeyboardEvent` implementation as a compatibility fallback when the Driver is unavailable, the target is invalid, or Driver dispatch throws. The existing Reasoning call sites are unchanged, including Ctrl+Shift+M, Enter/Space, Home/End/ArrowRight and Escape.
+
+Phase 7 deliberately does **not** move:
+
+- reasoning menu strategy;
+- slider walking or midpoint logic;
+- native `<input type="range">` mutation;
+- click fallback;
+- delays / retry timing;
+- post-selection verification;
+- model-family selection.
+
 ## Reasoning integration
 
-`content_reasoning_v7.js` still owns every actual reasoning write operation:
+`content_reasoning_v7.js` remains the owner of the Reasoning state machine and all decisions about what action to perform and when. After a successful zero-op or switch, the controller asks the Page Driver to attach an independent state snapshot. The established background `model_routing_v2.js` final probe remains the authoritative request gate.
 
-- Ctrl+Shift+M menu shortcut;
-- Enter / Space activation;
-- Home / End / ArrowRight slider navigation;
-- native `<input type="range">` updates;
-- click fallback.
-
-After a successful zero-op or switch, the controller asks the Page Driver to attach a second independent state snapshot. This snapshot is diagnostic in phase 3; the established background `model_routing_v2.js` final probe remains the authoritative request gate.
-
-When reasoning selection fails, the runtime response now includes a stable `code` plus Page Driver verification diagnostics when available. This makes logs distinguish a missing control, a menu-open failure, an unavailable requested level, an untrusted state and a real post-selection mismatch.
+When reasoning selection fails, the runtime response includes a stable `code` plus Page Driver verification diagnostics when available. This lets logs distinguish a missing control, menu-open failure, unavailable requested level, untrusted state and a real post-selection mismatch.
 
 ## Existing-tab bootstrap recovery
 
 Manifest content scripts only run automatically for matching pages at their normal injection lifecycle. Existing ChatGPT tabs can therefore need dynamic recovery after an extension update or when the background explicitly re-runs `ensureContent()`.
 
-`content_bootstrap.js` must inject the compatibility layers before feature controllers in this exact dependency order:
+`content_bootstrap.js` injects the compatibility layers before feature controllers in this dependency order:
 
 ```text
 content_page_adapter_v22.js
@@ -87,11 +101,11 @@ content_model_v7.js
 content_reasoning_v7.js
 ```
 
-Both Adapter and Driver are idempotent, so this recovery injection is safe when they are already present. Keeping them in the bootstrap list ensures dynamically recovered reasoning requests receive the same Page Driver diagnostics as freshly loaded tabs.
+Both Adapter and Driver are idempotent, so this recovery injection is safe when they are already present.
 
 ## Phase 5 background diagnostics propagation
 
-`model_routing_v2.js` preserves the structured controller failure instead of reducing it to a plain error string. A failed reasoning preparation now carries the controller `code`, controller diagnostics, Page Driver version and verification snapshot into the background routing error context.
+`model_routing_v2.js` preserves structured controller failures instead of reducing them to a plain error string. A failed reasoning preparation carries the controller `code`, controller diagnostics, Page Driver version and verification snapshot into the background routing error context.
 
 The background persists that context in `lastModelDiagnostics`, emits it through `chat.diagnostics`, and adds the same `code` and `diagnostics` fields to `chat.error`. Successful reasoning preparation also records the controller identity, Page Driver version, verification result and any verification warning in the normal request diagnostics.
 
@@ -102,10 +116,14 @@ model_verification_failed
 reasoning_verification_failed
 ```
 
-These routing codes do not replace Page Driver codes. They identify the separate condition where the controller completed but the existing authoritative post-selection `probeState()` gate still observed the wrong final model or reasoning state.
+These routing codes identify the separate condition where the controller completed but the authoritative post-selection `probeState()` gate still observed the wrong final model or reasoning state.
+
+## Phase 6 smoke prerequisite
+
+`content_page_smoke_v22.js` and `background_page_smoke_v22.js` provide the real-tab read-only smoke boundary introduced before write migration. Operators can verify Adapter → Driver → controllers → composer → final passive probe without changing the page state. Phase 7 keeps that smoke path read-only even though Driver itself now exposes the explicit `dispatchKey` primitive to feature controllers.
 
 ## Safety boundary
 
-Phase 3 Page Driver itself performs no clicks, keyboard dispatch, timers or MutationObserver work. Phase 5 only propagates diagnostics through background routing; it does not change the reasoning write algorithm, model selection algorithm, Free Mini routing, concurrency, images, Voice or GPT Live behavior.
+Page Driver still has no autonomous write behavior, no MutationObserver, no timers, no click operation and no range mutation. Its only write primitive is explicit keyboard dispatch initiated by an existing feature controller.
 
-The final background `probeState()` family/reasoning checks remain authoritative. A later phase may migrate one write primitive at a time behind the Page Driver only after real-browser smoke coverage demonstrates equivalent behavior.
+The final background `probeState()` family/reasoning checks remain authoritative. Additional write primitives should only migrate one at a time with the same local fallback and real-tab smoke boundary.
