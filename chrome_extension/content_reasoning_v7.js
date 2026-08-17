@@ -134,10 +134,17 @@
   }
 
   function key(target, name, code = name, extra = {}) {
-    if (!target?.dispatchEvent) return;
+    const pageDriver = driver();
+    if (pageDriver?.dispatchKey) {
+      try {
+        if (pageDriver.dispatchKey(target, name, code, extra)) return true;
+      } catch (_) {}
+    }
+    if (!target?.dispatchEvent) return false;
     const init = { key: name, code, bubbles: true, cancelable: true, ...extra };
     target.dispatchEvent(new KeyboardEvent("keydown", init));
     target.dispatchEvent(new KeyboardEvent("keyup", init));
+    return true;
   }
 
   function openByShortcut() {

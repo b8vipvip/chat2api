@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_PAGE_DRIVER_V22__";
   if (globalThis[KEY]) return;
 
-  const VERSION = "22.2.0";
+  const VERSION = "22.3.0";
   const CACHE_KEY = "chat2api:model-state:v2";
   const TEXT_MODELS = new Set(["gpt-5.6-sol", "gpt-5.5"]);
   const REASONING_LEVELS = new Set(["instant", "medium", "high"]);
@@ -18,6 +18,17 @@
     const normalized = String(value || "").trim().toLowerCase();
     if (["low", "minimal", "fast"].includes(normalized)) return "instant";
     return REASONING_LEVELS.has(normalized) ? normalized : "";
+  }
+
+  // Phase 7 begins write-side migration with one deliberately low-level,
+  // stateless primitive. The Driver never calls this on its own; feature
+  // controllers remain responsible for deciding what key to send and when.
+  function dispatchKey(target, name, code = name, extra = {}) {
+    if (!target?.dispatchEvent) return false;
+    const init = { key: name, code, bubbles: true, cancelable: true, ...extra };
+    target.dispatchEvent(new KeyboardEvent("keydown", init));
+    target.dispatchEvent(new KeyboardEvent("keyup", init));
+    return true;
   }
 
   function readCache() {
@@ -110,13 +121,14 @@
     sendResponse({
       ok: true,
       data: verifyState({ model: message.model, reasoning: message.reasoning_level || message.reasoning }),
-      controller: "page-driver-v22.2",
+      controller: "page-driver-v22.3",
     });
     return false;
   });
 
   globalThis[KEY] = Object.freeze({
     version: VERSION,
+    dispatchKey,
     currentState,
     verifyState,
     verifyReasoning,
