@@ -123,5 +123,7 @@ jobs:
           node --check /tmp/chat2api-admin.js
       - name: Page Driver VM contract
         run: node tests/page_driver_dispatch_key_v22.mjs
+      - name: Reasoning key fallback VM contract
+        run: node tests/reasoning_key_fallback_v9.mjs
       - name: Tests
         run: pytest -q
