@@ -80,9 +80,21 @@ vm.runInContext(networkSource, sandbox, { filename: "background_network_v26.js" 
 const gate = sandbox.__CHAT2API_NETWORK_GATE_V26__;
 assert.ok(gate, "Network gate API must be installed");
 
+// Status calls before the authenticated extension socket is connected must not
+// perform an egress lookup. This keeps the network probe behind the server's
+// connection_enabled/authentication boundary.
 fetchCalls.length = 0;
+socketPayloads.length = 0;
+await sandbox.trySendSocket({ type: "extension.status", metadata: { existing: true } });
+assert.equal(fetchCalls.length, 0, "Disconnected extension status must not trigger IP-country lookup");
+assert.equal(socketPayloads.length, 1);
+assert.equal(socketPayloads[0].payload.metadata.network_probe_status, "unknown");
+
 fetchHandler = async () => ({ ok: true, status: 200, json: async () => ({ success: true, country_code: "US", ip: "198.51.100.1" }) });
-const external = await gate.probe(true);
+await sandbox.chrome.storage.local.set({ socketState: "connected" });
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.equal(fetchCalls.length, 1, "Accepted socket connection must trigger one egress lookup");
+const external = await gate.probe(false);
 assert.equal(external.status, "external");
 assert.equal(external.country_code, "US");
 assert.equal(external.external_ready, true);
