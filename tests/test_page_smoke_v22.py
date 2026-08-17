@@ -75,11 +75,17 @@ def test_background_smoke_runs_independent_final_passive_probe_without_writes():
     assert "reasoning_match" in source
     assert "reasoning_trusted" in source
     assert '"final_probe_mismatch"' in source
+    assert "finalProbeError" in source
+    assert "final_probe_error" in source
     assert "lastPageSmoke" in source
     assert 'message?.type !== "popup.pageSmoke"' in source
     # Free Mini / unknown-model routes must not inherit a stale paid-account
     # reasoning expectation from storage.
     assert 'const expectedReasoning = expectedModel ? canonicalReasoning(settings.currentReasoning) : "";' in source
+    # If the final probe has no responder, preserve the smoke result and record
+    # the probe transport failure rather than replacing the root-cause code.
+    assert "try {" in source
+    assert "catch (error)" in source
     for forbidden in (
         "chat2api.model.prepare.v5",
         "chat2api.reasoning.prepare.v7",
