@@ -6,6 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 EXT = ROOT / "chrome_extension"
 DRIVER = "content_page_driver_v22.js"
 DRIVER_KEY = "__CHAT2API_PAGE_DRIVER_V22__"
+VM_CONTRACT = "tests/page_driver_dispatch_key_v22.mjs"
 
 
 def read(path: Path) -> str:
@@ -146,6 +147,29 @@ def test_model_router_propagates_structured_reasoning_diagnostics_without_weaken
     assert "if (reasoning && !after.reasoning_match)" in source
     assert 'code: "model_verification_failed"' in source
     assert 'code: "reasoning_verification_failed"' in source
+
+
+def test_page_driver_vm_contract_executes_and_is_required_by_ci():
+    contract = read(ROOT / VM_CONTRACT)
+    workflow = read(ROOT / ".github" / "workflows" / "ci.yml")
+
+    for token in (
+        'from "node:vm"',
+        "vm.runInContext(source, sandbox",
+        'constructedEvents.length, 0',
+        'runtimeListeners.length, 1',
+        'driver.dispatchKey(null, "Escape")',
+        'driver.dispatchKey({}, "Escape")',
+        'driver.dispatchKey(target, "M", "KeyM"',
+        'ctrlKey: true',
+        'shiftKey: true',
+        '["keydown", "keyup"]',
+        'driver.dispatchKey(defaultCodeTarget, "Escape")',
+    ):
+        assert token in contract
+
+    assert "- name: Page Driver VM contract" in workflow
+    assert f"run: node {VM_CONTRACT}" in workflow
 
 
 def test_ci_checks_page_driver_javascript_syntax():
