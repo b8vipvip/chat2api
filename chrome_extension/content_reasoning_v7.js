@@ -12,13 +12,17 @@
   const RATIOS = { instant: 0.05, medium: 0.5, high: 0.95 };
   const MAX_SLIDER_STEPS = 32;
 
-  const normalize = value => String(value || "")
+  const page = () => globalThis.__CHAT2API_PAGE_ADAPTER_V22__ || null;
+  const normalizeFallback = value => String(value || "")
     .replace(/[✓✔︎✔√]/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+  const normalize = value => page()?.normalizedLabelLower?.(value) ?? normalizeFallback(value);
 
   function visible(element) {
+    const adapter = page();
+    if (adapter?.visible) return adapter.visible(element);
     if (!element) return false;
     const rect = element.getBoundingClientRect();
     const style = getComputedStyle(element);
@@ -26,6 +30,8 @@
   }
 
   function labelOf(element) {
+    const adapter = page();
+    if (adapter?.labelOf) return adapter.labelOf(element);
     return String(element?.getAttribute?.("aria-label") || element?.getAttribute?.("data-value") || element?.title || element?.innerText || element?.textContent || "")
       .replace(/\s+/g, " ").trim();
   }
@@ -39,11 +45,18 @@
   }
 
   function composerRoot() {
+    const adapter = page();
+    if (adapter?.composerRoot) return adapter.composerRoot();
     return [...document.querySelectorAll("form[data-type='unified-composer'], form")]
       .find(form => visible(form) && form.querySelector("#prompt-textarea,textarea,[contenteditable='true']")) || null;
   }
 
   function currentPill() {
+    const adapter = page();
+    if (adapter?.reasoningControl) {
+      const current = adapter.reasoningControl();
+      if (current?.element && current.reasoning) return current.element;
+    }
     const root = composerRoot();
     if (!root) return null;
     const candidates = [...root.querySelectorAll("button,[role='button']")].filter(visible);
@@ -52,6 +65,8 @@
   }
 
   function openSurfaces() {
+    const adapter = page();
+    if (adapter?.openSurfaces) return adapter.openSurfaces();
     return [...document.querySelectorAll("[role='menu'],[role='listbox'],[data-radix-popper-content-wrapper],[data-radix-menu-content],[data-state='open']")]
       .filter(element => {
         if (!visible(element)) return false;
@@ -61,6 +76,8 @@
   }
 
   function visibleSlider() {
+    const adapter = page();
+    if (adapter?.reasoningSlider) return adapter.reasoningSlider();
     const sliders = [...document.querySelectorAll("input[type='range'],[role='slider']")].filter(visible);
     const surfaces = openSurfaces();
     return sliders.find(slider => surfaces.some(surface => surface.contains(slider))) || sliders[0] || null;

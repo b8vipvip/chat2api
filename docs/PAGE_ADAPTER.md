@@ -30,7 +30,7 @@ globalThis.__CHAT2API_PAGE_ADAPTER_V22__
 Current adapter version:
 
 ```text
-22.0.0
+22.1.0
 ```
 
 The adapter deliberately has no timers, no global `MutationObserver`, no runtime message listener and no automatic clicks. Loading it must not change ChatGPT page state by itself.
@@ -66,16 +66,25 @@ assistantIdentity
 assistantText
 familyFromText
 reasoningFromText
+modelReasoningControls
 modelReasoningControl
+modelControl
+reasoningControl
+reasoningEvidence
+modelFamilyEvidence
 openSurfaces
 reasoningSlider
 ```
+
+`modelFamilyEvidence()` preserves the model detector's ambiguity rule: if visible composer evidence points to more than one model family, it returns `ambiguous-dom` rather than choosing one.
+
+`reasoningEvidence()` only promotes the public adjustable levels `instant`, `medium` and `high`; the adapter may recognize the UI's `智能/自动` label for transition diagnostics, but it does not reinterpret that label as one of the public reasoning efforts.
 
 `dispatchEnter` is exposed because submit recovery already required it, but it is only called by an existing request overlay. The adapter itself never invokes it automatically.
 
 ## Phase-1 migrated consumers
 
-The first migration intentionally targets read-heavy, low-risk paths:
+The first migration targeted read-heavy, low-risk paths:
 
 - `content_request_perf_v21.js`
   - composer lookup
@@ -95,11 +104,32 @@ The first migration intentionally targets read-heavy, low-risk paths:
   - model/reasoning control state
   - model/reasoning label parsing
 
-Each migrated consumer still keeps its previous selector logic as a fallback. This makes the first migration reversible and reduces the chance that loading-order or adapter regressions disable an existing path.
+Each migrated consumer keeps its previous selector logic as a fallback. This makes the migration reversible and reduces the chance that loading-order or adapter regressions disable an existing path.
 
-## Not migrated in phase 1
+## Phase-2 migrated consumers
 
-The following write-heavy automation remains unchanged for now:
+Phase 2 moves the remaining high-value passive model/reasoning reads behind the adapter while deliberately leaving write automation unchanged:
+
+- `content_model_v7.js`
+  - visibility and label normalization
+  - composer lookup
+  - model-family passive evidence and ambiguity detection
+  - reasoning passive evidence
+  - model/reasoning label parsing
+- `content_reasoning_v7.js`
+  - visibility and label normalization
+  - composer lookup
+  - current reasoning-control lookup
+  - open menu/listbox surface lookup
+  - visible reasoning-slider lookup
+
+The existing model-state observer and manual-choice cache listener remain in `content_model_v7.js`; they call the shared adapter to read state but retain ownership of cache mutation.
+
+The existing shortcut, Enter/Space activation, slider keyboard navigation, native range updates and click fallback remain in `content_reasoning_v7.js`. The adapter only discovers the controls those operations act on.
+
+## Still not migrated
+
+Write-heavy browser automation remains feature-owned:
 
 - model menu selection logic;
 - reasoning shortcut/menu/slider keyboard automation;
@@ -107,7 +137,7 @@ The following write-heavy automation remains unchanged for now:
 - Images UI automation;
 - Voice / GPT Live UI and WebRTC hooks.
 
-In particular, `content_reasoning_v7.js` remains authoritative for reasoning selection. A future phase can move its passive reads to the adapter first, then move write actions only after real-browser smoke coverage exists.
+Moving write operations into a shared page driver should happen only after real-browser smoke coverage can verify model/reasoning selection against current ChatGPT UI variants.
 
 ## Maintenance rule
 

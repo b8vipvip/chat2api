@@ -19,14 +19,18 @@
   const state = { observer: null };
   globalThis[KEY] = state;
 
-  const normalize = value => String(value || "")
+  const page = () => globalThis.__CHAT2API_PAGE_ADAPTER_V22__ || null;
+  const normalizeFallback = value => String(value || "")
     .replace(/[✓✔︎✔√]/g, "")
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+  const normalize = value => page()?.normalizedLabelLower?.(value) ?? normalizeFallback(value);
 
   function visible(element) {
+    const adapter = page();
+    if (adapter?.visible) return adapter.visible(element);
     if (!element) return false;
     const rect = element.getBoundingClientRect();
     const style = getComputedStyle(element);
@@ -34,6 +38,8 @@
   }
 
   function labelOf(element) {
+    const adapter = page();
+    if (adapter?.labelOf) return adapter.labelOf(element);
     return String(
       element?.getAttribute?.("aria-label") ||
       element?.getAttribute?.("data-value") ||
@@ -45,6 +51,8 @@
   }
 
   function familyFromText(value) {
+    const adapter = page();
+    if (adapter?.familyFromText) return adapter.familyFromText(value);
     const text = normalize(value);
     for (const family of FAMILIES) {
       if ((FAMILY_ALIASES[family] || []).some(alias => text === normalize(alias) || text.includes(normalize(alias)))) return family;
@@ -53,6 +61,11 @@
   }
 
   function reasoningFromText(value) {
+    const adapter = page();
+    if (adapter?.reasoningFromText) {
+      const level = adapter.reasoningFromText(value);
+      return ["instant", "medium", "high"].includes(level) ? level : "";
+    }
     const text = normalize(value);
     for (const [level, aliases] of Object.entries(REASONING_ALIASES)) {
       if (aliases.some(alias => {
@@ -64,6 +77,8 @@
   }
 
   function composerRoot() {
+    const adapter = page();
+    if (adapter?.composerRoot) return adapter.composerRoot();
     return [...document.querySelectorAll("form[data-type='unified-composer'], form")]
       .find(form => visible(form) && form.querySelector("#prompt-textarea,textarea,[contenteditable='true']")) || null;
   }
@@ -79,6 +94,8 @@
   }
 
   function passiveReasoning() {
+    const adapter = page();
+    if (adapter?.reasoningEvidence) return adapter.reasoningEvidence();
     const root = composerRoot() || document;
     const candidates = [...root.querySelectorAll("button,[role='button'],[aria-label],[data-value]")]
       .filter(visible)
@@ -92,6 +109,8 @@
   }
 
   function passiveFamily() {
+    const adapter = page();
+    if (adapter?.modelFamilyEvidence) return adapter.modelFamilyEvidence();
     const root = composerRoot() || document;
     const attributeNames = ["data-model", "data-model-id", "data-value", "aria-label", "title"];
     const selectedSelectors = [
