@@ -101,6 +101,7 @@ function clearConstructedEvents() {
   clearConstructedEvents();
   const target = makeTarget();
   let calls = 0;
+  const extra = { ctrlKey: true, shiftKey: true, altKey: true, metaKey: true, repeat: true };
   sandbox.__CHAT2API_PAGE_DRIVER_V22__ = {
     dispatchKey() {
       calls += 1;
@@ -108,7 +109,7 @@ function clearConstructedEvents() {
     },
   };
 
-  assert.equal(key(target, "Enter", "Enter", { ctrlKey: true }), true);
+  assert.equal(key(target, "Enter", "Enter", extra), true);
   assert.equal(calls, 1, "Driver false path must call dispatchKey exactly once");
   assert.equal(target.dispatched.length, 2, "Driver false path must emit exactly one local keydown+keyup pair");
   assert.deepEqual(target.dispatched.map(event => event.type), ["keydown", "keyup"]);
@@ -119,6 +120,10 @@ function clearConstructedEvents() {
     assert.equal(event.bubbles, true);
     assert.equal(event.cancelable, true);
     assert.equal(event.ctrlKey, true);
+    assert.equal(event.shiftKey, true);
+    assert.equal(event.altKey, true);
+    assert.equal(event.metaKey, true);
+    assert.equal(event.repeat, true);
   }
 }
 
