@@ -121,5 +121,7 @@ jobs:
           Path("/tmp/chat2api-admin.js").write_text(match.group(1), encoding="utf-8")
           PY
           node --check /tmp/chat2api-admin.js
+      - name: Page Driver VM contract
+        run: node tests/page_driver_dispatch_key_v22.mjs
       - name: Tests
         run: pytest -q
