@@ -10,7 +10,7 @@ chat2api 有多个独立兼容面，不再用一个版本号混合表示全部�
 
 - Python package：`0.7.1`
 - Server runtime / console：`0.21.4`
-- Chrome Bridge：`0.7.6`
+- Chrome Bridge：`0.7.7`
 - Realtime Voice protocol：`chat2api-live-v1`
 - 生产入口：`app.entry:app`
 
@@ -44,6 +44,8 @@ ChatGPT Web / Images / Voice / WebRTC
 ```
 
 Windows `desktop_client` 已退出当前主运行链并保留作历史参考。Chrome 进程必须已经运行，扩展必须在线，ChatGPT 页面必须处于已登录状态；如果没有可用扩展，服务端会返回离线/容量错误，而不会自行启动整个 Chrome 进程。
+
+Chrome Bridge 使用同一套 Manifest V3 扩展代码支持 Windows、Linux 和 macOS。Linux 推荐使用独立、持久化的 Chrome/Chromium Profile 保存扩展身份与 ChatGPT 登录态；首次登录由用户在可见窗口中手动完成，不保存 ChatGPT 密码，也不自动处理 CAPTCHA/2FA。详细方案见 `docs/EXTENSION_NETWORK_LINUX.md`。
 
 ## 当前公开模型
 
@@ -303,6 +305,8 @@ data/concurrency.json
 
 Chrome Bridge 默认每 10 分钟刷新 affinity，并为高频组合准备最多两个 warm slot。请求到达时优先命中已准备且被动验证通过的精确组合，以减少冷页面加载和模型 UI 操作。
 
+从 Chrome Bridge 0.7.7 起，浏览器启动后仍会立即尝试连接服务端；当扩展的认证 WebSocket 已被服务端接受后，扩展会检测浏览器当前出口网络国家。仅检测为非中国大陆（国家码不是 `CN`）时允许后台主动创建 warm window；中国大陆、离线或探测失败时不主动开窗，但真实 API 请求到来后的按需创建兜底保持不变。
+
 最终发送 prompt 前，模型和 reasoning 的真实页面状态验证仍然是权威结果；预热或缓存不能绕过最终验证。
 
 ## 管理员、API Key 与扩展配对
@@ -370,13 +374,16 @@ uvicorn app.entry:app
 
 ## Chrome Bridge
 
+同一扩展包支持 Windows、Linux 和 macOS；Linux 无需单独编译扩展。Linux 生产 worker 推荐一个持久 Chrome/Chromium Profile 对应一个扩展身份和一个 ChatGPT 登录态，完整说明见 `docs/EXTENSION_NETWORK_LINUX.md`。
+
 1. 打开 `chrome://extensions/`。
 2. 开启开发者模式。
 3. 加载仓库中的 `chrome_extension`。
-4. 在该 Chrome Profile 手动登录 ChatGPT。
+4. 在该 Chrome Profile 手动登录 ChatGPT；首次登录、CAPTCHA 和 2FA 均由用户在可见窗口中完成。
 5. 登录 `/admin` 创建扩展配对码。
 6. 在扩展 popup 填写服务地址和配对码完成首次配对。
 7. 配对成功后使用设备凭据自动重连，不需要每次重新输入配对码。
+8. 确认 ChatGPT Composer 可用后运行一次 popup 的页面 Smoke Test；Linux 建议再重启一次浏览器验证 Profile 登录态和扩展自动重连均可恢复。
 
 扩展 popup 的版本显示直接读取 `chrome.runtime.getManifest().version`，不要通过硬编码文字判断当前扩展版本。
 
