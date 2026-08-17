@@ -54,14 +54,21 @@
 
   function normalize(value) {
     return String(value || "")
-      .replace(/[✓✔︎✔√]/g, "")
       .replace(/[\u200B-\u200D\uFEFF]/g, "")
       .replace(/\s+/g, " ")
       .trim();
   }
 
+  function normalizeLabel(value) {
+    return normalize(value).replace(/[✓✔︎✔√]/g, "").trim();
+  }
+
   function normalizedLower(value) {
     return normalize(value).toLowerCase();
+  }
+
+  function normalizedLabelLower(value) {
+    return normalizeLabel(value).toLowerCase();
   }
 
   function visible(element) {
@@ -72,7 +79,7 @@
   }
 
   function labelOf(element) {
-    return normalize(
+    return normalizeLabel(
       element?.getAttribute?.("aria-label") ||
       element?.getAttribute?.("data-value") ||
       element?.getAttribute?.("title") ||
@@ -132,7 +139,7 @@
     const button = target.closest("button");
     if (!button || !visible(button)) return false;
     if (button.matches("button[data-testid='send-button'],button[type='submit']")) return true;
-    const label = normalizedLower(`${button.getAttribute("aria-label") || ""} ${button.innerText || button.textContent || ""}`);
+    const label = normalizedLabelLower(`${button.getAttribute("aria-label") || ""} ${button.innerText || button.textContent || ""}`);
     return /send prompt|send message|发送提示|发送消息|发送$/.test(label);
   }
 
@@ -186,18 +193,18 @@
   }
 
   function familyFromText(value) {
-    const text = normalizedLower(value);
+    const text = normalizedLabelLower(value);
     for (const [family, aliases] of Object.entries(FAMILY_ALIASES)) {
-      if (aliases.some(alias => text === normalizedLower(alias) || text.includes(normalizedLower(alias)))) return family;
+      if (aliases.some(alias => text === normalizedLabelLower(alias) || text.includes(normalizedLabelLower(alias)))) return family;
     }
     return "";
   }
 
   function reasoningFromText(value) {
-    const text = normalizedLower(value);
+    const text = normalizedLabelLower(value);
     for (const [level, aliases] of Object.entries(REASONING_ALIASES)) {
       if (aliases.some(alias => {
-        const needle = normalizedLower(alias);
+        const needle = normalizedLabelLower(alias);
         return text === needle || text.startsWith(`${needle} `) || text.endsWith(` ${needle}`);
       })) return level;
     }
@@ -250,7 +257,9 @@
     version: VERSION,
     selectors: SELECTORS,
     normalize,
+    normalizeLabel,
     normalizedLower,
+    normalizedLabelLower,
     visible,
     labelOf,
     firstVisible,
