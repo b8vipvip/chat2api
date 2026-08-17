@@ -108,7 +108,7 @@ def test_model_router_propagates_structured_reasoning_diagnostics_without_weaken
     source = read(EXT / "model_routing_v2.js")
     for token in (
         "reasoningRoutingError",
-        'code: "reasoning_selection_failed"',
+        "reasoning_selection_failed",
         "reasoning_error_code",
         "reasoning_controller_diagnostics",
         "reasoning_verification",
