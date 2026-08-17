@@ -73,7 +73,9 @@ def test_reasoning_controller_attaches_driver_diagnostics_without_replacing_writ
     assert DRIVER_KEY in source
     assert "attachDriverVerification" in source
     assert "classifyDriverError" in source
-    assert 'controller: "reasoning-v7.3"' in source
+    # The Page Driver is additive; the established controller identity is a compatibility contract.
+    assert 'controller: "reasoning-v7.2"' in source
+    assert "page_driver_version" in source
     assert "verification: classified.verification" in source
 
     # Phase 3 deliberately keeps the proven write mechanics feature-owned.
