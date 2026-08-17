@@ -13,6 +13,15 @@ async function persistForm() {
     extensionName: $("extensionName").value.trim(),
   });
 }
+async function runtimeStatus() {
+  return chrome.storage.local.get({
+    platformOs: "",
+    platformArch: "",
+    networkProbeStatus: "unknown",
+    networkCountryCode: "",
+    networkProbeError: "",
+  });
+}
 function renderModels(settings) {
   const models = Array.isArray(settings.models) && settings.models.length
     ? settings.models.filter(item => TEXT_MODELS.includes(item?.id))
@@ -38,9 +47,13 @@ function networkLabel(settings) {
   return "网络区域待检测";
 }
 async function refresh() {
-  const response = await send({ type: "popup.status" });
+  const [response, localRuntime] = await Promise.all([
+    send({ type: "popup.status" }),
+    runtimeStatus(),
+  ]);
   if (!response?.ok) return;
-  const { settings, tabs } = response;
+  const settings = { ...(response.settings || {}), ...(localRuntime || {}) };
+  const tabs = response.tabs || [];
   $("versionInfo").textContent = `Chrome Bridge · v${EXTENSION_VERSION} · ${platformLabel(settings)}`;
   if (!formInitialized) {
     $("serverUrl").value = settings.serverUrl || DEFAULT_SERVER_URL;
