@@ -99,6 +99,24 @@ CI runs this contract as a dedicated `Page Driver VM contract` step before pytes
 
 This VM test does not replace the real-tab read-only smoke test. The VM contract protects the low-level JavaScript event semantics; the real-tab smoke boundary protects integration with the actual ChatGPT DOM/controller stack.
 
+## Phase 9 Reasoning fallback VM contract
+
+`tests/reasoning_key_fallback_v9.mjs` loads the real `content_reasoning_v7.js` source inside Node's built-in `vm` module. The production source stays unchanged; the test injects a VM-only export hook immediately before the controller IIFE closes so it can execute the internal `key(...)` helper directly.
+
+The contract locks down the Driver-first compatibility boundary:
+
+- Reasoning controller load constructs zero keyboard events;
+- when `PageDriver.dispatchKey(...)` returns `true`, Reasoning performs no local `KeyboardEvent` fallback;
+- when Driver dispatch returns `false`, Reasoning emits exactly one local `keydown` + `keyup` pair;
+- when Driver dispatch throws, the exception is contained and Reasoning emits exactly one local fallback pair;
+- when Page Driver is absent, the historical local implementation remains available and emits exactly one pair;
+- invalid local targets return `false` without constructing keyboard events;
+- modifiers are forwarded unchanged to Page Driver and preserved by the local fallback path.
+
+CI runs this as a separate `Reasoning key fallback VM contract` step after the Page Driver VM contract and before pytest. The Python regression suite also asserts that this executable step remains present in CI.
+
+Phase 9 changes test coverage only. It does not change the Reasoning controller identity, model/reasoning routing, slider logic, click fallback, timing, final probe, Free Mini routing, concurrency, images, Voice or GPT Live behavior.
+
 ## Reasoning integration
 
 `content_reasoning_v7.js` remains the owner of the Reasoning state machine and all decisions about what action to perform and when. After a successful zero-op or switch, the controller asks the Page Driver to attach an independent state snapshot. The established background `model_routing_v2.js` final probe remains the authoritative request gate.

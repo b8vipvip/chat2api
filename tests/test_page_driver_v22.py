@@ -7,6 +7,7 @@ EXT = ROOT / "chrome_extension"
 DRIVER = "content_page_driver_v22.js"
 DRIVER_KEY = "__CHAT2API_PAGE_DRIVER_V22__"
 VM_CONTRACT = "tests/page_driver_dispatch_key_v22.mjs"
+REASONING_VM_CONTRACT = "tests/reasoning_key_fallback_v9.mjs"
 
 
 def read(path: Path) -> str:
@@ -170,6 +171,31 @@ def test_page_driver_vm_contract_executes_and_is_required_by_ci():
 
     assert "- name: Page Driver VM contract" in workflow
     assert f"run: node {VM_CONTRACT}" in workflow
+
+
+def test_reasoning_vm_contract_executes_driver_first_and_single_fallback_paths():
+    contract = read(ROOT / REASONING_VM_CONTRACT)
+    workflow = read(ROOT / ".github" / "workflows" / "ci.yml")
+
+    for token in (
+        'from "node:vm"',
+        "__CHAT2API_REASONING_VM_V9__",
+        "Object.freeze({ key })",
+        'return true;',
+        'return false;',
+        'throw new Error("synthetic driver failure")',
+        'target.dispatched.length, 0',
+        'target.dispatched.length, 2',
+        '["keydown", "keyup"]',
+        'sandbox.__CHAT2API_PAGE_DRIVER_V22__ = null',
+        'key(null, "Escape", "Escape")',
+        'key({}, "Escape", "Escape")',
+        'reasoning_key_fallback_v9 VM contract passed',
+    ):
+        assert token in contract
+
+    assert "- name: Reasoning key fallback VM contract" in workflow
+    assert f"run: node {REASONING_VM_CONTRACT}" in workflow
 
 
 def test_ci_checks_page_driver_javascript_syntax():
