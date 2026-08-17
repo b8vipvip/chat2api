@@ -89,8 +89,23 @@ content_reasoning_v7.js
 
 Both Adapter and Driver are idempotent, so this recovery injection is safe when they are already present. Keeping them in the bootstrap list ensures dynamically recovered reasoning requests receive the same Page Driver diagnostics as freshly loaded tabs.
 
+## Phase 5 background diagnostics propagation
+
+`model_routing_v2.js` preserves the structured controller failure instead of reducing it to a plain error string. A failed reasoning preparation now carries the controller `code`, controller diagnostics, Page Driver version and verification snapshot into the background routing error context.
+
+The background persists that context in `lastModelDiagnostics`, emits it through `chat.diagnostics`, and adds the same `code` and `diagnostics` fields to `chat.error`. Successful reasoning preparation also records the controller identity, Page Driver version, verification result and any verification warning in the normal request diagnostics.
+
+The routing layer additionally distinguishes its own final passive verification failures with:
+
+```text
+model_verification_failed
+reasoning_verification_failed
+```
+
+These routing codes do not replace Page Driver codes. They identify the separate condition where the controller completed but the existing authoritative post-selection `probeState()` gate still observed the wrong final model or reasoning state.
+
 ## Safety boundary
 
-Phase 3 Page Driver itself performs no clicks, keyboard dispatch, timers or MutationObserver work. This is intentional: it establishes the contract and telemetry surface before any write mechanics move out of the historical controller.
+Phase 3 Page Driver itself performs no clicks, keyboard dispatch, timers or MutationObserver work. Phase 5 only propagates diagnostics through background routing; it does not change the reasoning write algorithm, model selection algorithm, Free Mini routing, concurrency, images, Voice or GPT Live behavior.
 
-A later phase may migrate one write primitive at a time behind the Page Driver only after real-browser smoke coverage demonstrates equivalent behavior.
+The final background `probeState()` family/reasoning checks remain authoritative. A later phase may migrate one write primitive at a time behind the Page Driver only after real-browser smoke coverage demonstrates equivalent behavior.
