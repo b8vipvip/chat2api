@@ -12,12 +12,16 @@
   };
   globalThis[KEY] = state;
 
-  const normalize = value => String(value || "")
+  const page = () => globalThis.__CHAT2API_PAGE_ADAPTER_V22__ || null;
+  const normalizeFallback = value => String(value || "")
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+  const normalize = value => page()?.normalize?.(value) ?? normalizeFallback(value);
 
   function visible(element) {
+    const adapter = page();
+    if (adapter?.visible) return adapter.visible(element);
     if (!element) return false;
     const rect = element.getBoundingClientRect();
     const style = getComputedStyle(element);
@@ -25,6 +29,8 @@
   }
 
   function stopButton() {
+    const adapter = page();
+    if (adapter?.stopButton) return adapter.stopButton();
     for (const selector of [
       "button[data-testid='stop-button']",
       "button[aria-label='Stop streaming']",
@@ -39,6 +45,8 @@
   }
 
   function assistantNodes() {
+    const adapter = page();
+    if (adapter?.assistantNodes) return adapter.assistantNodes();
     const result = [];
     const seen = new Set();
     for (const selector of [
@@ -56,11 +64,15 @@
   }
 
   function nodeIdentity(node) {
+    const adapter = page();
+    if (adapter?.assistantIdentity) return adapter.assistantIdentity(node);
     const turn = node?.closest("[data-message-id], article[id], article[data-testid]");
     return node?.getAttribute("data-message-id") || turn?.getAttribute("data-message-id") || turn?.id || turn?.getAttribute("data-testid") || "";
   }
 
   function nodeText(node) {
+    const adapter = page();
+    if (adapter?.assistantText) return adapter.assistantText(node);
     if (!node) return "";
     for (const selector of ["[data-message-content]", ".markdown", "[class*='markdown']"]) {
       const candidates = [...node.querySelectorAll(selector)].filter(visible);
@@ -120,6 +132,7 @@
           request_id: requestId,
           diagnostics: {
             completion_fast_overlay: "v21",
+            page_adapter: page()?.version || "fallback",
             completion_recovery: "strong-final-actions-fast",
             completion_stable_ms: stableMs,
             completion_final_action_count: actionCount,
@@ -145,7 +158,6 @@
 
   async function suppress(active, button, stableMs, actionCount) {
     if (!button || button.dataset.chat2apiPerfStaleStopSuppressed === "v21") return;
-    // Respect the conservative v6 overlay if it already owns the button.
     if (button.dataset.chat2apiStaleStopSuppressed === "v6") return;
     button.dataset.chat2apiPerfPreviousVisibility = button.style.visibility || "__empty__";
     button.dataset.chat2apiPerfStaleStopSuppressed = "v21";
@@ -194,9 +206,6 @@
     const stableMs = Date.now() - state.stableSince;
     const actions = finalActionControls(latest);
 
-    // A final copy/feedback action row plus stable assistant text and no live status is
-    // a substantially stronger completion signal than a stale Stop button alone.
-    // v6 remains the fallback for all weaker UI variants (2.5 s / 9 s paths).
     if (actions.length && stableMs >= 900) {
       await suppress(active, button, stableMs, actions.length);
     }
