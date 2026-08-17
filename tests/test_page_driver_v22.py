@@ -29,16 +29,23 @@ def test_page_driver_bootstrap_recovers_existing_tabs_in_same_order():
     assert "chrome.scripting.executeScript" in bootstrap
 
 
-def test_page_driver_v22_is_verification_only_in_phase3():
+def test_page_driver_v22_phase7_adds_only_explicit_keyboard_write_primitive():
     source = read(EXT / DRIVER)
-    assert 'const VERSION = "22.2.0"' in source
+    assert 'const VERSION = "22.3.0"' in source
     assert DRIVER_KEY in source
+    assert "function dispatchKey(target, name, code = name, extra = {})" in source
+    assert 'new KeyboardEvent("keydown", init)' in source
+    assert 'new KeyboardEvent("keyup", init)' in source
+    assert "return true;" in source
+    assert "    dispatchKey," in source
+
+    # The Driver still has no autonomous orchestration or higher-level writes.
     assert "new MutationObserver" not in source
     assert "setInterval(" not in source
     assert "setTimeout(" not in source
     assert ".click()" not in source
-    assert "KeyboardEvent" not in source
-    assert "dispatchEvent(" not in source
+    assert "HTMLInputElement.prototype" not in source
+    assert 'message?.type !== "chat2api.page.verify.v22"' in source
 
 
 def test_page_driver_merges_dom_evidence_with_trusted_model_cache():
@@ -68,6 +75,7 @@ def test_page_driver_exposes_structured_verification_codes():
     ):
         assert code in source
     for method in (
+        "dispatchKey",
         "currentState",
         "verifyState",
         "verifyReasoning",
@@ -75,20 +83,19 @@ def test_page_driver_exposes_structured_verification_codes():
         "attachVerification",
     ):
         assert f"    {method}," in source
-    assert 'message?.type !== "chat2api.page.verify.v22"' in source
+    assert 'controller: "page-driver-v22.3"' in source
 
 
-def test_reasoning_controller_attaches_driver_diagnostics_without_replacing_write_strategy():
+def test_reasoning_controller_prefers_driver_key_dispatch_but_keeps_exact_local_fallback():
     source = read(EXT / "content_reasoning_v7.js")
     assert DRIVER_KEY in source
-    assert "attachDriverVerification" in source
-    assert "classifyDriverError" in source
-    # The Page Driver is additive; the established controller identity is a compatibility contract.
-    assert 'controller: "reasoning-v7.2"' in source
-    assert "page_driver_version" in source
-    assert "verification: classified.verification" in source
+    assert "pageDriver?.dispatchKey" in source
+    assert "pageDriver.dispatchKey(target, name, code, extra)" in source
+    assert 'target.dispatchEvent(new KeyboardEvent("keydown", init));' in source
+    assert 'target.dispatchEvent(new KeyboardEvent("keyup", init));' in source
+    assert source.index("pageDriver.dispatchKey(target, name, code, extra)") < source.index('target.dispatchEvent(new KeyboardEvent("keydown", init));')
 
-    # Phase 3 deliberately keeps the proven write mechanics feature-owned.
+    # High-level reasoning behavior stays feature-owned and unchanged.
     for token in (
         'key(target, "M", "KeyM", { ctrlKey: true, shiftKey: true })',
         'key(pill, "Enter", "Enter")',
@@ -102,6 +109,17 @@ def test_reasoning_controller_attaches_driver_diagnostics_without_replacing_writ
         "choice.click()",
     ):
         assert token in source
+
+
+def test_reasoning_controller_attaches_driver_diagnostics_without_replacing_write_strategy():
+    source = read(EXT / "content_reasoning_v7.js")
+    assert DRIVER_KEY in source
+    assert "attachDriverVerification" in source
+    assert "classifyDriverError" in source
+    # The established controller identity remains a compatibility contract.
+    assert 'controller: "reasoning-v7.2"' in source
+    assert "page_driver_version" in source
+    assert "verification: classified.verification" in source
 
 
 def test_model_router_propagates_structured_reasoning_diagnostics_without_weakening_probe_gate():
