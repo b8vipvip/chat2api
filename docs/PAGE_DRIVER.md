@@ -74,6 +74,21 @@ After a successful zero-op or switch, the controller asks the Page Driver to att
 
 When reasoning selection fails, the runtime response now includes a stable `code` plus Page Driver verification diagnostics when available. This makes logs distinguish a missing control, a menu-open failure, an unavailable requested level, an untrusted state and a real post-selection mismatch.
 
+## Existing-tab bootstrap recovery
+
+Manifest content scripts only run automatically for matching pages at their normal injection lifecycle. Existing ChatGPT tabs can therefore need dynamic recovery after an extension update or when the background explicitly re-runs `ensureContent()`.
+
+`content_bootstrap.js` must inject the compatibility layers before feature controllers in this exact dependency order:
+
+```text
+content_page_adapter_v22.js
+content_page_driver_v22.js
+content_model_v7.js
+content_reasoning_v7.js
+```
+
+Both Adapter and Driver are idempotent, so this recovery injection is safe when they are already present. Keeping them in the bootstrap list ensures dynamically recovered reasoning requests receive the same Page Driver diagnostics as freshly loaded tabs.
+
 ## Safety boundary
 
 Phase 3 Page Driver itself performs no clicks, keyboard dispatch, timers or MutationObserver work. This is intentional: it establishes the contract and telemetry surface before any write mechanics move out of the historical controller.
