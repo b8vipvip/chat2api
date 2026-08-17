@@ -2,13 +2,16 @@
   const KEY = "__CHAT2API_LOGIN_READINESS_V27__";
   if (globalThis[KEY]) return;
 
+  const NETWORK_GATE_KEY = "__CHAT2API_NETWORK_GATE_V26__";
+  const WARM_POOL_KEY = "__CHAT2API_CONVERSATION_WARM_POOL_V2__";
   const CACHE_KEY = "chatgptLoginReadinessV27";
   const CACHE_MS = 15000;
   const PROBE_URL = "https://chatgpt.com/";
   const state = {
     inFlight: null,
     bootValidated: false,
-    takingProbe: false,
+    suppressedRemovedTabs: new Set(),
+    warmPoolPatched: false,
   };
   globalThis[KEY] = state;
 
@@ -145,6 +148,24 @@
     return rows;
   }
 
+  async function retireAutomaticProbeIfReady(snapshot) {
+    if (snapshot?.state !== "ready" || snapshot?.composer_ready !== true) return snapshot;
+    const probe = await trackedProbe();
+    if (!probe?.adoptable || probe.tab_id !== snapshot.tab_id) return snapshot;
+
+    state.suppressedRemovedTabs.add(probe.tab_id);
+    await clearTrackedProbe();
+    const stable = await persist({
+      ...snapshot,
+      strategy: `${snapshot.strategy}+startup-readiness-confirmed`,
+      tab_id: null,
+      window_id: null,
+      checked_at_ms: Date.now(),
+    });
+    try { await chrome.windows.remove(probe.window_id); } catch (_) {}
+    return stable;
+  }
+
   async function runDetection() {
     const candidates = await candidateTabs();
     if (!candidates.length) {
@@ -197,7 +218,10 @@
         tab_id: tab.id,
         window_id: tab.windowId,
       };
-      if (result.state === "ready" && result.composer_ready === true) return persist(result);
+      if (result.state === "ready" && result.composer_ready === true) {
+        const saved = await persist(result);
+        return retireAutomaticProbeIfReady(saved);
+      }
       if (result.state === "login_required") loginRequired ||= result;
       else if (result.state === "checking") checking ||= result;
       else unknown ||= result;
@@ -223,14 +247,14 @@
   }
 
   async function ensureProbeWindow({ focused = false, userVisible = false } = {}) {
-    let probe = await trackedProbe();
-    if (probe?.tab) {
+    const existing = await trackedProbe();
+    if (existing?.tab) {
       if (userVisible) {
         await chrome.storage.local.set({ chatgptLoginProbeAdoptable: false }).catch(() => {});
-        try { await chrome.windows.update(probe.window_id, { focused: true }); } catch (_) {}
-        try { await chrome.tabs.update(probe.tab_id, { active: true }); } catch (_) {}
+        try { await chrome.windows.update(existing.window_id, { focused: true }); } catch (_) {}
+        try { await chrome.tabs.update(existing.tab_id, { active: true }); } catch (_) {}
       }
-      return { ...probe, existing: true };
+      return { ...existing, existing: true };
     }
 
     const created = await chrome.windows.create({ url: PROBE_URL, focused: Boolean(focused), type: "normal" });
@@ -262,27 +286,12 @@
   }
 
   async function readyForPrewarm() {
-    let snapshot = await detect(!state.bootValidated);
+    const snapshot = await detect(!state.bootValidated);
     if (snapshot.state === "unknown" && snapshot.strategy === "no-chatgpt-tab") {
       await ensureProbeWindow({ focused: false, userVisible: false });
       return false;
     }
     return snapshot.state === "ready" && snapshot.composer_ready === true;
-  }
-
-  async function takeReadyProbe() {
-    if (state.takingProbe) return null;
-    state.takingProbe = true;
-    try {
-      const probe = await trackedProbe();
-      if (!probe?.tab || !probe.adoptable) return null;
-      const detected = await queryDetector(probe.tab_id);
-      if (normalizeState(detected?.state) !== "ready" || detected?.composer_ready !== true) return null;
-      await clearTrackedProbe();
-      return probe.tab;
-    } finally {
-      state.takingProbe = false;
-    }
   }
 
   async function openLoginWindow() {
@@ -315,11 +324,50 @@
     };
   }
 
+  function installNetworkLoginGate() {
+    const gate = globalThis[NETWORK_GATE_KEY];
+    if (!gate || typeof gate.allowPrewarm !== "function" || gate.login_readiness_gate_v27 === true) return false;
+    const baseAllowPrewarm = gate.allowPrewarm.bind(gate);
+    gate.allowPrewarm = async () => {
+      const networkAllowed = await baseAllowPrewarm();
+      if (!networkAllowed) return false;
+      return readyForPrewarm();
+    };
+    gate.login_readiness_gate_v27 = true;
+    return true;
+  }
+
+  function patchWarmPoolAffinityGate() {
+    const pool = globalThis[WARM_POOL_KEY];
+    if (!pool || typeof pool.onAffinityChanged !== "function") return false;
+    if (pool.login_readiness_gate_v27 === true) return true;
+    const baseAffinityChanged = pool.onAffinityChanged.bind(pool);
+    pool.onAffinityChanged = async (...args) => {
+      const gate = globalThis[NETWORK_GATE_KEY];
+      if (typeof gate?.allowPrewarm !== "function" || !await gate.allowPrewarm()) return null;
+      return baseAffinityChanged(...args);
+    };
+    pool.login_readiness_gate_v27 = true;
+    state.warmPoolPatched = true;
+    return true;
+  }
+
+  function kickWarmPool(attempt = 0) {
+    if (patchWarmPoolAffinityGate()) {
+      const pool = globalThis[WARM_POOL_KEY];
+      Promise.resolve(pool.onAffinityChanged()).catch(() => {});
+      return;
+    }
+    if (attempt < 20) setTimeout(() => kickWarmPool(attempt + 1), 100);
+  }
+
   state.detect = detect;
   state.readyForPrewarm = readyForPrewarm;
-  state.takeReadyProbe = takeReadyProbe;
   state.openLoginWindow = openLoginWindow;
   state.snapshot = cachedSnapshot;
+
+  installNetworkLoginGate();
+  setTimeout(() => patchWarmPoolAffinityGate(), 0);
 
   if (typeof trySendSocket === "function") {
     const baseTrySendSocket = trySendSocket;
@@ -362,7 +410,12 @@
     return false;
   });
 
-  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  chrome.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local") return;
+    if (changes.chatgptLoginState?.newValue === "ready") kickWarmPool();
+  });
+
+  chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
     const url = changeInfo.url || tab?.url || tab?.pendingUrl || "";
     if (!isChatGptUrl(url) && !isAuthLikeUrl(url)) return;
     if (changeInfo.url || changeInfo.status === "complete") {
@@ -374,11 +427,24 @@
   });
 
   chrome.tabs.onRemoved.addListener(tabId => {
+    if (state.suppressedRemovedTabs.has(tabId)) {
+      state.suppressedRemovedTabs.delete(tabId);
+      return;
+    }
     chrome.storage.local.get({ chatgptLoginProbeTabId: null, chatgptLoginTabId: null }).then(async stored => {
       if (stored.chatgptLoginProbeTabId === tabId) await clearTrackedProbe();
       if (stored.chatgptLoginTabId === tabId || stored.chatgptLoginProbeTabId === tabId) {
         state.bootValidated = false;
         detect(true).catch(() => {});
+      }
+    }).catch(() => {});
+  });
+
+  chrome.windows.onFocusChanged.addListener(windowId => {
+    if (!Number.isInteger(windowId) || windowId < 0) return;
+    chrome.storage.local.get({ chatgptLoginProbeWindowId: null }).then(stored => {
+      if (stored.chatgptLoginProbeWindowId === windowId) {
+        chrome.storage.local.set({ chatgptLoginProbeAdoptable: false }).catch(() => {});
       }
     }).catch(() => {});
   });
