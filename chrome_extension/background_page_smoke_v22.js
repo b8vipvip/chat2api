@@ -13,7 +13,7 @@
 
   function canonicalReasoning(value) {
     const level = String(value || "").trim().toLowerCase();
-    if (level === "low") return "instant";
+    if (["low", "minimal", "fast"].includes(level)) return "instant";
     return REASONING_LEVELS.has(level) ? level : "";
   }
 
@@ -38,19 +38,26 @@
 
     let finalProbe = null;
     let finalProbeOk = null;
+    let finalProbeError = null;
     if (expectedModel) {
-      const probeResponse = await chrome.tabs.sendMessage(tab.id, {
-        type: "chat2api.model.probe.v7",
-        model: expectedModel,
-        reasoning_level: expectedReasoning,
-      });
-      finalProbe = probeResponse?.data || null;
-      finalProbeOk = Boolean(
-        probeResponse?.ok &&
-        finalProbe?.family_match &&
-        finalProbe?.family_trusted &&
-        (!expectedReasoning || (finalProbe?.reasoning_match && finalProbe?.reasoning_trusted)),
-      );
+      try {
+        const probeResponse = await chrome.tabs.sendMessage(tab.id, {
+          type: "chat2api.model.probe.v7",
+          model: expectedModel,
+          reasoning_level: expectedReasoning,
+        });
+        finalProbe = probeResponse?.data || null;
+        finalProbeOk = Boolean(
+          probeResponse?.ok &&
+          finalProbe?.family_match &&
+          finalProbe?.family_trusted &&
+          (!expectedReasoning || (finalProbe?.reasoning_match && finalProbe?.reasoning_trusted)),
+        );
+        if (!probeResponse?.ok) finalProbeError = probeResponse?.error || "Final passive model probe did not return ok";
+      } catch (error) {
+        finalProbeOk = false;
+        finalProbeError = String(error?.message || error);
+      }
     }
 
     const smoke = smokeResponse.data || {};
@@ -62,6 +69,7 @@
       code,
       final_probe: finalProbe,
       final_probe_ok: finalProbeOk,
+      final_probe_error: finalProbeError,
       tab_id: tab.id,
       tab_url: tab.url || tab.pendingUrl || "",
       tab_title: tab.title || "",
