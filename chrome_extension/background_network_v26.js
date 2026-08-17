@@ -127,6 +127,12 @@
     return result.external_ready === true;
   }
 
+  async function statusSnapshot() {
+    const socket = await chrome.storage.local.get({ socketState: "disconnected" }).catch(() => ({ socketState: "disconnected" }));
+    if (socket.socketState === "connected") return probe(false);
+    return storedSnapshot();
+  }
+
   function metadata(snapshot) {
     return {
       network_probe_version: "v26",
@@ -147,7 +153,7 @@
     const baseTrySendSocket = trySendSocket;
     trySendSocket = async payload => {
       if (payload?.type === "extension.status") {
-        const snapshot = await probe(false);
+        const snapshot = await statusSnapshot();
         payload = { ...payload, metadata: { ...(payload.metadata || {}), ...metadata(snapshot) } };
       }
       return baseTrySendSocket(payload);
