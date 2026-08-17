@@ -77,6 +77,9 @@ def test_background_smoke_runs_independent_final_passive_probe_without_writes():
     assert '"final_probe_mismatch"' in source
     assert "lastPageSmoke" in source
     assert 'message?.type !== "popup.pageSmoke"' in source
+    # Free Mini / unknown-model routes must not inherit a stale paid-account
+    # reasoning expectation from storage.
+    assert 'const expectedReasoning = expectedModel ? canonicalReasoning(settings.currentReasoning) : "";' in source
     for forbidden in (
         "chat2api.model.prepare.v5",
         "chat2api.reasoning.prepare.v7",
