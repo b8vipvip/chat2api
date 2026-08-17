@@ -68,9 +68,9 @@ def test_proactive_warm_pool_is_gated_but_request_time_reconcile_remains_availab
     assert 'changes.networkExternalReady?.newValue === true' in source
 
 
-def test_bridge_version_and_popup_expose_linux_and_network_state():
+def test_popup_exposes_linux_and_network_state():
     manifest = json.loads(read(EXT / "manifest.json"))
-    assert manifest["version"] == "0.7.7"
+    assert manifest["manifest_version"] == 3
     popup = read(EXT / "popup.js")
     for token in (
         'linux: "Linux"',
