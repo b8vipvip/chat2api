@@ -365,7 +365,7 @@
     if (message.type === "chat2api.reasoning.prepare.v7") {
       const requested = normalize(message.reasoning_level);
       prepare(message.reasoning_level)
-        .then(data => sendResponse({ ok: true, data, controller: "reasoning-v7.3" }))
+        .then(data => sendResponse({ ok: true, data, controller: "reasoning-v7.2" }))
         .catch(error => {
           const classified = classifyDriverError(error, requested || message.reasoning_level);
           sendResponse({
@@ -376,7 +376,7 @@
               page_driver_version: driver()?.version || null,
               verification: classified.verification || null,
             },
-            controller: "reasoning-v7.3",
+            controller: "reasoning-v7.2",
           });
         });
       return true;
