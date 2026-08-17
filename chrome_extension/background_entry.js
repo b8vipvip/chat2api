@@ -2,6 +2,8 @@ importScripts(
   "background.js",
   "background_device_v17.js",
   "background_time_v14.js",
+  "background_platform_v26.js",
+  "background_network_v26.js",
   "content_bootstrap.js",
   "background_hardening.js",
   "background_socket_singleflight_v21.js",
