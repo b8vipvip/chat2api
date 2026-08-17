@@ -16,14 +16,18 @@
   const state = { pending: null, observer: null };
   globalThis[KEY] = state;
 
-  const normalize = value => String(value || "")
+  const page = () => globalThis.__CHAT2API_PAGE_ADAPTER_V22__ || null;
+  const normalizeFallback = value => String(value || "")
     .replace(/[✓✔︎✔√]/g, "")
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .replace(/\s+/g, " ")
     .trim()
     .toLowerCase();
+  const normalize = value => page()?.normalizedLower?.(value) ?? normalizeFallback(value);
 
   function visible(element) {
+    const adapter = page();
+    if (adapter?.visible) return adapter.visible(element);
     if (!element) return false;
     const rect = element.getBoundingClientRect();
     const style = getComputedStyle(element);
@@ -31,11 +35,15 @@
   }
 
   function labelOf(element) {
+    const adapter = page();
+    if (adapter?.labelOf) return adapter.labelOf(element);
     return String(element?.getAttribute?.("aria-label") || element?.getAttribute?.("data-value") || element?.title || element?.innerText || element?.textContent || "")
       .replace(/\s+/g, " ").trim();
   }
 
   function familyFromText(value) {
+    const adapter = page();
+    if (adapter?.familyFromText) return adapter.familyFromText(value);
     const text = normalize(value);
     for (const [family, aliases] of Object.entries(FAMILY_ALIASES)) {
       if (aliases.some(alias => text === normalize(alias) || text.includes(normalize(alias)))) return family;
@@ -44,6 +52,8 @@
   }
 
   function reasoningFromText(value) {
+    const adapter = page();
+    if (adapter?.reasoningFromText) return adapter.reasoningFromText(value);
     const text = normalize(value);
     for (const [level, aliases] of Object.entries(REASONING_ALIASES)) {
       if (aliases.some(alias => {
@@ -55,11 +65,18 @@
   }
 
   function composerRoot() {
+    const adapter = page();
+    if (adapter?.composerRoot) return adapter.composerRoot();
     return [...document.querySelectorAll("form[data-type='unified-composer'], form")]
       .find(form => visible(form) && form.querySelector("#prompt-textarea,textarea,[contenteditable='true']")) || null;
   }
 
   function stateControl() {
+    const adapter = page();
+    if (adapter?.modelReasoningControl) {
+      const current = adapter.modelReasoningControl();
+      return { label: current.label || "", family: current.family || "", reasoning: current.reasoning || "" };
+    }
     const root = composerRoot();
     if (!root) return { label: "", family: "", reasoning: "" };
     const candidates = [...root.querySelectorAll("button,[role='button'],[aria-label],[data-value]")]
@@ -76,8 +93,8 @@
   }
 
   function readCache() {
-    try { return JSON.parse(sessionStorage.getItem(CACHE_KEY) || "null") || {}; }
-    catch (_) { return {}; }
+    try { return JSON.parse(sessionStorage.getItem(CACHE_KEY) || "null") || {};
+    } catch (_) { return {}; }
   }
 
   function writeCache(value) {
@@ -127,11 +144,11 @@
     }
 
     // GPT-5.6 Sol may collapse the combined control from e.g. "5.5 极速"
-    // to only a reasoning label after a successful family selection. That
-    // reasoning-only label can be 极速/中/高 or the default 智能/自动 state.
-    // Treat the transition as trusted evidence only when we knew the previous
-    // family, captured the exact target-family click, and the composer changed.
-    // A failed click that leaves the old composer control unchanged is rejected.
+    // to a reasoning-only label after a successful family switch. That label can
+    // be 极速/中/高 or the default 智能/自动. Trust this transition only when the
+    // previous family was known, the exact target-family click was captured, and
+    // the composer control actually changed; a failed click that leaves the old
+    // control unchanged must not be promoted into trusted model state.
     const changed = normalize(current.label) && normalize(current.label) !== normalize(pending.before_label);
     const reasoningOnly = Boolean(current.reasoning && !current.family);
     if (

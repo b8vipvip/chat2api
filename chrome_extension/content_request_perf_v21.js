@@ -6,12 +6,16 @@
   globalThis[KEY] = state;
 
   const FAST_FALLBACK_MS = 1200;
-  const normalize = value => String(value || "")
+  const page = () => globalThis.__CHAT2API_PAGE_ADAPTER_V22__ || null;
+  const normalizeFallback = value => String(value || "")
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+  const normalize = value => page()?.normalize?.(value) ?? normalizeFallback(value);
 
   function visible(element) {
+    const adapter = page();
+    if (adapter?.visible) return adapter.visible(element);
     if (!element) return false;
     const rect = element.getBoundingClientRect();
     const style = getComputedStyle(element);
@@ -19,11 +23,15 @@
   }
 
   function composerRoot() {
+    const adapter = page();
+    if (adapter?.composerRoot) return adapter.composerRoot();
     return [...document.querySelectorAll("form[data-type='unified-composer'], form")]
       .find(form => visible(form) && form.querySelector("#prompt-textarea,textarea,[contenteditable='true']")) || null;
   }
 
   function composer() {
+    const adapter = page();
+    if (adapter?.composer) return adapter.composer();
     const root = composerRoot() || document;
     for (const selector of [
       "#prompt-textarea",
@@ -39,12 +47,16 @@
   }
 
   function composerText(element = composer()) {
+    const adapter = page();
+    if (adapter?.composerText) return adapter.composerText(element);
     if (!element) return "";
     if (element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement) return normalize(element.value || "");
     return normalize(element.innerText || element.textContent || "");
   }
 
   function sendButton() {
+    const adapter = page();
+    if (adapter?.sendButton) return adapter.sendButton();
     const root = composerRoot() || document;
     for (const selector of [
       "button[data-testid='send-button']",
@@ -60,10 +72,14 @@
   }
 
   function buttonReady(button) {
+    const adapter = page();
+    if (adapter?.buttonReady) return adapter.buttonReady(button);
     return Boolean(button && visible(button) && !button.disabled && button.getAttribute("aria-disabled") !== "true");
   }
 
   function stopButton() {
+    const adapter = page();
+    if (adapter?.stopButton) return adapter.stopButton();
     for (const selector of [
       "button[data-testid='stop-button']",
       "button[aria-label='Stop streaming']",
@@ -78,6 +94,8 @@
   }
 
   function isSendTarget(target) {
+    const adapter = page();
+    if (adapter?.isSendTarget) return adapter.isSendTarget(target);
     if (!(target instanceof Element)) return false;
     const button = target.closest("button");
     if (!button || !visible(button)) return false;
@@ -87,7 +105,9 @@
   }
 
   function dispatchEnter(element) {
-    if (!element) return;
+    const adapter = page();
+    if (adapter?.dispatchEnter) return adapter.dispatchEnter(element);
+    if (!element) return false;
     element.focus();
     for (const type of ["keydown", "keypress", "keyup"]) {
       element.dispatchEvent(new KeyboardEvent(type, {
@@ -99,6 +119,7 @@
         cancelable: true,
       }));
     }
+    return true;
   }
 
   async function emitDiagnostics(requestId, extra) {
@@ -109,7 +130,11 @@
         event: {
           type: "chat.diagnostics",
           request_id: requestId,
-          diagnostics: { request_perf_overlay: "v21", ...extra },
+          diagnostics: {
+            request_perf_overlay: "v21",
+            page_adapter: page()?.version || "fallback",
+            ...extra,
+          },
         },
       });
     } catch (_) {}
@@ -136,10 +161,6 @@
       const stillPresent = Boolean(text && (text === target || (target.length > 6 && text.includes(target))));
       const button = sendButton();
 
-      // This is intentionally a strong failure signal: the exact prompt is still in
-      // the composer, generation never started, and the send control is still ready.
-      // If the click had been accepted, ChatGPT normally clears/replaces these states
-      // synchronously. Only then do we synthesize Enter before request-v5 waits 6 s.
       if (!stillPresent || stopButton() || !buttonReady(button)) return;
 
       dispatchEnter(input);

@@ -23,6 +23,7 @@ jobs:
       - name: JavaScript syntax
         run: |
           node --check chrome_extension/content.js
+          node --check chrome_extension/content_page_adapter_v22.js
           node --check chrome_extension/content_request_v2.js
           node --check chrome_extension/content_request_v3.js
           node --check chrome_extension/content_request_v4.js
