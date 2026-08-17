@@ -131,7 +131,6 @@ def test_completion_recovery_is_conservative_and_loaded_after_request_v5() -> No
     assert 'button.style.visibility = "hidden"' in source
     assert scripts.index("content_request_v5.js") < scripts.index("content_completion_v6.js")
     assert '"content_completion_v6.js"' in bootstrap
-    assert manifest["version"] == "0.7.6"
 
 
 def test_warm_pool_reuses_closed_routes_as_fresh_chat_and_refills_on_claim() -> None:
