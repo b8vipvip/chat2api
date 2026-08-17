@@ -24,6 +24,7 @@ jobs:
         run: |
           node --check chrome_extension/content.js
           node --check chrome_extension/content_page_adapter_v22.js
+          node --check chrome_extension/content_login_v27.js
           node --check chrome_extension/content_page_driver_v22.js
           node --check chrome_extension/content_page_smoke_v22.js
           node --check chrome_extension/content_request_v2.js
@@ -82,6 +83,7 @@ jobs:
           node --check chrome_extension/background_time_v14.js
           node --check chrome_extension/background_platform_v26.js
           node --check chrome_extension/background_network_v26.js
+          node --check chrome_extension/background_login_v27.js
           node --check chrome_extension/background_hardening.js
           node --check chrome_extension/background_socket_singleflight_v21.js
           node --check chrome_extension/background_logging.js
@@ -129,5 +131,7 @@ jobs:
         run: node tests/reasoning_key_fallback_v9.mjs
       - name: Network and platform VM contract
         run: node tests/network_platform_v26.mjs
+      - name: Login readiness VM contract
+        run: node tests/login_readiness_v27.mjs
       - name: Tests
         run: pytest -q

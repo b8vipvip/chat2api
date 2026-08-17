@@ -5,6 +5,7 @@ importScripts(
   "background_platform_v26.js",
   "background_network_v26.js",
   "content_bootstrap.js",
+  "background_login_v27.js",
   "background_hardening.js",
   "background_socket_singleflight_v21.js",
   "browser_tabs.js",
