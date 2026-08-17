@@ -1,6 +1,6 @@
 # ChatGPT Page Smoke Test
 
-Phase 6 adds a read-only smoke-test boundary that runs inside a real logged-in ChatGPT tab. It exists to verify the Page Adapter → Page Driver → model/reasoning controllers → final passive probe chain before any more write mechanics move into shared infrastructure.
+Phase 6 adds a read-only smoke-test boundary that runs inside a real logged-in ChatGPT tab. It exists to verify the Page Adapter → Page Driver → model/reasoning controllers → final passive probe chain before and during incremental write-side migration.
 
 ## Real-tab scope
 
@@ -86,8 +86,10 @@ The extension popup exposes:
 
 The button calls the background `popup.pageSmoke` message and displays the state of Adapter, Driver, model controller, reasoning controller, composer, expected state, Driver state and final probe.
 
-## Safety boundary
+## Phase 7 relationship
 
-Phase 6 still does not migrate write behavior. `content_reasoning_v7.js` continues to own shortcut, Enter/Space, slider keyboard navigation, native range updates, click fallback and post-selection verification. The Page Driver remains verification-only.
+Phase 7 moves only the low-level `dispatchKey(...)` implementation into Page Driver. That does **not** change this smoke harness: smoke code never invokes `dispatchKey`, never sends `chat2api.reasoning.prepare.v7`, and remains strictly read-only.
 
-A later phase can use this real-tab smoke boundary as the prerequisite for moving one explicit write primitive at a time, while keeping the existing final `chat2api.model.probe.v7` request gate authoritative.
+`content_reasoning_v7.js` still owns all Reasoning decisions, slider/native-range behavior, click fallback, timing and post-selection verification. It merely prefers the Driver for the same `keydown`/`keyup` pair and keeps the historical local KeyboardEvent path as fallback.
+
+The existing final `chat2api.model.probe.v7` request gate remains authoritative. Future write migration should continue one primitive at a time behind this real-tab smoke boundary.
