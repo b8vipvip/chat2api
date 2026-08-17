@@ -7,6 +7,7 @@ importScripts(
   "background_socket_singleflight_v21.js",
   "browser_tabs.js",
   "model_routing_v2.js",
+  "background_page_smoke_v22.js",
   "background_account_v20.js",
   "model_prefetch_fast_v21.js",
   "image_routing.js",
