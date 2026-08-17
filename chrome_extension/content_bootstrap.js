@@ -7,6 +7,8 @@
       await chrome.scripting.executeScript({
         target: { tabId },
         files: [
+          "content_page_adapter_v22.js",
+          "content_page_driver_v22.js",
           "content_request_v2.js",
           "content_model_v5.js",
           "content_model_fast_v21.js",

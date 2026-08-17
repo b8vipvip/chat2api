@@ -19,6 +19,16 @@ def test_page_driver_loads_after_adapter_before_reasoning_controller():
     assert scripts.index(DRIVER) < scripts.index("content_reasoning_v7.js")
 
 
+def test_page_driver_bootstrap_recovers_existing_tabs_in_same_order():
+    bootstrap = read(EXT / "content_bootstrap.js")
+    adapter_pos = bootstrap.index('"content_page_adapter_v22.js"')
+    driver_pos = bootstrap.index(f'"{DRIVER}"')
+    model_pos = bootstrap.index('"content_model_v7.js"')
+    reasoning_pos = bootstrap.index('"content_reasoning_v7.js"')
+    assert adapter_pos < driver_pos < model_pos < reasoning_pos
+    assert "chrome.scripting.executeScript" in bootstrap
+
+
 def test_page_driver_v22_is_verification_only_in_phase3():
     source = read(EXT / DRIVER)
     assert 'const VERSION = "22.2.0"' in source
