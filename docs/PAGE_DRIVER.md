@@ -82,6 +82,23 @@ Phase 7 deliberately does **not** move:
 - post-selection verification;
 - model-family selection.
 
+## Phase 8 executable VM contract
+
+`tests/page_driver_dispatch_key_v22.mjs` loads the real `content_page_driver_v22.js` source inside Node's built-in `vm` module with only the minimum mocked browser globals required by the Driver. It is a behavioral contract, not a static source-string check.
+
+The contract verifies that:
+
+- loading the Driver constructs zero keyboard events;
+- duplicate bootstrap injection remains idempotent and installs only one runtime listener;
+- invalid targets return `false` without constructing events;
+- one `dispatchKey(...)` call emits exactly one `keydown` and one `keyup` in that order;
+- key/code, bubbles/cancelable and Ctrl/Shift/Alt/Meta/repeat fields are preserved;
+- omitting `code` keeps the historical default `code = key` behavior.
+
+CI runs this contract as a dedicated `Page Driver VM contract` step before pytest. `tests/test_page_driver_v22.py` separately asserts that the executable step remains wired into the workflow, so later refactors cannot silently remove execution coverage while leaving static tests green.
+
+This VM test does not replace the real-tab read-only smoke test. The VM contract protects the low-level JavaScript event semantics; the real-tab smoke boundary protects integration with the actual ChatGPT DOM/controller stack.
+
 ## Reasoning integration
 
 `content_reasoning_v7.js` remains the owner of the Reasoning state machine and all decisions about what action to perform and when. After a successful zero-op or switch, the controller asks the Page Driver to attach an independent state snapshot. The established background `model_routing_v2.js` final probe remains the authoritative request gate.
