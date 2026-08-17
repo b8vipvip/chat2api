@@ -104,6 +104,32 @@ def test_reasoning_controller_attaches_driver_diagnostics_without_replacing_writ
         assert token in source
 
 
+def test_model_router_propagates_structured_reasoning_diagnostics_without_weakening_probe_gate():
+    source = read(EXT / "model_routing_v2.js")
+    for token in (
+        "reasoningRoutingError",
+        'code: "reasoning_selection_failed"',
+        "reasoning_error_code",
+        "reasoning_controller_diagnostics",
+        "reasoning_verification",
+        "reasoning_page_driver_version",
+        "reasoning_verification_warning",
+        "lastModelDiagnostics: errorDiagnostics",
+        'type: "chat.diagnostics"',
+        'type: "chat.error"',
+        "code: errorCode",
+        "diagnostics: errorDiagnostics",
+    ):
+        assert token in source
+
+    # The final passive probe remains the authoritative request gate.
+    assert "const afterResponse = await probeState(tab.id, model, reasoning);" in source
+    assert "if (!after.family_match)" in source
+    assert "if (reasoning && !after.reasoning_match)" in source
+    assert 'code: "model_verification_failed"' in source
+    assert 'code: "reasoning_verification_failed"' in source
+
+
 def test_ci_checks_page_driver_javascript_syntax():
     workflow = read(ROOT / ".github" / "workflows" / "ci.yml")
     assert f"node --check chrome_extension/{DRIVER}" in workflow
