@@ -96,6 +96,38 @@
     ["content_model_v7.js"],
   );
 
+  function routingError(message, options = {}) {
+    const error = new Error(String(message || "ChatGPT routing failed"));
+    error.code = String(options.code || "chat_routing_failed");
+    error.stage = String(options.stage || "chat-routing");
+    error.diagnostics = options.diagnostics && typeof options.diagnostics === "object"
+      ? options.diagnostics
+      : {};
+    return error;
+  }
+
+  function reasoningRoutingError(response, model, reasoning) {
+    const controllerDiagnostics = response?.diagnostics && typeof response.diagnostics === "object"
+      ? response.diagnostics
+      : {};
+    const code = String(response?.code || "reasoning_selection_failed");
+    const message = String(response?.error || `Unable to select requested reasoning level: ${reasoning}`);
+    return routingError(message, {
+      code,
+      stage: "reasoning-selection",
+      diagnostics: {
+        requested_model: model,
+        requested_reasoning: reasoning || null,
+        reasoning_error_code: code,
+        reasoning_error: message,
+        reasoning_controller: response?.controller || null,
+        reasoning_controller_diagnostics: controllerDiagnostics,
+        reasoning_verification: controllerDiagnostics.verification || null,
+        page_driver_version: controllerDiagnostics.page_driver_version || null,
+      },
+    });
+  }
+
   async function sendCanonicalStatus(modelData = null) {
     const settings = await config();
     const tabs = await chatTabs();
@@ -254,7 +286,7 @@
       const postFamily = familyRecovery?.data || (await probeState(tab.id, model, reasoning))?.data || before;
       if (reasoning && !(postFamily.reasoning_match && postFamily.reasoning_trusted)) {
         reasoningResponse = await prepareReasoning(tab.id, reasoning);
-        if (!reasoningResponse?.ok) throw new Error(reasoningResponse?.error || `Unable to select requested reasoning level: ${reasoning}`);
+        if (!reasoningResponse?.ok) throw reasoningRoutingError(reasoningResponse, model, reasoning);
         reasoningSwitched = Boolean(reasoningResponse.data?.reasoning_switched ?? true);
       }
 
@@ -265,8 +297,29 @@
 
     const afterResponse = await probeState(tab.id, model, reasoning);
     const after = afterResponse?.data || {};
-    if (!after.family_match) throw new Error(`ChatGPT model verification failed after selection: requested ${model}, actual ${after.actual_family || "unknown"}`);
-    if (reasoning && !after.reasoning_match) throw new Error(`ChatGPT reasoning verification failed after selection: requested ${reasoning}, actual ${after.actual_reasoning || "unknown"}`);
+    if (!after.family_match) {
+      throw routingError(`ChatGPT model verification failed after selection: requested ${model}, actual ${after.actual_family || "unknown"}`, {
+        code: "model_verification_failed",
+        stage: "post-selection-verification",
+        diagnostics: { ...before, ...after, requested_model: model, requested_reasoning: reasoning || null },
+      });
+    }
+    if (reasoning && !after.reasoning_match) {
+      throw routingError(`ChatGPT reasoning verification failed after selection: requested ${reasoning}, actual ${after.actual_reasoning || "unknown"}`, {
+        code: "reasoning_verification_failed",
+        stage: "post-selection-verification",
+        diagnostics: {
+          ...before,
+          ...after,
+          requested_model: model,
+          requested_reasoning: reasoning || null,
+          reasoning_controller: reasoningResponse?.controller || null,
+          reasoning_controller_diagnostics: reasoningResponse?.diagnostics || null,
+          reasoning_verification: reasoningResponse?.data?.verification || reasoningResponse?.diagnostics?.verification || null,
+          page_driver_version: reasoningResponse?.data?.page_driver_version || reasoningResponse?.diagnostics?.page_driver_version || null,
+        },
+      });
+    }
 
     const reasoningStrategy = reasoningResponse?.data?.selection_strategy || null;
     const reasoningUsedClick = Boolean(reasoningResponse?.data?.used_click);
@@ -290,6 +343,10 @@
         ? `family-ui-fallback${familyRecovery?.ok ? "+passive-recovery" : ""}${reasoningStrategy ? `+${reasoningStrategy}` : ""}`
         : (reasoningStrategy || "reasoning-only"),
       reasoning_selection_strategy: reasoningStrategy,
+      reasoning_controller: reasoningResponse?.controller || null,
+      reasoning_page_driver_version: reasoningResponse?.data?.page_driver_version || null,
+      reasoning_verification: reasoningResponse?.data?.verification || null,
+      reasoning_verification_warning: reasoningResponse?.data?.verification_warning || null,
     };
     await persistPrepared(diagnostics, model, reasoning);
     return { prepared: true, diagnostics };
@@ -412,14 +469,29 @@
       if (!response?.ok) throw new Error(response?.error || "ChatGPT tab rejected the request");
     } catch (error) {
       const text = String(error?.message || error);
+      const errorCode = String(error?.code || "chat_routing_failed");
+      const errorDiagnostics = {
+        ...(error?.diagnostics && typeof error.diagnostics === "object" ? error.diagnostics : {}),
+        error_code: errorCode,
+        error_message: text,
+        error_stage: error?.stage || "chat-routing",
+        logical_requested_model: logicalRequestedModel,
+        logical_requested_reasoning: logicalRequestedReasoning || null,
+        effective_model: effectiveModel,
+        effective_reasoning: effectiveReasoning || null,
+        account_type: accountProfile?.account_type || null,
+        routing_ms: Date.now() - routingStarted,
+      };
       await chrome.storage.local.set({
         lastRequestedModel: logicalRequestedModel,
         lastRequestedReasoning: logicalRequestedReasoning || null,
         lastEffectiveModel: effectiveModel,
         lastEffectiveReasoning: effectiveReasoning || null,
         lastModelSelectionError: text,
+        lastModelDiagnostics: errorDiagnostics,
       });
-      await trySendSocket({ type: "chat.error", request_id: message.request_id, error: text });
+      await trySendSocket({ type: "chat.diagnostics", request_id: message.request_id, diagnostics: errorDiagnostics });
+      await trySendSocket({ type: "chat.error", request_id: message.request_id, error: text, code: errorCode, diagnostics: errorDiagnostics });
     }
   };
 })();
