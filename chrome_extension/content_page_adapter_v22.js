@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_PAGE_ADAPTER_V22__";
   if (globalThis[KEY]) return;
 
-  const VERSION = "22.0.0";
+  const VERSION = "22.1.0";
   const FAMILY_ALIASES = {
     "gpt-5.6-sol": ["gpt-5.6 sol", "gpt 5.6 sol", "5.6 sol"],
     "gpt-5.5": ["gpt-5.5", "gpt 5.5", "5.5"],
@@ -211,20 +211,83 @@
     return "";
   }
 
-  function modelReasoningControl() {
+  function modelReasoningControls() {
     const root = composerRoot();
-    if (!root) return { element: null, label: "", family: "", reasoning: "" };
-    const candidates = [...root.querySelectorAll("button,[role='button'],[aria-label],[data-value]")]
+    if (!root) return [];
+    return [...root.querySelectorAll("button,[role='button'],[aria-label],[data-value]")]
       .filter(visible)
       .map(element => {
         const label = labelOf(element);
         return { element, label, family: familyFromText(label), reasoning: reasoningFromText(label) };
       })
       .filter(item => item.family || item.reasoning);
+  }
+
+  function modelReasoningControl() {
+    const candidates = modelReasoningControls();
     return candidates.find(item => item.family && item.reasoning) ||
       candidates.find(item => item.family) ||
       candidates.find(item => item.reasoning) ||
       { element: null, label: "", family: "", reasoning: "" };
+  }
+
+  function modelControl() {
+    const candidates = modelReasoningControls();
+    return candidates.find(item => item.family && item.reasoning) ||
+      candidates.find(item => item.family) ||
+      { element: null, label: "", family: "", reasoning: "" };
+  }
+
+  function reasoningControl() {
+    const candidates = modelReasoningControls();
+    return candidates.find(item => item.family && item.reasoning) ||
+      candidates.find(item => item.reasoning) ||
+      { element: null, label: "", family: "", reasoning: "" };
+  }
+
+  function reasoningEvidence() {
+    const candidates = modelReasoningControls().filter(item => ["instant", "medium", "high"].includes(item.reasoning));
+    if (!candidates.length) return { reasoning: "", source: "none" };
+    const exact = candidates.find(item => {
+      const firstAlias = (REASONING_ALIASES[item.reasoning] || [])[0] || "";
+      return normalizedLabelLower(item.label) === normalizedLabelLower(firstAlias);
+    });
+    const combined = candidates.find(item => item.family);
+    const item = exact || combined || candidates[0];
+    return { reasoning: item.reasoning, source: "composer-dom", label: item.label };
+  }
+
+  function modelFamilyEvidence() {
+    const root = composerRoot() || document;
+    const attributeNames = ["data-model", "data-model-id", "data-value", "aria-label", "title"];
+    const selectedSelectors = [
+      "[aria-checked='true']",
+      "[aria-selected='true']",
+      "[data-state='checked']",
+      "[data-state='selected']",
+      "[data-selected='true']",
+      "button[class*='composer-pill']",
+      "button[data-testid*='model' i]",
+    ];
+    const seen = new Set();
+    const rows = [];
+    for (const selector of selectedSelectors) {
+      for (const element of root.querySelectorAll(selector)) {
+        if (seen.has(element)) continue;
+        seen.add(element);
+        const values = [labelOf(element), ...attributeNames.map(name => element.getAttribute?.(name) || "")];
+        const family = values.map(familyFromText).find(Boolean) || "";
+        if (family) rows.push({ family, source: "composer-dom", label: values.find(value => familyFromText(value) === family) || "" });
+      }
+    }
+    // ChatGPT often renders a combined composer pill such as "5.5 高" without
+    // model-specific attributes. Visible composer controls are passive evidence.
+    for (const item of modelReasoningControls()) {
+      if (item.family) rows.push({ family: item.family, source: "composer-dom", label: item.label });
+    }
+    const unique = [...new Set(rows.map(item => item.family))];
+    if (unique.length === 1) return rows.find(item => item.family === unique[0]);
+    return { family: "", source: unique.length > 1 ? "ambiguous-dom" : "none" };
   }
 
   function openSurfaces() {
@@ -277,7 +340,12 @@
     assistantText,
     familyFromText,
     reasoningFromText,
+    modelReasoningControls,
     modelReasoningControl,
+    modelControl,
+    reasoningControl,
+    reasoningEvidence,
+    modelFamilyEvidence,
     openSurfaces,
     reasoningSlider,
   });
