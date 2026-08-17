@@ -13,6 +13,7 @@
   const MAX_SLIDER_STEPS = 32;
 
   const page = () => globalThis.__CHAT2API_PAGE_ADAPTER_V22__ || null;
+  const driver = () => globalThis.__CHAT2API_PAGE_DRIVER_V22__ || null;
   const normalizeFallback = value => String(value || "")
     .replace(/[✓✔︎✔√]/g, "")
     .replace(/\s+/g, " ")
@@ -326,30 +327,58 @@
     return { strategy: "click-fallback+nested-choice", used_click: true };
   }
 
+  function attachDriverVerification(data, requested) {
+    const pageDriver = driver();
+    return pageDriver?.attachVerification ? pageDriver.attachVerification(data, requested) : data;
+  }
+
+  function classifyDriverError(error, requested) {
+    const pageDriver = driver();
+    if (pageDriver?.classifyReasoningError) return pageDriver.classifyReasoningError(error, requested);
+    return {
+      code: "reasoning_selection_failed",
+      message: String(error?.message || error),
+      verification: null,
+    };
+  }
+
   async function prepare(level) {
     const requested = normalize(level);
     if (!["instant", "medium", "high"].includes(requested)) throw new Error(`Unsupported reasoning level: ${level}`);
     if (matches(labelOf(currentPill()), requested)) {
-      return { reasoning: requested, zero_op: true, reasoning_switched: false, selection_strategy: "reasoning-dom-zero-op", used_click: false };
+      return attachDriverVerification({ reasoning: requested, zero_op: true, reasoning_switched: false, selection_strategy: "reasoning-dom-zero-op", used_click: false }, requested);
     }
 
     let result = await chooseNoClick(requested);
     if (matches(labelOf(currentPill()), requested)) {
-      return { reasoning: requested, zero_op: false, reasoning_switched: true, selection_strategy: result?.strategy || "no-click", used_click: false };
+      return attachDriverVerification({ reasoning: requested, zero_op: false, reasoning_switched: true, selection_strategy: result?.strategy || "no-click", used_click: false }, requested);
     }
 
     result = await chooseClickFallback(requested);
     if (!matches(labelOf(currentPill()), requested)) {
       throw new Error(`ChatGPT reasoning level could not be verified after selection: ${requested}`);
     }
-    return { reasoning: requested, zero_op: false, reasoning_switched: true, selection_strategy: result.strategy, used_click: true };
+    return attachDriverVerification({ reasoning: requested, zero_op: false, reasoning_switched: true, selection_strategy: result.strategy, used_click: true }, requested);
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "chat2api.reasoning.prepare.v7") {
+      const requested = normalize(message.reasoning_level);
       prepare(message.reasoning_level)
         .then(data => sendResponse({ ok: true, data, controller: "reasoning-v7.2" }))
-        .catch(error => sendResponse({ ok: false, error: String(error?.message || error), controller: "reasoning-v7.2" }));
+        .catch(error => {
+          const classified = classifyDriverError(error, requested || message.reasoning_level);
+          sendResponse({
+            ok: false,
+            error: classified.message,
+            code: classified.code,
+            diagnostics: {
+              page_driver_version: driver()?.version || null,
+              verification: classified.verification || null,
+            },
+            controller: "reasoning-v7.2",
+          });
+        });
       return true;
     }
     return false;
