@@ -3,6 +3,7 @@
   if (globalThis[KEY]) return;
 
   const ROUTER_KEY = "__CHAT2API_CONVERSATION_ROUTING_V1__";
+  const NETWORK_GATE_KEY = "__CHAT2API_NETWORK_GATE_V26__";
   const STORAGE_KEY = "chat2apiConversationWarmPoolV2";
   const WARM_URL = "https://chatgpt.com/";
   const READY_TIMEOUT_MS = 45000;
@@ -43,6 +44,19 @@
       return ["free", "paid"].includes(value) ? value : "unknown";
     } catch (_) {
       return "unknown";
+    }
+  }
+
+  async function proactivePrewarmAllowed() {
+    const gate = globalThis[NETWORK_GATE_KEY];
+    if (typeof gate?.allowPrewarm === "function") {
+      try { return await gate.allowPrewarm(); } catch (_) { return false; }
+    }
+    try {
+      const stored = await chrome.storage.local.get({ networkExternalReady: false });
+      return stored.networkExternalReady === true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -358,6 +372,7 @@
       syncLegacyAliases();
       const settings = await config().catch(() => ({}));
       if (!settings.clientId || !settings.clientToken || settings.socketState !== "connected") return;
+      if (!await proactivePrewarmAllowed()) return;
       const definitions = await desiredSlotDefinitions();
       const selected = preferredSlotKey ? definitions.find(item => item.slot_key === preferredSlotKey) : null;
       if (selected) await ensureWarmSlot(selected).catch(() => {});
@@ -547,6 +562,7 @@
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
     if (changes.socketState?.newValue === "connected") scheduleWarm(600);
+    if (changes.networkExternalReady?.newValue === true) scheduleWarm(120);
   });
 
   chrome.tabs.onRemoved.addListener(tabId => {

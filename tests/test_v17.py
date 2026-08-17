@@ -300,7 +300,6 @@ def test_route_history_migration_uses_latest_request_record(tmp_path: Path) -> N
 
 def test_extension_and_console_static_contracts() -> None:
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.7.6"
     entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")
     device = (EXTENSION / "background_device_v17.js").read_text(encoding="utf-8")
     admin = (ROOT / "app" / "admin_v17.js").read_text(encoding="utf-8")

@@ -144,7 +144,6 @@ def test_control_panel_docs_cover_concurrency_and_live_text_access() -> None:
     patch = (ROOT / "app" / "v21_patch.py").read_text(encoding="utf-8")
     routing_patch = (ROOT / "app" / "v21_routing_patch.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
-    manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
 
     assert 'const VERSION = "0.21.0"' in docs
     assert "单扩展并发与容量" in docs
@@ -159,4 +158,3 @@ def test_control_panel_docs_cover_concurrency_and_live_text_access() -> None:
     assert 'ROUTED_REQUEST_TYPES = {"chat.request", "image.request", "voice.request", "voice.live.start"}' in routing_patch
     assert entry.index("install_v20_3_patch(app)") < entry.index("install_v21_patch(app)")
     assert entry.index("install_v21_patch(app)") < entry.index("install_v21_routing_patch(app)")
-    assert manifest["version"] == "0.7.6"

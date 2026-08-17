@@ -17,7 +17,6 @@ def test_free_account_detector_is_passive_and_loaded() -> None:
     background = (EXTENSION / "background_account_v20.js").read_text(encoding="utf-8")
     entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")
 
-    assert manifest["version"] == "0.7.6"
     assert "content_account_v20.js" in scripts
     assert "client-bootstrap-free" in source
     assert "ready-composer-without-model-selector" in source

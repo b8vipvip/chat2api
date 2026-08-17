@@ -13,6 +13,15 @@ async function persistForm() {
     extensionName: $("extensionName").value.trim(),
   });
 }
+async function runtimeStatus() {
+  return chrome.storage.local.get({
+    platformOs: "",
+    platformArch: "",
+    networkProbeStatus: "unknown",
+    networkCountryCode: "",
+    networkProbeError: "",
+  });
+}
 function renderModels(settings) {
   const models = Array.isArray(settings.models) && settings.models.length
     ? settings.models.filter(item => TEXT_MODELS.includes(item?.id))
@@ -22,11 +31,30 @@ function renderModels(settings) {
   const labels = models.map(item => `${item.id === current || item.selected ? "✓ " : ""}${item.id}`);
   $("models").textContent = `文本模型：${labels.join("、")}。当前模型：${current || "尚未被动确认"}；推理强度：${reasoning}。API 请求会先被动识别页面状态，匹配时零切换直接执行。`;
 }
+function platformLabel(settings) {
+  const os = String(settings.platformOs || "").toLowerCase();
+  const arch = String(settings.platformArch || "").toLowerCase();
+  const names = { win: "Windows", linux: "Linux", mac: "macOS", cros: "ChromeOS", openbsd: "OpenBSD" };
+  return `${names[os] || os || "未知平台"}${arch ? `/${arch}` : ""}`;
+}
+function networkLabel(settings) {
+  const status = String(settings.networkProbeStatus || "unknown");
+  const country = String(settings.networkCountryCode || "").toUpperCase();
+  if (status === "external") return `外网${country ? `(${country})` : ""} · 已允许主动预热`;
+  if (status === "china-mainland") return "中国大陆网络(CN) · 禁止主动预热";
+  if (status === "offline") return "浏览器离线";
+  if (status === "error") return "外网检测失败 · 请求时仍可按需创建窗口";
+  return "网络区域待检测";
+}
 async function refresh() {
-  $("versionInfo").textContent = `Chrome Bridge · v${EXTENSION_VERSION}`;
-  const response = await send({ type: "popup.status" });
+  const [response, localRuntime] = await Promise.all([
+    send({ type: "popup.status" }),
+    runtimeStatus(),
+  ]);
   if (!response?.ok) return;
-  const { settings, tabs } = response;
+  const settings = { ...(response.settings || {}), ...(localRuntime || {}) };
+  const tabs = response.tabs || [];
+  $("versionInfo").textContent = `Chrome Bridge · v${EXTENSION_VERSION} · ${platformLabel(settings)}`;
   if (!formInitialized) {
     $("serverUrl").value = settings.serverUrl || DEFAULT_SERVER_URL;
     $("pairingCode").value = settings.pairingCode || "";
@@ -34,12 +62,13 @@ async function refresh() {
     formInitialized = true;
   }
   const status = $("status");
-  status.textContent = `${settings.socketState || "disconnected"}${settings.clientId ? ` · ${settings.clientId}` : " · 未配对"}`;
+  status.textContent = `${settings.socketState || "disconnected"}${settings.clientId ? ` · ${settings.clientId}` : " · 未配对"} · ${networkLabel(settings)}`;
   status.className = `status ${settings.socketState === "connected" ? "connected" : settings.socketState === "error" ? "error" : ""}`;
   const bound = tabs.find(tab => tab.id === settings.boundTabId);
   $("binding").textContent = bound ? `已绑定：${bound.title || bound.url}` : `未绑定；当前检测到 ${tabs.length} 个 ChatGPT 标签页。API 请求会复用唯一标签页，或由扩展自动创建新的 ChatGPT 标签页。`;
   renderModels(settings);
   if (settings.socketError) $("message").textContent = settings.socketError;
+  else if (settings.networkProbeError && settings.networkProbeStatus === "error") $("message").textContent = `外网检测：${settings.networkProbeError}`;
   else if (settings.lastModelSelectionError) $("message").textContent = `上次模型/推理强度选择失败：${settings.lastModelSelectionError}`;
 }
 for (const id of ["serverUrl", "pairingCode", "extensionName"]) {
