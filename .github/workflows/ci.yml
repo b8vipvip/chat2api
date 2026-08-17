@@ -25,6 +25,7 @@ jobs:
           node --check chrome_extension/content.js
           node --check chrome_extension/content_page_adapter_v22.js
           node --check chrome_extension/content_page_driver_v22.js
+          node --check chrome_extension/content_page_smoke_v22.js
           node --check chrome_extension/content_request_v2.js
           node --check chrome_extension/content_request_v3.js
           node --check chrome_extension/content_request_v4.js
@@ -75,6 +76,7 @@ jobs:
           node --check chrome_extension/audio_routing_live.js
           node --check chrome_extension/browser_tabs.js
           node --check chrome_extension/background.js
+          node --check chrome_extension/background_page_smoke_v22.js
           node --check chrome_extension/background_device_v17.js
           node --check chrome_extension/background_account_v20.js
           node --check chrome_extension/background_time_v14.js
@@ -86,6 +88,7 @@ jobs:
           node --check chrome_extension/conversation_workers_v24.js
           node --check chrome_extension/conversation_dispatch.js
           node --check chrome_extension/popup.js
+          node --check chrome_extension/popup_page_smoke_v22.js
           node --check chrome_extension/popup_logging.js
           node --check app/admin_v6.js
           node --check app/admin_v7.js
