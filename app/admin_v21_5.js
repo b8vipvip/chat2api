@@ -30,7 +30,7 @@
       const byClient = new Map((data.clients || []).map(row => [String(row.client_id || ""), row]));
       const rows = document.querySelectorAll("#extensionDeviceBody tr");
       for (const tr of rows) {
-        if (!tr.cells || tr.cells.length < 5) continue;
+        if (!tr.cells || tr.cells.length < 6) continue;
         const clientId = columnCell(tr, "client_id", 0)?.textContent?.trim() || "";
         const item = byClient.get(clientId);
         if (!item) continue;
@@ -38,7 +38,9 @@
           ? Number(item.active_api_calls)
           : Number(item.capacity?.active_requests || 0);
         const limit = Number(item.max_concurrency || item.capacity?.limit_units || 0);
-        const concurrencyCell = columnCell(tr, "concurrency", 4);
+        // v0.20 added account_type at base index 3, so the historical
+        // bound-api-key/live-concurrency cell is base index 5, not 4.
+        const concurrencyCell = columnCell(tr, "concurrency", 5);
         if (!concurrencyCell) continue;
         concurrencyCell.textContent = limit > 0 ? `${active} / ${limit}` : String(active);
         concurrencyCell.title = "实时活动 API 请求 / 最大并发";
