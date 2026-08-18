@@ -50,9 +50,15 @@ def test_health_center_uses_existing_extension_metadata_without_new_host_credent
         '["platform", "平台"]',
         '["network", "网络"]',
         '["chatgpt", "ChatGPT"]',
-        '["health", "运行健康"]',
+        "healthState(row)",
+        "运行状态中心",
     ):
         assert token in source
+
+    assert '["health", "运行健康"]' not in source
+    assert 'ensureCell(tr, "health")' not in source
+    assert 'renderState(ensureCell(tr, "health")' not in source
+    assert "removeLegacyHealthColumn" in source
 
     for forbidden in (
         "CHAT2API_ADMIN_PASSWORD",
@@ -79,7 +85,7 @@ def test_health_center_and_live_concurrency_support_reordered_columns():
     live = read(ROOT / "app" / "admin_v21_5.js")
 
     # v0.20 inserted account_type at base index 3. Historical positions remain
-    # safe fallbacks before the v0.21.8 layout controller marks cells, while
+    # safe fallbacks before the final layout controller marks cells, while
     # keyed lookup becomes authoritative after a user reorders the table.
     assert 'columnCell(tr, "client_id", 0)' in live
     assert 'columnCell(tr, "concurrency", 5)' in live
