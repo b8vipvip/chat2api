@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 import app as package
 from app.live_voice_patch import LIVE_PROTOCOL_VERSION
 from app.runtime_contract import (
+    ADMIN_EXTENSION_COLUMNS_ASSET,
     ADMIN_VERSION_ASSET,
     CHROME_BRIDGE_VERSION,
     PACKAGE_VERSION,
@@ -54,6 +55,7 @@ def test_runtime_contract_installs_once_and_after_latest_patch():
     install_runtime_contract(runtime)
     assert sum(1 for route in runtime.routes if getattr(route, "path", "") == "/version") == 1
     assert sum(1 for route in runtime.routes if getattr(route, "path", "") == ADMIN_VERSION_ASSET) == 1
+    assert sum(1 for route in runtime.routes if getattr(route, "path", "") == ADMIN_EXTENSION_COLUMNS_ASSET) == 1
 
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert "install_runtime_contract(app)" in entry
@@ -67,6 +69,10 @@ def test_runtime_contract_is_final_admin_version_owner():
     @runtime.get("/admin")
     async def admin_page():
         return HTMLResponse('<html><body><div class="brand"><small>Server Console · v0.21.4</small></div><div id="status">v0.20.0</div><script src="/assets/historical.js"></script></body></html>')
+
+    @runtime.get("/developers")
+    async def developers_page():
+        return HTMLResponse('<html><body><div class="brand"><small>Server Console · v0.21.4</small></div></body></html>')
 
     @runtime.get("/api/admin/overview")
     async def overview():
@@ -82,7 +88,12 @@ def test_runtime_contract_is_final_admin_version_owner():
     client = TestClient(runtime)
     html = client.get("/admin").text
     assert f'<script src="{ADMIN_VERSION_ASSET}"></script>' in html
-    assert html.index('/assets/historical.js') < html.index(ADMIN_VERSION_ASSET)
+    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}"></script>' in html
+    assert html.index('/assets/historical.js') < html.index(ADMIN_VERSION_ASSET) < html.index(ADMIN_EXTENSION_COLUMNS_ASSET)
+
+    developers_html = client.get("/developers").text
+    assert ADMIN_VERSION_ASSET in developers_html
+    assert ADMIN_EXTENSION_COLUMNS_ASSET not in developers_html
 
     script = client.get(ADMIN_VERSION_ASSET).text
     assert f'const VERSION = "{SERVER_RUNTIME_VERSION}"' in script
@@ -90,6 +101,10 @@ def test_runtime_contract_is_final_admin_version_owner():
     assert 'document.querySelector(".brand small")' in script
     assert 'document.getElementById("status")' in script
     assert "MutationObserver" in script
+
+    columns_script = client.get(ADMIN_EXTENSION_COLUMNS_ASSET).text
+    assert 'const STORAGE_KEY = "chat2api.extensionColumns.v1"' in columns_script
+    assert 'id = "extensionColumnSettingsButton"' in columns_script
 
     overview_payload = client.get("/api/admin/overview").json()
     assert overview_payload["version"] == SERVER_RUNTIME_VERSION
