@@ -40,8 +40,12 @@
     return true;
   }
 
+  async function rawTracking() {
+    return chrome.storage.local.get(TRACKING_DEFAULTS).catch(() => TRACKING_DEFAULTS);
+  }
+
   async function trackedBootstrap() {
-    const stored = await chrome.storage.local.get(TRACKING_DEFAULTS).catch(() => TRACKING_DEFAULTS);
+    const stored = await rawTracking();
     const tabId = stored.chatgptExternalWarmTabIdV28;
     const windowId = stored.chatgptExternalWarmWindowIdV28;
     if (!Number.isInteger(tabId) || !Number.isInteger(windowId)) return null;
@@ -223,7 +227,7 @@
         preset_prepare_ms: Date.now() - prepareStarted,
         strategy: definition.preset ? "external-network-bootstrap-affinity" : "external-network-bootstrap-generic",
         account_type: definition.account_type,
-        model_picker_ready: definition.account_type !== "free" ? true : false,
+        model_picker_ready: definition.account_type !== "free",
         preset_key: definition.preset?.key || null,
         preset_model: definition.preset?.model || null,
         preset_reasoning: definition.preset?.reasoning || null,
@@ -298,7 +302,7 @@
       scheduleEnsure(0);
     }
     if (changes.chatgptLoginState || changes.chatgptLoginComposerReady) {
-      reportLogin(false).then(() => adoptReadyBootstrap()).catch(() => {});
+      adoptReadyBootstrap().catch(() => {});
     }
   });
 
@@ -311,8 +315,8 @@
   });
 
   chrome.tabs.onRemoved.addListener(tabId => {
-    trackedBootstrap().then(async tracked => {
-      if (!tracked || tracked.tab_id !== tabId) return;
+    rawTracking().then(async stored => {
+      if (stored.chatgptExternalWarmTabIdV28 !== tabId) return;
       await clearTrackedBootstrap();
       if (await eligible()) scheduleEnsure(350);
     }).catch(() => {});
