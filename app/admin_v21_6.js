@@ -13,6 +13,10 @@
     return document.getElementById("view-extensions")?.classList.contains("active");
   }
 
+  function columnCell(tr, key, fallbackIndex) {
+    return tr?.querySelector(`td[data-chat2api-column-key="${key}"]`) || tr?.cells?.[fallbackIndex] || null;
+  }
+
   function text(value, fallback = "-") {
     const normalized = String(value ?? "").trim();
     return normalized || fallback;
@@ -93,19 +97,26 @@
     const row = table?.querySelector("thead tr");
     if (!row) return;
     for (const [key, label] of STATUS_COLUMNS) {
-      if (row.querySelector(`th[data-chat2api-health-column="${key}"]`)) continue;
-      const th = document.createElement("th");
-      th.dataset.chat2apiHealthColumn = key;
-      th.textContent = label;
-      row.appendChild(th);
+      let th = row.querySelector(`th[data-chat2api-health-column="${key}"]`);
+      if (!th) {
+        th = document.createElement("th");
+        th.dataset.chat2apiHealthColumn = key;
+        th.textContent = label;
+        row.appendChild(th);
+      }
+      th.dataset.chat2apiColumnKey = key;
     }
   }
 
   function ensureCell(tr, key) {
     let cell = tr.querySelector(`td[data-chat2api-health-cell="${key}"]`);
-    if (cell) return cell;
+    if (cell) {
+      cell.dataset.chat2apiColumnKey = key;
+      return cell;
+    }
     cell = document.createElement("td");
     cell.dataset.chat2apiHealthCell = key;
+    cell.dataset.chat2apiColumnKey = key;
     tr.appendChild(cell);
     return cell;
   }
@@ -150,16 +161,14 @@
     const domRows = document.querySelectorAll("#extensionDeviceBody tr");
     for (const tr of domRows) {
       if (!tr.cells || !tr.cells.length) continue;
-      const clientId = tr.cells[0]?.textContent?.trim() || "";
+      const clientId = columnCell(tr, "client_id", 0)?.textContent?.trim() || "";
       const row = byClient.get(clientId);
       if (!row) continue;
 
-      // The persisted registration version may be older than the live status
-      // metadata after an unpacked-extension reload. Prefer the live extension
-      // version without changing the stable table indices used by v21.5.
-      if (tr.cells[2]) {
-        tr.cells[2].textContent = effectiveVersion(row);
-        tr.cells[2].title = "当前在线扩展上报的 manifest 版本优先；离线时回退到注册版本";
+      const versionCell = columnCell(tr, "version", 2);
+      if (versionCell) {
+        versionCell.textContent = effectiveVersion(row);
+        versionCell.title = "当前在线扩展上报的 manifest 版本优先；离线时回退到注册版本";
       }
 
       const platform = platformState(row);
