@@ -74,15 +74,23 @@ def test_health_center_preserves_network_and_login_safety_boundaries():
     assert 'label: "需要人工登录"' in source
 
 
-def test_health_center_keeps_v21_5_live_concurrency_cell_indices_stable():
+def test_health_center_and_live_concurrency_support_reordered_columns():
     health = read(ROOT / "app" / "admin_v21_6.js")
     live = read(ROOT / "app" / "admin_v21_5.js")
-    assert "tr.cells[4]" in live
+
+    # Historical positions remain safe fallbacks before the v0.21.7 layout
+    # controller marks cells, but keyed lookup becomes authoritative after a
+    # user reorders the table.
+    assert 'columnCell(tr, "client_id", 0)' in live
+    assert 'columnCell(tr, "concurrency", 4)' in live
+    assert 'data-chat2api-column-key' in live
+
+    assert 'columnCell(tr, "client_id", 0)' in health
+    assert 'columnCell(tr, "version", 2)' in health
     assert "row.appendChild(th)" in health
     assert "tr.appendChild(cell)" in health
     assert "insertCell" not in health
     assert "insertBefore(cell" not in health
-    assert "tr.cells[4]" not in health
 
 
 def test_v21_6_is_installed_after_v21_5_and_before_runtime_contract():
