@@ -59,12 +59,15 @@ The browser bridge should not store ChatGPT credentials or attempt to automate C
 
 ## Unattended systemd worker
 
-`scripts/install_linux_worker_autostart.sh` captures the currently working Xray configuration and installs four pieces of host automation:
+`scripts/install_linux_worker_autostart.sh` captures the currently working Xray configuration and installs five pieces of host automation:
 
 - `chat2api-xray.service`: the captured Xray proxy on `127.0.0.1:10808`;
 - `chat2api-xvfb.service`: the virtual X display used by the production browser;
 - `chat2api-chrome.service`: Google Chrome using the persistent worker profile and the local SOCKS proxy;
-- `chat2api-worker-watchdog.timer`: a periodic health check that runs `chat2api-worker-watchdog.service` roughly every two minutes.
+- `chat2api-worker-watchdog.timer`: a periodic health check that runs `chat2api-worker-watchdog.service` roughly every two minutes;
+- `chat2api-extension-autoreload.timer`: a source-version watcher that runs `chat2api-extension-autoreload.service` roughly every minute.
+
+The installer is intentionally idempotent. Once systemd Xray already runs from `${WORKER_CONFIG_DIR}/xray-config.json`, a later installer run recognizes that the live source config and captured destination are the same file and does not call `install(1)` on the same path. This allows later automation units to be installed during routine production updates.
 
 The watchdog is deliberately conservative. It checks:
 
@@ -82,6 +85,33 @@ The watchdog also refuses to create, re-own, or replace a missing/mis-owned prod
 
 ChatGPT `login_required` is intentionally not repaired by the host watchdog. The extension already reports login readiness through its normal metadata path; expired login, CAPTCHA and 2FA remain a visible/manual account operation.
 
+## Automatic unpacked-extension update
+
+The production worker loads `chrome_extension/` as an unpacked extension from the repository path. Chrome does not reliably reload an already-running unpacked extension just because files on disk changed, so Linux production uses an explicit source watcher.
+
+`chat2api-extension-autoreload.service` records the currently deployed extension source fingerprint and the `version` from `chrome_extension/manifest.json` under:
+
+```text
+/var/lib/chat2api-worker/extension-state.env
+```
+
+When the repository has been updated and the Git tree for `chrome_extension/` changes, the watcher:
+
+1. waits if a Git index update is still in progress;
+2. refuses automatic reload if `chrome_extension/` has local/uncommitted changes;
+3. reads the new manifest version and Git tree fingerprint;
+4. restarts only `chat2api-chrome.service`;
+5. waits for the production Chrome process using the expected persistent `user-data-dir` to return;
+6. records the new version, fingerprint, Git commit and applied time.
+
+A server-only repository update does not change the extension tree and therefore does not restart Chrome.
+
+If one extension fingerprint fails to restart Chrome successfully, that exact fingerprint is recorded as failed and is **not retried every minute**. A later source change produces a new fingerprint and becomes eligible for one fresh attempt. This avoids an automatic restart storm caused by one bad extension revision.
+
+The watcher does not run `git pull` by itself. Repository deployment remains an explicit operator/deployment action; once the working tree is updated, extension activation is automatic. This keeps server deployment, Docker rebuilds and browser reloads as separate safety domains.
+
+The formal Chrome Bridge release version remains `chrome_extension/manifest.json`. The host never rewrites the manifest locally, so the repository stays clean for future `git pull`. If a future extension release updates the manifest version in Git, the watcher reloads that version automatically and records it in `extension-state.env`.
+
 Useful commands after installation:
 
 ```bash
@@ -90,14 +120,24 @@ systemctl status \
   chat2api-xvfb \
   chat2api-chrome \
   chat2api-worker-watchdog.timer \
+  chat2api-extension-autoreload.timer \
   --no-pager
 
 systemctl start chat2api-worker-watchdog.service
+systemctl start chat2api-extension-autoreload.service
+
 journalctl -u chat2api-worker-watchdog -n 100 --no-pager
-systemctl list-timers chat2api-worker-watchdog.timer --no-pager
+journalctl -u chat2api-extension-autoreload -n 100 --no-pager
+
+systemctl list-timers \
+  chat2api-worker-watchdog.timer \
+  chat2api-extension-autoreload.timer \
+  --no-pager
+
+cat /var/lib/chat2api-worker/extension-state.env
 ```
 
-When `chrome_extension/*` is updated in the repository, restart `chat2api-chrome.service` once so the persistent-profile browser reloads the unpacked extension from disk. Do not run a second Chrome instance against the same `user-data-dir` at the same time.
+Do not run a second Chrome instance against the same `user-data-dir` at the same time.
 
 ## First configuration recommendation
 
