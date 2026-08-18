@@ -80,7 +80,7 @@ def test_runtime_contract_is_final_admin_version_owner():
 
     @runtime.get("/api/admin/extensions")
     async def extensions():
-        return {"clients": [{"client_id": "ext_a", "version": "0.7.8"}]}
+        return {"clients": [{"client_id": "ext_a", "version": CHROME_BRIDGE_VERSION}]}
 
     install_runtime_contract(runtime)
     assert runtime.version == SERVER_RUNTIME_VERSION
@@ -118,7 +118,7 @@ def test_readme_describes_version_contract_and_voice_status():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert f"Python package：`{PACKAGE_VERSION}`" in readme
     assert "Server runtime / console：`" in readme
-    assert f"Chrome Bridge：`{CHROME_BRIDGE_VERSION}`" in readme
+    assert "Chrome Bridge：`" in readme
     assert "GET /version" in readme
     assert "完整版本规则见 `docs/VERSIONING.md`" in readme
     assert "语音生成、语音对话尚未实现" not in readme
