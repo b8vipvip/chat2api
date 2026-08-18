@@ -116,6 +116,7 @@ jobs:
           node --check app/admin_v21_1.js
           node --check app/admin_v21_3.js
           node --check app/admin_v21_4.js
+          node --check app/admin_v21_5.js
           python - <<'PY'
           import re
           from pathlib import Path
@@ -125,6 +126,8 @@ jobs:
           Path("/tmp/chat2api-admin.js").write_text(match.group(1), encoding="utf-8")
           PY
           node --check /tmp/chat2api-admin.js
+      - name: Linux worker installer syntax
+        run: bash -n scripts/install_linux_worker_autostart.sh
       - name: Page Driver VM contract
         run: node tests/page_driver_dispatch_key_v22.mjs
       - name: Reasoning key fallback VM contract
