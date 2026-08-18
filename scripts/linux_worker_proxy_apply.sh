@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-XRAY_BIN="${CHAT2API_XRAY_BIN:-/usr/local/bin/xray}"
-XRAY_CONFIG="${CHAT2API_XRAY_CONFIG:-/etc/chat2api-worker/xray.json}"
-XRAY_UNIT="${CHAT2API_XRAY_UNIT:-chat2api-xray.service}"
-CHROME_UNIT="${CHAT2API_CHROME_UNIT:-chat2api-chrome.service}"
-PROXY_PORT="${CHAT2API_PROXY_PORT:-10808}"
-TEST_URL="${CHAT2API_PROXY_TEST_URL:-https://chatgpt.com/}"
+# Fixed privileged paths: the unprivileged Worker agent is allowed to invoke
+# this exact helper, but it must not be able to redirect the root helper toward
+# arbitrary files or units through environment variables or command arguments.
+XRAY_BIN="/usr/local/bin/xray"
+XRAY_CONFIG="/etc/chat2api-worker/xray.json"
+XRAY_UNIT="chat2api-xray.service"
+CHROME_UNIT="chat2api-chrome.service"
+PROXY_PORT="10808"
+TEST_URL="https://chatgpt.com/"
 
 if [[ "${EUID}" -ne 0 ]]; then
   printf '%s\n' '{"ok":false,"error":"root_required"}'
