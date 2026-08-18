@@ -112,7 +112,9 @@ User=chat2api
 ExecStart=/opt/chat2api-worker-venv/bin/python ${REPO_DIR}/scripts/linux_worker_agent.py
 Restart=always
 RestartSec=5
-NoNewPrivileges=true
+# The agent is still unprivileged, but it must be able to use the exact
+# sudoers allowlist below for three systemd restarts. NoNewPrivileges=true
+# would make those explicit sudo operations fail.
 ProtectSystem=strict
 ReadOnlyPaths=/etc/chat2api-worker
 [Install]
