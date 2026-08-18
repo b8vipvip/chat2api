@@ -13,6 +13,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import quote
 
 
 DISPLAY = os.environ.get("CHAT2API_LOGIN_DISPLAY", ":99")
@@ -96,17 +97,64 @@ def _run_xdotool(args: list[str]) -> dict[str, Any]:
     return {"ok": result.returncode == 0, "error": None if result.returncode == 0 else "input_injection_failed"}
 
 
-def _run_xdotool_script(parts: list[str]) -> dict[str, Any]:
-    """Send keyboard commands over stdin so typed secrets never enter argv."""
-    error = _check_session()
-    if error:
-        return error
+def _run_xdotool_stdin(parts: list[str], *, require_session: bool = True, error_name: str = "input_injection_failed") -> dict[str, Any]:
+    """Send commands over stdin so typed secrets never enter process argv."""
+    if require_session:
+        error = _check_session()
+        if error:
+            return error
     script = " ".join(shlex.quote(str(part)) for part in parts) + "\n"
     try:
-        result = subprocess.run(["xdotool", "-"], input=script, capture_output=True, text=True, timeout=5, check=False, env=_env())
+        result = subprocess.run(["xdotool", "-"], input=script, capture_output=True, text=True, timeout=8, check=False, env=_env())
     except (OSError, subprocess.TimeoutExpired):
-        return {"ok": False, "error": "input_injection_failed"}
-    return {"ok": result.returncode == 0, "error": None if result.returncode == 0 else "input_injection_failed"}
+        return {"ok": False, "error": error_name}
+    return {"ok": result.returncode == 0, "error": None if result.returncode == 0 else error_name}
+
+
+def _chrome_window_id() -> str | None:
+    """Return one visible Chrome X11 window. Window IDs are not sensitive."""
+    try:
+        result = subprocess.run(
+            ["xdotool", "search", "--onlyvisible", "--class", "google-chrome"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            env=_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    rows = [line.strip() for line in (result.stdout or "").splitlines() if line.strip().isdigit()]
+    return rows[-1] if result.returncode == 0 and rows else None
+
+
+def inject_worker_binding(ticket: str, server_url: str) -> dict[str, Any]:
+    """Deliver a short-lived Worker binding proof through a URL fragment.
+
+    The proof is never placed in subprocess argv. URL fragments are not sent in
+    HTTP requests, and the Chrome Bridge removes the fragment immediately after
+    capture.
+    """
+    raw_ticket = str(ticket or "").strip()
+    clean_server = str(server_url or "").strip().rstrip("/")
+    if not raw_ticket.startswith("wbind_") or len(raw_ticket) > 160:
+        return {"ok": False, "error": "invalid_binding_ticket"}
+    if not clean_server.startswith(("https://", "http://")) or len(clean_server) > 500:
+        return {"ok": False, "error": "invalid_binding_server"}
+    window_id = _chrome_window_id()
+    if not window_id:
+        return {"ok": False, "error": "chrome_window_not_found"}
+    binding_url = f"https://chatgpt.com/#chat2api-worker-bind={raw_ticket}&chat2api-server={quote(clean_server, safe='')}"
+    return _run_xdotool_stdin(
+        [
+            "windowactivate", "--sync", window_id,
+            "key", "--clearmodifiers", "ctrl+l",
+            "type", "--clearmodifiers", "--delay", "0", binding_url,
+            "key", "--clearmodifiers", "Return",
+        ],
+        require_session=False,
+        error_name="binding_injection_failed",
+    )
 
 
 def send_input(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -149,13 +197,13 @@ def send_input(arguments: dict[str, Any]) -> dict[str, Any]:
         special = {"Enter":"Return","Tab":"Tab","Escape":"Escape","Backspace":"BackSpace","Delete":"Delete","ArrowLeft":"Left","ArrowRight":"Right","ArrowUp":"Up","ArrowDown":"Down","Home":"Home","End":"End","PageUp":"Page_Up","PageDown":"Page_Down"," ":"space"}
         if key in special:
             combo = "+".join([*allowed_modifiers, special[key]])
-            return _run_xdotool_script(["key", "--clearmodifiers", combo])
+            return _run_xdotool_stdin(["key", "--clearmodifiers", combo])
         if len(key) == 1 and key.isprintable():
             chord_modifiers = [item for item in allowed_modifiers if item in {"ctrl", "alt", "super"}]
             if chord_modifiers:
                 combo = "+".join([*chord_modifiers, key])
-                return _run_xdotool_script(["key", "--clearmodifiers", combo])
-            return _run_xdotool_script(["type", "--clearmodifiers", "--delay", "0", key])
+                return _run_xdotool_stdin(["key", "--clearmodifiers", combo])
+            return _run_xdotool_stdin(["type", "--clearmodifiers", "--delay", "0", key])
         return {"ok": False, "error": "unsupported_key"}
 
     return {"ok": False, "error": "unsupported_input_kind"}
