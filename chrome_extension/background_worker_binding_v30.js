@@ -6,6 +6,7 @@
   const HASH_TICKET = "chat2api-worker-bind";
   const HASH_SERVER = "chat2api-server";
   const RETRY_MS = 5000;
+  const RESTORE_URL = "https://chatgpt.com/";
   const state = { inFlight: null, retryTimer: null };
   globalThis[KEY] = state;
 
@@ -25,7 +26,7 @@
   function bindingFromUrl(value, tabId = null) {
     try {
       const url = new URL(String(value || ""));
-      if (!isChatGptUrl(url.toString())) return null;
+      if (url.protocol !== "about:" || url.pathname !== "blank") return null;
       const params = new URLSearchParams(url.hash.replace(/^#/, ""));
       const ticket = String(params.get(HASH_TICKET) || "").trim();
       const serverUrl = normalizeServer(params.get(HASH_SERVER));
@@ -46,27 +47,19 @@
     return value;
   }
 
-  async function hideBindingFragment(tabId) {
+  async function scrubBindingTab(tabId) {
+    if (!Number.isInteger(tabId)) return;
+    try { await chrome.tabs.update(tabId, { url: "about:blank" }); } catch (_) {}
+  }
+
+  async function restoreChatGpt(tabId) {
     if (!Number.isInteger(tabId)) return;
     try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => {
-          try {
-            if (location.hash.includes("chat2api-worker-bind=")) {
-              history.replaceState(history.state, "", `${location.pathname}${location.search}`);
-            }
-          } catch (_) {}
-        },
-      });
-      return;
-    } catch (_) {}
-    try {
       const tab = await chrome.tabs.get(tabId);
-      const url = new URL(tab.url || tab.pendingUrl || "");
-      if (!url.hash.includes("chat2api-worker-bind=")) return;
-      url.hash = "";
-      await chrome.tabs.update(tabId, { url: url.toString() });
+      const url = String(tab?.url || tab?.pendingUrl || "");
+      if (url === "about:blank" || url.startsWith("about:blank#")) {
+        await chrome.tabs.update(tabId, { url: RESTORE_URL });
+      }
     } catch (_) {}
   }
 
@@ -147,6 +140,7 @@
     if (socket) {
       try { socket.close(4000, "Linux Worker binding completed"); } catch (_) {}
     }
+    await restoreChatGpt(binding.tabId);
     await connectSocket();
     return payload;
   }
@@ -160,8 +154,12 @@
         return await claim(pending);
       } catch (error) {
         const status = Number(error?.status || 0);
-        if (status >= 400 && status < 500 && status !== 429) await clearPending();
-        else scheduleRetry();
+        if (status >= 400 && status < 500 && status !== 429) {
+          await clearPending();
+          await restoreChatGpt(pending.tabId);
+        } else {
+          scheduleRetry();
+        }
         return null;
       }
     })().finally(() => { state.inFlight = null; });
@@ -173,13 +171,13 @@
     const binding = bindingFromUrl(tab.url || tab.pendingUrl || "", tab.id);
     if (!binding) return false;
     await savePending(binding);
-    await hideBindingFragment(tab.id);
+    await scrubBindingTab(tab.id);
     await claimPending();
     return true;
   }
 
   async function scanTabs() {
-    const tabs = await chrome.tabs.query({ url: CHATGPT_URLS }).catch(() => []);
+    const tabs = await chrome.tabs.query({}).catch(() => []);
     for (const tab of tabs || []) {
       if (await captureFromTab(tab)) return true;
     }
@@ -188,7 +186,7 @@
 
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     const value = changeInfo.url || tab?.url || tab?.pendingUrl || "";
-    if (!String(value).includes(`${HASH_TICKET}=`)) return;
+    if (!String(value).startsWith("about:blank#") || !String(value).includes(`${HASH_TICKET}=`)) return;
     captureFromTab({ ...tab, id: tabId, url: value }).catch(() => {});
   });
 
