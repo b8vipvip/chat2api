@@ -76,7 +76,11 @@ def test_admin_list_enroll_worker_status_and_unauthorized(tmp_path):
 
 
 def test_command_allowlist_has_no_arbitrary_execution():
-    required = {"health_check", "restart_chrome", "restart_xray", "restart_xvfb", "reload_extension", "test_proxy", "apply_proxy_config", "open_login_session", "close_login_session", "get_logs", "reconcile_reserve_pool"}
+    required = {
+        "health_check", "restart_chrome", "restart_xray", "restart_xvfb", "reload_extension",
+        "test_proxy", "apply_proxy_config", "open_login_session", "close_login_session",
+        "login_session_frame", "login_session_input", "get_logs", "reconcile_reserve_pool",
+    }
     assert ALLOWED_COMMANDS == required
     assert not {"exec_shell", "run_command", "bash"} & ALLOWED_COMMANDS
 
