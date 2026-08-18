@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import base64
 import os
+import shlex
 import subprocess
 import time
 from dataclasses import dataclass
@@ -95,6 +96,19 @@ def _run_xdotool(args: list[str]) -> dict[str, Any]:
     return {"ok": result.returncode == 0, "error": None if result.returncode == 0 else "input_injection_failed"}
 
 
+def _run_xdotool_script(parts: list[str]) -> dict[str, Any]:
+    """Send keyboard commands over stdin so typed secrets never enter argv."""
+    error = _check_session()
+    if error:
+        return error
+    script = " ".join(shlex.quote(str(part)) for part in parts) + "\n"
+    try:
+        result = subprocess.run(["xdotool", "-"], input=script, capture_output=True, text=True, timeout=5, check=False, env=_env())
+    except (OSError, subprocess.TimeoutExpired):
+        return {"ok": False, "error": "input_injection_failed"}
+    return {"ok": result.returncode == 0, "error": None if result.returncode == 0 else "input_injection_failed"}
+
+
 def send_input(arguments: dict[str, Any]) -> dict[str, Any]:
     kind = str(arguments.get("kind") or "")
     if kind == "mouse":
@@ -135,16 +149,13 @@ def send_input(arguments: dict[str, Any]) -> dict[str, Any]:
         special = {"Enter":"Return","Tab":"Tab","Escape":"Escape","Backspace":"BackSpace","Delete":"Delete","ArrowLeft":"Left","ArrowRight":"Right","ArrowUp":"Up","ArrowDown":"Down","Home":"Home","End":"End","PageUp":"Page_Up","PageDown":"Page_Down"," ":"space"}
         if key in special:
             combo = "+".join([*allowed_modifiers, special[key]])
-            return _run_xdotool(["key", "--clearmodifiers", combo])
+            return _run_xdotool_script(["key", "--clearmodifiers", combo])
         if len(key) == 1 and key.isprintable():
             chord_modifiers = [item for item in allowed_modifiers if item in {"ctrl", "alt", "super"}]
             if chord_modifiers:
                 combo = "+".join([*chord_modifiers, key])
-                return _run_xdotool(["key", "--clearmodifiers", combo])
-            # event.key already contains the final printable character, including
-            # shifted symbols such as @ or !; typing it directly avoids invalid
-            # xdotool combinations like shift+@.
-            return _run_xdotool(["type", "--clearmodifiers", "--delay", "0", key])
+                return _run_xdotool_script(["key", "--clearmodifiers", combo])
+            return _run_xdotool_script(["type", "--clearmodifiers", "--delay", "0", key])
         return {"ok": False, "error": "unsupported_key"}
 
     return {"ok": False, "error": "unsupported_input_kind"}
