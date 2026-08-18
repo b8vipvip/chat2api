@@ -20,7 +20,7 @@ def test_extension_action_buttons_use_short_labels_without_changing_handlers():
     assert ">删除记录</button>" not in source
 
 
-def test_server_runtime_bumped_for_extension_action_label_change():
+def test_server_runtime_keeps_action_labels_under_current_runtime():
     source = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.21.14"' in source
+    assert 'SERVER_RUNTIME_VERSION = "0.22.0"' in source
     assert 'CHROME_BRIDGE_VERSION = "0.8.0"' in source
