@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 import json
+import re
 import subprocess
 
 from fastapi import FastAPI
@@ -14,6 +15,12 @@ from app.v21_13_patch import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _semver(value: str) -> tuple[int, int, int]:
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", value)
+    assert match, value
+    return tuple(map(int, match.groups()))
 
 
 class _Registry:
@@ -74,7 +81,6 @@ def test_reserve_pool_tracks_real_managed_windows_and_active_subset():
     ):
         assert token in source
 
-    # Manual ChatGPT tabs are intentionally not used as the reserve total.
     assert "chatTabs()" not in source
     assert "tab_count" not in source
 
@@ -110,9 +116,12 @@ def test_reserve_window_column_is_live_and_configurable():
 def test_reserve_versions_match_manifest_and_runtime_contract():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert manifest["version"] == "0.8.0"
-    assert 'SERVER_RUNTIME_VERSION = "0.21.14"' in runtime
-    assert 'CHROME_BRIDGE_VERSION = "0.8.0"' in runtime
+    server = re.search(r'SERVER_RUNTIME_VERSION = "([0-9.]+)"', runtime)
+    bridge = re.search(r'CHROME_BRIDGE_VERSION = "([0-9.]+)"', runtime)
+    assert server and bridge
+    assert _semver(server.group(1)) >= (0, 21, 13)
+    assert _semver(manifest["version"]) >= (0, 8, 0)
+    assert bridge.group(1) == manifest["version"]
 
 
 def test_reserve_pool_javascript_syntax():

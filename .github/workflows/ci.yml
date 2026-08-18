@@ -19,7 +19,9 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install -e '.[dev]'
       - name: Python compile
-        run: python -m compileall -q app
+        run: |
+          python -m compileall -q app
+          python -m py_compile scripts/linux_worker_agent.py
       - name: JavaScript syntax
         run: |
           node --check chrome_extension/content.js
@@ -120,6 +122,7 @@ jobs:
           node --check app/admin_v21_5.js
           node --check app/admin_v21_6.js
           node --check app/admin_extension_columns.js
+          node --check app/admin_linux_workers.js
           python - <<'PY'
           import re
           from pathlib import Path
@@ -130,7 +133,9 @@ jobs:
           PY
           node --check /tmp/chat2api-admin.js
       - name: Linux worker installer syntax
-        run: bash -n scripts/install_linux_worker_autostart.sh
+        run: |
+          bash -n scripts/install_linux_worker_autostart.sh
+          bash -n scripts/bootstrap_linux_worker.sh
       - name: Page Driver VM contract
         run: node tests/page_driver_dispatch_key_v22.mjs
       - name: Reasoning key fallback VM contract
