@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.21.13";
+  const VERSION = "0.21.6";
   const POLL_MS = 1500;
   const STATUS_COLUMNS = [
     ["platform", "平台"],
