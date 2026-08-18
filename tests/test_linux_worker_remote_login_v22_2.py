@@ -1,0 +1,128 @@
+from pathlib import Path
+
+import pytest
+
+from app.linux_worker_login_sessions import LOGIN_SESSION_IDLE_SECONDS, LoginSessionStore
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.value = 1000.0
+
+    def __call__(self) -> float:
+        return self.value
+
+
+def test_login_session_ticket_is_memory_only_worker_bound_single_session_and_expires():
+    clock = Clock()
+    store = LoginSessionStore(now=clock, idle_seconds=120)
+
+    first = store.issue("wrk_one")
+    assert first.startswith("lgn_")
+    assert first not in repr(store._sessions)
+    assert store.require("wrk_one", first).worker_id == "wrk_one"
+    with pytest.raises(KeyError):
+        store.require("wrk_two", first)
+
+    second = store.issue("wrk_one")
+    assert second != first
+    with pytest.raises(KeyError):
+        store.require("wrk_one", first)
+    assert store.require("wrk_one", second).worker_id == "wrk_one"
+
+    clock.value += 121
+    with pytest.raises(KeyError):
+        store.require("wrk_one", second)
+    assert not store.has_worker_session("wrk_one")
+
+
+def test_remote_login_helper_uses_xvfb_capture_and_xdotool_without_listener():
+    source = (ROOT / "scripts" / "linux_worker_remote_login.py").read_text(encoding="utf-8")
+    for token in (
+        'DISPLAY = os.environ.get("CHAT2API_LOGIN_DISPLAY", ":99")',
+        'SESSION_IDLE_SECONDS = int(os.environ.get("CHAT2API_LOGIN_SESSION_IDLE_SECONDS", "1200"))',
+        'MAX_FRAME_BYTES = 1_500_000',
+        '["xwd", "-display", DISPLAY, "-root", "-silent"]',
+        '"convert"',
+        '["xdotool", *args]',
+        'max(0, min(SOURCE_WIDTH - 1',
+        'max(0, min(SOURCE_HEIGHT - 1',
+    ):
+        assert token in source
+    lowered = source.lower()
+    assert "http.server" not in lowered
+    assert "websocket" not in lowered
+    assert ".listen(" not in lowered
+    assert "5900" not in source
+    assert "6080" not in source
+
+
+def test_bootstrap_installs_only_headless_capture_dependencies_not_desktop_or_remote_ports():
+    source = (ROOT / "scripts" / "bootstrap_linux_worker.sh").read_text(encoding="utf-8")
+    assert "x11-apps xdotool imagemagick" in source
+    assert "Environment=DISPLAY=:99" in source
+    assert 'agent_version:"0.3.0"' in source
+    lowered = source.lower()
+    for forbidden in ("x11vnc", "novnc", "xrdp", "xfce", "gnome", "5900", "6080", "3389"):
+        assert forbidden not in lowered
+
+
+def test_remote_login_control_plane_requires_admin_plus_worker_bound_ticket():
+    source = (ROOT / "app" / "linux_worker_patch.py").read_text(encoding="utf-8")
+    for token in (
+        'LOGIN_TICKET_HEADER = "x-chat2api-login-ticket"',
+        'LoginSessionStore()',
+        '"/api/admin/linux-workers/{worker_id}/login-session"',
+        '"/api/admin/linux-workers/{worker_id}/login-session/frame"',
+        '"/api/admin/linux-workers/{worker_id}/login-session/input"',
+        'require_login_ticket(worker_id, request)',
+        '"open_login_session"',
+        '"close_login_session"',
+        '"login_session_frame"',
+        '"login_session_input"',
+        'len(frame) > 2_100_000',
+    ):
+        assert token in source
+    assert LOGIN_SESSION_IDLE_SECONDS == 20 * 60
+
+
+def test_admin_remote_login_is_direct_browser_interaction_not_password_form():
+    source = (ROOT / "app" / "admin_linux_workers.js").read_text(encoding="utf-8")
+    for token in (
+        "远程登录 ChatGPT",
+        'id="linuxLoginFrame"',
+        "X-Chat2API-Login-Ticket",
+        "/login-session/frame",
+        "/login-session/input",
+        'data-login="${esc(worker.worker_id)}"',
+        'remoteImage.addEventListener("keydown"',
+        'remoteImage.addEventListener("wheel"',
+        "chat2api 不保存这些输入内容",
+    ):
+        assert token in source
+    lowered = source.lower()
+    assert 'type="password"' not in lowered
+    assert "ws://" not in lowered
+    assert "wss://" not in lowered
+    assert "novnc" not in lowered
+    assert 'addEventListener("dblclick"' not in source
+    assert 'const {headers = {}, ...rest} = options;' in source
+
+
+def test_worker_agent_implements_remote_login_without_privilege_escalation():
+    source = (ROOT / "scripts" / "linux_worker_agent.py").read_text(encoding="utf-8")
+    assert '"agent_version": "0.3.0"' in source
+    for command in ("open_login_session", "close_login_session", "login_session_frame", "login_session_input"):
+        assert f'"{command}"' in source
+    assert "capture_frame()" in source
+    assert "send_input(args)" in source
+    assert "sudo" not in (ROOT / "scripts" / "linux_worker_remote_login.py").read_text(encoding="utf-8")
+
+
+def test_remote_login_runtime_bumps_server_only():
+    runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
+    assert 'SERVER_RUNTIME_VERSION = "0.22.2"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.8.0"' in runtime
