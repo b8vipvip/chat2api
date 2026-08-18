@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.21.9";
+  const VERSION = "0.21.12";
   const STORAGE_KEY = "chat2api.extensionColumns.v1";
   const BASE_KEYS = ["client_id", "device_id", "version", "account_type", "status", "concurrency", "last_seen", "actions"];
   const COLUMNS = [
@@ -35,6 +35,7 @@
   let observedTable = null;
   let tableObserver = null;
   let refreshScheduled = false;
+  let bodyOverflowBeforeModal = "";
 
   function defaultPrefs() {
     return {
@@ -107,10 +108,7 @@
 
     for (const tr of body.rows) {
       if (tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan")) continue;
-
-      const hasBaseKeys = BASE_KEYS.every(key =>
-        tr.querySelector(`td[data-chat2api-column-key="${key}"]`),
-      );
+      const hasBaseKeys = BASE_KEYS.every(key => tr.querySelector(`td[data-chat2api-column-key="${key}"]`));
       if (!hasBaseKeys) {
         for (let index = 0; index < Math.min(BASE_KEYS.length, tr.cells.length); index += 1) {
           const cell = tr.cells[index];
@@ -121,7 +119,6 @@
           }
         }
       }
-
       for (const cell of tr.cells) {
         const health = String(cell.dataset.chat2apiHealthCell || "").trim();
         if (KNOWN_KEYS.has(health)) cell.dataset.chat2apiColumnKey = health;
@@ -139,20 +136,14 @@
   function reorderKnownChildren(parent, prefs) {
     if (!parent) return false;
     const current = [...parent.children];
-    const orderedKnown = prefs.order
-      .map(key => keyedDirectChild(parent, key))
-      .filter(Boolean);
+    const orderedKnown = prefs.order.map(key => keyedDirectChild(parent, key)).filter(Boolean);
     const unknown = current.filter(node =>
       !KNOWN_KEYS.has(String(node.dataset?.chat2apiColumnKey || "").trim()),
     );
     const desired = [...orderedKnown, ...unknown];
-    if (
-      current.length === desired.length
-      && current.every((node, index) => node === desired[index])
-    ) {
+    if (current.length === desired.length && current.every((node, index) => node === desired[index])) {
       return false;
     }
-
     const fragment = document.createDocumentFragment();
     for (const node of desired) fragment.appendChild(node);
     parent.appendChild(fragment);
@@ -177,16 +168,11 @@
 
     reorderKnownChildren(headerRow, prefs);
     for (const tr of body.rows) {
-      if (!(tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan"))) {
-        reorderKnownChildren(tr, prefs);
-      }
+      if (!(tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan"))) reorderKnownChildren(tr, prefs);
     }
-
     applyVisibility(headerRow, prefs);
     for (const tr of body.rows) {
-      if (!(tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan"))) {
-        applyVisibility(tr, prefs);
-      }
+      if (!(tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan"))) applyVisibility(tr, prefs);
     }
 
     const visibleCount = prefs.order.filter(
@@ -226,76 +212,116 @@
   }
 
   function ensureMenu() {
+    let backdrop = document.getElementById("extensionColumnSettingsBackdrop");
+    if (!backdrop) {
+      backdrop = document.createElement("div");
+      backdrop.id = "extensionColumnSettingsBackdrop";
+      backdrop.style.cssText = [
+        "position:fixed",
+        "inset:0",
+        "z-index:300",
+        "display:none",
+        "align-items:center",
+        "justify-content:center",
+        "padding:24px",
+        "background:rgba(2,6,23,.72)",
+        "backdrop-filter:blur(2px)",
+      ].join(";");
+      backdrop.addEventListener("mousedown", event => {
+        if (event.target === backdrop) closeMenu();
+      });
+      document.body.appendChild(backdrop);
+    }
+
     let menu = document.getElementById("extensionColumnSettingsMenu");
-    if (menu) return menu;
-    menu = document.createElement("div");
-    menu.id = "extensionColumnSettingsMenu";
-    menu.style.cssText = [
-      "position:fixed",
-      "z-index:120",
-      "display:none",
-      "width:340px",
-      "max-width:calc(100vw - 24px)",
-      "max-height:min(70vh,620px)",
-      "overflow:auto",
-      "padding:12px",
-      "border:1px solid rgba(148,163,184,.24)",
-      "border-radius:12px",
-      "background:#0f172a",
-      "box-shadow:0 18px 55px rgba(0,0,0,.38)",
-    ].join(";");
-    menu.addEventListener("click", event => event.stopPropagation());
-    document.body.appendChild(menu);
+    if (!menu) {
+      menu = document.createElement("div");
+      menu.id = "extensionColumnSettingsMenu";
+      menu.setAttribute("role", "dialog");
+      menu.setAttribute("aria-modal", "true");
+      menu.setAttribute("aria-labelledby", "extensionColumnSettingsTitle");
+      menu.tabIndex = -1;
+      menu.style.cssText = [
+        "width:min(980px,calc(100vw - 48px))",
+        "max-width:980px",
+        "max-height:min(82vh,760px)",
+        "display:flex",
+        "flex-direction:column",
+        "overflow:hidden",
+        "border:1px solid rgba(148,163,184,.28)",
+        "border-radius:16px",
+        "background:#0f172a",
+        "box-shadow:0 28px 90px rgba(0,0,0,.55)",
+      ].join(";");
+      menu.addEventListener("mousedown", event => event.stopPropagation());
+      backdrop.appendChild(menu);
+    }
     return menu;
   }
 
-  function positionMenu() {
-    const button = document.getElementById("extensionColumnSettingsButton");
-    const menu = document.getElementById("extensionColumnSettingsMenu");
-    if (!button || !menu || !menuOpen) return;
-    const rect = button.getBoundingClientRect();
-    const width = Math.min(340, window.innerWidth - 24);
-    const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
-    const top = Math.min(rect.bottom + 8, window.innerHeight - 120);
-    menu.style.width = `${width}px`;
-    menu.style.left = `${left}px`;
-    menu.style.top = `${top}px`;
-  }
-
   function closeMenu() {
-    const menu = document.getElementById("extensionColumnSettingsMenu");
-    if (menu) menu.style.display = "none";
+    const backdrop = document.getElementById("extensionColumnSettingsBackdrop");
+    if (backdrop) backdrop.style.display = "none";
+    if (menuOpen) document.body.style.overflow = bodyOverflowBeforeModal;
     menuOpen = false;
   }
 
   function openMenu() {
     const menu = ensureMenu();
-    menuOpen = true;
+    const backdrop = document.getElementById("extensionColumnSettingsBackdrop");
     renderMenu();
-    menu.style.display = "block";
-    positionMenu();
+    if (!menuOpen) bodyOverflowBeforeModal = document.body.style.overflow;
+    menuOpen = true;
+    document.body.style.overflow = "hidden";
+    if (backdrop) backdrop.style.display = "flex";
+    requestAnimationFrame(() => menu.focus());
   }
 
   function renderMenu() {
     const menu = ensureMenu();
+    const previousScroll = menu.querySelector("#extensionColumnSettingsBody")?.scrollTop || 0;
     const prefs = loadPrefs();
     const labelByKey = new Map(COLUMNS.map(item => [item.key, item.label]));
-    const rows = prefs.order.map((key, index) => {
+    const visibleCount = prefs.order.filter(key => prefs.visible[key] !== false).length;
+    const cards = prefs.order.map((key, index) => {
       const label = labelByKey.get(key) || key;
       const checked = prefs.visible[key] !== false ? "checked" : "";
-      return `<div data-column-row="${key}" style="display:flex;align-items:center;gap:8px;padding:7px 4px;border-bottom:1px solid rgba(148,163,184,.12)">
-        <label style="display:flex;align-items:center;gap:8px;flex:1;min-width:0;cursor:pointer;font-size:13px">
-          <input type="checkbox" data-column-visible="${key}" ${checked}>
-          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</span>
-        </label>
-        <button type="button" class="action" data-column-move="${key}" data-delta="-1" title="前移" ${index === 0 ? "disabled" : ""}>↑</button>
-        <button type="button" class="action" data-column-move="${key}" data-delta="1" title="后移" ${index === prefs.order.length - 1 ? "disabled" : ""}>↓</button>
+      const number = String(index + 1).padStart(2, "0");
+      return `<div data-column-card="${key}" style="display:flex;flex-direction:column;gap:10px;min-width:0;padding:12px;border:1px solid rgba(148,163,184,.16);border-radius:11px;background:rgba(15,23,42,.72)">
+        <div style="display:flex;align-items:center;gap:9px;min-width:0">
+          <span style="flex:none;min-width:30px;padding:3px 6px;text-align:center;border-radius:999px;background:rgba(59,130,246,.16);color:#93c5fd;font-size:11px;font-variant-numeric:tabular-nums">${number}</span>
+          <label style="display:flex;align-items:center;gap:8px;min-width:0;flex:1;cursor:pointer;font-size:13px;font-weight:600">
+            <input type="checkbox" data-column-visible="${key}" ${checked}>
+            <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${label}">${label}</span>
+          </label>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <button type="button" class="action" data-column-move="${key}" data-delta="-1" title="前移一位" ${index === 0 ? "disabled" : ""}>← 前移</button>
+          <button type="button" class="action" data-column-move="${key}" data-delta="1" title="后移一位" ${index === prefs.order.length - 1 ? "disabled" : ""}>后移 →</button>
+        </div>
       </div>`;
     }).join("");
-    menu.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px">
-        <div><b>列表列设置</b><div class="muted" style="font-size:12px;margin-top:2px">勾选显示；↑ / ↓ 调整前后顺序</div></div>
-        <button type="button" class="action" id="resetExtensionColumns">恢复默认</button>
-      </div>${rows}`;
+
+    menu.innerHTML = `<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:18px 20px 14px;border-bottom:1px solid rgba(148,163,184,.16)">
+        <div style="min-width:0">
+          <div id="extensionColumnSettingsTitle" style="font-size:17px;font-weight:700">扩展列表列设置</div>
+          <div class="muted" style="font-size:12px;margin-top:5px">勾选控制显示；编号代表当前列顺序，使用“前移 / 后移”调整。</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex:none">
+          <button type="button" class="action" id="resetExtensionColumns">恢复默认</button>
+          <button type="button" class="action" data-close-extension-columns title="关闭" aria-label="关闭列设置">✕</button>
+        </div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 20px 0;font-size:12px" class="muted">
+        <span>已显示 ${visibleCount} / ${prefs.order.length} 列</span>
+        <span>宽屏自动多列排列</span>
+      </div>
+      <div id="extensionColumnSettingsBody" style="flex:1;min-height:0;overflow:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:14px 20px 18px">
+        <div id="extensionColumnSettingsGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">${cards}</div>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 20px;border-top:1px solid rgba(148,163,184,.16)">
+        <button type="button" class="action" data-close-extension-columns>完成</button>
+      </div>`;
 
     for (const input of menu.querySelectorAll("[data-column-visible]")) {
       input.addEventListener("change", event =>
@@ -304,14 +330,15 @@
     }
     for (const button of menu.querySelectorAll("[data-column-move]")) {
       button.addEventListener("click", event =>
-        moveColumn(
-          event.currentTarget.dataset.columnMove,
-          Number(event.currentTarget.dataset.delta || 0),
-        ),
+        moveColumn(event.currentTarget.dataset.columnMove, Number(event.currentTarget.dataset.delta || 0)),
       );
     }
+    for (const button of menu.querySelectorAll("[data-close-extension-columns]")) {
+      button.addEventListener("click", closeMenu);
+    }
     menu.querySelector("#resetExtensionColumns")?.addEventListener("click", resetLayout);
-    if (menuOpen) positionMenu();
+    const body = menu.querySelector("#extensionColumnSettingsBody");
+    if (body) body.scrollTop = previousScroll;
   }
 
   function ensureSettingsButton() {
@@ -321,8 +348,7 @@
     if (!panel) return false;
     const heading = [...panel.querySelectorAll("h3")]
       .find(node => String(node.textContent || "").trim().startsWith("扩展列表"))
-      || [...panel.querySelectorAll("h3")]
-        .find(node => String(node.textContent || "").trim().startsWith("绑定设备"))
+      || [...panel.querySelectorAll("h3")].find(node => String(node.textContent || "").trim().startsWith("绑定设备"))
       || panel.querySelector("h3");
     if (!heading) return false;
 
@@ -371,31 +397,30 @@
   }
 
   const baseLoadExtensions = typeof globalThis.loadExtensions === "function" ? globalThis.loadExtensions : null;
-  if (baseLoadExtensions && !baseLoadExtensions.__chat2apiColumnLayoutV219) {
+  if (baseLoadExtensions && !baseLoadExtensions.__chat2apiColumnLayoutV2112) {
     const wrappedLoadExtensions = async (...args) => {
       const result = await baseLoadExtensions(...args);
       scheduleRefresh();
       return result;
     };
-    wrappedLoadExtensions.__chat2apiColumnLayoutV219 = true;
+    wrappedLoadExtensions.__chat2apiColumnLayoutV2112 = true;
     globalThis.loadExtensions = wrappedLoadExtensions;
   }
 
   const baseShow = typeof globalThis.show === "function" ? globalThis.show : null;
-  if (baseShow && !baseShow.__chat2apiColumnLayoutV219) {
+  if (baseShow && !baseShow.__chat2apiColumnLayoutV2112) {
     const wrappedShow = async (...args) => {
       const result = await baseShow(...args);
       if (args[0] === "extensions") scheduleRefresh();
       return result;
     };
-    wrappedShow.__chat2apiColumnLayoutV219 = true;
+    wrappedShow.__chat2apiColumnLayoutV2112 = true;
     globalThis.show = wrappedShow;
   }
 
-  document.addEventListener("click", closeMenu);
-  document.addEventListener("keydown", event => { if (event.key === "Escape") closeMenu(); });
-  window.addEventListener("resize", positionMenu);
-  window.addEventListener("scroll", positionMenu, true);
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape" && menuOpen) closeMenu();
+  });
 
   document.documentElement.dataset.chat2apiExtensionColumnLayoutVersion = VERSION;
   refreshUi();
