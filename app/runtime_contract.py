@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -14,11 +15,12 @@ from .live_voice_patch import LIVE_PROTOCOL_VERSION
 # collapse them into a single version number: package releases, the layered
 # server runtime/console, the Chrome Bridge, and the realtime wire protocol can
 # evolve independently.
-SERVER_RUNTIME_VERSION = "0.21.6"
+SERVER_RUNTIME_VERSION = "0.21.7"
 CHROME_BRIDGE_VERSION = "0.7.8"
 PRODUCTION_ENTRYPOINT = "app.entry:app"
 VERSION_CONTRACT_VERSION = 1
 ADMIN_VERSION_ASSET = "/assets/chat2api-runtime-version.js"
+ADMIN_EXTENSION_COLUMNS_ASSET = "/assets/chat2api-extension-columns.js"
 
 
 def version_contract_payload(app: FastAPI) -> dict[str, Any]:
@@ -131,6 +133,15 @@ def install_runtime_contract(app: FastAPI) -> FastAPI:
             headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
         )
 
+    @app.get(ADMIN_EXTENSION_COLUMNS_ASSET, include_in_schema=False)
+    async def admin_extension_columns_js() -> Response:
+        path = Path(__file__).with_name("admin_extension_columns.js")
+        return Response(
+            path.read_text(encoding="utf-8"),
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+        )
+
     @app.middleware("http")
     async def runtime_contract_response(request: Request, call_next):
         response = await call_next(request)
@@ -140,9 +151,13 @@ def install_runtime_contract(app: FastAPI) -> FastAPI:
         if path in {"/admin", "/developers"} and "text/html" in content_type:
             raw = await _response_bytes(response)
             text = raw.decode("utf-8", errors="replace")
-            marker = f'<script src="{ADMIN_VERSION_ASSET}"></script>'
-            if marker not in text:
-                text = text.replace("</body>", marker + "</body>")
+            version_marker = f'<script src="{ADMIN_VERSION_ASSET}"></script>'
+            if version_marker not in text:
+                text = text.replace("</body>", version_marker + "</body>")
+            if path == "/admin":
+                columns_marker = f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}"></script>'
+                if columns_marker not in text:
+                    text = text.replace("</body>", columns_marker + "</body>")
             headers = {
                 key: value
                 for key, value in response.headers.items()
