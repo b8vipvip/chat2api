@@ -97,6 +97,11 @@ def test_extension_autoreload_uses_git_tree_version_and_single_attempt_failure_g
         'GIT_COMMIT=${commit}',
         'previously failed to reload; suppressing repeated restart until source changes',
         'Chrome Bridge source has local changes; refusing automatic reload until the worktree is clean',
+        'LOCK_FILE="${STATE_DIR}/extension-autoreload.lock"',
+        'command -v flock',
+        'exec 9>"${LOCK_FILE}"',
+        'flock -n 9',
+        'another Chrome Bridge reload transaction is already running; skipping this trigger',
     ):
         assert token in source
 
@@ -121,6 +126,14 @@ def test_installer_adds_extension_autoreload_service_and_timer():
         "systemctl restart chat2api-extension-autoreload.timer",
     ):
         assert token in source
+
+    unit_start = source.index("cat >/etc/systemd/system/chat2api-extension-autoreload.service <<EOF")
+    unit_end = source.index("\nEOF", unit_start)
+    unit_block = source[unit_start:unit_end]
+    assert "After=chat2api-chrome.service" in unit_block
+    assert "Wants=chat2api-chrome.service" in unit_block
+    assert "Requires=chat2api-chrome.service" not in unit_block
+    assert "hard Requires= dependency would" in unit_block
 
 
 def test_installer_persists_runtime_paths_without_credentials():
