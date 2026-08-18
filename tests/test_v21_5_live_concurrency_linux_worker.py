@@ -51,9 +51,18 @@ def test_linux_worker_installer_uses_systemd_xray_xvfb_and_persistent_chrome_pro
         "--password-store=basic",
         "--proxy-server=socks5://127.0.0.1:${PROXY_PORT}",
         "--user-data-dir=${PROFILE_DIR}",
-        "systemctl enable chat2api-xray.service chat2api-xvfb.service chat2api-chrome.service",
+        "systemctl enable \\",
     ):
         assert token in script
+    enable_index = script.index("systemctl enable \\")
+    enable_block_end = script.index("systemctl restart chat2api-xray.service", enable_index)
+    enable_block = script[enable_index:enable_block_end]
+    for unit in (
+        "chat2api-xray.service",
+        "chat2api-xvfb.service",
+        "chat2api-chrome.service",
+    ):
+        assert unit in enable_block
     assert "--no-sandbox" not in script
     assert "pkill -TERM -u \"${WORKER_USER}\" -f \"user-data-dir=${PROFILE_DIR}\"" in script
 
@@ -65,12 +74,13 @@ def test_linux_worker_installer_captures_geodata_before_stopping_live_xray():
         "geosite.dat",
         "geoip.dat",
         'xray_dir="$(dirname "${xray_bin}")"',
-        '"${xray_bin}" run -test -c "${WORKER_CONFIG_DIR}/xray-config.json"',
+        'captured_config="${WORKER_CONFIG_DIR}/xray-config.json"',
+        '"${xray_bin}" run -test -c "${captured_config}"',
         "The live proxy has not been stopped.",
     ):
         assert token in script
     copy_index = script.index('"${xray_dir}/geosite.dat"')
-    preflight_index = script.index('run -test -c "${WORKER_CONFIG_DIR}/xray-config.json"')
+    preflight_index = script.index('run -test -c "${captured_config}"')
     kill_index = script.index('kill "${proxy_pid}"')
     assert copy_index < preflight_index < kill_index
 
