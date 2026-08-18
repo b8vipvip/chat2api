@@ -8,6 +8,7 @@ import os
 import platform
 import socket
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ XRAY_CONFIG = Path(os.environ.get("CHAT2API_XRAY_CONFIG", "/etc/chat2api-worker/
 PROXY_APPLY_HELPER = Path(os.environ.get("CHAT2API_PROXY_APPLY_HELPER", "/usr/local/sbin/chat2api-worker-proxy-apply"))
 PROXY_PORT = int(os.environ.get("CHAT2API_PROXY_PORT", "10808"))
 PROXY_TEST_URL = os.environ.get("CHAT2API_PROXY_TEST_URL", "https://chatgpt.com/")
+HEARTBEAT_SECONDS = 15.0
 ALLOWED_UNITS = {
     "restart_chrome": "chat2api-chrome.service",
     "restart_xray": "chat2api-xray.service",
@@ -218,28 +220,36 @@ async def main() -> None:
         try:
             async with websockets.connect(config["websocket_url"], additional_headers=headers, ping_interval=20) as ws:
                 delay = 2
+                next_heartbeat = 0.0
                 while True:
-                    await ws.send(json.dumps({"type": "heartbeat", "data": health()}))
+                    now = time.monotonic()
+                    if now >= next_heartbeat:
+                        await ws.send(json.dumps({"type": "heartbeat", "data": health()}))
+                        next_heartbeat = now + HEARTBEAT_SECONDS
+
+                    timeout = max(0.05, next_heartbeat - time.monotonic())
                     try:
-                        message = json.loads(await asyncio.wait_for(ws.recv(), timeout=30))
-                        if message.get("type") == "command":
-                            result = await asyncio.to_thread(
-                                run_allowed,
-                                str(message.get("command", "")),
-                                dict(message.get("arguments") or {}),
-                            )
-                            await ws.send(
-                                json.dumps(
-                                    {
-                                        "type": "command.result",
-                                        "request_id": message.get("request_id"),
-                                        "result": result,
-                                    }
-                                )
-                            )
+                        raw = await asyncio.wait_for(ws.recv(), timeout=timeout)
                     except asyncio.TimeoutError:
-                        pass
-                    await asyncio.sleep(15)
+                        continue
+
+                    message = json.loads(raw)
+                    if message.get("type") != "command":
+                        continue
+                    result = await asyncio.to_thread(
+                        run_allowed,
+                        str(message.get("command", "")),
+                        dict(message.get("arguments") or {}),
+                    )
+                    await ws.send(
+                        json.dumps(
+                            {
+                                "type": "command.result",
+                                "request_id": message.get("request_id"),
+                                "result": result,
+                            }
+                        )
+                    )
         except Exception as exc:
             print(f"worker connection unavailable: {type(exc).__name__}", flush=True)
             await asyncio.sleep(delay)
