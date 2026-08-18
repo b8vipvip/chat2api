@@ -58,12 +58,7 @@ def _check_session() -> dict[str, Any] | None:
 
 def open_session() -> dict[str, Any]:
     SESSION.touch()
-    return {
-        "ok": True,
-        "idle_timeout_seconds": SESSION_IDLE_SECONDS,
-        "source_width": SOURCE_WIDTH,
-        "source_height": SOURCE_HEIGHT,
-    }
+    return {"ok": True, "idle_timeout_seconds": SESSION_IDLE_SECONDS, "source_width": SOURCE_WIDTH, "source_height": SOURCE_HEIGHT}
 
 
 def close_session() -> dict[str, Any]:
@@ -76,29 +71,8 @@ def capture_frame() -> dict[str, Any]:
     if error:
         return error
     try:
-        xwd = subprocess.Popen(
-            ["xwd", "-display", DISPLAY, "-root", "-silent"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            env=_env(),
-        )
-        convert = subprocess.run(
-            [
-                "convert",
-                "xwd:-",
-                "-resize",
-                f"{FRAME_WIDTH}x{FRAME_HEIGHT}",
-                "-strip",
-                "-quality",
-                "62",
-                "jpg:-",
-            ],
-            stdin=xwd.stdout,
-            capture_output=True,
-            timeout=8,
-            check=False,
-            env=_env(),
-        )
+        xwd = subprocess.Popen(["xwd", "-display", DISPLAY, "-root", "-silent"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, env=_env())
+        convert = subprocess.run(["convert", "xwd:-", "-resize", f"{FRAME_WIDTH}x{FRAME_HEIGHT}", "-strip", "-quality", "62", "jpg:-"], stdin=xwd.stdout, capture_output=True, timeout=8, check=False, env=_env())
         if xwd.stdout:
             xwd.stdout.close()
         xwd.wait(timeout=3)
@@ -107,15 +81,7 @@ def capture_frame() -> dict[str, Any]:
     payload = convert.stdout or b""
     if convert.returncode != 0 or not payload or len(payload) > MAX_FRAME_BYTES:
         return {"ok": False, "error": "frame_capture_failed"}
-    return {
-        "ok": True,
-        "mime": "image/jpeg",
-        "frame": base64.b64encode(payload).decode("ascii"),
-        "source_width": SOURCE_WIDTH,
-        "source_height": SOURCE_HEIGHT,
-        "frame_width": FRAME_WIDTH,
-        "frame_height": FRAME_HEIGHT,
-    }
+    return {"ok": True, "mime": "image/jpeg", "frame": base64.b64encode(payload).decode("ascii"), "source_width": SOURCE_WIDTH, "source_height": SOURCE_HEIGHT, "frame_width": FRAME_WIDTH, "frame_height": FRAME_HEIGHT}
 
 
 def _run_xdotool(args: list[str]) -> dict[str, Any]:
@@ -123,14 +89,7 @@ def _run_xdotool(args: list[str]) -> dict[str, Any]:
     if error:
         return error
     try:
-        result = subprocess.run(
-            ["xdotool", *args],
-            capture_output=True,
-            text=True,
-            timeout=5,
-            check=False,
-            env=_env(),
-        )
+        result = subprocess.run(["xdotool", *args], capture_output=True, text=True, timeout=5, check=False, env=_env())
     except (OSError, subprocess.TimeoutExpired):
         return {"ok": False, "error": "input_injection_failed"}
     return {"ok": result.returncode == 0, "error": None if result.returncode == 0 else "input_injection_failed"}
@@ -173,18 +132,18 @@ def send_input(arguments: dict[str, Any]) -> dict[str, Any]:
         key = str(arguments.get("key") or "")
         modifiers = arguments.get("modifiers") or []
         allowed_modifiers = [str(item).lower() for item in modifiers if str(item).lower() in {"ctrl", "alt", "shift", "super"}]
-        special = {
-            "Enter": "Return", "Tab": "Tab", "Escape": "Escape", "Backspace": "BackSpace",
-            "Delete": "Delete", "ArrowLeft": "Left", "ArrowRight": "Right", "ArrowUp": "Up", "ArrowDown": "Down",
-            "Home": "Home", "End": "End", "PageUp": "Page_Up", "PageDown": "Page_Down", " ": "space",
-        }
+        special = {"Enter":"Return","Tab":"Tab","Escape":"Escape","Backspace":"BackSpace","Delete":"Delete","ArrowLeft":"Left","ArrowRight":"Right","ArrowUp":"Up","ArrowDown":"Down","Home":"Home","End":"End","PageUp":"Page_Up","PageDown":"Page_Down"," ":"space"}
         if key in special:
             combo = "+".join([*allowed_modifiers, special[key]])
             return _run_xdotool(["key", "--clearmodifiers", combo])
         if len(key) == 1 and key.isprintable():
-            if allowed_modifiers:
-                combo = "+".join([*allowed_modifiers, key])
+            chord_modifiers = [item for item in allowed_modifiers if item in {"ctrl", "alt", "super"}]
+            if chord_modifiers:
+                combo = "+".join([*chord_modifiers, key])
                 return _run_xdotool(["key", "--clearmodifiers", combo])
+            # event.key already contains the final printable character, including
+            # shifted symbols such as @ or !; typing it directly avoids invalid
+            # xdotool combinations like shift+@.
             return _run_xdotool(["type", "--clearmodifiers", "--delay", "0", key])
         return {"ok": False, "error": "unsupported_key"}
 
