@@ -116,10 +116,19 @@ def test_unpaired_extension_claims_worker_identity_without_pairing_code_and_tick
         )
         assert replay.status_code == 401
 
-        already = client.post("/api/workers/extension-binding-ticket", headers=headers)
-        assert already.status_code == 200
-        assert already.json()["bound"] is True
-        assert already.json()["client_id"] == payload["client_id"]
+        # Durable identity alone is not enough to suppress healing: an offline
+        # client receives a fresh proof in case extension storage was lost.
+        offline = client.post("/api/workers/extension-binding-ticket", headers=headers)
+        assert offline.status_code == 200
+        assert offline.json()["bound"] is False
+        assert offline.json()["current_client_id"] == payload["client_id"]
+
+        # Once that exact bound client is online, no navigation/ticket is needed.
+        app.state.registry.sockets[payload["client_id"]] = object()
+        online = client.post("/api/workers/extension-binding-ticket", headers=headers)
+        assert online.status_code == 200
+        assert online.json()["bound"] is True
+        assert online.json()["client_id"] == payload["client_id"]
 
 
 def test_existing_extension_identity_is_reused_and_cannot_bind_to_two_active_workers(tmp_path):
@@ -225,7 +234,7 @@ def test_extension_binding_uses_session_storage_about_blank_scrub_and_no_pairing
         'chrome.storage.session.remove(PENDING_KEY)',
         'url.protocol !== "about:" || url.pathname !== "blank"',
         'chrome.tabs.update(tabId, { url: "about:blank" })',
-        '"/api/extensions/worker-bind"',
+        '/api/extensions/worker-bind',
         'pairingCode: ""',
         'linuxWorkerBindingVersion: 30',
         'await restoreChatGpt(binding.tabId)',
@@ -247,9 +256,10 @@ def test_agent_binding_ticket_never_enters_argv_or_chatgpt_page_and_has_no_new_l
     assert '"type", "--clearmodifiers", "--delay", "0", binding_url' in helper
     assert "https://chatgpt.com/#chat2api-worker-bind=" not in helper
     assert '"X-Worker-Token": str(config.get("worker_token") or "")' in agent
-    assert '"/api/workers/extension-binding-ticket"' in agent
+    assert "/api/workers/extension-binding-ticket" in agent
     assert "inject_worker_binding" in agent
     assert '"agent_version": "0.3.1"' in agent
+    assert "BINDING_BOUND_POLL_SECONDS = 60.0" in agent
     lowered = agent.lower()
     assert "http.server" not in lowered
     assert ".listen(" not in lowered
