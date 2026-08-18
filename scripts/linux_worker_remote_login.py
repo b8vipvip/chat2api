@@ -129,11 +129,11 @@ def _chrome_window_id() -> str | None:
 
 
 def inject_worker_binding(ticket: str, server_url: str) -> dict[str, Any]:
-    """Deliver a short-lived Worker binding proof through a URL fragment.
+    """Deliver a short-lived Worker binding proof through an about:blank fragment.
 
-    The proof is never placed in subprocess argv. URL fragments are not sent in
-    HTTP requests, and the Chrome Bridge removes the fragment immediately after
-    capture.
+    The proof never enters subprocess argv, an HTTP request, or ChatGPT page
+    JavaScript. The Chrome Bridge captures it from the tab URL, scrubs the tab,
+    claims the Worker identity, and then restores ChatGPT.
     """
     raw_ticket = str(ticket or "").strip()
     clean_server = str(server_url or "").strip().rstrip("/")
@@ -144,7 +144,7 @@ def inject_worker_binding(ticket: str, server_url: str) -> dict[str, Any]:
     window_id = _chrome_window_id()
     if not window_id:
         return {"ok": False, "error": "chrome_window_not_found"}
-    binding_url = f"https://chatgpt.com/#chat2api-worker-bind={raw_ticket}&chat2api-server={quote(clean_server, safe='')}"
+    binding_url = f"about:blank#chat2api-worker-bind={raw_ticket}&chat2api-server={quote(clean_server, safe='')}"
     return _run_xdotool_stdin(
         [
             "windowactivate", "--sync", window_id,
