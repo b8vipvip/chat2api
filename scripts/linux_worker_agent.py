@@ -31,6 +31,7 @@ MANIFEST = REPO_DIR / "chrome_extension" / "manifest.json"
 HEARTBEAT_SECONDS = 15.0
 BINDING_RETRY_SECONDS = 20.0
 BINDING_POST_INJECT_SECONDS = 12.0
+BINDING_BOUND_POLL_SECONDS = 60.0
 ALLOWED_UNITS = {
     "restart_chrome": "chat2api-chrome.service",
     "restart_xray": "chat2api-xray.service",
@@ -257,11 +258,12 @@ def _request_binding_ticket(config: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def _binding_loop(config: dict[str, Any]) -> None:
-    """Establish explicit Worker↔Bridge identity before/alongside manual login."""
+    """Keep explicit Worker↔Bridge identity healthy for the lifetime of the Agent."""
     while True:
         payload = await asyncio.to_thread(_request_binding_ticket, config)
         if payload and payload.get("bound") is True:
-            return
+            await asyncio.sleep(BINDING_BOUND_POLL_SECONDS)
+            continue
         ticket = str((payload or {}).get("ticket") or "")
         server_url = str((payload or {}).get("server_url") or "")
         if ticket and server_url and service_active("chat2api-chrome.service"):
