@@ -14,6 +14,7 @@ from typing import Any
 import websockets
 
 from linux_worker_proxy import ProxyConfigError, build_xray_config
+from linux_worker_remote_login import capture_frame, close_session, open_session, send_input
 
 
 CONFIG = Path(os.environ.get("CHAT2API_WORKER_CONFIG", "/etc/chat2api-worker/worker.json"))
@@ -34,10 +35,21 @@ ALLOWED_COMMANDS = {
     "apply_proxy_config",
     "open_login_session",
     "close_login_session",
+    "login_session_frame",
+    "login_session_input",
     "get_logs",
     "reconcile_reserve_pool",
 }
-IMPLEMENTED_COMMANDS = {"health_check", *ALLOWED_UNITS, "test_proxy", "apply_proxy_config"}
+IMPLEMENTED_COMMANDS = {
+    "health_check",
+    *ALLOWED_UNITS,
+    "test_proxy",
+    "apply_proxy_config",
+    "open_login_session",
+    "close_login_session",
+    "login_session_frame",
+    "login_session_input",
+}
 
 
 def service_active(unit: str) -> bool:
@@ -120,7 +132,7 @@ def health() -> dict[str, Any]:
         "platform": "linux",
         "arch": platform.machine(),
         "os_version": platform.freedesktop_os_release().get("PRETTY_NAME", "Linux"),
-        "agent_version": "0.2.0",
+        "agent_version": "0.3.0",
         "status": status,
         "proxy_status": "error" if not services["xray"] else ("connected" if has_proxy else "waiting"),
         "metadata": metadata,
@@ -172,12 +184,21 @@ def _apply_proxy(arguments: dict[str, Any]) -> dict[str, Any]:
 def run_allowed(command: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     if command not in ALLOWED_COMMANDS:
         return {"ok": False, "error": "command_not_allowed"}
+    args = dict(arguments or {})
     if command == "health_check":
         return {"ok": True, "health": health()}
     if command == "test_proxy":
         return _proxy_test()
     if command == "apply_proxy_config":
-        return _apply_proxy(dict(arguments or {}))
+        return _apply_proxy(args)
+    if command == "open_login_session":
+        return open_session()
+    if command == "close_login_session":
+        return close_session()
+    if command == "login_session_frame":
+        return capture_frame()
+    if command == "login_session_input":
+        return send_input(args)
     if command in ALLOWED_UNITS:
         result = subprocess.run(
             ["sudo", "-n", "/bin/systemctl", "restart", ALLOWED_UNITS[command]],
