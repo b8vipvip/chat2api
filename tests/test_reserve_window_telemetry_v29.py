@@ -74,7 +74,6 @@ def test_reserve_pool_tracks_real_managed_windows_and_active_subset():
     ):
         assert token in source
 
-    # Manual ChatGPT tabs are intentionally not used as the reserve total.
     assert "chatTabs()" not in source
     assert "tab_count" not in source
 
@@ -111,7 +110,7 @@ def test_reserve_versions_match_manifest_and_runtime_contract():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     assert manifest["version"] == "0.8.0"
-    assert 'SERVER_RUNTIME_VERSION = "0.21.14"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.0"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.0"' in runtime
 
 
