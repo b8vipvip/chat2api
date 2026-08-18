@@ -11,8 +11,9 @@ def test_dockerfile_keeps_dependency_layer_cacheable():
     assert "COPY app ./app" in source
     assert source.index("COPY requirements.txt ./") < source.index("COPY app ./app")
     assert "--mount=type=cache,id=chat2api-pip,target=/root/.cache/pip,sharing=locked" in source
-    assert "pip install --prefer-binary -r requirements.txt" in source
+    assert "pip install -r requirements.txt" in source
     assert "--no-cache-dir" not in source
+    assert "--prefer-binary" not in source
 
 
 def test_dockerignore_excludes_runtime_and_development_churn():
