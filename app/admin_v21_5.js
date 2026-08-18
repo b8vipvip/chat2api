@@ -7,6 +7,10 @@
     return document.getElementById("view-extensions")?.classList.contains("active");
   }
 
+  function columnCell(tr, key, fallbackIndex) {
+    return tr?.querySelector(`td[data-chat2api-column-key="${key}"]`) || tr?.cells?.[fallbackIndex] || null;
+  }
+
   function patchHeader() {
     const table = document.querySelector("#view-extensions #extensionDeviceBody")?.closest("table");
     const headers = table ? [...table.querySelectorAll("thead th")] : [];
@@ -27,15 +31,17 @@
       const rows = document.querySelectorAll("#extensionDeviceBody tr");
       for (const tr of rows) {
         if (!tr.cells || tr.cells.length < 5) continue;
-        const clientId = tr.cells[0]?.textContent?.trim() || "";
+        const clientId = columnCell(tr, "client_id", 0)?.textContent?.trim() || "";
         const item = byClient.get(clientId);
         if (!item) continue;
         const active = Number.isFinite(Number(item.active_api_calls))
           ? Number(item.active_api_calls)
           : Number(item.capacity?.active_requests || 0);
         const limit = Number(item.max_concurrency || item.capacity?.limit_units || 0);
-        tr.cells[4].textContent = limit > 0 ? `${active} / ${limit}` : String(active);
-        tr.cells[4].title = "实时活动 API 请求 / 最大并发";
+        const concurrencyCell = columnCell(tr, "concurrency", 4);
+        if (!concurrencyCell) continue;
+        concurrencyCell.textContent = limit > 0 ? `${active} / ${limit}` : String(active);
+        concurrencyCell.title = "实时活动 API 请求 / 最大并发";
       }
     } catch (_) {
       // The historical extension-management loader owns visible error reporting.
