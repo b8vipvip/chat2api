@@ -19,7 +19,9 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install -e '.[dev]'
       - name: Python compile
-        run: python -m compileall -q app
+        run: |
+          python -m compileall -q app
+          python -m py_compile scripts/linux_worker_agent.py
       - name: JavaScript syntax
         run: |
           node --check chrome_extension/content.js
