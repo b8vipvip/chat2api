@@ -87,6 +87,26 @@ class LinuxWorkerStore:
             self._save()
             return self.public(worker)
 
+    def record_proxy_success(self, worker_id: str, summary: dict[str, Any]) -> dict[str, Any]:
+        """Persist only non-secret proxy facts after the Worker reports success."""
+        safe = {
+            "protocol": str(summary.get("protocol") or "")[:32],
+            "server": str(summary.get("server") or "")[:200],
+            "port": int(summary.get("port") or 0),
+            "transport": str(summary.get("transport") or "")[:32],
+            "security": str(summary.get("security") or "")[:64],
+        }
+        with self._lock:
+            worker = self.data["workers"][worker_id]
+            worker["proxy_status"] = "connected"
+            if worker.get("status") in {"installing", "enrolling", "waiting_proxy", "proxy_checking", "degraded"}:
+                worker["status"] = "waiting_login"
+            metadata = dict(worker.get("metadata") or {})
+            metadata["proxy_summary"] = safe
+            worker["metadata"] = metadata
+            self._save()
+            return self.public(worker)
+
     def revoke(self, worker_id: str) -> None:
         with self._lock:
             self.data["workers"][worker_id]["revoked_at"] = iso(utcnow())
