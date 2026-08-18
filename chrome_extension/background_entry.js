@@ -24,6 +24,7 @@ importScripts(
   "model_contract_v25.js",
   "conversation_routing.js",
   "conversation_warm_pool_v2.js",
+  "background_external_warm_v28.js",
   "conversation_workers_v24.js",
   "conversation_dispatch.js",
   "audio_routing_live.js",

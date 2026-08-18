@@ -80,6 +80,17 @@ def test_health_center_preserves_network_and_login_safety_boundaries():
     assert 'label: "需要人工登录"' in source
 
 
+def test_chatgpt_column_shows_login_status_without_composer_jargon():
+    source = read(ROOT / "app" / "admin_v21_6.js")
+    assert 'return {label: "已登录", level: "ok"' in source
+    assert 'return {label: "已登录", level: "warn"' in source
+    assert 'return {label: "未登录", level: "bad"' in source
+    assert 'return {label: "检测中", level: "warn"' in source
+    assert 'return {label: "未知", level: "warn"' in source
+    assert "已登录 · Composer" not in source
+    assert "Composer 未确认" not in source
+
+
 def test_health_center_and_live_concurrency_support_reordered_columns():
     health = read(ROOT / "app" / "admin_v21_6.js")
     live = read(ROOT / "app" / "admin_v21_5.js")

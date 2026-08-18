@@ -61,10 +61,10 @@
     const meta = metadata(row);
     const state = text(meta.chatgpt_login_state, "unknown");
     const composer = meta.chatgpt_login_composer_ready === true;
-    if (state === "ready" && composer) return {label: "已登录 · Composer", level: "ok", detail: "ChatGPT Composer 已被动确认可用"};
-    if (state === "login_required") return {label: "需要登录", level: "bad", detail: "需要在可见窗口中人工完成登录/CAPTCHA/2FA"};
+    if (state === "ready" && composer) return {label: "已登录", level: "ok", detail: "ChatGPT 登录已确认，聊天输入区可用"};
+    if (state === "ready") return {label: "已登录", level: "warn", detail: "ChatGPT 登录已识别，聊天输入区尚未确认可用"};
+    if (state === "login_required") return {label: "未登录", level: "bad", detail: "需要在可见窗口中人工完成登录/CAPTCHA/2FA"};
     if (state === "checking") return {label: "检测中", level: "warn", detail: text(meta.chatgpt_login_strategy, "正在检查 ChatGPT 登录状态")};
-    if (state === "ready") return {label: "已登录 · Composer 未确认", level: "warn", detail: "登录已识别，但 Composer 尚未确认可用"};
     return {label: "未知", level: "warn", detail: text(meta.chatgpt_login_strategy, "尚无足够被动登录证据")};
   }
 
@@ -80,7 +80,7 @@
     if (login.level === "bad") return {label: "需要人工登录", level: "bad", detail: login.detail};
     if (network.level === "bad") return {label: "网络离线", level: "bad", detail: network.detail};
     if (meta.platform_supported_desktop === false) return {label: "平台不支持", level: "bad", detail: platform.detail};
-    if (login.level === "ok" && network.level === "ok") return {label: "就绪", level: "ok", detail: "扩展在线，外网可用，ChatGPT Composer 已确认"};
+    if (login.level === "ok" && network.level === "ok") return {label: "就绪", level: "ok", detail: "扩展在线，外网可用，ChatGPT 已登录且聊天输入区可用"};
     if (network.label.startsWith("中国大陆")) return {label: "可调用 · 不主动预热", level: "warn", detail: network.detail};
     if (login.label === "检测中") return {label: "登录检测中", level: "warn", detail: login.detail};
     if (network.label === "探测失败") return {label: "网络探测异常", level: "warn", detail: network.detail};
