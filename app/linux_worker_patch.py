@@ -10,21 +10,25 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import Response
 
 from .admin_auth import SESSION_COOKIE
+from .linux_worker_login_sessions import LOGIN_SESSION_IDLE_SECONDS, LoginSessionStore
 from .linux_workers import ALLOWED_COMMANDS, LinuxWorkerStore
 
 
-PATCH_VERSION = "0.22.1"
+PATCH_VERSION = "0.22.2"
 PROXY_SCHEMES = frozenset({"vless", "vmess", "trojan", "ss"})
 MAX_PROXY_LINK_LENGTH = 16384
+LOGIN_TICKET_HEADER = "x-chat2api-login-ticket"
 
 
 def install_linux_worker_patch(app: FastAPI) -> FastAPI:
     if getattr(app.state, "linux_worker_control_plane_installed", False):
         return app
     store = LinuxWorkerStore(app.state.settings.data_dir)
+    login_sessions = LoginSessionStore()
     app.state.linux_workers = store
     app.state.worker_sockets = {}
     app.state.worker_command_waiters = {}
+    app.state.worker_login_sessions = login_sessions
     app.state.linux_worker_control_plane_installed = True
 
     def admin(request: Request) -> None:
@@ -32,12 +36,23 @@ def install_linux_worker_patch(app: FastAPI) -> FastAPI:
         if not sessions or not sessions.authenticate(request.cookies.get(SESSION_COOKIE)):
             raise HTTPException(401, "Administrator session required")
 
-    def worker_exists(worker_id: str) -> None:
+    def worker_exists(worker_id: str) -> dict[str, Any]:
         worker = store.data["workers"].get(worker_id)
         if not worker:
             raise HTTPException(404, "Worker not found")
         if worker.get("revoked_at"):
             raise HTTPException(409, "Worker is revoked")
+        return worker
+
+    def require_login_ticket(worker_id: str, request: Request, *, touch: bool = True) -> str:
+        ticket = str(request.headers.get(LOGIN_TICKET_HEADER) or "")
+        if not ticket:
+            raise HTTPException(403, "Remote login session ticket required")
+        try:
+            login_sessions.require(worker_id, ticket, touch=touch)
+        except KeyError as exc:
+            raise HTTPException(403, "Remote login session expired or invalid") from exc
+        return ticket
 
     async def send_worker_command(
         worker_id: str,
@@ -91,6 +106,7 @@ def install_linux_worker_patch(app: FastAPI) -> FastAPI:
         admin(request)
         if worker_id not in store.data["workers"]:
             raise HTTPException(404, "Worker not found")
+        login_sessions.revoke(worker_id)
         store.revoke(worker_id)
         socket = app.state.worker_sockets.pop(worker_id, None)
         if socket:
@@ -154,6 +170,93 @@ def install_linux_worker_patch(app: FastAPI) -> FastAPI:
             "error": None if result.get("ok") else str(result.get("error") or "proxy_test_failed")[:120],
         }
 
+    @app.post("/api/admin/linux-workers/{worker_id}/login-session")
+    async def open_worker_login_session(worker_id: str, request: Request) -> dict[str, Any]:
+        admin(request)
+        worker_exists(worker_id)
+        command = await send_worker_command(worker_id, "open_login_session", {}, wait=True, timeout=15)
+        result = command["result"]
+        if not result.get("ok"):
+            raise HTTPException(422, f"Remote login could not start: {str(result.get('error') or 'open_failed')[:120]}")
+        ticket = login_sessions.issue(worker_id)
+        return {
+            "opened": True,
+            "ticket": ticket,
+            "idle_timeout_seconds": LOGIN_SESSION_IDLE_SECONDS,
+            "source_width": int(result.get("source_width") or 1920),
+            "source_height": int(result.get("source_height") or 1080),
+        }
+
+    @app.get("/api/admin/linux-workers/{worker_id}/login-session/frame")
+    async def worker_login_frame(worker_id: str, request: Request) -> dict[str, Any]:
+        admin(request)
+        ticket = require_login_ticket(worker_id, request)
+        worker = worker_exists(worker_id)
+        if str(worker.get("chatgpt_status") or "").lower() in {"ready", "logged_in", "authenticated"}:
+            login_sessions.revoke(worker_id, ticket)
+            await send_worker_command(worker_id, "close_login_session", {}, wait=False)
+            return {"ok": True, "complete": True, "chatgpt_status": worker.get("chatgpt_status")}
+        command = await send_worker_command(worker_id, "login_session_frame", {}, wait=True, timeout=15)
+        result = command["result"]
+        if not result.get("ok"):
+            raise HTTPException(422, f"Remote frame failed: {str(result.get('error') or 'frame_failed')[:120]}")
+        frame = str(result.get("frame") or "")
+        if not frame or len(frame) > 2_100_000:
+            raise HTTPException(502, "Worker returned an invalid remote frame")
+        return {
+            "ok": True,
+            "complete": False,
+            "mime": str(result.get("mime") or "image/jpeg")[:32],
+            "frame": frame,
+            "source_width": int(result.get("source_width") or 1920),
+            "source_height": int(result.get("source_height") or 1080),
+            "frame_width": int(result.get("frame_width") or 1280),
+            "frame_height": int(result.get("frame_height") or 720),
+        }
+
+    @app.post("/api/admin/linux-workers/{worker_id}/login-session/input")
+    async def worker_login_input(worker_id: str, request: Request) -> dict[str, Any]:
+        admin(request)
+        require_login_ticket(worker_id, request)
+        body = await request.json()
+        if not isinstance(body, dict):
+            raise HTTPException(400, "Remote input payload must be an object")
+        kind = str(body.get("kind") or "")
+        if kind not in {"mouse", "key"}:
+            raise HTTPException(400, "Unsupported remote input kind")
+        if kind == "key":
+            body = {
+                "kind": "key",
+                "key": str(body.get("key") or "")[:32],
+                "modifiers": [str(item)[:16] for item in list(body.get("modifiers") or [])[:4]],
+            }
+        else:
+            body = {
+                "kind": "mouse",
+                "action": str(body.get("action") or "click")[:32],
+                "x": body.get("x"),
+                "y": body.get("y"),
+                "button": body.get("button"),
+                "delta": body.get("delta"),
+            }
+        command = await send_worker_command(worker_id, "login_session_input", body, wait=True, timeout=8)
+        result = command["result"]
+        if not result.get("ok"):
+            raise HTTPException(422, f"Remote input failed: {str(result.get('error') or 'input_failed')[:120]}")
+        return {"ok": True}
+
+    @app.delete("/api/admin/linux-workers/{worker_id}/login-session")
+    async def close_worker_login_session(worker_id: str, request: Request) -> dict[str, bool]:
+        admin(request)
+        ticket = require_login_ticket(worker_id, request, touch=False)
+        login_sessions.revoke(worker_id, ticket)
+        try:
+            await send_worker_command(worker_id, "close_login_session", {}, wait=False)
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise
+        return {"closed": True}
+
     @app.post("/api/workers/enroll")
     async def enroll_worker(request: Request) -> dict[str, str]:
         body = await request.json()
@@ -190,6 +293,7 @@ def install_linux_worker_patch(app: FastAPI) -> FastAPI:
         finally:
             if app.state.worker_sockets.get(worker_id) is websocket:
                 app.state.worker_sockets.pop(worker_id, None)
+            login_sessions.revoke(worker_id)
             for request_id, waiter in list(app.state.worker_command_waiters.items()):
                 if waiter[0] == worker_id and not waiter[1].done():
                     waiter[1].set_result({"ok": False, "error": "worker_disconnected"})
