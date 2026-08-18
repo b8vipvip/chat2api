@@ -51,11 +51,53 @@ Recommended first setup:
 7. Wait for popup to report `ChatGPT：已登录，可用 · Composer 已确认`.
 8. Run the popup Page Smoke Test once.
 9. Restart Chrome once and confirm that the same profile remains logged in, the extension returns to `connected`, login readiness returns to `ready`, and external-network prewarming resumes automatically.
-10. Only after that should the browser be configured to start automatically with the Linux desktop/session.
+10. Only after that should the worker be switched to the unattended systemd path with `scripts/install_linux_worker_autostart.sh`.
 
 ### Why manual first login is recommended
 
 The browser bridge should not store ChatGPT credentials or attempt to automate CAPTCHA/2FA. The reliable boundary is the Chrome profile's own authenticated session. Once the user has logged in manually, every normal ChatGPT tab/window created by the extension uses the same profile cookies and session state.
+
+## Unattended systemd worker
+
+`scripts/install_linux_worker_autostart.sh` captures the currently working Xray configuration and installs four pieces of host automation:
+
+- `chat2api-xray.service`: the captured Xray proxy on `127.0.0.1:10808`;
+- `chat2api-xvfb.service`: the virtual X display used by the production browser;
+- `chat2api-chrome.service`: Google Chrome using the persistent worker profile and the local SOCKS proxy;
+- `chat2api-worker-watchdog.timer`: a periodic health check that runs `chat2api-worker-watchdog.service` roughly every two minutes.
+
+The watchdog is deliberately conservative. It checks:
+
+1. the persistent Chrome profile still exists and is owned by the expected worker user;
+2. the unpacked Chrome Bridge source still contains `manifest.json`;
+3. Xray is active and the configured local proxy port is actually listening;
+4. Xvfb is active;
+5. the dedicated Chrome service is active and a Chrome process using the expected `user-data-dir` exists;
+6. ChatGPT can be reached through the worker SOCKS path;
+7. the configured chat2api `/healthz` endpoint is reachable.
+
+A definitively dead local Xray, missing proxy listener, dead Xvfb, or dead Chrome worker can be restarted once automatically. The watchdog does **not** repeatedly restart healthy local processes merely because an upstream proxy node, DNS path, ChatGPT, or the chat2api server is temporarily unavailable. Those conditions are logged as degraded failures for operator visibility.
+
+The watchdog also refuses to create, re-own, or replace a missing/mis-owned production Chrome profile. Automatically creating a fresh profile could silently lose the paired extension identity and the saved ChatGPT session, so that condition requires manual repair.
+
+ChatGPT `login_required` is intentionally not repaired by the host watchdog. The extension already reports login readiness through its normal metadata path; expired login, CAPTCHA and 2FA remain a visible/manual account operation.
+
+Useful commands after installation:
+
+```bash
+systemctl status \
+  chat2api-xray \
+  chat2api-xvfb \
+  chat2api-chrome \
+  chat2api-worker-watchdog.timer \
+  --no-pager
+
+systemctl start chat2api-worker-watchdog.service
+journalctl -u chat2api-worker-watchdog -n 100 --no-pager
+systemctl list-timers chat2api-worker-watchdog.timer --no-pager
+```
+
+When `chrome_extension/*` is updated in the repository, restart `chat2api-chrome.service` once so the persistent-profile browser reloads the unpacked extension from disk. Do not run a second Chrome instance against the same `user-data-dir` at the same time.
 
 ## First configuration recommendation
 

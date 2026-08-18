@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="${REPO_DIR:-$(cd -- "${SCRIPT_DIR}/.." && pwd)}"
 WORKER_USER="${WORKER_USER:-chat2api}"
 PROFILE_DIR="${PROFILE_DIR:-/home/${WORKER_USER}/.config/chat2api-chrome-worker-01}"
 WORKER_CONFIG_DIR="${WORKER_CONFIG_DIR:-/home/${WORKER_USER}/.config/chat2api-worker}"
+EXTENSION_DIR="${EXTENSION_DIR:-${REPO_DIR}/chrome_extension}"
 PROXY_PORT="${PROXY_PORT:-10808}"
 DISPLAY_NUM="${DISPLAY_NUM:-99}"
 CHATGPT_URL="${CHATGPT_URL:-https://chatgpt.com/}"
+CHAT2API_SERVER_URL="${CHAT2API_SERVER_URL:-https://chat2api.mv3.cn}"
 BYPASS_LIST="${BYPASS_LIST:-localhost;127.0.0.1;chat2api.mv3.cn}"
+WATCHDOG_SOURCE="${SCRIPT_DIR}/linux_worker_watchdog.sh"
+WATCHDOG_BIN="/usr/local/sbin/chat2api-linux-worker-watchdog"
+WATCHDOG_ENV="/etc/default/chat2api-worker-watchdog"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "Run this installer as root." >&2
@@ -21,6 +28,16 @@ fi
 
 if [[ ! -x /usr/bin/google-chrome ]]; then
   echo "Google Chrome not found at /usr/bin/google-chrome" >&2
+  exit 1
+fi
+
+if [[ ! -f "${EXTENSION_DIR}/manifest.json" ]]; then
+  echo "Chrome Bridge source not found: ${EXTENSION_DIR}/manifest.json" >&2
+  exit 1
+fi
+
+if [[ ! -f "${WATCHDOG_SOURCE}" ]]; then
+  echo "Linux worker watchdog source not found: ${WATCHDOG_SOURCE}" >&2
   exit 1
 fi
 
@@ -106,6 +123,17 @@ fi
 install -d -o "${WORKER_USER}" -g "${WORKER_USER}" -m 700 "${WORKER_CONFIG_DIR}"
 install -o "${WORKER_USER}" -g "${WORKER_USER}" -m 600 "${source_config}" "${WORKER_CONFIG_DIR}/xray-config.json"
 install -d -o "${WORKER_USER}" -g "${WORKER_USER}" -m 700 "${PROFILE_DIR}"
+install -o root -g root -m 755 "${WATCHDOG_SOURCE}" "${WATCHDOG_BIN}"
+
+cat >"${WATCHDOG_ENV}" <<EOF
+WORKER_USER=${WORKER_USER}
+PROFILE_DIR=${PROFILE_DIR}
+EXTENSION_DIR=${EXTENSION_DIR}
+PROXY_PORT=${PROXY_PORT}
+CHATGPT_URL=${CHATGPT_URL}
+CHAT2API_SERVER_URL=${CHAT2API_SERVER_URL}
+EOF
+chmod 644 "${WATCHDOG_ENV}"
 
 # Validate the captured configuration while the original live proxy is still
 # running. Xray's test mode does not bind the inbound port, so failure here is a
@@ -182,6 +210,35 @@ TimeoutStopSec=20
 WantedBy=multi-user.target
 EOF
 
+cat >/etc/systemd/system/chat2api-worker-watchdog.service <<EOF
+[Unit]
+Description=chat2api Linux worker health check and conservative self-heal
+Wants=network-online.target
+After=network-online.target chat2api-xray.service chat2api-xvfb.service chat2api-chrome.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-${WATCHDOG_ENV}
+ExecStart=${WATCHDOG_BIN}
+TimeoutStartSec=60
+EOF
+
+cat >/etc/systemd/system/chat2api-worker-watchdog.timer <<'EOF'
+[Unit]
+Description=Periodically verify the chat2api Linux worker
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=2min
+AccuracySec=15s
+RandomizedDelaySec=10s
+Persistent=true
+Unit=chat2api-worker-watchdog.service
+
+[Install]
+WantedBy=timers.target
+EOF
+
 # Stop only the dedicated worker Chrome profile. Other Chrome processes on the
 # host (for example BT-Panel helpers) are intentionally left alone.
 pkill -TERM -u "${WORKER_USER}" -f "user-data-dir=${PROFILE_DIR}" 2>/dev/null || true
@@ -196,10 +253,11 @@ for _ in {1..20}; do
 done
 
 systemctl daemon-reload
-systemctl enable chat2api-xray.service chat2api-xvfb.service chat2api-chrome.service
+systemctl enable chat2api-xray.service chat2api-xvfb.service chat2api-chrome.service chat2api-worker-watchdog.timer
 systemctl restart chat2api-xray.service
 systemctl restart chat2api-xvfb.service
 systemctl restart chat2api-chrome.service
+systemctl restart chat2api-worker-watchdog.timer
 
 sleep 3
 
@@ -211,13 +269,15 @@ if [[ -n "${source_geoip}" ]]; then
   echo "geoip.dat: ${source_geoip} -> ${xray_dir}/geoip.dat"
 fi
 echo "Chrome profile: ${PROFILE_DIR}"
+echo "Chrome Bridge source: ${EXTENSION_DIR}"
 echo "Proxy: socks5://127.0.0.1:${PROXY_PORT}"
 echo "Virtual display: :${DISPLAY_NUM}"
+echo "Watchdog: ${WATCHDOG_BIN} (systemd timer every ~2 minutes)"
 echo
 echo "Service status:"
-for unit in chat2api-xray chat2api-xvfb chat2api-chrome; do
-  printf '%-20s ' "${unit}"
-  systemctl is-active "${unit}.service" || true
+for unit in chat2api-xray chat2api-xvfb chat2api-chrome chat2api-worker-watchdog.timer; do
+  printf '%-32s ' "${unit}"
+  systemctl is-active "${unit}" || true
 done
 
 echo
@@ -230,6 +290,7 @@ pgrep -af "google-chrome.*chat2api-chrome-worker-01" | head -5 || true
 
 echo
 echo "Useful commands:"
-echo "  systemctl status chat2api-xray chat2api-xvfb chat2api-chrome --no-pager"
-echo "  journalctl -u chat2api-chrome -n 100 --no-pager"
+echo "  systemctl status chat2api-xray chat2api-xvfb chat2api-chrome chat2api-worker-watchdog.timer --no-pager"
+echo "  systemctl start chat2api-worker-watchdog.service"
+echo "  journalctl -u chat2api-worker-watchdog -n 100 --no-pager"
 echo "  systemctl restart chat2api-chrome"
