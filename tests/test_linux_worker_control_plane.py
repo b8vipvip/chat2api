@@ -90,3 +90,13 @@ def test_bootstrap_is_strict_idempotent_and_preserves_profile():
     assert "rm -rf /home/chat2api" not in source
     assert "NOPASSWD: ALL" not in source
     assert "--no-sandbox" not in source
+
+
+def test_bootstrap_config_permissions_allow_unprivileged_services_to_read():
+    source = Path("scripts/bootstrap_linux_worker.sh").read_text(encoding="utf-8")
+    assert "install -d -o root -g chat2api -m 750 /etc/chat2api-worker" in source
+    assert "chown root:chat2api /etc/chat2api-worker/xray.json" in source
+    assert "chmod 640 /etc/chat2api-worker/xray.json" in source
+    assert "chown root:chat2api /etc/chat2api-worker/worker.json" in source
+    assert "chmod 640 /etc/chat2api-worker/worker.json" in source
+    assert "User=chat2api" in source
