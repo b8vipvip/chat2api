@@ -111,7 +111,7 @@ def test_reserve_versions_match_manifest_and_runtime_contract():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     assert manifest["version"] == "0.8.0"
-    assert 'SERVER_RUNTIME_VERSION = "0.21.13"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.21.14"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.0"' in runtime
 
 
