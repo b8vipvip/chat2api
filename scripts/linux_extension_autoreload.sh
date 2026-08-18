@@ -64,11 +64,9 @@ extension_fingerprint() {
       git_lock="${repo_real}/${git_lock}"
     fi
     if [[ -n "${git_lock}" && -e "${git_lock}" ]]; then
-      log INFO "git update is in progress; deferring extension reload"
       return 2
     fi
     if [[ -n "$(git -C "${repo_real}" status --porcelain --untracked-files=all -- "${extension_rel}" 2>/dev/null)" ]]; then
-      log ERROR "Chrome Bridge source has local changes; refusing automatic reload until the worktree is clean"
       return 3
     fi
     git -C "${repo_real}" rev-parse "HEAD:${extension_rel}" 2>/dev/null
@@ -123,13 +121,26 @@ fi
 install -d -o root -g root -m 755 "${STATE_DIR}"
 
 fingerprint=""
-if ! fingerprint="$(extension_fingerprint)"; then
-  rc=$?
-  if [[ "${rc}" -eq 2 ]]; then
+set +e
+fingerprint="$(extension_fingerprint)"
+rc=$?
+set -e
+case "${rc}" in
+  0) ;;
+  2)
+    log INFO "git update is in progress; deferring extension reload"
     exit 0
-  fi
-  exit "${rc}"
-fi
+    ;;
+  3)
+    log ERROR "Chrome Bridge source has local changes; refusing automatic reload until the worktree is clean"
+    exit 1
+    ;;
+  *)
+    log ERROR "could not determine Chrome Bridge source fingerprint (exit=${rc})"
+    exit "${rc}"
+    ;;
+esac
+
 if [[ -z "${fingerprint}" ]]; then
   log ERROR "could not determine Chrome Bridge source fingerprint"
   exit 1
