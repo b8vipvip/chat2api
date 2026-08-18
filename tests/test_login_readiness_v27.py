@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+from app.runtime_contract import CHROME_BRIDGE_VERSION
+
 
 ROOT = Path(__file__).resolve().parents[1]
 EXT = ROOT / "chrome_extension"
@@ -13,9 +15,9 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_bridge_078_loads_login_detector_for_new_and_existing_tabs():
+def test_current_bridge_loads_login_detector_for_new_and_existing_tabs():
     manifest = json.loads(read(EXT / "manifest.json"))
-    assert manifest["version"] == "0.7.8"
+    assert manifest["version"] == CHROME_BRIDGE_VERSION
     scripts = manifest["content_scripts"][1]["js"]
     assert CONTENT in scripts
     assert scripts.index("content_page_adapter_v22.js") < scripts.index(CONTENT) < scripts.index("content_page_driver_v22.js")
