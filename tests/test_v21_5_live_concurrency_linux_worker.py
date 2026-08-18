@@ -58,6 +58,23 @@ def test_linux_worker_installer_uses_systemd_xray_xvfb_and_persistent_chrome_pro
     assert "pkill -TERM -u \"${WORKER_USER}\" -f \"user-data-dir=${PROFILE_DIR}\"" in script
 
 
+def test_linux_worker_installer_captures_geodata_before_stopping_live_xray():
+    script = read(ROOT / "scripts" / "install_linux_worker_autostart.sh")
+    for token in (
+        "find_geodata()",
+        "geosite.dat",
+        "geoip.dat",
+        'xray_dir="$(dirname "${xray_bin}")"',
+        '"${xray_bin}" run -test -c "${WORKER_CONFIG_DIR}/xray-config.json"',
+        "The live proxy has not been stopped.",
+    ):
+        assert token in script
+    copy_index = script.index('"${xray_dir}/geosite.dat"')
+    preflight_index = script.index('run -test -c "${WORKER_CONFIG_DIR}/xray-config.json"')
+    kill_index = script.index('kill "${proxy_pid}"')
+    assert copy_index < preflight_index < kill_index
+
+
 def test_ci_checks_new_admin_js_and_linux_installer():
     workflow = read(ROOT / ".github" / "workflows" / "ci.yml")
     assert "node --check app/admin_v21_5.js" in workflow

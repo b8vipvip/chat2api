@@ -34,6 +34,7 @@ if [[ -z "${proxy_pid}" || ! -e "/proc/${proxy_pid}/exe" ]]; then
 fi
 
 xray_bin="$(readlink -f "/proc/${proxy_pid}/exe")"
+xray_dir="$(dirname "${xray_bin}")"
 xray_cwd="$(readlink -f "/proc/${proxy_pid}/cwd")"
 proxy_user="$(stat -c '%U' "/proc/${proxy_pid}")"
 if [[ "${proxy_user}" != "${WORKER_USER}" ]]; then
@@ -67,9 +68,54 @@ if [[ ! -f "${source_config}" ]]; then
   exit 1
 fi
 
+find_geodata() {
+  local name="$1"
+  local candidate
+  for candidate in \
+    "${xray_dir}/${name}" \
+    "${xray_cwd}/${name}" \
+    "$(dirname "${xray_dir}")/${name}" \
+    "/home/${WORKER_USER}/.local/share/v2rayN/bin/${name}" \
+    "/home/${WORKER_USER}/.local/share/v2rayN/bin/xray/${name}"; do
+    if [[ -f "${candidate}" ]]; then
+      readlink -f "${candidate}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+source_geosite="$(find_geodata geosite.dat || true)"
+source_geoip="$(find_geodata geoip.dat || true)"
+if [[ -z "${source_geosite}" ]]; then
+  echo "Could not locate geosite.dat required by the active Xray routing config." >&2
+  echo "Expected it near ${xray_bin} or the v2rayN bin directory. The live proxy has not been stopped." >&2
+  exit 1
+fi
+
+# Xray resolves geosite.dat/geoip.dat relative to its executable directory in
+# this v2rayN layout. Copy the assets before stopping the known-good live proxy,
+# so a missing geodata file cannot leave the worker without a proxy listener.
+if [[ "${source_geosite}" != "${xray_dir}/geosite.dat" ]]; then
+  install -o "${WORKER_USER}" -g "${WORKER_USER}" -m 644 "${source_geosite}" "${xray_dir}/geosite.dat"
+fi
+if [[ -n "${source_geoip}" && "${source_geoip}" != "${xray_dir}/geoip.dat" ]]; then
+  install -o "${WORKER_USER}" -g "${WORKER_USER}" -m 644 "${source_geoip}" "${xray_dir}/geoip.dat"
+fi
+
 install -d -o "${WORKER_USER}" -g "${WORKER_USER}" -m 700 "${WORKER_CONFIG_DIR}"
 install -o "${WORKER_USER}" -g "${WORKER_USER}" -m 600 "${source_config}" "${WORKER_CONFIG_DIR}/xray-config.json"
 install -d -o "${WORKER_USER}" -g "${WORKER_USER}" -m 700 "${PROFILE_DIR}"
+
+# Validate the captured configuration while the original live proxy is still
+# running. Xray's test mode does not bind the inbound port, so failure here is a
+# safe preflight and leaves the current working proxy untouched.
+if ! "${xray_bin}" run -test -c "${WORKER_CONFIG_DIR}/xray-config.json" >/tmp/chat2api-xray-preflight.log 2>&1; then
+  echo "Captured Xray config failed preflight. The live proxy has not been stopped." >&2
+  cat /tmp/chat2api-xray-preflight.log >&2 || true
+  exit 1
+fi
+rm -f /tmp/chat2api-xray-preflight.log
 
 cat >/etc/systemd/system/chat2api-xray.service <<EOF
 [Unit]
@@ -160,6 +206,10 @@ sleep 3
 echo "=== chat2api Linux worker autostart installed ==="
 echo "Xray binary: ${xray_bin}"
 echo "Captured config: ${source_config} -> ${WORKER_CONFIG_DIR}/xray-config.json"
+echo "geosite.dat: ${source_geosite} -> ${xray_dir}/geosite.dat"
+if [[ -n "${source_geoip}" ]]; then
+  echo "geoip.dat: ${source_geoip} -> ${xray_dir}/geoip.dat"
+fi
 echo "Chrome profile: ${PROFILE_DIR}"
 echo "Proxy: socks5://127.0.0.1:${PROXY_PORT}"
 echo "Virtual display: :${DISPLAY_NUM}"
