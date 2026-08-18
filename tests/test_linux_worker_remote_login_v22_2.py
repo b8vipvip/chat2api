@@ -48,6 +48,8 @@ def test_remote_login_helper_uses_xvfb_capture_and_xdotool_without_listener():
         '["xwd", "-display", DISPLAY, "-root", "-silent"]',
         '"convert"',
         '["xdotool", *args]',
+        '["xdotool", "-"]',
+        'input=script',
         'max(0, min(SOURCE_WIDTH - 1',
         'max(0, min(SOURCE_HEIGHT - 1',
     ):
@@ -58,6 +60,8 @@ def test_remote_login_helper_uses_xvfb_capture_and_xdotool_without_listener():
     assert ".listen(" not in lowered
     assert "5900" not in source
     assert "6080" not in source
+    assert '_run_xdotool_script(["type", "--clearmodifiers", "--delay", "0", key])' in source
+    assert '_run_xdotool(["type", "--clearmodifiers", "--delay", "0", key])' not in source
 
 
 def test_bootstrap_installs_only_headless_capture_dependencies_not_desktop_or_remote_ports():
@@ -112,13 +116,16 @@ def test_admin_remote_login_is_direct_browser_interaction_not_password_form():
     assert 'const {headers = {}, ...rest} = options;' in source
 
 
-def test_worker_agent_implements_remote_login_without_privilege_escalation():
+def test_worker_agent_implements_low_latency_remote_login_without_privilege_escalation():
     source = (ROOT / "scripts" / "linux_worker_agent.py").read_text(encoding="utf-8")
     assert '"agent_version": "0.3.0"' in source
     for command in ("open_login_session", "close_login_session", "login_session_frame", "login_session_input"):
         assert f'"{command}"' in source
     assert "capture_frame()" in source
     assert "send_input(args)" in source
+    assert "HEARTBEAT_SECONDS = 15.0" in source
+    assert "timeout = max(0.05, next_heartbeat - time.monotonic())" in source
+    assert "await asyncio.sleep(15)" not in source
     assert "sudo" not in (ROOT / "scripts" / "linux_worker_remote_login.py").read_text(encoding="utf-8")
 
 
