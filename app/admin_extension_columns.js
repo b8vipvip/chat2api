@@ -1,12 +1,12 @@
 (() => {
-  const VERSION = "0.21.7";
+  const VERSION = "0.21.8";
   const STORAGE_KEY = "chat2api.extensionColumns.v1";
-  const APPLY_MS = 900;
-  const BASE_KEYS = ["client_id", "device_id", "version", "status", "concurrency", "last_seen", "actions"];
+  const BASE_KEYS = ["client_id", "device_id", "version", "account_type", "status", "concurrency", "last_seen", "actions"];
   const COLUMNS = [
     {key: "client_id", label: "扩展 ID"},
     {key: "device_id", label: "设备标识"},
     {key: "version", label: "版本"},
+    {key: "account_type", label: "账户类型"},
     {key: "status", label: "状态"},
     {key: "concurrency", label: "API 调用数（实时并发）"},
     {key: "last_seen", label: "最后在线"},
@@ -21,6 +21,7 @@
     ["扩展 ID", "client_id"],
     ["设备标识", "device_id"],
     ["版本", "version"],
+    ["账户类型", "account_type"],
     ["状态", "status"],
     ["绑定 API Key 数", "concurrency"],
     ["API 调用数（实时并发）", "concurrency"],
@@ -33,6 +34,9 @@
   ]);
 
   let menuOpen = false;
+  let observedTable = null;
+  let tableObserver = null;
+  let refreshScheduled = false;
 
   function defaultPrefs() {
     return {
@@ -45,7 +49,11 @@
     const defaults = defaultPrefs();
     const seen = new Set();
     const order = [];
-    const candidate = Array.isArray(raw?.order) ? raw.order : [];
+    const candidate = Array.isArray(raw?.order) ? [...raw.order] : [];
+    if (candidate.length && !candidate.includes("account_type")) {
+      const versionIndex = candidate.indexOf("version");
+      candidate.splice(versionIndex + 1, 0, "account_type");
+    }
     for (const key of candidate) {
       if (!KNOWN_KEYS.has(key) || seen.has(key)) continue;
       seen.add(key);
@@ -101,12 +109,21 @@
 
     for (const tr of body.rows) {
       if (tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan")) continue;
-      for (let index = 0; index < Math.min(BASE_KEYS.length, tr.cells.length); index += 1) {
-        const cell = tr.cells[index];
-        if (!cell.dataset.chat2apiColumnKey && !cell.dataset.chat2apiHealthCell) {
-          cell.dataset.chat2apiColumnKey = BASE_KEYS[index];
+
+      const hasBaseKeys = BASE_KEYS.every(key =>
+        tr.querySelector(`td[data-chat2api-column-key="${key}"]`),
+      );
+      if (!hasBaseKeys) {
+        for (let index = 0; index < Math.min(BASE_KEYS.length, tr.cells.length); index += 1) {
+          const cell = tr.cells[index];
+          const explicit = String(cell.dataset.chat2apiColumnKey || "").trim();
+          const health = String(cell.dataset.chat2apiHealthCell || "").trim();
+          if (!KNOWN_KEYS.has(explicit) && !KNOWN_KEYS.has(health)) {
+            cell.dataset.chat2apiColumnKey = BASE_KEYS[index];
+          }
         }
       }
+
       for (const cell of tr.cells) {
         const health = String(cell.dataset.chat2apiHealthCell || "").trim();
         if (KNOWN_KEYS.has(health)) cell.dataset.chat2apiColumnKey = health;
@@ -115,8 +132,43 @@
     return true;
   }
 
-  function keyedChild(parent, selector, key) {
-    return parent?.querySelector(`${selector}[data-chat2api-column-key="${key}"]`) || null;
+  function keyedDirectChild(parent, key) {
+    return [...(parent?.children || [])].find(node =>
+      String(node.dataset?.chat2apiColumnKey || "").trim() === key,
+    ) || null;
+  }
+
+  function reorderKnownChildren(parent, prefs) {
+    if (!parent) return false;
+    const current = [...parent.children];
+    const orderedKnown = prefs.order
+      .map(key => keyedDirectChild(parent, key))
+      .filter(Boolean);
+    const unknown = current.filter(node =>
+      !KNOWN_KEYS.has(String(node.dataset?.chat2apiColumnKey || "").trim()),
+    );
+    const desired = [...orderedKnown, ...unknown];
+    if (
+      current.length === desired.length
+      && current.every((node, index) => node === desired[index])
+    ) {
+      return false;
+    }
+
+    const fragment = document.createDocumentFragment();
+    for (const node of desired) fragment.appendChild(node);
+    parent.appendChild(fragment);
+    return true;
+  }
+
+  function applyVisibility(parent, prefs) {
+    if (!parent) return;
+    for (const key of prefs.order) {
+      const node = keyedDirectChild(parent, key);
+      if (!node) continue;
+      const display = prefs.visible[key] === false ? "none" : "";
+      if (node.style.display !== display) node.style.display = display;
+    }
   }
 
   function applyLayout() {
@@ -125,29 +177,27 @@
     const {body, headerRow} = tableParts();
     if (!body || !headerRow) return;
 
-    for (const key of prefs.order) {
-      const header = keyedChild(headerRow, "th", key);
-      if (header && header !== headerRow.lastElementChild) headerRow.appendChild(header);
-      for (const tr of body.rows) {
-        const cell = keyedChild(tr, "td", key);
-        if (cell && cell !== tr.lastElementChild) tr.appendChild(cell);
+    reorderKnownChildren(headerRow, prefs);
+    for (const tr of body.rows) {
+      if (!(tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan"))) {
+        reorderKnownChildren(tr, prefs);
       }
     }
 
-    for (const key of prefs.order) {
-      const display = prefs.visible[key] === false ? "none" : "";
-      const header = keyedChild(headerRow, "th", key);
-      if (header) header.style.display = display;
-      for (const tr of body.rows) {
-        const cell = keyedChild(tr, "td", key);
-        if (cell) cell.style.display = display;
+    applyVisibility(headerRow, prefs);
+    for (const tr of body.rows) {
+      if (!(tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan"))) {
+        applyVisibility(tr, prefs);
       }
     }
 
-    const visibleCount = prefs.order.filter(key => prefs.visible[key] !== false && keyedChild(headerRow, "th", key)).length;
+    const visibleCount = prefs.order.filter(
+      key => prefs.visible[key] !== false && keyedDirectChild(headerRow, key),
+    ).length;
     for (const tr of body.rows) {
       if (tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan")) {
-        tr.cells[0].colSpan = Math.max(1, visibleCount);
+        const next = Math.max(1, visibleCount);
+        if (tr.cells[0].colSpan !== next) tr.cells[0].colSpan = next;
       }
     }
   }
@@ -250,10 +300,17 @@
       </div>${rows}`;
 
     for (const input of menu.querySelectorAll("[data-column-visible]")) {
-      input.addEventListener("change", event => setColumnVisible(event.currentTarget.dataset.columnVisible, event.currentTarget.checked));
+      input.addEventListener("change", event =>
+        setColumnVisible(event.currentTarget.dataset.columnVisible, event.currentTarget.checked),
+      );
     }
     for (const button of menu.querySelectorAll("[data-column-move]")) {
-      button.addEventListener("click", event => moveColumn(event.currentTarget.dataset.columnMove, Number(event.currentTarget.dataset.delta || 0)));
+      button.addEventListener("click", event =>
+        moveColumn(
+          event.currentTarget.dataset.columnMove,
+          Number(event.currentTarget.dataset.delta || 0),
+        ),
+      );
     }
     menu.querySelector("#resetExtensionColumns")?.addEventListener("click", resetLayout);
     if (menuOpen) positionMenu();
@@ -264,7 +321,11 @@
     const body = document.getElementById("extensionDeviceBody");
     const panel = body?.closest(".panel");
     if (!panel) return false;
-    const heading = [...panel.querySelectorAll("h3")].find(node => String(node.textContent || "").trim().startsWith("绑定设备")) || panel.querySelector("h3");
+    const heading = [...panel.querySelectorAll("h3")]
+      .find(node => String(node.textContent || "").trim().startsWith("扩展列表"))
+      || [...panel.querySelectorAll("h3")]
+        .find(node => String(node.textContent || "").trim().startsWith("绑定设备"))
+      || panel.querySelector("h3");
     if (!heading) return false;
 
     const button = document.createElement("button");
@@ -284,30 +345,52 @@
     return true;
   }
 
+  function scheduleRefresh() {
+    if (refreshScheduled) return;
+    refreshScheduled = true;
+    const run = () => {
+      refreshScheduled = false;
+      refreshUi();
+    };
+    if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+    else setTimeout(run, 0);
+  }
+
+  function ensureObserver() {
+    const {table} = tableParts();
+    if (!table || typeof MutationObserver !== "function") return;
+    if (observedTable === table && tableObserver) return;
+    tableObserver?.disconnect();
+    observedTable = table;
+    tableObserver = new MutationObserver(() => scheduleRefresh());
+    tableObserver.observe(table, {childList: true, subtree: true});
+  }
+
   function refreshUi() {
     if (!ensureSettingsButton()) return;
+    ensureObserver();
     applyLayout();
   }
 
   const baseLoadExtensions = typeof globalThis.loadExtensions === "function" ? globalThis.loadExtensions : null;
-  if (baseLoadExtensions && !baseLoadExtensions.__chat2apiColumnLayoutV217) {
+  if (baseLoadExtensions && !baseLoadExtensions.__chat2apiColumnLayoutV218) {
     const wrappedLoadExtensions = async (...args) => {
       const result = await baseLoadExtensions(...args);
-      setTimeout(refreshUi, 0);
+      scheduleRefresh();
       return result;
     };
-    wrappedLoadExtensions.__chat2apiColumnLayoutV217 = true;
+    wrappedLoadExtensions.__chat2apiColumnLayoutV218 = true;
     globalThis.loadExtensions = wrappedLoadExtensions;
   }
 
   const baseShow = typeof globalThis.show === "function" ? globalThis.show : null;
-  if (baseShow && !baseShow.__chat2apiColumnLayoutV217) {
+  if (baseShow && !baseShow.__chat2apiColumnLayoutV218) {
     const wrappedShow = async (...args) => {
       const result = await baseShow(...args);
-      if (args[0] === "extensions") setTimeout(refreshUi, 0);
+      if (args[0] === "extensions") scheduleRefresh();
       return result;
     };
-    wrappedShow.__chat2apiColumnLayoutV217 = true;
+    wrappedShow.__chat2apiColumnLayoutV218 = true;
     globalThis.show = wrappedShow;
   }
 
@@ -318,8 +401,5 @@
 
   document.documentElement.dataset.chat2apiExtensionColumnLayoutVersion = VERSION;
   refreshUi();
-  setInterval(() => {
-    const active = document.getElementById("view-extensions")?.classList.contains("active");
-    if (active) refreshUi();
-  }, APPLY_MS);
+  scheduleRefresh();
 })();
