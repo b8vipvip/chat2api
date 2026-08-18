@@ -60,7 +60,7 @@ def test_remote_login_helper_uses_xvfb_capture_and_xdotool_without_listener():
     assert ".listen(" not in lowered
     assert "5900" not in source
     assert "6080" not in source
-    assert '_run_xdotool_script(["type", "--clearmodifiers", "--delay", "0", key])' in source
+    assert '_run_xdotool_stdin(["type", "--clearmodifiers", "--delay", "0", key])' in source
     assert '_run_xdotool(["type", "--clearmodifiers", "--delay", "0", key])' not in source
 
 
@@ -68,7 +68,7 @@ def test_bootstrap_installs_only_headless_capture_dependencies_not_desktop_or_re
     source = (ROOT / "scripts" / "bootstrap_linux_worker.sh").read_text(encoding="utf-8")
     assert "x11-apps xdotool imagemagick" in source
     assert "Environment=DISPLAY=:99" in source
-    assert 'agent_version:"0.3.0"' in source
+    assert 'agent_version:"0.3.1"' in source
     lowered = source.lower()
     for forbidden in ("x11vnc", "novnc", "xrdp", "xfce", "gnome", "5900", "6080", "3389"):
         assert forbidden not in lowered
@@ -105,6 +105,8 @@ def test_admin_remote_login_is_direct_browser_interaction_not_password_form():
         'remoteImage.addEventListener("keydown"',
         'remoteImage.addEventListener("wheel"',
         "chat2api 不保存这些输入内容",
+        "登录状态已确认，正在自动关闭远程会话",
+        "setTimeout(() => closeLoginDialog(), 650)",
     ):
         assert token in source
     lowered = source.lower()
@@ -118,7 +120,7 @@ def test_admin_remote_login_is_direct_browser_interaction_not_password_form():
 
 def test_worker_agent_implements_low_latency_remote_login_without_privilege_escalation():
     source = (ROOT / "scripts" / "linux_worker_agent.py").read_text(encoding="utf-8")
-    assert '"agent_version": "0.3.0"' in source
+    assert '"agent_version": "0.3.1"' in source
     for command in ("open_login_session", "close_login_session", "login_session_frame", "login_session_input"):
         assert f'"{command}"' in source
     assert "capture_frame()" in source
@@ -129,7 +131,7 @@ def test_worker_agent_implements_low_latency_remote_login_without_privilege_esca
     assert "sudo" not in (ROOT / "scripts" / "linux_worker_remote_login.py").read_text(encoding="utf-8")
 
 
-def test_remote_login_runtime_bumps_server_only():
+def test_remote_login_runtime_tracks_binding_upgrade():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.2"' in runtime
-    assert 'CHROME_BRIDGE_VERSION = "0.8.0"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.3"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
