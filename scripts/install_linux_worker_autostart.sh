@@ -268,7 +268,9 @@ cat >/etc/systemd/system/chat2api-extension-autoreload.service <<EOF
 [Unit]
 Description=Apply updated chat2api unpacked Chrome Bridge source
 After=chat2api-chrome.service
-Requires=chat2api-chrome.service
+# Autoreload intentionally restarts Chrome. A hard Requires= dependency would
+# cause systemd to SIGTERM this oneshot when Chrome is stopped for that restart.
+Wants=chat2api-chrome.service
 
 [Service]
 Type=oneshot
