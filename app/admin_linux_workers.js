@@ -1,7 +1,8 @@
 (() => {
   const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]);
   const request = async (path, options = {}) => {
-    const response = await fetch(path, {credentials:"same-origin",cache:"no-store",headers:{"Content-Type":"application/json",...(options.headers||{})},...options});
+    const {headers = {}, ...rest} = options;
+    const response = await fetch(path, {credentials:"same-origin",cache:"no-store",...rest,headers:{"Content-Type":"application/json",...headers}});
     const payload = await response.json();
     if (!response.ok) throw new Error(typeof payload.detail === "string" ? payload.detail : `HTTP ${response.status}`);
     return payload;
@@ -197,10 +198,6 @@
     remoteImage.focus({preventScroll:true});
     const point = remotePoint(event); if (!point) return;
     queueRemoteInput({kind:"mouse",action:"click",button:event.button + 1,...point});
-  });
-  remoteImage.addEventListener("dblclick", event => {
-    event.preventDefault(); const point = remotePoint(event); if (!point) return;
-    queueRemoteInput({kind:"mouse",action:"double_click",...point});
   });
   remoteImage.addEventListener("contextmenu", event => {
     event.preventDefault(); const point = remotePoint(event); if (!point) return;
