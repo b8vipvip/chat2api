@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.21.12";
+  const VERSION = "0.21.13";
   const STORAGE_KEY = "chat2api.extensionColumns.v1";
   const BASE_KEYS = ["client_id", "device_id", "version", "account_type", "status", "concurrency", "last_seen", "actions"];
   const COLUMNS = [
@@ -14,6 +14,7 @@
     {key: "platform", label: "平台"},
     {key: "network", label: "网络"},
     {key: "chatgpt", label: "ChatGPT"},
+    {key: "reserve_windows", label: "备用窗口"},
   ];
   const KNOWN_KEYS = new Set(COLUMNS.map(item => item.key));
   const LABEL_TO_KEY = new Map([
@@ -29,6 +30,7 @@
     ["平台", "platform"],
     ["网络", "network"],
     ["ChatGPT", "chatgpt"],
+    ["备用窗口", "reserve_windows"],
   ]);
 
   let menuOpen = false;
@@ -397,24 +399,24 @@
   }
 
   const baseLoadExtensions = typeof globalThis.loadExtensions === "function" ? globalThis.loadExtensions : null;
-  if (baseLoadExtensions && !baseLoadExtensions.__chat2apiColumnLayoutV2112) {
+  if (baseLoadExtensions && !baseLoadExtensions.__chat2apiColumnLayoutV2113) {
     const wrappedLoadExtensions = async (...args) => {
       const result = await baseLoadExtensions(...args);
       scheduleRefresh();
       return result;
     };
-    wrappedLoadExtensions.__chat2apiColumnLayoutV2112 = true;
+    wrappedLoadExtensions.__chat2apiColumnLayoutV2113 = true;
     globalThis.loadExtensions = wrappedLoadExtensions;
   }
 
   const baseShow = typeof globalThis.show === "function" ? globalThis.show : null;
-  if (baseShow && !baseShow.__chat2apiColumnLayoutV2112) {
+  if (baseShow && !baseShow.__chat2apiColumnLayoutV2113) {
     const wrappedShow = async (...args) => {
       const result = await baseShow(...args);
       if (args[0] === "extensions") scheduleRefresh();
       return result;
     };
-    wrappedShow.__chat2apiColumnLayoutV2112 = true;
+    wrappedShow.__chat2apiColumnLayoutV2113 = true;
     globalThis.show = wrappedShow;
   }
 

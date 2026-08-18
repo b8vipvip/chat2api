@@ -5,6 +5,7 @@
     ["platform", "平台"],
     ["network", "网络"],
     ["chatgpt", "ChatGPT"],
+    ["reserve_windows", "备用窗口"],
   ];
   let pollInFlight = false;
 
@@ -66,6 +67,27 @@
     if (state === "login_required") return {label: "未登录", level: "bad", detail: "需要在可见窗口中人工完成登录/CAPTCHA/2FA"};
     if (state === "checking") return {label: "检测中", level: "warn", detail: text(meta.chatgpt_login_strategy, "正在检查 ChatGPT 登录状态")};
     return {label: "未知", level: "warn", detail: text(meta.chatgpt_login_strategy, "尚无足够被动登录证据")};
+  }
+
+  function reserveWindowState(row) {
+    if (row?.online !== true) return {label: "-", level: "warn", detail: "扩展离线，无法确认当前备用窗口数量"};
+    const meta = metadata(row);
+    const hasTelemetry = Number(meta.reserve_window_telemetry_version || 0) >= 29
+      || meta.reserve_window_total !== undefined
+      || meta.reserve_window_active !== undefined;
+    if (!hasTelemetry) return {label: "未知", level: "warn", detail: "当前扩展版本尚未上报备用窗口运行时数据"};
+
+    const total = Math.max(0, Math.floor(Number(meta.reserve_window_total || 0)));
+    const active = Math.max(0, Math.min(total, Math.floor(Number(meta.reserve_window_active || 0))));
+    const target = Math.max(0, Math.floor(Number(meta.reserve_window_target || 0)));
+    const idleSeconds = Math.max(0, Math.floor(Number(meta.reserve_window_idle_close_seconds || 0)));
+    const level = target > 0 && total < target ? "warn" : "ok";
+    const idleText = idleSeconds > 0 ? `；调用窗口闲置 ${Math.round(idleSeconds / 60)} 分钟后自动回收` : "";
+    return {
+      label: `${total}(${active})`,
+      level,
+      detail: `已打开 ${total} / 目标 ${target || "-"}；当前调用中 ${active}${idleText}`,
+    };
   }
 
   function healthState(row) {
@@ -183,9 +205,11 @@
       const platform = platformState(row);
       const network = networkState(row);
       const login = loginState(row);
+      const reserve = reserveWindowState(row);
       renderState(ensureCell(tr, "platform"), {...platform, level: metadata(row).platform_supported_desktop === false ? "bad" : "ok"});
       renderState(ensureCell(tr, "network"), network);
       renderState(ensureCell(tr, "chatgpt"), login);
+      renderState(ensureCell(tr, "reserve_windows"), reserve);
     }
     renderSummary(rows);
   }

@@ -15,8 +15,8 @@ from .live_voice_patch import LIVE_PROTOCOL_VERSION
 # collapse them into a single version number: package releases, the layered
 # server runtime/console, the Chrome Bridge, and the realtime wire protocol can
 # evolve independently.
-SERVER_RUNTIME_VERSION = "0.21.12"
-CHROME_BRIDGE_VERSION = "0.7.9"
+SERVER_RUNTIME_VERSION = "0.21.13"
+CHROME_BRIDGE_VERSION = "0.8.0"
 PRODUCTION_ENTRYPOINT = "app.entry:app"
 VERSION_CONTRACT_VERSION = 1
 ADMIN_VERSION_ASSET = "/assets/chat2api-runtime-version.js"

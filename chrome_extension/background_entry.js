@@ -25,6 +25,8 @@ importScripts(
   "conversation_routing.js",
   "conversation_warm_pool_v2.js",
   "background_external_warm_v28.js",
+  "background_reserve_pool_v29.js",
+  "background_reserve_status_reconnect_v29.js",
   "conversation_workers_v24.js",
   "conversation_dispatch.js",
   "audio_routing_live.js",
