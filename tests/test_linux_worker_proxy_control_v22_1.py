@@ -154,4 +154,4 @@ def test_admin_proxy_ui_clears_secret_and_runtime_versions_are_aligned():
     assert 'input.value = ""' in admin
     assert "/proxy/test" in admin
     assert _runtime_version(runtime) >= (0, 22, 1)
-    assert 'CHROME_BRIDGE_VERSION = "0.8.0"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
