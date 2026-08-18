@@ -19,7 +19,7 @@
   const section = document.createElement("section");
   section.className = "view";
   section.id = "view-linux-workers";
-  section.innerHTML = `<div class="panel"><div class="toolbar"><input id="linuxWorkerName" placeholder="Worker 名称"><button class="action good" id="createLinuxWorker">新增 Linux Worker</button><button class="action" id="refreshLinuxWorkers">刷新</button></div><div id="linuxWorkerInstall" class="secret hidden"></div><div class="scroll"><table><thead><tr><th>名称</th><th>状态</th><th>系统</th><th>平台</th><th>网络</th><th>代理</th><th>ChatGPT</th><th>Chrome Bridge</th><th>最后在线</th><th>操作</th></tr></thead><tbody id="linuxWorkerRows"></tbody></table></div></div>`;
+  section.innerHTML = `<div class="panel"><div class="toolbar"><input id="linuxWorkerName" placeholder="Worker 名称"><button class="action good" id="createLinuxWorker">新增 Linux Worker</button><button class="action" id="refreshLinuxWorkers">刷新</button></div><div id="linuxWorkerInstall" class="secret hidden"></div><div class="scroll"><table><thead><tr><th>名称</th><th>状态</th><th>系统</th><th>平台</th><th>网络</th><th>代理</th><th>ChatGPT</th><th>Chrome Bridge</th><th>账户</th><th>备用窗口</th><th>扩展绑定</th><th>最后在线</th><th>操作</th></tr></thead><tbody id="linuxWorkerRows"></tbody></table></div></div>`;
   content.insertBefore(section, content.lastElementChild);
 
   const proxyDialog = document.createElement("dialog");
@@ -31,7 +31,7 @@
   const loginDialog = document.createElement("dialog");
   loginDialog.id = "linuxWorkerLoginDialog";
   loginDialog.style.cssText = "width:min(1320px,calc(100vw - 24px));max-width:none;border:1px solid #334155;border-radius:12px;background:#020617;color:#e5e7eb;padding:0;box-shadow:0 24px 90px rgba(0,0,0,.72)";
-  loginDialog.innerHTML = `<div style="padding:14px"><div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px"><div><div style="font-size:18px;font-weight:700">远程登录 ChatGPT</div><div id="linuxLoginWorkerName" style="margin-top:3px;color:#94a3b8"></div></div><div style="display:flex;align-items:center;gap:10px"><span id="linuxLoginStatus" style="color:#94a3b8">准备中…</span><button class="action" id="closeLinuxLogin" type="button">结束登录</button></div></div><div style="font-size:12px;color:#94a3b8;margin-bottom:10px">这是服务器 Xvfb :99 中真实 Chrome 画面。请直接在画面里输入账号、密码、验证码或完成 CAPTCHA；chat2api 不保存这些输入内容。点击画面后即可键盘输入。</div><div id="linuxLoginViewport" style="position:relative;background:#000;border:1px solid #334155;border-radius:8px;overflow:hidden;min-height:360px;display:flex;align-items:center;justify-content:center"><img id="linuxLoginFrame" tabindex="0" draggable="false" alt="远程 Chrome 画面" style="display:block;max-width:100%;max-height:calc(100vh - 210px);outline:none;cursor:default;user-select:none"><div id="linuxLoginPlaceholder" style="position:absolute;color:#94a3b8">正在连接 Worker 画面…</div></div></div>`;
+  loginDialog.innerHTML = `<div style="padding:14px"><div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px"><div><div style="font-size:18px;font-weight:700">远程登录 ChatGPT</div><div id="linuxLoginWorkerName" style="margin-top:3px;color:#94a3b8"></div></div><div style="display:flex;align-items:center;gap:10px"><span id="linuxLoginStatus" style="color:#94a3b8">准备中…</span><button class="action" id="closeLinuxLogin" type="button">结束登录</button></div></div><div style="font-size:12px;color:#94a3b8;margin-bottom:10px">这是服务器 Xvfb :99 中真实 Chrome 画面。请直接在画面里输入账号、密码、验证码或完成 CAPTCHA；chat2api 不保存这些输入内容。点击画面后即可键盘输入。登录状态确认后本窗口会自动结束。</div><div id="linuxLoginViewport" style="position:relative;background:#000;border:1px solid #334155;border-radius:8px;overflow:hidden;min-height:360px;display:flex;align-items:center;justify-content:center"><img id="linuxLoginFrame" tabindex="0" draggable="false" alt="远程 Chrome 画面" style="display:block;max-width:100%;max-height:calc(100vh - 210px);outline:none;cursor:default;user-select:none"><div id="linuxLoginPlaceholder" style="position:absolute;color:#94a3b8">正在连接 Worker 画面…</div></div></div>`;
   document.body.appendChild(loginDialog);
 
   let selectedWorkerId = "";
@@ -43,6 +43,7 @@
   let loginClosing = false;
   let inputChain = Promise.resolve();
 
+  const bridge = worker => worker?.metadata?.bridge && typeof worker.metadata.bridge === "object" ? worker.metadata.bridge : {};
   const proxyLabel = worker => {
     const summary = worker?.metadata?.proxy_summary || {};
     const base = String(worker.proxy_status || "-");
@@ -50,13 +51,41 @@
     const endpoint = summary.server ? ` · ${summary.server}${summary.port ? `:${summary.port}` : ""}` : "";
     return `${base} · ${summary.protocol}${endpoint}`;
   };
+  const chatgptLabel = worker => {
+    const b = bridge(worker);
+    if (b.login_state === "ready" && b.composer_ready === true) return "已登录 · Composer";
+    if (b.login_state === "login_required") return "需要登录";
+    if (b.login_state === "checking") return "检测中";
+    if (worker.chatgpt_status === "offline") return "扩展离线";
+    return String(worker.chatgpt_status || b.login_state || "-");
+  };
+  const networkLabel = worker => {
+    const b = bridge(worker);
+    const country = b.network_country_code ? ` · ${b.network_country_code}` : "";
+    return b.network_probe_status && b.network_probe_status !== "unknown" ? `${b.network_probe_status}${country}` : String(worker.network_status || "-");
+  };
+  const reserveLabel = worker => {
+    const b = bridge(worker);
+    if (!worker.extension_client_id) return "-";
+    const total = Math.max(0, Number(b.reserve_window_total || 0));
+    const active = Math.max(0, Number(b.reserve_window_active || 0));
+    const target = Math.max(0, Number(b.reserve_window_target || 0));
+    return `${total}(${active})${target ? ` / ${target}` : ""}`;
+  };
+  const bindingLabel = worker => {
+    const id = String(worker.extension_client_id || "");
+    if (!id) return "等待绑定";
+    const b = bridge(worker);
+    return `${id}${b.online === false ? " · 离线" : b.online === true ? " · 在线" : ""}`;
+  };
+  const accountLabel = worker => ({free:"Free",paid:"付费",unknown:"未识别"})[String(bridge(worker).account_type || "unknown")] || "未识别";
 
   const load = async () => {
     try {
       const payload = await request("/api/admin/linux-workers");
-      document.getElementById("linuxWorkerRows").innerHTML = payload.data.map(worker => `<tr><td>${esc(worker.name)}</td><td>${esc(worker.status)}</td><td>${esc(worker.os_version || "-")}</td><td>${esc(`${worker.platform || "linux"} ${worker.arch || ""}`)}</td><td>${esc(worker.network_status)}</td><td>${esc(proxyLabel(worker))}</td><td>${esc(worker.chatgpt_status)}</td><td>${esc(worker.chrome_bridge_version || "-")}</td><td>${esc(worker.last_seen_at || "-")}</td><td><button class="action" data-login="${esc(worker.worker_id)}" data-worker-name="${esc(worker.name)}">登录</button> <button class="action" data-proxy="${esc(worker.worker_id)}" data-worker-name="${esc(worker.name)}">代理</button> <button class="action danger" data-revoke="${esc(worker.worker_id)}">禁用</button></td></tr>`).join("") || '<tr><td colspan="10">暂无 Worker</td></tr>';
+      document.getElementById("linuxWorkerRows").innerHTML = payload.data.map(worker => `<tr><td>${esc(worker.name)}</td><td>${esc(worker.status)}</td><td>${esc(worker.os_version || "-")}</td><td>${esc(`${worker.platform || "linux"} ${worker.arch || ""}`)}</td><td>${esc(networkLabel(worker))}</td><td>${esc(proxyLabel(worker))}</td><td>${esc(chatgptLabel(worker))}</td><td>${esc(worker.chrome_bridge_version || "-")}</td><td>${esc(accountLabel(worker))}</td><td>${esc(reserveLabel(worker))}</td><td><code>${esc(bindingLabel(worker))}</code></td><td>${esc(worker.last_seen_at || "-")}</td><td><button class="action" data-login="${esc(worker.worker_id)}" data-worker-name="${esc(worker.name)}">登录</button> <button class="action" data-proxy="${esc(worker.worker_id)}" data-worker-name="${esc(worker.name)}">代理</button> <button class="action danger" data-revoke="${esc(worker.worker_id)}">禁用</button></td></tr>`).join("") || '<tr><td colspan="13">暂无 Worker</td></tr>';
     } catch (error) {
-      document.getElementById("linuxWorkerRows").innerHTML = `<tr><td colspan="10">${esc(error.message)}</td></tr>`;
+      document.getElementById("linuxWorkerRows").innerHTML = `<tr><td colspan="13">${esc(error.message)}</td></tr>`;
     }
   };
 
@@ -98,10 +127,11 @@
       const result = await request(`/api/admin/linux-workers/${encodeURIComponent(loginWorkerId)}/login-session/frame`, {headers:loginHeaders()});
       if (result.complete) {
         loginTicket = "";
-        setLoginStatus("ChatGPT 已登录，远程会话已自动结束");
-        document.getElementById("linuxLoginPlaceholder").textContent = "登录状态已确认，可以关闭此窗口。";
+        setLoginStatus("ChatGPT 已登录 · Composer 已就绪");
+        document.getElementById("linuxLoginPlaceholder").textContent = "登录状态已确认，正在自动关闭远程会话…";
         document.getElementById("linuxLoginPlaceholder").style.display = "block";
         await load();
+        setTimeout(() => closeLoginDialog(), 650);
         return;
       }
       loginSourceWidth = Number(result.source_width || 1920);

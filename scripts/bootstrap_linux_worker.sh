@@ -62,7 +62,7 @@ chmod 640 /etc/chat2api-worker/xray.json
 
 STAGE="enrollment"
 if [[ ! -s /etc/chat2api-worker/worker.json ]]; then
-  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$PRETTY_NAME" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.0"}')"
+  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$PRETTY_NAME" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.1"}')"
   curl -fsSL -H 'Content-Type: application/json' -d "$payload" "$SERVER/api/workers/enroll" | jq -e '.worker_id and .worker_token and .websocket_url' >/etc/chat2api-worker/worker.json
 fi
 chown root:chat2api /etc/chat2api-worker/worker.json; chmod 640 /etc/chat2api-worker/worker.json
