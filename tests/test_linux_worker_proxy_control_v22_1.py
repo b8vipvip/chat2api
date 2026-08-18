@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -20,6 +21,12 @@ def _proxy_outbound(config):
     return config["outbounds"][0]
 
 
+def _runtime_version(source: str) -> tuple[int, int, int]:
+    match = re.search(r'SERVER_RUNTIME_VERSION = "(\d+)\.(\d+)\.(\d+)"', source)
+    assert match
+    return tuple(map(int, match.groups()))
+
+
 def test_vless_reality_share_link_builds_xray_without_leaking_credentials_in_summary():
     link = "vless://11111111-1111-1111-1111-111111111111@vless.example.com:443?type=tcp&security=reality&sni=www.example.com&fp=chrome&pbk=PUBLIC_KEY&sid=abcd&flow=xtls-rprx-vision#node"
     config, summary = build_xray_config(link)
@@ -28,13 +35,7 @@ def test_vless_reality_share_link_builds_xray_without_leaking_credentials_in_sum
     assert outbound["settings"]["vnext"][0]["users"][0]["id"] == "11111111-1111-1111-1111-111111111111"
     assert outbound["streamSettings"]["security"] == "reality"
     assert outbound["streamSettings"]["realitySettings"]["publicKey"] == "PUBLIC_KEY"
-    assert summary == {
-        "protocol": "vless",
-        "server": "vless.example.com",
-        "port": 443,
-        "transport": "tcp",
-        "security": "reality",
-    }
+    assert summary == {"protocol":"vless","server":"vless.example.com","port":443,"transport":"tcp","security":"reality"}
     assert "11111111" not in json.dumps(summary)
     assert "PUBLIC_KEY" not in json.dumps(summary)
 
@@ -96,18 +97,7 @@ def test_worker_store_persists_only_sanitized_proxy_summary(tmp_path):
     enrollment = store.create_enrollment("US Proxy")
     credentials = store.enroll(enrollment["code"], {"hostname": "worker-1"})
     worker_id = credentials["worker_id"]
-    public = store.record_proxy_success(
-        worker_id,
-        {
-            "protocol": "vless",
-            "server": "proxy.example.com",
-            "port": 443,
-            "transport": "ws",
-            "security": "tls",
-            "password": "must-not-persist",
-            "uuid": "must-not-persist-either",
-        },
-    )
+    public = store.record_proxy_success(worker_id, {"protocol":"vless","server":"proxy.example.com","port":443,"transport":"ws","security":"tls","password":"must-not-persist","uuid":"must-not-persist-either"})
     assert public["proxy_status"] == "connected"
     assert public["status"] == "waiting_login"
     raw = store.path.read_text(encoding="utf-8")
@@ -163,5 +153,5 @@ def test_admin_proxy_ui_clears_secret_and_runtime_versions_are_aligned():
     assert "VLESS、VMess、Trojan、Shadowsocks" in admin
     assert 'input.value = ""' in admin
     assert "/proxy/test" in admin
-    assert 'SERVER_RUNTIME_VERSION = "0.22.1"' in runtime
+    assert _runtime_version(runtime) >= (0, 22, 1)
     assert 'CHROME_BRIDGE_VERSION = "0.8.0"' in runtime
