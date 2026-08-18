@@ -13,7 +13,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # changes do not invalidate the expensive Python dependency step.
 COPY requirements.txt ./
 RUN --mount=type=cache,id=chat2api-pip,target=/root/.cache/pip,sharing=locked \
-    pip install --prefer-binary -r requirements.txt
+    pip install -r requirements.txt
 
 COPY app ./app
 RUN mkdir -p /app/data
