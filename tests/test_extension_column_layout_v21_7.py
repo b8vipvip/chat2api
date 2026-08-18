@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_column_layout_supports_visibility_order_and_persistence():
     source = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
-    assert 'const VERSION = "0.21.8"' in source
+    assert 'const VERSION = "0.21.9"' in source
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v1"' in source
     assert "localStorage.getItem(STORAGE_KEY)" in source
     assert "localStorage.setItem(STORAGE_KEY" in source
@@ -23,7 +23,7 @@ def test_column_layout_supports_visibility_order_and_persistence():
     assert 'prefs.visible[key] === false ? "none" : ""' in source
 
 
-def test_column_layout_covers_real_v20_base_columns_and_health_columns():
+def test_column_layout_covers_real_v20_base_columns_and_nonduplicate_status_columns():
     source = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
     assert (
         'const BASE_KEYS = ["client_id", "device_id", "version", "account_type", '
@@ -41,7 +41,6 @@ def test_column_layout_covers_real_v20_base_columns_and_health_columns():
         "platform",
         "network",
         "chatgpt",
-        "health",
     ):
         assert f'key: "{key}"' in source
     for label in (
@@ -56,9 +55,12 @@ def test_column_layout_covers_real_v20_base_columns_and_health_columns():
         "平台",
         "网络",
         "ChatGPT",
-        "运行健康",
     ):
         assert label in source
+
+    assert 'key: "health"' not in source
+    assert 'label: "运行健康"' not in source
+    assert '["运行健康", "health"]' not in source
 
     historical = (ROOT / "app" / "admin_v20.js").read_text(encoding="utf-8")
     assert "<th>账户类型</th>" in historical
@@ -96,6 +98,7 @@ def test_column_layout_migrates_legacy_preferences_without_losing_account_type()
     assert 'candidate.includes("account_type")' in source
     assert 'candidate.indexOf("version")' in source
     assert 'candidate.splice(versionIndex + 1, 0, "account_type")' in source
+    assert "KNOWN_KEYS.has(key)" in source
 
 
 def test_column_layout_does_not_add_server_calls_or_privileged_browser_automation():
