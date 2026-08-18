@@ -5,7 +5,6 @@
     ["platform", "平台"],
     ["network", "网络"],
     ["chatgpt", "ChatGPT"],
-    ["health", "运行健康"],
   ];
   let pollInFlight = false;
 
@@ -92,10 +91,19 @@
     return level === "ok" ? "ok" : level === "bad" ? "bad" : "warnText";
   }
 
+  function removeLegacyHealthColumn() {
+    const table = document.querySelector("#view-extensions #extensionDeviceBody")?.closest("table");
+    if (!table) return;
+    for (const node of table.querySelectorAll('[data-chat2api-health-column="health"], th[data-chat2api-column-key="health"], [data-chat2api-health-cell="health"], td[data-chat2api-column-key="health"]')) {
+      node.remove();
+    }
+  }
+
   function patchHeader() {
     const table = document.querySelector("#view-extensions #extensionDeviceBody")?.closest("table");
     const row = table?.querySelector("thead tr");
     if (!row) return;
+    removeLegacyHealthColumn();
     for (const [key, label] of STATUS_COLUMNS) {
       let th = row.querySelector(`th[data-chat2api-health-column="${key}"]`);
       if (!th) {
@@ -157,6 +165,7 @@
   }
 
   function renderRows(rows) {
+    removeLegacyHealthColumn();
     const byClient = new Map(rows.map(row => [String(row.client_id || ""), row]));
     const domRows = document.querySelectorAll("#extensionDeviceBody tr");
     for (const tr of domRows) {
@@ -174,11 +183,9 @@
       const platform = platformState(row);
       const network = networkState(row);
       const login = loginState(row);
-      const health = healthState(row);
       renderState(ensureCell(tr, "platform"), {...platform, level: metadata(row).platform_supported_desktop === false ? "bad" : "ok"});
       renderState(ensureCell(tr, "network"), network);
       renderState(ensureCell(tr, "chatgpt"), login);
-      renderState(ensureCell(tr, "health"), health);
     }
     renderSummary(rows);
   }
