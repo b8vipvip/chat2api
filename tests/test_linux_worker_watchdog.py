@@ -68,8 +68,10 @@ def test_installer_adds_systemd_watchdog_service_and_timer():
 
 def test_installer_persists_watchdog_runtime_paths_without_credentials():
     source = read(ROOT / "scripts" / "install_linux_worker_autostart.sh")
-    env_block_start = source.index('cat >"${WATCHDOG_ENV}" <<EOF')
-    env_block_end = source.index("EOF", env_block_start + 1)
+    marker = 'cat >"${WATCHDOG_ENV}" <<EOF'
+    marker_start = source.index(marker)
+    env_block_start = source.index("\n", marker_start) + 1
+    env_block_end = source.index("\nEOF", env_block_start)
     env_block = source[env_block_start:env_block_end]
 
     for token in (
