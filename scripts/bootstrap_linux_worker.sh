@@ -65,7 +65,7 @@ chmod 640 /etc/chat2api-worker/xray.json
 
 STAGE="enrollment"
 if [[ ! -s /etc/chat2api-worker/worker.json ]]; then
-  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$PRETTY_NAME" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.1.0"}')"
+  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$PRETTY_NAME" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.2.0"}')"
   curl -fsSL -H 'Content-Type: application/json' -d "$payload" "$SERVER/api/workers/enroll" | jq -e '.worker_id and .worker_token and .websocket_url' >/etc/chat2api-worker/worker.json
 fi
 chown root:chat2api /etc/chat2api-worker/worker.json; chmod 640 /etc/chat2api-worker/worker.json
@@ -112,16 +112,17 @@ User=chat2api
 ExecStart=/opt/chat2api-worker-venv/bin/python ${REPO_DIR}/scripts/linux_worker_agent.py
 Restart=always
 RestartSec=5
-# The agent is still unprivileged, but it must be able to use the exact
-# sudoers allowlist below for three systemd restarts. NoNewPrivileges=true
-# would make those explicit sudo operations fail.
+# The agent remains unprivileged. The writable mount exception only makes the
+# fixed config directory writable to the root proxy helper spawned through the
+# exact sudoers rule below; Unix ownership still prevents direct agent writes.
 ProtectSystem=strict
-ReadOnlyPaths=/etc/chat2api-worker
+ReadWritePaths=/etc/chat2api-worker
 [Install]
 WantedBy=multi-user.target
 UNIT
 install -m 755 "$REPO_DIR/scripts/linux_worker_watchdog.sh" /usr/local/sbin/chat2api-linux-worker-watchdog
 install -m 755 "$REPO_DIR/scripts/linux_extension_autoreload.sh" /usr/local/sbin/chat2api-linux-extension-autoreload
+install -o root -g root -m 755 "$REPO_DIR/scripts/linux_worker_proxy_apply.sh" /usr/local/sbin/chat2api-worker-proxy-apply
 cat >/etc/default/chat2api-worker-watchdog <<ENV
 REPO_DIR=$REPO_DIR
 WORKER_USER=chat2api
@@ -162,7 +163,7 @@ Persistent=true
 WantedBy=timers.target
 UNIT
 cat >/etc/sudoers.d/chat2api-worker <<'SUDO'
-chat2api ALL=(root) NOPASSWD: /bin/systemctl restart chat2api-chrome.service, /bin/systemctl restart chat2api-xray.service, /bin/systemctl restart chat2api-xvfb.service
+chat2api ALL=(root) NOPASSWD: /bin/systemctl restart chat2api-chrome.service, /bin/systemctl restart chat2api-xray.service, /bin/systemctl restart chat2api-xvfb.service, /usr/local/sbin/chat2api-worker-proxy-apply
 SUDO
 chmod 440 /etc/sudoers.d/chat2api-worker; visudo -cf /etc/sudoers.d/chat2api-worker
 systemctl daemon-reload
