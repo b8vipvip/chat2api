@@ -67,8 +67,8 @@
       const data = await api("/api/admin/extensions");
       body.innerHTML = (data.clients || []).map(row => {
         const connectionAction = row.connection_enabled
-          ? `<button class="action danger" onclick="disconnectExtensionV18('${esc(row.client_id)}')">断开连接</button>`
-          : `<button class="action good" onclick="enableExtensionV18('${esc(row.client_id)}')">允许连接</button>`;
+          ? `<button class="action danger" onclick="disconnectExtensionV18('${esc(row.client_id)}')">断开</button>`
+          : `<button class="action good" onclick="enableExtensionV18('${esc(row.client_id)}')">连接</button>`;
         return `<tr>
           <td><code>${esc(row.client_id)}</code></td>
           <td><code>${esc(row.device_id || row.metadata?.device_id || "旧版设备未上报")}</code></td>
@@ -79,7 +79,7 @@
           <td>${fmtTime(row.last_seen_at)}</td>
           <td><div class="rowactions">
             ${connectionAction}
-            <button class="action danger" onclick="deleteExtensionHistoryV18('${esc(row.client_id)}',${row.online ? "true" : "false"})">删除记录</button>
+            <button class="action danger" onclick="deleteExtensionHistoryV18('${esc(row.client_id)}',${row.online ? "true" : "false"})">删除</button>
           </div></td>
         </tr>`;
       }).join("") || '<tr><td colspan="8">暂无扩展历史记录。</td></tr>';
