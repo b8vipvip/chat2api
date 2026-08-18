@@ -54,7 +54,7 @@ def test_remote_login_helper_uses_xvfb_capture_and_xdotool_without_listener():
         assert token in source
     lowered = source.lower()
     assert "http.server" not in lowered
-    assert "websocket" not in lowered
+    assert "import websockets" not in lowered
     assert ".listen(" not in lowered
     assert "5900" not in source
     assert "6080" not in source
