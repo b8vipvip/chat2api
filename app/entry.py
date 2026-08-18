@@ -31,6 +31,7 @@ from .v21_4_model_contract_patch import install_v21_4_model_contract_patch
 from .v21_5_patch import install_v21_5_patch
 from .v21_6_patch import install_v21_6_patch
 from .runtime_contract import install_runtime_contract
+from .v21_11_patch import install_v21_11_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -64,6 +65,9 @@ install_v21_4_model_contract_patch(app)
 install_v21_5_patch(app)
 install_v21_6_patch(app)
 
-# Install this after the historical patch stack so /version describes the final
-# production app rather than the legacy base layer in app.main.
+# Install the runtime contract after historical feature patches so /version
+# remains the canonical production version owner. The v21.11 UI-only patch is
+# installed last because it must run after the column-layout asset in /admin,
+# but it deliberately does not mutate app.version.
 install_runtime_contract(app)
+install_v21_11_patch(app)
