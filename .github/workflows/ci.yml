@@ -21,7 +21,7 @@ jobs:
       - name: Python compile
         run: |
           python -m compileall -q app
-          python -m py_compile scripts/linux_worker_agent.py scripts/linux_worker_proxy.py
+          python -m py_compile scripts/linux_worker_agent.py scripts/linux_worker_proxy.py scripts/linux_worker_remote_login.py
       - name: JavaScript syntax
         run: |
           node --check chrome_extension/content.js
