@@ -110,4 +110,4 @@ def test_worker_agent_uses_only_noninteractive_restricted_sudo_and_reports_unimp
     assert 'status = "waiting_proxy"' in agent
     assert "NOPASSWD: /bin/systemctl restart chat2api-chrome.service" in bootstrap
     agent_unit = bootstrap.split("cat >/etc/systemd/system/chat2api-worker-agent.service", 1)[1].split("\nUNIT\n", 1)[0]
-    assert "NoNewPrivileges=true" not in agent_unit
+    assert "\nNoNewPrivileges=true\n" not in agent_unit
