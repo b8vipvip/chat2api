@@ -9,8 +9,8 @@
 chat2api 有多个独立兼容面，不再用一个版本号混合表示全部组件：
 
 - Python package：`0.7.1`
-- Server runtime / console：`0.21.4`
-- Chrome Bridge：`0.7.8`
+- Server runtime / console：`0.22.0`
+- Chrome Bridge：`0.8.0`
 - Realtime Voice protocol：`chat2api-live-v1`
 - 生产入口：`app.entry:app`
 
