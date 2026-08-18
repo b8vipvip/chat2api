@@ -10,6 +10,7 @@ STATE_DIR="${STATE_DIR:-/var/lib/chat2api-worker}"
 APPLIED_FILE="${STATE_DIR}/extension-applied.sha256"
 FAILED_FILE="${STATE_DIR}/extension-failed.sha256"
 STATE_FILE="${STATE_DIR}/extension-state.env"
+LOCK_FILE="${STATE_DIR}/extension-autoreload.lock"
 
 log() {
   local level="$1"
@@ -119,6 +120,15 @@ if [[ ! -f "${EXTENSION_DIR}/manifest.json" ]]; then
 fi
 
 install -d -o root -g root -m 755 "${STATE_DIR}"
+if ! command -v flock >/dev/null 2>&1; then
+  log ERROR "flock is required to serialize Chrome Bridge reload transactions"
+  exit 1
+fi
+exec 9>"${LOCK_FILE}"
+if ! flock -n 9; then
+  log INFO "another Chrome Bridge reload transaction is already running; skipping this trigger"
+  exit 0
+fi
 
 fingerprint=""
 set +e
