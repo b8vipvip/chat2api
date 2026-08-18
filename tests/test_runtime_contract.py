@@ -3,10 +3,13 @@ import tomllib
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+from fastapi.testclient import TestClient
 
 import app as package
 from app.live_voice_patch import LIVE_PROTOCOL_VERSION
 from app.runtime_contract import (
+    ADMIN_VERSION_ASSET,
     CHROME_BRIDGE_VERSION,
     PACKAGE_VERSION,
     PRODUCTION_ENTRYPOINT,
@@ -50,11 +53,50 @@ def test_runtime_contract_installs_once_and_after_latest_patch():
     install_runtime_contract(runtime)
     install_runtime_contract(runtime)
     assert sum(1 for route in runtime.routes if getattr(route, "path", "") == "/version") == 1
+    assert sum(1 for route in runtime.routes if getattr(route, "path", "") == ADMIN_VERSION_ASSET) == 1
 
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert "install_runtime_contract(app)" in entry
     assert entry.index("install_v21_4_model_contract_patch(app)") < entry.index("install_v21_5_patch(app)")
     assert entry.index("install_v21_5_patch(app)") < entry.index("install_runtime_contract(app)")
+
+
+def test_runtime_contract_is_final_admin_version_owner():
+    runtime = FastAPI(version="0.21.4")
+
+    @runtime.get("/admin")
+    async def admin_page():
+        return HTMLResponse('<html><body><div class="brand"><small>Server Console · v0.21.4</small></div><div id="status">v0.20.0</div><script src="/assets/historical.js"></script></body></html>')
+
+    @runtime.get("/api/admin/overview")
+    async def overview():
+        return {"version": "0.21.4", "online_extensions": 2}
+
+    @runtime.get("/api/admin/extensions")
+    async def extensions():
+        return {"clients": [{"client_id": "ext_a", "version": "0.7.8"}]}
+
+    install_runtime_contract(runtime)
+    assert runtime.version == SERVER_RUNTIME_VERSION
+
+    client = TestClient(runtime)
+    html = client.get("/admin").text
+    assert f'<script src="{ADMIN_VERSION_ASSET}"></script>' in html
+    assert html.index('/assets/historical.js') < html.index(ADMIN_VERSION_ASSET)
+
+    script = client.get(ADMIN_VERSION_ASSET).text
+    assert f'const VERSION = "{SERVER_RUNTIME_VERSION}"' in script
+    assert "__chat2apiRuntimeVersionOwner" in script
+    assert 'document.querySelector(".brand small")' in script
+    assert 'document.getElementById("status")' in script
+    assert "MutationObserver" in script
+
+    overview_payload = client.get("/api/admin/overview").json()
+    assert overview_payload["version"] == SERVER_RUNTIME_VERSION
+
+    extension_payload = client.get("/api/admin/extensions").json()
+    assert extension_payload["clients"][0]["version"] == CHROME_BRIDGE_VERSION
+    assert "version" not in extension_payload
 
 
 def test_readme_describes_version_contract_and_voice_status():
