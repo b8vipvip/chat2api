@@ -100,3 +100,14 @@ def test_bootstrap_config_permissions_allow_unprivileged_services_to_read():
     assert "chown root:chat2api /etc/chat2api-worker/worker.json" in source
     assert "chmod 640 /etc/chat2api-worker/worker.json" in source
     assert "User=chat2api" in source
+
+
+def test_worker_agent_uses_only_noninteractive_restricted_sudo_and_reports_unimplemented_commands():
+    agent = Path("scripts/linux_worker_agent.py").read_text(encoding="utf-8")
+    bootstrap = Path("scripts/bootstrap_linux_worker.sh").read_text(encoding="utf-8")
+    assert '["sudo", "-n", "/bin/systemctl", "restart"' in agent
+    assert 'return {"ok": False, "error": "not_implemented"}' in agent
+    assert 'status = "waiting_proxy"' in agent
+    assert "NOPASSWD: /bin/systemctl restart chat2api-chrome.service" in bootstrap
+    agent_unit = bootstrap.split("cat >/etc/systemd/system/chat2api-worker-agent.service", 1)[1].split("\nUNIT\n", 1)[0]
+    assert "NoNewPrivileges=true" not in agent_unit
