@@ -28,6 +28,7 @@ from .v21_1_patch import install_v21_1_patch
 from .v21_2_patch import install_v21_2_patch
 from .v21_3_patch import install_v21_3_patch
 from .v21_4_model_contract_patch import install_v21_4_model_contract_patch
+from .v21_5_patch import install_v21_5_patch
 from .runtime_contract import install_runtime_contract
 
 install_voice_patch(app)
@@ -59,6 +60,7 @@ install_v21_1_patch(app)
 install_v21_2_patch(app)
 install_v21_3_patch(app)
 install_v21_4_model_contract_patch(app)
+install_v21_5_patch(app)
 
 # Install this after the historical patch stack so /version describes the final
 # production app rather than the legacy base layer in app.main.
