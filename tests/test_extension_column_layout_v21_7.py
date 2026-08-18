@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_column_layout_supports_visibility_order_and_persistence():
     source = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
-    assert 'const VERSION = "0.21.12"' in source
+    assert 'const VERSION = "0.21.13"' in source
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v1"' in source
     assert "localStorage.getItem(STORAGE_KEY)" in source
     assert "localStorage.setItem(STORAGE_KEY" in source
@@ -41,6 +41,7 @@ def test_column_layout_covers_real_v20_base_columns_and_nonduplicate_status_colu
         "platform",
         "network",
         "chatgpt",
+        "reserve_windows",
     ):
         assert f'key: "{key}"' in source
     for label in (
@@ -55,6 +56,7 @@ def test_column_layout_covers_real_v20_base_columns_and_nonduplicate_status_colu
         "平台",
         "网络",
         "ChatGPT",
+        "备用窗口",
     ):
         assert label in source
 
