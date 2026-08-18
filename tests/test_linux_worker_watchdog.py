@@ -1,3 +1,4 @@
+import subprocess
 from pathlib import Path
 
 
@@ -39,7 +40,7 @@ def test_watchdog_never_recreates_or_reowns_the_persistent_profile():
     assert "stat -c '%U'" in source
     assert 'expected ${WORKER_USER}; refusing automatic recovery' in source
     assert 'mkdir -p "${PROFILE_DIR}"' not in source
-    assert 'chown' not in source
+    assert "chown" not in source
 
 
 def test_installer_adds_systemd_watchdog_service_and_timer():
@@ -85,7 +86,9 @@ def test_installer_persists_watchdog_runtime_paths_without_credentials():
         assert forbidden not in env_block
 
 
-def test_ci_shell_checks_both_linux_worker_scripts():
-    workflow = read(ROOT / ".github" / "workflows" / "ci.yml")
-    assert "bash -n scripts/install_linux_worker_autostart.sh" in workflow
-    assert "bash -n scripts/linux_worker_watchdog.sh" in workflow
+def test_linux_worker_scripts_have_valid_bash_syntax():
+    for script in (
+        ROOT / "scripts" / "install_linux_worker_autostart.sh",
+        ROOT / "scripts" / "linux_worker_watchdog.sh",
+    ):
+        subprocess.run(["bash", "-n", str(script)], check=True)
