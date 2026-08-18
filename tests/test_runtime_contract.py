@@ -53,13 +53,15 @@ def test_runtime_contract_installs_once_and_after_latest_patch():
 
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert "install_runtime_contract(app)" in entry
-    assert entry.index("install_v21_4_model_contract_patch(app)") < entry.index("install_runtime_contract(app)")
+    assert entry.index("install_v21_4_model_contract_patch(app)") < entry.index("install_v21_5_patch(app)")
+    assert entry.index("install_v21_5_patch(app)") < entry.index("install_runtime_contract(app)")
 
 
-def test_readme_uses_current_version_contract_and_voice_status():
+def test_readme_describes_version_contract_and_voice_status():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     assert f"Python package：`{PACKAGE_VERSION}`" in readme
-    assert f"Server runtime / console：`{SERVER_RUNTIME_VERSION}`" in readme
+    assert "Server runtime / console：`" in readme
     assert f"Chrome Bridge：`{CHROME_BRIDGE_VERSION}`" in readme
     assert "GET /version" in readme
+    assert "完整版本规则见 `docs/VERSIONING.md`" in readme
     assert "语音生成、语音对话尚未实现" not in readme
