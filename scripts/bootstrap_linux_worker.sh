@@ -21,7 +21,7 @@ getent hosts github.com >/dev/null; timedatectl show -p NTPSynchronized --value 
 STAGE="packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y ca-certificates curl wget git jq unzip xvfb xauth procps iproute2 lsof fonts-liberation python3 python3-venv sudo
+apt-get install -y ca-certificates curl wget git jq unzip xvfb xauth x11-apps xdotool imagemagick procps iproute2 lsof fonts-liberation python3 python3-venv sudo
 if ! command -v google-chrome >/dev/null; then
   curl -fsSLo /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
   apt-get install -y /tmp/google-chrome.deb; rm -f /tmp/google-chrome.deb
@@ -50,9 +50,6 @@ if ! command -v xray >/dev/null; then
   unzip -qo /tmp/xray.zip xray geoip.dat geosite.dat -d /usr/local/share/xray
   install -m 755 /usr/local/share/xray/xray /usr/local/bin/xray
 fi
-# Both Xray and the outbound Worker agent run as the unprivileged chat2api user.
-# Keep the directory root-owned but group-traversable, while individual secret
-# files remain readable only by root and the chat2api group.
 install -d -o root -g chat2api -m 750 /etc/chat2api-worker
 install -d -o root -g root -m 700 /var/lib/chat2api-worker/state
 if [[ ! -s /etc/chat2api-worker/xray.json ]]; then
@@ -65,7 +62,7 @@ chmod 640 /etc/chat2api-worker/xray.json
 
 STAGE="enrollment"
 if [[ ! -s /etc/chat2api-worker/worker.json ]]; then
-  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$PRETTY_NAME" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.2.0"}')"
+  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$PRETTY_NAME" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.0"}')"
   curl -fsSL -H 'Content-Type: application/json' -d "$payload" "$SERVER/api/workers/enroll" | jq -e '.worker_id and .worker_token and .websocket_url' >/etc/chat2api-worker/worker.json
 fi
 chown root:chat2api /etc/chat2api-worker/worker.json; chmod 640 /etc/chat2api-worker/worker.json
@@ -109,12 +106,10 @@ cat >/etc/systemd/system/chat2api-worker-agent.service <<UNIT
 After=network-online.target chat2api-chrome.service
 [Service]
 User=chat2api
+Environment=DISPLAY=:99
 ExecStart=/opt/chat2api-worker-venv/bin/python ${REPO_DIR}/scripts/linux_worker_agent.py
 Restart=always
 RestartSec=5
-# The agent remains unprivileged. The writable mount exception only makes the
-# fixed config directory writable to the root proxy helper spawned through the
-# exact sudoers rule below; Unix ownership still prevents direct agent writes.
 ProtectSystem=strict
 ReadWritePaths=/etc/chat2api-worker
 [Install]
