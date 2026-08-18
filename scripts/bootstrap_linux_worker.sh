@@ -50,13 +50,18 @@ if ! command -v xray >/dev/null; then
   unzip -qo /tmp/xray.zip xray geoip.dat geosite.dat -d /usr/local/share/xray
   install -m 755 /usr/local/share/xray/xray /usr/local/bin/xray
 fi
-install -d -m 700 /etc/chat2api-worker /var/lib/chat2api-worker/state
+# Both Xray and the outbound Worker agent run as the unprivileged chat2api user.
+# Keep the directory root-owned but group-traversable, while individual secret
+# files remain readable only by root and the chat2api group.
+install -d -o root -g chat2api -m 750 /etc/chat2api-worker
+install -d -o root -g root -m 700 /var/lib/chat2api-worker/state
 if [[ ! -s /etc/chat2api-worker/xray.json ]]; then
 cat >/etc/chat2api-worker/xray.json <<'JSON'
 {"log":{"loglevel":"warning"},"inbounds":[{"listen":"127.0.0.1","port":10808,"protocol":"socks","settings":{"udp":true}}],"outbounds":[{"protocol":"freedom","tag":"direct"}]}
 JSON
 fi
-chmod 600 /etc/chat2api-worker/xray.json
+chown root:chat2api /etc/chat2api-worker/xray.json
+chmod 640 /etc/chat2api-worker/xray.json
 
 STAGE="enrollment"
 if [[ ! -s /etc/chat2api-worker/worker.json ]]; then
