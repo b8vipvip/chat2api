@@ -102,17 +102,20 @@ def install_linux_worker_bridge_binding_patch(app: FastAPI) -> FastAPI:
             workers.clear_extension_binding(worker["worker_id"], expected_client_id=client_id)
             return
         metadata = dict(item.metadata or {})
-        workers.record_extension_status(
-            worker["worker_id"],
-            {
-                "client_id": client_id,
-                "device_id": item.device_id or metadata.get("device_id") or "",
-                "version": metadata.get("extension_version") or item.version,
-                "online": client_id in registry.sockets and item.connection_enabled,
-                "connection_enabled": item.connection_enabled,
-                "metadata": metadata,
-            },
-        )
+        try:
+            workers.record_extension_status(
+                worker["worker_id"],
+                {
+                    "client_id": client_id,
+                    "device_id": item.device_id or metadata.get("device_id") or "",
+                    "version": metadata.get("extension_version") or item.version,
+                    "online": client_id in registry.sockets and item.connection_enabled,
+                    "connection_enabled": item.connection_enabled,
+                    "metadata": metadata,
+                },
+            )
+        except (KeyError, TypeError, ValueError):
+            return
 
     async def ensure_binding_metadata(client_id: str, worker_id: str, device_id: str) -> None:
         await registry.touch(
@@ -124,6 +127,22 @@ def install_linux_worker_bridge_binding_patch(app: FastAPI) -> FastAPI:
                 "device_id": device_id,
             },
         )
+
+    async def clear_registry_binding_metadata(client_id: str) -> None:
+        if client_id not in registry.clients:
+            return
+        await registry.touch(
+            client_id,
+            {
+                "linux_worker_id": "",
+                "linux_worker_binding_version": 0,
+                "linux_worker_binding_source": "replaced-offline-worker-binding-v30",
+            },
+        )
+
+    def client_online(client_id: str) -> bool:
+        item = registry.clients.get(client_id)
+        return bool(item and item.connection_enabled and client_id in registry.sockets)
 
     # Keep Worker state synchronized with the authoritative extension registry.
     if not getattr(registry, "_chat2api_linux_worker_binding_v30", False):
@@ -181,14 +200,21 @@ def install_linux_worker_bridge_binding_patch(app: FastAPI) -> FastAPI:
                     _safe_text(worker.get("extension_device_id") or registry.clients[current_client_id].device_id, 200),
                 )
                 await sync_client(current_client_id)
-                return {"bound": True, "worker_id": worker_id, "client_id": current_client_id, "version": PATCH_VERSION}
-            workers.clear_extension_binding(worker_id, expected_client_id=current_client_id)
+                if client_online(current_client_id):
+                    return {"bound": True, "online": True, "worker_id": worker_id, "client_id": current_client_id, "version": PATCH_VERSION}
+            else:
+                workers.clear_extension_binding(worker_id, expected_client_id=current_client_id)
+                current_client_id = ""
 
+        # A durable binding with an offline client intentionally receives a fresh
+        # proof. The same profile can reuse its existing credentials; if storage
+        # was lost, the Worker may replace only this offline identity.
         ticket = tickets.issue(worker_id)
         server_url = app.state.settings.resolved_public_url(str(request.base_url)).rstrip("/")
         return {
             "bound": False,
             "worker_id": worker_id,
+            "current_client_id": current_client_id or None,
             "ticket": ticket,
             "expires_in_seconds": BINDING_TICKET_TTL_SECONDS,
             "retry_after_seconds": 60,
@@ -206,23 +232,24 @@ def install_linux_worker_bridge_binding_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(400, "Invalid worker binding JSON")
 
         raw_ticket = str(body.get("ticket") or "")
+        device_id = _safe_text(body.get("device_id"), 200)
+        if len(device_id) < 8:
+            raise HTTPException(400, "Extension device_id is required")
+        client_id = _safe_text(body.get("client_id"), 180)
+        client_token = str(body.get("client_token") or "")
+        if bool(client_id) != bool(client_token):
+            raise HTTPException(400, "client_id and client_token must be supplied together")
+
+        # Consume before any async identity mutation so two concurrent claims can
+        # never both pass the same proof.
         try:
-            binding = tickets.require(raw_ticket)
+            binding = tickets.consume(raw_ticket)
         except KeyError as exc:
             raise HTTPException(401, "Invalid or expired worker binding ticket") from exc
 
         worker = workers.data["workers"].get(binding.worker_id)
         if not worker or worker.get("revoked_at"):
             raise HTTPException(409, "Worker is unavailable")
-
-        device_id = _safe_text(body.get("device_id"), 200)
-        if len(device_id) < 8:
-            raise HTTPException(400, "Extension device_id is required")
-
-        client_id = _safe_text(body.get("client_id"), 180)
-        client_token = str(body.get("client_token") or "")
-        if bool(client_id) != bool(client_token):
-            raise HTTPException(400, "client_id and client_token must be supplied together")
 
         metadata = dict(body.get("metadata") or {}) if isinstance(body.get("metadata"), dict) else {}
         safe_metadata = {
@@ -235,18 +262,28 @@ def install_linux_worker_bridge_binding_patch(app: FastAPI) -> FastAPI:
         }
         safe_metadata = {key: value for key, value in safe_metadata.items() if value not in {"", None}}
 
-        created = False
-        token: str | None = None
         if client_id:
             if not await registry.authenticate(client_id, client_token):
                 raise HTTPException(401, "Invalid extension credentials")
             item = registry.clients.get(client_id)
+            if item and item.device_id and str(item.device_id) != device_id:
+                raise HTTPException(409, "Extension credentials belong to another device_id")
             previous_worker = _safe_text((item.metadata or {}).get("linux_worker_id"), 120) if item else ""
             if previous_worker and previous_worker != binding.worker_id:
                 previous = workers.data["workers"].get(previous_worker)
                 if previous and not previous.get("revoked_at"):
                     raise HTTPException(409, "Extension is already bound to another active Linux Worker")
-        else:
+
+        current_client_id = _safe_text(worker.get("extension_client_id"), 180)
+        if current_client_id and current_client_id != client_id:
+            if client_online(current_client_id):
+                raise HTTPException(409, "Linux Worker already has an online bound extension")
+            workers.clear_extension_binding(binding.worker_id, expected_client_id=current_client_id)
+            await clear_registry_binding_metadata(current_client_id)
+
+        created = False
+        token: str | None = None
+        if not client_id:
             client_id, token = await registry.register(
                 _safe_text(body.get("name"), 120) or f"Linux Worker {worker.get('name') or binding.worker_id}",
                 _safe_text(body.get("browser_name"), 80) or "Chrome",
@@ -265,7 +302,6 @@ def install_linux_worker_bridge_binding_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(409, str(exc)) from exc
 
         await ensure_binding_metadata(client_id, binding.worker_id, device_id)
-        tickets.consume(raw_ticket)
         await sync_client(client_id)
 
         result: dict[str, Any] = {
