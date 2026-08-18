@@ -10,7 +10,21 @@ from typing import Any
 
 
 WORKER_STATES = frozenset({"installing", "enrolling", "waiting_proxy", "proxy_checking", "waiting_login", "login_checking", "ready", "degraded", "offline", "error"})
-ALLOWED_COMMANDS = frozenset({"health_check", "restart_chrome", "restart_xray", "restart_xvfb", "reload_extension", "test_proxy", "apply_proxy_config", "open_login_session", "close_login_session", "get_logs", "reconcile_reserve_pool"})
+ALLOWED_COMMANDS = frozenset({
+    "health_check",
+    "restart_chrome",
+    "restart_xray",
+    "restart_xvfb",
+    "reload_extension",
+    "test_proxy",
+    "apply_proxy_config",
+    "open_login_session",
+    "close_login_session",
+    "login_session_frame",
+    "login_session_input",
+    "get_logs",
+    "reconcile_reserve_pool",
+})
 
 
 def utcnow() -> datetime:
