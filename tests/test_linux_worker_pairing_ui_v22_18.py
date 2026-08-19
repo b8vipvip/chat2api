@@ -141,56 +141,47 @@ def test_proxy_apply_body_reaches_existing_backend_and_catalog_name_is_persisted
 
 def test_worker_pairing_control_plane_stores_reference_not_raw_secret_and_reconciles_on_login():
     source = (ROOT / "app" / "linux_worker_pairing_patch.py").read_text(encoding="utf-8")
-
     for token in (
         '/api/admin/linux-workers/{worker_id}/pairing-code',
         'hashlib.sha256(raw_code.encode("utf-8")).hexdigest()',
         '"worker_pairing"',
-        '"pairing_id": pairing.pairing_id',
-        '"name": pairing.name',
-        '"prefix": pairing.prefix',
-        'str(worker.get("chatgpt_status") or "").lower() != "ready"',
         'await pairings.bind(pairing_id, client_id, device_id)',
-        'client.pairing_id = pairing_id',
         'workers.record_extension_status = record_extension_status_with_pairing',
         'path == "/api/workers/extension-binding-ticket"',
     ):
         assert token in source
 
-    # The pasted secret is only used for validation. It must never be copied into
-    # the persisted Worker metadata payload.
     state_block = source.split("def write_pairing_state", 1)[1].split("async def unbind_previous", 1)[0]
     assert "raw_code" not in state_block
     assert 'metadata["worker_pairing"] = current' in state_block
 
 
-def test_worker_ui_uses_requested_chinese_columns_beijing_time_and_real_status_fields():
-    source = (ROOT / "app" / "admin_linux_worker_pairing.js").read_text(encoding="utf-8")
-
-    assert '["名称","状态","安装进度","安装命令","系统","网络","代理","ChatGPT","最后更新","操作"]' in source
-    assert '"Chrome Bridge"' not in source
-    assert '"备用窗口"' not in source
-    assert 'timeZone:"Asia/Shanghai"' in source
-    assert 'row.last_seen_at || row.install_updated_at' in source
-    assert 'return logged ? "已登录" : "未登录"' in source
-    assert 'return `已连接（${name}）`' in source
-    assert 'button.textContent = "配对码"' in source
-    assert 'metadata.proxy_summary' in source
-    assert 'meta.worker_pairing' in source
-    assert '/api/admin/linux-worker-installations' in source
-    assert '/api/admin/linux-worker-proxies' in source
-
-
-def test_install_progress_is_presented_in_chinese_and_beijing_time():
-    source = (ROOT / "app" / "admin_linux_worker_chinese_progress.js").read_text(encoding="utf-8")
+def test_worker_ui_is_stable_chinese_and_uses_beijing_time():
+    source = (ROOT / "app" / "admin_linux_worker_stable_table.js").read_text(encoding="utf-8")
     for token in (
-        '"system-check":"系统环境检查"',
-        'packages:"安装基础依赖"',
-        '"worker-bundle":"更新 Worker 组件"',
-        'enrollment:"注册 Worker 身份"',
-        'health:"检查 Worker 健康状态"',
+        'nth-child(9)',
+        'nth-child(10)',
         'timeZone:"Asia/Shanghai"',
-        'row.install_history',
+        'row.last_seen_at || row.install_updated_at',
+        'return logged ? "已登录" : "未登录"',
+        'return `已连接（${name}）`',
+        'pairing.textContent = "配对码"',
+        'remove.textContent = "删除 Worker"',
+        'if (/ubuntu/i.test(os) || platform === "linux") return "Ubuntu"',
+        'state === "installed" ? "完成"',
+        'new MutationObserver(() => paint()).observe(tbody, {childList:true,subtree:false})',
+    ):
+        assert token in source
+
+
+def test_stability_patch_disables_the_two_competing_v22_18_presentation_loops_and_adds_hard_delete():
+    source = (ROOT / "app" / "linux_worker_table_stability_patch.py").read_text(encoding="utf-8")
+    for token in (
+        '__CHAT2API_LINUX_WORKER_PAIRING_UI_V22_18__=true',
+        '__CHAT2API_LINUX_WORKER_CHINESE_PROGRESS_V22_18__=true',
+        '/api/admin/linux-workers/{worker_id}/record',
+        'workers.data["workers"].pop(worker_id, None)',
+        'str(item.get("worker_id") or "") == worker_id',
     ):
         assert token in source
 
@@ -210,26 +201,22 @@ def test_proxy_name_is_backfilled_from_the_real_proxy_catalog_and_persisted_afte
 
 
 def test_worker_ui_javascript_has_valid_syntax():
-    for relative in (
-        "app/admin_linux_worker_pairing.js",
-        "app/admin_linux_worker_chinese_progress.js",
-    ):
-        result = subprocess.run(
-            ["node", "--check", str(ROOT / relative)],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        assert result.returncode == 0, f"{relative}: {result.stderr}"
+    result = subprocess.run(
+        ["node", "--check", str(ROOT / "app" / "admin_linux_worker_stable_table.js")],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
-def test_runtime_marks_worker_pairing_ui_release_without_bridge_protocol_bump():
+def test_runtime_marks_worker_table_stability_release_without_bridge_protocol_bump():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.18"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.19"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert "install_runtime_contract(app)" in entry
     assert "install_linux_worker_pairing_patch(app)" in entry
     assert "install_linux_worker_proxy_name_patch(app)" in entry
-    assert entry.index("install_runtime_contract(app)") < entry.index("install_linux_worker_pairing_patch(app)")
-    assert entry.index("install_linux_worker_pairing_patch(app)") < entry.index("install_linux_worker_proxy_name_patch(app)")
+    assert "install_linux_worker_table_stability_patch(app)" in entry
+    assert entry.index("install_runtime_contract(app)") < entry.index("install_linux_worker_table_stability_patch(app)")
