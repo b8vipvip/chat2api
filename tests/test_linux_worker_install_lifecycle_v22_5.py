@@ -72,5 +72,5 @@ def test_server_packages_bundle_and_admin_uses_worker_lifecycle_list():
     assert "/api/admin/linux-worker-installations" in admin
     assert "安装完成或失败后自动停用" in admin
     assert "有效期至" not in admin
-    assert 'SERVER_RUNTIME_VERSION = "0.22.5"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.6"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
