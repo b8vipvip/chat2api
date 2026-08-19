@@ -22,6 +22,7 @@ SOURCE_HEIGHT = int(os.environ.get("CHAT2API_LOGIN_SOURCE_HEIGHT", "1080"))
 FRAME_WIDTH = int(os.environ.get("CHAT2API_LOGIN_FRAME_WIDTH", "1280"))
 FRAME_HEIGHT = int(os.environ.get("CHAT2API_LOGIN_FRAME_HEIGHT", "720"))
 SESSION_IDLE_SECONDS = int(os.environ.get("CHAT2API_LOGIN_SESSION_IDLE_SECONDS", "1200"))
+LOGIN_TMPDIR = os.environ.get("CHAT2API_LOGIN_TMPDIR", "/dev/shm")
 MAX_FRAME_BYTES = 1_500_000
 
 
@@ -46,7 +47,15 @@ SESSION = RemoteLoginSession()
 
 
 def _env() -> dict[str, str]:
-    return {**os.environ, "DISPLAY": DISPLAY}
+    env = {**os.environ, "DISPLAY": DISPLAY}
+    if LOGIN_TMPDIR:
+        # The Agent runs with ProtectSystem=strict, which can expose /tmp as
+        # read-only inside its mount namespace. ImageMagick needs writable
+        # scratch space even when stdin/stdout are pipes. /dev/shm stays
+        # writable, is memory-backed, and avoids persisting login frames.
+        env["TMPDIR"] = LOGIN_TMPDIR
+        env["MAGICK_TMPDIR"] = LOGIN_TMPDIR
+    return env
 
 
 def _check_session() -> dict[str, Any] | None:
