@@ -27,6 +27,14 @@ async def _response_bytes(response: Response) -> bytes:
     return b"".join(chunks)
 
 
+def _safe_port(value: Any) -> int:
+    try:
+        port = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return port if 0 < port <= 65535 else 0
+
+
 def _decode_b64_json(value: str) -> dict[str, Any]:
     text = str(value or "").strip()
     if not text:
@@ -62,22 +70,27 @@ def _proxy_endpoint(share_link: str) -> tuple[str, str, int]:
     protocol = scheme.lower()
     if protocol == "vmess":
         payload = _decode_b64_json(remainder.split("#", 1)[0])
-        return "vmess", str(payload.get("add") or "").strip().lower(), int(payload.get("port") or 0)
+        return "vmess", str(payload.get("add") or "").strip().lower(), _safe_port(payload.get("port"))
 
-    parsed = urlsplit(raw)
-    if parsed.hostname:
-        return ("ss" if protocol == "shadowsocks" else protocol), parsed.hostname.lower(), int(parsed.port or 0)
+    try:
+        parsed = urlsplit(raw)
+        hostname = str(parsed.hostname or "").strip().lower()
+        port = _safe_port(parsed.port)
+    except (TypeError, ValueError):
+        hostname = ""
+        port = 0
+    if hostname:
+        return ("ss" if protocol == "shadowsocks" else protocol), hostname, port
 
     if protocol == "ss":
         encoded = remainder.split("#", 1)[0]
         decoded = _decode_b64_text(encoded)
         host_part = decoded.rsplit("@", 1)[-1]
         if ":" in host_part:
-            host, port = host_part.rsplit(":", 1)
-            try:
-                return "ss", host.strip("[]").lower(), int(port)
-            except ValueError:
-                pass
+            host, raw_port = host_part.rsplit(":", 1)
+            port = _safe_port(raw_port)
+            if port:
+                return "ss", host.strip("[]").lower(), port
     return protocol, "", 0
 
 
@@ -108,10 +121,7 @@ def install_linux_worker_proxy_name_patch(app: FastAPI) -> FastAPI:
     def catalog_name_for_summary(summary: dict[str, Any]) -> str:
         protocol = str(summary.get("protocol") or "").lower()
         server = str(summary.get("server") or "").strip().lower()
-        try:
-            port = int(summary.get("port") or 0)
-        except (TypeError, ValueError):
-            port = 0
+        port = _safe_port(summary.get("port"))
         if not protocol or not server:
             return ""
         for item in catalog.list():
