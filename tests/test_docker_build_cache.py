@@ -29,7 +29,12 @@ def test_dockerignore_excludes_runtime_and_development_churn():
         "data",
         "chrome_extension",
         "docs",
-        "scripts",
         "tests",
     }:
         assert required in entries
+
+    # Worker-only scripts remain excluded from the server image context, while
+    # the public bootstrap is explicitly allowed so Docker can COPY it.
+    assert "scripts" not in entries
+    assert "scripts/*" in entries
+    assert "!scripts/bootstrap_linux_worker.sh" in entries
