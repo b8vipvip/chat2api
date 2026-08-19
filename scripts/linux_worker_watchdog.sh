@@ -48,7 +48,11 @@ wait_for_proxy_listener() {
 }
 
 chrome_process_ready() {
-  pgrep -u "${WORKER_USER}" -f "google-chrome.*user-data-dir=${PROFILE_DIR}" >/dev/null 2>&1
+  # Chrome for Testing uses a different executable/process name from branded
+  # Google Chrome. The dedicated Worker profile is the stable identity marker.
+  ps -u "${WORKER_USER}" -o args= 2>/dev/null \
+    | grep -F -- "--user-data-dir=${PROFILE_DIR}" \
+    | grep -E '[Cc]hrome' >/dev/null 2>&1
 }
 
 chatgpt_transport_ready() {
