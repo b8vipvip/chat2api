@@ -44,7 +44,11 @@
     return roots;
   }
 
-  const dangerousContext = /(captcha|verify you are human|security check|two[- ]?factor|2fa|authenticator|passkey|password|email address|phone number|log ?in|sign ?in|sign ?up|payment|billing|subscription|purchase|delete|remove account|log ?out|sign ?out|terms of use|privacy policy|age verification|identity verification|验证码|人机验证|安全验证|两步验证|双重验证|密码|邮箱|手机号|登录|注册|付款|账单|订阅|购买|删除账号|退出登录|服务条款|隐私政策|年龄验证|身份验证)/i;
+  // Never automate security/authentication, financial, destructive-account or
+  // identity-verification surfaces. Generic footer links such as "Privacy
+  // policy" are intentionally not included because harmless product-tour
+  // dialogs frequently contain them.
+  const dangerousContext = /(captcha|verify you are human|security check|two[- ]?factor|2fa|authenticator|passkey|password|email address|phone number|log ?in|sign ?in|sign ?up|payment|billing|subscription|purchase|delete|remove account|log ?out|sign ?out|age verification|identity verification|验证码|人机验证|安全验证|两步验证|双重验证|密码|邮箱|手机号|登录|注册|付款|账单|订阅|购买|删除账号|退出登录|年龄验证|身份验证)/i;
   const nuisanceContext = /(more relevant, personalized replies|personalized replies|personalised replies|memory|remembering|what'?s new|new feature|new features|introducing|welcome to|tips|onboarding|try .*feature|get notified|desktop notifications|notifications|stay up to date|remind me|product update|feature update|个性化回复|个性化|记忆|新功能|功能更新|欢迎|使用提示|新手引导|通知|桌面通知|保持更新|产品更新)/i;
   const microphoneContext = /(microphone|audio input|voice mode|voice chat|voice conversation|麦克风|音频输入|语音模式|语音聊天|语音对话)/i;
   const safeDismissButton = /^(got it|ok|okay|done|close|dismiss|skip|not now|maybe later|later|no thanks|understood|知道了|好的|确定|完成|关闭|跳过|暂不|以后再说|不用了)$/i;
@@ -100,7 +104,7 @@
   document.addEventListener("visibilitychange", () => { if (!document.hidden) scheduleScan(20); });
   window.addEventListener("focus", () => scheduleScan(20));
   setInterval(() => scan(), 3000);
-  scheduleScan(0);
+  scan();
 
   globalThis[KEY] = Object.freeze({ state, scan });
 })();
