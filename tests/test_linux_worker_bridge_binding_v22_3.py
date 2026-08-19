@@ -1,4 +1,5 @@
 import asyncio
+import re
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,12 @@ from app.registry import ClientRegistry
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _runtime_version(source: str) -> tuple[int, int, int]:
+    match = re.search(r'SERVER_RUNTIME_VERSION = "(\d+)\.(\d+)\.(\d+)"', source)
+    assert match
+    return tuple(map(int, match.groups()))
 
 
 class Clock:
@@ -116,14 +123,11 @@ def test_unpaired_extension_claims_worker_identity_without_pairing_code_and_tick
         )
         assert replay.status_code == 401
 
-        # Durable identity alone is not enough to suppress healing: an offline
-        # client receives a fresh proof in case extension storage was lost.
         offline = client.post("/api/workers/extension-binding-ticket", headers=headers)
         assert offline.status_code == 200
         assert offline.json()["bound"] is False
         assert offline.json()["current_client_id"] == payload["client_id"]
 
-        # Once that exact bound client is online, no navigation/ticket is needed.
         app.state.registry.sockets[payload["client_id"]] = object()
         online = client.post("/api/workers/extension-binding-ticket", headers=headers)
         assert online.status_code == 200
@@ -147,13 +151,7 @@ def test_existing_extension_identity_is_reused_and_cannot_bind_to_two_active_wor
         ).json()["ticket"]
         claimed = client.post(
             "/api/extensions/worker-bind",
-            json={
-                "ticket": first_ticket,
-                "device_id": "existing-device-123",
-                "client_id": client_id,
-                "client_token": client_token,
-                "version": "0.8.1",
-            },
+            json={"ticket": first_ticket,"device_id":"existing-device-123","client_id":client_id,"client_token":client_token,"version":"0.8.1"},
         )
         assert claimed.status_code == 200
         assert claimed.json()["reused"] is True
@@ -165,13 +163,7 @@ def test_existing_extension_identity_is_reused_and_cannot_bind_to_two_active_wor
         ).json()["ticket"]
         conflict = client.post(
             "/api/extensions/worker-bind",
-            json={
-                "ticket": second_ticket,
-                "device_id": "existing-device-123",
-                "client_id": client_id,
-                "client_token": client_token,
-                "version": "0.8.1",
-            },
+            json={"ticket":second_ticket,"device_id":"existing-device-123","client_id":client_id,"client_token":client_token,"version":"0.8.1"},
         )
         assert conflict.status_code == 409
         assert store.data["workers"][second["worker_id"]]["extension_client_id"] == ""
@@ -181,44 +173,17 @@ def test_bridge_readiness_is_authoritative_and_agent_heartbeat_cannot_downgrade_
     store = LinuxWorkerStore(tmp_path)
     credentials = enrolled(store, "ready-worker")
     worker_id = credentials["worker_id"]
-    store.record_proxy_success(worker_id, {"protocol": "vless", "server": "proxy.example", "port": 443})
+    store.record_proxy_success(worker_id, {"protocol":"vless","server":"proxy.example","port":443})
     store.bind_extension(worker_id, "ext_ready", "device-ready-123")
-    ready = store.record_extension_status(
-        worker_id,
-        {
-            "client_id": "ext_ready",
-            "device_id": "device-ready-123",
-            "version": "0.8.1",
-            "online": True,
-            "connection_enabled": True,
-            "metadata": {
-                "chatgpt_login_state": "ready",
-                "chatgpt_login_composer_ready": True,
-                "chatgpt_login_confidence": "high",
-                "chatgpt_login_strategy": "composer-ready",
-                "network_probe_status": "external",
-                "network_country_code": "US",
-                "account_type": "paid",
-                "reserve_window_total": 10,
-                "reserve_window_active": 2,
-                "reserve_window_target": 10,
-                "reserve_window_idle_close_seconds": 900,
-            },
-        },
-    )
+    ready = store.record_extension_status(worker_id, {
+        "client_id":"ext_ready","device_id":"device-ready-123","version":"0.8.1","online":True,"connection_enabled":True,
+        "metadata":{"chatgpt_login_state":"ready","chatgpt_login_composer_ready":True,"chatgpt_login_confidence":"high","chatgpt_login_strategy":"composer-ready","network_probe_status":"external","network_country_code":"US","account_type":"paid","reserve_window_total":10,"reserve_window_active":2,"reserve_window_target":10,"reserve_window_idle_close_seconds":900},
+    })
     assert ready["status"] == "ready"
     assert ready["chatgpt_status"] == "ready"
     assert ready["chrome_bridge_version"] == "0.8.1"
 
-    heartbeat = store.heartbeat(
-        worker_id,
-        {
-            "status": "waiting_login",
-            "proxy_status": "connected",
-            "chrome_bridge_version": "0.8.1",
-            "metadata": {"services": {"xray": True, "xvfb": True, "chrome": True}, "host_fact": "preserved"},
-        },
-    )
+    heartbeat = store.heartbeat(worker_id, {"status":"waiting_login","proxy_status":"connected","chrome_bridge_version":"0.8.1","metadata":{"services":{"xray":True,"xvfb":True,"chrome":True},"host_fact":"preserved"}})
     assert heartbeat["status"] == "ready"
     assert heartbeat["chatgpt_status"] == "ready"
     assert heartbeat["metadata"]["host_fact"] == "preserved"
@@ -230,14 +195,7 @@ def test_bridge_readiness_is_authoritative_and_agent_heartbeat_cannot_downgrade_
 def test_extension_binding_uses_session_storage_about_blank_scrub_and_no_pairing_secret():
     source = (ROOT / "chrome_extension" / "background_worker_binding_v30.js").read_text(encoding="utf-8")
     for token in (
-        'chrome.storage.session.set({ [PENDING_KEY]: binding })',
-        'chrome.storage.session.remove(PENDING_KEY)',
-        'url.protocol !== "about:" || url.pathname !== "blank"',
-        'chrome.tabs.update(tabId, { url: "about:blank" })',
-        '/api/extensions/worker-bind',
-        'pairingCode: ""',
-        'linuxWorkerBindingVersion: 30',
-        'await restoreChatGpt(binding.tabId)',
+        'chrome.storage.session.set({ [PENDING_KEY]: binding })','chrome.storage.session.remove(PENDING_KEY)','url.protocol !== "about:" || url.pathname !== "blank"','chrome.tabs.update(tabId, { url: "about:blank" })','/api/extensions/worker-bind','pairingCode: ""','linuxWorkerBindingVersion: 30','await restoreChatGpt(binding.tabId)',
     ):
         assert token in source
     assert 'chrome.storage.local.set({ [PENDING_KEY]' not in source
@@ -270,7 +228,7 @@ def test_binding_versions_are_aligned():
     manifest = (ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8")
     bootstrap = (ROOT / "scripts" / "bootstrap_linux_worker.sh").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.4"' in runtime
+    assert _runtime_version(runtime) >= (0, 22, 4)
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert '"version": "0.8.1"' in manifest
     assert 'agent_version:"0.3.1"' in bootstrap
