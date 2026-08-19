@@ -8,6 +8,7 @@ def test_bootstrap_preserves_worker_bundle_traversal_and_enrollment_json():
     assert "jq -e '.worker_id and .worker_token and .websocket_url' \"$ENROLL_RESPONSE\"" in source
     assert 'install -o root -g chat2api -m 640 "$ENROLL_RESPONSE" /etc/chat2api-worker/worker.json' in source
     assert "| jq -e '.worker_id and .worker_token and .websocket_url' >/etc/chat2api-worker/worker.json" not in source
+    assert 'historical five-byte "true\\n"' in source
 
 
 def test_bootstrap_prepares_chrome_xdg_dirs_and_quotes_proxy_bypass():
@@ -16,6 +17,7 @@ def test_bootstrap_prepares_chrome_xdg_dirs_and_quotes_proxy_bypass():
     assert 'Environment=XDG_CONFIG_HOME=/home/chat2api/.config' in source
     assert 'Environment=XDG_CACHE_HOME=/home/chat2api/.cache' in source
     assert '"--proxy-bypass-list=localhost;127.0.0.1;' in source
+    assert "\\;127.0.0.1\\;" not in source
 
 
 def test_health_waits_for_services_instead_of_single_instant_check():
@@ -23,3 +25,10 @@ def test_health_waits_for_services_instead_of_single_instant_check():
     assert 'for attempt in $(seq 1 30); do' in source
     assert '等待 Worker 核心服务启动' in source
     assert 'systemctl reset-failed chat2api-chrome.service chat2api-worker-agent.service' in source
+    assert '核心服务未正常运行' in source
+
+
+def test_runtime_marks_bootstrap_recovery_release():
+    runtime = Path("app/runtime_contract.py").read_text(encoding="utf-8")
+    assert 'SERVER_RUNTIME_VERSION = "0.22.7"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
