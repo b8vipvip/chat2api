@@ -35,6 +35,7 @@ from .linux_worker_patch import install_linux_worker_patch
 from .linux_worker_install_patch import install_linux_worker_install_patch
 from .linux_worker_xray_patch import install_linux_worker_xray_patch
 from .linux_worker_bridge_binding import install_linux_worker_bridge_binding_patch
+from .linux_worker_ui_state_patch import install_linux_worker_ui_state_patch
 from .stream_keepalive_patch import install_stream_keepalive_patch
 from .runtime_contract import install_runtime_contract
 
@@ -74,6 +75,7 @@ install_linux_worker_patch(app)
 install_linux_worker_install_patch(app)
 install_linux_worker_xray_patch(app)
 install_linux_worker_bridge_binding_patch(app)
+install_linux_worker_ui_state_patch(app)
 install_stream_keepalive_patch(app)
 
 # Install this after the historical patch stack so /version describes the final
