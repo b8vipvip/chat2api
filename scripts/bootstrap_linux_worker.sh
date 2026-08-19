@@ -4,6 +4,7 @@ set -euo pipefail
 STAGE="arguments"
 SERVER="https://chat2api.mv3.cn"
 ENROLL_CODE=""
+UPGRADE_ONLY=0
 WORKER_DIR="/opt/chat2api-worker"
 PROFILE_DIR="/home/chat2api/.config/chat2api-chrome-worker-01"
 PIP_INDEX_URL="${CHAT2API_PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
@@ -14,17 +15,22 @@ while (($#)); do
   case "$1" in
     --server) SERVER="${2%/}"; shift 2;;
     --enroll-code) ENROLL_CODE="$2"; shift 2;;
+    --upgrade) UPGRADE_ONLY=1; shift;;
     --repo-url) echo "[INFO] --repo-url 已弃用；Worker 代码现在从中心服务器 Bundle 获取" >&2; shift 2;;
     *) echo "Unknown argument: $1" >&2; exit 2;;
   esac
 done
 
 [[ $EUID -eq 0 ]] || { echo "Run with sudo/root" >&2; exit 1; }
-[[ -n "$ENROLL_CODE" ]] || { echo "--enroll-code is required" >&2; exit 2; }
+if [[ $UPGRADE_ONLY -ne 1 && -z "$ENROLL_CODE" ]]; then
+  echo "--enroll-code is required for a new Worker; use --upgrade only on an already enrolled Worker" >&2
+  exit 2
+fi
 [[ "$SERVER" == https://* || "${CHAT2API_ALLOW_INSECURE_HTTP:-0}" == 1 ]] || { echo "Server must use HTTPS" >&2; exit 2; }
 
 report_progress() {
   local state="$1" stage="$2" message="$3"
+  [[ -n "$ENROLL_CODE" ]] || return 0
   command -v python3 >/dev/null 2>&1 || return 0
   {
     printf '%s\n' "$ENROLL_CODE" "$state" "$stage" "$message" "$(hostname 2>/dev/null || true)" "$(uname -m 2>/dev/null || true)"
@@ -73,6 +79,12 @@ PY
 then
   VALID_IDENTITY=1
 fi
+
+if [[ $UPGRADE_ONLY -eq 1 && $VALID_IDENTITY -ne 1 ]]; then
+  LAST_MESSAGE="升级模式要求现有有效 Worker 身份；请使用后台生成的新安装命令重新注册"
+  exit 1
+fi
+
 if [[ $VALID_IDENTITY -eq 0 ]]; then
   for unit in \
     chat2api-worker-agent.service chat2api-chrome.service chat2api-xray.service chat2api-xvfb.service \
@@ -170,10 +182,14 @@ fi
 chown root:chat2api /etc/chat2api-worker/xray.json
 chmod 640 /etc/chat2api-worker/xray.json
 
-set_stage "enrollment" "向中心服务器注册 Worker 身份"
-report_progress "enrolling" "$STAGE" "$LAST_MESSAGE"
+if [[ $UPGRADE_ONLY -eq 1 ]]; then
+  set_stage "enrollment" "校验现有 Worker 身份"
+else
+  set_stage "enrollment" "向中心服务器注册 Worker 身份"
+  report_progress "enrolling" "$STAGE" "$LAST_MESSAGE"
+fi
 if [[ ! -s /etc/chat2api-worker/worker.json ]]; then
-  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$PRETTY_NAME" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.1"}')"
+  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$PRETTY_NAME" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.2"}')"
   ENROLL_RESPONSE="$(mktemp)"
   if ! printf '%s' "$payload" | curl -fsSL --retry 3 --retry-all-errors -H 'Content-Type: application/json' --data-binary @- -o "$ENROLL_RESPONSE" "$SERVER/api/workers/enroll"; then
     rm -f "$ENROLL_RESPONSE"
@@ -228,7 +244,7 @@ Environment=HOME=/home/chat2api
 Environment=DISPLAY=:99
 Environment=XDG_CONFIG_HOME=/home/chat2api/.config
 Environment=XDG_CACHE_HOME=/home/chat2api/.cache
-ExecStart=/usr/bin/google-chrome --user-data-dir=${PROFILE_DIR} --password-store=basic --proxy-server=socks5://127.0.0.1:10808 "--proxy-bypass-list=localhost;127.0.0.1;${SERVER#*://}" --load-extension=${WORKER_DIR}/chrome_extension --no-first-run --no-default-browser-check --disable-dev-shm-usage https://chatgpt.com/
+ExecStart=/usr/bin/google-chrome --user-data-dir=${PROFILE_DIR} --password-store=basic --proxy-server=socks5://127.0.0.1:10808 "--proxy-bypass-list=localhost;127.0.0.1;${SERVER#*://}" --load-extension=${WORKER_DIR}/chrome_extension --no-first-run --no-default-browser-check --disable-dev-shm-usage about:blank
 Restart=always
 RestartSec=3
 [Install]
@@ -328,7 +344,7 @@ report_progress "installed" "complete" "Worker 安装完成并已启动"
 echo "=== chat2api Linux Worker installed ==="
 echo "Worker ID: $(jq -r .worker_id /etc/chat2api-worker/worker.json)"
 echo "Server: $SERVER"
-echo "Registration: enrolled"
+echo "Registration: $([[ $UPGRADE_ONLY -eq 1 ]] && echo existing || echo enrolled)"
 for unit in xray xvfb chrome worker-agent worker-watchdog.timer extension-autoreload.timer; do echo "$unit: $(systemctl is-active chat2api-$unit || true)"; done
 echo "Chrome Bridge: $(jq -r .version "$WORKER_DIR/chrome_extension/manifest.json")"
 echo "Next: $SERVER/admin#linux-workers"
