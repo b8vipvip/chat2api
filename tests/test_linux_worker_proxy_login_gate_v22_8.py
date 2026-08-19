@@ -31,7 +31,8 @@ def test_real_world_vless_ws_tls_link_shape_builds_expected_xray_stream_settings
     assert outbound["streamSettings"]["tlsSettings"]["serverName"] == "us03.example.com"
     assert outbound["streamSettings"]["tlsSettings"]["fingerprint"] == "chrome"
     assert outbound["streamSettings"]["wsSettings"]["path"] == "/abc123"
-    assert outbound["streamSettings"]["wsSettings"]["headers"]["Host"] == "us03.example.com"
+    assert outbound["streamSettings"]["wsSettings"]["host"] == "us03.example.com"
+    assert "headers" not in outbound["streamSettings"]["wsSettings"]
     assert summary == {
         "protocol": "vless",
         "server": "us03.example.com",
