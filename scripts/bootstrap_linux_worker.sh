@@ -57,13 +57,17 @@ set_stage "system-check" "检查 Ubuntu、架构、systemd、磁盘和中心服�
 (( $(df -Pk / | awk 'NR==2{print $4}') >= 2097152 )) || { LAST_MESSAGE="根分区至少需要 2 GiB 可用空间"; exit 1; }
 curl -fsS --retry 3 --retry-all-errors --connect-timeout 8 --max-time 20 "$SERVER/version" >/dev/null
 id chat2api >/dev/null 2>&1 || useradd --create-home --shell /usr/sbin/nologin chat2api
+install -d -o chat2api -g chat2api -m 750 /home/chat2api
+install -d -o chat2api -g chat2api -m 700 /home/chat2api/.config /home/chat2api/.cache
 install -d -o chat2api -g chat2api -m 700 "$PROFILE_DIR"
+install -d -o chat2api -g chat2api -m 700 /home/chat2api/.config/google-chrome "/home/chat2api/.config/google-chrome/Crash Reports"
 
 set_stage "cleanup" "检查并清理上次未完成安装残留（保留 Chrome Profile）"
 VALID_IDENTITY=0
 if [[ -s /etc/chat2api-worker/worker.json ]] && python3 - /etc/chat2api-worker/worker.json <<'PY' >/dev/null 2>&1
 import json,sys
 obj=json.load(open(sys.argv[1],encoding='utf-8'))
+assert isinstance(obj, dict)
 assert obj.get('worker_id') and obj.get('worker_token') and obj.get('websocket_url')
 PY
 then
@@ -109,6 +113,12 @@ tar -xzf "$BUNDLE_FILE" -C "$BUNDLE_TMP"
 rm -rf "${WORKER_DIR}.new"
 install -d -m 755 "${WORKER_DIR}.new"
 cp -a "$BUNDLE_TMP"/. "${WORKER_DIR}.new"/
+# cp -a SOURCE/. DEST/ preserves SOURCE directory metadata; mktemp -d creates
+# SOURCE as 0700. Restore traversal/readability so the unprivileged Worker and
+# Chrome can execute/read the center-hosted bundle.
+chown -R root:root "${WORKER_DIR}.new"
+chmod -R a+rX "${WORKER_DIR}.new"
+chmod 755 "${WORKER_DIR}.new"
 if [[ -d "$WORKER_DIR" ]]; then rm -rf "${WORKER_DIR}.previous"; mv "$WORKER_DIR" "${WORKER_DIR}.previous"; fi
 mv "${WORKER_DIR}.new" "$WORKER_DIR"
 rm -rf "${WORKER_DIR}.previous" "$BUNDLE_TMP"
@@ -164,7 +174,25 @@ set_stage "enrollment" "向中心服务器注册 Worker 身份"
 report_progress "enrolling" "$STAGE" "$LAST_MESSAGE"
 if [[ ! -s /etc/chat2api-worker/worker.json ]]; then
   payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$PRETTY_NAME" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.1"}')"
-  printf '%s' "$payload" | curl -fsSL --retry 3 --retry-all-errors -H 'Content-Type: application/json' --data-binary @- "$SERVER/api/workers/enroll" | jq -e '.worker_id and .worker_token and .websocket_url' >/etc/chat2api-worker/worker.json
+  ENROLL_RESPONSE="$(mktemp)"
+  if ! printf '%s' "$payload" | curl -fsSL --retry 3 --retry-all-errors -H 'Content-Type: application/json' --data-binary @- -o "$ENROLL_RESPONSE" "$SERVER/api/workers/enroll"; then
+    rm -f "$ENROLL_RESPONSE"
+    LAST_MESSAGE="Worker enrollment 请求失败"
+    exit 1
+  fi
+  if ! jq -e '.worker_id and .worker_token and .websocket_url' "$ENROLL_RESPONSE" >/dev/null; then
+    rm -f "$ENROLL_RESPONSE"
+    LAST_MESSAGE="Worker enrollment 返回无效身份"
+    exit 1
+  fi
+  install -o root -g chat2api -m 640 "$ENROLL_RESPONSE" /etc/chat2api-worker/worker.json
+  rm -f "$ENROLL_RESPONSE"
+fi
+# Always validate an existing identity before any service starts. This also
+# rejects the historical five-byte "true\n" file produced by the old jq pipe.
+if ! jq -e 'type == "object" and (.worker_id | type == "string" and length > 0) and (.worker_token | type == "string" and length > 0) and (.websocket_url | type == "string" and length > 0)' /etc/chat2api-worker/worker.json >/dev/null 2>&1; then
+  LAST_MESSAGE="Worker 身份文件无效，请使用新的安装命令重新注册"
+  exit 1
 fi
 chown root:chat2api /etc/chat2api-worker/worker.json
 chmod 640 /etc/chat2api-worker/worker.json
@@ -198,8 +226,11 @@ After=chat2api-xray.service chat2api-xvfb.service
 User=chat2api
 Environment=HOME=/home/chat2api
 Environment=DISPLAY=:99
-ExecStart=/usr/bin/google-chrome --user-data-dir=${PROFILE_DIR} --password-store=basic --proxy-server=socks5://127.0.0.1:10808 --proxy-bypass-list=localhost\;127.0.0.1\;${SERVER#*://} --load-extension=${WORKER_DIR}/chrome_extension --no-first-run --no-default-browser-check --disable-dev-shm-usage https://chatgpt.com/
+Environment=XDG_CONFIG_HOME=/home/chat2api/.config
+Environment=XDG_CACHE_HOME=/home/chat2api/.cache
+ExecStart=/usr/bin/google-chrome --user-data-dir=${PROFILE_DIR} --password-store=basic --proxy-server=socks5://127.0.0.1:10808 "--proxy-bypass-list=localhost;127.0.0.1;${SERVER#*://}" --load-extension=${WORKER_DIR}/chrome_extension --no-first-run --no-default-browser-check --disable-dev-shm-usage https://chatgpt.com/
 Restart=always
+RestartSec=3
 [Install]
 WantedBy=multi-user.target
 UNIT
@@ -265,12 +296,32 @@ SUDO
 chmod 440 /etc/sudoers.d/chat2api-worker
 visudo -cf /etc/sudoers.d/chat2api-worker
 systemctl daemon-reload
+systemctl reset-failed chat2api-chrome.service chat2api-worker-agent.service >/dev/null 2>&1 || true
 systemctl enable --now chat2api-xray chat2api-xvfb chat2api-chrome chat2api-worker-agent chat2api-worker-watchdog.timer chat2api-extension-autoreload.timer
 
 set_stage "health" "验证 Worker 服务状态"
-for unit in chat2api-xray.service chat2api-xvfb.service chat2api-chrome.service chat2api-worker-agent.service; do
-  systemctl is-active --quiet "$unit" || { LAST_MESSAGE="$unit 未正常运行"; exit 1; }
+HEALTH_OK=0
+for attempt in $(seq 1 30); do
+  HEALTH_OK=1
+  for unit in chat2api-xray.service chat2api-xvfb.service chat2api-chrome.service chat2api-worker-agent.service; do
+    if ! systemctl is-active --quiet "$unit"; then HEALTH_OK=0; break; fi
+  done
+  [[ $HEALTH_OK -eq 1 ]] && break
+  if (( attempt == 1 || attempt % 5 == 0 )); then
+    LAST_MESSAGE="等待 Worker 核心服务启动（${attempt}/30）"
+    echo "[health] $LAST_MESSAGE"
+    report_progress "installing" "$STAGE" "$LAST_MESSAGE"
+  fi
+  sleep 1
 done
+if [[ $HEALTH_OK -ne 1 ]]; then
+  FAILED_UNITS=""
+  for unit in chat2api-xray.service chat2api-xvfb.service chat2api-chrome.service chat2api-worker-agent.service; do
+    systemctl is-active --quiet "$unit" || FAILED_UNITS="${FAILED_UNITS}${FAILED_UNITS:+, }${unit}"
+  done
+  LAST_MESSAGE="核心服务未正常运行：${FAILED_UNITS:-unknown}"
+  exit 1
+fi
 
 INSTALL_SUCCESS=1
 report_progress "installed" "complete" "Worker 安装完成并已启动"
