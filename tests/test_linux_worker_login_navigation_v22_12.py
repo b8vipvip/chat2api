@@ -4,21 +4,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_remote_login_navigation_uses_direct_existing_chrome_command():
+def test_remote_login_navigation_prefers_loopback_cdp_with_singleton_fallback():
     helper = (ROOT / "scripts" / "linux_worker_remote_login.py").read_text(encoding="utf-8")
+    launcher = (ROOT / "scripts" / "linux_worker_chrome_launcher.sh").read_text(encoding="utf-8")
     assert 'LOGIN_URL = os.environ.get("CHAT2API_LOGIN_URL", "https://chatgpt.com/auth/login")' in helper
+    assert 'CHROME_DEBUG_URL = os.environ.get("CHAT2API_LOGIN_CHROME_DEBUG_URL", "http://127.0.0.1:9222")' in helper
     assert '[CHROME_BINARY, f"--user-data-dir={CHROME_PROFILE_DIR}", "--new-tab", url]' in helper
-    assert 'return _open_url_via_existing_chrome(LOGIN_URL, error_name="login_navigation_failed")' in helper
-    login_navigation = helper.split("def _navigate_login_page", 1)[1].split("def inject_worker_binding", 1)[0]
-    assert "xdotool" not in login_navigation
-    assert "ctrl+l" not in login_navigation
+    navigation = helper.split("def _navigate_login_page", 1)[1].split("def inject_worker_binding", 1)[0]
+    assert "_open_url_via_cdp(LOGIN_URL" in navigation
+    assert "_open_url_via_existing_chrome(LOGIN_URL" in navigation
+    assert "xdotool" not in navigation
+    assert "ctrl+l" not in navigation
+    assert "--remote-debugging-address=127.0.0.1" in launcher
+    assert "--remote-debugging-port=9222" in launcher
 
 
-def test_navigation_failure_is_warning_not_remote_login_blocker():
+def test_navigation_failure_blocks_misleading_blank_remote_login_session():
     helper = (ROOT / "scripts" / "linux_worker_remote_login.py").read_text(encoding="utf-8")
     open_session = helper.split("def open_session()", 1)[1].split("def close_session()", 1)[0]
-    assert '"navigation_warning"' in open_session
-    assert 'SESSION.close()' not in open_session
+    assert '"error": "login_navigation_failed"' in open_session
+    assert 'SESSION.close()' in open_session
+    assert '"navigation_warning"' not in open_session
+    assert '"ok": False' in open_session
     assert '"ok": True' in open_session
 
 
