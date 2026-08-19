@@ -21,7 +21,7 @@ def _iso(value: datetime | None = None) -> str:
     return (value or _utcnow()).astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _hash(value: str) -> str:
+def code_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
@@ -55,7 +55,7 @@ class LinuxWorkerInstallStore:
         temp.replace(self.path)
 
     def _by_code_locked(self, code: str) -> dict[str, Any] | None:
-        digest = _hash(str(code or "").strip().upper())
+        digest = code_hash(str(code or "").strip().upper())
         for item in self.data["installs"].values():
             if secrets.compare_digest(str(item.get("code_hash") or ""), digest):
                 return item
@@ -64,12 +64,7 @@ class LinuxWorkerInstallStore:
     @staticmethod
     def _event(item: dict[str, Any], stage: str, state: str, message: str) -> None:
         history = item.setdefault("history", [])
-        history.append({
-            "at": _iso(),
-            "stage": _text(stage, 80),
-            "state": _text(state, 40),
-            "message": _text(message, 500),
-        })
+        history.append({"at": _iso(), "stage": _text(stage, 80), "state": _text(state, 40), "message": _text(message, 500)})
         if len(history) > 80:
             del history[:-80]
 
@@ -82,7 +77,7 @@ class LinuxWorkerInstallStore:
             "install_id": install_id,
             "name": _text(name, 80) or "Linux Worker",
             "code": code,
-            "code_hash": _hash(code),
+            "code_hash": code_hash(code),
             "created_at": now,
             "updated_at": now,
             "started_at": None,
@@ -118,15 +113,7 @@ class LinuxWorkerInstallStore:
             item = self.data["installs"].get(install_id)
             return self.admin_public(dict(item)) if item else None
 
-    def record_progress(
-        self,
-        code: str,
-        *,
-        stage: str,
-        state: str,
-        message: str,
-        facts: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
+    def record_progress(self, code: str, *, stage: str, state: str, message: str, facts: dict[str, Any] | None = None) -> dict[str, Any]:
         state = _text(state, 40).lower()
         if state not in INSTALL_STATES:
             state = "installing"
@@ -138,7 +125,6 @@ class LinuxWorkerInstallStore:
                 raise ValueError("Install command is disabled")
             if item.get("state") == "installed":
                 return self.admin_public(dict(item))
-
             now = _iso()
             if not item.get("started_at") and state in {"installing", "enrolling"}:
                 item["started_at"] = now
@@ -160,37 +146,17 @@ class LinuxWorkerInstallStore:
             self._save()
             return self.admin_public(dict(item))
 
-    def begin_enrollment(self, code: str) -> dict[str, Any]:
+    def link_worker(self, code: str, worker_id: str) -> dict[str, Any]:
         with self._lock:
             item = self._by_code_locked(code)
             if not item:
-                raise ValueError("Invalid install command")
-            if not item.get("enabled"):
-                raise ValueError("Install command is disabled")
-            if item.get("consumed_at") or item.get("worker_id"):
-                raise ValueError("Install command has already been consumed")
-            item["state"] = "enrolling"
-            item["stage"] = "enrollment"
-            item["message"] = "正在创建 Worker 身份"
-            item["updated_at"] = _iso()
-            self._event(item, "enrollment", "enrolling", item["message"])
-            self._save()
-            return self.admin_public(dict(item))
-
-    def finish_enrollment(self, code: str, worker_id: str) -> dict[str, Any]:
-        with self._lock:
-            item = self._by_code_locked(code)
-            if not item:
-                raise ValueError("Invalid install command")
-            now = _iso()
-            item["consumed_at"] = now
-            item["worker_id"] = _text(worker_id, 100)
-            item["state"] = "installing"
-            item["stage"] = "post-enrollment"
-            item["message"] = "Worker 身份已创建，正在安装并启动服务"
-            item["updated_at"] = now
-            self._event(item, item["stage"], item["state"], item["message"])
-            self._save()
+                raise ValueError("Unknown install command")
+            if worker_id:
+                item["worker_id"] = _text(worker_id, 100)
+                if not item.get("consumed_at"):
+                    item["consumed_at"] = _iso()
+                item["updated_at"] = _iso()
+                self._save()
             return self.admin_public(dict(item))
 
     def mark_failed(self, code: str, stage: str, message: str) -> dict[str, Any] | None:
