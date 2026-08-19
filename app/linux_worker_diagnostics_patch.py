@@ -61,10 +61,11 @@ def _patch_stable_table(text: str) -> str:
     if delete_block in text:
         text = text.replace(delete_block, diagnostics_block, 1)
 
-    listener = '''    tbody.addEventListener("click", event => {
-      const pairing = event.target.closest?.("[data-worker-pairing-v2219]");'''
-    listener_new = '''    tbody.addEventListener("click", event => {
-      const diagnostics = event.target.closest?.("[data-worker-diagnostics-v2222]");
+    # v0.22.20 inserts its copy-progress click handler before the pairing handler.
+    # Anchor on the stable pairing line instead of on the beginning of the event
+    # listener so this patch works regardless of how many newer handlers precede it.
+    pairing_line = '''      const pairing = event.target.closest?.("[data-worker-pairing-v2219]");'''
+    handler = '''      const diagnostics = event.target.closest?.("[data-worker-diagnostics-v2222]");
       if (diagnostics) {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -107,8 +108,8 @@ def _patch_stable_table(text: str) -> str:
         return;
       }
       const pairing = event.target.closest?.("[data-worker-pairing-v2219]");'''
-    if listener in text:
-        text = text.replace(listener, listener_new, 1)
+    if pairing_line in text:
+        text = text.replace(pairing_line, handler, 1)
     return text
 
 
