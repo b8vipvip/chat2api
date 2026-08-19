@@ -75,7 +75,7 @@ def test_bootstrap_installs_only_headless_capture_dependencies_not_desktop_or_re
     source = (ROOT / "scripts" / "bootstrap_linux_worker.sh").read_text(encoding="utf-8")
     assert "x11-apps xdotool imagemagick" in source
     assert "Environment=DISPLAY=:99" in source
-    assert 'agent_version:"0.3.1"' in source
+    assert 'agent_version:"0.3.2"' in source
     lowered = source.lower()
     for forbidden in ("x11vnc", "novnc", "xrdp", "xfce", "gnome", "5900", "6080", "3389"):
         assert forbidden not in lowered
@@ -127,7 +127,7 @@ def test_admin_remote_login_is_direct_browser_interaction_not_password_form():
 
 def test_worker_agent_implements_low_latency_remote_login_without_privilege_escalation():
     source = (ROOT / "scripts" / "linux_worker_agent.py").read_text(encoding="utf-8")
-    assert '"agent_version": "0.3.1"' in source
+    assert 'AGENT_VERSION = "0.3.2"' in source
     for command in ("open_login_session", "close_login_session", "login_session_frame", "login_session_input"):
         assert f'"{command}"' in source
     assert "capture_frame()" in source
