@@ -22,6 +22,10 @@ async def _response_bytes(response: Response) -> bytes:
 
 
 def _patch_bootstrap(text: str) -> str:
+    # The historical bootstrap source still carries the previous Agent label;
+    # the served v0.22.22 installer deploys Agent 0.3.3 from the verified bundle.
+    text = text.replace('agent_version:"0.3.2"', 'agent_version:"0.3.3"')
+
     proxy_install = 'install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_proxy_apply.sh" /usr/local/sbin/chat2api-worker-proxy-apply'
     diagnostics_install = proxy_install + '\ninstall -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_diagnostics.sh" /usr/local/sbin/chat2api-worker-diagnostics'
     if "/usr/local/sbin/chat2api-worker-diagnostics" not in text and proxy_install in text:
