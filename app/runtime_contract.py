@@ -15,7 +15,7 @@ from .live_voice_patch import LIVE_PROTOCOL_VERSION
 # collapse them into a single version number: package releases, the layered
 # server runtime/console, the Chrome Bridge, and the realtime wire protocol can
 # evolve independently.
-SERVER_RUNTIME_VERSION = "0.22.17"
+SERVER_RUNTIME_VERSION = "0.22.18"
 CHROME_BRIDGE_VERSION = "0.8.1"
 PRODUCTION_ENTRYPOINT = "app.entry:app"
 VERSION_CONTRACT_VERSION = 1
@@ -116,10 +116,8 @@ def install_runtime_contract(app: FastAPI) -> FastAPI:
     if getattr(app.state, "runtime_contract_installed", False):
         return app
 
-    # The runtime contract is installed last by app.entry and is the canonical
-    # owner of the current server/console version. Historical feature patches
-    # keep their own internal patch versions but must not win the final public
-    # version surface.
+    # The runtime contract is the canonical owner of the current server/console
+    # version. Later presentation-only feature patches must not overwrite it.
     app.version = SERVER_RUNTIME_VERSION
     app.state.runtime_contract_installed = True
 
