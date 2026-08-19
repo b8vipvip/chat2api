@@ -121,8 +121,27 @@ PIP_DEFAULT_TIMEOUT=120 /opt/chat2api-worker-venv/bin/pip install --disable-pip-
 
 set_stage "xray" "从 chat2api 中心服务器下载并校验 Xray Core"
 if ! command -v xray >/dev/null; then
-  XRAY_META="$(mktemp)"; XRAY_ZIP="$(mktemp)"
-  curl -fSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 180 -o "$XRAY_META" "$SERVER/bootstrap/xray/latest.json"
+  XRAY_META="$(mktemp)"; XRAY_ZIP="$(mktemp)"; XRAY_READY=0
+  for attempt in $(seq 1 90); do
+    curl -fsS --connect-timeout 5 --max-time 10 -o "$XRAY_META" "$SERVER/bootstrap/xray/latest.json" || true
+    if jq -e '.ready == true and (.sha256 | type == "string")' "$XRAY_META" >/dev/null 2>&1; then
+      XRAY_READY=1
+      break
+    fi
+    XRAY_STATE="$(jq -r '.state // "preparing"' "$XRAY_META" 2>/dev/null || echo preparing)"
+    XRAY_MESSAGE="$(jq -r '.message // "等待中心服务器准备 Xray 缓存"' "$XRAY_META" 2>/dev/null || echo '等待中心服务器准备 Xray 缓存')"
+    if [[ "$XRAY_STATE" == "error" ]]; then
+      LAST_MESSAGE="中心服务器准备 Xray 失败：$XRAY_MESSAGE"
+      exit 1
+    fi
+    if (( attempt == 1 || attempt % 5 == 0 )); then
+      LAST_MESSAGE="等待中心服务器准备 Xray 缓存（${attempt}/90）"
+      echo "[xray] $LAST_MESSAGE"
+      report_progress "installing" "$STAGE" "$LAST_MESSAGE"
+    fi
+    sleep 2
+  done
+  [[ $XRAY_READY -eq 1 ]] || { LAST_MESSAGE="中心服务器未能在限定时间内准备 Xray"; exit 1; }
   XRAY_SHA="$(jq -er '.sha256' "$XRAY_META")"
   curl -fSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 600 -o "$XRAY_ZIP" "$SERVER/bootstrap/xray/latest.zip"
   echo "$XRAY_SHA  $XRAY_ZIP" | sha256sum -c -
