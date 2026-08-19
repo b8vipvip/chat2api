@@ -321,38 +321,44 @@ chmod 440 /etc/sudoers.d/chat2api-worker
 visudo -cf /etc/sudoers.d/chat2api-worker
 systemctl daemon-reload
 systemctl reset-failed chat2api-chrome.service chat2api-worker-agent.service >/dev/null 2>&1 || true
-systemctl enable --now chat2api-xray chat2api-xvfb chat2api-chrome chat2api-worker-agent chat2api-worker-watchdog.timer chat2api-extension-autoreload.timer
-# `enable --now` does not restart an already-running service. An upgrade can
-# replace both the Chrome launcher and Agent code, so force them to reload the
-# freshly installed Worker Bundle before reporting success.
+# Enable all units first, then start/restart them in dependency order. This
+# avoids briefly starting the Chrome launcher and immediately killing its first
+# Chrome-for-Testing download during an upgrade.
+systemctl enable chat2api-xray chat2api-xvfb chat2api-chrome chat2api-worker-agent chat2api-worker-watchdog.timer chat2api-extension-autoreload.timer
+systemctl restart chat2api-xray.service
+systemctl restart chat2api-xvfb.service
 systemctl restart chat2api-chrome.service
 systemctl restart chat2api-worker-agent.service
+systemctl restart chat2api-worker-watchdog.timer chat2api-extension-autoreload.timer
 
-set_stage "health" "验证 Worker 服务状态和自动加载浏览器"
-HEALTH_OK=0
+set_stage "health" "验证 Worker 服务状态、Chrome for Testing 和自动加载浏览器"
+BROWSER_READY=0
 for attempt in $(seq 1 180); do
-  HEALTH_OK=1
+  CORE_OK=1
   for unit in chat2api-xray.service chat2api-xvfb.service chat2api-chrome.service chat2api-worker-agent.service; do
-    if ! systemctl is-active --quiet "$unit"; then HEALTH_OK=0; break; fi
+    if ! systemctl is-active --quiet "$unit"; then CORE_OK=0; break; fi
   done
-  [[ $HEALTH_OK -eq 1 ]] && break
+  if [[ $CORE_OK -eq 1 ]] \
+      && [[ -x /home/chat2api/.cache/chat2api-chrome-for-testing/chrome ]] \
+      && ps -u chat2api -o args= 2>/dev/null \
+          | grep -F -- "--user-data-dir=${PROFILE_DIR}" \
+          | grep -E '[Cc]hrome' >/dev/null 2>&1; then
+    BROWSER_READY=1
+    break
+  fi
   if (( attempt == 1 || attempt % 10 == 0 )); then
-    LAST_MESSAGE="等待 Worker 核心服务启动；首次运行可能正在下载 Chrome for Testing（${attempt}/180）"
+    LAST_MESSAGE="等待 Worker 浏览器就绪；首次运行可能正在下载 Chrome for Testing（${attempt}/180）"
     echo "[health] $LAST_MESSAGE"
     report_progress "installing" "$STAGE" "$LAST_MESSAGE"
   fi
   sleep 1
 done
-if [[ $HEALTH_OK -ne 1 ]]; then
+if [[ $BROWSER_READY -ne 1 ]]; then
   FAILED_UNITS=""
   for unit in chat2api-xray.service chat2api-xvfb.service chat2api-chrome.service chat2api-worker-agent.service; do
     systemctl is-active --quiet "$unit" || FAILED_UNITS="${FAILED_UNITS}${FAILED_UNITS:+, }${unit}"
   done
-  LAST_MESSAGE="核心服务未正常运行：${FAILED_UNITS:-unknown}"
-  exit 1
-fi
-if [[ ! -x /home/chat2api/.cache/chat2api-chrome-for-testing/chrome ]]; then
-  LAST_MESSAGE="Chrome for Testing 未完成安装，无法保证 Chrome Bridge 自动加载"
+  LAST_MESSAGE="Worker 浏览器未在限定时间内就绪；失败服务：${FAILED_UNITS:-none}"
   exit 1
 fi
 
