@@ -15,7 +15,7 @@ from .live_voice_patch import LIVE_PROTOCOL_VERSION
 # collapse them into a single version number: package releases, the layered
 # server runtime/console, the Chrome Bridge, and the realtime wire protocol can
 # evolve independently.
-SERVER_RUNTIME_VERSION = "0.22.3"
+SERVER_RUNTIME_VERSION = "0.22.4"
 CHROME_BRIDGE_VERSION = "0.8.1"
 PRODUCTION_ENTRYPOINT = "app.entry:app"
 VERSION_CONTRACT_VERSION = 1
@@ -101,7 +101,7 @@ def _admin_version_script() -> str:
       characterData: true,
       subtree: true,
     }});
-  }};
+  }}
 
   patchVersion();
   observeVersionNode(document.querySelector(".brand small"));

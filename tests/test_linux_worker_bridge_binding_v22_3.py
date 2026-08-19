@@ -270,7 +270,7 @@ def test_binding_versions_are_aligned():
     manifest = (ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8")
     bootstrap = (ROOT / "scripts" / "bootstrap_linux_worker.sh").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.3"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.4"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert '"version": "0.8.1"' in manifest
     assert 'agent_version:"0.3.1"' in bootstrap
