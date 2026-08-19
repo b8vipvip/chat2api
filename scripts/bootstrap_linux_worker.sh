@@ -106,8 +106,11 @@ set_stage "packages" "安装 Worker 基础依赖（沿用系统现有 APT 镜像
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
 apt-get install -y ca-certificates curl wget git jq unzip xvfb xauth x11-apps xdotool imagemagick procps iproute2 lsof fonts-liberation python3 python3-venv sudo
+# Keep the regular Google Chrome package installed for its Linux runtime
+# dependencies. The Worker itself runs Chrome for Testing because official
+# branded Chrome 137+ no longer honors --load-extension.
 if ! command -v google-chrome >/dev/null; then
-  LAST_MESSAGE="下载并安装 Google Chrome"
+  LAST_MESSAGE="下载并安装 Google Chrome 运行依赖"
   report_progress "installing" "$STAGE" "$LAST_MESSAGE"
   curl -fSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 15 --max-time 300 -o /tmp/google-chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
   apt-get install -y /tmp/google-chrome.deb
@@ -121,7 +124,7 @@ EXPECTED_SHA="$(jq -er '.sha256' "$BUNDLE_META")"
 curl -fSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 300 -o "$BUNDLE_FILE" "$SERVER/bootstrap/linux-worker-bundle.tar.gz"
 echo "$EXPECTED_SHA  $BUNDLE_FILE" | sha256sum -c -
 tar -xzf "$BUNDLE_FILE" -C "$BUNDLE_TMP"
-[[ -f "$BUNDLE_TMP/chrome_extension/manifest.json" && -f "$BUNDLE_TMP/scripts/linux_worker_agent.py" ]] || { LAST_MESSAGE="Worker Bundle 内容不完整"; exit 1; }
+[[ -f "$BUNDLE_TMP/chrome_extension/manifest.json" && -f "$BUNDLE_TMP/scripts/linux_worker_agent.py" && -f "$BUNDLE_TMP/scripts/linux_worker_chrome_launcher.sh" ]] || { LAST_MESSAGE="Worker Bundle 内容不完整"; exit 1; }
 rm -rf "${WORKER_DIR}.new"
 install -d -m 755 "${WORKER_DIR}.new"
 cp -a "$BUNDLE_TMP"/. "${WORKER_DIR}.new"/
@@ -214,7 +217,7 @@ chown root:chat2api /etc/chat2api-worker/worker.json
 chmod 640 /etc/chat2api-worker/worker.json
 install -d -o chat2api -g chat2api -m 700 "$PROFILE_DIR"
 
-set_stage "systemd" "安装并启动 Xray、Xvfb、Chrome、Agent、Watchdog"
+set_stage "systemd" "安装并启动 Xray、Xvfb、Chrome for Testing、Agent、Watchdog"
 cat >/etc/systemd/system/chat2api-xray.service <<'UNIT'
 [Unit]
 After=network-online.target
@@ -244,7 +247,12 @@ Environment=HOME=/home/chat2api
 Environment=DISPLAY=:99
 Environment=XDG_CONFIG_HOME=/home/chat2api/.config
 Environment=XDG_CACHE_HOME=/home/chat2api/.cache
-ExecStart=/usr/bin/google-chrome --user-data-dir=${PROFILE_DIR} --password-store=basic --proxy-server=socks5://127.0.0.1:10808 "--proxy-bypass-list=localhost;127.0.0.1;${SERVER#*://}" --load-extension=${WORKER_DIR}/chrome_extension --no-first-run --no-default-browser-check --disable-dev-shm-usage about:blank
+Environment=CHAT2API_CHROME_HOME=/home/chat2api
+Environment=CHAT2API_CHROME_PROFILE=${PROFILE_DIR}
+Environment=CHAT2API_EXTENSION_DIR=${WORKER_DIR}/chrome_extension
+Environment=CHAT2API_PROXY_PORT=10808
+Environment=CHAT2API_SERVER_URL=${SERVER}
+ExecStart=/bin/bash ${WORKER_DIR}/scripts/linux_worker_chrome_launcher.sh
 Restart=always
 RestartSec=3
 [Install]
@@ -314,17 +322,22 @@ visudo -cf /etc/sudoers.d/chat2api-worker
 systemctl daemon-reload
 systemctl reset-failed chat2api-chrome.service chat2api-worker-agent.service >/dev/null 2>&1 || true
 systemctl enable --now chat2api-xray chat2api-xvfb chat2api-chrome chat2api-worker-agent chat2api-worker-watchdog.timer chat2api-extension-autoreload.timer
+# `enable --now` does not restart an already-running service. An upgrade can
+# replace both the Chrome launcher and Agent code, so force them to reload the
+# freshly installed Worker Bundle before reporting success.
+systemctl restart chat2api-chrome.service
+systemctl restart chat2api-worker-agent.service
 
-set_stage "health" "验证 Worker 服务状态"
+set_stage "health" "验证 Worker 服务状态和自动加载浏览器"
 HEALTH_OK=0
-for attempt in $(seq 1 30); do
+for attempt in $(seq 1 180); do
   HEALTH_OK=1
   for unit in chat2api-xray.service chat2api-xvfb.service chat2api-chrome.service chat2api-worker-agent.service; do
     if ! systemctl is-active --quiet "$unit"; then HEALTH_OK=0; break; fi
   done
   [[ $HEALTH_OK -eq 1 ]] && break
-  if (( attempt == 1 || attempt % 5 == 0 )); then
-    LAST_MESSAGE="等待 Worker 核心服务启动（${attempt}/30）"
+  if (( attempt == 1 || attempt % 10 == 0 )); then
+    LAST_MESSAGE="等待 Worker 核心服务启动；首次运行可能正在下载 Chrome for Testing（${attempt}/180）"
     echo "[health] $LAST_MESSAGE"
     report_progress "installing" "$STAGE" "$LAST_MESSAGE"
   fi
@@ -338,13 +351,18 @@ if [[ $HEALTH_OK -ne 1 ]]; then
   LAST_MESSAGE="核心服务未正常运行：${FAILED_UNITS:-unknown}"
   exit 1
 fi
+if [[ ! -x /home/chat2api/.cache/chat2api-chrome-for-testing/chrome ]]; then
+  LAST_MESSAGE="Chrome for Testing 未完成安装，无法保证 Chrome Bridge 自动加载"
+  exit 1
+fi
 
 INSTALL_SUCCESS=1
-report_progress "installed" "complete" "Worker 安装完成并已启动"
+report_progress "installed" "complete" "Worker 安装完成，Chrome Bridge 将自动加载并自动配对"
 echo "=== chat2api Linux Worker installed ==="
 echo "Worker ID: $(jq -r .worker_id /etc/chat2api-worker/worker.json)"
 echo "Server: $SERVER"
 echo "Registration: $([[ $UPGRADE_ONLY -eq 1 ]] && echo existing || echo enrolled)"
 for unit in xray xvfb chrome worker-agent worker-watchdog.timer extension-autoreload.timer; do echo "$unit: $(systemctl is-active chat2api-$unit || true)"; done
-echo "Chrome Bridge: $(jq -r .version "$WORKER_DIR/chrome_extension/manifest.json")"
+echo "Worker Browser: $(/home/chat2api/.cache/chat2api-chrome-for-testing/chrome --version 2>/dev/null || echo Chrome-for-Testing)"
+echo "Chrome Bridge: $(jq -r .version "$WORKER_DIR/chrome_extension/manifest.json") (自动加载 / 自动配对，无需手工配对码)"
 echo "Next: $SERVER/admin#linux-workers"

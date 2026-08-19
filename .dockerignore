@@ -23,5 +23,6 @@ scripts/*
 !scripts/linux_worker_watchdog.sh
 !scripts/linux_extension_autoreload.sh
 !scripts/linux_worker_proxy_apply.sh
+!scripts/linux_worker_chrome_launcher.sh
 tests
 *.md

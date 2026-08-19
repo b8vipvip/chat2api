@@ -20,16 +20,17 @@ def test_bootstrap_preserves_worker_bundle_traversal_and_enrollment_json():
 
 def test_bootstrap_prepares_chrome_xdg_dirs_and_quotes_proxy_bypass():
     source = Path("scripts/bootstrap_linux_worker.sh").read_text(encoding="utf-8")
+    launcher = Path("scripts/linux_worker_chrome_launcher.sh").read_text(encoding="utf-8")
     assert 'install -d -o chat2api -g chat2api -m 700 /home/chat2api/.config /home/chat2api/.cache' in source
     assert 'Environment=XDG_CONFIG_HOME=/home/chat2api/.config' in source
     assert 'Environment=XDG_CACHE_HOME=/home/chat2api/.cache' in source
-    assert '"--proxy-bypass-list=localhost;127.0.0.1;' in source
-    assert "\\;127.0.0.1\\;" not in source
+    assert '"--proxy-bypass-list=localhost;127.0.0.1;${server_host}"' in launcher
+    assert "\\;127.0.0.1\\;" not in launcher
 
 
 def test_health_waits_for_services_instead_of_single_instant_check():
     source = Path("scripts/bootstrap_linux_worker.sh").read_text(encoding="utf-8")
-    assert 'for attempt in $(seq 1 30); do' in source
+    assert 'for attempt in $(seq 1 180); do' in source
     assert '等待 Worker 核心服务启动' in source
     assert 'systemctl reset-failed chat2api-chrome.service chat2api-worker-agent.service' in source
     assert '核心服务未正常运行' in source

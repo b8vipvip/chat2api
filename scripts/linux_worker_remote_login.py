@@ -25,7 +25,7 @@ FRAME_HEIGHT = int(os.environ.get("CHAT2API_LOGIN_FRAME_HEIGHT", "720"))
 SESSION_IDLE_SECONDS = int(os.environ.get("CHAT2API_LOGIN_SESSION_IDLE_SECONDS", "1200"))
 LOGIN_TMPDIR = os.environ.get("CHAT2API_LOGIN_TMPDIR", "/dev/shm")
 LOGIN_URL = os.environ.get("CHAT2API_LOGIN_URL", "https://chatgpt.com/auth/login")
-CHROME_BINARY = os.environ.get("CHAT2API_LOGIN_CHROME_BINARY", "/usr/bin/google-chrome")
+CHROME_BINARY = os.environ.get("CHAT2API_LOGIN_CHROME_BINARY", "/home/chat2api/.cache/chat2api-chrome-for-testing/chrome")
 CHROME_PROFILE_DIR = os.environ.get("CHAT2API_LOGIN_CHROME_PROFILE", "/home/chat2api/.config/chat2api-chrome-worker-01")
 CHROME_HOME = os.environ.get("CHAT2API_LOGIN_CHROME_HOME", "/home/chat2api")
 MAX_FRAME_BYTES = 1_500_000
@@ -163,10 +163,10 @@ def _run_xdotool_stdin(parts: list[str], *, require_session: bool = True, error_
 
 
 def _chrome_window_id() -> str | None:
-    """Return one visible Chrome X11 window. Window IDs are not sensitive."""
+    """Return one visible Chrome/CfT X11 window. Window IDs are not sensitive."""
     try:
         result = subprocess.run(
-            ["xdotool", "search", "--onlyvisible", "--class", "google-chrome"],
+            ["xdotool", "search", "--onlyvisible", "--class", ".*[Cc]hrome.*"],
             capture_output=True,
             text=True,
             timeout=5,
