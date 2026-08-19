@@ -20,10 +20,38 @@ def load_helper():
     return module
 
 
-def test_login_navigation_uses_direct_chrome_singleton_command(monkeypatch):
+def test_login_navigation_prefers_loopback_cdp_without_keyboard_simulation(monkeypatch):
     helper = load_helper()
     seen = []
 
+    def fake_cdp(url, *, error_name):
+        seen.append((url, error_name))
+        return {"ok": True, "method": "cdp", "target_id": "target-1", "target_url": url}
+
+    monkeypatch.setattr(helper, "_open_url_via_cdp", fake_cdp)
+    monkeypatch.setattr(
+        helper,
+        "_open_url_via_existing_chrome",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("fallback must not run")),
+    )
+
+    result = helper._navigate_login_page()
+
+    assert result["ok"] is True
+    assert result["method"] == "cdp"
+    assert seen == [("https://chatgpt.com/auth/login", "login_navigation_failed")]
+
+
+def test_login_navigation_falls_back_to_existing_chrome_singleton(monkeypatch):
+    helper = load_helper()
+    seen = []
+
+    monkeypatch.setattr(
+        helper,
+        "_open_url_via_cdp",
+        lambda *_args, **_kwargs: {"ok": False, "error": "login_navigation_failed", "detail": "cdp unavailable"},
+    )
+    monkeypatch.setattr(helper, "time", SimpleNamespace(sleep=lambda *_args: None))
     monkeypatch.setattr(helper, "_chrome_window_id", lambda: "123")
 
     def fake_run(args, **kwargs):
@@ -33,7 +61,8 @@ def test_login_navigation_uses_direct_chrome_singleton_command(monkeypatch):
     monkeypatch.setattr(helper.subprocess, "run", fake_run)
     result = helper._navigate_login_page()
 
-    assert result == {"ok": True, "error": None}
+    assert result["ok"] is True
+    assert result["method"] == "process-singleton"
     assert len(seen) == 1
     args = seen[0][0]
     assert args == [

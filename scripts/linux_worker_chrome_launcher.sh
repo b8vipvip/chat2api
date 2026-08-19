@@ -85,6 +85,8 @@ exec "$CURRENT_LINK" \
   --password-store=basic \
   --proxy-server="socks5://127.0.0.1:${PROXY_PORT}" \
   "--proxy-bypass-list=localhost;127.0.0.1;${server_host}" \
+  --remote-debugging-address=127.0.0.1 \
+  --remote-debugging-port=9222 \
   --load-extension="$EXTENSION_DIR" \
   --no-first-run \
   --no-default-browser-check \

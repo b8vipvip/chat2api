@@ -45,7 +45,7 @@ def test_real_world_vless_ws_tls_link_shape_builds_expected_xray_stream_settings
 
 def test_worker_proxy_test_rejects_default_freedom_and_login_has_worker_side_gate():
     source = (ROOT / "scripts" / "linux_worker_agent.py").read_text(encoding="utf-8")
-    assert 'AGENT_VERSION = "0.3.2"' in source
+    assert 'AGENT_VERSION = "0.3.3"' in source
     assert 'if not proxy_configured():' in source
     assert '"error": "proxy_not_configured"' in source
     assert 'if command == "open_login_session":' in source
