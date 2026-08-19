@@ -66,15 +66,18 @@ def test_proxy_catalog_patch_is_installed_and_admin_ui_supports_crud_and_worker_
     assert 'chat2api-linux-worker-proxy-catalog.js' in runtime
 
 
-def test_remote_login_uses_direct_chrome_command_and_binding_cannot_steal_focus():
+def test_remote_login_uses_cdp_first_and_binding_cannot_steal_focus():
     helper = (ROOT / "scripts" / "linux_worker_remote_login.py").read_text(encoding="utf-8")
     agent = (ROOT / "scripts" / "linux_worker_agent.py").read_text(encoding="utf-8")
 
     assert 'LOGIN_URL = os.environ.get("CHAT2API_LOGIN_URL", "https://chatgpt.com/auth/login")' in helper
     assert 'CHROME_PROFILE_DIR = os.environ.get("CHAT2API_LOGIN_CHROME_PROFILE", "/home/chat2api/.config/chat2api-chrome-worker-01")' in helper
+    assert 'CHROME_DEBUG_URL = os.environ.get("CHAT2API_LOGIN_CHROME_DEBUG_URL", "http://127.0.0.1:9222")' in helper
     assert '[CHROME_BINARY, f"--user-data-dir={CHROME_PROFILE_DIR}", "--new-tab", url]' in helper
-    assert 'return _open_url_via_existing_chrome(LOGIN_URL, error_name="login_navigation_failed")' in helper
-    assert '"key", "--clearmodifiers", "ctrl+l",\n            "type"' not in helper
+    navigation = helper.split("def _navigate_login_page", 1)[1].split("def inject_worker_binding", 1)[0]
+    assert "_open_url_via_cdp(LOGIN_URL" in navigation
+    assert "_open_url_via_existing_chrome(LOGIN_URL" in navigation
+    assert '"key", "--clearmodifiers", "ctrl+l",\n            "type"' not in navigation
     assert '"binding_deferred_login_session"' in helper
     assert 'def session_active() -> bool:' in helper
     assert 'from linux_worker_remote_login import capture_frame, close_session, inject_worker_binding, open_session, send_input, session_active' in agent
