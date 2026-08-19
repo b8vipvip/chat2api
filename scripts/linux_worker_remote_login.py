@@ -23,6 +23,7 @@ FRAME_WIDTH = int(os.environ.get("CHAT2API_LOGIN_FRAME_WIDTH", "1280"))
 FRAME_HEIGHT = int(os.environ.get("CHAT2API_LOGIN_FRAME_HEIGHT", "720"))
 SESSION_IDLE_SECONDS = int(os.environ.get("CHAT2API_LOGIN_SESSION_IDLE_SECONDS", "1200"))
 LOGIN_TMPDIR = os.environ.get("CHAT2API_LOGIN_TMPDIR", "/dev/shm")
+LOGIN_URL = os.environ.get("CHAT2API_LOGIN_URL", "https://chatgpt.com/auth/login")
 MAX_FRAME_BYTES = 1_500_000
 
 
@@ -69,7 +70,17 @@ def _check_session() -> dict[str, Any] | None:
 
 def open_session() -> dict[str, Any]:
     SESSION.touch()
-    return {"ok": True, "idle_timeout_seconds": SESSION_IDLE_SECONDS, "source_width": SOURCE_WIDTH, "source_height": SOURCE_HEIGHT}
+    navigation = _navigate_login_page()
+    if not navigation.get("ok"):
+        SESSION.close()
+        return {"ok": False, "error": str(navigation.get("error") or "login_navigation_failed")}
+    return {
+        "ok": True,
+        "idle_timeout_seconds": SESSION_IDLE_SECONDS,
+        "source_width": SOURCE_WIDTH,
+        "source_height": SOURCE_HEIGHT,
+        "login_url": LOGIN_URL,
+    }
 
 
 def close_session() -> dict[str, Any]:
@@ -135,6 +146,27 @@ def _chrome_window_id() -> str | None:
         return None
     rows = [line.strip() for line in (result.stdout or "").splitlines() if line.strip().isdigit()]
     return rows[-1] if result.returncode == 0 and rows else None
+
+
+def _navigate_login_page() -> dict[str, Any]:
+    window_id = None
+    for _ in range(12):
+        window_id = _chrome_window_id()
+        if window_id:
+            break
+        time.sleep(0.25)
+    if not window_id:
+        return {"ok": False, "error": "chrome_window_not_found"}
+    return _run_xdotool_stdin(
+        [
+            "windowactivate", "--sync", window_id,
+            "key", "--clearmodifiers", "ctrl+l",
+            "type", "--clearmodifiers", "--delay", "0", LOGIN_URL,
+            "key", "--clearmodifiers", "Return",
+        ],
+        require_session=False,
+        error_name="login_navigation_failed",
+    )
 
 
 def inject_worker_binding(ticket: str, server_url: str) -> dict[str, Any]:
