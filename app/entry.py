@@ -39,6 +39,7 @@ from .linux_worker_ui_state_patch import install_linux_worker_ui_state_patch
 from .linux_worker_proxy_catalog_patch import install_linux_worker_proxy_catalog_patch
 from .linux_worker_pairing_patch import install_linux_worker_pairing_patch
 from .linux_worker_proxy_name_patch import install_linux_worker_proxy_name_patch
+from .linux_worker_table_stability_patch import install_linux_worker_table_stability_patch
 from .stream_keepalive_patch import install_stream_keepalive_patch
 from .runtime_contract import install_runtime_contract
 
@@ -87,7 +88,8 @@ install_stream_keepalive_patch(app)
 install_runtime_contract(app)
 
 # These final Worker patches do not own the runtime version. They are installed
-# last so the presentation asset runs after the legacy Linux Worker scripts and
-# the proxy-name layer can enrich the real installation/heartbeat response.
+# last so the presentation assets can refine the legacy Worker console without
+# changing the established Worker/Bridge transport contracts.
 install_linux_worker_pairing_patch(app)
 install_linux_worker_proxy_name_patch(app)
+install_linux_worker_table_stability_patch(app)
