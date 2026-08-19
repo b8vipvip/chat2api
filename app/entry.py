@@ -40,6 +40,7 @@ from .linux_worker_proxy_catalog_patch import install_linux_worker_proxy_catalog
 from .linux_worker_pairing_patch import install_linux_worker_pairing_patch
 from .linux_worker_proxy_name_patch import install_linux_worker_proxy_name_patch
 from .linux_worker_table_stability_patch import install_linux_worker_table_stability_patch
+from .linux_worker_install_ux_patch import install_linux_worker_install_ux_patch
 from .stream_keepalive_patch import install_stream_keepalive_patch
 from .runtime_contract import install_runtime_contract
 
@@ -93,3 +94,4 @@ install_runtime_contract(app)
 install_linux_worker_pairing_patch(app)
 install_linux_worker_proxy_name_patch(app)
 install_linux_worker_table_stability_patch(app)
+install_linux_worker_install_ux_patch(app)
