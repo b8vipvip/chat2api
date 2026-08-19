@@ -10,6 +10,7 @@ import base64
 import os
 import shlex
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -24,6 +25,9 @@ FRAME_HEIGHT = int(os.environ.get("CHAT2API_LOGIN_FRAME_HEIGHT", "720"))
 SESSION_IDLE_SECONDS = int(os.environ.get("CHAT2API_LOGIN_SESSION_IDLE_SECONDS", "1200"))
 LOGIN_TMPDIR = os.environ.get("CHAT2API_LOGIN_TMPDIR", "/dev/shm")
 LOGIN_URL = os.environ.get("CHAT2API_LOGIN_URL", "https://chatgpt.com/auth/login")
+CHROME_BINARY = os.environ.get("CHAT2API_LOGIN_CHROME_BINARY", "/usr/bin/google-chrome")
+CHROME_PROFILE_DIR = os.environ.get("CHAT2API_LOGIN_CHROME_PROFILE", "/home/chat2api/.config/chat2api-chrome-worker-01")
+CHROME_HOME = os.environ.get("CHAT2API_LOGIN_CHROME_HOME", "/home/chat2api")
 MAX_FRAME_BYTES = 1_500_000
 
 
@@ -45,34 +49,50 @@ class RemoteLoginSession:
 
 
 SESSION = RemoteLoginSession()
+ACTION_LOCK = threading.RLock()
 
 
 def _env() -> dict[str, str]:
-    env = {**os.environ, "DISPLAY": DISPLAY}
+    env = {
+        **os.environ,
+        "DISPLAY": DISPLAY,
+        "HOME": CHROME_HOME,
+        "XDG_CONFIG_HOME": f"{CHROME_HOME}/.config",
+        "XDG_CACHE_HOME": f"{CHROME_HOME}/.cache",
+    }
     if LOGIN_TMPDIR:
         # The Agent runs with ProtectSystem=strict, which can expose /tmp as
-        # read-only inside its mount namespace. ImageMagick needs writable
-        # scratch space even when stdin/stdout are pipes. /dev/shm stays
+        # read-only inside its mount namespace. ImageMagick and a secondary
+        # Chrome launcher both need writable scratch space. /dev/shm stays
         # writable, is memory-backed, and avoids persisting login frames.
         env["TMPDIR"] = LOGIN_TMPDIR
         env["MAGICK_TMPDIR"] = LOGIN_TMPDIR
     return env
 
 
+def session_active() -> bool:
+    with ACTION_LOCK:
+        if SESSION.expired():
+            SESSION.close()
+        return SESSION.active
+
+
 def _check_session() -> dict[str, Any] | None:
-    if SESSION.expired():
-        SESSION.close()
-    if not SESSION.active:
-        return {"ok": False, "error": "login_session_not_active"}
-    SESSION.touch()
+    with ACTION_LOCK:
+        if SESSION.expired():
+            SESSION.close()
+        if not SESSION.active:
+            return {"ok": False, "error": "login_session_not_active"}
+        SESSION.touch()
     return None
 
 
 def open_session() -> dict[str, Any]:
-    SESSION.touch()
-    navigation = _navigate_login_page()
+    with ACTION_LOCK:
+        SESSION.touch()
+        navigation = _navigate_login_page()
     # Opening the remote frame is the recovery path if automatic navigation
-    # ever fails. Do not make a best-effort address-bar action a hard gate for
+    # ever fails. Do not make a best-effort fixed-URL action a hard gate for
     # the whole login session.
     return {
         "ok": True,
@@ -85,7 +105,8 @@ def open_session() -> dict[str, Any]:
 
 
 def close_session() -> dict[str, Any]:
-    SESSION.close()
+    with ACTION_LOCK:
+        SESSION.close()
     return {"ok": True}
 
 
@@ -118,18 +139,27 @@ def _run_xdotool(args: list[str]) -> dict[str, Any]:
     return {"ok": result.returncode == 0, "error": None if result.returncode == 0 else "input_injection_failed"}
 
 
-def _run_xdotool_stdin(parts: list[str], *, require_session: bool = True, error_name: str = "input_injection_failed") -> dict[str, Any]:
-    """Send commands over stdin so typed secrets never enter process argv."""
+def _run_xdotool_stdin_commands(commands: list[list[str]], *, require_session: bool = True, error_name: str = "input_injection_failed") -> dict[str, Any]:
+    """Send one xdotool command per stdin line so secrets never enter argv.
+
+    `xdotool -` treats a line as one command. Joining several commands onto one
+    line makes `type` consume later command tokens as literal text, which was
+    the source of the address-bar corruption seen in the remote login frame.
+    """
     if require_session:
         error = _check_session()
         if error:
             return error
-    script = " ".join(shlex.quote(str(part)) for part in parts) + "\n"
+    script = "".join(" ".join(shlex.quote(str(part)) for part in command) + "\n" for command in commands)
     try:
         result = subprocess.run(["xdotool", "-"], input=script, capture_output=True, text=True, timeout=8, check=False, env=_env())
     except (OSError, subprocess.TimeoutExpired):
         return {"ok": False, "error": error_name}
     return {"ok": result.returncode == 0, "error": None if result.returncode == 0 else error_name}
+
+
+def _run_xdotool_stdin(parts: list[str], *, require_session: bool = True, error_name: str = "input_injection_failed") -> dict[str, Any]:
+    return _run_xdotool_stdin_commands([parts], require_session=require_session, error_name=error_name)
 
 
 def _chrome_window_id() -> str | None:
@@ -150,13 +180,7 @@ def _chrome_window_id() -> str | None:
 
 
 def _focus_window(window_id: str, *, error_name: str) -> dict[str, Any]:
-    """Focus an X11 window without requiring an EWMH window manager.
-
-    The Worker runs Chrome directly on Xvfb and intentionally does not run a
-    desktop/window manager. `xdotool windowactivate` relies on the
-    `_NET_ACTIVE_WINDOW` EWMH request and therefore fails in this environment;
-    `windowfocus` talks to X11 directly and works on the bare Xvfb display.
-    """
+    """Focus an X11 window without requiring an EWMH window manager."""
     try:
         result = subprocess.run(
             ["xdotool", "windowfocus", "--sync", window_id],
@@ -172,30 +196,44 @@ def _focus_window(window_id: str, *, error_name: str) -> dict[str, Any]:
 
 
 def _type_url_into_focused_chrome(url: str, *, error_name: str) -> dict[str, Any]:
-    return _run_xdotool_stdin(
+    """Type a secret/internal URL without putting it in process argv."""
+    return _run_xdotool_stdin_commands(
         [
-            "key", "--clearmodifiers", "ctrl+l",
-            "type", "--clearmodifiers", "--delay", "0", url,
-            "key", "--clearmodifiers", "Return",
+            ["key", "--clearmodifiers", "ctrl+l"],
+            ["type", "--clearmodifiers", "--delay", "0", url],
+            ["key", "--clearmodifiers", "Return"],
         ],
         require_session=False,
         error_name=error_name,
     )
 
 
-def _navigate_login_page() -> dict[str, Any]:
-    window_id = None
-    for _ in range(12):
-        window_id = _chrome_window_id()
-        if window_id:
-            break
-        time.sleep(0.25)
-    if not window_id:
+def _open_url_via_existing_chrome(url: str, *, error_name: str) -> dict[str, Any]:
+    """Ask the already-running profile instance to open a URL directly.
+
+    The login URL is fixed and non-secret, so there is no reason to simulate
+    Ctrl+L/typing/Enter. A second Chrome invocation with the same profile is
+    handed to the existing ProcessSingleton and opens the URL as a new tab.
+    This avoids keyboard focus, clipboard, and concurrent UI automation races.
+    """
+    if not _chrome_window_id():
         return {"ok": False, "error": "chrome_window_not_found"}
-    focused = _focus_window(window_id, error_name="login_navigation_focus_failed")
-    if not focused.get("ok"):
-        return focused
-    return _type_url_into_focused_chrome(LOGIN_URL, error_name="login_navigation_failed")
+    try:
+        result = subprocess.run(
+            [CHROME_BINARY, f"--user-data-dir={CHROME_PROFILE_DIR}", "--new-tab", url],
+            capture_output=True,
+            text=True,
+            timeout=12,
+            check=False,
+            env=_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {"ok": False, "error": error_name}
+    return {"ok": result.returncode == 0, "error": None if result.returncode == 0 else error_name}
+
+
+def _navigate_login_page() -> dict[str, Any]:
+    return _open_url_via_existing_chrome(LOGIN_URL, error_name="login_navigation_failed")
 
 
 def inject_worker_binding(ticket: str, server_url: str) -> dict[str, Any]:
@@ -203,7 +241,9 @@ def inject_worker_binding(ticket: str, server_url: str) -> dict[str, Any]:
 
     The proof never enters subprocess argv, an HTTP request, or ChatGPT page
     JavaScript. The Chrome Bridge captures it from the tab URL, scrubs the tab,
-    claims the Worker identity, and then restores ChatGPT.
+    claims the Worker identity, and then restores ChatGPT. Binding injection is
+    deferred while a human remote-login session is active so it cannot steal
+    address-bar focus from the operator.
     """
     raw_ticket = str(ticket or "").strip()
     clean_server = str(server_url or "").strip().rstrip("/")
@@ -211,14 +251,19 @@ def inject_worker_binding(ticket: str, server_url: str) -> dict[str, Any]:
         return {"ok": False, "error": "invalid_binding_ticket"}
     if not clean_server.startswith(("https://", "http://")) or len(clean_server) > 500:
         return {"ok": False, "error": "invalid_binding_server"}
-    window_id = _chrome_window_id()
-    if not window_id:
-        return {"ok": False, "error": "chrome_window_not_found"}
-    focused = _focus_window(window_id, error_name="binding_focus_failed")
-    if not focused.get("ok"):
-        return focused
-    binding_url = f"about:blank#chat2api-worker-bind={raw_ticket}&chat2api-server={quote(clean_server, safe='')}"
-    return _type_url_into_focused_chrome(binding_url, error_name="binding_injection_failed")
+    with ACTION_LOCK:
+        if SESSION.expired():
+            SESSION.close()
+        if SESSION.active:
+            return {"ok": False, "error": "binding_deferred_login_session"}
+        window_id = _chrome_window_id()
+        if not window_id:
+            return {"ok": False, "error": "chrome_window_not_found"}
+        focused = _focus_window(window_id, error_name="binding_focus_failed")
+        if not focused.get("ok"):
+            return focused
+        binding_url = f"about:blank#chat2api-worker-bind={raw_ticket}&chat2api-server={quote(clean_server, safe='')}"
+        return _type_url_into_focused_chrome(binding_url, error_name="binding_injection_failed")
 
 
 def send_input(arguments: dict[str, Any]) -> dict[str, Any]:
