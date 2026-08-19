@@ -105,7 +105,10 @@ def _stream_settings(
         if path:
             ws["path"] = path
         if host:
-            ws["headers"] = {"Host": host}
+            # Xray's current WebSocket client has a dedicated host field. Older
+            # configs placed Host inside headers; Xray still migrates that form
+            # but marks it deprecated. Emit the canonical form directly.
+            ws["host"] = host
         stream["wsSettings"] = ws
     elif normalized_network == "grpc":
         service_name = _first(query, "serviceName") or _first(query, "path")

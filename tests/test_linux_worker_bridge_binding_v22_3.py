@@ -216,7 +216,7 @@ def test_agent_binding_ticket_never_enters_argv_or_chatgpt_page_and_has_no_new_l
     assert '"X-Worker-Token": str(config.get("worker_token") or "")' in agent
     assert "/api/workers/extension-binding-ticket" in agent
     assert "inject_worker_binding" in agent
-    assert '"agent_version": "0.3.1"' in agent
+    assert 'AGENT_VERSION = "0.3.2"' in agent
     assert "BINDING_BOUND_POLL_SECONDS = 60.0" in agent
     lowered = agent.lower()
     assert "http.server" not in lowered
@@ -231,6 +231,6 @@ def test_binding_versions_are_aligned():
     assert _runtime_version(runtime) >= (0, 22, 4)
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert '"version": "0.8.1"' in manifest
-    assert 'agent_version:"0.3.1"' in bootstrap
+    assert 'agent_version:"0.3.2"' in bootstrap
     assert "install_linux_worker_bridge_binding_patch(app)" in entry
     assert entry.index("install_linux_worker_patch(app)") < entry.index("install_linux_worker_bridge_binding_patch(app)") < entry.index("install_runtime_contract(app)")

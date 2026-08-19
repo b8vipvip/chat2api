@@ -1,4 +1,11 @@
 from pathlib import Path
+import re
+
+
+def _runtime_version(source: str) -> tuple[int, int, int]:
+    match = re.search(r'SERVER_RUNTIME_VERSION = "(\d+)\.(\d+)\.(\d+)"', source)
+    assert match
+    return tuple(map(int, match.groups()))
 
 
 def test_bootstrap_preserves_worker_bundle_traversal_and_enrollment_json():
@@ -30,5 +37,5 @@ def test_health_waits_for_services_instead_of_single_instant_check():
 
 def test_runtime_marks_bootstrap_recovery_release():
     runtime = Path("app/runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.7"' in runtime
+    assert _runtime_version(runtime) >= (0, 22, 7)
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
