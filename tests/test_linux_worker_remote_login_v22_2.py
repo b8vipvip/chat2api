@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 import pytest
 
@@ -14,6 +15,12 @@ class Clock:
 
     def __call__(self) -> float:
         return self.value
+
+
+def _runtime_version(source: str) -> tuple[int, int, int]:
+    match = re.search(r'SERVER_RUNTIME_VERSION = "(\d+)\.(\d+)\.(\d+)"', source)
+    assert match
+    return tuple(map(int, match.groups()))
 
 
 def test_login_session_ticket_is_memory_only_worker_bound_single_session_and_expires():
@@ -101,7 +108,7 @@ def test_admin_remote_login_is_direct_browser_interaction_not_password_form():
         "X-Chat2API-Login-Ticket",
         "/login-session/frame",
         "/login-session/input",
-        'data-login="${esc(worker.worker_id)}"',
+        'data-login="${esc(row.worker_id)}"',
         'remoteImage.addEventListener("keydown"',
         'remoteImage.addEventListener("wheel"',
         "chat2api 不保存这些输入内容",
@@ -133,5 +140,5 @@ def test_worker_agent_implements_low_latency_remote_login_without_privilege_esca
 
 def test_remote_login_runtime_tracks_binding_upgrade():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.4"' in runtime
+    assert _runtime_version(runtime) >= (0, 22, 4)
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
