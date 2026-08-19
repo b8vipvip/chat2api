@@ -90,7 +90,8 @@ def test_bootstrap_is_strict_idempotent_and_preserves_profile():
     assert "set -euo pipefail" in source
     assert 'if [[ ! -s /etc/chat2api-worker/worker.json ]]' in source
     assert 'if [[ ! -s /etc/chat2api-worker/xray.json ]]' in source
-    assert "user-data-dir=/home/chat2api/.config/chat2api-chrome-worker-01" in source
+    assert 'PROFILE_DIR="/home/chat2api/.config/chat2api-chrome-worker-01"' in source
+    assert "--user-data-dir=${PROFILE_DIR}" in source
     assert "rm -rf /home/chat2api" not in source
     assert "NOPASSWD: ALL" not in source
     assert "--no-sandbox" not in source
