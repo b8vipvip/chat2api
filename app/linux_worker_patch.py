@@ -14,10 +14,55 @@ from .linux_worker_login_sessions import LOGIN_SESSION_IDLE_SECONDS, LoginSessio
 from .linux_workers import ALLOWED_COMMANDS, LinuxWorkerStore
 
 
-PATCH_VERSION = "0.22.2"
+PATCH_VERSION = "0.22.8"
 PROXY_SCHEMES = frozenset({"vless", "vmess", "trojan", "ss"})
 MAX_PROXY_LINK_LENGTH = 16384
 LOGIN_TICKET_HEADER = "x-chat2api-login-ticket"
+PROXY_LOGIN_REQUIRED = "请先配置并通过 Worker 代理测试，代理验证成功后才能打开 ChatGPT 登录窗口"
+PROXY_ERROR_LABELS = {
+    "proxy_not_configured": "尚未配置代理节点",
+    "xray_not_running": "Xray 服务未运行",
+    "proxy_test_command_failed": "Worker 无法执行代理测试",
+    "proxy_connectivity_test_failed": "代理无法访问 ChatGPT",
+    "proxy_helper_not_authorized": "Worker sudo 权限未授权代理 helper",
+    "proxy_helper_privilege_blocked": "Worker systemd 权限策略阻止了代理 helper 提权",
+    "proxy_helper_missing": "代理 helper 未安装",
+    "proxy_helper_permission_denied": "代理 helper 无执行权限",
+    "proxy_helper_launch_failed": "代理 helper 无法启动",
+    "proxy_helper_failed": "代理 helper 执行失败",
+    "proxy_apply_timeout": "代理应用超时",
+    "xray_binary_missing": "Xray 可执行文件不存在",
+    "xray_config_test_failed": "Xray 配置校验失败",
+    "xray_restart_failed": "Xray 重启失败",
+    "xray_restart_failed_rollback_failed": "Xray 重启失败且回滚失败",
+    "proxy_listener_not_ready": "本地 SOCKS 监听未就绪",
+    "proxy_listener_not_ready_rollback_failed": "本地 SOCKS 未就绪且回滚失败",
+    "proxy_connectivity_test_failed_rollback_failed": "代理无法访问 ChatGPT 且回滚失败",
+    "proxy_helper_failed": "代理 helper 执行失败",
+}
+
+
+def _proxy_error_text(result: dict[str, Any], fallback: str = "代理操作失败") -> str:
+    code = str(result.get("error") or "")[:120]
+    label = PROXY_ERROR_LABELS.get(code, code or fallback)
+    stage = str(result.get("stage") or "")[:80]
+    exit_code = result.get("helper_exit_code")
+    parts = [label]
+    if stage:
+        parts.append(f"阶段 {stage}")
+    if isinstance(exit_code, int) and exit_code:
+        parts.append(f"exit={exit_code}")
+    if result.get("rolled_back"):
+        parts.append("已自动回滚")
+    return " · ".join(parts)
+
+
+def _worker_has_configured_proxy(worker: dict[str, Any]) -> bool:
+    if str(worker.get("proxy_status") or "").lower() != "connected":
+        return False
+    metadata = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}
+    summary = metadata.get("proxy_summary") if isinstance(metadata.get("proxy_summary"), dict) else {}
+    return str(summary.get("protocol") or "").lower() in PROXY_SCHEMES
 
 
 def install_linux_worker_patch(app: FastAPI) -> FastAPI:
@@ -148,9 +193,7 @@ def install_linux_worker_patch(app: FastAPI) -> FastAPI:
         )
         result = command["result"]
         if not result.get("ok"):
-            error = str(result.get("error") or "proxy_apply_failed")[:120]
-            suffix = " (rolled back)" if result.get("rolled_back") else ""
-            raise HTTPException(422, f"Proxy apply failed: {error}{suffix}")
+            raise HTTPException(422, f"代理应用失败：{_proxy_error_text(result)}")
         summary = result.get("proxy") if isinstance(result.get("proxy"), dict) else {}
         worker = store.record_proxy_success(worker_id, summary)
         return {
@@ -167,21 +210,40 @@ def install_linux_worker_patch(app: FastAPI) -> FastAPI:
         return {
             "ok": bool(result.get("ok")),
             "http_status": str(result.get("http_status") or "")[:8],
-            "error": None if result.get("ok") else str(result.get("error") or "proxy_test_failed")[:120],
+            "error": None if result.get("ok") else _proxy_error_text(result, "代理测试失败"),
         }
 
     @app.post("/api/admin/linux-workers/{worker_id}/login-session")
     async def open_worker_login_session(worker_id: str, request: Request) -> dict[str, Any]:
         admin(request)
-        worker_exists(worker_id)
-        command = await send_worker_command(worker_id, "open_login_session", {}, wait=True, timeout=15)
+        worker = worker_exists(worker_id)
+        if not _worker_has_configured_proxy(worker):
+            raise HTTPException(409, PROXY_LOGIN_REQUIRED)
+
+        proxy_command = await send_worker_command(worker_id, "test_proxy", {}, wait=True, timeout=35)
+        proxy_result = proxy_command["result"]
+        if not proxy_result.get("ok"):
+            raise HTTPException(422, f"{PROXY_LOGIN_REQUIRED}：{_proxy_error_text(proxy_result, '代理测试失败')}")
+
+        command = await send_worker_command(
+            worker_id,
+            "open_login_session",
+            {"proxy_prevalidated": True},
+            wait=True,
+            timeout=15,
+        )
         result = command["result"]
         if not result.get("ok"):
+            proxy_detail = result.get("proxy") if isinstance(result.get("proxy"), dict) else {}
+            if str(result.get("error") or "") == "proxy_required_for_login":
+                raise HTTPException(422, f"{PROXY_LOGIN_REQUIRED}：{_proxy_error_text(proxy_detail, '代理测试失败')}")
             raise HTTPException(422, f"Remote login could not start: {str(result.get('error') or 'open_failed')[:120]}")
         ticket = login_sessions.issue(worker_id)
         return {
             "opened": True,
             "ticket": ticket,
+            "proxy_verified": True,
+            "proxy_http_status": str(proxy_result.get("http_status") or "")[:8],
             "idle_timeout_seconds": LOGIN_SESSION_IDLE_SECONDS,
             "source_width": int(result.get("source_width") or 1920),
             "source_height": int(result.get("source_height") or 1080),
