@@ -211,7 +211,8 @@ def test_agent_binding_ticket_never_enters_argv_or_chatgpt_page_and_has_no_new_l
     agent = (ROOT / "scripts" / "linux_worker_agent.py").read_text(encoding="utf-8")
     assert 'binding_url = f"about:blank#chat2api-worker-bind={raw_ticket}' in helper
     assert '["xdotool", "-"]' in helper
-    assert '"type", "--clearmodifiers", "--delay", "0", binding_url' in helper
+    assert '_type_url_into_focused_chrome(binding_url, error_name="binding_injection_failed")' in helper
+    assert 'script = " ".join(shlex.quote(str(part)) for part in parts)' in helper
     assert "https://chatgpt.com/#chat2api-worker-bind=" not in helper
     assert '"X-Worker-Token": str(config.get("worker_token") or "")' in agent
     assert "/api/workers/extension-binding-ticket" in agent
