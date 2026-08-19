@@ -32,12 +32,14 @@ def test_worker_agent_implements_bounded_diagnostics_command_and_bundle_ships_he
     agent = (ROOT / "scripts" / "linux_worker_agent.py").read_text(encoding="utf-8")
     helper = (ROOT / "scripts" / "linux_worker_diagnostics.sh").read_text(encoding="utf-8")
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
 
     assert 'AGENT_VERSION = "0.3.3"' in agent
     assert 'DIAGNOSTICS_HELPER = Path(' in agent
     assert 'if command == "get_logs":' in agent
     assert 'MAX_DIAGNOSTIC_CHARS = 450_000' in agent
-    assert 'chat2api-worker-diagnostics' in dockerfile
+    assert 'scripts/linux_worker_diagnostics.sh' in dockerfile
+    assert '!scripts/linux_worker_diagnostics.sh' in dockerignore
     assert "last 30 minutes" in helper
     assert "wbind_[REDACTED]" in helper
     assert "journalctl -u \"$unit\" --since '-30 min' -n 220" in helper
