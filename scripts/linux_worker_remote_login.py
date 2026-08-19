@@ -195,6 +195,19 @@ def _focus_window(window_id: str, *, error_name: str) -> dict[str, Any]:
     return {"ok": result.returncode == 0, "error": None if result.returncode == 0 else error_name}
 
 
+def _type_url_into_focused_chrome(url: str, *, error_name: str) -> dict[str, Any]:
+    """Type a secret/internal URL without putting it in process argv."""
+    return _run_xdotool_stdin_commands(
+        [
+            ["key", "--clearmodifiers", "ctrl+l"],
+            ["type", "--clearmodifiers", "--delay", "0", url],
+            ["key", "--clearmodifiers", "Return"],
+        ],
+        require_session=False,
+        error_name=error_name,
+    )
+
+
 def _open_url_via_existing_chrome(url: str, *, error_name: str) -> dict[str, Any]:
     """Ask the already-running profile instance to open a URL directly.
 
@@ -250,15 +263,7 @@ def inject_worker_binding(ticket: str, server_url: str) -> dict[str, Any]:
         if not focused.get("ok"):
             return focused
         binding_url = f"about:blank#chat2api-worker-bind={raw_ticket}&chat2api-server={quote(clean_server, safe='')}"
-        return _run_xdotool_stdin_commands(
-            [
-                ["key", "--clearmodifiers", "ctrl+l"],
-                ["type", "--clearmodifiers", "--delay", "0", binding_url],
-                ["key", "--clearmodifiers", "Return"],
-            ],
-            require_session=False,
-            error_name="binding_injection_failed",
-        )
+        return _type_url_into_focused_chrome(binding_url, error_name="binding_injection_failed")
 
 
 def send_input(arguments: dict[str, Any]) -> dict[str, Any]:
