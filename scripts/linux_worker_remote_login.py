@@ -71,15 +71,16 @@ def _check_session() -> dict[str, Any] | None:
 def open_session() -> dict[str, Any]:
     SESSION.touch()
     navigation = _navigate_login_page()
-    if not navigation.get("ok"):
-        SESSION.close()
-        return {"ok": False, "error": str(navigation.get("error") or "login_navigation_failed")}
+    # Opening the remote frame is the recovery path if automatic navigation
+    # ever fails. Do not make a best-effort address-bar action a hard gate for
+    # the whole login session.
     return {
         "ok": True,
         "idle_timeout_seconds": SESSION_IDLE_SECONDS,
         "source_width": SOURCE_WIDTH,
         "source_height": SOURCE_HEIGHT,
         "login_url": LOGIN_URL,
+        "navigation_warning": None if navigation.get("ok") else str(navigation.get("error") or "login_navigation_failed"),
     }
 
 
@@ -148,6 +149,40 @@ def _chrome_window_id() -> str | None:
     return rows[-1] if result.returncode == 0 and rows else None
 
 
+def _focus_window(window_id: str, *, error_name: str) -> dict[str, Any]:
+    """Focus an X11 window without requiring an EWMH window manager.
+
+    The Worker runs Chrome directly on Xvfb and intentionally does not run a
+    desktop/window manager. `xdotool windowactivate` relies on the
+    `_NET_ACTIVE_WINDOW` EWMH request and therefore fails in this environment;
+    `windowfocus` talks to X11 directly and works on the bare Xvfb display.
+    """
+    try:
+        result = subprocess.run(
+            ["xdotool", "windowfocus", "--sync", window_id],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            env=_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {"ok": False, "error": error_name}
+    return {"ok": result.returncode == 0, "error": None if result.returncode == 0 else error_name}
+
+
+def _type_url_into_focused_chrome(url: str, *, error_name: str) -> dict[str, Any]:
+    return _run_xdotool_stdin(
+        [
+            "key", "--clearmodifiers", "ctrl+l",
+            "type", "--clearmodifiers", "--delay", "0", url,
+            "key", "--clearmodifiers", "Return",
+        ],
+        require_session=False,
+        error_name=error_name,
+    )
+
+
 def _navigate_login_page() -> dict[str, Any]:
     window_id = None
     for _ in range(12):
@@ -157,16 +192,10 @@ def _navigate_login_page() -> dict[str, Any]:
         time.sleep(0.25)
     if not window_id:
         return {"ok": False, "error": "chrome_window_not_found"}
-    return _run_xdotool_stdin(
-        [
-            "windowactivate", "--sync", window_id,
-            "key", "--clearmodifiers", "ctrl+l",
-            "type", "--clearmodifiers", "--delay", "0", LOGIN_URL,
-            "key", "--clearmodifiers", "Return",
-        ],
-        require_session=False,
-        error_name="login_navigation_failed",
-    )
+    focused = _focus_window(window_id, error_name="login_navigation_focus_failed")
+    if not focused.get("ok"):
+        return focused
+    return _type_url_into_focused_chrome(LOGIN_URL, error_name="login_navigation_failed")
 
 
 def inject_worker_binding(ticket: str, server_url: str) -> dict[str, Any]:
@@ -185,17 +214,11 @@ def inject_worker_binding(ticket: str, server_url: str) -> dict[str, Any]:
     window_id = _chrome_window_id()
     if not window_id:
         return {"ok": False, "error": "chrome_window_not_found"}
+    focused = _focus_window(window_id, error_name="binding_focus_failed")
+    if not focused.get("ok"):
+        return focused
     binding_url = f"about:blank#chat2api-worker-bind={raw_ticket}&chat2api-server={quote(clean_server, safe='')}"
-    return _run_xdotool_stdin(
-        [
-            "windowactivate", "--sync", window_id,
-            "key", "--clearmodifiers", "ctrl+l",
-            "type", "--clearmodifiers", "--delay", "0", binding_url,
-            "key", "--clearmodifiers", "Return",
-        ],
-        require_session=False,
-        error_name="binding_injection_failed",
-    )
+    return _type_url_into_focused_chrome(binding_url, error_name="binding_injection_failed")
 
 
 def send_input(arguments: dict[str, Any]) -> dict[str, Any]:
