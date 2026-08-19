@@ -33,6 +33,7 @@ from .v21_6_patch import install_v21_6_patch
 from .v21_13_patch import install_v21_13_patch
 from .linux_worker_patch import install_linux_worker_patch
 from .linux_worker_install_patch import install_linux_worker_install_patch
+from .linux_worker_xray_patch import install_linux_worker_xray_patch
 from .linux_worker_bridge_binding import install_linux_worker_bridge_binding_patch
 from .runtime_contract import install_runtime_contract
 
@@ -70,6 +71,7 @@ install_v21_6_patch(app)
 install_v21_13_patch(app)
 install_linux_worker_patch(app)
 install_linux_worker_install_patch(app)
+install_linux_worker_xray_patch(app)
 install_linux_worker_bridge_binding_patch(app)
 
 # Install this after the historical patch stack so /version describes the final
