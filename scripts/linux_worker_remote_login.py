@@ -7,6 +7,7 @@ authenticated outbound Worker websocket control plane.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import shlex
 import subprocess
@@ -14,7 +15,9 @@ import threading
 import time
 from dataclasses import dataclass
 from typing import Any
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 
 DISPLAY = os.environ.get("CHAT2API_LOGIN_DISPLAY", ":99")
@@ -28,6 +31,7 @@ LOGIN_URL = os.environ.get("CHAT2API_LOGIN_URL", "https://chatgpt.com/auth/login
 CHROME_BINARY = os.environ.get("CHAT2API_LOGIN_CHROME_BINARY", "/home/chat2api/.cache/chat2api-chrome-for-testing/chrome")
 CHROME_PROFILE_DIR = os.environ.get("CHAT2API_LOGIN_CHROME_PROFILE", "/home/chat2api/.config/chat2api-chrome-worker-01")
 CHROME_HOME = os.environ.get("CHAT2API_LOGIN_CHROME_HOME", "/home/chat2api")
+CHROME_DEBUG_URL = os.environ.get("CHAT2API_LOGIN_CHROME_DEBUG_URL", "http://127.0.0.1:9222").rstrip("/")
 MAX_FRAME_BYTES = 1_500_000
 
 
@@ -91,16 +95,21 @@ def open_session() -> dict[str, Any]:
     with ACTION_LOCK:
         SESSION.touch()
         navigation = _navigate_login_page()
-    # Opening the remote frame is the recovery path if automatic navigation
-    # ever fails. Do not make a best-effort fixed-URL action a hard gate for
-    # the whole login session.
+        if not navigation.get("ok"):
+            SESSION.close()
+            return {
+                "ok": False,
+                "error": "login_navigation_failed",
+                "navigation_detail": str(navigation.get("detail") or navigation.get("error") or "")[:240],
+                "login_url": LOGIN_URL,
+            }
     return {
         "ok": True,
         "idle_timeout_seconds": SESSION_IDLE_SECONDS,
         "source_width": SOURCE_WIDTH,
         "source_height": SOURCE_HEIGHT,
         "login_url": LOGIN_URL,
-        "navigation_warning": None if navigation.get("ok") else str(navigation.get("error") or "login_navigation_failed"),
+        "navigation_method": str(navigation.get("method") or "direct"),
     }
 
 
@@ -208,13 +217,28 @@ def _type_url_into_focused_chrome(url: str, *, error_name: str) -> dict[str, Any
     )
 
 
+def _open_url_via_cdp(url: str, *, error_name: str) -> dict[str, Any]:
+    """Open a fixed public URL through Chrome's loopback-only DevTools endpoint."""
+    endpoint = f"{CHROME_DEBUG_URL}/json/new?{quote(url, safe=':/?&=%')}"
+    try:
+        request = Request(endpoint, data=b"", method="PUT")
+        with urlopen(request, timeout=4) as response:
+            payload = json.loads(response.read(65536).decode("utf-8"))
+    except (OSError, HTTPError, URLError, ValueError, json.JSONDecodeError) as exc:
+        return {"ok": False, "error": error_name, "detail": f"cdp_unavailable:{type(exc).__name__}"}
+    target_id = str(payload.get("id") or "") if isinstance(payload, dict) else ""
+    target_url = str(payload.get("url") or "") if isinstance(payload, dict) else ""
+    if not target_id:
+        return {"ok": False, "error": error_name, "detail": "cdp_target_missing"}
+    return {"ok": True, "method": "cdp", "target_id": target_id, "target_url": target_url}
+
+
 def _open_url_via_existing_chrome(url: str, *, error_name: str) -> dict[str, Any]:
     """Ask the already-running profile instance to open a URL directly.
 
-    The login URL is fixed and non-secret, so there is no reason to simulate
-    Ctrl+L/typing/Enter. A second Chrome invocation with the same profile is
-    handed to the existing ProcessSingleton and opens the URL as a new tab.
-    This avoids keyboard focus, clipboard, and concurrent UI automation races.
+    This is the compatibility fallback for older upgraded launchers. It still
+    uses Chrome's ProcessSingleton command path and never simulates typing or
+    reads the operator clipboard.
     """
     if not _chrome_window_id():
         return {"ok": False, "error": "chrome_window_not_found"}
@@ -229,11 +253,29 @@ def _open_url_via_existing_chrome(url: str, *, error_name: str) -> dict[str, Any
         )
     except (OSError, subprocess.TimeoutExpired):
         return {"ok": False, "error": error_name}
-    return {"ok": result.returncode == 0, "error": None if result.returncode == 0 else error_name}
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "process_singleton_failed").strip().replace("\n", " ")[-220:]
+        return {"ok": False, "error": error_name, "detail": detail}
+    return {"ok": True, "method": "process-singleton"}
 
 
 def _navigate_login_page() -> dict[str, Any]:
-    return _open_url_via_existing_chrome(LOGIN_URL, error_name="login_navigation_failed")
+    cdp_error = ""
+    for _ in range(6):
+        result = _open_url_via_cdp(LOGIN_URL, error_name="login_navigation_failed")
+        if result.get("ok"):
+            return result
+        cdp_error = str(result.get("detail") or result.get("error") or "")
+        time.sleep(0.35)
+    fallback = _open_url_via_existing_chrome(LOGIN_URL, error_name="login_navigation_failed")
+    if fallback.get("ok"):
+        return fallback
+    fallback_error = str(fallback.get("detail") or fallback.get("error") or "")
+    return {
+        "ok": False,
+        "error": "login_navigation_failed",
+        "detail": f"cdp={cdp_error or 'failed'};process={fallback_error or 'failed'}"[:240],
+    }
 
 
 def inject_worker_binding(ticket: str, server_url: str) -> dict[str, Any]:
