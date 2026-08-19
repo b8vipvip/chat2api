@@ -25,13 +25,13 @@
   const proxyDialog = document.createElement("dialog");
   proxyDialog.id = "linuxWorkerProxyDialog";
   proxyDialog.style.cssText = "width:min(720px,calc(100vw - 32px));border:1px solid #334155;border-radius:12px;background:#0f172a;color:#e5e7eb;padding:0;box-shadow:0 24px 80px rgba(0,0,0,.55)";
-  proxyDialog.innerHTML = `<div style="padding:20px"><div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><div><div style="font-size:18px;font-weight:700">配置 Worker 代理</div><div id="linuxProxyWorkerName" style="margin-top:4px;color:#94a3b8"></div></div><button class="action" id="closeLinuxProxy" type="button">关闭</button></div><div style="margin-top:16px;color:#94a3b8;line-height:1.6">支持 VLESS、VMess、Trojan、Shadowsocks 分享链接。节点凭据只通过已认证 Worker 通道发送到目标服务器，不保存到中心 Worker 记录。</div><textarea id="linuxProxyShareLink" autocomplete="off" spellcheck="false" placeholder="粘贴 vless://、vmess://、trojan:// 或 ss:// 节点链接" style="box-sizing:border-box;width:100%;min-height:110px;margin-top:14px;padding:12px;border:1px solid #334155;border-radius:8px;background:#020617;color:#e5e7eb;resize:vertical"></textarea><div id="linuxProxyResult" style="min-height:22px;margin-top:12px;color:#94a3b8"></div><div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px"><button class="action" id="testLinuxProxy" type="button">测试当前代理</button><button class="action good" id="applyLinuxProxy" type="button">校验并应用</button></div></div>`;
+  proxyDialog.innerHTML = `<div style="padding:20px"><div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><div><div style="font-size:18px;font-weight:700">配置 Worker 代理</div><div id="linuxProxyWorkerName" style="margin-top:4px;color:#94a3b8"></div></div><button class="action" id="closeLinuxProxy" type="button">关闭</button></div><div style="margin-top:16px;color:#94a3b8;line-height:1.6">支持 VLESS、VMess、Trojan、Shadowsocks 分享链接。节点凭据只通过已认证 Worker 通道发送到目标服务器，不保存到中心 Worker 记录。代理验证成功前不会打开 ChatGPT 登录窗口。</div><textarea id="linuxProxyShareLink" autocomplete="off" spellcheck="false" placeholder="粘贴 vless://、vmess://、trojan:// 或 ss:// 节点链接" style="box-sizing:border-box;width:100%;min-height:110px;margin-top:14px;padding:12px;border:1px solid #334155;border-radius:8px;background:#020617;color:#e5e7eb;resize:vertical"></textarea><div id="linuxProxyResult" style="min-height:22px;margin-top:12px;color:#94a3b8"></div><div style="display:flex;justify-content:flex-end;gap:10px;margin-top:16px"><button class="action" id="testLinuxProxy" type="button">测试当前代理</button><button class="action good" id="applyLinuxProxy" type="button">校验并应用</button></div></div>`;
   document.body.appendChild(proxyDialog);
 
   const loginDialog = document.createElement("dialog");
   loginDialog.id = "linuxWorkerLoginDialog";
   loginDialog.style.cssText = "width:min(1320px,calc(100vw - 24px));max-width:none;border:1px solid #334155;border-radius:12px;background:#020617;color:#e5e7eb;padding:0;box-shadow:0 24px 90px rgba(0,0,0,.72)";
-  loginDialog.innerHTML = `<div style="padding:14px"><div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px"><div><div style="font-size:18px;font-weight:700">远程登录 ChatGPT</div><div id="linuxLoginWorkerName" style="margin-top:3px;color:#94a3b8"></div></div><div style="display:flex;align-items:center;gap:10px"><span id="linuxLoginStatus" style="color:#94a3b8">准备中…</span><button class="action" id="closeLinuxLogin" type="button">结束登录</button></div></div><div style="font-size:12px;color:#94a3b8;margin-bottom:10px">这是服务器 Xvfb :99 中真实 Chrome 画面。请直接在画面里输入账号、密码、验证码或完成 CAPTCHA；chat2api 不保存这些输入内容。点击画面后即可键盘输入。登录状态确认后本窗口会自动结束。</div><div id="linuxLoginViewport" style="position:relative;background:#000;border:1px solid #334155;border-radius:8px;overflow:hidden;min-height:360px;display:flex;align-items:center;justify-content:center"><img id="linuxLoginFrame" tabindex="0" draggable="false" alt="远程 Chrome 画面" style="display:block;max-width:100%;max-height:calc(100vh - 210px);outline:none;cursor:default;user-select:none"><div id="linuxLoginPlaceholder" style="position:absolute;color:#94a3b8">正在连接 Worker 画面…</div></div></div>`;
+  loginDialog.innerHTML = `<div style="padding:14px"><div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px"><div><div style="font-size:18px;font-weight:700">远程登录 ChatGPT</div><div id="linuxLoginWorkerName" style="margin-top:3px;color:#94a3b8"></div></div><div style="display:flex;align-items:center;gap:10px"><span id="linuxLoginStatus" style="color:#94a3b8">准备中…</span><button class="action" id="closeLinuxLogin" type="button">结束登录</button></div></div><div style="font-size:12px;color:#94a3b8;margin-bottom:10px">这是服务器 Xvfb :99 中真实 Chrome 画面。打开此窗口前系统已经实时验证当前代理可以访问 ChatGPT。请直接在画面里输入账号、密码、验证码或完成 CAPTCHA；chat2api 不保存这些输入内容。点击画面后即可键盘输入。登录状态确认后本窗口会自动结束。</div><div id="linuxLoginViewport" style="position:relative;background:#000;border:1px solid #334155;border-radius:8px;overflow:hidden;min-height:360px;display:flex;align-items:center;justify-content:center"><img id="linuxLoginFrame" tabindex="0" draggable="false" alt="远程 Chrome 画面" style="display:block;max-width:100%;max-height:calc(100vh - 210px);outline:none;cursor:default;user-select:none"><div id="linuxLoginPlaceholder" style="position:absolute;color:#94a3b8">正在连接 Worker 画面…</div></div></div>`;
   document.body.appendChild(loginDialog);
 
   let selectedWorkerId = "";
@@ -44,6 +44,10 @@
   let inputChain = Promise.resolve();
 
   const bridge = worker => worker?.metadata?.bridge && typeof worker.metadata.bridge === "object" ? worker.metadata.bridge : {};
+  const proxyReady = worker => {
+    const summary = worker?.metadata?.proxy_summary && typeof worker.metadata.proxy_summary === "object" ? worker.metadata.proxy_summary : {};
+    return String(worker?.proxy_status || "").toLowerCase() === "connected" && Boolean(String(summary.protocol || "").trim());
+  };
   const proxyLabel = worker => { const summary = worker?.metadata?.proxy_summary || {}; const base = String(worker.proxy_status || "-"); if (!summary.protocol) return base; const endpoint = summary.server ? ` · ${summary.server}${summary.port ? `:${summary.port}` : ""}` : ""; return `${base} · ${summary.protocol}${endpoint}`; };
   const chatgptLabel = worker => { const b = bridge(worker); if (b.login_state === "ready" && b.composer_ready === true) return "已登录 · Composer"; if (b.login_state === "login_required") return "需要登录"; if (b.login_state === "checking") return "检测中"; if (worker.chatgpt_status === "offline") return "扩展离线"; return String(worker.chatgpt_status || b.login_state || "-"); };
   const networkLabel = worker => { const b = bridge(worker); const country = b.network_country_code ? ` · ${b.network_country_code}` : ""; return b.network_probe_status && b.network_probe_status !== "unknown" ? `${b.network_probe_status}${country}` : String(worker.network_status || "-"); };
@@ -69,7 +73,8 @@
       parts.push(`<button class="action danger" data-delete-install="${esc(row.install_id)}">删除命令</button>`);
     }
     if (row.worker_id) {
-      parts.push(`<button class="action" data-login="${esc(row.worker_id)}" data-worker-name="${esc(row.name)}">登录</button>`);
+      const canLogin = proxyReady(row);
+      parts.push(`<button class="action" data-login="${esc(row.worker_id)}" data-worker-name="${esc(row.name)}" ${canLogin ? "" : "disabled"} title="${canLogin ? "实时检查代理后打开登录" : "请先配置并验证代理"}">${canLogin ? "登录" : "登录（先配代理）"}</button>`);
       parts.push(`<button class="action" data-proxy="${esc(row.worker_id)}" data-worker-name="${esc(row.name)}">代理</button>`);
       parts.push(`<button class="action danger" data-revoke="${esc(row.worker_id)}">禁用 Worker</button>`);
     }
@@ -105,7 +110,21 @@
     } catch (error) { setLoginStatus(error.message); loginFrameTimer = setTimeout(fetchLoginFrame, 1800); }
   };
   const closeLoginDialog = async () => { if (loginClosing) return; loginClosing = true; clearLoginTimer(); const workerId = loginWorkerId; const ticket = loginTicket; loginTicket = ""; loginWorkerId = ""; if (workerId && ticket) { try { await request(`/api/admin/linux-workers/${encodeURIComponent(workerId)}/login-session`, {method:"DELETE",headers:{"X-Chat2API-Login-Ticket":ticket}}); } catch (_) {} } document.getElementById("linuxLoginFrame").removeAttribute("src"); document.getElementById("linuxLoginPlaceholder").style.display = "block"; document.getElementById("linuxLoginPlaceholder").textContent = "远程登录会话已结束。"; if (loginDialog.open) loginDialog.close(); loginClosing = false; };
-  const openLoginDialog = async (workerId, workerName) => { if (loginDialog.open) await closeLoginDialog(); loginWorkerId = workerId; loginClosing = false; loginTicket = ""; document.getElementById("linuxLoginWorkerName").textContent = workerName || workerId; document.getElementById("linuxLoginPlaceholder").style.display = "block"; document.getElementById("linuxLoginPlaceholder").textContent = "正在创建安全登录会话…"; setLoginStatus("连接中…"); loginDialog.showModal(); try { const result = await request(`/api/admin/linux-workers/${encodeURIComponent(workerId)}/login-session`, {method:"POST",body:"{}"}); loginTicket = result.ticket; loginSourceWidth = Number(result.source_width || 1920); loginSourceHeight = Number(result.source_height || 1080); setLoginStatus(`会话已建立 · 空闲 ${Math.round(Number(result.idle_timeout_seconds || 1200) / 60)} 分钟自动关闭`); fetchLoginFrame(); } catch (error) { setLoginStatus(error.message); document.getElementById("linuxLoginPlaceholder").textContent = "无法打开远程登录会话。"; } };
+  const openLoginDialog = async (workerId, workerName) => {
+    if (loginDialog.open) await closeLoginDialog();
+    const result = await request(`/api/admin/linux-workers/${encodeURIComponent(workerId)}/login-session`, {method:"POST",body:"{}"});
+    loginWorkerId = workerId;
+    loginClosing = false;
+    loginTicket = result.ticket;
+    loginSourceWidth = Number(result.source_width || 1920);
+    loginSourceHeight = Number(result.source_height || 1080);
+    document.getElementById("linuxLoginWorkerName").textContent = workerName || workerId;
+    document.getElementById("linuxLoginPlaceholder").style.display = "block";
+    document.getElementById("linuxLoginPlaceholder").textContent = "正在连接安全登录画面…";
+    loginDialog.showModal();
+    setLoginStatus(`代理已验证 · HTTP ${result.proxy_http_status || "reachable"} · 空闲 ${Math.round(Number(result.idle_timeout_seconds || 1200) / 60)} 分钟自动关闭`);
+    fetchLoginFrame();
+  };
   const remotePoint = event => { const image = document.getElementById("linuxLoginFrame"); const rect = image.getBoundingClientRect(); if (!rect.width || !rect.height) return null; return {x:Math.round((event.clientX-rect.left)/rect.width*loginSourceWidth),y:Math.round((event.clientY-rect.top)/rect.height*loginSourceHeight)}; };
 
   button.addEventListener("click", () => { document.querySelectorAll(".view").forEach(node => node.classList.remove("active")); document.querySelectorAll(".nav button").forEach(node => node.classList.toggle("active", node === button)); section.classList.add("active"); document.getElementById("pageTitle").textContent = "Linux Worker"; location.hash = "linux-workers"; load(); });
@@ -122,7 +141,7 @@
   remoteImage.addEventListener("wheel", event => { event.preventDefault(); const point = remotePoint(event); if (!point) return; queueRemoteInput({kind:"mouse",action:"scroll",delta:Math.sign(event.deltaY)*Math.max(1,Math.min(5,Math.round(Math.abs(event.deltaY)/100)||1)),...point}); }, {passive:false});
   remoteImage.addEventListener("keydown", event => { if (!loginTicket) return; const modifiers=[]; if(event.ctrlKey)modifiers.push("ctrl");if(event.altKey)modifiers.push("alt");if(event.shiftKey)modifiers.push("shift");if(event.metaKey)modifiers.push("super"); const supportedSpecial=new Set(["Enter","Tab","Escape","Backspace","Delete","ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Home","End","PageUp","PageDown"," "]); if(event.key.length!==1&&!supportedSpecial.has(event.key))return; event.preventDefault(); queueRemoteInput({kind:"key",key:event.key,modifiers}); });
 
-  document.getElementById("applyLinuxProxy").onclick = async () => { if (!selectedWorkerId) return; const input=document.getElementById("linuxProxyShareLink"); const resultNode=document.getElementById("linuxProxyResult"); const shareLink=input.value.trim(); if(!shareLink){resultNode.textContent="请先粘贴节点链接。";return;} setProxyBusy(true);resultNode.textContent="正在校验 Xray 配置、应用并测试 ChatGPT 连通性…"; try{const result=await request(`/api/admin/linux-workers/${encodeURIComponent(selectedWorkerId)}/proxy`,{method:"POST",body:JSON.stringify({share_link:shareLink})});input.value="";const proxy=result.proxy||{};resultNode.textContent=`应用成功：${proxy.protocol||"proxy"}${proxy.server?` · ${proxy.server}:${proxy.port||""}`:""} · HTTP ${result.test?.http_status||"reachable"}`;await load();}catch(error){resultNode.textContent=error.message;}finally{setProxyBusy(false);} };
+  document.getElementById("applyLinuxProxy").onclick = async () => { if (!selectedWorkerId) return; const input=document.getElementById("linuxProxyShareLink"); const resultNode=document.getElementById("linuxProxyResult"); const shareLink=input.value.trim(); if(!shareLink){resultNode.textContent="请先粘贴节点链接。";return;} setProxyBusy(true);resultNode.textContent="正在校验 Xray 配置、应用并测试 ChatGPT 连通性…"; try{const result=await request(`/api/admin/linux-workers/${encodeURIComponent(selectedWorkerId)}/proxy`,{method:"POST",body:JSON.stringify({share_link:shareLink})});input.value="";const proxy=result.proxy||{};resultNode.textContent=`应用成功：${proxy.protocol||"proxy"}${proxy.server?` · ${proxy.server}:${proxy.port||""}`:""} · HTTP ${result.test?.http_status||"reachable"}；代理已验证，现在可以登录。`;await load();}catch(error){resultNode.textContent=error.message;}finally{setProxyBusy(false);} };
   document.getElementById("testLinuxProxy").onclick = async () => { if(!selectedWorkerId)return; const resultNode=document.getElementById("linuxProxyResult");setProxyBusy(true);resultNode.textContent="正在通过当前 SOCKS 代理测试 ChatGPT…";try{const result=await request(`/api/admin/linux-workers/${encodeURIComponent(selectedWorkerId)}/proxy/test`,{method:"POST",body:"{}"});resultNode.textContent=result.ok?`当前代理可达 · HTTP ${result.http_status||"reachable"}`:`当前代理不可达：${result.error||"test failed"}`;}catch(error){resultNode.textContent=error.message;}finally{setProxyBusy(false);} };
 
   document.getElementById("linuxWorkerRows").onclick = async event => {
@@ -135,7 +154,21 @@
     if (toggleId) { await request(`/api/admin/linux-worker-installations/${encodeURIComponent(toggleId)}`,{method:"PATCH",body:JSON.stringify({enabled:target.dataset.enable==="1"})}); await load(); return; }
     const deleteId = target.dataset.deleteInstall;
     if (deleteId && confirm("确定删除这条安装命令记录？已安装的 Worker 身份不会因此删除。")) { await request(`/api/admin/linux-worker-installations/${encodeURIComponent(deleteId)}`,{method:"DELETE"}); await load(); return; }
-    const loginId = target.dataset.login; if(loginId){openLoginDialog(loginId,target.dataset.workerName||loginId);return;}
+    const loginId = target.dataset.login;
+    if (loginId) {
+      const previousText = target.textContent;
+      target.disabled = true;
+      target.textContent = "检查代理…";
+      try {
+        await openLoginDialog(loginId, target.dataset.workerName || loginId);
+      } catch (error) {
+        alert(error.message);
+      } finally {
+        target.disabled = false;
+        target.textContent = previousText;
+      }
+      return;
+    }
     const proxyId = target.dataset.proxy; if(proxyId){openProxyDialog(proxyId,target.dataset.workerName||proxyId);return;}
     const id = target.dataset.revoke; if(id&&confirm("确定禁用此 Worker？")){await request(`/api/admin/linux-workers/${encodeURIComponent(id)}`,{method:"DELETE"});load();}
   };
