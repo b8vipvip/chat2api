@@ -4,7 +4,7 @@
   "version": "0.8.1",
   "description": "Turns logged-in ChatGPT browser tabs into a concurrent remotely callable text, multimodal, image-generation and realtime Voice API bridge.",
   "minimum_chrome_version": "116",
-  "permissions": ["storage", "unlimitedStorage", "tabs", "scripting", "alarms", "downloads"],
+  "permissions": ["storage", "unlimitedStorage", "tabs", "scripting", "alarms", "downloads", "contentSettings"],
   "host_permissions": [
     "http://*/*",
     "https://*/*",
@@ -35,6 +35,7 @@
         "content.js",
         "content_page_adapter_v22.js",
         "content_login_v27.js",
+        "content_ui_hygiene_v31.js",
         "content_page_driver_v22.js",
         "content_request_v2.js",
         "content_model.js",
