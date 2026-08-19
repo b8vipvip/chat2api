@@ -21,10 +21,11 @@ from linux_worker_proxy import ProxyConfigError, build_xray_config
 from linux_worker_remote_login import capture_frame, close_session, inject_worker_binding, open_session, send_input, session_active
 
 
-AGENT_VERSION = "0.3.2"
+AGENT_VERSION = "0.3.3"
 CONFIG = Path(os.environ.get("CHAT2API_WORKER_CONFIG", "/etc/chat2api-worker/worker.json"))
 XRAY_CONFIG = Path(os.environ.get("CHAT2API_XRAY_CONFIG", "/etc/chat2api-worker/xray.json"))
 PROXY_APPLY_HELPER = Path(os.environ.get("CHAT2API_PROXY_APPLY_HELPER", "/usr/local/sbin/chat2api-worker-proxy-apply"))
+DIAGNOSTICS_HELPER = Path(os.environ.get("CHAT2API_DIAGNOSTICS_HELPER", "/usr/local/sbin/chat2api-worker-diagnostics"))
 PROXY_PORT = int(os.environ.get("CHAT2API_PROXY_PORT", "10808"))
 PROXY_TEST_URL = os.environ.get("CHAT2API_PROXY_TEST_URL", "https://chatgpt.com/")
 REPO_DIR = Path(__file__).resolve().parents[1]
@@ -33,6 +34,7 @@ HEARTBEAT_SECONDS = 15.0
 BINDING_RETRY_SECONDS = 20.0
 BINDING_POST_INJECT_SECONDS = 12.0
 BINDING_BOUND_POLL_SECONDS = 60.0
+MAX_DIAGNOSTIC_CHARS = 450_000
 ALLOWED_UNITS = {
     "restart_chrome": "chat2api-chrome.service",
     "restart_xray": "chat2api-xray.service",
@@ -60,6 +62,7 @@ IMPLEMENTED_COMMANDS = {
     "close_login_session",
     "login_session_frame",
     "login_session_input",
+    "get_logs",
 }
 
 
@@ -230,6 +233,36 @@ def _apply_proxy(arguments: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _collect_diagnostics() -> dict[str, Any]:
+    if not DIAGNOSTICS_HELPER.is_file():
+        return {"ok": False, "error": "diagnostics_helper_missing"}
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", str(DIAGNOSTICS_HELPER)],
+            capture_output=True,
+            text=True,
+            timeout=25,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": "diagnostics_timeout"}
+    except OSError:
+        return {"ok": False, "error": "diagnostics_helper_launch_failed"}
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip().replace("\n", " ")[-240:]
+        return {"ok": False, "error": "diagnostics_helper_failed", "detail": detail}
+    logs = str(result.stdout or "")
+    if not logs:
+        return {"ok": False, "error": "diagnostics_empty"}
+    truncated = len(logs) > MAX_DIAGNOSTIC_CHARS
+    if truncated:
+        logs = logs[-MAX_DIAGNOSTIC_CHARS:]
+        logs = "[chat2api] diagnostics truncated to newest output\n" + logs
+    safe_host = "".join(ch for ch in socket.gethostname() if ch.isalnum() or ch in {"-", "_"})[:64] or "worker"
+    filename = f"chat2api-worker-{safe_host}-{time.strftime('%Y%m%d-%H%M%S', time.gmtime())}.log"
+    return {"ok": True, "filename": filename, "logs": logs, "truncated": truncated}
+
+
 def run_allowed(command: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
     if command not in ALLOWED_COMMANDS:
         return {"ok": False, "error": "command_not_allowed"}
@@ -240,6 +273,8 @@ def run_allowed(command: str, arguments: dict[str, Any] | None = None) -> dict[s
         return _proxy_test()
     if command == "apply_proxy_config":
         return _apply_proxy(args)
+    if command == "get_logs":
+        return _collect_diagnostics()
     if command == "open_login_session":
         # The authenticated server endpoint performs a live proxy test immediately
         # before this command. Honor that short-lived preflight only while a real
