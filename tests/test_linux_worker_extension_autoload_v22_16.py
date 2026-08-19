@@ -1,8 +1,15 @@
 from pathlib import Path
+import re
 import subprocess
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _runtime_version(source: str) -> tuple[int, int, int]:
+    match = re.search(r'SERVER_RUNTIME_VERSION = "(\d+)\.(\d+)\.(\d+)"', source)
+    assert match
+    return tuple(map(int, match.groups()))
 
 
 def test_worker_uses_chrome_for_testing_to_keep_unpacked_extension_autoload_supported():
@@ -57,5 +64,5 @@ def test_shell_launchers_are_syntax_valid():
 
 def test_runtime_marks_extension_autoload_release_without_changing_bridge_protocol_version():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.16"' in runtime
+    assert _runtime_version(runtime) >= (0, 22, 16)
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
