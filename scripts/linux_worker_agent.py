@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 import websockets
 
 from linux_worker_proxy import ProxyConfigError, build_xray_config
-from linux_worker_remote_login import capture_frame, close_session, inject_worker_binding, open_session, send_input
+from linux_worker_remote_login import capture_frame, close_session, inject_worker_binding, open_session, send_input, session_active
 
 
 AGENT_VERSION = "0.3.2"
@@ -300,11 +300,15 @@ def _request_binding_ticket(config: dict[str, Any]) -> dict[str, Any] | None:
 async def _binding_loop(config: dict[str, Any]) -> None:
     """Keep explicit Worker↔Bridge identity healthy for the lifetime of the Agent.
 
-    A fresh Worker intentionally stays on about:blank until a real proxy node is
-    configured and can reach ChatGPT. Only then may the binding flow restore a
-    ChatGPT tab, preventing pre-login direct-network navigation.
+    Binding must never fight with a human remote-login session for Chrome focus.
+    While the login window is open, ticket injection is deferred until the
+    operator closes the session. A fresh Worker still waits for a real proxy
+    before any binding navigation is attempted.
     """
     while True:
+        if session_active():
+            await asyncio.sleep(BINDING_RETRY_SECONDS)
+            continue
         payload = await asyncio.to_thread(_request_binding_ticket, config)
         if payload and payload.get("bound") is True:
             await asyncio.sleep(BINDING_BOUND_POLL_SECONDS)
@@ -314,6 +318,9 @@ async def _binding_loop(config: dict[str, Any]) -> None:
             continue
         proxy = await asyncio.to_thread(_proxy_test)
         if not proxy.get("ok"):
+            await asyncio.sleep(BINDING_RETRY_SECONDS)
+            continue
+        if session_active():
             await asyncio.sleep(BINDING_RETRY_SECONDS)
             continue
         ticket = str((payload or {}).get("ticket") or "")
