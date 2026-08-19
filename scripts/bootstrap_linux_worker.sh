@@ -56,17 +56,27 @@ set_stage "system-check" "检查 Ubuntu、架构、systemd、磁盘和中心服�
 [[ -d /run/systemd/system ]] || { LAST_MESSAGE="systemd 不可用"; exit 1; }
 (( $(df -Pk / | awk 'NR==2{print $4}') >= 2097152 )) || { LAST_MESSAGE="根分区至少需要 2 GiB 可用空间"; exit 1; }
 curl -fsS --retry 3 --retry-all-errors --connect-timeout 8 --max-time 20 "$SERVER/version" >/dev/null
+id chat2api >/dev/null 2>&1 || useradd --create-home --shell /usr/sbin/nologin chat2api
+install -d -o chat2api -g chat2api -m 700 "$PROFILE_DIR"
 
 set_stage "cleanup" "检查并清理上次未完成安装残留（保留 Chrome Profile）"
 VALID_IDENTITY=0
-if [[ -s /etc/chat2api-worker/worker.json ]] && jq -e '.worker_id and .worker_token and .websocket_url' /etc/chat2api-worker/worker.json >/dev/null 2>&1; then
+if [[ -s /etc/chat2api-worker/worker.json ]] && python3 - /etc/chat2api-worker/worker.json <<'PY' >/dev/null 2>&1
+import json,sys
+obj=json.load(open(sys.argv[1],encoding='utf-8'))
+assert obj.get('worker_id') and obj.get('worker_token') and obj.get('websocket_url')
+PY
+then
   VALID_IDENTITY=1
 fi
 if [[ $VALID_IDENTITY -eq 0 ]]; then
-  for unit in chat2api-worker-agent.service chat2api-chrome.service chat2api-xray.service chat2api-xvfb.service chat2api-worker-watchdog.timer chat2api-worker-watchdog.service chat2api-extension-autoreload.timer chat2api-extension-autoreload.service; do
+  for unit in \
+    chat2api-worker-agent.service chat2api-chrome.service chat2api-xray.service chat2api-xvfb.service \
+    chat2api-worker-watchdog.timer chat2api-worker-watchdog.service \
+    chat2api-extension-autoreload.timer chat2api-extension-autoreload.service; do
     systemctl disable --now "$unit" >/dev/null 2>&1 || true
+    rm -f "/etc/systemd/system/$unit"
   done
-  rm -f /etc/systemd/system/chat2api-{worker-agent,chrome,xray,xvfb,worker-watchdog.service,worker-watchdog.timer,extension-autoreload.service,extension-autoreload.timer} 2>/dev/null || true
   rm -f /etc/default/chat2api-worker-watchdog /etc/sudoers.d/chat2api-worker
   rm -f /usr/local/sbin/chat2api-linux-worker-watchdog /usr/local/sbin/chat2api-linux-extension-autoreload /usr/local/sbin/chat2api-worker-proxy-apply
   rm -rf /opt/chat2api-worker-venv "$WORKER_DIR" /etc/chat2api-worker /var/lib/chat2api-worker
@@ -75,7 +85,6 @@ if [[ $VALID_IDENTITY -eq 0 ]]; then
 else
   echo "[cleanup] 检测到完整 Worker 身份，按幂等升级处理，不删除身份和 Profile"
 fi
-mkdir -p "$PROFILE_DIR"
 
 set_stage "packages" "安装 Worker 基础依赖（沿用系统现有 APT 镜像）"
 export DEBIAN_FRONTEND=noninteractive
@@ -90,21 +99,19 @@ if ! command -v google-chrome >/dev/null; then
 fi
 
 set_stage "worker-bundle" "从 chat2api 中心服务器下载并校验 Worker Bundle"
-BUNDLE_META="$(mktemp)"; BUNDLE_FILE="$(mktemp)"; BUNDLE_DIR="$(mktemp -d)"
-trap 'rm -f "$BUNDLE_META" "$BUNDLE_FILE"; rm -rf "$BUNDLE_DIR"' RETURN 2>/dev/null || true
+BUNDLE_META="$(mktemp)"; BUNDLE_FILE="$(mktemp)"; BUNDLE_TMP="$(mktemp -d)"
 curl -fSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 120 -o "$BUNDLE_META" "$SERVER/bootstrap/linux-worker-bundle.json"
 EXPECTED_SHA="$(jq -er '.sha256' "$BUNDLE_META")"
 curl -fSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 300 -o "$BUNDLE_FILE" "$SERVER/bootstrap/linux-worker-bundle.tar.gz"
 echo "$EXPECTED_SHA  $BUNDLE_FILE" | sha256sum -c -
-tar -xzf "$BUNDLE_FILE" -C "$BUNDLE_DIR"
-[[ -f "$BUNDLE_DIR/chrome_extension/manifest.json" && -f "$BUNDLE_DIR/scripts/linux_worker_agent.py" ]] || { LAST_MESSAGE="Worker Bundle 内容不完整"; exit 1; }
-if [[ -d "$WORKER_DIR" ]]; then
-  rm -rf "${WORKER_DIR}.previous"
-  mv "$WORKER_DIR" "${WORKER_DIR}.previous"
-fi
-install -d -m 755 "$WORKER_DIR"
-cp -a "$BUNDLE_DIR"/. "$WORKER_DIR"/
-rm -rf "${WORKER_DIR}.previous" "$BUNDLE_DIR"
+tar -xzf "$BUNDLE_FILE" -C "$BUNDLE_TMP"
+[[ -f "$BUNDLE_TMP/chrome_extension/manifest.json" && -f "$BUNDLE_TMP/scripts/linux_worker_agent.py" ]] || { LAST_MESSAGE="Worker Bundle 内容不完整"; exit 1; }
+rm -rf "${WORKER_DIR}.new"
+install -d -m 755 "${WORKER_DIR}.new"
+cp -a "$BUNDLE_TMP"/. "${WORKER_DIR}.new"/
+if [[ -d "$WORKER_DIR" ]]; then rm -rf "${WORKER_DIR}.previous"; mv "$WORKER_DIR" "${WORKER_DIR}.previous"; fi
+mv "${WORKER_DIR}.new" "$WORKER_DIR"
+rm -rf "${WORKER_DIR}.previous" "$BUNDLE_TMP"
 rm -f "$BUNDLE_META" "$BUNDLE_FILE"
 
 set_stage "python" "创建 Worker Python 环境并从国内 PyPI 镜像安装运行库"
@@ -112,18 +119,18 @@ rm -rf /opt/chat2api-worker-venv
 python3 -m venv /opt/chat2api-worker-venv
 PIP_DEFAULT_TIMEOUT=120 /opt/chat2api-worker-venv/bin/pip install --disable-pip-version-check --retries 5 --timeout 120 --index-url "$PIP_INDEX_URL" 'websockets>=13,<16'
 
-set_stage "xray" "安装或复用 Xray Core"
+set_stage "xray" "从 chat2api 中心服务器下载并校验 Xray Core"
 if ! command -v xray >/dev/null; then
-  XRAY_VERSION="$(curl -fsSL --retry 5 --retry-all-errors https://api.github.com/repos/XTLS/Xray-core/releases/latest | jq -er .tag_name)"
-  curl -fSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 15 --max-time 300 -o /tmp/xray.zip "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip"
-  curl -fSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 15 --max-time 120 -o /tmp/xray.dgst "https://github.com/XTLS/Xray-core/releases/download/${XRAY_VERSION}/Xray-linux-64.zip.dgst"
-  grep 'SHA2-256=' /tmp/xray.dgst | cut -d= -f2 | tr -d ' ' | awk '{print $1"  /tmp/xray.zip"}' | sha256sum -c -
+  XRAY_META="$(mktemp)"; XRAY_ZIP="$(mktemp)"
+  curl -fSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 180 -o "$XRAY_META" "$SERVER/bootstrap/xray/latest.json"
+  XRAY_SHA="$(jq -er '.sha256' "$XRAY_META")"
+  curl -fSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 600 -o "$XRAY_ZIP" "$SERVER/bootstrap/xray/latest.zip"
+  echo "$XRAY_SHA  $XRAY_ZIP" | sha256sum -c -
   install -d -m 755 /usr/local/share/xray
-  unzip -qo /tmp/xray.zip xray geoip.dat geosite.dat -d /usr/local/share/xray
+  unzip -qo "$XRAY_ZIP" xray geoip.dat geosite.dat -d /usr/local/share/xray
   install -m 755 /usr/local/share/xray/xray /usr/local/bin/xray
-  rm -f /tmp/xray.zip /tmp/xray.dgst
+  rm -f "$XRAY_META" "$XRAY_ZIP"
 fi
-id chat2api >/dev/null 2>&1 || useradd --create-home --shell /usr/sbin/nologin chat2api
 install -d -o root -g chat2api -m 750 /etc/chat2api-worker
 install -d -o root -g root -m 700 /var/lib/chat2api-worker/state
 if [[ ! -s /etc/chat2api-worker/xray.json ]]; then
