@@ -66,13 +66,15 @@ def test_worker_bridge_binding_waits_for_live_proxy_before_restoring_chatgpt():
 
 def test_bootstrap_upgrade_preserves_identity_and_chrome_starts_about_blank():
     source = (ROOT / "scripts" / "bootstrap_linux_worker.sh").read_text(encoding="utf-8")
+    launcher = (ROOT / "scripts" / "linux_worker_chrome_launcher.sh").read_text(encoding="utf-8")
     assert "--upgrade) UPGRADE_ONLY=1" in source
     assert "use --upgrade only on an already enrolled Worker" in source
     assert "升级模式要求现有有效 Worker 身份" in source
     assert 'agent_version:"0.3.2"' in source
     chrome_unit = source.split("cat >/etc/systemd/system/chat2api-chrome.service", 1)[1].split("\nUNIT\n", 1)[0]
-    assert "about:blank" in chrome_unit
+    assert "linux_worker_chrome_launcher.sh" in chrome_unit
     assert "https://chatgpt.com/" not in chrome_unit
+    assert "about:blank" in launcher
     assert "PROFILE_DIR" in source
     assert 'rm -rf /opt/chat2api-worker-venv "$WORKER_DIR" /etc/chat2api-worker /var/lib/chat2api-worker' in source
 
