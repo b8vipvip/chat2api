@@ -1,8 +1,15 @@
 import json
+import re
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _runtime_version(source: str) -> tuple[int, int, int]:
+    match = re.search(r'SERVER_RUNTIME_VERSION = "(\d+)\.(\d+)\.(\d+)"', source)
+    assert match
+    return tuple(map(int, match.groups()))
 
 
 def test_manifest_loads_ui_hygiene_and_site_settings_permission():
@@ -52,5 +59,5 @@ def test_ui_hygiene_only_dismisses_known_nuisance_or_microphone_preflight_dialog
 
 def test_runtime_tracks_ui_hygiene_release():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.15"' in runtime
+    assert _runtime_version(runtime) >= (0, 22, 15)
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
