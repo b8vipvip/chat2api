@@ -21,6 +21,7 @@ from linux_worker_proxy import ProxyConfigError, build_xray_config
 from linux_worker_remote_login import capture_frame, close_session, inject_worker_binding, open_session, send_input
 
 
+AGENT_VERSION = "0.3.2"
 CONFIG = Path(os.environ.get("CHAT2API_WORKER_CONFIG", "/etc/chat2api-worker/worker.json"))
 XRAY_CONFIG = Path(os.environ.get("CHAT2API_XRAY_CONFIG", "/etc/chat2api-worker/xray.json"))
 PROXY_APPLY_HELPER = Path(os.environ.get("CHAT2API_PROXY_APPLY_HELPER", "/usr/local/sbin/chat2api-worker-proxy-apply"))
@@ -105,27 +106,34 @@ def proxy_configured() -> bool:
 
 
 def _proxy_test() -> dict[str, Any]:
-    result = subprocess.run(
-        [
-            "curl",
-            "--proxy",
-            f"socks5h://127.0.0.1:{PROXY_PORT}",
-            "--connect-timeout",
-            "10",
-            "--max-time",
-            "20",
-            "-sS",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{http_code}",
-            PROXY_TEST_URL,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=25,
-        check=False,
-    )
+    if not proxy_configured():
+        return {"ok": False, "http_status": "000", "error": "proxy_not_configured"}
+    if not service_active("chat2api-xray.service"):
+        return {"ok": False, "http_status": "000", "error": "xray_not_running"}
+    try:
+        result = subprocess.run(
+            [
+                "curl",
+                "--proxy",
+                f"socks5h://127.0.0.1:{PROXY_PORT}",
+                "--connect-timeout",
+                "10",
+                "--max-time",
+                "20",
+                "-sS",
+                "-o",
+                "/dev/null",
+                "-w",
+                "%{http_code}",
+                PROXY_TEST_URL,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=25,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {"ok": False, "http_status": "000", "error": "proxy_test_command_failed"}
     code = (result.stdout or "").strip()
     reachable = result.returncode == 0 and bool(code) and code != "000"
     return {"ok": reachable, "http_status": code or "000", "error": None if reachable else "proxy_connectivity_test_failed"}
@@ -149,12 +157,25 @@ def health() -> dict[str, Any]:
         "platform": "linux",
         "arch": platform.machine(),
         "os_version": platform.freedesktop_os_release().get("PRETTY_NAME", "Linux"),
-        "agent_version": "0.3.1",
+        "agent_version": AGENT_VERSION,
         "chrome_bridge_version": _manifest_version(),
         "status": status,
         "proxy_status": "error" if not services["xray"] else ("connected" if has_proxy else "waiting"),
         "metadata": metadata,
     }
+
+
+def _helper_failure_name(returncode: int, stderr: str) -> str:
+    text = str(stderr or "").lower()
+    if "not allowed to execute" in text or "may not run sudo" in text or "not in the sudoers" in text:
+        return "proxy_helper_not_authorized"
+    if "no new privileges" in text:
+        return "proxy_helper_privilege_blocked"
+    if "no such file" in text or returncode == 127:
+        return "proxy_helper_missing"
+    if "permission denied" in text:
+        return "proxy_helper_permission_denied"
+    return "proxy_helper_failed"
 
 
 def _apply_proxy(arguments: dict[str, Any]) -> dict[str, Any]:
@@ -175,6 +196,8 @@ def _apply_proxy(arguments: dict[str, Any]) -> dict[str, Any]:
         )
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "proxy_apply_timeout"}
+    except OSError:
+        return {"ok": False, "error": "proxy_helper_launch_failed"}
 
     helper: dict[str, Any] = {}
     for line in reversed((result.stdout or "").splitlines()):
@@ -185,12 +208,20 @@ def _apply_proxy(arguments: dict[str, Any]) -> dict[str, Any]:
         if isinstance(value, dict):
             helper = value
             break
+
     if result.returncode != 0 or not helper.get("ok"):
-        return {
+        error = str(helper.get("error") or _helper_failure_name(result.returncode, result.stderr))[:120]
+        response = {
             "ok": False,
-            "error": str(helper.get("error") or "proxy_apply_failed")[:120],
+            "error": error,
             "rolled_back": bool(helper.get("rolled_back")),
+            "helper_exit_code": int(helper.get("exit_code") or result.returncode or 0),
         }
+        stage = str(helper.get("stage") or "")[:80]
+        if stage:
+            response["stage"] = stage
+        return response
+
     return {
         "ok": True,
         "proxy": summary,
@@ -210,6 +241,9 @@ def run_allowed(command: str, arguments: dict[str, Any] | None = None) -> dict[s
     if command == "apply_proxy_config":
         return _apply_proxy(args)
     if command == "open_login_session":
+        proxy = _proxy_test()
+        if not proxy.get("ok"):
+            return {"ok": False, "error": "proxy_required_for_login", "proxy": proxy}
         return open_session()
     if command == "close_login_session":
         return close_session()
@@ -258,11 +292,23 @@ def _request_binding_ticket(config: dict[str, Any]) -> dict[str, Any] | None:
 
 
 async def _binding_loop(config: dict[str, Any]) -> None:
-    """Keep explicit Worker↔Bridge identity healthy for the lifetime of the Agent."""
+    """Keep explicit Worker↔Bridge identity healthy for the lifetime of the Agent.
+
+    A fresh Worker intentionally stays on about:blank until a real proxy node is
+    configured and can reach ChatGPT. Only then may the binding flow restore a
+    ChatGPT tab, preventing pre-login direct-network navigation.
+    """
     while True:
         payload = await asyncio.to_thread(_request_binding_ticket, config)
         if payload and payload.get("bound") is True:
             await asyncio.sleep(BINDING_BOUND_POLL_SECONDS)
+            continue
+        if not proxy_configured():
+            await asyncio.sleep(BINDING_RETRY_SECONDS)
+            continue
+        proxy = await asyncio.to_thread(_proxy_test)
+        if not proxy.get("ok"):
+            await asyncio.sleep(BINDING_RETRY_SECONDS)
             continue
         ticket = str((payload or {}).get("ticket") or "")
         server_url = str((payload or {}).get("server_url") or "")
