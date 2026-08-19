@@ -87,14 +87,16 @@ def test_command_allowlist_has_no_arbitrary_execution():
 
 def test_bootstrap_is_strict_idempotent_and_preserves_profile():
     source = Path("scripts/bootstrap_linux_worker.sh").read_text(encoding="utf-8")
+    launcher = Path("scripts/linux_worker_chrome_launcher.sh").read_text(encoding="utf-8")
     assert "set -euo pipefail" in source
     assert 'if [[ ! -s /etc/chat2api-worker/worker.json ]]' in source
     assert 'if [[ ! -s /etc/chat2api-worker/xray.json ]]' in source
     assert 'PROFILE_DIR="/home/chat2api/.config/chat2api-chrome-worker-01"' in source
-    assert "--user-data-dir=${PROFILE_DIR}" in source
+    assert '--user-data-dir="$PROFILE_DIR"' in launcher
     assert "rm -rf /home/chat2api" not in source
     assert "NOPASSWD: ALL" not in source
     assert "--no-sandbox" not in source
+    assert "--no-sandbox" not in launcher
 
 
 def test_bootstrap_config_permissions_allow_unprivileged_services_to_read():
