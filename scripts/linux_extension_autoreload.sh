@@ -21,11 +21,13 @@ log() {
 }
 
 chrome_process_ready() {
-  pgrep -u "${WORKER_USER}" -f "google-chrome.*user-data-dir=${PROFILE_DIR}" >/dev/null 2>&1
+  ps -u "${WORKER_USER}" -o args= 2>/dev/null \
+    | grep -F -- "--user-data-dir=${PROFILE_DIR}" \
+    | grep -E '[Cc]hrome' >/dev/null 2>&1
 }
 
 wait_for_chrome() {
-  local attempts="${1:-30}"
+  local attempts="${1:-60}"
   local delay="${2:-1}"
   local i
   for ((i=0; i<attempts; i++)); do
@@ -183,7 +185,7 @@ if ! systemctl restart "${CHROME_UNIT}"; then
   exit 1
 fi
 
-if ! wait_for_chrome 30 1; then
+if ! wait_for_chrome 60 1; then
   printf '%s\n' "${fingerprint}" >"${FAILED_FILE}"
   log ERROR "${CHROME_UNIT} did not become healthy after extension update; this fingerprint will not be retried automatically"
   exit 1
