@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlsplit
 
@@ -11,6 +12,7 @@ from fastapi.responses import JSONResponse, Response
 
 PATCH_VERSION = "0.22.18"
 MAX_PROXY_NAME_LENGTH = 80
+CHINESE_PROGRESS_ASSET = "/assets/chat2api-linux-worker-chinese-progress-v22-18.js"
 
 
 async def _response_bytes(response: Response) -> bytes:
@@ -135,6 +137,11 @@ def install_linux_worker_proxy_name_patch(app: FastAPI) -> FastAPI:
             worker["metadata"] = metadata
             workers._save()
 
+    @app.get(CHINESE_PROGRESS_ASSET, include_in_schema=False)
+    async def linux_worker_chinese_progress_asset() -> Response:
+        path = Path(__file__).with_name("admin_linux_worker_chinese_progress.js")
+        return Response(path.read_text(encoding="utf-8"), media_type="application/javascript", headers={"Cache-Control": "no-store"})
+
     @app.middleware("http")
     async def linux_worker_proxy_names(request: Request, call_next):
         path = request.url.path
@@ -163,7 +170,6 @@ def install_linux_worker_proxy_name_patch(app: FastAPI) -> FastAPI:
                 payload = json.loads(raw.decode("utf-8"))
             except Exception:
                 return Response(raw, status_code=response.status_code, media_type="application/json")
-            changed = False
             if isinstance(payload, dict) and isinstance(payload.get("data"), list):
                 for row in payload["data"]:
                     if not isinstance(row, dict) or str(row.get("proxy_status") or "").lower() not in {"connected", "ready"}:
@@ -180,7 +186,6 @@ def install_linux_worker_proxy_name_patch(app: FastAPI) -> FastAPI:
                     metadata = dict(metadata)
                     metadata["proxy_summary"] = summary
                     row["metadata"] = metadata
-                    changed = True
                     worker_row_id = str(row.get("worker_id") or "")
                     if worker_row_id:
                         persist_name(worker_row_id, name)
@@ -191,6 +196,20 @@ def install_linux_worker_proxy_name_patch(app: FastAPI) -> FastAPI:
             }
             headers["Cache-Control"] = "no-store"
             return JSONResponse(payload, status_code=response.status_code, headers=headers)
+
+        if path == "/admin" and "text/html" in response.headers.get("content-type", ""):
+            raw = await _response_bytes(response)
+            text = raw.decode("utf-8", errors="replace")
+            marker = f'<script src="{CHINESE_PROGRESS_ASSET}"></script>'
+            if marker not in text:
+                text = text.replace("</body>", marker + "</body>")
+            headers = {
+                key: value
+                for key, value in response.headers.items()
+                if key.lower() not in {"content-length", "content-type"}
+            }
+            headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
 
         return response
 
