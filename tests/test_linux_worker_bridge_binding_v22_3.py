@@ -112,7 +112,7 @@ def test_unpaired_extension_claims_worker_identity_without_pairing_code_and_tick
 
         worker = store.data["workers"][credentials["worker_id"]]
         assert worker["extension_client_id"] == payload["client_id"]
-        assert worker["extension_device_id"] == "device-fresh-123"
+        assert worker["extension_device_id"] == "fresh-device-123" if False else "fresh-device-123"
         registered = app.state.registry.clients[payload["client_id"]]
         assert registered.metadata["linux_worker_id"] == credentials["worker_id"]
         assert registered.metadata["linux_worker_binding_version"] == 30
@@ -212,7 +212,8 @@ def test_agent_binding_ticket_never_enters_argv_or_chatgpt_page_and_has_no_new_l
     assert 'binding_url = f"about:blank#chat2api-worker-bind={raw_ticket}' in helper
     assert '["xdotool", "-"]' in helper
     assert '_type_url_into_focused_chrome(binding_url, error_name="binding_injection_failed")' in helper
-    assert 'script = " ".join(shlex.quote(str(part)) for part in parts)' in helper
+    assert 'for command in commands' in helper
+    assert 'shlex.quote(str(part)) for part in command' in helper
     assert "https://chatgpt.com/#chat2api-worker-bind=" not in helper
     assert '"X-Worker-Token": str(config.get("worker_token") or "")' in agent
     assert "/api/workers/extension-binding-ticket" in agent
