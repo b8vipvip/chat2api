@@ -20,6 +20,8 @@ def test_background_preconfigures_microphone_and_notifications_without_clipboard
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
 
     assert '"background_site_permissions_v31.js"' in entry
+    assert 'chrome.runtime.getPlatformInfo()' in settings
+    assert 'platform?.os !== "linux"' in settings
     assert '["microphone", "allow"]' in settings
     assert '["notifications", "block"]' in settings
     assert "https://chatgpt.com/*" in settings
