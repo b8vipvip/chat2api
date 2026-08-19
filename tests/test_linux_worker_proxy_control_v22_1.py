@@ -123,7 +123,7 @@ def test_proxy_apply_helper_is_transactional_fixed_path_and_secret_safe():
 
 def test_bootstrap_installs_only_exact_privileged_proxy_helper_and_writable_mount_exception():
     source = (ROOT / "scripts" / "bootstrap_linux_worker.sh").read_text(encoding="utf-8")
-    assert 'install -o root -g root -m 755 "$REPO_DIR/scripts/linux_worker_proxy_apply.sh" /usr/local/sbin/chat2api-worker-proxy-apply' in source
+    assert 'install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_proxy_apply.sh" /usr/local/sbin/chat2api-worker-proxy-apply' in source
     assert "/usr/local/sbin/chat2api-worker-proxy-apply" in source
     assert "NOPASSWD: ALL" not in source
     agent_unit = source.split("cat >/etc/systemd/system/chat2api-worker-agent.service", 1)[1].split("\nUNIT\n", 1)[0]
@@ -151,7 +151,7 @@ def test_admin_proxy_ui_clears_secret_and_runtime_versions_are_aligned():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     assert "配置 Worker 代理" in admin
     assert "VLESS、VMess、Trojan、Shadowsocks" in admin
-    assert 'input.value = ""' in admin
+    assert re.search(r'input\.value\s*=\s*""', admin)
     assert "/proxy/test" in admin
     assert _runtime_version(runtime) >= (0, 22, 1)
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime

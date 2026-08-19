@@ -1,0 +1,61 @@
+name: Production image smoke
+
+on:
+  pull_request:
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'requirements.txt'
+      - 'app/**'
+      - 'chrome_extension/**'
+      - 'scripts/bootstrap_linux_worker.sh'
+      - 'scripts/linux_worker_*.py'
+      - 'scripts/linux_worker_*.sh'
+      - 'scripts/linux_extension_autoreload.sh'
+      - '.github/workflows/production-image-smoke.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Dockerfile'
+      - '.dockerignore'
+      - 'requirements.txt'
+      - 'app/**'
+      - 'chrome_extension/**'
+      - 'scripts/bootstrap_linux_worker.sh'
+      - 'scripts/linux_worker_*.py'
+      - 'scripts/linux_worker_*.sh'
+      - 'scripts/linux_extension_autoreload.sh'
+      - '.github/workflows/production-image-smoke.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build production image
+        run: DOCKER_BUILDKIT=1 docker build --progress=plain -t chat2api-production-smoke .
+      - name: Verify bootstrap and Worker bundle inside image
+        run: |
+          docker run --rm --entrypoint python chat2api-production-smoke -c '
+          import hashlib, json, tarfile
+          from pathlib import Path
+          bootstrap = Path("/app/scripts/bootstrap_linux_worker.sh")
+          bundle = Path("/app/bootstrap/linux-worker-bundle.tar.gz")
+          digest = Path("/app/bootstrap/linux-worker-bundle.sha256").read_text().strip()
+          assert bootstrap.read_text().startswith("#!/usr/bin/env bash\nset -euo pipefail")
+          assert bundle.is_file() and bundle.stat().st_size > 0
+          assert hashlib.sha256(bundle.read_bytes()).hexdigest() == digest
+          with tarfile.open(bundle, "r:gz") as archive:
+              names = set(archive.getnames())
+          required = {
+              "chrome_extension/manifest.json",
+              "scripts/linux_worker_agent.py",
+              "scripts/linux_worker_proxy.py",
+              "scripts/linux_worker_remote_login.py",
+              "scripts/linux_worker_watchdog.sh",
+              "scripts/linux_extension_autoreload.sh",
+              "scripts/linux_worker_proxy_apply.sh",
+          }
+          assert required <= names, sorted(required - names)
+          print(json.dumps({"bootstrap": True, "bundle_files": len(names), "sha256": digest}))
+          '

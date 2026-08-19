@@ -16,25 +16,27 @@ def test_dockerfile_keeps_dependency_layer_cacheable():
     assert "--prefer-binary" not in source
 
 
-def test_dockerignore_excludes_runtime_and_development_churn():
+def test_dockerignore_excludes_churn_but_allows_worker_bundle_payload():
     entries = {
         line.strip()
         for line in (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     }
-    for required in {
-        ".git",
-        ".github",
-        ".env",
-        "data",
-        "chrome_extension",
-        "docs",
-        "tests",
-    }:
+    for required in {".git", ".github", ".env", "data", "docs", "tests"}:
         assert required in entries
 
-    # Worker-only scripts remain excluded from the server image context, while
-    # the public bootstrap is explicitly allowed so Docker can COPY it.
-    assert "scripts" not in entries
     assert "scripts/*" in entries
-    assert "!scripts/bootstrap_linux_worker.sh" in entries
+    for allowed in {
+        "!scripts/bootstrap_linux_worker.sh",
+        "!scripts/linux_worker_agent.py",
+        "!scripts/linux_worker_proxy.py",
+        "!scripts/linux_worker_remote_login.py",
+        "!scripts/linux_worker_watchdog.sh",
+        "!scripts/linux_extension_autoreload.sh",
+        "!scripts/linux_worker_proxy_apply.sh",
+    }:
+        assert allowed in entries
+
+    assert "chrome_extension/**" in entries
+    assert "!chrome_extension/" in entries
+    assert "!chrome_extension/**" in entries

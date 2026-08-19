@@ -19,7 +19,7 @@
   const section = document.createElement("section");
   section.className = "view";
   section.id = "view-linux-workers";
-  section.innerHTML = `<div class="panel"><div class="toolbar"><input id="linuxWorkerName" placeholder="Worker 名称"><button class="action good" id="createLinuxWorker">新增 Linux Worker</button><button class="action" id="refreshLinuxWorkers">刷新</button></div><div id="linuxWorkerInstall" class="secret hidden"></div><div class="scroll"><table><thead><tr><th>名称</th><th>状态</th><th>系统</th><th>平台</th><th>网络</th><th>代理</th><th>ChatGPT</th><th>Chrome Bridge</th><th>账户</th><th>备用窗口</th><th>扩展绑定</th><th>最后在线</th><th>操作</th></tr></thead><tbody id="linuxWorkerRows"></tbody></table></div></div>`;
+  section.innerHTML = `<div class="panel"><div class="toolbar"><input id="linuxWorkerName" placeholder="Worker 名称"><button class="action good" id="createLinuxWorker">新增 Linux Worker</button><button class="action" id="refreshLinuxWorkers">刷新</button></div><div style="margin:10px 0;color:#94a3b8;font-size:12px;line-height:1.6">生成安装命令后会立即出现在 Worker 列表。安装命令不按时间过期；安装完成或失败后自动停用。安装阶段与结果由目标服务器实时回传。</div><div class="scroll"><table><thead><tr><th>名称</th><th>安装状态</th><th>安装进度</th><th>安装命令</th><th>系统</th><th>网络</th><th>代理</th><th>ChatGPT</th><th>Chrome Bridge</th><th>备用窗口</th><th>最后更新</th><th>操作</th></tr></thead><tbody id="linuxWorkerRows"></tbody></table></div></div>`;
   content.insertBefore(section, content.lastElementChild);
 
   const proxyDialog = document.createElement("dialog");
@@ -44,179 +44,72 @@
   let inputChain = Promise.resolve();
 
   const bridge = worker => worker?.metadata?.bridge && typeof worker.metadata.bridge === "object" ? worker.metadata.bridge : {};
-  const proxyLabel = worker => {
-    const summary = worker?.metadata?.proxy_summary || {};
-    const base = String(worker.proxy_status || "-");
-    if (!summary.protocol) return base;
-    const endpoint = summary.server ? ` · ${summary.server}${summary.port ? `:${summary.port}` : ""}` : "";
-    return `${base} · ${summary.protocol}${endpoint}`;
+  const proxyLabel = worker => { const summary = worker?.metadata?.proxy_summary || {}; const base = String(worker.proxy_status || "-"); if (!summary.protocol) return base; const endpoint = summary.server ? ` · ${summary.server}${summary.port ? `:${summary.port}` : ""}` : ""; return `${base} · ${summary.protocol}${endpoint}`; };
+  const chatgptLabel = worker => { const b = bridge(worker); if (b.login_state === "ready" && b.composer_ready === true) return "已登录 · Composer"; if (b.login_state === "login_required") return "需要登录"; if (b.login_state === "checking") return "检测中"; if (worker.chatgpt_status === "offline") return "扩展离线"; return String(worker.chatgpt_status || b.login_state || "-"); };
+  const networkLabel = worker => { const b = bridge(worker); const country = b.network_country_code ? ` · ${b.network_country_code}` : ""; return b.network_probe_status && b.network_probe_status !== "unknown" ? `${b.network_probe_status}${country}` : String(worker.network_status || "-"); };
+  const reserveLabel = worker => { const b = bridge(worker); if (!worker.worker_id || !worker.extension_client_id) return "-"; const total = Math.max(0, Number(b.reserve_window_total || 0)); const active = Math.max(0, Number(b.reserve_window_active || 0)); const target = Math.max(0, Number(b.reserve_window_target || 0)); return `${total}(${active})${target ? ` / ${target}` : ""}`; };
+  const installLabel = row => ({pending:"待安装",installing:"安装中",enrolling:"注册中",installed:"已安装",failed:"失败",disabled:"已停用",legacy:"已安装"})[String(row.install_state || "")] || String(row.install_state || row.status || "-");
+  const progressHtml = row => {
+    if (row.record_type !== "installation") return esc(row.status || "-");
+    const history = Array.isArray(row.install_history) ? row.install_history.slice(-8).reverse() : [];
+    const current = `${row.install_stage || "-"}${row.install_message ? ` · ${row.install_message}` : ""}`;
+    if (!history.length) return esc(current);
+    return `<details><summary>${esc(current)}</summary><div style="min-width:280px;max-width:520px;white-space:normal;line-height:1.5">${history.map(item => `<div><code>${esc(item.at || "")}</code> ${esc(item.stage || "")} · ${esc(item.message || "")}</div>`).join("")}</div></details>`;
   };
-  const chatgptLabel = worker => {
-    const b = bridge(worker);
-    if (b.login_state === "ready" && b.composer_ready === true) return "已登录 · Composer";
-    if (b.login_state === "login_required") return "需要登录";
-    if (b.login_state === "checking") return "检测中";
-    if (worker.chatgpt_status === "offline") return "扩展离线";
-    return String(worker.chatgpt_status || b.login_state || "-");
+  const commandHtml = row => {
+    if (row.record_type !== "installation" || !row.install_command) return "-";
+    const disabled = !row.install_enabled;
+    return `<details><summary>${disabled ? "已停用" : "安装命令"}</summary><div style="min-width:360px;max-width:620px;white-space:normal;word-break:break-all"><code>${esc(row.install_command)}</code><div style="margin-top:6px"><button class="action" data-copy-install="${esc(row.install_id)}" ${disabled ? "disabled" : ""}>复制</button></div></div></details>`;
   };
-  const networkLabel = worker => {
-    const b = bridge(worker);
-    const country = b.network_country_code ? ` · ${b.network_country_code}` : "";
-    return b.network_probe_status && b.network_probe_status !== "unknown" ? `${b.network_probe_status}${country}` : String(worker.network_status || "-");
+  const actionsHtml = row => {
+    const parts = [];
+    if (row.record_type === "installation") {
+      parts.push(`<button class="action" data-rename-install="${esc(row.install_id)}" data-current-name="${esc(row.name)}">改名</button>`);
+      if (!row.install_consumed_at && row.install_state !== "installed") parts.push(`<button class="action" data-toggle-install="${esc(row.install_id)}" data-enable="${row.install_enabled ? "0" : "1"}">${row.install_enabled ? "停用" : "启用"}</button>`);
+      parts.push(`<button class="action danger" data-delete-install="${esc(row.install_id)}">删除命令</button>`);
+    }
+    if (row.worker_id) {
+      parts.push(`<button class="action" data-login="${esc(row.worker_id)}" data-worker-name="${esc(row.name)}">登录</button>`);
+      parts.push(`<button class="action" data-proxy="${esc(row.worker_id)}" data-worker-name="${esc(row.name)}">代理</button>`);
+      parts.push(`<button class="action danger" data-revoke="${esc(row.worker_id)}">禁用 Worker</button>`);
+    }
+    return parts.join(" ") || "-";
   };
-  const reserveLabel = worker => {
-    const b = bridge(worker);
-    if (!worker.extension_client_id) return "-";
-    const total = Math.max(0, Number(b.reserve_window_total || 0));
-    const active = Math.max(0, Number(b.reserve_window_active || 0));
-    const target = Math.max(0, Number(b.reserve_window_target || 0));
-    return `${total}(${active})${target ? ` / ${target}` : ""}`;
-  };
-  const bindingLabel = worker => {
-    const id = String(worker.extension_client_id || "");
-    if (!id) return "等待绑定";
-    const b = bridge(worker);
-    return `${id}${b.online === false ? " · 离线" : b.online === true ? " · 在线" : ""}`;
-  };
-  const accountLabel = worker => ({free:"Free",paid:"付费",unknown:"未识别"})[String(bridge(worker).account_type || "unknown")] || "未识别";
 
+  let latestRows = [];
   const load = async () => {
     try {
-      const payload = await request("/api/admin/linux-workers");
-      document.getElementById("linuxWorkerRows").innerHTML = payload.data.map(worker => `<tr><td>${esc(worker.name)}</td><td>${esc(worker.status)}</td><td>${esc(worker.os_version || "-")}</td><td>${esc(`${worker.platform || "linux"} ${worker.arch || ""}`)}</td><td>${esc(networkLabel(worker))}</td><td>${esc(proxyLabel(worker))}</td><td>${esc(chatgptLabel(worker))}</td><td>${esc(worker.chrome_bridge_version || "-")}</td><td>${esc(accountLabel(worker))}</td><td>${esc(reserveLabel(worker))}</td><td><code>${esc(bindingLabel(worker))}</code></td><td>${esc(worker.last_seen_at || "-")}</td><td><button class="action" data-login="${esc(worker.worker_id)}" data-worker-name="${esc(worker.name)}">登录</button> <button class="action" data-proxy="${esc(worker.worker_id)}" data-worker-name="${esc(worker.name)}">代理</button> <button class="action danger" data-revoke="${esc(worker.worker_id)}">禁用</button></td></tr>`).join("") || '<tr><td colspan="13">暂无 Worker</td></tr>';
+      const payload = await request("/api/admin/linux-worker-installations");
+      latestRows = payload.data || [];
+      document.getElementById("linuxWorkerRows").innerHTML = latestRows.map(row => `<tr><td>${esc(row.name)}</td><td>${esc(installLabel(row))}${row.record_type === "installation" ? `<div style="font-size:11px;color:#94a3b8">命令：${row.install_enabled ? "启用" : "停用"}</div>` : ""}</td><td>${progressHtml(row)}</td><td>${commandHtml(row)}</td><td>${esc(row.os_version || row.hostname || "-")}</td><td>${esc(networkLabel(row))}</td><td>${esc(proxyLabel(row))}</td><td>${esc(chatgptLabel(row))}</td><td>${esc(row.chrome_bridge_version || "-")}</td><td>${esc(reserveLabel(row))}</td><td>${esc(row.install_updated_at || row.last_seen_at || row.created_at || "-")}</td><td>${actionsHtml(row)}</td></tr>`).join("") || '<tr><td colspan="12">暂无 Worker</td></tr>';
     } catch (error) {
-      document.getElementById("linuxWorkerRows").innerHTML = `<tr><td colspan="13">${esc(error.message)}</td></tr>`;
+      document.getElementById("linuxWorkerRows").innerHTML = `<tr><td colspan="12">${esc(error.message)}</td></tr>`;
     }
   };
 
-  const setProxyBusy = busy => {
-    document.getElementById("applyLinuxProxy").disabled = busy;
-    document.getElementById("testLinuxProxy").disabled = busy;
-    document.getElementById("closeLinuxProxy").disabled = busy;
-  };
-  const closeProxyDialog = () => {
-    document.getElementById("linuxProxyShareLink").value = "";
-    document.getElementById("linuxProxyResult").textContent = "";
-    selectedWorkerId = "";
-    if (proxyDialog.open) proxyDialog.close();
-  };
-  const openProxyDialog = (workerId, workerName) => {
-    selectedWorkerId = workerId;
-    document.getElementById("linuxProxyWorkerName").textContent = workerName || workerId;
-    document.getElementById("linuxProxyShareLink").value = "";
-    document.getElementById("linuxProxyResult").textContent = "";
-    proxyDialog.showModal();
-    document.getElementById("linuxProxyShareLink").focus();
-  };
-
+  const setProxyBusy = busy => { document.getElementById("applyLinuxProxy").disabled = busy; document.getElementById("testLinuxProxy").disabled = busy; document.getElementById("closeLinuxProxy").disabled = busy; };
+  const closeProxyDialog = () => { document.getElementById("linuxProxyShareLink").value = ""; document.getElementById("linuxProxyResult").textContent = ""; selectedWorkerId = ""; if (proxyDialog.open) proxyDialog.close(); };
+  const openProxyDialog = (workerId, workerName) => { selectedWorkerId = workerId; document.getElementById("linuxProxyWorkerName").textContent = workerName || workerId; document.getElementById("linuxProxyShareLink").value = ""; document.getElementById("linuxProxyResult").textContent = ""; proxyDialog.showModal(); document.getElementById("linuxProxyShareLink").focus(); };
   const loginHeaders = () => ({"X-Chat2API-Login-Ticket": loginTicket});
   const clearLoginTimer = () => { if (loginFrameTimer) clearTimeout(loginFrameTimer); loginFrameTimer = 0; };
   const setLoginStatus = text => { document.getElementById("linuxLoginStatus").textContent = text; };
-
-  const queueRemoteInput = payload => {
-    if (!loginWorkerId || !loginTicket || loginClosing) return;
-    inputChain = inputChain.then(() => request(`/api/admin/linux-workers/${encodeURIComponent(loginWorkerId)}/login-session/input`, {
-      method:"POST", headers:loginHeaders(), body:JSON.stringify(payload),
-    })).catch(error => setLoginStatus(error.message));
-  };
+  const queueRemoteInput = payload => { if (!loginWorkerId || !loginTicket || loginClosing) return; inputChain = inputChain.then(() => request(`/api/admin/linux-workers/${encodeURIComponent(loginWorkerId)}/login-session/input`, {method:"POST",headers:loginHeaders(),body:JSON.stringify(payload)})).catch(error => setLoginStatus(error.message)); };
 
   const fetchLoginFrame = async () => {
-    clearLoginTimer();
-    if (!loginWorkerId || !loginTicket || loginClosing || !loginDialog.open) return;
+    clearLoginTimer(); if (!loginWorkerId || !loginTicket || loginClosing || !loginDialog.open) return;
     try {
       const result = await request(`/api/admin/linux-workers/${encodeURIComponent(loginWorkerId)}/login-session/frame`, {headers:loginHeaders()});
-      if (result.complete) {
-        loginTicket = "";
-        setLoginStatus("ChatGPT 已登录 · Composer 已就绪");
-        document.getElementById("linuxLoginPlaceholder").textContent = "登录状态已确认，正在自动关闭远程会话…";
-        document.getElementById("linuxLoginPlaceholder").style.display = "block";
-        await load();
-        setTimeout(() => closeLoginDialog(), 650);
-        return;
-      }
-      loginSourceWidth = Number(result.source_width || 1920);
-      loginSourceHeight = Number(result.source_height || 1080);
-      const image = document.getElementById("linuxLoginFrame");
-      image.src = `data:${result.mime || "image/jpeg"};base64,${result.frame}`;
-      document.getElementById("linuxLoginPlaceholder").style.display = "none";
-      setLoginStatus("已连接 · 点击画面后可输入");
-      loginFrameTimer = setTimeout(fetchLoginFrame, 850);
-    } catch (error) {
-      setLoginStatus(error.message);
-      loginFrameTimer = setTimeout(fetchLoginFrame, 1800);
-    }
+      if (result.complete) { loginTicket = ""; setLoginStatus("ChatGPT 已登录 · Composer 已就绪"); document.getElementById("linuxLoginPlaceholder").textContent = "登录状态已确认，正在自动关闭远程会话…"; document.getElementById("linuxLoginPlaceholder").style.display = "block"; await load(); setTimeout(() => closeLoginDialog(), 650); return; }
+      loginSourceWidth = Number(result.source_width || 1920); loginSourceHeight = Number(result.source_height || 1080);
+      const image = document.getElementById("linuxLoginFrame"); image.src = `data:${result.mime || "image/jpeg"};base64,${result.frame}`; document.getElementById("linuxLoginPlaceholder").style.display = "none"; setLoginStatus("已连接 · 点击画面后可输入"); loginFrameTimer = setTimeout(fetchLoginFrame, 850);
+    } catch (error) { setLoginStatus(error.message); loginFrameTimer = setTimeout(fetchLoginFrame, 1800); }
   };
+  const closeLoginDialog = async () => { if (loginClosing) return; loginClosing = true; clearLoginTimer(); const workerId = loginWorkerId; const ticket = loginTicket; loginTicket = ""; loginWorkerId = ""; if (workerId && ticket) { try { await request(`/api/admin/linux-workers/${encodeURIComponent(workerId)}/login-session`, {method:"DELETE",headers:{"X-Chat2API-Login-Ticket":ticket}}); } catch (_) {} } document.getElementById("linuxLoginFrame").removeAttribute("src"); document.getElementById("linuxLoginPlaceholder").style.display = "block"; document.getElementById("linuxLoginPlaceholder").textContent = "远程登录会话已结束。"; if (loginDialog.open) loginDialog.close(); loginClosing = false; };
+  const openLoginDialog = async (workerId, workerName) => { if (loginDialog.open) await closeLoginDialog(); loginWorkerId = workerId; loginClosing = false; loginTicket = ""; document.getElementById("linuxLoginWorkerName").textContent = workerName || workerId; document.getElementById("linuxLoginPlaceholder").style.display = "block"; document.getElementById("linuxLoginPlaceholder").textContent = "正在创建安全登录会话…"; setLoginStatus("连接中…"); loginDialog.showModal(); try { const result = await request(`/api/admin/linux-workers/${encodeURIComponent(workerId)}/login-session`, {method:"POST",body:"{}"}); loginTicket = result.ticket; loginSourceWidth = Number(result.source_width || 1920); loginSourceHeight = Number(result.source_height || 1080); setLoginStatus(`会话已建立 · 空闲 ${Math.round(Number(result.idle_timeout_seconds || 1200) / 60)} 分钟自动关闭`); fetchLoginFrame(); } catch (error) { setLoginStatus(error.message); document.getElementById("linuxLoginPlaceholder").textContent = "无法打开远程登录会话。"; } };
+  const remotePoint = event => { const image = document.getElementById("linuxLoginFrame"); const rect = image.getBoundingClientRect(); if (!rect.width || !rect.height) return null; return {x:Math.round((event.clientX-rect.left)/rect.width*loginSourceWidth),y:Math.round((event.clientY-rect.top)/rect.height*loginSourceHeight)}; };
 
-  const closeLoginDialog = async () => {
-    if (loginClosing) return;
-    loginClosing = true;
-    clearLoginTimer();
-    const workerId = loginWorkerId;
-    const ticket = loginTicket;
-    loginTicket = "";
-    loginWorkerId = "";
-    if (workerId && ticket) {
-      try {
-        await request(`/api/admin/linux-workers/${encodeURIComponent(workerId)}/login-session`, {method:"DELETE",headers:{"X-Chat2API-Login-Ticket":ticket}});
-      } catch (_) {}
-    }
-    document.getElementById("linuxLoginFrame").removeAttribute("src");
-    document.getElementById("linuxLoginPlaceholder").style.display = "block";
-    document.getElementById("linuxLoginPlaceholder").textContent = "远程登录会话已结束。";
-    if (loginDialog.open) loginDialog.close();
-    loginClosing = false;
-  };
-
-  const openLoginDialog = async (workerId, workerName) => {
-    if (loginDialog.open) await closeLoginDialog();
-    loginWorkerId = workerId;
-    loginClosing = false;
-    loginTicket = "";
-    document.getElementById("linuxLoginWorkerName").textContent = workerName || workerId;
-    document.getElementById("linuxLoginPlaceholder").style.display = "block";
-    document.getElementById("linuxLoginPlaceholder").textContent = "正在创建安全登录会话…";
-    setLoginStatus("连接中…");
-    loginDialog.showModal();
-    try {
-      const result = await request(`/api/admin/linux-workers/${encodeURIComponent(workerId)}/login-session`, {method:"POST",body:"{}"});
-      loginTicket = result.ticket;
-      loginSourceWidth = Number(result.source_width || 1920);
-      loginSourceHeight = Number(result.source_height || 1080);
-      setLoginStatus(`会话已建立 · 空闲 ${Math.round(Number(result.idle_timeout_seconds || 1200) / 60)} 分钟自动关闭`);
-      fetchLoginFrame();
-    } catch (error) {
-      setLoginStatus(error.message);
-      document.getElementById("linuxLoginPlaceholder").textContent = "无法打开远程登录会话。";
-    }
-  };
-
-  const remotePoint = event => {
-    const image = document.getElementById("linuxLoginFrame");
-    const rect = image.getBoundingClientRect();
-    if (!rect.width || !rect.height) return null;
-    return {
-      x: Math.round((event.clientX - rect.left) / rect.width * loginSourceWidth),
-      y: Math.round((event.clientY - rect.top) / rect.height * loginSourceHeight),
-    };
-  };
-
-  button.addEventListener("click", () => {
-    document.querySelectorAll(".view").forEach(node => node.classList.remove("active"));
-    document.querySelectorAll(".nav button").forEach(node => node.classList.toggle("active", node === button));
-    section.classList.add("active");
-    document.getElementById("pageTitle").textContent = "Linux Worker";
-    location.hash = "linux-workers";
-    load();
-  });
-
-  document.getElementById("createLinuxWorker").addEventListener("click", async () => {
-    const payload = await request("/api/admin/linux-workers/enrollments", {method:"POST",body:JSON.stringify({name:document.getElementById("linuxWorkerName").value || "Linux Worker"})});
-    const box = document.getElementById("linuxWorkerInstall");
-    box.classList.remove("hidden");
-    box.innerHTML = `<b>有效期至 ${esc(payload.expires_at)}</b><pre>${esc(payload.install_command)}</pre><button class="action">复制安装命令</button>`;
-    box.querySelector("button").onclick = () => navigator.clipboard.writeText(payload.install_command);
-  });
-
+  button.addEventListener("click", () => { document.querySelectorAll(".view").forEach(node => node.classList.remove("active")); document.querySelectorAll(".nav button").forEach(node => node.classList.toggle("active", node === button)); section.classList.add("active"); document.getElementById("pageTitle").textContent = "Linux Worker"; location.hash = "linux-workers"; load(); });
+  document.getElementById("createLinuxWorker").addEventListener("click", async () => { const name = document.getElementById("linuxWorkerName").value || "Linux Worker"; await request("/api/admin/linux-worker-installations", {method:"POST",body:JSON.stringify({name})}); document.getElementById("linuxWorkerName").value = ""; await load(); });
   document.getElementById("refreshLinuxWorkers").onclick = load;
   document.getElementById("closeLinuxProxy").onclick = closeProxyDialog;
   proxyDialog.addEventListener("cancel", event => { event.preventDefault(); closeProxyDialog(); });
@@ -224,64 +117,29 @@
   loginDialog.addEventListener("cancel", event => { event.preventDefault(); closeLoginDialog(); });
 
   const remoteImage = document.getElementById("linuxLoginFrame");
-  remoteImage.addEventListener("click", event => {
-    remoteImage.focus({preventScroll:true});
-    const point = remotePoint(event); if (!point) return;
-    queueRemoteInput({kind:"mouse",action:"click",button:event.button + 1,...point});
-  });
-  remoteImage.addEventListener("contextmenu", event => {
-    event.preventDefault(); const point = remotePoint(event); if (!point) return;
-    queueRemoteInput({kind:"mouse",action:"click",button:3,...point});
-  });
-  remoteImage.addEventListener("wheel", event => {
-    event.preventDefault(); const point = remotePoint(event); if (!point) return;
-    queueRemoteInput({kind:"mouse",action:"scroll",delta:Math.sign(event.deltaY) * Math.max(1,Math.min(5,Math.round(Math.abs(event.deltaY)/100)||1)),...point});
-  }, {passive:false});
-  remoteImage.addEventListener("keydown", event => {
-    if (!loginTicket) return;
-    const modifiers = [];
-    if (event.ctrlKey) modifiers.push("ctrl"); if (event.altKey) modifiers.push("alt"); if (event.shiftKey) modifiers.push("shift"); if (event.metaKey) modifiers.push("super");
-    const supportedSpecial = new Set(["Enter","Tab","Escape","Backspace","Delete","ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Home","End","PageUp","PageDown"," "]);
-    if (event.key.length !== 1 && !supportedSpecial.has(event.key)) return;
-    event.preventDefault();
-    queueRemoteInput({kind:"key",key:event.key,modifiers});
-  });
+  remoteImage.addEventListener("click", event => { remoteImage.focus({preventScroll:true}); const point = remotePoint(event); if (!point) return; queueRemoteInput({kind:"mouse",action:"click",button:event.button+1,...point}); });
+  remoteImage.addEventListener("contextmenu", event => { event.preventDefault(); const point = remotePoint(event); if (!point) return; queueRemoteInput({kind:"mouse",action:"click",button:3,...point}); });
+  remoteImage.addEventListener("wheel", event => { event.preventDefault(); const point = remotePoint(event); if (!point) return; queueRemoteInput({kind:"mouse",action:"scroll",delta:Math.sign(event.deltaY)*Math.max(1,Math.min(5,Math.round(Math.abs(event.deltaY)/100)||1)),...point}); }, {passive:false});
+  remoteImage.addEventListener("keydown", event => { if (!loginTicket) return; const modifiers=[]; if(event.ctrlKey)modifiers.push("ctrl");if(event.altKey)modifiers.push("alt");if(event.shiftKey)modifiers.push("shift");if(event.metaKey)modifiers.push("super"); const supportedSpecial=new Set(["Enter","Tab","Escape","Backspace","Delete","ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Home","End","PageUp","PageDown"," "]); if(event.key.length!==1&&!supportedSpecial.has(event.key))return; event.preventDefault(); queueRemoteInput({kind:"key",key:event.key,modifiers}); });
 
-  document.getElementById("applyLinuxProxy").onclick = async () => {
-    if (!selectedWorkerId) return;
-    const input = document.getElementById("linuxProxyShareLink");
-    const resultNode = document.getElementById("linuxProxyResult");
-    const shareLink = input.value.trim();
-    if (!shareLink) { resultNode.textContent = "请先粘贴节点链接。"; return; }
-    setProxyBusy(true); resultNode.textContent = "正在校验 Xray 配置、应用并测试 ChatGPT 连通性…";
-    try {
-      const result = await request(`/api/admin/linux-workers/${encodeURIComponent(selectedWorkerId)}/proxy`, {method:"POST",body:JSON.stringify({share_link:shareLink})});
-      input.value = ""; const proxy = result.proxy || {};
-      resultNode.textContent = `应用成功：${proxy.protocol || "proxy"}${proxy.server ? ` · ${proxy.server}:${proxy.port || ""}` : ""} · HTTP ${result.test?.http_status || "reachable"}`;
-      await load();
-    } catch (error) { resultNode.textContent = error.message; } finally { setProxyBusy(false); }
-  };
-
-  document.getElementById("testLinuxProxy").onclick = async () => {
-    if (!selectedWorkerId) return;
-    const resultNode = document.getElementById("linuxProxyResult"); setProxyBusy(true); resultNode.textContent = "正在通过当前 SOCKS 代理测试 ChatGPT…";
-    try {
-      const result = await request(`/api/admin/linux-workers/${encodeURIComponent(selectedWorkerId)}/proxy/test`, {method:"POST",body:"{}"});
-      resultNode.textContent = result.ok ? `当前代理可达 · HTTP ${result.http_status || "reachable"}` : `当前代理不可达：${result.error || "test failed"}`;
-    } catch (error) { resultNode.textContent = error.message; } finally { setProxyBusy(false); }
-  };
+  document.getElementById("applyLinuxProxy").onclick = async () => { if (!selectedWorkerId) return; const input=document.getElementById("linuxProxyShareLink"); const resultNode=document.getElementById("linuxProxyResult"); const shareLink=input.value.trim(); if(!shareLink){resultNode.textContent="请先粘贴节点链接。";return;} setProxyBusy(true);resultNode.textContent="正在校验 Xray 配置、应用并测试 ChatGPT 连通性…"; try{const result=await request(`/api/admin/linux-workers/${encodeURIComponent(selectedWorkerId)}/proxy`,{method:"POST",body:JSON.stringify({share_link:shareLink})});input.value="";const proxy=result.proxy||{};resultNode.textContent=`应用成功：${proxy.protocol||"proxy"}${proxy.server?` · ${proxy.server}:${proxy.port||""}`:""} · HTTP ${result.test?.http_status||"reachable"}`;await load();}catch(error){resultNode.textContent=error.message;}finally{setProxyBusy(false);} };
+  document.getElementById("testLinuxProxy").onclick = async () => { if(!selectedWorkerId)return; const resultNode=document.getElementById("linuxProxyResult");setProxyBusy(true);resultNode.textContent="正在通过当前 SOCKS 代理测试 ChatGPT…";try{const result=await request(`/api/admin/linux-workers/${encodeURIComponent(selectedWorkerId)}/proxy/test`,{method:"POST",body:"{}"});resultNode.textContent=result.ok?`当前代理可达 · HTTP ${result.http_status||"reachable"}`:`当前代理不可达：${result.error||"test failed"}`;}catch(error){resultNode.textContent=error.message;}finally{setProxyBusy(false);} };
 
   document.getElementById("linuxWorkerRows").onclick = async event => {
-    const loginId = event.target.dataset.login;
-    if (loginId) { openLoginDialog(loginId, event.target.dataset.workerName || loginId); return; }
-    const proxyId = event.target.dataset.proxy;
-    if (proxyId) { openProxyDialog(proxyId, event.target.dataset.workerName || proxyId); return; }
-    const id = event.target.dataset.revoke;
-    if (id && confirm("确定禁用此 Worker？")) { await request(`/api/admin/linux-workers/${encodeURIComponent(id)}`, {method:"DELETE"}); load(); }
+    const target = event.target;
+    const copyId = target.dataset.copyInstall;
+    if (copyId) { const row=latestRows.find(item=>item.install_id===copyId); if(row?.install_command) await navigator.clipboard.writeText(row.install_command); return; }
+    const renameId = target.dataset.renameInstall;
+    if (renameId) { const name=prompt("Worker 名称", target.dataset.currentName || "Linux Worker"); if(name!==null&&name.trim()){await request(`/api/admin/linux-worker-installations/${encodeURIComponent(renameId)}`,{method:"PATCH",body:JSON.stringify({name:name.trim()})});await load();} return; }
+    const toggleId = target.dataset.toggleInstall;
+    if (toggleId) { await request(`/api/admin/linux-worker-installations/${encodeURIComponent(toggleId)}`,{method:"PATCH",body:JSON.stringify({enabled:target.dataset.enable==="1"})}); await load(); return; }
+    const deleteId = target.dataset.deleteInstall;
+    if (deleteId && confirm("确定删除这条安装命令记录？已安装的 Worker 身份不会因此删除。")) { await request(`/api/admin/linux-worker-installations/${encodeURIComponent(deleteId)}`,{method:"DELETE"}); await load(); return; }
+    const loginId = target.dataset.login; if(loginId){openLoginDialog(loginId,target.dataset.workerName||loginId);return;}
+    const proxyId = target.dataset.proxy; if(proxyId){openProxyDialog(proxyId,target.dataset.workerName||proxyId);return;}
+    const id = target.dataset.revoke; if(id&&confirm("确定禁用此 Worker？")){await request(`/api/admin/linux-workers/${encodeURIComponent(id)}`,{method:"DELETE"});load();}
   };
 
-  setInterval(() => {
-    if (section.classList.contains("active") && !proxyDialog.open && !loginDialog.open) load();
-  }, 3000);
+  setInterval(() => { if(section.classList.contains("active")&&!proxyDialog.open&&!loginDialog.open) load(); }, 1000);
   if (location.hash === "#linux-workers") button.click();
 })();
