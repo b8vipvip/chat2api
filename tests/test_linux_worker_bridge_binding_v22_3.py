@@ -112,7 +112,7 @@ def test_unpaired_extension_claims_worker_identity_without_pairing_code_and_tick
 
         worker = store.data["workers"][credentials["worker_id"]]
         assert worker["extension_client_id"] == payload["client_id"]
-        assert worker["extension_device_id"] == "fresh-device-123" if False else "fresh-device-123"
+        assert worker["extension_device_id"] == "device-fresh-123"
         registered = app.state.registry.clients[payload["client_id"]]
         assert registered.metadata["linux_worker_id"] == credentials["worker_id"]
         assert registered.metadata["linux_worker_binding_version"] == 30
