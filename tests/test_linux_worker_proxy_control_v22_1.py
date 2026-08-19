@@ -46,7 +46,8 @@ def test_vmess_ws_tls_share_link_builds_xray():
     assert outbound["protocol"] == "vmess"
     assert outbound["settings"]["vnext"][0]["address"] == "vm.example.com"
     assert outbound["streamSettings"]["network"] == "ws"
-    assert outbound["streamSettings"]["wsSettings"]["headers"]["Host"] == "cdn.example.com"
+    assert outbound["streamSettings"]["wsSettings"]["host"] == "cdn.example.com"
+    assert "headers" not in outbound["streamSettings"]["wsSettings"]
     assert outbound["streamSettings"]["tlsSettings"]["serverName"] == "vm.example.com"
     assert summary["protocol"] == "vmess"
     assert summary["security"] == "tls"
@@ -59,6 +60,7 @@ def test_trojan_ws_tls_share_link_builds_xray_and_sanitized_summary():
     assert outbound["protocol"] == "trojan"
     assert outbound["settings"]["servers"][0]["password"] == "super-secret-password"
     assert outbound["streamSettings"]["wsSettings"]["path"] == "/tr"
+    assert outbound["streamSettings"]["wsSettings"]["host"] == "cdn.example.com"
     assert "super-secret-password" not in json.dumps(summary)
     assert summary["server"] == "trojan.example.com"
 
