@@ -70,5 +70,5 @@ def test_remote_login_opens_official_chatgpt_login_route_before_frame_streaming(
     helper = (ROOT / "scripts" / "linux_worker_remote_login.py").read_text(encoding="utf-8")
     assert 'LOGIN_URL = os.environ.get("CHAT2API_LOGIN_URL", "https://chatgpt.com/auth/login")' in helper
     assert "navigation = _navigate_login_page()" in helper
-    assert 'error_name="login_navigation_failed"' in helper
-    assert '"type", "--clearmodifiers", "--delay", "0", LOGIN_URL' in helper
+    assert '_focus_window(window_id, error_name="login_navigation_focus_failed")' in helper
+    assert '_type_url_into_focused_chrome(LOGIN_URL, error_name="login_navigation_failed")' in helper
