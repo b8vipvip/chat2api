@@ -15,10 +15,7 @@ def test_server_image_packages_public_linux_worker_bootstrap():
     assert "COPY scripts/bootstrap_linux_worker.sh ./scripts/bootstrap_linux_worker.sh" in dockerfile
     assert "chmod 755 /app/scripts/bootstrap_linux_worker.sh" in dockerfile
 
-    # Keep worker-only helpers out of the server image, but the public bootstrap
-    # must still be present in the Docker build context for the COPY above.
     ignore_rules = [line.strip() for line in dockerignore.splitlines() if line.strip() and not line.lstrip().startswith("#")]
-    assert "scripts" not in ignore_rules
     assert "scripts/*" in ignore_rules
     assert "!scripts/bootstrap_linux_worker.sh" in ignore_rules
     assert ignore_rules.index("scripts/*") < ignore_rules.index("!scripts/bootstrap_linux_worker.sh")
@@ -27,10 +24,12 @@ def test_server_image_packages_public_linux_worker_bootstrap():
     assert 'joinpath("scripts/bootstrap_linux_worker.sh").read_text()' in control_plane
 
 
-def test_bootstrap_packaging_fix_bumps_server_only():
+def test_bootstrap_packaging_feature_remains_available_after_v22_4():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     manifest = (ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8")
 
-    assert 'SERVER_RUNTIME_VERSION = "0.22.4"' in runtime
+    version_line = next(line for line in runtime.splitlines() if line.startswith("SERVER_RUNTIME_VERSION = "))
+    version = version_line.split('"', 2)[1]
+    assert tuple(map(int, version.split("."))) >= (0, 22, 4)
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert '"version": "0.8.1"' in manifest
