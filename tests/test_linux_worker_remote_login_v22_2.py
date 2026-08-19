@@ -133,5 +133,5 @@ def test_worker_agent_implements_low_latency_remote_login_without_privilege_esca
 
 def test_remote_login_runtime_tracks_binding_upgrade():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.3"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.4"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
