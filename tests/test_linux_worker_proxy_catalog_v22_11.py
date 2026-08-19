@@ -66,9 +66,25 @@ def test_proxy_catalog_patch_is_installed_and_admin_ui_supports_crud_and_worker_
     assert 'chat2api-linux-worker-proxy-catalog.js' in runtime
 
 
-def test_remote_login_opens_official_chatgpt_login_route_before_frame_streaming():
+def test_remote_login_uses_direct_chrome_command_and_binding_cannot_steal_focus():
     helper = (ROOT / "scripts" / "linux_worker_remote_login.py").read_text(encoding="utf-8")
+    agent = (ROOT / "scripts" / "linux_worker_agent.py").read_text(encoding="utf-8")
+
     assert 'LOGIN_URL = os.environ.get("CHAT2API_LOGIN_URL", "https://chatgpt.com/auth/login")' in helper
-    assert "navigation = _navigate_login_page()" in helper
-    assert '_focus_window(window_id, error_name="login_navigation_focus_failed")' in helper
-    assert '_type_url_into_focused_chrome(LOGIN_URL, error_name="login_navigation_failed")' in helper
+    assert 'CHROME_PROFILE_DIR = os.environ.get("CHAT2API_LOGIN_CHROME_PROFILE", "/home/chat2api/.config/chat2api-chrome-worker-01")' in helper
+    assert '[CHROME_BINARY, f"--user-data-dir={CHROME_PROFILE_DIR}", "--new-tab", url]' in helper
+    assert 'return _open_url_via_existing_chrome(LOGIN_URL, error_name="login_navigation_failed")' in helper
+    assert '"key", "--clearmodifiers", "ctrl+l",\n            "type"' not in helper
+    assert '"binding_deferred_login_session"' in helper
+    assert 'def session_active() -> bool:' in helper
+    assert 'from linux_worker_remote_login import capture_frame, close_session, inject_worker_binding, open_session, send_input, session_active' in agent
+    assert agent.count("if session_active():") >= 2
+
+
+def test_xdotool_stdin_uses_one_command_per_line_for_secret_binding_url():
+    helper = (ROOT / "scripts" / "linux_worker_remote_login.py").read_text(encoding="utf-8")
+    assert 'def _run_xdotool_stdin_commands(commands: list[list[str]]' in helper
+    assert 'for command in commands' in helper
+    assert '["key", "--clearmodifiers", "ctrl+l"]' in helper
+    assert '["type", "--clearmodifiers", "--delay", "0", binding_url]' in helper
+    assert '["key", "--clearmodifiers", "Return"]' in helper
