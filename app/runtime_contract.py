@@ -15,13 +15,14 @@ from .live_voice_patch import LIVE_PROTOCOL_VERSION
 # collapse them into a single version number: package releases, the layered
 # server runtime/console, the Chrome Bridge, and the realtime wire protocol can
 # evolve independently.
-SERVER_RUNTIME_VERSION = "0.22.10"
+SERVER_RUNTIME_VERSION = "0.22.11"
 CHROME_BRIDGE_VERSION = "0.8.1"
 PRODUCTION_ENTRYPOINT = "app.entry:app"
 VERSION_CONTRACT_VERSION = 1
 ADMIN_VERSION_ASSET = "/assets/chat2api-runtime-version.js"
 ADMIN_EXTENSION_COLUMNS_ASSET = "/assets/chat2api-extension-columns.js"
 ADMIN_LINUX_WORKERS_ASSET = "/assets/chat2api-linux-workers.js"
+ADMIN_LINUX_PROXY_CATALOG_ASSET = "/assets/chat2api-linux-worker-proxy-catalog.js"
 
 
 def version_contract_payload(app: FastAPI) -> dict[str, Any]:
@@ -147,6 +148,10 @@ def install_runtime_contract(app: FastAPI) -> FastAPI:
     async def admin_linux_workers_js() -> Response:
         return Response(Path(__file__).with_name("admin_linux_workers.js").read_text(encoding="utf-8"), media_type="application/javascript", headers={"Cache-Control": "no-store"})
 
+    @app.get(ADMIN_LINUX_PROXY_CATALOG_ASSET, include_in_schema=False)
+    async def admin_linux_worker_proxy_catalog_js() -> Response:
+        return Response(Path(__file__).with_name("admin_linux_worker_proxy_catalog.js").read_text(encoding="utf-8"), media_type="application/javascript", headers={"Cache-Control": "no-store"})
+
     @app.middleware("http")
     async def runtime_contract_response(request: Request, call_next):
         response = await call_next(request)
@@ -163,6 +168,9 @@ def install_runtime_contract(app: FastAPI) -> FastAPI:
                 workers_marker = f'<script src="{ADMIN_LINUX_WORKERS_ASSET}"></script>'
                 if workers_marker not in text:
                     text = text.replace("</body>", workers_marker + "</body>")
+                proxy_catalog_marker = f'<script src="{ADMIN_LINUX_PROXY_CATALOG_ASSET}"></script>'
+                if proxy_catalog_marker not in text:
+                    text = text.replace("</body>", proxy_catalog_marker + "</body>")
                 columns_marker = f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}"></script>'
                 if columns_marker not in text:
                     text = text.replace("</body>", columns_marker + "</body>")
