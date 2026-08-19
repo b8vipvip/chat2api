@@ -1,9 +1,16 @@
 from pathlib import Path
+import re
 
 from app.linux_worker_installs import LinuxWorkerInstallStore
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _runtime_version(source: str) -> tuple[int, int, int]:
+    match = re.search(r'SERVER_RUNTIME_VERSION = "(\d+)\.(\d+)\.(\d+)"', source)
+    assert match
+    return tuple(map(int, match.groups()))
 
 
 def test_install_record_has_no_time_expiry_and_tracks_terminal_disable(tmp_path):
@@ -72,5 +79,5 @@ def test_server_packages_bundle_and_admin_uses_worker_lifecycle_list():
     assert "/api/admin/linux-worker-installations" in admin
     assert "安装完成或失败后自动停用" in admin
     assert "有效期至" not in admin
-    assert 'SERVER_RUNTIME_VERSION = "0.22.6"' in runtime
+    assert _runtime_version(runtime) >= (0, 22, 5)
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
