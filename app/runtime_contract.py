@@ -15,7 +15,7 @@ from .live_voice_patch import LIVE_PROTOCOL_VERSION
 # collapse them into a single version number: package releases, the layered
 # server runtime/console, the Chrome Bridge, and the realtime wire protocol can
 # evolve independently.
-SERVER_RUNTIME_VERSION = "0.22.4"
+SERVER_RUNTIME_VERSION = "0.22.5"
 CHROME_BRIDGE_VERSION = "0.8.1"
 PRODUCTION_ENTRYPOINT = "app.entry:app"
 VERSION_CONTRACT_VERSION = 1
@@ -118,80 +118,33 @@ def install_runtime_contract(app: FastAPI) -> FastAPI:
     # The runtime contract is installed last by app.entry and is the canonical
     # owner of the current server/console version. Historical feature patches
     # keep their own internal patch versions but must not win the final public
-    # version surface.
-    app.version = SERVER_RUNTIME_VERSION
+    # version.
     app.state.runtime_contract_installed = True
+    app.version = SERVER_RUNTIME_VERSION
 
-    @app.get("/version", tags=["system"])
-    async def version_contract() -> dict[str, Any]:
-        return version_contract_payload(app)
+    @app.get("/version", include_in_schema=False)
+    async def runtime_version() -> JSONResponse:
+        return JSONResponse(version_contract_payload(app), headers={"Cache-Control": "no-store"})
 
     @app.get(ADMIN_VERSION_ASSET, include_in_schema=False)
-    async def admin_runtime_version_js() -> Response:
-        return Response(
-            _admin_version_script(),
-            media_type="application/javascript",
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
-        )
-
-    @app.get(ADMIN_EXTENSION_COLUMNS_ASSET, include_in_schema=False)
-    async def admin_extension_columns_js() -> Response:
-        path = Path(__file__).with_name("admin_extension_columns.js")
-        return Response(
-            path.read_text(encoding="utf-8"),
-            media_type="application/javascript",
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
-        )
-
-    @app.get(ADMIN_LINUX_WORKERS_ASSET, include_in_schema=False)
-    async def admin_linux_workers_js() -> Response:
-        return Response(Path(__file__).with_name("admin_linux_workers.js").read_text(encoding="utf-8"), media_type="application/javascript", headers={"Cache-Control": "no-store"})
+    async def admin_version_asset() -> Response:
+        return Response(_admin_version_script(), media_type="application/javascript", headers={"Cache-Control": "no-store"})
 
     @app.middleware("http")
-    async def runtime_contract_response(request: Request, call_next):
+    async def runtime_contract_admin_html(request: Request, call_next):
         response = await call_next(request)
-        path = request.url.path
-        content_type = response.headers.get("content-type", "")
-
-        if path in {"/admin", "/developers"} and "text/html" in content_type:
-            raw = await _response_bytes(response)
-            text = raw.decode("utf-8", errors="replace")
-            version_marker = f'<script src="{ADMIN_VERSION_ASSET}"></script>'
-            if version_marker not in text:
-                text = text.replace("</body>", version_marker + "</body>")
-            if path == "/admin":
-                workers_marker = f'<script src="{ADMIN_LINUX_WORKERS_ASSET}"></script>'
-                if workers_marker not in text:
-                    text = text.replace("</body>", workers_marker + "</body>")
-                columns_marker = f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}"></script>'
-                if columns_marker not in text:
-                    text = text.replace("</body>", columns_marker + "</body>")
-            headers = {
-                key: value
-                for key, value in response.headers.items()
-                if key.lower() not in {"content-length", "content-type"}
-            }
-            headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
-            return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
-
-        if path.startswith("/api/admin/") and "application/json" in content_type:
-            raw = await _response_bytes(response)
-            try:
-                payload = json.loads(raw.decode("utf-8"))
-            except Exception:
-                return Response(raw, status_code=response.status_code, media_type="application/json")
-
-            if isinstance(payload, dict) and (path == "/api/admin/overview" or "version" in payload):
-                payload["version"] = SERVER_RUNTIME_VERSION
-
-            headers = {
-                key: value
-                for key, value in response.headers.items()
-                if key.lower() not in {"content-length", "content-type"}
-            }
-            headers["Cache-Control"] = "no-store"
-            return JSONResponse(payload, status_code=response.status_code, headers=headers)
-
-        return response
+        if request.url.path != "/admin" or response.status_code != 200:
+            return response
+        content_type = str(response.headers.get("content-type") or "")
+        if "text/html" not in content_type:
+            return response
+        body = (await _response_bytes(response)).decode("utf-8", errors="replace")
+        marker = f'<script src="{ADMIN_VERSION_ASSET}"></script>'
+        if marker not in body:
+            needle = "</body>"
+            body = body.replace(needle, f"{marker}{needle}", 1) if needle in body else body + marker
+        headers = {k: v for k, v in response.headers.items() if k.lower() not in {"content-length", "content-encoding", "etag"}}
+        headers["Cache-Control"] = "no-store"
+        return Response(body, status_code=response.status_code, media_type="text/html", headers=headers)
 
     return app
