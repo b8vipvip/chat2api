@@ -10,6 +10,7 @@ XRAY_UNIT="chat2api-xray.service"
 CHROME_UNIT="chat2api-chrome.service"
 PROXY_PORT="10808"
 TEST_URL="https://chatgpt.com/"
+WORKSPACE_PARENT="/etc/chat2api-worker"
 
 RESULT_EMITTED=0
 CURRENT_STAGE="startup"
@@ -40,7 +41,12 @@ fi
 
 umask 077
 CURRENT_STAGE="temporary_workspace"
-work_dir="$(mktemp -d /tmp/chat2api-proxy-apply.XXXXXX)"
+# The Worker Agent runs with ProtectSystem=strict and explicitly grants write
+# access only to /etc/chat2api-worker. A sudo child stays inside that mount
+# namespace, so /tmp may be read-only even though the helper itself is root.
+# Keep the short-lived candidate/rollback files inside the already allowlisted
+# Worker configuration directory and remove them via the EXIT trap above.
+work_dir="$(mktemp -d "${WORKSPACE_PARENT}/.proxy-apply.XXXXXX")"
 candidate="${work_dir}/xray.candidate.json"
 backup="${work_dir}/xray.previous.json"
 
