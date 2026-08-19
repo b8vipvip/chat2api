@@ -42,7 +42,7 @@ def test_worker_ui_uses_requested_chinese_columns_beijing_time_and_real_status_f
     assert 'return `已连接（${name}）`' in source
     assert 'button.textContent = "配对码"' in source
     assert 'metadata.proxy_summary' in source
-    assert 'metadata.worker_pairing' in source
+    assert 'meta.worker_pairing' in source
     assert '/api/admin/linux-worker-installations' in source
     assert '/api/admin/linux-worker-proxies' in source
 
