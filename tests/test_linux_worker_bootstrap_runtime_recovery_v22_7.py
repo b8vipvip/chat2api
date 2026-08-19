@@ -31,9 +31,10 @@ def test_bootstrap_prepares_chrome_xdg_dirs_and_quotes_proxy_bypass():
 def test_health_waits_for_services_instead_of_single_instant_check():
     source = Path("scripts/bootstrap_linux_worker.sh").read_text(encoding="utf-8")
     assert 'for attempt in $(seq 1 180); do' in source
-    assert '等待 Worker 核心服务启动' in source
+    assert '等待 Worker 浏览器就绪' in source
+    assert 'grep -F -- "--user-data-dir=${PROFILE_DIR}"' in source
     assert 'systemctl reset-failed chat2api-chrome.service chat2api-worker-agent.service' in source
-    assert '核心服务未正常运行' in source
+    assert 'Worker 浏览器未在限定时间内就绪' in source
 
 
 def test_runtime_marks_bootstrap_recovery_release():
