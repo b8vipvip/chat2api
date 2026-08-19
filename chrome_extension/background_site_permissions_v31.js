@@ -10,6 +10,7 @@
 
   const state = {
     applied: false,
+    skipped: false,
     appliedAt: 0,
     failures: [],
   };
@@ -23,6 +24,15 @@
   }
 
   async function apply() {
+    const platform = await chrome.runtime.getPlatformInfo();
+    if (platform?.os !== "linux") {
+      state.applied = false;
+      state.skipped = true;
+      state.appliedAt = Date.now();
+      state.failures = [];
+      return { ...state };
+    }
+
     const failures = [];
     const operations = [
       ["microphone", "allow"],
@@ -36,6 +46,7 @@
       }
     }
     state.applied = failures.length === 0;
+    state.skipped = false;
     state.appliedAt = Date.now();
     state.failures = failures;
     return { ...state };
