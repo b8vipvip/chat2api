@@ -241,6 +241,12 @@ def run_allowed(command: str, arguments: dict[str, Any] | None = None) -> dict[s
     if command == "apply_proxy_config":
         return _apply_proxy(args)
     if command == "open_login_session":
+        # The authenticated server endpoint performs a live proxy test immediately
+        # before this command. Honor that short-lived preflight only while a real
+        # non-freedom proxy config is still present. Direct command callers still
+        # have to pass a Worker-side connectivity test.
+        if args.get("proxy_prevalidated") is True and proxy_configured():
+            return open_session()
         proxy = _proxy_test()
         if not proxy.get("ok"):
             return {"ok": False, "error": "proxy_required_for_login", "proxy": proxy}
