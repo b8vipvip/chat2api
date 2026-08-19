@@ -47,13 +47,18 @@ def test_worker_ui_uses_requested_chinese_columns_beijing_time_and_real_status_f
     assert '/api/admin/linux-worker-proxies' in source
 
 
-def test_proxy_name_is_persisted_only_after_real_connected_worker_summary_exists():
-    source = (ROOT / "app" / "linux_worker_pairing_patch.py").read_text(encoding="utf-8")
-    block = source.split("async def save_worker_proxy_label", 1)[1].split("@app.get(PAIRING_ASSET", 1)[0]
-    assert 'worker.get("proxy_status")' in block
-    assert 'metadata.get("proxy_summary")' in block
-    assert 'summary["name"] = name' in block
-    assert 'workers._save()' in block
+def test_proxy_name_is_backfilled_from_the_real_proxy_catalog_and_persisted_after_apply():
+    source = (ROOT / "app" / "linux_worker_proxy_name_patch.py").read_text(encoding="utf-8")
+    for token in (
+        'catalog.list()',
+        'str(item.get("share_link") or "").strip() == raw',
+        'path == "/api/admin/linux-worker-installations"',
+        'metadata.get("proxy_summary")',
+        'summary["name"] = name',
+        'workers._save()',
+        'request.method == "POST" and path.startswith(apply_prefix) and path.endswith(apply_suffix)',
+    ):
+        assert token in source
 
 
 def test_pairing_ui_javascript_has_valid_syntax():
@@ -71,5 +76,8 @@ def test_runtime_marks_worker_pairing_ui_release_without_bridge_protocol_bump():
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert 'SERVER_RUNTIME_VERSION = "0.22.18"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert "install_runtime_contract(app)\n\n# This final Worker patch" in entry
+    assert "install_runtime_contract(app)" in entry
     assert "install_linux_worker_pairing_patch(app)" in entry
+    assert "install_linux_worker_proxy_name_patch(app)" in entry
+    assert entry.index("install_runtime_contract(app)") < entry.index("install_linux_worker_pairing_patch(app)")
+    assert entry.index("install_linux_worker_pairing_patch(app)") < entry.index("install_linux_worker_proxy_name_patch(app)")
