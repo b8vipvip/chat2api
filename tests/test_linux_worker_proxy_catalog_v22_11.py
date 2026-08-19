@@ -86,5 +86,6 @@ def test_xdotool_stdin_uses_one_command_per_line_for_secret_binding_url():
     assert 'def _run_xdotool_stdin_commands(commands: list[list[str]]' in helper
     assert 'for command in commands' in helper
     assert '["key", "--clearmodifiers", "ctrl+l"]' in helper
-    assert '["type", "--clearmodifiers", "--delay", "0", binding_url]' in helper
+    assert '["type", "--clearmodifiers", "--delay", "0", url]' in helper
     assert '["key", "--clearmodifiers", "Return"]' in helper
+    assert '_type_url_into_focused_chrome(binding_url, error_name="binding_injection_failed")' in helper
