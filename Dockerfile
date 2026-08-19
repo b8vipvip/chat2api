@@ -22,7 +22,7 @@ COPY scripts/bootstrap_linux_worker.sh ./scripts/bootstrap_linux_worker.sh
 # center-server image and expose it as a verified tarball from /bootstrap/.
 COPY chrome_extension ./worker_payload/chrome_extension
 COPY scripts/linux_worker_agent.py scripts/linux_worker_proxy.py scripts/linux_worker_remote_login.py ./worker_payload/scripts/
-COPY scripts/linux_worker_watchdog.sh scripts/linux_extension_autoreload.sh scripts/linux_worker_proxy_apply.sh scripts/linux_worker_chrome_launcher.sh ./worker_payload/scripts/
+COPY scripts/linux_worker_watchdog.sh scripts/linux_extension_autoreload.sh scripts/linux_worker_proxy_apply.sh scripts/linux_worker_chrome_launcher.sh scripts/linux_worker_diagnostics.sh ./worker_payload/scripts/
 RUN chmod 755 /app/scripts/bootstrap_linux_worker.sh \
     && mkdir -p /app/data /app/bootstrap \
     && python - <<'PY'
