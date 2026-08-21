@@ -3,7 +3,12 @@
   if (globalThis[KEY]) return;
 
   const REQUEST_KEY = "__CHAT2API_REQUEST_CONTENT_V5__";
-  const GENERATION_STOP_GRACE_MS = 5000;
+  // Stop-button visibility is not a completion contract. ChatGPT can briefly
+  // remove it while transitioning from reasoning/generation into the rendered
+  // assistant turn, especially in Free-account and loaded-history conversations.
+  // The previous 5s grace produced false failures in production. Only declare a
+  // stopped-without-response stall after a sustained, fully idle UI window.
+  const GENERATION_STOP_GRACE_MS = 30000;
   const GENERATION_START_TIMEOUT_MS = 60000;
   const POLL_MS = 250;
 
@@ -13,12 +18,18 @@
     .trim();
 
   const ERROR_PATTERN = /(出了点问题|发生错误|生成回复时出错|无法生成|生成失败|网络错误|请重试|稍后再试|请求过多|使用上限|消息上限|免费.{0,20}(?:限制|上限)|已达到.{0,30}(?:限制|上限)|达到.{0,30}(?:限制|上限)|something went wrong|there was an error generating|network error|please try again|try again later|unable to generate|failed to generate|too many requests|rate limit|usage limit|message limit|you(?:'|’)?ve reached|you have reached|free plan limit)/i;
+  const ACTIVE_STATUS_PATTERN = /(^|\s)(thinking|analyzing|reasoning|generating|searching|browsing|working)(\s|$)|正在(思考|分析|推理|生成|搜索|浏览|处理)/i;
 
   function visible(element) {
     if (!element) return false;
     const rect = element.getBoundingClientRect?.() || { width: 0, height: 0 };
     const style = typeof getComputedStyle === "function" ? getComputedStyle(element) : { display: "", visibility: "" };
     return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+  }
+
+  function composerRoot() {
+    return [...document.querySelectorAll("form[data-type='unified-composer'], form")]
+      .find(form => visible(form) && form.querySelector?.("#prompt-textarea,textarea,[contenteditable='true']")) || document;
   }
 
   function composerText() {
@@ -41,11 +52,32 @@
       "button[data-testid='stop-button']",
       "button[aria-label='Stop streaming']",
       "button[aria-label='Stop generating']",
+      "button[aria-label*='停止回答']",
       "button[aria-label*='停止生成']",
     ]) {
       if ([...document.querySelectorAll(selector)].some(item => visible(item) && !item.disabled)) return true;
     }
     return false;
+  }
+
+  function sendReady() {
+    const root = composerRoot();
+    for (const selector of [
+      "button[data-testid='send-button']",
+      "button[aria-label='Send prompt']",
+      "button[aria-label*='发送提示']",
+      "button[aria-label*='发送消息']",
+      "button[type='submit']",
+    ]) {
+      const button = [...root.querySelectorAll(selector)].find(item => visible(item));
+      if (button) return !button.disabled && button.getAttribute?.("aria-disabled") !== "true";
+    }
+    return false;
+  }
+
+  function transientStatusVisible() {
+    const nodes = [...document.querySelectorAll("[role='status'],[aria-live='polite'],[aria-live='assertive']")].filter(visible);
+    return nodes.some(node => ACTIVE_STATUS_PATTERN.test(normalize(node.innerText || node.textContent || "")));
   }
 
   function assistantNodes() {
@@ -124,6 +156,8 @@
     const isGenerating = Boolean(snapshot?.generating);
     const responseText = normalize(snapshot?.new_assistant_text || "");
     const errorText = normalize(snapshot?.error_text || "");
+    const statusActive = Boolean(snapshot?.status_active);
+    const isSendReady = snapshot?.send_ready === undefined ? true : Boolean(snapshot?.send_ready);
 
     if (composerHasText) track.sawComposerText = true;
     if (track.sawComposerText && !composerHasText && !track.submittedAt) track.submittedAt = now;
@@ -143,12 +177,19 @@
     }
 
     if (track.sawGenerating && !isGenerating && !track.sawResponseText) {
-      track.generationStoppedAt ||= now;
-      if (now - track.generationStoppedAt >= GENERATION_STOP_GRACE_MS) {
-        return {
-          code: "generation-stopped-without-response",
-          message: "ChatGPT generation stopped before any assistant response text was captured",
-        };
+      // A missing Stop button is only meaningful when the composer has returned to
+      // an idle/sendable state and no thinking/status surface remains. Any active UI
+      // signal resets the idle interval instead of accumulating toward a failure.
+      if (statusActive || !isSendReady) {
+        track.generationStoppedAt = 0;
+      } else {
+        track.generationStoppedAt ||= now;
+        if (now - track.generationStoppedAt >= GENERATION_STOP_GRACE_MS) {
+          return {
+            code: "generation-stopped-without-response",
+            message: `ChatGPT UI stayed idle for ${Math.round(GENERATION_STOP_GRACE_MS / 1000)}s after generation without any assistant response text`,
+          };
+        }
       }
     }
 
@@ -156,6 +197,8 @@
       track.submittedAt
       && !track.sawGenerating
       && !track.sawResponseText
+      && !statusActive
+      && isSendReady
       && now - track.submittedAt >= GENERATION_START_TIMEOUT_MS
     ) {
       return {
@@ -182,6 +225,7 @@
         request_stall_reason: failure.code,
         generation_seen: Boolean(track.sawGenerating),
         response_text_seen: Boolean(track.sawResponseText),
+        generation_stop_grace_ms: GENERATION_STOP_GRACE_MS,
       },
     });
     await emit({ type: "chat.error", request_id: active.requestId, error: failure.message });
@@ -213,6 +257,8 @@
     const snapshot = {
       composer_has_text: Boolean(composerText()),
       generating: generating(),
+      status_active: transientStatusVisible(),
+      send_ready: sendReady(),
       new_assistant_text: newAssistantText(active),
       error_text: visibleErrorText(active),
     };
