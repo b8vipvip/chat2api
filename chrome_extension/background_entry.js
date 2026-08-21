@@ -1,5 +1,6 @@
 importScripts(
   "background.js",
+  "background_socket_singleflight_v21.js",
   "background_device_v17.js",
   "background_time_v14.js",
   "background_platform_v26.js",
@@ -9,8 +10,8 @@ importScripts(
   "background_worker_binding_v30.js",
   "background_site_permissions_v31.js",
   "background_hardening.js",
-  "background_socket_singleflight_v21.js",
   "browser_tabs.js",
+  "background_tab_supervisor_v32.js",
   "model_routing_v2.js",
   "background_page_smoke_v22.js",
   "background_account_v20.js",
@@ -32,5 +33,4 @@ importScripts(
   "conversation_workers_v24.js",
   "conversation_dispatch.js",
   "audio_routing_live.js",
-  "background_tab_supervisor_v32.js",
 );
