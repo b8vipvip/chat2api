@@ -52,6 +52,7 @@ jobs:
               "scripts/linux_worker_agent.py",
               "scripts/linux_worker_proxy.py",
               "scripts/linux_worker_remote_login.py",
+              "scripts/linux_worker_tab_init.py",
               "scripts/linux_worker_watchdog.sh",
               "scripts/linux_extension_autoreload.sh",
               "scripts/linux_worker_proxy_apply.sh",
