@@ -52,12 +52,16 @@ def _score(target: dict[str, Any]) -> tuple[int, int]:
 def _close(debug_url: str, target_id: str) -> bool:
     if not target_id:
         return False
-    path = f"/json/close/{quote(target_id, safe='')}"
+    url = f"{debug_url.rstrip('/')}/json/close/{quote(target_id, safe='')}"
+    # Chrome responds to /json/close with plain text rather than JSON. Accept
+    # either documented method so this helper also works across CfT revisions.
     for method in ("PUT", "GET"):
         try:
-            _json(debug_url, path, method=method)
+            request = Request(url, data=b"" if method != "GET" else None, method=method)
+            with urlopen(request, timeout=2.5) as response:
+                response.read(64_000)
             return True
-        except (OSError, HTTPError, URLError, ValueError, json.JSONDecodeError):
+        except (OSError, HTTPError, URLError):
             continue
     return False
 
