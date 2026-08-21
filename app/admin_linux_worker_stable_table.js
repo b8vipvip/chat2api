@@ -61,7 +61,7 @@
       <div style="margin-top:14px;color:#94a3b8;font-size:12px;line-height:1.6">粘贴已有扩展配对码并保存。中心只在校验时使用明文，Worker 记录只保留安全的配对引用；ChatGPT 登录且扩展在线后自动完成绑定。</div>
       <input id="linuxWorkerPairingCodeV2219" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴配对码" style="margin-top:12px">
       <div id="linuxWorkerPairingResultV2219" style="min-height:22px;margin-top:10px;color:#94a3b8"></div>
-      <div style="display:flex;justify-content:flex-end;gap:9px;margin-top:10px"><button class="action danger" id="clearLinuxWorkerPairingV2219" type="button">解除配置</button><button class="action good" id="saveLinuxWorkerPairingV2219" type="button">保存配对码</button></div>
+      <div style="display:flex;justify-content:flex-end;gap:9px;margin-top:10px"><button class="action danger" id="clearLinuxWorkerPairingV2219" type="button">解除配置</button><button class="action" id="reconcileLinuxWorkerPairingV2219" type="button">自动配对</button><button class="action good" id="saveLinuxWorkerPairingV2219" type="button">保存配对码</button></div>
     </div>`;
     document.body.appendChild(pairingDialog);
 
@@ -146,6 +146,7 @@
       if (state === "offline") return "网络离线";
       if (state === "error" || state === "failed") return "检测失败";
       if (["ready","online","connected","reachable"].includes(state)) return "已联网";
+      if (["connected","ready"].includes(String(row?.proxy_status || "").toLowerCase())) return "检测中";
       return "未检测";
     };
     const proxyText = row => {
@@ -168,7 +169,11 @@
     };
     const connectionText = row => {
       const state = String(row?.worker_pairing_state || pairingMeta(row).status || "pending").toLowerCase();
-      const extension = state === "bound" ? "已绑定" : ["detecting_extension","binding"].includes(state) ? "检测中" : "未连接";
+      const b = bridge(row);
+      const heartbeat = parseTime(b.heartbeat_at);
+      const heartbeatLive = Boolean(heartbeat && Date.now() - heartbeat.getTime() < 90000);
+      const paired = Boolean(pairingMeta(row).pairing_id && b.pairing_id === pairingMeta(row).pairing_id);
+      const extension = state === "bound" && b.extension_id && b.online !== false && heartbeatLive && paired ? "已连接" : b.extension_id ? "已检测" : "未连接";
       const pairing = state === "bound" ? "完成" : state === "binding" ? "绑定中" : "等待";
       return {extension, pairing};
     };
@@ -189,7 +194,7 @@
     const pairingTitle = row => {
       const meta = pairingMeta(row);
       if (!meta.pairing_id) return "未配置配对码";
-      const state = ({pending:"等待",waiting_chatgpt_login:"等待登录",detecting_extension:"检测扩展",binding:"绑定中",bound:"已绑定",failed:"绑定失败"})[String(meta.status || "pending")] || String(meta.status || "等待");
+      const state = ({pending:"准备自动配对",detecting_extension:"检测扩展",binding:"绑定中",bound:"已绑定",failed:"绑定失败"})[String(meta.status || "pending")] || String(meta.status || "准备自动配对");
       return `${state}${meta.name ? ` · ${meta.name}` : ""}${meta.prefix ? ` · ${meta.prefix}…` : ""}`;
     };
     const setCell = (cell, html, title = "") => {
@@ -271,8 +276,11 @@
         target.innerHTML = "<b>当前：</b>未设置配对码";
         return;
       }
-      const state = ({saved:"已保存，等待自动绑定",waiting_login:"等待 ChatGPT 登录",waiting_extension:"等待扩展连接",bound:"已绑定到本 Worker 扩展",error:"绑定失败"})[String(meta.status || "saved")] || String(meta.status || "已保存");
-      target.innerHTML = `<div><b>当前：</b>${esc(meta.name || "配对码")}</div><div><b>前缀：</b>${esc(meta.prefix || "-")}…</div><div><b>状态：</b>${esc(state)}</div>${meta.last_error ? `<div style="color:#fca5a5"><b>原因：</b>${esc(meta.last_error)}</div>` : ""}`;
+      const b = bridge(row);
+      const logged = b.chatgpt_logged_in === true || (b.login_state === "ready" && b.composer_ready === true);
+      const extension = Boolean(b.extension_id || row?.extension_client_id);
+      const state = ({pending:"准备自动配对",detecting_extension:"检测扩展",binding:"🔄 绑定中",bound:"✅ 已绑定",failed:"绑定失败"})[String(meta.status || "pending")] || String(meta.status || "准备自动配对");
+      target.innerHTML = `<div><b>Worker：</b>${esc(row?.name || row?.hostname || "Linux Worker")}</div><div><b>ChatGPT：</b>${logged ? "✅ 已登录" : "检测中"}</div><div><b>Extension：</b>${extension ? "✅ 已检测" : "检测中"}</div><div><b>Pairing：</b>${esc(state)}</div><div class="lw-muted">${esc(meta.name || "配对码")} · ${esc(meta.prefix || "-")}…</div>${meta.last_error ? `<div style="color:#fca5a5"><b>原因：</b>${esc(meta.last_error)}</div>` : ""}`;
     };
     const openPairing = async (workerId, workerName) => {
       selectedWorkerId = workerId;
@@ -313,6 +321,17 @@
       try {
         await request(`/api/admin/linux-workers/${encodeURIComponent(selectedWorkerId)}/pairing-code`, {method:"DELETE"});
         result.textContent = "已解除配对码配置。";
+        await refreshRows();
+        renderPairing(currentPairingRow());
+      } catch (error) { result.textContent = error.message; }
+    };
+    document.getElementById("reconcileLinuxWorkerPairingV2219").onclick = async () => {
+      if (!selectedWorkerId) return;
+      const result = document.getElementById("linuxWorkerPairingResultV2219");
+      result.textContent = "正在自动检测并配对…";
+      try {
+        const payload = await request(`/api/admin/linux-workers/${encodeURIComponent(selectedWorkerId)}/pairing-reconcile`, {method:"POST",body:"{}"});
+        result.textContent = payload.status === "bound" ? "✅ 自动配对完成。" : "已触发自动配对，正在同步实时状态。";
         await refreshRows();
         renderPairing(currentPairingRow());
       } catch (error) { result.textContent = error.message; }

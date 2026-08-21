@@ -18,7 +18,7 @@ PATCH_VERSION = "0.22.18"
 PAIRING_ASSET = "/assets/chat2api-linux-worker-pairing-v22-18.js"
 MAX_PAIRING_CODE_LENGTH = 512
 MAX_PROXY_NAME_LENGTH = 80
-PAIRING_STATES = {"pending", "waiting_chatgpt_login", "detecting_extension", "binding", "bound", "failed"}
+PAIRING_STATES = {"pending", "detecting_extension", "binding", "bound", "failed"}
 logger = logging.getLogger(__name__)
 
 
@@ -135,9 +135,14 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
         if not pairing_id:
             return {"configured": False, "status": "not_configured"}
 
-        if str(worker.get("chatgpt_status") or "").lower() != "ready":
-            write_pairing_state(worker_id, {"status": "waiting_chatgpt_login", "last_error": ""})
-            return {"configured": True, "status": "waiting_chatgpt_login", "pairing_id": pairing_id}
+        bridge = (worker.get("metadata") or {}).get("bridge") or {}
+        login_ready = (
+            bridge.get("chatgpt_logged_in") is True
+            or (str(bridge.get("login_state") or "").lower() == "ready" and bridge.get("composer_ready") is True)
+        )
+        if not login_ready:
+            write_pairing_state(worker_id, {"status": "pending", "last_error": ""})
+            return {"configured": True, "status": "pending", "pairing_id": pairing_id}
 
         logger.info("[linux-worker] ChatGPT login detected worker_id=%s", worker_id)
 
@@ -181,6 +186,7 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
                 write_pairing_state(worker_id, {"status": "detecting_extension", "last_error": "扩展身份已离线或删除"})
                 return {"configured": True, "status": "detecting_extension", "pairing_id": pairing_id}
             client.pairing_id = pairing_id
+            client.connection_enabled = True
             metadata = dict(client.metadata or {})
             metadata["pairing_id"] = pairing_id
             metadata["linux_worker_pairing_id"] = pairing_id
@@ -189,6 +195,21 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
             await registry.save()
 
         bound_at = beijing_now_iso()
+        with workers._lock:
+            live = workers.data["workers"].get(worker_id)
+            if live:
+                metadata = dict(live.get("metadata") or {})
+                bridge = dict(metadata.get("bridge") or {})
+                bridge.update({
+                    "extension_id": client_id,
+                    "pairing_id": pairing_id,
+                    "connection_enabled": True,
+                    "online": client_id in registry.sockets,
+                    "last_sync_at": bound_at,
+                })
+                metadata["bridge"] = bridge
+                live["metadata"] = metadata
+                workers._save()
         write_pairing_state(
             worker_id,
             {
@@ -204,7 +225,7 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
                 "last_error": "",
             },
         )
-        logger.info("[linux-worker] extension enrollment completed worker_id=%s extension_id=%s", worker_id, client_id)
+        logger.info("[linux-worker] binding completed worker_id=%s extension_id=%s", worker_id, client_id)
         return {"configured": True, "status": "bound", "pairing_id": pairing_id, "client_id": client_id}
 
     # The Bridge binding patch calls this method whenever authoritative extension
@@ -216,7 +237,11 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
 
         def record_extension_status_with_pairing(worker_id: str, snapshot: dict[str, Any]) -> dict[str, Any]:
             result = base_record_extension_status(worker_id, snapshot)
-            if str(result.get("chatgpt_status") or "").lower() == "ready" and _pairing_meta(result).get("pairing_id"):
+            bridge = (result.get("metadata") or {}).get("bridge") or {}
+            login_ready = bridge.get("chatgpt_logged_in") is True or (
+                str(bridge.get("login_state") or "").lower() == "ready" and bridge.get("composer_ready") is True
+            )
+            if login_ready and bridge.get("extension_id") and _pairing_meta(result).get("pairing_id"):
                 try:
                     asyncio.get_running_loop().create_task(reconcile_pairing(worker_id))
                 except RuntimeError:
@@ -273,6 +298,13 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
             await unbind_previous(worker, pairing_id)
         write_pairing_state(worker_id, None)
         return {"cleared": True}
+
+    @app.post("/api/admin/linux-workers/{worker_id}/pairing-reconcile")
+    async def reconcile_worker_pairing(worker_id: str, request: Request) -> dict[str, Any]:
+        """Immediately reconcile the saved code with live Bridge telemetry."""
+        admin(request)
+        worker_exists(worker_id)
+        return await reconcile_pairing(worker_id)
 
     @app.post("/api/admin/linux-workers/{worker_id}/proxy-label")
     async def save_worker_proxy_label(worker_id: str, request: Request) -> dict[str, Any]:

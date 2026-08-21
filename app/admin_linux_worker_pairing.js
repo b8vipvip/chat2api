@@ -56,7 +56,7 @@
     <div style="margin-top:14px;color:#94a3b8;font-size:12px;line-height:1.6">粘贴中心后台已有的 Chrome 扩展配对码并保存。这里只保存安全的配对记录 ID，不会把明文配对码写入 Worker 配置。ChatGPT 登录成功后会自动把该配对记录关联到此 Worker 的扩展。</div>
     <input id="linuxWorkerPairingCode" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴配对码" style="margin-top:12px">
     <div id="linuxWorkerPairingResult" style="min-height:22px;margin-top:10px;color:#94a3b8"></div>
-    <div style="display:flex;justify-content:flex-end;gap:9px;margin-top:10px"><button class="action danger" id="clearLinuxWorkerPairing" type="button">解除配置</button><button class="action good" id="saveLinuxWorkerPairing" type="button">保存配对码</button></div>
+    <div style="display:flex;justify-content:flex-end;gap:9px;margin-top:10px"><button class="action danger" id="clearLinuxWorkerPairing" type="button">解除配置</button><button class="action" id="reconcileLinuxWorkerPairing" type="button">自动配对</button><button class="action good" id="saveLinuxWorkerPairing" type="button">保存配对码</button></div>
   </div>`;
   document.body.appendChild(pairingDialog);
 
@@ -157,6 +157,7 @@
     if (state === "offline") return "网络离线";
     if (state === "error" || state === "failed") return "检测失败";
     if (["ready","online","connected","reachable"].includes(state)) return "已联网";
+    if (["connected","ready"].includes(String(row?.proxy_status || "").toLowerCase())) return "检测中";
     return "未检测";
   };
   const proxyText = row => {
@@ -308,6 +309,18 @@
     try {
       await request(`/api/admin/linux-workers/${encodeURIComponent(selectedPairingWorkerId)}/pairing-code`, {method:"DELETE"});
       result.textContent = "已解除配对码配置。";
+      await fetchRows(true);
+      renderPairingCurrent(selectedRow());
+      await decorate(true);
+    } catch (error) { result.textContent = error.message; }
+  };
+  document.getElementById("reconcileLinuxWorkerPairing").onclick = async () => {
+    if (!selectedPairingWorkerId) return;
+    const result = document.getElementById("linuxWorkerPairingResult");
+    result.textContent = "正在自动检测并配对…";
+    try {
+      const payload = await request(`/api/admin/linux-workers/${encodeURIComponent(selectedPairingWorkerId)}/pairing-reconcile`, {method:"POST", body:"{}"});
+      result.textContent = payload.status === "bound" ? "✅ 自动配对完成。" : "已触发自动配对，正在同步实时状态。";
       await fetchRows(true);
       renderPairingCurrent(selectedRow());
       await decorate(true);
