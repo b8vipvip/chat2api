@@ -80,7 +80,8 @@ def test_worker_binding_creates_blank_target_then_sends_secret_only_over_loopbac
 
 
 def test_worker_binding_rejects_non_loopback_debugger_websocket(monkeypatch):
-    def fake_urlopen(_request, _timeout):
+    def fake_urlopen(_request, timeout):
+        assert timeout == 4
         return _Response({
             "id": "target-1",
             "webSocketDebuggerUrl": "ws://198.51.100.10:9222/devtools/page/target-1",
