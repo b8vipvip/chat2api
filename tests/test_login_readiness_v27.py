@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import subprocess
 
 from app.runtime_contract import CHROME_BRIDGE_VERSION
 
@@ -9,6 +10,7 @@ EXT = ROOT / "chrome_extension"
 CONTENT = "content_login_v27.js"
 BACKGROUND = "background_login_v27.js"
 VM_CONTRACT = "tests/login_readiness_v27.mjs"
+GUEST_VM_CONTRACT = "tests/content_login_guest_precedence_v27.mjs"
 
 
 def read(path: Path) -> str:
@@ -27,18 +29,36 @@ def test_current_bridge_loads_login_detector_for_new_and_existing_tabs():
     assert bootstrap.index('"content_page_adapter_v22.js"') < bootstrap.index(f'"{CONTENT}"') < bootstrap.index('"content_page_driver_v22.js"')
 
 
-def test_login_detector_is_strictly_passive_and_uses_composer_as_ready_evidence():
+def test_login_detector_is_strictly_passive_and_auth_evidence_beats_guest_composer():
     source = read(EXT / CONTENT)
     for state in ("checking", "ready", "login_required", "unknown"):
         assert f'"{state}"' in source
     assert 'strategy: "visible-composer"' in source
     assert 'strategy: authEvidence.kind === "path" ? "auth-path" : "visible-auth-control"' in source
     assert 'message?.type !== "chat2api.login.detect.v27"' in source
+    detect = source.split("function detect()", 1)[1].split("globalThis[KEY]", 1)[0]
+    assert detect.index("const authEvidence = authPathEvidence() || authUiEvidence()") < detect.index("const readyComposer = composer()")
+    assert 'normalize(node.getAttribute("aria-label") || "")' in source
+    assert 'normalize(node.innerText || node.textContent || "")' in source
+    assert "AUTH_CONTROL_RE.test(text)" in source
     assert ".click()" not in source
     assert "MutationObserver" not in source
     assert "KeyboardEvent" not in source
     assert "dispatchEvent" not in source
     assert "setInterval" not in source
+
+
+def test_guest_composer_auth_precedence_vm_contract():
+    result = subprocess.run(
+        ["node", GUEST_VM_CONTRACT],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "content_login_guest_precedence_v27 VM contract passed" in result.stdout
 
 
 def test_background_login_coordinator_loads_before_warm_pool_and_gates_network_prewarm():

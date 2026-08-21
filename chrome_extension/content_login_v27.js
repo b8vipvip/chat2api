@@ -6,6 +6,7 @@
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+  const AUTH_CONTROL_RE = /^(log\s*in|sign\s*in|sign\s*up|登录|登入|注册|註冊)$/i;
 
   function visible(node) {
     if (!(node instanceof Element)) return false;
@@ -42,31 +43,23 @@
     const candidates = document.querySelectorAll("a,button,[role='button']");
     for (const node of candidates) {
       if (!visible(node)) continue;
-      const text = normalize(`${node.getAttribute("aria-label") || ""} ${node.innerText || node.textContent || ""}`);
-      if (!text || text.length > 120) continue;
-      if (/^(log\s*in|sign\s*in|sign\s*up|登录|登入|注册|註冊)$/i.test(text)) {
-        return { kind: "auth-control", value: text.slice(0, 80) };
+      const values = [
+        normalize(node.getAttribute("aria-label") || ""),
+        normalize(node.innerText || node.textContent || ""),
+      ];
+      for (const text of values) {
+        if (!text || text.length > 120) continue;
+        if (AUTH_CONTROL_RE.test(text)) {
+          return { kind: "auth-control", value: text.slice(0, 80) };
+        }
       }
     }
     return null;
   }
 
   function detect() {
-    const readyComposer = composer();
-    if (readyComposer) {
-      return {
-        state: "ready",
-        confidence: "high",
-        strategy: "visible-composer",
-        detector: "login-v27",
-        composer_ready: true,
-        auth_evidence: null,
-        document_ready: document.readyState !== "loading",
-        url: location.href,
-        checked_at_ms: Date.now(),
-      };
-    }
-
+    // Logged-out ChatGPT can expose a guest composer. Explicit authentication
+    // UI/path evidence therefore has priority over composer presence.
     const authEvidence = authPathEvidence() || authUiEvidence();
     if (authEvidence) {
       return {
@@ -76,6 +69,21 @@
         detector: "login-v27",
         composer_ready: false,
         auth_evidence: authEvidence,
+        document_ready: document.readyState !== "loading",
+        url: location.href,
+        checked_at_ms: Date.now(),
+      };
+    }
+
+    const readyComposer = composer();
+    if (readyComposer) {
+      return {
+        state: "ready",
+        confidence: "high",
+        strategy: "visible-composer",
+        detector: "login-v27",
+        composer_ready: true,
+        auth_evidence: null,
         document_ready: document.readyState !== "loading",
         url: location.href,
         checked_at_ms: Date.now(),
