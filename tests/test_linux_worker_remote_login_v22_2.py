@@ -129,7 +129,7 @@ def test_admin_remote_login_is_direct_browser_interaction_not_password_form():
 
 def test_worker_agent_implements_low_latency_remote_login_without_privilege_escalation():
     source = (ROOT / "scripts" / "linux_worker_agent.py").read_text(encoding="utf-8")
-    assert 'AGENT_VERSION = "0.3.3"' in source
+    assert 'AGENT_VERSION = "0.3.4"' in source
     for command in ("open_login_session", "close_login_session", "login_session_frame", "login_session_input"):
         assert f'"{command}"' in source
     assert "capture_frame()" in source
