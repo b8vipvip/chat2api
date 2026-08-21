@@ -51,6 +51,7 @@ const chrome = {
   tabs: {
     async query(query = {}) {
       const rows = [...tabs.values()];
+      if (query.active) return rows.filter(tab => tab.active).map(tab => ({ ...tab }));
       if (Number.isInteger(query.windowId)) return rows.filter(tab => tab.windowId === query.windowId).map(tab => ({ ...tab }));
       return rows.map(tab => ({ ...tab }));
     },
@@ -121,5 +122,17 @@ assert.equal(removedTabs.length, 32, "all restored unmanaged ChatGPT tabs must b
 const workerVisibleTabs = await sandbox.chatTabs();
 assert.deepEqual(workerVisibleTabs.map(tab => tab.id).sort((a, b) => a - b), [2, 3, 4], "initialization tab must not participate in request routing or popup worker-tab counts");
 assert.ok(statusReports >= 1, "cleanup should trigger a fresh extension status report");
+
+// Agent remote login may expose a user-controlled ChatGPT tab that is not yet
+// owned by route/warm/reserve state. Active interactive tabs must survive
+// indefinitely; once no longer active/owned they become eligible for cleanup.
+tabs.get(1).active = false;
+tabs.set(50, { id: 50, windowId: 150, url: "https://chatgpt.com/", pendingUrl: "", active: true, status: "complete" });
+const interactive = await supervisor.reconcile();
+assert.ok(tabs.has(50), "active remote-login ChatGPT tab must never be reclaimed as an orphan");
+assert.equal(interactive.protected_interactive_tabs, 1);
+tabs.get(50).active = false;
+await supervisor.reconcile();
+assert.ok(!tabs.has(50), "inactive unowned ChatGPT tab should be reclaimed after interaction ends");
 
 console.log("tab_supervisor_v32 VM contract passed");
