@@ -91,7 +91,7 @@ const markerStart = source.indexOf("async function candidateTabs");
 const markerEnd = source.indexOf("async function retireAutomaticProbeIfReady");
 assert.ok(markerStart >= 0 && markerEnd > markerStart);
 const candidateBlock = source.slice(markerStart, markerEnd);
-assert.ok(candidateBlock.includes("chat2apiInitializationTabIdV32"), "initialization tab must be an authoritative login candidate");
+assert.ok(candidateBlock.includes("INIT_TAB_KEY"), "initialization tab must be an authoritative login candidate");
 assert.ok(!candidateBlock.includes("for (const tab of await chatTabs())"), "all worker tabs must not vote on account login state");
 
 console.log("login_authority_v32 VM contract passed");
