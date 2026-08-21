@@ -46,6 +46,21 @@ def test_login_session_ticket_is_memory_only_worker_bound_single_session_and_exp
     assert not store.has_worker_session("wrk_one")
 
 
+def test_login_session_ignores_stale_ready_and_requires_fresh_login_transition():
+    store = LoginSessionStore(idle_seconds=120)
+    ticket = store.issue("wrk_login", baseline_login_checked_at_ms=1000)
+    session = store.require("wrk_login", ticket, touch=False)
+
+    assert session.observe_login(checked_at_ms=1000, state="ready", composer_ready=True) is False
+    assert session.observe_login(checked_at_ms=1100, state="ready", composer_ready=True) is False
+    assert session.saw_login_required is False
+    assert session.observe_login(checked_at_ms=1200, state="login_required", composer_ready=False) is False
+    assert session.saw_login_required is True
+    assert session.observe_login(checked_at_ms=1200, state="ready", composer_ready=True) is False
+    assert session.observe_login(checked_at_ms=1300, state="ready", composer_ready=False) is False
+    assert session.observe_login(checked_at_ms=1400, state="ready", composer_ready=True) is True
+
+
 def test_remote_login_helper_uses_xvfb_capture_and_xdotool_without_listener():
     source = (ROOT / "scripts" / "linux_worker_remote_login.py").read_text(encoding="utf-8")
     for token in (
@@ -83,6 +98,7 @@ def test_bootstrap_installs_only_headless_capture_dependencies_not_desktop_or_re
 
 def test_remote_login_control_plane_requires_admin_plus_worker_bound_ticket():
     source = (ROOT / "app" / "linux_worker_patch.py").read_text(encoding="utf-8")
+    freshness = (ROOT / "app" / "linux_worker_login_freshness_patch.py").read_text(encoding="utf-8")
     for token in (
         'LOGIN_TICKET_HEADER = "x-chat2api-login-ticket"',
         'LoginSessionStore()',
@@ -97,6 +113,10 @@ def test_remote_login_control_plane_requires_admin_plus_worker_bound_ticket():
         'len(frame) > 2_100_000',
     ):
         assert token in source
+    assert 'session.observe_login(' in freshness
+    assert 'baseline = _bridge_login_observation(worker)["checked_at_ms"]' in freshness
+    assert 'send_worker_command(worker_id, "login_session_frame"' in freshness
+    assert 'send_worker_command(worker_id, "close_login_session"' in freshness
     assert LOGIN_SESSION_IDLE_SECONDS == 20 * 60
 
 
@@ -142,5 +162,8 @@ def test_worker_agent_implements_low_latency_remote_login_without_privilege_esca
 
 def test_remote_login_runtime_tracks_binding_upgrade():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
+    entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert _runtime_version(runtime) >= (0, 22, 4)
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
+    assert "install_linux_worker_login_freshness_patch(app)" in entry
+    assert entry.index("install_linux_worker_patch(app)") < entry.index("install_linux_worker_login_freshness_patch(app)")
