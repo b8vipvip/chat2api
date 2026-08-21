@@ -21,7 +21,7 @@ from linux_worker_proxy import ProxyConfigError, build_xray_config
 from linux_worker_remote_login import capture_frame, close_session, inject_worker_binding, open_session, send_input, session_active
 
 
-AGENT_VERSION = "0.3.3"
+AGENT_VERSION = "0.3.4"
 CONFIG = Path(os.environ.get("CHAT2API_WORKER_CONFIG", "/etc/chat2api-worker/worker.json"))
 XRAY_CONFIG = Path(os.environ.get("CHAT2API_XRAY_CONFIG", "/etc/chat2api-worker/xray.json"))
 PROXY_APPLY_HELPER = Path(os.environ.get("CHAT2API_PROXY_APPLY_HELPER", "/usr/local/sbin/chat2api-worker-proxy-apply"))
@@ -335,36 +335,64 @@ def _request_binding_ticket(config: dict[str, Any]) -> dict[str, Any] | None:
 async def _binding_loop(config: dict[str, Any]) -> None:
     """Keep explicit Worker↔Bridge identity healthy for the lifetime of the Agent.
 
-    Binding must never fight with a human remote-login session for Chrome focus.
-    While the login window is open, ticket injection is deferred until the
-    operator closes the session. A fresh Worker still waits for a real proxy
-    before any binding navigation is attempted.
+    Extension enrollment is a control-plane operation against the chat2api
+    server and must not depend on ChatGPT/proxy reachability. Requiring a live
+    ChatGPT proxy probe here creates a circular dependency: without enrollment
+    the Bridge cannot upload the network/login telemetry needed to diagnose the
+    proxy. Human remote-login sessions are still protected from focus changes.
     """
+    last_stage = ""
+
+    def report(stage: str, detail: str = "") -> None:
+        nonlocal last_stage
+        safe_detail = str(detail or "").strip()[:120]
+        marker = f"{stage}:{safe_detail}"
+        if marker == last_stage:
+            return
+        last_stage = marker
+        suffix = f" detail={safe_detail}" if safe_detail else ""
+        print(f"[linux-worker] extension-binding stage={stage}{suffix}", flush=True)
+
     while True:
         if session_active():
+            report("deferred_login_session")
             await asyncio.sleep(BINDING_RETRY_SECONDS)
             continue
+
         payload = await asyncio.to_thread(_request_binding_ticket, config)
         if payload and payload.get("bound") is True:
+            report("bound")
             await asyncio.sleep(BINDING_BOUND_POLL_SECONDS)
             continue
-        if not proxy_configured():
+        if not payload:
+            report("ticket_unavailable")
             await asyncio.sleep(BINDING_RETRY_SECONDS)
             continue
-        proxy = await asyncio.to_thread(_proxy_test)
-        if not proxy.get("ok"):
-            await asyncio.sleep(BINDING_RETRY_SECONDS)
-            continue
+
         if session_active():
+            report("deferred_login_session")
             await asyncio.sleep(BINDING_RETRY_SECONDS)
             continue
-        ticket = str((payload or {}).get("ticket") or "")
-        server_url = str((payload or {}).get("server_url") or "")
-        if ticket and server_url and service_active("chat2api-chrome.service"):
-            result = await asyncio.to_thread(inject_worker_binding, ticket, server_url)
-            if result.get("ok"):
-                await asyncio.sleep(BINDING_POST_INJECT_SECONDS)
-                continue
+
+        ticket = str(payload.get("ticket") or "")
+        server_url = str(payload.get("server_url") or "")
+        if not ticket or not server_url:
+            report("ticket_invalid")
+            await asyncio.sleep(BINDING_RETRY_SECONDS)
+            continue
+        if not service_active("chat2api-chrome.service"):
+            report("chrome_unavailable")
+            await asyncio.sleep(BINDING_RETRY_SECONDS)
+            continue
+
+        report("injecting")
+        result = await asyncio.to_thread(inject_worker_binding, ticket, server_url)
+        if result.get("ok"):
+            report("injected")
+            await asyncio.sleep(BINDING_POST_INJECT_SECONDS)
+            continue
+
+        report("inject_failed", str(result.get("error") or "unknown"))
         await asyncio.sleep(BINDING_RETRY_SECONDS)
 
 
