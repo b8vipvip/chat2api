@@ -218,7 +218,7 @@ def test_agent_binding_ticket_never_enters_argv_or_chatgpt_page_and_has_no_new_l
     assert '"X-Worker-Token": str(config.get("worker_token") or "")' in agent
     assert "/api/workers/extension-binding-ticket" in agent
     assert "inject_worker_binding" in agent
-    assert 'AGENT_VERSION = "0.3.3"' in agent
+    assert 'AGENT_VERSION = "0.3.4"' in agent
     assert "BINDING_BOUND_POLL_SECONDS = 60.0" in agent
     lowered = agent.lower()
     assert "http.server" not in lowered
