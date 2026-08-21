@@ -84,11 +84,13 @@ def test_remote_login_uses_cdp_first_and_binding_cannot_steal_focus():
     assert agent.count("if session_active():") >= 2
 
 
-def test_xdotool_stdin_uses_one_command_per_line_for_secret_binding_url():
+def test_xdotool_stdin_remains_for_remote_input_while_secret_binding_uses_cdp():
     helper = (ROOT / "scripts" / "linux_worker_remote_login.py").read_text(encoding="utf-8")
+    binding = helper.split("def inject_worker_binding", 1)[1].split("def send_input", 1)[0]
     assert 'def _run_xdotool_stdin_commands(commands: list[list[str]]' in helper
     assert 'for command in commands' in helper
     assert '["key", "--clearmodifiers", "ctrl+l"]' in helper
     assert '["type", "--clearmodifiers", "--delay", "0", url]' in helper
     assert '["key", "--clearmodifiers", "Return"]' in helper
-    assert '_type_url_into_focused_chrome(binding_url, error_name="binding_injection_failed")' in helper
+    assert '_navigate_secret_url_via_cdp(binding_url, error_name="binding_injection_failed")' in binding
+    assert '_type_url_into_focused_chrome(binding_url, error_name="binding_injection_failed")' not in binding
