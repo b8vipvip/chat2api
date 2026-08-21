@@ -5,6 +5,7 @@
   const NETWORK_GATE_KEY = "__CHAT2API_NETWORK_GATE_V26__";
   const WARM_POOL_KEY = "__CHAT2API_CONVERSATION_WARM_POOL_V2__";
   const CACHE_KEY = "chatgptLoginReadinessV27";
+  const INIT_TAB_KEY = "chat2apiInitializationTabIdV32";
   const CACHE_MS = 15000;
   const PROBE_URL = "https://chatgpt.com/";
   const state = {
@@ -129,22 +130,32 @@
       rows.push(tab);
     };
 
+    // A human login/auth window is the strongest authority while it exists.
     const probe = await trackedProbe();
     if (probe?.tab) add(probe.tab);
 
-    const settings = await config().catch(() => ({}));
-    if (Number.isInteger(settings.boundTabId)) {
-      try { add(await chrome.tabs.get(settings.boundTabId)); } catch (_) {}
+    // The Worker tab supervisor owns one dedicated initialization/auth tab. It
+    // is deliberately excluded from request routing and is the stable fallback
+    // authority after Chrome restores or cleans worker windows.
+    const stored = await chrome.storage.local.get({ [INIT_TAB_KEY]: null }).catch(() => ({}));
+    if (Number.isInteger(stored[INIT_TAB_KEY])) {
+      try { add(await chrome.tabs.get(stored[INIT_TAB_KEY])); } catch (_) {}
     }
 
+    // Remote login through the Worker Agent can focus a ChatGPT page without
+    // going through popup.login.open, so keep the active page authoritative too.
     try {
       const active = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       for (const tab of active || []) add(tab);
     } catch (_) {}
 
-    try {
-      for (const tab of await chatTabs()) add(tab);
-    } catch (_) {}
+    // Keep the legacy bound tab as a final compatibility fallback, but do not
+    // scan every worker/warm/reserve tab: stale pages must not vote the account
+    // back to `ready` after an explicit logout in the authoritative browser.
+    const settings = await config().catch(() => ({}));
+    if (Number.isInteger(settings.boundTabId)) {
+      try { add(await chrome.tabs.get(settings.boundTabId)); } catch (_) {}
+    }
     return rows;
   }
 
@@ -182,6 +193,7 @@
     }
 
     let loginRequired = null;
+    let ready = null;
     let checking = null;
     let unknown = null;
     for (const tab of candidates) {
@@ -218,16 +230,16 @@
         tab_id: tab.id,
         window_id: tab.windowId,
       };
-      if (result.state === "ready" && result.composer_ready === true) {
-        const saved = await persist(result);
-        return retireAutomaticProbeIfReady(saved);
-      }
       if (result.state === "login_required") loginRequired ||= result;
+      else if (result.state === "ready" && result.composer_ready === true) ready ||= result;
       else if (result.state === "checking") checking ||= result;
       else unknown ||= result;
     }
 
-    return persist(loginRequired || checking || unknown || {
+    // Explicit authentication UI wins over a composer. This is intentionally
+    // conservative: a false positive `ready` can send API traffic into a logged-
+    // out Worker, whereas a short login_required/checking period is recoverable.
+    const selected = loginRequired || ready || checking || unknown || {
       state: "unknown",
       confidence: "low",
       strategy: "no-passive-login-evidence",
@@ -235,7 +247,9 @@
       document_ready: false,
       tab_id: candidates[0]?.id || null,
       window_id: candidates[0]?.windowId || null,
-    });
+    };
+    const saved = await persist(selected);
+    return selected === ready ? retireAutomaticProbeIfReady(saved) : saved;
   }
 
   async function detect(force = false) {
@@ -339,8 +353,7 @@
 
   function patchWarmPoolAffinityGate() {
     const pool = globalThis[WARM_POOL_KEY];
-    if (!pool || typeof pool.onAffinityChanged !== "function") return false;
-    if (pool.login_readiness_gate_v27 === true) return true;
+    if (!pool || typeof pool.onAffinityChanged !== "function" || pool.login_readiness_gate_v27 === true) return Boolean(pool?.login_readiness_gate_v27);
     const baseAffinityChanged = pool.onAffinityChanged.bind(pool);
     pool.onAffinityChanged = async (...args) => {
       const gate = globalThis[NETWORK_GATE_KEY];
@@ -413,6 +426,7 @@
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
     if (changes.chatgptLoginState?.newValue === "ready") kickWarmPool();
+    if (changes[INIT_TAB_KEY]) state.bootValidated = false;
   });
 
   chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
@@ -431,9 +445,9 @@
       state.suppressedRemovedTabs.delete(tabId);
       return;
     }
-    chrome.storage.local.get({ chatgptLoginProbeTabId: null, chatgptLoginTabId: null }).then(async stored => {
+    chrome.storage.local.get({ chatgptLoginProbeTabId: null, chatgptLoginTabId: null, [INIT_TAB_KEY]: null }).then(async stored => {
       if (stored.chatgptLoginProbeTabId === tabId) await clearTrackedProbe();
-      if (stored.chatgptLoginTabId === tabId || stored.chatgptLoginProbeTabId === tabId) {
+      if (stored.chatgptLoginTabId === tabId || stored.chatgptLoginProbeTabId === tabId || stored[INIT_TAB_KEY] === tabId) {
         state.bootValidated = false;
         detect(true).catch(() => {});
       }

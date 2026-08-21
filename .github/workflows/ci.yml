@@ -88,6 +88,7 @@ jobs:
           node --check chrome_extension/background_login_v27.js
           node --check chrome_extension/background_worker_binding_v30.js
           node --check chrome_extension/background_external_warm_v28.js
+          node --check chrome_extension/background_tab_supervisor_v32.js
           node --check chrome_extension/background_hardening.js
           node --check chrome_extension/background_socket_singleflight_v21.js
           node --check chrome_extension/background_logging.js
@@ -146,6 +147,10 @@ jobs:
         run: node tests/network_platform_v26.mjs
       - name: Login readiness VM contract
         run: node tests/login_readiness_v27.mjs
+      - name: Login authority VM contract
+        run: node tests/login_authority_v32.mjs
+      - name: Worker tab supervisor VM contract
+        run: node tests/tab_supervisor_v32.mjs
       - name: External warm bootstrap VM contract
         run: node tests/external_warm_bootstrap_v28.mjs
       - name: Tests
