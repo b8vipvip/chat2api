@@ -34,7 +34,7 @@ def test_worker_agent_implements_bounded_diagnostics_command_and_bundle_ships_he
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
 
-    assert 'AGENT_VERSION = "0.3.3"' in agent
+    assert 'AGENT_VERSION = "0.3.4"' in agent
     assert 'DIAGNOSTICS_HELPER = Path(' in agent
     assert 'if command == "get_logs":' in agent
     assert 'MAX_DIAGNOSTIC_CHARS = 450_000' in agent
