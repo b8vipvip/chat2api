@@ -108,15 +108,22 @@ def test_bridge_login_event_automatically_reconciles_saved_pairing(tmp_path):
     app.state.pairings = pairings
     app.state.admin_sessions = _AdminSessions()
     install_linux_worker_pairing_patch(app)
+
+    @app.post("/_test/bridge-ready")
+    async def bridge_ready():
+        workers.record_extension_status(worker_id, {
+            "client_id": client_id, "device_id": device_id, "online": True, "connection_enabled": True,
+            "metadata": {"chatgpt_login_state": "ready", "chatgpt_login_composer_ready": True},
+        })
+        return {"ok": True}
+
     with TestClient(app) as client:
         saved = client.put(f"/api/admin/linux-workers/{worker_id}/pairing-code", json={"pairing_code": raw_code})
         assert saved.status_code == 200
         assert saved.json()["reconcile"]["status"] == "pending"
 
-        workers.record_extension_status(worker_id, {
-            "client_id": client_id, "device_id": device_id, "online": True, "connection_enabled": True,
-            "metadata": {"chatgpt_login_state": "ready", "chatgpt_login_composer_ready": True},
-        })
+        reported = client.post("/_test/bridge-ready")
+        assert reported.status_code == 200, reported.text
         deadline = time.monotonic() + 2
         while time.monotonic() < deadline and pairings.get(pairing["pairing_id"]).bound_client_id != client_id:
             time.sleep(0.02)
@@ -207,7 +214,7 @@ def test_worker_ui_is_stable_chinese_and_uses_beijing_time():
         'nth-child(10)',
         'timeZone:"Asia/Shanghai"',
         'row.last_seen_at || row.install_updated_at',
-        'return logged ? "已登录" : "未登录"',
+        'return logged ? "已登录" : checking ? "登录中" : "未登录"',
         'return `已连接（${name}）`',
         'pairing.textContent = "配对码"',
         'remove.textContent = "删除 Worker"',

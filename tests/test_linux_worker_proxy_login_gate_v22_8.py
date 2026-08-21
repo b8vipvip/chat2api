@@ -45,7 +45,7 @@ def test_real_world_vless_ws_tls_link_shape_builds_expected_xray_stream_settings
 
 def test_worker_proxy_test_rejects_default_freedom_and_login_has_worker_side_gate():
     source = (ROOT / "scripts" / "linux_worker_agent.py").read_text(encoding="utf-8")
-    assert 'AGENT_VERSION = "0.3.3"' in source
+    assert 'AGENT_VERSION = "0.3.4"' in source
     assert 'if not proxy_configured():' in source
     assert '"error": "proxy_not_configured"' in source
     assert 'if command == "open_login_session":' in source
@@ -53,18 +53,19 @@ def test_worker_proxy_test_rejects_default_freedom_and_login_has_worker_side_gat
     assert '"error": "proxy_required_for_login"' in source
 
 
-def test_worker_bridge_binding_waits_for_live_proxy_before_restoring_chatgpt():
+def test_worker_bridge_binding_is_independent_from_chatgpt_proxy_probe():
     source = (ROOT / "scripts" / "linux_worker_agent.py").read_text(encoding="utf-8")
     binding = source.split("async def _binding_loop", 1)[1].split("async def main", 1)[0]
-    assert "if not proxy_configured():" in binding
-    assert "proxy = await asyncio.to_thread(_proxy_test)" in binding
-    assert "if not proxy.get(\"ok\")" in binding
+    assert "_request_binding_ticket" in binding
     assert "inject_worker_binding" in binding
-    assert binding.index("if not proxy_configured():") < binding.index("inject_worker_binding")
-    assert binding.index("proxy = await asyncio.to_thread(_proxy_test)") < binding.index("inject_worker_binding")
+    assert "if not proxy_configured():" not in binding
+    assert "proxy = await asyncio.to_thread(_proxy_test)" not in binding
+    assert "if not proxy.get(\"ok\")" not in binding
+    assert "session_active()" in binding
+    assert 'service_active("chat2api-chrome.service")' in binding
 
 
-def test_bootstrap_upgrade_preserves_identity_and_chrome_starts_about_blank():
+def test_bootstrap_upgrade_preserves_identity_and_chrome_starts_chatgpt():
     source = (ROOT / "scripts" / "bootstrap_linux_worker.sh").read_text(encoding="utf-8")
     launcher = (ROOT / "scripts" / "linux_worker_chrome_launcher.sh").read_text(encoding="utf-8")
     assert "--upgrade) UPGRADE_ONLY=1" in source
@@ -74,7 +75,8 @@ def test_bootstrap_upgrade_preserves_identity_and_chrome_starts_about_blank():
     chrome_unit = source.split("cat >/etc/systemd/system/chat2api-chrome.service", 1)[1].split("\nUNIT\n", 1)[0]
     assert "linux_worker_chrome_launcher.sh" in chrome_unit
     assert "https://chatgpt.com/" not in chrome_unit
-    assert "about:blank" in launcher
+    assert 'CHATGPT_URL="${CHATGPT_URL:-https://chatgpt.com/}"' in launcher
+    assert '"$CHATGPT_URL"' in launcher
     assert "PROFILE_DIR" in source
     assert 'rm -rf /opt/chat2api-worker-venv "$WORKER_DIR" /etc/chat2api-worker /var/lib/chat2api-worker' in source
 
