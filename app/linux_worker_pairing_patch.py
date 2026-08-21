@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import secrets
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,8 @@ PATCH_VERSION = "0.22.18"
 PAIRING_ASSET = "/assets/chat2api-linux-worker-pairing-v22-18.js"
 MAX_PAIRING_CODE_LENGTH = 512
 MAX_PROXY_NAME_LENGTH = 80
+PAIRING_STATES = {"pending", "waiting_chatgpt_login", "detecting_extension", "binding", "bound", "failed"}
+logger = logging.getLogger(__name__)
 
 
 async def _response_bytes(response: Response) -> bytes:
@@ -88,11 +91,14 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
             metadata = dict(worker.get("metadata") or {})
             if values is None:
                 metadata.pop("worker_pairing", None)
+                worker["worker_pairing_state"] = "pending"
             else:
                 current = dict(metadata.get("worker_pairing") or {}) if isinstance(metadata.get("worker_pairing"), dict) else {}
                 current.update(values)
                 current["updated_at"] = beijing_now_iso()
                 metadata["worker_pairing"] = current
+                state = str(current.get("status") or "pending")
+                worker["worker_pairing_state"] = state if state in PAIRING_STATES else "failed"
             worker["metadata"] = metadata
             workers._save()
             return workers.public(worker)
@@ -130,47 +136,55 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
             return {"configured": False, "status": "not_configured"}
 
         if str(worker.get("chatgpt_status") or "").lower() != "ready":
-            write_pairing_state(worker_id, {"status": "waiting_login", "last_error": ""})
-            return {"configured": True, "status": "waiting_login", "pairing_id": pairing_id}
+            write_pairing_state(worker_id, {"status": "waiting_chatgpt_login", "last_error": ""})
+            return {"configured": True, "status": "waiting_chatgpt_login", "pairing_id": pairing_id}
+
+        logger.info("[linux-worker] ChatGPT login detected worker_id=%s", worker_id)
 
         client_id = str(worker.get("extension_client_id") or "")
         device_id = str(worker.get("extension_device_id") or "")
         if not client_id or len(device_id) < 8:
-            write_pairing_state(worker_id, {"status": "waiting_extension", "last_error": ""})
-            return {"configured": True, "status": "waiting_extension", "pairing_id": pairing_id}
+            write_pairing_state(worker_id, {"status": "detecting_extension", "last_error": ""})
+            return {"configured": True, "status": "detecting_extension", "pairing_id": pairing_id}
+
+        logger.info("[linux-worker] extension detected worker_id=%s extension_id=%s", worker_id, client_id)
 
         await pairings.ensure_loaded()
         pairing = pairings.get(pairing_id)
         if not pairing or not pairing.enabled:
-            write_pairing_state(worker_id, {"status": "error", "last_error": "配对码不存在或已停用"})
-            return {"configured": True, "status": "error", "error": "pairing_unavailable"}
+            write_pairing_state(worker_id, {"status": "failed", "last_error": "配对码不存在或已停用"})
+            return {"configured": True, "status": "failed", "error": "pairing_unavailable"}
         if pairing.bound_device_id and pairing.bound_device_id != device_id:
-            write_pairing_state(worker_id, {"status": "error", "last_error": "配对码已绑定到其他扩展设备"})
-            return {"configured": True, "status": "error", "error": "pairing_device_mismatch"}
+            write_pairing_state(worker_id, {"status": "failed", "last_error": "配对码已绑定到其他扩展设备"})
+            return {"configured": True, "status": "failed", "error": "pairing_device_mismatch"}
 
         client = registry.clients.get(client_id)
         if not client:
-            write_pairing_state(worker_id, {"status": "waiting_extension", "last_error": "扩展身份尚未同步到中心"})
-            return {"configured": True, "status": "waiting_extension", "pairing_id": pairing_id}
+            write_pairing_state(worker_id, {"status": "detecting_extension", "last_error": "扩展身份尚未同步到中心"})
+            return {"configured": True, "status": "detecting_extension", "pairing_id": pairing_id}
         if client.device_id and str(client.device_id) != device_id:
-            write_pairing_state(worker_id, {"status": "error", "last_error": "Worker 与扩展设备标识不一致"})
-            return {"configured": True, "status": "error", "error": "extension_device_mismatch"}
+            write_pairing_state(worker_id, {"status": "failed", "last_error": "Worker 与扩展设备标识不一致"})
+            return {"configured": True, "status": "failed", "error": "extension_device_mismatch"}
+
+        write_pairing_state(worker_id, {"status": "binding", "last_error": ""})
+        logger.info("[linux-worker] pairing matched worker_id=%s pairing_id=%s", worker_id, pairing_id)
 
         try:
             await pairings.bind(pairing_id, client_id, device_id)
         except (KeyError, PermissionError) as exc:
-            write_pairing_state(worker_id, {"status": "error", "last_error": str(exc)[:160]})
-            return {"configured": True, "status": "error", "error": "pairing_bind_failed"}
+            write_pairing_state(worker_id, {"status": "failed", "last_error": str(exc)[:160]})
+            return {"configured": True, "status": "failed", "error": "pairing_bind_failed"}
 
         async with registry.lock:
             client = registry.clients.get(client_id)
             if not client:
-                write_pairing_state(worker_id, {"status": "waiting_extension", "last_error": "扩展身份已离线或删除"})
-                return {"configured": True, "status": "waiting_extension", "pairing_id": pairing_id}
+                write_pairing_state(worker_id, {"status": "detecting_extension", "last_error": "扩展身份已离线或删除"})
+                return {"configured": True, "status": "detecting_extension", "pairing_id": pairing_id}
             client.pairing_id = pairing_id
             metadata = dict(client.metadata or {})
             metadata["pairing_id"] = pairing_id
             metadata["linux_worker_pairing_id"] = pairing_id
+            metadata.update({"extension_id": client_id, "worker_id": worker_id, "platform": "linux", "status": "connected", "last_seen": beijing_now_iso()})
             client.metadata = metadata
             await registry.save()
 
@@ -183,10 +197,14 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
                 "prefix": pairing.prefix,
                 "status": "bound",
                 "bound_client_id": client_id,
+                "extension_id": client_id,
+                "worker_id": worker_id,
                 "bound_at": bound_at,
+                "last_sync_at": bound_at,
                 "last_error": "",
             },
         )
+        logger.info("[linux-worker] extension enrollment completed worker_id=%s extension_id=%s", worker_id, client_id)
         return {"configured": True, "status": "bound", "pairing_id": pairing_id, "client_id": client_id}
 
     # The Bridge binding patch calls this method whenever authoritative extension
@@ -235,7 +253,7 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
                 "pairing_id": pairing.pairing_id,
                 "name": pairing.name,
                 "prefix": pairing.prefix,
-                "status": "saved",
+                "status": "pending",
                 "bound_client_id": None,
                 "bound_at": None,
                 "last_error": "",

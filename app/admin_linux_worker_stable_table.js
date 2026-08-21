@@ -163,7 +163,14 @@
     const chatgptText = row => {
       const b = bridge(row);
       const logged = String(row?.chatgpt_status || "").toLowerCase() === "ready" || (String(b.login_state || "").toLowerCase() === "ready" && b.composer_ready === true);
-      return logged ? "已登录" : "未登录";
+      const checking = ["checking","login_checking"].includes(String(row?.chatgpt_status || b.login_state || "").toLowerCase());
+      return logged ? "已登录" : checking ? "登录中" : "未登录";
+    };
+    const connectionText = row => {
+      const state = String(row?.worker_pairing_state || pairingMeta(row).status || "pending").toLowerCase();
+      const extension = state === "bound" ? "已绑定" : ["detecting_extension","binding"].includes(state) ? "检测中" : "未连接";
+      const pairing = state === "bound" ? "完成" : state === "binding" ? "绑定中" : "等待";
+      return {extension, pairing};
     };
     const progressHtml = row => {
       if (!row || row.record_type !== "installation") return "-";
@@ -182,7 +189,7 @@
     const pairingTitle = row => {
       const meta = pairingMeta(row);
       if (!meta.pairing_id) return "未配置配对码";
-      const state = ({saved:"已保存",waiting_login:"等待登录",waiting_extension:"等待扩展",bound:"已绑定",error:"绑定失败"})[String(meta.status || "saved")] || String(meta.status || "已保存");
+      const state = ({pending:"等待",waiting_chatgpt_login:"等待登录",detecting_extension:"检测扩展",binding:"绑定中",bound:"已绑定",failed:"绑定失败"})[String(meta.status || "pending")] || String(meta.status || "等待");
       return `${state}${meta.name ? ` · ${meta.name}` : ""}${meta.prefix ? ` · ${meta.prefix}…` : ""}`;
     };
     const setCell = (cell, html, title = "") => {
@@ -211,7 +218,8 @@
         const proxy = proxyText(row);
         setCell(cells[6], `<span class="lw-pill ${proxy.startsWith("已连接") ? "good" : proxy === "连接异常" ? "bad" : "warn"}">${esc(proxy)}</span>`);
         const chat = chatgptText(row);
-        setCell(cells[7], `<span class="lw-pill ${chat === "已登录" ? "good" : "warn"}">${chat}</span>`);
+        const connection = connectionText(row);
+        setCell(cells[7], `<div>ChatGPT：<span class="lw-pill ${chat === "已登录" ? "good" : "warn"}">${chat}</span></div><div class="lw-muted">Extension：${esc(connection.extension)} · Pairing：${esc(connection.pairing)}</div>`);
         const updated = row.last_seen_at || row.install_updated_at || row.updated_at || row.created_at || row.install_created_at;
         setCell(cells[10], `<span class="lw-muted">${esc(beijingShort(updated))}</span>`, beijingFull(updated));
         cells[11].classList.add("lw-actions");

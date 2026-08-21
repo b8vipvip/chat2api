@@ -4,6 +4,7 @@ import hashlib
 import secrets
 import threading
 import time
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -125,6 +126,11 @@ def install_linux_worker_bridge_binding_patch(app: FastAPI) -> FastAPI:
                 "linux_worker_binding_version": 30,
                 "linux_worker_binding_source": "worker-ticket-v30",
                 "device_id": device_id,
+                "extension_id": client_id,
+                "worker_id": worker_id,
+                "platform": "linux",
+                "status": "connected",
+                "last_seen": datetime.now(timezone.utc).isoformat(),
             },
         )
 
