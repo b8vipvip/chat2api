@@ -88,6 +88,17 @@
     if (Number.isInteger(initTabId)) protectedTabs.add(initTabId);
     if (Number.isInteger(loginTabId)) protectedTabs.add(loginTabId);
 
+    // Agent remote login controls the real Chrome/Xvfb surface and does not
+    // necessarily create the Extension's popup login probe. The currently
+    // visible ChatGPT tab is therefore protected independently of ownership so
+    // a long CAPTCHA/login flow can never be reclaimed as an orphan.
+    try {
+      const active = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      for (const tab of active || []) {
+        if (isChatTab(tab)) protectedTabs.add(tab.id);
+      }
+    } catch (_) {}
+
     if (Number.isInteger(stored.boundTabId) && stored.boundTabId !== initTabId) {
       addOwned(workerTabs, stored.boundTabId, "bound", { priority: 40 });
     }
@@ -196,7 +207,7 @@
       const orphanIds = [];
 
       for (const tab of tabs) {
-        if (tab.id === init.id || tab.id === current.loginTabId || current.workerTabs.has(tab.id)) continue;
+        if (current.protectedTabs.has(tab.id) || current.workerTabs.has(tab.id)) continue;
         const createdAt = Number(state.createdAt.get(tab.id) || 0);
         const startupRestored = state.startupChatTabs.has(tab.id);
         if (!startupRestored && createdAt && now - createdAt < NEW_TAB_GRACE_MS) continue;
@@ -225,6 +236,7 @@
         chatgpt_tabs_seen: tabs.length,
         managed_worker_tabs: surviving.length,
         active_worker_tabs: surviving.filter(row => row.active).length,
+        protected_interactive_tabs: [...current.protectedTabs].filter(tabId => tabId !== init.id && tabId !== current.loginTabId && !current.workerTabs.has(tabId)).length,
         orphan_tabs_closed: closedOrphans,
         overflow_tabs_closed: closedOverflow,
         checked_at_ms: Date.now(),
