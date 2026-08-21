@@ -206,14 +206,21 @@ def test_extension_binding_uses_session_storage_about_blank_scrub_and_no_pairing
     assert '"background_worker_binding_v30.js"' in entry
 
 
-def test_agent_binding_ticket_never_enters_argv_or_chatgpt_page_and_has_no_new_listener():
+def test_agent_binding_ticket_uses_loopback_cdp_without_x11_window_or_secret_http_url():
     helper = (ROOT / "scripts" / "linux_worker_remote_login.py").read_text(encoding="utf-8")
     agent = (ROOT / "scripts" / "linux_worker_agent.py").read_text(encoding="utf-8")
-    assert 'binding_url = f"about:blank#chat2api-worker-bind={raw_ticket}' in helper
-    assert '["xdotool", "-"]' in helper
-    assert '_type_url_into_focused_chrome(binding_url, error_name="binding_injection_failed")' in helper
-    assert 'for command in commands' in helper
-    assert 'shlex.quote(str(part)) for part in command' in helper
+    binding = helper.split("def inject_worker_binding", 1)[1].split("def send_input", 1)[0]
+    cdp = helper.split("def _navigate_secret_url_via_cdp", 1)[1].split("def _open_url_via_existing_chrome", 1)[0]
+
+    assert 'binding_url = f"about:blank#chat2api-worker-bind={raw_ticket}' in binding
+    assert '_navigate_secret_url_via_cdp(binding_url, error_name="binding_injection_failed")' in binding
+    assert "_chrome_window_id()" not in binding
+    assert "_focus_window(" not in binding
+    assert "_type_url_into_focused_chrome(" not in binding
+    assert 'endpoint = f"{CHROME_DEBUG_URL}/json/new?about:blank"' in cdp
+    assert '"method": "Page.navigate"' in cdp
+    assert '"params": {"url": url}' in cdp
+    assert 'debugger_url.startswith(("ws://127.0.0.1:", "ws://localhost:"))' in cdp
     assert "https://chatgpt.com/#chat2api-worker-bind=" not in helper
     assert '"X-Worker-Token": str(config.get("worker_token") or "")' in agent
     assert "/api/workers/extension-binding-ticket" in agent

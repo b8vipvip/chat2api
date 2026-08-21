@@ -19,6 +19,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
 
+from websockets.sync.client import connect as websocket_connect
+
 
 DISPLAY = os.environ.get("CHAT2API_LOGIN_DISPLAY", ":99")
 SOURCE_WIDTH = int(os.environ.get("CHAT2API_LOGIN_SOURCE_WIDTH", "1920"))
@@ -233,6 +235,50 @@ def _open_url_via_cdp(url: str, *, error_name: str) -> dict[str, Any]:
     return {"ok": True, "method": "cdp", "target_id": target_id, "target_url": target_url}
 
 
+def _navigate_secret_url_via_cdp(url: str, *, error_name: str) -> dict[str, Any]:
+    """Navigate a fresh blank target over loopback CDP without putting `url` in HTTP or argv."""
+    endpoint = f"{CHROME_DEBUG_URL}/json/new?about:blank"
+    try:
+        request = Request(endpoint, data=b"", method="PUT")
+        with urlopen(request, timeout=4) as response:
+            payload = json.loads(response.read(65536).decode("utf-8"))
+    except (OSError, HTTPError, URLError, ValueError, json.JSONDecodeError) as exc:
+        return {"ok": False, "error": error_name, "detail": f"cdp_unavailable:{type(exc).__name__}"}
+
+    target_id = str(payload.get("id") or "") if isinstance(payload, dict) else ""
+    debugger_url = str(payload.get("webSocketDebuggerUrl") or "") if isinstance(payload, dict) else ""
+    if not target_id or not debugger_url:
+        return {"ok": False, "error": error_name, "detail": "cdp_target_missing"}
+    if not debugger_url.startswith(("ws://127.0.0.1:", "ws://localhost:")):
+        return {"ok": False, "error": error_name, "detail": "cdp_debugger_not_loopback"}
+
+    command_id = 1
+    try:
+        with websocket_connect(debugger_url, open_timeout=4, close_timeout=1) as socket:
+            socket.send(json.dumps({
+                "id": command_id,
+                "method": "Page.navigate",
+                "params": {"url": url},
+            }, separators=(",", ":")))
+            deadline = time.monotonic() + 4.0
+            while time.monotonic() < deadline:
+                raw = socket.recv(timeout=max(0.05, deadline - time.monotonic()))
+                message = json.loads(raw)
+                if not isinstance(message, dict) or message.get("id") != command_id:
+                    continue
+                if message.get("error"):
+                    return {"ok": False, "error": error_name, "detail": "cdp_page_error"}
+                result = message.get("result") if isinstance(message.get("result"), dict) else {}
+                if result.get("errorText"):
+                    return {"ok": False, "error": error_name, "detail": "cdp_navigation_error"}
+                return {"ok": True, "method": "cdp-page-navigate", "target_id": target_id}
+    except Exception as exc:
+        # Do not include the navigation URL or WebSocket payload in diagnostics;
+        # the Worker binding ticket is intentionally short-lived and secret.
+        return {"ok": False, "error": error_name, "detail": f"cdp_socket:{type(exc).__name__}"}
+    return {"ok": False, "error": error_name, "detail": "cdp_navigation_timeout"}
+
+
 def _open_url_via_existing_chrome(url: str, *, error_name: str) -> dict[str, Any]:
     """Ask the already-running profile instance to open a URL directly.
 
@@ -281,11 +327,11 @@ def _navigate_login_page() -> dict[str, Any]:
 def inject_worker_binding(ticket: str, server_url: str) -> dict[str, Any]:
     """Deliver a short-lived Worker binding proof through an about:blank fragment.
 
-    The proof never enters subprocess argv, an HTTP request, or ChatGPT page
-    JavaScript. The Chrome Bridge captures it from the tab URL, scrubs the tab,
-    claims the Worker identity, and then restores ChatGPT. Binding injection is
-    deferred while a human remote-login session is active so it cannot steal
-    address-bar focus from the operator.
+    The proof never enters subprocess argv, a DevTools HTTP request, or ChatGPT
+    page JavaScript. A blank CDP target is created first, then Page.navigate is
+    sent only over Chrome's loopback-only DevTools WebSocket. The Chrome Bridge
+    captures the fragment, scrubs the tab, claims the Worker identity, and then
+    restores ChatGPT. Binding remains deferred during a human login session.
     """
     raw_ticket = str(ticket or "").strip()
     clean_server = str(server_url or "").strip().rstrip("/")
@@ -298,14 +344,8 @@ def inject_worker_binding(ticket: str, server_url: str) -> dict[str, Any]:
             SESSION.close()
         if SESSION.active:
             return {"ok": False, "error": "binding_deferred_login_session"}
-        window_id = _chrome_window_id()
-        if not window_id:
-            return {"ok": False, "error": "chrome_window_not_found"}
-        focused = _focus_window(window_id, error_name="binding_focus_failed")
-        if not focused.get("ok"):
-            return focused
         binding_url = f"about:blank#chat2api-worker-bind={raw_ticket}&chat2api-server={quote(clean_server, safe='')}"
-        return _type_url_into_focused_chrome(binding_url, error_name="binding_injection_failed")
+        return _navigate_secret_url_via_cdp(binding_url, error_name="binding_injection_failed")
 
 
 def send_input(arguments: dict[str, Any]) -> dict[str, Any]:

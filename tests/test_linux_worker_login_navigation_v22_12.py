@@ -29,10 +29,13 @@ def test_navigation_failure_blocks_misleading_blank_remote_login_session():
     assert '"ok": True' in open_session
 
 
-def test_binding_navigation_keeps_secret_url_off_process_argv():
+def test_binding_navigation_keeps_secret_url_off_process_argv_and_devtools_http_query():
     helper = (ROOT / "scripts" / "linux_worker_remote_login.py").read_text(encoding="utf-8")
     binding = helper.split("def inject_worker_binding", 1)[1].split("def send_input", 1)[0]
-    assert '_focus_window(window_id, error_name="binding_focus_failed")' in binding
-    assert '_type_url_into_focused_chrome(binding_url, error_name="binding_injection_failed")' in binding
-    assert 'subprocess.run(["xdotool", "-"]' in helper
-    assert 'for command in commands' in helper
+    cdp = helper.split("def _navigate_secret_url_via_cdp", 1)[1].split("def _open_url_via_existing_chrome", 1)[0]
+    assert '_navigate_secret_url_via_cdp(binding_url, error_name="binding_injection_failed")' in binding
+    assert "_focus_window(" not in binding
+    assert "_type_url_into_focused_chrome(" not in binding
+    assert 'endpoint = f"{CHROME_DEBUG_URL}/json/new?about:blank"' in cdp
+    assert '"method": "Page.navigate"' in cdp
+    assert '"params": {"url": url}' in cdp
