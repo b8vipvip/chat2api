@@ -1,6 +1,7 @@
 import asyncio
 from pathlib import Path
 import subprocess
+import time
 
 from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
@@ -86,6 +87,49 @@ def test_saved_pairing_code_binds_to_the_existing_logged_in_worker_extension(tmp
     assert raw_code not in str(workers.data["workers"][worker_id])
     assert pairings.get(pairing["pairing_id"]).bound_client_id == client_id
     assert registry.clients[client_id].pairing_id == pairing["pairing_id"]
+
+
+def test_bridge_login_event_automatically_reconciles_saved_pairing(tmp_path):
+    workers = LinuxWorkerStore(tmp_path)
+    enrollment = workers.create_enrollment("Automatic Worker")
+    credentials = workers.enroll(enrollment["code"], {"platform": "linux"})
+    worker_id = credentials["worker_id"]
+    workers.record_proxy_success(worker_id, {"protocol": "vless", "server": "us03", "port": 443})
+    registry = ClientRegistry(tmp_path)
+    device_id = "automatic-device-0001"
+    client_id, _ = asyncio.run(registry.register("Bridge", "Chrome", "0.8.1", {}, device_id=device_id))
+    workers.bind_extension(worker_id, client_id, device_id)
+    pairings = PairingStore(tmp_path)
+    pairing, raw_code = asyncio.run(pairings.create("Automatic Pairing"))
+
+    app = FastAPI()
+    app.state.linux_workers = workers
+    app.state.registry = registry
+    app.state.pairings = pairings
+    app.state.admin_sessions = _AdminSessions()
+    install_linux_worker_pairing_patch(app)
+    with TestClient(app) as client:
+        saved = client.put(f"/api/admin/linux-workers/{worker_id}/pairing-code", json={"pairing_code": raw_code})
+        assert saved.status_code == 200
+        assert saved.json()["reconcile"]["status"] == "pending"
+
+        workers.record_extension_status(worker_id, {
+            "client_id": client_id, "device_id": device_id, "online": True, "connection_enabled": True,
+            "metadata": {"chatgpt_login_state": "ready", "chatgpt_login_composer_ready": True},
+        })
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and pairings.get(pairing["pairing_id"]).bound_client_id != client_id:
+            time.sleep(0.02)
+
+        assert pairings.get(pairing["pairing_id"]).bound_client_id == client_id
+        bridge = workers.data["workers"][worker_id]["metadata"]["bridge"]
+        assert bridge["chatgpt_logged_in"] is True
+        assert bridge["extension_id"] == client_id
+        assert workers.data["workers"][worker_id]["metadata"]["worker_pairing"]["status"] == "bound"
+
+        reconciled = client.post(f"/api/admin/linux-workers/{worker_id}/pairing-reconcile")
+        assert reconciled.status_code == 200
+        assert reconciled.json()["status"] == "bound"
 
 
 def test_proxy_apply_body_reaches_existing_backend_and_catalog_name_is_persisted(tmp_path):

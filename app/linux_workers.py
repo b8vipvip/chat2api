@@ -265,6 +265,13 @@ class LinuxWorkerStore:
             "extension_version": _safe_text(snapshot.get("version") or raw.get("extension_version"), 40),
             "login_state": _safe_text(raw.get("chatgpt_login_state"), 40) or "unknown",
             "composer_ready": raw.get("chatgpt_login_composer_ready") is True,
+            "chatgpt_logged_in": (
+                _safe_text(raw.get("chatgpt_login_state"), 40).lower() == "ready"
+                and raw.get("chatgpt_login_composer_ready") is True
+            ),
+            "extension_id": _safe_text(snapshot.get("client_id"), 180),
+            "pairing_id": _safe_text(raw.get("pairing_id") or raw.get("linux_worker_pairing_id"), 120),
+            "heartbeat_at": iso(utcnow()),
             "login_confidence": _safe_text(raw.get("chatgpt_login_confidence"), 40),
             "login_strategy": _safe_text(raw.get("chatgpt_login_strategy"), 160),
             "login_checked_at_ms": int(raw.get("chatgpt_login_checked_at_ms") or 0),
