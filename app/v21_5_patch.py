@@ -25,12 +25,28 @@ def install_v21_5_patch(app: FastAPI) -> FastAPI:
         def summaries_with_live_concurrency() -> list[dict[str, Any]]:
             rows = base_summaries()
             runtime = getattr(app.state, "concurrency_config", {})
-            configured_limit = int(runtime.get("max_concurrency") or getattr(broker, "max_concurrency", 0) or 0)
+            limit_for = runtime.get("limit_for") if isinstance(runtime, dict) else None
+            default_limit = int(
+                runtime.get("default_max_concurrency")
+                or runtime.get("max_concurrency")
+                or getattr(broker, "max_concurrency", 0)
+                or 0
+            ) if isinstance(runtime, dict) else int(getattr(broker, "max_concurrency", 0) or 0)
+            client_limits = runtime.get("client_limits", {}) if isinstance(runtime, dict) else {}
+            if not isinstance(client_limits, dict):
+                client_limits = {}
+
             for row in rows:
                 client_id = str(row.get("client_id") or "")
                 capacity = row.get("capacity") if isinstance(row.get("capacity"), dict) else {}
+                if callable(limit_for):
+                    configured_limit = int(limit_for(client_id))
+                else:
+                    configured_limit = int(capacity.get("limit_units") or default_limit or 0)
                 row["active_api_calls"] = _active_api_calls(broker, client_id)
-                row["max_concurrency"] = configured_limit or int(capacity.get("limit_units") or 0)
+                row["max_concurrency"] = configured_limit
+                row["concurrency_limit_source"] = "extension" if client_id in client_limits else "default"
+                row["default_max_concurrency"] = default_limit
             return rows
 
         registry.summaries = summaries_with_live_concurrency

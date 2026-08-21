@@ -8,10 +8,12 @@ def test_console_hotfix_removes_broad_dom_observer() -> None:
     admin = (ROOT / "app" / "admin_v21_1.js").read_text(encoding="utf-8")
     assert 'const VERSION = "0.21.2"' in admin
     assert "MutationObserver" not in admin
-    assert "function patchVisibleView(view)" in admin
     assert 'document.querySelectorAll(".nav button[data-view]")' in admin
-    assert "let loadInFlight = null" in admin
-    assert "if (loadInFlight) return loadInFlight" in admin
+    # v0.21.1 no longer polls a separate Overview concurrency panel. Per-extension
+    # editors are owned by admin_v21_5's bounded one-second extension-table refresh.
+    assert 'fetch("/api/admin/concurrency"' not in admin
+    assert "data-concurrency-settings-v211" in admin
+    assert "node.remove()" in admin
 
 
 def test_v212_patch_is_installed_after_configurable_concurrency() -> None:
