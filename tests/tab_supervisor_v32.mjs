@@ -13,11 +13,16 @@ const storageChanged = [];
 const alarmListeners = [];
 const removedTabs = [];
 let statusReports = 0;
+let lastFocusedWindowId = 101;
 
+// Production Chrome restores each historical automation window separately. A
+// one-tab window reports its only tab as `active`, so every restored tab can be
+// active at the same time. Only the active tab of the last-focused window is a
+// user-interactive login surface; the other windows must still be reclaimable.
 for (let id = 1; id <= 36; id += 1) {
-  tabs.set(id, { id, windowId: 100 + id, url: "https://chatgpt.com/", pendingUrl: "", active: id === 1, status: "complete" });
+  tabs.set(id, { id, windowId: 100 + id, url: "https://chatgpt.com/", pendingUrl: "", active: true, status: "complete" });
 }
-tabs.set(900, { id: 900, windowId: 900, url: "https://example.com/", active: false, status: "complete" });
+tabs.set(900, { id: 900, windowId: 900, url: "https://example.com/", active: true, status: "complete" });
 
 const reserveSlots = new Map([
   ["reserve:1", { tab_id: 2, window_id: 102, created_at_ms: 100 }],
@@ -51,6 +56,9 @@ const chrome = {
   tabs: {
     async query(query = {}) {
       const rows = [...tabs.values()];
+      if (query.active && query.lastFocusedWindow) {
+        return rows.filter(tab => tab.active && tab.windowId === lastFocusedWindowId).map(tab => ({ ...tab }));
+      }
       if (query.active) return rows.filter(tab => tab.active).map(tab => ({ ...tab }));
       if (Number.isInteger(query.windowId)) return rows.filter(tab => tab.windowId === query.windowId).map(tab => ({ ...tab }));
       return rows.map(tab => ({ ...tab }));
@@ -117,22 +125,25 @@ assert.ok(tabs.has(1), "initialization tab must remain open");
 assert.ok(tabs.has(2) && tabs.has(3) && tabs.has(4), "three managed Worker tabs must remain open");
 assert.ok(tabs.has(900), "non-ChatGPT tabs are outside supervisor ownership");
 assert.equal([...tabs.values()].filter(tab => /chatgpt\.com/.test(tab.url)).length, 4, "idle steady state is target workers plus one initialization tab");
-assert.equal(removedTabs.length, 32, "all restored unmanaged ChatGPT tabs must be removed");
+assert.equal(removedTabs.length, 32, "all restored unmanaged ChatGPT tabs must be removed even when each restored window marks its tab active");
 
 const workerVisibleTabs = await sandbox.chatTabs();
 assert.deepEqual(workerVisibleTabs.map(tab => tab.id).sort((a, b) => a - b), [2, 3, 4], "initialization tab must not participate in request routing or popup worker-tab counts");
 assert.ok(statusReports >= 1, "cleanup should trigger a fresh extension status report");
 
 // Agent remote login may expose a user-controlled ChatGPT tab that is not yet
-// owned by route/warm/reserve state. Active interactive tabs must survive
-// indefinitely; once no longer active/owned they become eligible for cleanup.
-tabs.get(1).active = false;
+// owned by route/warm/reserve state. The tab in the last-focused window must
+// survive indefinitely; an active tab in a background restored window is not
+// considered interactive and becomes eligible for cleanup.
+lastFocusedWindowId = 150;
 tabs.set(50, { id: 50, windowId: 150, url: "https://chatgpt.com/", pendingUrl: "", active: true, status: "complete" });
 const interactive = await supervisor.reconcile();
-assert.ok(tabs.has(50), "active remote-login ChatGPT tab must never be reclaimed as an orphan");
+assert.ok(tabs.has(50), "last-focused remote-login ChatGPT tab must never be reclaimed as an orphan");
 assert.equal(interactive.protected_interactive_tabs, 1);
-tabs.get(50).active = false;
+lastFocusedWindowId = 101;
 await supervisor.reconcile();
-assert.ok(!tabs.has(50), "inactive unowned ChatGPT tab should be reclaimed after interaction ends");
+assert.ok(!tabs.has(50), "active but background unowned ChatGPT tab should be reclaimed after interaction ends");
 
+// Keep the socket replacement race under the same explicit CI VM-contract step.
+await import("./socket_state_race_v33.mjs");
 console.log("tab_supervisor_v32 VM contract passed");
