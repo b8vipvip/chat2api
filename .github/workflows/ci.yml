@@ -33,6 +33,7 @@ jobs:
           node --check chrome_extension/content_request_v3.js
           node --check chrome_extension/content_request_v4.js
           node --check chrome_extension/content_request_v5.js
+          node --check chrome_extension/content_request_stall_guard_v34.js
           node --check chrome_extension/content_request_perf_v21.js
           node --check chrome_extension/content_completion_v6.js
           node --check chrome_extension/content_completion_fast_v21.js
@@ -151,6 +152,8 @@ jobs:
         run: node tests/login_authority_v32.mjs
       - name: Worker tab supervisor VM contract
         run: node tests/tab_supervisor_v32.mjs
+      - name: Request stall VM contract
+        run: node tests/request_stall_guard_v34.mjs
       - name: External warm bootstrap VM contract
         run: node tests/external_warm_bootstrap_v28.mjs
       - name: Tests
