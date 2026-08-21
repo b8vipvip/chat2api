@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import subprocess
 
 from app.runtime_contract import CHROME_BRIDGE_VERSION
 
@@ -9,6 +10,7 @@ EXT = ROOT / "chrome_extension"
 CONTENT = "content_login_v27.js"
 BACKGROUND = "background_login_v27.js"
 VM_CONTRACT = "tests/login_readiness_v27.mjs"
+GUEST_VM_CONTRACT = "tests/content_login_guest_precedence_v27.mjs"
 
 
 def read(path: Path) -> str:
@@ -44,6 +46,19 @@ def test_login_detector_is_strictly_passive_and_auth_evidence_beats_guest_compos
     assert "KeyboardEvent" not in source
     assert "dispatchEvent" not in source
     assert "setInterval" not in source
+
+
+def test_guest_composer_auth_precedence_vm_contract():
+    result = subprocess.run(
+        ["node", GUEST_VM_CONTRACT],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+    assert "content_login_guest_precedence_v27 VM contract passed" in result.stdout
 
 
 def test_background_login_coordinator_loads_before_warm_pool_and_gates_network_prewarm():
