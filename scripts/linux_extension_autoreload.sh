@@ -39,6 +39,25 @@ wait_for_chrome() {
   return 1
 }
 
+chrome_main_pid() {
+  ps -u "${WORKER_USER}" -o pid=,args= 2>/dev/null \
+    | awk -v needle="--user-data-dir=${PROFILE_DIR}" 'index($0, needle) && !index($0, "--type=") { print $1; exit }'
+}
+
+chrome_started_after_extension_source() {
+  local pid latest started_text started_epoch latest_epoch
+  pid="$(chrome_main_pid)"
+  [[ -n "${pid}" ]] || return 1
+  latest="$(find "${EXTENSION_DIR}" -type f -printf '%T@\n' 2>/dev/null | sort -nr | head -n1 || true)"
+  [[ -n "${latest}" ]] || return 1
+  started_text="$(ps -o lstart= -p "${pid}" 2>/dev/null | sed 's/^ *//;s/ *$//' || true)"
+  [[ -n "${started_text}" ]] || return 1
+  started_epoch="$(date -d "${started_text}" +%s 2>/dev/null || true)"
+  latest_epoch="${latest%%.*}"
+  [[ "${started_epoch}" =~ ^[0-9]+$ && "${latest_epoch}" =~ ^[0-9]+$ ]] || return 1
+  (( started_epoch >= latest_epoch ))
+}
+
 extension_version() {
   python3 - "${EXTENSION_DIR}/manifest.json" <<'PY'
 import json
@@ -170,6 +189,21 @@ if [[ -z "${applied}" ]]; then
 fi
 
 if [[ "${fingerprint}" == "${applied}" ]]; then
+  exit 0
+fi
+
+# The bootstrap upgrader replaces the Worker Bundle and then explicitly restarts
+# Chrome from that new bundle. The old applied fingerprint is still on disk, so
+# the minute timer used to restart the freshly started Chrome a second time.
+# That second restart could land between binding-ticket injection and socket
+# claim, leaving the popup disconnected. If the running Chrome process started
+# after the current extension files were written, it already loaded this exact
+# source tree: adopt the fingerprint instead of restarting it again.
+if chrome_started_after_extension_source; then
+  printf '%s\n' "${fingerprint}" >"${APPLIED_FILE}"
+  rm -f "${FAILED_FILE}"
+  write_state "${fingerprint}" "${version}"
+  log INFO "Chrome already started after the current Bridge source; adopted version=${version} fingerprint=${fingerprint:0:12} without a second restart"
   exit 0
 fi
 

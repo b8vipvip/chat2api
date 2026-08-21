@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 WORKER_USER_HOME="${CHAT2API_CHROME_HOME:-/home/chat2api}"
 PROFILE_DIR="${CHAT2API_CHROME_PROFILE:-${WORKER_USER_HOME}/.config/chat2api-chrome-worker-01}"
 EXTENSION_DIR="${CHAT2API_EXTENSION_DIR:-/opt/chat2api-worker/chrome_extension}"
@@ -10,6 +11,7 @@ PROXY_PORT="${CHAT2API_PROXY_PORT:-10808}"
 CACHE_ROOT="${CHAT2API_CFT_CACHE_DIR:-${WORKER_USER_HOME}/.cache/chat2api-chrome-for-testing}"
 META_URL="${CHAT2API_CFT_META_URL:-https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json}"
 CURRENT_LINK="${CACHE_ROOT}/chrome"
+TAB_INIT_HELPER="${CHAT2API_TAB_INIT_HELPER:-${SCRIPT_DIR}/linux_worker_tab_init.py}"
 
 log() {
   printf '%s [chat2api-cft] %s\n' "$(date -Is)" "$*"
@@ -77,10 +79,31 @@ for old in "${old_versions[@]:-}"; do
   [[ -n "$old" ]] && rm -rf "${CACHE_ROOT}/${old}"
 done
 
+# A Worker profile needs cookies/login state, not Chrome's historical window
+# restore journal. The journal caused every service restart to resurrect all old
+# ChatGPT automation windows (39/40 tabs in production). Remove only tab/window
+# session metadata; Cookies, Local Storage, IndexedDB and login credentials stay
+# in the persistent profile.
+rm -rf "${PROFILE_DIR}/Default/Sessions" 2>/dev/null || true
+rm -f \
+  "${PROFILE_DIR}/Default/Current Session" \
+  "${PROFILE_DIR}/Default/Current Tabs" \
+  "${PROFILE_DIR}/Default/Last Session" \
+  "${PROFILE_DIR}/Default/Last Tabs" 2>/dev/null || true
+
 server_host="${SERVER_URL#*://}"
 server_host="${server_host%%/*}"
 server_host="${server_host%%:*}"
 log "starting Chrome for Testing ${version}; Chrome Bridge=${EXTENSION_DIR}"
+
+# Belt-and-suspenders cleanup: if Chrome restores page targets from another
+# profile journal format, prune duplicate ChatGPT targets through loopback CDP
+# during the first seconds of this Chrome process. This is intentionally
+# one-shot; steady-state capacity remains owned by the Extension supervisor.
+if [[ -f "$TAB_INIT_HELPER" ]]; then
+  python3 "$TAB_INIT_HELPER" --debug-url http://127.0.0.1:9222 --keep 1 --wait 45 &
+fi
+
 exec "$CURRENT_LINK" \
   --user-data-dir="$PROFILE_DIR" \
   --password-store=basic \
