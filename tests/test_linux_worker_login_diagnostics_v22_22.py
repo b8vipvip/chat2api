@@ -69,9 +69,9 @@ def test_worker_table_adds_one_click_diagnostic_log_download(tmp_path):
     for token in (
         'data-worker-diagnostics-v2222',
         'diagnostics.textContent = "诊断日志"',
-        'command:"get_logs"',
-        'timeout_seconds:40',
-        'new Blob([logs], {type:"text/plain;charset=utf-8"})',
+        '/api/admin/linux-worker/${encodeURIComponent(workerId)}/diagnostics/logs',
+        'await response.blob()',
+        'diagnostics.zip',
         'anchor.download = filename',
         'diagnostics.textContent = "已下载"',
         '诊断日志获取失败',
@@ -82,6 +82,23 @@ def test_worker_table_adds_one_click_diagnostic_log_download(tmp_path):
     rendered.write_text(patched, encoding="utf-8")
     result = subprocess.run(["node", "--check", str(rendered)], capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
+
+
+def test_diagnostics_endpoint_is_admin_only_bounded_zip_with_named_logs():
+    source = (ROOT / "app" / "linux_worker_diagnostics_patch.py").read_text(encoding="utf-8")
+
+    for token in (
+        '@app.get("/api/admin/linux-worker/{worker_id}/diagnostics/logs")',
+        'raise HTTPException(401, "Administrator session required")',
+        'MAX_DIAGNOSTICS_BYTES = 50 * 1024 * 1024',
+        '"worker-runtime.log"',
+        '"chrome.log"',
+        '"xvfb.log"',
+        '"pairing.log"',
+        '"extension-sync.log"',
+        'media_type="application/zip"',
+    ):
+        assert token in source
 
 
 def test_runtime_and_entry_publish_v22_22_diagnostics_patch_last():

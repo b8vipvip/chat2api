@@ -5,6 +5,7 @@ WORKER_USER_HOME="${CHAT2API_CHROME_HOME:-/home/chat2api}"
 PROFILE_DIR="${CHAT2API_CHROME_PROFILE:-${WORKER_USER_HOME}/.config/chat2api-chrome-worker-01}"
 EXTENSION_DIR="${CHAT2API_EXTENSION_DIR:-/opt/chat2api-worker/chrome_extension}"
 SERVER_URL="${CHAT2API_SERVER_URL:-https://chat2api.mv3.cn}"
+CHATGPT_URL="${CHATGPT_URL:-https://chatgpt.com/}"
 PROXY_PORT="${CHAT2API_PROXY_PORT:-10808}"
 CACHE_ROOT="${CHAT2API_CFT_CACHE_DIR:-${WORKER_USER_HOME}/.cache/chat2api-chrome-for-testing}"
 META_URL="${CHAT2API_CFT_META_URL:-https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json}"
@@ -93,4 +94,4 @@ exec "$CURRENT_LINK" \
   --disable-dev-shm-usage \
   --window-position=0,0 \
   --window-size=1920,1080 \
-  about:blank
+  "$CHATGPT_URL"

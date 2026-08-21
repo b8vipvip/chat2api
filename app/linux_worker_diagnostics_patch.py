@@ -1,12 +1,20 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, Request
+import io
+import logging
+import zipfile
+
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
+
+from .admin_auth import SESSION_COOKIE
 
 
 PATCH_VERSION = "0.22.22"
 STABLE_TABLE_ASSET = "/assets/chat2api-linux-worker-stable-table-v22-19.js"
 BOOTSTRAP_PATH = "/bootstrap/linux-worker.sh"
+MAX_DIAGNOSTICS_BYTES = 50 * 1024 * 1024
+logger = logging.getLogger(__name__)
 
 
 async def _response_bytes(response: Response) -> bytes:
@@ -78,16 +86,10 @@ def _patch_stable_table(text: str) -> str:
         const original = diagnostics.textContent;
         diagnostics.disabled = true;
         diagnostics.textContent = "生成中…";
-        request(`/api/admin/linux-workers/${encodeURIComponent(workerId)}/commands`, {
-          method:"POST",
-          body:JSON.stringify({command:"get_logs",arguments:{},wait:true,timeout_seconds:40}),
-        }).then(payload => {
-          const result = payload?.result || {};
-          if (!result.ok) throw new Error(String(result.detail || result.error || "Worker 未返回诊断日志"));
-          const logs = String(result.logs || "");
-          if (!logs) throw new Error("Worker 返回的诊断日志为空");
-          const filename = String(result.filename || `chat2api-worker-${workerId}-diagnostics.log`).replace(/[^0-9A-Za-z._-]/g, "_");
-          const blob = new Blob([logs], {type:"text/plain;charset=utf-8"});
+        fetch(`/api/admin/linux-worker/${encodeURIComponent(workerId)}/diagnostics/logs`, {credentials:"same-origin",cache:"no-store"}).then(async response => {
+          if (!response.ok) throw new Error((await response.text()) || `HTTP ${response.status}`);
+          const blob = await response.blob();
+          const filename = `chat2api-worker-${workerId}-diagnostics.zip`;
           const url = URL.createObjectURL(blob);
           const anchor = document.createElement("a");
           anchor.href = url;
@@ -97,7 +99,7 @@ def _patch_stable_table(text: str) -> str:
           anchor.remove();
           setTimeout(() => URL.revokeObjectURL(url), 1200);
           diagnostics.textContent = "已下载";
-          diagnostics.title = result.truncated ? "日志过大，已保留最近内容后下载" : "最近 Worker 诊断日志已下载";
+          diagnostics.title = "最近 Worker 诊断 ZIP 已下载";
           setTimeout(() => {
             if (diagnostics.isConnected) {
               diagnostics.disabled = false;
@@ -121,6 +123,52 @@ def install_linux_worker_diagnostics_patch(app: FastAPI) -> FastAPI:
     if getattr(app.state, "linux_worker_diagnostics_patch_installed", False):
         return app
     app.state.linux_worker_diagnostics_patch_installed = True
+
+    def admin(request: Request) -> None:
+        sessions = getattr(app.state, "admin_sessions", None)
+        if not sessions or not sessions.authenticate(request.cookies.get(SESSION_COOKIE)):
+            raise HTTPException(401, "Administrator session required")
+
+    @app.get("/api/admin/linux-worker/{worker_id}/diagnostics/logs")
+    async def download_linux_worker_diagnostics(worker_id: str, request: Request) -> Response:
+        admin(request)
+        logger.info("[linux-worker] diagnostics requested worker_id=%s", worker_id)
+        try:
+            command = await app.state.send_linux_worker_command(worker_id, "get_logs", {}, wait=True, timeout=40)
+            result = command.get("result") if isinstance(command, dict) else None
+            if not isinstance(result, dict) or not result.get("ok"):
+                raise HTTPException(502, str((result or {}).get("error") or "Worker diagnostics failed")[:160])
+            raw = str(result.get("logs") or "").encode("utf-8")[-MAX_DIAGNOSTICS_BYTES:]
+            if not raw:
+                raise HTTPException(502, "Worker returned empty diagnostics")
+            # The helper emits one redacted, bounded journal stream. Preserve it
+            # intact and also provide named views expected by support tooling.
+            categories = {
+                "worker-runtime.log": ("chat2api-worker-agent",),
+                "chrome.log": ("chat2api-chrome",),
+                "xvfb.log": ("chat2api-xvfb",),
+                "pairing.log": ("pairing", "worker-bind"),
+                "extension-sync.log": ("extension", "bridge"),
+            }
+            text_log = raw.decode("utf-8", errors="replace")
+            output = io.BytesIO()
+            with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for filename, needles in categories.items():
+                    lines = [line for line in text_log.splitlines() if any(needle in line.lower() for needle in needles)]
+                    archive.writestr(filename, "\n".join(lines) + ("\n" if lines else "No matching entries in the bounded diagnostic window.\n"))
+                archive.writestr("diagnostics-full.log", raw)
+            payload = output.getvalue()
+            logger.info("[linux-worker] diagnostics completed worker_id=%s bytes=%d", worker_id, len(payload))
+            return Response(payload, media_type="application/zip", headers={
+                "Content-Disposition": f'attachment; filename="chat2api-worker-{worker_id}-diagnostics.zip"',
+                "Cache-Control": "no-store",
+            })
+        except HTTPException:
+            logger.warning("[linux-worker] diagnostics failed worker_id=%s", worker_id, exc_info=True)
+            raise
+        except Exception as exc:
+            logger.exception("[linux-worker] diagnostics failed worker_id=%s", worker_id)
+            raise HTTPException(500, "Unable to collect Worker diagnostics") from exc
 
     @app.middleware("http")
     async def linux_worker_diagnostics_ui(request: Request, call_next):

@@ -132,6 +132,11 @@ def install_linux_worker_patch(app: FastAPI) -> FastAPI:
         finally:
             app.state.worker_command_waiters.pop(request_id, None)
 
+    # Later, narrowly-scoped patches (for example the diagnostics download
+    # endpoint) reuse the authenticated command transport instead of duplicating
+    # websocket correlation and timeout handling.
+    app.state.send_linux_worker_command = send_worker_command
+
     @app.post("/api/admin/linux-workers/enrollments")
     async def create_enrollment(request: Request) -> dict[str, Any]:
         admin(request)
