@@ -32,4 +32,5 @@ importScripts(
   "conversation_workers_v24.js",
   "conversation_dispatch.js",
   "audio_routing_live.js",
+  "background_tab_supervisor_v32.js",
 );
