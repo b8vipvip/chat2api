@@ -69,6 +69,20 @@ def test_fresh_worker_claims_extension_then_login_event_auto_binds_saved_pairing
     worker_id = credentials["worker_id"]
     pairing, raw_pairing_code = asyncio.run(pairings.create("Fresh Worker Pairing"))
 
+    @app.post("/_test/bridge-ready/{target_client_id}")
+    async def bridge_ready(target_client_id: str):
+        await registry.touch(
+            target_client_id,
+            {
+                "chatgpt_login_state": "ready",
+                "chatgpt_login_composer_ready": True,
+                "chatgpt_login_confidence": "high",
+                "network_probe_status": "external",
+                "network_country_code": "US",
+            },
+        )
+        return {"ok": True}
+
     headers = {
         "X-Worker-ID": worker_id,
         "X-Worker-Token": credentials["worker_token"],
@@ -102,18 +116,8 @@ def test_fresh_worker_claims_extension_then_login_event_auto_binds_saved_pairing
         client_id = claimed.json()["client_id"]
         assert workers.data["workers"][worker_id]["extension_client_id"] == client_id
 
-        asyncio.run(
-            registry.touch(
-                client_id,
-                {
-                    "chatgpt_login_state": "ready",
-                    "chatgpt_login_composer_ready": True,
-                    "chatgpt_login_confidence": "high",
-                    "network_probe_status": "external",
-                    "network_country_code": "US",
-                },
-            )
-        )
+        ready = client.post(f"/_test/bridge-ready/{client_id}")
+        assert ready.status_code == 200, ready.text
 
         deadline = time.monotonic() + 2.0
         while time.monotonic() < deadline:
