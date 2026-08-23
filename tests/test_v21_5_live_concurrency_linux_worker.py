@@ -33,7 +33,7 @@ def test_v21_5_is_installed_after_concurrency_and_before_runtime_contract():
 
 def test_extension_console_uses_live_concurrency_and_per_id_editor():
     source = read(ROOT / "app" / "admin_v21_5.js")
-    assert '"API 调用 / 并发上限"' in source
+    assert 'target.textContent = "并发设置"' in source
     assert "active_api_calls" in source
     assert "capacity?.active_requests" in source
     assert "const POLL_MS = 1000" in source
@@ -42,7 +42,11 @@ def test_extension_console_uses_live_concurrency_and_per_id_editor():
     assert "data-concurrency-limit" in source
     assert "data-concurrency-save" in source
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/concurrency' in source
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in source
     assert 'method: "PUT"' in source
+    assert 'method: "POST"' in source
+    assert "showActionResult" in source
+    assert "target_reached" in source
     assert "concurrency_limit_source" in source
     assert "bound_api_keys" not in source
 

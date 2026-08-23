@@ -47,6 +47,7 @@ from .linux_worker_diagnostics_patch import install_linux_worker_diagnostics_pat
 from .stream_keepalive_patch import install_stream_keepalive_patch
 from .request_stall_patch import install_request_stall_patch
 from .runtime_contract import install_runtime_contract
+from .extension_capacity_control_patch import install_extension_capacity_control_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -93,6 +94,11 @@ install_request_stall_patch(app)
 # Install the runtime contract after the historical patch stack so /version
 # describes the production app rather than the legacy base layer in app.main.
 install_runtime_contract(app)
+
+# Live extension capacity controls add admin/Bridge control endpoints without
+# owning the runtime version. They are installed after the runtime contract so
+# the version surface remains stable while the control plane can evolve.
+install_extension_capacity_control_patch(app)
 
 # These final Worker patches do not own the runtime version. They are installed
 # last so the presentation assets can refine the legacy Worker console without

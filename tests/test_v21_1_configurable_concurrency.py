@@ -38,16 +38,19 @@ def test_v211_static_contracts() -> None:
     assert 'data-concurrency-settings-v211' in admin
     assert 'querySelectorAll("[data-concurrency-settings-v211]").forEach(node => node.remove())' in admin
     assert "按扩展 ID 独立计数" in admin
-    assert "API 调用 / 并发上限" in admin
+    assert "并发设置" in admin
     assert 'fetch("/api/admin/concurrency"' not in admin
     assert "saveConcurrencyV211" not in admin
 
-    assert "API 调用 / 并发上限" in admin_live
+    assert "并发设置" in admin_live
     assert "data-extension-concurrency-editor" in admin_live
     assert "data-concurrency-limit" in admin_live
     assert "data-concurrency-save" in admin_live
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/concurrency' in admin_live
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in admin_live
     assert 'method: "PUT"' in admin_live
+    assert "concurrency_limit_source" in admin_live
+    assert "bound_api_keys" not in admin_live
 
     assert "MAX_WORKERS_PER_KEY = 3" in workers
     assert "function workerLimit(message)" in workers
