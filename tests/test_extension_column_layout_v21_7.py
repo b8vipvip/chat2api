@@ -7,9 +7,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_column_layout_supports_visibility_order_and_persistence():
     source = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
-    assert 'const VERSION = "0.21.13"' in source
-    assert 'const STORAGE_KEY = "chat2api.extensionColumns.v1"' in source
+    assert 'const VERSION = "0.21.14"' in source
+    assert 'const STORAGE_KEY = "chat2api.extensionColumns.v2"' in source
+    assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v1"' in source
     assert "localStorage.getItem(STORAGE_KEY)" in source
+    assert "localStorage.getItem(LEGACY_STORAGE_KEY)" in source
     assert "localStorage.setItem(STORAGE_KEY" in source
     assert 'data-column-visible' in source
     assert 'data-column-move' in source
@@ -50,7 +52,7 @@ def test_column_layout_covers_real_v20_base_columns_and_nonduplicate_status_colu
         "版本",
         "账户类型",
         "状态",
-        "API 调用数（实时并发）",
+        "API 调用 / 并发上限",
         "最后在线",
         "操作",
         "平台",
@@ -60,6 +62,7 @@ def test_column_layout_covers_real_v20_base_columns_and_nonduplicate_status_colu
     ):
         assert label in source
 
+    assert '["API 调用数（实时并发）", "concurrency"]' in source
     assert 'key: "health"' not in source
     assert 'label: "运行健康"' not in source
     assert '["运行健康", "health"]' not in source
@@ -135,12 +138,15 @@ def test_column_settings_modal_uses_numbered_cards_and_compact_order_controls():
     assert "已显示 ${visibleCount} / ${prefs.order.length} 列" in source
 
 
-def test_column_layout_migrates_legacy_preferences_without_losing_account_type():
+def test_column_layout_migrates_legacy_preferences_without_losing_account_type_or_editor_visibility():
     source = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
     assert 'candidate.includes("account_type")' in source
     assert 'candidate.indexOf("version")' in source
     assert 'candidate.splice(versionIndex + 1, 0, "account_type")' in source
     assert "KNOWN_KEYS.has(key)" in source
+    assert "const legacy = localStorage.getItem(LEGACY_STORAGE_KEY)" in source
+    assert "migrated.visible.concurrency = true" in source
+    assert 'label: "API 调用 / 并发上限"' in source
 
 
 def test_column_layout_does_not_add_server_calls_or_privileged_browser_automation():
