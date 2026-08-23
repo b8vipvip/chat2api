@@ -101,14 +101,20 @@ def test_reserve_pool_reuses_spares_and_extends_route_idle_close_to_ten_minutes(
         assert token in source
 
 
-def test_reserve_window_column_is_live_and_configurable():
+def test_reserve_window_column_is_live_refreshable_and_configurable():
     health = (ROOT / "app" / "admin_v21_6.js").read_text(encoding="utf-8")
     columns = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
-    assert '["reserve_windows", "备用窗口"]' in health
+    concurrency = (ROOT / "app" / "admin_v21_5.js").read_text(encoding="utf-8")
+    assert '["reserve_windows", "实时窗口"]' in health
     assert 'label: `${total}(${active})`' in health
     assert 'meta.reserve_window_total' in health
     assert 'meta.reserve_window_active' in health
     assert 'meta.reserve_window_target' in health
+    assert 'data-live-window-refresh' in health
+    assert '/windows/refresh' in health
+    assert '"备用窗口", "实时窗口"' in concurrency
+    # The underlying stable column key remains backward compatible with v1/v2
+    # saved layout preferences; the visible label is migrated at runtime.
     assert '{key: "reserve_windows", label: "备用窗口"}' in columns
     assert '["备用窗口", "reserve_windows"]' in columns
 
