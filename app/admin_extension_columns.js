@@ -1,6 +1,7 @@
 (() => {
-  const VERSION = "0.21.13";
-  const STORAGE_KEY = "chat2api.extensionColumns.v1";
+  const VERSION = "0.21.14";
+  const STORAGE_KEY = "chat2api.extensionColumns.v2";
+  const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v1";
   const BASE_KEYS = ["client_id", "device_id", "version", "account_type", "status", "concurrency", "last_seen", "actions"];
   const COLUMNS = [
     {key: "client_id", label: "扩展 ID"},
@@ -8,7 +9,7 @@
     {key: "version", label: "版本"},
     {key: "account_type", label: "账户类型"},
     {key: "status", label: "状态"},
-    {key: "concurrency", label: "API 调用数（实时并发）"},
+    {key: "concurrency", label: "API 调用 / 并发上限"},
     {key: "last_seen", label: "最后在线"},
     {key: "actions", label: "操作"},
     {key: "platform", label: "平台"},
@@ -25,6 +26,7 @@
     ["状态", "status"],
     ["绑定 API Key 数", "concurrency"],
     ["API 调用数（实时并发）", "concurrency"],
+    ["API 调用 / 并发上限", "concurrency"],
     ["最后在线", "last_seen"],
     ["操作", "actions"],
     ["平台", "platform"],
@@ -74,7 +76,18 @@
 
   function loadPrefs() {
     try {
-      return normalizePrefs(JSON.parse(localStorage.getItem(STORAGE_KEY) || "null"));
+      const current = localStorage.getItem(STORAGE_KEY);
+      if (current) return normalizePrefs(JSON.parse(current));
+
+      const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+      const migrated = legacy ? normalizePrefs(JSON.parse(legacy)) : defaultPrefs();
+      // v0.21.5 turned this historical telemetry column into the per-extension
+      // concurrency editor. Old browsers may have hidden it before that feature
+      // existed, so expose it once during the v1 -> v2 preference migration while
+      // preserving every other saved column order/visibility choice.
+      migrated.visible.concurrency = true;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated));
+      return migrated;
     } catch (_) {
       return defaultPrefs();
     }
@@ -399,24 +412,24 @@
   }
 
   const baseLoadExtensions = typeof globalThis.loadExtensions === "function" ? globalThis.loadExtensions : null;
-  if (baseLoadExtensions && !baseLoadExtensions.__chat2apiColumnLayoutV2113) {
+  if (baseLoadExtensions && !baseLoadExtensions.__chat2apiColumnLayoutV2114) {
     const wrappedLoadExtensions = async (...args) => {
       const result = await baseLoadExtensions(...args);
       scheduleRefresh();
       return result;
     };
-    wrappedLoadExtensions.__chat2apiColumnLayoutV2113 = true;
+    wrappedLoadExtensions.__chat2apiColumnLayoutV2114 = true;
     globalThis.loadExtensions = wrappedLoadExtensions;
   }
 
   const baseShow = typeof globalThis.show === "function" ? globalThis.show : null;
-  if (baseShow && !baseShow.__chat2apiColumnLayoutV2113) {
+  if (baseShow && !baseShow.__chat2apiColumnLayoutV2114) {
     const wrappedShow = async (...args) => {
       const result = await baseShow(...args);
       if (args[0] === "extensions") scheduleRefresh();
       return result;
     };
-    wrappedShow.__chat2apiColumnLayoutV2113 = true;
+    wrappedShow.__chat2apiColumnLayoutV2114 = true;
     globalThis.show = wrappedShow;
   }
 
