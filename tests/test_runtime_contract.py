@@ -103,7 +103,9 @@ def test_runtime_contract_is_final_admin_version_owner():
     assert "MutationObserver" in script
 
     columns_script = client.get(ADMIN_EXTENSION_COLUMNS_ASSET).text
-    assert 'const STORAGE_KEY = "chat2api.extensionColumns.v1"' in columns_script
+    assert 'const STORAGE_KEY = "chat2api.extensionColumns.v2"' in columns_script
+    assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v1"' in columns_script
+    assert 'label: "API 调用 / 并发上限"' in columns_script
     assert 'id = "extensionColumnSettingsButton"' in columns_script
 
     overview_payload = client.get("/api/admin/overview").json()
