@@ -29,11 +29,15 @@ def install_v21_13_patch(app: FastAPI) -> FastAPI:
 
         runtime = getattr(app.state, "concurrency_config", {})
         broker = getattr(app.state, "broker", None)
-        configured = int(
-            runtime.get("max_concurrency")
-            or getattr(broker, "max_concurrency", 0)
-            or 1
-        )
+        limit_for = runtime.get("limit_for") if isinstance(runtime, dict) else None
+        if callable(limit_for):
+            configured = int(limit_for(client_id))
+        else:
+            configured = int(
+                (runtime.get("max_concurrency") if isinstance(runtime, dict) else 0)
+                or getattr(broker, "max_concurrency", 0)
+                or 1
+            )
         target = max(1, min(MAX_RESERVE_WINDOW_TARGET, configured))
         return {
             "reserve_window_target": target,
