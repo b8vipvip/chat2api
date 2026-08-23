@@ -13,6 +13,73 @@
     return tr?.querySelector(`td[data-chat2api-column-key="${key}"]`) || tr?.cells?.[fallbackIndex] || null;
   }
 
+  function ensureToastHost() {
+    let host = document.getElementById("chat2apiActionToastHost");
+    if (host) return host;
+    host = document.createElement("div");
+    host.id = "chat2apiActionToastHost";
+    host.style.cssText = [
+      "position:fixed",
+      "top:18px",
+      "right:18px",
+      "z-index:10000",
+      "display:flex",
+      "flex-direction:column",
+      "gap:8px",
+      "max-width:min(460px,calc(100vw - 36px))",
+      "pointer-events:none",
+    ].join(";");
+    document.body.appendChild(host);
+    return host;
+  }
+
+  function showActionResult(message, level = "ok", button = null) {
+    const text = String(message || "").trim();
+    if (!text) return;
+    if (button) button.title = text;
+    if (typeof globalThis.status === "function") {
+      globalThis.status(text, level === "bad" ? "bad" : level === "warn" ? "warnText" : "ok");
+    }
+    const host = ensureToastHost();
+    const toast = document.createElement("div");
+    toast.setAttribute("role", "status");
+    toast.dataset.level = level;
+    toast.textContent = text;
+    toast.style.cssText = [
+      "pointer-events:auto",
+      "padding:10px 12px",
+      "border:1px solid rgba(148,163,184,.32)",
+      "border-radius:10px",
+      "background:#0f172a",
+      "box-shadow:0 14px 36px rgba(0,0,0,.4)",
+      "font-size:13px",
+      "line-height:1.45",
+      "white-space:normal",
+    ].join(";");
+    if (level === "bad") toast.classList.add("bad");
+    else if (level === "warn") toast.classList.add("warnText");
+    else toast.classList.add("ok");
+    host.appendChild(toast);
+    setTimeout(() => toast.remove(), 4200);
+  }
+  if (typeof globalThis.chat2apiActionToast !== "function") globalThis.chat2apiActionToast = showActionResult;
+
+  function patchColumnSettingsLabels() {
+    const menu = document.getElementById("extensionColumnSettingsMenu");
+    if (!menu) return;
+    const replacements = new Map([
+      ["API 调用数（实时并发）", "并发设置"],
+      ["API 调用 / 并发上限", "并发设置"],
+      ["备用窗口", "实时窗口"],
+    ]);
+    for (const node of menu.querySelectorAll("span,button,label")) {
+      const current = String(node.textContent || "").trim();
+      if (replacements.has(current)) node.textContent = replacements.get(current);
+      const title = String(node.getAttribute?.("title") || "").trim();
+      if (replacements.has(title)) node.setAttribute("title", replacements.get(title));
+    }
+  }
+
   function patchHeader() {
     const table = document.querySelector("#view-extensions #extensionDeviceBody")?.closest("table");
     const headers = table ? [...table.querySelectorAll("thead th")] : [];
@@ -20,10 +87,11 @@
       "绑定 API Key 数",
       "API 调用数（实时并发）",
       "API 调用 / 并发上限",
+      "并发设置",
     ].includes(node.textContent.trim()));
     if (target) {
-      target.textContent = "API 调用 / 并发上限";
-      target.title = "当前正在该扩展上执行的 API 请求数，并可按 Extension ID 单独设置最大并发数";
+      target.textContent = "并发设置";
+      target.title = "当前 API 调用数 / 此 Extension ID 的最大并发；保存后立即触发设备扩容或减容";
       target.dataset.chat2apiColumnKey = "concurrency";
     }
   }
@@ -48,7 +116,7 @@
     }
     cell.title = source === "extension"
       ? `Extension ID ${clientId} 的独立并发上限；当前活动请求 ${active}`
-      : `当前继承默认并发上限 ${limit}；点击保存后为 Extension ID ${clientId} 建立独立配置`;
+      : `当前继承默认并发上限 ${limit}；点击保存后为 Extension ID ${clientId} 建立独立配置并立即调整设备窗口`;
   }
 
   async function refreshLiveConcurrency() {
@@ -68,18 +136,22 @@
           ? Number(item.active_api_calls)
           : Number(item.capacity?.active_requests || 0);
         const limit = Number(item.max_concurrency || item.capacity?.limit_units || item.default_max_concurrency || 0);
-        // v0.20 added account_type at base index 3, so the historical
-        // bound-api-key/live-concurrency cell is base index 5, not 4.
         const concurrencyCell = columnCell(tr, "concurrency", 5);
         if (!concurrencyCell) continue;
         renderConcurrencyCell(concurrencyCell, item, active, limit);
       }
     } catch (_) {
       // The historical extension-management loader owns visible transport/auth errors.
-      // Poll failures stay silent so a transient refresh cannot overwrite it.
     } finally {
       pollInFlight = false;
     }
+  }
+
+  function snapshotText(snapshot, target) {
+    if (!snapshot || typeof snapshot !== "object" || snapshot.total === undefined) return `目标 ${target}`;
+    const total = Math.max(0, Number(snapshot.total || 0));
+    const active = Math.max(0, Number(snapshot.active || 0));
+    return `实时窗口 ${total}(${active})，目标 ${target}`;
   }
 
   async function saveExtensionConcurrency(button) {
@@ -88,21 +160,42 @@
     const input = editor?.querySelector?.("[data-concurrency-limit]");
     const value = Number(input?.value || 0);
     if (!clientId || !Number.isInteger(value) || value < MIN_LIMIT || value > MAX_LIMIT) {
-      if (typeof globalThis.status === "function") globalThis.status(`并发上限请输入 ${MIN_LIMIT}-${MAX_LIMIT} 的整数`, "bad");
+      showActionResult(`并发上限请输入 ${MIN_LIMIT}-${MAX_LIMIT} 的整数`, "bad", button);
       return;
     }
+
     button.disabled = true;
     const oldText = button.textContent;
-    button.textContent = "保存中";
+    let persisted = false;
     try {
-      await api(`/api/admin/extensions/${encodeURIComponent(clientId)}/concurrency`, {
+      button.textContent = "保存中";
+      const saved = await api(`/api/admin/extensions/${encodeURIComponent(clientId)}/concurrency`, {
         method: "PUT",
         body: { max_concurrency: value },
       });
-      if (typeof globalThis.status === "function") globalThis.status(`${clientId} 并发上限已设为 ${value}`, "ok");
+      persisted = true;
+      const appliedLimit = Number(saved?.max_concurrency || value);
+      if (input && input.value !== String(appliedLimit)) input.value = String(appliedLimit);
+
+      button.textContent = "执行中";
+      const applied = await api(`/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply`, {
+        method: "POST",
+        body: { target: appliedLimit },
+      });
+      const snapshot = applied?.window_snapshot || {};
+      if (applied?.ok === true && applied?.target_reached === true) {
+        showActionResult(`保存成功：并发 ${appliedLimit}；${snapshotText(snapshot, appliedLimit)}`, "ok", button);
+      } else if (applied?.ok === true) {
+        const reason = String(applied?.pending_reason || "设备仍在收敛");
+        showActionResult(`配置已保存，设备已执行：${snapshotText(snapshot, appliedLimit)}；${reason}`, "warn", button);
+      } else {
+        const reason = String(applied?.error || "设备没有返回执行确认");
+        showActionResult(`配置已保存，但设备未确认执行：${reason}`, "warn", button);
+      }
       await refreshLiveConcurrency();
     } catch (error) {
-      if (typeof globalThis.status === "function") globalThis.status(`并发设置失败：${String(error?.message || error)}`, "bad");
+      const detail = String(error?.message || error);
+      showActionResult(persisted ? `配置已保存，但设备执行失败：${detail}` : `并发设置保存失败：${detail}`, "bad", button);
     } finally {
       button.disabled = false;
       button.textContent = oldText || "保存";
@@ -111,9 +204,16 @@
 
   document.addEventListener("click", event => {
     const button = event.target?.closest?.("[data-concurrency-save]");
-    if (!button) return;
-    event.preventDefault();
-    saveExtensionConcurrency(button).catch(() => {});
+    if (button) {
+      event.preventDefault();
+      saveExtensionConcurrency(button).catch(() => {});
+    }
+    if (event.target?.closest?.("#extensionColumnSettingsButton, #extensionColumnSettingsMenu")) {
+      setTimeout(patchColumnSettingsLabels, 0);
+    }
+  });
+  document.addEventListener("change", event => {
+    if (event.target?.closest?.("#extensionColumnSettingsMenu")) setTimeout(patchColumnSettingsLabels, 0);
   });
 
   const baseShow = typeof globalThis.show === "function" ? globalThis.show : null;
@@ -130,6 +230,7 @@
   const brandSmall = document.querySelector(".brand small");
   if (brandSmall) brandSmall.textContent = `Server Console · v${VERSION}`;
   patchHeader();
+  patchColumnSettingsLabels();
   refreshLiveConcurrency();
   setInterval(() => {
     if (extensionViewActive()) refreshLiveConcurrency();
