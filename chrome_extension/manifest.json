@@ -49,6 +49,7 @@
         "content_reasoning_v7.js",
         "content_page_smoke_v22.js",
         "content_multimodal.js",
+        "content_multimodal_quota_v36.js",
         "content_request_v3.js",
         "content_multimodal_v4.js",
         "content_request_v4.js",

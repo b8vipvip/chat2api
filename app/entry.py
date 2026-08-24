@@ -48,6 +48,7 @@ from .stream_keepalive_patch import install_stream_keepalive_patch
 from .request_stall_patch import install_request_stall_patch
 from .runtime_contract import install_runtime_contract
 from .extension_capacity_control_patch import install_extension_capacity_control_patch
+from .mini_multimodal_quota_patch import install_mini_multimodal_quota_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -99,6 +100,11 @@ install_runtime_contract(app)
 # owning the runtime version. They are installed after the runtime contract so
 # the version surface remains stable while the control plane can evolve.
 install_extension_capacity_control_patch(app)
+
+# Keep gpt-5.5-mini vision/file routing enabled for Free accounts until the
+# browser reports an actual ChatGPT quota reset time. This is installed after
+# the historical routing stack so it decorates the final resolver/catalog.
+install_mini_multimodal_quota_patch(app)
 
 # These final Worker patches do not own the runtime version. They are installed
 # last so the presentation assets can refine the legacy Worker console without

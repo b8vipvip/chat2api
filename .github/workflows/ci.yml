@@ -48,6 +48,7 @@ jobs:
           node --check chrome_extension/content_model_transition_v15.js
           node --check chrome_extension/content_reasoning_v7.js
           node --check chrome_extension/content_multimodal.js
+          node --check chrome_extension/content_multimodal_quota_v36.js
           node --check chrome_extension/content_multimodal_v4.js
           node --check chrome_extension/content_guard.js
           node --check chrome_extension/content_image.js
@@ -82,6 +83,7 @@ jobs:
           node --check chrome_extension/background.js
           node --check chrome_extension/background_page_smoke_v22.js
           node --check chrome_extension/background_device_v17.js
+          node --check chrome_extension/background_multimodal_quota_v36.js
           node --check chrome_extension/background_account_v20.js
           node --check chrome_extension/background_time_v14.js
           node --check chrome_extension/background_platform_v26.js
@@ -156,5 +158,7 @@ jobs:
         run: node tests/request_stall_guard_v34.mjs
       - name: External warm bootstrap VM contract
         run: node tests/external_warm_bootstrap_v28.mjs
+      - name: Mini multimodal quota VM contract
+        run: node tests/mini_multimodal_quota_v36.mjs
       - name: Tests
         run: pytest -q

@@ -14,6 +14,7 @@ importScripts(
   "background_tab_supervisor_v32.js",
   "model_routing_v2.js",
   "background_page_smoke_v22.js",
+  "background_multimodal_quota_v36.js",
   "background_account_v20.js",
   "model_prefetch_fast_v21.js",
   "image_routing.js",
