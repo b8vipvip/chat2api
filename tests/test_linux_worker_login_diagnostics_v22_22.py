@@ -40,9 +40,9 @@ def test_worker_agent_implements_bounded_diagnostics_command_and_bundle_ships_he
     assert 'MAX_DIAGNOSTIC_CHARS = 450_000' in agent
     assert 'scripts/linux_worker_diagnostics.sh' in dockerfile
     assert '!scripts/linux_worker_diagnostics.sh' in dockerignore
-    assert "last 30 minutes" in helper
+    assert "last 90 minutes" in helper
     assert "wbind_[REDACTED]" in helper
-    assert "journalctl -u \"$unit\" --since '-30 min' -n 220" in helper
+    assert "journalctl -u \"$unit\" --since '-90 min' -n 600" in helper
 
     shell = subprocess.run(
         ["bash", "-n", str(ROOT / "scripts" / "linux_worker_diagnostics.sh")],

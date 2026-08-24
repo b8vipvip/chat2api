@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import uuid
 from typing import Any
@@ -13,6 +14,7 @@ MIN_TARGET = 1
 MAX_TARGET = 32
 CONTROL_RESULT_KEY = "extension_control_result"
 MIN_CONTROL_VERSION = 36
+logger = logging.getLogger("chat2api.capacity")
 
 
 class CapacityApplyRequest(BaseModel):
@@ -55,6 +57,8 @@ def _control_diagnostics(item: Any) -> dict[str, Any]:
         "control_ready": control_ready if isinstance(control_ready, bool) else None,
         "control_transport": str(metadata.get("extension_control_transport") or ""),
         "control_last_error": str(metadata.get("extension_control_last_error") or ""),
+        "capability_reporter": metadata.get("extension_control_capability_reporter"),
+        "capability_reported_at": metadata.get("extension_control_capability_reported_at"),
     }
 
 
@@ -91,6 +95,12 @@ async def _request_extension_control(
     registry = app.state.registry
     item = registry.clients.get(client_id)
     if not item or not item.connection_enabled:
+        logger.warning(
+            "Capacity control rejected because extension connection is disabled client=%s action=%s",
+            client_id,
+            action,
+            extra={"client_id": client_id, "action": action},
+        )
         return {
             "ok": False,
             "action": action,
@@ -99,6 +109,12 @@ async def _request_extension_control(
             "data": {},
         }
     if client_id not in registry.sockets:
+        logger.warning(
+            "Capacity control rejected because extension is offline client=%s action=%s",
+            client_id,
+            action,
+            extra={"client_id": client_id, "action": action},
+        )
         return {
             "ok": False,
             "action": action,
@@ -109,6 +125,13 @@ async def _request_extension_control(
 
     capability, capability_diagnostics = _control_protocol_ready(item)
     if not capability:
+        logger.warning(
+            "Capacity control capability not ready client=%s action=%s diagnostics=%s",
+            client_id,
+            action,
+            capability_diagnostics,
+            extra={"client_id": client_id, "action": action},
+        )
         return {
             "ok": False,
             "action": action,
@@ -132,7 +155,23 @@ async def _request_extension_control(
                 "minimum_control_version": MIN_CONTROL_VERSION,
             },
         )
+        logger.info(
+            "Capacity control sent client=%s action=%s control_id=%s payload=%s diagnostics=%s",
+            client_id,
+            action,
+            control_id,
+            dict(payload or {}),
+            capability_diagnostics,
+            extra={"client_id": client_id, "action": action, "control_id": control_id},
+        )
     except Exception as error:
+        logger.exception(
+            "Capacity control send failed client=%s action=%s control_id=%s",
+            client_id,
+            action,
+            control_id,
+            extra={"client_id": client_id, "action": action, "control_id": control_id},
+        )
         return {
             "ok": False,
             "control_id": control_id,
@@ -151,6 +190,21 @@ async def _request_extension_control(
         result = metadata.get(CONTROL_RESULT_KEY)
         if isinstance(result, dict) and str(result.get("control_id") or "") == control_id:
             data = result.get("data") if isinstance(result.get("data"), dict) else {}
+            diagnostics = _control_diagnostics(current)
+            round_trip_ms = round((time.time() - sent_at) * 1000, 1)
+            log = logger.info if result.get("ok") is True else logger.warning
+            log(
+                "Capacity control confirmation client=%s action=%s control_id=%s ok=%s round_trip_ms=%s data=%s error=%s diagnostics=%s",
+                client_id,
+                action,
+                control_id,
+                result.get("ok") is True,
+                round_trip_ms,
+                data,
+                str(result.get("error") or ""),
+                diagnostics,
+                extra={"client_id": client_id, "action": action, "control_id": control_id},
+            )
             return {
                 "ok": result.get("ok") is True,
                 "control_id": control_id,
@@ -159,13 +213,22 @@ async def _request_extension_control(
                 "error_code": "" if result.get("ok") is True else "extension_control_failed",
                 "data": dict(data),
                 "observed_at": result.get("observed_at"),
-                "round_trip_ms": round((time.time() - sent_at) * 1000, 1),
-                "diagnostics": _control_diagnostics(current),
+                "round_trip_ms": round_trip_ms,
+                "diagnostics": diagnostics,
             }
         await asyncio.sleep(0.1)
 
     current = registry.clients.get(client_id)
     diagnostics = _control_diagnostics(current)
+    logger.error(
+        "Capacity control confirmation timeout client=%s action=%s control_id=%s timeout_seconds=%s diagnostics=%s",
+        client_id,
+        action,
+        control_id,
+        timeout_seconds,
+        diagnostics,
+        extra={"client_id": client_id, "action": action, "control_id": control_id},
+    )
     return {
         "ok": False,
         "control_id": control_id,
@@ -190,6 +253,13 @@ def install_extension_capacity_control_patch(app: FastAPI) -> FastAPI:
         client_id = _ensure_client(app, client_id)
         configured = _configured_limit(app, client_id)
         if int(body.target) != configured:
+            logger.warning(
+                "Capacity apply configuration race client=%s configured=%s requested=%s",
+                client_id,
+                configured,
+                body.target,
+                extra={"client_id": client_id, "action": "workers.resize"},
+            )
             raise HTTPException(
                 status_code=409,
                 detail=f"Concurrency configuration changed before apply (configured={configured}, requested={body.target})",

@@ -136,8 +136,16 @@
     };
     state.lastResult = result;
 
+    const dispatcher = globalThis.__CHAT2API_CAPACITY_CONTROL_V36__;
+    const dispatcherReady = Boolean(
+      dispatcher
+      && Number(dispatcher.version || 0) >= 36
+      && globalThis.handleServerMessage?.__chat2apiCapacityControlV36 === true
+    );
     const metadata = {
-      extension_control_version: 35,
+      extension_control_version: dispatcherReady ? 36 : 35,
+      extension_control_ready: dispatcherReady,
+      extension_control_transport: dispatcherReady ? "capacity-result-v35-via-dispatch-v36" : "capacity-controller-v35",
       extension_control_result: result,
     };
     if (snapshot) {

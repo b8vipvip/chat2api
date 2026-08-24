@@ -47,6 +47,7 @@ from .linux_worker_diagnostics_patch import install_linux_worker_diagnostics_pat
 from .stream_keepalive_patch import install_stream_keepalive_patch
 from .request_stall_patch import install_request_stall_patch
 from .runtime_contract import install_runtime_contract
+from .runtime_logs_patch import install_runtime_logs_patch
 from .extension_capacity_control_patch import install_extension_capacity_control_patch
 from .mini_multimodal_quota_patch import install_mini_multimodal_quota_patch
 
@@ -95,6 +96,10 @@ install_request_stall_patch(app)
 # Install the runtime contract after the historical patch stack so /version
 # describes the production app rather than the legacy base layer in app.main.
 install_runtime_contract(app)
+
+# Capture server runtime logs before the final control-plane patches are installed
+# so their diagnostics and exception traces are available from the admin console.
+install_runtime_logs_patch(app)
 
 # Live extension capacity controls add admin/Bridge control endpoints without
 # owning the runtime version. They are installed after the runtime contract so
