@@ -199,7 +199,7 @@ def test_extension_binding_uses_session_storage_about_blank_scrub_and_no_pairing
     ):
         assert token in source
     assert 'chrome.storage.local.set({ [PENDING_KEY]' not in source
-    assert "X-Worker-Token" not in source
+    assert "X-Pairing-Code" not in source
     assert "console.log" not in source
     assert "console.warn" not in source
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
