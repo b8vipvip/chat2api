@@ -13,6 +13,9 @@ const DEFAULTS = {
   modelsUpdatedAt: 0,
 };
 const CHATGPT_URLS = ["https://chatgpt.com/*", "https://www.chatgpt.com/*", "https://chat.openai.com/*"];
+const NATIVE_CAPACITY_CONTROL_VERSION = 36;
+globalThis.__CHAT2API_NATIVE_CAPACITY_CONTROL_VERSION__ = NATIVE_CAPACITY_CONTROL_VERSION;
+globalThis.__CHAT2API_NATIVE_CAPACITY_DISPATCH_V37__ = true;
 let socket = null;
 let reconnectTimer = null;
 let reconnectAttempt = 0;
@@ -89,6 +92,18 @@ async function trySendSocket(payload) {
   try { socket.send(JSON.stringify(payload)); return true; }
   catch (_) { return false; }
 }
+function nativeCapacityControlMetadata() {
+  const controller = globalThis.__CHAT2API_CAPACITY_CONTROL_V35__;
+  const ready = Boolean(controller && typeof controller.handle === "function" && typeof controller.snapshot === "function");
+  return {
+    extension_control_version: ready ? NATIVE_CAPACITY_CONTROL_VERSION : 0,
+    extension_control_ready: ready,
+    extension_control_transport: ready ? "background-native-dispatch-v37" : "background-native-controller-pending-v37",
+    extension_control_last_error: ready ? null : "Capacity controller v35 is not ready",
+    extension_control_capability_reporter: 37,
+    extension_control_capability_reported_at: new Date().toISOString(),
+  };
+}
 
 async function discoverModels(tab, force = false) {
   if (!tab?.id) return { models: [], current_model: "default" };
@@ -137,12 +152,33 @@ async function sendExtensionStatus(forceModelDiscovery = false) {
       models: modelData.models || [],
       current_model: modelData.current_model || "default",
       capabilities: ["text", "vision", "file-understanding", "image-generation", "model-selection", "diagnostics", "estimated-token-usage"],
+      ...nativeCapacityControlMetadata(),
     },
   });
 }
 
 async function handleServerMessage(message) {
   if (message.type === "heartbeat.ack" || message.type === "server.hello") return;
+  if (message.type === "extension.control") {
+    const controller = globalThis.__CHAT2API_CAPACITY_CONTROL_V35__;
+    if (controller && typeof controller.handle === "function") {
+      return controller.handle(message);
+    }
+    const error = "Native capacity dispatcher is ready but Capacity controller v35 is unavailable";
+    await trySendSocket({
+      type: "extension.control.result",
+      control_id: String(message?.control_id || ""),
+      action: String(message?.action || ""),
+      ok: false,
+      data: {},
+      error,
+      metadata: {
+        ...nativeCapacityControlMetadata(),
+        extension_control_last_error: error,
+      },
+    });
+    return;
+  }
   if (message.type === "chat.request") {
     try {
       const tab = await resolveTargetTab();
@@ -225,7 +261,14 @@ async function connectSocket() {
   socket.onopen = async () => {
     reconnectAttempt = 0;
     await updateState("connected");
-    await sendSocket({ type: "extension.hello", metadata: { extension_version: chrome.runtime.getManifest().version, runtime_id: chrome.runtime.id } });
+    await sendSocket({
+      type: "extension.hello",
+      metadata: {
+        extension_version: chrome.runtime.getManifest().version,
+        runtime_id: chrome.runtime.id,
+        ...nativeCapacityControlMetadata(),
+      },
+    });
     await maybeAutoBind();
     await sendExtensionStatus(false);
     keepAliveTimer = setInterval(() => trySendSocket({ type: "heartbeat", ts: Date.now() }), 20000);
