@@ -35,9 +35,11 @@ def test_capacity_controller_vm_contracts_cover_native_and_reporter_paths():
         assert result.returncode == 0, f"{script}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
-def test_runtime_contract_identifies_new_bridge_build():
+def test_runtime_contract_separates_protocol_from_new_bundle_build():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.24"' in runtime
-    assert 'CHROME_BRIDGE_VERSION = "0.8.2"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.23"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.2"' in runtime
+    assert '"bundle_version": CHROME_BRIDGE_BUNDLE_VERSION' in runtime
     assert '"build_revision": "capacity-native-v37-r2"' in runtime
     assert '"bridge_service_worker_cache_bust": True' in runtime
