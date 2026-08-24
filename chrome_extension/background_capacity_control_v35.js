@@ -137,15 +137,23 @@
     state.lastResult = result;
 
     const dispatcher = globalThis.__CHAT2API_CAPACITY_CONTROL_V36__;
-    const dispatcherReady = Boolean(
+    const nativeReady = Boolean(
+      Number(globalThis.__CHAT2API_NATIVE_CAPACITY_CONTROL_VERSION__ || 0) >= 36
+      && globalThis.__CHAT2API_NATIVE_CAPACITY_DISPATCH_V37__ === true
+    );
+    const overlayReady = Boolean(
       dispatcher
       && Number(dispatcher.version || 0) >= 36
       && globalThis.handleServerMessage?.__chat2apiCapacityControlV36 === true
     );
+    const controlReady = nativeReady || overlayReady;
     const metadata = {
-      extension_control_version: dispatcherReady ? 36 : 35,
-      extension_control_ready: dispatcherReady,
-      extension_control_transport: dispatcherReady ? "capacity-result-v35-via-dispatch-v36" : "capacity-controller-v35",
+      extension_control_version: controlReady ? 36 : 35,
+      extension_control_ready: controlReady,
+      extension_control_transport: nativeReady
+        ? "capacity-result-v35-via-native-v37"
+        : (overlayReady ? "capacity-result-v35-via-dispatch-v36" : "capacity-controller-v35"),
+      extension_control_capability_reporter: nativeReady ? 37 : null,
       extension_control_result: result,
     };
     if (snapshot) {
@@ -197,15 +205,22 @@
     }
   }
 
-  const baseHandler = globalThis.handleServerMessage;
-  if (typeof baseHandler !== "function") return;
-  const wrappedHandler = async message => {
-    if (String(message?.type || "") === "extension.control") return handleControl(message);
-    return baseHandler(message);
-  };
-  wrappedHandler.__chat2apiCapacityControlV35 = true;
-  globalThis.handleServerMessage = wrappedHandler;
+  // Native background.js dispatches extension.control directly into this API.
+  // Publish it before installing any legacy wrapper so MV3 global binding quirks
+  // cannot leave the controller permanently at control=v0.
   state.handle = handleControl;
   state.snapshot = windowSnapshot;
   state.resize = resizeWorkers;
+
+  // Retain the historical overlay path for older Bridge entrypoints. It is now
+  // optional: absence of a global base handler must not disable the controller.
+  const baseHandler = globalThis.handleServerMessage;
+  if (typeof baseHandler === "function") {
+    const wrappedHandler = async message => {
+      if (String(message?.type || "") === "extension.control") return handleControl(message);
+      return baseHandler(message);
+    };
+    wrappedHandler.__chat2apiCapacityControlV35 = true;
+    globalThis.handleServerMessage = wrappedHandler;
+  }
 })();

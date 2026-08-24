@@ -91,6 +91,16 @@ rm -f \
   "${PROFILE_DIR}/Default/Last Session" \
   "${PROFILE_DIR}/Default/Last Tabs" 2>/dev/null || true
 
+# Unpacked MV3 extensions can retain the compiled Service Worker script when the
+# source tree changes under the same persistent Chrome profile. Clear only
+# disposable script/code caches before every managed Chrome start. This preserves
+# ChatGPT Cookies, Local Storage, IndexedDB and the user's authenticated profile.
+rm -rf \
+  "${PROFILE_DIR}/Default/Service Worker/ScriptCache" \
+  "${PROFILE_DIR}/Default/Code Cache/js" \
+  "${PROFILE_DIR}/Default/Code Cache/wasm" 2>/dev/null || true
+log "cleared disposable Chrome Service Worker/JS caches before Bridge load"
+
 server_host="${SERVER_URL#*://}"
 server_host="${server_host%%/*}"
 server_host="${server_host%%:*}"
@@ -111,6 +121,7 @@ exec "$CURRENT_LINK" \
   "--proxy-bypass-list=localhost;127.0.0.1;${server_host}" \
   --remote-debugging-address=127.0.0.1 \
   --remote-debugging-port=9222 \
+  --disable-extensions-except="$EXTENSION_DIR" \
   --load-extension="$EXTENSION_DIR" \
   --no-first-run \
   --no-default-browser-check \

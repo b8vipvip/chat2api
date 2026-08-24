@@ -11,6 +11,7 @@ from app.live_voice_patch import LIVE_PROTOCOL_VERSION
 from app.runtime_contract import (
     ADMIN_EXTENSION_COLUMNS_ASSET,
     ADMIN_VERSION_ASSET,
+    CHROME_BRIDGE_BUNDLE_VERSION,
     CHROME_BRIDGE_VERSION,
     PACKAGE_VERSION,
     PRODUCTION_ENTRYPOINT,
@@ -28,9 +29,10 @@ def test_python_package_versions_are_aligned():
     assert package.__version__ == PACKAGE_VERSION == pyproject["project"]["version"]
 
 
-def test_chrome_bridge_contract_matches_manifest():
+def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == CHROME_BRIDGE_VERSION
+    assert CHROME_BRIDGE_VERSION == "0.8.1"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
 
 
 def test_realtime_protocol_contract_matches_live_bridge():
@@ -46,6 +48,7 @@ def test_runtime_contract_payload_names_each_version_surface():
     assert payload["server"]["runtime_aligned"] is True
     assert payload["server"]["entrypoint"] == PRODUCTION_ENTRYPOINT
     assert payload["chrome_bridge"]["version"] == CHROME_BRIDGE_VERSION
+    assert payload["chrome_bridge"]["bundle_version"] == CHROME_BRIDGE_BUNDLE_VERSION
     assert payload["protocols"]["realtime_voice"] == LIVE_PROTOCOL_VERSION
 
 

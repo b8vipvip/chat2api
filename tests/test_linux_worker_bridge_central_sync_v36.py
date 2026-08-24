@@ -4,19 +4,20 @@ import json
 import subprocess
 from pathlib import Path
 
-from app.runtime_contract import CHROME_BRIDGE_VERSION
+from app.runtime_contract import CHROME_BRIDGE_VERSION, CHROME_BRIDGE_BUNDLE_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_bridge_protocol_stays_stable_while_capacity_control_uses_v36() -> None:
+def test_bridge_protocol_stays_stable_while_bundle_busts_mv3_cache() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     dispatcher = (ROOT / "chrome_extension" / "background_capacity_control_v36.js").read_text(encoding="utf-8")
 
-    assert manifest["version"] == "0.8.1"
+    assert manifest["version"] == "0.8.2"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == manifest["version"]
     assert '"background_capacity_control_v36.js"' in entry
     assert entry.index('"background_capacity_control_v35.js"') < entry.index('"background_capacity_control_v36.js"')
     assert "const CONTROL_VERSION = 36" in dispatcher

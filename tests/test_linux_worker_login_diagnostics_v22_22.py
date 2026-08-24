@@ -106,8 +106,9 @@ def test_runtime_and_entry_publish_v22_23_diagnostics_patch_last():
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
 
     assert 'SERVER_RUNTIME_VERSION = "0.22.23"' in runtime
-    assert 'RUNTIME_FEATURE_REVISION = "capacity-native-v37-runtime-logs-v1"' in runtime
+    assert 'RUNTIME_FEATURE_REVISION = "capacity-native-v37-bundle-082-runtime-logs-v1"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.2"' in runtime
     assert 'from .linux_worker_diagnostics_patch import install_linux_worker_diagnostics_patch' in entry
     assert 'install_linux_worker_diagnostics_patch(app)' in entry
     assert entry.index('install_linux_worker_repair_command_patch(app)') < entry.index('install_linux_worker_diagnostics_patch(app)')

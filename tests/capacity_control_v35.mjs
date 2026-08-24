@@ -46,14 +46,25 @@ const supervisor = {
 
 globalThis.__CHAT2API_RESERVE_POOL_V29__ = reserve;
 globalThis.__CHAT2API_TAB_SUPERVISOR_V32__ = supervisor;
+globalThis.__CHAT2API_NATIVE_CAPACITY_CONTROL_VERSION__ = 36;
+globalThis.__CHAT2API_NATIVE_CAPACITY_DISPATCH_V37__ = true;
 globalThis.handleServerMessage = async message => forwarded.push(message);
 globalThis.trySendSocket = async payload => {
   sent.push(payload);
   return true;
 };
 
+// Native background.js must be able to consume v35 even if the historical
+// global handleServerMessage overlay is unavailable in an MV3 worker binding.
+assert.ok(
+  source.indexOf('state.handle = handleControl;') < source.indexOf('const baseHandler = globalThis.handleServerMessage;'),
+  'controller API must be published before optional legacy handler wrapping',
+);
+
 vm.runInThisContext(source, { filename: 'background_capacity_control_v35.js' });
 assert.ok(globalThis.__CHAT2API_CAPACITY_CONTROL_V35__, 'capacity control should install');
+assert.equal(typeof globalThis.__CHAT2API_CAPACITY_CONTROL_V35__.handle, 'function');
+assert.equal(typeof globalThis.__CHAT2API_CAPACITY_CONTROL_V35__.snapshot, 'function');
 
 await globalThis.handleServerMessage({ type: 'chat.request', request_id: 'req_passthrough' });
 assert.equal(forwarded.length, 1);
@@ -69,6 +80,10 @@ let result = sent.at(-1);
 assert.equal(result.type, 'extension.control.result');
 assert.equal(result.control_id, 'ctl_snapshot');
 assert.equal(result.ok, true);
+assert.equal(result.metadata.extension_control_version, 36);
+assert.equal(result.metadata.extension_control_ready, true);
+assert.equal(result.metadata.extension_control_transport, 'capacity-result-v35-via-native-v37');
+assert.equal(result.metadata.extension_control_capability_reporter, 37);
 assert.equal(result.metadata.extension_control_result.control_id, 'ctl_snapshot');
 assert.equal(result.metadata.reserve_window_total, 1);
 assert.equal(result.metadata.reserve_window_active, 0);
