@@ -15,11 +15,11 @@ from .live_voice_patch import LIVE_PROTOCOL_VERSION
 # collapse them into a single version number: package releases, the layered
 # server runtime/console, the Chrome Bridge, and the realtime wire protocol can
 # evolve independently.
-SERVER_RUNTIME_VERSION = "0.22.23"
-CHROME_BRIDGE_VERSION = "0.8.1"
+SERVER_RUNTIME_VERSION = "0.22.24"
+CHROME_BRIDGE_VERSION = "0.8.2"
 PRODUCTION_ENTRYPOINT = "app.entry:app"
 VERSION_CONTRACT_VERSION = 1
-RUNTIME_FEATURE_REVISION = "capacity-native-v37-runtime-logs-v1"
+RUNTIME_FEATURE_REVISION = "capacity-native-v37-bridge-082-runtime-logs-v1"
 ADMIN_VERSION_ASSET = "/assets/chat2api-runtime-version.js"
 ADMIN_EXTENSION_COLUMNS_ASSET = "/assets/chat2api-extension-columns.js"
 ADMIN_LINUX_WORKERS_ASSET = "/assets/chat2api-linux-workers.js"
@@ -41,6 +41,7 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
         },
         "chrome_bridge": {
             "version": CHROME_BRIDGE_VERSION,
+            "build_revision": "capacity-native-v37-r2",
             "capacity_control_version": 36,
             "capacity_reporter_version": 37,
         },
@@ -49,6 +50,7 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
             "runtime_log_export": True,
             "native_capacity_control": True,
             "worker_extension_runtime_diagnostics": True,
+            "bridge_service_worker_cache_bust": True,
         },
         "protocols": {
             "realtime_voice": LIVE_PROTOCOL_VERSION,
