@@ -4,6 +4,7 @@
   const MIN_LIMIT = 1;
   const MAX_LIMIT = 32;
   let pollInFlight = false;
+  const windowRefreshPending = new Set();
 
   function extensionViewActive() {
     return document.getElementById("view-extensions")?.classList.contains("active");
@@ -70,7 +71,6 @@
     const replacements = new Map([
       ["API 调用数（实时并发）", "并发设置"],
       ["API 调用 / 并发上限", "并发设置"],
-      ["备用窗口", "实时窗口"],
     ]);
     for (const node of menu.querySelectorAll("span,button,label")) {
       const current = String(node.textContent || "").trim();
@@ -91,7 +91,7 @@
     ].includes(node.textContent.trim()));
     if (target) {
       target.textContent = "并发设置";
-      target.title = "当前 API 调用数 / 此 Extension ID 的最大并发；保存后立即触发设备扩容或减容";
+      target.title = "当前 API 调用数 / 此 Extension ID 的最大并发；保存调整并发，刷新核对设备真实窗口";
       target.dataset.chat2apiColumnKey = "concurrency";
     }
   }
@@ -99,7 +99,8 @@
   function renderConcurrencyCell(cell, item, active, limit) {
     const clientId = String(item.client_id || "");
     const source = String(item.concurrency_limit_source || item.capacity?.limit_source || "default");
-    const currentEditor = cell.querySelector("[data-extension-concurrency-editor]");
+    const pending = windowRefreshPending.has(clientId);
+    let currentEditor = cell.querySelector("[data-extension-concurrency-editor]");
     if (!currentEditor || currentEditor.dataset.clientId !== clientId) {
       cell.innerHTML = `
         <div data-extension-concurrency-editor data-client-id="${clientId}" style="display:flex;align-items:center;gap:6px;white-space:nowrap">
@@ -107,12 +108,20 @@
           <span class="muted">/</span>
           <input data-concurrency-limit type="number" min="${MIN_LIMIT}" max="${MAX_LIMIT}" step="1" value="${limit}" style="width:64px;padding:5px 6px">
           <button class="action" data-concurrency-save style="padding:5px 8px">保存</button>
+          <button class="action" data-concurrency-refresh style="padding:5px 8px">刷新</button>
         </div>`;
+      currentEditor = cell.querySelector("[data-extension-concurrency-editor]");
     } else {
       const activeNode = currentEditor.querySelector("[data-concurrency-active]");
       if (activeNode) activeNode.textContent = String(active);
       const input = currentEditor.querySelector("[data-concurrency-limit]");
       if (input && document.activeElement !== input && input.value !== String(limit)) input.value = String(limit);
+    }
+    const refreshButton = currentEditor?.querySelector("[data-concurrency-refresh]");
+    if (refreshButton) {
+      refreshButton.disabled = pending;
+      refreshButton.textContent = pending ? "刷新中" : "刷新";
+      if (!pending) refreshButton.title = "主动向该 Extension 获取真实 Chrome 窗口快照";
     }
     cell.title = source === "extension"
       ? `Extension ID ${clientId} 的独立并发上限；当前活动请求 ${active}`
@@ -154,10 +163,42 @@
     return `实时窗口 ${total}(${active})，目标 ${target}`;
   }
 
+  async function refreshExtensionWindows(button) {
+    const editor = button?.closest?.("[data-extension-concurrency-editor]");
+    const clientId = String(editor?.dataset?.clientId || "");
+    if (!clientId || windowRefreshPending.has(clientId)) return;
+    const saveButton = editor?.querySelector?.("[data-concurrency-save]");
+    windowRefreshPending.add(clientId);
+    button.disabled = true;
+    if (saveButton) saveButton.disabled = true;
+    button.textContent = "刷新中";
+    try {
+      const result = await api(`/api/admin/extensions/${encodeURIComponent(clientId)}/windows/refresh`, { method: "POST" });
+      const snapshot = result?.window_snapshot || {};
+      if (result?.ok === true && snapshot.total !== undefined) {
+        const total = Math.max(0, Number(snapshot.total || 0));
+        const active = Math.max(0, Number(snapshot.active || 0));
+        const allChatGpt = Math.max(total, Number(snapshot.all_chatgpt_windows || total));
+        showActionResult(`刷新成功：实时窗口 ${total}(${active})；Chrome ChatGPT 窗口 ${allChatGpt}`, "ok", button);
+      } else {
+        showActionResult(`刷新失败：${String(result?.error || "扩展没有返回真实窗口快照")}`, "bad", button);
+      }
+      await refreshLiveConcurrency();
+    } catch (error) {
+      showActionResult(`刷新失败：${String(error?.message || error)}`, "bad", button);
+    } finally {
+      windowRefreshPending.delete(clientId);
+      button.disabled = false;
+      button.textContent = "刷新";
+      if (saveButton) saveButton.disabled = false;
+    }
+  }
+
   async function saveExtensionConcurrency(button) {
     const editor = button?.closest?.("[data-extension-concurrency-editor]");
     const clientId = String(editor?.dataset?.clientId || "");
     const input = editor?.querySelector?.("[data-concurrency-limit]");
+    const refreshButton = editor?.querySelector?.("[data-concurrency-refresh]");
     const value = Number(input?.value || 0);
     if (!clientId || !Number.isInteger(value) || value < MIN_LIMIT || value > MAX_LIMIT) {
       showActionResult(`并发上限请输入 ${MIN_LIMIT}-${MAX_LIMIT} 的整数`, "bad", button);
@@ -165,6 +206,7 @@
     }
 
     button.disabled = true;
+    if (refreshButton) refreshButton.disabled = true;
     const oldText = button.textContent;
     let persisted = false;
     try {
@@ -199,14 +241,22 @@
     } finally {
       button.disabled = false;
       button.textContent = oldText || "保存";
+      if (refreshButton) refreshButton.disabled = windowRefreshPending.has(clientId);
     }
   }
 
   document.addEventListener("click", event => {
-    const button = event.target?.closest?.("[data-concurrency-save]");
-    if (button) {
+    const saveButton = event.target?.closest?.("[data-concurrency-save]");
+    if (saveButton) {
       event.preventDefault();
-      saveExtensionConcurrency(button).catch(() => {});
+      saveExtensionConcurrency(saveButton).catch(() => {});
+      return;
+    }
+    const refreshButton = event.target?.closest?.("[data-concurrency-refresh]");
+    if (refreshButton) {
+      event.preventDefault();
+      refreshExtensionWindows(refreshButton).catch(() => {});
+      return;
     }
     if (event.target?.closest?.("#extensionColumnSettingsButton, #extensionColumnSettingsMenu")) {
       setTimeout(patchColumnSettingsLabels, 0);
