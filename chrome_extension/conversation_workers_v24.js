@@ -3,6 +3,7 @@
   if (globalThis[KEY]) return;
 
   const ROUTER_KEY = "__CHAT2API_CONVERSATION_ROUTING_V1__";
+  const RESERVE_KEY = "__CHAT2API_RESERVE_POOL_V29__";
   const MAX_WORKERS_PER_KEY = 3; // Historical/default contract; runtime value is server-driven.
   const MIN_WORKERS_PER_KEY = 1;
   const HARD_MAX_WORKERS_PER_KEY = 32;
@@ -12,6 +13,8 @@
   const state = {
     requestRoutes: new Map(),
     maxWorkers: MAX_WORKERS_PER_KEY,
+    lastAuthoritativeLimitSource: null,
+    lastLimitSource: "default",
   };
   globalThis[KEY] = state;
   globalThis.chat2apiConversationWorkersV24 = state;
@@ -22,12 +25,52 @@
     return typeof value === "string" && value.trim() ? value.trim() : null;
   }
 
-  function workerLimit(message) {
+  function normalizeWorkerLimit(value, fallback = MAX_WORKERS_PER_KEY) {
+    const parsed = Number(value);
+    const candidate = Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+    return Math.max(MIN_WORKERS_PER_KEY, Math.min(HARD_MAX_WORKERS_PER_KEY, candidate || MAX_WORKERS_PER_KEY));
+  }
+
+  function runtimeConfigLimit() {
+    const reserve = globalThis[RESERVE_KEY];
+    const refreshedAt = Number(reserve?.configRefreshedAt || 0);
+    const target = Number(reserve?.target);
+    if (!refreshedAt || !Number.isFinite(target) || target <= 0) return null;
+    return normalizeWorkerLimit(target);
+  }
+
+  function workerLimitConfig(message) {
     const supplied = Number(message?.routing?.worker_limit);
-    const value = Number.isFinite(supplied) && supplied > 0 ? Math.floor(supplied) : Number(state.maxWorkers || MAX_WORKERS_PER_KEY);
-    const limited = Math.max(MIN_WORKERS_PER_KEY, Math.min(HARD_MAX_WORKERS_PER_KEY, value || MAX_WORKERS_PER_KEY));
-    state.maxWorkers = limited;
-    return limited;
+    if (Number.isFinite(supplied) && supplied > 0) {
+      const limit = normalizeWorkerLimit(supplied);
+      state.maxWorkers = limit;
+      state.lastAuthoritativeLimitSource = "server-routing";
+      state.lastLimitSource = "server-routing";
+      return { limit, source: "server-routing" };
+    }
+
+    // The server normally carries worker_limit on every routed request. If a
+    // stale/hot-reloaded dispatch path drops that field, Reserve Pool v29 still
+    // has the same authenticated per-extension runtime target. Prefer that
+    // authoritative value over the historical hard-coded fallback of 3.
+    const runtimeLimit = runtimeConfigLimit();
+    if (runtimeLimit) {
+      state.maxWorkers = runtimeLimit;
+      state.lastAuthoritativeLimitSource = "runtime-config";
+      state.lastLimitSource = "runtime-config";
+      return { limit: runtimeLimit, source: "runtime-config" };
+    }
+
+    const limit = normalizeWorkerLimit(state.maxWorkers);
+    const source = state.lastAuthoritativeLimitSource
+      ? `cached-${state.lastAuthoritativeLimitSource}`
+      : "default";
+    state.lastLimitSource = source;
+    return { limit, source };
+  }
+
+  function workerLimit(message) {
+    return workerLimitConfig(message).limit;
   }
 
   function workerRouteKey(baseKey, index) {
@@ -54,6 +97,7 @@
     if (existing) return existing;
 
     const limit = workerLimit(message);
+    const limitSource = state.lastLimitSource;
     const router = globalThis[ROUTER_KEY];
     const routes = router?.routes && typeof router.routes === "object" ? router.routes : {};
     for (let index = 1; index <= limit; index += 1) {
@@ -66,6 +110,7 @@
         routeKey,
         workerIndex: index,
         workerLimit: limit,
+        workerLimitSource: limitSource,
         tabId: null,
         windowId: null,
       };
@@ -78,6 +123,7 @@
   state.requestTarget = function requestTarget(requestId) {
     return state.requestRoutes.get(String(requestId || "")) || null;
   };
+  state.workerLimitConfig = workerLimitConfig;
 
   globalThis.resolveTargetTabForRequest = async function resolveConcurrentWorker(message) {
     const selected = await chooseWorker(message);
@@ -106,7 +152,7 @@
           extension_worker_limit: selected.workerLimit,
           extension_worker_route_key: selected.routeKey,
           extension_worker_logical_api_key_id: selected.baseKey,
-          extension_worker_limit_source: Number(message?.routing?.worker_limit) > 0 ? "server-routing" : "default",
+          extension_worker_limit_source: selected.workerLimitSource,
           routed_tab_id: selected.tabId,
           routed_window_id: selected.windowId,
         },
