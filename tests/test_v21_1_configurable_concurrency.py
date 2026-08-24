@@ -56,7 +56,10 @@ def test_v211_static_contracts() -> None:
     assert "function workerLimit(message)" in workers
     assert "message?.routing?.worker_limit" in workers
     assert "selected.workerLimit" in workers
-    assert 'extension_worker_limit_source: Number(message?.routing?.worker_limit) > 0 ? "server-routing" : "default"' in workers
+    assert "runtimeConfigLimit" in workers
+    assert 'source: "server-routing"' in workers
+    assert 'source: "runtime-config"' in workers
+    assert "extension_worker_limit_source: selected.workerLimitSource" in workers
 
     assert "from .v21_1_patch import install_v21_1_patch" in entry
     assert "from .v21_2_patch import install_v21_2_patch" in entry
