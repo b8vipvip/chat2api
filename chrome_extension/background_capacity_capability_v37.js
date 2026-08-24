@@ -14,27 +14,69 @@
     last_report_ok: false,
     last_error: "",
     report_count: 0,
+    runtime_errors: [],
   };
   globalThis[KEY] = state;
+
+  function errorText(error) {
+    const value = String(error?.stack || error?.message || error || "unknown runtime error");
+    return value.length > 8000 ? value.slice(0, 8000) + "…" : value;
+  }
+
+  function recordRuntimeError(kind, error) {
+    const row = {
+      at: new Date().toISOString(),
+      kind: String(kind || "runtime"),
+      error: errorText(error),
+    };
+    state.runtime_errors.push(row);
+    if (state.runtime_errors.length > 20) state.runtime_errors.splice(0, state.runtime_errors.length - 20);
+    state.last_error = row.error;
+    console.warn("chat2api capacity runtime error", row.kind, row.error);
+    setTimeout(() => report(`runtime-error:${row.kind}`).catch(() => false), 0);
+  }
+
+  if (typeof self?.addEventListener === "function") {
+    self.addEventListener("error", event => {
+      const error = event?.error || event?.message || "Service Worker error event";
+      recordRuntimeError("error", error);
+    });
+    self.addEventListener("unhandledrejection", event => {
+      recordRuntimeError("unhandledrejection", event?.reason || "Unhandled promise rejection");
+    });
+  }
 
   function capability() {
     const v35 = globalThis[V35_KEY];
     const v36 = globalThis[V36_KEY];
-    const dispatcherReady = Boolean(
-      v36
+    const controllerReady = Boolean(v35 && typeof v35.handle === "function" && typeof v35.snapshot === "function");
+    const nativeReady = Boolean(
+      controllerReady
+      && Number(globalThis.__CHAT2API_NATIVE_CAPACITY_CONTROL_VERSION__ || 0) >= CONTROL_VERSION
+      && globalThis.__CHAT2API_NATIVE_CAPACITY_DISPATCH_V37__ === true
+    );
+    const overlayReady = Boolean(
+      controllerReady
+      && v36
       && Number(v36.version || 0) >= CONTROL_VERSION
       && globalThis.handleServerMessage?.__chat2apiCapacityControlV36 === true
     );
-    const controllerReady = Boolean(v35 && typeof v35.handle === "function" && typeof v35.snapshot === "function");
-    state.ready = dispatcherReady && controllerReady;
+    state.ready = nativeReady || overlayReady;
+    const latestRuntimeError = state.runtime_errors.length ? state.runtime_errors[state.runtime_errors.length - 1] : null;
     return {
       extension_version: chrome.runtime.getManifest().version,
       extension_control_version: state.ready ? CONTROL_VERSION : 0,
       extension_control_ready: state.ready,
-      extension_control_transport: state.ready ? "direct-capability-heartbeat-v37" : "control-stack-not-ready-v37",
+      extension_control_transport: nativeReady
+        ? "background-native-dispatch-v37"
+        : (overlayReady ? "overlay-dispatch-v36-with-reporter-v37" : "control-stack-not-ready-v37"),
       extension_control_last_error: state.last_error || null,
       extension_control_capability_reporter: 37,
       extension_control_capability_reported_at: new Date().toISOString(),
+      extension_control_native_version: Number(globalThis.__CHAT2API_NATIVE_CAPACITY_CONTROL_VERSION__ || 0),
+      extension_control_native_ready: nativeReady,
+      extension_runtime_error_count: state.runtime_errors.length,
+      extension_runtime_error_last: latestRuntimeError,
     };
   }
 
@@ -47,11 +89,11 @@
       if (typeof sendSocket !== "function") throw new Error("Base WebSocket sender is unavailable");
       await sendSocket({ type: "extension.status", metadata });
       state.last_report_ok = true;
-      state.last_error = "";
+      if (!state.runtime_errors.length) state.last_error = "";
       return true;
     } catch (error) {
       state.last_report_ok = false;
-      state.last_error = String(error?.stack || error?.message || error);
+      state.last_error = errorText(error);
       console.warn("chat2api capacity capability v37 report failed", state.last_error);
       return false;
     }
@@ -78,4 +120,5 @@
   schedule("startup-5000ms", 5000);
   state.report = report;
   state.capability = capability;
+  state.recordRuntimeError = recordRuntimeError;
 })();
