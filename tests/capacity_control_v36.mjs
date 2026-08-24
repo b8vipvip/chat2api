@@ -21,7 +21,7 @@ globalThis.trySendSocket = async payload => {
   return true;
 };
 globalThis.chrome = {
-  runtime: {getManifest: () => ({version: '0.8.2'})},
+  runtime: {getManifest: () => ({version: '0.8.1'})},
   storage: {
     onChanged: {addListener: fn => storageListeners.push(fn)},
   },
@@ -48,7 +48,7 @@ assert.equal(forwarded[0].request_id, 'req_passthrough');
 await state.report();
 const status = sent.find(item => item.type === 'extension.status');
 assert.ok(status, 'dispatcher should proactively report capability');
-assert.equal(status.metadata.extension_version, '0.8.2');
+assert.equal(status.metadata.extension_version, '0.8.1');
 assert.equal(status.metadata.extension_control_version, 36);
 assert.equal(status.metadata.extension_control_ready, true);
 assert.equal(status.metadata.extension_control_transport, 'authoritative-global-dispatch-v36');
