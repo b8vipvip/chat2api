@@ -103,22 +103,43 @@
     setTimeout(() => report(reason).catch(() => false), delay);
   }
 
+  function installPostControlReporter() {
+    const v35 = globalThis[V35_KEY];
+    if (!v35 || typeof v35.handle !== "function" || v35.__chat2apiPostControlReporterV37) return false;
+    const baseHandle = v35.handle;
+    v35.handle = async message => {
+      try {
+        return await baseHandle(message);
+      } finally {
+        await report(`control-result:${String(message?.action || "unknown")}`).catch(() => false);
+      }
+    };
+    v35.__chat2apiPostControlReporterV37 = true;
+    return true;
+  }
+
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
     if (changes.socketState?.newValue === "connected") {
+      installPostControlReporter();
       schedule("socket-connected-120ms", 120);
       schedule("socket-connected-1200ms", 1200);
     }
   });
 
   chrome.alarms.onAlarm.addListener(alarm => {
-    if (alarm?.name === "chat2api-keepalive") report("keepalive-alarm").catch(() => false);
+    if (alarm?.name === "chat2api-keepalive") {
+      installPostControlReporter();
+      report("keepalive-alarm").catch(() => false);
+    }
   });
 
+  installPostControlReporter();
   schedule("startup-500ms", 500);
   schedule("startup-2000ms", 2000);
   schedule("startup-5000ms", 5000);
   state.report = report;
   state.capability = capability;
   state.recordRuntimeError = recordRuntimeError;
+  state.installPostControlReporter = installPostControlReporter;
 })();
