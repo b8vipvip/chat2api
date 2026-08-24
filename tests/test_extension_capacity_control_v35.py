@@ -199,10 +199,11 @@ def test_console_and_bridge_expose_live_capacity_controls() -> None:
     assert 'target.textContent = "并发设置"' in concurrency
     assert '/capacity/apply' in concurrency
     assert "showActionResult" in concurrency
-    assert '"实时窗口"' in health
-    assert "data-live-window-refresh" in health
-    assert '/windows/refresh' in health
-    assert "刷新成功：实时窗口" in health
+    assert "data-concurrency-refresh" in concurrency
+    assert '/windows/refresh' in concurrency
+    assert "刷新成功：实时窗口" in concurrency
+    assert '"实时窗口"' not in health
+    assert "data-live-window-refresh" not in health
     assert "install_extension_capacity_control_patch(app)" in entry
     assert entry.index("install_runtime_contract(app)") < entry.index("install_extension_capacity_control_patch(app)")
     assert '"background_capacity_control_v35.js"' in background_entry
