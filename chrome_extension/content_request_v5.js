@@ -9,7 +9,7 @@
   }
 
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const state = { active: null, listener: null };
+  const state = { active: null, listener: null, contract: null };
   globalThis[KEY] = state;
 
   function visible(element) {
@@ -260,14 +260,48 @@
     return Boolean(text && (text === target || (target.length > 6 && text.includes(target))));
   }
 
+  function classifySubmissionState({ promptPresent, composerChars, generating, newAssistant }) {
+    if (promptPresent) return null;
+    if (generating) return { reason: "generating", composerCleared: composerChars === 0, generating: true };
+    if (newAssistant) return { reason: "assistant-turn", composerCleared: composerChars === 0, generating: false };
+    if (composerChars === 0) return { reason: "composer-cleared", composerCleared: true, generating: false };
+    return null;
+  }
+
+  function nextSubmitAction(confirmed, promptPresent) {
+    if (confirmed) return "confirmed";
+    return promptPresent ? "retry" : "settle";
+  }
+
+  state.contract = { classifySubmissionState, nextSubmitAction };
+
   async function waitAfterSend(active, prompt, reasonPrefix, timeout = 6000) {
     return waitFor(() => {
-      const text = composerText(findComposer());
-      const stillPresent = promptStillPresent(prompt);
-      if (!stillPresent && !text) return { reason: `${reasonPrefix}-composer-cleared`, composerCleared: true, generating: isGenerating() };
-      if (!stillPresent && isGenerating()) return { reason: `${reasonPrefix}-generating`, composerCleared: !text, generating: true };
-      return null;
+      const composer = findComposer();
+      const text = composerText(composer);
+      const promptPresent = promptStillPresent(prompt);
+      const assistant = newAssistantState(active);
+      const result = classifySubmissionState({
+        promptPresent,
+        composerChars: text.length,
+        generating: isGenerating(),
+        newAssistant: assistant.isNew,
+      });
+      return result ? { ...result, reason: `${reasonPrefix}-${result.reason}` } : null;
     }, timeout, 100);
+  }
+
+  async function settleAfterPromptLeftComposer(active, prompt, attempts) {
+    await diagnostic(active, "post-click-settling", {
+      send_attempts: attempts,
+      submission_retry_suppressed: true,
+      composer_chars: composerText(findComposer()).length,
+      button_found: Boolean(sendButton()),
+      generating_observed: isGenerating(),
+    });
+    const confirmed = await waitAfterSend(active, prompt, "late", 20000);
+    if (confirmed) return confirmed;
+    throw new Error("ChatGPT prompt left the composer after send, but submission could not be confirmed; duplicate send was suppressed");
   }
 
   async function submitAndConfirm(active, prompt) {
@@ -277,6 +311,7 @@
     const readinessBudget = Math.max(15000, Math.min(90000, requestTimeoutMs - 5000));
     let attempts = 0;
     let enterFallbackUsed = false;
+    let retrySuppressed = false;
 
     while (attempts < 3 && !active.cancelled) {
       attempts += 1;
@@ -308,7 +343,13 @@
       });
 
       let confirmed = await waitAfterSend(active, prompt, "click", 6000);
-      if (!confirmed && promptStillPresent(prompt)) {
+      let action = nextSubmitAction(confirmed, promptStillPresent(prompt));
+
+      if (action === "settle") {
+        retrySuppressed = true;
+        confirmed = await settleAfterPromptLeftComposer(active, prompt, attempts);
+        action = "confirmed";
+      } else if (action === "retry") {
         dispatchEnter(findComposer());
         enterFallbackUsed = true;
         await diagnostic(active, "enter-fallback", {
@@ -317,9 +358,15 @@
           composer_chars: composerText(findComposer()).length,
         });
         confirmed = await waitAfterSend(active, prompt, "enter", 6000);
+        action = nextSubmitAction(confirmed, promptStillPresent(prompt));
+        if (action === "settle") {
+          retrySuppressed = true;
+          confirmed = await settleAfterPromptLeftComposer(active, prompt, attempts);
+          action = "confirmed";
+        }
       }
 
-      if (confirmed) {
+      if (action === "confirmed" && confirmed) {
         await diagnostic(active, "confirmed", {
           send_attempts: attempts,
           submit_total_ms: Math.round((performance.now() - totalStarted) * 10) / 10,
@@ -328,6 +375,7 @@
           composer_cleared: confirmed.composerCleared,
           generating_observed: confirmed.generating,
           enter_fallback_used: enterFallbackUsed,
+          submission_retry_suppressed: retrySuppressed,
           historical_hydration_ignored: true,
         });
         return;
