@@ -199,7 +199,7 @@ def test_extension_binding_uses_session_storage_about_blank_scrub_and_no_pairing
     ):
         assert token in source
     assert 'chrome.storage.local.set({ [PENDING_KEY]' not in source
-    assert "X-Pairing-Code" not in source
+    assert "X-Worker-Token" not in source
     assert "console.log" not in source
     assert "console.warn" not in source
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
@@ -239,7 +239,8 @@ def test_binding_versions_are_aligned():
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert _runtime_version(runtime) >= (0, 22, 4)
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert '"version": "0.8.1"' in manifest
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.2"' in runtime
+    assert '"version": "0.8.2"' in manifest
     assert 'agent_version:"0.3.2"' in bootstrap
     assert "install_linux_worker_bridge_binding_patch(app)" in entry
     assert entry.index("install_linux_worker_patch(app)") < entry.index("install_linux_worker_bridge_binding_patch(app)") < entry.index("install_runtime_contract(app)")
