@@ -13,6 +13,8 @@ UNITS=(
   chat2api-worker-watchdog.service
   chat2api-extension-autoreload.service
 )
+EXTENSION_DIR=/opt/chat2api-worker/chrome_extension
+STATE_DIR=/var/lib/chat2api-worker
 
 redact() {
   sed -E \
@@ -44,9 +46,22 @@ printf '\n===== browser / extension =====\n'
 if [[ -L /home/chat2api/.cache/chat2api-chrome-for-testing/chrome ]]; then
   printf 'chrome_link=%s\n' "$(readlink -f /home/chat2api/.cache/chat2api-chrome-for-testing/chrome 2>/dev/null || true)"
 fi
-if [[ -r /opt/chat2api-worker/chrome_extension/manifest.json ]]; then
-  printf 'extension_version=%s\n' "$(jq -r '.version // ""' /opt/chat2api-worker/chrome_extension/manifest.json 2>/dev/null || true)"
+if [[ -r "${EXTENSION_DIR}/manifest.json" ]]; then
+  printf 'extension_version=%s\n' "$(jq -r '.version // ""' "${EXTENSION_DIR}/manifest.json" 2>/dev/null || true)"
 fi
+printf 'capacity_control_v35_source=%s\n' "$([[ -r "${EXTENSION_DIR}/background_capacity_control_v35.js" ]] && echo present || echo missing)"
+printf 'capacity_control_v36_source=%s\n' "$([[ -r "${EXTENSION_DIR}/background_capacity_control_v36.js" ]] && echo present || echo missing)"
+printf 'capacity_control_v35_loaded_by_entry=%s\n' "$([[ -r "${EXTENSION_DIR}/background_entry.js" ]] && grep -q 'background_capacity_control_v35.js' "${EXTENSION_DIR}/background_entry.js" && echo yes || echo no)"
+printf 'capacity_control_v36_loaded_by_entry=%s\n' "$([[ -r "${EXTENSION_DIR}/background_entry.js" ]] && grep -q 'background_capacity_control_v36.js' "${EXTENSION_DIR}/background_entry.js" && echo yes || echo no)"
+if [[ -r "${STATE_DIR}/extension-state.env" ]]; then
+  printf '%s\n' '--- extension-state.env ---'
+  grep -E '^(EXTENSION_VERSION|EXTENSION_FINGERPRINT|GIT_COMMIT|CENTRAL_BUNDLE_SHA256|APPLIED_AT)=' "${STATE_DIR}/extension-state.env" 2>/dev/null || true
+fi
+for marker in extension-applied.sha256 extension-failed.sha256 extension-central-bundle.sha256; do
+  if [[ -r "${STATE_DIR}/${marker}" ]]; then
+    printf '%s=%s\n' "${marker}" "$(head -c 80 "${STATE_DIR}/${marker}" 2>/dev/null || true)"
+  fi
+done
 printf 'chrome_processes=%s\n' "$(pgrep -u chat2api -fc 'chrome' 2>/dev/null || true)"
 printf 'cdp_9222='; ss -lnt 2>/dev/null | awk '$4 ~ /127\.0\.0\.1:9222$/ {found=1} END {print found ? "listening" : "not_listening"}'
 

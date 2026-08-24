@@ -35,4 +35,5 @@ importScripts(
   "conversation_dispatch.js",
   "audio_routing_live.js",
   "background_capacity_control_v35.js",
+  "background_capacity_control_v36.js",
 );

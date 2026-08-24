@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 MIN_TARGET = 1
 MAX_TARGET = 32
 CONTROL_RESULT_KEY = "extension_control_result"
+MIN_CONTROL_VERSION = 36
 
 
 class CapacityApplyRequest(BaseModel):
@@ -40,6 +41,45 @@ def _ensure_client(app: FastAPI, client_id: str) -> str:
     return client_id
 
 
+def _control_diagnostics(item: Any) -> dict[str, Any]:
+    metadata = item.metadata if item and isinstance(getattr(item, "metadata", None), dict) else {}
+    bridge_version = str(metadata.get("extension_version") or getattr(item, "version", "") or "unknown")
+    try:
+        control_version = int(metadata.get("extension_control_version") or 0)
+    except (TypeError, ValueError):
+        control_version = 0
+    control_ready = metadata.get("extension_control_ready")
+    return {
+        "bridge_version": bridge_version,
+        "control_version": control_version,
+        "control_ready": control_ready if isinstance(control_ready, bool) else None,
+        "control_transport": str(metadata.get("extension_control_transport") or ""),
+        "control_last_error": str(metadata.get("extension_control_last_error") or ""),
+    }
+
+
+def _control_protocol_ready(item: Any) -> tuple[bool, dict[str, Any]]:
+    diagnostics = _control_diagnostics(item)
+    return (
+        int(diagnostics["control_version"] or 0) >= MIN_CONTROL_VERSION
+        and diagnostics["control_ready"] is True,
+        diagnostics,
+    )
+
+
+def _stale_control_error(diagnostics: dict[str, Any]) -> str:
+    bridge = diagnostics.get("bridge_version") or "unknown"
+    control = diagnostics.get("control_version") or 0
+    detail = diagnostics.get("control_last_error") or ""
+    suffix = f" ({detail})" if detail else ""
+    return (
+        f"Chrome Bridge capacity control is not ready: extension={bridge}, control=v{control}; "
+        f"required control=v{MIN_CONTROL_VERSION}. Update/reload this Linux Worker Bridge bundle; "
+        "the saved concurrency setting is unchanged."
+        f"{suffix}"
+    )
+
+
 async def _request_extension_control(
     app: FastAPI,
     client_id: str,
@@ -55,6 +95,7 @@ async def _request_extension_control(
             "ok": False,
             "action": action,
             "error": "Chrome extension connection is disabled",
+            "error_code": "extension_disabled",
             "data": {},
         }
     if client_id not in registry.sockets:
@@ -62,7 +103,19 @@ async def _request_extension_control(
             "ok": False,
             "action": action,
             "error": "Chrome extension is offline",
+            "error_code": "extension_offline",
             "data": {},
+        }
+
+    capability, capability_diagnostics = _control_protocol_ready(item)
+    if not capability:
+        return {
+            "ok": False,
+            "action": action,
+            "error": _stale_control_error(capability_diagnostics),
+            "error_code": "extension_control_not_ready",
+            "data": {},
+            "diagnostics": capability_diagnostics,
         }
 
     control_id = "ctl_" + uuid.uuid4().hex
@@ -76,6 +129,7 @@ async def _request_extension_control(
                 "action": str(action),
                 "payload": dict(payload or {}),
                 "sent_at": sent_at,
+                "minimum_control_version": MIN_CONTROL_VERSION,
             },
         )
     except Exception as error:
@@ -84,7 +138,9 @@ async def _request_extension_control(
             "control_id": control_id,
             "action": action,
             "error": str(error),
+            "error_code": "extension_control_send_failed",
             "data": {},
+            "diagnostics": capability_diagnostics,
         }
 
     loop = asyncio.get_running_loop()
@@ -100,18 +156,27 @@ async def _request_extension_control(
                 "control_id": control_id,
                 "action": action,
                 "error": str(result.get("error") or ""),
+                "error_code": "" if result.get("ok") is True else "extension_control_failed",
                 "data": dict(data),
                 "observed_at": result.get("observed_at"),
                 "round_trip_ms": round((time.time() - sent_at) * 1000, 1),
+                "diagnostics": _control_diagnostics(current),
             }
         await asyncio.sleep(0.1)
 
+    current = registry.clients.get(client_id)
+    diagnostics = _control_diagnostics(current)
     return {
         "ok": False,
         "control_id": control_id,
         "action": action,
-        "error": f"Timed out after {round(timeout_seconds, 1)}s waiting for the Extension control confirmation",
+        "error": (
+            f"Timed out after {round(timeout_seconds, 1)}s waiting for the Extension control confirmation "
+            f"(extension={diagnostics['bridge_version']}, control=v{diagnostics['control_version']})."
+        ),
+        "error_code": "extension_control_timeout",
         "data": {},
+        "diagnostics": diagnostics,
     }
 
 
@@ -149,6 +214,7 @@ def install_extension_capacity_control_patch(app: FastAPI) -> FastAPI:
             "window_snapshot": snapshot,
             "pending_reason": str(data.get("pending_reason") or ""),
             "error": str(control.get("error") or ""),
+            "error_code": str(control.get("error_code") or ""),
             "control": control,
         }
 
@@ -169,6 +235,7 @@ def install_extension_capacity_control_patch(app: FastAPI) -> FastAPI:
             "client_id": client_id,
             "window_snapshot": snapshot,
             "error": str(control.get("error") or ""),
+            "error_code": str(control.get("error_code") or ""),
             "control": control,
         }
 
