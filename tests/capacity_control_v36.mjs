@@ -53,6 +53,16 @@ assert.equal(status.metadata.extension_control_version, 36);
 assert.equal(status.metadata.extension_control_ready, true);
 assert.equal(status.metadata.extension_control_transport, 'authoritative-global-dispatch-v36');
 
+await globalThis.trySendSocket({
+  type: 'extension.control.result',
+  control_id: 'ctl_result_test',
+  metadata: {extension_control_version: 35},
+});
+const resultEnvelope = sent.find(item => item.control_id === 'ctl_result_test');
+assert.ok(resultEnvelope, 'control result should reach the base sender');
+assert.equal(resultEnvelope.metadata.extension_control_version, 36);
+assert.equal(resultEnvelope.metadata.extension_control_ready, true);
+
 assert.equal(storageListeners.length, 1);
 storageListeners[0]({socketState: {newValue: 'connected'}}, 'local');
 await new Promise(resolve => setTimeout(resolve, 160));
