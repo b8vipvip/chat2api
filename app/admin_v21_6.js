@@ -5,10 +5,8 @@
     ["platform", "平台"],
     ["network", "网络"],
     ["chatgpt", "ChatGPT"],
-    ["reserve_windows", "实时窗口"],
   ];
   let pollInFlight = false;
-  const windowRefreshPending = new Set();
 
   function extensionViewActive() {
     return document.getElementById("view-extensions")?.classList.contains("active");
@@ -25,18 +23,6 @@
 
   function metadata(row) {
     return row?.metadata && typeof row.metadata === "object" ? row.metadata : {};
-  }
-
-  function actionToast(message, level = "ok", button = null) {
-    const fn = globalThis.chat2apiActionToast;
-    if (typeof fn === "function") {
-      fn(message, level, button);
-      return;
-    }
-    if (button) button.title = String(message || "");
-    if (typeof globalThis.status === "function") {
-      globalThis.status(String(message || ""), level === "bad" ? "bad" : level === "warn" ? "warnText" : "ok");
-    }
   }
 
   function effectiveVersion(row) {
@@ -82,28 +68,6 @@
     return {label: "未知", level: "warn", detail: text(meta.chatgpt_login_strategy, "尚无足够被动登录证据")};
   }
 
-  function reserveWindowState(row) {
-    if (row?.online !== true) return {label: "-", level: "warn", detail: "扩展离线，无法确认当前实时窗口数量"};
-    const meta = metadata(row);
-    const hasTelemetry = Number(meta.reserve_window_telemetry_version || 0) >= 29
-      || meta.reserve_window_total !== undefined
-      || meta.reserve_window_active !== undefined;
-    if (!hasTelemetry) return {label: "未知", level: "warn", detail: "当前扩展版本尚未上报实时窗口运行数据"};
-
-    const total = Math.max(0, Math.floor(Number(meta.reserve_window_total || 0)));
-    const active = Math.max(0, Math.min(total, Math.floor(Number(meta.reserve_window_active || 0))));
-    const target = Math.max(0, Math.floor(Number(meta.reserve_window_target || 0)));
-    const allChatGpt = Math.max(total, Math.floor(Number(meta.reserve_window_all_chatgpt_windows || total)));
-    const idleSeconds = Math.max(0, Math.floor(Number(meta.reserve_window_idle_close_seconds || 0)));
-    const level = target > 0 && total < target ? "warn" : "ok";
-    const idleText = idleSeconds > 0 ? `；调用窗口闲置 ${Math.round(idleSeconds / 60)} 分钟后自动回收` : "";
-    return {
-      label: `${total}(${active})`,
-      level,
-      detail: `受监管实时窗口 ${total} / 目标 ${target || "-"}；当前正忙 ${active}；Chrome ChatGPT 窗口 ${allChatGpt}${idleText}`,
-    };
-  }
-
   function healthState(row) {
     if (row?.connection_enabled === false) return {label: "已禁用", level: "warn", detail: "管理员已禁止该扩展连接"};
     if (row?.online !== true) return {label: "离线", level: "bad", detail: "扩展 WebSocket 当前不在线"};
@@ -130,7 +94,16 @@
   function removeLegacyHealthColumn() {
     const table = document.querySelector("#view-extensions #extensionDeviceBody")?.closest("table");
     if (!table) return;
-    for (const node of table.querySelectorAll('[data-chat2api-health-column="health"], th[data-chat2api-column-key="health"], [data-chat2api-health-cell="health"], td[data-chat2api-column-key="health"]')) {
+    for (const node of table.querySelectorAll([
+      '[data-chat2api-health-column="health"]',
+      'th[data-chat2api-column-key="health"]',
+      '[data-chat2api-health-cell="health"]',
+      'td[data-chat2api-column-key="health"]',
+      '[data-chat2api-health-column="reserve_windows"]',
+      'th[data-chat2api-column-key="reserve_windows"]',
+      '[data-chat2api-health-cell="reserve_windows"]',
+      'td[data-chat2api-column-key="reserve_windows"]',
+    ].join(","))) {
       node.remove();
     }
   }
@@ -149,7 +122,6 @@
       }
       th.textContent = label;
       th.dataset.chat2apiColumnKey = key;
-      if (key === "reserve_windows") th.title = "受监管窗口总数(正忙数量)；刷新会主动向扩展读取真实 Chrome 窗口状态";
     }
   }
 
@@ -168,29 +140,6 @@
 
   function renderState(cell, state) {
     cell.textContent = state.label;
-    cell.classList.remove("ok", "bad", "warnText");
-    cell.classList.add(statusClass(state.level));
-    cell.title = state.detail || state.label;
-  }
-
-  function renderReserveWindowCell(cell, state, clientId) {
-    const pending = windowRefreshPending.has(clientId);
-    let wrapper = cell.querySelector("[data-live-window-editor]");
-    if (!wrapper || wrapper.dataset.clientId !== clientId) {
-      cell.innerHTML = `<div data-live-window-editor data-client-id="${clientId}" style="display:flex;align-items:center;gap:7px;white-space:nowrap">
-        <span data-live-window-count></span>
-        <button type="button" class="action" data-live-window-refresh style="padding:4px 8px">刷新</button>
-      </div>`;
-      wrapper = cell.querySelector("[data-live-window-editor]");
-    }
-    const count = wrapper?.querySelector("[data-live-window-count]");
-    const button = wrapper?.querySelector("[data-live-window-refresh]");
-    if (count) count.textContent = state.label;
-    if (button) {
-      button.disabled = pending;
-      button.textContent = pending ? "刷新中" : "刷新";
-      if (!button.title || !pending) button.title = "主动向该 Extension 获取一次真实 Chrome 窗口快照";
-    }
     cell.classList.remove("ok", "bad", "warnText");
     cell.classList.add(statusClass(state.level));
     cell.title = state.detail || state.label;
@@ -243,11 +192,9 @@
       const platform = platformState(row);
       const network = networkState(row);
       const login = loginState(row);
-      const reserve = reserveWindowState(row);
       renderState(ensureCell(tr, "platform"), {...platform, level: metadata(row).platform_supported_desktop === false ? "bad" : "ok"});
       renderState(ensureCell(tr, "network"), network);
       renderState(ensureCell(tr, "chatgpt"), login);
-      renderReserveWindowCell(ensureCell(tr, "reserve_windows"), reserve, clientId);
     }
     renderSummary(rows);
   }
@@ -265,42 +212,6 @@
       pollInFlight = false;
     }
   }
-
-  async function refreshLiveWindows(button) {
-    const wrapper = button?.closest?.("[data-live-window-editor]");
-    const clientId = String(wrapper?.dataset?.clientId || "");
-    if (!clientId || windowRefreshPending.has(clientId)) return;
-    windowRefreshPending.add(clientId);
-    button.disabled = true;
-    button.textContent = "刷新中";
-    try {
-      const result = await api(`/api/admin/extensions/${encodeURIComponent(clientId)}/windows/refresh`, { method: "POST" });
-      const snapshot = result?.window_snapshot || {};
-      if (result?.ok === true && snapshot.total !== undefined) {
-        const total = Math.max(0, Number(snapshot.total || 0));
-        const active = Math.max(0, Number(snapshot.active || 0));
-        const allChatGpt = Math.max(total, Number(snapshot.all_chatgpt_windows || total));
-        const message = `刷新成功：实时窗口 ${total}(${active})；Chrome ChatGPT 窗口 ${allChatGpt}`;
-        actionToast(message, "ok", button);
-      } else {
-        actionToast(`刷新失败：${String(result?.error || "扩展没有返回真实窗口快照")}`, "bad", button);
-      }
-      await refreshHealthCenter();
-    } catch (error) {
-      actionToast(`刷新失败：${String(error?.message || error)}`, "bad", button);
-    } finally {
-      windowRefreshPending.delete(clientId);
-      button.disabled = false;
-      button.textContent = "刷新";
-    }
-  }
-
-  document.addEventListener("click", event => {
-    const button = event.target?.closest?.("[data-live-window-refresh]");
-    if (!button) return;
-    event.preventDefault();
-    refreshLiveWindows(button).catch(() => {});
-  });
 
   const baseShow = typeof globalThis.show === "function" ? globalThis.show : null;
   if (baseShow && !baseShow.__chat2apiHealthCenterV216) {
