@@ -8,7 +8,13 @@ EXTENSION_DIR="${EXTENSION_DIR:-${REPO_DIR}/chrome_extension}"
 CHROME_UNIT="${CHROME_UNIT:-chat2api-chrome.service}"
 STATE_DIR="${STATE_DIR:-/var/lib/chat2api-worker}"
 SERVER_URL="${CHAT2API_SERVER_URL:-}"
-CENTRAL_SYNC_ENABLED="${CHAT2API_EXTENSION_CENTRAL_SYNC:-0}"
+if [[ -n "${CHAT2API_EXTENSION_CENTRAL_SYNC+x}" ]]; then
+  CENTRAL_SYNC_ENABLED="${CHAT2API_EXTENSION_CENTRAL_SYNC}"
+elif [[ "${REPO_DIR}" == "/opt/chat2api-worker" && -n "${SERVER_URL}" ]]; then
+  CENTRAL_SYNC_ENABLED=1
+else
+  CENTRAL_SYNC_ENABLED=0
+fi
 APPLIED_FILE="${STATE_DIR}/extension-applied.sha256"
 FAILED_FILE="${STATE_DIR}/extension-failed.sha256"
 CENTRAL_BUNDLE_FILE="${STATE_DIR}/extension-central-bundle.sha256"
@@ -257,8 +263,8 @@ if ! flock -n 9; then
   exit 0
 fi
 
-# Production Linux Workers opt into central sync through the bootstrap-created
-# EnvironmentFile. Development checkouts keep the historical local-only behavior.
+# Production Linux Workers infer central sync from their canonical bundle path
+# and CHAT2API_SERVER_URL. Development checkouts remain local-only unless opted in.
 sync_central_extension || true
 
 fingerprint=""
