@@ -15,7 +15,8 @@ def test_request_v5_never_accepts_history_hydration_as_submission() -> None:
     assert "historical_hydration_ignored: true" in source
     assert "promptStillPresent(prompt)" in source
     assert "ready.button.click()" in source
-    assert "${reasonPrefix}-composer-cleared" in source
+    assert 'reason: `${reasonPrefix}-${result.reason}`' in source
+    assert 'reason: "composer-cleared"' in source
 
 
 def test_request_v5_is_loaded_after_v4() -> None:
