@@ -41,8 +41,11 @@ def test_extension_console_uses_live_concurrency_and_per_id_editor():
     assert "data-extension-concurrency-editor" in source
     assert "data-concurrency-limit" in source
     assert "data-concurrency-save" in source
+    assert "data-concurrency-refresh" in source
+    assert source.index("data-concurrency-save") < source.index("data-concurrency-refresh")
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/concurrency' in source
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in source
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/refresh' in source
     assert 'method: "PUT"' in source
     assert 'method: "POST"' in source
     assert "showActionResult" in source
