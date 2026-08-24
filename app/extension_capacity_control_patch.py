@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import time
 import uuid
 from typing import Any
@@ -14,7 +13,6 @@ MIN_TARGET = 1
 MAX_TARGET = 32
 CONTROL_RESULT_KEY = "extension_control_result"
 MIN_CONTROL_VERSION = 36
-MIN_BRIDGE_VERSION = (0, 8, 2)
 
 
 class CapacityApplyRequest(BaseModel):
@@ -43,13 +41,6 @@ def _ensure_client(app: FastAPI, client_id: str) -> str:
     return client_id
 
 
-def _version_tuple(value: Any) -> tuple[int, int, int]:
-    match = re.match(r"^\s*(\d+)\.(\d+)\.(\d+)", str(value or ""))
-    if not match:
-        return (0, 0, 0)
-    return tuple(int(part) for part in match.groups())
-
-
 def _control_diagnostics(item: Any) -> dict[str, Any]:
     metadata = item.metadata if item and isinstance(getattr(item, "metadata", None), dict) else {}
     bridge_version = str(metadata.get("extension_version") or getattr(item, "version", "") or "unknown")
@@ -67,24 +58,13 @@ def _control_diagnostics(item: Any) -> dict[str, Any]:
     }
 
 
-def _control_protocol_ready(item: Any) -> tuple[bool | None, dict[str, Any]]:
+def _control_protocol_ready(item: Any) -> tuple[bool, dict[str, Any]]:
     diagnostics = _control_diagnostics(item)
-    control_version = int(diagnostics["control_version"] or 0)
-    control_ready = diagnostics["control_ready"]
-    bridge_version = _version_tuple(diagnostics["bridge_version"])
-
-    if control_version >= MIN_CONTROL_VERSION:
-        return control_ready is not False, diagnostics
-    if control_ready is False:
-        return False, diagnostics
-    if bridge_version and bridge_version < MIN_BRIDGE_VERSION:
-        return False, diagnostics
-    # A freshly reconnected 0.8.2+ Bridge may receive an admin action before
-    # its first capability status reaches the server. Allow that short race and
-    # rely on the correlated control result rather than rejecting it locally.
-    if bridge_version >= MIN_BRIDGE_VERSION:
-        return None, diagnostics
-    return False, diagnostics
+    return (
+        int(diagnostics["control_version"] or 0) >= MIN_CONTROL_VERSION
+        and diagnostics["control_ready"] is True,
+        diagnostics,
+    )
 
 
 def _stale_control_error(diagnostics: dict[str, Any]) -> str:
@@ -93,8 +73,9 @@ def _stale_control_error(diagnostics: dict[str, Any]) -> str:
     detail = diagnostics.get("control_last_error") or ""
     suffix = f" ({detail})" if detail else ""
     return (
-        f"Chrome Bridge control protocol is not ready: extension={bridge}, control=v{control}. "
-        "Update/reload this Linux Worker Bridge to 0.8.2 or newer; the saved concurrency setting is unchanged."
+        f"Chrome Bridge capacity control is not ready: extension={bridge}, control=v{control}; "
+        f"required control=v{MIN_CONTROL_VERSION}. Update/reload this Linux Worker Bridge bundle; "
+        "the saved concurrency setting is unchanged."
         f"{suffix}"
     )
 
@@ -127,7 +108,7 @@ async def _request_extension_control(
         }
 
     capability, capability_diagnostics = _control_protocol_ready(item)
-    if capability is False:
+    if not capability:
         return {
             "ok": False,
             "action": action,
