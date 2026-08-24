@@ -264,7 +264,7 @@ def test_worker_ui_javascript_has_valid_syntax():
 def test_runtime_marks_worker_release_without_bridge_protocol_bump():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.22"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.23"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert "install_runtime_contract(app)" in entry
     assert "install_linux_worker_pairing_patch(app)" in entry

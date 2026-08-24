@@ -101,11 +101,12 @@ def test_diagnostics_endpoint_is_admin_only_bounded_zip_with_named_logs():
         assert token in source
 
 
-def test_runtime_and_entry_publish_v22_22_diagnostics_patch_last():
+def test_runtime_and_entry_publish_v22_23_diagnostics_patch_last():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
 
-    assert 'SERVER_RUNTIME_VERSION = "0.22.22"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.23"' in runtime
+    assert 'RUNTIME_FEATURE_REVISION = "capacity-native-v37-runtime-logs-v1"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert 'from .linux_worker_diagnostics_patch import install_linux_worker_diagnostics_patch' in entry
     assert 'install_linux_worker_diagnostics_patch(app)' in entry
