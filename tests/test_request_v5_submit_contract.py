@@ -49,18 +49,21 @@ assert.equal(
   contract.classifySubmissionState({ promptPresent: true, composerChars: 4212, generating: false, newAssistant: false }),
   null,
 );
-assert.deepEqual(
-  contract.classifySubmissionState({ promptPresent: false, composerChars: 0, generating: false, newAssistant: false }),
-  { reason: "composer-cleared", composerCleared: true, generating: false },
-);
-assert.deepEqual(
-  contract.classifySubmissionState({ promptPresent: false, composerChars: 0, generating: true, newAssistant: false }),
-  { reason: "generating", composerCleared: true, generating: true },
-);
-assert.deepEqual(
-  contract.classifySubmissionState({ promptPresent: false, composerChars: 10, generating: false, newAssistant: true }),
-  { reason: "assistant-turn", composerCleared: false, generating: false },
-);
+
+const cleared = contract.classifySubmissionState({ promptPresent: false, composerChars: 0, generating: false, newAssistant: false });
+assert.equal(cleared.reason, "composer-cleared");
+assert.equal(cleared.composerCleared, true);
+assert.equal(cleared.generating, false);
+
+const generating = contract.classifySubmissionState({ promptPresent: false, composerChars: 0, generating: true, newAssistant: false });
+assert.equal(generating.reason, "generating");
+assert.equal(generating.composerCleared, true);
+assert.equal(generating.generating, true);
+
+const assistantTurn = contract.classifySubmissionState({ promptPresent: false, composerChars: 10, generating: false, newAssistant: true });
+assert.equal(assistantTurn.reason, "assistant-turn");
+assert.equal(assistantTurn.composerCleared, false);
+assert.equal(assistantTurn.generating, false);
 '''
     result = subprocess.run(
         ["node", "--input-type=module", "-e", script],
