@@ -101,22 +101,17 @@ def test_reserve_pool_reuses_spares_and_extends_route_idle_close_to_ten_minutes(
         assert token in source
 
 
-def test_reserve_window_column_is_live_refreshable_and_configurable():
+def test_realtime_window_refresh_is_compacted_into_concurrency_column():
     health = (ROOT / "app" / "admin_v21_6.js").read_text(encoding="utf-8")
-    columns = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
     concurrency = (ROOT / "app" / "admin_v21_5.js").read_text(encoding="utf-8")
-    assert '["reserve_windows", "实时窗口"]' in health
-    assert 'label: `${total}(${active})`' in health
-    assert 'meta.reserve_window_total' in health
-    assert 'meta.reserve_window_active' in health
-    assert 'meta.reserve_window_target' in health
-    assert 'data-live-window-refresh' in health
-    assert '/windows/refresh' in health
-    assert '"备用窗口", "实时窗口"' in concurrency
-    # The underlying stable column key remains backward compatible with v1/v2
-    # saved layout preferences; the visible label is migrated at runtime.
-    assert '{key: "reserve_windows", label: "备用窗口"}' in columns
-    assert '["备用窗口", "reserve_windows"]' in columns
+
+    assert '["reserve_windows", "实时窗口"]' not in health
+    assert 'data-live-window-refresh' not in health
+    assert 'renderReserveWindowCell' not in health
+    assert 'data-concurrency-refresh' in concurrency
+    assert '/windows/refresh' in concurrency
+    assert '刷新成功：实时窗口 ${total}(${active})；Chrome ChatGPT 窗口 ${allChatGpt}' in concurrency
+    assert concurrency.index('data-concurrency-save') < concurrency.index('data-concurrency-refresh')
 
 
 def test_reserve_versions_match_manifest_and_runtime_contract():
