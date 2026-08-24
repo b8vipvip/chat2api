@@ -7,10 +7,14 @@ PROFILE_DIR="${PROFILE_DIR:-/home/${WORKER_USER}/.config/chat2api-chrome-worker-
 EXTENSION_DIR="${EXTENSION_DIR:-${REPO_DIR}/chrome_extension}"
 CHROME_UNIT="${CHROME_UNIT:-chat2api-chrome.service}"
 STATE_DIR="${STATE_DIR:-/var/lib/chat2api-worker}"
+SERVER_URL="${CHAT2API_SERVER_URL:-}"
+CENTRAL_SYNC_ENABLED="${CHAT2API_EXTENSION_CENTRAL_SYNC:-0}"
 APPLIED_FILE="${STATE_DIR}/extension-applied.sha256"
 FAILED_FILE="${STATE_DIR}/extension-failed.sha256"
+CENTRAL_BUNDLE_FILE="${STATE_DIR}/extension-central-bundle.sha256"
 STATE_FILE="${STATE_DIR}/extension-state.env"
 LOCK_FILE="${STATE_DIR}/extension-autoreload.lock"
+CENTRAL_EXTENSION_CHANGED=0
 
 log() {
   local level="$1"
@@ -74,6 +78,18 @@ else:
 PY
 }
 
+tree_fingerprint() {
+  local root="$1"
+  find "${root}" -type f -print0 \
+    | sort -z \
+    | while IFS= read -r -d '' file; do
+        printf '%s\0' "${file#${root}/}"
+        sha256sum "${file}"
+      done \
+    | sha256sum \
+    | awk '{print $1}'
+}
+
 extension_fingerprint() {
   local repo_real extension_real extension_rel git_lock
   repo_real="$(realpath "${REPO_DIR}")"
@@ -95,14 +111,103 @@ extension_fingerprint() {
     return
   fi
 
-  find "${extension_real}" -type f -print0 \
-    | sort -z \
-    | while IFS= read -r -d '' file; do
-        printf '%s\0' "${file#${extension_real}/}"
-        sha256sum "${file}"
-      done \
-    | sha256sum \
-    | awk '{print $1}'
+  tree_fingerprint "${extension_real}"
+}
+
+sync_central_extension() {
+  [[ "${CENTRAL_SYNC_ENABLED}" == "1" ]] || return 0
+  if [[ -z "${SERVER_URL}" ]]; then
+    log WARN "central Bridge sync enabled but CHAT2API_SERVER_URL is empty"
+    return 0
+  fi
+  if ! command -v curl >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+    log WARN "central Bridge sync skipped because curl/python3 is unavailable"
+    return 0
+  fi
+
+  local meta bundle tmp incoming expected known incoming_fp current_fp new_dir backup_dir
+  meta="$(mktemp)"
+  bundle="$(mktemp)"
+  tmp="$(mktemp -d)"
+  cleanup_central_sync() { rm -f "${meta}" "${bundle}"; rm -rf "${tmp}"; }
+
+  if ! curl -fsS --connect-timeout 5 --max-time 15 -o "${meta}" "${SERVER_URL%/}/bootstrap/linux-worker-bundle.json"; then
+    log WARN "central Bridge manifest check failed; keeping the currently loaded local bundle"
+    cleanup_central_sync
+    return 0
+  fi
+  expected="$(python3 - "${meta}" <<'PY'
+import json,sys
+try:
+    value=json.load(open(sys.argv[1],encoding='utf-8'))
+    digest=str(value.get('sha256') or '').strip().lower()
+    print(digest if len(digest)==64 and all(c in '0123456789abcdef' for c in digest) else '')
+except Exception:
+    print('')
+PY
+)"
+  if [[ -z "${expected}" ]]; then
+    log WARN "central Bridge manifest returned an invalid bundle digest"
+    cleanup_central_sync
+    return 0
+  fi
+
+  known="$(cat "${CENTRAL_BUNDLE_FILE}" 2>/dev/null || true)"
+  if [[ "${known}" == "${expected}" ]]; then
+    cleanup_central_sync
+    return 0
+  fi
+
+  if ! curl -fSL --retry 2 --retry-delay 1 --retry-all-errors --connect-timeout 8 --max-time 120 \
+      -o "${bundle}" "${SERVER_URL%/}/bootstrap/linux-worker-bundle.tar.gz"; then
+    log WARN "central Worker Bundle download failed; local Bridge remains unchanged"
+    cleanup_central_sync
+    return 0
+  fi
+  if ! printf '%s  %s\n' "${expected}" "${bundle}" | sha256sum -c - >/dev/null 2>&1; then
+    log WARN "central Worker Bundle digest verification failed; local Bridge remains unchanged"
+    cleanup_central_sync
+    return 0
+  fi
+  if ! tar -xzf "${bundle}" -C "${tmp}" chrome_extension >/dev/null 2>&1; then
+    log WARN "central Worker Bundle does not contain a readable chrome_extension directory"
+    cleanup_central_sync
+    return 0
+  fi
+
+  incoming="${tmp}/chrome_extension"
+  if [[ ! -f "${incoming}/manifest.json" || ! -f "${incoming}/background_entry.js" ]]; then
+    log WARN "central Bridge payload failed structural validation"
+    cleanup_central_sync
+    return 0
+  fi
+
+  incoming_fp="$(tree_fingerprint "${incoming}")"
+  current_fp="$(tree_fingerprint "${EXTENSION_DIR}")"
+  if [[ -n "${incoming_fp}" && "${incoming_fp}" != "${current_fp}" ]]; then
+    new_dir="${EXTENSION_DIR}.central-new"
+    backup_dir="${EXTENSION_DIR}.central-previous"
+    rm -rf "${new_dir}" "${backup_dir}"
+    cp -a "${incoming}" "${new_dir}"
+    chown -R root:root "${new_dir}"
+    chmod -R a+rX "${new_dir}"
+    mv "${EXTENSION_DIR}" "${backup_dir}"
+    if mv "${new_dir}" "${EXTENSION_DIR}"; then
+      rm -rf "${backup_dir}"
+      CENTRAL_EXTENSION_CHANGED=1
+      log INFO "synced a newer Chrome Bridge from the central Worker Bundle: $(extension_version)"
+    else
+      mv "${backup_dir}" "${EXTENSION_DIR}" || true
+      rm -rf "${new_dir}"
+      log ERROR "failed to atomically install the central Chrome Bridge; restored previous source"
+      cleanup_central_sync
+      return 1
+    fi
+  fi
+
+  printf '%s\n' "${expected}" >"${CENTRAL_BUNDLE_FILE}"
+  cleanup_central_sync
+  return 0
 }
 
 write_state() {
@@ -116,6 +221,7 @@ write_state() {
 EXTENSION_VERSION=${version}
 EXTENSION_FINGERPRINT=${fingerprint}
 GIT_COMMIT=${commit}
+CENTRAL_BUNDLE_SHA256=$(cat "${CENTRAL_BUNDLE_FILE}" 2>/dev/null || echo unknown)
 APPLIED_AT=$(date -Is)
 EOF
 }
@@ -151,6 +257,10 @@ if ! flock -n 9; then
   exit 0
 fi
 
+# Production Linux Workers opt into central sync through the bootstrap-created
+# EnvironmentFile. Development checkouts keep the historical local-only behavior.
+sync_central_extension || true
+
 fingerprint=""
 set +e
 fingerprint="$(extension_fingerprint)"
@@ -180,7 +290,7 @@ version="$(extension_version)"
 applied="$(cat "${APPLIED_FILE}" 2>/dev/null || true)"
 failed="$(cat "${FAILED_FILE}" 2>/dev/null || true)"
 
-if [[ -z "${applied}" ]]; then
+if [[ -z "${applied}" && "${CENTRAL_EXTENSION_CHANGED}" != "1" ]]; then
   printf '%s\n' "${fingerprint}" >"${APPLIED_FILE}"
   rm -f "${FAILED_FILE}"
   write_state "${fingerprint}" "${version}"
@@ -195,11 +305,9 @@ fi
 # The bootstrap upgrader replaces the Worker Bundle and then explicitly restarts
 # Chrome from that new bundle. The old applied fingerprint is still on disk, so
 # the minute timer used to restart the freshly started Chrome a second time.
-# That second restart could land between binding-ticket injection and socket
-# claim, leaving the popup disconnected. If the running Chrome process started
-# after the current extension files were written, it already loaded this exact
-# source tree: adopt the fingerprint instead of restarting it again.
-if chrome_started_after_extension_source; then
+# If this invocation itself downloaded a newer central Bridge, however, Chrome
+# definitely predates those files and must restart even when timestamps are close.
+if [[ "${CENTRAL_EXTENSION_CHANGED}" != "1" ]] && chrome_started_after_extension_source; then
   printf '%s\n' "${fingerprint}" >"${APPLIED_FILE}"
   rm -f "${FAILED_FILE}"
   write_state "${fingerprint}" "${version}"
