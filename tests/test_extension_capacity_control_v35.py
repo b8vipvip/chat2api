@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class FakeRegistry:
     def __init__(self, *, online: bool = True, legacy: bool = False) -> None:
         metadata = {} if legacy else {
-            "extension_version": "0.8.2",
+            "extension_version": "0.8.1",
             "extension_control_version": 36,
             "extension_control_ready": True,
             "extension_control_transport": "authoritative-global-dispatch-v36",
@@ -26,7 +26,7 @@ class FakeRegistry:
         self.clients = {
             "ext_test": SimpleNamespace(
                 connection_enabled=True,
-                version="0.8.1" if legacy else "0.8.2",
+                version="0.8.1",
                 metadata=metadata,
             )
         }
@@ -114,7 +114,7 @@ def test_server_capacity_apply_waits_for_matching_real_extension_ack() -> None:
     assert registry.sent[-1]["action"] == "windows.snapshot"
 
 
-def test_stale_081_bridge_fails_fast_instead_of_15_or_70_second_timeout() -> None:
+def test_stale_same_version_bridge_without_control_v36_fails_fast() -> None:
     registry = FakeRegistry(legacy=True)
     client = TestClient(make_capacity_app(registry, limit=5))
 
@@ -125,8 +125,9 @@ def test_stale_081_bridge_fails_fast_instead_of_15_or_70_second_timeout() -> Non
     payload = refreshed.json()
     assert payload["ok"] is False
     assert payload["error_code"] == "extension_control_not_ready"
-    assert "0.8.2" in payload["error"]
-    assert "0.8.1" in payload["error"]
+    assert "extension=0.8.1" in payload["error"]
+    assert "control=v0" in payload["error"]
+    assert "required control=v36" in payload["error"]
     assert elapsed < 2.0
     assert registry.sent == []
 
@@ -138,6 +139,7 @@ def test_stale_081_bridge_fails_fast_instead_of_15_or_70_second_timeout() -> Non
     assert payload["saved"] is True
     assert payload["applied"] is False
     assert payload["error_code"] == "extension_control_not_ready"
+    assert "control=v0" in payload["error"]
     assert elapsed < 2.0
     assert registry.sent == []
 
