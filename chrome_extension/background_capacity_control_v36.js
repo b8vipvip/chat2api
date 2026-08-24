@@ -72,7 +72,7 @@
   if (typeof trySendSocket === "function") {
     const baseTrySendSocket = trySendSocket;
     trySendSocket = async payload => {
-      if (payload?.type === "extension.status") {
+      if (payload?.type === "extension.status" || payload?.type === "extension.control.result") {
         payload = { ...payload, metadata: capabilityMetadata(payload.metadata || {}) };
       }
       return baseTrySendSocket(payload);
