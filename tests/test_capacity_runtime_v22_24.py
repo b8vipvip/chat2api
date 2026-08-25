@@ -10,7 +10,7 @@ def test_bridge_082_busts_mv3_script_cache_without_touching_login_state():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     launcher = (ROOT / "scripts" / "linux_worker_chrome_launcher.sh").read_text(encoding="utf-8")
 
-    assert manifest["version"] == "0.8.2"
+    assert manifest["version"] == "0.8.3"
     assert 'Default/Service Worker/ScriptCache' in launcher
     assert 'Default/Code Cache/js' in launcher
     assert '--disable-extensions-except="$EXTENSION_DIR"' in launcher
@@ -39,7 +39,7 @@ def test_runtime_contract_separates_protocol_from_new_bundle_build():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     assert 'SERVER_RUNTIME_VERSION = "0.22.23"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.2"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.3"' in runtime
     assert '"bundle_version": CHROME_BRIDGE_BUNDLE_VERSION' in runtime
-    assert '"build_revision": "capacity-native-v37-r2"' in runtime
+    assert '"build_revision": "capacity-native-v37-r2-spare-freshness-v39"' in runtime
     assert '"bridge_service_worker_cache_bust": True' in runtime

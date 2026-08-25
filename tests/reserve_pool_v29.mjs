@@ -162,12 +162,28 @@ assert.equal(snapshot.target, 3, "server concurrency should become reserve targe
 assert.equal(snapshot.total, 3, "reserve pool should pre-open target window total");
 assert.equal(snapshot.active, 0);
 
+// Reproduce the production failure shape: an apparently ready spare survived for
+// more than four hours. It must be evicted before route allocation even though its
+// tab and composer still exist.
+const staleReserve = [...reserve.reserveSlots.values()][0];
+assert.ok(staleReserve, "startup should create at least one reserve slot");
+staleReserve.ready_at_ms = Date.now() - (4 * 60 * 60 * 1000);
+const staleReserveTabId = staleReserve.tab_id;
+assert.equal(reserve.isFresh(staleReserve), false, "four-hour reserve slots must fail the request-time freshness gate");
+
 const routed = await globalThis.resolveTargetTabForRequest({
   type: "chat.request",
   request_id: "req-1",
   routing: {api_key_id: "key-1", worker_limit: 3},
 });
 assert.ok(routed?.id);
+assert.notEqual(routed.id, staleReserveTabId, "a stale reserve page must never receive the API request");
+await assert.rejects(() => chrome.tabs.get(staleReserveTabId), /tab missing/, "the stale reserve window should be closed");
+const routeFreshness = sent.find(item => item?.type === "chat.diagnostics" && item?.request_id === "req-1" && item?.diagnostics?.conversation_reserve_prewarm_hit === true);
+assert.ok(routeFreshness, "request diagnostics should record the fresh reserve claim");
+assert.equal(routeFreshness.diagnostics.conversation_prewarm_freshness_gate, "spare-max-ready-age-v39");
+assert.ok(routeFreshness.diagnostics.conversation_reserve_prewarm_ready_age_ms < 30 * 60 * 1000);
+await new Promise(resolve => setTimeout(resolve, 260));
 snapshot = await reserve.snapshot();
 assert.equal(snapshot.total, 3, "claiming a reserve window must not increase total");
 assert.equal(snapshot.active, 1, "claimed routed window should be counted as active");
@@ -207,5 +223,7 @@ assert.equal(latest.metadata.reserve_window_total, 3);
 assert.equal(latest.metadata.reserve_window_active, 0);
 assert.equal(latest.metadata.reserve_window_target, 3);
 assert.equal(latest.metadata.reserve_window_idle_close_seconds, 600);
+assert.equal(latest.metadata.reserve_window_freshness_version, 39);
+assert.equal(latest.metadata.reserve_window_max_ready_age_seconds, 1800);
 
 console.log("reserve_pool_v29 VM contract passed");
