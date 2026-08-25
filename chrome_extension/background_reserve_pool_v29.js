@@ -12,6 +12,7 @@
   const CREATE_BATCH = 4;
   const READY_TIMEOUT_MS = 45000;
   const ROUTE_IDLE_CLOSE_MS = 10 * 60 * 1000;
+  const MAX_RESERVE_READY_AGE_MS = 30 * 60 * 1000;
   const MAX_TARGET = 32;
   const ROUTE_ALARM_PREFIX = "chat2api-route-close:";
 
@@ -160,6 +161,64 @@
     }).catch(() => {});
   }
 
+  function reserveReadyAge(slot, now = Date.now()) {
+    const readyAt = Number(slot?.ready_at_ms || 0);
+    if (!Number.isFinite(readyAt) || readyAt <= 0) return null;
+    return Math.max(0, Number(now || Date.now()) - readyAt);
+  }
+
+  function reserveSlotFresh(slot, now = Date.now()) {
+    const age = reserveReadyAge(slot, now);
+    if (slot?.ready === true || age !== null) {
+      return age !== null && age <= MAX_RESERVE_READY_AGE_MS;
+    }
+    // An opening slot has no ready_at timestamp yet. Preserve it only for the
+    // bounded preparation window; an abandoned opener must not survive forever.
+    const createdAt = Number(slot?.created_at_ms || 0);
+    return Number.isFinite(createdAt)
+      && createdAt > 0
+      && Math.max(0, Number(now || Date.now()) - createdAt) <= READY_TIMEOUT_MS + 5000;
+  }
+
+  async function pruneExpiredReserveSlots(now = Date.now()) {
+    const routeIds = routeWindowIds();
+    const warmIds = warmWindowIds();
+    let expiredCount = 0;
+    let closedWindows = 0;
+    let detachedOwnedWindows = 0;
+    let maxAgeMs = 0;
+    for (const [slotKey, slot] of [...state.reserveSlots.entries()]) {
+      if (reserveSlotFresh(slot, now)) continue;
+      const age = reserveReadyAge(slot, now);
+      if (age !== null) maxAgeMs = Math.max(maxAgeMs, age);
+      state.reserveSlots.delete(slotKey);
+      expiredCount += 1;
+      if (routeIds.has(slot?.window_id) || warmIds.has(slot?.window_id)) {
+        detachedOwnedWindows += 1;
+        continue;
+      }
+      try {
+        if (Number.isInteger(slot?.window_id)) await chrome.windows.remove(slot.window_id);
+        closedWindows += 1;
+      } catch (_) {}
+    }
+    if (expiredCount) await persistOwn();
+    state.lastFreshnessPrune = {
+      version: 39,
+      checked_at_ms: Number(now || Date.now()),
+      expired_count: expiredCount,
+      max_ready_age_ms: maxAgeMs,
+      closed_windows: closedWindows,
+      detached_owned_windows: detachedOwnedWindows,
+    };
+    return state.lastFreshnessPrune;
+  }
+
+  state.maxReadyAgeMs = MAX_RESERVE_READY_AGE_MS;
+  state.readyAge = reserveReadyAge;
+  state.isFresh = reserveSlotFresh;
+  state.pruneExpired = pruneExpiredReserveSlots;
+
   async function persistRouter() {
     const router = globalThis[ROUTER_KEY];
     if (!router?.routes || typeof router.routes !== "object") return;
@@ -181,6 +240,10 @@
       if (seen.has(raw.window_id) || routeIds.has(raw.window_id) || warmIds.has(raw.window_id)) continue;
       const tab = await tabExists(raw.tab_id);
       if (!tab || tab.windowId !== raw.window_id) continue;
+      if (!reserveSlotFresh(raw)) {
+        try { await chrome.windows.remove(raw.window_id); } catch (_) {}
+        continue;
+      }
       seen.add(raw.window_id);
       state.reserveSlots.set(String(raw.slot_id || `reserve:${raw.window_id}`), {
         ...raw,
@@ -262,17 +325,20 @@
 
   async function managedSnapshot() {
     await normalizeOwnership();
+    await pruneExpiredReserveSlots();
     const live = await liveChatGptWindowIds();
     const managed = new Set();
     const active = new Set();
     const own = new Set();
     const warm = new Set();
     const routed = new Set();
+    let oldestSpareReadyAgeMs = 0;
 
     for (const slot of state.reserveSlots.values()) {
       if (live.has(slot.window_id)) {
         managed.add(slot.window_id);
         own.add(slot.window_id);
+        oldestSpareReadyAgeMs = Math.max(oldestSpareReadyAgeMs, reserveReadyAge(slot) || 0);
       }
     }
 
@@ -281,6 +347,10 @@
       if (Number.isInteger(slot?.window_id) && live.has(slot.window_id)) {
         managed.add(slot.window_id);
         warm.add(slot.window_id);
+        const age = typeof pool?.readyAge === "function"
+          ? pool.readyAge(slot)
+          : Math.max(0, Date.now() - Number(slot?.ready_at_ms || Date.now()));
+        oldestSpareReadyAgeMs = Math.max(oldestSpareReadyAgeMs, Number(age || 0));
       }
     }
 
@@ -314,6 +384,7 @@
       warm: warm.size,
       routed: routed.size,
       target: state.target,
+      oldest_spare_ready_age_ms: oldestSpareReadyAgeMs,
       live,
     };
   }
@@ -345,6 +416,9 @@
             reserve_window_routed: snapshot.routed,
             reserve_window_idle_close_seconds: ROUTE_IDLE_CLOSE_MS / 1000,
             reserve_window_telemetry_version: 29,
+            reserve_window_freshness_version: 39,
+            reserve_window_max_ready_age_seconds: MAX_RESERVE_READY_AGE_MS / 1000,
+            reserve_window_oldest_ready_age_seconds: Math.round(snapshot.oldest_spare_ready_age_ms / 1000),
             reserve_window_updated_at: Date.now(),
           },
         }).catch(() => false);
@@ -460,6 +534,9 @@
     if (state.reconcileInFlight) return state.reconcileInFlight;
     state.reconcileInFlight = (async () => {
       await loadOwn();
+      const warmPool = globalThis[WARM_POOL_KEY];
+      if (typeof warmPool?.pruneExpired === "function") await warmPool.pruneExpired().catch(() => null);
+      await pruneExpiredReserveSlots();
       await refreshRuntimeConfig(false);
       await patchRouteIdleDeadlines();
       let snapshot = await managedSnapshot();
@@ -497,18 +574,21 @@
   async function claimOwnReserve(key) {
     if (!key) return null;
     await loadOwn();
+    const warmPool = globalThis[WARM_POOL_KEY];
+    if (typeof warmPool?.pruneExpired === "function") await warmPool.pruneExpired().catch(() => null);
+    await pruneExpiredReserveSlots();
     const router = globalThis[ROUTER_KEY];
     if (!router?.routes || typeof router.routes !== "object") return null;
     const existing = router.routes[key];
     if (existing && await tabExists(existing.tab_id)) return null;
 
-    const warmPool = globalThis[WARM_POOL_KEY];
     if (Number(warmPool?.warmSlots?.size || 0) > 0) return null;
 
     let selectedKey = null;
     let selected = null;
     for (const [slotKey, slot] of state.reserveSlots.entries()) {
       if (slot?.ready !== true) continue;
+      if (!reserveSlotFresh(slot)) continue;
       const tab = await tabExists(slot.tab_id);
       if (!tab) continue;
       selectedKey = slotKey;
@@ -528,13 +608,19 @@
     route.close_after = null;
     route.prewarm_claimed_at = Date.now();
     route.prewarm_load_ms = Math.max(0, Date.now() - Number(selected.created_at_ms || Date.now()));
+    route.prewarm_ready_age_ms = reserveReadyAge(selected) || 0;
+    route.prewarm_source = "reserve-pool-v29-freshness-v39";
     route.last_rotation_reason = "reserve-pool-v29-claim";
     router.routes[key] = route;
 
     state.reserveSlots.delete(selectedKey);
     await Promise.all([persistOwn(), persistRouter()]);
     scheduleReport(0);
-    return selected.tab;
+    return {
+      tab: selected.tab,
+      ready_age_ms: route.prewarm_ready_age_ms,
+      created_age_ms: route.prewarm_load_ms,
+    };
   }
 
   globalThis.resolveTargetTabForRequest = async function resolveWithReservePool(message) {
@@ -548,8 +634,25 @@
       }
     }
     const key = String(message?.routing?.api_key_id || "").trim();
-    if (key) await claimOwnReserve(key).catch(() => null);
+    const claimed = key ? await claimOwnReserve(key).catch(() => null) : null;
     const tab = await baseResolver(message);
+    if (claimed && message?.request_id && typeof trySendSocket === "function") {
+      const eventType = message.type === "chat.request" ? "chat.diagnostics" : "image.diagnostics";
+      await trySendSocket({
+        type: eventType,
+        kind: message.type === "voice.request" || message.type === "voice.live.start" ? "voice" : undefined,
+        request_id: message.request_id,
+        diagnostics: {
+          conversation_reserve_prewarm_hit: true,
+          conversation_reserve_prewarm_ready_age_ms: Number(claimed.ready_age_ms || 0),
+          conversation_reserve_prewarm_created_age_ms: Number(claimed.created_age_ms || 0),
+          conversation_prewarm_max_ready_age_ms: MAX_RESERVE_READY_AGE_MS,
+          conversation_prewarm_freshness_gate: "spare-max-ready-age-v39",
+          routed_tab_id: tab?.id ?? null,
+          routed_window_id: tab?.windowId ?? null,
+        },
+      }).catch(() => false);
+    }
     scheduleReport(0);
     scheduleReconcile(120);
     return tab;

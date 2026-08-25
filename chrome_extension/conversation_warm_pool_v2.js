@@ -10,6 +10,12 @@
   const CLAIM_WAIT_MS = 1800;
   const REQUEST_READY_WAIT_MS = 1400;
   const MAX_WARM_SLOTS = 2;
+  // A visible composer only proves that the cached DOM is present. Long-lived
+  // ChatGPT SPA pages can retain that DOM while their generation transport is no
+  // longer healthy. Never give an API request a spare page that has sat idle for
+  // hours; rotate it before routing so playground and external requests share the
+  // same freshness guarantee.
+  const MAX_WARM_READY_AGE_MS = 30 * 60 * 1000;
   const state = {
     warm: null,
     opening: null,
@@ -237,6 +243,58 @@
     try { if (Number.isInteger(warm.window_id)) await chrome.windows.remove(warm.window_id); } catch (_) {}
   }
 
+  function warmReadyAge(warm, now = Date.now()) {
+    const readyAt = Number(warm?.ready_at_ms || warm?.created_at_ms || 0);
+    if (!Number.isFinite(readyAt) || readyAt <= 0) return null;
+    return Math.max(0, Number(now || Date.now()) - readyAt);
+  }
+
+  function warmSlotFresh(warm, now = Date.now()) {
+    const age = warmReadyAge(warm, now);
+    return age !== null && age <= MAX_WARM_READY_AGE_MS;
+  }
+
+  async function pruneExpiredWarmSlots(now = Date.now(), scheduleReplacement = true) {
+    const expired = [];
+    let maxAgeMs = 0;
+    let closedWindows = 0;
+    let detachedRoutedWindows = 0;
+    for (const [slotKey, warm] of [...state.warmSlots.entries()]) {
+      if (warmSlotFresh(warm, now)) continue;
+      const age = warmReadyAge(warm, now);
+      if (age !== null) maxAgeMs = Math.max(maxAgeMs, age);
+      state.warmSlots.delete(slotKey);
+      const routed = await warmUsedByRoute(warm?.tab_id);
+      if (routed) {
+        // Persisted pool ownership can lag a claim during a service-worker restart.
+        // Detach that slot, but never close a page already owned by a live route.
+        detachedRoutedWindows += 1;
+      } else {
+        await closeWarm(warm);
+        closedWindows += 1;
+      }
+      expired.push({ slot_key: slotKey, ready_age_ms: age });
+    }
+    if (expired.length) {
+      await persistWarmSlots();
+      if (scheduleReplacement) scheduleWarm(120);
+    }
+    state.lastFreshnessPrune = {
+      version: 39,
+      checked_at_ms: Number(now || Date.now()),
+      expired_count: expired.length,
+      max_ready_age_ms: maxAgeMs,
+      closed_windows: closedWindows,
+      detached_routed_windows: detachedRoutedWindows,
+    };
+    return state.lastFreshnessPrune;
+  }
+
+  state.maxReadyAgeMs = MAX_WARM_READY_AGE_MS;
+  state.readyAge = warmReadyAge;
+  state.isFresh = warmSlotFresh;
+  state.pruneExpired = pruneExpiredWarmSlots;
+
   async function loadStoredWarmSlots() {
     if (state.storedLoaded) return;
     state.storedLoaded = true;
@@ -247,6 +305,10 @@
       if (!Number.isInteger(raw?.tab_id) || !raw?.slot_key) continue;
       const tab = await tabExists(raw.tab_id);
       if (!tab || await warmUsedByRoute(raw.tab_id)) continue;
+      if (!warmSlotFresh(raw)) {
+        await closeWarm({ ...raw, window_id: tab.windowId });
+        continue;
+      }
       state.warmSlots.set(String(raw.slot_key), { ...raw, tab_id: tab.id, window_id: tab.windowId, recovered: true });
     }
     await persistWarmSlots();
@@ -331,9 +393,10 @@
     if (existing) {
       const tab = await tabExists(existing.tab_id);
       const samePreset = String(existing.preset_key || "") === String(definition.preset?.key || "");
-      if (tab && samePreset && !await warmUsedByRoute(tab.id)) return existing;
+      const routed = tab ? await warmUsedByRoute(tab.id) : false;
+      if (tab && samePreset && !routed && warmSlotFresh(existing)) return existing;
       state.warmSlots.delete(definition.slot_key);
-      await closeWarm(existing);
+      if (!routed) await closeWarm(existing);
       await persistWarmSlots();
     }
     if (state.openingSlots.has(definition.slot_key)) return state.openingSlots.get(definition.slot_key);
@@ -348,6 +411,7 @@
 
   async function reconcileWarmSlots() {
     await loadStoredWarmSlots();
+    await pruneExpiredWarmSlots(Date.now(), false);
     const definitions = await desiredSlotDefinitions();
     const desiredKeys = new Set(definitions.map(item => item.slot_key));
     for (const [slotKey, warm] of [...state.warmSlots.entries()]) {
@@ -389,6 +453,7 @@
 
   async function candidateOrder(message) {
     await loadStoredWarmSlots();
+    await pruneExpiredWarmSlots();
     const accountType = await cachedAccountType();
     const affinity = globalThis.chat2apiModelAffinityV23;
     const combo = affinity?.requestedCombo ? affinity.requestedCombo(message, accountType) : null;
@@ -503,6 +568,8 @@
           conversation_prewarm_hit: true,
           conversation_prewarm_load_ms: claimed.warm.load_ms,
           conversation_prewarm_ready_age_ms: stableAge,
+          conversation_prewarm_max_ready_age_ms: MAX_WARM_READY_AGE_MS,
+          conversation_prewarm_freshness_gate: "spare-max-ready-age-v39",
           conversation_prewarm_claim_wait_ms: claimed.claim_wait_ms,
           conversation_prewarm_account_type: claimed.readiness?.account_type || claimed.warm.account_type || null,
           conversation_prewarm_model_picker_ready: Boolean(claimed.readiness?.model_picker),
@@ -533,6 +600,8 @@
           conversation_prewarm_bypassed: true,
           conversation_prewarm_bypass_reason: bypass?.reason || "unknown",
           conversation_prewarm_claim_wait_ms: Number(bypass?.wait_ms || 0),
+          conversation_prewarm_max_ready_age_ms: MAX_WARM_READY_AGE_MS,
+          conversation_prewarm_freshness_gate: "spare-max-ready-age-v39",
           conversation_requested_preset_key: bypass?.requested_preset_key || null,
           conversation_warm_pool_slots: MAX_WARM_SLOTS,
           routed_tab_id: tab?.id ?? null,

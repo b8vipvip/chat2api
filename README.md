@@ -9,8 +9,9 @@
 chat2api 有多个独立兼容面，不再用一个版本号混合表示全部组件：
 
 - Python package：`0.7.1`
-- Server runtime / console：`0.22.0`
-- Chrome Bridge：`0.8.0`
+- Server runtime / console：`0.22.23`
+- Chrome Bridge：`0.8.1`（wire protocol）
+- Chrome Bundle：`0.8.3`（Manifest V3 扩展包）
 - Realtime Voice protocol：`chat2api-live-v1`
 - 生产入口：`app.entry:app`
 
@@ -304,6 +305,8 @@ data/concurrency.json
 服务端根据最近请求历史统计常用文本 `model + reasoning` 组合，并向扩展提供最多两个 affinity preset。
 
 Chrome Bridge 默认每 10 分钟刷新 affinity，并为高频组合准备最多两个 warm slot。请求到达时优先命中已准备且被动验证通过的精确组合，以减少冷页面加载和模型 UI 操作。
+
+所有未领取的 affinity warm / reserve 页面最多保留 30 分钟；后台会滚动淘汰并补池，请求分配前也会再次执行同一新鲜度门禁。仅有可见 Composer 不能证明长期驻留的 ChatGPT SPA 生成链仍然健康，超龄页面不会被测试场或外部 `/v1` 请求领取。已经分配给活动 route 的窗口不受空闲页清理影响。
 
 从 Chrome Bridge 0.7.8 起，浏览器启动后仍会立即尝试连接服务端；只有认证 WebSocket 已被服务端接受、浏览器出口国家为非 `CN`，并且当前 Chrome Profile 已被动确认存在可用 ChatGPT Composer 时，才允许后台主动创建 warm window。若当前没有 ChatGPT 页面，扩展会先创建一个未聚焦的登录就绪检测窗口；已登录时确认 Composer 后自动切入 warm pool，需要登录时 popup 可复用并聚焦该窗口让用户手动完成登录/CAPTCHA/2FA。中国大陆、离线、网络探测失败或登录状态未确认时不主动预热，但真实 API 请求到来后的按需创建兜底保持不变。
 
