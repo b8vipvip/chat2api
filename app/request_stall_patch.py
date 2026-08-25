@@ -12,6 +12,7 @@ from fastapi import FastAPI
 DISPATCH_ACK_TIMEOUT_SECONDS = 45.0
 SUBMIT_ACK_TIMEOUT_SECONDS = 120.0
 POST_SUBMIT_START_TIMEOUT_SECONDS = 75.0
+GENERATION_ACTIVITY_TIMEOUT_SECONDS = 150.0
 ABSOLUTE_REQUEST_TIMEOUT_GRACE_SECONDS = 15.0
 ORPHAN_RELEASE_GRACE_SECONDS = 2.0
 PATCH_ID = "request-stall-v38"
@@ -54,13 +55,14 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
     The original v34 guard bounded dispatch and prompt submission only. Production
     diagnostics showed that a request could still occupy Broker capacity after the
     browser had returned to a fully idle reserve pool when the post-submit terminal
-    event was lost. This revision adds a post-submit generation-start watchdog, an
-    absolute request lease aligned with the API timeout, forced orphan release, and
-    lifecycle diagnostics without logging prompts or credentials.
+    event was lost. This guard includes generation-start and generation-activity
+    watchdogs, an absolute request lease aligned with the API timeout, forced orphan
+    release, and lifecycle diagnostics without logging prompts or credentials.
     """
 
     broker = app.state.broker
     registry = app.state.registry
+    telemetry = getattr(app.state, "telemetry", None)
 
     if getattr(broker, "_chat2api_request_stall_v38", False):
         return app
@@ -83,6 +85,9 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
             if state is None:
                 continue
             last_event_mono = float(getattr(state, "_chat2api_last_browser_event_mono", state.created_mono) or state.created_mono)
+            last_activity_mono = float(
+                getattr(state, "_chat2api_last_generation_activity_mono", last_event_mono) or last_event_mono
+            )
             hard_deadline = getattr(state, "_chat2api_hard_deadline_mono", None)
             result.append(
                 {
@@ -91,6 +96,10 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
                     "stage": _stage(state),
                     "last_event_type": str(getattr(state, "_chat2api_last_browser_event_type", "") or ""),
                     "last_event_age_seconds": round(max(0.0, now - last_event_mono), 1),
+                    "last_generation_activity_type": str(
+                        getattr(state, "_chat2api_last_generation_activity_type", "") or ""
+                    ),
+                    "last_generation_activity_age_seconds": round(max(0.0, now - last_activity_mono), 1),
                     "timeout_seconds": getattr(state, "_chat2api_request_timeout_seconds", None),
                     "deadline_remaining_seconds": (
                         round(max(0.0, float(hard_deadline) - now), 1)
@@ -125,6 +134,7 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
                 "_chat2api_dispatch_watchdog_task",
                 "_chat2api_submit_watchdog_task",
                 "_chat2api_post_submit_watchdog_task",
+                "_chat2api_generation_activity_watchdog_task",
                 "_chat2api_absolute_watchdog_task",
             ):
                 task = getattr(state, name, None)
@@ -192,6 +202,24 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
             state.request_id,
             {"type": "chat.error", "request_id": state.request_id, "error": message},
         )
+        if telemetry is not None and callable(getattr(telemetry, "get", None)) and telemetry.get(state.request_id):
+            try:
+                await telemetry.upsert(
+                    {
+                        "request_id": state.request_id,
+                        "status": "stalled",
+                        "error": message,
+                        "timings": state.timings(),
+                        "diagnostics": dict(state.diagnostics),
+                    }
+                )
+            except Exception:
+                logger.exception(
+                    "Watchdog could not persist stalled request request_id=%s client=%s",
+                    state.request_id,
+                    state.client_id,
+                    extra={"request_id": state.request_id, "client_id": state.client_id},
+                )
         _schedule_force_release(state, code)
 
     async def publish_guarded(request_id: str, event: dict[str, Any]) -> bool:
@@ -278,6 +306,8 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
             if generation_started and not getattr(state, "_chat2api_generation_started", False):
                 state._chat2api_generation_started = True
                 state._chat2api_generation_started_mono = now
+                state._chat2api_last_generation_activity_mono = now
+                state._chat2api_last_generation_activity_type = event_type or "chat.diagnostics"
                 state.diagnostics.setdefault(
                     "extension_generation_started_ms",
                     round((now - state.created_mono) * 1000, 1),
@@ -288,6 +318,53 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
                     state.client_id,
                     event_type or "diagnostics",
                     extra={"request_id": state.request_id, "client_id": state.client_id, "event_type": event_type},
+                )
+                generation_event = getattr(state, "_chat2api_generation_started_event", None)
+                if isinstance(generation_event, asyncio.Event):
+                    generation_event.set()
+
+            activity = False
+            activity_marker: tuple[str, str] | None = None
+            if event_type == "chat.started":
+                activity = True
+            elif event_type == "chat.delta" and bool(str((event or {}).get("delta") or "")):
+                activity = True
+            elif event_type == "chat.snapshot":
+                activity = str((event or {}).get("text") or "") != str(getattr(state, "text", "") or "")
+            elif event_type == "chat.diagnostics" and isinstance(diagnostics, dict):
+                for name in (
+                    "generation_progress",
+                    "generation_sequence",
+                    "response_chars",
+                    "generated_chars",
+                    "delta_count",
+                ):
+                    if diagnostics.get(name) is not None:
+                        activity_marker = (name, str(diagnostics.get(name)))
+                        break
+                if activity_marker and activity_marker != getattr(state, "_chat2api_generation_activity_marker", None):
+                    state._chat2api_generation_activity_marker = activity_marker
+                    activity = True
+                elif diagnostics.get("generating_observed") is True and not getattr(
+                    state, "_chat2api_generation_observed_once", False
+                ):
+                    state._chat2api_generation_observed_once = True
+                    activity = True
+
+            if getattr(state, "_chat2api_generation_started", False) and activity:
+                state._chat2api_last_generation_activity_mono = now
+                state._chat2api_last_generation_activity_type = event_type or "chat.diagnostics"
+                logger.info(
+                    "Generation activity request_id=%s client=%s event=%s age_ms=%.1f",
+                    state.request_id,
+                    state.client_id,
+                    event_type or "chat.diagnostics",
+                    (now - state.created_mono) * 1000,
+                    extra={
+                        "request_id": state.request_id,
+                        "client_id": state.client_id,
+                        "event_type": event_type or "chat.diagnostics",
+                    },
                 )
 
             if _terminal_event(event_type):
@@ -387,6 +464,49 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
         except asyncio.CancelledError:
             return
 
+    async def _generation_activity_watchdog(state: Any) -> None:
+        try:
+            generation_event = getattr(state, "_chat2api_generation_started_event", None)
+            if not isinstance(generation_event, asyncio.Event):
+                return
+            await generation_event.wait()
+            while broker.requests.get(state.request_id) is state and not state.completed_mono:
+                last_activity = float(
+                    getattr(
+                        state,
+                        "_chat2api_last_generation_activity_mono",
+                        getattr(state, "_chat2api_generation_started_mono", time.perf_counter()),
+                    )
+                )
+                remaining = GENERATION_ACTIVITY_TIMEOUT_SECONDS - (time.perf_counter() - last_activity)
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+                    continue
+                logger.warning(
+                    "Generation activity watchdog fired request_id=%s client=%s last_event=%s",
+                    state.request_id,
+                    state.client_id,
+                    str(getattr(state, "_chat2api_last_generation_activity_type", "") or ""),
+                    extra={"request_id": state.request_id, "client_id": state.client_id},
+                )
+                await _fail_and_reclaim(
+                    state,
+                    code="generation_activity_watchdog_fired",
+                    diagnostics={
+                        "generation_activity_timeout_ms": int(GENERATION_ACTIVITY_TIMEOUT_SECONDS * 1000),
+                        "last_generation_activity_type": str(
+                            getattr(state, "_chat2api_last_generation_activity_type", "") or ""
+                        ),
+                    },
+                    message=(
+                        "ChatGPT response generation stopped making observable progress for "
+                        f"{int(GENERATION_ACTIVITY_TIMEOUT_SECONDS)}s"
+                    ),
+                )
+                return
+        except asyncio.CancelledError:
+            return
+
     async def send_with_request_lease(client_id: str, payload: dict[str, Any]) -> None:
         value = dict(payload or {})
         if str(value.get("type") or "") == "chat.request":
@@ -430,15 +550,28 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
             state._chat2api_last_browser_event_mono = state.created_mono
             state._chat2api_last_browser_event_type = ""
             state._chat2api_submit_ack_event = asyncio.Event()
+            state._chat2api_generation_started_event = asyncio.Event()
             state._chat2api_dispatch_watchdog_task = asyncio.create_task(_dispatch_watchdog(state))
             state._chat2api_submit_watchdog_task = asyncio.create_task(_submit_watchdog(state))
             state._chat2api_post_submit_watchdog_task = asyncio.create_task(_post_submit_watchdog(state))
+            state._chat2api_generation_activity_watchdog_task = asyncio.create_task(
+                _generation_activity_watchdog(state)
+            )
             state.diagnostics["request_stall_guard"] = PATCH_ID
             logger.info(
                 "Request accepted request_id=%s client=%s stage=waiting_dispatch",
                 state.request_id,
                 state.client_id,
                 extra={"request_id": state.request_id, "client_id": state.client_id, "stage": "waiting_dispatch"},
+            )
+            logger.info(
+                "Capacity admitted request_id=%s client=%s used_before=%s used_after=%s limit=%s",
+                state.request_id,
+                state.client_id,
+                state.diagnostics.get("extension_capacity_used_before"),
+                state.diagnostics.get("extension_capacity_used_after"),
+                state.diagnostics.get("extension_capacity_limit_units"),
+                extra={"request_id": state.request_id, "client_id": state.client_id},
             )
         return state
 
@@ -454,6 +587,7 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
                 "_chat2api_dispatch_watchdog_task",
                 "_chat2api_submit_watchdog_task",
                 "_chat2api_post_submit_watchdog_task",
+                "_chat2api_generation_activity_watchdog_task",
                 "_chat2api_absolute_watchdog_task",
                 "_chat2api_orphan_release_task",
             ):

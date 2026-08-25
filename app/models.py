@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
 
 def normalize_model_id(value: Any) -> Any:
@@ -136,12 +136,18 @@ class ImageGenerationRequest(BaseModel):
 
 class TestRunCreate(BaseModel):
     run_id: str = Field(min_length=1, max_length=120)
+    request_id: str | None = Field(default=None, max_length=160)
+    request_ids: list[str] = Field(default_factory=list, max_length=12)
     test_type: str = Field(min_length=1, max_length=80)
-    status: Literal["passed", "warning", "failed", "skipped"]
+    status: Literal["pending", "running", "passed", "warning", "failed", "skipped", "cancelled", "stalled"]
     model: str | None = Field(default=None, max_length=120)
+    api_key_id: str | None = Field(default=None, max_length=120)
+    api_key_name: str | None = Field(default=None, max_length=120)
     started_at: str | None = None
+    updated_at: str | None = None
     finished_at: str | None = None
     duration_ms: float | None = Field(default=None, ge=0)
+    error: str | None = Field(default=None, max_length=4000)
     summary: str = Field(default="", max_length=4000)
     results: list[dict[str, Any]] = Field(default_factory=list)
     quality: dict[str, Any] = Field(default_factory=dict)
@@ -150,6 +156,40 @@ class TestRunCreate(BaseModel):
     @classmethod
     def normalize_test_model(cls, value: Any) -> Any:
         return normalize_model_id(value)
+
+
+class PlaygroundFileInput(BaseModel):
+    filename: str = Field(min_length=1, max_length=180)
+    mime_type: str | None = Field(default=None, max_length=160)
+    data_base64: str = Field(min_length=1, max_length=28_000_000)
+
+
+class PlaygroundRunRequest(BaseModel):
+    test_type: Literal[
+        "text",
+        "vision",
+        "file",
+        "image_generation",
+        "voice_generation",
+        "voice_conversation",
+        "all",
+    ]
+    model: str = Field(default="gpt-5.6-sol", min_length=1, max_length=120)
+    reasoning_effort: Literal["low", "medium", "high"] | None = None
+    api_key_id: str | None = Field(default=None, max_length=120)
+    api_key: SecretStr | None = None
+    files: list[PlaygroundFileInput] = Field(default_factory=list, max_length=4)
+
+    @field_validator("model", mode="before")
+    @classmethod
+    def normalize_playground_model(cls, value: Any) -> Any:
+        return normalize_model_id(value)
+
+    @model_validator(mode="after")
+    def validate_credential(self):
+        if not self.api_key_id and not self.api_key:
+            raise ValueError("api_key_id or api_key is required")
+        return self
 
 
 class ClientSummary(BaseModel):

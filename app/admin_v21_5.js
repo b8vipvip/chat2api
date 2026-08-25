@@ -123,9 +123,17 @@
       refreshButton.textContent = pending ? "刷新中" : "刷新";
       if (!pending) refreshButton.title = "主动向该 Extension 获取真实 Chrome 窗口快照";
     }
-    cell.title = source === "extension"
+    const requestDetails = (item.active_request_details || []).map(request => {
+      const requestId = String(request.request_id || "-");
+      const stage = String(request.stage || "-");
+      const age = Number(request.age_seconds || 0).toFixed(1);
+      const activityAge = Number(request.last_generation_activity_age_seconds ?? request.last_event_age_seconds ?? 0).toFixed(1);
+      return `${requestId} · ${stage} · ${age}s · activity ${activityAge}s`;
+    });
+    const baseTitle = source === "extension"
       ? `Extension ID ${clientId} 的独立并发上限；当前活动请求 ${active}`
       : `当前继承默认并发上限 ${limit}；点击保存后为 Extension ID ${clientId} 建立独立配置并立即调整设备窗口`;
+    cell.title = requestDetails.length ? `${baseTitle}\n${requestDetails.join("\n")}` : baseTitle;
   }
 
   async function refreshLiveConcurrency() {

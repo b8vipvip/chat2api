@@ -17,8 +17,9 @@ def utc_now() -> str:
 
 def _normalize_record_time(row: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(row)
-    if normalized.get("recorded_at"):
-        normalized["recorded_at"] = to_beijing_iso(normalized["recorded_at"]) or normalized["recorded_at"]
+    for key in ("recorded_at", "updated_at", "finished_at"):
+        if normalized.get(key):
+            normalized[key] = to_beijing_iso(normalized[key]) or normalized[key]
     return normalized
 
 
@@ -28,35 +29,68 @@ class TelemetryStore:
         self.items: deque[dict[str, Any]] = deque(maxlen=max_items)
         self.lock = asyncio.Lock()
 
+    def _remember(self, record: dict[str, Any]) -> None:
+        request_id = str(record.get("request_id") or "")
+        if request_id:
+            retained = [item for item in self.items if str(item.get("request_id") or "") != request_id]
+            self.items = deque(retained, maxlen=self.items.maxlen)
+        self.items.append(record)
+
     async def load(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if not self.path.exists():
             return
         try:
-            lines = self.path.read_text(encoding="utf-8").splitlines()[-self.items.maxlen :]
-            for line in lines:
+            latest: dict[tuple[str, str], dict[str, Any]] = {}
+            order: list[tuple[str, str]] = []
+            lines = self.path.read_text(encoding="utf-8").splitlines()
+            for line_number in range(len(lines) - 1, -1, -1):
+                line = lines[line_number]
                 if not line.strip():
                     continue
                 item = json.loads(line)
-                if isinstance(item, dict):
-                    self.items.append(_normalize_record_time(item))
+                if not isinstance(item, dict):
+                    continue
+                request_id = str(item.get("request_id") or "")
+                record_key = ("request", request_id) if request_id else ("legacy-line", str(line_number))
+                if record_key in latest:
+                    continue
+                latest[record_key] = _normalize_record_time(item)
+                order.append(record_key)
+                if len(order) >= (self.items.maxlen or 500):
+                    break
+            for record_key in reversed(order):
+                self._remember(latest[record_key])
         except (OSError, ValueError, TypeError):
             self.items.clear()
 
     async def append(self, item: dict[str, Any]) -> None:
+        await self.upsert(item)
+
+    async def upsert(self, item: dict[str, Any]) -> dict[str, Any]:
         record = dict(item)
         trace_id = current_trace_id.get()
         if trace_id:
             record.setdefault("trace_id", trace_id)
-        if record.get("recorded_at"):
-            record["recorded_at"] = to_beijing_iso(record["recorded_at"]) or record["recorded_at"]
-        else:
-            record["recorded_at"] = utc_now()
         async with self.lock:
-            self.items.append(record)
+            request_id = str(record.get("request_id") or "")
+            existing = self.get(request_id) if request_id else None
+            record = {**(existing or {}), **record}
+            record.setdefault("recorded_at", utc_now())
+            record["updated_at"] = utc_now()
+            if str(record.get("status") or "") in {"completed", "error", "cancelled", "stalled"}:
+                record.setdefault("finished_at", utc_now())
+            record = _normalize_record_time(record)
+            self._remember(record)
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+        return dict(record)
+
+    async def update(self, request_id: str, changes: dict[str, Any]) -> dict[str, Any]:
+        if not self.get(request_id):
+            raise KeyError(f"Unknown request: {request_id}")
+        return await self.upsert({"request_id": request_id, **changes})
 
     def recent(self, limit: int = 100) -> list[dict[str, Any]]:
         size = max(1, min(int(limit), self.items.maxlen or 500))
@@ -140,7 +174,7 @@ class TelemetryStore:
             stats["request_count"] += 1
             if row.get("status") == "completed":
                 stats["completed_requests"] += 1
-            elif row.get("status") == "error":
+            elif row.get("status") in {"error", "cancelled", "stalled"}:
                 stats["error_requests"] += 1
             stats["estimated_tokens"] += int((row.get("usage") or {}).get("total_tokens") or 0)
             stats["last_request_at"] = row.get("recorded_at") or stats["last_request_at"]
@@ -149,7 +183,9 @@ class TelemetryStore:
     def summary(self) -> dict[str, Any]:
         rows = list(self.items)
         completed = [row for row in rows if row.get("status") == "completed"]
-        errors = [row for row in rows if row.get("status") == "error"]
+        errors = [row for row in rows if row.get("status") in {"error", "cancelled", "stalled"}]
+        running = [row for row in rows if row.get("status") == "running"]
+        terminal_count = len(completed) + len(errors)
         prompt_tokens = sum(int((row.get("usage") or {}).get("prompt_tokens") or 0) for row in rows)
         completion_tokens = sum(int((row.get("usage") or {}).get("completion_tokens") or 0) for row in rows)
         total_ms_values = [
@@ -166,7 +202,8 @@ class TelemetryStore:
             "retained_requests": len(rows),
             "completed_requests": len(completed),
             "error_requests": len(errors),
-            "success_rate": round((len(completed) / len(rows) * 100), 2) if rows else 100.0,
+            "running_requests": len(running),
+            "success_rate": round((len(completed) / terminal_count * 100), 2) if terminal_count else 100.0,
             "estimated_prompt_tokens": prompt_tokens,
             "estimated_completion_tokens": completion_tokens,
             "estimated_total_tokens": prompt_tokens + completion_tokens,

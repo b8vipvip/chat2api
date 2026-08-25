@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import secrets
 import time
 import uuid
@@ -56,6 +57,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         await api_keys.load()
         await file_store.load()
         await test_runs.load()
+        recovered_runs = await test_runs.recover_interrupted()
+        if recovered_runs:
+            logger.warning("Recovered %s interrupted playground test run(s) as stalled", len(recovered_runs))
         if config.api_key in {"", "change-me"}:
             logger.warning("CHAT2API_API_KEY is using an unsafe default. Change it before remote exposure.")
         if config.pairing_code in {"", "change-me-pairing"}:
@@ -279,7 +283,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.post("/api/admin/tests", dependencies=[Depends(require_admin_key)])
     async def save_test_report(body: TestRunCreate) -> dict[str, object]:
-        row = await test_runs.append(body.model_dump())
+        row = await test_runs.upsert(body.model_dump())
         return {"report": row}
 
     @app.post("/api/extensions/register", response_model=ExtensionRegistrationResult)
@@ -367,6 +371,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def completion_id() -> str:
         return "chatcmpl-" + uuid.uuid4().hex
 
+    def accepted_request_id(supplied: str | None, prefix: str) -> str:
+        value = str(supplied or "").strip()
+        if not value:
+            return prefix + uuid.uuid4().hex
+        if not re.fullmatch(re.escape(prefix) + r"[A-Za-z0-9_-]{8,120}", value):
+            raise HTTPException(status_code=400, detail=f"Invalid {prefix} request ID")
+        if value in broker.requests or telemetry.get(value):
+            raise HTTPException(status_code=409, detail=f"Duplicate request_id: {value}")
+        return value
+
     def standard_usage(prompt: str, completion: str) -> tuple[dict[str, int], dict[str, object]]:
         usage = usage_for(prompt, completion)
         return (
@@ -447,7 +461,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         attachments_count: int = 0,
     ) -> tuple[dict[str, int], dict[str, object]]:
         usage, token_meta = standard_usage(prompt, final_text)
-        await telemetry.append(
+        await telemetry.upsert(
             {
                 "request_id": state.request_id,
                 "response_id": response_id,
@@ -471,13 +485,68 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return usage, token_meta
 
+    async def record_request_running(
+        state: RequestState,
+        requested_model: str,
+        prompt: str,
+        principal: ApiPrincipal,
+        *,
+        stream: bool,
+        prompt_mode: str,
+        response_id: str,
+        request_type: str,
+        attachments_count: int,
+    ) -> None:
+        usage, token_meta = standard_usage(prompt, "")
+        await telemetry.upsert(
+            {
+                "request_id": state.request_id,
+                "response_id": response_id,
+                "client_id": state.client_id,
+                "api_key_id": principal.key_id,
+                "api_key_name": principal.name,
+                "auth_kind": principal.kind,
+                "requested_model": requested_model,
+                "request_type": request_type,
+                "attachments_count": attachments_count,
+                "stream": stream,
+                "prompt_mode": prompt_mode,
+                "prompt_chars": len(prompt),
+                "completion_chars": 0,
+                "status": "running",
+                "usage": {**usage, **token_meta},
+                "timings": state.timings(),
+                "diagnostics": dict(state.diagnostics),
+                "error": None,
+            }
+        )
+
+    def failure_status(state: RequestState, event_type: str = "", message: str = "") -> str:
+        diagnostics = state.diagnostics or {}
+        if event_type == "chat.cancelled" or diagnostics.get("playground_cancelled") is True:
+            return "cancelled"
+        if any(
+            diagnostics.get(name) is True
+            for name in (
+                "extension_dispatch_watchdog_fired",
+                "extension_submit_watchdog_fired",
+                "post_submit_generation_watchdog_fired",
+                "generation_activity_watchdog_fired",
+                "absolute_request_lease_watchdog_fired",
+            )
+        ):
+            return "stalled"
+        if "cancel" in str(message or "").lower():
+            return "cancelled"
+        return "error"
+
     async def record_early_error(
         *, request_id: str, response_id: str, requested_model: str, prompt: str,
         principal: ApiPrincipal, stream: bool, prompt_mode: str, started_mono: float,
         error: str, request_type: str = "text", attachments_count: int = 0,
     ) -> None:
         usage, token_meta = standard_usage(prompt, "")
-        await telemetry.append(
+        await telemetry.upsert(
             {
                 "request_id": request_id,
                 "response_id": response_id,
@@ -587,7 +656,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     break
                 elif event_type in {"chat.error", "chat.cancelled"}:
                     message = str(event.get("error") or event.get("reason") or "Browser request failed")
-                    await record_request(state, model, prompt, "error", principal, stream=True, prompt_mode=prompt_mode,
+                    await record_request(state, model, prompt, failure_status(state, str(event_type), message), principal, stream=True, prompt_mode=prompt_mode,
                                          response_id=response_id, final_text=sent_text, error=message,
                                          request_type=request_type, attachments_count=attachments_count)
                     recorded = True
@@ -601,9 +670,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     break
         finally:
             if not recorded and state.completed_mono:
-                await record_request(state, model, prompt, "error", principal, stream=True, prompt_mode=prompt_mode,
+                message = "Streaming request ended before completion"
+                await record_request(state, model, prompt, failure_status(state, message=message), principal, stream=True, prompt_mode=prompt_mode,
                                      response_id=response_id, final_text=sent_text,
-                                     error="Streaming request ended before completion", request_type=request_type,
+                                     error=message, request_type=request_type,
                                      attachments_count=attachments_count)
             registry.busy_clients.discard(state.client_id)
             await broker.release(state.request_id)
@@ -613,6 +683,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         body: ChatCompletionRequest,
         request: Request,
         x_chat2api_client: str | None = Header(default=None),
+        x_chat2api_request_id: str | None = Header(default=None),
         principal: ApiPrincipal = Depends(require_api_key),
     ):
         require_scope(principal, "chat")
@@ -620,7 +691,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         inline_ids = await inline_image_files(body, principal)
         file_ids = list(dict.fromkeys(body.all_file_ids() + inline_ids))
         attachments = attachment_specs(file_ids, principal)
-        request_id = "req_" + uuid.uuid4().hex
+        request_id = accepted_request_id(x_chat2api_request_id, "req_")
         response_id = completion_id()
         request_started = time.perf_counter()
         requested_client = body.client_id or x_chat2api_client
@@ -647,6 +718,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         registry.busy_clients.add(client_id)
         timeout_seconds = body.timeout or config.request_timeout_seconds
         try:
+            await record_request_running(
+                state,
+                body.model,
+                prompt,
+                principal,
+                stream=body.stream,
+                prompt_mode=body.prompt_mode,
+                response_id=response_id,
+                request_type=request_type,
+                attachments_count=len(attachments),
+            )
             await registry.send(
                 client_id,
                 {
@@ -691,9 +773,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                  attachments_count=len(attachments))
             raise HTTPException(status_code=504, detail="Timed out waiting for ChatGPT") from error
         except RuntimeError as error:
-            await record_request(state, body.model, prompt, "error", principal, stream=False,
+            message = str(error)
+            await record_request(state, body.model, prompt, failure_status(state, message=message), principal, stream=False,
                                  prompt_mode=body.prompt_mode, response_id=response_id, final_text=state.text,
-                                 error=str(error), request_type=request_type, attachments_count=len(attachments))
+                                 error=message, request_type=request_type, attachments_count=len(attachments))
             raise HTTPException(status_code=502, detail=str(error)) from error
         finally:
             registry.busy_clients.discard(client_id)
@@ -709,11 +792,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def image_generations(
         body: ImageGenerationRequest,
         x_chat2api_client: str | None = Header(default=None),
+        x_chat2api_request_id: str | None = Header(default=None),
         principal: ApiPrincipal = Depends(require_api_key),
     ) -> dict[str, object]:
         require_scope(principal, "images")
         attachments = attachment_specs([item.file_id for item in body.attachments], principal)
-        request_id = "imgreq_" + uuid.uuid4().hex
+        request_id = accepted_request_id(x_chat2api_request_id, "imgreq_")
         response_id = "img_" + uuid.uuid4().hex
         started = time.perf_counter()
         client_id = resolve_client_now(body.client_id or x_chat2api_client)
@@ -724,6 +808,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         registry.busy_clients.add(client_id)
         timeout_seconds = body.timeout or max(config.request_timeout_seconds, 300)
         try:
+            await telemetry.upsert(
+                {
+                    "request_id": request_id, "response_id": response_id, "client_id": client_id,
+                    "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
+                    "requested_model": "gpt-image", "request_type": "image_generation",
+                    "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
+                    "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "running",
+                    "usage": {}, "timings": state.timings(), "diagnostics": dict(state.diagnostics), "error": None,
+                }
+            )
             await registry.send(
                 client_id,
                 {
@@ -768,7 +862,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         output.append({"url": f"data:{mime};base64,{image['b64_json']}"})
             state.completed_mono = state.completed_mono or time.perf_counter()
             usage, token_meta = standard_usage(body.prompt, "")
-            await telemetry.append(
+            await telemetry.upsert(
                 {
                     "request_id": request_id, "response_id": response_id, "client_id": client_id,
                     "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
@@ -794,7 +888,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             }
         except asyncio.TimeoutError as error:
             state.completed_mono = time.perf_counter()
-            await telemetry.append(
+            await telemetry.upsert(
                 {"request_id": request_id, "response_id": response_id, "client_id": client_id,
                  "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
                  "requested_model": "gpt-image", "request_type": "image_generation",
@@ -806,12 +900,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=504, detail="Timed out waiting for ChatGPT Images") from error
         except RuntimeError as error:
             state.completed_mono = state.completed_mono or time.perf_counter()
-            await telemetry.append(
+            await telemetry.upsert(
                 {"request_id": request_id, "response_id": response_id, "client_id": client_id,
                  "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
                  "requested_model": "gpt-image", "request_type": "image_generation",
                  "attachments_count": len(attachments), "stream": False, "prompt_mode": "image",
-                 "prompt_chars": len(body.prompt), "completion_chars": 0, "status": "error",
+                 "prompt_chars": len(body.prompt), "completion_chars": 0,
+                 "status": failure_status(state, message=str(error)),
                  "usage": {}, "timings": state.timings(), "diagnostics": state.diagnostics, "error": str(error)}
             )
             raise HTTPException(status_code=502, detail=str(error)) from error

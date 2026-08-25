@@ -126,6 +126,7 @@ jobs:
           node --check app/admin_v21_4.js
           node --check app/admin_v21_5.js
           node --check app/admin_v21_6.js
+          node --check app/admin_playground_lifecycle.js
           node --check app/admin_extension_columns.js
           node --check app/admin_linux_workers.js
           python - <<'PY'

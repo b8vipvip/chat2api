@@ -366,6 +366,7 @@ def install_v13_patch(app: FastAPI) -> FastAPI:
             body=chat_body,
             request=request,
             x_chat2api_client=request.headers.get("x-chat2api-client"),
+            x_chat2api_request_id=request.headers.get("x-chat2api-request-id"),
             principal=principal,
         )
         ignored = _ignored_parameters(body, {"metadata", "store", "previous_response_id", "temperature", "top_p"})
@@ -470,6 +471,7 @@ def install_v13_patch(app: FastAPI) -> FastAPI:
             body=chat_body,
             request=request,
             x_chat2api_client=request.headers.get("x-chat2api-client"),
+            x_chat2api_request_id=request.headers.get("x-chat2api-request-id"),
             principal=principal,
         )
         completion_id = "cmpl_" + uuid.uuid4().hex
