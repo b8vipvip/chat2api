@@ -165,6 +165,60 @@ def test_generation_start_prevents_post_submit_false_positive(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_generation_activity_watchdog_reclaims_started_but_silent_request(monkeypatch):
+    async def scenario() -> None:
+        monkeypatch.setattr(request_stall_patch, "DISPATCH_ACK_TIMEOUT_SECONDS", 1.0)
+        monkeypatch.setattr(request_stall_patch, "SUBMIT_ACK_TIMEOUT_SECONDS", 1.0)
+        monkeypatch.setattr(request_stall_patch, "POST_SUBMIT_START_TIMEOUT_SECONDS", 1.0)
+        monkeypatch.setattr(request_stall_patch, "GENERATION_ACTIVITY_TIMEOUT_SECONDS", 0.03)
+        monkeypatch.setattr(request_stall_patch, "ORPHAN_RELEASE_GRACE_SECONDS", 0.02)
+        _app, broker, registry = make_app()
+        state = await broker.create("req_generation_silent", "ext_generation_silent")
+        await broker.publish(state.request_id, {"type": "chat.started", "request_id": state.request_id})
+
+        with pytest.raises(RuntimeError, match="stopped making observable progress"):
+            await asyncio.wait_for(state.final_future, timeout=0.2)
+        assert state.diagnostics["generation_activity_watchdog_fired"] is True
+        assert any(payload.get("type") == "chat.cancel" for _client, payload in registry.sent)
+        await asyncio.sleep(0.05)
+        assert state.request_id not in broker.requests
+        assert broker.capacity_snapshot("ext_generation_silent")["used_units"] == 0
+
+    asyncio.run(scenario())
+
+
+def test_generation_activity_watchdog_tracks_deltas_without_false_positive(monkeypatch):
+    async def scenario() -> None:
+        monkeypatch.setattr(request_stall_patch, "DISPATCH_ACK_TIMEOUT_SECONDS", 1.0)
+        monkeypatch.setattr(request_stall_patch, "SUBMIT_ACK_TIMEOUT_SECONDS", 1.0)
+        monkeypatch.setattr(request_stall_patch, "POST_SUBMIT_START_TIMEOUT_SECONDS", 1.0)
+        monkeypatch.setattr(request_stall_patch, "GENERATION_ACTIVITY_TIMEOUT_SECONDS", 0.04)
+        _app, broker, _registry = make_app()
+        state = await broker.create("req_generation_active", "ext_generation_active")
+        await broker.publish(state.request_id, {"type": "chat.started", "request_id": state.request_id})
+        await asyncio.sleep(0.025)
+        await broker.publish(
+            state.request_id,
+            {"type": "chat.delta", "request_id": state.request_id, "delta": "a"},
+        )
+        await asyncio.sleep(0.025)
+        await broker.publish(
+            state.request_id,
+            {"type": "chat.delta", "request_id": state.request_id, "delta": "b"},
+        )
+        await asyncio.sleep(0.025)
+        await broker.publish(
+            state.request_id,
+            {"type": "chat.completed", "request_id": state.request_id, "text": "ab"},
+        )
+
+        assert await asyncio.wait_for(state.final_future, timeout=0.1) == "ab"
+        assert state.diagnostics.get("generation_activity_watchdog_fired") is not True
+        await broker.release(state.request_id)
+
+    asyncio.run(scenario())
+
+
 def test_absolute_request_lease_reclaims_abandoned_handler(monkeypatch):
     async def scenario() -> None:
         monkeypatch.setattr(request_stall_patch, "DISPATCH_ACK_TIMEOUT_SECONDS", 1.0)

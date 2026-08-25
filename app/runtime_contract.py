@@ -20,7 +20,7 @@ CHROME_BRIDGE_VERSION = "0.8.1"
 CHROME_BRIDGE_BUNDLE_VERSION = "0.8.2"
 PRODUCTION_ENTRYPOINT = "app.entry:app"
 VERSION_CONTRACT_VERSION = 1
-RUNTIME_FEATURE_REVISION = "capacity-native-v37-bundle-082-runtime-logs-v1"
+RUNTIME_FEATURE_REVISION = "capacity-native-v37-bundle-082-runtime-logs-v1-playground-lifecycle-v1"
 ADMIN_VERSION_ASSET = "/assets/chat2api-runtime-version.js"
 ADMIN_EXTENSION_COLUMNS_ASSET = "/assets/chat2api-extension-columns.js"
 ADMIN_LINUX_WORKERS_ASSET = "/assets/chat2api-linux-workers.js"
@@ -53,6 +53,10 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
             "native_capacity_control": True,
             "worker_extension_runtime_diagnostics": True,
             "bridge_service_worker_cache_bust": True,
+            "persistent_playground_runs": True,
+            "running_request_history": True,
+            "playground_cancellation": True,
+            "generation_activity_watchdog": True,
         },
         "protocols": {
             "realtime_voice": LIVE_PROTOCOL_VERSION,
