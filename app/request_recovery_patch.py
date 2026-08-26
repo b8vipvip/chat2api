@@ -142,8 +142,18 @@ def install_request_recovery_patch(app: FastAPI) -> FastAPI:
         await reap_terminal_requests_once()
         return await base_create(request_id, client_id)
 
+    async def release_with_terminal_recovery(request_id: str) -> None:
+        state = broker.requests.get(str(request_id))
+        if state is not None:
+            task = getattr(state, "_chat2api_terminal_release_task", None)
+            current = asyncio.current_task()
+            if isinstance(task, asyncio.Task) and task is not current and not task.done():
+                task.cancel()
+        await base_release(request_id)
+
     broker.create = create_with_terminal_recovery
     broker.publish = publish_with_terminal_recovery
+    broker.release = release_with_terminal_recovery
     broker.request_recovery_reap_once = reap_terminal_requests_once
     broker._chat2api_request_recovery_v40 = True
     return app
