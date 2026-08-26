@@ -6,7 +6,7 @@
   const DISPATCH_KEY = "__CHAT2API_CONVERSATION_DISPATCH_V1__";
   const STORAGE_KEY = "chat2apiConversationRoutesV1";
   const CANCEL_RECYCLE_DELAY_MS = 2500;
-  const TERMINAL_RECYCLE_DELAY_MS = 250;
+  const TERMINAL_RECYCLE_DELAY_MS = 750;
   const STATE_RETENTION_MS = 60000;
   const state = {
     recycled: new Set(),
