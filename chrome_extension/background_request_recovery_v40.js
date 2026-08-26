@@ -7,10 +7,13 @@
   const STORAGE_KEY = "chat2apiConversationRoutesV1";
   const CANCEL_RECYCLE_DELAY_MS = 2500;
   const TERMINAL_RECYCLE_DELAY_MS = 250;
-  const state = { recycled: new Set(), pending: new Map(), recycleRequest: null };
+  const state = {
+    recycled: new Set(),
+    terminalSeen: new Set(),
+    pending: new Map(),
+    recycleRequest: null,
+  };
   globalThis[KEY] = state;
-
-  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   async function persistRoutes(router) {
     if (!router?.routes || typeof router.routes !== "object") return;
@@ -110,9 +113,10 @@
     const result = await baseHandleServerMessage(message);
     if (message?.type === "chat.cancel" && message?.request_id) {
       const requestId = String(message.request_id);
-      scheduleRecycle(requestId, "cancel-timeout-recycle", CANCEL_RECYCLE_DELAY_MS);
       setTimeout(async () => {
-        if (!state.recycled.has(requestId)) return;
+        if (state.terminalSeen.has(requestId)) return;
+        const recycled = await recycleRequest(requestId, "cancel-timeout-recycle").catch(() => false);
+        if (!recycled) return;
         try {
           await trySendSocket({
             type: "chat.cancelled",
@@ -120,7 +124,7 @@
             reason: "ChatGPT route was recycled after cancellation did not settle",
           });
         } catch (_) {}
-      }, CANCEL_RECYCLE_DELAY_MS + 250);
+      }, CANCEL_RECYCLE_DELAY_MS);
     }
     return result;
   };
@@ -131,11 +135,11 @@
     const requestId = String(event.request_id || "");
     if (!requestId) return false;
 
-    if (["chat.error", "image.error"].includes(event.type)) {
-      scheduleRecycle(requestId, `${event.type}-recycle`, TERMINAL_RECYCLE_DELAY_MS);
-    } else if (["chat.cancelled", "image.cancelled"].includes(event.type)) {
+    if (["chat.error", "image.error", "chat.cancelled", "image.cancelled"].includes(event.type)) {
+      state.terminalSeen.add(requestId);
       scheduleRecycle(requestId, `${event.type}-recycle`, TERMINAL_RECYCLE_DELAY_MS);
     } else if (["chat.completed", "image.completed"].includes(event.type)) {
+      state.terminalSeen.add(requestId);
       clearTimeout(state.pending.get(requestId));
       state.pending.delete(requestId);
       state.recycled.delete(requestId);
