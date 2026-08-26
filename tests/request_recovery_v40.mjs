@@ -74,7 +74,9 @@ function harness() {
 }
 
 async function flush() {
-  for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  for (let i = 0; i < 12; i += 1) await Promise.resolve();
+  await new Promise(resolve => setImmediate(resolve));
+  for (let i = 0; i < 4; i += 1) await Promise.resolve();
 }
 
 {
