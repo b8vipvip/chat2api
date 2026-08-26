@@ -58,6 +58,8 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
             "playground_cancellation": True,
             "generation_activity_watchdog": True,
             "fresh_spare_rotation": True,
+            "terminal_request_recovery": True,
+            "failed_route_recycle": True,
         },
         "protocols": {
             "realtime_voice": LIVE_PROTOCOL_VERSION,
@@ -121,7 +123,7 @@ def _admin_version_script() -> str:
       characterData: true,
       subtree: true,
     }});
-  }}
+  }};
 
   patchVersion();
   observeVersionNode(document.querySelector(".brand small"));

@@ -46,6 +46,7 @@ from .linux_worker_repair_command_patch import install_linux_worker_repair_comma
 from .linux_worker_diagnostics_patch import install_linux_worker_diagnostics_patch
 from .stream_keepalive_patch import install_stream_keepalive_patch
 from .request_stall_patch import install_request_stall_patch
+from .request_recovery_patch import install_request_recovery_patch
 from .playground_lifecycle_patch import install_playground_lifecycle_patch
 from .runtime_contract import install_runtime_contract
 from .runtime_logs_patch import install_runtime_logs_patch
@@ -93,6 +94,7 @@ install_linux_worker_ui_state_patch(app)
 install_linux_worker_proxy_catalog_patch(app)
 install_stream_keepalive_patch(app)
 install_request_stall_patch(app)
+install_request_recovery_patch(app)
 install_playground_lifecycle_patch(app)
 
 # Install the runtime contract after the historical patch stack so /version
