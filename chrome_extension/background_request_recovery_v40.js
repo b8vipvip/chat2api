@@ -7,6 +7,7 @@
   const STORAGE_KEY = "chat2apiConversationRoutesV1";
   const CANCEL_RECYCLE_DELAY_MS = 2500;
   const TERMINAL_RECYCLE_DELAY_MS = 250;
+  const STATE_RETENTION_MS = 60000;
   const state = {
     recycled: new Set(),
     terminalSeen: new Set(),
@@ -32,6 +33,14 @@
     return null;
   }
 
+  function scheduleStateCleanup(requestId) {
+    setTimeout(() => {
+      state.recycled.delete(requestId);
+      state.terminalSeen.delete(requestId);
+      state.pending.delete(requestId);
+    }, STATE_RETENTION_MS);
+  }
+
   async function recycleRequest(requestId, reason) {
     requestId = String(requestId || "");
     if (!requestId || state.recycled.has(requestId)) return false;
@@ -47,6 +56,7 @@
 
     if (!route && !Number.isInteger(windowId)) return false;
     state.recycled.add(requestId);
+    scheduleStateCleanup(requestId);
 
     if (route) {
       const hadSession = Boolean(
@@ -137,9 +147,11 @@
 
     if (["chat.error", "image.error", "chat.cancelled", "image.cancelled"].includes(event.type)) {
       state.terminalSeen.add(requestId);
+      scheduleStateCleanup(requestId);
       scheduleRecycle(requestId, `${event.type}-recycle`, TERMINAL_RECYCLE_DELAY_MS);
     } else if (["chat.completed", "image.completed"].includes(event.type)) {
       state.terminalSeen.add(requestId);
+      scheduleStateCleanup(requestId);
       clearTimeout(state.pending.get(requestId));
       state.pending.delete(requestId);
       state.recycled.delete(requestId);
