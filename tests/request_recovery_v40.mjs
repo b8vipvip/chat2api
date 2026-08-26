@@ -50,9 +50,11 @@ function harness() {
     globalThis: null,
     handleServerMessage: async () => ({ ok: true }),
     trySendSocket: async event => { socketEvents.push(event); },
-    setTimeout: fn => {
+    setTimeout: (fn, ms = 0) => {
       const id = ++timerId;
-      Promise.resolve().then(() => { if (!cancelledTimers.has(id)) return fn(); });
+      if (Number(ms) <= 5000) {
+        Promise.resolve().then(() => { if (!cancelledTimers.has(id)) return fn(); });
+      }
       return id;
     },
     clearTimeout: id => { cancelledTimers.add(id); },
@@ -72,7 +74,7 @@ function harness() {
 }
 
 async function flush() {
-  for (let i = 0; i < 8; i += 1) await Promise.resolve();
+  for (let i = 0; i < 10; i += 1) await Promise.resolve();
 }
 
 {
