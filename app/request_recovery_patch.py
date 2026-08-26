@@ -10,7 +10,6 @@ from fastapi import FastAPI
 
 PATCH_ID = "request-recovery-v40"
 TERMINAL_RELEASE_GRACE_SECONDS = 10.0
-TERMINAL_REAPER_INTERVAL_SECONDS = 15.0
 TERMINAL_REAPER_STALE_SECONDS = 30.0
 logger = logging.getLogger("chat2api.request_recovery")
 
@@ -32,8 +31,9 @@ def install_request_recovery_patch(app: FastAPI) -> FastAPI:
     ``chat.error`` and still remained in ``client_active_requests`` for many hours.
     A completed future is therefore not proof that capacity was returned.
 
-    This layer gives terminal browser events an independent release lease and also
-    runs a conservative reaper for already-terminal entries. Normal request
+    This layer gives terminal browser events an independent release lease. It also
+    reaps already-terminal entries before each new admission, so stale capacity is
+    recovered without depending on framework startup/lifespan hooks. Normal request
     handlers still own the fast path; these fallbacks only act when the same state
     is still registered after a grace period.
     """
@@ -42,6 +42,7 @@ def install_request_recovery_patch(app: FastAPI) -> FastAPI:
     if getattr(broker, "_chat2api_request_recovery_v40", False):
         return app
 
+    base_create = broker.create
     base_publish = broker.publish
     base_release = broker.release
 
@@ -133,30 +134,16 @@ def install_request_recovery_patch(app: FastAPI) -> FastAPI:
             )
         return reclaimed
 
-    async def _reaper_loop() -> None:
-        try:
-            while True:
-                await asyncio.sleep(TERMINAL_REAPER_INTERVAL_SECONDS)
-                await reap_terminal_requests_once()
-        except asyncio.CancelledError:
-            return
+    async def create_with_terminal_recovery(request_id: str, client_id: str):
+        # This admission-time sweep also repairs terminal states that predate the
+        # patch or whose normal handler cleanup was interrupted. It runs before the
+        # capacity gate sees the next request, preventing ghost busy slots from
+        # permanently reducing concurrency.
+        await reap_terminal_requests_once()
+        return await base_create(request_id, client_id)
 
-    async def _start_reaper() -> None:
-        task = getattr(app.state, "request_terminal_reaper_task", None)
-        if isinstance(task, asyncio.Task) and not task.done():
-            return
-        app.state.request_terminal_reaper_task = asyncio.create_task(_reaper_loop())
-
-    async def _stop_reaper() -> None:
-        task = getattr(app.state, "request_terminal_reaper_task", None)
-        if isinstance(task, asyncio.Task) and not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
-        app.state.request_terminal_reaper_task = None
-
+    broker.create = create_with_terminal_recovery
     broker.publish = publish_with_terminal_recovery
     broker.request_recovery_reap_once = reap_terminal_requests_once
     broker._chat2api_request_recovery_v40 = True
-    app.add_event_handler("startup", _start_reaper)
-    app.add_event_handler("shutdown", _stop_reaper)
     return app
