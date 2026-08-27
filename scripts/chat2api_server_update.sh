@@ -14,6 +14,7 @@ CURRENT_STAGE="starting"
 CURRENT_PERCENT="2"
 CURRENT_MESSAGE="正在启动更新任务"
 REQUEST_ID=""
+USE_BUILD_CACHE="true"
 FROM_COMMIT=""
 TARGET_COMMIT=""
 ROLLBACK_COMMIT=""
@@ -46,6 +47,19 @@ try:
 except Exception:
     payload = {}
 print(str(payload.get("request_id") or ""))
+PY
+}
+
+read_use_build_cache() {
+  python3 - "$REQUEST_FILE" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    payload = {}
+print("false" if payload.get("use_build_cache") is False else "true")
 PY
 }
 
@@ -145,6 +159,38 @@ fetch_main() {
   return 1
 }
 
+normalize_legacy_updater_mode() {
+  # v0.22.23's updater installer chmodded this tracked 100644 script to 0755.
+  # That mode-only change made the updater reject its own worktree. Normalize
+  # only when the file bytes are still exactly the committed bytes; genuine
+  # local content edits remain protected by the dirty-worktree preflight.
+  local rel="scripts/chat2api_server_update.sh"
+  local current="${APP_DIR}/${rel}"
+  [[ -f "$current" ]] || return 0
+  if git -C "$APP_DIR" diff --quiet --ignore-submodules=all -- "$rel"; then
+    return 0
+  fi
+  local expected
+  expected="$(mktemp /tmp/chat2api-updater-head.XXXXXX)"
+  if git -C "$APP_DIR" show "HEAD:${rel}" >"$expected" 2>/dev/null && cmp -s "$current" "$expected"; then
+    chmod 0644 "$current"
+    log "normalized legacy mode-only change on ${rel} back to 0644"
+  fi
+  rm -f "$expected"
+}
+
+build_new_image() {
+  cd "$APP_DIR"
+  docker compose config -q
+  if [[ "$USE_BUILD_CACHE" == "false" ]]; then
+    log "building Docker image without cache by administrator request"
+    DOCKER_BUILDKIT=1 docker compose build --no-cache
+  else
+    log "building Docker image with existing BuildKit/layer cache"
+    DOCKER_BUILDKIT=1 docker compose build
+  fi
+}
+
 rollback() {
   [[ "$CODE_SWITCHED" == "true" ]] || return 0
   [[ -n "$FROM_COMMIT" ]] || return 0
@@ -156,6 +202,7 @@ rollback() {
   local git_rc=$?
   restore_env
   if (( git_rc == 0 )); then
+    # Recovery prioritizes speed/availability; always reuse safe local cache.
     (cd "$APP_DIR" && DOCKER_BUILDKIT=1 docker compose build)
     local build_rc=$?
     if (( build_rc == 0 )); then
@@ -198,6 +245,7 @@ if ! flock -n 9; then
 fi
 
 REQUEST_ID="$(read_request_id)"
+USE_BUILD_CACHE="$(read_use_build_cache)"
 rm -f "$REQUEST_FILE"
 write_status "running" "starting" "2" "主机更新助手已接管任务"
 
@@ -214,6 +262,7 @@ if [[ "$remote_url" != "$EXPECTED_REPO" && "$remote_url" != "git@github.com:b8vi
   exit 3
 fi
 
+normalize_legacy_updater_mode
 tracked_dirty="$(git -C "$APP_DIR" status --porcelain --untracked-files=no)"
 if [[ -n "$tracked_dirty" ]]; then
   log "tracked working tree is dirty; refusing destructive update"
@@ -264,12 +313,12 @@ git -C "$APP_DIR" reset --hard "$TARGET_COMMIT"
 CODE_SWITCHED="true"
 restore_env
 
-write_status "running" "build" "55" "正在校验 Compose 并构建新 Docker 镜像"
-(
-  cd "$APP_DIR"
-  docker compose config -q
-  DOCKER_BUILDKIT=1 docker compose build
-)
+if [[ "$USE_BUILD_CACHE" == "false" ]]; then
+  write_status "running" "build" "55" "正在校验 Compose 并无缓存构建新 Docker 镜像"
+else
+  write_status "running" "build" "55" "正在校验 Compose 并使用现有 Docker 缓存构建新镜像"
+fi
+build_new_image
 
 write_status "running" "deploy" "76" "新镜像构建成功，正在切换 chat2api 容器"
 (

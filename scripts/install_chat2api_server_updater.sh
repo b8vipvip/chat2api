@@ -28,7 +28,11 @@ case "$origin" in
 esac
 
 install -d -m 0755 "$DATA_DIR"
-chmod 755 "$UPDATER_SCRIPT"
+# The service invokes this tracked file through /bin/bash, so it does not need
+# an executable bit. Keep the mode aligned with Git (100644); the old installer
+# used chmod 755 here, which made the worktree look dirty and caused the updater
+# itself to fail its destructive-update preflight with exit code 4.
+chmod 0644 "$UPDATER_SCRIPT"
 # Ubuntu + GnuTLS environments occasionally terminate GitHub HTTP/2 sessions
 # early. Keep this repository on HTTP/1.1; the updater also retries every fetch.
 git -C "$APP_DIR" config http.version HTTP/1.1

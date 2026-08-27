@@ -66,12 +66,17 @@ def test_update_api_is_session_protected_and_only_queues_fixed_request(tmp_path,
         assert payload["updater"]["installed"] is True
         assert payload["updater"]["install_command"].endswith("install_chat2api_server_updater.sh")
 
-        queued = client.post("/api/admin/server-update/start", json={"confirm": True})
+        queued = client.post(
+            "/api/admin/server-update/start",
+            json={"confirm": True, "use_build_cache": False},
+        )
         assert queued.status_code == 202
+        assert queued.json()["use_build_cache"] is False
         request = json.loads((tmp_path / update_patch.UPDATE_REQUEST_NAME).read_text(encoding="utf-8"))
         assert request["repository"] == "b8vipvip/chat2api"
         assert request["branch"] == "main"
         assert request["request_id"].startswith("upd_")
+        assert request["use_build_cache"] is False
         assert "command" not in request
         assert "shell" not in request
 
@@ -81,6 +86,23 @@ def test_update_api_is_session_protected_and_only_queues_fixed_request(tmp_path,
 
         duplicate = client.post("/api/admin/server-update/start", json={"confirm": True})
         assert duplicate.status_code == 409
+
+
+def _pkt(payload: bytes) -> bytes:
+    return f"{len(payload) + 4:04x}".encode("ascii") + payload
+
+
+def test_git_smart_http_parser_extracts_main_without_rest_api_quota():
+    head = b"a" * 40
+    main = b"b" * 40
+    advertised = (
+        _pkt(b"# service=git-upload-pack\n")
+        + b"0000"
+        + _pkt(head + b" HEAD\x00multi_ack thin-pack side-band\n")
+        + _pkt(main + b" refs/heads/main\n")
+        + b"0000"
+    )
+    assert update_patch._git_smart_main_sha(advertised) == "b" * 40
 
 
 def test_update_console_and_host_scripts_use_narrow_systemd_boundary():
@@ -97,15 +119,27 @@ def test_update_console_and_host_scripts_use_narrow_systemd_boundary():
         "systemd.path + 固定更新脚本",
         "install_chat2api_server_updater.sh",
         "/api/admin/server-update/start",
+        "使用 Docker 构建缓存（推荐）",
+        "use_build_cache",
+        "terminalTransition",
+        "previousState !== data.status",
     ):
         assert token in ui
     assert 'GITHUB_REPOSITORY = "b8vipvip/chat2api"' in patch
+    assert "GITHUB_SMART_REFS" in patch
+    assert '"source": "git-smart-http"' in patch
+    assert 'os.getenv("CHAT2API_GITHUB_TOKEN")' in patch
     assert 'UPDATE_REQUEST_NAME = "admin-update-request.json"' in patch
     assert 'PathExists=${DATA_DIR}/admin-update-request.json' in installer
     assert "chat2api-admin-update.service" in installer
+    assert 'chmod 0644 "$UPDATER_SCRIPT"' in installer
+    assert 'chmod 755 "$UPDATER_SCRIPT"' not in installer
     assert "git -C \"$APP_DIR\" config http.version HTTP/1.1" in updater
     assert "fetch_main" in updater
+    assert "normalize_legacy_updater_mode" in updater
+    assert "read_use_build_cache" in updater
     assert "DOCKER_BUILDKIT=1 docker compose build" in updater
+    assert "docker compose build --no-cache" in updater
     assert "rollback()" in updater
     assert "wait_health" in updater
     assert "/var/run/docker.sock" not in compose

@@ -1,6 +1,6 @@
 (() => {
   if (globalThis.__CHAT2API_SERVER_UPDATE_UI__) return;
-  globalThis.__CHAT2API_SERVER_UPDATE_UI__ = {version: 1};
+  globalThis.__CHAT2API_SERVER_UPDATE_UI__ = {version: 2};
 
   const nav = document.querySelector(".nav");
   const content = document.querySelector(".content");
@@ -33,6 +33,12 @@
           <button class="action" id="updCheck">重新检查 GitHub</button>
           <button class="action good" id="updStart">从 GitHub 更新服务端</button>
         </div>
+      </div>
+      <div style="margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:#07101e">
+        <label style="display:flex;align-items:center;gap:9px;cursor:pointer">
+          <input id="updUseBuildCache" type="checkbox" checked>
+          <span><b>使用 Docker 构建缓存（推荐）</b> <span class="muted">复用现有 BuildKit/镜像层和 pip 缓存，通常可显著缩短更新；取消勾选才会执行 --no-cache 全量重建。</span></span>
+        </label>
       </div>
       <div id="updRemoteMessage" class="codebox" style="margin-top:12px;display:none"></div>
     </div>
@@ -71,7 +77,7 @@
         <li>宿主机更新助手固定更新 <code>/opt/chat2api</code> 的 <code>origin/main</code>，并在更新前检查 tracked 工作区是否干净。</li>
         <li>先构建新 Docker 镜像，构建成功后才切换容器；健康检查失败时自动回滚到更新前提交并重新构建。</li>
         <li><code>.env</code> 与 <code>data/</code> 在更新过程中保留，更新状态与日志写入持久化 <code>data/</code>。</li>
-        <li>Git 拉取默认强制 HTTP/1.1 并带重试，以降低 GnuTLS/TLS 连接被提前终止造成的更新失败。</li>
+        <li>GitHub main 优先通过 Git Smart HTTP 检查，不消耗 GitHub REST API 未认证配额；Git 拉取仍强制 HTTP/1.1 并带重试。</li>
       </ul>
     </div>`;
   content.appendChild(view);
@@ -140,6 +146,7 @@
     if (log) log.scrollTop = log.scrollHeight;
     $("updStart").disabled = running || !data.updater_installed;
     $("updStart").textContent = running ? "服务端正在更新…" : "从 GitHub 更新服务端";
+    $("updUseBuildCache").disabled = running;
     lastState = state;
   }
 
@@ -200,10 +207,10 @@
       try {
         const data = await callApi("/api/admin/server-update/status");
         $("updReconnect").style.display = "none";
+        const previousState = lastState;
         renderStatus(data);
-        if ((lastState === "succeeded" || lastState === "failed") && data.status === lastState) {
-          await loadOverview(true);
-        }
+        const terminalTransition = ["succeeded", "failed"].includes(String(data.status || "")) && previousState !== data.status;
+        if (terminalTransition) await loadOverview(true);
         await new Promise(resolve => setTimeout(resolve, data.status === "queued" || data.status === "running" ? 1000 : 5000));
       } catch (_) {
         if (lastState === "queued" || lastState === "running") $("updReconnect").style.display = "";
@@ -221,9 +228,11 @@
     setTimeout(() => setText("updCopyInstall", "复制安装命令"), 1200);
   };
   $("updStart").onclick = async () => {
-    if (!confirm("确定从 GitHub main 自动更新 chat2api 服务端吗？更新过程中控制台会短暂断线；失败会尝试自动回滚。")) return;
+    const useBuildCache = Boolean($("updUseBuildCache")?.checked);
+    const cacheText = useBuildCache ? "使用现有 Docker/BuildKit 缓存构建" : "执行 --no-cache 全量构建";
+    if (!confirm(`确定从 GitHub main 自动更新 chat2api 服务端吗？\n\n本次将${cacheText}。更新过程中控制台会短暂断线；失败会尝试自动回滚。`)) return;
     try {
-      await callApi("/api/admin/server-update/start", {method: "POST", body: {confirm: true}});
+      await callApi("/api/admin/server-update/start", {method: "POST", body: {confirm: true, use_build_cache: useBuildCache}});
       active = true;
       await loadOverview(false);
       pollStatus();

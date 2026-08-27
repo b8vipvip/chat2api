@@ -19,12 +19,15 @@ from .runtime_contract import CHROME_BRIDGE_BUNDLE_VERSION, CHROME_BRIDGE_VERSIO
 ASSET_PATH = "/assets/chat2api-server-update.js"
 GITHUB_REPOSITORY = "b8vipvip/chat2api"
 GITHUB_MAIN_API = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/commits/main"
+GITHUB_SMART_REFS = f"https://github.com/{GITHUB_REPOSITORY}.git/info/refs?service=git-upload-pack"
 UPDATE_REQUEST_NAME = "admin-update-request.json"
 UPDATE_STATUS_NAME = "admin-update-status.json"
 UPDATE_LOG_NAME = "admin-update.log"
 UPDATER_MARKER_NAME = "admin-updater-installed.json"
 DEPLOYMENT_NAME = "deployment.json"
-REMOTE_CACHE_SECONDS = 30.0
+# Even an explicit UI refresh respects this short anti-stampede window. The old
+# terminal-state polling path could otherwise bypass the cache every few seconds.
+REMOTE_CACHE_SECONDS = 60.0
 
 
 async def _response_bytes(response: Response) -> bytes:
@@ -91,37 +94,106 @@ def _status_payload(app: FastAPI) -> dict[str, Any]:
     }
 
 
+def _git_smart_main_sha(body: bytes) -> str:
+    """Extract refs/heads/main from a Git smart-HTTP v0 advertisement."""
+    cursor = 0
+    target = b"refs/heads/main"
+    while cursor + 4 <= len(body):
+        prefix = body[cursor : cursor + 4]
+        cursor += 4
+        try:
+            size = int(prefix, 16)
+        except ValueError:
+            return ""
+        if size == 0:
+            continue
+        if size < 4 or cursor + size - 4 > len(body):
+            return ""
+        packet = body[cursor : cursor + size - 4]
+        cursor += size - 4
+        line = packet.rstrip(b"\n")
+        if b"\x00" in line:
+            line = line.split(b"\x00", 1)[0]
+        fields = line.split()
+        if len(fields) >= 2 and fields[1] == target:
+            sha = fields[0].decode("ascii", errors="ignore").lower()
+            if len(sha) == 40 and all(ch in "0123456789abcdef" for ch in sha):
+                return sha
+    return ""
+
+
 async def _remote_main(app: FastAPI, *, refresh: bool = False) -> dict[str, Any]:
     now = time.monotonic()
     cache = getattr(app.state, "server_update_remote_cache", None)
-    if not refresh and isinstance(cache, dict) and now - float(cache.get("at") or 0) < REMOTE_CACHE_SECONDS:
+    if isinstance(cache, dict) and now - float(cache.get("at") or 0) < REMOTE_CACHE_SECONDS:
         value = cache.get("value")
         if isinstance(value, dict):
             return value
 
+    smart_error = ""
+    result: dict[str, Any] | None = None
     try:
         async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
             response = await client.get(
-                GITHUB_MAIN_API,
+                GITHUB_SMART_REFS,
                 headers={
-                    "Accept": "application/vnd.github+json",
+                    "Accept": "application/x-git-upload-pack-advertisement",
                     "User-Agent": "chat2api-server-update-check",
-                    "X-GitHub-Api-Version": "2022-11-28",
                 },
             )
             response.raise_for_status()
-            payload = response.json()
-        commit = payload.get("commit") if isinstance(payload, dict) else {}
-        message = str((commit or {}).get("message") or "").splitlines()[0]
+            sha = _git_smart_main_sha(response.content)
+            if not sha:
+                raise ValueError("Git smart HTTP response did not advertise refs/heads/main")
         result = {
             "ok": True,
-            "sha": str(payload.get("sha") or ""),
-            "short_sha": str(payload.get("sha") or "")[:12],
-            "message": message,
-            "url": str(payload.get("html_url") or ""),
+            "sha": sha,
+            "short_sha": sha[:12],
+            "message": "通过 Git Smart HTTP 检查 main（不消耗 GitHub REST API 配额）",
+            "url": f"https://github.com/{GITHUB_REPOSITORY}/commit/{sha}",
+            "source": "git-smart-http",
         }
     except Exception as exc:
-        result = {"ok": False, "sha": "", "short_sha": "", "message": "", "url": "", "error": str(exc)[:320]}
+        smart_error = str(exc)[:240]
+
+    # Smart HTTP is the normal path for this public repository. Keep a REST API
+    # fallback for unusual proxies/private deployments. An optional token raises
+    # the REST rate limit, but no token/deploy key is required for the public repo.
+    if result is None:
+        try:
+            headers = {
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "chat2api-server-update-check",
+                "X-GitHub-Api-Version": "2022-11-28",
+            }
+            token = str(os.getenv("CHAT2API_GITHUB_TOKEN") or "").strip()
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+                response = await client.get(GITHUB_MAIN_API, headers=headers)
+                response.raise_for_status()
+                payload = response.json()
+            commit = payload.get("commit") if isinstance(payload, dict) else {}
+            message = str((commit or {}).get("message") or "").splitlines()[0]
+            sha = str(payload.get("sha") or "")
+            result = {
+                "ok": True,
+                "sha": sha,
+                "short_sha": sha[:12],
+                "message": message,
+                "url": str(payload.get("html_url") or ""),
+                "source": "github-rest-api",
+            }
+        except Exception as exc:
+            rest_error = str(exc)[:240]
+            result = {
+                "ok": False,
+                "sha": "",
+                "short_sha": "",
+                "message": "",
+                "url": "",
+                "error": f"Git Smart HTTP: {smart_error}; GitHub API fallback: {rest_error}"[:480],
+            }
 
     app.state.server_update_remote_cache = {"at": now, "value": result}
     return result
@@ -183,6 +255,14 @@ def install_server_update_patch(app: FastAPI) -> FastAPI:
         if current.get("status") in {"queued", "running"}:
             raise HTTPException(409, "已有服务端更新任务正在执行")
 
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
+        use_build_cache = body.get("use_build_cache") is not False
+
         request_id = f"upd_{uuid.uuid4().hex[:18]}"
         now = datetime.now(timezone.utc).isoformat()
         _write_json_atomic(
@@ -205,9 +285,13 @@ def install_server_update_patch(app: FastAPI) -> FastAPI:
                 "requested_at": now,
                 "repository": GITHUB_REPOSITORY,
                 "branch": "main",
+                "use_build_cache": use_build_cache,
             },
         )
-        return JSONResponse({"ok": True, "request_id": request_id, "status": "queued"}, status_code=202)
+        return JSONResponse(
+            {"ok": True, "request_id": request_id, "status": "queued", "use_build_cache": use_build_cache},
+            status_code=202,
+        )
 
     @app.get(ASSET_PATH, include_in_schema=False)
     async def admin_server_update_js() -> Response:
