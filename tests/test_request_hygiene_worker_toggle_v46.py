@@ -98,7 +98,6 @@ def test_linux_worker_disable_is_routing_only_and_reversible():
     assert payload["worker"]["status"] == "offline"
     assert payload["worker"]["chatgpt_status"] == "offline"
 
-    # The physical client object remains intact; only request routing changes.
     assert "ext_linux" in app.state.registry.clients
     assert app.state.registry.online_client_ids() == ["ext_windows"]
     assert app.state.registry.api_key_routes == {"key_windows": "ext_windows"}
@@ -152,6 +151,27 @@ def test_request_hygiene_only_clears_automation_owned_stale_drafts():
         assert token in content
 
 
+def test_persistent_draft_ownership_survives_browser_restart_and_never_stores_prompt_text():
+    source = (ROOT / "chrome_extension" / "content_draft_ownership_v43.js").read_text(encoding="utf-8")
+    for token in (
+        'STORAGE_PREFIX = "chat2apiDraftOwnershipV43:"',
+        'crypto.subtle.digest("SHA-256"',
+        'status = "prepared"',
+        '"draft_written"',
+        "startupRecovery",
+        "request-ended-before-submit",
+        "startup-restored-owned-draft",
+        "matchingRecord",
+        "clearIfStillOwned",
+        "legacyListener",
+        "Non-owned text is treated as a possible human draft",
+        "Receiving chat2api.request is itself authoritative automation ownership",
+    ):
+        assert token in source
+    assert "prompt:" not in source
+    assert "prompt_text" not in source
+
+
 def test_visible_generation_liveness_extends_observable_progress_without_removing_hard_timeout():
     source = (ROOT / "chrome_extension" / "content_generation_liveness_v42.js").read_text(encoding="utf-8")
     server = (ROOT / "app" / "request_stall_patch.py").read_text(encoding="utf-8")
@@ -165,15 +185,21 @@ def test_visible_generation_liveness_extends_observable_progress_without_removin
     ):
         assert token in source
     assert '"generation_sequence"' in server
-    assert "REQUEST_TIMEOUT_SECONDS" in server
+    assert "ABSOLUTE_REQUEST_TIMEOUT_GRACE_SECONDS" in server
+    assert "_absolute_watchdog" in server
 
 
 def test_bundle_load_order_and_new_scripts_parse():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
     assert manifest["version"] == "0.8.5"
-    assert scripts.index("content_request_v5.js") < scripts.index("content_request_hygiene_v42.js")
+    assert scripts.index("content_request_v5.js") < scripts.index("content_request_hygiene_v42.js") < scripts.index("content_draft_ownership_v43.js")
+    assert scripts.index("content_draft_ownership_v43.js") < scripts.index("content_response_capture_v41.js")
     assert scripts.index("content_request_stall_guard_v34.js") < scripts.index("content_generation_liveness_v42.js")
+
+    bootstrap = (ROOT / "chrome_extension" / "content_bootstrap.js").read_text(encoding="utf-8")
+    assert bootstrap.index('"content_request_v5.js"') < bootstrap.index('"content_request_hygiene_v42.js"') < bootstrap.index('"content_draft_ownership_v43.js"')
+    assert '"content_generation_liveness_v42.js"' in bootstrap
 
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     assert entry.index("conversation_dispatch.js") < entry.index("background_request_hygiene_v42.js") < entry.index("background_request_recovery_v40.js")
@@ -181,6 +207,7 @@ def test_bundle_load_order_and_new_scripts_parse():
     for filename in (
         "chrome_extension/background_request_hygiene_v42.js",
         "chrome_extension/content_request_hygiene_v42.js",
+        "chrome_extension/content_draft_ownership_v43.js",
         "chrome_extension/content_generation_liveness_v42.js",
         "app/admin_linux_worker_enable_v46.js",
     ):
