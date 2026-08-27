@@ -33,6 +33,7 @@ importScripts(
   "background_reserve_status_reconnect_v29.js",
   "conversation_workers_v24.js",
   "conversation_dispatch.js",
+  "background_request_hygiene_v42.js",
   "background_request_recovery_v40.js",
   "audio_routing_live.js",
   "background_capacity_control_v35.js",
