@@ -23,6 +23,7 @@
           "content_multimodal_v4.js",
           "content_request_v4.js",
           "content_request_v5.js",
+          "content_response_capture_v41.js",
           "content_request_perf_v21.js",
           "content_completion_v6.js",
           "content_completion_fast_v21.js",
