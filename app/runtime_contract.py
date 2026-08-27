@@ -17,10 +17,10 @@ from .live_voice_patch import LIVE_PROTOCOL_VERSION
 # extension bundle, and the realtime wire protocol can evolve independently.
 SERVER_RUNTIME_VERSION = "0.22.23"
 CHROME_BRIDGE_VERSION = "0.8.1"
-CHROME_BRIDGE_BUNDLE_VERSION = "0.8.3"
+CHROME_BRIDGE_BUNDLE_VERSION = "0.8.4"
 PRODUCTION_ENTRYPOINT = "app.entry:app"
 VERSION_CONTRACT_VERSION = 1
-RUNTIME_FEATURE_REVISION = "capacity-native-v37-bundle-083-runtime-logs-v1-playground-lifecycle-v1-spare-freshness-v39"
+RUNTIME_FEATURE_REVISION = "capacity-native-v37-bundle-084-runtime-logs-v1-playground-lifecycle-v1-spare-freshness-v39-response-capture-v41"
 ADMIN_VERSION_ASSET = "/assets/chat2api-runtime-version.js"
 ADMIN_EXTENSION_COLUMNS_ASSET = "/assets/chat2api-extension-columns.js"
 ADMIN_LINUX_WORKERS_ASSET = "/assets/chat2api-linux-workers.js"
@@ -43,7 +43,7 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
         "chrome_bridge": {
             "version": CHROME_BRIDGE_VERSION,
             "bundle_version": CHROME_BRIDGE_BUNDLE_VERSION,
-            "build_revision": "capacity-native-v37-r2-spare-freshness-v39",
+            "build_revision": "capacity-native-v37-r2-spare-freshness-v39-response-capture-v41",
             "capacity_control_version": 36,
             "capacity_reporter_version": 37,
         },
@@ -60,6 +60,7 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
             "fresh_spare_rotation": True,
             "terminal_request_recovery": True,
             "failed_route_recycle": True,
+            "rendered_response_capture_recovery": True,
         },
         "protocols": {
             "realtime_voice": LIVE_PROTOCOL_VERSION,
