@@ -16,6 +16,10 @@ from .live_voice_patch import LIVE_PROTOCOL_VERSION
 # server runtime/console, the Chrome Bridge wire protocol, the shipped unpacked
 # extension bundle, and the realtime wire protocol can evolve independently.
 SERVER_RUNTIME_VERSION = "0.22.25"
+# v0.22.24 is the compatibility baseline for Workers that first gained the
+# bounded initialize/recovery command. Keep it explicit while v0.22.25 adds the
+# next bounded capability (online upgrade) on top of that deployed population.
+WORKER_INITIALIZE_BASELINE_SERVER_RUNTIME_VERSION = "0.22.24"
 CHROME_BRIDGE_VERSION = "0.8.1"
 CHROME_BRIDGE_BUNDLE_VERSION = "0.8.4"
 PRODUCTION_ENTRYPOINT = "app.entry:app"
