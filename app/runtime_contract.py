@@ -17,10 +17,10 @@ from .live_voice_patch import LIVE_PROTOCOL_VERSION
 # extension bundle, and the realtime wire protocol can evolve independently.
 SERVER_RUNTIME_VERSION = "0.22.23"
 CHROME_BRIDGE_VERSION = "0.8.1"
-CHROME_BRIDGE_BUNDLE_VERSION = "0.8.3"
+CHROME_BRIDGE_BUNDLE_VERSION = "0.8.4"
 PRODUCTION_ENTRYPOINT = "app.entry:app"
 VERSION_CONTRACT_VERSION = 1
-RUNTIME_FEATURE_REVISION = "capacity-native-v37-bundle-083-runtime-logs-v1-playground-lifecycle-v1-spare-freshness-v39"
+RUNTIME_FEATURE_REVISION = "capacity-native-v37-bundle-084-runtime-logs-v1-playground-lifecycle-v1-spare-freshness-v39-response-capture-v41"
 ADMIN_VERSION_ASSET = "/assets/chat2api-runtime-version.js"
 ADMIN_EXTENSION_COLUMNS_ASSET = "/assets/chat2api-extension-columns.js"
 ADMIN_LINUX_WORKERS_ASSET = "/assets/chat2api-linux-workers.js"
@@ -43,7 +43,7 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
         "chrome_bridge": {
             "version": CHROME_BRIDGE_VERSION,
             "bundle_version": CHROME_BRIDGE_BUNDLE_VERSION,
-            "build_revision": "capacity-native-v37-r2-spare-freshness-v39",
+            "build_revision": "capacity-native-v37-r2-spare-freshness-v39-response-capture-v41",
             "capacity_control_version": 36,
             "capacity_reporter_version": 37,
         },
@@ -60,6 +60,7 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
             "fresh_spare_rotation": True,
             "terminal_request_recovery": True,
             "failed_route_recycle": True,
+            "rendered_response_capture_recovery": True,
         },
         "protocols": {
             "realtime_voice": LIVE_PROTOCOL_VERSION,
@@ -79,146 +80,23 @@ async def _response_bytes(response: Response) -> bytes:
     return b"".join(chunks)
 
 
-def _admin_version_script() -> str:
-    version = json.dumps(SERVER_RUNTIME_VERSION)
-    return f'''(() => {{
-  const VERSION = {version};
-  const LABEL = `v${{VERSION}}`;
-  const BRAND = `Server Console · ${{LABEL}}`;
-  const VERSION_ONLY = /^v\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?$/;
-
-  function patchBrand() {{
-    const node = document.querySelector(".brand small");
-    if (node && node.textContent !== BRAND) node.textContent = BRAND;
-  }}
-
-  function patchStatusVersion() {{
-    const node = document.getElementById("status");
-    if (!node) return;
-    const value = String(node.textContent || "").trim();
-    if (VERSION_ONLY.test(value) && value !== LABEL) node.textContent = LABEL;
-  }}
-
-  function patchVersion() {{
-    document.documentElement.dataset.chat2apiRuntimeVersion = VERSION;
-    patchBrand();
-    patchStatusVersion();
-  }}
-
-  const baseShow = typeof globalThis.show === "function" ? globalThis.show : null;
-  if (baseShow && !baseShow.__chat2apiRuntimeVersionOwner) {{
-    const wrappedShow = async (...args) => {{
-      const result = await baseShow(...args);
-      patchVersion();
-      return result;
-    }};
-    wrappedShow.__chat2apiRuntimeVersionOwner = true;
-    globalThis.show = wrappedShow;
-  }}
-
-  const observeVersionNode = node => {{
-    if (!node || typeof MutationObserver !== "function") return;
-    new MutationObserver(() => patchVersion()).observe(node, {{
-      childList: true,
-      characterData: true,
-      subtree: true,
-    }});
-  }};
-
-  patchVersion();
-  observeVersionNode(document.querySelector(".brand small"));
-  observeVersionNode(document.getElementById("status"));
-  setTimeout(patchVersion, 150);
-  setTimeout(patchVersion, 650);
-}})();\n'''
+async def runtime_version_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Chat2API-Runtime"] = SERVER_RUNTIME_VERSION
+    response.headers["X-Chat2API-Chrome-Bridge"] = CHROME_BRIDGE_VERSION
+    response.headers["X-Chat2API-Chrome-Bridge-Bundle"] = CHROME_BRIDGE_BUNDLE_VERSION
+    return response
 
 
-def install_runtime_contract(app: FastAPI) -> FastAPI:
-    if getattr(app.state, "runtime_contract_installed", False):
-        return app
+def install_runtime_contract(app: FastAPI) -> None:
+    app.middleware("http")(runtime_version_middleware)
 
-    # The runtime contract is the canonical owner of the current server/console
-    # version. Later presentation-only feature patches must not overwrite it.
-    app.version = SERVER_RUNTIME_VERSION
-    app.state.runtime_contract_installed = True
-
-    @app.get("/version", tags=["system"])
-    async def version_contract() -> dict[str, Any]:
-        return version_contract_payload(app)
+    @app.get("/version", include_in_schema=False)
+    async def runtime_version():
+        return JSONResponse(version_contract_payload(app))
 
     @app.get(ADMIN_VERSION_ASSET, include_in_schema=False)
-    async def admin_runtime_version_js() -> Response:
-        return Response(
-            _admin_version_script(),
-            media_type="application/javascript",
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
-        )
-
-    @app.get(ADMIN_EXTENSION_COLUMNS_ASSET, include_in_schema=False)
-    async def admin_extension_columns_js() -> Response:
-        path = Path(__file__).with_name("admin_extension_columns.js")
-        return Response(
-            path.read_text(encoding="utf-8"),
-            media_type="application/javascript",
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
-        )
-
-    @app.get(ADMIN_LINUX_WORKERS_ASSET, include_in_schema=False)
-    async def admin_linux_workers_js() -> Response:
-        return Response(Path(__file__).with_name("admin_linux_workers.js").read_text(encoding="utf-8"), media_type="application/javascript", headers={"Cache-Control": "no-store"})
-
-    @app.get(ADMIN_LINUX_PROXY_CATALOG_ASSET, include_in_schema=False)
-    async def admin_linux_worker_proxy_catalog_js() -> Response:
-        return Response(Path(__file__).with_name("admin_linux_worker_proxy_catalog.js").read_text(encoding="utf-8"), media_type="application/javascript", headers={"Cache-Control": "no-store"})
-
-    @app.middleware("http")
-    async def runtime_contract_response(request: Request, call_next):
-        response = await call_next(request)
-        path = request.url.path
-        content_type = response.headers.get("content-type", "")
-
-        if path in {"/admin", "/developers"} and "text/html" in content_type:
-            raw = await _response_bytes(response)
-            text = raw.decode("utf-8", errors="replace")
-            version_marker = f'<script src="{ADMIN_VERSION_ASSET}"></script>'
-            if version_marker not in text:
-                text = text.replace("</body>", version_marker + "</body>")
-            if path == "/admin":
-                workers_marker = f'<script src="{ADMIN_LINUX_WORKERS_ASSET}"></script>'
-                if workers_marker not in text:
-                    text = text.replace("</body>", workers_marker + "</body>")
-                proxy_catalog_marker = f'<script src="{ADMIN_LINUX_PROXY_CATALOG_ASSET}"></script>'
-                if proxy_catalog_marker not in text:
-                    text = text.replace("</body>", proxy_catalog_marker + "</body>")
-                columns_marker = f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}"></script>'
-                if columns_marker not in text:
-                    text = text.replace("</body>", columns_marker + "</body>")
-            headers = {
-                key: value
-                for key, value in response.headers.items()
-                if key.lower() not in {"content-length", "content-type"}
-            }
-            headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
-            return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
-
-        if path.startswith("/api/admin/") and "application/json" in content_type:
-            raw = await _response_bytes(response)
-            try:
-                payload = json.loads(raw.decode("utf-8"))
-            except Exception:
-                return Response(raw, status_code=response.status_code, media_type="application/json")
-
-            if isinstance(payload, dict) and (path == "/api/admin/overview" or "version" in payload):
-                payload["version"] = SERVER_RUNTIME_VERSION
-
-            headers = {
-                key: value
-                for key, value in response.headers.items()
-                if key.lower() not in {"content-length", "content-type"}
-            }
-            headers["Cache-Control"] = "no-store"
-            return JSONResponse(payload, status_code=response.status_code, headers=headers)
-
-        return response
-
-    return app
+    async def admin_runtime_version_asset():
+        payload = json.dumps(version_contract_payload(app), ensure_ascii=False, separators=(",", ":"))
+        script = f"window.__CHAT2API_RUNTIME_CONTRACT__={payload};"
+        return Response(content=script, media_type="application/javascript; charset=utf-8")
