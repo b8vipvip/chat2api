@@ -27,7 +27,7 @@
   function classifyTurn({ user = false, hasAssistantRole = false, roleVisible = false, hasFinalActions = false, hasTextHost = false } = {}) {
     if (user || !hasTextHost) return "";
     if (hasAssistantRole && !roleVisible) return "role-proxy";
-    if (!hasAssistantRole && hasFinalActions) return "final-actions";
+    if (hasFinalActions) return "final-actions";
     return "";
   }
 
@@ -86,28 +86,47 @@
     return seen.size;
   }
 
-  function textHost(root) {
-    if (!root?.querySelectorAll) return null;
+  function textCandidates(root) {
+    if (!root?.querySelectorAll) return [];
+    const result = [];
+    const seen = new Set();
     for (const selector of [
       "[data-message-content]",
       ".markdown",
       "[class*='markdown']",
       "[class*='prose']",
     ]) {
-      const candidates = [...root.querySelectorAll(selector)];
-      for (let index = candidates.length - 1; index >= 0; index -= 1) {
-        const candidate = candidates[index];
+      for (const candidate of root.querySelectorAll(selector)) {
+        if (seen.has(candidate)) continue;
+        seen.add(candidate);
         const text = normalize(candidate.innerText || candidate.textContent || "");
-        if (visible(candidate) && text && !transientText(text)) return candidate;
+        if (visible(candidate) && text && !transientText(text)) result.push(candidate);
       }
     }
-    const ownText = normalize(root.innerText || root.textContent || "");
+    return result;
+  }
+
+  function textHost(root) {
+    const candidates = textCandidates(root);
+    if (candidates.length) return candidates[candidates.length - 1];
+    const ownText = normalize(root?.innerText || root?.textContent || "");
     if (visible(root) && ownText && !transientText(ownText)) return root;
     return null;
   }
 
+  function completionProxyHost(turn) {
+    const candidates = textCandidates(turn);
+    for (let index = candidates.length - 1; index >= 0; index -= 1) {
+      const candidate = candidates[index];
+      if (candidate.dataset?.chat2apiAssistantProxy === "v41") return candidate;
+      if (candidate.getAttribute?.("data-message-author-role") !== "assistant") return candidate;
+    }
+    return textHost(turn);
+  }
+
   function markProxy(host, source) {
     if (!host?.setAttribute) return false;
+    if (host.dataset?.chat2apiAssistantProxy === "v41") return false;
     if (host.getAttribute("data-message-author-role") === "assistant" && visible(host)) return false;
     host.setAttribute("data-message-author-role", "assistant");
     try {
@@ -136,16 +155,19 @@
     for (const turn of turns) {
       if (userTurn(turn)) continue;
       const roles = [...turn.querySelectorAll("[data-message-author-role='assistant']")];
-      if (roles.some(visible)) continue;
-      const host = textHost(turn);
+      const roleVisible = roles.some(visible);
+      const host = completionProxyHost(turn);
       const actions = finalActionCount(turn);
       const source = classifyTurn({
         user: false,
         hasAssistantRole: roles.length > 0,
-        roleVisible: roles.some(visible),
+        roleVisible,
         hasFinalActions: actions > 0,
         hasTextHost: Boolean(host),
       });
+      // A final-actions proxy is useful even when the canonical assistant role is
+      // visible: it gives request-v5 a new DOM node/count when ChatGPT reuses a
+      // turn identity that was already present in the pre-send baseline.
       if (source === "final-actions" && markProxy(host, source)) repaired += 1;
     }
     return { repaired, total: turns.length };
