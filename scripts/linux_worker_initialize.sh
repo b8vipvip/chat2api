@@ -8,7 +8,6 @@ CHATGPT_URL="${CHATGPT_URL:-https://chatgpt.com/}"
 TAB_INIT_HELPER="${CHAT2API_TAB_INIT_HELPER:-/opt/chat2api-worker/scripts/linux_worker_tab_init.py}"
 LOCK_FILE="/run/chat2api-worker-initialize.lock"
 STATE_FILE="/var/lib/chat2api-worker/initialize-state.json"
-UNITS=(chat2api-xray.service chat2api-xvfb.service chat2api-chrome.service chat2api-worker-agent.service)
 
 log() {
   printf '%s [chat2api-worker-initialize] %s\n' "$(date -Is)" "$*"
@@ -138,6 +137,11 @@ run_initialize() {
     log "another initialization is already running"
     exit 0
   fi
+
+  # The command reaches us through the Agent itself. The transient systemd unit
+  # can start immediately after systemd-run returns, so give the Agent a short
+  # deterministic window to send command.result before we stop its service.
+  sleep 2
 
   local failed=0
   cleanup() {
