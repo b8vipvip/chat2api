@@ -67,6 +67,9 @@ WantedBy=multi-user.target
 EOF
 
 chmod 0644 "$SERVICE_UNIT" "$PATH_UNIT"
+# Never allow a stale request left by a previous partial installation to fire
+# while systemd units are being replaced.
+rm -f "${DATA_DIR}/admin-update-request.json"
 systemctl daemon-reload
 systemctl enable --now chat2api-admin-update.path
 
@@ -104,16 +107,14 @@ write(marker, {
     "service_unit": "chat2api-admin-update.service",
     "installed_at": now,
 })
-if not deployment.exists():
-    write(deployment, {
-        "commit": sha,
-        "branch": "main",
-        "repository": "b8vipvip/chat2api",
-        "updated_at": now,
-    })
+write(deployment, {
+    "commit": sha,
+    "branch": "main",
+    "repository": "b8vipvip/chat2api",
+    "updated_at": now,
+})
 PY
 
-rm -f "${DATA_DIR}/admin-update-request.json"
 systemctl restart chat2api-admin-update.path
 
 echo "chat2api 主机更新助手已安装。"
