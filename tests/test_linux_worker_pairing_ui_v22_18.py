@@ -264,7 +264,7 @@ def test_worker_ui_javascript_has_valid_syntax():
 def test_runtime_marks_worker_release_without_bridge_protocol_bump():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.23"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.24"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert "install_runtime_contract(app)" in entry
     assert "install_linux_worker_pairing_patch(app)" in entry
@@ -273,7 +273,9 @@ def test_runtime_marks_worker_release_without_bridge_protocol_bump():
     assert "install_linux_worker_install_ux_patch(app)" in entry
     assert "install_linux_worker_repair_command_patch(app)" in entry
     assert "install_linux_worker_diagnostics_patch(app)" in entry
+    assert "install_linux_worker_initialize_patch(app)" in entry
     assert entry.index("install_runtime_contract(app)") < entry.index("install_linux_worker_table_stability_patch(app)")
     assert entry.index("install_linux_worker_table_stability_patch(app)") < entry.index("install_linux_worker_install_ux_patch(app)")
     assert entry.index("install_linux_worker_install_ux_patch(app)") < entry.index("install_linux_worker_repair_command_patch(app)")
     assert entry.index("install_linux_worker_repair_command_patch(app)") < entry.index("install_linux_worker_diagnostics_patch(app)")
+    assert entry.index("install_linux_worker_diagnostics_patch(app)") < entry.index("install_linux_worker_initialize_patch(app)")
