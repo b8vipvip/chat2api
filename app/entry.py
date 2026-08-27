@@ -52,6 +52,7 @@ from .runtime_contract import install_runtime_contract
 from .runtime_logs_patch import install_runtime_logs_patch
 from .extension_capacity_control_patch import install_extension_capacity_control_patch
 from .mini_multimodal_quota_patch import install_mini_multimodal_quota_patch
+from .server_update_patch import install_server_update_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -124,3 +125,9 @@ install_linux_worker_table_stability_patch(app)
 install_linux_worker_install_ux_patch(app)
 install_linux_worker_repair_command_patch(app)
 install_linux_worker_diagnostics_patch(app)
+
+# Docker deployments cannot safely update their own host by exposing the Docker
+# socket to the web container. The server update patch writes a bounded request
+# into the persisted data volume; a one-time host systemd.path helper executes
+# the fixed transactional updater outside the container.
+install_server_update_patch(app)
