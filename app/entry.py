@@ -44,6 +44,7 @@ from .linux_worker_table_stability_patch import install_linux_worker_table_stabi
 from .linux_worker_install_ux_patch import install_linux_worker_install_ux_patch
 from .linux_worker_repair_command_patch import install_linux_worker_repair_command_patch
 from .linux_worker_diagnostics_patch import install_linux_worker_diagnostics_patch
+from .linux_worker_initialize_patch import install_linux_worker_initialize_patch
 from .stream_keepalive_patch import install_stream_keepalive_patch
 from .request_stall_patch import install_request_stall_patch
 from .request_recovery_patch import install_request_recovery_patch
@@ -125,6 +126,10 @@ install_linux_worker_table_stability_patch(app)
 install_linux_worker_install_ux_patch(app)
 install_linux_worker_repair_command_patch(app)
 install_linux_worker_diagnostics_patch(app)
+# Initialization is deliberately installed after diagnostics: its bootstrap
+# transformation extends the final helper/sudo rules and its admin button can
+# use the stable diagnostics-tagged Worker rows.
+install_linux_worker_initialize_patch(app)
 
 # Docker deployments cannot safely update their own host by exposing the Docker
 # socket to the web container. The server update patch writes a bounded request

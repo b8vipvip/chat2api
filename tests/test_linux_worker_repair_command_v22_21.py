@@ -52,10 +52,12 @@ def test_admin_asset_keeps_failed_linked_install_command_copyable_with_feedback(
 def test_runtime_and_entry_keep_repair_patch_before_diagnostics_patch():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.23"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.24"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert "from .linux_worker_repair_command_patch import install_linux_worker_repair_command_patch" in entry
     assert "install_linux_worker_repair_command_patch(app)" in entry
     assert "install_linux_worker_diagnostics_patch(app)" in entry
+    assert "install_linux_worker_initialize_patch(app)" in entry
     assert entry.index("install_linux_worker_install_ux_patch(app)") < entry.index("install_linux_worker_repair_command_patch(app)")
     assert entry.index("install_linux_worker_repair_command_patch(app)") < entry.index("install_linux_worker_diagnostics_patch(app)")
+    assert entry.index("install_linux_worker_diagnostics_patch(app)") < entry.index("install_linux_worker_initialize_patch(app)")
