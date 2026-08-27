@@ -48,6 +48,7 @@ assert.ok(contract, "v41 capture contract should be exposed");
 assert.equal(contract.classifyTurn({ user: true, hasTextHost: true, hasFinalActions: true }), "");
 assert.equal(contract.classifyTurn({ hasAssistantRole: true, roleVisible: false, hasTextHost: true }), "role-proxy");
 assert.equal(contract.classifyTurn({ hasAssistantRole: false, hasFinalActions: true, hasTextHost: true }), "final-actions");
+assert.equal(contract.classifyTurn({ hasAssistantRole: true, roleVisible: true, hasFinalActions: true, hasTextHost: true }), "final-actions");
 assert.equal(contract.classifyTurn({ hasAssistantRole: false, hasFinalActions: false, hasTextHost: true }), "");
 '''
     result = subprocess.run(
@@ -64,6 +65,7 @@ def test_response_capture_v41_has_both_recovery_paths() -> None:
     source = (ROOT / "chrome_extension" / "content_response_capture_v41.js").read_text(encoding="utf-8")
     assert "repairInvisibleAssistantRoles" in source
     assert "repairCompletedAssistantTurns" in source
+    assert "completionProxyHost" in source
     assert 'data-message-author-role", "assistant"' in source
     assert "Good response" in source
     assert "Bad response" in source
