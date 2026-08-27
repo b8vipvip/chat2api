@@ -41,10 +41,11 @@ def test_runtime_contract_separates_protocol_from_new_bundle_build():
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.5"' in runtime
     assert '"bundle_version": CHROME_BRIDGE_BUNDLE_VERSION' in runtime
-    assert 'request-hygiene-v42-generation-liveness-v42' in runtime
+    assert 'request-hygiene-v42-persistent-draft-ownership-v43-generation-liveness-v42' in runtime
     assert '"bridge_service_worker_cache_bust": True' in runtime
     assert '"rendered_response_capture_recovery": True' in runtime
     assert '"managed_request_draft_recovery": True' in runtime
+    assert '"persistent_request_draft_ownership": True' in runtime
     assert '"visible_generation_liveness": True' in runtime
     assert '"linux_worker_initialize": True' in runtime
     assert '"linux_worker_routing_toggle": True' in runtime
