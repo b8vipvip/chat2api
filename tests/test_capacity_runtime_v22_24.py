@@ -37,10 +37,11 @@ def test_capacity_controller_vm_contracts_cover_native_and_reporter_paths():
 
 def test_runtime_contract_separates_protocol_from_new_bundle_build():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.23"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.24"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.4"' in runtime
     assert '"bundle_version": CHROME_BRIDGE_BUNDLE_VERSION' in runtime
     assert '"build_revision": "capacity-native-v37-r2-spare-freshness-v39-response-capture-v41"' in runtime
     assert '"bridge_service_worker_cache_bust": True' in runtime
     assert '"rendered_response_capture_recovery": True' in runtime
+    assert '"linux_worker_initialize": True' in runtime
