@@ -19,6 +19,7 @@ scripts/*
 !scripts/bootstrap_linux_worker.sh
 !scripts/linux_worker_agent.py
 !scripts/linux_worker_agent_v43.py
+!scripts/linux_worker_agent_v44.py
 !scripts/linux_worker_proxy.py
 !scripts/linux_worker_remote_login.py
 !scripts/linux_worker_tab_init.py
@@ -27,6 +28,7 @@ scripts/*
 !scripts/linux_extension_autoreload_v43.sh
 !scripts/linux_worker_proxy_apply.sh
 !scripts/linux_worker_initialize.sh
+!scripts/linux_worker_upgrade.sh
 !scripts/linux_worker_chrome_launcher.sh
 !scripts/linux_worker_diagnostics.sh
 tests
