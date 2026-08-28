@@ -115,7 +115,7 @@ def test_linux_worker_disable_is_routing_only_and_reversible():
 def test_worker_toggle_ui_reuses_legacy_button_without_permanent_revoke():
     source = (ROOT / "app" / "admin_linux_worker_enable_v46.js").read_text(encoding="utf-8")
     for token in (
-        'button.textContent = isEnabled ? "禁用" : "启用"',
+        'if (button.textContent !== nextText) button.textContent = nextText;',
         'button[data-revoke]',
         'method: "PUT"',
         '/enabled`,',
@@ -124,6 +124,8 @@ def test_worker_toggle_ui_reuses_legacy_button_without_permanent_revoke():
     ):
         assert token in source
     assert 'method: "DELETE"' not in source
+    assert 'observer.observe(document.documentElement, { childList: true, subtree: true })' not in source
+    assert 'rowsObserver.observe(workerRows, { childList: true, subtree: false })' in source
 
 
 def test_request_hygiene_only_clears_automation_owned_stale_drafts():
