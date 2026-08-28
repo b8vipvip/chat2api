@@ -9,15 +9,15 @@
 <body>
   <main>
     <h1>chat2api</h1>
-    <div id="versionInfo" class="version-info">Chrome Bridge · 读取版本中…</div>
+    <div id="versionInfo" class="version-info">Worker · 读取版本中…</div>
     <div id="status" class="status">读取状态中…</div>
     <div id="loginStatus" class="model-list">ChatGPT：检测登录状态中…</div>
     <button id="openLogin" class="secondary">打开 ChatGPT 登录窗口</button>
     <button id="refreshLogin" class="secondary">重新检测 ChatGPT 登录状态</button>
     <label>服务地址<input id="serverUrl" placeholder="https://chat2api.mv3.cn" autocomplete="off"></label>
-    <label>配对码<input id="pairingCode" type="password" placeholder="CHAT2API_PAIRING_CODE" autocomplete="off"></label>
-    <label>扩展名称<input id="extensionName" placeholder="My Chrome" autocomplete="off"></label>
-    <button id="pair">配对并连接</button>
+    <label>设备码<input id="pairingCode" type="password" placeholder="设备码" autocomplete="off"></label>
+    <label>Worker 名称<input id="extensionName" placeholder="My Worker" autocomplete="off"></label>
+    <button id="pair">使用设备码绑定并连接</button>
     <button id="connect" class="secondary">重新连接</button>
     <hr>
     <div id="binding">尚未绑定 ChatGPT 标签页</div>
@@ -29,7 +29,7 @@
     <div>运行诊断</div>
     <div class="model-list">页面 Smoke Test 只读取 Adapter、Driver、模型/推理控制器、Composer 和最终被动 Probe 状态，不会切换模型或推理强度。</div>
     <button id="pageSmoke" class="secondary">运行页面 Smoke Test（只读）</button>
-    <div class="model-list">运行日志会静默自动保存在扩展的 chrome.storage.local；同 API Key 按调用 Run 聚合，120 秒空闲后封账。下面按钮只用于手动导出查看，不会触发自动下载。</div>
+    <div class="model-list">运行日志会静默自动保存在 Worker 的 chrome.storage.local；同 API Key 按调用 Run 聚合，120 秒空闲后封账。下面按钮只用于手动导出查看，不会触发自动下载。</div>
     <button id="downloadRuntimeLog" class="secondary">下载运行日志汇总</button>
     <button id="clearRuntimeLog" class="secondary">清空运行日志缓存</button>
     <pre id="message"></pre>
@@ -37,5 +37,6 @@
   <script src="popup.js"></script>
   <script src="popup_page_smoke_v22.js"></script>
   <script src="popup_logging.js"></script>
+  <script src="popup_terminology_v47.js"></script>
 </body>
 </html>
