@@ -39,47 +39,47 @@ def test_enable_ui_paint_is_idempotent_under_repeated_observer_callbacks(tmp_pat
     source_path = ROOT / "app" / "admin_linux_worker_enable_v46.js"
     harness = tmp_path / "enable_ui_harness.mjs"
     harness.write_text(
-        f'''import fs from "node:fs";\n'
-const source = fs.readFileSync({str(source_path)!r}, "utf8");\n'
-let textWrites = 0;\n'
-const button = {{\n'
-  dataset: {{revoke:"wrk_test"}},\n'
-  _text: "禁用 Worker",\n'
-  get textContent() {{ return this._text; }},\n'
-  set textContent(value) {{ textWrites += 1; this._text = value; }},\n'
-  title: "",\n'
-  disabled: false,\n'
-  classList: {{toggle() {{}}}},\n'
-}};\n'
-const workerRows = {{}};\n'
-const section = {{classList:{{contains(){{return false;}}}}}};\n'
-let observer = null;\n'
-globalThis.MutationObserver = class {{\n'
-  constructor(callback) {{ this.callback = callback; observer = this; }}\n'
-  observe(target, options) {{ this.target = target; this.options = options; }}\n'
-}};\n'
-globalThis.document = {{\n'
-  addEventListener() {{}},\n'
-  querySelectorAll(selector) {{ return selector === "button[data-revoke]" ? [button] : []; }},\n'
-  querySelector() {{ return null; }},\n'
-  getElementById(id) {{\n'
-    if (id === "linuxWorkerRows") return workerRows;\n'
-    if (id === "view-linux-workers") return section;\n'
-    return null;\n'
-  }},\n'
-}};\n'
-globalThis.addEventListener = () => {{}};\n'
-globalThis.setInterval = () => 0;\n'
-globalThis.setTimeout = () => 0;\n'
-globalThis.fetch = async () => ({{ok:true, json:async()=>({{data:[]}})}});\n'
-(0, eval)(source);\n'
-if (!observer) throw new Error("rows observer was not installed");\n'
-if (observer.target !== workerRows) throw new Error("observer target escaped Worker tbody");\n'
-if (observer.options?.subtree !== false) throw new Error("observer subtree must be false");\n'
-observer.callback();\n'
-const afterFirst = textWrites;\n'
-observer.callback();\n'
-if (textWrites !== afterFirst) throw new Error(`paint rewrote identical text: ${{afterFirst}} -> ${{textWrites}}`);\n'
+        f'''import fs from "node:fs";
+const source = fs.readFileSync({str(source_path)!r}, "utf8");
+let textWrites = 0;
+const button = {{
+  dataset: {{revoke:"wrk_test"}},
+  _text: "禁用 Worker",
+  get textContent() {{ return this._text; }},
+  set textContent(value) {{ textWrites += 1; this._text = value; }},
+  title: "",
+  disabled: false,
+  classList: {{toggle() {{}}}},
+}};
+const workerRows = {{}};
+const section = {{classList:{{contains(){{return false;}}}}}};
+let observer = null;
+globalThis.MutationObserver = class {{
+  constructor(callback) {{ this.callback = callback; observer = this; }}
+  observe(target, options) {{ this.target = target; this.options = options; }}
+}};
+globalThis.document = {{
+  addEventListener() {{}},
+  querySelectorAll(selector) {{ return selector === "button[data-revoke]" ? [button] : []; }},
+  querySelector() {{ return null; }},
+  getElementById(id) {{
+    if (id === "linuxWorkerRows") return workerRows;
+    if (id === "view-linux-workers") return section;
+    return null;
+  }},
+}};
+globalThis.addEventListener = () => {{}};
+globalThis.setInterval = () => 0;
+globalThis.setTimeout = () => 0;
+globalThis.fetch = async () => ({{ok:true, json:async()=>({{data:[]}})}});
+(0, eval)(source);
+if (!observer) throw new Error("rows observer was not installed");
+if (observer.target !== workerRows) throw new Error("observer target escaped Worker tbody");
+if (observer.options?.subtree !== false) throw new Error("observer subtree must be false");
+observer.callback();
+const afterFirst = textWrites;
+observer.callback();
+if (textWrites !== afterFirst) throw new Error(`paint rewrote identical text: ${{afterFirst}} -> ${{textWrites}}`);
 ''',
         encoding="utf-8",
     )
