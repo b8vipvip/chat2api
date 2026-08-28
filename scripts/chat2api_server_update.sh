@@ -21,6 +21,11 @@ ROLLBACK_COMMIT=""
 ROLLBACK_SUCCEEDED="false"
 CODE_SWITCHED="false"
 ENV_BACKUP=""
+COMPOSE_SERVICE="chat2api"
+CONTAINER_STOP_SECONDS="${CHAT2API_UPDATE_CONTAINER_STOP_SECONDS:-20}"
+CONTAINER_STOP_COMMAND_SECONDS="${CHAT2API_UPDATE_CONTAINER_STOP_COMMAND_SECONDS:-35}"
+CONTAINER_REMOVE_COMMAND_SECONDS="${CHAT2API_UPDATE_CONTAINER_REMOVE_COMMAND_SECONDS:-25}"
+COMPOSE_UP_COMMAND_SECONDS="${CHAT2API_UPDATE_COMPOSE_UP_COMMAND_SECONDS:-75}"
 
 if [[ "${EUID}" -ne 0 ]]; then
   echo "chat2api server updater must run as root" >&2
@@ -191,6 +196,56 @@ build_new_image() {
   fi
 }
 
+service_container_ids() {
+  # Query Docker directly instead of asking Compose to inspect/reconcile the
+  # project. This remains usable even when a Compose recreate operation itself
+  # is the component that is wedged.
+  timeout --foreground --signal=TERM --kill-after=5s 15s \
+    docker ps -aq \
+      --filter "label=com.docker.compose.project.working_dir=${APP_DIR}" \
+      --filter "label=com.docker.compose.service=${COMPOSE_SERVICE}" 2>/dev/null || true
+}
+
+replace_chat2api_container() {
+  local phase="${1:-deploy}"
+  local ids=""
+  cd "$APP_DIR"
+
+  ids="$(service_container_ids)"
+  if [[ -n "$ids" ]]; then
+    log "${phase}: stopping existing ${COMPOSE_SERVICE} container(s): $(tr '\n' ' ' <<<"$ids")"
+    if ! timeout --foreground --signal=TERM --kill-after=5s "${CONTAINER_STOP_COMMAND_SECONDS}s" \
+      docker stop --time "$CONTAINER_STOP_SECONDS" $ids; then
+      log "${phase}: graceful stop timed out/failed; forcing old ${COMPOSE_SERVICE} container(s) down"
+      timeout --foreground --signal=KILL 15s docker kill $ids >/dev/null 2>&1 || true
+    fi
+
+    # Never pass -v: /app/data is a host bind mount and update recovery must not
+    # remove any persistent data. Removing only the old service container also
+    # bypasses Compose v5 recreate-state hangs seen on some hosts.
+    if ! timeout --foreground --signal=TERM --kill-after=5s "${CONTAINER_REMOVE_COMMAND_SECONDS}s" \
+      docker rm -f $ids; then
+      log "${phase}: failed to remove old ${COMPOSE_SERVICE} container(s) within bounded timeout"
+      return 1
+    fi
+  fi
+
+  log "${phase}: creating ${COMPOSE_SERVICE} from the already-built image"
+  if timeout --foreground --signal=TERM --kill-after=10s "${COMPOSE_UP_COMMAND_SECONDS}s" \
+    docker compose up -d --no-deps --no-build "$COMPOSE_SERVICE"; then
+    return 0
+  fi
+
+  # A Compose CLI can time out after the engine has already started the new
+  # container. Accept that case only if the actual HTTP service is healthy.
+  log "${phase}: docker compose up did not finish in time; checking service health before failing"
+  if wait_health "$(health_port)" 12; then
+    log "${phase}: service is healthy despite Compose CLI timeout; continuing"
+    return 0
+  fi
+  return 1
+}
+
 rollback() {
   [[ "$CODE_SWITCHED" == "true" ]] || return 0
   [[ -n "$FROM_COMMIT" ]] || return 0
@@ -206,7 +261,7 @@ rollback() {
     (cd "$APP_DIR" && DOCKER_BUILDKIT=1 docker compose build)
     local build_rc=$?
     if (( build_rc == 0 )); then
-      (cd "$APP_DIR" && docker compose up -d --remove-orphans)
+      replace_chat2api_container "rollback"
       local up_rc=$?
       if (( up_rc == 0 )) && wait_health "$(health_port)" 45; then
         ROLLBACK_SUCCEEDED="true"
@@ -254,6 +309,7 @@ write_status "running" "preflight" "8" "正在检查 Git、Docker Compose 与工
 command -v git >/dev/null
 command -v docker >/dev/null
 command -v curl >/dev/null
+command -v timeout >/dev/null
 docker compose version >/dev/null
 
 remote_url="$(git -C "$APP_DIR" remote get-url origin 2>/dev/null || true)"
@@ -320,11 +376,14 @@ else
 fi
 build_new_image
 
-write_status "running" "deploy" "76" "新镜像构建成功，正在切换 chat2api 容器"
-(
-  cd "$APP_DIR"
-  docker compose up -d --remove-orphans
-)
+write_status "running" "deploy" "76" "新镜像构建成功，正在有界停止旧容器并启动新 chat2api 容器"
+if ! replace_chat2api_container "deploy"; then
+  CURRENT_STAGE="deploy"
+  CURRENT_PERCENT="76"
+  CURRENT_MESSAGE="新版本容器切换"
+  log "bounded container replacement failed"
+  exit 7
+fi
 
 port="$(health_port)"
 write_status "running" "health" "88" "正在等待新服务健康检查 127.0.0.1:${port}/version"
