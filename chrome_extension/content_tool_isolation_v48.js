@@ -6,6 +6,7 @@
     version: 48,
     scans: 0,
     blocked: 0,
+    prevented_positive_actions: 0,
     last_category: "",
     last_action: "",
     last_context: "",
@@ -102,6 +103,36 @@
     return { context, buttons, positive, negative, category: "external-account-tool" };
   }
 
+  function integrationRootForAction(node) {
+    if (!(node instanceof Element)) return null;
+    for (const root of [node.closest("[role='dialog']"), node.closest("[aria-modal='true']"), node.closest("article"), node.closest("[data-testid^='conversation-turn']"), node.closest("main")]) {
+      if (!root) continue;
+      const match = classify(root);
+      if (match?.positive?.node === node || (positiveAction.test(labelOf(node)) && integrationContext.test(match?.context || labelOf(root)))) {
+        return {root, match};
+      }
+    }
+    return null;
+  }
+
+  function preventPositiveAction(event) {
+    const target = event.target instanceof Element ? event.target.closest("button,[role='button']") : null;
+    if (!target || !positiveAction.test(labelOf(target))) return;
+    const found = integrationRootForAction(target);
+    if (!found) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation?.();
+    state.prevented_positive_actions += 1;
+    state.blocked += 1;
+    state.last_category = "external-account-tool";
+    state.last_action = `prevented:${labelOf(target)}`;
+    state.last_context = String(found.match?.context || labelOf(found.root)).slice(0, 240);
+    state.last_at_ms = Date.now();
+    report("external-account-tool", state.last_action, state.last_context).catch(() => {});
+    queueMicrotask(() => scan());
+  }
+
   function dismissRoot(root, match) {
     if (handled.has(root)) return false;
     handled.add(root);
@@ -179,6 +210,8 @@
   };
   chrome.runtime.onMessage.addListener(listener);
 
+  document.addEventListener("pointerdown", preventPositiveAction, true);
+  document.addEventListener("click", preventPositiveAction, true);
   const observer = new MutationObserver(() => schedule(30));
   observer.observe(document.documentElement, {childList: true, subtree: true, attributes: true, attributeFilter: ["role", "aria-modal", "data-state", "class", "style"]});
   setInterval(scan, 1000);
