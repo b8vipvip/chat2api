@@ -35,7 +35,19 @@
     if (message?.type !== "chat.request") return baseHandleServerMessage(message);
     state.wrapped_requests += 1;
     state.last_request_id = String(message?.request_id || "");
-    return baseHandleServerMessage(isolatedChatMessage(message));
+    const isolated = isolatedChatMessage(message);
+    try {
+      await trySendSocket({
+        type: "chat.diagnostics",
+        request_id: state.last_request_id,
+        diagnostics: {
+          external_account_tools_disabled: true,
+          tool_isolation: "tool-isolation-v48",
+          tool_policy_injected: true,
+        },
+      });
+    } catch (_) {}
+    return baseHandleServerMessage(isolated);
   };
 
   globalThis.__CHAT2API_EXTERNAL_ACCOUNT_TOOLS_DISABLED__ = Object.freeze({
