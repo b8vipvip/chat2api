@@ -47,6 +47,7 @@ from .linux_worker_diagnostics_patch import install_linux_worker_diagnostics_pat
 from .linux_worker_initialize_patch import install_linux_worker_initialize_patch
 from .linux_worker_upgrade_patch import install_linux_worker_upgrade_patch
 from .linux_worker_enable_patch import install_linux_worker_enable_patch
+from .linux_worker_console_polling_patch import install_linux_worker_console_polling_patch
 from .stream_keepalive_patch import install_stream_keepalive_patch
 from .request_stall_patch import install_request_stall_patch
 from .request_recovery_patch import install_request_recovery_patch
@@ -140,6 +141,10 @@ install_linux_worker_upgrade_patch(app)
 # installed after pairing. Pairing may keep the physical extension transport
 # healthy, while this final boundary decides whether it is eligible for requests.
 install_linux_worker_enable_patch(app)
+# The Worker console polling guard is the final Worker presentation boundary.
+# It serializes list refreshes, suppresses unchanged tbody rewrites, and lets the
+# stable renderer consume the base page's shared snapshot instead of polling twice.
+install_linux_worker_console_polling_patch(app)
 
 # Docker deployments cannot safely update their own host by exposing the Docker
 # socket to the web container. The server update patch writes a bounded request
