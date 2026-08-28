@@ -23,7 +23,7 @@ docker compose version >/dev/null
 
 origin="$(git -C "${APP_DIR}" remote get-url origin 2>/dev/null || true)"
 case "$origin" in
-  https://github.com/b8vipvip/chat2api.git|git@github.com:b8vipvip/chat2api.git) ;;
+  https://github.com/b8vipvip/chat2api.git|git@github.com:b8vipvip/chat2api.git|ssh://git@ssh.github.com:443/b8vipvip/chat2api.git) ;;
   *) echo "origin 不是预期的 chat2api 仓库：${origin}" >&2; exit 3 ;;
 esac
 
@@ -33,8 +33,8 @@ install -d -m 0755 "$DATA_DIR"
 # used chmod 755 here, which made the worktree look dirty and caused the updater
 # itself to fail its destructive-update preflight with exit code 4.
 chmod 0644 "$UPDATER_SCRIPT"
-# Ubuntu + GnuTLS environments occasionally terminate GitHub HTTP/2 sessions
-# early. Keep this repository on HTTP/1.1; the updater also retries every fetch.
+# HTTPS is now the final fallback behind SSH-443 and SSH-22. Keep that fallback
+# on HTTP/1.1 because some Ubuntu/GnuTLS paths terminate GitHub HTTP/2 early.
 git -C "$APP_DIR" config http.version HTTP/1.1
 
 cat > "$SERVICE_UNIT" <<EOF
@@ -126,4 +126,5 @@ echo "监听单元：chat2api-admin-update.path"
 echo "执行单元：chat2api-admin-update.service"
 echo "部署目录：${APP_DIR}"
 echo "当前提交：${current_sha}"
+echo "GitHub 拉取策略：SSH-443 → SSH-22 → HTTPS 自动容灾（均带硬超时）"
 echo "现在可以在 chat2api 控制台 → 版本更新 中直接执行 GitHub main 自动更新。"
