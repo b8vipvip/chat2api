@@ -38,13 +38,14 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
     base_recent = telemetry.recent
     base_query = telemetry.query
     base_get = telemetry.get
-    base_pairing_create = pairings.create
+    base_pairing_create = getattr(pairings, "create", None)
 
-    async def create_device_code(name: str = "Worker"):
-        canonical = _canonical_label(name) or "Worker"
-        return await base_pairing_create(canonical)
+    if callable(base_pairing_create):
+        async def create_device_code(name: str = "Worker"):
+            canonical = _canonical_label(name) or "Worker"
+            return await base_pairing_create(canonical)
 
-    pairings.create = create_device_code
+        pairings.create = create_device_code
 
     def pairing_rows() -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
