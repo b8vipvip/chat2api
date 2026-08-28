@@ -38,6 +38,13 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
     base_recent = telemetry.recent
     base_query = telemetry.query
     base_get = telemetry.get
+    base_pairing_create = pairings.create
+
+    async def create_device_code(name: str = "Worker"):
+        canonical = _canonical_label(name) or "Worker"
+        return await base_pairing_create(canonical)
+
+    pairings.create = create_device_code
 
     def pairing_rows() -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -118,7 +125,7 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
     @app.middleware("http")
     async def inject_request_device_identity(request: Request, call_next: Callable):
         response = await call_next(request)
-        if request.url.path != "/admin" or "text/html" not in response.headers.get("content-type", ""):
+        if request.url.path not in {"/admin", "/developers"} or "text/html" not in response.headers.get("content-type", ""):
             return response
         body = getattr(response, "body", None)
         if body is None:
