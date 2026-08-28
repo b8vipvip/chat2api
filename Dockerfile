@@ -44,4 +44,6 @@ Path('/app/bootstrap/linux-worker-bundle.sha256').write_text(digest + '\n', enco
 PY
 
 EXPOSE 8765
-CMD ["sh", "-c", "uvicorn app.entry:app --host ${CHAT2API_HOST:-0.0.0.0} --port ${CHAT2API_PORT:-8765}"]
+# exec makes uvicorn PID 1 inside the container so Docker SIGTERM reaches the
+# server directly during an update instead of relying on /bin/sh forwarding it.
+CMD ["sh", "-c", "exec uvicorn app.entry:app --host ${CHAT2API_HOST:-0.0.0.0} --port ${CHAT2API_PORT:-8765}"]
