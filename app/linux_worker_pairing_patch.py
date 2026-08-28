@@ -180,18 +180,27 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
         # Extension telemetry and binding-ticket polling are intentionally noisy.
         # Once every durable store already agrees on the same binding, reconciliation
         # must be a read-only no-op instead of rewriting three JSON files per pulse.
-        bridge_pairing_id = str(bridge.get("pairing_id") or "")
         bridge_extension_id = str(bridge.get("extension_id") or bridge.get("client_id") or "")
         if (
             str(configured.get("status") or "") == "bound"
             and str(configured.get("bound_client_id") or configured.get("extension_id") or "") == client_id
-            and bridge_pairing_id == pairing_id
             and bridge_extension_id == client_id
             and pairing.bound_client_id == client_id
             and (not pairing.bound_device_id or pairing.bound_device_id == device_id)
             and client.pairing_id == pairing_id
             and client.connection_enabled is not False
         ):
+            # Bridge telemetry does not have to echo the pairing id. Keep the
+            # presentation cache coherent in memory without another disk write.
+            if str(bridge.get("pairing_id") or "") != pairing_id:
+                with workers._lock:
+                    live = workers.data["workers"].get(worker_id)
+                    if live:
+                        metadata = dict(live.get("metadata") or {})
+                        live_bridge = dict(metadata.get("bridge") or {})
+                        live_bridge["pairing_id"] = pairing_id
+                        metadata["bridge"] = live_bridge
+                        live["metadata"] = metadata
             return {"configured": True, "status": "bound", "pairing_id": pairing_id, "client_id": client_id, "unchanged": True}
 
         logger.info("[linux-worker] ChatGPT login detected worker_id=%s", worker_id)
