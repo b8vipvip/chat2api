@@ -6,6 +6,7 @@
     version: 48,
     request: null,
     timer: null,
+    deltas: 0,
     snapshots: 0,
     completions: 0,
   };
@@ -159,6 +160,33 @@
     } catch (_) { return false; }
   }
 
+  async function emitRecoveredText(ctx, requestId, text) {
+    const previous = ctx.emittedText;
+    if (text === previous) return false;
+    if (text.startsWith(previous)) {
+      const delta = text.slice(previous.length);
+      if (delta) {
+        state.deltas += 1;
+        await emit({
+          type: "chat.delta",
+          request_id: requestId,
+          delta,
+          diagnostics: { response_stream_recovery: "dom-turn-v48" },
+        });
+      }
+    } else {
+      state.snapshots += 1;
+      await emit({
+        type: "chat.snapshot",
+        request_id: requestId,
+        text,
+        diagnostics: { response_stream_recovery: "dom-turn-v48", response_stream_reset: true },
+      });
+    }
+    ctx.emittedText = text;
+    return true;
+  }
+
   async function tick() {
     const active = globalThis.__CHAT2API_REQUEST_CONTENT_V5__?.active;
     const requestId = String(active?.requestId || "");
@@ -178,15 +206,7 @@
       ctx.changedAt = Date.now();
     }
 
-    if (candidate.text !== ctx.emittedText) {
-      ctx.emittedText = candidate.text;
-      state.snapshots += 1;
-      await emit({
-        type: "chat.snapshot",
-        request_id: requestId,
-        text: candidate.text,
-        diagnostics: { response_stream_recovery: "dom-turn-v48" },
-      });
+    if (await emitRecoveredText(ctx, requestId, candidate.text)) {
       if (!ctx.diagnosticSent) {
         ctx.diagnosticSent = true;
         await emit({
