@@ -6,7 +6,6 @@
     version: 48,
     request: null,
     timer: null,
-    deltas: 0,
     snapshots: 0,
     completions: 0,
   };
@@ -160,30 +159,20 @@
     } catch (_) { return false; }
   }
 
-  async function emitRecoveredText(ctx, requestId, text) {
-    const previous = ctx.emittedText;
-    if (text === previous) return false;
-    if (text.startsWith(previous)) {
-      const delta = text.slice(previous.length);
-      if (delta) {
-        state.deltas += 1;
-        await emit({
-          type: "chat.delta",
-          request_id: requestId,
-          delta,
-          diagnostics: { response_stream_recovery: "dom-turn-v48" },
-        });
-      }
-    } else {
-      state.snapshots += 1;
-      await emit({
-        type: "chat.snapshot",
-        request_id: requestId,
-        text,
-        diagnostics: { response_stream_recovery: "dom-turn-v48", response_stream_reset: true },
-      });
-    }
+  async function emitRecoveredSnapshot(ctx, requestId, text) {
+    if (text === ctx.emittedText) return false;
     ctx.emittedText = text;
+    state.snapshots += 1;
+    // The server treats chat.snapshot as an authoritative full-text checkpoint
+    // and, for streaming APIs, forwards only the suffix not already sent. This
+    // deliberately avoids duplicate output when request-v5 and this recovery
+    // overlay both observe the same healthy response.
+    await emit({
+      type: "chat.snapshot",
+      request_id: requestId,
+      text,
+      diagnostics: { response_stream_recovery: "dom-turn-v48" },
+    });
     return true;
   }
 
@@ -206,7 +195,7 @@
       ctx.changedAt = Date.now();
     }
 
-    if (await emitRecoveredText(ctx, requestId, candidate.text)) {
+    if (await emitRecoveredSnapshot(ctx, requestId, candidate.text)) {
       if (!ctx.diagnosticSent) {
         ctx.diagnosticSent = true;
         await emit({
@@ -225,7 +214,7 @@
     const stableMs = Date.now() - ctx.changedAt;
     const stopped = !stopVisible();
     const hasFinal = finalActions(candidate.turn);
-    const completeNow = (stopped && stableMs >= 700) || (hasFinal && stableMs >= 700) || stableMs >= 9000;
+    const completeNow = (hasFinal && stableMs >= 700) || (stopped && stableMs >= 1800) || stableMs >= 9000;
     if (!completeNow) return;
 
     ctx.completed = true;
@@ -236,7 +225,7 @@
       text: candidate.text,
       diagnostics: {
         response_stream_recovery: "dom-turn-v48",
-        response_stream_completion_reason: stopped ? "generation-control-gone" : (hasFinal ? "final-actions-visible" : "stale-generation-control"),
+        response_stream_completion_reason: hasFinal ? "final-actions-visible" : (stopped ? "generation-control-gone" : "stale-generation-control"),
         response_stream_stable_ms: stableMs,
       },
     });
