@@ -5,6 +5,10 @@
   const STORAGE_KEY = "chat2apiWorkerTransportOutboxV47";
   const RETENTION_MS = 15 * 60 * 1000;
   const MAX_EVENTS = 12;
+  const TERMINAL_TYPES = new Set([
+    "chat.completed", "chat.error", "chat.cancelled",
+    "image.completed", "image.error", "image.cancelled",
+  ]);
   const state = {
     outbox: new Map(),
     restoring: true,
@@ -18,7 +22,7 @@
   const recoverableTerminal = payload => {
     const type = String(payload?.type || "");
     const requestId = String(payload?.request_id || "");
-    return Boolean(requestId) && ["chat.completed", "chat.error", "chat.cancelled"].includes(type);
+    return Boolean(requestId) && TERMINAL_TYPES.has(type);
   };
 
   const eventKey = payload => `${String(payload?.request_id || "")}:${String(payload?.type || "")}`;
@@ -91,10 +95,10 @@
     state.flushTimer = setTimeout(() => flush().catch(() => {}), Math.max(0, Number(delay || 0)));
   }
 
-  // All current background modules call this shared global helper.  A terminal
+  // All current background modules call this shared global helper. A terminal
   // event produced while the WebSocket is briefly down is acknowledged locally
   // only after it has been durably queued, then replayed on the replacement
-  // socket.  Non-terminal traffic keeps the original best-effort semantics.
+  // socket. Non-terminal traffic keeps the original best-effort semantics.
   trySendSocket = async function trySendSocketWithWorkerRecovery(payload) {
     const sent = await baseTrySendSocket(payload).catch(() => false);
     if (sent) {
@@ -108,7 +112,7 @@
   };
 
   // A connected socket sends status/heartbeat traffic regularly; the wrapped
-  // trySendSocket above schedules a flush on the first successful send.  This
+  // trySendSocket above schedules a flush on the first successful send. This
   // slow fallback also covers unusual reconnects with no immediate status event.
   setInterval(() => {
     if (state.outbox.size && socketReady()) scheduleFlush(0);
