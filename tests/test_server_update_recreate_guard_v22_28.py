@@ -15,7 +15,7 @@ def test_updater_bypasses_unbounded_compose_recreate_path():
         "service_container_ids()",
         'label=com.docker.compose.project.working_dir=${APP_DIR}',
         'label=com.docker.compose.service=${COMPOSE_SERVICE}',
-        'docker stop --time "$CONTAINER_STOP_SECONDS"',
+        'docker stop --timeout "$CONTAINER_STOP_SECONDS"',
         "graceful stop timed out/failed",
         "docker kill $ids",
         "docker rm -f $ids",
