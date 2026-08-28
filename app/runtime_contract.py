@@ -15,7 +15,7 @@ from .live_voice_patch import LIVE_PROTOCOL_VERSION
 # collapse them into a single version number: package releases, the layered
 # server runtime/console, the Chrome Bridge wire protocol, the shipped unpacked
 # extension bundle, and the realtime wire protocol can evolve independently.
-SERVER_RUNTIME_VERSION = "0.22.27"
+SERVER_RUNTIME_VERSION = "0.22.26"
 # v0.22.24 remains the compatibility baseline for Workers that first gained the
 # bounded initialize/recovery command. Later runtimes add online upgrade and
 # routing-only enable/disable without changing that bootstrap compatibility floor.
