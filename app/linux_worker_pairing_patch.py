@@ -14,7 +14,7 @@ from .admin_auth import SESSION_COOKIE
 from .timezone_utils import beijing_now_iso
 
 
-PATCH_VERSION = "0.22.18"
+PATCH_VERSION = "0.22.27"
 PAIRING_ASSET = "/assets/chat2api-linux-worker-pairing-v22-18.js"
 MAX_PAIRING_CODE_LENGTH = 512
 MAX_PROXY_NAME_LENGTH = 80
@@ -57,6 +57,7 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
     workers = app.state.linux_workers
     registry = app.state.registry
     pairings = app.state.pairings
+    reconcile_tasks: dict[str, asyncio.Task[Any]] = {}
     app.state.linux_worker_pairing_patch_installed = True
 
     def admin(request: Request) -> None:
@@ -84,21 +85,30 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
         return None
 
     def write_pairing_state(worker_id: str, values: dict[str, Any] | None) -> dict[str, Any]:
+        """Persist pairing state only when its semantic value actually changes."""
         with workers._lock:
             worker = workers.data["workers"].get(worker_id)
             if not worker:
                 raise KeyError(worker_id)
             metadata = dict(worker.get("metadata") or {})
             if values is None:
+                if "worker_pairing" not in metadata and worker.get("worker_pairing_state") == "pending":
+                    return workers.public(worker)
                 metadata.pop("worker_pairing", None)
                 worker["worker_pairing_state"] = "pending"
             else:
                 current = dict(metadata.get("worker_pairing") or {}) if isinstance(metadata.get("worker_pairing"), dict) else {}
+                state = str(values.get("status", current.get("status") or "pending"))
+                state = state if state in PAIRING_STATES else "failed"
+                if (
+                    all(current.get(key) == value for key, value in values.items())
+                    and worker.get("worker_pairing_state") == state
+                ):
+                    return workers.public(worker)
                 current.update(values)
                 current["updated_at"] = beijing_now_iso()
                 metadata["worker_pairing"] = current
-                state = str(current.get("status") or "pending")
-                worker["worker_pairing_state"] = state if state in PAIRING_STATES else "failed"
+                worker["worker_pairing_state"] = state
             worker["metadata"] = metadata
             workers._save()
             return workers.public(worker)
@@ -144,15 +154,11 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
             write_pairing_state(worker_id, {"status": "pending", "last_error": ""})
             return {"configured": True, "status": "pending", "pairing_id": pairing_id}
 
-        logger.info("[linux-worker] ChatGPT login detected worker_id=%s", worker_id)
-
         client_id = str(worker.get("extension_client_id") or "")
         device_id = str(worker.get("extension_device_id") or "")
         if not client_id or len(device_id) < 8:
             write_pairing_state(worker_id, {"status": "detecting_extension", "last_error": ""})
             return {"configured": True, "status": "detecting_extension", "pairing_id": pairing_id}
-
-        logger.info("[linux-worker] extension detected worker_id=%s extension_id=%s", worker_id, client_id)
 
         await pairings.ensure_loaded()
         pairing = pairings.get(pairing_id)
@@ -171,6 +177,34 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
             write_pairing_state(worker_id, {"status": "failed", "last_error": "Worker 与扩展设备标识不一致"})
             return {"configured": True, "status": "failed", "error": "extension_device_mismatch"}
 
+        # Extension telemetry and binding-ticket polling are intentionally noisy.
+        # Once every durable store already agrees on the same binding, reconciliation
+        # must be a read-only no-op instead of rewriting three JSON files per pulse.
+        bridge_extension_id = str(bridge.get("extension_id") or bridge.get("client_id") or "")
+        if (
+            str(configured.get("status") or "") == "bound"
+            and str(configured.get("bound_client_id") or configured.get("extension_id") or "") == client_id
+            and bridge_extension_id == client_id
+            and pairing.bound_client_id == client_id
+            and (not pairing.bound_device_id or pairing.bound_device_id == device_id)
+            and client.pairing_id == pairing_id
+            and client.connection_enabled is not False
+        ):
+            # Bridge telemetry does not have to echo the pairing id. Keep the
+            # presentation cache coherent in memory without another disk write.
+            if str(bridge.get("pairing_id") or "") != pairing_id:
+                with workers._lock:
+                    live = workers.data["workers"].get(worker_id)
+                    if live:
+                        metadata = dict(live.get("metadata") or {})
+                        live_bridge = dict(metadata.get("bridge") or {})
+                        live_bridge["pairing_id"] = pairing_id
+                        metadata["bridge"] = live_bridge
+                        live["metadata"] = metadata
+            return {"configured": True, "status": "bound", "pairing_id": pairing_id, "client_id": client_id, "unchanged": True}
+
+        logger.info("[linux-worker] ChatGPT login detected worker_id=%s", worker_id)
+        logger.info("[linux-worker] extension detected worker_id=%s extension_id=%s", worker_id, client_id)
         write_pairing_state(worker_id, {"status": "binding", "last_error": ""})
         logger.info("[linux-worker] pairing matched worker_id=%s pairing_id=%s", worker_id, pairing_id)
 
@@ -228,6 +262,31 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
         logger.info("[linux-worker] binding completed worker_id=%s extension_id=%s", worker_id, client_id)
         return {"configured": True, "status": "bound", "pairing_id": pairing_id, "client_id": client_id}
 
+    def schedule_reconcile(worker_id: str) -> asyncio.Task[Any] | None:
+        """Keep at most one reconciliation task alive for each Worker."""
+        current = reconcile_tasks.get(worker_id)
+        if current is not None and not current.done():
+            return current
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return None
+        task = loop.create_task(reconcile_pairing(worker_id))
+        reconcile_tasks[worker_id] = task
+
+        def done(completed: asyncio.Task[Any]) -> None:
+            if reconcile_tasks.get(worker_id) is completed:
+                reconcile_tasks.pop(worker_id, None)
+            try:
+                completed.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.exception("[linux-worker] pairing reconcile failed worker_id=%s", worker_id)
+
+        task.add_done_callback(done)
+        return task
+
     # The Bridge binding patch calls this method whenever authoritative extension
     # telemetry changes. Wrapping it here makes a saved pairing code bind as soon
     # as the extension reports ChatGPT ready, while the Agent's regular binding
@@ -242,10 +301,7 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
                 str(bridge.get("login_state") or "").lower() == "ready" and bridge.get("composer_ready") is True
             )
             if login_ready and bridge.get("extension_id") and _pairing_meta(result).get("pairing_id"):
-                try:
-                    asyncio.get_running_loop().create_task(reconcile_pairing(worker_id))
-                except RuntimeError:
-                    pass
+                schedule_reconcile(worker_id)
             return result
 
         workers.record_extension_status = record_extension_status_with_pairing
@@ -342,10 +398,7 @@ def install_linux_worker_pairing_patch(app: FastAPI) -> FastAPI:
             worker_id = str(request.headers.get("x-worker-id") or "")
             worker_token = str(request.headers.get("x-worker-token") or "")
             if worker_id and worker_token and workers.authenticate(worker_id, worker_token):
-                try:
-                    asyncio.get_running_loop().create_task(reconcile_pairing(worker_id))
-                except RuntimeError:
-                    pass
+                schedule_reconcile(worker_id)
 
         if path == "/admin" and "text/html" in response.headers.get("content-type", ""):
             raw = await _response_bytes(response)

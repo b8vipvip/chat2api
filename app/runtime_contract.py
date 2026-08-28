@@ -24,7 +24,7 @@ CHROME_BRIDGE_VERSION = "0.8.1"
 CHROME_BRIDGE_BUNDLE_VERSION = "0.8.5"
 PRODUCTION_ENTRYPOINT = "app.entry:app"
 VERSION_CONTRACT_VERSION = 1
-RUNTIME_FEATURE_REVISION = "capacity-native-v37-bundle-085-runtime-logs-v1-playground-lifecycle-v1-spare-freshness-v39-response-capture-v41-request-hygiene-v42-persistent-draft-ownership-v43-generation-liveness-v42-worker-initialize-v43-worker-online-upgrade-v44-worker-routing-toggle-v46"
+RUNTIME_FEATURE_REVISION = "capacity-native-v37-bundle-085-runtime-logs-v1-playground-lifecycle-v1-spare-freshness-v39-response-capture-v41-request-hygiene-v42-persistent-draft-ownership-v43-generation-liveness-v42-worker-initialize-v43-worker-online-upgrade-v44-worker-routing-toggle-v46-worker-console-freeze-v22-27"
 ADMIN_VERSION_ASSET = "/assets/chat2api-runtime-version.js"
 ADMIN_EXTENSION_COLUMNS_ASSET = "/assets/chat2api-extension-columns.js"
 ADMIN_LINUX_WORKERS_ASSET = "/assets/chat2api-linux-workers.js"
@@ -73,6 +73,7 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
             "linux_worker_online_upgrade": True,
             "linux_worker_upgrade_live_progress": True,
             "linux_worker_routing_toggle": True,
+            "linux_worker_console_freeze_guard": True,
         },
         "protocols": {
             "realtime_voice": LIVE_PROTOCOL_VERSION,

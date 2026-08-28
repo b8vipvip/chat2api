@@ -9,8 +9,9 @@ from fastapi.responses import Response
 from .admin_auth import SESSION_COOKIE
 
 
-PATCH_VERSION = "0.22.19"
+PATCH_VERSION = "0.22.27"
 ASSET = "/assets/chat2api-linux-worker-stable-table-v22-19.js"
+POLL_GUARD_ASSET = "/assets/chat2api-linux-worker-poll-guard-v22-27.js"
 
 
 async def _response_bytes(response: Response) -> bytes:
@@ -39,6 +40,11 @@ def install_linux_worker_table_stability_patch(app: FastAPI) -> FastAPI:
     cells caused the table width to jump. This patch leaves the source DOM at 12
     cells, hides the two retired columns with CSS, and paints the requested 10
     operational columns synchronously from cached backend data after each refresh.
+
+    The base table and the stable-table layer both refresh the same backend list.
+    v0.22.27 installs a narrow fetch guard for that endpoint so concurrent polls
+    are coalesced, recent successful responses are briefly reused, and a stalled
+    request is aborted instead of accumulating an unbounded browser request queue.
     """
 
     if getattr(app.state, "linux_worker_table_stability_patch_installed", False):
@@ -137,6 +143,15 @@ def install_linux_worker_table_stability_patch(app: FastAPI) -> FastAPI:
             headers={"Cache-Control": "no-store"},
         )
 
+    @app.get(POLL_GUARD_ASSET, include_in_schema=False)
+    async def linux_worker_poll_guard_asset() -> Response:
+        path = Path(__file__).with_name("admin_linux_worker_poll_guard.js")
+        return Response(
+            path.read_text(encoding="utf-8"),
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.middleware("http")
     async def linux_worker_stable_table_ui(request: Request, call_next):
         response = await call_next(request)
@@ -153,6 +168,9 @@ def install_linux_worker_table_stability_patch(app: FastAPI) -> FastAPI:
         )
         if blocker not in text:
             text = text.replace("</head>", blocker + "</head>")
+        poll_guard_marker = f'<script src="{POLL_GUARD_ASSET}"></script>'
+        if poll_guard_marker not in text:
+            text = text.replace("</body>", poll_guard_marker + "</body>")
         marker = f'<script src="{ASSET}"></script>'
         if marker not in text:
             text = text.replace("</body>", marker + "</body>")
