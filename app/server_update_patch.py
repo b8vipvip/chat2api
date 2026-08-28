@@ -17,6 +17,7 @@ from .runtime_contract import CHROME_BRIDGE_BUNDLE_VERSION, CHROME_BRIDGE_VERSIO
 
 
 ASSET_PATH = "/assets/chat2api-server-update.js"
+FETCH_GUARD_ASSET_PATH = "/assets/chat2api-server-update-fetch-guard.js"
 GITHUB_REPOSITORY = "b8vipvip/chat2api"
 GITHUB_MAIN_API = f"https://api.github.com/repos/{GITHUB_REPOSITORY}/commits/main"
 GITHUB_SMART_REFS = f"https://github.com/{GITHUB_REPOSITORY}.git/info/refs?service=git-upload-pack"
@@ -293,6 +294,11 @@ def install_server_update_patch(app: FastAPI) -> FastAPI:
             status_code=202,
         )
 
+    @app.get(FETCH_GUARD_ASSET_PATH, include_in_schema=False)
+    async def admin_server_update_fetch_guard_js() -> Response:
+        source = Path(__file__).with_name("admin_server_update_fetch_guard.js").read_text(encoding="utf-8")
+        return Response(source, media_type="application/javascript", headers={"Cache-Control": "no-store"})
+
     @app.get(ASSET_PATH, include_in_schema=False)
     async def admin_server_update_js() -> Response:
         source = Path(__file__).with_name("admin_server_update.js").read_text(encoding="utf-8")
@@ -305,9 +311,12 @@ def install_server_update_patch(app: FastAPI) -> FastAPI:
             return response
         raw = await _response_bytes(response)
         text = raw.decode("utf-8", errors="replace")
+        guard = f'<script src="{FETCH_GUARD_ASSET_PATH}"></script>'
         marker = f'<script src="{ASSET_PATH}"></script>'
         if marker not in text:
-            text = text.replace("</body>", marker + "</body>")
+            text = text.replace("</body>", guard + marker + "</body>")
+        elif guard not in text:
+            text = text.replace(marker, guard + marker)
         headers = {
             key: value
             for key, value in response.headers.items()
