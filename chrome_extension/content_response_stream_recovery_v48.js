@@ -93,16 +93,24 @@
 
   function captureBaseline(active) {
     const all = turns();
-    const assistant = all.filter(isAssistantTurn);
-    const user = all.filter(isUserTurn);
     const baseline = new Map();
-    assistant.forEach((turn, index) => baseline.set(signature(turn, index), turnText(turn)));
+    let assistantCount = 0;
+    let userCount = 0;
+    all.forEach((turn, index) => {
+      if (isUserTurn(turn)) userCount += 1;
+      if (!isAssistantTurn(turn)) return;
+      assistantCount += 1;
+      baseline.set(signature(turn, index), turnText(turn));
+    });
+    const controllerCount = Number(active?.baselineCount || 0);
     return {
       requestId: String(active.requestId || ""),
       startedAt: Date.now(),
-      baselineAssistantCount: assistant.length,
-      baselineUserCount: user.length,
+      baselineAssistantCount: Math.max(assistantCount, controllerCount),
+      baselineUserCount: userCount,
       baseline,
+      controllerBaselineIds: active?.baselineIds instanceof Set ? new Set(active.baselineIds) : new Set(),
+      controllerBaselineIdentity: String(active?.baselineIdentity || ""),
       lastText: "",
       lastSignature: "",
       changedAt: 0,
@@ -136,8 +144,11 @@
     const baselineText = ctx.baseline.get(newest.sig);
     const countAdvanced = assistant.length > ctx.baselineAssistantCount;
     const identityAdvanced = !ctx.baseline.has(newest.sig);
+    const controllerIdentityAdvanced = Boolean(
+      newest.sig && ctx.controllerBaselineIds.size && !ctx.controllerBaselineIds.has(newest.sig)
+    );
     const textChanged = baselineText !== undefined && newest.text !== baselineText;
-    if (countAdvanced || identityAdvanced || textChanged) return newest;
+    if (countAdvanced || identityAdvanced || controllerIdentityAdvanced || textChanged) return newest;
     return null;
   }
 
