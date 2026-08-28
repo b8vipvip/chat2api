@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
+
+from .admin_auth import SESSION_COOKIE
 
 
 PATCH_VERSION = "0.22.31"
 BASE_ASSET = "/assets/chat2api-linux-workers.js"
 STABLE_ASSET = "/assets/chat2api-linux-worker-stable-table-v22-19.js"
+SNAPSHOT_ENDPOINT = "/api/admin/linux-worker-console-snapshot"
 
 
 async def _response_bytes(response: Response) -> bytes:
@@ -34,6 +38,47 @@ def _patch_base_asset(text: str) -> str:
     replacement = r'''  let latestRows = [];
   let loadInFlight = null;
   let lastTableHtml = "";
+  let lastWorkerRowsSource = "primary";
+
+  const xhrJson = (path, timeoutMs) => new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", path, true);
+    xhr.withCredentials = true;
+    xhr.timeout = timeoutMs;
+    xhr.setRequestHeader("Accept", "application/json");
+    const fail = message => reject(new Error(message));
+    xhr.onload = () => {
+      let payload = {};
+      try { payload = xhr.responseText ? JSON.parse(xhr.responseText) : {}; }
+      catch (_) { fail(`Worker 状态响应无法解析（HTTP ${xhr.status || 0}）`); return; }
+      if (xhr.status < 200 || xhr.status >= 300) {
+        fail(typeof payload.detail === "string" ? payload.detail : `HTTP ${xhr.status}`);
+        return;
+      }
+      resolve(payload);
+    };
+    xhr.onerror = () => fail("Worker 状态连接失败");
+    xhr.onabort = () => fail("Worker 状态请求已中止");
+    xhr.ontimeout = () => fail(`Worker 状态请求超过 ${Math.round(timeoutMs / 1000)} 秒`);
+    xhr.send();
+  });
+
+  const requestWorkerRows = async () => {
+    try {
+      const payload = await xhrJson("/api/admin/linux-worker-installations", 4500);
+      lastWorkerRowsSource = "primary";
+      return payload;
+    } catch (primaryError) {
+      try {
+        const payload = await xhrJson("/api/admin/linux-worker-console-snapshot", 2500);
+        lastWorkerRowsSource = "snapshot";
+        payload.console_fallback_reason = primaryError.message;
+        return payload;
+      } catch (fallbackError) {
+        throw new Error(`${primaryError.message}；备用状态接口失败：${fallbackError.message}`);
+      }
+    }
+  };
 
   const workerHeartbeatAge = row => {
     const value = Date.parse(String(row?.last_seen_at || ""));
@@ -53,10 +98,11 @@ def _patch_base_asset(text: str) -> str:
       } else {
         const latest = workers.map(workerHeartbeatAge).filter(value => value !== null).sort((a,b) => a-b)[0];
         const latestText = Number.isFinite(latest) ? (latest < 60000 ? `${Math.max(0, Math.round(latest / 1000))} 秒前` : `${Math.round(latest / 60000)} 分钟前`) : "无心跳";
-        summary.textContent = `Worker：${workers.length} · 在线：${online} · 离线：${workers.length - online} · 最近心跳：${latestText}`;
+        const sourceText = lastWorkerRowsSource === "snapshot" ? " · 列表接口异常，已切换备用状态" : "";
+        summary.textContent = `Worker：${workers.length} · 在线：${online} · 离线：${workers.length - online} · 最近心跳：${latestText}${sourceText}`;
       }
     }
-    globalThis.dispatchEvent(new CustomEvent("chat2api:linux-worker-rows", {detail:{rows:latestRows}}));
+    globalThis.dispatchEvent(new CustomEvent("chat2api:linux-worker-rows", {detail:{rows:latestRows,source:lastWorkerRowsSource}}));
   };
   const renderRows = () => {
     const html = latestRows.map(row => `<tr><td>${esc(row.name)}</td><td>${esc(installLabel(row))}${row.record_type === "installation" ? `<div style="font-size:11px;color:#94a3b8">命令：${row.install_enabled ? "启用" : "停用"}</div>` : ""}</td><td>${progressHtml(row)}</td><td>${commandHtml(row)}</td><td>${esc(row.os_version || row.hostname || "-")}</td><td>${esc(networkLabel(row))}</td><td>${esc(proxyLabel(row))}</td><td>${esc(chatgptLabel(row))}</td><td>${esc(row.chrome_bridge_version || "-")}</td><td>${esc(reserveLabel(row))}</td><td>${esc(row.install_updated_at || row.last_seen_at || row.created_at || "-")}</td><td>${actionsHtml(row)}</td></tr>`).join("") || '<tr><td colspan="12">暂无 Worker</td></tr>';
@@ -67,12 +113,14 @@ def _patch_base_asset(text: str) -> str:
   const load = async () => {
     if (loadInFlight) return loadInFlight;
     loadInFlight = (async () => {
+      const summary = document.getElementById("linuxWorkerLiveSummary");
       try {
-        const payload = await request("/api/admin/linux-worker-installations");
+        const payload = await requestWorkerRows();
         latestRows = Array.isArray(payload.data) ? payload.data : [];
         publishRows();
         renderRows();
       } catch (error) {
+        if (summary) summary.textContent = `Worker 状态读取失败：${error.message}`;
         const html = `<tr><td colspan="12">${esc(error.message)}</td></tr>`;
         if (html !== lastTableHtml) {
           lastTableHtml = html;
@@ -120,13 +168,8 @@ def _patch_stable_asset(text: str) -> str:
         const sharedRefresh = globalThis.__CHAT2API_LINUX_WORKER_REFRESH__;
         if (typeof sharedRefresh === "function") await sharedRefresh();
         const sharedRows = globalThis.__CHAT2API_LINUX_WORKER_ROWS__;
-        if (Array.isArray(sharedRows)) {
-          rows = sharedRows;
-          paint();
-          return;
-        }
-        const payload = await request("/api/admin/linux-worker-installations");
-        rows = Array.isArray(payload.data) ? payload.data : [];
+        if (!Array.isArray(sharedRows)) return;
+        rows = sharedRows;
         paint();
       } catch (_) {
       } finally {
@@ -154,10 +197,41 @@ def _patch_stable_asset(text: str) -> str:
     return text.replace(old, new, 1)
 
 
+def _fallback_rows(app: FastAPI) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    workers = getattr(app.state, "linux_workers", None)
+    if workers is None:
+        return rows
+    for worker in workers.list_public():
+        rows.append({
+            **worker,
+            "record_type": "worker",
+            "install_state": "legacy",
+            "install_enabled": False,
+        })
+    return rows
+
+
 def install_linux_worker_console_polling_patch(app: FastAPI) -> FastAPI:
     if getattr(app.state, "linux_worker_console_polling_patch_installed", False):
         return app
     app.state.linux_worker_console_polling_patch_installed = True
+
+    def admin(request: Request) -> None:
+        sessions = getattr(app.state, "admin_sessions", None)
+        if not sessions or not sessions.authenticate(request.cookies.get(SESSION_COOKIE)):
+            raise HTTPException(401, "Administrator session required")
+
+    @app.get(SNAPSHOT_ENDPOINT)
+    async def linux_worker_console_snapshot(request: Request) -> dict[str, Any]:
+        admin(request)
+        rows = _fallback_rows(app)
+        return {
+            "object": "chat2api.linux-worker-console-snapshot",
+            "version": PATCH_VERSION,
+            "data": rows,
+            "row_count": len(rows),
+        }
 
     @app.middleware("http")
     async def linux_worker_console_polling(request: Request, call_next):
