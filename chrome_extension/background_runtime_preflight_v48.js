@@ -38,6 +38,16 @@
     }
   }
 
+  async function waitForContract(tabId, attempts = 12, delayMs = 100) {
+    let last = null;
+    for (let index = 0; index < attempts; index += 1) {
+      last = await contract(tabId);
+      if (last?.ok && String(last?.marker?.bundle || "") === REQUIRED_BUNDLE) return last;
+      if (index + 1 < attempts) await sleep(delayMs);
+    }
+    return last;
+  }
+
   async function waitForComplete(tabId, timeoutMs = 20000) {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
@@ -54,7 +64,7 @@
     const started = Date.now();
     await baseEnsureContent(tabId);
     try { await injectOverlays(tabId); } catch (_) {}
-    let result = await contract(tabId);
+    let result = await waitForContract(tabId, 8, 80);
     let reloaded = false;
 
     // A dynamic executeScript can refresh overlay code, but it cannot prove that
@@ -69,7 +79,7 @@
       await sleep(250);
       await baseEnsureContent(tabId);
       try { await injectOverlays(tabId); } catch (_) {}
-      result = await contract(tabId);
+      result = await waitForContract(tabId, 16, 100);
     }
 
     if (!result?.ok || String(result?.marker?.bundle || "") !== REQUIRED_BUNDLE) {
