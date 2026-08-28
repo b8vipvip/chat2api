@@ -4,12 +4,15 @@ set -Eeuo pipefail
 APP_DIR="${APP_DIR:-/opt/chat2api}"
 BRANCH="${BRANCH:-main}"
 EXPECTED_REPO="${EXPECTED_REPO:-https://github.com/b8vipvip/chat2api.git}"
+GITHUB_HTTPS_URL="https://github.com/b8vipvip/chat2api.git"
+GITHUB_SSH_URL="git@github.com:b8vipvip/chat2api.git"
 DATA_DIR="${APP_DIR}/data"
 REQUEST_FILE="${DATA_DIR}/admin-update-request.json"
 STATUS_FILE="${DATA_DIR}/admin-update-status.json"
 LOG_FILE="${DATA_DIR}/admin-update.log"
 DEPLOYMENT_FILE="${DATA_DIR}/deployment.json"
 LOCK_FILE="/run/lock/chat2api-admin-update.lock"
+GITHUB_KNOWN_HOSTS_FILE="/run/chat2api-github-known-hosts"
 CURRENT_STAGE="starting"
 CURRENT_PERCENT="2"
 CURRENT_MESSAGE="正在启动更新任务"
@@ -21,7 +24,14 @@ ROLLBACK_COMMIT=""
 ROLLBACK_SUCCEEDED="false"
 CODE_SWITCHED="false"
 ENV_BACKUP=""
+FETCH_TRANSPORT=""
+FETCH_ELAPSED_MS=""
+FETCH_ATTEMPTS="0"
 COMPOSE_SERVICE="chat2api"
+GITHUB_SSH_CONNECT_SECONDS="${CHAT2API_UPDATE_GITHUB_SSH_CONNECT_SECONDS:-8}"
+GITHUB_SSH_FETCH_SECONDS="${CHAT2API_UPDATE_GITHUB_SSH_FETCH_SECONDS:-25}"
+GITHUB_HTTPS_FETCH_SECONDS="${CHAT2API_UPDATE_GITHUB_HTTPS_FETCH_SECONDS:-35}"
+GITHUB_HTTPS_LOW_SPEED_SECONDS="${CHAT2API_UPDATE_GITHUB_HTTPS_LOW_SPEED_SECONDS:-12}"
 CONTAINER_STOP_SECONDS="${CHAT2API_UPDATE_CONTAINER_STOP_SECONDS:-20}"
 CONTAINER_STOP_COMMAND_SECONDS="${CHAT2API_UPDATE_CONTAINER_STOP_COMMAND_SECONDS:-35}"
 CONTAINER_REMOVE_COMMAND_SECONDS="${CHAT2API_UPDATE_CONTAINER_REMOVE_COMMAND_SECONDS:-25}"
@@ -73,7 +83,7 @@ write_status() {
   CURRENT_STAGE="$stage"
   CURRENT_PERCENT="$percent"
   CURRENT_MESSAGE="$message"
-  python3 - "$STATUS_FILE" "$status" "$stage" "$percent" "$message" "$REQUEST_ID" "$FROM_COMMIT" "$TARGET_COMMIT" "$ROLLBACK_COMMIT" "$ROLLBACK_SUCCEEDED" <<'PY'
+  python3 - "$STATUS_FILE" "$status" "$stage" "$percent" "$message" "$REQUEST_ID" "$FROM_COMMIT" "$TARGET_COMMIT" "$ROLLBACK_COMMIT" "$ROLLBACK_SUCCEEDED" "$FETCH_TRANSPORT" "$FETCH_ELAPSED_MS" "$FETCH_ATTEMPTS" <<'PY'
 from __future__ import annotations
 import json, os, sys, tempfile
 from datetime import datetime, timezone
@@ -82,6 +92,7 @@ from pathlib import Path
 path = Path(sys.argv[1])
 status, stage, percent, message = sys.argv[2:6]
 request_id, from_commit, target_commit, rollback_commit, rollback_succeeded = sys.argv[6:11]
+fetch_transport, fetch_elapsed_ms, fetch_attempts = sys.argv[11:14]
 now = datetime.now(timezone.utc).isoformat()
 try:
     old = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
@@ -104,6 +115,9 @@ payload = {
     "deployed_commit": target_commit if status == "succeeded" else "",
     "rollback_commit": rollback_commit,
     "rollback_succeeded": rollback_succeeded.lower() == "true",
+    "fetch_transport": fetch_transport or str(old.get("fetch_transport") or ""),
+    "fetch_elapsed_ms": int(fetch_elapsed_ms) if fetch_elapsed_ms.isdigit() else int(old.get("fetch_elapsed_ms") or 0),
+    "fetch_attempts": int(fetch_attempts) if fetch_attempts.isdigit() else int(old.get("fetch_attempts") or 0),
 }
 path.parent.mkdir(parents=True, exist_ok=True)
 fd, tmp = tempfile.mkstemp(prefix=".admin-update-status.", dir=str(path.parent), text=True)
@@ -152,14 +166,82 @@ wait_health() {
   return 1
 }
 
+prepare_github_known_hosts() {
+  # Pin GitHub's published Ed25519 host key instead of accepting an unknown
+  # host interactively. The same published fingerprint is used by GitHub's
+  # ssh.github.com endpoint on port 443.
+  cat >"$GITHUB_KNOWN_HOSTS_FILE" <<'EOF'
+github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+ssh.github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl
+EOF
+  chmod 600 "$GITHUB_KNOWN_HOSTS_FILE"
+}
+
+fetch_refspec() {
+  printf '+refs/heads/%s:refs/remotes/origin/%s' "$BRANCH" "$BRANCH"
+}
+
+run_fetch_transport() {
+  local transport="$1"
+  local start_ms end_ms elapsed_ms rc=0
+  local refspec
+  refspec="$(fetch_refspec)"
+  FETCH_ATTEMPTS="$((FETCH_ATTEMPTS + 1))"
+  start_ms="$(date +%s%3N)"
+  log "git fetch attempt ${FETCH_ATTEMPTS} transport=${transport}"
+
+  case "$transport" in
+    ssh-443)
+      GIT_TERMINAL_PROMPT=0 \
+      GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=${GITHUB_SSH_CONNECT_SECONDS} -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=1 -o HostName=ssh.github.com -o Port=443 -o HostKeyAlias=ssh.github.com -o UserKnownHostsFile=${GITHUB_KNOWN_HOSTS_FILE} -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o HostKeyAlgorithms=ssh-ed25519" \
+      timeout --signal=TERM --kill-after=5s "${GITHUB_SSH_FETCH_SECONDS}s" \
+        git -C "$APP_DIR" fetch --prune "$GITHUB_SSH_URL" "$refspec" || rc=$?
+      ;;
+    ssh-22)
+      GIT_TERMINAL_PROMPT=0 \
+      GIT_SSH_COMMAND="ssh -o BatchMode=yes -o ConnectTimeout=${GITHUB_SSH_CONNECT_SECONDS} -o ConnectionAttempts=1 -o ServerAliveInterval=5 -o ServerAliveCountMax=1 -o HostKeyAlias=github.com -o UserKnownHostsFile=${GITHUB_KNOWN_HOSTS_FILE} -o GlobalKnownHostsFile=/dev/null -o StrictHostKeyChecking=yes -o HostKeyAlgorithms=ssh-ed25519" \
+      timeout --signal=TERM --kill-after=5s "${GITHUB_SSH_FETCH_SECONDS}s" \
+        git -C "$APP_DIR" fetch --prune "$GITHUB_SSH_URL" "$refspec" || rc=$?
+      ;;
+    https)
+      GIT_TERMINAL_PROMPT=0 \
+      timeout --signal=TERM --kill-after=5s "${GITHUB_HTTPS_FETCH_SECONDS}s" \
+        git -c http.version=HTTP/1.1 \
+            -c http.lowSpeedLimit=1024 \
+            -c "http.lowSpeedTime=${GITHUB_HTTPS_LOW_SPEED_SECONDS}" \
+            -C "$APP_DIR" fetch --prune "$GITHUB_HTTPS_URL" "$refspec" || rc=$?
+      ;;
+    *)
+      log "unknown GitHub fetch transport: ${transport}"
+      return 2
+      ;;
+  esac
+
+  end_ms="$(date +%s%3N)"
+  elapsed_ms="$((end_ms - start_ms))"
+  if (( rc == 0 )); then
+    FETCH_TRANSPORT="$transport"
+    FETCH_ELAPSED_MS="$elapsed_ms"
+    log "git fetch success transport=${transport} elapsed_ms=${elapsed_ms} attempt=${FETCH_ATTEMPTS}"
+    return 0
+  fi
+  log "git fetch failed transport=${transport} elapsed_ms=${elapsed_ms} rc=${rc}; trying next transport"
+  return "$rc"
+}
+
 fetch_main() {
-  local attempt
-  for attempt in 1 2 3 4 5 6; do
-    log "git fetch attempt ${attempt}/6 (HTTP/1.1)"
-    if GIT_TERMINAL_PROMPT=0 git -c http.version=HTTP/1.1 -c http.lowSpeedLimit=0 -C "$APP_DIR" fetch --prune origin "$BRANCH"; then
-      return 0
+  local cycle
+  prepare_github_known_hosts
+  for cycle in 1 2; do
+    log "GitHub fetch transport cycle ${cycle}/2: SSH-443 -> SSH-22 -> HTTPS"
+    if command -v ssh >/dev/null 2>&1; then
+      if run_fetch_transport "ssh-443"; then return 0; fi
+      if run_fetch_transport "ssh-22"; then return 0; fi
+    else
+      log "ssh client unavailable; skipping SSH transports"
     fi
-    sleep $((attempt * 2))
+    if run_fetch_transport "https"; then return 0; fi
+    if (( cycle < 2 )); then sleep $((cycle * 2)); fi
   done
   return 1
 }
@@ -215,7 +297,7 @@ replace_chat2api_container() {
   if [[ -n "$ids" ]]; then
     log "${phase}: stopping existing ${COMPOSE_SERVICE} container(s): $(tr '\n' ' ' <<<"$ids")"
     if ! timeout --signal=TERM --kill-after=5s "${CONTAINER_STOP_COMMAND_SECONDS}s" \
-      docker stop --time "$CONTAINER_STOP_SECONDS" $ids; then
+      docker stop --timeout "$CONTAINER_STOP_SECONDS" $ids; then
       log "${phase}: graceful stop timed out/failed; forcing old ${COMPOSE_SERVICE} container(s) down"
       timeout --signal=KILL 15s docker kill $ids >/dev/null 2>&1 || true
     fi
@@ -275,6 +357,7 @@ rollback() {
 cleanup() {
   [[ -n "$ENV_BACKUP" ]] && rm -f "$ENV_BACKUP" || true
   rm -f "$REQUEST_FILE" || true
+  rm -f "$GITHUB_KNOWN_HOSTS_FILE" || true
 }
 
 on_exit() {
@@ -313,10 +396,10 @@ command -v timeout >/dev/null
 docker compose version >/dev/null
 
 remote_url="$(git -C "$APP_DIR" remote get-url origin 2>/dev/null || true)"
-if [[ "$remote_url" != "$EXPECTED_REPO" && "$remote_url" != "git@github.com:b8vipvip/chat2api.git" ]]; then
-  log "unexpected origin remote: $remote_url"
-  exit 3
-fi
+case "$remote_url" in
+  "$EXPECTED_REPO"|"$GITHUB_HTTPS_URL"|"$GITHUB_SSH_URL"|"ssh://git@ssh.github.com:443/b8vipvip/chat2api.git") ;;
+  *) log "unexpected origin remote: $remote_url"; exit 3 ;;
+esac
 
 normalize_legacy_updater_mode
 tracked_dirty="$(git -C "$APP_DIR" status --porcelain --untracked-files=no)"
@@ -333,17 +416,17 @@ if [[ -f "$APP_DIR/.env" ]]; then
   cp -a "$APP_DIR/.env" "$ENV_BACKUP"
 fi
 
-# Persist HTTP/1.1 locally because some Ubuntu/GnuTLS paths intermittently fail
-# with 'The TLS connection was non-properly terminated' under HTTP/2.
+# Keep HTTPS fallback on HTTP/1.1 because some Ubuntu/GnuTLS paths
+# intermittently terminate GitHub HTTP/2 sessions early.
 git -C "$APP_DIR" config http.version HTTP/1.1
 
-write_status "running" "fetch" "24" "正在从 GitHub 拉取 origin/main（带重试）"
+write_status "running" "fetch" "24" "正在从 GitHub 拉取 main：SSH-443 → SSH-22 → HTTPS 自动容灾"
 if ! fetch_main; then
-  log "git fetch failed after retries"
+  log "git fetch failed on all bounded transports"
   exit 5
 fi
 TARGET_COMMIT="$(git -C "$APP_DIR" rev-parse "origin/${BRANCH}")"
-write_status "running" "fetch" "32" "GitHub main=${TARGET_COMMIT:0:12}"
+write_status "running" "fetch" "32" "GitHub main=${TARGET_COMMIT:0:12}；通道=${FETCH_TRANSPORT}；耗时=${FETCH_ELAPSED_MS}ms；尝试=${FETCH_ATTEMPTS}"
 
 if [[ "$TARGET_COMMIT" == "$FROM_COMMIT" ]]; then
   write_status "succeeded" "completed" "100" "当前已经是 GitHub main 最新提交 ${TARGET_COMMIT:0:12}"
