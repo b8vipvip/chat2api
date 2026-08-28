@@ -9,6 +9,7 @@
     [/扩展/g, "Worker"],
     [/Chrome Bridge/g, "Worker"],
     [/Chrome extension/gi, "Worker"],
+    [/\bExtension\b/g, "Worker"],
   ];
 
   const canonical = value => {
@@ -105,7 +106,9 @@
 
   function hookApi() {
     if (state.apiHooked) return true;
-    const base = globalThis.api;
+    let base = null;
+    try { if (typeof api === "function") base = api; } catch (_) {}
+    if (!base && typeof globalThis.api === "function") base = globalThis.api;
     if (typeof base !== "function") return false;
     if (base.__chat2apiDeviceIdentityV47) {
       state.apiHooked = true;
@@ -117,7 +120,8 @@
       return payload;
     };
     wrapped.__chat2apiDeviceIdentityV47 = true;
-    globalThis.api = wrapped;
+    try { api = wrapped; } catch (_) { globalThis.api = wrapped; }
+    if (typeof globalThis.api === "function" && globalThis.api === base) globalThis.api = wrapped;
     state.apiHooked = true;
     return true;
   }
@@ -127,9 +131,9 @@
     new MutationObserver(() => queueMicrotask(paintRequestRows)).observe(tbody, {childList:true,subtree:false});
   }
 
-  // Normalize every currently visible administrator label, then only inspect
-  // changed/added nodes. Writes are conditional so this observer cannot create
-  // the self-triggering loop that previously froze the Linux Worker page.
+  // Normalize every currently visible administrator/developer label, then only
+  // inspect changed/added nodes. Writes are conditional so this observer cannot
+  // recreate the self-triggering loop that previously froze Linux Worker.
   canonicalizeElement(document.body);
   new MutationObserver(mutations => {
     for (const mutation of mutations) {
