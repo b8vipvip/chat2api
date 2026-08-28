@@ -200,7 +200,7 @@ service_container_ids() {
   # Query Docker directly instead of asking Compose to inspect/reconcile the
   # project. This remains usable even when a Compose recreate operation itself
   # is the component that is wedged.
-  timeout --foreground --signal=TERM --kill-after=5s 15s \
+  timeout --signal=TERM --kill-after=5s 15s \
     docker ps -aq \
       --filter "label=com.docker.compose.project.working_dir=${APP_DIR}" \
       --filter "label=com.docker.compose.service=${COMPOSE_SERVICE}" 2>/dev/null || true
@@ -214,16 +214,16 @@ replace_chat2api_container() {
   ids="$(service_container_ids)"
   if [[ -n "$ids" ]]; then
     log "${phase}: stopping existing ${COMPOSE_SERVICE} container(s): $(tr '\n' ' ' <<<"$ids")"
-    if ! timeout --foreground --signal=TERM --kill-after=5s "${CONTAINER_STOP_COMMAND_SECONDS}s" \
+    if ! timeout --signal=TERM --kill-after=5s "${CONTAINER_STOP_COMMAND_SECONDS}s" \
       docker stop --time "$CONTAINER_STOP_SECONDS" $ids; then
       log "${phase}: graceful stop timed out/failed; forcing old ${COMPOSE_SERVICE} container(s) down"
-      timeout --foreground --signal=KILL 15s docker kill $ids >/dev/null 2>&1 || true
+      timeout --signal=KILL 15s docker kill $ids >/dev/null 2>&1 || true
     fi
 
     # Never pass -v: /app/data is a host bind mount and update recovery must not
     # remove any persistent data. Removing only the old service container also
     # bypasses Compose v5 recreate-state hangs seen on some hosts.
-    if ! timeout --foreground --signal=TERM --kill-after=5s "${CONTAINER_REMOVE_COMMAND_SECONDS}s" \
+    if ! timeout --signal=TERM --kill-after=5s "${CONTAINER_REMOVE_COMMAND_SECONDS}s" \
       docker rm -f $ids; then
       log "${phase}: failed to remove old ${COMPOSE_SERVICE} container(s) within bounded timeout"
       return 1
@@ -231,7 +231,7 @@ replace_chat2api_container() {
   fi
 
   log "${phase}: creating ${COMPOSE_SERVICE} from the already-built image"
-  if timeout --foreground --signal=TERM --kill-after=10s "${COMPOSE_UP_COMMAND_SECONDS}s" \
+  if timeout --signal=TERM --kill-after=10s "${COMPOSE_UP_COMMAND_SECONDS}s" \
     docker compose up -d --no-deps --no-build "$COMPOSE_SERVICE"; then
     return 0
   fi
