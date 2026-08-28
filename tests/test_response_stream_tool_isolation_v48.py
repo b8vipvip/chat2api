@@ -62,9 +62,11 @@ def test_background_preflight_wraps_final_conversation_dispatch():
 
 def test_response_stream_recovery_reports_first_text_and_completion():
     source = (ROOT / "chrome_extension" / "content_response_stream_recovery_v48.js").read_text(encoding="utf-8")
+    assert 'type: "chat.delta"' in source
     assert 'type: "chat.snapshot"' in source
     assert 'type: "chat.completed"' in source
     assert 'response_stream_recovery: "dom-turn-v48"' in source
+    assert "text.startsWith(previous)" in source
     assert "stableMs >= 9000" in source
     assert "baselineAssistantCount" in source
     assert "integrationSurface(turn)" in source
