@@ -51,6 +51,8 @@ from .linux_worker_console_polling_patch import install_linux_worker_console_pol
 from .stream_keepalive_patch import install_stream_keepalive_patch
 from .request_stall_patch import install_request_stall_patch
 from .request_recovery_patch import install_request_recovery_patch
+from .worker_transport_recovery_patch import install_worker_transport_recovery_patch
+from .request_device_identity_patch import install_request_device_identity_patch
 from .playground_lifecycle_patch import install_playground_lifecycle_patch
 from .runtime_contract import install_runtime_contract
 from .runtime_logs_patch import install_runtime_logs_patch
@@ -100,6 +102,10 @@ install_linux_worker_proxy_catalog_patch(app)
 install_stream_keepalive_patch(app)
 install_request_stall_patch(app)
 install_request_recovery_patch(app)
+# Preserve active browser requests through brief Worker WebSocket reconnects.
+# This sits after request-stall/recovery so the synthetic disconnect filter owns
+# the final terminal decision while existing timeout/watchdog limits stay intact.
+install_worker_transport_recovery_patch(app)
 install_playground_lifecycle_patch(app)
 
 # Install the runtime contract after the historical patch stack so /version
@@ -145,6 +151,9 @@ install_linux_worker_enable_patch(app)
 # It serializes list refreshes, suppresses unchanged tbody rewrites, and lets the
 # stable renderer consume the base page's shared snapshot instead of polling twice.
 install_linux_worker_console_polling_patch(app)
+# Request history resolves ext_* transport identities to the administrator's
+# human device-code name and injects the canonical Worker/设备码 terminology layer.
+install_request_device_identity_patch(app)
 
 # Docker deployments cannot safely update their own host by exposing the Docker
 # socket to the web container. The server update patch writes a bounded request
