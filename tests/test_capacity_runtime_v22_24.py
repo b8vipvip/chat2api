@@ -10,7 +10,7 @@ def test_bridge_082_busts_mv3_script_cache_without_touching_login_state():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     launcher = (ROOT / "scripts" / "linux_worker_chrome_launcher.sh").read_text(encoding="utf-8")
 
-    assert manifest["version"] == "0.8.8"
+    assert manifest["version"] == "0.8.9"
     assert 'Default/Service Worker/ScriptCache' in launcher
     assert 'Default/Code Cache/js' in launcher
     assert '--disable-extensions-except="$EXTENSION_DIR"' in launcher
@@ -37,15 +37,18 @@ def test_capacity_controller_vm_contracts_cover_native_and_reporter_paths():
 
 def test_runtime_contract_separates_protocol_from_new_bundle_build():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.35"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.36"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.8"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.9"' in runtime
     assert '"bundle_version": CHROME_BRIDGE_BUNDLE_VERSION' in runtime
     assert 'request-hygiene-v42-persistent-draft-ownership-v43-generation-liveness-v49' in runtime
     assert 'response-stream-v49-page-progress-v49-same-api-concurrency-v25' in runtime
     assert 'request-lifecycle-v50-route-quarantine-v50-transient-retry-v50' in runtime
+    assert 'response-semantic-guard-v1-response-semantic-recovery-v51' in runtime
     assert '"bridge_service_worker_cache_bust": True' in runtime
     assert '"rendered_response_capture_recovery": True' in runtime
+    assert '"assistant_response_semantic_guard": True' in runtime
+    assert '"assistant_response_semantic_recovery": True' in runtime
     assert '"managed_request_draft_recovery": True' in runtime
     assert '"persistent_request_draft_ownership": True' in runtime
     assert '"visible_generation_liveness": True' in runtime

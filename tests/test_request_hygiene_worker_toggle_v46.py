@@ -187,8 +187,6 @@ def test_generation_liveness_is_diagnostic_only_and_hard_timeout_remains():
     ):
         assert token in source
     assert "generation_sequence:" not in source
-    # Server keeps recognizing legacy v42 generation_sequence events for old
-    # Workers, while v49 no longer emits them as progress.
     assert '"generation_sequence"' in server
     assert "ABSOLUTE_REQUEST_TIMEOUT_GRACE_SECONDS" in server
     assert "_absolute_watchdog" in server
@@ -197,10 +195,10 @@ def test_generation_liveness_is_diagnostic_only_and_hard_timeout_remains():
 def test_bundle_load_order_and_new_scripts_parse():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.8.8"
+    assert manifest["version"] == "0.8.9"
     assert scripts.index("content_request_v5.js") < scripts.index("content_request_lifecycle_v50.js") < scripts.index("content_request_hygiene_v42.js") < scripts.index("content_draft_ownership_v43.js")
     assert scripts.index("content_draft_ownership_v43.js") < scripts.index("content_response_capture_v41.js")
-    assert scripts.index("content_response_stream_recovery_v49.js") < scripts.index("content_transient_retry_v50.js") < scripts.index("content_request_stall_guard_v34.js") < scripts.index("content_generation_liveness_v49.js")
+    assert scripts.index("content_response_stream_recovery_v49.js") < scripts.index("content_response_semantic_recovery_v51.js") < scripts.index("content_transient_retry_v50.js") < scripts.index("content_request_stall_guard_v34.js") < scripts.index("content_generation_liveness_v49.js")
 
     bootstrap = (ROOT / "chrome_extension" / "content_bootstrap.js").read_text(encoding="utf-8")
     assert bootstrap.index('"content_request_v5.js"') < bootstrap.index('"content_request_hygiene_v42.js"') < bootstrap.index('"content_draft_ownership_v43.js"')
@@ -217,6 +215,7 @@ def test_bundle_load_order_and_new_scripts_parse():
         "chrome_extension/content_request_lifecycle_v50.js",
         "chrome_extension/content_draft_ownership_v43.js",
         "chrome_extension/content_response_stream_recovery_v49.js",
+        "chrome_extension/content_response_semantic_recovery_v51.js",
         "chrome_extension/content_transient_retry_v50.js",
         "chrome_extension/content_generation_liveness_v49.js",
         "app/admin_linux_worker_enable_v46.js",
@@ -233,8 +232,8 @@ def test_bundle_load_order_and_new_scripts_parse():
 def test_runtime_advertises_v46_recovery_and_toggle_features():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.35"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.8"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.36"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.9"' in runtime
     assert '"managed_request_draft_recovery": True' in runtime
     assert '"visible_generation_liveness": True' in runtime
     assert '"browser_page_progress_probe": True' in runtime
@@ -242,6 +241,8 @@ def test_runtime_advertises_v46_recovery_and_toggle_features():
     assert '"failed_route_quarantine": True' in runtime
     assert '"request_controller_lifecycle_guard": True' in runtime
     assert '"chatgpt_transient_retry": True' in runtime
+    assert '"assistant_response_semantic_guard": True' in runtime
+    assert '"assistant_response_semantic_recovery": True' in runtime
     assert '"linux_worker_routing_toggle": True' in runtime
     assert '"server_update_recreate_guard": True' in runtime
     assert '"server_update_poll_timeout_guard": True' in runtime
