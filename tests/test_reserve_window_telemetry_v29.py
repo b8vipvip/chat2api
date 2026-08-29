@@ -56,7 +56,7 @@ def test_reserve_pool_is_loaded_between_warm_pool_and_worker_router():
     warm = entry.index('"conversation_warm_pool_v2.js"')
     external = entry.index('"background_external_warm_v28.js"')
     reserve = entry.index('"background_reserve_pool_v29.js"')
-    workers = entry.index('"conversation_workers_v24.js"')
+    workers = entry.index('"conversation_workers_v25.js"')
     assert warm < external < reserve < workers
 
 
