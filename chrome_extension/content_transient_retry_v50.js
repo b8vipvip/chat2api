@@ -40,15 +40,22 @@
     return normalize(`${node?.getAttribute?.("aria-label") || ""} ${node?.title || ""} ${node?.innerText || node?.textContent || ""}`);
   }
 
+  function localRetryEvidence(button) {
+    let node = button?.parentElement || null;
+    for (let depth = 0; node && depth < 7; depth += 1, node = node.parentElement) {
+      const text = normalize(node.innerText || node.textContent || "").slice(0, 1200);
+      if (RETRYABLE_TEXT.test(text)) return text;
+      if (text.length > 900) break;
+    }
+    return "";
+  }
+
   function retrySurface() {
     const buttons = [...document.querySelectorAll("button,[role='button']")].filter(visible);
     for (const button of buttons) {
       const buttonLabel = label(button);
       if (!RETRY_LABEL.test(buttonLabel)) continue;
-      const container = button.closest("[role='alert'],[data-testid],article,section,div") || button.parentElement;
-      const text = normalize(container?.innerText || container?.textContent || buttonLabel).slice(0, 800);
-      const pageTail = normalize(document.body?.innerText || "").slice(-2400);
-      const evidence = RETRYABLE_TEXT.test(text) ? text : (RETRYABLE_TEXT.test(pageTail) ? pageTail : "");
+      const evidence = localRetryEvidence(button);
       if (!evidence || NON_RETRYABLE_TEXT.test(evidence)) continue;
       return { button, reason: evidence.slice(0, 240), label: buttonLabel.slice(0, 80) };
     }
