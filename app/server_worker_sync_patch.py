@@ -329,8 +329,9 @@ class ServerWorkerSyncCoordinator:
         upgrade = self._upgrade_meta(worker)
         upgrade_started = str(upgrade.get("started_at") or "")
         terminal_for_attempt = bool(scheduled_at and upgrade_started and upgrade_started >= scheduled_at)
+        versions_current = self._versions_current(worker)
 
-        if self._versions_current(worker) and not force:
+        if versions_current and not force:
             return self._update_worker_meta(
                 worker_id,
                 target_commit=target_commit,
@@ -338,7 +339,7 @@ class ServerWorkerSyncCoordinator:
                 last_synced_commit=target_commit,
                 last_error="",
             )
-        if terminal_for_attempt and str(upgrade.get("state") or "") == "succeeded":
+        if versions_current and terminal_for_attempt and str(upgrade.get("state") or "") == "succeeded":
             return self._update_worker_meta(
                 worker_id,
                 target_commit=target_commit,
@@ -420,10 +421,7 @@ class ServerWorkerSyncCoordinator:
                 )
             except HTTPException as exc:
                 detail = str(exc.detail)[:500]
-                if exc.status_code == 409:
-                    state = "pending-offline"
-                else:
-                    state = "failed"
+                state = "pending-offline" if exc.status_code == 409 else "failed"
                 self._update_worker_meta(
                     worker_id,
                     target_commit=target_commit,
