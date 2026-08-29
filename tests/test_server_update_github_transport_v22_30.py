@@ -47,8 +47,8 @@ def test_host_updater_prefers_bounded_ssh_and_keeps_https_fallback():
 def test_github_host_key_is_pinned_and_not_accept_new():
     updater = (ROOT / "scripts" / "chat2api_server_update.sh").read_text(encoding="utf-8")
     assert "SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU" not in updater
-    assert "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" in updater
-    assert "ssh.github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" in updater
+    assert "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UoqKLsabgH5C9okWi0dh2l9GKJl" in updater
+    assert "ssh.github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UoqKLsabgH5C9okWi0dh2l9GKJl" in updater
     assert "StrictHostKeyChecking=accept-new" not in updater
     assert "StrictHostKeyChecking=no" not in updater
 
@@ -65,7 +65,7 @@ def test_updater_accepts_supported_origin_forms_and_installer_matches():
 
 def test_transport_release_contract_and_shell_syntax():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.32"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.33"' in runtime
     assert '"github_transport_failover": True' in runtime
     assert "github-transport-failover-v22-30" in runtime
 
