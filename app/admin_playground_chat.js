@@ -26,6 +26,7 @@
     .pgChatRow.user .pgChatBubble{background:#17375e;border-color:#28517f}
     .pgChatBubble.pending{color:var(--muted)}.pgChatBubble.error{border-color:#70323c;background:#351b22;color:#ffd5d9}
     .pgChatMeta{font-size:11px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap}
+    .pgChatAttachment{font-size:11px;color:#adc7eb;border:1px solid #294363;background:#0d1b2e;border-radius:999px;padding:2px 8px}
     .pgChatComposer{display:grid;grid-template-columns:1fr auto;gap:9px;margin-top:10px;align-items:end}
     .pgChatComposer textarea{width:100%;min-height:76px;max-height:220px;resize:vertical;line-height:1.55}
     .pgChatComposer button{height:42px;min-width:94px}
@@ -68,7 +69,16 @@
   function loadHistory() {
     try {
       const value = JSON.parse(sessionStorage.getItem(STORAGE_KEY) || "[]");
-      if (Array.isArray(value)) messages = value.filter(item => item && ["user", "assistant"].includes(item.role) && typeof item.content === "string").slice(-MAX_HISTORY_MESSAGES);
+      if (Array.isArray(value)) {
+        messages = value
+          .filter(item => item && ["user", "assistant"].includes(item.role) && typeof item.content === "string")
+          .map(item => ({
+            ...item,
+            attachment_names: Array.isArray(item.attachment_names) ? item.attachment_names.map(String).slice(0, 4) : [],
+            include_in_context: item.include_in_context !== false,
+          }))
+          .slice(-MAX_HISTORY_MESSAGES);
+      }
     } catch (_) { messages = []; }
   }
 
@@ -78,12 +88,16 @@
       box.innerHTML = '<div class="pgChatEmpty">输入消息即可开始。支持连续追问；后续请求会携带本窗口中的文本对话历史。</div>';
       return;
     }
-    box.innerHTML = messages.map((item, index) => `
+    box.innerHTML = messages.map((item, index) => {
+      const attachments = (item.attachment_names || []).map(name => `<span class="pgChatAttachment">附件 · ${escHtml(name)}</span>`).join("");
+      const errorClass = item.error ? " error" : "";
+      return `
       <div class="pgChatRow ${item.role}" data-chat-index="${index}">
         <div class="pgChatRole">${item.role === "user" ? "你" : "模型"}</div>
-        <div class="pgChatBubble">${escHtml(item.content)}</div>
-        ${item.meta ? `<div class="pgChatMeta"><span>${escHtml(item.meta.request_id || "")}</span><span>${escHtml(item.meta.model || "")}</span><span>${item.meta.total_ms != null ? `${Math.round(item.meta.total_ms)} ms` : ""}</span></div>` : ""}
-      </div>`).join("");
+        <div class="pgChatBubble${errorClass}">${escHtml(item.content)}</div>
+        ${(attachments || item.meta) ? `<div class="pgChatMeta">${attachments}${item.meta ? `<span>${escHtml(item.meta.request_id || "")}</span><span>${escHtml(item.meta.model || "")}</span><span>${item.meta.total_ms != null ? `${Math.round(item.meta.total_ms)} ms` : ""}</span>` : ""}</div>` : ""}
+      </div>`;
+    }).join("");
     box.scrollTop = box.scrollHeight;
   }
 
@@ -169,7 +183,10 @@
   }
 
   function normalizedHistory() {
-    return messages.slice(-MAX_HISTORY_MESSAGES).map(item => ({role: item.role, content: item.content}));
+    return messages
+      .filter(item => item.include_in_context !== false)
+      .slice(-MAX_HISTORY_MESSAGES)
+      .map(item => ({role: item.role, content: item.content}));
   }
 
   async function sendMessage() {
@@ -187,8 +204,13 @@
     let credential = null;
     let pendingBubble = null;
     const userFiles = [...$chat("pgChatFiles").files].slice(0, 4);
-    const userDisplay = userFiles.length ? `${text}\n\n[本轮附件：${userFiles.map(file => file.name).join("、")}]` : text;
-    messages.push({role: "user", content: userDisplay});
+    const userIndex = messages.length;
+    messages.push({
+      role: "user",
+      content: text,
+      attachment_names: userFiles.map(file => file.name),
+      include_in_context: true,
+    });
     input.value = "";
     renderMessages();
     pendingBubble = addPendingAssistant();
@@ -261,7 +283,12 @@
 
       const totalMs = performance.now() - started;
       document.getElementById("pgChatPending")?.remove();
-      messages.push({role: "assistant", content: assistantText, meta: {request_id: requestId, model, total_ms: totalMs, first_token_ms: firstTokenMs}});
+      messages.push({
+        role: "assistant",
+        content: assistantText,
+        include_in_context: true,
+        meta: {request_id: requestId, model, total_ms: totalMs, first_token_ms: firstTokenMs},
+      });
       lastRequest = {request_id: requestId, model, total_ms: totalMs, first_token_ms: firstTokenMs, diagnostics};
       saveHistory();
       renderMessages();
@@ -270,16 +297,19 @@
       $chat("pgChatFiles").value = "";
     } catch (error) {
       const totalMs = performance.now() - started;
-      if (pendingBubble) {
-        pendingBubble.className = "pgChatBubble error";
-        pendingBubble.textContent = `请求失败：${String(error?.message || error)}`;
-        const meta = document.getElementById("pgChatPendingMeta");
-        if (meta) meta.textContent = `${requestId} · ${Math.round(totalMs)} ms`;
-      }
+      document.getElementById("pgChatPending")?.remove();
+      if (messages[userIndex]) messages[userIndex].include_in_context = false;
+      messages.push({
+        role: "assistant",
+        content: `请求失败：${String(error?.message || error)}`,
+        include_in_context: false,
+        error: true,
+        meta: {request_id: requestId, model, total_ms: totalMs},
+      });
       lastRequest = {request_id: requestId, model, total_ms: totalMs, error: String(error?.message || error), diagnostics};
-      status(`聊天请求失败：${String(error?.message || error)}`, "bad");
-      // Failed assistant turns are not inserted into future model context.
       saveHistory();
+      renderMessages();
+      status(`聊天请求失败：${String(error?.message || error)}`, "bad");
     } finally {
       if (credential && uploaded.length) await cleanupFiles(uploaded, credential.token);
       sending = false;
