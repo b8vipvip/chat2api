@@ -47,8 +47,8 @@ def test_host_updater_prefers_bounded_ssh_and_keeps_https_fallback():
 def test_github_host_key_is_pinned_and_not_accept_new():
     updater = (ROOT / "scripts" / "chat2api_server_update.sh").read_text(encoding="utf-8")
     assert "SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU" not in updater
-    assert "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UoqKLsabgH5C9okWi0dh2l9GKJl" in updater
-    assert "ssh.github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UoqKLsabgH5C9okWi0dh2l9GKJl" in updater
+    assert "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" in updater
+    assert "ssh.github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" in updater
     assert "StrictHostKeyChecking=accept-new" not in updater
     assert "StrictHostKeyChecking=no" not in updater
 
