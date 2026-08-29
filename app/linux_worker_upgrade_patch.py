@@ -12,7 +12,7 @@ from .linux_workers import iso, utcnow
 from .runtime_contract import CHROME_BRIDGE_BUNDLE_VERSION, SERVER_RUNTIME_VERSION
 
 
-PATCH_VERSION = "0.22.25"
+PATCH_VERSION = "0.22.33"
 TARGET_AGENT_VERSION = "0.3.6"
 ASSET_PATH = "/assets/chat2api-linux-worker-upgrade-v44.js"
 BOOTSTRAP_PATH = "/bootstrap/linux-worker.sh"
@@ -63,6 +63,24 @@ def _patch_bootstrap(text: str) -> str:
             line += ", /usr/local/sbin/chat2api-worker-upgrade"
         patched_lines.append(line)
     text = "\n".join(patched_lines) + ("\n" if text.endswith("\n") else "")
+
+    # Never write an unvalidated sudoers fragment directly into /etc/sudoers.d.
+    # The bootstrap is assembled by several response-layer patches; validating a
+    # temporary file first prevents any future transformation bug from breaking
+    # sudo globally on the Worker host. A successful run atomically replaces a
+    # previously malformed chat2api-worker fragment as part of repair/upgrade.
+    direct_header = "cat >/etc/sudoers.d/chat2api-worker <<'SUDO'"
+    temp_header = 'SUDOERS_TMP="$(mktemp)"\ncat >"$SUDOERS_TMP" <<\'SUDO\''
+    if direct_header in text and "SUDOERS_TMP=\"$(mktemp)\"" not in text:
+        text = text.replace(direct_header, temp_header, 1)
+        direct_footer = "SUDO\nchmod 440 /etc/sudoers.d/chat2api-worker\nvisudo -cf /etc/sudoers.d/chat2api-worker"
+        temp_footer = (
+            'SUDO\nchmod 440 "$SUDOERS_TMP"\nvisudo -cf "$SUDOERS_TMP"\n'
+            'install -o root -g root -m 440 "$SUDOERS_TMP" /etc/sudoers.d/chat2api-worker\n'
+            'rm -f "$SUDOERS_TMP"'
+        )
+        if direct_footer in text:
+            text = text.replace(direct_footer, temp_footer, 1)
 
     bridge_line = 'echo "Chrome Bridge: $(jq -r .version "$WORKER_DIR/chrome_extension/manifest.json") (自动加载 / 自动配对，无需手工配对码)"'
     agent_line = f'echo "Worker Agent: {TARGET_AGENT_VERSION} (支持后台一键更新 / 实时进度)"'
@@ -231,14 +249,25 @@ def install_linux_worker_upgrade_patch(app: FastAPI) -> FastAPI:
             }
 
         error = str((result or {}).get("error") or "") if isinstance(result, dict) else "unknown_error"
-        if error in {"command_not_allowed", "not_implemented", "upgrade_helper_missing"}:
-            server = app.state.settings.resolved_public_url(str(request.base_url)).rstrip("/")
-            command_text = f"curl -fsSL {server}/bootstrap/linux-worker.sh | sudo bash -s -- --server {server} --upgrade"
+        detail = str((result or {}).get("detail") or "") if isinstance(result, dict) else ""
+        detail = detail.replace("\r", " ").replace("\n", " ").strip()[:300]
+        diagnostic = error + (f" · {detail}" if detail else "")
+        server = app.state.settings.resolved_public_url(str(request.base_url)).rstrip("/")
+        command_text = f"curl -fsSL {server}/bootstrap/linux-worker.sh | sudo bash -s -- --server {server} --upgrade"
+
+        if error in {
+            "command_not_allowed",
+            "not_implemented",
+            "upgrade_helper_missing",
+            "upgrade_schedule_failed",
+            "upgrade_schedule_timeout",
+            "upgrade_helper_launch_failed",
+        }:
             write_state(
                 worker_id,
                 state="unsupported",
                 stage="one-time-enable",
-                message="当前 Worker Agent 尚未安装在线更新能力，需要最后执行一次幂等升级来启用更新按钮",
+                message=f"Worker 在线更新无法启动：{diagnostic}。请执行一次幂等修复升级；完成后可继续使用在线更新按钮。",
                 percent=0,
             )
             return {
@@ -246,6 +275,7 @@ def install_linux_worker_upgrade_patch(app: FastAPI) -> FastAPI:
                 "needs_bootstrap_once": True,
                 "bootstrap_command": command_text,
                 "error": error,
+                "detail": detail,
                 **public_status(worker_id),
             }
 
@@ -253,10 +283,10 @@ def install_linux_worker_upgrade_patch(app: FastAPI) -> FastAPI:
             worker_id,
             state="failed",
             stage="schedule",
-            message=f"Worker 无法启动在线更新：{error}",
+            message=f"Worker 无法启动在线更新：{diagnostic}",
             percent=1,
         )
-        raise HTTPException(502, f"Worker 无法启动在线更新：{error}")
+        raise HTTPException(502, f"Worker 无法启动在线更新：{diagnostic}")
 
     @app.get(ASSET_PATH, include_in_schema=False)
     async def linux_worker_upgrade_asset() -> Response:

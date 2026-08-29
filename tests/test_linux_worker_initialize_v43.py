@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.linux_worker_diagnostics_patch import _patch_bootstrap as patch_diagnostics_bootstrap
 from app.linux_worker_initialize_patch import _patch_bootstrap as patch_initialize_bootstrap
+from app.linux_worker_upgrade_patch import _patch_bootstrap as patch_upgrade_bootstrap
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -68,6 +69,33 @@ def test_final_bootstrap_installs_v43_agent_initializer_and_runtime_validator() 
     assert 'rm -rf "$PROFILE_DIR/Default/Service Worker"' in patched
 
 
+def test_initialize_patch_never_splits_sudoers_restart_allowlist() -> None:
+    source = (ROOT / "scripts" / "bootstrap_linux_worker.sh").read_text(encoding="utf-8")
+    patched = patch_upgrade_bootstrap(patch_initialize_bootstrap(patch_diagnostics_bootstrap(source)))
+
+    # Regression for production failure on 2026-08-29: a substring replacement
+    # matched `/bin/systemctl restart chat2api-chrome.service` inside the sudoers
+    # allowlist and injected a newline, leaving line 2 as a bare `systemctl ...`.
+    sudo_header = 'cat >"$SUDOERS_TMP" <<\'SUDO\''
+    assert sudo_header in patched
+    sudo_block = patched.split(sudo_header + "\n", 1)[1].split("\nSUDO\n", 1)[0]
+    sudo_lines = [line for line in sudo_block.splitlines() if line.strip()]
+    assert len(sudo_lines) == 1
+    rule = sudo_lines[0]
+    assert rule.startswith("chat2api ALL=(root) NOPASSWD:")
+    assert "/bin/systemctl restart chat2api-chrome.service" in rule
+    assert "/usr/local/sbin/chat2api-worker-diagnostics" in rule
+    assert "/usr/local/sbin/chat2api-worker-initialize" in rule
+    assert "/usr/local/sbin/chat2api-worker-upgrade" in rule
+    assert "PROFILE_DIR" not in rule
+
+    lines = patched.splitlines()
+    restart_index = lines.index("systemctl restart chat2api-chrome.service")
+    assert lines[restart_index - 1] == 'rm -rf "$PROFILE_DIR/Default/Service Worker" 2>/dev/null || true'
+    assert 'visudo -cf "$SUDOERS_TMP"' in patched
+    assert 'install -o root -g root -m 440 "$SUDOERS_TMP" /etc/sudoers.d/chat2api-worker' in patched
+
+
 def test_docker_bundle_ships_full_initialize_payload() -> None:
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     for token in (
@@ -96,7 +124,9 @@ def test_admin_initialize_patch_has_full_and_compatibility_paths() -> None:
 
 def test_runtime_contract_publishes_worker_initialize_v43() -> None:
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.32"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.33"' in runtime
     assert "worker-initialize-v43" in runtime
+    assert "worker-sudoers-guard-v22-33" in runtime
     assert '"linux_worker_initialize": True' in runtime
     assert '"linux_worker_bridge_runtime_recovery": True' in runtime
+    assert '"linux_worker_sudoers_guard": True' in runtime

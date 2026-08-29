@@ -225,7 +225,7 @@ def test_bundle_load_order_and_new_scripts_parse():
 def test_runtime_advertises_v46_recovery_and_toggle_features():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.32"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.33"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.6"' in runtime
     assert '"managed_request_draft_recovery": True' in runtime
     assert '"visible_generation_liveness": True' in runtime
