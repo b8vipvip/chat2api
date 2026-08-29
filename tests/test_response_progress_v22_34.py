@@ -10,13 +10,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.8"
+    assert manifest["version"] == "0.8.9"
     scripts = [
         script
         for item in manifest.get("content_scripts", [])
         for script in item.get("js", [])
     ]
     assert "content_response_stream_recovery_v49.js" in scripts
+    assert "content_response_semantic_recovery_v51.js" in scripts
     assert "content_generation_liveness_v49.js" in scripts
     assert "content_request_lifecycle_v50.js" in scripts
     assert "content_transient_retry_v50.js" in scripts
@@ -41,15 +42,13 @@ def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> No
     assert 'type: "chat.completed"' in recovery
     assert 'type: "chat.error"' in recovery
 
-    # v42 used a changing generation_sequence field, which the server intentionally
-    # treats as real response progress. v49 heartbeat must remain diagnostic-only
-    # so a frozen Stop/Thinking UI cannot refresh the response-progress lease.
     assert "generation_heartbeat_sequence" in heartbeat
     assert "generation_control_visible" in heartbeat
     assert "generation_sequence:" not in heartbeat
 
     for path in (
         ROOT / "chrome_extension" / "content_response_stream_recovery_v49.js",
+        ROOT / "chrome_extension" / "content_response_semantic_recovery_v51.js",
         ROOT / "chrome_extension" / "content_generation_liveness_v49.js",
         ROOT / "chrome_extension" / "content_request_lifecycle_v50.js",
         ROOT / "chrome_extension" / "content_transient_retry_v50.js",
