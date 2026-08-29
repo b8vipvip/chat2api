@@ -84,7 +84,7 @@ if wait_runtime 30; then
   exit 0
 fi
 
-log WARN "Chrome is running but the Worker Service Worker is unavailable; resetting disposable Service Worker state once"
+log WARN "Chrome is running but the Bridge Service Worker is unavailable; resetting disposable Service Worker state once"
 systemctl stop "$CHROME_UNIT" || true
 rm -rf "${PROFILE_DIR}/Default/Service Worker" 2>/dev/null || true
 systemctl start "$CHROME_UNIT"
@@ -92,13 +92,13 @@ systemctl start "$CHROME_UNIT"
 for _ in $(seq 1 45); do
   if systemctl is-active --quiet "$CHROME_UNIT" && wait_runtime 1; then
     rm -f "$FAILED_RUNTIME_FILE"
-    log INFO "Worker runtime recovered after Service Worker state reset"
+    log INFO "Chrome Bridge runtime recovered after Service Worker state reset"
     exit 0
   fi
   sleep 1
 done
 
 rm -f "$APPLIED_FILE"
-printf '%s\n' "$(date -Is) Worker Service Worker unavailable after clean restart" >"$FAILED_RUNTIME_FILE"
-log ERROR "Worker runtime is still unavailable after a clean restart"
+printf '%s\n' "$(date -Is) Bridge Service Worker unavailable after clean restart" >"$FAILED_RUNTIME_FILE"
+log ERROR "Chrome Bridge runtime is still unavailable after a clean restart"
 exit 1
