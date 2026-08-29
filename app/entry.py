@@ -56,6 +56,7 @@ from .request_device_identity_patch import install_request_device_identity_patch
 from .playground_lifecycle_patch import install_playground_lifecycle_patch
 from .playground_multimodal_defaults_patch import install_playground_multimodal_defaults_patch
 from .playground_random_prompt_patch import install_playground_random_prompt_patch
+from .playground_chat_patch import install_playground_chat_patch
 from .runtime_contract import install_runtime_contract
 from .runtime_logs_patch import install_runtime_logs_patch
 from .extension_capacity_control_patch import install_extension_capacity_control_patch
@@ -118,6 +119,10 @@ install_playground_multimodal_defaults_patch(app)
 # Install after multimodal defaults so generated vision/file samples flow through
 # the same randomized chat boundary as administrator-supplied attachments.
 install_playground_random_prompt_patch(app)
+# Manual Playground chat is deliberately separate from the randomized automatic
+# test layer: administrator-authored messages must reach /v1/chat/completions
+# verbatim while still exercising the same production routing boundary.
+install_playground_chat_patch(app)
 
 # Install the runtime contract after the historical patch stack so /version
 # describes the production app rather than the legacy base layer in app.main.
