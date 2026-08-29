@@ -54,6 +54,7 @@ from .request_recovery_patch import install_request_recovery_patch
 from .worker_transport_recovery_patch import install_worker_transport_recovery_patch
 from .request_device_identity_patch import install_request_device_identity_patch
 from .playground_lifecycle_patch import install_playground_lifecycle_patch
+from .playground_multimodal_defaults_patch import install_playground_multimodal_defaults_patch
 from .runtime_contract import install_runtime_contract
 from .runtime_logs_patch import install_runtime_logs_patch
 from .extension_capacity_control_patch import install_extension_capacity_control_patch
@@ -107,6 +108,10 @@ install_request_recovery_patch(app)
 # the final terminal decision while existing timeout/watchdog limits stay intact.
 install_worker_transport_recovery_patch(app)
 install_playground_lifecycle_patch(app)
+# The console promises that an empty attachment chooser generates a default
+# sample. Make vision/file tests dispatch real multimodal requests instead of
+# being silently skipped when the administrator leaves the chooser empty.
+install_playground_multimodal_defaults_patch(app)
 
 # Install the runtime contract after the historical patch stack so /version
 # describes the production app rather than the legacy base layer in app.main.
