@@ -174,18 +174,21 @@ def test_persistent_draft_ownership_survives_browser_restart_and_never_stores_pr
     assert "prompt_text" not in source
 
 
-def test_visible_generation_liveness_extends_observable_progress_without_removing_hard_timeout():
-    source = (ROOT / "chrome_extension" / "content_generation_liveness_v42.js").read_text(encoding="utf-8")
+def test_generation_liveness_is_diagnostic_only_and_hard_timeout_remains():
+    source = (ROOT / "chrome_extension" / "content_generation_liveness_v49.js").read_text(encoding="utf-8")
     server = (ROOT / "app" / "request_stall_patch.py").read_text(encoding="utf-8")
 
     for token in (
-        "generation_sequence",
+        "generation_heartbeat_sequence",
         "generation_liveness",
+        "generation_control_visible",
         "track?.sawGenerating",
-        "generationControlVisible",
         "INTERVAL_MS = 20000",
     ):
         assert token in source
+    assert "generation_sequence:" not in source
+    # Server keeps recognizing legacy v42 generation_sequence events for old
+    # Workers, while v49 no longer emits them as progress.
     assert '"generation_sequence"' in server
     assert "ABSOLUTE_REQUEST_TIMEOUT_GRACE_SECONDS" in server
     assert "_absolute_watchdog" in server
@@ -194,14 +197,15 @@ def test_visible_generation_liveness_extends_observable_progress_without_removin
 def test_bundle_load_order_and_new_scripts_parse():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.8.6"
+    assert manifest["version"] == "0.8.7"
     assert scripts.index("content_request_v5.js") < scripts.index("content_request_hygiene_v42.js") < scripts.index("content_draft_ownership_v43.js")
     assert scripts.index("content_draft_ownership_v43.js") < scripts.index("content_response_capture_v41.js")
-    assert scripts.index("content_request_stall_guard_v34.js") < scripts.index("content_generation_liveness_v42.js")
+    assert scripts.index("content_response_stream_recovery_v49.js") < scripts.index("content_request_stall_guard_v34.js") < scripts.index("content_generation_liveness_v49.js")
 
     bootstrap = (ROOT / "chrome_extension" / "content_bootstrap.js").read_text(encoding="utf-8")
     assert bootstrap.index('"content_request_v5.js"') < bootstrap.index('"content_request_hygiene_v42.js"') < bootstrap.index('"content_draft_ownership_v43.js"')
-    assert '"content_generation_liveness_v42.js"' in bootstrap
+    assert '"content_response_stream_recovery_v49.js"' in bootstrap
+    assert '"content_generation_liveness_v49.js"' in bootstrap
 
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     assert entry.index("conversation_dispatch.js") < entry.index("background_request_hygiene_v42.js") < entry.index("background_request_recovery_v40.js")
@@ -210,7 +214,8 @@ def test_bundle_load_order_and_new_scripts_parse():
         "chrome_extension/background_request_hygiene_v42.js",
         "chrome_extension/content_request_hygiene_v42.js",
         "chrome_extension/content_draft_ownership_v43.js",
-        "chrome_extension/content_generation_liveness_v42.js",
+        "chrome_extension/content_response_stream_recovery_v49.js",
+        "chrome_extension/content_generation_liveness_v49.js",
         "app/admin_linux_worker_enable_v46.js",
     ):
         result = subprocess.run(
@@ -225,10 +230,12 @@ def test_bundle_load_order_and_new_scripts_parse():
 def test_runtime_advertises_v46_recovery_and_toggle_features():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.33"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.6"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.34"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.7"' in runtime
     assert '"managed_request_draft_recovery": True' in runtime
     assert '"visible_generation_liveness": True' in runtime
+    assert '"browser_page_progress_probe": True' in runtime
+    assert '"same_api_parallel_requests": True' in runtime
     assert '"linux_worker_routing_toggle": True' in runtime
     assert '"server_update_recreate_guard": True' in runtime
     assert '"server_update_poll_timeout_guard": True' in runtime
