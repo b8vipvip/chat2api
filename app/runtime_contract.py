@@ -15,7 +15,7 @@ from .live_voice_patch import LIVE_PROTOCOL_VERSION
 # collapse them into a single version number: package releases, the layered
 # server runtime/console, the Worker wire protocol, the shipped unpacked
 # Worker bundle, and the realtime wire protocol can evolve independently.
-SERVER_RUNTIME_VERSION = "0.22.35"
+SERVER_RUNTIME_VERSION = "0.22.36"
 # v0.22.24 remains the compatibility baseline for Workers that first gained the
 # bounded initialize/recovery command. Later runtimes add online upgrade and
 # routing-only enable/disable without changing that bootstrap compatibility floor.
@@ -24,7 +24,7 @@ CHROME_BRIDGE_VERSION = "0.8.1"
 CHROME_BRIDGE_BUNDLE_VERSION = "0.8.8"
 PRODUCTION_ENTRYPOINT = "app.entry:app"
 VERSION_CONTRACT_VERSION = 1
-RUNTIME_FEATURE_REVISION = "capacity-native-v37-bundle-088-runtime-logs-v1-playground-lifecycle-v1-spare-freshness-v39-response-capture-v41-request-hygiene-v42-persistent-draft-ownership-v43-generation-liveness-v49-worker-initialize-v43-worker-online-upgrade-v44-worker-routing-toggle-v46-worker-console-freeze-v22-27-server-update-recreate-guard-v22-28-server-update-poll-timeout-v22-29-github-transport-failover-v22-30-worker-transport-v47-device-identity-v47-response-stream-v49-page-progress-v49-same-api-concurrency-v25-tool-isolation-v48-runtime-preflight-v48-worker-sudoers-guard-v22-33-request-lifecycle-v50-route-quarantine-v50-transient-retry-v50-autoreload-self-heal-v50"
+RUNTIME_FEATURE_REVISION = "capacity-native-v37-bundle-088-runtime-logs-v1-playground-lifecycle-v1-spare-freshness-v39-response-capture-v41-request-hygiene-v42-persistent-draft-ownership-v43-generation-liveness-v49-worker-initialize-v43-worker-online-upgrade-v44-worker-routing-toggle-v46-worker-console-freeze-v22-27-server-update-recreate-guard-v22-28-server-update-poll-timeout-v22-29-github-transport-failover-v22-30-worker-transport-v47-device-identity-v47-response-stream-v49-page-progress-v49-same-api-concurrency-v25-tool-isolation-v48-runtime-preflight-v48-worker-sudoers-guard-v22-33-request-lifecycle-v50-route-quarantine-v50-transient-retry-v50-autoreload-self-heal-v50-server-worker-auto-sync-v1"
 ADMIN_VERSION_ASSET = "/assets/chat2api-runtime-version.js"
 ADMIN_EXTENSION_COLUMNS_ASSET = "/assets/chat2api-extension-columns.js"
 ADMIN_LINUX_WORKERS_ASSET = "/assets/chat2api-linux-workers.js"
@@ -87,6 +87,7 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
             "server_update_recreate_guard": True,
             "server_update_poll_timeout_guard": True,
             "github_transport_failover": True,
+            "server_update_worker_auto_sync": True,
         },
         "protocols": {
             "realtime_voice": LIVE_PROTOCOL_VERSION,
