@@ -2,10 +2,11 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V48__";
   if (globalThis[KEY]) return;
 
-  const REQUIRED_BUNDLE = "0.8.6";
+  const REQUIRED_BUNDLE = "0.8.7";
   const OVERLAY_FILES = [
     "content_tool_isolation_v48.js",
-    "content_response_stream_recovery_v48.js",
+    "content_response_stream_recovery_v49.js",
+    "content_generation_liveness_v49.js",
     "content_runtime_contract_v48.js",
   ];
   const inflight = new Map();
