@@ -12,23 +12,25 @@ EXT = ROOT / "chrome_extension"
 
 def test_runtime_versions_and_features() -> None:
     source = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.35"' in source
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.8"' in source
+    assert 'SERVER_RUNTIME_VERSION = "0.22.36"' in source
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.9"' in source
     for marker in (
         '"failed_route_quarantine": True',
         '"request_controller_lifecycle_guard": True',
         '"chatgpt_transient_retry": True',
         '"linux_worker_autoreload_self_heal": True',
+        '"assistant_response_semantic_guard": True',
+        '"assistant_response_semantic_recovery": True',
     ):
         assert marker in source
 
 
 def test_manifest_loads_lifecycle_and_retry_overlays_in_order() -> None:
     manifest = json.loads((EXT / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.8"
+    assert manifest["version"] == "0.8.9"
     scripts = manifest["content_scripts"][1]["js"]
     assert scripts.index("content_request_v5.js") < scripts.index("content_request_lifecycle_v50.js")
-    assert scripts.index("content_response_stream_recovery_v49.js") < scripts.index("content_transient_retry_v50.js")
+    assert scripts.index("content_response_stream_recovery_v49.js") < scripts.index("content_response_semantic_recovery_v51.js") < scripts.index("content_transient_retry_v50.js")
     assert scripts.index("content_transient_retry_v50.js") < scripts.index("content_runtime_contract_v48.js")
 
 
@@ -67,17 +69,19 @@ def test_background_entry_loads_quarantine_after_worker_router() -> None:
     assert source.index('"background_route_quarantine_v50.js"') < source.index('"background_request_recovery_v40.js"')
 
 
-def test_runtime_preflight_requires_v50_overlays() -> None:
+def test_runtime_preflight_requires_v50_and_v51_overlays() -> None:
     source = (EXT / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
     contract = (EXT / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     marker = (EXT / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
-    assert 'const REQUIRED_BUNDLE = "0.8.8"' in source
+    assert 'const REQUIRED_BUNDLE = "0.8.9"' in source
     assert '"content_request_lifecycle_v50.js"' in source
+    assert '"content_response_semantic_recovery_v51.js"' in source
     assert '"content_transient_retry_v50.js"' in source
-    assert 'const REQUIRED_BUNDLE = "0.8.8"' in contract
+    assert 'const REQUIRED_BUNDLE = "0.8.9"' in contract
     assert "request_lifecycle_v50" in contract
+    assert "response_semantic_recovery_v51" in contract
     assert "transient_retry_v50" in contract
-    assert 'bundle: "0.8.8"' in marker
+    assert 'bundle: "0.8.9"' in marker
 
 
 def test_linux_autoreload_wrapper_self_repairs_missing_base_helper() -> None:
@@ -97,6 +101,7 @@ def test_new_javascript_syntax() -> None:
         return
     for name in (
         "content_request_lifecycle_v50.js",
+        "content_response_semantic_recovery_v51.js",
         "content_transient_retry_v50.js",
         "background_route_quarantine_v50.js",
         "background_runtime_preflight_v48.js",
