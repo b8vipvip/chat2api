@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.7"
+    assert manifest["version"] == "0.8.8"
     scripts = [
         script
         for item in manifest.get("content_scripts", [])
@@ -18,6 +18,8 @@ def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> No
     ]
     assert "content_response_stream_recovery_v49.js" in scripts
     assert "content_generation_liveness_v49.js" in scripts
+    assert "content_request_lifecycle_v50.js" in scripts
+    assert "content_transient_retry_v50.js" in scripts
     assert "content_response_stream_recovery_v48.js" not in scripts
     assert "content_generation_liveness_v42.js" not in scripts
 
@@ -49,6 +51,8 @@ def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> No
     for path in (
         ROOT / "chrome_extension" / "content_response_stream_recovery_v49.js",
         ROOT / "chrome_extension" / "content_generation_liveness_v49.js",
+        ROOT / "chrome_extension" / "content_request_lifecycle_v50.js",
+        ROOT / "chrome_extension" / "content_transient_retry_v50.js",
         ROOT / "chrome_extension" / "conversation_workers_v25.js",
     ):
         result = subprocess.run(
@@ -107,6 +111,7 @@ def test_background_loads_request_reserving_worker_router() -> None:
     source = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     assert '"conversation_workers_v25.js"' in source
     assert '"conversation_workers_v24.js"' not in source
+    assert '"background_route_quarantine_v50.js"' in source
 
     router = (ROOT / "chrome_extension" / "conversation_workers_v25.js").read_text(encoding="utf-8")
     assert "routeReservations: new Map()" in router
