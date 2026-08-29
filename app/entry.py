@@ -61,7 +61,7 @@ from .runtime_logs_patch import install_runtime_logs_patch
 from .extension_capacity_control_patch import install_extension_capacity_control_patch
 from .mini_multimodal_quota_patch import install_mini_multimodal_quota_patch
 from .server_update_patch import install_server_update_patch
-from .server_worker_sync_patch import install_server_worker_sync_patch
+from .server_worker_sync_lifespan_patch import install_server_worker_sync_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -175,5 +175,6 @@ install_server_update_patch(app)
 # Worker with the newly deployed server. Worker-impacting GitHub diffs force a
 # refresh even when the semantic bundle version did not change; server-only
 # updates leave already-current Workers untouched. Offline Workers stay pending
-# and continue automatically when they reconnect.
+# and continue automatically when they reconnect. The lifespan compatibility
+# adapter keeps this safe on Starlette 1.x where app.add_event_handler is gone.
 install_server_worker_sync_patch(app)
