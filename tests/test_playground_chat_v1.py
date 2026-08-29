@@ -40,6 +40,18 @@ def test_playground_chat_patch_injects_console_asset() -> None:
         assert 'X-Chat2API-Request-ID' in source
 
 
+def test_playground_chat_keeps_manual_prompt_verbatim_and_failed_turns_out_of_context() -> None:
+    app = _app()
+    with TestClient(app) as client:
+        source = client.get(ASSET_PATH).text
+    assert 'content: text' in source
+    assert 'attachment_names: userFiles.map' in source
+    assert '.filter(item => item.include_in_context !== false)' in source
+    assert 'messages[userIndex].include_in_context = false' in source
+    assert 'include_in_context: false' in source
+    assert 'const userDisplay =' not in source
+
+
 def test_playground_chat_patch_is_idempotent() -> None:
     app = _app()
     assert app.state.playground_chat_patch_installed is True
