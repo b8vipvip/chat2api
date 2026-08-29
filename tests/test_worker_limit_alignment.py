@@ -48,7 +48,7 @@ def test_server_dispatch_carries_same_per_extension_worker_limit_as_admission() 
             install_v21_1_patch(app)
 
             registry = app.state.registry
-            client_id, _token = await registry.register("A", "Chrome", "0.8.2", {})
+            client_id, _token = await registry.register("A", "Chrome", "0.8.7", {})
             app.state.concurrency_config["client_limits"][client_id] = 5
             socket = _Socket()
             await registry.attach(client_id, socket)
@@ -73,13 +73,13 @@ def test_server_dispatch_carries_same_per_extension_worker_limit_as_admission() 
     asyncio.run(scenario())
 
 
-def test_extension_worker_router_uses_fresh_runtime_target_when_message_limit_is_missing() -> None:
+def test_extension_worker_router_uses_runtime_limit_and_reserves_identical_parallel_requests() -> None:
     script = r'''
 import fs from "node:fs";
 import vm from "node:vm";
 import assert from "node:assert/strict";
 
-const source = fs.readFileSync("chrome_extension/conversation_workers_v24.js", "utf8");
+const source = fs.readFileSync("chrome_extension/conversation_workers_v25.js", "utf8");
 const diagnostics = [];
 const context = {
   console,
@@ -90,7 +90,13 @@ const context = {
   Promise,
   setTimeout,
   clearTimeout,
-  resolveTargetTabForRequest: async () => ({ id: 101, windowId: 201 }),
+  resolveTargetTabForRequest: async message => {
+    // Yield once so two simultaneous callers overlap while route allocation is
+    // still being resolved. v25 must already have reserved distinct routes.
+    await Promise.resolve();
+    const index = Number(message?.routing?.worker_index || 1);
+    return { id: 100 + index, windowId: 200 + index };
+  },
   trySendSocket: async payload => { diagnostics.push(payload); return true; },
   chrome: { runtime: { onMessage: { addListener() {} } } },
   __CHAT2API_CONVERSATION_ROUTING_V1__: { routes: {}, activeRequests: new Map() },
@@ -98,7 +104,7 @@ const context = {
 };
 context.globalThis = context;
 vm.createContext(context);
-vm.runInContext(source, context, { filename: "conversation_workers_v24.js" });
+vm.runInContext(source, context, { filename: "conversation_workers_v25.js" });
 
 const runtimeFallback = {
   type: "chat.request",
@@ -109,6 +115,7 @@ await context.resolveTargetTabForRequest(runtimeFallback);
 assert.equal(runtimeFallback.routing.worker_limit, 5);
 assert.equal(diagnostics.at(-1).diagnostics.extension_worker_limit, 5);
 assert.equal(diagnostics.at(-1).diagnostics.extension_worker_limit_source, "runtime-config");
+assert.equal(diagnostics.at(-1).diagnostics.extension_worker_request_reservation, true);
 
 const serverRouted = {
   type: "chat.request",
@@ -128,6 +135,40 @@ const cached = {
 await context.resolveTargetTabForRequest(cached);
 assert.equal(cached.routing.worker_limit, 7);
 assert.equal(diagnostics.at(-1).diagnostics.extension_worker_limit_source, "cached-server-routing");
+
+// Same API key + byte-identical prompt + simultaneous arrival must remain two
+// independent executions. Prompt equality is intentionally irrelevant; request_id
+// owns identity and each in-flight call reserves a different conversation worker.
+const first = {
+  type: "chat.request",
+  request_id: "req_same_1",
+  prompt: "identical prompt",
+  routing: { api_key_id: "key_same", worker_limit: 2 },
+};
+const second = {
+  type: "chat.request",
+  request_id: "req_same_2",
+  prompt: "identical prompt",
+  routing: { api_key_id: "key_same", worker_limit: 2 },
+};
+const [firstTab, secondTab] = await Promise.all([
+  context.resolveTargetTabForRequest(first),
+  context.resolveTargetTabForRequest(second),
+]);
+assert.notEqual(first.request_id, second.request_id);
+assert.equal(first.routing.logical_api_key_id, "key_same");
+assert.equal(second.routing.logical_api_key_id, "key_same");
+assert.deepEqual(new Set([first.routing.worker_index, second.routing.worker_index]), new Set([1, 2]));
+assert.notEqual(first.routing.api_key_id, second.routing.api_key_id);
+assert.notEqual(firstTab.id, secondTab.id);
+
+const workers = context.__CHAT2API_CONVERSATION_WORKERS_V25__;
+assert.equal(workers.requestRoutes.size >= 2, true);
+assert.equal(workers.routeReservations.get("key_same")?.requestId, "req_same_1");
+assert.equal(workers.routeReservations.get("key_same::worker2")?.requestId, "req_same_2");
+workers.releaseRequest("req_same_1");
+assert.equal(workers.routeReservations.has("key_same"), false);
+assert.equal(workers.routeReservations.get("key_same::worker2")?.requestId, "req_same_2");
 '''
     result = subprocess.run(
         ["node", "--input-type=module", "-e", script],

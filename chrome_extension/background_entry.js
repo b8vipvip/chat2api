@@ -31,7 +31,7 @@ importScripts(
   "background_external_warm_v28.js",
   "background_reserve_pool_v29.js",
   "background_reserve_status_reconnect_v29.js",
-  "conversation_workers_v24.js",
+  "conversation_workers_v25.js",
   "conversation_dispatch.js",
   "background_tool_isolation_v48.js",
   "background_runtime_preflight_v48.js",
