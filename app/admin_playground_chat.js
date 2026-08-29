@@ -48,12 +48,12 @@
     <div class="pgChatToolbar">
       <div><label>模型</label><select id="pgChatModel"><option value="gpt-5.6-sol">gpt-5.6-sol</option><option value="gpt-5.5-mini">gpt-5.5-mini</option></select></div>
       <div><label>推理强度</label><select id="pgChatReasoning"><option value="low">低</option><option value="medium" selected>中</option><option value="high">高</option></select></div>
-      <div><label>API Key</label><div class="pgChatKeyBox"><select id="pgChatKey"><option value="master">管理员 CHAT2API_API_KEY（默认）</option></select><input id="pgChatKeyInput" type="password" autocomplete="off" placeholder="粘贴 API Key（可选，优先使用）"></div></div>
+      <div><label>业务 API Key</label><div class="pgChatKeyBox"><select id="pgChatKey"><option value="">正在读取可用业务 Key…</option></select><input id="pgChatKeyInput" type="password" autocomplete="off" placeholder="粘贴业务 API Key（可选，优先使用）"></div></div>
       <div><label>本轮附件（最多 4 个）</label><input id="pgChatFiles" type="file" multiple></div>
     </div>
     <div class="pgChatMessages" id="pgChatMessages"><div class="pgChatEmpty">输入消息即可开始。支持连续追问；后续请求会携带本窗口中的文本对话历史。</div></div>
     <div class="pgChatComposer"><textarea id="pgChatInput" placeholder="输入测试消息。Enter 发送，Shift+Enter 换行。"></textarea><button class="action good" id="pgChatSend">发送</button></div>
-    <div class="pgChatAttachHint"><span>附件只绑定当前一轮请求；模型回答会保留在后续文本上下文中。</span><span id="pgChatLast">尚未发送</span></div>
+    <div class="pgChatAttachHint"><span>附件只绑定当前一轮请求；模型回答会保留在后续文本上下文中。每一轮都会写入下方测试记录。</span><span id="pgChatLast">尚未发送</span></div>
   `;
   root.insertBefore(panel, root.firstElementChild);
 
@@ -61,9 +61,7 @@
   const escHtml = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));
 
   function saveHistory() {
-    try {
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-MAX_HISTORY_MESSAGES)));
-    } catch (_) {}
+    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-MAX_HISTORY_MESSAGES))); } catch (_) {}
   }
 
   function loadHistory() {
@@ -127,18 +125,21 @@
   async function syncKeys() {
     if (typeof api !== "function") return;
     const target = $chat("pgChatKey");
-    const current = target.value || "master";
+    const current = target.value;
     try {
       const data = await api("/api/admin/keys");
-      const options = ['<option value="master">管理员 CHAT2API_API_KEY（默认）</option>'];
+      const options = ['<option value="">请选择可用业务 API Key</option>'];
+      let firstUsable = "";
       for (const item of data.data || []) {
         if (!item.managed) continue;
         const usable = item.enabled && !item.expired && !item.revoked_at && item.secret_recoverable;
         const state = item.revoked_at ? "已撤销" : item.expired ? "已过期" : !item.enabled ? "已停用" : !item.secret_recoverable ? "旧 Key 无法恢复" : "可用";
-        options.push(`<option value="${escHtml(item.key_id)}" ${usable ? "" : "disabled"}>${escHtml(item.name)} · ${escHtml(item.prefix)} · ${escHtml(state)}</option>`);
+        if (usable && !firstUsable) firstUsable = String(item.key_id || "");
+        options.push(`<option value="${escHtml(item.key_id)}" data-key-name="${escHtml(item.name || item.key_id)}" ${usable ? "" : "disabled"}>${escHtml(item.name)} · ${escHtml(item.prefix)} · ${escHtml(state)}</option>`);
       }
       target.innerHTML = options.join("");
-      if ([...target.options].some(option => option.value === current && !option.disabled)) target.value = current;
+      if (current && [...target.options].some(option => option.value === current && !option.disabled)) target.value = current;
+      else if (firstUsable) target.value = firstUsable;
     } catch (_) {}
   }
 
@@ -150,16 +151,13 @@
 
   async function resolveCredential() {
     const pasted = $chat("pgChatKeyInput").value.trim();
-    if (pasted) return {token: pasted, label: "手动粘贴"};
-    const selected = $chat("pgChatKey").value || "master";
-    if (selected === "master") {
-      const token = typeof key === "function" ? String(key() || "").trim() : "";
-      if (!token) throw new Error("请先登录管理员账号");
-      return {token, label: "管理员 CHAT2API_API_KEY"};
-    }
+    if (pasted) return {token: pasted, label: "手动粘贴", key_id: null};
+    const selected = $chat("pgChatKey").value;
+    if (!selected) throw new Error("请选择一个可用业务 API Key，或手动粘贴业务 API Key");
+    const option = $chat("pgChatKey").selectedOptions?.[0];
     const data = await api(`/api/admin/keys/${encodeURIComponent(selected)}/secret`);
     if (!data.token) throw new Error("无法读取所选业务 API Key");
-    return {token: data.token, label: selected};
+    return {token: data.token, label: option?.dataset?.keyName || selected, key_id: selected};
   }
 
   async function uploadFiles(files, token) {
@@ -189,6 +187,30 @@
       .map(item => ({role: item.role, content: item.content}));
   }
 
+  async function recordChatTurn({requestId, model, credential, text, statusValue, totalMs, firstTokenMs, responseChars, attachmentsCount, error}) {
+    try {
+      await api("/api/admin/playground/chat-records", {
+        method: "POST",
+        body: {
+          request_id: requestId,
+          model,
+          api_key_id: credential?.key_id || null,
+          api_key_name: credential?.label || ($chat("pgChatKey").selectedOptions?.[0]?.dataset?.keyName || "未解析"),
+          status: statusValue,
+          duration_ms: totalMs,
+          first_token_ms: firstTokenMs,
+          prompt: text,
+          response_chars: responseChars,
+          attachments_count: attachmentsCount,
+          error: error || null,
+        },
+      });
+      if (typeof loadTests === "function") await loadTests();
+    } catch (recordError) {
+      console.warn("Playground chat record persistence failed", recordError);
+    }
+  }
+
   async function sendMessage() {
     if (sending) return;
     const input = $chat("pgChatInput");
@@ -205,12 +227,7 @@
     let pendingBubble = null;
     const userFiles = [...$chat("pgChatFiles").files].slice(0, 4);
     const userIndex = messages.length;
-    messages.push({
-      role: "user",
-      content: text,
-      attachment_names: userFiles.map(file => file.name),
-      include_in_context: true,
-    });
+    messages.push({role: "user", content: text, attachment_names: userFiles.map(file => file.name), include_in_context: true});
     input.value = "";
     renderMessages();
     pendingBubble = addPendingAssistant();
@@ -295,21 +312,31 @@
       $chat("pgChatLast").innerHTML = `<span class="pgChatBadge">${escHtml(requestId)}</span> <span class="pgChatBadge">${Math.round(totalMs)} ms</span>`;
       status(`聊天请求完成：${requestId}`, "ok");
       $chat("pgChatFiles").value = "";
+      await recordChatTurn({
+        requestId, model, credential, text, statusValue: "passed", totalMs, firstTokenMs,
+        responseChars: assistantText.length, attachmentsCount: userFiles.length, error: null,
+      });
     } catch (error) {
       const totalMs = performance.now() - started;
+      const errorText = String(error?.message || error);
+      const failedStatus = /(stalled|watchdog|timed out|timeout|no observable|no response progress)/i.test(errorText) ? "stalled" : "failed";
       document.getElementById("pgChatPending")?.remove();
       if (messages[userIndex]) messages[userIndex].include_in_context = false;
       messages.push({
         role: "assistant",
-        content: `请求失败：${String(error?.message || error)}`,
+        content: `请求失败：${errorText}`,
         include_in_context: false,
         error: true,
         meta: {request_id: requestId, model, total_ms: totalMs},
       });
-      lastRequest = {request_id: requestId, model, total_ms: totalMs, error: String(error?.message || error), diagnostics};
+      lastRequest = {request_id: requestId, model, total_ms: totalMs, error: errorText, diagnostics};
       saveHistory();
       renderMessages();
-      status(`聊天请求失败：${String(error?.message || error)}`, "bad");
+      status(`聊天请求失败：${errorText}`, "bad");
+      await recordChatTurn({
+        requestId, model, credential, text, statusValue: failedStatus, totalMs, firstTokenMs,
+        responseChars: assistantText.length, attachmentsCount: userFiles.length, error: errorText,
+      });
     } finally {
       if (credential && uploaded.length) await cleanupFiles(uploaded, credential.token);
       sending = false;
