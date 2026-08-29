@@ -10,7 +10,7 @@ from . import linux_worker_patch as worker_control
 from .admin_auth import SESSION_COOKIE
 
 
-PATCH_VERSION = "0.22.24"
+PATCH_VERSION = "0.22.33"
 ASSET_PATH = "/assets/chat2api-linux-worker-initialize-v43.js"
 BOOTSTRAP_PATH = "/bootstrap/linux-worker.sh"
 
@@ -59,10 +59,22 @@ def _patch_bootstrap(text: str) -> str:
     # A repair upgrade must also recover a profile that has already entered the
     # Chromium DidStartWorkerFail loop. Only Service Worker runtime state is
     # disposable; authenticated ChatGPT cookies/storage remain untouched.
+    #
+    # IMPORTANT: patch only the standalone service restart command. Older code
+    # replaced the first *substring* occurrence of "systemctl restart ...",
+    # which is also present inside the sudoers command allowlist. That split the
+    # sudoers heredoc into shell commands and made /etc/sudoers.d/chat2api-worker
+    # syntactically invalid, preventing the unprivileged chat2api Agent from
+    # scheduling initialize/upgrade helpers with sudo -n.
     restart_anchor = "systemctl restart chat2api-chrome.service"
-    reset = 'rm -rf "$PROFILE_DIR/Default/Service Worker" 2>/dev/null || true\n' + restart_anchor
-    if restart_anchor in text and 'PROFILE_DIR/Default/Service Worker' not in text:
-        text = text.replace(restart_anchor, reset, 1)
+    reset_line = 'rm -rf "$PROFILE_DIR/Default/Service Worker" 2>/dev/null || true'
+    if reset_line not in text:
+        lines = text.splitlines()
+        for index, line in enumerate(lines):
+            if line.strip() == restart_anchor:
+                lines.insert(index, reset_line)
+                text = "\n".join(lines) + ("\n" if text.endswith("\n") else "")
+                break
     return text
 
 
