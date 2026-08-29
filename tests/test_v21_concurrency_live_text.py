@@ -102,7 +102,7 @@ def test_live_text_accepts_simple_and_realtime_item_shapes() -> None:
 
 
 def test_extension_uses_three_per_key_workers_after_affinity_warm_pool() -> None:
-    workers = (EXTENSION / "conversation_workers_v24.js").read_text(encoding="utf-8")
+    workers = (EXTENSION / "conversation_workers_v25.js").read_text(encoding="utf-8")
     dispatch = (EXTENSION / "conversation_dispatch.js").read_text(encoding="utf-8")
     entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")
     warm = (EXTENSION / "conversation_warm_pool_v2.js").read_text(encoding="utf-8")
@@ -112,12 +112,13 @@ def test_extension_uses_three_per_key_workers_after_affinity_warm_pool() -> None
     assert "logical_api_key_id" in workers
     assert "worker_index" in workers
     assert "extension_worker_router" in workers
+    assert "routeReservations: new Map()" in workers
     assert "requestTabs: new Map()" in dispatch
     assert '"voice.live.start"' in dispatch
     assert "Serialize only route allocation / page dispatch" in dispatch
     assert "MAX_WARM_SLOTS = 2" in warm
-    assert entry.index('"conversation_warm_pool_v2.js"') < entry.index('"conversation_workers_v24.js"')
-    assert entry.index('"conversation_workers_v24.js"') < entry.index('"conversation_dispatch.js"')
+    assert entry.index('"conversation_warm_pool_v2.js"') < entry.index('"conversation_workers_v25.js"')
+    assert entry.index('"conversation_workers_v25.js"') < entry.index('"conversation_dispatch.js"')
 
 
 def test_live_voice_routes_text_to_same_bound_tab_without_stopping_audio() -> None:
