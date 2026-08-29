@@ -88,8 +88,9 @@ def test_external_account_tools_are_fail_closed_at_prompt_and_ui_layers():
 def test_runtime_contract_exposes_v48_features():
     app = FastAPI(version=SERVER_RUNTIME_VERSION)
     payload = version_contract_payload(app)
-    assert SERVER_RUNTIME_VERSION == "0.22.32"
+    assert SERVER_RUNTIME_VERSION == "0.22.33"
     assert payload["chrome_bridge"]["bundle_version"] == "0.8.6"
     assert payload["features"]["response_stream_recovery"] is True
     assert payload["features"]["worker_runtime_preflight"] is True
     assert payload["features"]["external_account_tool_isolation"] is True
+    assert payload["features"]["linux_worker_sudoers_guard"] is True
