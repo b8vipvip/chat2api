@@ -65,7 +65,7 @@ def test_updater_accepts_supported_origin_forms_and_installer_matches():
 
 def test_transport_release_contract_and_shell_syntax():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.35"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.36"' in runtime
     assert '"github_transport_failover": True' in runtime
     assert "github-transport-failover-v22-30" in runtime
 
