@@ -14,7 +14,9 @@
     attempts: 0,
     last_click_at: 0,
     timer: null,
+    observer: null,
     last_reason: "",
+    checking: false,
   };
   globalThis[KEY] = state;
 
@@ -85,58 +87,68 @@
   }
 
   async function tick() {
-    const active = globalThis[REQUEST_KEY]?.active;
-    const requestId = String(active?.requestId || "");
-    if (!requestId) {
-      state.request_id = "";
-      state.attempts = 0;
-      state.last_click_at = 0;
-      state.last_reason = "";
-      return;
-    }
-    if (state.request_id !== requestId) {
-      state.request_id = requestId;
-      state.attempts = 0;
-      state.last_click_at = 0;
-      state.last_reason = "";
-    }
-
-    const surface = retrySurface();
-    if (!surface) return;
-    if (Date.now() - state.last_click_at < RETRY_COOLDOWN_MS) return;
-    if (state.attempts >= MAX_RETRIES) {
-      if (state.last_reason !== "exhausted") {
-        state.last_reason = "exhausted";
-        await emit(requestId, {
-          transient_retry: "chatgpt-ui-v50",
-          transient_retry_exhausted: true,
-          transient_retry_attempts: state.attempts,
-          transient_retry_reason: surface.reason,
-        });
-      }
-      return;
-    }
-
-    state.attempts += 1;
-    state.last_click_at = Date.now();
-    state.last_reason = surface.reason;
-    resetRecoveryClock(requestId);
-    await emit(requestId, {
-      transient_retry: "chatgpt-ui-v50",
-      transient_retry_attempt: state.attempts,
-      transient_retry_max_attempts: MAX_RETRIES,
-      transient_retry_reason: surface.reason,
-      transient_retry_button_label: surface.label,
-      transient_retry_same_request: true,
-    });
+    if (state.checking) return;
+    state.checking = true;
     try {
-      surface.button.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-      surface.button.click();
-    } catch (_) {}
+      const active = globalThis[REQUEST_KEY]?.active;
+      const requestId = String(active?.requestId || "");
+      if (!requestId) {
+        state.request_id = "";
+        state.attempts = 0;
+        state.last_click_at = 0;
+        state.last_reason = "";
+        return;
+      }
+      if (state.request_id !== requestId) {
+        state.request_id = requestId;
+        state.attempts = 0;
+        state.last_click_at = 0;
+        state.last_reason = "";
+      }
+
+      const surface = retrySurface();
+      if (!surface) return;
+      if (Date.now() - state.last_click_at < RETRY_COOLDOWN_MS) return;
+      if (state.attempts >= MAX_RETRIES) {
+        if (state.last_reason !== "exhausted") {
+          state.last_reason = "exhausted";
+          await emit(requestId, {
+            transient_retry: "chatgpt-ui-v50",
+            transient_retry_exhausted: true,
+            transient_retry_attempts: state.attempts,
+            transient_retry_reason: surface.reason,
+          });
+        }
+        return;
+      }
+
+      state.attempts += 1;
+      state.last_click_at = Date.now();
+      state.last_reason = surface.reason;
+      resetRecoveryClock(requestId);
+      await emit(requestId, {
+        transient_retry: "chatgpt-ui-v50",
+        transient_retry_attempt: state.attempts,
+        transient_retry_max_attempts: MAX_RETRIES,
+        transient_retry_reason: surface.reason,
+        transient_retry_button_label: surface.label,
+        transient_retry_same_request: true,
+      });
+      try {
+        surface.button.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+        surface.button.click();
+      } catch (_) {}
+    } finally {
+      state.checking = false;
+    }
   }
 
   state.retrySurface = retrySurface;
   state.resetRecoveryClock = resetRecoveryClock;
   state.constants = Object.freeze({ max_retries: MAX_RETRIES, retry_cooldown_ms: RETRY_COOLDOWN_MS });
   state.timer = setInterval(() => tick().catch(() => {}), CHECK_INTERVAL_MS);
+  if (typeof MutationObserver === "function" && document.documentElement) {
+    state.observer = new MutationObserver(() => tick().catch(() => {}));
+    state.observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  }
 })();
