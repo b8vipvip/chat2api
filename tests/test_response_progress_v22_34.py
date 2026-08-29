@@ -21,6 +21,12 @@ def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> No
     assert "content_response_stream_recovery_v48.js" not in scripts
     assert "content_generation_liveness_v42.js" not in scripts
 
+    bootstrap = (ROOT / "chrome_extension" / "content_bootstrap.js").read_text(encoding="utf-8")
+    assert '"content_response_stream_recovery_v49.js"' in bootstrap
+    assert '"content_generation_liveness_v49.js"' in bootstrap
+    assert '"content_response_stream_recovery_v48.js"' not in bootstrap
+    assert '"content_generation_liveness_v42.js"' not in bootstrap
+
     recovery = (ROOT / "chrome_extension" / "content_response_stream_recovery_v49.js").read_text(encoding="utf-8")
     heartbeat = (ROOT / "chrome_extension" / "content_generation_liveness_v49.js").read_text(encoding="utf-8")
 
@@ -33,12 +39,12 @@ def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> No
     assert 'type: "chat.completed"' in recovery
     assert 'type: "chat.error"' in recovery
 
-    # v42 used generation_sequence, which the server intentionally treats as real
-    # response progress. v49 heartbeat must remain diagnostic-only so a frozen
-    # Stop/Thinking UI cannot indefinitely refresh the generation-activity lease.
+    # v42 used a changing generation_sequence field, which the server intentionally
+    # treats as real response progress. v49 heartbeat must remain diagnostic-only
+    # so a frozen Stop/Thinking UI cannot refresh the response-progress lease.
     assert "generation_heartbeat_sequence" in heartbeat
     assert "generation_control_visible" in heartbeat
-    assert "generation_sequence" not in heartbeat
+    assert "generation_sequence:" not in heartbeat
 
     for path in (
         ROOT / "chrome_extension" / "content_response_stream_recovery_v49.js",
