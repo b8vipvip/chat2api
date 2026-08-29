@@ -60,3 +60,27 @@ jobs:
           assert required <= names, sorted(required - names)
           print(json.dumps({"bootstrap": True, "bundle_files": len(names), "sha256": digest}))
           '
+      - name: Boot production ASGI entrypoint and verify health
+        run: |
+          set -euo pipefail
+          cid="$(docker run -d -p 127.0.0.1:18765:8765 chat2api-production-smoke)"
+          trap 'docker logs "$cid" || true; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
+          ok=0
+          for _ in $(seq 1 30); do
+            if curl -fsS --max-time 2 http://127.0.0.1:18765/version > /tmp/chat2api-version.json; then
+              ok=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ok" -ne 1 ]; then
+            echo 'production ASGI entrypoint failed to become healthy' >&2
+            exit 1
+          fi
+          python - <<'PY'
+          import json
+          payload = json.load(open('/tmp/chat2api-version.json', encoding='utf-8'))
+          assert payload['server']['runtime_aligned'] is True
+          assert payload['server']['entrypoint'] == 'app.entry:app'
+          print(json.dumps({'production_entrypoint': True, 'runtime': payload['server']['runtime_version']}))
+          PY
