@@ -30,7 +30,7 @@ def test_playground_chat_patch_injects_console_asset() -> None:
         asset = client.get(ASSET_PATH)
         assert asset.status_code == 200
         source = asset.text
-        assert 'id="playgroundChatPanel"' in source
+        assert 'panel.id = "playgroundChatPanel"' in source
         assert 'prompt_mode: "full"' in source
         assert 'stream: true' in source
         assert 'messages: normalizedHistory()' in source
