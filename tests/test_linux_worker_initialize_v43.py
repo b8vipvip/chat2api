@@ -52,6 +52,8 @@ def test_autoreload_v43_does_not_accept_running_chrome_without_bridge_runtime() 
         'rm -rf "${PROFILE_DIR}/Default/Service Worker"',
         'rm -f "$APPLIED_FILE"',
         "Bridge Service Worker is unavailable",
+        "repair_base_script()",
+        "/bootstrap/linux-worker-bundle.tar.gz",
     ):
         assert token in source
     result = subprocess.run(["bash", "-n", str(ROOT / "scripts" / "linux_extension_autoreload_v43.sh")], capture_output=True, text=True)
@@ -124,9 +126,10 @@ def test_admin_initialize_patch_has_full_and_compatibility_paths() -> None:
 
 def test_runtime_contract_publishes_worker_initialize_v43() -> None:
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.34"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.35"' in runtime
     assert "worker-initialize-v43" in runtime
     assert "worker-sudoers-guard-v22-33" in runtime
     assert '"linux_worker_initialize": True' in runtime
     assert '"linux_worker_bridge_runtime_recovery": True' in runtime
     assert '"linux_worker_sudoers_guard": True' in runtime
+    assert '"linux_worker_autoreload_self_heal": True' in runtime

@@ -33,6 +33,7 @@ importScripts(
   "background_reserve_status_reconnect_v29.js",
   "conversation_workers_v25.js",
   "conversation_dispatch.js",
+  "background_route_quarantine_v50.js",
   "background_tool_isolation_v48.js",
   "background_runtime_preflight_v48.js",
   "background_request_hygiene_v42.js",

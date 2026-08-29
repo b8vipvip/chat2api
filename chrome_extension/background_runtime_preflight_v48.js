@@ -2,10 +2,12 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V48__";
   if (globalThis[KEY]) return;
 
-  const REQUIRED_BUNDLE = "0.8.7";
+  const REQUIRED_BUNDLE = "0.8.8";
   const OVERLAY_FILES = [
     "content_tool_isolation_v48.js",
+    "content_request_lifecycle_v50.js",
     "content_response_stream_recovery_v49.js",
+    "content_transient_retry_v50.js",
     "content_generation_liveness_v49.js",
     "content_runtime_contract_v48.js",
   ];
@@ -24,19 +26,14 @@
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   async function injectOverlays(tabId) {
-    await chrome.scripting.executeScript({
-      target: {tabId},
-      files: OVERLAY_FILES,
-    });
+    await chrome.scripting.executeScript({ target: {tabId}, files: OVERLAY_FILES });
   }
 
   async function contract(tabId) {
     try {
       const result = await chrome.tabs.sendMessage(tabId, {type: "chat2api.runtime.contract.v48"});
       return result && typeof result === "object" ? result : null;
-    } catch (_) {
-      return null;
-    }
+    } catch (_) { return null; }
   }
 
   async function waitForContract(tabId, attempts = 12, delayMs = 100) {
@@ -68,10 +65,6 @@
     let result = await waitForContract(tabId, 8, 80);
     let reloaded = false;
 
-    // A dynamic executeScript can refresh overlay code, but it cannot prove that
-    // the document itself was created under the current extension bundle because
-    // historical modules self-guard their global keys. The manifest-only marker
-    // is therefore the authority: if it is absent/stale, replace the document.
     if (!result?.ok || String(result?.marker?.bundle || "") !== REQUIRED_BUNDLE) {
       state.reloads += 1;
       reloaded = true;
@@ -91,9 +84,7 @@
     }
 
     let toolPreflight = null;
-    try {
-      toolPreflight = await chrome.tabs.sendMessage(tabId, {type: "chat2api.tool-isolation.preflight"});
-    } catch (_) {}
+    try { toolPreflight = await chrome.tabs.sendMessage(tabId, {type: "chat2api.tool-isolation.preflight"}); } catch (_) {}
     state.last = {
       tab_id: tabId,
       ok: true,

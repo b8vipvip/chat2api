@@ -5,13 +5,44 @@ BASE_SCRIPT="${CHAT2API_BASE_AUTORELOAD:-/opt/chat2api-worker/scripts/linux_exte
 PROFILE_DIR="${PROFILE_DIR:-/home/chat2api/.config/chat2api-chrome-worker-01}"
 CHROME_UNIT="${CHROME_UNIT:-chat2api-chrome.service}"
 DEBUG_URL="${CHAT2API_CHROME_DEBUG_URL:-http://127.0.0.1:9222}"
-APPLIED_FILE="${STATE_DIR:-/var/lib/chat2api-worker}/extension-applied.sha256"
-FAILED_RUNTIME_FILE="${STATE_DIR:-/var/lib/chat2api-worker}/extension-runtime-failed.txt"
+SERVER_URL="${CHAT2API_SERVER_URL:-}"
+STATE_DIR="${STATE_DIR:-/var/lib/chat2api-worker}"
+APPLIED_FILE="${STATE_DIR}/extension-applied.sha256"
+FAILED_RUNTIME_FILE="${STATE_DIR}/extension-runtime-failed.txt"
 
 log() {
   local level="$1"; shift
   printf '%s [%s] %s\n' "$(date -Is)" "$level" "$*"
   logger -t chat2api-linux-extension-autoreload -- "[$level] $*" 2>/dev/null || true
+}
+
+repair_base_script() {
+  [[ -n "$SERVER_URL" ]] || return 1
+  command -v curl >/dev/null 2>&1 || return 1
+  command -v tar >/dev/null 2>&1 || return 1
+  command -v sha256sum >/dev/null 2>&1 || return 1
+  local meta bundle tmp expected
+  meta="$(mktemp)"; bundle="$(mktemp)"; tmp="$(mktemp -d)"
+  cleanup_repair() { rm -f "$meta" "$bundle"; rm -rf "$tmp"; }
+  if ! curl -fsS --connect-timeout 5 --max-time 15 -o "$meta" "${SERVER_URL%/}/bootstrap/linux-worker-bundle.json"; then cleanup_repair; return 1; fi
+  expected="$(python3 - "$meta" <<'PY'
+import json,sys
+try:
+    d=str(json.load(open(sys.argv[1],encoding='utf-8')).get('sha256') or '').strip().lower()
+    print(d if len(d)==64 and all(c in '0123456789abcdef' for c in d) else '')
+except Exception:
+    print('')
+PY
+)"
+  [[ -n "$expected" ]] || { cleanup_repair; return 1; }
+  if ! curl -fSL --retry 2 --retry-delay 1 --retry-all-errors --connect-timeout 8 --max-time 120 -o "$bundle" "${SERVER_URL%/}/bootstrap/linux-worker-bundle.tar.gz"; then cleanup_repair; return 1; fi
+  if ! printf '%s  %s\n' "$expected" "$bundle" | sha256sum -c - >/dev/null 2>&1; then cleanup_repair; return 1; fi
+  if ! tar -xzf "$bundle" -C "$tmp" scripts/linux_extension_autoreload.sh >/dev/null 2>&1; then cleanup_repair; return 1; fi
+  [[ -s "$tmp/scripts/linux_extension_autoreload.sh" ]] || { cleanup_repair; return 1; }
+  install -o root -g root -m 755 "$tmp/scripts/linux_extension_autoreload.sh" "$BASE_SCRIPT"
+  cleanup_repair
+  log INFO "restored missing base autoreload helper from verified central Worker Bundle"
+  return 0
 }
 
 runtime_ready() {
@@ -41,14 +72,13 @@ wait_runtime() {
 }
 
 [[ "$EUID" -eq 0 ]] || { log ERROR "run as root"; exit 1; }
-[[ -x "$BASE_SCRIPT" ]] || { log ERROR "base autoreload script is missing: $BASE_SCRIPT"; exit 1; }
+if [[ ! -x "$BASE_SCRIPT" ]]; then
+  log WARN "base autoreload script is missing: $BASE_SCRIPT; attempting verified self-repair"
+  repair_base_script || { log ERROR "unable to restore base autoreload script from central Worker Bundle"; exit 1; }
+fi
 
 "$BASE_SCRIPT"
 
-# A healthy Bridge keeps an authenticated WebSocket open, so its MV3 service
-# worker should be observable through loopback CDP. A running Chrome process by
-# itself is not enough: Chromium can repeatedly fail DidStartWorker while the
-# service unit remains green.
 if wait_runtime 30; then
   rm -f "$FAILED_RUNTIME_FILE"
   exit 0
@@ -68,8 +98,6 @@ for _ in $(seq 1 45); do
   sleep 1
 done
 
-# Do not leave the source fingerprint recorded as healthy. The next timer pass
-# is allowed to retry instead of permanently accepting a broken runtime.
 rm -f "$APPLIED_FILE"
 printf '%s\n' "$(date -Is) Bridge Service Worker unavailable after clean restart" >"$FAILED_RUNTIME_FILE"
 log ERROR "Chrome Bridge runtime is still unavailable after a clean restart"
