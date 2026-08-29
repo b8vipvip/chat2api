@@ -2,11 +2,12 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V48__";
   if (globalThis[KEY]) return;
 
-  const REQUIRED_BUNDLE = "0.8.8";
+  const REQUIRED_BUNDLE = "0.8.9";
   const OVERLAY_FILES = [
     "content_tool_isolation_v48.js",
     "content_request_lifecycle_v50.js",
     "content_response_stream_recovery_v49.js",
+    "content_response_semantic_recovery_v51.js",
     "content_transient_retry_v50.js",
     "content_generation_liveness_v49.js",
     "content_runtime_contract_v48.js",
