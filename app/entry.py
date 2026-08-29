@@ -61,6 +61,7 @@ from .runtime_logs_patch import install_runtime_logs_patch
 from .extension_capacity_control_patch import install_extension_capacity_control_patch
 from .mini_multimodal_quota_patch import install_mini_multimodal_quota_patch
 from .server_update_patch import install_server_update_patch
+from .server_worker_sync_patch import install_server_worker_sync_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -170,3 +171,9 @@ install_request_device_identity_patch(app)
 # into the persisted data volume; a one-time host systemd.path helper executes
 # the fixed transactional updater outside the container.
 install_server_update_patch(app)
+# After the host updater has finished its health check, reconcile every Linux
+# Worker with the newly deployed server. Worker-impacting GitHub diffs force a
+# refresh even when the semantic bundle version did not change; server-only
+# updates leave already-current Workers untouched. Offline Workers stay pending
+# and continue automatically when they reconnect.
+install_server_worker_sync_patch(app)
