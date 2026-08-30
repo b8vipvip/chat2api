@@ -115,11 +115,13 @@ def test_external_account_tools_are_fail_closed_at_prompt_and_ui_layers():
 def test_runtime_contract_exposes_v48_v49_v50_and_v51_features():
     app = FastAPI(version=SERVER_RUNTIME_VERSION)
     payload = version_contract_payload(app)
-    assert SERVER_RUNTIME_VERSION == "0.22.36"
+    assert SERVER_RUNTIME_VERSION == "0.22.37"
     assert payload["chrome_bridge"]["bundle_version"] == "0.8.9"
     assert payload["features"]["response_stream_recovery"] is True
     assert payload["features"]["assistant_response_semantic_guard"] is True
     assert payload["features"]["assistant_response_semantic_recovery"] is True
+    assert payload["features"]["model_capability_routing_guard"] is True
+    assert payload["features"]["playground_chat_running_records"] is True
     assert payload["features"]["browser_page_progress_probe"] is True
     assert payload["features"]["same_api_parallel_requests"] is True
     assert payload["features"]["failed_route_quarantine"] is True
