@@ -103,8 +103,8 @@ def test_generation_health_guard_is_final_after_free_account_admission() -> None
 def test_bundle_and_runtime_publish_generation_backend_health_revision() -> None:
     manifest = json.loads(read("chrome_extension/manifest.json"))
     runtime = read("app/runtime_contract.py")
-    assert manifest["version"] == "0.8.12"
+    assert manifest["version"] == "0.8.11"
     assert 'SERVER_RUNTIME_VERSION = "0.22.38"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.12"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.11"' in runtime
     assert '"linux_worker_generation_backend_health": True' in runtime
     assert "generation-backend-health-v54" in runtime
