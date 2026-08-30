@@ -11,6 +11,7 @@ importScripts(
   "background_hardening.js",
   "background_socket_singleflight_v21.js",
   "browser_tabs.js",
+  "background_rate_limit_guard_v52.js",
   "background_tab_supervisor_v32.js",
   "model_routing_v2.js",
   "background_page_smoke_v22.js",

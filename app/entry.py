@@ -61,6 +61,7 @@ from .runtime_contract import install_runtime_contract
 from .runtime_logs_patch import install_runtime_logs_patch
 from .extension_capacity_control_patch import install_extension_capacity_control_patch
 from .mini_multimodal_quota_patch import install_mini_multimodal_quota_patch
+from .model_capability_routing_patch import install_model_capability_routing_patch
 from .server_update_patch import install_server_update_patch
 from .server_worker_sync_lifespan_patch import install_server_worker_sync_patch
 
@@ -163,6 +164,11 @@ install_linux_worker_upgrade_patch(app)
 # installed after pairing. Pairing may keep the physical extension transport
 # healthy, while this final boundary decides whether it is eligible for requests.
 install_linux_worker_enable_patch(app)
+# Route text requests only to Workers that can actually serve the requested
+# model. Install after the Worker routing toggle and mini quota policy so the
+# final resolver preserves those constraints while rejecting Free->paid family
+# mismatches before browser dispatch.
+install_model_capability_routing_patch(app)
 # The Worker console polling guard is the final Worker presentation boundary.
 # It serializes list refreshes, suppresses unchanged tbody rewrites, and lets the
 # stable renderer consume the base page's shared snapshot instead of polling twice.

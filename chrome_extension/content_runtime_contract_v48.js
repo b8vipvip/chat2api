@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_CONTENT_RUNTIME_CONTRACT_V48__";
   if (globalThis[KEY]) return;
 
-  const REQUIRED_BUNDLE = "0.8.9";
+  const REQUIRED_BUNDLE = "0.8.10";
   const snapshot = () => {
     const marker = globalThis.__CHAT2API_CONTENT_BUNDLE_MARKER_V48__ || null;
     const modules = {
@@ -10,6 +10,7 @@
       request_lifecycle_v50: Number(globalThis.__CHAT2API_REQUEST_LIFECYCLE_V50__?.version || 0) === 50,
       response_capture_v41: Number(globalThis.__CHAT2API_RESPONSE_CAPTURE_V41__?.version || 0) === 41,
       completion_recovery_v6: Boolean(globalThis.__CHAT2API_COMPLETION_RECOVERY_V6__),
+      rate_limit_guard_v52: Boolean(globalThis.__CHAT2API_RATE_LIMIT_CONTENT_V52__),
       tool_isolation_v48: Number(globalThis.__CHAT2API_TOOL_ISOLATION_V48__?.version || 0) === 48,
       response_stream_recovery_v49: Number(globalThis.__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__?.version || 0) === 49,
       response_semantic_recovery_v51: Number(globalThis.__CHAT2API_RESPONSE_SEMANTIC_RECOVERY_V51__?.version || 0) === 51,

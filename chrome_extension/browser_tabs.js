@@ -16,7 +16,35 @@
     throw lastError || new Error("Timed out waiting for the ChatGPT page controller");
   }
 
+  async function beforeWindowCreate(purpose) {
+    const guard = globalThis.__CHAT2API_RATE_LIMIT_GUARD_V52__;
+    if (typeof guard?.beforeWindowCreate === "function") await guard.beforeWindowCreate(purpose);
+  }
+
+  async function chooseExistingTab() {
+    const tabs = await chatTabs().catch(() => []);
+    if (!tabs.length) return null;
+    const sorted = [...tabs].sort((left, right) => {
+      const activeDiff = Number(Boolean(right?.active)) - Number(Boolean(left?.active));
+      if (activeDiff) return activeDiff;
+      return Number(right?.lastAccessed || 0) - Number(left?.lastAccessed || 0);
+    });
+    const chosen = sorted[0] || null;
+    if (!Number.isInteger(chosen?.id)) return null;
+    await chrome.storage.local.set({
+      boundTabId: chosen.id,
+      autoBind: false,
+      modelsUpdatedAt: 0,
+      automationTabAdoptedAt: new Date().toISOString(),
+      automationWindowId: chosen.windowId,
+      automationWindowStrategy: "adopt-existing-on-multiple-tabs-v52",
+    }).catch(() => {});
+    if (typeof sendExtensionStatus === "function") await sendExtensionStatus(false).catch(() => {});
+    return chosen;
+  }
+
   async function createAutomationWindow() {
+    await beforeWindowCreate("automation-fallback");
     const created = await chrome.windows.create({
       url: "https://chatgpt.com/",
       focused: false,
@@ -46,7 +74,15 @@
     try { return await baseResolveTargetTab(); }
     catch (error) {
       const text = String(error?.message || error);
-      if (text.includes("Multiple ChatGPT tabs") || text.includes("No ChatGPT tab")) return createAutomationWindow();
+      if (text.includes("Multiple ChatGPT tabs")) {
+        // Never respond to an already-multiple state by creating one more window.
+        // The previous behavior was a positive-feedback loop: N tabs -> N+1 on
+        // every request. Adopt one existing Worker tab instead and bind it.
+        const existing = await chooseExistingTab();
+        if (existing) return existing;
+        throw error;
+      }
+      if (text.includes("No ChatGPT tab")) return createAutomationWindow();
       throw error;
     }
   };
