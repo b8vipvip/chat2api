@@ -75,9 +75,6 @@ def test_initialize_patch_never_splits_sudoers_restart_allowlist() -> None:
     source = (ROOT / "scripts" / "bootstrap_linux_worker.sh").read_text(encoding="utf-8")
     patched = patch_upgrade_bootstrap(patch_initialize_bootstrap(patch_diagnostics_bootstrap(source)))
 
-    # Regression for production failure on 2026-08-29: a substring replacement
-    # matched `/bin/systemctl restart chat2api-chrome.service` inside the sudoers
-    # allowlist and injected a newline, leaving line 2 as a bare `systemctl ...`.
     sudo_header = 'cat >"$SUDOERS_TMP" <<\'SUDO\''
     assert sudo_header in patched
     sudo_block = patched.split(sudo_header + "\n", 1)[1].split("\nSUDO\n", 1)[0]
@@ -126,7 +123,7 @@ def test_admin_initialize_patch_has_full_and_compatibility_paths() -> None:
 
 def test_runtime_contract_publishes_worker_initialize_v43() -> None:
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.37"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.38"' in runtime
     assert "worker-initialize-v43" in runtime
     assert "worker-sudoers-guard-v22-33" in runtime
     assert '"linux_worker_initialize": True' in runtime
