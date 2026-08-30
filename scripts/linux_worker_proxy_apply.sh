@@ -127,10 +127,11 @@ if [[ "${listener_ready}" -ne 1 ]]; then
   exit 5
 fi
 
-# Do not accept a node merely because chatgpt.com renders. A real generation
-# also depends on OpenAI/ChatGPT backend transports. The shared probe performs
-# TLS/HTTP handshakes to the landing page plus bzr.openai.com and ws.chatgpt.com
-# through the exact local SOCKS path Chrome uses.
+# Historical compatibility term: chatgpt_connectivity_test. The old check used
+# socks5h://127.0.0.1:${PROXY_PORT} against only the landing page. The new shared
+# probe keeps that exact SOCKS path but also exercises the real text conversation
+# and Sentinel HTTP routes. Telemetry (bzr) and realtime/voice WebSocket traffic
+# are deliberately not hard gates for ordinary text generation.
 CURRENT_STAGE="generation_backend_connectivity_test"
 if [[ ! -x "${GENERATION_PROBE}" ]]; then
   if rollback; then
