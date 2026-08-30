@@ -6,6 +6,7 @@
   const state = {
     lastSnapshot: null,
     baseResolveTargetTab: typeof globalThis.resolveTargetTab === "function" ? globalThis.resolveTargetTab : null,
+    baseWindowsCreate: chrome.windows?.create ? chrome.windows.create.bind(chrome.windows) : null,
   };
   globalThis[KEY] = state;
 
@@ -61,6 +62,18 @@
     return assertReady(`create-window:${purpose}`);
   }
 
+  function chatgptCreateData(createData) {
+    const urls = Array.isArray(createData?.url) ? createData.url : [createData?.url];
+    return urls.some(value => {
+      if (!value) return false;
+      try {
+        return ["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(new URL(String(value)).hostname);
+      } catch (_) {
+        return false;
+      }
+    });
+  }
+
   state.snapshot = snapshot;
   state.assertReady = assertReady;
   state.beforeWindowCreate = beforeWindowCreate;
@@ -73,6 +86,19 @@
     };
     wrapped.__chat2apiRateLimitGuardV52 = true;
     globalThis.resolveTargetTab = wrapped;
+  }
+
+  // Warm, reserve, bootstrap and legacy automation paths all create ChatGPT
+  // windows through chrome.windows.create. Intercept that single boundary so a
+  // visible rate-limit modal cannot make several independent recovery loops each
+  // open another window. Non-ChatGPT windows are untouched.
+  if (state.baseWindowsCreate && !chrome.windows.create?.__chat2apiRateLimitGuardV52) {
+    const guardedCreate = async createData => {
+      if (chatgptCreateData(createData)) await beforeWindowCreate("chrome.windows.create");
+      return state.baseWindowsCreate(createData);
+    };
+    guardedCreate.__chat2apiRateLimitGuardV52 = true;
+    try { chrome.windows.create = guardedCreate; } catch (_) {}
   }
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
