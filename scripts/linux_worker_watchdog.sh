@@ -2,11 +2,15 @@
 set -euo pipefail
 
 WORKER_USER="${WORKER_USER:-chat2api}"
+REPO_DIR="${REPO_DIR:-/opt/chat2api-worker}"
 PROFILE_DIR="${PROFILE_DIR:-/home/${WORKER_USER}/.config/chat2api-chrome-worker-01}"
 EXTENSION_DIR="${EXTENSION_DIR:-/opt/chat2api/chrome_extension}"
 PROXY_PORT="${PROXY_PORT:-10808}"
 CHATGPT_URL="${CHATGPT_URL:-https://chatgpt.com/}"
 CHAT2API_SERVER_URL="${CHAT2API_SERVER_URL:-https://chat2api.mv3.cn}"
+STATE_DIR="${STATE_DIR:-/var/lib/chat2api-worker}"
+GENERATION_PROBE="${GENERATION_PROBE:-${REPO_DIR}/scripts/linux_worker_generation_probe.sh}"
+GENERATION_HEALTH_FILE="${GENERATION_HEALTH_FILE:-${STATE_DIR%/}/generation-backend-health.json}"
 XRAY_UNIT="${XRAY_UNIT:-chat2api-xray.service}"
 XVFB_UNIT="${XVFB_UNIT:-chat2api-xvfb.service}"
 CHROME_UNIT="${CHROME_UNIT:-chat2api-chrome.service}"
@@ -55,13 +59,39 @@ chrome_process_ready() {
     | grep -E '[Cc]hrome' >/dev/null 2>&1
 }
 
-chatgpt_transport_ready() {
-  # Deliberately do not use --fail: an HTTP 4xx/5xx still proves that the
-  # browser worker's SOCKS path can resolve and establish an HTTPS connection.
-  curl --silent --show-error --output /dev/null \
-    --connect-timeout 8 --max-time 20 \
-    --proxy "socks5h://127.0.0.1:${PROXY_PORT}" \
-    "${CHATGPT_URL}"
+write_generation_health() {
+  local ready="$1"
+  mkdir -p "${STATE_DIR}"
+  local temp="${GENERATION_HEALTH_FILE}.tmp.$$"
+  printf '{"ready":%s,"checked_at_epoch":%s,"source":"linux-worker-watchdog-generation-v54"}\n' \
+    "${ready}" "$(date +%s)" >"${temp}"
+  chmod 644 "${temp}" 2>/dev/null || true
+  mv -f "${temp}" "${GENERATION_HEALTH_FILE}"
+}
+
+generation_backend_ready() {
+  if [[ ! -x "${GENERATION_PROBE}" ]]; then
+    write_generation_health false
+    log ERROR "generation backend probe is missing or not executable: ${GENERATION_PROBE}"
+    return 1
+  fi
+
+  local output="" rc=0
+  if output="$(CHAT2API_PROXY_PORT="${PROXY_PORT}" "${GENERATION_PROBE}" 2>&1)"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] && log INFO "generation-probe ${line}"
+  done <<<"${output}"
+
+  if [[ "${rc}" -eq 0 ]]; then
+    write_generation_health true
+    return 0
+  fi
+  write_generation_health false
+  return "${rc}"
 }
 
 server_health_ready() {
@@ -136,8 +166,8 @@ fi
 # restarts. They may represent an upstream node, DNS, ChatGPT, or server outage;
 # repeatedly restarting healthy local services would only create a restart loop.
 degraded=0
-if ! chatgpt_transport_ready; then
-  log ERROR "ChatGPT is not reachable through socks5h://127.0.0.1:${PROXY_PORT}; local services were left running"
+if ! generation_backend_ready; then
+  log ERROR "ChatGPT landing/generation backends are not all reachable through socks5h://127.0.0.1:${PROXY_PORT}; local services were left running"
   degraded=1
 fi
 if ! server_health_ready; then
@@ -149,4 +179,4 @@ if (( degraded )); then
   exit 1
 fi
 
-log INFO "healthy: Xray listener, Xvfb, persistent-profile Chrome, ChatGPT proxy path and chat2api server are reachable"
+log INFO "healthy: Xray listener, Xvfb, persistent-profile Chrome, ChatGPT generation backend proxy paths and chat2api server are reachable"
