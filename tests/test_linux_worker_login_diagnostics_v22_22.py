@@ -105,7 +105,7 @@ def test_runtime_and_entry_publish_v22_23_diagnostics_patch_last():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
 
-    assert 'SERVER_RUNTIME_VERSION = "0.22.36"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.37"' in runtime
     for token in (
         "capacity-native-v37",
         "bundle-089",
@@ -122,6 +122,7 @@ def test_runtime_and_entry_publish_v22_23_diagnostics_patch_last():
         "route-quarantine-v50",
         "transient-retry-v50",
         "response-semantic-recovery-v51",
+        "model-capability-routing-v1",
     ):
         assert token in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
