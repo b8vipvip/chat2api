@@ -91,17 +91,17 @@ def test_chatgpt_column_shows_login_status_without_composer_jargon():
     assert "Composer 未确认" not in source
 
 
-def test_health_center_and_live_concurrency_support_reordered_columns():
+def test_health_center_and_worker_window_editor_support_reordered_columns():
     health = read(ROOT / "app" / "admin_v21_6.js")
     live = read(ROOT / "app" / "admin_v21_5.js")
 
-    # v0.20 inserted account_type at base index 3. Historical positions remain
-    # safe fallbacks before the final layout controller marks cells, while
-    # keyed lookup becomes authoritative after a user reorders the table.
+    # v57 deliberately owns the platform cell as the Worker-window editor. Keyed
+    # lookup stays authoritative after a user reorders the extension table.
     assert 'columnCell(tr, "client_id", 0)' in live
-    assert 'columnCell(tr, "concurrency", 5)' in live
-    assert 'columnCell(tr, "concurrency", 4)' not in live
+    assert 'columnCell(tr, "platform", 8)' in live
+    assert 'columnCell(tr, "concurrency", 5)' not in live
     assert 'data-chat2api-column-key' in live
+    assert 'platformHeader.dataset.chat2apiColumnKey = "platform"' in live
 
     assert 'columnCell(tr, "client_id", 0)' in health
     assert 'columnCell(tr, "version", 2)' in health
