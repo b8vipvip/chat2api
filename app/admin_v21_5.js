@@ -1,17 +1,23 @@
 (() => {
-  const VERSION = "0.21.5";
-  const POLL_MS = 1000;
+  const VERSION = "0.22.39-capacity-v57";
+  const POLL_MS = 2000;
   const MIN_LIMIT = 1;
   const MAX_LIMIT = 32;
   let pollInFlight = false;
+  let keyRenderInFlight = false;
   const windowRefreshPending = new Set();
 
   function extensionViewActive() {
     return document.getElementById("view-extensions")?.classList.contains("active");
   }
-
+  function keyViewActive() {
+    return document.getElementById("view-keys")?.classList.contains("active");
+  }
   function columnCell(tr, key, fallbackIndex) {
     return tr?.querySelector(`td[data-chat2api-column-key="${key}"]`) || tr?.cells?.[fallbackIndex] || null;
+  }
+  function esc(value) {
+    return String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]);
   }
 
   function ensureToastHost() {
@@ -19,278 +25,274 @@
     if (host) return host;
     host = document.createElement("div");
     host.id = "chat2apiActionToastHost";
-    host.style.cssText = [
-      "position:fixed",
-      "top:18px",
-      "right:18px",
-      "z-index:10000",
-      "display:flex",
-      "flex-direction:column",
-      "gap:8px",
-      "max-width:min(460px,calc(100vw - 36px))",
-      "pointer-events:none",
-    ].join(";");
+    host.style.cssText = "position:fixed;top:18px;right:18px;z-index:10000;display:flex;flex-direction:column;gap:8px;max-width:min(520px,calc(100vw - 36px));pointer-events:none";
     document.body.appendChild(host);
     return host;
   }
-
   function showActionResult(message, level = "ok", button = null) {
     const text = String(message || "").trim();
     if (!text) return;
     if (button) button.title = text;
-    if (typeof globalThis.status === "function") {
-      globalThis.status(text, level === "bad" ? "bad" : level === "warn" ? "warnText" : "ok");
-    }
-    const host = ensureToastHost();
+    if (typeof globalThis.status === "function") globalThis.status(text, level === "bad" ? "bad" : level === "warn" ? "warnText" : "ok");
     const toast = document.createElement("div");
-    toast.setAttribute("role", "status");
-    toast.dataset.level = level;
     toast.textContent = text;
-    toast.style.cssText = [
-      "pointer-events:auto",
-      "padding:10px 12px",
-      "border:1px solid rgba(148,163,184,.32)",
-      "border-radius:10px",
-      "background:#0f172a",
-      "box-shadow:0 14px 36px rgba(0,0,0,.4)",
-      "font-size:13px",
-      "line-height:1.45",
-      "white-space:normal",
-    ].join(";");
+    toast.style.cssText = "pointer-events:auto;padding:10px 12px;border:1px solid rgba(148,163,184,.32);border-radius:10px;background:#0f172a;box-shadow:0 14px 36px rgba(0,0,0,.4);font-size:13px;line-height:1.45;white-space:normal";
     if (level === "bad") toast.classList.add("bad");
     else if (level === "warn") toast.classList.add("warnText");
     else toast.classList.add("ok");
-    host.appendChild(toast);
-    setTimeout(() => toast.remove(), 4200);
+    ensureToastHost().appendChild(toast);
+    setTimeout(() => toast.remove(), 4800);
   }
-  if (typeof globalThis.chat2apiActionToast !== "function") globalThis.chat2apiActionToast = showActionResult;
+  globalThis.chat2apiActionToast = showActionResult;
 
   function patchColumnSettingsLabels() {
     const menu = document.getElementById("extensionColumnSettingsMenu");
     if (!menu) return;
     const replacements = new Map([
-      ["API 调用数（实时并发）", "并发设置"],
-      ["API 调用 / 并发上限", "并发设置"],
+      ["平台", "Worker 窗口"],
+      ["API 调用数（实时并发）", "旧并发列（已合并）"],
+      ["API 调用 / 并发上限", "旧并发列（已合并）"],
+      ["并发设置", "旧并发列（已合并）"],
+      ["备用窗口", "旧备用窗口列（已合并）"],
     ]);
     for (const node of menu.querySelectorAll("span,button,label")) {
       const current = String(node.textContent || "").trim();
       if (replacements.has(current)) node.textContent = replacements.get(current);
-      const title = String(node.getAttribute?.("title") || "").trim();
-      if (replacements.has(title)) node.setAttribute("title", replacements.get(title));
     }
   }
 
-  function patchHeader() {
-    const table = document.querySelector("#view-extensions #extensionDeviceBody")?.closest("table");
-    const headers = table ? [...table.querySelectorAll("thead th")] : [];
-    const target = headers.find(node => [
-      "绑定 API Key 数",
-      "API 调用数（实时并发）",
-      "API 调用 / 并发上限",
-      "并发设置",
-    ].includes(node.textContent.trim()));
-    if (target) {
-      target.textContent = "并发设置";
-      target.title = "当前 API 调用数 / 此 Extension ID 的最大并发；保存调整并发，刷新核对设备真实窗口";
-      target.dataset.chat2apiColumnKey = "concurrency";
+  function patchExtensionColumns() {
+    const body = document.getElementById("extensionDeviceBody");
+    const table = body?.closest("table");
+    const header = table?.querySelector("thead tr");
+    if (!body || !header) return;
+    const platformHeader = [...header.cells].find(th => String(th.dataset.chat2apiColumnKey || "") === "platform" || th.textContent.trim() === "平台" || th.textContent.trim() === "Worker 窗口");
+    if (platformHeader) {
+      platformHeader.textContent = "Worker 窗口";
+      platformHeader.dataset.chat2apiColumnKey = "platform";
+      platformHeader.title = "设置此 Worker 最大并发请求和最大空闲备用窗口；超过并发上限的请求进入 FIFO 队列。";
+      platformHeader.style.display = "";
+      platformHeader.style.minWidth = "350px";
+    }
+    for (const key of ["concurrency", "reserve_windows"]) {
+      const th = [...header.cells].find(node => String(node.dataset.chat2apiColumnKey || "") === key);
+      if (th) th.style.display = "none";
+      for (const tr of body.rows) {
+        const cell = tr.querySelector(`td[data-chat2api-column-key="${key}"]`);
+        if (cell) cell.style.display = "none";
+      }
     }
   }
 
-  function renderConcurrencyCell(cell, item, active, limit) {
-    const clientId = String(item.client_id || "");
-    const source = String(item.concurrency_limit_source || item.capacity?.limit_source || "default");
-    const pending = windowRefreshPending.has(clientId);
-    let currentEditor = cell.querySelector("[data-extension-concurrency-editor]");
-    if (!currentEditor || currentEditor.dataset.clientId !== clientId) {
-      cell.innerHTML = `
-        <div data-extension-concurrency-editor data-client-id="${clientId}" style="display:flex;align-items:center;gap:6px;white-space:nowrap">
-          <span data-concurrency-active>${active}</span>
-          <span class="muted">/</span>
-          <input data-concurrency-limit type="number" min="${MIN_LIMIT}" max="${MAX_LIMIT}" step="1" value="${limit}" style="width:64px;padding:5px 6px">
-          <button class="action" data-concurrency-save style="padding:5px 8px">保存</button>
-          <button class="action" data-concurrency-refresh style="padding:5px 8px">刷新</button>
-        </div>`;
-      currentEditor = cell.querySelector("[data-extension-concurrency-editor]");
-    } else {
-      const activeNode = currentEditor.querySelector("[data-concurrency-active]");
-      if (activeNode) activeNode.textContent = String(active);
-      const input = currentEditor.querySelector("[data-concurrency-limit]");
-      if (input && document.activeElement !== input && input.value !== String(limit)) input.value = String(limit);
-    }
-    const refreshButton = currentEditor?.querySelector("[data-concurrency-refresh]");
-    if (refreshButton) {
-      refreshButton.disabled = pending;
-      refreshButton.textContent = pending ? "刷新中" : "刷新";
-      if (!pending) refreshButton.title = "主动向该 Extension 获取真实 Chrome 窗口快照";
-    }
-    const requestDetails = (item.active_request_details || []).map(request => {
-      const requestId = String(request.request_id || "-");
-      const stage = String(request.stage || "-");
-      const age = Number(request.age_seconds || 0).toFixed(1);
-      const activityAge = Number(request.last_generation_activity_age_seconds ?? request.last_event_age_seconds ?? 0).toFixed(1);
-      return `${requestId} · ${stage} · ${age}s · activity ${activityAge}s`;
-    });
-    const baseTitle = source === "extension"
-      ? `Extension ID ${clientId} 的独立并发上限；当前活动请求 ${active}`
-      : `当前继承默认并发上限 ${limit}；点击保存后为 Extension ID ${clientId} 建立独立配置并立即调整设备窗口`;
-    cell.title = requestDetails.length ? `${baseTitle}\n${requestDetails.join("\n")}` : baseTitle;
+  function platformText(item) {
+    const metadata = item?.metadata || {};
+    const os = String(metadata.platform_os || "").trim() || "unknown";
+    const arch = String(metadata.platform_arch || "").trim();
+    return arch ? `${os} · ${arch}` : os;
   }
 
-  async function refreshLiveConcurrency() {
+  function workerEditorHtml(clientId, item, settings) {
+    const metadata = item?.metadata || {};
+    const maximum = Number(settings?.max_concurrency || 3);
+    const reserve = Number(settings?.reserve_windows || 3);
+    const active = Number(item?.active_api_calls ?? item?.capacity?.active_requests ?? settings?.active ?? 0);
+    const total = Number(metadata.reserve_window_total || 0);
+    const idle = Number(metadata.reserve_window_idle || 0);
+    const queued = Number(settings?.queued || 0);
+    const cooling = Boolean(settings?.rate_limit_cooldown);
+    const remaining = Number(settings?.rate_limit_remaining_seconds || 0);
+    const cooldown = cooling ? `<span class="bad">ChatGPT 限流冷却 ${Math.ceil(remaining)}s</span>` : "";
+    return `<div data-worker-window-editor data-client-id="${esc(clientId)}" style="min-width:340px;white-space:normal">
+      <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+        <label class="muted">并发</label><input data-worker-max type="number" min="${MIN_LIMIT}" max="${MAX_LIMIT}" value="${maximum}" style="width:58px;padding:5px 6px">
+        <label class="muted">备用</label><input data-worker-reserve type="number" min="${MIN_LIMIT}" max="${MAX_LIMIT}" value="${reserve}" style="width:58px;padding:5px 6px">
+        <button class="action" data-worker-save style="padding:5px 8px">保存</button>
+        <button class="action" data-worker-refresh style="padding:5px 8px">刷新</button>
+      </div>
+      <div class="muted" style="margin-top:5px;font-size:11px">当前 ${active}/${maximum} · 排队 ${queued} · 窗口 ${total} · 空闲 ${idle}/${reserve}${cooldown ? ` · ${cooldown}` : ""}</div>
+      <div class="muted" style="margin-top:2px;font-size:11px">${esc(platformText(item))}</div>
+    </div>`;
+  }
+
+  async function refreshWorkerSettings() {
     if (!extensionViewActive() || pollInFlight || typeof globalThis.api !== "function") return;
     pollInFlight = true;
     try {
-      patchHeader();
-      const data = await api("/api/admin/extensions");
-      const byClient = new Map((data.clients || []).map(row => [String(row.client_id || ""), row]));
-      const rows = document.querySelectorAll("#extensionDeviceBody tr");
-      for (const tr of rows) {
-        if (!tr.cells || tr.cells.length < 6) continue;
+      patchExtensionColumns();
+      patchColumnSettingsLabels();
+      const [extensions, capacity] = await Promise.all([api("/api/admin/extensions"), api("/api/admin/capacity-v57")]);
+      const byClient = new Map((extensions.clients || []).map(row => [String(row.client_id || ""), row]));
+      const settingsByClient = capacity.workers || {};
+      for (const tr of document.querySelectorAll("#extensionDeviceBody tr")) {
+        if (!tr.cells || tr.cells.length < 2) continue;
         const clientId = columnCell(tr, "client_id", 0)?.textContent?.trim() || "";
         const item = byClient.get(clientId);
         if (!item) continue;
-        const active = Number.isFinite(Number(item.active_api_calls))
-          ? Number(item.active_api_calls)
-          : Number(item.capacity?.active_requests || 0);
-        const limit = Number(item.max_concurrency || item.capacity?.limit_units || item.default_max_concurrency || 0);
-        const concurrencyCell = columnCell(tr, "concurrency", 5);
-        if (!concurrencyCell) continue;
-        renderConcurrencyCell(concurrencyCell, item, active, limit);
+        const cell = columnCell(tr, "platform", 8);
+        if (!cell) continue;
+        const editor = cell.querySelector("[data-worker-window-editor]");
+        const focused = editor && editor.contains(document.activeElement);
+        if (!focused) cell.innerHTML = workerEditorHtml(clientId, item, settingsByClient[clientId] || item.worker_window_settings || {});
+        cell.style.display = "";
+        cell.title = "并发 = 同时执行的最大请求数；备用 = 维持的最大空闲 Worker 窗口数。两者默认均为 3。";
       }
     } catch (_) {
-      // The historical extension-management loader owns visible transport/auth errors.
     } finally {
       pollInFlight = false;
     }
   }
 
-  function snapshotText(snapshot, target) {
-    if (!snapshot || typeof snapshot !== "object" || snapshot.total === undefined) return `目标 ${target}`;
-    const total = Math.max(0, Number(snapshot.total || 0));
-    const active = Math.max(0, Number(snapshot.active || 0));
-    return `实时窗口 ${total}(${active})，目标 ${target}`;
+  async function saveWorkerSettings(button) {
+    const editor = button.closest("[data-worker-window-editor]");
+    const clientId = String(editor?.dataset.clientId || "");
+    const maximum = Number(editor?.querySelector("[data-worker-max]")?.value || 0);
+    const reserve = Number(editor?.querySelector("[data-worker-reserve]")?.value || 0);
+    if (!clientId || !Number.isInteger(maximum) || !Number.isInteger(reserve) || maximum < MIN_LIMIT || maximum > MAX_LIMIT || reserve < MIN_LIMIT || reserve > MAX_LIMIT) {
+      showActionResult(`并发和备用窗口都请输入 ${MIN_LIMIT}-${MAX_LIMIT} 的整数`, "bad", button);
+      return;
+    }
+    const refresh = editor.querySelector("[data-worker-refresh]");
+    button.disabled = true;
+    if (refresh) refresh.disabled = true;
+    const old = button.textContent;
+    try {
+      button.textContent = "保存中";
+      await api(`/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57`, {method:"PUT", body:{max_concurrency:maximum,reserve_windows:reserve}});
+      button.textContent = "执行中";
+      let apply = null;
+      try {
+        apply = await api(`/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply`, {method:"POST", body:{target:reserve}});
+      } catch (_) {}
+      if (apply?.ok === true) {
+        showActionResult(`保存成功：最大并发 ${maximum}，空闲备用窗口 ${reserve}；超过并发上限的请求将排队。`, apply.target_reached === false ? "warn" : "ok", button);
+      } else {
+        showActionResult(`配置已保存：最大并发 ${maximum}，空闲备用窗口 ${reserve}；设备将在心跳/窗口同步时收敛。`, "warn", button);
+      }
+      await refreshWorkerSettings();
+    } catch (error) {
+      showActionResult(`Worker 窗口设置失败：${String(error?.message || error)}`, "bad", button);
+    } finally {
+      button.disabled = false;
+      button.textContent = old || "保存";
+      if (refresh) refresh.disabled = false;
+    }
   }
 
   async function refreshExtensionWindows(button) {
-    const editor = button?.closest?.("[data-extension-concurrency-editor]");
-    const clientId = String(editor?.dataset?.clientId || "");
+    const editor = button.closest("[data-worker-window-editor]");
+    const clientId = String(editor?.dataset.clientId || "");
     if (!clientId || windowRefreshPending.has(clientId)) return;
-    const saveButton = editor?.querySelector?.("[data-concurrency-save]");
     windowRefreshPending.add(clientId);
     button.disabled = true;
-    if (saveButton) saveButton.disabled = true;
+    const old = button.textContent;
     button.textContent = "刷新中";
     try {
-      const result = await api(`/api/admin/extensions/${encodeURIComponent(clientId)}/windows/refresh`, { method: "POST" });
-      const snapshot = result?.window_snapshot || {};
-      if (result?.ok === true && snapshot.total !== undefined) {
-        const total = Math.max(0, Number(snapshot.total || 0));
-        const active = Math.max(0, Number(snapshot.active || 0));
-        const allChatGpt = Math.max(total, Number(snapshot.all_chatgpt_windows || total));
-        showActionResult(`刷新成功：实时窗口 ${total}(${active})；Chrome ChatGPT 窗口 ${allChatGpt}`, "ok", button);
-      } else {
-        showActionResult(`刷新失败：${String(result?.error || "扩展没有返回真实窗口快照")}`, "bad", button);
-      }
-      await refreshLiveConcurrency();
+      const result = await api(`/api/admin/extensions/${encodeURIComponent(clientId)}/windows/refresh`, {method:"POST"});
+      const snap = result?.window_snapshot || {};
+      showActionResult(result?.ok === true ? `窗口已刷新：总数 ${Number(snap.total || 0)}，活动 ${Number(snap.active || 0)}，空闲 ${Number(snap.idle || 0)}` : `窗口刷新失败：${String(result?.error || "无返回")}`, result?.ok === true ? "ok" : "bad", button);
+      await refreshWorkerSettings();
     } catch (error) {
-      showActionResult(`刷新失败：${String(error?.message || error)}`, "bad", button);
+      showActionResult(`窗口刷新失败：${String(error?.message || error)}`, "bad", button);
     } finally {
       windowRefreshPending.delete(clientId);
       button.disabled = false;
-      button.textContent = "刷新";
-      if (saveButton) saveButton.disabled = false;
+      button.textContent = old || "刷新";
     }
   }
 
-  async function saveExtensionConcurrency(button) {
-    const editor = button?.closest?.("[data-extension-concurrency-editor]");
-    const clientId = String(editor?.dataset?.clientId || "");
-    const input = editor?.querySelector?.("[data-concurrency-limit]");
-    const refreshButton = editor?.querySelector?.("[data-concurrency-refresh]");
-    const value = Number(input?.value || 0);
-    if (!clientId || !Number.isInteger(value) || value < MIN_LIMIT || value > MAX_LIMIT) {
-      showActionResult(`并发上限请输入 ${MIN_LIMIT}-${MAX_LIMIT} 的整数`, "bad", button);
+  function ensureKeyConcurrencyHeader() {
+    const body = document.getElementById("keysBody");
+    const header = body?.closest("table")?.querySelector("thead tr");
+    if (!body || !header) return false;
+    let th = header.querySelector("th[data-key-concurrency-v57]");
+    if (!th) {
+      th = document.createElement("th");
+      th.dataset.keyConcurrencyV57 = "1";
+      th.textContent = "最大并发";
+      th.title = "此 API Key 可同时执行的最大请求数，默认 3；超过后 FIFO 排队。";
+      header.insertBefore(th, header.lastElementChild);
+    }
+    return true;
+  }
+
+  async function renderKeyConcurrency() {
+    if (!keyViewActive() || keyRenderInFlight || typeof globalThis.api !== "function" || !ensureKeyConcurrencyHeader()) return;
+    keyRenderInFlight = true;
+    try {
+      const [keys, capacity] = await Promise.all([api("/api/admin/keys"), api("/api/admin/capacity-v57")]);
+      const rows = [...document.querySelectorAll("#keysBody tr")];
+      const data = Array.isArray(keys.data) ? keys.data : [];
+      const defaults = Number(capacity?.defaults?.api_key_max_concurrency || 3);
+      const configured = capacity?.keys || {};
+      const active = capacity?.key_active || {};
+      rows.forEach((tr, index) => {
+        const item = data[index];
+        if (!item || tr.cells.length < 2) return;
+        const keyId = String(item.key_id || "");
+        let cell = tr.querySelector("td[data-key-concurrency-v57]");
+        if (!cell) {
+          cell = document.createElement("td");
+          cell.dataset.keyConcurrencyV57 = "1";
+          tr.insertBefore(cell, tr.lastElementChild);
+        }
+        const limit = Number(configured[keyId] || defaults);
+        if (!cell.contains(document.activeElement)) {
+          cell.innerHTML = `<div data-key-capacity-editor data-key-id="${esc(keyId)}" style="display:flex;align-items:center;gap:6px"><span class="muted">${Number(active[keyId] || 0)}/</span><input data-key-max type="number" min="${MIN_LIMIT}" max="${MAX_LIMIT}" value="${limit}" style="width:58px;padding:5px 6px"><button class="action" data-key-save style="padding:5px 8px">保存</button></div>`;
+        }
+        cell.title = "当前活动请求 / 最大并发；超过上限时不报 409/180 秒容量错误，而是在服务器 FIFO 队列中等待。";
+      });
+    } catch (_) {
+    } finally {
+      keyRenderInFlight = false;
+    }
+  }
+
+  async function saveKeyConcurrency(button) {
+    const editor = button.closest("[data-key-capacity-editor]");
+    const keyId = String(editor?.dataset.keyId || "");
+    const maximum = Number(editor?.querySelector("[data-key-max]")?.value || 0);
+    if (!keyId || !Number.isInteger(maximum) || maximum < MIN_LIMIT || maximum > MAX_LIMIT) {
+      showActionResult(`Key 最大并发请输入 ${MIN_LIMIT}-${MAX_LIMIT} 的整数`, "bad", button);
       return;
     }
-
     button.disabled = true;
-    if (refreshButton) refreshButton.disabled = true;
-    const oldText = button.textContent;
-    let persisted = false;
+    const old = button.textContent;
+    button.textContent = "保存中";
     try {
-      button.textContent = "保存中";
-      const saved = await api(`/api/admin/extensions/${encodeURIComponent(clientId)}/concurrency`, {
-        method: "PUT",
-        body: { max_concurrency: value },
-      });
-      persisted = true;
-      const appliedLimit = Number(saved?.max_concurrency || value);
-      if (input && input.value !== String(appliedLimit)) input.value = String(appliedLimit);
-
-      button.textContent = "执行中";
-      const applied = await api(`/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply`, {
-        method: "POST",
-        body: { target: appliedLimit },
-      });
-      const snapshot = applied?.window_snapshot || {};
-      if (applied?.ok === true && applied?.target_reached === true) {
-        showActionResult(`保存成功：并发 ${appliedLimit}；${snapshotText(snapshot, appliedLimit)}`, "ok", button);
-      } else if (applied?.ok === true) {
-        const reason = String(applied?.pending_reason || "设备仍在收敛");
-        showActionResult(`配置已保存，设备已执行：${snapshotText(snapshot, appliedLimit)}；${reason}`, "warn", button);
-      } else {
-        const reason = String(applied?.error || "设备没有返回执行确认");
-        showActionResult(`配置已保存，但设备未确认执行：${reason}`, "warn", button);
-      }
-      await refreshLiveConcurrency();
+      await api(`/api/admin/keys/${encodeURIComponent(keyId)}/concurrency-v57`, {method:"PUT", body:{max_concurrency:maximum}});
+      showActionResult(`API Key 最大并发已设置为 ${maximum}；超过部分将排队依次执行。`, "ok", button);
+      await renderKeyConcurrency();
     } catch (error) {
-      const detail = String(error?.message || error);
-      showActionResult(persisted ? `配置已保存，但设备执行失败：${detail}` : `并发设置保存失败：${detail}`, "bad", button);
+      showActionResult(`API Key 并发设置失败：${String(error?.message || error)}`, "bad", button);
     } finally {
       button.disabled = false;
-      button.textContent = oldText || "保存";
-      if (refreshButton) refreshButton.disabled = windowRefreshPending.has(clientId);
+      button.textContent = old || "保存";
     }
   }
 
   document.addEventListener("click", event => {
-    const saveButton = event.target?.closest?.("[data-concurrency-save]");
-    if (saveButton) {
-      event.preventDefault();
-      saveExtensionConcurrency(saveButton).catch(() => {});
-      return;
-    }
-    const refreshButton = event.target?.closest?.("[data-concurrency-refresh]");
-    if (refreshButton) {
-      event.preventDefault();
-      refreshExtensionWindows(refreshButton).catch(() => {});
-      return;
-    }
-    if (event.target?.closest?.("#extensionColumnSettingsButton, #extensionColumnSettingsMenu")) {
-      setTimeout(patchColumnSettingsLabels, 0);
-    }
-  });
-  document.addEventListener("change", event => {
-    if (event.target?.closest?.("#extensionColumnSettingsMenu")) setTimeout(patchColumnSettingsLabels, 0);
-  });
+    const workerSave = event.target?.closest?.("[data-worker-save]");
+    if (workerSave) { event.preventDefault(); saveWorkerSettings(workerSave).catch(() => {}); return; }
+    const workerRefresh = event.target?.closest?.("[data-worker-refresh]");
+    if (workerRefresh) { event.preventDefault(); refreshExtensionWindows(workerRefresh).catch(() => {}); return; }
+    const keySave = event.target?.closest?.("[data-key-save]");
+    if (keySave) { event.preventDefault(); saveKeyConcurrency(keySave).catch(() => {}); return; }
+    if (event.target?.closest?.("#extensionColumnSettingsButton, #extensionColumnSettingsMenu")) setTimeout(patchColumnSettingsLabels, 0);
+  }, true);
 
-  const baseShow = typeof globalThis.show === "function" ? globalThis.show : null;
-  if (baseShow && !baseShow.__chat2apiPerExtensionConcurrencyV215) {
-    const wrappedShow = async (...args) => {
-      const result = await baseShow(...args);
-      if (args[0] === "extensions") await refreshLiveConcurrency();
-      return result;
-    };
-    wrappedShow.__chat2apiPerExtensionConcurrencyV215 = true;
-    globalThis.show = wrappedShow;
-  }
+  const extensionBody = document.getElementById("extensionDeviceBody");
+  if (extensionBody) new MutationObserver(() => { patchExtensionColumns(); setTimeout(refreshWorkerSettings, 0); }).observe(extensionBody, {childList:true});
+  const keysBody = document.getElementById("keysBody");
+  if (keysBody) new MutationObserver(() => setTimeout(renderKeyConcurrency, 0)).observe(keysBody, {childList:true});
 
   const brandSmall = document.querySelector(".brand small");
-  if (brandSmall) brandSmall.textContent = `Server Console · v${VERSION}`;
-  patchHeader();
+  if (brandSmall) brandSmall.textContent = `Server Console · ${VERSION}`;
+  patchExtensionColumns();
   patchColumnSettingsLabels();
-  refreshLiveConcurrency();
+  refreshWorkerSettings();
+  renderKeyConcurrency();
   setInterval(() => {
-    if (extensionViewActive()) refreshLiveConcurrency();
+    if (extensionViewActive()) refreshWorkerSettings();
+    if (keyViewActive()) renderKeyConcurrency();
   }, POLL_MS);
 })();
