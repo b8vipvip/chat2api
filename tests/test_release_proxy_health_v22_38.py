@@ -57,8 +57,8 @@ def test_release_versions_are_explicit_and_consistent() -> None:
     assert 'bundle: "0.8.12"' in marker
     assert 'REQUIRED_BUNDLE = "0.8.12"' in preflight
     assert 'REQUIRED_BUNDLE = "0.8.12"' in contract
-    assert '__version__ = "0.7.2"' in package
-    assert 'version = "0.7.2"' in project
+    assert '__version__ = "0.7.1"' in package
+    assert 'version = "0.7.1"' in project
     assert '"linux_worker_proxy_health_facets": True' in runtime
 
 
