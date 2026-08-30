@@ -32,5 +32,5 @@ def test_bootstrap_packaging_feature_remains_available_after_v22_4():
     version = version_line.split('"', 2)[1]
     assert tuple(map(int, version.split("."))) >= (0, 22, 4)
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.12"' in runtime
-    assert '"version": "0.8.12"' in manifest
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.13"' in runtime
+    assert '"version": "0.8.13"' in manifest
