@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 
@@ -11,35 +12,53 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_proxy_health_overlay_is_not_blocked_by_legacy_stable_table_flag() -> None:
+def test_network_health_v56_retires_proxy_cell_repaint_loop() -> None:
     source = read("app/admin_linux_worker_chinese_progress.js")
     stable = read("app/linux_worker_table_stability_patch.py")
 
-    assert "__CHAT2API_LINUX_WORKER_PROXY_HEALTH_V55__" in source
-    assert "__CHAT2API_LINUX_WORKER_CHINESE_PROGRESS_V22_18__" not in source
-    assert "observedProxyCells" in source
-    assert "observeProxyCell(proxyCell)" in source
-    assert 'proxyCell.dataset.chat2apiProxyHealthOwner = "v55"' in source
-    assert 'if (proxyCell.innerHTML !== html) proxyCell.innerHTML = html;' in source
+    assert "__CHAT2API_LINUX_WORKER_NETWORK_HEALTH_V56__" in source
+    assert '__CHAT2API_LINUX_WORKER_PROXY_HEALTH_V55__ = "retired-by-v56"' in source
+    assert "observedProxyCells" not in source
+    assert "observeProxyCell" not in source
+    assert "proxyCell.innerHTML" not in source
+    assert "progressCell.innerHTML" not in source
+    assert 'new MutationObserver(() => syncDom()).observe(tbody, {childList:true,subtree:false})' in source
     assert 'globalThis.__CHAT2API_LINUX_WORKER_CHINESE_PROGRESS_V22_18__=true;' in stable
 
 
-def test_proxy_health_ui_exposes_requested_four_facets() -> None:
+def test_network_column_owns_proxy_health_and_proxy_column_is_hidden() -> None:
     source = read("app/admin_linux_worker_chinese_progress.js")
     for token in (
-        'pill("已配置","good")',
+        '#view-linux-workers th:nth-child(7)',
+        '#view-linux-workers td:nth-child(7){display:none!important}',
+        '#view-linux-workers td:nth-child(6)::before',
+        '#view-linux-workers td:nth-child(6)::after',
+        'cell.dataset.chat2apiNetworkMain = view.main',
+        'cell.dataset.chat2apiNetworkSub = view.sub',
+        'cell.dataset.chat2apiNetworkTone = view.tone',
+        'cell.dataset.chat2apiNetworkOwner = "v56"',
         '"网络正常"',
         '"网络异常"',
         '"GPT正常"',
         '"GPT异常"',
-        '`延迟 ${health.latencyMs} ms`',
         'command:"test_proxy"',
         "HEALTH_TTL_MS = 60000",
         "HEALTH_RETRY_MS = 20000",
         'parseProbe(result, "network_access")',
-        '"chatgpt_home", "conversation_route", "sentinel_route"',
+        '"chatgpt_home","conversation_route","sentinel_route"',
     ):
         assert token in source
+
+
+def test_network_health_script_parses() -> None:
+    result = subprocess.run(
+        ["node", "--check", str(ROOT / "app" / "admin_linux_worker_chinese_progress.js")],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_release_versions_are_explicit_and_consistent() -> None:
