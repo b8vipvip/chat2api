@@ -37,7 +37,7 @@ def test_capacity_controller_vm_contracts_cover_native_and_reporter_paths():
 
 def test_runtime_contract_separates_protocol_from_new_bundle_build():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.36"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.37"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.9"' in runtime
     assert '"bundle_version": CHROME_BRIDGE_BUNDLE_VERSION' in runtime
@@ -45,10 +45,12 @@ def test_runtime_contract_separates_protocol_from_new_bundle_build():
     assert 'response-stream-v49-page-progress-v49-same-api-concurrency-v25' in runtime
     assert 'request-lifecycle-v50-route-quarantine-v50-transient-retry-v50' in runtime
     assert 'response-semantic-guard-v1-response-semantic-recovery-v51' in runtime
+    assert 'model-capability-routing-v1' in runtime
     assert '"bridge_service_worker_cache_bust": True' in runtime
     assert '"rendered_response_capture_recovery": True' in runtime
     assert '"assistant_response_semantic_guard": True' in runtime
     assert '"assistant_response_semantic_recovery": True' in runtime
+    assert '"model_capability_routing_guard": True' in runtime
     assert '"managed_request_draft_recovery": True' in runtime
     assert '"persistent_request_draft_ownership": True' in runtime
     assert '"visible_generation_liveness": True' in runtime
