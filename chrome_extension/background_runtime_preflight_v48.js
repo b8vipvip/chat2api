@@ -3,11 +3,13 @@
   if (globalThis[KEY]) return;
 
   const REQUIRED_BUNDLE = "0.8.11";
+  const MAIN_FILES = ["network_stream_main_v54.js"];
   const OVERLAY_FILES = [
     "content_rate_limit_guard_v52.js",
     "content_tool_isolation_v48.js",
     "content_request_lifecycle_v50.js",
     "content_response_stream_recovery_v49.js",
+    "content_network_stream_progress_v54.js",
     "content_response_semantic_recovery_v51.js",
     "content_transient_retry_v50.js",
     "content_generation_liveness_v49.js",
@@ -28,6 +30,7 @@
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   async function injectOverlays(tabId) {
+    await chrome.scripting.executeScript({ target: {tabId}, files: MAIN_FILES, world: "MAIN" });
     await chrome.scripting.executeScript({ target: {tabId}, files: OVERLAY_FILES });
   }
 

@@ -24,6 +24,7 @@ scripts/*
 !scripts/linux_worker_remote_login.py
 !scripts/linux_worker_tab_init.py
 !scripts/linux_worker_watchdog.sh
+!scripts/linux_worker_generation_probe.sh
 !scripts/linux_extension_autoreload.sh
 !scripts/linux_extension_autoreload_v43.sh
 !scripts/linux_worker_proxy_apply.sh

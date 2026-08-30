@@ -16,6 +16,8 @@
       tool_isolation_v48: Number(globalThis.__CHAT2API_TOOL_ISOLATION_V48__?.version || 0) === 48,
       response_stream_recovery_v49: Number(responseOwner?.version || 0) === 49,
       response_single_owner_v53: Number(responseOwner?.owner_revision || 0) === 53 && Boolean(responseOwner?.timer),
+      network_stream_progress_v54: Number(globalThis.__CHAT2API_NETWORK_STREAM_PROGRESS_V54__?.version || 0) === 54,
+      network_stream_main_v54: document.documentElement?.getAttribute?.("data-chat2api-network-stream-main-v54") === "54",
       response_semantic_recovery_v51: Number(semanticHelper?.version || 0) === 51 && semanticHelper?.timer == null,
       transient_retry_v50: Number(globalThis.__CHAT2API_TRANSIENT_RETRY_V50__?.version || 0) === 50,
       generation_liveness_v49: Number(globalThis.__CHAT2API_GENERATION_LIVENESS_V49__?.version || 0) === 49,
