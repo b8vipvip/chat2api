@@ -41,22 +41,13 @@ def _compatible(registry: Any, client_id: str, model: str) -> bool:
     advertised = _advertised_models(registry, client_id)
 
     if model in PAID_TEXT_MODELS:
-        # A Worker explicitly identified as ChatGPT Free cannot expose a paid
-        # family that requires the model picker. This is the fail-closed boundary
-        # that prevents a 30-second browser wait on a control that cannot exist.
         if account == "free":
             return False
-        # New Workers report their concrete model catalog. Respect it exactly.
-        # Legacy paid/unknown Workers without a catalog remain compatible so an
-        # old bridge is not made unusable merely by upgrading the server.
         return not advertised or model in advertised
 
     if model == MINI_MODEL:
         if account == "free":
             return True
-        # Paid/unknown Workers may serve mini through the documented gpt-5.5
-        # instant fallback. A bridge that explicitly advertises neither is not
-        # a valid fallback candidate.
         return not advertised or MINI_MODEL in advertised or "gpt-5.5" in advertised
 
     return True
@@ -113,14 +104,7 @@ def _select_mini(registry: Any, *, needs_multimodal: bool) -> str:
 
 
 class _ModelRequestContextMiddleware:
-    """Set the final model target in the same ASGI task as the endpoint.
-
-    Historical model routing was layered through BaseHTTPMiddleware and several
-    ContextVar decorators. This direct ASGI middleware restores the request body
-    and owns the final target context around the application call, while the
-    resolver below also owns Free/paid capability selection itself. Correctness
-    therefore no longer depends on a historical middleware task boundary.
-    """
+    """Own the final model target around the actual API endpoint call."""
 
     def __init__(self, app: Callable[..., Awaitable[None]]) -> None:
         self.app = app
@@ -154,12 +138,16 @@ class _ModelRequestContextMiddleware:
         try:
             payload = json.loads(raw.decode("utf-8")) if raw else {}
             if isinstance(payload, dict):
-                target = dict(v13_patch._target_from_payload(payload))
+                # Parse the public model literal first. Historical v13 predates
+                # gpt-5.5-mini and may reject that literal; such a rejection must
+                # not erase the final routing target we already know from the API.
                 raw_model = str(payload.get("model") or "").strip().lower()
+                try:
+                    target = dict(v13_patch._target_from_payload(payload))
+                except (ValueError, TypeError, KeyError):
+                    target = {}
                 if raw_model in PAID_TEXT_MODELS | {MINI_MODEL}:
                     target["model"] = raw_model
-                # Keep multimodal intent explicit even if a transitional runtime
-                # did not yet decorate v13's target parser with the quota patch.
                 target["needs_multimodal"] = bool(target.get("needs_multimodal")) or mini_quota._needs_multimodal(payload)
         except (UnicodeDecodeError, ValueError, TypeError):
             target = None
@@ -201,11 +189,6 @@ def install_model_capability_routing_patch(app: FastAPI) -> FastAPI:
                     )
             return selected
 
-        # Own mini selection at this final boundary rather than delegating to an
-        # older resolver that may depend on a ContextVar created by another
-        # middleware task. This keeps Free-first and multimodal cooldown semantics
-        # deterministic and deliberately leaves the paid API-key sticky route
-        # untouched by mini traffic.
         if model == MINI_MODEL:
             return _select_mini(registry, needs_multimodal=bool(target.get("needs_multimodal")))
 
