@@ -10,7 +10,7 @@ def test_bridge_082_busts_mv3_script_cache_without_touching_login_state():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     launcher = (ROOT / "scripts" / "linux_worker_chrome_launcher.sh").read_text(encoding="utf-8")
 
-    assert manifest["version"] == "0.8.12"
+    assert manifest["version"] == "0.8.13"
     assert 'Default/Service Worker/ScriptCache' in launcher
     assert 'Default/Code Cache/js' in launcher
     assert '--disable-extensions-except="$EXTENSION_DIR"' in launcher
@@ -37,9 +37,9 @@ def test_capacity_controller_vm_contracts_cover_native_and_reporter_paths():
 
 def test_runtime_contract_separates_protocol_from_new_bundle_build():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.38"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.39"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.12"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.13"' in runtime
     assert '"bundle_version": CHROME_BRIDGE_BUNDLE_VERSION' in runtime
     assert 'request-hygiene-v42-persistent-draft-ownership-v43-generation-liveness-v49' in runtime
     assert 'response-stream-v49-page-progress-v49-same-api-concurrency-v25' in runtime
@@ -48,6 +48,7 @@ def test_runtime_contract_separates_protocol_from_new_bundle_build():
     assert 'single-response-owner-v53' in runtime
     assert 'model-capability-routing-v1' in runtime
     assert 'rate-limit-guard-v52' in runtime
+    assert 'worker-key-capacity-queue-v57' in runtime
     assert '"bridge_service_worker_cache_bust": True' in runtime
     assert '"rendered_response_capture_recovery": True' in runtime
     assert '"single_response_observer": True' in runtime
@@ -56,6 +57,10 @@ def test_runtime_contract_separates_protocol_from_new_bundle_build():
     assert '"model_capability_routing_guard": True' in runtime
     assert '"chatgpt_rate_limit_circuit_breaker": True' in runtime
     assert '"worker_window_reopen_loop_guard": True' in runtime
+    assert '"active_rate_limit_terminal_error": True' in runtime
+    assert '"worker_key_capacity_fifo_queue": True' in runtime
+    assert '"worker_window_concurrency_controls": True' in runtime
+    assert '"api_key_concurrency_controls": True' in runtime
     assert '"managed_request_draft_recovery": True' in runtime
     assert '"persistent_request_draft_ownership": True' in runtime
     assert '"visible_generation_liveness": True' in runtime
