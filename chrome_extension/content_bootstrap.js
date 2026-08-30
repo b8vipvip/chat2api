@@ -9,6 +9,7 @@
         files: [
           "content_page_adapter_v22.js",
           "content_login_v27.js",
+          "content_rate_limit_guard_v52.js",
           "content_tool_isolation_v48.js",
           "content_page_driver_v22.js",
           "content_request_v2.js",
