@@ -63,6 +63,7 @@ from .extension_capacity_control_patch import install_extension_capacity_control
 from .mini_multimodal_quota_patch import install_mini_multimodal_quota_patch
 from .model_capability_routing_patch import install_model_capability_routing_patch
 from .account_generation_admission_patch import install_account_generation_admission_patch
+from .generation_backend_routing_patch import install_generation_backend_routing_patch
 from .server_update_patch import install_server_update_patch
 from .server_worker_sync_lifespan_patch import install_server_worker_sync_patch
 
@@ -174,6 +175,11 @@ install_model_capability_routing_patch(app)
 # Keep warm tabs available, but serialize confirmed ChatGPT Free generations and
 # queue additional API calls at the broker instead of dispatching them in parallel.
 install_account_generation_admission_patch(app)
+# A healthy ChatGPT landing page does not prove that the generation transports
+# are healthy. Install this after model routing and Free-account queueing so both
+# idle selection and the busy Free fallback respect fresh Linux Worker backend
+# probe failures before dispatching a request.
+install_generation_backend_routing_patch(app)
 # The Worker console polling guard is the final Worker presentation boundary.
 # It serializes list refreshes, suppresses unchanged tbody rewrites, and lets the
 # stable renderer consume the base page's shared snapshot instead of polling twice.

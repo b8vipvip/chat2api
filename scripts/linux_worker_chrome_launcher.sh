@@ -119,6 +119,7 @@ exec "$CURRENT_LINK" \
   --password-store=basic \
   --proxy-server="socks5://127.0.0.1:${PROXY_PORT}" \
   "--proxy-bypass-list=localhost;127.0.0.1;${server_host}" \
+  --disable-quic \
   --remote-debugging-address=127.0.0.1 \
   --remote-debugging-port=9222 \
   --disable-extensions-except="$EXTENSION_DIR" \
