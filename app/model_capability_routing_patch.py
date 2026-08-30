@@ -7,6 +7,7 @@ from typing import Any, Awaitable, Callable
 
 from fastapi import FastAPI
 
+from . import mini_multimodal_quota_patch as mini_quota
 from . import v13_patch
 
 
@@ -67,14 +68,58 @@ def _description(registry: Any, client_id: str) -> str:
     return f"{client_id}[account={account}, models={','.join(models) or 'unknown'}]"
 
 
+def _idle_compatible(registry: Any, model: str) -> list[str]:
+    online = list(registry.online_client_ids())
+    if not online:
+        raise ConnectionError("No Chrome extension is online. Open Chrome with a paired chat2api extension.")
+    idle = [client_id for client_id in online if client_id not in registry.busy_clients]
+    if not idle:
+        raise LookupError("All online Chrome extensions are busy")
+    return [client_id for client_id in idle if _compatible(registry, client_id, model)]
+
+
+def _select_mini(registry: Any, *, needs_multimodal: bool) -> str:
+    eligible = _idle_compatible(registry, MINI_MODEL)
+    if not eligible:
+        raise ConnectionError("No compatible Chrome extension is available for gpt-5.5-mini")
+
+    free = [client_id for client_id in eligible if _account_type(registry, client_id) == "free"]
+    fallback = [client_id for client_id in eligible if _account_type(registry, client_id) != "free"]
+
+    if not needs_multimodal:
+        if free:
+            return secrets.choice(free)
+        if fallback:
+            return secrets.choice(fallback)
+        raise ConnectionError("No compatible Chrome extension is available for gpt-5.5-mini")
+
+    free_ready = [client_id for client_id in free if mini_quota._multimodal_available(registry, client_id)]
+    if free_ready:
+        return secrets.choice(free_ready)
+    if fallback:
+        return secrets.choice(fallback)
+
+    cooling_free = [client_id for client_id in free if not mini_quota._multimodal_available(registry, client_id)]
+    if cooling_free:
+        restore_times = sorted(
+            value for value in (mini_quota._cooldown_until_ms(registry, client_id) for client_id in cooling_free) if value > 0
+        )
+        restore = mini_quota._iso_from_ms(restore_times[0]) if restore_times else None
+        raise ConnectionError(
+            "All available ChatGPT Free gpt-5.5-mini vision/file quotas are cooling down"
+            + (f" until {restore}" if restore else "")
+        )
+    raise ConnectionError("No compatible Chrome extension is available for gpt-5.5-mini multimodal input")
+
+
 class _ModelRequestContextMiddleware:
     """Set the final model target in the same ASGI task as the endpoint.
 
-    The historical v13 target middleware is layered through Starlette's
-    BaseHTTPMiddleware stack. This direct ASGI middleware deliberately restores
-    the request body and sets the target ContextVar immediately around the final
-    application call, so model-aware routing does not depend on middleware task
-    boundaries or patch ordering.
+    Historical model routing was layered through BaseHTTPMiddleware and several
+    ContextVar decorators. This direct ASGI middleware restores the request body
+    and owns the final target context around the application call, while the
+    resolver below also owns Free/paid capability selection itself. Correctness
+    therefore no longer depends on a historical middleware task boundary.
     """
 
     def __init__(self, app: Callable[..., Awaitable[None]]) -> None:
@@ -110,12 +155,12 @@ class _ModelRequestContextMiddleware:
             payload = json.loads(raw.decode("utf-8")) if raw else {}
             if isinstance(payload, dict):
                 target = dict(v13_patch._target_from_payload(payload))
-                # The final boundary must understand the public model literal
-                # even in isolated tests or transitional runtimes where an older
-                # target normalizer has not yet been decorated with mini support.
                 raw_model = str(payload.get("model") or "").strip().lower()
                 if raw_model in PAID_TEXT_MODELS | {MINI_MODEL}:
                     target["model"] = raw_model
+                # Keep multimodal intent explicit even if a transitional runtime
+                # did not yet decorate v13's target parser with the quota patch.
+                target["needs_multimodal"] = bool(target.get("needs_multimodal")) or mini_quota._needs_multimodal(payload)
         except (UnicodeDecodeError, ValueError, TypeError):
             target = None
 
@@ -147,31 +192,32 @@ def install_model_capability_routing_patch(app: FastAPI) -> FastAPI:
                 raise LookupError(
                     f"Requested Worker is not compatible with {model}: {_description(registry, selected)}"
                 )
+            if model == MINI_MODEL and bool(target.get("needs_multimodal")):
+                if _account_type(registry, selected) == "free" and not mini_quota._multimodal_available(registry, selected):
+                    until_ms = mini_quota._cooldown_until_ms(registry, selected)
+                    raise LookupError(
+                        "Requested ChatGPT Free extension has gpt-5.5-mini vision/file quota cooling down"
+                        + (f" until {mini_quota._iso_from_ms(until_ms)}" if until_ms else "")
+                    )
             return selected
 
-        # Preserve the existing mini resolver, including Free preference,
-        # multimodal quota cooldown and paid-account fallback. The ASGI context
-        # above makes its historical target lookup deterministic again.
+        # Own mini selection at this final boundary rather than delegating to an
+        # older resolver that may depend on a ContextVar created by another
+        # middleware task. This keeps Free-first and multimodal cooldown semantics
+        # deterministic and deliberately leaves the paid API-key sticky route
+        # untouched by mini traffic.
         if model == MINI_MODEL:
-            selected = base_resolve_client(None)
-            if not _compatible(registry, selected, model):
-                raise LookupError(
-                    f"Selected Worker is not compatible with {model}: {_description(registry, selected)}"
-                )
-            return selected
+            return _select_mini(registry, needs_multimodal=bool(target.get("needs_multimodal")))
 
-        online = list(registry.online_client_ids())
-        if not online:
-            raise ConnectionError("No Chrome extension is online. Open Chrome with a paired chat2api extension.")
-        idle = [client_id for client_id in online if client_id not in registry.busy_clients]
-        if not idle:
-            raise LookupError("All online Chrome extensions are busy")
-
-        eligible = [client_id for client_id in idle if _compatible(registry, client_id, model)]
+        eligible = _idle_compatible(registry, model)
         if not eligible:
-            available = "; ".join(_description(registry, client_id) for client_id in idle)
+            online_idle = [
+                client_id for client_id in registry.online_client_ids()
+                if client_id not in registry.busy_clients
+            ]
+            available = "; ".join(_description(registry, client_id) for client_id in online_idle)
             raise ConnectionError(
-                f"No online Worker is compatible with {model}. Available: {available}. "
+                f"No online Worker is compatible with {model}. Available: {available or 'none'}. "
                 f"ChatGPT Free Workers can serve {MINI_MODEL} only; connect a paid/unknown Worker that advertises {model}."
             )
 
