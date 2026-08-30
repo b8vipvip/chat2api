@@ -4,6 +4,7 @@ import asyncio
 import json
 from pathlib import Path
 
+from app import v21_patch
 from app.config import Settings
 from app.live_voice_patch import _input_text_from_control
 from app.main import create_app
@@ -27,6 +28,16 @@ def settings(tmp_path: Path) -> Settings:
     )
 
 
+def install_historical_v21(app) -> None:
+    # Later compatibility layers intentionally mutate these old module globals.
+    # These tests exercise v21 in isolation, so restore its original policy first
+    # instead of making their outcome depend on pytest collection/execution order.
+    v21_patch.CAPACITY_UNITS = CAPACITY_UNITS
+    v21_patch.CAPACITY_WAIT_SECONDS = CAPACITY_WAIT_SECONDS
+    v21_patch.request_weight = request_weight
+    install_v21_patch(app)
+
+
 def test_request_weights_match_default_capacity_policy() -> None:
     assert CAPACITY_UNITS == 3
     assert CAPACITY_WAIT_SECONDS == 1.5
@@ -40,7 +51,7 @@ def test_request_weights_match_default_capacity_policy() -> None:
 def test_one_extension_accepts_three_parallel_text_requests(tmp_path: Path) -> None:
     async def scenario() -> None:
         app = create_app(settings(tmp_path))
-        install_v21_patch(app)
+        install_historical_v21(app)
         broker = app.state.broker
         states = [
             await broker.create("req_a", "ext_one"),
@@ -63,7 +74,7 @@ def test_one_extension_accepts_three_parallel_text_requests(tmp_path: Path) -> N
 def test_image_plus_text_share_three_capacity_units_and_waiter_wakes(tmp_path: Path) -> None:
     async def scenario() -> None:
         app = create_app(settings(tmp_path))
-        install_v21_patch(app)
+        install_historical_v21(app)
         broker = app.state.broker
         image = await broker.create("imgreq_a", "ext_one")
         text = await broker.create("req_a", "ext_one")

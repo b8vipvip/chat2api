@@ -62,6 +62,7 @@ from .runtime_logs_patch import install_runtime_logs_patch
 from .extension_capacity_control_patch import install_extension_capacity_control_patch
 from .mini_multimodal_quota_patch import install_mini_multimodal_quota_patch
 from .model_capability_routing_patch import install_model_capability_routing_patch
+from .account_generation_admission_patch import install_account_generation_admission_patch
 from .server_update_patch import install_server_update_patch
 from .server_worker_sync_lifespan_patch import install_server_worker_sync_patch
 
@@ -169,6 +170,10 @@ install_linux_worker_enable_patch(app)
 # final resolver preserves those constraints while rejecting Free->paid family
 # mismatches before browser dispatch.
 install_model_capability_routing_patch(app)
+# Browser-route capacity is not the same as account-wide generation capacity.
+# Keep warm tabs available, but serialize confirmed ChatGPT Free generations and
+# queue additional API calls at the broker instead of dispatching them in parallel.
+install_account_generation_admission_patch(app)
 # The Worker console polling guard is the final Worker presentation boundary.
 # It serializes list refreshes, suppresses unchanged tbody rewrites, and lets the
 # stable renderer consume the base page's shared snapshot instead of polling twice.
