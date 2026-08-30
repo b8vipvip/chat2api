@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V48__";
   if (globalThis[KEY]) return;
 
-  const REQUIRED_BUNDLE = "0.8.11";
+  const REQUIRED_BUNDLE = "0.8.12";
   const MAIN_FILES = ["network_stream_main_v54.js"];
   const OVERLAY_FILES = [
     "content_rate_limit_guard_v52.js",

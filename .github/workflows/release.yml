@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: chat2api-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and validate release versions
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import re
+          from pathlib import Path
+
+          runtime = Path("app/runtime_contract.py").read_text(encoding="utf-8")
+          package = Path("app/__init__.py").read_text(encoding="utf-8")
+          project = Path("pyproject.toml").read_text(encoding="utf-8")
+          manifest = json.loads(Path("chrome_extension/manifest.json").read_text(encoding="utf-8"))
+          marker = Path("chrome_extension/content_bundle_marker_v48.js").read_text(encoding="utf-8")
+          preflight = Path("chrome_extension/background_runtime_preflight_v48.js").read_text(encoding="utf-8")
+          contract = Path("chrome_extension/content_runtime_contract_v48.js").read_text(encoding="utf-8")
+
+          def one(pattern: str, text: str, label: str) -> str:
+              match = re.search(pattern, text)
+              if not match:
+                  raise SystemExit(f"missing {label}")
+              return match.group(1)
+
+          server = one(r'SERVER_RUNTIME_VERSION = "([^"]+)"', runtime, "server runtime")
+          bundle = one(r'CHROME_BRIDGE_BUNDLE_VERSION = "([^"]+)"', runtime, "bundle runtime")
+          package_version = one(r'__version__ = "([^"]+)"', package, "package version")
+          project_version = one(r'version = "([^"]+)"', project, "project version")
+
+          if manifest.get("version") != bundle:
+              raise SystemExit(f"manifest {manifest.get('version')} != runtime bundle {bundle}")
+          for label, text in (("marker", marker), ("preflight", preflight), ("contract", contract)):
+              if bundle not in text:
+                  raise SystemExit(f"{label} does not advertise bundle {bundle}")
+          if package_version != project_version:
+              raise SystemExit(f"package {package_version} != pyproject {project_version}")
+
+          print(f"server={server}")
+          print(f"bundle={bundle}")
+          print(f"package={package_version}")
+          print(f"tag=v{server}")
+          PY
+
+      - name: Check whether release already exists
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        if: steps.existing.outputs.exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          SERVER: ${{ steps.version.outputs.server }}
+          BUNDLE: ${{ steps.version.outputs.bundle }}
+          PACKAGE: ${{ steps.version.outputs.package }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > /tmp/release-notes.md <<EOF
+          ## chat2api ${SERVER}
+
+          - Server Runtime: ${SERVER}
+          - Chrome Worker Bundle: ${BUNDLE}
+          - Python package: ${PACKAGE}
+          - Source commit: ${GITHUB_SHA}
+
+          This release is created automatically from the validated `main` runtime contract. GitHub-generated notes below contain the merged changes since the previous release.
+          EOF
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "chat2api v${SERVER}" \
+            --notes-file /tmp/release-notes.md \
+            --generate-notes
+
+      - name: Release already exists
+        if: steps.existing.outputs.exists == 'true'
+        run: echo "${{ steps.version.outputs.tag }} already exists; no duplicate release created."
