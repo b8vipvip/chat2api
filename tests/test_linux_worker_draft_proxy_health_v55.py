@@ -127,21 +127,29 @@ def test_generation_probe_reports_network_gpt_and_latency_without_using_telemetr
     assert 'bzr.openai.com as a text-generation health gate' in source
 
 
-def test_linux_worker_console_shows_four_proxy_health_facets_and_auto_tests() -> None:
+def test_linux_worker_console_shows_proxy_health_inside_network_column_and_auto_tests() -> None:
     source = read("app/admin_linux_worker_chinese_progress.js")
     for token in (
-        'pill("已配置","good")',
+        '__CHAT2API_LINUX_WORKER_NETWORK_HEALTH_V56__',
+        '#view-linux-workers td:nth-child(7){display:none!important}',
+        'cell.dataset.chat2apiNetworkMain = view.main',
+        'cell.dataset.chat2apiNetworkSub = view.sub',
         '"网络正常"',
+        '"网络异常"',
         '"GPT正常"',
-        '`延迟 ${health.latencyMs} ms`',
+        '"GPT异常"',
+        'const latencyText = health.latencyMs > 0 ? `${health.latencyMs} ms` : "--"',
         'command:"test_proxy"',
         '/api/admin/linux-workers/${encodeURIComponent(workerId)}/commands',
         '"network_access"',
         '"conversation_route"',
         '"sentinel_route"',
         'HEALTH_TTL_MS = 60000',
+        'HEALTH_RETRY_MS = 20000',
     ):
         assert token in source
+    assert "observedProxyCells" not in source
+    assert "proxyCell.innerHTML" not in source
     assert "已连接（" not in source
 
 
