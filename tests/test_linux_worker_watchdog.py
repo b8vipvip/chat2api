@@ -18,7 +18,9 @@ def test_watchdog_repairs_only_definitive_local_worker_failures():
         '/dev/tcp/127.0.0.1/"${PROXY_PORT}"',
         'grep -F -- "--user-data-dir=${PROFILE_DIR}"',
         "grep -E '[Cc]hrome'",
-        '--proxy "socks5h://127.0.0.1:${PROXY_PORT}"',
+        'GENERATION_PROBE="${GENERATION_PROBE:-${REPO_DIR}/scripts/linux_worker_generation_probe.sh}"',
+        'GENERATION_HEALTH_FILE="${GENERATION_HEALTH_FILE:-${STATE_DIR%/}/generation-backend-health.json}"',
+        'CHAT2API_PROXY_PORT="${PROXY_PORT}" "${GENERATION_PROBE}"',
         '"${CHAT2API_SERVER_URL%/}/healthz"',
         'persistent Chrome profile is missing; refusing automatic recovery',
         'Chrome Bridge source is missing; refusing automatic Chrome restart',
@@ -26,11 +28,20 @@ def test_watchdog_repairs_only_definitive_local_worker_failures():
     ):
         assert token in source
 
-    chatgpt_probe = source.index("if ! chatgpt_transport_ready; then")
+    generation_probe = source.index("if ! generation_backend_ready; then")
     server_probe = source.index("if ! server_health_ready; then")
-    tail = source[chatgpt_probe:]
+    tail = source[generation_probe:]
     assert "restart_unit" not in tail
-    assert chatgpt_probe < server_probe
+    assert generation_probe < server_probe
+
+
+def test_watchdog_persists_generation_health_without_credentials():
+    source = read(ROOT / "scripts" / "linux_worker_watchdog.sh")
+    assert '"ready":%s' in source
+    assert '"checked_at_epoch":%s' in source
+    assert '"source":"linux-worker-watchdog-generation-v54"' in source
+    assert "worker_token" not in source.lower()
+    assert "pairing" not in source.lower()
 
 
 def test_watchdog_never_recreates_or_reowns_the_persistent_profile():
@@ -167,6 +178,7 @@ def test_linux_worker_scripts_have_valid_bash_syntax():
     for script in (
         ROOT / "scripts" / "install_linux_worker_autostart.sh",
         ROOT / "scripts" / "linux_worker_watchdog.sh",
+        ROOT / "scripts" / "linux_worker_generation_probe.sh",
         ROOT / "scripts" / "linux_extension_autoreload.sh",
     ):
         subprocess.run(["bash", "-n", str(script)], check=True)
