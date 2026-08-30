@@ -8,14 +8,18 @@
   const IDLE_STUCK_MS = 25000;
   const NON_IDLE_STUCK_MS = 45000;
   const VISIBLE_GENERATION_STUCK_MS = 120000;
+  const OBSERVER_GRACE_MS = 180000;
 
   const state = {
     version: 49,
+    owner_revision: 53,
+    owner: "response-stream-v49-single-owner",
     request: null,
     timer: null,
     snapshots: 0,
     completions: 0,
     failures: 0,
+    semantic_shells_filtered: 0,
   };
   globalThis[KEY] = state;
 
@@ -23,6 +27,21 @@
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .replace(/\s+/g, " ")
     .trim();
+
+  const ROLE_ONLY = /^(?:chatgpt|assistant|ai)\s*(?:said|says|回复|回答|说)\s*[:：]?\s*$/i;
+  const ROLE_PREFIX = /^(?:chatgpt|assistant|ai)\s*(?:said|says|回复|回答|说)\s*[:：]\s*/i;
+
+  function sanitizeAssistantText(value) {
+    const text = normalize(value);
+    if (!text) return { text: "", filtered: false };
+    if (ROLE_ONLY.test(text)) {
+      state.semantic_shells_filtered += 1;
+      return { text: "", filtered: true };
+    }
+    const stripped = text.replace(ROLE_PREFIX, "").trim();
+    if (stripped !== text) state.semantic_shells_filtered += 1;
+    return { text: stripped, filtered: stripped !== text };
+  }
 
   const visible = node => {
     if (!(node instanceof Element)) return false;
@@ -57,7 +76,6 @@
 
   function turnText(turn) {
     if (!turn) return "";
-    const candidates = [];
     for (const selector of [
       "[data-message-author-role='assistant'] [data-message-content]",
       "[data-message-author-role='assistant'] .markdown",
@@ -68,14 +86,32 @@
       "[class*='markdown']",
       "[class*='prose']",
     ]) {
-      for (const node of turn.querySelectorAll(selector)) {
-        if (!visible(node)) continue;
-        const text = normalize(node.innerText || node.textContent || "");
-        if (text) candidates.push(text);
+      const candidates = [...turn.querySelectorAll(selector)].filter(visible);
+      for (let index = candidates.length - 1; index >= 0; index -= 1) {
+        const result = sanitizeAssistantText(candidates[index].innerText || candidates[index].textContent || "");
+        if (result.text) return result.text;
       }
     }
-    if (candidates.length) return candidates[candidates.length - 1];
-    return normalize(turn.innerText || turn.textContent || "");
+
+    // Current ChatGPT DOM can expose the accessibility role heading before it
+    // mounts a stable markdown body. Keep the broad v49 fallback that worked in
+    // production, but strip action chrome and role-only leaf nodes first. This
+    // preserves DOM-shape tolerance without ever returning "ChatGPT said:" as
+    // assistant content.
+    let clone = null;
+    try { clone = turn.cloneNode(true); } catch (_) {}
+    if (clone?.querySelectorAll) {
+      clone.querySelectorAll("button,svg,nav,footer,[aria-hidden='true'],[data-testid*='copy'],[data-testid*='feedback'],[data-testid*='action']")
+        .forEach(node => node.remove());
+      for (const node of [...clone.querySelectorAll("*")].reverse()) {
+        if (node.children?.length) continue;
+        if (ROLE_ONLY.test(normalize(node.textContent || ""))) node.remove();
+      }
+      const result = sanitizeAssistantText(clone.innerText || clone.textContent || "");
+      if (result.text) return result.text;
+    }
+
+    return sanitizeAssistantText(turn.innerText || turn.textContent || "").text;
   }
 
   function transient(text) {
@@ -162,7 +198,7 @@
     });
     const controllerCount = Number(active?.baselineCount || 0);
     return {
-      requestId: String(active.requestId || ""),
+      requestId: String(active?.requestId || ""),
       startedAt: Date.now(),
       generationSeenAt: 0,
       lastMeaningfulProgressAt: 0,
@@ -181,6 +217,7 @@
       probeSequence: 0,
       lastUiFingerprint: "",
       lastUiChangedAt: 0,
+      controllerDetachedAt: 0,
     };
   }
 
@@ -232,7 +269,12 @@
       type: "chat.snapshot",
       request_id: requestId,
       text,
-      diagnostics: { response_stream_recovery: "dom-turn-v49", page_progress_probe: "page-progress-v49" },
+      diagnostics: {
+        response_stream_recovery: "dom-turn-v49-single-owner-v53",
+        response_semantic_recovery: "role-shell-filter-integrated-v53",
+        assistant_ui_boilerplate_filtered: true,
+        page_progress_probe: "page-progress-v49",
+      },
     });
     return true;
   }
@@ -268,7 +310,9 @@
       type: "chat.diagnostics",
       request_id: requestId,
       diagnostics: {
-        response_stream_recovery: "dom-turn-v49",
+        response_stream_recovery: "dom-turn-v49-single-owner-v53",
+        response_semantic_recovery: "role-shell-filter-integrated-v53",
+        response_observer_controller_detached: Boolean(ctx.controllerDetachedAt),
         page_progress_probe: "page-progress-v49",
         page_probe_sequence: ctx.probeSequence,
         page_probe_no_response_ms: noProgressMs,
@@ -297,29 +341,41 @@
       request_id: ctx.requestId,
       error: `ChatGPT UI made no observable response progress for ${Math.round(thresholdMs / 1000)}s after generation started (${mode})`,
       diagnostics: {
-        response_stream_recovery: "dom-turn-v49",
+        response_stream_recovery: "dom-turn-v49-single-owner-v53",
+        response_semantic_recovery: "role-shell-filter-integrated-v53",
         page_progress_probe: "page-progress-v49",
         page_probe_failure: "chatgpt-ui-stuck",
       },
     });
-    active.cancelled = true;
+    if (active) active.cancelled = true;
   }
 
   async function tick() {
     const active = globalThis[REQUEST_KEY]?.active;
-    const requestId = String(active?.requestId || "");
-    if (!requestId) {
-      state.request = null;
-      return;
+    const activeId = String(active?.requestId || "");
+    if (activeId && (!state.request || state.request.requestId !== activeId || state.request.completed || state.request.failed)) {
+      state.request = captureBaseline(active);
     }
-    if (!state.request || state.request.requestId !== requestId) state.request = captureBaseline(active);
-    const ctx = state.request;
-    if (ctx.completed || ctx.failed) return;
 
+    const ctx = state.request;
+    if (!ctx || ctx.completed || ctx.failed) return;
     const now = Date.now();
+
+    // request-v5 is allowed to settle its local controller independently. The
+    // response observer must not disappear with it: the server still owns this
+    // request until a meaningful snapshot/terminal event is observed. This was
+    // the v0.8.9 regression that turned a DOM miss into a blind 150s timeout.
+    if (!activeId) {
+      if (!ctx.controllerDetachedAt) ctx.controllerDetachedAt = now;
+      if (now - ctx.startedAt > OBSERVER_GRACE_MS) {
+        state.request = null;
+        return;
+      }
+    }
+
     const track = globalThis[STALL_KEY]?.track;
     if (
-      String(track?.requestId || "") === requestId
+      String(track?.requestId || "") === ctx.requestId
       && track?.sawGenerating
       && !ctx.generationSeenAt
     ) {
@@ -342,17 +398,19 @@
     }
 
     if (candidate) {
-      if (await emitRecoveredSnapshot(ctx, requestId, candidate.text)) {
+      if (await emitRecoveredSnapshot(ctx, ctx.requestId, candidate.text)) {
         if (!ctx.diagnosticSent) {
           ctx.diagnosticSent = true;
           await emit({
             type: "chat.diagnostics",
-            request_id: requestId,
+            request_id: ctx.requestId,
             diagnostics: {
-              response_stream_recovery: "dom-turn-v49",
+              response_stream_recovery: "dom-turn-v49-single-owner-v53",
+              response_semantic_recovery: "role-shell-filter-integrated-v53",
               response_stream_first_capture_ms: now - ctx.startedAt,
               response_stream_baseline_assistants: ctx.baselineAssistantCount,
               response_stream_baseline_users: ctx.baselineUserCount,
+              response_observer_controller_detached: Boolean(ctx.controllerDetachedAt),
               page_progress_probe: "page-progress-v49",
             },
           });
@@ -370,14 +428,16 @@
       state.completions += 1;
       await emit({
         type: "chat.completed",
-        request_id: requestId,
+        request_id: ctx.requestId,
         text: candidate.text,
         diagnostics: {
-          response_stream_recovery: "dom-turn-v49",
+          response_stream_recovery: "dom-turn-v49-single-owner-v53",
+          response_semantic_recovery: "role-shell-filter-integrated-v53",
           response_stream_completion_reason: hasFinal
             ? "final-actions-visible"
             : (!snapshot.stop_visible ? "generation-control-gone" : "stale-generation-control"),
           response_stream_stable_ms: stableMs,
+          response_observer_controller_detached: Boolean(ctx.controllerDetachedAt),
           page_progress_probe: "page-progress-v49",
         },
       });
@@ -390,12 +450,12 @@
       noProgressMs >= DIAGNOSTIC_AFTER_MS
       && now - ctx.lastProbeDiagnosticAt >= DIAGNOSTIC_AFTER_MS
     ) {
-      await emitProbe(ctx, requestId, snapshot, noProgressMs);
+      await emitProbe(ctx, ctx.requestId, snapshot, noProgressMs);
     }
 
     const thresholdMs = stuckThreshold(snapshot);
     if (noProgressMs >= thresholdMs) {
-      await failStuck(ctx, active, snapshot, noProgressMs, thresholdMs);
+      await failStuck(ctx, activeId === ctx.requestId ? active : null, snapshot, noProgressMs, thresholdMs);
     }
   }
 
@@ -404,7 +464,10 @@
     idle_stuck_ms: IDLE_STUCK_MS,
     non_idle_stuck_ms: NON_IDLE_STUCK_MS,
     visible_generation_stuck_ms: VISIBLE_GENERATION_STUCK_MS,
+    observer_grace_ms: OBSERVER_GRACE_MS,
   };
+  state.sanitizeAssistantText = sanitizeAssistantText;
+  state.extractTurnText = turnText;
   state.pageState = pageState;
   state.stuckThreshold = stuckThreshold;
   state.tick = tick;
