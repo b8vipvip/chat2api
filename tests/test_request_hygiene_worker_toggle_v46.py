@@ -195,7 +195,7 @@ def test_generation_liveness_is_diagnostic_only_and_hard_timeout_remains():
 def test_bundle_load_order_and_new_scripts_parse():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.8.9"
+    assert manifest["version"] == "0.8.10"
     assert scripts.index("content_request_v5.js") < scripts.index("content_request_lifecycle_v50.js") < scripts.index("content_request_hygiene_v42.js") < scripts.index("content_draft_ownership_v43.js")
     assert scripts.index("content_draft_ownership_v43.js") < scripts.index("content_response_capture_v41.js")
     assert scripts.index("content_response_stream_recovery_v49.js") < scripts.index("content_response_semantic_recovery_v51.js") < scripts.index("content_transient_retry_v50.js") < scripts.index("content_request_stall_guard_v34.js") < scripts.index("content_generation_liveness_v49.js")
@@ -233,7 +233,7 @@ def test_runtime_advertises_v46_recovery_and_toggle_features():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert 'SERVER_RUNTIME_VERSION = "0.22.37"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.9"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.10"' in runtime
     assert '"managed_request_draft_recovery": True' in runtime
     assert '"visible_generation_liveness": True' in runtime
     assert '"browser_page_progress_probe": True' in runtime
