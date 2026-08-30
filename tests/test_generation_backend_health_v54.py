@@ -13,17 +13,23 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_generation_probe_checks_landing_and_real_backend_transports() -> None:
+def test_generation_probe_checks_real_text_generation_control_paths() -> None:
     source = read("scripts/linux_worker_generation_probe.sh")
     for token in (
         "https://chatgpt.com/",
-        "https://bzr.openai.com/",
-        "https://ws.chatgpt.com/",
+        "https://chatgpt.com/backend-api/f/conversation",
+        "https://chatgpt.com/backend-api/sentinel/chat-requirements",
         'socks5h://127.0.0.1:${PROXY_PORT}',
         "generation_backend_ready=true",
         "generation_backend_ready=false",
+        "Accept: text/event-stream",
     ):
         assert token in source
+    # bzr is telemetry/measurement and ws is not the normal text-generation SSE
+    # transport. Neither may become a hard health gate for text Workers.
+    assert '"generation_bzr|https://bzr.openai.com/"' not in source
+    assert '"generation_ws|https://ws.chatgpt.com/"' not in source
+    assert "Do NOT use bzr.openai.com as a text-generation health gate" in source
 
 
 def test_proxy_transaction_rejects_node_when_generation_backend_probe_fails() -> None:
