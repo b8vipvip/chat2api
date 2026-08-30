@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import inspect
 from contextlib import asynccontextmanager
-from typing import Any, Awaitable, Callable
+from typing import Any, Callable
 
 from fastapi import FastAPI
 
+from .capacity_queue_v57_patch import install_capacity_queue_v57_patch
 from .server_worker_sync_patch import install_server_worker_sync_patch as _install_server_worker_sync_patch
 
 
@@ -18,18 +19,21 @@ async def _run_handler(handler: Callable[[], Any]) -> None:
         await result
 
 
-def install_server_worker_sync_patch(app: FastAPI) -> FastAPI:
-    """Install the Worker sync patch without relying on removed Starlette APIs.
+def _install_final_capacity(app: FastAPI) -> FastAPI:
+    return install_capacity_queue_v57_patch(app)
 
-    Starlette 1.x removed ``Starlette.add_event_handler``. The original v1
-    coordinator still registers startup/shutdown hooks through that method, so
-    capture those registrations and compose them into the router lifespan when
-    the method is unavailable. Older FastAPI/Starlette releases keep their native
-    behavior unchanged.
+
+def install_server_worker_sync_patch(app: FastAPI) -> FastAPI:
+    """Install Worker sync plus the final v57 admission/settings owner.
+
+    This module is the last server patch installed by entry.py, which makes it the
+    correct ownership boundary for replacing historical free-account clamping and
+    the older coupling between API concurrency and reserve-window count.
     """
 
     if hasattr(app, "add_event_handler"):
-        return _install_server_worker_sync_patch(app)
+        result = _install_server_worker_sync_patch(app)
+        return _install_final_capacity(result)
 
     captured: dict[str, list[Callable[[], Any]]] = {"startup": [], "shutdown": []}
 
@@ -62,4 +66,4 @@ def install_server_worker_sync_patch(app: FastAPI) -> FastAPI:
 
     app.router.lifespan_context = composed_lifespan
     app.state.server_worker_sync_lifespan_patch = PATCH_ID
-    return result
+    return _install_final_capacity(result)
