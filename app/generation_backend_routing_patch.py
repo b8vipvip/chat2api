@@ -5,6 +5,7 @@ from typing import Any
 
 from fastapi import FastAPI
 
+from . import linux_worker_patch as worker_control
 from . import model_capability_routing_patch as model_routing
 from . import v13_patch
 
@@ -53,6 +54,15 @@ def install_generation_backend_routing_patch(app: FastAPI) -> FastAPI:
 
     if getattr(app.state, "generation_backend_routing_patch_installed", False):
         return app
+
+    worker_control.PROXY_ERROR_LABELS.update({
+        "generation_probe_missing": "Worker 生成后端探测器缺失",
+        "generation_probe_missing_rollback_failed": "Worker 生成后端探测器缺失且代理回滚失败",
+        "generation_probe_command_failed": "Worker 无法执行生成后端探测",
+        "generation_backend_probe_timeout": "ChatGPT 生成后端代理探测超时",
+        "generation_backend_connectivity_test_failed": "代理可打开 ChatGPT，但生成后端连接失败",
+        "generation_backend_connectivity_test_failed_rollback_failed": "ChatGPT 生成后端连接失败且代理回滚失败",
+    })
 
     registry = app.state.registry
     store = getattr(app.state, "linux_workers", None)
