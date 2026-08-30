@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 NEW_JS = [
     "chrome_extension/content_bundle_marker_v48.js",
+    "chrome_extension/content_rate_limit_guard_v52.js",
     "chrome_extension/content_tool_isolation_v48.js",
     "chrome_extension/content_request_lifecycle_v50.js",
     "chrome_extension/content_response_stream_recovery_v49.js",
@@ -18,6 +19,7 @@ NEW_JS = [
     "chrome_extension/content_transient_retry_v50.js",
     "chrome_extension/content_generation_liveness_v49.js",
     "chrome_extension/content_runtime_contract_v48.js",
+    "chrome_extension/background_rate_limit_guard_v52.js",
     "chrome_extension/background_route_quarantine_v50.js",
     "chrome_extension/background_tool_isolation_v48.js",
     "chrome_extension/background_runtime_preflight_v48.js",
@@ -37,10 +39,10 @@ def test_v48_javascript_assets_parse():
 
 def test_manifest_requires_fresh_document_marker_and_passive_recovery():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.9"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.10"
     scripts = manifest["content_scripts"][1]["js"]
     assert scripts.index("content.js") < scripts.index("content_bundle_marker_v48.js")
-    assert scripts.index("content_ui_hygiene_v31.js") < scripts.index("content_tool_isolation_v48.js")
+    assert scripts.index("content_ui_hygiene_v31.js") < scripts.index("content_rate_limit_guard_v52.js") < scripts.index("content_tool_isolation_v48.js")
     assert scripts.index("content_request_v5.js") < scripts.index("content_request_lifecycle_v50.js")
     assert scripts.index("content_response_capture_v41.js") < scripts.index("content_response_stream_recovery_v49.js") < scripts.index("content_response_semantic_recovery_v51.js") < scripts.index("content_transient_retry_v50.js")
     assert scripts.index("content_request_stall_guard_v34.js") < scripts.index("content_generation_liveness_v49.js")
@@ -50,6 +52,7 @@ def test_manifest_requires_fresh_document_marker_and_passive_recovery():
 def test_bundle_marker_cannot_be_spoofed_by_dynamic_bootstrap():
     bootstrap = (ROOT / "chrome_extension" / "content_bootstrap.js").read_text(encoding="utf-8")
     assert "content_bundle_marker_v48.js" not in bootstrap
+    assert "content_rate_limit_guard_v52.js" in bootstrap
     assert "content_tool_isolation_v48.js" in bootstrap
     assert "content_response_stream_recovery_v49.js" in bootstrap
     assert "content_generation_liveness_v49.js" in bootstrap
@@ -58,24 +61,27 @@ def test_bundle_marker_cannot_be_spoofed_by_dynamic_bootstrap():
 
 def test_background_preflight_wraps_final_conversation_dispatch():
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
+    assert entry.index('"browser_tabs.js"') < entry.index('"background_rate_limit_guard_v52.js"') < entry.index('"background_tab_supervisor_v32.js"')
     assert entry.index('"conversation_dispatch.js"') < entry.index('"background_route_quarantine_v50.js"') < entry.index('"background_tool_isolation_v48.js"')
     assert entry.index('"background_tool_isolation_v48.js"') < entry.index('"background_runtime_preflight_v48.js"')
     preflight = (ROOT / "chrome_extension" / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
     contract = (ROOT / "chrome_extension" / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     marker = (ROOT / "chrome_extension" / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
-    assert 'REQUIRED_BUNDLE = "0.8.9"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.10"' in preflight
+    assert '"content_rate_limit_guard_v52.js"' in preflight
     assert '"content_request_lifecycle_v50.js"' in preflight
     assert '"content_response_stream_recovery_v49.js"' in preflight
     assert '"content_response_semantic_recovery_v51.js"' in preflight
     assert '"content_transient_retry_v50.js"' in preflight
     assert '"content_generation_liveness_v49.js"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.9"' in contract
+    assert 'REQUIRED_BUNDLE = "0.8.10"' in contract
+    assert "__CHAT2API_RATE_LIMIT_CONTENT_V52__" in contract
     assert "__CHAT2API_REQUEST_LIFECYCLE_V50__" in contract
     assert "__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__" in contract
     assert "__CHAT2API_RESPONSE_SEMANTIC_RECOVERY_V51__" in contract
     assert "__CHAT2API_TRANSIENT_RETRY_V50__" in contract
     assert "__CHAT2API_GENERATION_LIVENESS_V49__" in contract
-    assert 'bundle: "0.8.9"' in marker
+    assert 'bundle: "0.8.10"' in marker
     assert "content_bundle_marker_v48.js" not in preflight
     assert "chrome.tabs.reload" in preflight
     assert "ChatGPT tab Worker runtime is stale or incomplete" in preflight
@@ -116,11 +122,13 @@ def test_runtime_contract_exposes_v48_v49_v50_and_v51_features():
     app = FastAPI(version=SERVER_RUNTIME_VERSION)
     payload = version_contract_payload(app)
     assert SERVER_RUNTIME_VERSION == "0.22.37"
-    assert payload["chrome_bridge"]["bundle_version"] == "0.8.9"
+    assert payload["chrome_bridge"]["bundle_version"] == "0.8.10"
     assert payload["features"]["response_stream_recovery"] is True
     assert payload["features"]["assistant_response_semantic_guard"] is True
     assert payload["features"]["assistant_response_semantic_recovery"] is True
     assert payload["features"]["model_capability_routing_guard"] is True
+    assert payload["features"]["chatgpt_rate_limit_circuit_breaker"] is True
+    assert payload["features"]["worker_window_reopen_loop_guard"] is True
     assert payload["features"]["playground_chat_running_records"] is True
     assert payload["features"]["browser_page_progress_probe"] is True
     assert payload["features"]["same_api_parallel_requests"] is True
