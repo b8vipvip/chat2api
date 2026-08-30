@@ -39,7 +39,7 @@ def test_v48_javascript_assets_parse():
 
 def test_manifest_requires_fresh_document_marker_and_passive_recovery():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.10"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.11"
     scripts = manifest["content_scripts"][1]["js"]
     assert scripts.index("content.js") < scripts.index("content_bundle_marker_v48.js")
     assert scripts.index("content_ui_hygiene_v31.js") < scripts.index("content_rate_limit_guard_v52.js") < scripts.index("content_tool_isolation_v48.js")
@@ -67,21 +67,23 @@ def test_background_preflight_wraps_final_conversation_dispatch():
     preflight = (ROOT / "chrome_extension" / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
     contract = (ROOT / "chrome_extension" / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     marker = (ROOT / "chrome_extension" / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
-    assert 'REQUIRED_BUNDLE = "0.8.10"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.11"' in preflight
     assert '"content_rate_limit_guard_v52.js"' in preflight
     assert '"content_request_lifecycle_v50.js"' in preflight
     assert '"content_response_stream_recovery_v49.js"' in preflight
     assert '"content_response_semantic_recovery_v51.js"' in preflight
     assert '"content_transient_retry_v50.js"' in preflight
     assert '"content_generation_liveness_v49.js"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.10"' in contract
+    assert 'REQUIRED_BUNDLE = "0.8.11"' in contract
     assert "__CHAT2API_RATE_LIMIT_CONTENT_V52__" in contract
     assert "__CHAT2API_REQUEST_LIFECYCLE_V50__" in contract
     assert "__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__" in contract
     assert "__CHAT2API_RESPONSE_SEMANTIC_RECOVERY_V51__" in contract
+    assert "response_single_owner_v53" in contract
+    assert "semanticHelper?.timer == null" in contract
     assert "__CHAT2API_TRANSIENT_RETRY_V50__" in contract
     assert "__CHAT2API_GENERATION_LIVENESS_V49__" in contract
-    assert 'bundle: "0.8.10"' in marker
+    assert 'bundle: "0.8.11"' in marker
     assert "content_bundle_marker_v48.js" not in preflight
     assert "chrome.tabs.reload" in preflight
     assert "ChatGPT tab Worker runtime is stale or incomplete" in preflight
@@ -93,12 +95,14 @@ def test_response_stream_recovery_reports_first_text_completion_and_bounded_stal
     assert 'type: "chat.snapshot"' in source
     assert 'type: "chat.completed"' in source
     assert 'type: "chat.error"' in source
-    assert 'response_stream_recovery: "dom-turn-v49"' in source
+    assert 'response_stream_recovery: "dom-turn-v49-single-owner-v53"' in source
+    assert 'response_semantic_recovery: "role-shell-filter-integrated-v53"' in source
     assert 'page_progress_probe: "page-progress-v49"' in source
     assert 'page_probe_failure: "chatgpt-ui-stuck"' in source
     assert "stableMs >= 9000" in source
     assert "baselineAssistantCount" in source
     assert "integrationSurface(turn)" in source
+    assert "OBSERVER_GRACE_MS = 180000" in source
     assert "IDLE_STUCK_MS = 25000" in source
     assert "NON_IDLE_STUCK_MS = 45000" in source
     assert "VISIBLE_GENERATION_STUCK_MS = 120000" in source
@@ -122,8 +126,9 @@ def test_runtime_contract_exposes_v48_v49_v50_and_v51_features():
     app = FastAPI(version=SERVER_RUNTIME_VERSION)
     payload = version_contract_payload(app)
     assert SERVER_RUNTIME_VERSION == "0.22.37"
-    assert payload["chrome_bridge"]["bundle_version"] == "0.8.10"
+    assert payload["chrome_bridge"]["bundle_version"] == "0.8.11"
     assert payload["features"]["response_stream_recovery"] is True
+    assert payload["features"]["single_response_observer"] is True
     assert payload["features"]["assistant_response_semantic_guard"] is True
     assert payload["features"]["assistant_response_semantic_recovery"] is True
     assert payload["features"]["model_capability_routing_guard"] is True
