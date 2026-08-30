@@ -14,6 +14,7 @@
       completion_recovery_v6: Boolean(globalThis.__CHAT2API_COMPLETION_RECOVERY_V6__),
       rate_limit_guard_v52: Boolean(globalThis.__CHAT2API_RATE_LIMIT_CONTENT_V52__),
       tool_isolation_v48: Number(globalThis.__CHAT2API_TOOL_ISOLATION_V48__?.version || 0) === 48,
+      draft_managed_recovery_v55: Number(globalThis.__CHAT2API_DRAFT_MANAGED_RECOVERY_V55__?.version || 0) === 55,
       response_stream_recovery_v49: Number(responseOwner?.version || 0) === 49,
       response_single_owner_v53: Number(responseOwner?.owner_revision || 0) === 53 && Boolean(responseOwner?.timer),
       network_stream_progress_v54: Number(globalThis.__CHAT2API_NETWORK_STREAM_PROGRESS_V54__?.version || 0) === 54,

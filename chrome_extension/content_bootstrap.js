@@ -32,6 +32,7 @@
           "content_request_v5.js",
           "content_request_hygiene_v42.js",
           "content_draft_ownership_v43.js",
+          "content_draft_managed_recovery_v55.js",
           "content_response_capture_v41.js",
           "content_response_stream_recovery_v49.js",
           "content_network_stream_progress_v54.js",

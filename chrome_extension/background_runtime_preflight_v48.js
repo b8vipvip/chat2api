@@ -8,6 +8,7 @@
     "content_rate_limit_guard_v52.js",
     "content_tool_isolation_v48.js",
     "content_request_lifecycle_v50.js",
+    "content_draft_managed_recovery_v55.js",
     "content_response_stream_recovery_v49.js",
     "content_network_stream_progress_v54.js",
     "content_response_semantic_recovery_v51.js",
