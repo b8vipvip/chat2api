@@ -1,8 +1,8 @@
 (() => {
   const section = document.getElementById("view-linux-workers");
   const tbody = document.getElementById("linuxWorkerRows");
-  if (!section || !tbody || globalThis.__CHAT2API_LINUX_WORKER_CHINESE_PROGRESS_V22_18__) return;
-  globalThis.__CHAT2API_LINUX_WORKER_CHINESE_PROGRESS_V22_18__ = true;
+  if (!section || !tbody || globalThis.__CHAT2API_LINUX_WORKER_PROXY_HEALTH_V55__) return;
+  globalThis.__CHAT2API_LINUX_WORKER_PROXY_HEALTH_V55__ = true;
 
   const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]);
   const stageNames = {
@@ -32,6 +32,7 @@
 
   const healthByWorker = new Map();
   const healthInflight = new Map();
+  const observedProxyCells = new WeakSet();
   const HEALTH_TTL_MS = 60000;
   const HEALTH_RETRY_MS = 20000;
 
@@ -123,6 +124,11 @@
     fetchedAt = Date.now();
     return rows;
   };
+  const observeProxyCell = cell => {
+    if (!cell || observedProxyCells.has(cell)) return;
+    observedProxyCells.add(cell);
+    new MutationObserver(() => setTimeout(() => render(false), 0)).observe(cell, {childList:true,subtree:true,characterData:true});
+  };
   const render = async force => {
     if (busy) return;
     busy = true;
@@ -142,21 +148,26 @@
             const currentMessage = String(row.install_message || "").trim();
             const summary = `${currentStage}${currentMessage ? ` · ${currentMessage}` : ""}`;
             if (!history.length) {
-              progressCell.innerHTML = `<span class="lw-muted">${esc(summary)}</span>`;
+              const html = `<span class="lw-muted">${esc(summary)}</span>`;
+              if (progressCell.innerHTML !== html) progressCell.innerHTML = html;
             } else {
-              progressCell.innerHTML = `<details><summary>${esc(summary)}</summary><div style="min-width:280px;max-width:520px;white-space:normal;line-height:1.55">${history.map(item => {
+              const html = `<details><summary>${esc(summary)}</summary><div style="min-width:280px;max-width:520px;white-space:normal;line-height:1.55">${history.map(item => {
                 const at = beijingShort(item.at);
                 const stage = stageName(item.stage);
                 const message = String(item.message || "").trim();
                 return `<div>${at ? `<code>${esc(at)}</code> ` : ""}${esc(stage)}${message ? ` · ${esc(message)}` : ""}</div>`;
               }).join("")}</div></details>`;
+              if (progressCell.innerHTML !== html) progressCell.innerHTML = html;
             }
           }
         }
 
         const proxyCell = tr.children[6];
         if (proxyCell && row.record_type !== "installation") {
-          proxyCell.innerHTML = proxyHealthHtml(row);
+          observeProxyCell(proxyCell);
+          const html = proxyHealthHtml(row);
+          proxyCell.dataset.chat2apiProxyHealthOwner = "v55";
+          if (proxyCell.innerHTML !== html) proxyCell.innerHTML = html;
           requestProxyHealth(row);
         }
       });
