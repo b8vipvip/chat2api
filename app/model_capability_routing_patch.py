@@ -110,6 +110,12 @@ class _ModelRequestContextMiddleware:
             payload = json.loads(raw.decode("utf-8")) if raw else {}
             if isinstance(payload, dict):
                 target = dict(v13_patch._target_from_payload(payload))
+                # The final boundary must understand the public model literal
+                # even in isolated tests or transitional runtimes where an older
+                # target normalizer has not yet been decorated with mini support.
+                raw_model = str(payload.get("model") or "").strip().lower()
+                if raw_model in PAID_TEXT_MODELS | {MINI_MODEL}:
+                    target["model"] = raw_model
         except (UnicodeDecodeError, ValueError, TypeError):
             target = None
 
