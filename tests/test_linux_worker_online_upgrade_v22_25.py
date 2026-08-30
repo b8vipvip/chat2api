@@ -87,7 +87,7 @@ def test_online_upgrade_control_plane_is_worker_authenticated_and_progress_survi
     assert "install_linux_worker_upgrade_patch(app)" in entry
     assert entry.index("install_linux_worker_initialize_patch(app)") < entry.index("install_linux_worker_upgrade_patch(app)")
     assert 'SERVER_RUNTIME_VERSION = "0.22.37"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.10"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.11"' in runtime
     assert '"linux_worker_online_upgrade": True' in runtime
     assert '"linux_worker_upgrade_live_progress": True' in runtime
     assert '"linux_worker_sudoers_guard": True' in runtime
