@@ -88,14 +88,14 @@ def test_proxy_helper_reports_safe_stage_diagnostics_without_candidate_contents(
         "xray_config_test",
         "restart_xray",
         "wait_socks_listener",
-        "chatgpt_connectivity_test",
+        "generation_backend_connectivity_test",
         "complete",
     ):
         assert stage in source
     assert '"stage":"%s"' in source
     assert "proxy_helper_failed" in source
     assert "xray_restart_failed_rollback_failed" in source
-    assert "proxy_connectivity_test_failed_rollback_failed" in source
+    assert "generation_backend_connectivity_test_failed_rollback_failed" in source
     assert 'cat >"${candidate}"' in source
     assert 'cat "${candidate}"' not in source
 
