@@ -9,7 +9,7 @@ XRAY_CONFIG="/etc/chat2api-worker/xray.json"
 XRAY_UNIT="chat2api-xray.service"
 CHROME_UNIT="chat2api-chrome.service"
 PROXY_PORT="10808"
-TEST_URL="https://chatgpt.com/"
+GENERATION_PROBE="/opt/chat2api-worker/scripts/linux_worker_generation_probe.sh"
 WORKSPACE_PARENT="/etc/chat2api-worker"
 
 RESULT_EMITTED=0
@@ -127,16 +127,31 @@ if [[ "${listener_ready}" -ne 1 ]]; then
   exit 5
 fi
 
-CURRENT_STAGE="chatgpt_connectivity_test"
-http_code="$(curl --proxy "socks5h://127.0.0.1:${PROXY_PORT}" --connect-timeout 10 --max-time 20 -sS -o /dev/null -w '%{http_code}' "${TEST_URL}" 2>/dev/null || true)"
-if [[ -z "${http_code}" || "${http_code}" == "000" ]]; then
+# Do not accept a node merely because chatgpt.com renders. A real generation
+# also depends on OpenAI/ChatGPT backend transports. The shared probe performs
+# TLS/HTTP handshakes to the landing page plus bzr.openai.com and ws.chatgpt.com
+# through the exact local SOCKS path Chrome uses.
+CURRENT_STAGE="generation_backend_connectivity_test"
+if [[ ! -x "${GENERATION_PROBE}" ]]; then
   if rollback; then
-    emit_error "proxy_connectivity_test_failed" true 6
+    emit_error "generation_probe_missing" true 6
   else
-    emit_error "proxy_connectivity_test_failed_rollback_failed" false 6
+    emit_error "generation_probe_missing_rollback_failed" false 6
   fi
   exit 6
 fi
+probe_output=""
+if ! probe_output="$(CHAT2API_PROXY_PORT="${PROXY_PORT}" "${GENERATION_PROBE}" 2>&1)"; then
+  printf '%s\n' "${probe_output}" >&2
+  if rollback; then
+    emit_error "generation_backend_connectivity_test_failed" true 6
+  else
+    emit_error "generation_backend_connectivity_test_failed_rollback_failed" false 6
+  fi
+  exit 6
+fi
+http_code="$(printf '%s\n' "${probe_output}" | sed -n 's/^probe=chatgpt_home .*http_status=\([^ ]*\).*/\1/p' | tail -n1)"
+http_code="${http_code:-000}"
 
 # Ensure the browser is alive after the dependency restart and uses the newly
 # validated local SOCKS listener. This preserves the persistent Chrome profile.
@@ -145,4 +160,4 @@ systemctl restart "${CHROME_UNIT}" >/dev/null 2>&1 || true
 
 CURRENT_STAGE="complete"
 RESULT_EMITTED=1
-printf '{"ok":true,"http_status":"%s","rolled_back":false,"stage":"complete"}\n' "${http_code}"
+printf '{"ok":true,"http_status":"%s","generation_backend_ready":true,"rolled_back":false,"stage":"complete"}\n' "${http_code}"
