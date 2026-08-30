@@ -21,5 +21,5 @@ First formal GitHub release of the current production runtime line.
 ### Server
 
 - Server Runtime `0.22.38`.
-- Python package `0.7.2`.
+- Python package remains `0.7.1` because this release changes the deployed runtime/Worker bundle, not the Python distribution compatibility surface.
 - Add a release workflow that creates one GitHub Release per Server Runtime version after a validated merge to `main`.
