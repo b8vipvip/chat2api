@@ -33,7 +33,7 @@ def test_health_center_asset_is_injected_after_historical_admin_assets():
     asset = client.get(ADMIN_HEALTH_ASSET)
     assert asset.status_code == 200
     assert asset.headers["cache-control"] == "no-store, no-cache, must-revalidate"
-    assert 'const VERSION = "0.21.6"' in asset.text
+    assert 'const VERSION = "0.22.40-health-owner-v58"' in asset.text
 
 
 def test_health_center_uses_existing_extension_metadata_without_new_host_credentials():
@@ -47,14 +47,21 @@ def test_health_center_uses_existing_extension_metadata_without_new_host_credent
         'meta.chatgpt_login_state',
         'meta.chatgpt_login_composer_ready',
         'api("/api/admin/extensions")',
-        '["platform", "平台"]',
         '["network", "网络"]',
         '["chatgpt", "ChatGPT"]',
         "healthState(row)",
         "运行状态中心",
+        'worker_window: "admin_v21_5"',
+        'health_columns: ["network", "chatgpt"]',
     ):
         assert token in source
 
+    # v58 keeps platform metadata for overall health decisions, but platform /
+    # Worker-window DOM is exclusively owned by admin_v21_5. Reintroducing a
+    # platform health cell creates the 1.5s/2s alternating-render flicker.
+    assert '["platform", "平台"]' not in source
+    assert 'ensureCell(tr, "platform")' not in source
+    assert 'renderState(ensureCell(tr, "platform")' not in source
     assert '["health", "运行健康"]' not in source
     assert 'ensureCell(tr, "health")' not in source
     assert 'renderState(ensureCell(tr, "health")' not in source
@@ -95,13 +102,14 @@ def test_health_center_and_worker_window_editor_support_reordered_columns():
     health = read(ROOT / "app" / "admin_v21_6.js")
     live = read(ROOT / "app" / "admin_v21_5.js")
 
-    # v57 deliberately owns the platform cell as the Worker-window editor. Keyed
+    # v58 deliberately owns the platform cell as the Worker-window editor. Keyed
     # lookup stays authoritative after a user reorders the extension table.
     assert 'columnCell(tr, "client_id", 0)' in live
     assert 'columnCell(tr, "platform", 8)' in live
     assert 'columnCell(tr, "concurrency", 5)' not in live
     assert 'data-chat2api-column-key' in live
     assert 'platformHeader.dataset.chat2apiColumnKey = "platform"' in live
+    assert 'data-chat2api-structural-owner="worker-window-v58"' in live
 
     assert 'columnCell(tr, "client_id", 0)' in health
     assert 'columnCell(tr, "version", 2)' in health
@@ -109,6 +117,7 @@ def test_health_center_and_worker_window_editor_support_reordered_columns():
     assert "tr.appendChild(cell)" in health
     assert "insertCell" not in health
     assert "insertBefore(cell" not in health
+    assert 'globalThis.chat2apiRefreshWorkerWindowEditorsV58?.(rows)' in health
 
 
 def test_v21_6_is_installed_after_v21_5_and_before_runtime_contract():
