@@ -70,7 +70,7 @@ def test_release_versions_are_explicit_and_consistent() -> None:
     package = read("app/__init__.py")
     project = read("pyproject.toml")
 
-    assert 'SERVER_RUNTIME_VERSION = "0.22.39"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.40"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.13"' in runtime
     assert manifest["version"] == "0.8.13"
     assert 'bundle: "0.8.13"' in marker
@@ -81,6 +81,8 @@ def test_release_versions_are_explicit_and_consistent() -> None:
     assert '"linux_worker_proxy_health_facets": True' in runtime
     assert '"worker_key_capacity_fifo_queue": True' in runtime
     assert '"active_rate_limit_terminal_error": True' in runtime
+    assert '"routed_dispatch_terminal_error": True' in runtime
+    assert '"admin_single_render_owner": True' in runtime
 
 
 def test_release_workflow_creates_one_release_per_runtime_version() -> None:
