@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.22.41-capacity-v59";
+  const VERSION = "0.22.41-capacity-v60";
   const MIN_LIMIT = 1;
   const MAX_LIMIT = 32;
   let workerRefreshInFlight = false;
@@ -94,23 +94,14 @@
     return true;
   }
 
-  function platformText(item) {
-    const metadata = item?.metadata || {};
-    const os = String(metadata.platform_os || "").trim() || "unknown";
-    const arch = String(metadata.platform_arch || "").trim();
-    return arch ? `${os} · ${arch}` : os;
-  }
-
   function workerEditorHtml(clientId) {
-    return `<div data-worker-window-editor data-client-id="${esc(clientId)}" data-chat2api-structural-owner="worker-settings-v59" style="min-width:330px;white-space:normal">
+    return `<div data-worker-window-editor data-client-id="${esc(clientId)}" data-chat2api-structural-owner="worker-settings-v59" style="min-width:300px;white-space:normal">
       <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
         <label class="muted">并发</label><input data-worker-max type="number" min="${MIN_LIMIT}" max="${MAX_LIMIT}" value="3" style="width:58px;padding:5px 6px">
         <label class="muted">备用</label><input data-worker-reserve type="number" min="${MIN_LIMIT}" max="${MAX_LIMIT}" value="3" style="width:58px;padding:5px 6px">
         <button class="action" data-worker-save style="padding:5px 8px">保存</button>
         <button class="action" data-worker-refresh style="padding:5px 8px">刷新</button>
       </div>
-      <div class="muted" data-worker-live style="margin-top:5px;font-size:11px"></div>
-      <div class="muted" data-worker-platform style="margin-top:2px;font-size:11px"></div>
     </div>`;
   }
 
@@ -122,16 +113,8 @@
     }
     if (!editor) return;
 
-    const metadata = item?.metadata || {};
     const maximum = Number(settings?.max_concurrency || item?.worker_window_settings?.max_concurrency || 3);
     const reserve = Number(settings?.reserve_windows || item?.worker_window_settings?.reserve_windows || 3);
-    const active = Number(item?.active_api_calls ?? item?.capacity?.active_requests ?? settings?.active ?? 0);
-    const total = Number(metadata.reserve_window_total || 0);
-    const idle = Number(metadata.reserve_window_idle || 0);
-    const queued = Number(settings?.queued ?? item?.capacity?.queued_requests ?? 0);
-    const cooling = Boolean(settings?.rate_limit_cooldown ?? item?.capacity?.rate_limit_cooldown_active);
-    const remaining = Number(settings?.rate_limit_remaining_seconds ?? item?.capacity?.rate_limit_cooldown_remaining_seconds ?? 0);
-
     const focused = editor.contains(document.activeElement);
     const maxInput = editor.querySelector("[data-worker-max]");
     const reserveInput = editor.querySelector("[data-worker-reserve]");
@@ -139,17 +122,6 @@
       if (maxInput && Number(maxInput.value) !== maximum) maxInput.value = String(maximum);
       if (reserveInput && Number(reserveInput.value) !== reserve) reserveInput.value = String(reserve);
     }
-
-    const live = editor.querySelector("[data-worker-live]");
-    if (live) {
-      const cooldown = cooling ? ` · ChatGPT 限流冷却 ${Math.ceil(remaining)}s` : "";
-      const next = `当前 ${active}/${maximum} · 排队 ${queued} · 窗口 ${total} · 空闲 ${idle}/${reserve}${cooldown}`;
-      if (live.textContent !== next) live.textContent = next;
-      live.classList.toggle("bad", cooling);
-    }
-    const platform = editor.querySelector("[data-worker-platform]");
-    const nextPlatform = platformText(item);
-    if (platform && platform.textContent !== nextPlatform) platform.textContent = nextPlatform;
   }
 
   function clientIdForRow(tr) {

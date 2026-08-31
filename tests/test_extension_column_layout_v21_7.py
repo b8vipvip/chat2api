@@ -11,7 +11,7 @@ def source() -> str:
 
 def test_column_layout_supports_visibility_order_and_v2_to_v3_persistence():
     text = source()
-    assert 'const VERSION = "0.22.41-worker-list-v59"' in text
+    assert 'const VERSION = "0.22.41-worker-list-v60"' in text
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v3"' in text
     assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2"' in text
     assert "localStorage.getItem(STORAGE_KEY)" in text
@@ -36,7 +36,6 @@ def test_column_layout_uses_one_canonical_semantic_schema():
         ("version", "版本"),
         ("account_type", "账户类型"),
         ("status", "状态"),
-        ("bound_api_keys", "绑定 API Key 数"),
         ("worker_settings", "并发设置"),
         ("last_seen", "最后在线"),
         ("network", "网络"),
@@ -47,20 +46,22 @@ def test_column_layout_uses_one_canonical_semantic_schema():
         assert f'{{key: "{key}", label: "{label}"}}' in text
         assert f'data-chat2api-column-key="{key}"' in text
 
-    # The legacy presentation-only columns must not survive as active COLUMNS.
+    # Legacy and no-longer-useful presentation columns must not survive as active COLUMNS.
     assert '{key: "concurrency",' not in text
     assert '{key: "reserve_windows",' not in text
     assert '{key: "platform",' not in text
-    assert 'removed_columns: ["concurrency", "reserve_windows", "platform"]' in text
+    assert '{key: "bound_api_keys",' not in text
+    assert 'data-chat2api-column-key="bound_api_keys"' not in text
+    assert 'removed_columns: ["concurrency", "reserve_windows", "platform", "bound_api_keys"]' in text
     assert '旧并发列（已合并）' not in text
     assert '旧备用窗口列（已合并）' not in text
 
 
-def test_column_layout_migrates_the_historical_miskeyed_cells():
+def test_column_layout_migrates_only_still_supported_historical_cells():
     text = source()
     assert '["platform", "worker_settings"]' in text
-    assert '["concurrency", "bound_api_keys"]' in text
-    assert 'const REMOVED_KEYS = new Set(["reserve_windows"])' in text
+    assert '["concurrency", "bound_api_keys"]' not in text
+    assert 'const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys"])' in text
     assert 'const key = LEGACY_KEY_MAP.get(original) || original' in text
     assert 'if (REMOVED_KEYS.has(original)) continue' in text
     assert 'if (!KNOWN_KEYS.has(key) || seen.has(key)) continue' in text
@@ -86,7 +87,7 @@ def test_worker_view_bypasses_historical_multi_stage_extension_renderers():
     assert "legacy_renderers_bypassed: true" in text
 
     # Late promises from historical wrappers can still finish after the final
-    # owner is installed, so v59 repairs any non-canonical replacement before
+    # owner is installed, so v60 repairs any non-canonical replacement before
     # the next paint instead of allowing a visible second table style.
     assert "function queueCanonicalRepair()" in text
     assert "queueMicrotask(() =>" in text
@@ -119,10 +120,11 @@ def test_column_settings_modal_only_exposes_current_columns():
         'event.key === "Escape"',
         'document.body.style.overflow = "hidden"',
         'document.body.style.overflow = bodyOverflowBeforeModal',
-        '旧并发列与旧备用窗口列已永久移除',
+        '旧并发列、旧备用窗口列与绑定 API Key 数列已永久移除',
     ):
         assert token in text
 
+    assert '{key: "bound_api_keys", label: "绑定 API Key 数"}' not in text
     assert "positionMenu" not in text
     assert 'window.addEventListener("scroll"' not in text
     assert 'window.addEventListener("resize"' not in text

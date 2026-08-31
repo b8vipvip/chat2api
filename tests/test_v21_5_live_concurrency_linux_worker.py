@@ -39,8 +39,6 @@ def test_extension_console_uses_canonical_worker_settings_column():
     assert 'globalThis.chat2apiRefreshWorkerWindowEditorsV59' in source
     assert 'column: "worker_settings"' in source
     assert 'legacy_columns_removed: ["concurrency", "reserve_windows", "platform"]' in source
-    assert "active_api_calls" in source
-    assert "capacity?.active_requests" in source
     assert "const POLL_MS = 2000" not in source
     assert "setInterval(" not in source
     assert "requestAnimationFrame" in source
@@ -54,6 +52,12 @@ def test_extension_console_uses_canonical_worker_settings_column():
     assert "data-worker-save" in source
     assert "data-worker-refresh" in source
     assert source.index("data-worker-save") < source.index("data-worker-refresh")
+    assert "data-worker-live" not in source
+    assert "data-worker-platform" not in source
+    assert "platformText(" not in source
+    assert "active_api_calls" not in source
+    assert "capacity?.active_requests" not in source
+    assert "bound_api_keys" not in source
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57' in source
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in source
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/refresh' in source
