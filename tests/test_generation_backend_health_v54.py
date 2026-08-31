@@ -32,6 +32,13 @@ def test_generation_probe_checks_real_text_generation_control_paths() -> None:
     assert "Do NOT use bzr.openai.com as a text-generation health gate" in source
 
 
+def test_docker_worker_bundle_includes_generation_probe() -> None:
+    dockerfile = read("Dockerfile")
+    assert "scripts/linux_worker_generation_probe.sh" in dockerfile
+    assert "/app/worker_payload/scripts/linux_worker_generation_probe.sh" in dockerfile
+    assert "linux-worker-bundle.tar.gz" in dockerfile
+
+
 def test_proxy_transaction_rejects_node_when_generation_backend_probe_fails() -> None:
     source = read("scripts/linux_worker_proxy_apply.sh")
     probe_stage = source.index('CURRENT_STAGE="generation_backend_connectivity_test"')
