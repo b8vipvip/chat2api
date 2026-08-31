@@ -164,14 +164,4 @@ jobs:
       - name: Mini multimodal quota VM contract
         run: node tests/mini_multimodal_quota_v36.mjs
       - name: Tests
-        shell: bash
-        run: |
-          set -o pipefail
-          pytest -q 2>&1 | tee /tmp/chat2api-pytest.log
-      - name: Upload pytest diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: pytest-diagnostics
-          path: /tmp/chat2api-pytest.log
-          retention-days: 1
+        run: pytest -q
