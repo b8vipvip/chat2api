@@ -19,6 +19,7 @@
     timer: null,
     observer: null,
     lastFingerprint: "",
+    terminalRequestId: "",
   };
   globalThis[KEY] = state;
 
@@ -48,6 +49,50 @@
     return "";
   }
 
+  function activeRequest() {
+    // request-v5 is the authoritative text controller in the current bundle.
+    // Keep the base-controller fallback for partially upgraded tabs while the
+    // extension autoreload mechanism converges them to the current runtime.
+    return globalThis.__CHAT2API_REQUEST_CONTENT_V5__?.active || globalThis.__CHAT2API_CONTENT__?.active || null;
+  }
+
+  async function terminateActiveRequest(snapshot) {
+    const active = activeRequest();
+    const requestId = String(active?.requestId || "");
+    if (!requestId || state.terminalRequestId === requestId) return false;
+    state.terminalRequestId = requestId;
+    const seconds = Math.max(1, Math.ceil(Math.max(0, Number(snapshot?.until_ms || 0) - Date.now()) / 1000));
+    const error = `ChatGPT is temporarily rate limited; request dispatch paused for ${seconds}s after a visible Too many requests response`;
+
+    // Send the terminal browser error before cancelling the local monitor so
+    // the server receives the rate-limit reason first and can enter its shared
+    // Worker cooldown instead of recording a generic 300s timeout.
+    try {
+      await chrome.runtime.sendMessage({
+        type: "chat2api.event",
+        event: {
+          type: "chat.error",
+          request_id: requestId,
+          error,
+          diagnostics: {
+            chatgpt_rate_limit_detected: true,
+            chatgpt_rate_limit_source: String(snapshot?.source || "visible-chatgpt-rate-limit-modal-v52"),
+            chatgpt_rate_limit_retry_after_seconds: seconds,
+            chatgpt_rate_limit_text: String(snapshot?.text || "").slice(0, 240),
+          },
+        },
+      });
+    } catch (_) {
+      // Even if the Bridge socket is momentarily unavailable, stop the local
+      // request monitor; transport recovery will surface the disconnect rather
+      // than leaving this request stuck until its absolute timeout.
+    } finally {
+      active.rateLimitTerminalError = error;
+      active.cancelled = true;
+    }
+    return true;
+  }
+
   async function publish(text) {
     const now = Date.now();
     const stored = await chrome.storage.local.get({ [STORAGE_KEY]: null }).catch(() => ({}));
@@ -64,21 +109,23 @@
       source: "visible-chatgpt-rate-limit-modal-v52",
     };
     const fingerprint = `${text}|${location.href}|${until}`;
-    if (fingerprint === state.lastFingerprint) return next;
-    state.lastFingerprint = fingerprint;
-    await chrome.storage.local.set({ [STORAGE_KEY]: next }).catch(() => {});
-    try {
-      await chrome.runtime.sendMessage({
-        type: "chat2api.log.append",
-        entry: {
-          component: "page",
-          action: "chatgpt-rate-limit-detected",
-          level: "warn",
-          request_id: null,
-          data: { until_ms: until, text: text.slice(0, 240), href: location.href },
-        },
-      });
-    } catch (_) {}
+    if (fingerprint !== state.lastFingerprint) {
+      state.lastFingerprint = fingerprint;
+      await chrome.storage.local.set({ [STORAGE_KEY]: next }).catch(() => {});
+      try {
+        await chrome.runtime.sendMessage({
+          type: "chat2api.log.append",
+          entry: {
+            component: "page",
+            action: "chatgpt-rate-limit-detected",
+            level: "warn",
+            request_id: String(activeRequest()?.requestId || "") || null,
+            data: { until_ms: until, text: text.slice(0, 240), href: location.href },
+          },
+        });
+      } catch (_) {}
+    }
+    await terminateActiveRequest(next);
     return next;
   }
 
@@ -98,6 +145,7 @@
 
   state.detect = inspect;
   state.text = rateLimitText;
+  state.terminateActiveRequest = terminateActiveRequest;
 
   state.observer = new MutationObserver(() => schedule(120));
   state.observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ["role", "aria-modal", "class"] });

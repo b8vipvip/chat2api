@@ -196,12 +196,15 @@ def test_console_and_bridge_expose_live_capacity_controls() -> None:
     control = (ROOT / "chrome_extension" / "background_capacity_control_v35.js").read_text(encoding="utf-8")
     dispatcher = (ROOT / "chrome_extension" / "background_capacity_control_v36.js").read_text(encoding="utf-8")
 
-    assert 'target.textContent = "并发设置"' in concurrency
+    assert 'platformHeader.textContent = "Worker 窗口"' in concurrency
+    assert "data-worker-max" in concurrency
+    assert "data-worker-reserve" in concurrency
+    assert '/capacity-v57' in concurrency
     assert '/capacity/apply' in concurrency
     assert "showActionResult" in concurrency
-    assert "data-concurrency-refresh" in concurrency
+    assert "data-worker-refresh" in concurrency
     assert '/windows/refresh' in concurrency
-    assert "刷新成功：实时窗口" in concurrency
+    assert "窗口已刷新" in concurrency
     assert '"实时窗口"' not in health
     assert "data-live-window-refresh" not in health
     assert "install_extension_capacity_control_patch(app)" in entry

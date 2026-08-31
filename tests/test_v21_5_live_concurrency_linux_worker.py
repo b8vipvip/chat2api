@@ -31,27 +31,30 @@ def test_v21_5_is_installed_after_concurrency_and_before_runtime_contract():
     assert entry.index("install_v21_5_patch(app)") < entry.index("install_runtime_contract(app)")
 
 
-def test_extension_console_uses_live_concurrency_and_per_id_editor():
+def test_extension_console_uses_worker_window_and_separate_limits():
     source = read(ROOT / "app" / "admin_v21_5.js")
-    assert 'target.textContent = "并发设置"' in source
+    assert 'platformHeader.textContent = "Worker 窗口"' in source
     assert "active_api_calls" in source
     assert "capacity?.active_requests" in source
-    assert "const POLL_MS = 1000" in source
+    assert "const POLL_MS = 2000" in source
     assert 'api("/api/admin/extensions")' in source
-    assert "data-extension-concurrency-editor" in source
-    assert "data-concurrency-limit" in source
-    assert "data-concurrency-save" in source
-    assert "data-concurrency-refresh" in source
-    assert source.index("data-concurrency-save") < source.index("data-concurrency-refresh")
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/concurrency' in source
+    assert 'api("/api/admin/capacity-v57")' in source
+    assert "data-worker-window-editor" in source
+    assert "data-worker-max" in source
+    assert "data-worker-reserve" in source
+    assert "data-worker-save" in source
+    assert "data-worker-refresh" in source
+    assert source.index("data-worker-save") < source.index("data-worker-refresh")
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57' in source
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in source
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/refresh' in source
-    assert 'method: "PUT"' in source
-    assert 'method: "POST"' in source
+    assert 'method:"PUT"' in source or 'method: "PUT"' in source
+    assert 'method:"POST"' in source or 'method: "POST"' in source
     assert "showActionResult" in source
     assert "target_reached" in source
-    assert "concurrency_limit_source" in source
     assert "bound_api_keys" not in source
+    assert 'th.textContent = "最大并发"' in source
+    assert "data-key-max" in source
 
 
 def test_live_concurrency_summary_uses_runtime_limit_for_each_client():

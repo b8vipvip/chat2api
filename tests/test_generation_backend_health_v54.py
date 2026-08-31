@@ -32,6 +32,13 @@ def test_generation_probe_checks_real_text_generation_control_paths() -> None:
     assert "Do NOT use bzr.openai.com as a text-generation health gate" in source
 
 
+def test_docker_worker_bundle_includes_generation_probe() -> None:
+    dockerfile = read("Dockerfile")
+    assert "scripts/linux_worker_generation_probe.sh" in dockerfile
+    assert "/app/worker_payload/scripts/linux_worker_generation_probe.sh" in dockerfile
+    assert "linux-worker-bundle.tar.gz" in dockerfile
+
+
 def test_proxy_transaction_rejects_node_when_generation_backend_probe_fails() -> None:
     source = read("scripts/linux_worker_proxy_apply.sh")
     probe_stage = source.index('CURRENT_STAGE="generation_backend_connectivity_test"')
@@ -103,9 +110,9 @@ def test_generation_health_guard_is_final_after_free_account_admission() -> None
 def test_bundle_and_runtime_publish_generation_backend_health_revision() -> None:
     manifest = json.loads(read("chrome_extension/manifest.json"))
     runtime = read("app/runtime_contract.py")
-    assert manifest["version"] == "0.8.12"
-    assert 'SERVER_RUNTIME_VERSION = "0.22.38"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.12"' in runtime
+    assert manifest["version"] == "0.8.13"
+    assert 'SERVER_RUNTIME_VERSION = "0.22.39"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.13"' in runtime
     assert '"linux_worker_generation_backend_health": True' in runtime
     assert '"linux_worker_proxy_health_facets": True' in runtime
     assert "generation-backend-health-v54" in runtime

@@ -58,8 +58,31 @@ class RequestBroker:
                     state.final_future.exception()
                 except asyncio.CancelledError:
                     pass
-            if state and self.client_requests.get(state.client_id) == request_id:
-                self.client_requests.pop(state.client_id, None)
+            if not state:
+                return
+
+            # v21+ capacity patches keep a per-client active-request map. Keep
+            # the base broker release idempotently compatible with that state so
+            # later final admission owners (such as v57) never retain a phantom
+            # capacity unit if they capture this base implementation directly.
+            active_by_client = getattr(self, "client_active_requests", None)
+            if isinstance(active_by_client, dict):
+                active = active_by_client.get(state.client_id)
+                if isinstance(active, dict):
+                    active.pop(request_id, None)
+                    if not active:
+                        active_by_client.pop(state.client_id, None)
+
+            if self.client_requests.get(state.client_id) == request_id:
+                replacement = None
+                if isinstance(active_by_client, dict):
+                    active = active_by_client.get(state.client_id)
+                    if isinstance(active, dict):
+                        replacement = next(iter(active), None)
+                if replacement:
+                    self.client_requests[state.client_id] = replacement
+                else:
+                    self.client_requests.pop(state.client_id, None)
 
     async def publish(self, request_id: str, event: dict[str, Any]) -> bool:
         state = self.requests.get(request_id)

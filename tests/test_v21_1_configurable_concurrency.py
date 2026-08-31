@@ -33,8 +33,8 @@ def test_v211_static_contracts() -> None:
     assert '"live_voice_request_weight": 1' in patch
     assert "async def create_per_extension" in patch
 
-    # The global overview editor is intentionally removed. Per-ID controls live in
-    # the extension-management table next to realtime activity.
+    # Historical v21.1 endpoints remain for compatibility, while v57 owns the
+    # active console editor and separates request concurrency from reserve windows.
     assert 'data-concurrency-settings-v211' in admin
     assert 'querySelectorAll("[data-concurrency-settings-v211]").forEach(node => node.remove())' in admin
     assert "按扩展 ID 独立计数" in admin
@@ -42,14 +42,14 @@ def test_v211_static_contracts() -> None:
     assert 'fetch("/api/admin/concurrency"' not in admin
     assert "saveConcurrencyV211" not in admin
 
-    assert "并发设置" in admin_live
-    assert "data-extension-concurrency-editor" in admin_live
-    assert "data-concurrency-limit" in admin_live
-    assert "data-concurrency-save" in admin_live
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/concurrency' in admin_live
+    assert "Worker 窗口" in admin_live
+    assert "data-worker-window-editor" in admin_live
+    assert "data-worker-max" in admin_live
+    assert "data-worker-reserve" in admin_live
+    assert "data-worker-save" in admin_live
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57' in admin_live
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in admin_live
-    assert 'method: "PUT"' in admin_live
-    assert "concurrency_limit_source" in admin_live
+    assert 'method:"PUT"' in admin_live or 'method: "PUT"' in admin_live
     assert "bound_api_keys" not in admin_live
 
     assert "MAX_WORKERS_PER_KEY = 3" in workers

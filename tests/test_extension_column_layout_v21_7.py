@@ -78,9 +78,10 @@ def test_existing_extension_pollers_are_column_key_aware_with_correct_fallbacks(
     health = (ROOT / "app" / "admin_v21_6.js").read_text(encoding="utf-8")
 
     assert 'columnCell(tr, "client_id", 0)' in live
-    assert 'columnCell(tr, "concurrency", 5)' in live
-    assert 'columnCell(tr, "concurrency", 4)' not in live
+    assert 'columnCell(tr, "platform", 8)' in live
+    assert 'columnCell(tr, "concurrency", 5)' not in live
     assert 'data-chat2api-column-key' in live
+    assert 'platformHeader.dataset.chat2apiColumnKey = "platform"' in live
 
     assert 'columnCell(tr, "client_id", 0)' in health
     assert 'columnCell(tr, "version", 2)' in health

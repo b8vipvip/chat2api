@@ -101,17 +101,19 @@ def test_reserve_pool_reuses_spares_and_extends_route_idle_close_to_ten_minutes(
         assert token in source
 
 
-def test_realtime_window_refresh_is_compacted_into_concurrency_column():
+def test_realtime_window_refresh_is_compacted_into_worker_window_column():
     health = (ROOT / "app" / "admin_v21_6.js").read_text(encoding="utf-8")
-    concurrency = (ROOT / "app" / "admin_v21_5.js").read_text(encoding="utf-8")
+    worker = (ROOT / "app" / "admin_v21_5.js").read_text(encoding="utf-8")
 
     assert '["reserve_windows", "实时窗口"]' not in health
     assert 'data-live-window-refresh' not in health
     assert 'renderReserveWindowCell' not in health
-    assert 'data-concurrency-refresh' in concurrency
-    assert '/windows/refresh' in concurrency
-    assert '刷新成功：实时窗口 ${total}(${active})；Chrome ChatGPT 窗口 ${allChatGpt}' in concurrency
-    assert concurrency.index('data-concurrency-save') < concurrency.index('data-concurrency-refresh')
+    assert 'platformHeader.textContent = "Worker 窗口"' in worker
+    assert 'data-worker-refresh' in worker
+    assert '/windows/refresh' in worker
+    assert '窗口已刷新：总数 ${Number(snap.total || 0)}' in worker
+    assert worker.index('data-worker-save') < worker.index('data-worker-refresh')
+    assert 'data-worker-reserve' in worker
 
 
 def test_reserve_versions_match_manifest_and_runtime_contract():
