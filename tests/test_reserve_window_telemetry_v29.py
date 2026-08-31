@@ -101,14 +101,17 @@ def test_reserve_pool_reuses_spares_and_extends_route_idle_close_to_ten_minutes(
         assert token in source
 
 
-def test_realtime_window_refresh_is_compacted_into_worker_window_column():
+def test_realtime_window_refresh_is_compacted_into_worker_settings_column():
     health = (ROOT / "app" / "admin_v21_6.js").read_text(encoding="utf-8")
     worker = (ROOT / "app" / "admin_v21_5.js").read_text(encoding="utf-8")
 
     assert '["reserve_windows", "实时窗口"]' not in health
     assert 'data-live-window-refresh' not in health
     assert 'renderReserveWindowCell' not in health
-    assert 'platformHeader.textContent = "Worker 窗口"' in worker
+    assert 'th.dataset.chat2apiColumnKey = "worker_settings"' in worker
+    assert 'th.textContent = "并发设置"' in worker
+    assert 'data-chat2api-structural-owner="worker-settings-v59"' in worker
+    assert 'platformHeader.textContent = "Worker 窗口"' not in worker
     assert 'data-worker-refresh' in worker
     assert '/windows/refresh' in worker
     assert '窗口已刷新：总数 ${Number(snap.total || 0)}' in worker
