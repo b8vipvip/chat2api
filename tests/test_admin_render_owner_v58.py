@@ -24,7 +24,7 @@ def test_worker_settings_has_one_structural_owner() -> None:
     assert 'polling: false' in worker
 
     assert '{key: "worker_settings", label: "并发设置"}' in columns
-    assert '{key: "bound_api_keys", label: "绑定 API Key 数"}' in columns
+    assert '{key: "bound_api_keys", label: "绑定 API Key 数"}' not in columns
     assert '{key: "concurrency"' not in columns
     assert '{key: "reserve_windows"' not in columns
     assert '{key: "platform"' not in columns
@@ -43,7 +43,11 @@ def test_worker_settings_refresh_is_event_driven_and_idempotent() -> None:
     assert '.observe(extensionBody, {childList: true})' in worker
     assert 'tr.querySelector(\'td[data-chat2api-column-key="worker_settings"]\')' in worker
     assert 'if (!editor || String(editor.dataset.clientId || "") !== clientId)' in worker
-    assert 'if (live.textContent !== next) live.textContent = next' in worker
+    assert 'if (maxInput && Number(maxInput.value) !== maximum) maxInput.value = String(maximum)' in worker
+    assert 'if (reserveInput && Number(reserveInput.value) !== reserve) reserveInput.value = String(reserve)' in worker
+    assert "data-worker-live" not in worker
+    assert "data-worker-platform" not in worker
+    assert "platformText(" not in worker
     assert 'columnCell(tr, "platform", 8)' not in worker
     assert 'patchColumnSettingsLabels' not in worker
 
@@ -72,7 +76,6 @@ def test_canonical_worker_header_and_rows_use_same_keys() -> None:
         "version",
         "account_type",
         "status",
-        "bound_api_keys",
         "worker_settings",
         "last_seen",
         "network",
@@ -82,7 +85,9 @@ def test_canonical_worker_header_and_rows_use_same_keys() -> None:
     for key in expected:
         assert f'{{key: "{key}",' in columns
         assert f'data-chat2api-column-key="{key}"' in columns
-    assert 'removed_columns: ["concurrency", "reserve_windows", "platform"]' in columns
+    assert '{key: "bound_api_keys",' not in columns
+    assert 'data-chat2api-column-key="bound_api_keys"' not in columns
+    assert 'removed_columns: ["concurrency", "reserve_windows", "platform", "bound_api_keys"]' in columns
     assert '旧并发列（已合并）' not in columns
     assert '旧备用窗口列（已合并）' not in columns
 
