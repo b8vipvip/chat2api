@@ -56,7 +56,6 @@
     for (const selector of [
       '[data-chat2api-column-key="concurrency"]',
       '[data-chat2api-column-key="reserve_windows"]',
-      '[data-chat2api-column-key="bound_api_keys"]',
     ]) {
       for (const node of header.querySelectorAll(selector)) node.remove();
       for (const node of body.querySelectorAll(`td${selector}`)) node.remove();
@@ -350,7 +349,7 @@
     column: "worker_settings",
     structural_updates: "create-once-update-values",
     polling: false,
-    legacy_columns_removed: ["concurrency", "reserve_windows", "platform", "bound_api_keys"],
+    legacy_columns_removed: ["concurrency", "reserve_windows", "platform"],
   };
 
   const brandSmall = document.querySelector(".brand small");
