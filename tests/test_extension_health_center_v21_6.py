@@ -33,7 +33,7 @@ def test_health_center_asset_is_injected_after_historical_admin_assets():
     asset = client.get(ADMIN_HEALTH_ASSET)
     assert asset.status_code == 200
     assert asset.headers["cache-control"] == "no-store, no-cache, must-revalidate"
-    assert 'const VERSION = "0.22.40-health-owner-v58"' in asset.text
+    assert 'const VERSION = "0.22.41-health-owner-v59"' in asset.text
 
 
 def test_health_center_uses_existing_extension_metadata_without_new_host_credentials():
@@ -53,15 +53,18 @@ def test_health_center_uses_existing_extension_metadata_without_new_host_credent
         "运行状态中心",
         'worker_window: "admin_v21_5"',
         'health_columns: ["network", "chatgpt"]',
+        'chained_capacity_poll: false',
     ):
         assert token in source
 
-    # v58 keeps platform metadata for overall health decisions, but platform /
-    # Worker-window DOM is exclusively owned by admin_v21_5. Reintroducing a
-    # platform health cell creates the 1.5s/2s alternating-render flicker.
+    # v59 keeps platform metadata for overall health decisions, but platform /
+    # Worker-window DOM is exclusively owned by admin_v21_5. It also does not
+    # call that owner on every health tick because doing so reintroduced the
+    # repeating /capacity-v57 request seen in v0.22.40.
     assert '["platform", "平台"]' not in source
     assert 'ensureCell(tr, "platform")' not in source
     assert 'renderState(ensureCell(tr, "platform")' not in source
+    assert 'globalThis.chat2apiRefreshWorkerWindowEditorsV58?.(rows)' not in source
     assert '["health", "运行健康"]' not in source
     assert 'ensureCell(tr, "health")' not in source
     assert 'renderState(ensureCell(tr, "health")' not in source
@@ -117,7 +120,6 @@ def test_health_center_and_worker_window_editor_support_reordered_columns():
     assert "tr.appendChild(cell)" in health
     assert "insertCell" not in health
     assert "insertBefore(cell" not in health
-    assert 'globalThis.chat2apiRefreshWorkerWindowEditorsV58?.(rows)' in health
 
 
 def test_v21_6_is_installed_after_v21_5_and_before_runtime_contract():
