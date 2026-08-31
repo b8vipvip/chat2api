@@ -42,7 +42,10 @@ def test_v211_static_contracts() -> None:
     assert 'fetch("/api/admin/concurrency"' not in admin
     assert "saveConcurrencyV211" not in admin
 
-    assert "Worker 窗口" in admin_live
+    assert 'th.dataset.chat2apiColumnKey = "worker_settings"' in admin_live
+    assert 'th.textContent = "并发设置"' in admin_live
+    assert 'data-chat2api-structural-owner="worker-settings-v59"' in admin_live
+    assert 'platformHeader.textContent = "Worker 窗口"' not in admin_live
     assert "data-worker-window-editor" in admin_live
     assert "data-worker-max" in admin_live
     assert "data-worker-reserve" in admin_live
