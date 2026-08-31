@@ -1,14 +1,18 @@
 (() => {
-  const VERSION = "0.22.40-health-owner-v58";
-  const POLL_MS = 1500;
+  const VERSION = "0.22.41-health-owner-v59";
+  const POLL_MS = 5000;
   // IMPORTANT: platform/Worker-window is owned by admin_v21_5.js v58.
   // This health layer owns only Network and ChatGPT. Never add platform here
   // again or the two renderers will alternate textContent/innerHTML and flicker.
+  // Presentation writes must also be idempotent: admin_extension_columns watches
+  // table child-list mutations for layout changes, so replacing an unchanged text
+  // node on every poll would self-invalidate the table and create visible reflow.
   const STATUS_COLUMNS = [
     ["network", "网络"],
     ["chatgpt", "ChatGPT"],
   ];
   let pollInFlight = false;
+  let pollTimer = null;
 
   function extensionViewActive() {
     return document.getElementById("view-extensions")?.classList.contains("active");
@@ -21,6 +25,16 @@
   function text(value, fallback = "-") {
     const normalized = String(value ?? "").trim();
     return normalized || fallback;
+  }
+
+  function setText(node, value) {
+    const next = String(value ?? "");
+    if (node && node.textContent !== next) node.textContent = next;
+  }
+
+  function setTitle(node, value) {
+    const next = String(value ?? "");
+    if (node && node.title !== next) node.title = next;
   }
 
   function metadata(row) {
@@ -122,15 +136,15 @@
         th.dataset.chat2apiHealthColumn = key;
         row.appendChild(th);
       }
-      th.textContent = label;
-      th.dataset.chat2apiColumnKey = key;
+      setText(th, label);
+      if (th.dataset.chat2apiColumnKey !== key) th.dataset.chat2apiColumnKey = key;
     }
   }
 
   function ensureCell(tr, key) {
     let cell = tr.querySelector(`td[data-chat2api-health-cell="${key}"]`);
     if (cell) {
-      cell.dataset.chat2apiColumnKey = key;
+      if (cell.dataset.chat2apiColumnKey !== key) cell.dataset.chat2apiColumnKey = key;
       return cell;
     }
     cell = document.createElement("td");
@@ -141,10 +155,12 @@
   }
 
   function renderState(cell, state) {
-    cell.textContent = state.label;
-    cell.classList.remove("ok", "bad", "warnText");
-    cell.classList.add(statusClass(state.level));
-    cell.title = state.detail || state.label;
+    setText(cell, state.label);
+    const nextClass = statusClass(state.level);
+    for (const className of ["ok", "bad", "warnText"]) {
+      cell.classList.toggle(className, className === nextClass);
+    }
+    setTitle(cell, state.detail || state.label);
   }
 
   function ensureSummary() {
@@ -169,10 +185,12 @@
     const counts = {ok: 0, warn: 0, bad: 0};
     for (const row of rows) counts[healthState(row).level] += 1;
     const total = rows.length;
-    node.textContent = `运行状态中心：共 ${total} · 就绪 ${counts.ok} · 需关注 ${counts.warn} · 故障/离线 ${counts.bad}`;
-    node.classList.remove("ok", "bad", "warnText", "muted");
-    node.classList.add(counts.bad ? "bad" : counts.warn ? "warnText" : total ? "ok" : "muted");
-    node.title = "健康结论来自扩展现有 WebSocket、platform v26、network v26 与 login readiness v27 元数据；宿主机 systemd watchdog 仍以本机 journal/state 为权威。";
+    setText(node, `运行状态中心：共 ${total} · 就绪 ${counts.ok} · 需关注 ${counts.warn} · 故障/离线 ${counts.bad}`);
+    const nextClass = counts.bad ? "bad" : counts.warn ? "warnText" : total ? "ok" : "muted";
+    for (const className of ["ok", "bad", "warnText", "muted"]) {
+      node.classList.toggle(className, className === nextClass);
+    }
+    setTitle(node, "健康结论来自扩展现有 WebSocket、platform v26、network v26 与 login readiness v27 元数据；宿主机 systemd watchdog 仍以本机 journal/state 为权威。");
   }
 
   function renderRows(rows) {
@@ -187,19 +205,18 @@
 
       const versionCell = columnCell(tr, "version", 2);
       if (versionCell) {
-        versionCell.textContent = effectiveVersion(row);
-        versionCell.title = "当前在线扩展上报的 manifest 版本优先；离线时回退到注册版本";
+        setText(versionCell, effectiveVersion(row));
+        setTitle(versionCell, "当前在线扩展上报的 manifest 版本优先；离线时回退到注册版本");
       }
 
       // platform/Worker-window is intentionally not touched here. admin_v21_5
-      // is the only structural owner of that cell.
+      // is the only structural owner of that cell. In v59 we also stopped
+      // chaining into its capacity fetch on every health poll: its own owner
+      // refreshes on row replacement, save and explicit window refresh.
       renderState(ensureCell(tr, "network"), networkState(row));
       renderState(ensureCell(tr, "chatgpt"), loginState(row));
     }
     renderSummary(rows);
-    // Reuse the same /extensions snapshot for the Worker-window owner. It will
-    // fetch only its capacity state and update its own cell idempotently.
-    globalThis.chat2apiRefreshWorkerWindowEditorsV58?.(rows);
   }
 
   async function refreshHealthCenter() {
@@ -216,6 +233,15 @@
     }
   }
 
+  function schedulePoll(delay = POLL_MS) {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(async () => {
+      pollTimer = null;
+      if (!document.hidden && extensionViewActive()) await refreshHealthCenter();
+      schedulePoll(POLL_MS);
+    }, Math.max(250, Number(delay) || POLL_MS));
+  }
+
   const baseShow = typeof globalThis.show === "function" ? globalThis.show : null;
   if (baseShow && !baseShow.__chat2apiHealthCenterV216) {
     const wrappedShow = async (...args) => {
@@ -227,14 +253,23 @@
     globalThis.show = wrappedShow;
   }
 
-  globalThis.__CHAT2API_EXTENSION_RENDER_OWNER_V58__ = {
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && extensionViewActive()) {
+      refreshHealthCenter().catch(() => {});
+      schedulePoll(POLL_MS);
+    }
+  });
+
+  globalThis.__CHAT2API_EXTENSION_RENDER_OWNER_V59__ = {
     worker_window: "admin_v21_5",
     health_columns: ["network", "chatgpt"],
-    rule: "one-structural-owner-per-cell",
+    rule: "one-structural-owner-per-cell-and-idempotent-presentation-writes",
+    health_poll_ms: POLL_MS,
+    chained_capacity_poll: false,
   };
   document.documentElement.dataset.chat2apiHealthCenterVersion = VERSION;
   patchHeader();
   ensureSummary();
   refreshHealthCenter();
-  setInterval(refreshHealthCenter, POLL_MS);
+  schedulePoll(POLL_MS);
 })();
