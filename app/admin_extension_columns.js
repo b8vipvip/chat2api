@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.22.41-worker-list-v59";
+  const VERSION = "0.22.41-worker-list-v60";
   const STORAGE_KEY = "chat2api.extensionColumns.v3";
   const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2";
   const COLUMNS = [
@@ -8,7 +8,6 @@
     {key: "version", label: "版本"},
     {key: "account_type", label: "账户类型"},
     {key: "status", label: "状态"},
-    {key: "bound_api_keys", label: "绑定 API Key 数"},
     {key: "worker_settings", label: "并发设置"},
     {key: "last_seen", label: "最后在线"},
     {key: "network", label: "网络"},
@@ -19,12 +18,8 @@
   const DEFAULT_ORDER = COLUMNS.map(item => item.key);
   const LEGACY_KEY_MAP = new Map([
     ["platform", "worker_settings"],
-    // v2 accidentally used the old concurrency key for the real
-    // "绑定 API Key 数" base cell. Preserve the user's visibility/order choice
-    // while giving that cell its correct semantic key in v3.
-    ["concurrency", "bound_api_keys"],
   ]);
-  const REMOVED_KEYS = new Set(["reserve_windows"]);
+  const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys"]);
 
   let prefs = null;
   let menuOpen = false;
@@ -104,6 +99,16 @@
     const table = body?.closest("table") || null;
     const headerRow = table?.querySelector("thead tr") || null;
     return {body, table, headerRow};
+  }
+
+  function ensureCompactWorkerSettingsStyle() {
+    let style = document.getElementById("chat2apiWorkerSettingsCompactV60");
+    if (style) return style;
+    style = document.createElement("style");
+    style.id = "chat2apiWorkerSettingsCompactV60";
+    style.textContent = '[data-worker-window-editor] [data-worker-live],[data-worker-window-editor] [data-worker-platform]{display:none!important}';
+    document.head.appendChild(style);
+    return style;
   }
 
   function keyedChild(parent, key) {
@@ -219,7 +224,6 @@
       <td data-chat2api-column-key="version">${esc(row.metadata?.extension_version || row.version || "-")}</td>
       <td data-chat2api-column-key="account_type">${accountPill(row)}</td>
       <td data-chat2api-column-key="status">${statusPill(row)}</td>
-      <td data-chat2api-column-key="bound_api_keys">${esc(row.bound_api_keys ?? 0)}</td>
       <td data-chat2api-column-key="worker_settings" data-chat2api-structural-owner="worker-settings-v59"><span class="muted">加载中…</span></td>
       <td data-chat2api-column-key="last_seen">${typeof fmtTime === "function" ? fmtTime(row.last_seen_at) : esc(row.last_seen_at || "-")}</td>
       <td data-chat2api-column-key="network" data-chat2api-health-cell="network" class="${network.cls}">${esc(network.text)}</td>
@@ -420,7 +424,7 @@
       <label style="display:flex;align-items:center;gap:8px;flex:1;font-weight:600"><input type="checkbox" data-column-visible="${key}" ${active.visible[key] !== false ? "checked" : ""}><span>${esc(labels.get(key) || key)}</span></label></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="action" data-column-move="${key}" data-delta="-1" ${index === 0 ? "disabled" : ""}>← 前移</button><button class="action" data-column-move="${key}" data-delta="1" ${index === active.order.length - 1 ? "disabled" : ""}>后移 →</button></div>
     </div>`).join("");
-    menu.innerHTML = `<div style="display:flex;justify-content:space-between;gap:16px;padding:18px 20px 14px;border-bottom:1px solid rgba(148,163,184,.16)"><div><div style="font-size:17px;font-weight:700">Worker列表列设置</div><div class="muted" style="font-size:12px;margin-top:5px">只保留当前有效列；旧并发列与旧备用窗口列已永久移除。</div></div><div style="display:flex;gap:8px"><button class="action" data-reset-columns>恢复默认</button><button class="action" data-close-columns>✕</button></div></div>
+    menu.innerHTML = `<div style="display:flex;justify-content:space-between;gap:16px;padding:18px 20px 14px;border-bottom:1px solid rgba(148,163,184,.16)"><div><div style="font-size:17px;font-weight:700">Worker列表列设置</div><div class="muted" style="font-size:12px;margin-top:5px">只保留当前有效列；旧并发列、旧备用窗口列与绑定 API Key 数列已永久移除。</div></div><div style="display:flex;gap:8px"><button class="action" data-reset-columns>恢复默认</button><button class="action" data-close-columns>✕</button></div></div>
       <div class="muted" style="padding:10px 20px 0;font-size:12px">已显示 ${visibleCount} / ${active.order.length} 列</div>
       <div style="overflow:auto;padding:14px 20px 18px"><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px">${cards}</div></div>
       <div style="display:flex;justify-content:flex-end;padding:12px 20px;border-top:1px solid rgba(148,163,184,.16)"><button class="action" data-close-columns>完成</button></div>`;
@@ -519,6 +523,7 @@
   function boot() {
     const {table} = tableParts();
     if (table) table.style.visibility = "hidden";
+    ensureCompactWorkerSettingsStyle();
     loadPrefs();
     ensureSettingsButton();
     installCanonicalShowOwner();
@@ -528,7 +533,7 @@
     globalThis.__CHAT2API_CANONICAL_WORKER_LIST_V59__ = {
       version: VERSION,
       columns: [...DEFAULT_ORDER],
-      removed_columns: ["concurrency", "reserve_windows", "platform"],
+      removed_columns: ["concurrency", "reserve_windows", "platform", "bound_api_keys"],
       structural_owner: "admin_extension_columns",
       legacy_renderers_bypassed: true,
     };
