@@ -81,14 +81,16 @@ def test_worker_window_settings_are_independent_and_default_to_three() -> None:
     ):
         assert token in source
     for token in (
-        'platformHeader.textContent = "Worker 窗口"',
-        '["concurrency", "reserve_windows"]',
+        'th.dataset.chat2apiColumnKey = "worker_settings"',
+        'th.textContent = "并发设置"',
+        'data-chat2api-structural-owner="worker-settings-v59"',
         'data-worker-max',
         'data-worker-reserve',
         '最大并发',
         '空闲备用窗口',
     ):
         assert token in admin
+    assert 'platformHeader.textContent = "Worker 窗口"' not in admin
 
 
 def test_per_api_key_concurrency_defaults_to_three_and_queues() -> None:
