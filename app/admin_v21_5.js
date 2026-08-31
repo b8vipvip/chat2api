@@ -1,10 +1,11 @@
 (() => {
-  const VERSION = "0.22.39-capacity-v57";
-  const POLL_MS = 2000;
+  const VERSION = "0.22.40-capacity-v58";
   const MIN_LIMIT = 1;
   const MAX_LIMIT = 32;
-  let pollInFlight = false;
+  let workerRefreshInFlight = false;
   let keyRenderInFlight = false;
+  let workerRefreshScheduled = false;
+  let keyRefreshScheduled = false;
   const windowRefreshPending = new Set();
 
   function extensionViewActive() {
@@ -29,6 +30,7 @@
     document.body.appendChild(host);
     return host;
   }
+
   function showActionResult(message, level = "ok", button = null) {
     const text = String(message || "").trim();
     if (!text) return;
@@ -70,6 +72,7 @@
     if (platformHeader) {
       platformHeader.textContent = "Worker 窗口";
       platformHeader.dataset.chat2apiColumnKey = "platform";
+      platformHeader.dataset.chat2apiStructuralOwner = "worker-window-v58";
       platformHeader.title = "设置此 Worker 最大并发请求和最大空闲备用窗口；超过并发上限的请求进入 FIFO 队列。";
       platformHeader.style.display = "";
       platformHeader.style.minWidth = "350px";
@@ -91,38 +94,78 @@
     return arch ? `${os} · ${arch}` : os;
   }
 
-  function workerEditorHtml(clientId, item, settings) {
-    const metadata = item?.metadata || {};
-    const maximum = Number(settings?.max_concurrency || 3);
-    const reserve = Number(settings?.reserve_windows || 3);
-    const active = Number(item?.active_api_calls ?? item?.capacity?.active_requests ?? settings?.active ?? 0);
-    const total = Number(metadata.reserve_window_total || 0);
-    const idle = Number(metadata.reserve_window_idle || 0);
-    const queued = Number(settings?.queued || 0);
-    const cooling = Boolean(settings?.rate_limit_cooldown);
-    const remaining = Number(settings?.rate_limit_remaining_seconds || 0);
-    const cooldown = cooling ? `<span class="bad">ChatGPT 限流冷却 ${Math.ceil(remaining)}s</span>` : "";
-    return `<div data-worker-window-editor data-client-id="${esc(clientId)}" style="min-width:340px;white-space:normal">
+  function workerEditorHtml(clientId) {
+    return `<div data-worker-window-editor data-client-id="${esc(clientId)}" data-chat2api-structural-owner="worker-window-v58" style="min-width:340px;white-space:normal">
       <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
-        <label class="muted">并发</label><input data-worker-max type="number" min="${MIN_LIMIT}" max="${MAX_LIMIT}" value="${maximum}" style="width:58px;padding:5px 6px">
-        <label class="muted">备用</label><input data-worker-reserve type="number" min="${MIN_LIMIT}" max="${MAX_LIMIT}" value="${reserve}" style="width:58px;padding:5px 6px">
+        <label class="muted">并发</label><input data-worker-max type="number" min="${MIN_LIMIT}" max="${MAX_LIMIT}" value="3" style="width:58px;padding:5px 6px">
+        <label class="muted">备用</label><input data-worker-reserve type="number" min="${MIN_LIMIT}" max="${MAX_LIMIT}" value="3" style="width:58px;padding:5px 6px">
         <button class="action" data-worker-save style="padding:5px 8px">保存</button>
         <button class="action" data-worker-refresh style="padding:5px 8px">刷新</button>
       </div>
-      <div class="muted" style="margin-top:5px;font-size:11px">当前 ${active}/${maximum} · 排队 ${queued} · 窗口 ${total} · 空闲 ${idle}/${reserve}${cooldown ? ` · ${cooldown}` : ""}</div>
-      <div class="muted" style="margin-top:2px;font-size:11px">${esc(platformText(item))}</div>
+      <div class="muted" data-worker-live style="margin-top:5px;font-size:11px"></div>
+      <div class="muted" data-worker-platform style="margin-top:2px;font-size:11px"></div>
     </div>`;
   }
 
-  async function refreshWorkerSettings() {
-    if (!extensionViewActive() || pollInFlight || typeof globalThis.api !== "function") return;
-    pollInFlight = true;
+  function updateWorkerEditor(cell, clientId, item, settings) {
+    let editor = cell.querySelector("[data-worker-window-editor]");
+    if (!editor || String(editor.dataset.clientId || "") !== clientId) {
+      // Structural DOM is created once per row. Subsequent refreshes update only
+      // values/text so health polling cannot cause visual teardown/rebuild flicker.
+      cell.innerHTML = workerEditorHtml(clientId);
+      editor = cell.querySelector("[data-worker-window-editor]");
+    }
+    if (!editor) return;
+    cell.dataset.chat2apiStructuralOwner = "worker-window-v58";
+    cell.style.display = "";
+    cell.title = "并发 = 同时执行的最大请求数；备用 = 维持的最大空闲 Worker 窗口数。两者默认均为 3。";
+
+    const metadata = item?.metadata || {};
+    const maximum = Number(settings?.max_concurrency || item?.worker_window_settings?.max_concurrency || 3);
+    const reserve = Number(settings?.reserve_windows || item?.worker_window_settings?.reserve_windows || 3);
+    const active = Number(item?.active_api_calls ?? item?.capacity?.active_requests ?? settings?.active ?? 0);
+    const total = Number(metadata.reserve_window_total || 0);
+    const idle = Number(metadata.reserve_window_idle || 0);
+    const queued = Number(settings?.queued ?? item?.capacity?.queued_requests ?? 0);
+    const cooling = Boolean(settings?.rate_limit_cooldown ?? item?.capacity?.rate_limit_cooldown_active);
+    const remaining = Number(settings?.rate_limit_remaining_seconds ?? item?.capacity?.rate_limit_cooldown_remaining_seconds ?? 0);
+
+    const focused = editor.contains(document.activeElement);
+    const maxInput = editor.querySelector("[data-worker-max]");
+    const reserveInput = editor.querySelector("[data-worker-reserve]");
+    if (!focused) {
+      if (maxInput && Number(maxInput.value) !== maximum) maxInput.value = String(maximum);
+      if (reserveInput && Number(reserveInput.value) !== reserve) reserveInput.value = String(reserve);
+    }
+    const live = editor.querySelector("[data-worker-live]");
+    if (live) {
+      const cooldown = cooling ? ` · ChatGPT 限流冷却 ${Math.ceil(remaining)}s` : "";
+      const next = `当前 ${active}/${maximum} · 排队 ${queued} · 窗口 ${total} · 空闲 ${idle}/${reserve}${cooldown}`;
+      if (live.textContent !== next) live.textContent = next;
+      live.classList.toggle("bad", cooling);
+    }
+    const platform = editor.querySelector("[data-worker-platform]");
+    const platformLabel = platformText(item);
+    if (platform && platform.textContent !== platformLabel) platform.textContent = platformLabel;
+  }
+
+  async function refreshWorkerSettings(extensionRows = null) {
+    if (!extensionViewActive() || workerRefreshInFlight || typeof globalThis.api !== "function") return;
+    workerRefreshInFlight = true;
     try {
       patchExtensionColumns();
       patchColumnSettingsLabels();
-      const [extensions, capacity] = await Promise.all([api("/api/admin/extensions"), api("/api/admin/capacity-v57")]);
-      const byClient = new Map((extensions.clients || []).map(row => [String(row.client_id || ""), row]));
-      const settingsByClient = capacity.workers || {};
+      let rows = Array.isArray(extensionRows) ? extensionRows : null;
+      let capacity;
+      if (rows) {
+        capacity = await api("/api/admin/capacity-v57");
+      } else {
+        const payloads = await Promise.all([api("/api/admin/extensions"), api("/api/admin/capacity-v57")]);
+        rows = Array.isArray(payloads[0]?.clients) ? payloads[0].clients : [];
+        capacity = payloads[1];
+      }
+      const byClient = new Map((rows || []).map(row => [String(row.client_id || ""), row]));
+      const settingsByClient = capacity?.workers || {};
       for (const tr of document.querySelectorAll("#extensionDeviceBody tr")) {
         if (!tr.cells || tr.cells.length < 2) continue;
         const clientId = columnCell(tr, "client_id", 0)?.textContent?.trim() || "";
@@ -130,16 +173,22 @@
         if (!item) continue;
         const cell = columnCell(tr, "platform", 8);
         if (!cell) continue;
-        const editor = cell.querySelector("[data-worker-window-editor]");
-        const focused = editor && editor.contains(document.activeElement);
-        if (!focused) cell.innerHTML = workerEditorHtml(clientId, item, settingsByClient[clientId] || item.worker_window_settings || {});
-        cell.style.display = "";
-        cell.title = "并发 = 同时执行的最大请求数；备用 = 维持的最大空闲 Worker 窗口数。两者默认均为 3。";
+        updateWorkerEditor(cell, clientId, item, settingsByClient[clientId] || item.worker_window_settings || {});
       }
     } catch (_) {
+      // Base extension manager owns visible auth/transport errors.
     } finally {
-      pollInFlight = false;
+      workerRefreshInFlight = false;
     }
+  }
+
+  function scheduleWorkerRefresh() {
+    if (workerRefreshScheduled) return;
+    workerRefreshScheduled = true;
+    requestAnimationFrame(() => {
+      workerRefreshScheduled = false;
+      refreshWorkerSettings().catch(() => {});
+    });
   }
 
   async function saveWorkerSettings(button) {
@@ -236,15 +285,32 @@
           tr.insertBefore(cell, tr.lastElementChild);
         }
         const limit = Number(configured[keyId] || defaults);
-        if (!cell.contains(document.activeElement)) {
-          cell.innerHTML = `<div data-key-capacity-editor data-key-id="${esc(keyId)}" style="display:flex;align-items:center;gap:6px"><span class="muted">${Number(active[keyId] || 0)}/</span><input data-key-max type="number" min="${MIN_LIMIT}" max="${MAX_LIMIT}" value="${limit}" style="width:58px;padding:5px 6px"><button class="action" data-key-save style="padding:5px 8px">保存</button></div>`;
+        let editor = cell.querySelector("[data-key-capacity-editor]");
+        if (!editor || String(editor.dataset.keyId || "") !== keyId) {
+          cell.innerHTML = `<div data-key-capacity-editor data-key-id="${esc(keyId)}" style="display:flex;align-items:center;gap:6px"><span class="muted" data-key-active></span><input data-key-max type="number" min="${MIN_LIMIT}" max="${MAX_LIMIT}" value="${limit}" style="width:58px;padding:5px 6px"><button class="action" data-key-save style="padding:5px 8px">保存</button></div>`;
+          editor = cell.querySelector("[data-key-capacity-editor]");
         }
+        if (!editor) return;
+        const activeNode = editor.querySelector("[data-key-active]");
+        const activeText = `${Number(active[keyId] || 0)}/`;
+        if (activeNode && activeNode.textContent !== activeText) activeNode.textContent = activeText;
+        const input = editor.querySelector("[data-key-max]");
+        if (input && !editor.contains(document.activeElement) && Number(input.value) !== limit) input.value = String(limit);
         cell.title = "当前活动请求 / 最大并发；超过上限时不报 409/180 秒容量错误，而是在服务器 FIFO 队列中等待。";
       });
     } catch (_) {
     } finally {
       keyRenderInFlight = false;
     }
+  }
+
+  function scheduleKeyRefresh() {
+    if (keyRefreshScheduled) return;
+    keyRefreshScheduled = true;
+    requestAnimationFrame(() => {
+      keyRefreshScheduled = false;
+      renderKeyConcurrency().catch(() => {});
+    });
   }
 
   async function saveKeyConcurrency(button) {
@@ -281,9 +347,26 @@
   }, true);
 
   const extensionBody = document.getElementById("extensionDeviceBody");
-  if (extensionBody) new MutationObserver(() => { patchExtensionColumns(); setTimeout(refreshWorkerSettings, 0); }).observe(extensionBody, {childList:true});
+  if (extensionBody) {
+    new MutationObserver(mutations => {
+      // Observe only direct tbody row replacement by the base list renderer.
+      // Updating children inside our own Worker-window cell does not retrigger it.
+      if (mutations.some(mutation => mutation.type === "childList")) {
+        patchExtensionColumns();
+        scheduleWorkerRefresh();
+      }
+    }).observe(extensionBody, {childList:true});
+  }
   const keysBody = document.getElementById("keysBody");
-  if (keysBody) new MutationObserver(() => setTimeout(renderKeyConcurrency, 0)).observe(keysBody, {childList:true});
+  if (keysBody) new MutationObserver(() => scheduleKeyRefresh()).observe(keysBody, {childList:true});
+
+  globalThis.chat2apiRefreshWorkerWindowEditorsV58 = rows => refreshWorkerSettings(rows);
+  globalThis.__CHAT2API_WORKER_WINDOW_RENDER_OWNER_V58__ = {
+    owner: "worker-window-v58",
+    column: "platform",
+    structural_updates: "create-once-update-values",
+    polling: false,
+  };
 
   const brandSmall = document.querySelector(".brand small");
   if (brandSmall) brandSmall.textContent = `Server Console · ${VERSION}`;
@@ -291,8 +374,4 @@
   patchColumnSettingsLabels();
   refreshWorkerSettings();
   renderKeyConcurrency();
-  setInterval(() => {
-    if (extensionViewActive()) refreshWorkerSettings();
-    if (keyViewActive()) renderKeyConcurrency();
-  }, POLL_MS);
 })();

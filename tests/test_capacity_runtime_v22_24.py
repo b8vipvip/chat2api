@@ -37,7 +37,7 @@ def test_capacity_controller_vm_contracts_cover_native_and_reporter_paths():
 
 def test_runtime_contract_separates_protocol_from_new_bundle_build():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.39"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.40"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.13"' in runtime
     assert '"bundle_version": CHROME_BRIDGE_BUNDLE_VERSION' in runtime
@@ -49,6 +49,8 @@ def test_runtime_contract_separates_protocol_from_new_bundle_build():
     assert 'model-capability-routing-v1' in runtime
     assert 'rate-limit-guard-v52' in runtime
     assert 'worker-key-capacity-queue-v57' in runtime
+    assert 'admin-render-owner-v58' in runtime
+    assert 'routed-dispatch-terminal-v58' in runtime
     assert '"bridge_service_worker_cache_bust": True' in runtime
     assert '"rendered_response_capture_recovery": True' in runtime
     assert '"single_response_observer": True' in runtime
@@ -58,6 +60,8 @@ def test_runtime_contract_separates_protocol_from_new_bundle_build():
     assert '"chatgpt_rate_limit_circuit_breaker": True' in runtime
     assert '"worker_window_reopen_loop_guard": True' in runtime
     assert '"active_rate_limit_terminal_error": True' in runtime
+    assert '"routed_dispatch_terminal_error": True' in runtime
+    assert '"admin_single_render_owner": True' in runtime
     assert '"worker_key_capacity_fifo_queue": True' in runtime
     assert '"worker_window_concurrency_controls": True' in runtime
     assert '"api_key_concurrency_controls": True' in runtime

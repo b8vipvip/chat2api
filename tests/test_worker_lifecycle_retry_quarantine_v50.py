@@ -12,7 +12,7 @@ EXT = ROOT / "chrome_extension"
 
 def test_runtime_versions_and_features() -> None:
     source = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.39"' in source
+    assert 'SERVER_RUNTIME_VERSION = "0.22.40"' in source
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.13"' in source
     for marker in (
         '"failed_route_quarantine": True',

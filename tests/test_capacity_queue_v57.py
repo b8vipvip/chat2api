@@ -182,13 +182,13 @@ def test_rate_limit_guard_becomes_immediate_terminal_error_and_admission_cooldow
         assert token in content
 
 
-def test_release_contract_is_v02239_and_worker_bundle_0813() -> None:
+def test_release_contract_is_v02240_and_worker_bundle_0813() -> None:
     runtime = read("app/runtime_contract.py")
     manifest = read("chrome_extension/manifest.json")
     marker = read("chrome_extension/content_bundle_marker_v48.js")
     preflight = read("chrome_extension/background_runtime_preflight_v48.js")
     contract = read("chrome_extension/content_runtime_contract_v48.js")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.39"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.40"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.13"' in runtime
     assert '"version": "0.8.13"' in manifest
     assert 'bundle: "0.8.13"' in marker
@@ -196,6 +196,8 @@ def test_release_contract_is_v02239_and_worker_bundle_0813() -> None:
     assert 'REQUIRED_BUNDLE = "0.8.13"' in contract
     assert '"worker_key_capacity_fifo_queue": True' in runtime
     assert '"active_rate_limit_terminal_error": True' in runtime
+    assert '"routed_dispatch_terminal_error": True' in runtime
+    assert '"admin_single_render_owner": True' in runtime
 
 
 def test_admin_capacity_and_rate_limit_javascript_parse() -> None:

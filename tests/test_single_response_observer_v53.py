@@ -102,7 +102,7 @@ def test_runtime_contract_requires_worker_0813_single_owner():
     contract = (EXT / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     marker = (EXT / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
 
-    assert 'SERVER_RUNTIME_VERSION = "0.22.39"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.40"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.13"' in runtime
     assert '"single_response_observer": True' in runtime
     assert 'single-response-owner-v53' in runtime

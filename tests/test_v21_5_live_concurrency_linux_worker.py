@@ -36,10 +36,18 @@ def test_extension_console_uses_worker_window_and_separate_limits():
     assert 'platformHeader.textContent = "Worker 窗口"' in source
     assert "active_api_calls" in source
     assert "capacity?.active_requests" in source
-    assert "const POLL_MS = 2000" in source
+    # v58 deliberately removes the 2s structural poller. Worker-window is a
+    # create-once/update-values owner refreshed by row replacement or health data.
+    assert "const POLL_MS = 2000" not in source
+    assert "setInterval(" not in source
+    assert "requestAnimationFrame" in source
+    assert 'globalThis.chat2apiRefreshWorkerWindowEditorsV58' in source
+    assert 'structural_updates: "create-once-update-values"' in source
+    assert 'polling: false' in source
     assert 'api("/api/admin/extensions")' in source
     assert 'api("/api/admin/capacity-v57")' in source
     assert "data-worker-window-editor" in source
+    assert 'data-chat2api-structural-owner="worker-window-v58"' in source
     assert "data-worker-max" in source
     assert "data-worker-reserve" in source
     assert "data-worker-save" in source
