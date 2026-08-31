@@ -31,23 +31,24 @@ def test_v21_5_is_installed_after_concurrency_and_before_runtime_contract():
     assert entry.index("install_v21_5_patch(app)") < entry.index("install_runtime_contract(app)")
 
 
-def test_extension_console_uses_worker_window_and_separate_limits():
+def test_extension_console_uses_canonical_worker_settings_column():
     source = read(ROOT / "app" / "admin_v21_5.js")
-    assert 'platformHeader.textContent = "Worker 窗口"' in source
+    assert 'th.textContent !== "并发设置"' in source
+    assert 'data-chat2api-column-key="worker_settings"' in source
+    assert 'data-chat2api-structural-owner="worker-settings-v59"' in source
+    assert 'globalThis.chat2apiRefreshWorkerWindowEditorsV59' in source
+    assert 'column: "worker_settings"' in source
+    assert 'legacy_columns_removed: ["concurrency", "reserve_windows", "platform"]' in source
     assert "active_api_calls" in source
     assert "capacity?.active_requests" in source
-    # v58 deliberately removes the 2s structural poller. Worker-window is a
-    # create-once/update-values owner refreshed by row replacement or health data.
     assert "const POLL_MS = 2000" not in source
     assert "setInterval(" not in source
     assert "requestAnimationFrame" in source
-    assert 'globalThis.chat2apiRefreshWorkerWindowEditorsV58' in source
     assert 'structural_updates: "create-once-update-values"' in source
     assert 'polling: false' in source
     assert 'api("/api/admin/extensions")' in source
     assert 'api("/api/admin/capacity-v57")' in source
     assert "data-worker-window-editor" in source
-    assert 'data-chat2api-structural-owner="worker-window-v58"' in source
     assert "data-worker-max" in source
     assert "data-worker-reserve" in source
     assert "data-worker-save" in source
@@ -56,11 +57,12 @@ def test_extension_console_uses_worker_window_and_separate_limits():
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57' in source
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in source
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/refresh' in source
-    assert 'method:"PUT"' in source or 'method: "PUT"' in source
-    assert 'method:"POST"' in source or 'method: "POST"' in source
+    assert 'method: "PUT"' in source
+    assert 'method: "POST"' in source
     assert "showActionResult" in source
     assert "target_reached" in source
-    assert "bound_api_keys" not in source
+    assert 'columnCell(tr, "platform", 8)' not in source
+    assert 'patchColumnSettingsLabels' not in source
     assert 'th.textContent = "最大并发"' in source
     assert "data-key-max" in source
 

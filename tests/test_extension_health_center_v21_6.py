@@ -57,14 +57,13 @@ def test_health_center_uses_existing_extension_metadata_without_new_host_credent
     ):
         assert token in source
 
-    # v59 keeps platform metadata for overall health decisions, but platform /
-    # Worker-window DOM is exclusively owned by admin_v21_5. It also does not
-    # call that owner on every health tick because doing so reintroduced the
-    # repeating /capacity-v57 request seen in v0.22.40.
     assert '["platform", "平台"]' not in source
     assert 'ensureCell(tr, "platform")' not in source
     assert 'renderState(ensureCell(tr, "platform")' not in source
+    assert 'ensureCell(tr, "worker_settings")' not in source
+    assert 'renderState(ensureCell(tr, "worker_settings")' not in source
     assert 'globalThis.chat2apiRefreshWorkerWindowEditorsV58?.(rows)' not in source
+    assert 'globalThis.chat2apiRefreshWorkerWindowEditorsV59?.(rows)' not in source
     assert '["health", "运行健康"]' not in source
     assert 'ensureCell(tr, "health")' not in source
     assert 'renderState(ensureCell(tr, "health")' not in source
@@ -101,18 +100,16 @@ def test_chatgpt_column_shows_login_status_without_composer_jargon():
     assert "Composer 未确认" not in source
 
 
-def test_health_center_and_worker_window_editor_support_reordered_columns():
+def test_health_center_and_worker_settings_support_reordered_columns():
     health = read(ROOT / "app" / "admin_v21_6.js")
     live = read(ROOT / "app" / "admin_v21_5.js")
+    columns = read(ROOT / "app" / "admin_extension_columns.js")
 
-    # v58 deliberately owns the platform cell as the Worker-window editor. Keyed
-    # lookup stays authoritative after a user reorders the extension table.
-    assert 'columnCell(tr, "client_id", 0)' in live
-    assert 'columnCell(tr, "platform", 8)' in live
-    assert 'columnCell(tr, "concurrency", 5)' not in live
-    assert 'data-chat2api-column-key' in live
-    assert 'platformHeader.dataset.chat2apiColumnKey = "platform"' in live
-    assert 'data-chat2api-structural-owner="worker-window-v58"' in live
+    assert 'td[data-chat2api-column-key="worker_settings"]' in live
+    assert 'column: "worker_settings"' in live
+    assert 'data-chat2api-structural-owner="worker-settings-v59"' in live
+    assert 'columnCell(tr, "platform", 8)' not in live
+    assert 'patchColumnSettingsLabels' not in live
 
     assert 'columnCell(tr, "client_id", 0)' in health
     assert 'columnCell(tr, "version", 2)' in health
@@ -120,6 +117,12 @@ def test_health_center_and_worker_window_editor_support_reordered_columns():
     assert "tr.appendChild(cell)" in health
     assert "insertCell" not in health
     assert "insertBefore(cell" not in health
+
+    assert '{key: "worker_settings", label: "并发设置"}' in columns
+    assert '{key: "bound_api_keys", label: "绑定 API Key 数"}' in columns
+    assert 'data-chat2api-health-column="${key}"' in columns
+    assert 'data-chat2api-health-cell="network"' in columns
+    assert 'data-chat2api-health-cell="chatgpt"' in columns
 
 
 def test_v21_6_is_installed_after_v21_5_and_before_runtime_contract():

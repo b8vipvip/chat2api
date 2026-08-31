@@ -5,158 +5,146 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_column_layout_supports_visibility_order_and_persistence():
-    source = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
-    assert 'const VERSION = "0.21.14"' in source
-    assert 'const STORAGE_KEY = "chat2api.extensionColumns.v2"' in source
-    assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v1"' in source
-    assert "localStorage.getItem(STORAGE_KEY)" in source
-    assert "localStorage.getItem(LEGACY_STORAGE_KEY)" in source
-    assert "localStorage.setItem(STORAGE_KEY" in source
-    assert 'data-column-visible' in source
-    assert 'data-column-move' in source
-    assert 'title="前移一位"' in source
-    assert 'title="后移一位"' in source
-    assert "resetLayout" in source
-    assert 'button.textContent = "⚙"' in source
-    assert 'button.title = "设置扩展列表显示列和排序"' in source
-    assert "fragment.appendChild(node)" in source
-    assert "parent.appendChild(fragment)" in source
-    assert 'prefs.visible[key] === false ? "none" : ""' in source
+def source() -> str:
+    return (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
 
 
-def test_column_layout_covers_real_v20_base_columns_and_nonduplicate_status_columns():
-    source = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
-    assert (
-        'const BASE_KEYS = ["client_id", "device_id", "version", "account_type", '
-        '"status", "concurrency", "last_seen", "actions"]'
-    ) in source
-    for key in (
-        "client_id",
-        "device_id",
-        "version",
-        "account_type",
-        "status",
-        "concurrency",
-        "last_seen",
-        "actions",
-        "platform",
-        "network",
-        "chatgpt",
-        "reserve_windows",
-    ):
-        assert f'key: "{key}"' in source
-    for label in (
-        "扩展 ID",
-        "设备标识",
-        "版本",
-        "账户类型",
-        "状态",
-        "API 调用 / 并发上限",
-        "最后在线",
-        "操作",
-        "平台",
-        "网络",
-        "ChatGPT",
-        "备用窗口",
-    ):
-        assert label in source
-
-    assert '["API 调用数（实时并发）", "concurrency"]' in source
-    assert 'key: "health"' not in source
-    assert 'label: "运行健康"' not in source
-    assert '["运行健康", "health"]' not in source
-
-    historical = (ROOT / "app" / "admin_v20.js").read_text(encoding="utf-8")
-    assert "<th>账户类型</th>" in historical
-    assert "${accountPill(row)}" in historical
-    assert 'colspan="8"' in historical
+def test_column_layout_supports_visibility_order_and_v2_to_v3_persistence():
+    text = source()
+    assert 'const VERSION = "0.22.41-worker-list-v59"' in text
+    assert 'const STORAGE_KEY = "chat2api.extensionColumns.v3"' in text
+    assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2"' in text
+    assert "localStorage.getItem(STORAGE_KEY)" in text
+    assert "localStorage.getItem(LEGACY_STORAGE_KEY)" in text
+    assert "localStorage.setItem(STORAGE_KEY" in text
+    assert 'data-column-visible' in text
+    assert 'data-column-move' in text
+    assert "← 前移" in text
+    assert "后移 →" in text
+    assert 'button.textContent = "⚙"' in text
+    assert 'button.title = "Worker列表列设置"' in text
+    assert "fragment.appendChild(node)" in text
+    assert "parent.appendChild(fragment)" in text
+    assert 'activePrefs.visible[key] === false ? "none" : ""' in text
 
 
-def test_existing_extension_pollers_are_column_key_aware_with_correct_fallbacks():
-    live = (ROOT / "app" / "admin_v21_5.js").read_text(encoding="utf-8")
-    health = (ROOT / "app" / "admin_v21_6.js").read_text(encoding="utf-8")
+def test_column_layout_uses_one_canonical_semantic_schema():
+    text = source()
+    expected = (
+        ("client_id", "Worker ID"),
+        ("device_id", "设备标识"),
+        ("version", "版本"),
+        ("account_type", "账户类型"),
+        ("status", "状态"),
+        ("bound_api_keys", "绑定 API Key 数"),
+        ("worker_settings", "并发设置"),
+        ("last_seen", "最后在线"),
+        ("network", "网络"),
+        ("chatgpt", "ChatGPT"),
+        ("actions", "操作"),
+    )
+    for key, label in expected:
+        assert f'{{key: "{key}", label: "{label}"}}' in text
+        assert f'data-chat2api-column-key="{key}"' in text
 
-    assert 'columnCell(tr, "client_id", 0)' in live
-    assert 'columnCell(tr, "platform", 8)' in live
-    assert 'columnCell(tr, "concurrency", 5)' not in live
-    assert 'data-chat2api-column-key' in live
-    assert 'platformHeader.dataset.chat2apiColumnKey = "platform"' in live
-
-    assert 'columnCell(tr, "client_id", 0)' in health
-    assert 'columnCell(tr, "version", 2)' in health
-    assert 'th.dataset.chat2apiColumnKey = key' in health
-    assert 'cell.dataset.chat2apiColumnKey = key' in health
+    # The legacy presentation-only columns must not survive as active COLUMNS.
+    assert '{key: "concurrency",' not in text
+    assert '{key: "reserve_windows",' not in text
+    assert '{key: "platform",' not in text
+    assert 'removed_columns: ["concurrency", "reserve_windows", "platform"]' in text
+    assert '旧并发列（已合并）' not in text
+    assert '旧备用窗口列（已合并）' not in text
 
 
-def test_column_layout_is_event_driven_and_idempotent_instead_of_periodic_dom_churn():
-    source = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
-    assert "MutationObserver" in source
-    assert "reorderKnownChildren" in source
-    assert "current.every((node, index) => node === desired[index])" in source
-    assert "setInterval(" not in source
-    assert "APPLY_MS" not in source
-    assert "scheduleRefresh" in source
+def test_column_layout_migrates_the_historical_miskeyed_cells():
+    text = source()
+    assert '["platform", "worker_settings"]' in text
+    assert '["concurrency", "bound_api_keys"]' in text
+    assert 'const REMOVED_KEYS = new Set(["reserve_windows"])' in text
+    assert 'const key = LEGACY_KEY_MAP.get(original) || original' in text
+    assert 'if (REMOVED_KEYS.has(original)) continue' in text
+    assert 'if (!KNOWN_KEYS.has(key) || seen.has(key)) continue' in text
 
 
-def test_column_settings_uses_centered_modal_grid_instead_of_dropdown_positioning():
-    source = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
+def test_canonical_header_and_rows_have_the_same_column_keys():
+    text = source()
+    assert "function canonicalHeaderHtml()" in text
+    assert "function rowHtml(row)" in text
+    assert 'data-chat2api-canonical-worker-row="1"' in text
+    assert 'DEFAULT_ORDER.every(key => Boolean(keyedChild(tr, key)))' in text
+    assert 'headerRow.innerHTML !== header' in text
+    assert 'body.innerHTML = rows.length' in text
+    assert 'applyLayout();' in text
 
+
+def test_worker_view_bypasses_historical_multi_stage_extension_renderers():
+    text = source()
+    assert "function installCanonicalShowOwner()" in text
+    assert 'if (viewName !== "extensions") return baseShow(viewName)' in text
+    assert "activateExtensionView();" in text
+    assert "return loadCanonicalExtensions(true);" in text
+    assert "legacy_renderers_bypassed: true" in text
+
+    # Late promises from historical wrappers can still finish after the final
+    # owner is installed, so v59 repairs any non-canonical replacement before
+    # the next paint instead of allowing a visible second table style.
+    assert "function queueCanonicalRepair()" in text
+    assert "queueMicrotask(() =>" in text
+    assert "!isCanonical()" in text
+    assert 'new MutationObserver(queueCanonicalRepair).observe(body, {childList: true})' in text
+    assert 'new MutationObserver(queueCanonicalRepair).observe(headerRow, {childList: true})' in text
+
+
+def test_initial_worker_table_is_hidden_until_canonical_snapshot_is_ready():
+    text = source()
+    assert 'table.style.visibility = "hidden"' in text
+    assert 'table.style.visibility = ""' in text
+    assert 'document.documentElement.dataset.chat2apiWorkerListReady = "1"' in text
+    assert 'loadCanonicalExtensions(true)' in text
+
+
+def test_column_settings_modal_only_exposes_current_columns():
+    text = source()
     for token in (
         'backdrop.id = "extensionColumnSettingsBackdrop"',
         'menu.id = "extensionColumnSettingsMenu"',
-        'menu.setAttribute("role", "dialog")',
-        'menu.setAttribute("aria-modal", "true")',
-        '"align-items:center"',
-        '"justify-content:center"',
-        '"position:fixed"',
-        '"inset:0"',
-        'grid-template-columns:repeat(auto-fit,minmax(240px,1fr))',
-        'id="extensionColumnSettingsBody"',
+        'position:fixed',
+        'inset:0',
+        'align-items:center',
+        'justify-content:center',
+        'grid-template-columns:repeat(auto-fit,minmax(250px,1fr))',
         'overflow:auto',
-        'data-close-extension-columns',
+        'data-close-columns',
         'if (event.target === backdrop) closeMenu()',
         'event.key === "Escape"',
         'document.body.style.overflow = "hidden"',
         'document.body.style.overflow = bodyOverflowBeforeModal',
+        '旧并发列与旧备用窗口列已永久移除',
     ):
-        assert token in source
+        assert token in text
 
-    assert "positionMenu" not in source
-    assert 'window.addEventListener("scroll"' not in source
-    assert 'window.addEventListener("resize"' not in source
-    assert 'menu.style.left' not in source
-    assert 'menu.style.top' not in source
+    assert "positionMenu" not in text
+    assert 'window.addEventListener("scroll"' not in text
+    assert 'window.addEventListener("resize"' not in text
+    assert 'menu.style.left' not in text
+    assert 'menu.style.top' not in text
 
 
 def test_column_settings_modal_uses_numbered_cards_and_compact_order_controls():
-    source = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
-    assert 'data-column-card="${key}"' in source
-    assert 'String(index + 1).padStart(2, "0")' in source
-    assert "← 前移" in source
-    assert "后移 →" in source
-    assert "宽屏自动多列排列" in source
-    assert "已显示 ${visibleCount} / ${prefs.order.length} 列" in source
+    text = source()
+    assert 'String(index + 1).padStart(2, "0")' in text
+    assert "← 前移" in text
+    assert "后移 →" in text
+    assert "已显示 ${visibleCount} / ${active.order.length} 列" in text
 
 
-def test_column_layout_migrates_legacy_preferences_without_losing_account_type_or_editor_visibility():
-    source = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
-    assert 'candidate.includes("account_type")' in source
-    assert 'candidate.indexOf("version")' in source
-    assert 'candidate.splice(versionIndex + 1, 0, "account_type")' in source
-    assert "KNOWN_KEYS.has(key)" in source
-    assert "const legacy = localStorage.getItem(LEGACY_STORAGE_KEY)" in source
-    assert "migrated.visible.concurrency = true" in source
-    assert 'label: "API 调用 / 并发上限"' in source
-
-
-def test_column_layout_does_not_add_server_calls_or_privileged_browser_automation():
-    source = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
-    assert 'api("' not in source
-    assert "fetch(" not in source
-    assert "chrome." not in source
-    assert "CAPTCHA" not in source
-    assert "password" not in source.lower()
+def test_canonical_worker_list_uses_only_admin_apis_not_browser_privileges():
+    text = source()
+    assert 'api("/api/admin/extensions")' in text
+    assert 'api("/api/admin/pairing-codes"' in text
+    assert "chrome." not in text
+    assert "CAPTCHA" not in text
+    assert "password" not in text.lower()
 
 
 def test_column_layout_javascript_syntax():

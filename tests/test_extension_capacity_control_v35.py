@@ -196,7 +196,10 @@ def test_console_and_bridge_expose_live_capacity_controls() -> None:
     control = (ROOT / "chrome_extension" / "background_capacity_control_v35.js").read_text(encoding="utf-8")
     dispatcher = (ROOT / "chrome_extension" / "background_capacity_control_v36.js").read_text(encoding="utf-8")
 
-    assert 'platformHeader.textContent = "Worker 窗口"' in concurrency
+    assert 'th.dataset.chat2apiColumnKey = "worker_settings"' in concurrency
+    assert 'th.textContent = "并发设置"' in concurrency
+    assert 'data-chat2api-structural-owner="worker-settings-v59"' in concurrency
+    assert 'platformHeader.textContent = "Worker 窗口"' not in concurrency
     assert "data-worker-max" in concurrency
     assert "data-worker-reserve" in concurrency
     assert '/capacity-v57' in concurrency
