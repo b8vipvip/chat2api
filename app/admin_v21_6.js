@@ -1,8 +1,10 @@
 (() => {
-  const VERSION = "0.21.6";
+  const VERSION = "0.22.40-health-owner-v58";
   const POLL_MS = 1500;
+  // IMPORTANT: platform/Worker-window is owned by admin_v21_5.js v58.
+  // This health layer owns only Network and ChatGPT. Never add platform here
+  // again or the two renderers will alternate textContent/innerHTML and flicker.
   const STATUS_COLUMNS = [
-    ["platform", "平台"],
     ["network", "网络"],
     ["chatgpt", "ChatGPT"],
   ];
@@ -189,14 +191,15 @@
         versionCell.title = "当前在线扩展上报的 manifest 版本优先；离线时回退到注册版本";
       }
 
-      const platform = platformState(row);
-      const network = networkState(row);
-      const login = loginState(row);
-      renderState(ensureCell(tr, "platform"), {...platform, level: metadata(row).platform_supported_desktop === false ? "bad" : "ok"});
-      renderState(ensureCell(tr, "network"), network);
-      renderState(ensureCell(tr, "chatgpt"), login);
+      // platform/Worker-window is intentionally not touched here. admin_v21_5
+      // is the only structural owner of that cell.
+      renderState(ensureCell(tr, "network"), networkState(row));
+      renderState(ensureCell(tr, "chatgpt"), loginState(row));
     }
     renderSummary(rows);
+    // Reuse the same /extensions snapshot for the Worker-window owner. It will
+    // fetch only its capacity state and update its own cell idempotently.
+    globalThis.chat2apiRefreshWorkerWindowEditorsV58?.(rows);
   }
 
   async function refreshHealthCenter() {
@@ -224,6 +227,11 @@
     globalThis.show = wrappedShow;
   }
 
+  globalThis.__CHAT2API_EXTENSION_RENDER_OWNER_V58__ = {
+    worker_window: "admin_v21_5",
+    health_columns: ["network", "chatgpt"],
+    rule: "one-structural-owner-per-cell",
+  };
   document.documentElement.dataset.chat2apiHealthCenterVersion = VERSION;
   patchHeader();
   ensureSummary();
