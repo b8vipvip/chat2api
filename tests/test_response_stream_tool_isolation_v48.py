@@ -129,7 +129,7 @@ def test_external_account_tools_are_fail_closed_at_prompt_and_ui_layers():
 def test_runtime_contract_exposes_v48_v49_v50_and_v51_features():
     app = FastAPI(version=SERVER_RUNTIME_VERSION)
     payload = version_contract_payload(app)
-    assert SERVER_RUNTIME_VERSION == "0.22.39"
+    assert SERVER_RUNTIME_VERSION == "0.22.40"
     assert payload["chrome_bridge"]["bundle_version"] == "0.8.13"
     assert payload["features"]["response_stream_recovery"] is True
     assert payload["features"]["single_response_observer"] is True
@@ -139,6 +139,8 @@ def test_runtime_contract_exposes_v48_v49_v50_and_v51_features():
     assert payload["features"]["chatgpt_rate_limit_circuit_breaker"] is True
     assert payload["features"]["worker_window_reopen_loop_guard"] is True
     assert payload["features"]["active_rate_limit_terminal_error"] is True
+    assert payload["features"]["routed_dispatch_terminal_error"] is True
+    assert payload["features"]["admin_single_render_owner"] is True
     assert payload["features"]["worker_key_capacity_fifo_queue"] is True
     assert payload["features"]["worker_window_concurrency_controls"] is True
     assert payload["features"]["api_key_concurrency_controls"] is True
