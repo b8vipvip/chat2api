@@ -28,7 +28,12 @@ def test_worker_window_has_one_structural_owner() -> None:
     assert '["platform", "平台"]' not in health
     assert 'worker_window: "admin_v21_5"' in health
     assert 'health_columns: ["network", "chatgpt"]' in health
-    assert 'globalThis.chat2apiRefreshWorkerWindowEditorsV58?.(rows)' in health
+
+    # v0.22.40 still chained the Worker-window owner from every 1.5s health poll,
+    # causing /extensions + /capacity-v57 request pairs and unnecessary table
+    # invalidation. The health owner must no longer fan out into capacity polling.
+    assert 'globalThis.chat2apiRefreshWorkerWindowEditorsV58?.(rows)' not in health
+    assert 'chained_capacity_poll: false' in health
 
 
 def test_worker_window_refresh_is_event_driven_and_idempotent() -> None:
@@ -44,6 +49,20 @@ def test_worker_window_refresh_is_event_driven_and_idempotent() -> None:
     assert 'if (!editor || String(editor.dataset.clientId || "") !== clientId)' in worker
     assert 'if (live.textContent !== next) live.textContent = next' in worker
     assert 'if (platform && platform.textContent !== platformLabel) platform.textContent = platformLabel' in worker
+
+
+def test_health_refresh_does_not_self_invalidate_table() -> None:
+    health = read("app/admin_v21_6.js")
+
+    assert 'const POLL_MS = 5000' in health
+    assert 'function setText(node, value)' in health
+    assert 'if (node && node.textContent !== next) node.textContent = next' in health
+    assert 'setText(th, label)' in health
+    assert 'setText(versionCell, effectiveVersion(row))' in health
+    assert 'setText(cell, state.label)' in health
+    assert 'setInterval(refreshHealthCenter, POLL_MS)' not in health
+    assert 'schedulePoll(POLL_MS)' in health
+    assert '!document.hidden && extensionViewActive()' in health
 
 
 def test_common_bug_document_records_render_owner_rule() -> None:
