@@ -14,9 +14,10 @@
       const isEnabled = Boolean(disable);
       const wantedText = isEnabled ? "禁用" : "启用";
       if (action.textContent !== wantedText) action.textContent = wantedText;
-      action.title = isEnabled
+      const wantedTitle = isEnabled
         ? "禁用此 Worker；在线时先关闭受管的多余 ChatGPT 窗口并只保留 1 个"
         : "启用此 Worker；扩展重新连接后恢复请求路由和备用窗口";
+      if (action.title !== wantedTitle) action.title = wantedTitle;
       const status = row.querySelector('[data-chat2api-column-key="status"]');
       if (status) {
         const html = isEnabled
@@ -49,8 +50,17 @@
     paintLinuxWorkers();
   }
 
-  const observer = new MutationObserver(() => queueMicrotask(paint));
-  observer.observe(document.documentElement, { childList: true, subtree: true });
+  function observeRows(id) {
+    const body = document.getElementById(id);
+    if (!body || typeof MutationObserver !== "function") return;
+    const observer = new MutationObserver(() => queueMicrotask(paint));
+    // Observe only direct row replacement. The status/button edits made by this
+    // layer are descendants and therefore cannot recursively trigger the guard.
+    observer.observe(body, { childList: true, subtree: false });
+  }
+
+  observeRows("extensionDeviceBody");
+  observeRows("linuxWorkerRows");
   globalThis.addEventListener("chat2api:linux-worker-rows", () => queueMicrotask(paint));
   document.addEventListener("click", event => {
     if (event.target?.closest?.('[data-worker-list-action],[data-revoke]')) {
@@ -58,6 +68,5 @@
       setTimeout(paint, 250);
     }
   }, true);
-  setInterval(paint, 1000);
   paint();
 })();
