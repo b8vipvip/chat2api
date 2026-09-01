@@ -66,6 +66,7 @@ from .account_generation_admission_patch import install_account_generation_admis
 from .generation_backend_routing_patch import install_generation_backend_routing_patch
 from .server_update_patch import install_server_update_patch
 from .server_worker_sync_lifespan_patch import install_server_worker_sync_patch
+from .worker_disable_authority_patch import install_worker_disable_authority_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -200,3 +201,7 @@ install_server_update_patch(app)
 # and continue automatically when they reconnect. The lifespan compatibility
 # adapter keeps this safe on Starlette 1.x where app.add_event_handler is gone.
 install_server_worker_sync_patch(app)
+
+# Final authority boundary: no pairing/token/background sync path may revive a
+# Worker after an administrator disables it from either Worker management view.
+install_worker_disable_authority_patch(app)
