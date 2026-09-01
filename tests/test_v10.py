@@ -98,7 +98,9 @@ def test_multimodal_v4_accepts_visual_preview_as_upload_confirmation() -> None:
     source = (ROOT / "chrome_extension" / "content_multimodal_v4.js").read_text(encoding="utf-8")
     assert 'reason: "visual-preview-count"' in source
     assert "now.media > before.media" in source
-    assert 'attachments_controller: "multimodal-v4"' in source
+    assert 'const CONTROLLER = "multimodal-v4-r64"' in source
+    assert "attachments_controller: CONTROLLER" in source
+    assert "attachments_revision: 64" in source
     assert "automatic duplicate retry" not in source.lower()
 
 
