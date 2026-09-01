@@ -52,8 +52,8 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
                 if worker.get("revoked_at"):
                     continue
                 direct = str(worker.get("extension_client_id") or "")
-                bridge = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}
-                bridge = bridge.get("bridge") if isinstance(bridge.get("bridge"), dict) else {}
+                metadata = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}
+                bridge = metadata.get("bridge") if isinstance(metadata.get("bridge"), dict) else {}
                 bridged = str(bridge.get("extension_id") or bridge.get("client_id") or "")
                 if wanted in {direct, bridged}:
                     return worker
@@ -153,21 +153,23 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
         registry.save = save_with_worker_disable_authority
         registry._chat2api_worker_disable_authority_save_v62 = True
 
-    # Explicit calls to set_connection_enabled are administrative/control-plane
-    # intent. Mirror them into the Linux Worker record before the registry save so
-    # a legitimate Enable is allowed through the authority gate, while direct
-    # background mutation followed by registry.save() is still forced disabled.
+    # Do not treat every registry setter call as administrator intent. Pairing,
+    # token refresh and compatibility patches may legitimately call this method.
+    # A disabled Linux Worker is allowed to reopen transport only after an admin
+    # flow has first persisted worker.enabled=True. This keeps the durable Worker
+    # master flag authoritative even when an older background path asks for True.
     if not getattr(registry, "_chat2api_worker_disable_authority_set_v62", False):
         base_set_connection_enabled = registry.set_connection_enabled
 
         async def set_connection_enabled_authoritative(client_id: str, enabled: bool):
-            worker_id = worker_id_for_client(client_id)
-            if worker_id:
-                persist_worker_switch(
-                    worker_id,
-                    bool(enabled),
-                    source="registry-explicit-enable" if enabled else "registry-explicit-disable",
-                )
+            worker = worker_for_client(client_id)
+            if bool(enabled) and worker and worker.get("enabled") is False:
+                item = registry.clients.get(client_id)
+                if item is None:
+                    raise KeyError("Unknown client_id")
+                item.connection_enabled = False
+                await registry.save()
+                return item
             return await base_set_connection_enabled(client_id, bool(enabled))
 
         registry.set_connection_enabled = set_connection_enabled_authoritative
@@ -261,6 +263,8 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
         worker_id = worker_id_for_client(client_id)
         worker_public = None
         if worker_id:
+            # Persist admin intent first. The guarded registry setter only accepts
+            # True for Linux Workers whose durable master switch is already True.
             worker_public = persist_worker_switch(
                 worker_id,
                 True,
@@ -283,6 +287,7 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
         "disable_client": disable_client,
         "enable_client": enable_client,
         "disabled_linux_client_ids": disabled_linux_client_ids,
+        "persist_worker_switch": persist_worker_switch,
     }
 
     @app.get(ASSET_PATH, include_in_schema=False)
