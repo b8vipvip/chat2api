@@ -41,7 +41,7 @@ def test_v48_javascript_assets_parse():
 
 def test_manifest_requires_fresh_document_marker_and_passive_recovery():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.15"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.16"
     main_scripts = manifest["content_scripts"][0]["js"]
     scripts = manifest["content_scripts"][1]["js"]
     assert "network_stream_main_v55.js" in main_scripts
@@ -76,7 +76,7 @@ def test_background_preflight_wraps_final_conversation_dispatch():
     preflight = (ROOT / "chrome_extension" / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
     contract = (ROOT / "chrome_extension" / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     marker = (ROOT / "chrome_extension" / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
-    assert 'REQUIRED_BUNDLE = "0.8.15"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.16"' in preflight
     assert 'const MAIN_FILES = ["network_stream_main_v55.js"]' in preflight
     assert '"content_rate_limit_guard_v52.js"' in preflight
     assert '"content_request_lifecycle_v50.js"' in preflight
@@ -86,7 +86,7 @@ def test_background_preflight_wraps_final_conversation_dispatch():
     assert '"content_response_semantic_recovery_v51.js"' in preflight
     assert '"content_transient_retry_v50.js"' in preflight
     assert '"content_generation_liveness_v49.js"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.15"' in contract
+    assert 'REQUIRED_BUNDLE = "0.8.16"' in contract
     assert "__CHAT2API_RATE_LIMIT_CONTENT_V52__" in contract
     assert "__CHAT2API_REQUEST_LIFECYCLE_V50__" in contract
     assert "__CHAT2API_DRAFT_MANAGED_RECOVERY_V55__" in contract
@@ -100,7 +100,7 @@ def test_background_preflight_wraps_final_conversation_dispatch():
     assert "semanticHelper?.timer == null" in contract
     assert "__CHAT2API_TRANSIENT_RETRY_V50__" in contract
     assert "__CHAT2API_GENERATION_LIVENESS_V49__" in contract
-    assert 'bundle: "0.8.15"' in marker
+    assert 'bundle: "0.8.16"' in marker
     assert "content_bundle_marker_v48.js" not in preflight
     assert "chrome.tabs.reload" in preflight
     assert "ChatGPT tab Worker runtime is stale or incomplete" in preflight
@@ -147,8 +147,8 @@ def test_external_account_tools_are_fail_closed_at_prompt_and_ui_layers():
 def test_runtime_contract_exposes_v48_v49_v50_v51_and_v55_features():
     app = FastAPI(version=SERVER_RUNTIME_VERSION)
     payload = version_contract_payload(app)
-    assert SERVER_RUNTIME_VERSION == "0.22.42"
-    assert payload["chrome_bridge"]["bundle_version"] == "0.8.15"
+    assert SERVER_RUNTIME_VERSION == "0.22.43"
+    assert payload["chrome_bridge"]["bundle_version"] == "0.8.16"
     assert payload["chrome_bridge"]["network_response_recovery_version"] == 55
     assert payload["chrome_bridge"]["network_response_parser_revision"] == 62
     assert payload["chrome_bridge"]["worker_master_switch_version"] == 61
@@ -179,6 +179,9 @@ def test_runtime_contract_exposes_v48_v49_v50_v51_and_v55_features():
     assert payload["features"]["linux_worker_master_switch"] is True
     assert payload["features"]["linux_worker_disable_authority"] is True
     assert payload["features"]["worker_live_occupancy"] is True
+    assert payload["features"]["worker_device_name_column"] is True
+    assert payload["features"]["worker_pairing_rename"] is True
+    assert payload["features"]["multimodal_upload_confirmation_v64"] is True
     assert payload["features"]["linux_worker_sudoers_guard"] is True
     assert payload["features"]["linux_worker_autoreload_self_heal"] is True
     assert payload["features"]["linux_worker_proxy_health_facets"] is True
