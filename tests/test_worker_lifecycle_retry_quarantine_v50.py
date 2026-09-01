@@ -12,8 +12,8 @@ EXT = ROOT / "chrome_extension"
 
 def test_runtime_versions_and_features() -> None:
     source = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.42"' in source
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.15"' in source
+    assert 'SERVER_RUNTIME_VERSION = "0.22.43"' in source
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.16"' in source
     for marker in (
         '"failed_route_quarantine": True',
         '"request_controller_lifecycle_guard": True',
@@ -31,13 +31,16 @@ def test_runtime_versions_and_features() -> None:
         '"linux_worker_master_switch": True',
         '"worker_live_occupancy": True',
         '"linux_worker_proxy_health_facets": True',
+        '"worker_device_name_column": True',
+        '"worker_pairing_rename": True',
+        '"multimodal_upload_confirmation_v64": True',
     ):
         assert marker in source
 
 
 def test_manifest_loads_lifecycle_and_retry_overlays_in_order() -> None:
     manifest = json.loads((EXT / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.15"
+    assert manifest["version"] == "0.8.16"
     assert "network_stream_main_v55.js" in manifest["content_scripts"][0]["js"]
     scripts = manifest["content_scripts"][1]["js"]
     assert scripts.index("content_rate_limit_guard_v52.js") < scripts.index("content_request_v5.js")
@@ -87,7 +90,7 @@ def test_runtime_preflight_requires_v50_v51_and_v55_overlays() -> None:
     source = (EXT / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
     contract = (EXT / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     marker = (EXT / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
-    assert 'const REQUIRED_BUNDLE = "0.8.15"' in source
+    assert 'const REQUIRED_BUNDLE = "0.8.16"' in source
     assert 'const MAIN_FILES = ["network_stream_main_v55.js"]' in source
     assert '"content_rate_limit_guard_v52.js"' in source
     assert '"content_request_lifecycle_v50.js"' in source
@@ -95,7 +98,7 @@ def test_runtime_preflight_requires_v50_v51_and_v55_overlays() -> None:
     assert '"content_network_stream_recovery_v55.js"' in source
     assert '"content_response_semantic_recovery_v51.js"' in source
     assert '"content_transient_retry_v50.js"' in source
-    assert 'const REQUIRED_BUNDLE = "0.8.15"' in contract
+    assert 'const REQUIRED_BUNDLE = "0.8.16"' in contract
     assert "rate_limit_guard_v52" in contract
     assert "request_lifecycle_v50" in contract
     assert "draft_managed_recovery_v55" in contract
@@ -105,7 +108,7 @@ def test_runtime_preflight_requires_v50_v51_and_v55_overlays() -> None:
     assert "response_semantic_recovery_v51" in contract
     assert "semanticHelper?.timer == null" in contract
     assert "transient_retry_v50" in contract
-    assert 'bundle: "0.8.15"' in marker
+    assert 'bundle: "0.8.16"' in marker
 
 
 def test_linux_autoreload_wrapper_self_repairs_missing_base_helper() -> None:
