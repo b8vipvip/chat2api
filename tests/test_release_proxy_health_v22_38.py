@@ -70,12 +70,12 @@ def test_release_versions_are_explicit_and_consistent() -> None:
     package = read("app/__init__.py")
     project = read("pyproject.toml")
 
-    assert 'SERVER_RUNTIME_VERSION = "0.22.42"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.15"' in runtime
-    assert manifest["version"] == "0.8.15"
-    assert 'bundle: "0.8.15"' in marker
-    assert 'REQUIRED_BUNDLE = "0.8.15"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.15"' in contract
+    assert 'SERVER_RUNTIME_VERSION = "0.22.43"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.16"' in runtime
+    assert manifest["version"] == "0.8.16"
+    assert 'bundle: "0.8.16"' in marker
+    assert 'REQUIRED_BUNDLE = "0.8.16"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.16"' in contract
     assert '__version__ = "0.7.1"' in package
     assert 'version = "0.7.1"' in project
     assert '"network_response_recovery": True' in runtime
@@ -83,6 +83,9 @@ def test_release_versions_are_explicit_and_consistent() -> None:
     assert '"linux_worker_master_switch": True' in runtime
     assert '"linux_worker_disable_authority": True' in runtime
     assert '"worker_live_occupancy": True' in runtime
+    assert '"worker_device_name_column": True' in runtime
+    assert '"worker_pairing_rename": True' in runtime
+    assert '"multimodal_upload_confirmation_v64": True' in runtime
     assert '"linux_worker_proxy_health_facets": True' in runtime
     assert '"worker_key_capacity_fifo_queue": True' in runtime
     assert '"active_rate_limit_terminal_error": True' in runtime
