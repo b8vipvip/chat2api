@@ -12,7 +12,7 @@ from .extension_capacity_control_patch import _request_extension_control
 from .timezone_utils import beijing_now_iso
 
 
-PATCH_VERSION = "0.22.41"
+PATCH_VERSION = "0.22.42"
 ASSET_PATH = "/assets/chat2api-linux-worker-enable-v46.js"
 RUNTIME_ASSET_PATH = "/assets/chat2api-worker-runtime-v61.js"
 
@@ -20,12 +20,13 @@ RUNTIME_ASSET_PATH = "/assets/chat2api-worker-runtime-v61.js"
 def install_linux_worker_enable_patch(app: FastAPI) -> FastAPI:
     """Install the reversible Linux Worker master switch.
 
-    Disabling is a two-phase operation: while the Extension WebSocket is still
+    Online disabling is a two-phase operation: while the Extension WebSocket is
     usable, ask the Worker to collapse chat2api-managed ChatGPT windows to one
-    and wait for its control confirmation. Only after that succeeds do we persist
-    the logical Worker switch, disable Extension authentication, and close the
-    socket. Re-enabling restores authentication; the Extension reconnect loop can
-    then reconnect and Reserve Pool may refill to the configured target.
+    and wait for its control confirmation. An offline Worker can still be
+    persistently disabled because there is no live control transport to clean up;
+    the durable master flag then prevents later authentication/routing revival.
+    Re-enabling restores authentication and lets the Extension reconnect loop
+    refill Reserve Pool to the configured target.
     """
 
     if getattr(app.state, "linux_worker_enable_patch_installed", False):
@@ -105,11 +106,14 @@ def install_linux_worker_enable_patch(app: FastAPI) -> FastAPI:
         if not extension_id:
             return
         async with registry.lock:
-            registry.api_key_routes = {
+            next_routes = {
                 key_id: client_id
                 for key_id, client_id in registry.api_key_routes.items()
                 if client_id != extension_id
             }
+            if next_routes == registry.api_key_routes:
+                return
+            registry.api_key_routes = next_routes
             await registry.save()
 
     def persist_switch(worker_id: str, target: bool, *, control: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -123,6 +127,7 @@ def install_linux_worker_enable_patch(app: FastAPI) -> FastAPI:
             switch = dict(metadata.get("admin_master_switch") or {})
             switch.update({
                 "enabled": target,
+                "state": "enabled" if target else "disabled",
                 "routing_state": "connected" if target else "disconnected",
                 "updated_at": worker["enabled_updated_at"],
                 "transport_preserved": False,
@@ -131,9 +136,25 @@ def install_linux_worker_enable_patch(app: FastAPI) -> FastAPI:
             if isinstance(control, dict):
                 switch["control"] = control
             metadata["admin_master_switch"] = switch
+            bridge = dict(metadata.get("bridge") or {})
+            bridge["master_connection_enabled"] = target
+            bridge["routing_enabled"] = target
+            if not target:
+                bridge["logical_online"] = False
+                bridge["connection_enabled"] = False
+                bridge["online"] = False
+            metadata["bridge"] = bridge
             worker["metadata"] = metadata
             workers._save()
             return workers.public(worker)
+
+    def skipped_control(reason: str) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": reason,
+            "data": {"keep_windows": 1},
+        }
 
     @app.put("/api/admin/linux-workers/{worker_id}/enabled")
     async def set_worker_enabled(worker_id: str, request: Request) -> dict[str, Any]:
@@ -144,30 +165,37 @@ def install_linux_worker_enable_patch(app: FastAPI) -> FastAPI:
 
         target = bool(body["enabled"])
         worker, extension_id, currently_enabled = read_worker(worker_id)
+        item = registry.clients.get(extension_id) if extension_id else None
 
         if target:
-            if extension_id and extension_id in registry.clients:
+            if extension_id and item is None:
+                raise HTTPException(409, "Bound Chrome extension no longer exists")
+            # The v62 authority guard only permits transport=True after the
+            # durable Worker master flag is already enabled. Persist admin intent
+            # first, then reopen extension authentication.
+            public = persist_switch(worker_id, True)
+            if extension_id and item is not None:
                 try:
-                    await registry.set_connection_enabled(extension_id, True)
+                    item = await registry.set_connection_enabled(extension_id, True)
                 except KeyError as error:
                     raise HTTPException(409, "Bound Chrome extension no longer exists") from error
-            public = persist_switch(worker_id, True)
             return {
                 "ok": True,
                 "enabled": True,
                 "routing_state": "connected",
                 "transport_preserved": False,
-                "connection_enabled": True,
+                "connection_enabled": bool(item.connection_enabled) if item is not None else False,
                 "reconnect_pending": bool(extension_id and extension_id not in registry.sockets),
                 "worker": public,
                 "version": PATCH_VERSION,
             }
 
         if not currently_enabled:
-            if extension_id and extension_id in registry.clients:
-                await registry.set_connection_enabled(extension_id, False)
-            public = persist_switch(worker_id, False)
+            control = skipped_control("already-disabled")
+            public = persist_switch(worker_id, False, control=control)
             await clear_sticky_routes(extension_id)
+            if item is not None:
+                await registry.set_connection_enabled(extension_id, False)
             return {
                 "ok": True,
                 "enabled": False,
@@ -175,40 +203,45 @@ def install_linux_worker_enable_patch(app: FastAPI) -> FastAPI:
                 "transport_preserved": False,
                 "connection_enabled": False,
                 "already_disconnected": True,
+                "control": control,
                 "worker": public,
                 "version": PATCH_VERSION,
             }
 
+        # Window cleanup is required only when a live, authenticated extension
+        # transport exists. Offline/no-binding states have nothing the server can
+        # control, but the Worker must still be persistently disable-able.
         if not extension_id:
-            raise HTTPException(409, "Worker has no bound Chrome extension; cannot confirm managed-window collapse")
-        item = registry.clients.get(extension_id)
-        if not item:
-            raise HTTPException(409, "Bound Chrome extension no longer exists")
-        if extension_id not in registry.sockets or getattr(item, "connection_enabled", True) is False:
-            raise HTTPException(409, "Worker extension is offline; reconnect it before using Disconnect so window cleanup can be confirmed")
+            control = skipped_control("no-bound-extension")
+        elif item is None:
+            control = skipped_control("bound-extension-missing")
+        elif extension_id not in registry.sockets or getattr(item, "connection_enabled", True) is False:
+            control = skipped_control("offline-no-control")
+        else:
+            control = await _request_extension_control(
+                app,
+                extension_id,
+                "worker.disable",
+                {"keep_windows": 1},
+                timeout_seconds=15.0,
+            )
+            if control.get("ok") is not True:
+                detail = str(control.get("error") or "Worker did not confirm managed-window cleanup")
+                code = str(control.get("error_code") or "worker_disable_control_failed")
+                raise HTTPException(409, f"{detail} [{code}]")
 
-        control = await _request_extension_control(
-            app,
-            extension_id,
-            "worker.disable",
-            {"keep_windows": 1},
-            timeout_seconds=15.0,
-        )
-        if control.get("ok") is not True:
-            detail = str(control.get("error") or "Worker did not confirm managed-window cleanup")
-            code = str(control.get("error_code") or "worker_disable_control_failed")
-            raise HTTPException(409, f"{detail} [{code}]")
+            data = control.get("data") if isinstance(control.get("data"), dict) else {}
+            if int(data.get("managed_windows_after") or 0) > 1:
+                raise HTTPException(409, "Worker control returned success but more than one managed ChatGPT window remains")
 
-        data = control.get("data") if isinstance(control.get("data"), dict) else {}
-        if int(data.get("managed_windows_after") or 0) > 1:
-            raise HTTPException(409, "Worker control returned success but more than one managed ChatGPT window remains")
-
-        # The Extension has confirmed cleanup while its socket is still alive.
-        # Persist the switch and then disable authentication/close that socket.
+        # For online Workers this runs after confirmed cleanup. For offline
+        # Workers it establishes the durable authority barrier immediately.
         public = persist_switch(worker_id, False, control=control)
         await clear_sticky_routes(extension_id)
-        await registry.set_connection_enabled(extension_id, False)
+        if item is not None:
+            await registry.set_connection_enabled(extension_id, False)
 
+        data = control.get("data") if isinstance(control.get("data"), dict) else {}
         return {
             "ok": True,
             "enabled": False,

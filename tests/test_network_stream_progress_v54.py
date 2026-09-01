@@ -16,7 +16,7 @@ def test_manifest_installs_v55_main_world_stream_recovery_without_v54_double_wra
     manifest = json.loads(read("chrome_extension/manifest.json"))
     main = manifest["content_scripts"][0]
     isolated = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.8.14"
+    assert manifest["version"] == "0.8.15"
     assert main["world"] == "MAIN"
     assert main["run_at"] == "document_start"
     assert "network_stream_main_v55.js" in main["js"]
@@ -25,24 +25,28 @@ def test_manifest_installs_v55_main_world_stream_recovery_without_v54_double_wra
     assert "content_network_stream_progress_v54.js" not in isolated
 
 
-def test_main_world_v55_recovers_only_assistant_content_from_conversation_sse() -> None:
+def test_main_world_v55_uses_parser_revision_62_for_conversation_sse() -> None:
     source = read("chrome_extension/network_stream_main_v55.js")
     for token in (
         'url.pathname === "/backend-api/f/conversation"',
-        'role !== "assistant"',
+        'const PARSER_REVISION = 62;',
+        'data-chat2api-network-stream-parser',
         'type.includes("text/event-stream")',
         "response.clone()",
         "clone.body?.getReader",
         'phase: "assistant-snapshot"',
         'phase: "assistant-complete"',
-        'data-chat2api-network-stream-main-v55',
+        'type === "message_stream_complete"',
+        'patch?.p !== undefined ? patch.p : patch?.path',
+        'if (pointer == null || pointer === "") return [];',
+        'if (typeof payload === "string") return;',
     ):
         assert token in source
     for forbidden in ("Authorization", "Cookie", "request_body", "prompt_text"):
         assert forbidden not in source
 
 
-def test_main_world_v55_reconstructs_incremental_assistant_json_patch_in_vm() -> None:
+def test_main_world_v55_reconstructs_real_root_patch_protocol_without_dom_in_vm() -> None:
     script = r'''
 import fs from "node:fs";
 import vm from "node:vm";
@@ -51,10 +55,17 @@ import {TextDecoder, TextEncoder} from "node:util";
 
 const source = fs.readFileSync("chrome_extension/network_stream_main_v55.js", "utf8");
 const messages = [];
+const attributes = new Map();
 const encoder = new TextEncoder();
+// Mirrors the /backend-api/f/conversation protocol shape observed in production:
+// a JSON string version marker, a root add patch carrying the assistant message,
+// a content append patch, a completion event and the final [DONE] marker.
 const chunks = [
-  encoder.encode('data: {"message":{"author":{"role":"assistant"},"content":{"parts":["Hel"]}}}\n\n'),
-  encoder.encode('data: {"o":"append","p":"/message/content/parts/0","v":"lo"}\n\n'),
+  encoder.encode('data: "v1"\n\n'),
+  encoder.encode('data: {"p":"","o":"add","v":{"message":{"author":{"role":"assistant"},"content":{"content_type":"text","parts":["Hel"]},"status":"in_progress"}},"c":2}\n\n'),
+  encoder.encode('data: {"p":"/message/content/parts/0","o":"append","v":"lo"}\n\n'),
+  encoder.encode('data: {"p":"/message/status","o":"replace","v":"finished_successfully"}\n\n'),
+  encoder.encode('data: {"type":"message_stream_complete"}\n\n'),
   encoder.encode('data: [DONE]\n\n'),
 ];
 let cursor = 0;
@@ -72,7 +83,10 @@ const response = {
   headers: {get: name => name.toLowerCase() === "content-type" ? "text/event-stream" : ""},
   clone: () => ({body: {getReader: () => reader}}),
 };
-const documentElement = {setAttribute() {}};
+const documentElement = {
+  setAttribute(name, value) { attributes.set(name, String(value)); },
+  getAttribute(name) { return attributes.get(name) ?? null; },
+};
 const context = {
   console,
   Math,
@@ -85,6 +99,7 @@ const context = {
   Date,
   URL,
   TextDecoder,
+  structuredClone,
   setTimeout,
   clearTimeout,
   location: {href:"https://chatgpt.com/", origin:"https://chatgpt.com"},
@@ -96,16 +111,20 @@ context.globalThis = context;
 vm.createContext(context);
 vm.runInContext(source, context, {filename:"network_stream_main_v55.js"});
 await context.fetch("https://chatgpt.com/backend-api/f/conversation", {method:"POST"});
-for (let i = 0; i < 12; i++) await new Promise(resolve => setTimeout(resolve, 0));
+for (let i = 0; i < 16; i++) await new Promise(resolve => setTimeout(resolve, 0));
 
 const snapshots = messages.filter(item => item?.phase === "assistant-snapshot");
 const completed = messages.find(item => item?.phase === "assistant-complete");
 const done = messages.find(item => item?.phase === "done");
+assert.equal(attributes.get("data-chat2api-network-stream-parser"), "62");
 assert.equal(snapshots.at(-1)?.text, "Hello");
 assert.equal(snapshots.at(-1)?.parser_source, "json-patch");
+assert.equal(snapshots.at(-1)?.parser_revision, 62);
 assert.equal(completed?.text, "Hello");
 assert.equal(completed?.completion_hint, true);
+assert.equal(completed?.parser_revision, 62);
 assert.equal(done?.assistant_chars, 5);
+assert.equal(done?.completion_hint, true);
 '''
     result = subprocess.run(
         ["node", "--input-type=module", "-e", script],
@@ -134,7 +153,7 @@ def test_isolated_v55_recovery_owns_success_and_stops_legacy_dom_watchdogs() -> 
     assert 'type: "chat.error"' not in source
 
 
-def test_runtime_preflight_requires_v55_main_and_isolated_recovery_modules() -> None:
+def test_runtime_preflight_requires_v55_parser_62_main_and_isolated_recovery_modules() -> None:
     bootstrap = read("chrome_extension/content_bootstrap.js")
     preflight = read("chrome_extension/background_runtime_preflight_v48.js")
     contract = read("chrome_extension/content_runtime_contract_v48.js")
@@ -142,13 +161,14 @@ def test_runtime_preflight_requires_v55_main_and_isolated_recovery_modules() -> 
     assert 'world: "MAIN"' in bootstrap
     assert '"network_stream_main_v55.js"' in bootstrap
     assert '"content_network_stream_recovery_v55.js"' in bootstrap
-    assert 'const REQUIRED_BUNDLE = "0.8.14"' in preflight
+    assert 'const REQUIRED_BUNDLE = "0.8.15"' in preflight
     assert 'const MAIN_FILES = ["network_stream_main_v55.js"]' in preflight
     assert '"content_network_stream_recovery_v55.js"' in preflight
     assert "network_stream_recovery_v55" in contract
     assert "network_stream_main_v55" in contract
-    assert "data-chat2api-network-stream-main-v55" in contract
-    assert 'bundle: "0.8.14"' in marker
+    assert "network_stream_parser_v62" in contract
+    assert "data-chat2api-network-stream-parser" in contract
+    assert 'bundle: "0.8.15"' in marker
     assert "network_stream_main_v54.js" not in preflight
     assert "content_network_stream_progress_v54.js" not in preflight
 

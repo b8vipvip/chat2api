@@ -96,22 +96,22 @@ assert.equal(helper.sanitize("ChatGPT said:").text, "");
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_runtime_contract_requires_worker_0814_single_owner_plus_network_recovery():
+def test_runtime_contract_requires_worker_0815_single_owner_plus_network_recovery():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     preflight = (EXT / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
     contract = (EXT / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     marker = (EXT / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
 
-    assert 'SERVER_RUNTIME_VERSION = "0.22.41"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.14"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.42"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.15"' in runtime
     assert '"single_response_observer": True' in runtime
     assert '"network_response_recovery": True' in runtime
     assert 'single-response-owner-v53' in runtime
     assert 'network-response-v55' in runtime
-    assert 'const REQUIRED_BUNDLE = "0.8.14"' in preflight
+    assert 'const REQUIRED_BUNDLE = "0.8.15"' in preflight
     assert '"content_network_stream_recovery_v55.js"' in preflight
-    assert 'const REQUIRED_BUNDLE = "0.8.14"' in contract
+    assert 'const REQUIRED_BUNDLE = "0.8.15"' in contract
     assert 'response_single_owner_v53' in contract
     assert 'network_stream_recovery_v55' in contract
     assert 'semanticHelper?.timer == null' in contract
-    assert 'bundle: "0.8.14"' in marker
+    assert 'bundle: "0.8.15"' in marker

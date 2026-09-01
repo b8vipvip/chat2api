@@ -41,7 +41,7 @@ def test_v48_javascript_assets_parse():
 
 def test_manifest_requires_fresh_document_marker_and_passive_recovery():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.14"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.15"
     main_scripts = manifest["content_scripts"][0]["js"]
     scripts = manifest["content_scripts"][1]["js"]
     assert "network_stream_main_v55.js" in main_scripts
@@ -76,7 +76,7 @@ def test_background_preflight_wraps_final_conversation_dispatch():
     preflight = (ROOT / "chrome_extension" / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
     contract = (ROOT / "chrome_extension" / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     marker = (ROOT / "chrome_extension" / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
-    assert 'REQUIRED_BUNDLE = "0.8.14"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.15"' in preflight
     assert 'const MAIN_FILES = ["network_stream_main_v55.js"]' in preflight
     assert '"content_rate_limit_guard_v52.js"' in preflight
     assert '"content_request_lifecycle_v50.js"' in preflight
@@ -86,19 +86,21 @@ def test_background_preflight_wraps_final_conversation_dispatch():
     assert '"content_response_semantic_recovery_v51.js"' in preflight
     assert '"content_transient_retry_v50.js"' in preflight
     assert '"content_generation_liveness_v49.js"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.14"' in contract
+    assert 'REQUIRED_BUNDLE = "0.8.15"' in contract
     assert "__CHAT2API_RATE_LIMIT_CONTENT_V52__" in contract
     assert "__CHAT2API_REQUEST_LIFECYCLE_V50__" in contract
     assert "__CHAT2API_DRAFT_MANAGED_RECOVERY_V55__" in contract
     assert "__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__" in contract
     assert "__CHAT2API_NETWORK_STREAM_RECOVERY_V55__" in contract
     assert "network_stream_main_v55" in contract
+    assert "network_stream_parser_v62" in contract
+    assert "data-chat2api-network-stream-parser" in contract
     assert "__CHAT2API_RESPONSE_SEMANTIC_RECOVERY_V51__" in contract
     assert "response_single_owner_v53" in contract
     assert "semanticHelper?.timer == null" in contract
     assert "__CHAT2API_TRANSIENT_RETRY_V50__" in contract
     assert "__CHAT2API_GENERATION_LIVENESS_V49__" in contract
-    assert 'bundle: "0.8.14"' in marker
+    assert 'bundle: "0.8.15"' in marker
     assert "content_bundle_marker_v48.js" not in preflight
     assert "chrome.tabs.reload" in preflight
     assert "ChatGPT tab Worker runtime is stale or incomplete" in preflight
@@ -108,6 +110,7 @@ def test_background_preflight_wraps_final_conversation_dispatch():
 def test_response_stream_recovery_reports_first_text_completion_and_bounded_stall_state():
     source = (ROOT / "chrome_extension" / "content_response_stream_recovery_v49.js").read_text(encoding="utf-8")
     network = (ROOT / "chrome_extension" / "content_network_stream_recovery_v55.js").read_text(encoding="utf-8")
+    network_main = (ROOT / "chrome_extension" / "network_stream_main_v55.js").read_text(encoding="utf-8")
     assert 'type: "chat.snapshot"' in source
     assert 'type: "chat.completed"' in source
     assert 'type: "chat.error"' in source
@@ -124,6 +127,7 @@ def test_response_stream_recovery_reports_first_text_completion_and_bounded_stal
     assert "VISIBLE_GENERATION_STUCK_MS = 120000" in source
     assert 'network_response_recovery: "sse-assistant-v55"' in network
     assert 'response_stream_completion_reason: "conversation-sse-ended"' in network
+    assert 'const PARSER_REVISION = 62;' in network_main
 
 
 def test_external_account_tools_are_fail_closed_at_prompt_and_ui_layers():
@@ -143,12 +147,15 @@ def test_external_account_tools_are_fail_closed_at_prompt_and_ui_layers():
 def test_runtime_contract_exposes_v48_v49_v50_v51_and_v55_features():
     app = FastAPI(version=SERVER_RUNTIME_VERSION)
     payload = version_contract_payload(app)
-    assert SERVER_RUNTIME_VERSION == "0.22.41"
-    assert payload["chrome_bridge"]["bundle_version"] == "0.8.14"
+    assert SERVER_RUNTIME_VERSION == "0.22.42"
+    assert payload["chrome_bridge"]["bundle_version"] == "0.8.15"
     assert payload["chrome_bridge"]["network_response_recovery_version"] == 55
+    assert payload["chrome_bridge"]["network_response_parser_revision"] == 62
     assert payload["chrome_bridge"]["worker_master_switch_version"] == 61
+    assert payload["chrome_bridge"]["worker_master_switch_revision"] == 62
     assert payload["features"]["response_stream_recovery"] is True
     assert payload["features"]["network_response_recovery"] is True
+    assert payload["features"]["network_response_parser_v62"] is True
     assert payload["features"]["single_response_observer"] is True
     assert payload["features"]["assistant_response_semantic_guard"] is True
     assert payload["features"]["assistant_response_semantic_recovery"] is True
@@ -170,6 +177,7 @@ def test_runtime_contract_exposes_v48_v49_v50_v51_and_v55_features():
     assert payload["features"]["worker_runtime_preflight"] is True
     assert payload["features"]["external_account_tool_isolation"] is True
     assert payload["features"]["linux_worker_master_switch"] is True
+    assert payload["features"]["linux_worker_disable_authority"] is True
     assert payload["features"]["worker_live_occupancy"] is True
     assert payload["features"]["linux_worker_sudoers_guard"] is True
     assert payload["features"]["linux_worker_autoreload_self_heal"] is True

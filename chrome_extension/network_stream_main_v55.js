@@ -4,9 +4,11 @@
 
   const SOURCE = "chat2api-network-stream-v55";
   const CHANNEL = "conversation-fetch-v55";
+  const PARSER_REVISION = 62;
   const decoderFactory = () => new TextDecoder("utf-8");
   const state = {
     version: 55,
+    parser_revision: PARSER_REVISION,
     streams: 0,
     snapshots: 0,
     completions: 0,
@@ -15,6 +17,7 @@
   globalThis[KEY] = state;
   try {
     document.documentElement?.setAttribute?.("data-chat2api-network-stream-main-v55", "55");
+    document.documentElement?.setAttribute?.("data-chat2api-network-stream-parser", String(PARSER_REVISION));
   } catch (_) {}
 
   const nativeFetch = globalThis.fetch?.bind(globalThis);
@@ -22,7 +25,7 @@
 
   function post(detail) {
     try {
-      globalThis.postMessage({ source: SOURCE, ...detail }, "*");
+      globalThis.postMessage({ source: SOURCE, parser_revision: PARSER_REVISION, ...detail }, "*");
     } catch (_) {}
   }
 
@@ -44,29 +47,67 @@
     catch (_) { return ""; }
   }
 
-  function textFromContent(content) {
-    if (typeof content === "string") return content;
-    if (!content || typeof content !== "object") return "";
-    if (typeof content.text === "string") return content.text;
-    if (Array.isArray(content.parts)) {
-      return content.parts.map(part => {
-        if (typeof part === "string") return part;
-        if (!part || typeof part !== "object") return "";
-        if (typeof part.text === "string") return part.text;
-        if (typeof part.content === "string") return part.content;
-        if (typeof part.value === "string") return part.value;
-        return "";
-      }).join("");
-    }
-    if (typeof content.result === "string") return content.result;
+  function primitiveText(value) {
+    if (typeof value === "string") return value;
+    if (!value || typeof value !== "object") return "";
+    if (typeof value.text === "string") return value.text;
+    if (typeof value.value === "string") return value.value;
+    if (typeof value.result === "string") return value.result;
+    if (typeof value.delta === "string") return value.delta;
+    if (typeof value.content === "string") return value.content;
     return "";
+  }
+
+  function textFromContent(content, depth = 0) {
+    if (depth > 8 || content == null) return "";
+    if (typeof content === "string") return content;
+    if (Array.isArray(content)) return content.map(value => textFromContent(value, depth + 1)).join("");
+    if (typeof content !== "object") return "";
+
+    const direct = primitiveText(content);
+    if (direct) return direct;
+
+    for (const key of ["parts", "content", "items", "blocks", "segments"]) {
+      const value = content[key];
+      if (Array.isArray(value)) {
+        const text = value.map(item => textFromContent(item, depth + 1)).join("");
+        if (text) return text;
+      } else if (value && typeof value === "object") {
+        const text = textFromContent(value, depth + 1);
+        if (text) return text;
+      }
+    }
+    return "";
+  }
+
+  function messageRole(message) {
+    if (!message || typeof message !== "object") return "";
+    return String(
+      message.author?.role
+      || message.author_role
+      || message.role
+      || message.message?.author?.role
+      || message.message?.role
+      || ""
+    ).toLowerCase();
   }
 
   function assistantText(message) {
     if (!message || typeof message !== "object") return "";
-    const role = String(message.author?.role || message.role || "").toLowerCase();
+    const role = messageRole(message);
     if (role !== "assistant") return "";
-    return textFromContent(message.content) || (typeof message.text === "string" ? message.text : "");
+    return textFromContent(message.content)
+      || textFromContent(message.message?.content)
+      || primitiveText(message)
+      || primitiveText(message.message);
+  }
+
+  function containsAssistantRole(node, depth = 0) {
+    if (depth > 12 || node == null) return false;
+    if (Array.isArray(node)) return node.some(value => containsAssistantRole(value, depth + 1));
+    if (typeof node !== "object") return false;
+    if (messageRole(node) === "assistant") return true;
+    return Object.values(node).some(value => containsAssistantRole(value, depth + 1));
   }
 
   function collectAssistantTexts(node, output = [], depth = 0) {
@@ -89,7 +130,8 @@
   }
 
   function assignPatch(rootBox, patch) {
-    const parts = pointerParts(patch?.p);
+    const pointer = patch?.p !== undefined ? patch.p : patch?.path;
+    const parts = pointerParts(pointer);
     if (!parts) return false;
     const op = String(patch?.o || patch?.op || "replace").toLowerCase();
     const value = patch?.v !== undefined ? patch.v : patch?.value;
@@ -98,6 +140,8 @@
         rootBox.value += String(value ?? "");
       } else if (op === "append" && Array.isArray(rootBox.value)) {
         rootBox.value.push(value);
+      } else if (op === "remove") {
+        rootBox.value = null;
       } else {
         rootBox.value = value;
       }
@@ -118,6 +162,7 @@
       if (typeof cursor[key] === "string") cursor[key] += String(value ?? "");
       else if (Array.isArray(cursor[key])) cursor[key].push(value);
       else if (cursor[key] == null) cursor[key] = value;
+      else if (typeof value === "string") cursor[key] = String(cursor[key] ?? "") + value;
       else return false;
     } else if (op === "remove") {
       if (Array.isArray(cursor) && /^\d+$/.test(key)) cursor.splice(Number(key), 1);
@@ -137,8 +182,9 @@
       return output;
     }
     if (typeof node !== "object") return output;
+    const pointer = node.p !== undefined ? node.p : node.path;
     if (
-      typeof node.p === "string"
+      typeof pointer === "string"
       && (Object.prototype.hasOwnProperty.call(node, "v") || Object.prototype.hasOwnProperty.call(node, "value"))
       && (node.o || node.op)
     ) output.push(node);
@@ -146,15 +192,24 @@
     return output;
   }
 
+  function eventType(node) {
+    if (!node || typeof node !== "object") return "";
+    return String(node.type || node.event || node.kind || node.status || "").toLowerCase();
+  }
+
   function completionHint(node, depth = 0) {
     if (depth > 12 || node == null) return false;
     if (Array.isArray(node)) return node.some(value => completionHint(value, depth + 1));
     if (typeof node !== "object") return false;
-    const type = String(node.type || node.event || node.status || "").toLowerCase();
+    const type = eventType(node);
     if (
       type === "finished_successfully"
       || type === "completed"
       || type === "message_end"
+      || type === "message_stream_complete"
+      || type === "message_stream_completed"
+      || type === "assistant_message_end"
+      || type === "assistant_message_complete"
       || type === "response.completed"
       || type === "conversation.item.done"
       || type === "done"
@@ -163,12 +218,42 @@
     return Object.values(node).some(value => completionHint(value, depth + 1));
   }
 
+  function assistantDeltaText(payload, assistantRoleSeen) {
+    if (!assistantRoleSeen || !payload || typeof payload !== "object") return "";
+    const type = eventType(payload);
+    const recognized = [
+      "text_delta",
+      "message_delta",
+      "assistant_delta",
+      "assistant_message_delta",
+      "content_delta",
+      "response.output_text.delta",
+      "conversation.item.delta",
+    ].includes(type);
+    if (!recognized) return "";
+    return primitiveText(payload.delta)
+      || primitiveText(payload.text)
+      || primitiveText(payload.content)
+      || primitiveText(payload.value)
+      || primitiveText(payload);
+  }
+
+  function patchTouchesAssistantContent(patch) {
+    const pointer = String(patch?.p !== undefined ? patch.p : patch?.path || "").toLowerCase();
+    return pointer.includes("/message/content/")
+      || pointer.includes("/content/parts/")
+      || pointer.endsWith("/content/text")
+      || pointer.endsWith("/output_text");
+  }
+
   function streamParser(streamId) {
     let buffer = "";
     let sequence = 0;
     let latestText = "";
     let patchRoot = { value: null };
     let sawDone = false;
+    let assistantRoleSeen = false;
+    let fallbackText = "";
 
     function emitSnapshot(text, source) {
       const normalized = String(text || "");
@@ -186,9 +271,23 @@
       });
     }
 
+    function updateFallbackFromPatch(patch) {
+      if (!assistantRoleSeen || !patchTouchesAssistantContent(patch)) return;
+      const op = String(patch?.o || patch?.op || "replace").toLowerCase();
+      const value = patch?.v !== undefined ? patch.v : patch?.value;
+      const text = textFromContent(value) || primitiveText(value);
+      if (!text) return;
+      if (op === "append") fallbackText += text;
+      else fallbackText = text;
+      emitSnapshot(fallbackText, "assistant-content-patch");
+    }
+
     function inspectPayload(payload) {
+      if (containsAssistantRole(payload)) assistantRoleSeen = true;
+
       const direct = collectAssistantTexts(payload, []);
       if (direct.length) {
+        assistantRoleSeen = true;
         if (patchRoot.value == null) {
           try { patchRoot.value = structuredClone(payload); }
           catch (_) { patchRoot.value = payload; }
@@ -198,11 +297,23 @@
 
       const patches = patchCandidates(payload, []);
       let patched = false;
-      for (const patch of patches) patched = assignPatch(patchRoot, patch) || patched;
+      for (const patch of patches) {
+        if (containsAssistantRole(patch?.v) || containsAssistantRole(patch?.value)) assistantRoleSeen = true;
+        patched = assignPatch(patchRoot, patch) || patched;
+        updateFallbackFromPatch(patch);
+      }
       if (patched) {
+        if (containsAssistantRole(patchRoot.value)) assistantRoleSeen = true;
         const recovered = collectAssistantTexts(patchRoot.value, []);
         if (recovered.length) emitSnapshot(recovered[recovered.length - 1], "json-patch");
       }
+
+      const delta = assistantDeltaText(payload, assistantRoleSeen);
+      if (delta) {
+        fallbackText += delta;
+        emitSnapshot(fallbackText, "assistant-delta");
+      }
+
       if (completionHint(payload)) sawDone = true;
     }
 
@@ -219,7 +330,11 @@
         return;
       }
       try {
-        inspectPayload(JSON.parse(data));
+        const payload = JSON.parse(data);
+        // The protocol begins with a JSON string such as "v1". It is a version
+        // marker, not a parse error and not assistant content.
+        if (typeof payload === "string") return;
+        inspectPayload(payload);
       } catch (_) {
         state.parse_errors += 1;
       }
@@ -234,6 +349,7 @@
       },
       finish() {
         if (buffer.trim()) processEvent(buffer);
+        if (!latestText && fallbackText) emitSnapshot(fallbackText, "assistant-fallback");
         if (latestText) {
           state.completions += 1;
           post({
@@ -246,7 +362,7 @@
             completion_hint: sawDone,
           });
         }
-        return { latestText, sawDone, sequence };
+        return { latestText, sawDone, sequence, assistantRoleSeen };
       },
     };
   }
@@ -303,6 +419,7 @@
         bytes,
         assistant_chars: String(parsed.latestText || "").length,
         completion_hint: Boolean(parsed.sawDone),
+        assistant_role_seen: Boolean(parsed.assistantRoleSeen),
       });
     } catch (error) {
       post({

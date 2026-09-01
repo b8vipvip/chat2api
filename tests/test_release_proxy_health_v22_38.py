@@ -70,16 +70,18 @@ def test_release_versions_are_explicit_and_consistent() -> None:
     package = read("app/__init__.py")
     project = read("pyproject.toml")
 
-    assert 'SERVER_RUNTIME_VERSION = "0.22.41"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.14"' in runtime
-    assert manifest["version"] == "0.8.14"
-    assert 'bundle: "0.8.14"' in marker
-    assert 'REQUIRED_BUNDLE = "0.8.14"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.14"' in contract
+    assert 'SERVER_RUNTIME_VERSION = "0.22.42"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.15"' in runtime
+    assert manifest["version"] == "0.8.15"
+    assert 'bundle: "0.8.15"' in marker
+    assert 'REQUIRED_BUNDLE = "0.8.15"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.15"' in contract
     assert '__version__ = "0.7.1"' in package
     assert 'version = "0.7.1"' in project
     assert '"network_response_recovery": True' in runtime
+    assert '"network_response_parser_v62": True' in runtime
     assert '"linux_worker_master_switch": True' in runtime
+    assert '"linux_worker_disable_authority": True' in runtime
     assert '"worker_live_occupancy": True' in runtime
     assert '"linux_worker_proxy_health_facets": True' in runtime
     assert '"worker_key_capacity_fifo_queue": True' in runtime

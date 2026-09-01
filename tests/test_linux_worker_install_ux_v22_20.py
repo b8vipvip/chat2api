@@ -50,10 +50,11 @@ def test_v22_20_ux_patch_remains_before_newer_worker_patches():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
 
-    assert 'SERVER_RUNTIME_VERSION = "0.22.41"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.42"' in runtime
     assert 'from .linux_worker_install_ux_patch import install_linux_worker_install_ux_patch' in entry
     assert 'install_linux_worker_install_ux_patch(app)' in entry
     assert entry.index('install_linux_worker_table_stability_patch(app)') < entry.index('install_linux_worker_install_ux_patch(app)')
     assert entry.index('install_linux_worker_install_ux_patch(app)') < entry.index('install_linux_worker_repair_command_patch(app)')
     assert entry.index('install_linux_worker_repair_command_patch(app)') < entry.index('install_linux_worker_diagnostics_patch(app)')
     assert entry.index('install_linux_worker_diagnostics_patch(app)') < entry.index('install_linux_worker_initialize_patch(app)')
+    assert entry.rindex('install_worker_disable_authority_patch(app)') > entry.rindex('install_server_worker_sync_patch(app)')
