@@ -164,12 +164,12 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
         async def set_connection_enabled_authoritative(client_id: str, enabled: bool):
             worker = worker_for_client(client_id)
             if bool(enabled) and worker and worker.get("enabled") is False:
-                item = registry.clients.get(client_id)
-                if item is None:
+                if client_id not in registry.clients:
                     raise KeyError("Unknown client_id")
-                item.connection_enabled = False
-                await registry.save()
-                return item
+                # Reject the attempted revival through the real disable boundary,
+                # not a metadata-only save. This also closes any stale WebSocket
+                # left behind by an older reconnect race.
+                return await base_set_connection_enabled(client_id, False)
             return await base_set_connection_enabled(client_id, bool(enabled))
 
         registry.set_connection_enabled = set_connection_enabled_authoritative
@@ -208,10 +208,6 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
         if getattr(item, "connection_enabled", True) is False:
             return {"ok": True, "skipped": True, "reason": "already-disabled", "data": {"keep_windows": 1}}
         if client_id not in registry.sockets:
-            # Offline is still a valid state to disable persistently. There is no
-            # live control transport that can close windows, so do not fabricate a
-            # cleanup confirmation; the important invariant is that it cannot
-            # authenticate/re-enter routing after the switch is persisted.
             return {"ok": True, "skipped": True, "reason": "offline-no-control", "data": {"keep_windows": 1}}
         control = await _request_extension_control(
             app,
@@ -263,8 +259,6 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
         worker_id = worker_id_for_client(client_id)
         worker_public = None
         if worker_id:
-            # Persist admin intent first. The guarded registry setter only accepts
-            # True for Linux Workers whose durable master switch is already True.
             worker_public = persist_worker_switch(
                 worker_id,
                 True,
@@ -298,9 +292,6 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
     @app.middleware("http")
     async def worker_disable_authority_middleware(request: Request, call_next):
         path = request.url.path
-
-        # Prevent the Linux Agent/Bridge binding loop from creating or replacing
-        # an extension identity while its Worker is administratively disabled.
         if request.method == "POST" and path == "/api/workers/extension-binding-ticket":
             worker_id = str(request.headers.get("x-worker-id") or "").strip()
             worker = workers.data.get("workers", {}).get(worker_id)
@@ -318,8 +309,6 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
                 if worker and worker.get("enabled") is False and not worker.get("revoked_at"):
                     return JSONResponse({"detail": "Worker is disabled by administrator", "state": "disabled"}, status_code=409)
             except (KeyError, ValueError, TypeError, json.JSONDecodeError):
-                # Let the canonical binding endpoint return its normal validation
-                # error for malformed or expired tickets.
                 pass
 
         match = EXTENSION_ACTION_RE.match(path) if request.method == "POST" else None
