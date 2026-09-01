@@ -198,7 +198,7 @@
         extension_control_transport: "worker-master-switch-v61",
         extension_control_result: result,
         worker_master_switch_version: 61,
-        worker_master_enabled: result.action !== "worker.disable",
+        worker_master_enabled: !(result.action === "worker.disable" && result.ok),
       },
     });
     if (!sent) throw new Error("Failed to send Worker master-switch confirmation");
