@@ -165,8 +165,6 @@ def test_background_registry_save_cannot_revive_disabled_linux_worker(monkeypatc
     worker = app.state.linux_workers.data["workers"]["wrk_linux"]
     assert worker["enabled"] is False
 
-    # Reproduce the old pairing/token reconciliation bug: a background path
-    # mutates the persisted extension record back to True and calls registry.save.
     app.state.registry.clients["ext_linux"].connection_enabled = True
     app.state.registry.sockets["ext_linux"] = object()
     asyncio.run(app.state.registry.save())
@@ -186,19 +184,19 @@ def test_background_registry_set_true_cannot_revive_disabled_linux_worker(monkey
     assert worker["enabled"] is False
     assert app.state.registry.clients["ext_linux"].connection_enabled is False
 
-    # Some historical reconciliation/control-plane paths call the public setter
-    # rather than mutating the dataclass followed by save(). That call must not be
-    # interpreted as administrator Enable intent.
+    # Simulate a stale physical connection appearing after the durable disable.
+    # Rejecting a background True must drive the real false setter so the stale
+    # socket is closed, not merely hidden from routing summaries.
     app.state.registry.sockets["ext_linux"] = object()
     result = asyncio.run(app.state.registry.set_connection_enabled("ext_linux", True))
 
     assert result.connection_enabled is False
     assert worker["enabled"] is False
     assert app.state.registry.clients["ext_linux"].connection_enabled is False
+    assert "ext_linux" not in app.state.registry.sockets
     assert ("ext_linux", True) not in app.state.registry.connection_changes
+    assert app.state.registry.connection_changes[-1] == ("ext_linux", False)
 
-    # The explicit authority flow persists Worker enabled first, then the exact
-    # same guarded registry setter is allowed to reopen transport.
     enabled = asyncio.run(authority["enable_client"]("ext_linux"))
     assert enabled["enabled"] is True
     assert worker["enabled"] is True
