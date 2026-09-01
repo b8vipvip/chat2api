@@ -10,7 +10,7 @@ def test_bridge_082_busts_mv3_script_cache_without_touching_login_state():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     launcher = (ROOT / "scripts" / "linux_worker_chrome_launcher.sh").read_text(encoding="utf-8")
 
-    assert manifest["version"] == "0.8.15"
+    assert manifest["version"] == "0.8.16"
     assert 'Default/Service Worker/ScriptCache' in launcher
     assert 'Default/Code Cache/js' in launcher
     assert '--disable-extensions-except="$EXTENSION_DIR"' in launcher
@@ -37,9 +37,9 @@ def test_capacity_controller_vm_contracts_cover_native_and_reporter_paths():
 
 def test_runtime_contract_separates_protocol_from_new_bundle_build():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.42"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.43"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.15"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.16"' in runtime
     assert '"bundle_version": CHROME_BRIDGE_BUNDLE_VERSION' in runtime
     assert 'request-hygiene-v42-persistent-draft-ownership-v43-generation-liveness-v49' in runtime
     assert 'response-stream-v49-network-response-v55-parser-v62-same-api-concurrency-v25' in runtime
@@ -54,6 +54,8 @@ def test_runtime_contract_separates_protocol_from_new_bundle_build():
     assert 'worker-master-switch-v61-r62' in runtime
     assert 'worker-disable-authority-v62' in runtime
     assert 'worker-live-occupancy-v61' in runtime
+    assert 'multimodal-upload-v64' in runtime
+    assert 'worker-presentation-v64' in runtime
     assert '"bridge_service_worker_cache_bust": True' in runtime
     assert '"rendered_response_capture_recovery": True' in runtime
     assert '"response_stream_recovery": True' in runtime
@@ -84,4 +86,7 @@ def test_runtime_contract_separates_protocol_from_new_bundle_build():
     assert '"linux_worker_master_switch": True' in runtime
     assert '"linux_worker_disable_authority": True' in runtime
     assert '"worker_live_occupancy": True' in runtime
+    assert '"worker_device_name_column": True' in runtime
+    assert '"worker_pairing_rename": True' in runtime
+    assert '"multimodal_upload_confirmation_v64": True' in runtime
     assert '"linux_worker_proxy_health_facets": True' in runtime
