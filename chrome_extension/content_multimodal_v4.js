@@ -2,8 +2,9 @@
   const KEY = "__CHAT2API_MULTIMODAL_V4__";
   if (globalThis[KEY]) return;
 
+  const CONTROLLER = "multimodal-v4-r64";
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const state = { duplicateEvents: [] };
+  const state = { duplicateEvents: [], uploadEvents: [] };
   const v3 = globalThis.__CHAT2API_MULTIMODAL_V3__;
 
   function decode(base64) {
@@ -24,10 +25,10 @@
   }
 
   function visible(el) {
-    if (!el) return false;
+    if (!el || typeof el.getBoundingClientRect !== "function") return false;
     const r = el.getBoundingClientRect();
     const s = getComputedStyle(el);
-    return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden";
+    return r.width > 0 && r.height > 0 && s.display !== "none" && s.visibility !== "hidden" && Number(s.opacity || 1) !== 0;
   }
 
   const textOf = el => String(el?.innerText || el?.textContent || "").replace(/\s+/g, " ").trim();
@@ -37,9 +38,26 @@
       .find(form => form.querySelector("#prompt-textarea,textarea,[contenteditable='true']")) || null;
   }
 
-  function attachmentSurface() {
+  function attachmentRoots() {
     const root = composerRoot();
-    return root ? (root.parentElement || root) : null;
+    if (!root) return [];
+    const roots = [];
+    const seen = new Set();
+    let node = root;
+    for (let depth = 0; node && depth < 5; depth += 1, node = node.parentElement) {
+      if (!seen.has(node)) {
+        seen.add(node);
+        roots.push(node);
+      }
+    }
+    for (const selector of ["[data-testid*='composer']", "[class*='composer']"]) {
+      const match = root.closest(selector);
+      if (match && !seen.has(match)) {
+        seen.add(match);
+        roots.push(match);
+      }
+    }
+    return roots;
   }
 
   function fileExtension(name) {
@@ -62,18 +80,18 @@
 
   function inputScore(input, file) {
     if (input.disabled || !acceptsFile(input, file)) return -10000;
-    const id = String(input.id || "").toLowerCase();
+    const id = `${input.id || ""} ${input.name || ""} ${input.dataset?.testid || ""}`.toLowerCase();
     const accept = String(input.accept || "").toLowerCase();
     const mime = String(file.type || "").toLowerCase();
     const isImage = mime.startsWith("image/");
     const isVideo = mime.startsWith("video/");
     let score = 10;
     if (!accept || accept === "*/*") score += 100;
-    if (/upload-photos|upload-camera/.test(id)) {
+    if (/upload-photos|upload-camera|photo|image/.test(id)) {
       if (isImage || isVideo) score += 90;
       else score -= 500;
     }
-    if (/file|attachment|document/.test(id)) score += 90;
+    if (/file|attachment|document|upload/.test(id)) score += 90;
     if (isImage && accept.includes("image")) score += 50;
     if (isVideo && accept.includes("video")) score += 50;
     if (!isImage && !isVideo && /pdf|text|word|sheet|presentation|json|csv|\*/.test(accept)) score += 60;
@@ -94,18 +112,54 @@
     )) || null;
   }
 
-  function evidence() {
-    const root = attachmentSurface();
-    if (!root) return { chips: 0, media: 0, text: "" };
-    const chips = root.querySelectorAll("[data-testid*='attachment'],[data-testid*='file-chip'],[aria-label*='Remove file'],[aria-label*='删除文件']").length;
-    const media = [...root.querySelectorAll("img,video")].filter(node => {
+  const CHIP_SELECTOR = [
+    "[data-testid*='attachment']",
+    "[data-testid*='file-chip']",
+    "[data-testid*='file-preview']",
+    "[data-testid*='upload-preview']",
+    "[data-testid*='thumbnail']",
+    "[aria-label*='Remove file']",
+    "[aria-label*='Remove attachment']",
+    "[aria-label*='删除文件']",
+    "[aria-label*='移除附件']",
+    "[class*='attachment'][class*='preview']",
+    "[class*='file'][class*='preview']",
+  ].join(",");
+
+  function uniqueNodes(roots, selector) {
+    const result = [];
+    const seen = new Set();
+    for (const root of roots) {
+      for (const node of root.querySelectorAll(selector)) {
+        if (seen.has(node)) continue;
+        seen.add(node);
+        result.push(node);
+      }
+    }
+    return result;
+  }
+
+  function previewMedia(roots) {
+    const local = uniqueNodes(roots, "img,video").filter(node => {
       if (!visible(node)) return false;
       const r = node.getBoundingClientRect();
-      if (r.width < 48 || r.height < 48) return false;
-      const src = node.currentSrc || node.src || "";
-      return !/avatar|emoji|icon|logo/i.test(src);
-    }).length;
-    return { chips, media, text: textOf(root) };
+      if (r.width < 32 || r.height < 32) return false;
+      const src = String(node.currentSrc || node.src || "");
+      const label = `${node.alt || ""} ${node.getAttribute("aria-label") || ""}`;
+      return !/avatar|emoji|icon|logo/i.test(`${src} ${label}`);
+    });
+    const documentBlob = [...document.querySelectorAll("img[src^='blob:'],img[src^='data:'],video[src^='blob:'],video[src^='data:']")]
+      .filter(node => visible(node));
+    return [...new Set([...local, ...documentBlob])];
+  }
+
+  function evidence() {
+    const roots = attachmentRoots();
+    if (!roots.length) return { chips: 0, media: 0, text: "", roots: 0 };
+    const chips = uniqueNodes(roots, CHIP_SELECTOR).filter(visible);
+    const media = previewMedia(roots);
+    const text = roots.map(textOf).filter(Boolean).sort((a, b) => b.length - a.length)[0] || "";
+    return { chips: chips.length, media: media.length, text, roots: roots.length };
   }
 
   function fileVisible(file, before) {
@@ -113,7 +167,7 @@
     const name = String(file.name || "");
     const stem = name.replace(/\.[^.]+$/, "");
     if (name && now.text.includes(name)) return { ok: true, reason: "filename", now };
-    if (stem.length >= 8 && now.text.includes(stem)) return { ok: true, reason: "filename-stem", now };
+    if (stem.length >= 5 && now.text.includes(stem)) return { ok: true, reason: "filename-stem", now };
     if (now.chips > before.chips) return { ok: true, reason: "attachment-chip-count", now };
     if (/^(image|video)\//.test(String(file.type || "")) && now.media > before.media) return { ok: true, reason: "visual-preview-count", now };
     return { ok: false, reason: "", now };
@@ -141,12 +195,47 @@
   }
 
   function uploadErrorFor(name) {
+    const stem = String(name || "").replace(/\.[^.]+$/, "");
     const alerts = [...document.querySelectorAll("[role='alert'],[data-sonner-toast],[data-toast],[class*='toast']")];
-    for (const node of alerts.slice(-12)) {
+    for (const node of alerts.slice(-16)) {
+      if (!visible(node)) continue;
       const text = textOf(node);
-      if (/(无法上传|上传失败|failed to upload|couldn.?t upload|cannot upload)/i.test(text) && (!name || text.includes(name) || text.includes(name.replace(/\.[^.]+$/, "")))) return text.slice(0, 500);
+      if (/(无法上传|上传失败|文件处理失败|failed to upload|couldn.?t upload|cannot upload|upload failed)/i.test(text)
+          && (!name || text.includes(name) || (stem && text.includes(stem)))) return text.slice(0, 500);
     }
     return "";
+  }
+
+  function uploadBusy() {
+    const roots = attachmentRoots();
+    const nodes = uniqueNodes(roots, "[role='progressbar'],[data-testid*='upload-progress'],[aria-label*='Uploading'],[aria-label*='正在上传']");
+    if (nodes.some(visible)) return true;
+    const text = roots.map(textOf).join(" ");
+    return /(?:uploading|processing file|正在上传|正在处理文件)[…\.\s]*$/i.test(text.slice(-180));
+  }
+
+  function mutationTracker(file) {
+    const body = document.body || document.documentElement;
+    const name = String(file.name || "");
+    const stem = name.replace(/\.[^.]+$/, "");
+    const tracker = { total: 0, strong: 0, named: 0, media: 0, started_at_ms: Date.now() };
+    if (!body || typeof MutationObserver !== "function") return { tracker, stop() {} };
+    const inspect = node => {
+      if (!(node instanceof Element)) return;
+      tracker.total += 1;
+      const blobMedia = node.matches?.("img[src^='blob:'],img[src^='data:'],video[src^='blob:'],video[src^='data:']")
+        || node.querySelector?.("img[src^='blob:'],img[src^='data:'],video[src^='blob:'],video[src^='data:']");
+      if (blobMedia) tracker.media += 1;
+      const strong = node.matches?.(CHIP_SELECTOR) || node.querySelector?.(CHIP_SELECTOR);
+      if (strong) tracker.strong += 1;
+      const text = textOf(node);
+      if ((name && text.includes(name)) || (stem.length >= 5 && text.includes(stem))) tracker.named += 1;
+    };
+    const observer = new MutationObserver(records => {
+      for (const record of records) for (const node of record.addedNodes || []) inspect(node);
+    });
+    observer.observe(body, { childList: true, subtree: true });
+    return { tracker, stop: () => observer.disconnect() };
   }
 
   async function exposeInput(file) {
@@ -163,9 +252,15 @@
     throw new Error(`ChatGPT has no compatible file input for ${file.name} (${file.type || "unknown type"})`);
   }
 
+  function inputConsumed(input) {
+    if (!input?.isConnected) return true;
+    try { return !input.files || input.files.length === 0; } catch (_) { return false; }
+  }
+
   async function uploadOne(file) {
     const before = evidence();
     const input = await exposeInput(file);
+    const mutations = mutationTracker(file);
     const transfer = new DataTransfer();
     transfer.items.add(file);
     input.files = transfer.files;
@@ -175,32 +270,75 @@
     const deadline = Date.now() + 45000;
     let duplicate = false;
     let duplicateClosed = false;
-    while (Date.now() < deadline) {
-      const dialog = duplicateDialog();
-      if (dialog) {
-        duplicate = true;
-        duplicateClosed = await closeDuplicate(dialog) || duplicateClosed;
+    let consumedSince = 0;
+    let lastSeen = before;
+    try {
+      while (Date.now() < deadline) {
+        const dialog = duplicateDialog();
+        if (dialog) {
+          duplicate = true;
+          duplicateClosed = await closeDuplicate(dialog) || duplicateClosed;
+        }
+        const uploadError = uploadErrorFor(file.name);
+        if (uploadError) throw new Error(`${file.name}: ${uploadError}`);
+        const seen = fileVisible(file, before);
+        lastSeen = seen.now;
+        if (seen.ok) {
+          await delay(650);
+          const lateError = uploadErrorFor(file.name);
+          if (lateError) throw new Error(`${file.name}: ${lateError}`);
+          return {
+            file,
+            input_id: input.id || null,
+            attempts: 1,
+            verify_reason: seen.reason,
+            evidence_before: { chips: before.chips, media: before.media },
+            evidence_after: { chips: seen.now.chips, media: seen.now.media },
+            mutation_evidence: { ...mutations.tracker },
+            input_consumed: inputConsumed(input),
+            duplicate_upload_dialog: duplicate,
+            duplicate_dialog_auto_closed: duplicateClosed,
+            duplicate_upload_recovered: duplicate,
+          };
+        }
+
+        const consumed = inputConsumed(input);
+        const mutationEvidence = mutations.tracker.strong > 0 || mutations.tracker.named > 0 || mutations.tracker.media > 0;
+        if (consumed && mutationEvidence && !uploadBusy()) {
+          if (!consumedSince) consumedSince = Date.now();
+          if (Date.now() - consumedSince >= 1200) {
+            const lateError = uploadErrorFor(file.name);
+            if (lateError) throw new Error(`${file.name}: ${lateError}`);
+            const finalEvidence = evidence();
+            state.uploadEvents.push({ at: Date.now(), name: file.name, reason: "input-consumed-stable", mutations: { ...mutations.tracker } });
+            if (state.uploadEvents.length > 30) state.uploadEvents.splice(0, 15);
+            return {
+              file,
+              input_id: input.id || null,
+              attempts: 1,
+              verify_reason: "input-consumed-stable",
+              evidence_before: { chips: before.chips, media: before.media },
+              evidence_after: { chips: finalEvidence.chips, media: finalEvidence.media },
+              mutation_evidence: { ...mutations.tracker },
+              input_consumed: true,
+              duplicate_upload_dialog: duplicate,
+              duplicate_dialog_auto_closed: duplicateClosed,
+              duplicate_upload_recovered: duplicate,
+            };
+          }
+        } else {
+          consumedSince = 0;
+        }
+        await delay(160);
       }
-      const uploadError = uploadErrorFor(file.name);
-      if (uploadError) throw new Error(`${file.name}: ${uploadError}`);
-      const seen = fileVisible(file, before);
-      if (seen.ok) {
-        await delay(450);
-        return {
-          file,
-          input_id: input.id || null,
-          attempts: 1,
-          verify_reason: seen.reason,
-          evidence_before: { chips: before.chips, media: before.media },
-          evidence_after: { chips: seen.now.chips, media: seen.now.media },
-          duplicate_upload_dialog: duplicate,
-          duplicate_dialog_auto_closed: duplicateClosed,
-          duplicate_upload_recovered: duplicate,
-        };
-      }
-      await delay(180);
+    } finally {
+      mutations.stop();
     }
-    throw new Error(`${file.name}: ChatGPT did not confirm that the attachment finished uploading; visual preview and attachment-chip checks both failed`);
+    throw new Error(
+      `${file.name}: ChatGPT did not confirm that the attachment finished uploading; ` +
+      `chips ${before.chips}->${lastSeen.chips}, previews ${before.media}->${lastSeen.media}, ` +
+      `input_consumed=${inputConsumed(input)}, mutations=${mutations.tracker.strong}/${mutations.tracker.named}/${mutations.tracker.media}`
+    );
   }
 
   async function attach(specs = []) {
@@ -215,14 +353,22 @@
       await delay(250);
     }
     return {
-      attachments_controller: "multimodal-v4",
+      attachments_controller: CONTROLLER,
+      attachments_revision: 64,
       attachments_count: uploaded.length,
       attachment_names: uploaded.map(item => item.file.name),
       attachment_bytes: uploaded.reduce((sum, item) => sum + item.file.size, 0),
       attachment_prepare_ms: Math.round((performance.now() - started) * 10) / 10,
       attachment_input_ids: uploaded.map(item => item.input_id),
-      attachment_attempts: uploaded.map(item => ({ name: item.file.name, attempts: item.attempts, verify_reason: item.verify_reason })),
+      attachment_attempts: uploaded.map(item => ({
+        name: item.file.name,
+        attempts: item.attempts,
+        verify_reason: item.verify_reason,
+        input_consumed: item.input_consumed,
+        mutation_evidence: item.mutation_evidence,
+      })),
       attachment_verified: true,
+      attachment_verification_revision: 64,
       duplicate_upload_dialog: uploaded.some(item => item.duplicate_upload_dialog),
       duplicate_dialog_auto_closed: uploaded.some(item => item.duplicate_dialog_auto_closed),
       duplicate_upload_recovered: uploaded.some(item => item.duplicate_upload_recovered),
@@ -235,22 +381,22 @@
     return { removed: 0, requested: Array.isArray(names) ? names.length : 0 };
   }
 
-  globalThis[KEY] = { attach, cleanup, evidence, state };
+  globalThis[KEY] = { attach, cleanup, evidence, state, revision: 64, controller: CONTROLLER };
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === "chat2api.attach.ping.v4") {
-      sendResponse({ ok: true, controller: "multimodal-v4" });
+      sendResponse({ ok: true, controller: CONTROLLER, revision: 64 });
       return false;
     }
     if (message.type === "chat2api.attach.prepare.v4") {
       attach(message.attachments || [])
-        .then(data => sendResponse({ ok: true, data, controller: "multimodal-v4" }))
-        .catch(error => sendResponse({ ok: false, error: String(error?.message || error), controller: "multimodal-v4" }));
+        .then(data => sendResponse({ ok: true, data, controller: CONTROLLER, revision: 64 }))
+        .catch(error => sendResponse({ ok: false, error: String(error?.message || error), controller: CONTROLLER, revision: 64 }));
       return true;
     }
     if (message.type === "chat2api.attach.cleanup.v4") {
       cleanup(message.names || [])
-        .then(data => sendResponse({ ok: true, data, controller: "multimodal-v4" }))
-        .catch(error => sendResponse({ ok: false, error: String(error?.message || error), controller: "multimodal-v4" }));
+        .then(data => sendResponse({ ok: true, data, controller: CONTROLLER, revision: 64 }))
+        .catch(error => sendResponse({ ok: false, error: String(error?.message || error), controller: CONTROLLER, revision: 64 }));
       return true;
     }
     return false;
