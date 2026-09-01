@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.14"
+    assert manifest["version"] == "0.8.15"
     scripts = [
         script
         for item in manifest.get("content_scripts", [])
@@ -36,6 +36,7 @@ def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> No
     semantic = (ROOT / "chrome_extension" / "content_response_semantic_recovery_v51.js").read_text(encoding="utf-8")
     heartbeat = (ROOT / "chrome_extension" / "content_generation_liveness_v49.js").read_text(encoding="utf-8")
     network = (ROOT / "chrome_extension" / "content_network_stream_recovery_v55.js").read_text(encoding="utf-8")
+    network_main = (ROOT / "chrome_extension" / "network_stream_main_v55.js").read_text(encoding="utf-8")
 
     assert 'owner_revision: 53' in recovery
     assert 'page_progress_probe: "page-progress-v49"' in recovery
@@ -49,6 +50,8 @@ def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> No
     assert 'network_response_recovery: "sse-assistant-v55"' in network
     assert 'type: "chat.snapshot"' in network
     assert 'type: "chat.completed"' in network
+    assert 'const PARSER_REVISION = 62;' in network_main
+    assert 'data-chat2api-network-stream-parser' in network_main
     assert 'mode: "semantic-helper-only"' in semantic
     assert 'timer: null' in semantic
 
@@ -58,6 +61,7 @@ def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> No
 
     for path in (
         ROOT / "chrome_extension" / "content_response_stream_recovery_v49.js",
+        ROOT / "chrome_extension" / "network_stream_main_v55.js",
         ROOT / "chrome_extension" / "content_network_stream_recovery_v55.js",
         ROOT / "chrome_extension" / "content_response_semantic_recovery_v51.js",
         ROOT / "chrome_extension" / "content_generation_liveness_v49.js",
