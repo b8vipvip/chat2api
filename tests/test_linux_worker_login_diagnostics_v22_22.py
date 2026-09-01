@@ -105,19 +105,19 @@ def test_runtime_and_entry_publish_v22_23_diagnostics_patch_last():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
 
-    assert 'SERVER_RUNTIME_VERSION = "0.22.40"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.41"' in runtime
     for token in (
         "capacity-native-v37",
-        "bundle-0813",
+        "bundle-0814",
         "response-capture-v41",
         "request-hygiene-v42",
         "generation-liveness-v49",
         "response-stream-v49",
-        "page-progress-v49",
+        "network-response-v55",
         "same-api-concurrency-v25",
         "worker-initialize-v43",
         "worker-online-upgrade-v44",
-        "worker-routing-toggle-v46",
+        "worker-master-switch-v61",
         "request-lifecycle-v50",
         "route-quarantine-v50",
         "transient-retry-v50",
@@ -129,10 +129,11 @@ def test_runtime_and_entry_publish_v22_23_diagnostics_patch_last():
         "worker-key-capacity-queue-v57",
         "admin-render-owner-v58",
         "routed-dispatch-terminal-v58",
+        "worker-live-occupancy-v61",
     ):
         assert token in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.13"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.14"' in runtime
     assert 'from .linux_worker_diagnostics_patch import install_linux_worker_diagnostics_patch' in entry
     assert 'install_linux_worker_diagnostics_patch(app)' in entry
     assert entry.index('install_linux_worker_repair_command_patch(app)') < entry.index('install_linux_worker_diagnostics_patch(app)')
