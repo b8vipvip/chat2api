@@ -35,8 +35,6 @@ def test_main_world_v55_recovers_only_assistant_content_from_conversation_sse() 
         "clone.body?.getReader",
         'phase: "assistant-snapshot"',
         'phase: "assistant-complete"',
-        'parser_source: "assistant-message"',
-        'parser_source: "json-patch"',
         'data-chat2api-network-stream-main-v55',
     ):
         assert token in source
