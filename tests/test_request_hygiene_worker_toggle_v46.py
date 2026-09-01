@@ -198,7 +198,7 @@ def test_linux_worker_disconnect_is_not_persisted_when_window_control_fails(monk
     assert app.state.registry.api_key_routes["key_linux"] == "ext_linux"
 
 
-def test_worker_toggle_ui_reuses_legacy_button_as_master_connect_switch():
+def test_worker_toggle_ui_reuses_legacy_button_as_master_enable_switch():
     source = (ROOT / "app" / "admin_linux_worker_enable_v46.js").read_text(encoding="utf-8")
     for token in (
         'if (button.textContent !== nextText) button.textContent = nextText;',
@@ -206,7 +206,7 @@ def test_worker_toggle_ui_reuses_legacy_button_as_master_connect_switch():
         'method: "PUT"',
         '/enabled`,',
         "stopImmediatePropagation",
-        'const nextText = isEnabled ? "断开" : "连接";',
+        'const nextText = isEnabled ? "禁用" : "启用";',
         "只保留 1 个",
         "备用 ChatGPT 窗口",
     ):
@@ -283,7 +283,7 @@ def test_generation_liveness_is_diagnostic_only_and_hard_timeout_remains():
 def test_bundle_load_order_and_new_scripts_parse():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.8.14"
+    assert manifest["version"] == "0.8.15"
     assert scripts.index("content_request_v5.js") < scripts.index("content_request_lifecycle_v50.js") < scripts.index("content_request_hygiene_v42.js") < scripts.index("content_draft_ownership_v43.js")
     assert scripts.index("content_draft_ownership_v43.js") < scripts.index("content_draft_managed_recovery_v55.js") < scripts.index("content_response_capture_v41.js")
     assert scripts.index("content_response_stream_recovery_v49.js") < scripts.index("content_network_stream_recovery_v55.js") < scripts.index("content_response_semantic_recovery_v51.js") < scripts.index("content_transient_retry_v50.js") < scripts.index("content_request_stall_guard_v34.js") < scripts.index("content_generation_liveness_v49.js")
@@ -315,6 +315,7 @@ def test_bundle_load_order_and_new_scripts_parse():
         "chrome_extension/content_generation_liveness_v49.js",
         "app/admin_linux_worker_enable_v46.js",
         "app/admin_worker_runtime_v61.js",
+        "app/admin_worker_disable_authority_v62.js",
         "app/admin_linux_worker_chinese_progress.js",
     ):
         result = subprocess.run(
@@ -326,14 +327,16 @@ def test_bundle_load_order_and_new_scripts_parse():
         assert result.returncode == 0, f"{filename}\n{result.stderr}"
 
 
-def test_runtime_advertises_v61_master_switch_and_network_recovery_features():
+def test_runtime_advertises_v62_worker_authority_and_network_parser_features():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     patch = (ROOT / "app" / "linux_worker_enable_patch.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.41"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.14"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.42"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.15"' in runtime
     assert '"network_response_recovery": True' in runtime
+    assert '"network_response_parser_v62": True' in runtime
     assert '"linux_worker_master_switch": True' in runtime
+    assert '"linux_worker_disable_authority": True' in runtime
     assert '"worker_live_occupancy": True' in runtime
     assert '"managed_request_draft_recovery": True' in runtime
     assert '"visible_generation_liveness": True' in runtime
@@ -348,5 +351,7 @@ def test_runtime_advertises_v61_master_switch_and_network_recovery_features():
     assert 'RUNTIME_ASSET_PATH = "/assets/chat2api-worker-runtime-v61.js"' in patch
     assert '"worker.disable"' in patch
     assert "install_linux_worker_enable_patch(app)" in entry
+    assert "install_worker_disable_authority_patch(app)" in entry
     assert "install_model_capability_routing_patch(app)" in entry
     assert entry.index("install_linux_worker_upgrade_patch(app)") < entry.index("install_linux_worker_enable_patch(app)") < entry.index("install_model_capability_routing_patch(app)")
+    assert entry.rindex("install_worker_disable_authority_patch(app)") > entry.rindex("install_server_worker_sync_patch(app)")
