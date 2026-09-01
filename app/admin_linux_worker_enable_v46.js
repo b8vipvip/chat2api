@@ -1,7 +1,7 @@
 (() => {
   const KEY = "__CHAT2API_LINUX_WORKER_ENABLE_UI_V46__";
   if (globalThis[KEY]) return;
-  globalThis[KEY] = { version: 61, master_switch: true, freeze_guard: true };
+  globalThis[KEY] = { version: 62, master_switch: true, freeze_guard: true };
 
   const rowsEndpoint = "/api/admin/linux-workers";
   const enabledByWorker = new Map();
@@ -37,10 +37,10 @@
       if (!workerId) continue;
       const isEnabled = enabledByWorker.get(workerId) !== false;
       const nextEnabled = isEnabled ? "1" : "0";
-      const nextText = isEnabled ? "断开" : "连接";
+      const nextText = isEnabled ? "禁用" : "启用";
       const nextTitle = isEnabled
-        ? "收缩 chat2api 管理的 ChatGPT 窗口到 1 个，然后断开此 Worker 扩展连接"
-        : "重新允许此 Worker 扩展连接；连接成功后按备用窗口配置自动补齐";
+        ? "禁用此 Worker：先收缩 chat2api 管理的 ChatGPT 窗口到 1 个，再关闭扩展连接与请求路由"
+        : "启用此 Worker：重新允许扩展连接；连接成功后按备用窗口配置自动补齐";
 
       if (button.dataset.workerEnabled !== nextEnabled) button.dataset.workerEnabled = nextEnabled;
       if (button.textContent !== nextText) button.textContent = nextText;
@@ -74,7 +74,7 @@
 
   // Capture phase intentionally intercepts the legacy permanent revoke button
   // before admin_linux_workers.js can issue DELETE. The visual slot is reused as
-  // a reversible Worker master connection switch.
+  // a reversible Worker master enable/disable switch.
   document.addEventListener("click", event => {
     const button = event.target?.closest?.("button[data-revoke]");
     if (!button) return;
@@ -85,8 +85,8 @@
     const current = enabledByWorker.get(workerId) !== false;
     const next = !current;
     const question = next
-      ? "确定连接此 Worker？扩展恢复连接后，备用 ChatGPT 窗口会按当前并发/备用配置自动补齐。"
-      : "确定断开此 Worker？系统会先关闭 chat2api 管理的多余 ChatGPT 窗口并只保留 1 个，确认完成后再断开扩展连接。";
+      ? "确定启用此 Worker？扩展恢复连接后，请求路由与备用 ChatGPT 窗口会按当前配置自动恢复。"
+      : "确定禁用此 Worker？系统会先关闭 chat2api 管理的多余 ChatGPT 窗口并只保留 1 个，确认完成后再禁用扩展连接与请求路由。";
     if (!confirm(question)) return;
     button.disabled = true;
     api(`/api/admin/linux-workers/${encodeURIComponent(workerId)}/enabled`, {
