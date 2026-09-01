@@ -67,6 +67,7 @@ from .generation_backend_routing_patch import install_generation_backend_routing
 from .server_update_patch import install_server_update_patch
 from .server_worker_sync_lifespan_patch import install_server_worker_sync_patch
 from .worker_disable_authority_patch import install_worker_disable_authority_patch
+from .worker_presentation_v64_patch import install_worker_presentation_v64_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -205,3 +206,8 @@ install_server_worker_sync_patch(app)
 # Final authority boundary: no pairing/token/background sync path may revive a
 # Worker after an administrator disables it from either Worker management view.
 install_worker_disable_authority_patch(app)
+# Final presentation layer: resolve the pairing-code name onto Worker rows, expose
+# live occupancy as its own configurable column, and allow pairing-code renames.
+# It intentionally wraps the already-authoritative summaries without changing
+# routing/connection state.
+install_worker_presentation_v64_patch(app)
