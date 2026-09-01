@@ -13,8 +13,21 @@
     snapshots: 0,
     completions: 0,
     diagnostics: 0,
+    local_settles: 0,
   };
   globalThis[KEY] = state;
+
+  function requestIdentity() {
+    const active = globalThis[REQUEST_KEY]?.active || null;
+    if (active?.requestId && !active.cancelled) {
+      return { requestId: String(active.requestId), detached: false };
+    }
+    const ctx = globalThis[RESPONSE_KEY]?.request || null;
+    if (ctx?.requestId && !ctx.completed && !ctx.failed) {
+      return { requestId: String(ctx.requestId), detached: true };
+    }
+    return null;
+  }
 
   function activeRequestId() {
     return String(globalThis[REQUEST_KEY]?.active?.requestId || "");
@@ -28,8 +41,8 @@
 
   async function emit(event) {
     try {
-      await chrome.runtime.sendMessage({ type: "chat2api.event", event });
-      return true;
+      const result = await chrome.runtime.sendMessage({ type: "chat2api.event", event });
+      return result?.ok !== false;
     } catch (_) {
       return false;
     }
@@ -40,11 +53,12 @@
     if (!key) return null;
     let row = streams.get(key) || null;
     if (!row && create) {
-      const requestId = activeRequestId();
-      if (!requestId) return null;
+      const identity = requestIdentity();
+      if (!identity?.requestId) return null;
       row = {
-        requestId,
+        requestId: identity.requestId,
         streamId: key,
+        detached: identity.detached === true,
         lastText: "",
         responseSeen: false,
         eventStream: false,
@@ -70,6 +84,43 @@
     }
   }
 
+  function sealResponseOwner(requestId, text = "") {
+    const ctx = responseContext(requestId);
+    if (!ctx) return false;
+    const now = Date.now();
+    if (text) {
+      ctx.emittedText = text;
+      ctx.lastText = text;
+      ctx.changedAt = now;
+    }
+    ctx.lastMeaningfulProgressAt = now;
+    ctx.completed = true;
+    ctx.failed = false;
+    return true;
+  }
+
+  function settleLocalOwners(row, text) {
+    const controller = globalThis[REQUEST_KEY];
+    const active = controller?.active || null;
+    if (String(active?.requestId || "") === row.requestId) {
+      active.networkCompleted = true;
+      active.networkCompletedAt = Date.now();
+      active.networkCompletedText = String(text || "");
+      // request-v5 has no external-complete primitive. Cancellation is used only
+      // to stop its DOM monitor after the network owner has already delivered the
+      // terminal success. The broker keeps the first terminal future result.
+      active.cancelled = true;
+      state.local_settles += 1;
+    }
+
+    // v49 samples every 100 ms. If it sees the still-unwinding request after the
+    // first seal it may recreate a baseline because completed=true. Seal again
+    // after request-v5 has had time to leave monitor() and clear state.active.
+    sealResponseOwner(row.requestId, text);
+    setTimeout(() => sealResponseOwner(row.requestId, text), 300);
+    setTimeout(() => sealResponseOwner(row.requestId, text), 900);
+  }
+
   async function diagnostics(row, detail) {
     state.diagnostics += 1;
     await emit({
@@ -85,7 +136,7 @@
         network_stream_bytes: Number(detail.bytes ?? row.bytes ?? 0),
         network_stream_http_status: row.status,
         network_stream_event_stream: row.eventStream,
-        network_stream_controller_detached: !activeRequestId(),
+        network_stream_controller_detached: row.detached || !activeRequestId(),
         network_recovered_assistant_chars: String(row.lastText || "").length,
         generation_progress: `${row.streamId}:${Number(detail.sequence || 0)}:${Number(detail.bytes ?? row.bytes ?? 0)}`,
         generating_observed: true,
@@ -122,12 +173,10 @@
       streams.delete(row.streamId);
       return;
     }
-    completed.add(row.requestId);
-    state.completions += 1;
+
     row.lastText = text;
     touchOwner(row, text);
-    if (ctx) ctx.completed = true;
-    await emit({
+    const delivered = await emit({
       type: "chat.completed",
       request_id: row.requestId,
       text,
@@ -140,6 +189,12 @@
         network_completion_hint: Boolean(detail.completion_hint),
       },
     });
+    if (!delivered) return;
+
+    completed.add(row.requestId);
+    if (completed.size > 256) completed.clear();
+    state.completions += 1;
+    settleLocalOwners(row, text);
     streams.delete(row.streamId);
   }
 
@@ -194,10 +249,5 @@
     const detail = event.data;
     if (!detail || detail.source !== SOURCE) return;
     onNetwork(detail).catch(() => {});
-  });
-
-  chrome.runtime.onMessage.addListener(message => {
-    if (message?.type !== "chat2api.runtime.contract.v48") return false;
-    return false;
   });
 })();
