@@ -2,10 +2,11 @@
   const KEY = "__CHAT2API_CONTENT_RUNTIME_CONTRACT_V48__";
   if (globalThis[KEY]) return;
 
-  const REQUIRED_BUNDLE = "0.8.13";
+  const REQUIRED_BUNDLE = "0.8.14";
   const snapshot = () => {
     const marker = globalThis.__CHAT2API_CONTENT_BUNDLE_MARKER_V48__ || null;
     const responseOwner = globalThis.__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__ || null;
+    const networkRecovery = globalThis.__CHAT2API_NETWORK_STREAM_RECOVERY_V55__ || null;
     const semanticHelper = globalThis.__CHAT2API_RESPONSE_SEMANTIC_RECOVERY_V51__ || null;
     const modules = {
       request_v5: Boolean(globalThis.__CHAT2API_REQUEST_CONTENT_V5__),
@@ -17,8 +18,8 @@
       draft_managed_recovery_v55: Number(globalThis.__CHAT2API_DRAFT_MANAGED_RECOVERY_V55__?.version || 0) === 55,
       response_stream_recovery_v49: Number(responseOwner?.version || 0) === 49,
       response_single_owner_v53: Number(responseOwner?.owner_revision || 0) === 53 && Boolean(responseOwner?.timer),
-      network_stream_progress_v54: Number(globalThis.__CHAT2API_NETWORK_STREAM_PROGRESS_V54__?.version || 0) === 54,
-      network_stream_main_v54: document.documentElement?.getAttribute?.("data-chat2api-network-stream-main-v54") === "54",
+      network_stream_recovery_v55: Number(networkRecovery?.version || 0) === 55,
+      network_stream_main_v55: document.documentElement?.getAttribute?.("data-chat2api-network-stream-main-v55") === "55",
       response_semantic_recovery_v51: Number(semanticHelper?.version || 0) === 51 && semanticHelper?.timer == null,
       transient_retry_v50: Number(globalThis.__CHAT2API_TRANSIENT_RETRY_V50__?.version || 0) === 50,
       generation_liveness_v49: Number(globalThis.__CHAT2API_GENERATION_LIVENESS_V49__?.version || 0) === 49,
@@ -35,6 +36,7 @@
       modules_ok: modulesOk,
       response_observer_owner: responseOwner?.owner || null,
       response_observer_revision: Number(responseOwner?.owner_revision || 0),
+      network_response_recovery: Number(networkRecovery?.version || 0) === 55 ? "conversation-sse-v55" : null,
       semantic_helper_mode: semanticHelper?.mode || null,
       document_url: String(location.href || ""),
       document_ready_state: String(document.readyState || ""),
