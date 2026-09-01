@@ -12,59 +12,69 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_manifest_installs_main_world_stream_tap_before_isolated_progress_bridge() -> None:
+def test_manifest_installs_v55_main_world_stream_recovery_without_v54_double_wrap() -> None:
     manifest = json.loads(read("chrome_extension/manifest.json"))
     main = manifest["content_scripts"][0]
     isolated = manifest["content_scripts"][1]["js"]
+    assert manifest["version"] == "0.8.14"
     assert main["world"] == "MAIN"
     assert main["run_at"] == "document_start"
-    assert "network_stream_main_v54.js" in main["js"]
-    assert isolated.index("content_response_stream_recovery_v49.js") < isolated.index("content_network_stream_progress_v54.js")
-    assert isolated.index("content_network_stream_progress_v54.js") < isolated.index("content_response_semantic_recovery_v51.js")
+    assert "network_stream_main_v55.js" in main["js"]
+    assert "network_stream_main_v54.js" not in main["js"]
+    assert isolated.index("content_response_stream_recovery_v49.js") < isolated.index("content_network_stream_recovery_v55.js")
+    assert "content_network_stream_progress_v54.js" not in isolated
 
 
-def test_main_world_tap_observes_only_conversation_sse_without_exposing_payload() -> None:
-    source = read("chrome_extension/network_stream_main_v54.js")
+def test_main_world_v55_recovers_only_assistant_content_from_conversation_sse() -> None:
+    source = read("chrome_extension/network_stream_main_v55.js")
     for token in (
-        'meta.url.pathname === "/backend-api/f/conversation"',
-        'meta.method !== "POST"',
-        'contentType.includes("text/event-stream")',
+        'url.pathname === "/backend-api/f/conversation"',
+        'role !== "assistant"',
+        'type.includes("text/event-stream")',
         "response.clone()",
         "clone.body?.getReader",
-        'phase: "chunk"',
-        'phase: "done"',
-        'data-chat2api-network-stream-main-v54',
+        'phase: "assistant-snapshot"',
+        'phase: "assistant-complete"',
+        'parser_source: "assistant-message"',
+        'parser_source: "json-patch"',
+        'data-chat2api-network-stream-main-v55',
     ):
         assert token in source
-    for forbidden in ("Authorization", "Cookie", "request_body", "response_text", "payloadData"):
+    for forbidden in ("Authorization", "Cookie", "request_body", "prompt_text"):
         assert forbidden not in source
 
 
-def test_isolated_bridge_turns_real_sse_bytes_into_generation_activity_without_owning_terminal_error() -> None:
-    source = read("chrome_extension/content_network_stream_progress_v54.js")
-    for token in (
-        'RECOVERY_KEY = "__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__"',
-        "ctx.lastMeaningfulProgressAt = now",
-        'network_stream_observer: "conversation-fetch-v54"',
-        "diagnostics.generation_progress",
-        "network_stream_controller_detached",
-        "requestIdentity",
-    ):
-        assert token in source
-    assert 'type: "chat.error"' not in source
-
-
-def test_stream_progress_bridge_updates_detached_response_owner_in_vm() -> None:
+def test_main_world_v55_reconstructs_incremental_assistant_json_patch_in_vm() -> None:
     script = r'''
 import fs from "node:fs";
 import vm from "node:vm";
 import assert from "node:assert/strict";
+import {TextDecoder, TextEncoder} from "node:util";
 
-const source = fs.readFileSync("chrome_extension/content_network_stream_progress_v54.js", "utf8");
-let now = 1_000_000;
-const sent = [];
-let listener = null;
-const windowObject = { addEventListener: (type, fn) => { if (type === "message") listener = fn; } };
+const source = fs.readFileSync("chrome_extension/network_stream_main_v55.js", "utf8");
+const messages = [];
+const encoder = new TextEncoder();
+const chunks = [
+  encoder.encode('data: {"message":{"author":{"role":"assistant"},"content":{"parts":["Hel"]}}}\n\n'),
+  encoder.encode('data: {"o":"append","p":"/message/content/parts/0","v":"lo"}\n\n'),
+  encoder.encode('data: [DONE]\n\n'),
+];
+let cursor = 0;
+const reader = {
+  async read() {
+    if (cursor >= chunks.length) return {done:true, value:undefined};
+    return {done:false, value:chunks[cursor++]};
+  },
+  releaseLock() {},
+};
+const response = {
+  ok: true,
+  status: 200,
+  body: {},
+  headers: {get: name => name.toLowerCase() === "content-type" ? "text/event-stream" : ""},
+  clone: () => ({body: {getReader: () => reader}}),
+};
+const documentElement = {setAttribute() {}};
 const context = {
   console,
   Math,
@@ -72,46 +82,32 @@ const context = {
   Number,
   Boolean,
   Promise,
-  Date: { now: () => now },
-  window: windowObject,
-  chrome: { runtime: { sendMessage: async message => { sent.push(message); return {ok:true}; } } },
-  __CHAT2API_REQUEST_CONTENT_V5__: { active: { requestId: "req_stream", cancelled: false } },
-  __CHAT2API_RESPONSE_STREAM_RECOVERY_V49__: {
-    request: {
-      requestId: "req_stream",
-      generationSeenAt: 0,
-      lastMeaningfulProgressAt: 100,
-      completed: false,
-      failed: false,
-    },
-  },
+  Object,
+  Array,
+  Date,
+  URL,
+  TextDecoder,
+  setTimeout,
+  clearTimeout,
+  location: {href:"https://chatgpt.com/", origin:"https://chatgpt.com"},
+  document: {documentElement},
+  postMessage: message => messages.push(message),
+  fetch: async () => response,
 };
 context.globalThis = context;
 vm.createContext(context);
-vm.runInContext(source, context, {filename:"content_network_stream_progress_v54.js"});
-const bridge = context.__CHAT2API_NETWORK_STREAM_PROGRESS_V54__;
-assert.ok(bridge?.contract);
+vm.runInContext(source, context, {filename:"network_stream_main_v55.js"});
+await context.fetch("https://chatgpt.com/backend-api/f/conversation", {method:"POST"});
+for (let i = 0; i < 12; i++) await new Promise(resolve => setTimeout(resolve, 0));
 
-await bridge.contract.handle({phase:"response", stream_id:"s1", status:200, event_stream:true});
-now += 1_100;
-await bridge.contract.handle({phase:"chunk", stream_id:"s1", sequence:1, total_bytes:512, chunk_bytes:512});
-assert.equal(context.__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__.request.lastMeaningfulProgressAt, now);
-assert.ok(sent.some(item => item?.event?.diagnostics?.generation_progress));
-
-context.__CHAT2API_REQUEST_CONTENT_V5__.active = null;
-now += 1_100;
-await bridge.contract.handle({phase:"chunk", stream_id:"s1", sequence:2, total_bytes:1024, chunk_bytes:512});
-assert.equal(context.__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__.request.lastMeaningfulProgressAt, now);
-assert.ok(sent.some(item => item?.event?.diagnostics?.network_stream_controller_detached === true));
-
-const beforeError = context.__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__.request.lastMeaningfulProgressAt;
-now += 1_100;
-await bridge.contract.handle({phase:"error", stream_id:"s1", total_bytes:1024});
-assert.equal(context.__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__.request.lastMeaningfulProgressAt, beforeError);
-const errorEvent = sent.at(-1)?.event;
-assert.equal(errorEvent?.diagnostics?.network_stream_phase, "error");
-assert.equal(errorEvent?.diagnostics?.generation_progress, undefined);
-assert.ok(listener);
+const snapshots = messages.filter(item => item?.phase === "assistant-snapshot");
+const completed = messages.find(item => item?.phase === "assistant-complete");
+const done = messages.find(item => item?.phase === "done");
+assert.equal(snapshots.at(-1)?.text, "Hello");
+assert.equal(snapshots.at(-1)?.parser_source, "json-patch");
+assert.equal(completed?.text, "Hello");
+assert.equal(completed?.completion_hint, true);
+assert.equal(done?.assistant_chars, 5);
 '''
     result = subprocess.run(
         ["node", "--input-type=module", "-e", script],
@@ -123,19 +119,40 @@ assert.ok(listener);
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def test_runtime_preflight_requires_both_main_and_isolated_stream_modules() -> None:
+def test_isolated_v55_recovery_owns_success_and_stops_legacy_dom_watchdogs() -> None:
+    source = read("chrome_extension/content_network_stream_recovery_v55.js")
+    for token in (
+        'RESPONSE_KEY = "__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__"',
+        'network_response_recovery: "sse-assistant-v55"',
+        'type: "chat.snapshot"',
+        'type: "chat.completed"',
+        "active.networkCompleted = true",
+        "active.cancelled = true",
+        "sealResponseOwner(row.requestId, text)",
+        "setTimeout(() => sealResponseOwner(row.requestId, text), 300)",
+        "network_stream_controller_detached",
+    ):
+        assert token in source
+    assert 'type: "chat.error"' not in source
+
+
+def test_runtime_preflight_requires_v55_main_and_isolated_recovery_modules() -> None:
     bootstrap = read("chrome_extension/content_bootstrap.js")
     preflight = read("chrome_extension/background_runtime_preflight_v48.js")
     contract = read("chrome_extension/content_runtime_contract_v48.js")
+    marker = read("chrome_extension/content_bundle_marker_v48.js")
     assert 'world: "MAIN"' in bootstrap
-    assert '"network_stream_main_v54.js"' in bootstrap
-    assert '"content_network_stream_progress_v54.js"' in bootstrap
-    assert 'const MAIN_FILES = ["network_stream_main_v54.js"]' in preflight
-    assert 'world: "MAIN"' in preflight
-    assert '"content_network_stream_progress_v54.js"' in preflight
-    assert "network_stream_progress_v54" in contract
-    assert "network_stream_main_v54" in contract
-    assert "data-chat2api-network-stream-main-v54" in contract
+    assert '"network_stream_main_v55.js"' in bootstrap
+    assert '"content_network_stream_recovery_v55.js"' in bootstrap
+    assert 'const REQUIRED_BUNDLE = "0.8.14"' in preflight
+    assert 'const MAIN_FILES = ["network_stream_main_v55.js"]' in preflight
+    assert '"content_network_stream_recovery_v55.js"' in preflight
+    assert "network_stream_recovery_v55" in contract
+    assert "network_stream_main_v55" in contract
+    assert "data-chat2api-network-stream-main-v55" in contract
+    assert 'bundle: "0.8.14"' in marker
+    assert "network_stream_main_v54.js" not in preflight
+    assert "content_network_stream_progress_v54.js" not in preflight
 
 
 def test_linux_worker_bundle_actually_packages_generation_probe() -> None:
