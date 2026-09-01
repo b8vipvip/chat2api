@@ -2,15 +2,15 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V48__";
   if (globalThis[KEY]) return;
 
-  const REQUIRED_BUNDLE = "0.8.13";
-  const MAIN_FILES = ["network_stream_main_v54.js"];
+  const REQUIRED_BUNDLE = "0.8.14";
+  const MAIN_FILES = ["network_stream_main_v55.js"];
   const OVERLAY_FILES = [
     "content_rate_limit_guard_v52.js",
     "content_tool_isolation_v48.js",
     "content_request_lifecycle_v50.js",
     "content_draft_managed_recovery_v55.js",
     "content_response_stream_recovery_v49.js",
-    "content_network_stream_progress_v54.js",
+    "content_network_stream_recovery_v55.js",
     "content_response_semantic_recovery_v51.js",
     "content_transient_retry_v50.js",
     "content_generation_liveness_v49.js",

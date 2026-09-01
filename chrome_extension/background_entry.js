@@ -44,4 +44,5 @@ importScripts(
   "background_capacity_control_v35.js",
   "background_capacity_control_v36.js",
   "background_capacity_capability_v37.js",
+  "background_worker_master_switch_v61.js",
 );

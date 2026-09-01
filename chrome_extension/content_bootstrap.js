@@ -7,7 +7,7 @@
       await chrome.scripting.executeScript({
         target: { tabId },
         world: "MAIN",
-        files: ["network_stream_main_v54.js"],
+        files: ["network_stream_main_v55.js"],
       });
       await chrome.scripting.executeScript({
         target: { tabId },
@@ -35,7 +35,7 @@
           "content_draft_managed_recovery_v55.js",
           "content_response_capture_v41.js",
           "content_response_stream_recovery_v49.js",
-          "content_network_stream_progress_v54.js",
+          "content_network_stream_recovery_v55.js",
           "content_request_stall_guard_v34.js",
           "content_generation_liveness_v49.js",
           "content_request_perf_v21.js",

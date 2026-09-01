@@ -10,13 +10,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.13"
+    assert manifest["version"] == "0.8.14"
     scripts = [
         script
         for item in manifest.get("content_scripts", [])
         for script in item.get("js", [])
     ]
     assert "content_response_stream_recovery_v49.js" in scripts
+    assert "content_network_stream_recovery_v55.js" in scripts
     assert "content_response_semantic_recovery_v51.js" in scripts
     assert "content_generation_liveness_v49.js" in scripts
     assert "content_request_lifecycle_v50.js" in scripts
@@ -26,6 +27,7 @@ def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> No
 
     bootstrap = (ROOT / "chrome_extension" / "content_bootstrap.js").read_text(encoding="utf-8")
     assert '"content_response_stream_recovery_v49.js"' in bootstrap
+    assert '"content_network_stream_recovery_v55.js"' in bootstrap
     assert '"content_generation_liveness_v49.js"' in bootstrap
     assert '"content_response_stream_recovery_v48.js"' not in bootstrap
     assert '"content_generation_liveness_v42.js"' not in bootstrap
@@ -33,6 +35,7 @@ def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> No
     recovery = (ROOT / "chrome_extension" / "content_response_stream_recovery_v49.js").read_text(encoding="utf-8")
     semantic = (ROOT / "chrome_extension" / "content_response_semantic_recovery_v51.js").read_text(encoding="utf-8")
     heartbeat = (ROOT / "chrome_extension" / "content_generation_liveness_v49.js").read_text(encoding="utf-8")
+    network = (ROOT / "chrome_extension" / "content_network_stream_recovery_v55.js").read_text(encoding="utf-8")
 
     assert 'owner_revision: 53' in recovery
     assert 'page_progress_probe: "page-progress-v49"' in recovery
@@ -43,6 +46,9 @@ def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> No
     assert 'type: "chat.snapshot"' in recovery
     assert 'type: "chat.completed"' in recovery
     assert 'type: "chat.error"' in recovery
+    assert 'network_response_recovery: "sse-assistant-v55"' in network
+    assert 'type: "chat.snapshot"' in network
+    assert 'type: "chat.completed"' in network
     assert 'mode: "semantic-helper-only"' in semantic
     assert 'timer: null' in semantic
 
@@ -52,6 +58,7 @@ def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> No
 
     for path in (
         ROOT / "chrome_extension" / "content_response_stream_recovery_v49.js",
+        ROOT / "chrome_extension" / "content_network_stream_recovery_v55.js",
         ROOT / "chrome_extension" / "content_response_semantic_recovery_v51.js",
         ROOT / "chrome_extension" / "content_generation_liveness_v49.js",
         ROOT / "chrome_extension" / "content_request_lifecycle_v50.js",

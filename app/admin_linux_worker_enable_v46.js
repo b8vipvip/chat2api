@@ -1,7 +1,7 @@
 (() => {
   const KEY = "__CHAT2API_LINUX_WORKER_ENABLE_UI_V46__";
   if (globalThis[KEY]) return;
-  globalThis[KEY] = { version: 46, freeze_guard: true };
+  globalThis[KEY] = { version: 61, master_switch: true, freeze_guard: true };
 
   const rowsEndpoint = "/api/admin/linux-workers";
   const enabledByWorker = new Map();
@@ -37,10 +37,10 @@
       if (!workerId) continue;
       const isEnabled = enabledByWorker.get(workerId) !== false;
       const nextEnabled = isEnabled ? "1" : "0";
-      const nextText = isEnabled ? "禁用" : "启用";
+      const nextText = isEnabled ? "断开" : "连接";
       const nextTitle = isEnabled
-        ? "停止把请求路由到此 Worker；Agent/Bridge 保持运行"
-        : "重新允许请求路由到此 Worker；不需要重启 Agent/Bridge";
+        ? "收缩 chat2api 管理的 ChatGPT 窗口到 1 个，然后断开此 Worker 扩展连接"
+        : "重新允许此 Worker 扩展连接；连接成功后按备用窗口配置自动补齐";
 
       if (button.dataset.workerEnabled !== nextEnabled) button.dataset.workerEnabled = nextEnabled;
       if (button.textContent !== nextText) button.textContent = nextText;
@@ -73,8 +73,8 @@
   }
 
   // Capture phase intentionally intercepts the legacy permanent revoke button
-  // before admin_linux_workers.js can issue DELETE. The visual slot is reused,
-  // but the operation is now a reversible routing-only toggle.
+  // before admin_linux_workers.js can issue DELETE. The visual slot is reused as
+  // a reversible Worker master connection switch.
   document.addEventListener("click", event => {
     const button = event.target?.closest?.("button[data-revoke]");
     if (!button) return;
@@ -85,8 +85,8 @@
     const current = enabledByWorker.get(workerId) !== false;
     const next = !current;
     const question = next
-      ? "确定启用此 Worker？启用后新的 API 请求可以再次路由到它。"
-      : "确定禁用此 Worker？只停止请求路由，Worker Agent、Chrome 与扩展连接不会被关闭。";
+      ? "确定连接此 Worker？扩展恢复连接后，备用 ChatGPT 窗口会按当前并发/备用配置自动补齐。"
+      : "确定断开此 Worker？系统会先关闭 chat2api 管理的多余 ChatGPT 窗口并只保留 1 个，确认完成后再断开扩展连接。";
     if (!confirm(question)) return;
     button.disabled = true;
     api(`/api/admin/linux-workers/${encodeURIComponent(workerId)}/enabled`, {
@@ -101,12 +101,8 @@
     });
   }, true);
 
-  // The previous implementation observed document.documentElement with
-  // subtree=true while paint() unconditionally assigned button.textContent.
-  // That text replacement generated another childList mutation and could form
-  // a self-sustaining MutationObserver loop as soon as Worker rows appeared.
-  // Observe only direct tbody row replacements; mutations performed inside a
-  // button are therefore outside the observer boundary.
+  // Observe only direct tbody row replacements. Button text changes must not
+  // retrigger the observer and recreate the historical console freeze loop.
   const workerRows = document.getElementById("linuxWorkerRows");
   if (workerRows) {
     rowsObserver = new MutationObserver(() => paint());
@@ -122,9 +118,6 @@
   linuxNav?.addEventListener("click", () => setTimeout(refreshFromOwner, 0));
   document.getElementById("refreshLinuxWorkers")?.addEventListener("click", () => setTimeout(refreshFromOwner, 0));
 
-  // PR #145 makes the base Worker view the normal list-transport owner. Keep a
-  // slow compatibility refresh only for older/unpatched pages where that owner
-  // is absent; do not create another 1-second polling loop.
   setInterval(() => {
     if (!linuxSection?.classList.contains("active")) return;
     if (typeof globalThis.__CHAT2API_LINUX_WORKER_REFRESH__ === "function") {
