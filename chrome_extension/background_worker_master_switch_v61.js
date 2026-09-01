@@ -91,6 +91,32 @@
     return null;
   }
 
+  async function markDisabling() {
+    await chrome.storage.local.set({
+      [DISABLED_STORAGE_KEY]: true,
+      socketState: "disconnecting",
+      chat2apiWorkerMasterSwitchV61: {
+        enabled: false,
+        phase: "collapsing-windows",
+        observed_at_ms: Date.now(),
+      },
+    }).catch(() => {});
+  }
+
+  async function restoreAfterFailure(error = "") {
+    const connected = typeof socketReady === "function" && socketReady();
+    await chrome.storage.local.set({
+      [DISABLED_STORAGE_KEY]: false,
+      socketState: connected ? "connected" : "disconnected",
+      chat2apiWorkerMasterSwitchV61: {
+        enabled: connected,
+        phase: "disable-failed",
+        error: String(error || ""),
+        observed_at_ms: Date.now(),
+      },
+    }).catch(() => {});
+  }
+
   async function collapseManagedWindows(keepCount = 1) {
     const ids = await managedWindowIds();
     const live = await liveWindowIds();
@@ -105,6 +131,10 @@
       keepIds.add(id);
     }
 
+    // Stop Reserve Pool eligibility before removing any windows. Otherwise its
+    // short reconcile timer can recreate a spare during the disable handshake.
+    await markDisabling();
+
     const closed = [];
     for (const id of managedLive) {
       if (keepIds.has(id)) continue;
@@ -118,6 +148,7 @@
       [DISABLED_STORAGE_KEY]: true,
       chat2apiWorkerMasterSwitchV61: {
         enabled: false,
+        phase: "collapsed",
         keep_windows: keepCount,
         kept_window_ids: [...keepIds],
         closed_window_ids: closed,
@@ -135,6 +166,8 @@
       keep_windows: keepCount,
       kept_window_ids: [...keepIds],
       closed_window_ids: closed,
+      managed_windows_before: managedLive.length,
+      managed_windows_after: keepIds.size,
       window_snapshot: snapshot || {},
       master_enabled: false,
     };
@@ -174,7 +207,7 @@
 
   async function handleDisable(message) {
     try {
-      const keep = 1;
+      const keep = Math.max(1, Math.floor(Number(message?.payload?.keep_windows || 1)));
       const data = await collapseManagedWindows(keep);
       const result = await emitResult(message, true, data);
       setTimeout(() => {
@@ -186,7 +219,9 @@
       }, 180);
       return result;
     } catch (error) {
-      return emitResult(message, false, {}, String(error?.message || error));
+      const messageText = String(error?.message || error);
+      await restoreAfterFailure(messageText);
+      return emitResult(message, false, {}, messageText);
     }
   }
 
@@ -211,6 +246,7 @@
         [DISABLED_STORAGE_KEY]: false,
         chat2apiWorkerMasterSwitchV61: {
           enabled: true,
+          phase: "connected",
           resumed_at_ms: Date.now(),
         },
       }).catch(() => {});
