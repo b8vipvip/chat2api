@@ -184,18 +184,18 @@ def test_rate_limit_guard_becomes_immediate_terminal_error_and_admission_cooldow
         assert token in content
 
 
-def test_release_contract_is_v02242_and_worker_bundle_0815() -> None:
+def test_release_contract_is_v02243_and_worker_bundle_0816() -> None:
     runtime = read("app/runtime_contract.py")
     manifest = read("chrome_extension/manifest.json")
     marker = read("chrome_extension/content_bundle_marker_v48.js")
     preflight = read("chrome_extension/background_runtime_preflight_v48.js")
     contract = read("chrome_extension/content_runtime_contract_v48.js")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.42"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.15"' in runtime
-    assert '"version": "0.8.15"' in manifest
-    assert 'bundle: "0.8.15"' in marker
-    assert 'REQUIRED_BUNDLE = "0.8.15"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.15"' in contract
+    assert 'SERVER_RUNTIME_VERSION = "0.22.43"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.16"' in runtime
+    assert '"version": "0.8.16"' in manifest
+    assert 'bundle: "0.8.16"' in marker
+    assert 'REQUIRED_BUNDLE = "0.8.16"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.16"' in contract
     assert '"worker_key_capacity_fifo_queue": True' in runtime
     assert '"active_rate_limit_terminal_error": True' in runtime
     assert '"routed_dispatch_terminal_error": True' in runtime
