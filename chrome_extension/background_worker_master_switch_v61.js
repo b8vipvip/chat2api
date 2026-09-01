@@ -7,8 +7,10 @@
   const ROUTER_KEY = "__CHAT2API_CONVERSATION_ROUTING_V1__";
   const WARM_KEY = "__CHAT2API_CONVERSATION_WARM_POOL_V2__";
   const DISABLED_STORAGE_KEY = "chat2apiWorkerMasterDisabledV61";
+  const AWAIT_DISCONNECT_KEY = "chat2apiWorkerMasterAwaitDisconnectV62";
   const state = {
     version: 61,
+    revision: 62,
     installed: false,
     lastResult: null,
   };
@@ -94,10 +96,12 @@
   async function markDisabling() {
     await chrome.storage.local.set({
       [DISABLED_STORAGE_KEY]: true,
+      [AWAIT_DISCONNECT_KEY]: true,
       socketState: "disconnecting",
       chat2apiWorkerMasterSwitchV61: {
         enabled: false,
         phase: "collapsing-windows",
+        revision: 62,
         observed_at_ms: Date.now(),
       },
     }).catch(() => {});
@@ -107,10 +111,12 @@
     const connected = typeof socketReady === "function" && socketReady();
     await chrome.storage.local.set({
       [DISABLED_STORAGE_KEY]: false,
+      [AWAIT_DISCONNECT_KEY]: false,
       socketState: connected ? "connected" : "disconnected",
       chat2apiWorkerMasterSwitchV61: {
         enabled: connected,
         phase: "disable-failed",
+        revision: 62,
         error: String(error || ""),
         observed_at_ms: Date.now(),
       },
@@ -146,9 +152,11 @@
 
     await chrome.storage.local.set({
       [DISABLED_STORAGE_KEY]: true,
+      [AWAIT_DISCONNECT_KEY]: true,
       chat2apiWorkerMasterSwitchV61: {
         enabled: false,
         phase: "collapsed",
+        revision: 62,
         keep_windows: keepCount,
         kept_window_ids: [...keepIds],
         closed_window_ids: closed,
@@ -176,6 +184,7 @@
   async function emitResult(message, ok, data = {}, error = "") {
     const result = {
       version: 61,
+      revision: 62,
       control_id: String(message?.control_id || ""),
       action: String(message?.action || ""),
       ok: Boolean(ok),
@@ -195,9 +204,10 @@
       metadata: {
         extension_control_version: 36,
         extension_control_ready: true,
-        extension_control_transport: "worker-master-switch-v61",
+        extension_control_transport: "worker-master-switch-v61-r62",
         extension_control_result: result,
         worker_master_switch_version: 61,
+        worker_master_switch_revision: 62,
         worker_master_enabled: !(result.action === "worker.disable" && result.ok),
       },
     });
@@ -240,15 +250,52 @@
   }
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
-    if (areaName !== "local") return;
-    if (changes.socketState?.newValue === "connected") {
-      chrome.storage.local.set({
+    if (areaName !== "local" || !changes.socketState) return;
+    const nextState = String(changes.socketState.newValue || "");
+    const previousState = String(changes.socketState.oldValue || "");
+
+    if (nextState === "disconnected") {
+      chrome.storage.local.get({
         [DISABLED_STORAGE_KEY]: false,
-        chat2apiWorkerMasterSwitchV61: {
-          enabled: true,
-          phase: "connected",
-          resumed_at_ms: Date.now(),
-        },
+        [AWAIT_DISCONNECT_KEY]: false,
+      }).then(stored => {
+        if (!stored[DISABLED_STORAGE_KEY]) return;
+        return chrome.storage.local.set({
+          [DISABLED_STORAGE_KEY]: true,
+          [AWAIT_DISCONNECT_KEY]: false,
+          chat2apiWorkerMasterSwitchV61: {
+            enabled: false,
+            phase: "disabled",
+            revision: 62,
+            disconnected_at_ms: Date.now(),
+          },
+        });
+      }).catch(() => {});
+      return;
+    }
+
+    if (nextState === "connected") {
+      chrome.storage.local.get({
+        [DISABLED_STORAGE_KEY]: false,
+        [AWAIT_DISCONNECT_KEY]: false,
+      }).then(stored => {
+        // During worker.disable the existing socket may briefly publish another
+        // connected heartbeat before its close frame wins the race. Never let
+        // that transient state erase the administrator's disabled flag. A real
+        // re-enable has to pass through a full disconnected state first.
+        if (stored[DISABLED_STORAGE_KEY] && stored[AWAIT_DISCONNECT_KEY] && previousState !== "disconnected") {
+          return;
+        }
+        return chrome.storage.local.set({
+          [DISABLED_STORAGE_KEY]: false,
+          [AWAIT_DISCONNECT_KEY]: false,
+          chat2apiWorkerMasterSwitchV61: {
+            enabled: true,
+            phase: "connected",
+            revision: 62,
+            resumed_at_ms: Date.now(),
+          },
+        });
       }).catch(() => {});
     }
   });
