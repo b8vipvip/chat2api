@@ -67,6 +67,7 @@ class Registry:
         self.sockets = {"ext_linux": object(), "ext_windows": object()}
         self.api_key_routes = {"key_linux": "ext_linux", "key_windows": "ext_windows"}
         self.saved = 0
+        self.connection_changes: list[tuple[str, bool]] = []
 
     async def save(self) -> None:
         self.saved += 1
@@ -74,6 +75,7 @@ class Registry:
     async def set_connection_enabled(self, client_id: str, enabled: bool):
         item = self.clients[client_id]
         item.connection_enabled = bool(enabled)
+        self.connection_changes.append((client_id, bool(enabled)))
         if not enabled:
             self.sockets.pop(client_id, None)
         return item
@@ -175,6 +177,35 @@ def test_background_registry_save_cannot_revive_disabled_linux_worker(monkeypatc
     assert row["online"] is False
 
 
+def test_background_registry_set_true_cannot_revive_disabled_linux_worker(monkeypatch) -> None:
+    app, _ = make_app(monkeypatch)
+    authority = app.state.worker_disable_authority
+
+    asyncio.run(authority["disable_client"]("ext_linux"))
+    worker = app.state.linux_workers.data["workers"]["wrk_linux"]
+    assert worker["enabled"] is False
+    assert app.state.registry.clients["ext_linux"].connection_enabled is False
+
+    # Some historical reconciliation/control-plane paths call the public setter
+    # rather than mutating the dataclass followed by save(). That call must not be
+    # interpreted as administrator Enable intent.
+    app.state.registry.sockets["ext_linux"] = object()
+    result = asyncio.run(app.state.registry.set_connection_enabled("ext_linux", True))
+
+    assert result.connection_enabled is False
+    assert worker["enabled"] is False
+    assert app.state.registry.clients["ext_linux"].connection_enabled is False
+    assert ("ext_linux", True) not in app.state.registry.connection_changes
+
+    # The explicit authority flow persists Worker enabled first, then the exact
+    # same guarded registry setter is allowed to reopen transport.
+    enabled = asyncio.run(authority["enable_client"]("ext_linux"))
+    assert enabled["enabled"] is True
+    assert worker["enabled"] is True
+    assert app.state.registry.clients["ext_linux"].connection_enabled is True
+    assert ("ext_linux", True) in app.state.registry.connection_changes
+
+
 def test_offline_worker_can_still_be_disabled_persistently(monkeypatch) -> None:
     app, control_calls = make_app(monkeypatch)
     app.state.registry.sockets.pop("ext_linux", None)
@@ -212,11 +243,13 @@ def test_authority_ui_uses_enable_disable_terms_without_global_dom_observer() ->
     source = (root / "app" / "admin_worker_disable_authority_v62.js").read_text(encoding="utf-8")
     linux_source = (root / "app" / "admin_linux_worker_enable_v46.js").read_text(encoding="utf-8")
     entry = (root / "app" / "entry.py").read_text(encoding="utf-8")
+    patch = (root / "app" / "worker_disable_authority_patch.py").read_text(encoding="utf-8")
 
     for token in ("禁用", "启用", "已禁用", "已启用"):
         assert token in source
     assert 'observer.observe(document.documentElement' not in source
     assert 'observer.observe(body, { childList: true, subtree: false })' in source
     assert 'const nextText = isEnabled ? "禁用" : "启用";' in linux_source
+    assert "Do not treat every registry setter call as administrator intent" in patch
     assert "install_worker_disable_authority_patch(app)" in entry
     assert entry.rindex("install_worker_disable_authority_patch(app)") > entry.rindex("install_server_worker_sync_patch(app)")
