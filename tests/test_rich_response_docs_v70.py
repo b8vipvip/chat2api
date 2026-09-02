@@ -18,7 +18,9 @@ def test_rich_response_docs_describe_openai_compatible_contract() -> None:
     assert "不需要 chat2api 专用请求参数" in RICH_RESPONSE_DOC_HTML
 
 
-def test_entry_installs_rich_response_docs_as_final_console_layer() -> None:
+def test_entry_installs_rich_response_docs_before_final_prompt_boundary() -> None:
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert "from .rich_response_docs_patch import install_rich_response_docs_patch" in entry
-    assert entry.rstrip().endswith("install_rich_response_docs_patch(app)")
+    assert "from .prompt_config_v72_patch import install_prompt_config_v72_patch" in entry
+    assert entry.index("install_rich_response_docs_patch(app)") < entry.index("install_prompt_config_v72_patch(app)")
+    assert entry.rstrip().endswith("install_prompt_config_v72_patch(app)")
