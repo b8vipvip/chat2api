@@ -108,8 +108,9 @@ def test_api_key_editor_asset_is_injected_and_uses_chinese_permissions(tmp_path:
 
     for label in ("管理员", "对话", "模型列表", "文件", "图片生成", "音频/语音"):
         assert label in script
-    assert 'data-api-key-edit="name"' in script
-    assert 'data-api-key-edit="scopes"' in script
+    assert 'data-api-key-edit="${action}"' in script
+    assert 'iconButton("name", row.key_id, "修改令牌名称")' in script
+    assert 'iconButton("scopes", row.key_id, "编辑权限")' in script
     assert "修改令牌名称" in script
     assert "编辑权限" in script
     assert 'usable ? "可用" : "停用"' in script
