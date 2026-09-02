@@ -6,11 +6,12 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 
-from .prompt_config import PromptConfigStore
+from .prompt_config import PromptConfigStore, SYSTEM_DEFAULT_PREFIX
 
 
-PATCH_ID = "prompt-config-v72"
+PATCH_ID = "prompt-config-v75"
 ASSET_PATH = "/assets/chat2api-prompt-config-v72.js"
+ASSET_V75_PATH = "/assets/chat2api-prompt-config-v75.js"
 PROMPT_THEME_MARKER = "data-chat2api-prompt-theme-v74"
 PROMPT_THEME_V74 = f'''<style {PROMPT_THEME_MARKER}="1">
 #pcSystemDefaultPrefix {{
@@ -29,6 +30,28 @@ PROMPT_THEME_V74 = f'''<style {PROMPT_THEME_MARKER}="1">
   background: #315d9b;
   color: #ffffff;
   -webkit-text-fill-color: #ffffff;
+}}
+#view-prompt-config .pc-inline-actions {{
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin: 8px 0 4px;
+}}
+#view-prompt-config button {{
+  border: 1px solid #2f7d5b !important;
+  background: #154634 !important;
+  color: #f1fff8 !important;
+  border-radius: 9px;
+  padding: 8px 12px;
+  cursor: pointer;
+}}
+#view-prompt-config button:hover {{
+  background: #1b5b43 !important;
+  border-color: #39d6a1 !important;
+}}
+#view-prompt-config button:disabled {{
+  opacity: .62;
+  cursor: wait;
 }}
 </style>'''
 
@@ -58,12 +81,30 @@ def install_prompt_config_v72_patch(app: FastAPI) -> FastAPI:
     main_module.build_prompt = configured_build_prompt
 
     # Capture the exact chat.request prompt at the final server->Worker boundary.
-    # This is intentionally outside build_prompt so request history records what
-    # was actually dispatched, after prefix/suffix/redaction processing.
+    # Also mark the prompt policy as server-owned. New Workers use this marker to
+    # respect an administrator-edited/empty system prompt instead of re-injecting
+    # the historical compatibility policy. Old servers still get Worker fallback.
     base_send = registry.send
 
     async def send_with_prompt_audit(client_id: str, payload: dict[str, Any]) -> None:
         if isinstance(payload, dict) and payload.get("type") == "chat.request":
+            system_default_prefix = str(store.config.get("system_default_prefix") or "")
+            options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
+            diagnostics = (
+                options.get("chat2api_diagnostics")
+                if isinstance(options.get("chat2api_diagnostics"), dict)
+                else {}
+            )
+            payload["options"] = {
+                **options,
+                "chat2api_diagnostics": {
+                    **diagnostics,
+                    "server_prompt_policy_managed": True,
+                    "server_system_default_prefix_chars": len(system_default_prefix),
+                    "server_system_default_prefix_recommended": system_default_prefix == SYSTEM_DEFAULT_PREFIX,
+                    "prompt_config_revision": int(store.config.get("revision") or 1),
+                },
+            }
             request_id = str(payload.get("request_id") or "").strip()
             prompt = str(payload.get("prompt") or "")
             if request_id and prompt and bool(store.config.get("audit_final_prompt", True)):
@@ -132,11 +173,18 @@ def install_prompt_config_v72_patch(app: FastAPI) -> FastAPI:
             headers={"Cache-Control": "no-store"},
         )
 
+    @app.get(ASSET_V75_PATH)
+    async def prompt_config_v75_asset() -> Response:
+        path = Path(__file__).with_name("admin_prompt_config_v75.js")
+        return Response(
+            path.read_text(encoding="utf-8"),
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-store"},
+        )
+
     # app.main imports the admin_response function, not ADMIN_HTML itself. Mutate
     # the canonical app.admin module so every future /admin or /developers response
-    # produced by admin_response() includes the new asset and a theme-safe readonly
-    # system-prefix field. The v73 JS had a light fallback color for an undefined
-    # CSS variable, which produced white-on-white text in the dark console.
+    # produced by admin_response() includes the prompt assets and theme-safe fields.
     from . import admin as admin_module
 
     if PROMPT_THEME_MARKER not in admin_module.ADMIN_HTML:
@@ -145,6 +193,10 @@ def install_prompt_config_v72_patch(app: FastAPI) -> FastAPI:
     marker = f'<script src="{ASSET_PATH}"></script>'
     if marker not in admin_module.ADMIN_HTML:
         admin_module.ADMIN_HTML = admin_module.ADMIN_HTML.replace("</body>", marker + "</body>")
+
+    marker_v75 = f'<script src="{ASSET_V75_PATH}"></script>'
+    if marker_v75 not in admin_module.ADMIN_HTML:
+        admin_module.ADMIN_HTML = admin_module.ADMIN_HTML.replace("</body>", marker_v75 + "</body>")
 
     app.state.prompt_config_v72_installed = True
     return app
