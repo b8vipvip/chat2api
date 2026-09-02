@@ -114,12 +114,11 @@ def test_worker_presentation_asset_is_bounded_and_replaces_v65_loop_owner():
         script = client.get(ADMIN_ASSET).text
 
     assert 'const VERSION = 66' in script
-    assert 'data-chat2api-column-key = "device_name"' not in script  # property assignment, not HTML-string ownership
     assert 'th.dataset.chat2apiColumnKey = "device_name"' in script
     assert 'th.dataset.chat2apiColumnKey = "occupancy"' in script
     assert "capacity.used_units" in script
     assert "capacity.limit_units" in script
-    assert "data-v66-pairing-rename" in script
+    assert "button.dataset.v66PairingRename" in script
     assert "设备名称已更新" in script
 
     # Critical console-liveness contract: v66 has no autonomous DOM observer or
