@@ -54,6 +54,7 @@
         "content_multimodal.js",
         "content_multimodal_quota_v36.js",
         "content_request_v3.js",
+        "content_multimodal_v68.js",
         "content_multimodal_v4.js",
         "content_request_v4.js",
         "content_request_v5.js",

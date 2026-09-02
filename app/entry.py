@@ -68,6 +68,7 @@ from .server_update_patch import install_server_update_patch
 from .server_worker_sync_lifespan_patch import install_server_worker_sync_patch
 from .worker_disable_authority_patch import install_worker_disable_authority_patch
 from .worker_presentation_v64_patch import install_worker_presentation_v64_patch
+from .api_key_console_v68_patch import install_api_key_console_v68_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -211,3 +212,7 @@ install_worker_disable_authority_patch(app)
 # It intentionally wraps the already-authoritative summaries without changing
 # routing/connection state.
 install_worker_presentation_v64_patch(app)
+# API Key presentation/editing is a separate bounded final console layer. It adds
+# Chinese permission labels plus name/scope editing without introducing a poll or
+# MutationObserver over the admin page.
+install_api_key_console_v68_patch(app)
