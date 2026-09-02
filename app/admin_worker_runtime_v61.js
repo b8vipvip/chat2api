@@ -3,9 +3,9 @@
   if (globalThis[KEY]) return;
 
   // Compatibility shim. The historical v61 runtime injected an independent
-  // `occupied_windows` column and polled /api/admin/capacity-v57 every second.
-  // The canonical Worker list now owns the single `occupancy` column, whose
-  // value includes both used and configured capacity (for example 0 / 3).
+  // `occupied_windows` column and refreshed it continuously. The canonical
+  // Worker list now owns the single `occupancy` column, whose value includes
+  // both used and configured capacity (for example 0 / 3).
   const state = Object.freeze({
     version: 61,
     retired: true,
