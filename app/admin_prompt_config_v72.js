@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_PROMPT_CONFIG_V72__";
   if (window[KEY]) return;
 
-  const state = { revision: 72, config: null, baseShow: window.show, baseLoadRequests: window.loadRequests };
+  const state = { revision: 73, config: null, baseShow: window.show, baseLoadRequests: window.loadRequests };
   window[KEY] = state;
   const $ = id => document.getElementById(id);
   const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
@@ -41,10 +41,13 @@
     section.innerHTML = `
       <div class="card">
         <h3>系统默认提示词</h3>
-        <div class="muted">处理顺序：OpenAI messages → chat2api 基础提示词 → 前缀/后缀 → 脱敏规则 → Worker/ChatGPT。请求记录中的“提示词”显示的就是最终实际发送内容。</div>
-        <label style="display:block;margin-top:12px">默认提示词前缀</label>
-        <textarea id="pcPrefix" rows="7" style="width:100%;margin-top:6px" placeholder="留空表示不添加。会插入到 chat2api 生成提示词之前。"></textarea>
-        <label style="display:block;margin-top:12px">默认提示词后缀</label>
+        <div class="muted">处理顺序：系统默认前置提示词 → 自定义前置提示词 → OpenAI messages/chat2api 基础提示词 → 自定义后置提示词 → 脱敏规则 → Worker/ChatGPT。请求记录中的“提示词”显示最终实际发送内容。</div>
+        <label style="display:block;margin-top:12px">系统默认前置提示词</label>
+        <textarea id="pcSystemDefaultPrefix" rows="9" readonly style="width:100%;margin-top:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--surface-2,#f6f7f9)" placeholder="系统当前没有默认前置提示词"></textarea>
+        <div class="muted" style="margin-top:6px">该内容由 chat2api 运行时内置，用于保证 API 请求不调用 ChatGPT 外部账户连接器。这里只读显示，避免控制台配置意外关闭运行时安全边界。</div>
+        <label style="display:block;margin-top:12px">自定义前置提示词</label>
+        <textarea id="pcPrefix" rows="7" style="width:100%;margin-top:6px" placeholder="留空表示不添加。会插入到系统默认前置提示词之后。"></textarea>
+        <label style="display:block;margin-top:12px">自定义后置提示词</label>
         <textarea id="pcSuffix" rows="7" style="width:100%;margin-top:6px" placeholder="留空表示不添加。会插入到 chat2api 生成提示词之后。"></textarea>
       </div>
       <div class="card">
@@ -66,7 +69,7 @@
           <button id="pcPreview" class="secondary">预览已保存配置</button>
         </div>
         <pre id="pcStatus" style="white-space:pre-wrap;margin-top:12px"></pre>
-        <textarea id="pcPreviewOutput" rows="10" readonly style="width:100%;margin-top:8px" placeholder="预览结果"></textarea>
+        <textarea id="pcPreviewOutput" rows="12" readonly style="width:100%;margin-top:8px" placeholder="预览结果"></textarea>
       </div>`;
     const settings = $("view-settings");
     main.insertBefore(section, settings || null);
@@ -94,13 +97,15 @@
 
   function renderConfig(config) {
     state.config = config || {};
+    $("pcSystemDefaultPrefix").value = config?.system_default_prefix || "";
     $("pcPrefix").value = config?.prefix || "";
     $("pcSuffix").value = config?.suffix || "";
     $("pcRedactionEnabled").checked = Boolean(config?.redaction_enabled);
     $("pcAudit").checked = config?.audit_final_prompt !== false;
     $("pcRules").innerHTML = "";
     for (const rule of config?.rules || []) addRule(rule);
-    $("pcStatus").textContent = `配置版本 revision=${config?.revision || 1}${config?.updated_at ? ` · 更新时间 ${config.updated_at}` : ""}${config?.last_error ? `\n加载警告：${config.last_error}` : ""}`;
+    const systemChars = (config?.system_default_prefix || "").length;
+    $("pcStatus").textContent = `配置版本 revision=${config?.revision || 1} · 系统默认前置提示词 ${systemChars} 字符${config?.updated_at ? ` · 更新时间 ${config.updated_at}` : ""}${config?.last_error ? `\n加载警告：${config.last_error}` : ""}`;
   }
 
   function collectConfig() {
@@ -136,7 +141,7 @@
     try {
       const payload = await api("/api/admin/prompt-config", { method: "PUT", body: JSON.stringify(collectConfig()) });
       renderConfig(payload.config || {});
-      $("pcStatus").textContent = `保存成功 · revision=${payload.config?.revision || "-"} · 新请求立即生效`;
+      $("pcStatus").textContent = `保存成功 · revision=${payload.config?.revision || "-"} · 系统默认前置提示词保持只读 · 新请求立即生效`;
     } catch (error) {
       $("pcStatus").textContent = `保存失败：${error.message || error}`;
     }
@@ -147,7 +152,7 @@
       const payload = await api("/api/admin/prompt-config/preview", { method: "POST", body: JSON.stringify({ prompt: $("pcPreviewInput").value }) });
       $("pcPreviewOutput").value = payload.output || "";
       const redactions = payload.meta?.redaction_count || 0;
-      $("pcStatus").textContent = `预览完成 · revision=${payload.meta?.revision || "-"} · 脱敏替换 ${redactions} 处`;
+      $("pcStatus").textContent = `预览完成 · revision=${payload.meta?.revision || "-"} · 系统默认前置提示词=${payload.meta?.system_default_prefix_applied ? "已应用" : "未应用"} · 脱敏替换 ${redactions} 处`;
     } catch (error) {
       $("pcStatus").textContent = `预览失败：${error.message || error}`;
     }

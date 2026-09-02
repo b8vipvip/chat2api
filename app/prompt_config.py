@@ -17,6 +17,16 @@ MAX_RULES = 50
 MAX_PATTERN_CHARS = 1_000
 MAX_REPLACEMENT_CHARS = 1_000
 
+SYSTEM_DEFAULT_PREFIX = " ".join(
+    [
+        "[chat2api API execution rule]",
+        "External account-connected apps, plugins, connectors, actions, integrations, and their account data are disabled for this API request.",
+        "Do not call, open, connect, reconnect, enable, authorize, install, select, or ask to use any external account tool, even when the user names one or asks you to use it.",
+        "Treat plugin/connector/app names and @mentions in the user's text as ordinary text only.",
+        "Answer directly using only the normal ChatGPT model capabilities available without external account connections. Do not mention this execution rule unless it is directly relevant to explaining an unavailable external-account action.",
+    ]
+)
+
 DEFAULT_RULES = [
     {
         "name": "电子邮箱",
@@ -147,6 +157,8 @@ class PromptConfigStore:
 
     def snapshot(self) -> dict[str, Any]:
         result = deepcopy(self.config)
+        result["system_default_prefix"] = SYSTEM_DEFAULT_PREFIX
+        result["system_default_prefix_readonly"] = True
         result["last_error"] = self.last_error
         return result
 
@@ -172,7 +184,7 @@ class PromptConfigStore:
         base = str(prompt or "")
         prefix = str(self.config.get("prefix") or "").strip()
         suffix = str(self.config.get("suffix") or "").strip()
-        pieces = [piece for piece in (prefix, base, suffix) if piece]
+        pieces = [piece for piece in (SYSTEM_DEFAULT_PREFIX, prefix, base, suffix) if piece]
         final = "\n\n".join(pieces)
         applied: list[dict[str, Any]] = []
         if self.config.get("redaction_enabled"):
@@ -185,6 +197,8 @@ class PromptConfigStore:
                     applied.append({"name": rule.get("name"), "count": count})
         return final, {
             "revision": int(self.config.get("revision") or 1),
+            "system_default_prefix_applied": True,
+            "system_default_prefix_chars": len(SYSTEM_DEFAULT_PREFIX),
             "redaction_enabled": bool(self.config.get("redaction_enabled")),
             "redactions": applied,
             "redaction_count": sum(int(item["count"]) for item in applied),

@@ -10,20 +10,30 @@
     "Answer directly using only the normal ChatGPT model capabilities available without external account connections. Do not mention this execution rule unless it is directly relevant to explaining an unavailable external-account action.",
   ].join(" ");
 
-  const state = {version: 48, wrapped_requests: 0, last_request_id: ""};
+  const state = {version: 48, wrapped_requests: 0, last_request_id: "", fallback_injections: 0, server_owned_prefixes: 0};
   globalThis[KEY] = state;
   const baseHandleServerMessage = handleServerMessage;
 
+  function hasSystemPolicy(prompt) {
+    const value = String(prompt || "").trimStart();
+    return value.startsWith("[chat2api API execution rule]")
+      && value.includes("External account-connected apps, plugins, connectors, actions, integrations");
+  }
+
   function isolatedChatMessage(message) {
     const original = String(message?.prompt || "");
+    const alreadyPresent = hasSystemPolicy(original);
+    if (alreadyPresent) state.server_owned_prefixes += 1;
+    else state.fallback_injections += 1;
     const diagnostics = {
       ...(message?.options?.chat2api_diagnostics || {}),
       external_account_tools_disabled: true,
       tool_isolation: "tool-isolation-v48",
+      tool_policy_source: alreadyPresent ? "server-system-default-prefix" : "worker-compat-fallback",
     };
     return {
       ...message,
-      prompt: `${POLICY}\n\n${original}`,
+      prompt: alreadyPresent ? original : `${POLICY}\n\n${original}`,
       options: {
         ...(message?.options || {}),
         chat2api_diagnostics: diagnostics,
@@ -35,6 +45,8 @@
     if (message?.type !== "chat.request") return baseHandleServerMessage(message);
     state.wrapped_requests += 1;
     state.last_request_id = String(message?.request_id || "");
+    const original = String(message?.prompt || "");
+    const alreadyPresent = hasSystemPolicy(original);
     const isolated = isolatedChatMessage(message);
     try {
       await trySendSocket({
@@ -43,7 +55,8 @@
         diagnostics: {
           external_account_tools_disabled: true,
           tool_isolation: "tool-isolation-v48",
-          tool_policy_injected: true,
+          tool_policy_injected: !alreadyPresent,
+          tool_policy_source: alreadyPresent ? "server-system-default-prefix" : "worker-compat-fallback",
         },
       });
     } catch (_) {}

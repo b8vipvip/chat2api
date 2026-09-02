@@ -4,18 +4,18 @@ import json
 import subprocess
 from pathlib import Path
 
-from app.prompt_config import PromptConfigStore
+from app.prompt_config import PromptConfigStore, SYSTEM_DEFAULT_PREFIX
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_prompt_config_applies_prefix_suffix_and_redaction(tmp_path: Path) -> None:
+def test_prompt_config_applies_system_prefix_custom_prefix_suffix_and_redaction(tmp_path: Path) -> None:
     store = PromptConfigStore(tmp_path)
     saved = store.save(
         {
-            "prefix": "SYSTEM PREFIX",
-            "suffix": "SYSTEM SUFFIX",
+            "prefix": "CUSTOM PREFIX",
+            "suffix": "CUSTOM SUFFIX",
             "redaction_enabled": True,
             "audit_final_prompt": True,
             "rules": [
@@ -30,10 +30,21 @@ def test_prompt_config_applies_prefix_suffix_and_redaction(tmp_path: Path) -> No
         }
     )
     final, meta = store.apply("User says SECRET-123")
-    assert final == "SYSTEM PREFIX\n\nUser says [MASKED]\n\nSYSTEM SUFFIX"
+    assert final == f"{SYSTEM_DEFAULT_PREFIX}\n\nCUSTOM PREFIX\n\nUser says [MASKED]\n\nCUSTOM SUFFIX"
+    assert meta["system_default_prefix_applied"] is True
+    assert meta["system_default_prefix_chars"] == len(SYSTEM_DEFAULT_PREFIX)
     assert meta["redaction_count"] == 1
+    assert saved["system_default_prefix"] == SYSTEM_DEFAULT_PREFIX
+    assert saved["system_default_prefix_readonly"] is True
     assert saved["audit_final_prompt"] is True
     assert (tmp_path / "prompt_config.json").exists()
+
+
+def test_system_default_prefix_matches_external_account_execution_rule() -> None:
+    assert SYSTEM_DEFAULT_PREFIX.startswith("[chat2api API execution rule]")
+    assert "External account-connected apps, plugins, connectors, actions, integrations" in SYSTEM_DEFAULT_PREFIX
+    assert "Do not call, open, connect, reconnect, enable, authorize, install, select" in SYSTEM_DEFAULT_PREFIX
+    assert "normal ChatGPT model capabilities" in SYSTEM_DEFAULT_PREFIX
 
 
 def test_prompt_config_rejects_invalid_regex(tmp_path: Path) -> None:
@@ -84,6 +95,16 @@ def test_request_bridge_delays_request_until_guard_resolution() -> None:
     assert "v5.listener = listener" in source
 
 
+def test_worker_tool_isolation_uses_server_prefix_and_only_falls_back_for_old_server() -> None:
+    source = (ROOT / "chrome_extension" / "background_tool_isolation_v48.js").read_text(encoding="utf-8")
+    assert "hasSystemPolicy" in source
+    assert 'tool_policy_source: alreadyPresent ? "server-system-default-prefix" : "worker-compat-fallback"' in source
+    assert "prompt: alreadyPresent ? original : `${POLICY}\\n\\n${original}`" in source
+    assert "tool_policy_injected: !alreadyPresent" in source
+    assert "fallback_injections" in source
+    assert "server_owned_prefixes" in source
+
+
 def test_prompt_config_patch_audits_exact_worker_prompt_and_strips_list_payload() -> None:
     source = (ROOT / "app" / "prompt_config_v72_patch.py").read_text(encoding="utf-8")
     assert 'payload.get("type") == "chat.request"' in source
@@ -95,11 +116,14 @@ def test_prompt_config_patch_audits_exact_worker_prompt_and_strips_list_payload(
     assert "main_module.build_prompt = configured_build_prompt" in source
 
 
-def test_admin_asset_has_prompt_nav_request_column_and_copy_modal() -> None:
+def test_admin_asset_has_system_prefix_prompt_nav_request_column_and_copy_modal() -> None:
     source = (ROOT / "app" / "admin_prompt_config_v72.js").read_text(encoding="utf-8")
     assert "提示词配置" in source
-    assert "默认提示词前缀" in source
-    assert "默认提示词后缀" in source
+    assert "系统默认前置提示词" in source
+    assert 'id="pcSystemDefaultPrefix"' in source
+    assert "readonly" in source
+    assert "自定义前置提示词" in source
+    assert "自定义后置提示词" in source
     assert "脱敏配置" in source
     assert "查看提示词" in source
     assert "最终完整提示词" in source
@@ -118,6 +142,7 @@ def test_new_javascript_syntax() -> None:
     for relative in (
         "chrome_extension/content_interruption_guard_v72.js",
         "chrome_extension/content_request_interruption_bridge_v72.js",
+        "chrome_extension/background_tool_isolation_v48.js",
         "app/admin_prompt_config_v72.js",
     ):
         subprocess.run(["node", "--check", str(ROOT / relative)], check=True, capture_output=True, text=True)
