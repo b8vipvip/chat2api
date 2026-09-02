@@ -5,43 +5,21 @@ import shutil
 import subprocess
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 EXT = ROOT / "chrome_extension"
 
 
 def test_runtime_versions_and_features() -> None:
     source = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.44"' in source
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.16"' in source
-    for marker in (
-        '"failed_route_quarantine": True',
-        '"request_controller_lifecycle_guard": True',
-        '"chatgpt_transient_retry": True',
-        '"linux_worker_autoreload_self_heal": True',
-        '"assistant_response_semantic_guard": True',
-        '"assistant_response_semantic_recovery": True',
-        '"response_stream_recovery": True',
-        '"network_response_recovery": True',
-        '"single_response_observer": True',
-        '"model_capability_routing_guard": True',
-        '"chatgpt_rate_limit_circuit_breaker": True',
-        '"worker_window_reopen_loop_guard": True',
-        '"playground_chat_running_records": True',
-        '"linux_worker_master_switch": True',
-        '"worker_live_occupancy": True',
-        '"linux_worker_proxy_health_facets": True',
-        '"worker_device_name_column": True',
-        '"worker_pairing_rename": True',
-        '"worker_presentation_console_liveness_v65": True',
-        '"multimodal_upload_confirmation_v64": True',
-    ):
+    assert 'SERVER_RUNTIME_VERSION = "0.22.45"' in source
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.17"' in source
+    for marker in ('"failed_route_quarantine": True','"request_controller_lifecycle_guard": True','"chatgpt_transient_retry": True','"linux_worker_autoreload_self_heal": True','"assistant_response_semantic_guard": True','"assistant_response_semantic_recovery": True','"response_stream_recovery": True','"network_response_recovery": True','"single_response_observer": True','"model_capability_routing_guard": True','"chatgpt_rate_limit_circuit_breaker": True','"worker_window_reopen_loop_guard": True','"playground_chat_running_records": True','"linux_worker_master_switch": True','"worker_live_occupancy": True','"linux_worker_proxy_health_facets": True','"worker_device_name_column": True','"worker_pairing_rename": True','"worker_presentation_console_liveness_v65": True','"worker_presentation_console_liveness_v66": True','"worker_column_registry_v67": True','"multimodal_upload_confirmation_v64": True','"multimodal_upload_v68": True','"api_key_console_v68": True','"rich_response_v69": True','"request_response_epoch_v69": True','"worker_content_runtime_epoch_v71": True'):
         assert marker in source
 
 
 def test_manifest_loads_lifecycle_and_retry_overlays_in_order() -> None:
     manifest = json.loads((EXT / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.16"
+    assert manifest["version"] == "0.8.17"
     assert "network_stream_main_v55.js" in manifest["content_scripts"][0]["js"]
     scripts = manifest["content_scripts"][1]["js"]
     assert scripts.index("content_rate_limit_guard_v52.js") < scripts.index("content_request_v5.js")
@@ -91,25 +69,14 @@ def test_runtime_preflight_requires_v50_v51_and_v55_overlays() -> None:
     source = (EXT / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
     contract = (EXT / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     marker = (EXT / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
-    assert 'const REQUIRED_BUNDLE = "0.8.16"' in source
+    assert 'const REQUIRED_BUNDLE = "0.8.17"' in source
     assert 'const MAIN_FILES = ["network_stream_main_v55.js"]' in source
-    assert '"content_rate_limit_guard_v52.js"' in source
-    assert '"content_request_lifecycle_v50.js"' in source
-    assert '"content_draft_managed_recovery_v55.js"' in source
-    assert '"content_network_stream_recovery_v55.js"' in source
-    assert '"content_response_semantic_recovery_v51.js"' in source
-    assert '"content_transient_retry_v50.js"' in source
-    assert 'const REQUIRED_BUNDLE = "0.8.16"' in contract
-    assert "rate_limit_guard_v52" in contract
-    assert "request_lifecycle_v50" in contract
-    assert "draft_managed_recovery_v55" in contract
-    assert "network_stream_recovery_v55" in contract
-    assert "network_stream_main_v55" in contract
-    assert "response_single_owner_v53" in contract
-    assert "response_semantic_recovery_v51" in contract
-    assert "semanticHelper?.timer == null" in contract
-    assert "transient_retry_v50" in contract
-    assert 'bundle: "0.8.16"' in marker
+    for token in ('"content_rate_limit_guard_v52.js"','"content_request_lifecycle_v50.js"','"content_draft_managed_recovery_v55.js"','"content_network_stream_recovery_v55.js"','"content_response_semantic_recovery_v51.js"','"content_transient_retry_v50.js"'):
+        assert token in source
+    assert 'const REQUIRED_BUNDLE = "0.8.17"' in contract
+    for token in ("rate_limit_guard_v52","request_lifecycle_v50","draft_managed_recovery_v55","network_stream_recovery_v55","network_stream_main_v55","response_single_owner_v53","response_semantic_recovery_v51","semanticHelper?.timer == null","transient_retry_v50"):
+        assert token in contract
+    assert 'bundle: "0.8.17"' in marker
 
 
 def test_linux_autoreload_wrapper_self_repairs_missing_base_helper() -> None:
@@ -127,18 +94,5 @@ def test_new_javascript_syntax() -> None:
     node = shutil.which("node")
     if not node:
         return
-    for name in (
-        "network_stream_main_v55.js",
-        "content_rate_limit_guard_v52.js",
-        "background_rate_limit_guard_v52.js",
-        "content_request_lifecycle_v50.js",
-        "content_draft_managed_recovery_v55.js",
-        "content_network_stream_recovery_v55.js",
-        "content_response_semantic_recovery_v51.js",
-        "content_transient_retry_v50.js",
-        "background_route_quarantine_v50.js",
-        "background_runtime_preflight_v48.js",
-        "content_runtime_contract_v48.js",
-        "content_bundle_marker_v48.js",
-    ):
+    for name in ("network_stream_main_v55.js","content_rate_limit_guard_v52.js","background_rate_limit_guard_v52.js","content_request_lifecycle_v50.js","content_draft_managed_recovery_v55.js","content_network_stream_recovery_v55.js","content_response_semantic_recovery_v51.js","content_transient_retry_v50.js","background_route_quarantine_v50.js","background_runtime_preflight_v48.js","content_runtime_contract_v48.js","content_bundle_marker_v48.js"):
         subprocess.run([node, "--check", str(EXT / name)], check=True, capture_output=True, text=True)
