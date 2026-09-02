@@ -12,7 +12,9 @@ from .response_semantic_guard_patch import install_response_semantic_guard_patch
 from .timezone_utils import beijing_now_iso
 
 
-PATCH_ID = "playground-chat-v69"
+# This identifier describes the persistent Playground run/record contract. The
+# browser UI asset can evolve independently while retaining the v3 record schema.
+PATCH_ID = "playground-chat-v3"
 ASSET_PATH = "/assets/chat2api-playground-chat.js"
 RECORDS_ASSET_PATH = "/assets/chat2api-playground-chat-records-v3.js"
 
