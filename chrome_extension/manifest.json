@@ -34,6 +34,7 @@
       "js": [
         "content.js",
         "content_bundle_marker_v48.js",
+        "content_bundle_marker_v71.js",
         "content_page_adapter_v22.js",
         "content_login_v27.js",
         "content_ui_hygiene_v31.js",
@@ -86,7 +87,8 @@
         "content_voice_fix_v3.js",
         "content_voice_fix_v4.js",
         "content_runtime_log.js",
-        "content_runtime_contract_v48.js"
+        "content_runtime_contract_v48.js",
+        "content_runtime_contract_v71.js"
       ],
       "run_at": "document_idle"
     }
