@@ -15,7 +15,7 @@ from .live_voice_patch import LIVE_PROTOCOL_VERSION
 # collapse them into a single version number: package releases, the layered
 # server runtime/console, the Worker wire protocol, the shipped unpacked
 # Worker bundle, and the realtime wire protocol can evolve independently.
-SERVER_RUNTIME_VERSION = "0.22.43"
+SERVER_RUNTIME_VERSION = "0.22.44"
 # v0.22.24 remains the compatibility baseline for Workers that first gained the
 # bounded initialize/recovery command. Later runtimes can evolve control-plane
 # behavior without changing that bootstrap compatibility floor.
@@ -24,7 +24,7 @@ CHROME_BRIDGE_VERSION = "0.8.1"
 CHROME_BRIDGE_BUNDLE_VERSION = "0.8.16"
 PRODUCTION_ENTRYPOINT = "app.entry:app"
 VERSION_CONTRACT_VERSION = 1
-RUNTIME_FEATURE_REVISION = "capacity-native-v37-bundle-0816-runtime-logs-v1-playground-lifecycle-v1-playground-chat-v3-spare-freshness-v39-response-capture-v41-request-hygiene-v42-persistent-draft-ownership-v43-generation-liveness-v49-worker-initialize-v43-worker-online-upgrade-v44-worker-master-switch-v61-r62-worker-disable-authority-v62-worker-console-freeze-v22-27-server-update-recreate-guard-v22-28-server-update-poll-timeout-v22-29-github-transport-failover-v22-30-worker-transport-v47-device-identity-v47-response-stream-v49-network-response-v55-parser-v62-same-api-concurrency-v25-tool-isolation-v48-runtime-preflight-v48-worker-sudoers-guard-v22-33-request-lifecycle-v50-route-quarantine-v50-transient-retry-v50-autoreload-self-heal-v50-server-worker-auto-sync-v1-response-semantic-guard-v1-response-semantic-recovery-v51-helper-model-capability-routing-v1-rate-limit-guard-v52-single-response-owner-v53-generation-backend-health-v54-proxy-health-v55-worker-key-capacity-queue-v57-active-rate-limit-terminal-v56-admin-render-owner-v58-routed-dispatch-terminal-v58-worker-live-occupancy-v61-multimodal-upload-v64-worker-presentation-v64-release-v02243"
+RUNTIME_FEATURE_REVISION = "capacity-native-v37-bundle-0816-runtime-logs-v1-playground-lifecycle-v1-playground-chat-v3-spare-freshness-v39-response-capture-v41-request-hygiene-v42-persistent-draft-ownership-v43-generation-liveness-v49-worker-initialize-v43-worker-online-upgrade-v44-worker-master-switch-v61-r62-worker-disable-authority-v62-worker-console-freeze-v22-27-server-update-recreate-guard-v22-28-server-update-poll-timeout-v22-29-github-transport-failover-v22-30-worker-transport-v47-device-identity-v47-response-stream-v49-network-response-v55-parser-v62-same-api-concurrency-v25-tool-isolation-v48-runtime-preflight-v48-worker-sudoers-guard-v22-33-request-lifecycle-v50-route-quarantine-v50-transient-retry-v50-autoreload-self-heal-v50-server-worker-auto-sync-v1-response-semantic-guard-v1-response-semantic-recovery-v51-helper-model-capability-routing-v1-rate-limit-guard-v52-single-response-owner-v53-generation-backend-health-v54-proxy-health-v55-worker-key-capacity-queue-v57-active-rate-limit-terminal-v56-admin-render-owner-v58-routed-dispatch-terminal-v58-worker-live-occupancy-v61-multimodal-upload-v64-worker-presentation-v64-worker-presentation-v65-console-liveness-v65-release-v02244"
 ADMIN_VERSION_ASSET = "/assets/chat2api-runtime-version.js"
 ADMIN_EXTENSION_COLUMNS_ASSET = "/assets/chat2api-extension-columns.js"
 ADMIN_LINUX_WORKERS_ASSET = "/assets/chat2api-linux-workers.js"
@@ -109,6 +109,7 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
             "worker_live_occupancy": True,
             "worker_device_name_column": True,
             "worker_pairing_rename": True,
+            "worker_presentation_console_liveness_v65": True,
             "multimodal_upload_confirmation_v64": True,
             "linux_worker_console_freeze_guard": True,
             "linux_worker_generation_backend_health": True,
