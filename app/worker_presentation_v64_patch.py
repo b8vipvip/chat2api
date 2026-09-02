@@ -1,28 +1,44 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from .admin_auth import SESSION_COOKIE
 
 
 PATCH_REVISION = 66
+ADMIN_ASSET = "/assets/chat2api-worker-presentation-v66.js"
 
 
 class PairingNameUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
 
-def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
-    """Expose Worker presentation data without installing a second DOM renderer.
+async def _response_bytes(response: Response) -> bytes:
+    body = getattr(response, "body", None)
+    if body is not None:
+        return bytes(body)
+    chunks: list[bytes] = []
+    iterator = getattr(response, "body_iterator", None)
+    if iterator is not None:
+        async for chunk in iterator:
+            chunks.append(chunk.encode() if isinstance(chunk, str) else bytes(chunk))
+    return b"".join(chunks)
 
-    v64/v65 appended a second admin-console presentation asset after the canonical
-    Worker list renderer. Even after making its own DOM ordering convergent, that
-    layer still maintained independent observers/refresh timers against the same
-    table. v66 keeps the server-side device-name decoration and rename API only;
-    the existing canonical admin_extension_columns renderer is the sole DOM owner.
+
+def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
+    """Expose Worker presentation data with a bounded passive console enhancer.
+
+    v64/v65 maintained autonomous MutationObservers and refresh timers against the
+    same Worker table already owned by admin_extension_columns. v66 keeps device
+    name/occupancy/rename behavior, but the enhancer has no MutationObserver and
+    no repeating interval: it only runs after canonical reload/show boundaries
+    plus two bounded startup passes. This prevents a second autonomous render loop
+    from starving the admin console while preserving the presentation features.
     """
     if getattr(app.state, "worker_presentation_v66_installed", False):
         return app
@@ -82,5 +98,32 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
             await pairings.save()
             payload = item.public()
         return {"pairing": payload, "device_name": payload.get("name"), "revision": PATCH_REVISION}
+
+    @app.get(ADMIN_ASSET, include_in_schema=False)
+    async def worker_presentation_asset() -> Response:
+        path = Path(__file__).with_name("admin_worker_presentation_v66.js")
+        return Response(
+            path.read_text(encoding="utf-8"),
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+        )
+
+    @app.middleware("http")
+    async def worker_presentation_v66(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path != "/admin" or "text/html" not in response.headers.get("content-type", ""):
+            return response
+        raw = await _response_bytes(response)
+        text = raw.decode("utf-8", errors="replace")
+        marker = f'<script src="{ADMIN_ASSET}"></script>'
+        if marker not in text:
+            text = text.replace("</body>", marker + "</body>")
+        headers = {
+            key: value
+            for key, value in response.headers.items()
+            if key.lower() not in {"content-length", "content-type"}
+        }
+        headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
 
     return app
