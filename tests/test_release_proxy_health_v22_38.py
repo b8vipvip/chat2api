@@ -15,7 +15,6 @@ def read(path: str) -> str:
 def test_network_health_v56_retires_proxy_cell_repaint_loop() -> None:
     source = read("app/admin_linux_worker_chinese_progress.js")
     stable = read("app/linux_worker_table_stability_patch.py")
-
     assert "__CHAT2API_LINUX_WORKER_NETWORK_HEALTH_V56__" in source
     assert '__CHAT2API_LINUX_WORKER_PROXY_HEALTH_V55__ = "retired-by-v56"' in source
     assert "observedProxyCells" not in source
@@ -28,36 +27,12 @@ def test_network_health_v56_retires_proxy_cell_repaint_loop() -> None:
 
 def test_network_column_owns_proxy_health_and_proxy_column_is_hidden() -> None:
     source = read("app/admin_linux_worker_chinese_progress.js")
-    for token in (
-        '#view-linux-workers th:nth-child(7)',
-        '#view-linux-workers td:nth-child(7){display:none!important}',
-        '#view-linux-workers td:nth-child(6)::before',
-        '#view-linux-workers td:nth-child(6)::after',
-        'cell.dataset.chat2apiNetworkMain = view.main',
-        'cell.dataset.chat2apiNetworkSub = view.sub',
-        'cell.dataset.chat2apiNetworkTone = view.tone',
-        'cell.dataset.chat2apiNetworkOwner = "v56"',
-        '"网络正常"',
-        '"网络异常"',
-        '"GPT正常"',
-        '"GPT异常"',
-        'command:"test_proxy"',
-        "HEALTH_TTL_MS = 60000",
-        "HEALTH_RETRY_MS = 20000",
-        'parseProbe(result, "network_access")',
-        '"chatgpt_home","conversation_route","sentinel_route"',
-    ):
+    for token in ('#view-linux-workers th:nth-child(7)','#view-linux-workers td:nth-child(7){display:none!important}','#view-linux-workers td:nth-child(6)::before','#view-linux-workers td:nth-child(6)::after','cell.dataset.chat2apiNetworkMain = view.main','cell.dataset.chat2apiNetworkSub = view.sub','cell.dataset.chat2apiNetworkTone = view.tone','cell.dataset.chat2apiNetworkOwner = "v56"','"网络正常"','"网络异常"','"GPT正常"','"GPT异常"','command:"test_proxy"',"HEALTH_TTL_MS = 60000","HEALTH_RETRY_MS = 20000",'parseProbe(result, "network_access")','"chatgpt_home","conversation_route","sentinel_route"'):
         assert token in source
 
 
 def test_network_health_script_parses() -> None:
-    result = subprocess.run(
-        ["node", "--check", str(ROOT / "app" / "admin_linux_worker_chinese_progress.js")],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = subprocess.run(["node", "--check", str(ROOT / "app" / "admin_linux_worker_chinese_progress.js")], cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stderr
 
 
@@ -65,33 +40,24 @@ def test_release_versions_are_explicit_and_consistent() -> None:
     runtime = read("app/runtime_contract.py")
     manifest = json.loads(read("chrome_extension/manifest.json"))
     marker = read("chrome_extension/content_bundle_marker_v48.js")
+    marker71 = read("chrome_extension/content_bundle_marker_v71.js")
     preflight = read("chrome_extension/background_runtime_preflight_v48.js")
     contract = read("chrome_extension/content_runtime_contract_v48.js")
+    contract71 = read("chrome_extension/content_runtime_contract_v71.js")
     package = read("app/__init__.py")
     project = read("pyproject.toml")
-
-    assert 'SERVER_RUNTIME_VERSION = "0.22.44"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.16"' in runtime
-    assert manifest["version"] == "0.8.16"
-    assert 'bundle: "0.8.16"' in marker
-    assert 'REQUIRED_BUNDLE = "0.8.16"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.16"' in contract
+    assert 'SERVER_RUNTIME_VERSION = "0.22.45"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.17"' in runtime
+    assert manifest["version"] == "0.8.17"
+    assert 'bundle: "0.8.17"' in marker
+    assert 'bundle: "0.8.17"' in marker71
+    assert 'REQUIRED_BUNDLE = "0.8.17"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.17"' in contract
+    assert 'REQUIRED_BUNDLE = "0.8.17"' in contract71
     assert '__version__ = "0.7.1"' in package
     assert 'version = "0.7.1"' in project
-    assert '"network_response_recovery": True' in runtime
-    assert '"network_response_parser_v62": True' in runtime
-    assert '"linux_worker_master_switch": True' in runtime
-    assert '"linux_worker_disable_authority": True' in runtime
-    assert '"worker_live_occupancy": True' in runtime
-    assert '"worker_device_name_column": True' in runtime
-    assert '"worker_pairing_rename": True' in runtime
-    assert '"worker_presentation_console_liveness_v65": True' in runtime
-    assert '"multimodal_upload_confirmation_v64": True' in runtime
-    assert '"linux_worker_proxy_health_facets": True' in runtime
-    assert '"worker_key_capacity_fifo_queue": True' in runtime
-    assert '"active_rate_limit_terminal_error": True' in runtime
-    assert '"routed_dispatch_terminal_error": True' in runtime
-    assert '"admin_single_render_owner": True' in runtime
+    for token in ('"network_response_recovery": True','"network_response_parser_v62": True','"linux_worker_master_switch": True','"linux_worker_disable_authority": True','"worker_live_occupancy": True','"worker_device_name_column": True','"worker_pairing_rename": True','"worker_presentation_console_liveness_v65": True','"worker_presentation_console_liveness_v66": True','"worker_column_registry_v67": True','"multimodal_upload_confirmation_v64": True','"multimodal_upload_v68": True','"api_key_console_v68": True','"rich_response_v69": True','"request_response_epoch_v69": True','"worker_content_runtime_epoch_v71": True','"linux_worker_proxy_health_facets": True','"worker_key_capacity_fifo_queue": True','"active_rate_limit_terminal_error": True','"routed_dispatch_terminal_error": True','"admin_single_render_owner": True'):
+        assert token in runtime
 
 
 def test_release_workflow_creates_one_release_per_runtime_version() -> None:
