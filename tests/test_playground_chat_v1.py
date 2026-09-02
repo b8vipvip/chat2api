@@ -40,14 +40,18 @@ def test_playground_chat_patch_injects_console_assets() -> None:
         assert asset.status_code == 200
         source = asset.text
         assert 'panel.id = "playgroundChatPanel"' in source
-        assert 'prompt_mode: "full"' in source
-        assert 'stream: true' in source
-        assert 'messages: normalizedHistory()' in source
-        assert 'attachments: uploaded.map' in source
+        assert 'prompt_mode:"full"' in source.replace(" ", "")
+        # Manual Playground now waits for the exact final response so Markdown
+        # structure is not flattened by the incremental preview path.
+        assert 'stream:false' in source.replace(" ", "")
+        assert 'payload.choices?.[0]?.message?.content' in source
+        assert 'messages:normalizedHistory()' in source.replace(" ", "")
+        assert 'attachments:uploaded.map' in source.replace(" ", "")
         assert 'sessionStorage.setItem' in source
         assert 'Shift+Enter' in source
         assert 'X-Chat2API-Request-ID' in source
         assert '/api/admin/playground/chat-records' in source
+        assert 'function renderMarkdown(markdown)' in source
         assert '管理员 CHAT2API_API_KEY（默认）' not in source
 
         records_asset = client.get(RECORDS_ASSET_PATH)
@@ -65,11 +69,12 @@ def test_playground_chat_keeps_manual_prompt_verbatim_and_failed_turns_out_of_co
     app = _app()
     with TestClient(app) as client:
         source = client.get(ASSET_PATH).text
-    assert 'content: text' in source
-    assert 'attachment_names: userFiles.map' in source
-    assert '.filter(item => item.include_in_context !== false)' in source
-    assert 'messages[userIndex].include_in_context = false' in source
-    assert 'include_in_context: false' in source
+    compact = source.replace(" ", "")
+    assert 'content:text' in compact
+    assert 'attachment_names:userFiles.map' in compact
+    assert '.filter(item=>item.include_in_context!==false)' in compact
+    assert 'messages[userIndex].include_in_context=false' in compact
+    assert 'include_in_context:false' in compact
     assert 'const userDisplay =' not in source
 
 
@@ -156,7 +161,10 @@ def test_playground_chat_patch_is_idempotent() -> None:
     app = _app()
     assert app.state.playground_chat_patch_installed is True
     assert install_playground_chat_patch(app) is app
+    # v3 is the persistence-record protocol; the served UI asset is v69.
     assert PATCH_ID == "playground-chat-v3"
+    with TestClient(app) as client:
+        assert '__CHAT2API_PLAYGROUND_CHAT_V69__' in client.get(ASSET_PATH).text
 
 
 def test_runtime_contract_advertises_playground_chat() -> None:
