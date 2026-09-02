@@ -70,7 +70,7 @@ def test_release_versions_are_explicit_and_consistent() -> None:
     package = read("app/__init__.py")
     project = read("pyproject.toml")
 
-    assert 'SERVER_RUNTIME_VERSION = "0.22.43"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.44"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.16"' in runtime
     assert manifest["version"] == "0.8.16"
     assert 'bundle: "0.8.16"' in marker
@@ -85,6 +85,7 @@ def test_release_versions_are_explicit_and_consistent() -> None:
     assert '"worker_live_occupancy": True' in runtime
     assert '"worker_device_name_column": True' in runtime
     assert '"worker_pairing_rename": True' in runtime
+    assert '"worker_presentation_console_liveness_v65": True' in runtime
     assert '"multimodal_upload_confirmation_v64": True' in runtime
     assert '"linux_worker_proxy_health_facets": True' in runtime
     assert '"worker_key_capacity_fifo_queue": True' in runtime
