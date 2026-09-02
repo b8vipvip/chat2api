@@ -147,7 +147,7 @@ def test_external_account_tools_are_fail_closed_at_prompt_and_ui_layers():
 def test_runtime_contract_exposes_v48_v49_v50_v51_and_v55_features():
     app = FastAPI(version=SERVER_RUNTIME_VERSION)
     payload = version_contract_payload(app)
-    assert SERVER_RUNTIME_VERSION == "0.22.43"
+    assert SERVER_RUNTIME_VERSION == "0.22.44"
     assert payload["chrome_bridge"]["bundle_version"] == "0.8.16"
     assert payload["chrome_bridge"]["network_response_recovery_version"] == 55
     assert payload["chrome_bridge"]["network_response_parser_revision"] == 62
@@ -181,6 +181,7 @@ def test_runtime_contract_exposes_v48_v49_v50_v51_and_v55_features():
     assert payload["features"]["worker_live_occupancy"] is True
     assert payload["features"]["worker_device_name_column"] is True
     assert payload["features"]["worker_pairing_rename"] is True
+    assert payload["features"]["worker_presentation_console_liveness_v65"] is True
     assert payload["features"]["multimodal_upload_confirmation_v64"] is True
     assert payload["features"]["linux_worker_sudoers_guard"] is True
     assert payload["features"]["linux_worker_autoreload_self_heal"] is True
