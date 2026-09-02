@@ -55,6 +55,7 @@ DEFAULT_RULES = [
 def default_config() -> dict[str, Any]:
     return {
         "version": STORE_VERSION,
+        "system_default_prefix": SYSTEM_DEFAULT_PREFIX,
         "prefix": "",
         "suffix": "",
         "redaction_enabled": False,
@@ -108,8 +109,15 @@ def _normalize_rule(raw: Any, index: int) -> dict[str, Any]:
 def normalize_config(raw: Any, *, previous_revision: int = 0) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise ValueError("Prompt configuration must be an object")
+    system_default_prefix = (
+        str(raw.get("system_default_prefix") or "")
+        if "system_default_prefix" in raw
+        else SYSTEM_DEFAULT_PREFIX
+    )
     prefix = str(raw.get("prefix") or "")
     suffix = str(raw.get("suffix") or "")
+    if len(system_default_prefix) > MAX_PREFIX_SUFFIX_CHARS:
+        raise ValueError(f"System default prompt prefix exceeds {MAX_PREFIX_SUFFIX_CHARS} characters")
     if len(prefix) > MAX_PREFIX_SUFFIX_CHARS:
         raise ValueError(f"Prompt prefix exceeds {MAX_PREFIX_SUFFIX_CHARS} characters")
     if len(suffix) > MAX_PREFIX_SUFFIX_CHARS:
@@ -124,6 +132,7 @@ def normalize_config(raw: Any, *, previous_revision: int = 0) -> dict[str, Any]:
     rules = [_normalize_rule(item, index) for index, item in enumerate(rules_raw)]
     return {
         "version": STORE_VERSION,
+        "system_default_prefix": system_default_prefix,
         "prefix": prefix,
         "suffix": suffix,
         "redaction_enabled": bool(raw.get("redaction_enabled", False)),
@@ -157,8 +166,15 @@ class PromptConfigStore:
 
     def snapshot(self) -> dict[str, Any]:
         result = deepcopy(self.config)
-        result["system_default_prefix"] = SYSTEM_DEFAULT_PREFIX
-        result["system_default_prefix_readonly"] = True
+        result["system_default_prefix_readonly"] = False
+        result["recommended"] = {
+            "system_default_prefix": SYSTEM_DEFAULT_PREFIX,
+            "prefix": "",
+            "suffix": "",
+            "redaction_enabled": False,
+            "audit_final_prompt": True,
+            "rules": deepcopy(DEFAULT_RULES),
+        }
         result["last_error"] = self.last_error
         return result
 
@@ -182,9 +198,10 @@ class PromptConfigStore:
 
     def apply(self, prompt: str) -> tuple[str, dict[str, Any]]:
         base = str(prompt or "")
+        system_default_prefix = str(self.config.get("system_default_prefix") or "").strip()
         prefix = str(self.config.get("prefix") or "").strip()
         suffix = str(self.config.get("suffix") or "").strip()
-        pieces = [piece for piece in (SYSTEM_DEFAULT_PREFIX, prefix, base, suffix) if piece]
+        pieces = [piece for piece in (system_default_prefix, prefix, base, suffix) if piece]
         final = "\n\n".join(pieces)
         applied: list[dict[str, Any]] = []
         if self.config.get("redaction_enabled"):
@@ -197,8 +214,9 @@ class PromptConfigStore:
                     applied.append({"name": rule.get("name"), "count": count})
         return final, {
             "revision": int(self.config.get("revision") or 1),
-            "system_default_prefix_applied": True,
-            "system_default_prefix_chars": len(SYSTEM_DEFAULT_PREFIX),
+            "system_default_prefix_applied": bool(system_default_prefix),
+            "system_default_prefix_chars": len(system_default_prefix),
+            "system_default_prefix_recommended": system_default_prefix == SYSTEM_DEFAULT_PREFIX,
             "redaction_enabled": bool(self.config.get("redaction_enabled")),
             "redactions": applied,
             "redaction_count": sum(int(item["count"]) for item in applied),

@@ -20,9 +20,13 @@
       && value.includes("External account-connected apps, plugins, connectors, actions, integrations");
   }
 
+  function serverManagesPromptPolicy(message) {
+    return message?.options?.chat2api_diagnostics?.server_prompt_policy_managed === true;
+  }
+
   function isolatedChatMessage(message) {
     const original = String(message?.prompt || "");
-    const alreadyPresent = hasSystemPolicy(original);
+    const alreadyPresent = serverManagesPromptPolicy(message) || hasSystemPolicy(original);
     if (alreadyPresent) state.server_owned_prefixes += 1;
     else state.fallback_injections += 1;
     const diagnostics = {
@@ -46,7 +50,7 @@
     state.wrapped_requests += 1;
     state.last_request_id = String(message?.request_id || "");
     const original = String(message?.prompt || "");
-    const alreadyPresent = hasSystemPolicy(original);
+    const alreadyPresent = serverManagesPromptPolicy(message) || hasSystemPolicy(original);
     const isolated = isolatedChatMessage(message);
     try {
       await trySendSocket({
@@ -57,6 +61,7 @@
           tool_isolation: "tool-isolation-v48",
           tool_policy_injected: !alreadyPresent,
           tool_policy_source: alreadyPresent ? "server-system-default-prefix" : "worker-compat-fallback",
+          server_prompt_policy_managed: serverManagesPromptPolicy(message),
         },
       });
     } catch (_) {}
