@@ -25,8 +25,6 @@ def test_generation_probe_checks_real_text_generation_control_paths() -> None:
         "Accept: text/event-stream",
     ):
         assert token in source
-    # bzr is telemetry/measurement and ws is not the normal text-generation SSE
-    # transport. Neither may become a hard health gate for text Workers.
     assert '"generation_bzr|https://bzr.openai.com/"' not in source
     assert '"generation_ws|https://ws.chatgpt.com/"' not in source
     assert "Do NOT use bzr.openai.com as a text-generation health gate" in source
@@ -74,28 +72,13 @@ def test_agent_v44_uses_generation_probe_and_reports_watchdog_state() -> None:
 
 def test_generation_backend_health_parser_is_fail_closed_only_when_fresh() -> None:
     now = int(routing.time.time())
-    fresh_bad = {
-        "metadata": {
-            "generation_backend_health": {
-                "ready": False,
-                "checked_at_epoch": now - 10,
-                "source": "linux-worker-watchdog-generation-v54",
-            }
-        }
-    }
+    fresh_bad = {"metadata": {"generation_backend_health": {"ready": False, "checked_at_epoch": now - 10, "source": "linux-worker-watchdog-generation-v54"}}}
     state = routing._health(fresh_bad)
     assert state is not None
     assert state["ready"] is False
     assert state["fresh"] is True
 
-    stale_bad = {
-        "metadata": {
-            "generation_backend_health": {
-                "ready": False,
-                "checked_at_epoch": now - routing.HEALTH_MAX_AGE_SECONDS - 10,
-            }
-        }
-    }
+    stale_bad = {"metadata": {"generation_backend_health": {"ready": False, "checked_at_epoch": now - routing.HEALTH_MAX_AGE_SECONDS - 10}}}
     stale = routing._health(stale_bad)
     assert stale is not None
     assert stale["fresh"] is False
@@ -110,9 +93,9 @@ def test_generation_health_guard_is_final_after_free_account_admission() -> None
 def test_bundle_and_runtime_publish_generation_backend_health_revision() -> None:
     manifest = json.loads(read("chrome_extension/manifest.json"))
     runtime = read("app/runtime_contract.py")
-    assert manifest["version"] == "0.8.16"
-    assert 'SERVER_RUNTIME_VERSION = "0.22.44"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.16"' in runtime
+    assert manifest["version"] == "0.8.17"
+    assert 'SERVER_RUNTIME_VERSION = "0.22.45"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.17"' in runtime
     assert '"linux_worker_generation_backend_health": True' in runtime
     assert '"linux_worker_proxy_health_facets": True' in runtime
     assert '"network_response_parser_v62": True' in runtime

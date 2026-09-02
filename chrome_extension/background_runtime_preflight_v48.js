@@ -2,10 +2,9 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__";
   if (globalThis[KEY]) return;
 
-  // The semantic Worker bundle remains 0.8.16 for this same-version hotfix.
-  // Revision 71 is the content-script epoch that prevents an already-open tab
-  // from being accepted merely because its MV3 service worker is current.
-  const REQUIRED_BUNDLE = "0.8.16";
+  // Worker bundle 0.8.17 formally seals the v71 content-script epoch and the
+  // v69 request/response chain that were previously shipped as 0.8.16 hotfixes.
+  const REQUIRED_BUNDLE = "0.8.17";
   const REQUIRED_REVISION = 71;
   const MAIN_FILES = ["network_stream_main_v55.js"];
   const OVERLAY_FILES = [

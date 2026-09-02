@@ -10,12 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.16"
-    scripts = [
-        script
-        for item in manifest.get("content_scripts", [])
-        for script in item.get("js", [])
-    ]
+    assert manifest["version"] == "0.8.17"
+    scripts = [script for item in manifest.get("content_scripts", []) for script in item.get("js", [])]
     assert "content_response_stream_recovery_v49.js" in scripts
     assert "content_network_stream_recovery_v55.js" in scripts
     assert "content_response_semantic_recovery_v51.js" in scripts
@@ -69,13 +65,7 @@ def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> No
         ROOT / "chrome_extension" / "content_transient_retry_v50.js",
         ROOT / "chrome_extension" / "conversation_workers_v25.js",
     ):
-        result = subprocess.run(
-            ["node", "--check", str(path)],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        result = subprocess.run(["node", "--check", str(path)], cwd=ROOT, capture_output=True, text=True, check=False)
         assert result.returncode == 0, result.stdout + result.stderr
 
 
@@ -111,13 +101,7 @@ assert.equal(recovery.stuckThreshold({ stop_visible: false, send_ready: false, s
 assert.equal(recovery.stuckThreshold({ stop_visible: false, send_ready: true, status_active: true }), 45000);
 assert.equal(recovery.stuckThreshold({ stop_visible: true, send_ready: false, status_active: true }), 120000);
 '''
-    result = subprocess.run(
-        ["node", "--input-type=module", "-e", script],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = subprocess.run(["node", "--input-type=module", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
     assert result.returncode == 0, result.stdout + result.stderr
 
 
