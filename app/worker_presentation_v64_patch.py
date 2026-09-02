@@ -1,39 +1,32 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from .admin_auth import SESSION_COOKIE
 
 
-PATCH_REVISION = 65
-ADMIN_ASSET = "/assets/chat2api-worker-presentation-v65.js"
+PATCH_REVISION = 66
 
 
 class PairingNameUpdate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
 
-async def _response_bytes(response: Response) -> bytes:
-    body = getattr(response, "body", None)
-    if body is not None:
-        return bytes(body)
-    chunks: list[bytes] = []
-    iterator = getattr(response, "body_iterator", None)
-    if iterator is not None:
-        async for chunk in iterator:
-            chunks.append(chunk.encode() if isinstance(chunk, str) else bytes(chunk))
-    return b"".join(chunks)
-
-
 def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
-    if getattr(app.state, "worker_presentation_v65_installed", False):
+    """Expose Worker presentation data without installing a second DOM renderer.
+
+    v64/v65 appended a second admin-console presentation asset after the canonical
+    Worker list renderer. Even after making its own DOM ordering convergent, that
+    layer still maintained independent observers/refresh timers against the same
+    table. v66 keeps the server-side device-name decoration and rename API only;
+    the existing canonical admin_extension_columns renderer is the sole DOM owner.
+    """
+    if getattr(app.state, "worker_presentation_v66_installed", False):
         return app
-    app.state.worker_presentation_v65_installed = True
+    app.state.worker_presentation_v66_installed = True
 
     registry = app.state.registry
     pairings = app.state.pairings
@@ -89,32 +82,5 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
             await pairings.save()
             payload = item.public()
         return {"pairing": payload, "device_name": payload.get("name"), "revision": PATCH_REVISION}
-
-    @app.get(ADMIN_ASSET, include_in_schema=False)
-    async def worker_presentation_asset() -> Response:
-        path = Path(__file__).with_name("admin_worker_presentation_v65.js")
-        return Response(
-            path.read_text(encoding="utf-8"),
-            media_type="application/javascript",
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
-        )
-
-    @app.middleware("http")
-    async def worker_presentation_v65(request: Request, call_next):
-        response = await call_next(request)
-        if request.url.path != "/admin" or "text/html" not in response.headers.get("content-type", ""):
-            return response
-        raw = await _response_bytes(response)
-        text = raw.decode("utf-8", errors="replace")
-        marker = f'<script src="{ADMIN_ASSET}"></script>'
-        if marker not in text:
-            text = text.replace("</body>", marker + "</body>")
-        headers = {
-            key: value
-            for key, value in response.headers.items()
-            if key.lower() not in {"content-length", "content-type"}
-        }
-        headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
-        return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
 
     return app
