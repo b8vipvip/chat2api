@@ -49,18 +49,49 @@
     return "chat.error";
   }
 
+  function releaseConversationReservation(requestId) {
+    const id = String(requestId || "");
+    if (!id) return false;
+    const router = globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
+    const routes = router?.routes;
+    const activeRequests = router?.activeRequests;
+    let released = false;
+
+    if (routes instanceof Map) {
+      for (const route of routes.values()) {
+        if (String(route?.inflight_request_id || "") !== id) continue;
+        route.inflight_request_id = null;
+        route.last_used_at = Date.now();
+        released = true;
+      }
+    }
+    if (activeRequests instanceof Map && activeRequests.has(id)) {
+      activeRequests.delete(id);
+      released = true;
+    }
+    return released;
+  }
+
   async function publishRoutedDispatchFailure(message, error) {
     const requestId = String(message?.request_id || "");
     if (!requestId) throw error;
     const text = String(error?.message || error || "Worker route dispatch failed");
     const retryAfterMs = Math.max(0, Number(error?.retry_after_ms || 0));
     const rateLimited = error?.code === "chatgpt_rate_limited" || /temporarily rate limited|too many requests/i.test(text);
+    // resolveTargetTabForRequest reserves a per-key route before background.js
+    // performs attachment preparation. If preparation fails before the request is
+    // handed to the content request controller, no content terminal event exists to
+    // release that reservation. Release it here before reporting the terminal error
+    // so one failed visual upload cannot permanently consume a conversation Worker.
+    const routeReservationReleased = releaseConversationReservation(requestId);
     const event = {
       type: terminalTypeFor(message),
       request_id: requestId,
       error: text,
       diagnostics: {
         routed_dispatch_terminal_v58: true,
+        routed_dispatch_reservation_release_v68: true,
+        route_reservation_released: routeReservationReleased,
         route_failure_code: String(error?.code || "route_dispatch_failed"),
         rate_limit_terminal: rateLimited,
         retry_after_ms: retryAfterMs,
@@ -110,9 +141,9 @@
       } catch (error) {
         // resolveRoutedTab() runs outside background.js's per-request try/catch. A
         // rate-limit guard or window-allocation failure here used to escape only to
-        // console.error, leaving the server request active until its 300s watchdog.
-        // Convert every routed allocation failure into exactly one terminal event so
-        // the broker releases capacity and v57 can enter the shared rate-limit cooldown.
+        // console.error, leaving the server request active until its watchdog. The
+        // v68 boundary additionally releases any route reservation already claimed
+        // before an attachment/preflight dispatch failure.
         if (isRoutedRequest) return publishRoutedDispatchFailure(message, error);
         throw error;
       }
