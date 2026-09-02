@@ -11,15 +11,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 NEW_JS = [
     "chrome_extension/content_bundle_marker_v48.js",
+    "chrome_extension/content_bundle_marker_v71.js",
     "chrome_extension/content_rate_limit_guard_v52.js",
     "chrome_extension/content_tool_isolation_v48.js",
     "chrome_extension/content_request_lifecycle_v50.js",
+    "chrome_extension/content_rich_response_v69.js",
+    "chrome_extension/content_request_v6.js",
     "chrome_extension/content_response_stream_recovery_v49.js",
+    "chrome_extension/content_response_stream_recovery_v69.js",
     "chrome_extension/content_network_stream_recovery_v55.js",
     "chrome_extension/content_response_semantic_recovery_v51.js",
     "chrome_extension/content_transient_retry_v50.js",
     "chrome_extension/content_generation_liveness_v49.js",
     "chrome_extension/content_runtime_contract_v48.js",
+    "chrome_extension/content_runtime_contract_v71.js",
     "chrome_extension/network_stream_main_v55.js",
     "chrome_extension/background_rate_limit_guard_v52.js",
     "chrome_extension/background_route_quarantine_v50.js",
@@ -46,26 +51,33 @@ def test_manifest_requires_fresh_document_marker_and_passive_recovery():
     scripts = manifest["content_scripts"][1]["js"]
     assert "network_stream_main_v55.js" in main_scripts
     assert "network_stream_main_v54.js" not in main_scripts
-    assert scripts.index("content.js") < scripts.index("content_bundle_marker_v48.js")
+    assert scripts.index("content.js") < scripts.index("content_bundle_marker_v48.js") < scripts.index("content_bundle_marker_v71.js")
     assert scripts.index("content_ui_hygiene_v31.js") < scripts.index("content_rate_limit_guard_v52.js") < scripts.index("content_tool_isolation_v48.js")
-    assert scripts.index("content_request_v5.js") < scripts.index("content_request_lifecycle_v50.js")
+    assert scripts.index("content_request_v5.js") < scripts.index("content_rich_response_v69.js") < scripts.index("content_request_v6.js") < scripts.index("content_request_lifecycle_v50.js")
     assert scripts.index("content_draft_ownership_v43.js") < scripts.index("content_draft_managed_recovery_v55.js")
-    assert scripts.index("content_response_capture_v41.js") < scripts.index("content_response_stream_recovery_v49.js") < scripts.index("content_network_stream_recovery_v55.js") < scripts.index("content_response_semantic_recovery_v51.js") < scripts.index("content_transient_retry_v50.js")
+    assert scripts.index("content_response_capture_v41.js") < scripts.index("content_response_stream_recovery_v49.js") < scripts.index("content_response_stream_recovery_v69.js") < scripts.index("content_network_stream_recovery_v55.js") < scripts.index("content_response_semantic_recovery_v51.js") < scripts.index("content_transient_retry_v50.js")
     assert scripts.index("content_request_stall_guard_v34.js") < scripts.index("content_generation_liveness_v49.js")
-    assert scripts[-1] == "content_runtime_contract_v48.js"
+    assert scripts.index("content_runtime_contract_v48.js") < scripts.index("content_runtime_contract_v71.js")
+    assert scripts[-1] == "content_runtime_contract_v71.js"
 
 
 def test_bundle_marker_cannot_be_spoofed_by_dynamic_bootstrap():
     bootstrap = (ROOT / "chrome_extension" / "content_bootstrap.js").read_text(encoding="utf-8")
     assert "content_bundle_marker_v48.js" not in bootstrap
+    # v71 is an independently refreshable content epoch, so programmatic
+    # bootstrap must be able to establish it on an already-open ChatGPT tab.
+    assert "content_bundle_marker_v71.js" in bootstrap
     assert "network_stream_main_v55.js" in bootstrap
     assert "content_rate_limit_guard_v52.js" in bootstrap
     assert "content_tool_isolation_v48.js" in bootstrap
     assert "content_draft_managed_recovery_v55.js" in bootstrap
-    assert "content_response_stream_recovery_v49.js" in bootstrap
+    assert "content_rich_response_v69.js" in bootstrap
+    assert "content_request_v6.js" in bootstrap
+    assert "content_response_stream_recovery_v69.js" in bootstrap
     assert "content_network_stream_recovery_v55.js" in bootstrap
     assert "content_generation_liveness_v49.js" in bootstrap
     assert "content_runtime_contract_v48.js" in bootstrap
+    assert "content_runtime_contract_v71.js" in bootstrap
 
 
 def test_background_preflight_wraps_final_conversation_dispatch():
@@ -74,23 +86,34 @@ def test_background_preflight_wraps_final_conversation_dispatch():
     assert entry.index('"conversation_dispatch.js"') < entry.index('"background_route_quarantine_v50.js"') < entry.index('"background_tool_isolation_v48.js"')
     assert entry.index('"background_tool_isolation_v48.js"') < entry.index('"background_runtime_preflight_v48.js"')
     preflight = (ROOT / "chrome_extension" / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
-    contract = (ROOT / "chrome_extension" / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
-    marker = (ROOT / "chrome_extension" / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
+    legacy_contract = (ROOT / "chrome_extension" / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
+    contract = (ROOT / "chrome_extension" / "content_runtime_contract_v71.js").read_text(encoding="utf-8")
+    legacy_marker = (ROOT / "chrome_extension" / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
+    marker = (ROOT / "chrome_extension" / "content_bundle_marker_v71.js").read_text(encoding="utf-8")
     assert 'REQUIRED_BUNDLE = "0.8.16"' in preflight
+    assert 'REQUIRED_REVISION = 71' in preflight
     assert 'const MAIN_FILES = ["network_stream_main_v55.js"]' in preflight
     assert '"content_rate_limit_guard_v52.js"' in preflight
     assert '"content_request_lifecycle_v50.js"' in preflight
     assert '"content_draft_managed_recovery_v55.js"' in preflight
-    assert '"content_response_stream_recovery_v49.js"' in preflight
+    assert '"content_rich_response_v69.js"' in preflight
+    assert '"content_request_v6.js"' in preflight
+    assert '"content_response_stream_recovery_v69.js"' in preflight
+    assert '"content_response_stream_recovery_v49.js"' not in preflight
     assert '"content_network_stream_recovery_v55.js"' in preflight
     assert '"content_response_semantic_recovery_v51.js"' in preflight
     assert '"content_transient_retry_v50.js"' in preflight
     assert '"content_generation_liveness_v49.js"' in preflight
+    assert '"content_bundle_marker_v71.js"' in preflight
+    assert '"content_runtime_contract_v71.js"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.16"' in legacy_contract
     assert 'REQUIRED_BUNDLE = "0.8.16"' in contract
+    assert 'REQUIRED_REVISION = 71' in contract
     assert "__CHAT2API_RATE_LIMIT_CONTENT_V52__" in contract
     assert "__CHAT2API_REQUEST_LIFECYCLE_V50__" in contract
     assert "__CHAT2API_DRAFT_MANAGED_RECOVERY_V55__" in contract
     assert "__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__" in contract
+    assert "__CHAT2API_RESPONSE_STREAM_RECOVERY_V69__" in contract
     assert "__CHAT2API_NETWORK_STREAM_RECOVERY_V55__" in contract
     assert "network_stream_main_v55" in contract
     assert "network_stream_parser_v62" in contract
@@ -100,9 +123,12 @@ def test_background_preflight_wraps_final_conversation_dispatch():
     assert "semanticHelper?.timer == null" in contract
     assert "__CHAT2API_TRANSIENT_RETRY_V50__" in contract
     assert "__CHAT2API_GENERATION_LIVENESS_V49__" in contract
+    assert 'bundle: "0.8.16"' in legacy_marker
     assert 'bundle: "0.8.16"' in marker
+    assert 'revision: 71' in marker
     assert "content_bundle_marker_v48.js" not in preflight
     assert "chrome.tabs.reload" in preflight
+    assert "waitForReloadOrContract" in preflight
     assert "ChatGPT tab Worker runtime is stale or incomplete" in preflight
     assert "chat2api.tool-isolation.preflight" in preflight
 
