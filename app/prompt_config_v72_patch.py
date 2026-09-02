@@ -112,9 +112,14 @@ def install_prompt_config_v72_patch(app: FastAPI) -> FastAPI:
             headers={"Cache-Control": "no-store"},
         )
 
+    # app.main imports the admin_response function, not ADMIN_HTML itself. Mutate
+    # the canonical app.admin module so every future /admin or /developers response
+    # produced by admin_response() includes the new asset.
+    from . import admin as admin_module
+
     marker = f'<script src="{ASSET_PATH}"></script>'
-    if marker not in main_module.ADMIN_HTML:
-        main_module.ADMIN_HTML = main_module.ADMIN_HTML.replace("</body>", marker + "</body>")
+    if marker not in admin_module.ADMIN_HTML:
+        admin_module.ADMIN_HTML = admin_module.ADMIN_HTML.replace("</body>", marker + "</body>")
 
     app.state.prompt_config_v72_installed = True
     return app
