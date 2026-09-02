@@ -81,13 +81,16 @@ def test_canonical_worker_header_and_rows_use_same_keys() -> None:
         "network",
         "chatgpt",
         "actions",
+        "device_name",
+        "occupancy",
     ]
     for key in expected:
         assert f'{{key: "{key}",' in columns
         assert f'data-chat2api-column-key="{key}"' in columns
     assert '{key: "bound_api_keys",' not in columns
+    assert '{key: "occupied_windows",' not in columns
     assert 'data-chat2api-column-key="bound_api_keys"' not in columns
-    assert 'removed_columns: ["concurrency", "reserve_windows", "platform", "bound_api_keys"]' in columns
+    assert 'removed_columns: ["concurrency", "reserve_windows", "platform", "bound_api_keys", "occupied_windows"]' in columns
     assert '旧并发列（已合并）' not in columns
     assert '旧备用窗口列（已合并）' not in columns
 
