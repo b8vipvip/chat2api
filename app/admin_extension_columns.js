@@ -1,5 +1,6 @@
 (() => {
   const VERSION = "0.22.41-worker-list-v60";
+  const COLUMN_SCHEMA_REVISION = 67;
   const STORAGE_KEY = "chat2api.extensionColumns.v3";
   const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2";
   const COLUMNS = [
@@ -13,13 +14,15 @@
     {key: "network", label: "网络"},
     {key: "chatgpt", label: "ChatGPT"},
     {key: "actions", label: "操作"},
+    {key: "device_name", label: "设备名称"},
+    {key: "occupancy", label: "当前占用"},
   ];
   const KNOWN_KEYS = new Set(COLUMNS.map(item => item.key));
   const DEFAULT_ORDER = COLUMNS.map(item => item.key);
   const LEGACY_KEY_MAP = new Map([
     ["platform", "worker_settings"],
   ]);
-  const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys"]);
+  const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys", "occupied_windows"]);
 
   let prefs = null;
   let menuOpen = false;
@@ -160,7 +163,8 @@
     return COLUMNS.map(({key, label}) => {
       const health = key === "network" || key === "chatgpt" ? ` data-chat2api-health-column="${key}"` : "";
       const owner = key === "worker_settings" ? ' data-chat2api-structural-owner="worker-settings-v59"' : "";
-      return `<th data-chat2api-column-key="${key}"${health}${owner}>${label}</th>`;
+      const title = key === "occupancy" ? ' title="当前占用 / 配置并发上限"' : "";
+      return `<th data-chat2api-column-key="${key}"${health}${owner}${title}>${label}</th>`;
     }).join("");
   }
 
@@ -206,6 +210,23 @@
     return {text: "未知", cls: "warnText"};
   }
 
+  function occupancy(row) {
+    const capacity = row?.capacity && typeof row.capacity === "object" ? row.capacity : {};
+    const usedRaw = capacity.used_units ?? row?.active_api_calls ?? 0;
+    const limitRaw = capacity.limit_units ?? row?.max_concurrency ?? row?.configured_max_concurrency ?? 0;
+    const queueRaw = capacity.queued_requests ?? 0;
+    const used = Number.isFinite(Number(usedRaw)) ? Number(usedRaw) : 0;
+    const limit = Number.isFinite(Number(limitRaw)) ? Number(limitRaw) : 0;
+    const queued = Number.isFinite(Number(queueRaw)) ? Number(queueRaw) : 0;
+    const cooling = capacity.rate_limit_cooldown_active === true;
+    const remaining = Number(capacity.rate_limit_cooldown_remaining_seconds || 0);
+    return {
+      text: `${used} / ${limit || "-"}${queued > 0 ? ` · 排队 ${queued}` : ""}`,
+      title: `当前占用 ${used}${limit ? ` / ${limit}` : ""}${queued > 0 ? `；排队 ${queued}` : ""}${cooling ? `；额度冷却 ${Math.max(0, Math.ceil(remaining))} 秒` : ""}`,
+      cls: used > 0 ? "warnText" : "muted",
+    };
+  }
+
   function workerActions(row) {
     const id = esc(row.client_id || "");
     const connect = row.connection_enabled === false
@@ -217,7 +238,12 @@
   function rowHtml(row) {
     const network = networkLabel(row);
     const login = chatgptLabel(row);
+    const occupied = occupancy(row);
     const clientId = esc(row.client_id || "");
+    const deviceName = String(row?.device_name || "").trim();
+    const deviceNameHtml = deviceName
+      ? `<span title="${esc(row?.device_code_id || row?.pairing_id || "")}">${esc(deviceName)}</span>`
+      : '<span class="muted">-</span>';
     return `<tr data-chat2api-canonical-worker-row="1" data-client-id="${clientId}">
       <td data-chat2api-column-key="client_id"><code>${clientId}</code></td>
       <td data-chat2api-column-key="device_id"><code>${esc(row.device_id || row.metadata?.device_id || "-")}</code></td>
@@ -229,6 +255,8 @@
       <td data-chat2api-column-key="network" data-chat2api-health-cell="network" class="${network.cls}">${esc(network.text)}</td>
       <td data-chat2api-column-key="chatgpt" data-chat2api-health-cell="chatgpt" class="${login.cls}">${esc(login.text)}</td>
       <td data-chat2api-column-key="actions">${workerActions(row)}</td>
+      <td data-chat2api-column-key="device_name">${deviceNameHtml}</td>
+      <td data-chat2api-column-key="occupancy" class="${occupied.cls}" title="${esc(occupied.title)}">${esc(occupied.text)}</td>
     </tr>`;
   }
 
@@ -245,6 +273,7 @@
       applyLayout();
       document.documentElement.dataset.chat2apiWorkerListReady = "1";
       document.documentElement.dataset.chat2apiWorkerListVersion = VERSION;
+      document.documentElement.dataset.chat2apiWorkerColumnSchemaRevision = String(COLUMN_SCHEMA_REVISION);
       if (table) table.style.visibility = "";
     } finally {
       canonicalizing = false;
@@ -532,8 +561,9 @@
     globalThis.chat2apiReloadCanonicalWorkerListV59 = () => loadCanonicalExtensions(true);
     globalThis.__CHAT2API_CANONICAL_WORKER_LIST_V59__ = {
       version: VERSION,
+      column_schema_revision: COLUMN_SCHEMA_REVISION,
       columns: [...DEFAULT_ORDER],
-      removed_columns: ["concurrency", "reserve_windows", "platform", "bound_api_keys"],
+      removed_columns: ["concurrency", "reserve_windows", "platform", "bound_api_keys", "occupied_windows"],
       structural_owner: "admin_extension_columns",
       legacy_renderers_bypassed: true,
     };

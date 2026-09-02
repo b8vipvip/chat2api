@@ -12,6 +12,7 @@ def source() -> str:
 def test_column_layout_supports_visibility_order_and_v2_to_v3_persistence():
     text = source()
     assert 'const VERSION = "0.22.41-worker-list-v60"' in text
+    assert 'const COLUMN_SCHEMA_REVISION = 67' in text
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v3"' in text
     assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2"' in text
     assert "localStorage.getItem(STORAGE_KEY)" in text
@@ -41,6 +42,8 @@ def test_column_layout_uses_one_canonical_semantic_schema():
         ("network", "网络"),
         ("chatgpt", "ChatGPT"),
         ("actions", "操作"),
+        ("device_name", "设备名称"),
+        ("occupancy", "当前占用"),
     )
     for key, label in expected:
         assert f'{{key: "{key}", label: "{label}"}}' in text
@@ -51,8 +54,9 @@ def test_column_layout_uses_one_canonical_semantic_schema():
     assert '{key: "reserve_windows",' not in text
     assert '{key: "platform",' not in text
     assert '{key: "bound_api_keys",' not in text
+    assert '{key: "occupied_windows",' not in text
     assert 'data-chat2api-column-key="bound_api_keys"' not in text
-    assert 'removed_columns: ["concurrency", "reserve_windows", "platform", "bound_api_keys"]' in text
+    assert 'removed_columns: ["concurrency", "reserve_windows", "platform", "bound_api_keys", "occupied_windows"]' in text
     assert '旧并发列（已合并）' not in text
     assert '旧备用窗口列（已合并）' not in text
 
@@ -61,7 +65,7 @@ def test_column_layout_migrates_only_still_supported_historical_cells():
     text = source()
     assert '["platform", "worker_settings"]' in text
     assert '["concurrency", "bound_api_keys"]' not in text
-    assert 'const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys"])' in text
+    assert 'const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys", "occupied_windows"])' in text
     assert 'const key = LEGACY_KEY_MAP.get(original) || original' in text
     assert 'if (REMOVED_KEYS.has(original)) continue' in text
     assert 'if (!KNOWN_KEYS.has(key) || seen.has(key)) continue' in text
@@ -76,6 +80,9 @@ def test_canonical_header_and_rows_have_the_same_column_keys():
     assert 'headerRow.innerHTML !== header' in text
     assert 'body.innerHTML = rows.length' in text
     assert 'applyLayout();' in text
+    assert 'capacity.used_units' in text
+    assert 'capacity.limit_units' in text
+    assert 'row?.device_name' in text
 
 
 def test_worker_view_bypasses_historical_multi_stage_extension_renderers():
@@ -104,7 +111,7 @@ def test_initial_worker_table_is_hidden_until_canonical_snapshot_is_ready():
     assert 'loadCanonicalExtensions(true)' in text
 
 
-def test_column_settings_modal_only_exposes_current_columns():
+def test_column_settings_modal_exposes_every_effective_worker_column():
     text = source()
     for token in (
         'backdrop.id = "extensionColumnSettingsBackdrop"',
@@ -121,10 +128,13 @@ def test_column_settings_modal_only_exposes_current_columns():
         'document.body.style.overflow = "hidden"',
         'document.body.style.overflow = bodyOverflowBeforeModal',
         '旧并发列、旧备用窗口列与绑定 API Key 数列已永久移除',
+        '{key: "device_name", label: "设备名称"}',
+        '{key: "occupancy", label: "当前占用"}',
     ):
         assert token in text
 
     assert '{key: "bound_api_keys", label: "绑定 API Key 数"}' not in text
+    assert '{key: "occupied_windows", label: "当前占用"}' not in text
     assert "positionMenu" not in text
     assert 'window.addEventListener("scroll"' not in text
     assert 'window.addEventListener("resize"' not in text
