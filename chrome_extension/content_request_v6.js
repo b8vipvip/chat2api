@@ -597,5 +597,10 @@
   };
 
   state.listener = listener;
+  // Historical lifecycle/hygiene overlays still discover the request owner
+  // through the v5 compatibility surface. Point that surface at v6 before those
+  // overlays load so they wrap this listener rather than accidentally restoring
+  // the stale count-based v5 response classifier.
+  if (v5) v5.listener = listener;
   chrome.runtime.onMessage.addListener(listener);
 })();
