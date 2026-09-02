@@ -11,6 +11,26 @@ from .prompt_config import PromptConfigStore
 
 PATCH_ID = "prompt-config-v72"
 ASSET_PATH = "/assets/chat2api-prompt-config-v72.js"
+PROMPT_THEME_MARKER = "data-chat2api-prompt-theme-v74"
+PROMPT_THEME_V74 = f'''<style {PROMPT_THEME_MARKER}="1">
+#pcSystemDefaultPrefix {{
+  background: var(--panel2) !important;
+  color: var(--text) !important;
+  border-color: var(--line) !important;
+  -webkit-text-fill-color: var(--text) !important;
+  opacity: 1 !important;
+  line-height: 1.55;
+}}
+#pcSystemDefaultPrefix:focus {{
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}}
+#pcSystemDefaultPrefix::selection {{
+  background: #315d9b;
+  color: #ffffff;
+  -webkit-text-fill-color: #ffffff;
+}}
+</style>'''
 
 
 def install_prompt_config_v72_patch(app: FastAPI) -> FastAPI:
@@ -114,8 +134,13 @@ def install_prompt_config_v72_patch(app: FastAPI) -> FastAPI:
 
     # app.main imports the admin_response function, not ADMIN_HTML itself. Mutate
     # the canonical app.admin module so every future /admin or /developers response
-    # produced by admin_response() includes the new asset.
+    # produced by admin_response() includes the new asset and a theme-safe readonly
+    # system-prefix field. The v73 JS had a light fallback color for an undefined
+    # CSS variable, which produced white-on-white text in the dark console.
     from . import admin as admin_module
+
+    if PROMPT_THEME_MARKER not in admin_module.ADMIN_HTML:
+        admin_module.ADMIN_HTML = admin_module.ADMIN_HTML.replace("</head>", PROMPT_THEME_V74 + "</head>")
 
     marker = f'<script src="{ASSET_PATH}"></script>'
     if marker not in admin_module.ADMIN_HTML:
