@@ -102,7 +102,7 @@ def test_runtime_contract_requires_worker_0816_single_owner_plus_network_recover
     contract = (EXT / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     marker = (EXT / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
 
-    assert 'SERVER_RUNTIME_VERSION = "0.22.43"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.44"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.16"' in runtime
     assert '"single_response_observer": True' in runtime
     assert '"network_response_recovery": True' in runtime

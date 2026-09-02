@@ -10,8 +10,8 @@ from pydantic import BaseModel, Field
 from .admin_auth import SESSION_COOKIE
 
 
-PATCH_REVISION = 64
-ADMIN_ASSET = "/assets/chat2api-worker-presentation-v64.js"
+PATCH_REVISION = 65
+ADMIN_ASSET = "/assets/chat2api-worker-presentation-v65.js"
 
 
 class PairingNameUpdate(BaseModel):
@@ -31,9 +31,9 @@ async def _response_bytes(response: Response) -> bytes:
 
 
 def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
-    if getattr(app.state, "worker_presentation_v64_installed", False):
+    if getattr(app.state, "worker_presentation_v65_installed", False):
         return app
-    app.state.worker_presentation_v64_installed = True
+    app.state.worker_presentation_v65_installed = True
 
     registry = app.state.registry
     pairings = app.state.pairings
@@ -92,7 +92,7 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
 
     @app.get(ADMIN_ASSET, include_in_schema=False)
     async def worker_presentation_asset() -> Response:
-        path = Path(__file__).with_name("admin_worker_presentation_v64.js")
+        path = Path(__file__).with_name("admin_worker_presentation_v65.js")
         return Response(
             path.read_text(encoding="utf-8"),
             media_type="application/javascript",
@@ -100,7 +100,7 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
         )
 
     @app.middleware("http")
-    async def worker_presentation_v64(request: Request, call_next):
+    async def worker_presentation_v65(request: Request, call_next):
         response = await call_next(request)
         if request.url.path != "/admin" or "text/html" not in response.headers.get("content-type", ""):
             return response

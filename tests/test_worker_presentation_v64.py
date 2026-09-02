@@ -8,7 +8,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.testclient import TestClient
 
 from app.admin_auth import SESSION_COOKIE
-from app.worker_presentation_v64_patch import ADMIN_ASSET, install_worker_presentation_v64_patch
+from app.worker_presentation_v64_patch import ADMIN_ASSET, PATCH_REVISION, install_worker_presentation_v64_patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -97,6 +97,8 @@ def test_pairing_code_name_can_be_changed_from_admin_api():
         response = client.patch("/api/admin/pairing-codes/pair_1/name", json={"name": "  ubuntu03-new  "})
         assert response.status_code == 200
         assert response.json()["device_name"] == "ubuntu03-new"
+        assert response.json()["revision"] == 65
+        assert PATCH_REVISION == 65
         assert app.state.pairings.items["pair_1"].name == "ubuntu03-new"
         assert app.state.pairings.saved == 1
         assert app.state.registry.summaries()[0]["device_name"] == "ubuntu03-new"
@@ -106,15 +108,20 @@ def test_worker_presentation_asset_is_injected_after_console():
     app = build_app()
     with TestClient(app) as client:
         html = client.get("/admin").text
+        assert ADMIN_ASSET == "/assets/chat2api-worker-presentation-v65.js"
         assert f'<script src="{ADMIN_ASSET}"></script>' in html
+        assert "chat2api-worker-presentation-v64.js" not in html
         script = client.get(ADMIN_ASSET).text
+        assert 'const VERSION = 65' in script
         assert '{ key: "device_name", label: "设备名称"' in script
         assert '{ key: "occupancy", label: "当前占用"' in script
         assert "capacity.used_units" in script
         assert "capacity.limit_units" in script
-        assert "data-v64-pairing-rename" in script
+        assert "data-v65-pairing-rename" in script
         assert "设备名称已更新" in script
         assert "已显示 ${baseVisible + extraVisible}" in script
+        assert "node.nextElementSibling !== next" in script
+        assert "node !== parent.lastElementChild" in script
 
 
 def test_worker_presentation_is_installed_after_disable_authority():
@@ -124,6 +131,17 @@ def test_worker_presentation_is_installed_after_disable_authority():
 
 
 def test_worker_presentation_javascript_syntax():
-    path = ROOT / "app" / "admin_worker_presentation_v64.js"
+    path = ROOT / "app" / "admin_worker_presentation_v65.js"
     result = subprocess.run(["node", "--check", str(path)], capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
+
+
+def test_worker_presentation_dom_ordering_converges_without_observer_loop():
+    result = subprocess.run(
+        ["node", "tests/worker_presentation_liveness_v65.mjs"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "DOM convergence contract passed" in result.stdout

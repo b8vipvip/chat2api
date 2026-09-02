@@ -37,7 +37,7 @@ def test_capacity_controller_vm_contracts_cover_native_and_reporter_paths():
 
 def test_runtime_contract_separates_protocol_from_new_bundle_build():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.43"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.44"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.16"' in runtime
     assert '"bundle_version": CHROME_BRIDGE_BUNDLE_VERSION' in runtime
@@ -56,6 +56,7 @@ def test_runtime_contract_separates_protocol_from_new_bundle_build():
     assert 'worker-live-occupancy-v61' in runtime
     assert 'multimodal-upload-v64' in runtime
     assert 'worker-presentation-v64' in runtime
+    assert 'worker-presentation-v65-console-liveness-v65' in runtime
     assert '"bridge_service_worker_cache_bust": True' in runtime
     assert '"rendered_response_capture_recovery": True' in runtime
     assert '"response_stream_recovery": True' in runtime
@@ -88,5 +89,6 @@ def test_runtime_contract_separates_protocol_from_new_bundle_build():
     assert '"worker_live_occupancy": True' in runtime
     assert '"worker_device_name_column": True' in runtime
     assert '"worker_pairing_rename": True' in runtime
+    assert '"worker_presentation_console_liveness_v65": True' in runtime
     assert '"multimodal_upload_confirmation_v64": True' in runtime
     assert '"linux_worker_proxy_health_facets": True' in runtime
