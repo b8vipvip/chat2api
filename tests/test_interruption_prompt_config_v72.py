@@ -10,10 +10,11 @@ from app.prompt_config import PromptConfigStore, SYSTEM_DEFAULT_PREFIX
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_prompt_config_applies_system_prefix_custom_prefix_suffix_and_redaction(tmp_path: Path) -> None:
+def test_prompt_config_applies_editable_system_prefix_custom_prefix_suffix_and_redaction(tmp_path: Path) -> None:
     store = PromptConfigStore(tmp_path)
     saved = store.save(
         {
+            "system_default_prefix": "CUSTOM SYSTEM PREFIX",
             "prefix": "CUSTOM PREFIX",
             "suffix": "CUSTOM SUFFIX",
             "redaction_enabled": True,
@@ -30,14 +31,37 @@ def test_prompt_config_applies_system_prefix_custom_prefix_suffix_and_redaction(
         }
     )
     final, meta = store.apply("User says SECRET-123")
-    assert final == f"{SYSTEM_DEFAULT_PREFIX}\n\nCUSTOM PREFIX\n\nUser says [MASKED]\n\nCUSTOM SUFFIX"
+    assert final == "CUSTOM SYSTEM PREFIX\n\nCUSTOM PREFIX\n\nUser says [MASKED]\n\nCUSTOM SUFFIX"
     assert meta["system_default_prefix_applied"] is True
-    assert meta["system_default_prefix_chars"] == len(SYSTEM_DEFAULT_PREFIX)
+    assert meta["system_default_prefix_chars"] == len("CUSTOM SYSTEM PREFIX")
+    assert meta["system_default_prefix_recommended"] is False
     assert meta["redaction_count"] == 1
-    assert saved["system_default_prefix"] == SYSTEM_DEFAULT_PREFIX
-    assert saved["system_default_prefix_readonly"] is True
+    assert saved["system_default_prefix"] == "CUSTOM SYSTEM PREFIX"
+    assert saved["system_default_prefix_readonly"] is False
+    assert saved["recommended"]["system_default_prefix"] == SYSTEM_DEFAULT_PREFIX
     assert saved["audit_final_prompt"] is True
     assert (tmp_path / "prompt_config.json").exists()
+
+
+def test_existing_prompt_config_without_system_field_migrates_to_recommended_default(tmp_path: Path) -> None:
+    (tmp_path / "prompt_config.json").write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "prefix": "legacy prefix",
+                "suffix": "",
+                "redaction_enabled": False,
+                "rules": [],
+                "audit_final_prompt": True,
+                "revision": 7,
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = PromptConfigStore(tmp_path)
+    assert store.config["system_default_prefix"] == SYSTEM_DEFAULT_PREFIX
+    assert store.config["prefix"] == "legacy prefix"
+    assert store.config["revision"] == 7
 
 
 def test_system_default_prefix_matches_external_account_execution_rule() -> None:
@@ -95,9 +119,11 @@ def test_request_bridge_delays_request_until_guard_resolution() -> None:
     assert "v5.listener = listener" in source
 
 
-def test_worker_tool_isolation_uses_server_prefix_and_only_falls_back_for_old_server() -> None:
+def test_worker_tool_isolation_respects_server_managed_prompt_and_falls_back_for_old_server() -> None:
     source = (ROOT / "chrome_extension" / "background_tool_isolation_v48.js").read_text(encoding="utf-8")
     assert "hasSystemPolicy" in source
+    assert "serverManagesPromptPolicy" in source
+    assert "server_prompt_policy_managed" in source
     assert 'tool_policy_source: alreadyPresent ? "server-system-default-prefix" : "worker-compat-fallback"' in source
     assert "prompt: alreadyPresent ? original : `${POLICY}\\n\\n${original}`" in source
     assert "tool_policy_injected: !alreadyPresent" in source
@@ -105,10 +131,12 @@ def test_worker_tool_isolation_uses_server_prefix_and_only_falls_back_for_old_se
     assert "server_owned_prefixes" in source
 
 
-def test_prompt_config_patch_audits_exact_worker_prompt_and_strips_list_payload() -> None:
+def test_prompt_config_patch_audits_exact_worker_prompt_and_marks_server_policy_owner() -> None:
     source = (ROOT / "app" / "prompt_config_v72_patch.py").read_text(encoding="utf-8")
     assert 'payload.get("type") == "chat.request"' in source
     assert '"final_prompt": prompt' in source
+    assert '"server_prompt_policy_managed": True' in source
+    assert '"server_system_default_prefix_recommended": system_default_prefix == SYSTEM_DEFAULT_PREFIX' in source
     assert 'row.pop("final_prompt", None)' in source
     assert '@app.get("/api/admin/prompt-config")' in source
     assert '@app.put("/api/admin/prompt-config")' in source
@@ -116,20 +144,28 @@ def test_prompt_config_patch_audits_exact_worker_prompt_and_strips_list_payload(
     assert "main_module.build_prompt = configured_build_prompt" in source
 
 
-def test_admin_asset_has_system_prefix_prompt_nav_request_column_and_copy_modal() -> None:
-    source = (ROOT / "app" / "admin_prompt_config_v72.js").read_text(encoding="utf-8")
-    assert "提示词配置" in source
-    assert "系统默认前置提示词" in source
-    assert 'id="pcSystemDefaultPrefix"' in source
-    assert "readonly" in source
-    assert "自定义前置提示词" in source
-    assert "自定义后置提示词" in source
-    assert "脱敏配置" in source
-    assert "查看提示词" in source
-    assert "最终完整提示词" in source
-    assert "复制提示词" in source
-    assert "/api/admin/prompt-config" in source
-    assert "/api/admin/requests/" in source
+def test_admin_assets_have_editable_system_prompt_inline_save_defaults_and_copy_modal() -> None:
+    legacy = (ROOT / "app" / "admin_prompt_config_v72.js").read_text(encoding="utf-8")
+    overlay = (ROOT / "app" / "admin_prompt_config_v75.js").read_text(encoding="utf-8")
+    assert "提示词配置" in legacy
+    assert "系统默认前置提示词" in legacy
+    assert 'id="pcSystemDefaultPrefix"' in legacy
+    assert "自定义前置提示词" in legacy
+    assert "自定义后置提示词" in legacy
+    assert "脱敏配置" in legacy
+    assert "查看提示词" in legacy
+    assert "最终完整提示词" in legacy
+    assert "复制提示词" in legacy
+    assert "/api/admin/prompt-config" in legacy
+    assert "/api/admin/requests/" in legacy
+    assert 'system.removeAttribute("readonly")' in overlay
+    assert 'addPromptActionBar("pcSystemDefaultPrefix", "system_default_prefix")' in overlay
+    assert 'addPromptActionBar("pcPrefix", "prefix")' in overlay
+    assert 'addPromptActionBar("pcSuffix", "suffix")' in overlay
+    assert "默认推荐" in overlay
+    assert "保存" in overlay
+    assert 'globalSave.remove()' in overlay
+    assert "saveRedaction" in overlay
 
 
 def test_entry_installs_prompt_config_as_final_boundary() -> None:
@@ -144,5 +180,6 @@ def test_new_javascript_syntax() -> None:
         "chrome_extension/content_request_interruption_bridge_v72.js",
         "chrome_extension/background_tool_isolation_v48.js",
         "app/admin_prompt_config_v72.js",
+        "app/admin_prompt_config_v75.js",
     ):
         subprocess.run(["node", "--check", str(ROOT / relative)], check=True, capture_output=True, text=True)
