@@ -1,7 +1,7 @@
 (() => {
   const baseEnsureContent = ensureContent;
 
-  ensureContent = async function ensureChat2apiContentV21(tabId) {
+  ensureContent = async function ensureChat2apiContentV71(tabId) {
     await baseEnsureContent(tabId);
     try {
       await chrome.scripting.executeScript({
@@ -12,6 +12,7 @@
       await chrome.scripting.executeScript({
         target: { tabId },
         files: [
+          "content_bundle_marker_v71.js",
           "content_page_adapter_v22.js",
           "content_login_v27.js",
           "content_rate_limit_guard_v52.js",
@@ -27,15 +28,22 @@
           "content_page_smoke_v22.js",
           "content_multimodal.js",
           "content_request_v3.js",
+          "content_multimodal_v68.js",
           "content_multimodal_v4.js",
           "content_request_v4.js",
           "content_request_v5.js",
+          "content_rich_response_v69.js",
+          "content_request_v6.js",
+          "content_request_lifecycle_v50.js",
           "content_request_hygiene_v42.js",
           "content_draft_ownership_v43.js",
           "content_draft_managed_recovery_v55.js",
           "content_response_capture_v41.js",
           "content_response_stream_recovery_v49.js",
+          "content_response_stream_recovery_v69.js",
           "content_network_stream_recovery_v55.js",
+          "content_response_semantic_recovery_v51.js",
+          "content_transient_retry_v50.js",
           "content_request_stall_guard_v34.js",
           "content_generation_liveness_v49.js",
           "content_request_perf_v21.js",
@@ -50,7 +58,8 @@
           "content_voice_fix_v3.js",
           "content_voice_fix_v4.js",
           "content_runtime_log.js",
-          "content_runtime_contract_v48.js"
+          "content_runtime_contract_v48.js",
+          "content_runtime_contract_v71.js"
         ],
       });
     } catch (_) {}
