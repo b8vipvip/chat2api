@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 import subprocess
@@ -79,11 +80,10 @@ def build_api_key_app(tmp_path: Path) -> tuple[FastAPI, ApiKeyStore]:
 
 def test_api_key_settings_endpoint_edits_name_and_scopes(tmp_path: Path):
     app, store = build_api_key_app(tmp_path)
+    created, _token = asyncio.run(store.create("Old name"))
+    key_id = created["key_id"]
     with TestClient(app) as client:
         client.cookies.set(SESSION_COOKIE, "session-ok")
-        created, _token = client.portal.call(store.create, "Old name")
-        key_id = created["key_id"]
-
         response = client.patch(
             f"/api/admin/keys/{key_id}/settings",
             json={"name": "  新令牌名称  ", "scopes": ["chat", "files"]},
