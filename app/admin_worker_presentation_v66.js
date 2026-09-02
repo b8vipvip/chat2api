@@ -200,7 +200,7 @@
     installReloadHook();
     installShowHook();
     // Two bounded startup passes cover the canonical renderer's initial async
-    // fetch without creating a permanent timer or MutationObserver feedback loop.
+    // fetch without creating any autonomous observer or repeating-timer loop.
     setTimeout(() => refresh(true), 120);
     setTimeout(() => refresh(true), 900);
   }
