@@ -69,6 +69,7 @@ from .server_worker_sync_lifespan_patch import install_server_worker_sync_patch
 from .worker_disable_authority_patch import install_worker_disable_authority_patch
 from .worker_presentation_v64_patch import install_worker_presentation_v64_patch
 from .api_key_console_v68_patch import install_api_key_console_v68_patch
+from .rich_response_docs_patch import install_rich_response_docs_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -216,3 +217,7 @@ install_worker_presentation_v64_patch(app)
 # Chinese permission labels plus name/scope editing without introducing a poll or
 # MutationObserver over the admin page.
 install_api_key_console_v68_patch(app)
+# Console developer documentation is the final presentation-only layer. It
+# explains how the v69 rich ChatGPT Markdown response travels through the normal
+# OpenAI-compatible response fields without changing request routing or runtime.
+install_rich_response_docs_patch(app)
