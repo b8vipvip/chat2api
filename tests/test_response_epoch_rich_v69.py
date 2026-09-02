@@ -67,7 +67,8 @@ def test_rich_serializer_preserves_semantic_answer_content_and_excludes_ui_chrom
 def test_manual_playground_waits_for_exact_final_reply_and_safely_renders_markdown():
     source = read("app/admin_playground_chat_v69.js")
     patch = read("app/playground_chat_patch.py")
-    assert 'PATCH_ID = "playground-chat-v69"' in patch
+    # The record persistence protocol remains v3; only the served UI asset is v69.
+    assert 'PATCH_ID = "playground-chat-v3"' in patch
     assert 'with_name("admin_playground_chat_v69.js")' in patch
     assert "stream:false" in source.replace(" ", "")
     assert "payload.choices?.[0]?.message?.content" in source
