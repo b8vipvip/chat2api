@@ -136,10 +136,9 @@ def install_v21_3_patch(app: FastAPI) -> FastAPI:
                 payload: Any = json.loads(raw.decode("utf-8"))
             except Exception:
                 return Response(raw, status_code=response.status_code, media_type="application/json")
-            if isinstance(payload, dict):
-                payload["version"] = PATCH_VERSION
-                if "server_version" in payload or path.endswith("/log"):
-                    payload["server_version"] = PATCH_VERSION
+            # v21.3 owns only the historical admin bundle. Runtime identity is
+            # owned by runtime_contract and must never be rewritten to this patch
+            # version in modern admin/diagnostic responses.
             headers = {
                 key: value
                 for key, value in response.headers.items()

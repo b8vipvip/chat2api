@@ -11,7 +11,7 @@ EXT = ROOT / "chrome_extension"
 
 def test_runtime_versions_and_features() -> None:
     source = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.47"' in source
+    assert 'SERVER_RUNTIME_VERSION = "0.22.48"' in source
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.19"' in source
     for marker in ('"failed_route_quarantine": True','"request_controller_lifecycle_guard": True','"chatgpt_transient_retry": True','"linux_worker_autoreload_self_heal": True','"assistant_response_semantic_guard": True','"assistant_response_semantic_recovery": True','"response_stream_recovery": True','"network_response_recovery": True','"single_response_observer": True','"model_capability_routing_guard": True','"chatgpt_rate_limit_circuit_breaker": True','"worker_window_reopen_loop_guard": True','"playground_chat_running_records": True','"linux_worker_master_switch": True','"worker_live_occupancy": True','"linux_worker_proxy_health_facets": True','"worker_device_name_column": True','"worker_pairing_rename": True','"worker_presentation_console_liveness_v65": True','"worker_presentation_console_liveness_v66": True','"worker_column_registry_v67": True','"multimodal_upload_confirmation_v64": True','"multimodal_upload_v68": True','"api_key_console_v68": True','"rich_response_v69": True','"request_response_epoch_v69": True','"worker_content_runtime_epoch_v71": True'):
         assert marker in source
