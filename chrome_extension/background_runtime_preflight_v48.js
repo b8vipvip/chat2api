@@ -2,9 +2,9 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__";
   if (globalThis[KEY]) return;
 
-  // Worker bundle 0.8.20 keeps the v71 request/response epoch while requiring
+  // Worker bundle 0.8.21 keeps the v71 request/response epoch while requiring
   // the v78 multimodal controller plus its MAIN-world upload bridge.
-  const REQUIRED_BUNDLE = "0.8.20";
+  const REQUIRED_BUNDLE = "0.8.21";
   const REQUIRED_REVISION = 71;
   const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"];
   const OVERLAY_FILES = [

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_worker_bundle_loads_v49_progress_probe_and_diagnostic_heartbeat() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.20"
+    assert manifest["version"] == "0.8.21"
     scripts = [script for item in manifest.get("content_scripts", []) for script in item.get("js", [])]
     assert "content_response_stream_recovery_v49.js" in scripts
     assert "content_network_stream_recovery_v55.js" in scripts

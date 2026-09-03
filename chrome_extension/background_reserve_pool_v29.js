@@ -400,6 +400,7 @@
         snapshot.warm,
         snapshot.routed,
         snapshot.target,
+        snapshot.live instanceof Set ? snapshot.live.size : snapshot.total,
       ]);
       if (!force && signature === state.lastReportSignature) return snapshot;
       state.lastReportSignature = signature;
@@ -411,6 +412,8 @@
             reserve_window_active: snapshot.active,
             reserve_window_idle: snapshot.idle,
             reserve_window_target: snapshot.target,
+            reserve_window_all_chatgpt_windows: snapshot.live instanceof Set ? snapshot.live.size : snapshot.total,
+            reserve_window_physical_telemetry_version: 83,
             reserve_window_own_spare: snapshot.own,
             reserve_window_warm_spare: snapshot.warm,
             reserve_window_routed: snapshot.routed,
