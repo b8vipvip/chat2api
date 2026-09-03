@@ -71,6 +71,7 @@ from .worker_presentation_v64_patch import install_worker_presentation_v64_patch
 from .api_key_console_v68_patch import install_api_key_console_v68_patch
 from .rich_response_docs_patch import install_rich_response_docs_patch
 from .prompt_config_v72_patch import install_prompt_config_v72_patch
+from .attachment_download_v82_patch import install_attachment_download_v82_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -226,3 +227,6 @@ install_rich_response_docs_patch(app)
 # build_prompt symbol, audits the exact Worker payload, and adds the administrator
 # prompt viewer/configuration UI without changing OpenAI-compatible API shapes.
 install_prompt_config_v72_patch(app)
+# v82 is the final file-transfer boundary. It replaces the historical extension
+# download route so Unicode filenames cannot crash Starlette header encoding.
+install_attachment_download_v82_patch(app)
