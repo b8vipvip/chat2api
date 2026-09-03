@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from types import SimpleNamespace
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -12,7 +13,7 @@ from app.model_capability_routing_patch import PATCH_ID, install_model_capabilit
 
 
 class Registry:
-    def __init__(self, rows: dict[str, tuple[str, list[str]]]) -> None:
+    def __init__(self, rows: dict[str, tuple[str, list[Any]]]) -> None:
         self.clients = {
             client_id: SimpleNamespace(metadata={"account_type": account}, connection_enabled=True)
             for client_id, (account, _models) in rows.items()
@@ -27,7 +28,7 @@ class Registry:
     def online_client_ids(self) -> list[str]:
         return list(self.sockets)
 
-    def client_models(self, client_id: str) -> list[str]:
+    def client_models(self, client_id: str) -> list[Any]:
         return list(self.models.get(client_id, []))
 
     def _remember_route(self, key_id: str | None, client_id: str) -> None:
@@ -48,7 +49,7 @@ class Registry:
         return self.online_client_ids()[0]
 
 
-def _app(rows: dict[str, tuple[str, list[str]]]) -> tuple[FastAPI, Registry]:
+def _app(rows: dict[str, tuple[str, list[Any]]]) -> tuple[FastAPI, Registry]:
     app = FastAPI()
     registry = Registry(rows)
     app.state.registry = registry
@@ -122,3 +123,35 @@ def test_mini_keeps_existing_free_preference_and_context_reaches_base_resolver()
     assert response.json()["client_id"] == "ext_free"
     assert registry.api_key_routes["key_test"] == "ext_paid"
     assert app.state.model_capability_routing_patch_id == PATCH_ID
+
+
+def test_unknown_linux_worker_with_structured_gpt55_catalog_routes_mini_vision() -> None:
+    """Production ClientRegistry returns model dictionaries, not string ids."""
+
+    app, registry = _app({"ext_linux": ("unknown", [])})
+    registry.models["ext_linux"] = [
+        {
+            "id": "gpt-5.5",
+            "label": "GPT-5.5",
+            "capabilities": ["text", "vision", "file-understanding"],
+            "selected": True,
+        }
+    ]
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "gpt-5.5-mini",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "describe"},
+                            {"type": "image_url", "image_url": {"url": "https://example.test/image.png"}},
+                        ],
+                    }
+                ],
+            },
+        )
+    assert response.status_code == 200
+    assert response.json()["client_id"] == "ext_linux"
