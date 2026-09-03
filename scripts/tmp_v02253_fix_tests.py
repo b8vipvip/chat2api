@@ -18,5 +18,12 @@ for path in (root / "tests").rglob("*"):
         updated = updated.replace("multimodal revision 84", "multimodal revision 85")
     if path.name == "runtime_preflight_refresh_v71.mjs":
         updated = updated.replace("last?.multimodal_revision, 84", "last?.multimodal_revision, 85")
+    if path.name == "reserve_pool_v29.mjs":
+        updated = updated.replace("reserve_window_idle_close_seconds, 120", "reserve_window_idle_close_seconds, 300")
+    if path.name == "test_v12.py":
+        updated = updated.replace(
+            'chrome.windows.create({ url: requestedUrl, focused: false',
+            'createManagedWindow({ url: requestedUrl, focused: false',
+        )
     if updated != text:
         path.write_text(updated, encoding="utf-8")
