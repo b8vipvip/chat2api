@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "chat2api Worker",
-  "version": "0.8.21",
+  "version": "0.8.22",
   "description": "Turns logged-in ChatGPT browser tabs into a concurrent remotely callable chat2api Worker for text, multimodal, image-generation and realtime Voice requests.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -73,6 +73,7 @@
         "content_multimodal_quota_v36.js",
         "content_request_v3.js",
         "content_multimodal_v78.js",
+        "content_multimodal_settle_v84.js",
         "content_multimodal_v68.js",
         "content_multimodal_v4.js",
         "content_request_v4.js",
@@ -106,6 +107,8 @@
         "content_voice_v2.js",
         "content_voice_fix_v3.js",
         "content_voice_fix_v4.js",
+        "content_voice_live.js",
+        "content_voice_live_text_v24.js",
         "content_runtime_log.js",
         "content_runtime_contract_v48.js",
         "content_runtime_contract_v71.js"
