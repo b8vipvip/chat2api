@@ -14,7 +14,7 @@ def _runtime_version(source: str) -> tuple[int, int, int]:
 
 def test_manifest_loads_ui_hygiene_and_site_settings_permission():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.19"
+    assert manifest["version"] == "0.8.20"
     assert "contentSettings" in manifest["permissions"]
     scripts = manifest["content_scripts"][1]["js"]
     assert "content_ui_hygiene_v31.js" in scripts
@@ -61,4 +61,4 @@ def test_runtime_tracks_ui_hygiene_release():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     assert _runtime_version(runtime) >= (0, 22, 15)
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.19"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.20"' in runtime

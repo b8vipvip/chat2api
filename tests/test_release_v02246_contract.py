@@ -12,10 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_formal_release_v02246_versions_and_notes_are_aligned() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert SERVER_RUNTIME_VERSION == "0.22.48"
+    assert SERVER_RUNTIME_VERSION == "0.22.49"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.19"
-    assert manifest["version"] == "0.8.19"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.20"
+    assert manifest["version"] == "0.8.20"
     assert "multimodal_main_v78.js" in manifest["content_scripts"][0]["js"]
     assert "content_multimodal_v78.js" in manifest["content_scripts"][1]["js"]
     assert (ROOT / "docs" / "releases" / "v0.22.46.md").is_file()

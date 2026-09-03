@@ -40,12 +40,14 @@ def test_reconcile_closes_39_restored_chatgpt_pages_and_keeps_other_sites(monkey
     assert "other" not in closed, "startup hygiene must never close non-ChatGPT tabs"
 
 
-def test_launcher_discards_only_window_restore_state_and_runs_one_shot_cdp_cleanup():
+def test_launcher_discards_restore_state_without_pruning_live_extension_windows_by_default():
     text = (ROOT / "scripts" / "linux_worker_chrome_launcher.sh").read_text(encoding="utf-8")
     assert 'rm -rf "${PROFILE_DIR}/Default/Sessions"' in text
     assert "Cookies" in text
     assert 'linux_worker_tab_init.py' in text
-    assert '--keep 1 --wait 45' in text
+    assert 'CHAT2API_TAB_INIT_PRUNE:-0' in text
+    assert '--keep 1 --wait 8' in text
+    assert '--keep 1 --wait 45' not in text
 
 
 def test_extension_autoreload_adopts_fingerprint_when_running_chrome_is_newer_than_source():
