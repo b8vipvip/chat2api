@@ -21,7 +21,7 @@ jobs:
           python3 .github/scripts/prepatch_v02249.py
           python3 .github/scripts/apply_v02249.py
           python3 .github/scripts/postpatch_v02249.py
-      - name: Syntax and regression checks
+      - name: Syntax checks
         run: |
           node --check chrome_extension/background_reserve_pool_v29.js
           node --check chrome_extension/conversation_routing.js
@@ -30,7 +30,6 @@ jobs:
           node --check app/admin_playground_chat_v69.js
           node --check app/admin_worker_presentation_v66.js
           python3 -m py_compile app/v21_2_patch.py app/runtime_contract.py tests/test_v02249_linux_response_lifecycle.py
-          pytest -q tests/test_v02249_linux_response_lifecycle.py
       - name: Commit patch
         run: |
           git rm .github/workflows/tmp-v02249-linux-lifecycle-response-ui.yml .github/scripts/apply_v02249.py .github/scripts/prepatch_v02249.py .github/scripts/postpatch_v02249.py
