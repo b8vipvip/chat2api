@@ -4,7 +4,7 @@
 
   // Worker bundle 0.8.18 keeps the v71 request/response epoch while requiring
   // the v78 multimodal controller plus its MAIN-world upload bridge.
-  const REQUIRED_BUNDLE = "0.8.18";
+  const REQUIRED_BUNDLE = "0.8.19";
   const REQUIRED_REVISION = 71;
   const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"];
   const OVERLAY_FILES = [

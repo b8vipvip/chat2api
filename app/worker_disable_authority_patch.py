@@ -15,7 +15,7 @@ from .extension_capacity_control_patch import _request_extension_control
 from .timezone_utils import beijing_now_iso
 
 
-PATCH_VERSION = "0.22.42"
+PATCH_VERSION = "0.22.47"
 ASSET_PATH = "/assets/chat2api-worker-disable-authority-v62.js"
 EXTENSION_ACTION_RE = re.compile(r"^/api/admin/extensions/([^/]+)/(disconnect|enable)$")
 logger = logging.getLogger("chat2api.worker-disable-authority")
@@ -201,7 +201,45 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
         registry.summaries = summaries_with_worker_authority
         registry._chat2api_worker_disable_authority_summaries_v62 = True
 
+    def active_request_ids(client_id: str) -> list[str]:
+        broker = getattr(app.state, "broker", None)
+        if broker is None:
+            return []
+        active_by_client = getattr(broker, "client_active_requests", None)
+        if isinstance(active_by_client, dict):
+            active = active_by_client.get(client_id)
+            if isinstance(active, dict):
+                return [str(request_id) for request_id in active.keys()]
+            if isinstance(active, (set, list, tuple)):
+                return [str(request_id) for request_id in active]
+        request_map = getattr(broker, "client_requests", None)
+        request_id = request_map.get(client_id) if isinstance(request_map, dict) else None
+        if request_id and request_id in getattr(broker, "requests", {}):
+            return [str(request_id)]
+        return []
+
+    def require_disable_lease(client_id: str) -> None:
+        active = active_request_ids(client_id)
+        if not active:
+            return
+        logger.warning(
+            "Worker disable blocked by active-request lease client=%s active_requests=%s",
+            client_id,
+            active,
+        )
+        raise HTTPException(
+            409,
+            {
+                "message": "Worker still has active requests; disable is blocked until every request reaches a terminal event",
+                "code": "worker_active_request_lease",
+                "active_request_count": len(active),
+                "active_request_ids": active[:20],
+                "retryable": True,
+            },
+        )
+
     async def collapse_managed_windows(client_id: str) -> dict[str, Any]:
+        require_disable_lease(client_id)
         item = registry.clients.get(client_id)
         if not item:
             raise HTTPException(404, "Unknown extension ID")
@@ -229,6 +267,7 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
         client_id = str(client_id or "")
         if client_id not in registry.clients:
             raise HTTPException(404, "Unknown extension ID")
+        require_disable_lease(client_id)
         control = await collapse_managed_windows(client_id)
         worker_id = worker_id_for_client(client_id)
         worker_public = None
@@ -282,6 +321,8 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
         "enable_client": enable_client,
         "disabled_linux_client_ids": disabled_linux_client_ids,
         "persist_worker_switch": persist_worker_switch,
+        "active_request_ids": active_request_ids,
+        "require_disable_lease": require_disable_lease,
     }
 
     @app.get(ASSET_PATH, include_in_schema=False)

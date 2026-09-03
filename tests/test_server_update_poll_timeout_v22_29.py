@@ -25,7 +25,7 @@ def test_server_update_status_poll_has_browser_side_timeout_guard():
     assert 'FETCH_GUARD_ASSET_PATH = "/assets/chat2api-server-update-fetch-guard.js"' in patch
     assert 'Path(__file__).with_name("admin_server_update_fetch_guard.js")' in patch
     assert "guard + marker" in patch
-    assert 'SERVER_RUNTIME_VERSION = "0.22.46"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.47"' in runtime
     assert '"server_update_poll_timeout_guard": True' in runtime
     assert '"github_transport_failover": True' in runtime
     assert '"linux_worker_disable_authority": True' in runtime
