@@ -63,7 +63,7 @@ def test_reserve_pool_is_loaded_between_warm_pool_and_worker_router():
 def test_reserve_pool_tracks_real_managed_windows_and_active_subset():
     source = (ROOT / "chrome_extension" / "background_reserve_pool_v29.js").read_text(encoding="utf-8")
     for token in (
-        'const ROUTE_IDLE_CLOSE_MS = 2 * 60 * 1000',
+        'const ROUTE_IDLE_CLOSE_MS = 5 * 60 * 1000',
         'const MAX_TARGET = 32',
         'reserve_window_total: snapshot.total',
         'reserve_window_active: snapshot.active',

@@ -11,7 +11,7 @@
   const RECONCILE_DELAY_MS = 180;
   const CREATE_BATCH = 4;
   const READY_TIMEOUT_MS = 45000;
-  const ROUTE_IDLE_CLOSE_MS = 2 * 60 * 1000;
+  const ROUTE_IDLE_CLOSE_MS = 5 * 60 * 1000;
   const MAX_RESERVE_READY_AGE_MS = 30 * 60 * 1000;
   const MAX_TARGET = 32;
   const ROUTE_ALARM_PREFIX = "chat2api-route-close:";
@@ -35,6 +35,9 @@
   if (typeof baseResolver !== "function") return;
 
   const sleepReserve = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const createManagedWindow = (options, reason) => typeof globalThis.chat2apiCreateWindowStaggered === "function"
+    ? globalThis.chat2apiCreateWindowStaggered(options, { reason })
+    : chrome.windows.create(options);
 
   function normalizeTarget(value) {
     const parsed = Number(value);
@@ -476,7 +479,7 @@
 
   async function createReserveWindow() {
     const createdAt = Date.now();
-    const created = await chrome.windows.create({ url: "https://chatgpt.com/", focused: false, type: "normal" });
+    const created = await createManagedWindow({ url: "https://chatgpt.com/", focused: false, type: "normal" }, "reserve-pool");
     if (!Number.isInteger(created?.id)) throw new Error("Chrome did not create reserve ChatGPT window");
     let tab = Array.isArray(created.tabs) ? created.tabs.find(item => Number.isInteger(item?.id)) : null;
     if (!tab) {

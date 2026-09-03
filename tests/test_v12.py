@@ -150,12 +150,12 @@ def test_extension_074_has_per_key_conversation_budget_and_idle_close() -> None:
     assert "MAX_ATTACHMENTS = 16" in routing
     assert "SLOW_LOAD_MS = 8000" in routing
     assert "HARD_SLOW_LOAD_MS = 15000" in routing
-    assert "IDLE_CLOSE_MS = 2 * 60 * 1000" in routing
+    assert "IDLE_CLOSE_MS = 5 * 60 * 1000" in routing
     assert "resetClosedRoute" in routing
     assert '"closed-window-new-chat"' in routing
     assert '"window-closed-new-chat-next-request"' in routing
     assert '"idle-window-closed-new-chat-next-request"' in routing
-    assert "chrome.windows.create({ url: requestedUrl, focused: false" in routing
+    assert "createManagedWindow({ url: requestedUrl, focused: false" in routing
     assert "chrome.windows.remove(windowId)" in routing
     assert "conversation_url" in routing and "conversation_id" in routing
     assert "api_key_id" in routing

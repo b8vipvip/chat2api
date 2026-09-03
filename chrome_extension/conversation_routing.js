@@ -4,7 +4,7 @@
 
   const STORAGE_KEY = "chat2apiConversationRoutesV1";
   const NEW_CHAT_URL = "https://chatgpt.com/";
-  const IDLE_CLOSE_MS = 2 * 60 * 1000;
+  const IDLE_CLOSE_MS = 5 * 60 * 1000;
   const SLOW_LOAD_MS = 8000;
   const HARD_SLOW_LOAD_MS = 15000;
   const MAX_TURNS = 32;
@@ -15,6 +15,9 @@
   globalThis[KEY] = state;
 
   const sleepLocal = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const createManagedWindow = (options, reason) => typeof globalThis.chat2apiCreateWindowStaggered === "function"
+    ? globalThis.chat2apiCreateWindowStaggered(options, { reason })
+    : chrome.windows.create(options);
 
   function conversationId(url = "") {
     try {
@@ -189,7 +192,7 @@
 
     const requestedUrl = route.conversation_url || NEW_CHAT_URL;
     const expectedConversation = route.conversation_id;
-    const created = await chrome.windows.create({ url: requestedUrl, focused: false, type: "normal" });
+    const created = await createManagedWindow({ url: requestedUrl, focused: false, type: "normal" }, "routed-conversation");
     if (!created?.id) throw new Error("Chrome did not create a routed ChatGPT window");
     let tab = Array.isArray(created.tabs) ? created.tabs.find(item => Number.isInteger(item.id)) : null;
     if (!tab) {

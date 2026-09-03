@@ -13,7 +13,7 @@ CONTENT = EXT / "content_multimodal_v78.js"
 
 def test_multimodal_v78_is_split_across_main_and_isolated_worlds() -> None:
     manifest = json.loads((EXT / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.22"
+    assert manifest["version"] == "0.8.23"
     main = manifest["content_scripts"][0]
     isolated = manifest["content_scripts"][1]
     assert main["world"] == "MAIN"

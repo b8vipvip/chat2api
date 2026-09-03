@@ -8,14 +8,14 @@ function currentContract() {
   return {
     ok: true,
     contract_revision: 71,
-    multimodal_revision: 84,
-    marker: { bundle: "0.8.22", revision: 71 },
+    multimodal_revision: 85,
+    marker: { bundle: "0.8.23", revision: 71 },
     modules: {
       request_v6: true,
       rich_response_v69: true,
       response_stream_v69: true,
       multimodal_v78: true,
-      multimodal_v84: true,
+      multimodal_v84: true, multimodal_v85: true,
       multimodal_main_v78: true,
     },
   };
@@ -90,13 +90,13 @@ assert.equal(hot.worlds[0], "MAIN", "the multimodal/page bridge must be injected
 assert.equal(hot.state.last?.ok, true);
 assert.equal(hot.state.last?.hot_healed, true);
 assert.equal(hot.state.last?.contract_revision, 71);
-assert.equal(hot.state.last?.multimodal_revision, 84);
+assert.equal(hot.state.last?.multimodal_revision, 85);
 
 const loading = await runScenario({ hotHealWorks: false });
 assert.equal(loading.reloads, 1, "reload remains a bounded fallback when hot-heal cannot establish the epoch");
 assert.equal(loading.state.last?.ok, true, "a current content contract must win even while tabs.get reports loading");
 assert.equal(loading.state.last?.reloaded, true);
-assert.equal(loading.state.last?.marker?.bundle, "0.8.22");
-assert.equal(loading.state.last?.multimodal_revision, 84);
+assert.equal(loading.state.last?.marker?.bundle, "0.8.23");
+assert.equal(loading.state.last?.multimodal_revision, 85);
 
 console.log("runtime preflight v71 regression scenarios passed");

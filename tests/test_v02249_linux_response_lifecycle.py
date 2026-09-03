@@ -13,10 +13,10 @@ def test_linux_launcher_does_not_prune_extension_windows_by_default():
 def test_reserve_target_counts_spares_not_routed_windows():
     source = text("chrome_extension/background_reserve_pool_v29.js")
     assert "spareTotal = Math.max(0, snapshot.total - snapshot.routed)" in source
-    assert "const ROUTE_IDLE_CLOSE_MS = 2 * 60 * 1000;" in source
+    assert "const ROUTE_IDLE_CLOSE_MS = 5 * 60 * 1000;" in source
 
-def test_conversation_affinity_is_two_minutes():
-    assert "const IDLE_CLOSE_MS = 2 * 60 * 1000;" in text("chrome_extension/conversation_routing.js")
+def test_conversation_affinity_is_five_minutes():
+    assert "const IDLE_CLOSE_MS = 5 * 60 * 1000;" in text("chrome_extension/conversation_routing.js")
     assert "ROUTE_IDLE_CLOSE_SECONDS = 2 * 60" in text("app/v21_13_patch.py")
 
 def test_response_requires_terminal_rich_dom_settlement():
@@ -46,6 +46,6 @@ def test_historical_v212_does_not_stamp_runtime_identity():
 def test_release_versions():
     runtime = text("app/runtime_contract.py")
     manifest = text("chrome_extension/manifest.json")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.52"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.22"' in runtime
-    assert '"version": "0.8.22"' in manifest
+    assert 'SERVER_RUNTIME_VERSION = "0.22.53"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.23"' in runtime
+    assert '"version": "0.8.23"' in manifest

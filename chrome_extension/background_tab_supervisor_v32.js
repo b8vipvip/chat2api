@@ -22,6 +22,9 @@
     lastSnapshot: null,
   };
   globalThis[KEY] = state;
+  const createManagedWindow = (options, reason) => typeof globalThis.chat2apiCreateWindowStaggered === "function"
+    ? globalThis.chat2apiCreateWindowStaggered(options, { reason })
+    : chrome.windows.create(options);
 
   function isChatTab(tab) {
     if (!Number.isInteger(tab?.id)) return false;
@@ -161,7 +164,7 @@
     const adopt = tabs.find(tab => !owned.workerTabs.has(tab.id) && tab.id !== owned.loginTabId);
     if (adopt) return storeInitialization(adopt);
 
-    const created = await chrome.windows.create({ url: INIT_URL, focused: false, type: "normal" });
+    const created = await createManagedWindow({ url: INIT_URL, focused: false, type: "normal" }, "initialization");
     if (!Number.isInteger(created?.id)) throw new Error("Chrome did not create the Worker initialization window");
     let tab = Array.isArray(created.tabs) ? created.tabs.find(item => Number.isInteger(item?.id)) : null;
     if (!tab) {
@@ -219,10 +222,16 @@
 
       const target = await targetLimit();
       const surviving = [...current.workerTabs.values()].filter(row => liveIds.has(row.tab_id));
-      const excess = Math.max(0, surviving.length - target);
+      // reserve_window_target is a SPARE target. Routed same-key conversation
+      // windows are intentionally retained by their own idle alarm and must never
+      // be reclaimed merely because spare + routed exceeds the spare target.
+      const spareKinds = new Set(["reserve", "warm", "external-warm"]);
+      const spareSurviving = surviving.filter(row => spareKinds.has(row.kind));
+      const routedSurviving = surviving.filter(row => row.kind === "route" || row.kind === "request");
+      const excess = Math.max(0, spareSurviving.length - target);
       let closedOverflow = 0;
       if (excess > 0) {
-        const candidates = surviving
+        const candidates = spareSurviving
           .filter(row => !row.active && row.tab_id !== current.loginTabId && row.tab_id !== init.id)
           .sort((a, b) => a.priority - b.priority || Number(a.last_active_at || 0) - Number(b.last_active_at || 0));
         closedOverflow = await removeTabs(candidates.slice(0, excess).map(row => row.tab_id));
@@ -235,6 +244,9 @@
         login_tab_id: Number.isInteger(current.loginTabId) ? current.loginTabId : null,
         chatgpt_tabs_seen: tabs.length,
         managed_worker_tabs: surviving.length,
+        spare_worker_tabs: spareSurviving.length,
+        routed_worker_tabs: routedSurviving.length,
+        worker_target_semantics: "spares-only-v85",
         active_worker_tabs: surviving.filter(row => row.active).length,
         protected_interactive_tabs: [...current.protectedTabs].filter(tabId => tabId !== init.id && tabId !== current.loginTabId && !current.workerTabs.has(tabId)).length,
         orphan_tabs_closed: closedOrphans,

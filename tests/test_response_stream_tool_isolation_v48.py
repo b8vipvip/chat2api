@@ -30,7 +30,7 @@ def test_v48_javascript_assets_parse():
 
 def test_manifest_requires_fresh_document_marker_and_passive_recovery():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.22"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.23"
     main_scripts = manifest["content_scripts"][0]["js"]
     scripts = manifest["content_scripts"][1]["js"]
     assert "network_stream_main_v55.js" in main_scripts
@@ -63,19 +63,19 @@ def test_background_preflight_wraps_final_conversation_dispatch():
     contract = (ROOT / "chrome_extension" / "content_runtime_contract_v71.js").read_text(encoding="utf-8")
     legacy_marker = (ROOT / "chrome_extension" / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
     marker = (ROOT / "chrome_extension" / "content_bundle_marker_v71.js").read_text(encoding="utf-8")
-    assert 'REQUIRED_BUNDLE = "0.8.22"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.23"' in preflight
     assert 'REQUIRED_REVISION = 71' in preflight
     assert 'const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"]' in preflight
     for token in ('"content_rate_limit_guard_v52.js"','"content_request_lifecycle_v50.js"','"content_draft_managed_recovery_v55.js"','"content_rich_response_v69.js"','"content_request_v6.js"','"content_response_stream_recovery_v69.js"','"content_network_stream_recovery_v55.js"','"content_response_semantic_recovery_v51.js"','"content_transient_retry_v50.js"','"content_generation_liveness_v49.js"','"content_bundle_marker_v71.js"','"content_runtime_contract_v71.js"'):
         assert token in preflight
     assert '"content_response_stream_recovery_v49.js"' not in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.22"' in legacy_contract
-    assert 'REQUIRED_BUNDLE = "0.8.22"' in contract
+    assert 'REQUIRED_BUNDLE = "0.8.23"' in legacy_contract
+    assert 'REQUIRED_BUNDLE = "0.8.23"' in contract
     assert 'REQUIRED_REVISION = 71' in contract
     for token in ("__CHAT2API_RATE_LIMIT_CONTENT_V52__","__CHAT2API_REQUEST_LIFECYCLE_V50__","__CHAT2API_DRAFT_MANAGED_RECOVERY_V55__","__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__","__CHAT2API_RESPONSE_STREAM_RECOVERY_V69__","__CHAT2API_NETWORK_STREAM_RECOVERY_V55__","network_stream_main_v55","network_stream_parser_v62","data-chat2api-network-stream-parser","__CHAT2API_RESPONSE_SEMANTIC_RECOVERY_V51__","response_single_owner_v53","semanticHelper?.timer == null","__CHAT2API_TRANSIENT_RETRY_V50__","__CHAT2API_GENERATION_LIVENESS_V49__"):
         assert token in contract
-    assert 'bundle: "0.8.22"' in legacy_marker
-    assert 'bundle: "0.8.22"' in marker
+    assert 'bundle: "0.8.23"' in legacy_marker
+    assert 'bundle: "0.8.23"' in marker
     assert 'revision: 71' in marker
     assert "content_bundle_marker_v48.js" not in preflight
     assert "chrome.tabs.reload" in preflight
@@ -112,8 +112,8 @@ def test_external_account_tools_are_fail_closed_at_prompt_and_ui_layers():
 def test_runtime_contract_exposes_v48_v49_v50_v51_and_v55_features():
     app = FastAPI(version=SERVER_RUNTIME_VERSION)
     payload = version_contract_payload(app)
-    assert SERVER_RUNTIME_VERSION == "0.22.52"
-    assert payload["chrome_bridge"]["bundle_version"] == "0.8.22"
+    assert SERVER_RUNTIME_VERSION == "0.22.53"
+    assert payload["chrome_bridge"]["bundle_version"] == "0.8.23"
     assert payload["chrome_bridge"]["network_response_recovery_version"] == 55
     assert payload["chrome_bridge"]["network_response_parser_revision"] == 62
     assert payload["chrome_bridge"]["worker_master_switch_version"] == 61
