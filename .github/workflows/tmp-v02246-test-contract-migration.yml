@@ -1,0 +1,52 @@
+name: Temporary v0.22.46 test contract migration
+
+on:
+  push:
+    branches:
+      - fix/vision-routing-upload-v78-release-20260903
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/vision-routing-upload-v78-release-20260903
+          fetch-depth: 0
+      - name: Update stale formal-release assertions
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            sed -i \
+              -e 's/0\.22\.45/0.22.46/g' \
+              -e 's/0\.8\.17/0.8.18/g' \
+              -e 's/model-capability-routing-v1/model-capability-routing-v2/g' \
+              "$file"
+          done < <(find tests -type f \( -name '*.py' -o -name '*.mjs' \) -print0)
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tests/test_worker_runtime_refresh_v71.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('assert "modules.multimodal_v78" in preflight', 'assert "result?.modules?.multimodal_v78" in preflight')
+          text = text.replace('assert "modules.multimodal_main_v78" in preflight', 'assert "result?.modules?.multimodal_main_v78" in preflight')
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm -f .github/workflows/tmp-v02246-test-contract-migration.yml
+      - name: Commit migrated assertions and remove temporary workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'chat2api-release-bot'
+          git config user.email 'actions@users.noreply.github.com'
+          git add tests .github/workflows/tmp-v02246-test-contract-migration.yml
+          if git diff --cached --quiet; then
+            echo 'No migration changes required.'
+            exit 0
+          fi
+          git commit -m 'Align regression suite with v0.22.46 / Worker 0.8.18'
+          git push origin HEAD:fix/vision-routing-upload-v78-release-20260903
