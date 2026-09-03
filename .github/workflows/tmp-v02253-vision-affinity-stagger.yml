@@ -27,6 +27,9 @@ jobs:
         run: |
           python scripts/tmp_v02253_repair.py
           python scripts/tmp_v02253_fix_tests.py
+          # GITHUB_TOKEN cannot push workflow-file updates. CI syntax coverage for
+          # the new JS files is performed explicitly below, so keep ci.yml unchanged.
+          git checkout -- .github/workflows/ci.yml
       - name: Verify contracts
         run: |
           grep -q 'SERVER_RUNTIME_VERSION = "0.22.53"' app/runtime_contract.py
@@ -60,7 +63,7 @@ jobs:
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app chrome_extension tests docs .github/workflows/ci.yml
+          git add app chrome_extension tests docs
           git rm scripts/tmp_v02253_repair.py scripts/tmp_v02253_fix_tests.py
           if git diff --cached --quiet; then
             echo 'No repair changes to commit.'
