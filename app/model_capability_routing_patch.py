@@ -11,7 +11,7 @@ from . import mini_multimodal_quota_patch as mini_quota
 from . import v13_patch
 
 
-PATCH_ID = "model-capability-routing-v1"
+PATCH_ID = "model-capability-routing-v2"
 PAID_TEXT_MODELS = {"gpt-5.6-sol", "gpt-5.5"}
 MINI_MODEL = "gpt-5.5-mini"
 _MODEL_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar(
@@ -28,11 +28,29 @@ def _account_type(registry: Any, client_id: str) -> str:
 
 
 def _advertised_models(registry: Any, client_id: str) -> set[str]:
+    """Return normalized model ids from the real registry model shape.
+
+    ClientRegistry.client_models() returns dictionaries in production, while the
+    original routing guard accidentally stringified those dictionaries. That made
+    an online unknown/paid Worker advertising gpt-5.5 look incompatible with
+    gpt-5.5-mini and could fail a vision request with HTTP 503 before dispatch.
+    Keep string support for older/fake registries, but parse dict ids explicitly.
+    """
+
     try:
         values = registry.client_models(client_id)
     except Exception:
         values = []
-    return {str(value or "").strip().lower() for value in values if str(value or "").strip()}
+    result: set[str] = set()
+    for value in values or []:
+        if isinstance(value, dict):
+            raw = value.get("id") or value.get("model") or value.get("family") or ""
+        else:
+            raw = value
+        model_id = str(raw or "").strip().lower()
+        if model_id:
+            result.add(model_id)
+    return result
 
 
 def _compatible(registry: Any, client_id: str, model: str) -> bool:
@@ -48,6 +66,10 @@ def _compatible(registry: Any, client_id: str, model: str) -> bool:
     if model == MINI_MODEL:
         if account == "free":
             return True
+        # Paid/unknown Workers exposing the parent gpt-5.5 model can execute the
+        # mini compatibility route even if the page catalog omits a separate
+        # gpt-5.5-mini row. This is the shape reported by Linux Workers after a
+        # reconnect while account-plan detection is still settling.
         return not advertised or MINI_MODEL in advertised or "gpt-5.5" in advertised
 
     return True
