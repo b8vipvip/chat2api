@@ -14,6 +14,13 @@ from .admin_auth import SESSION_COOKIE
 PATCH_REVISION = 68
 ADMIN_ASSET = "/assets/chat2api-api-key-editor-v68.js"
 EDITABLE_SCOPES = ("chat", "models", "files", "images", "audio")
+EDIT_ICON_MIRROR_MARKER = "data-chat2api-api-key-edit-icon-mirror-v77"
+EDIT_ICON_MIRROR_STYLE = f'''<style {EDIT_ICON_MIRROR_MARKER}="1">
+button[data-api-key-edit] {{
+  transform: scaleX(-1);
+  transform-origin: center;
+}}
+</style>'''
 
 
 class ApiKeySettingsUpdate(BaseModel):
@@ -108,6 +115,8 @@ def install_api_key_console_v68_patch(app: FastAPI) -> FastAPI:
             return response
         raw = await _response_bytes(response)
         text = raw.decode("utf-8", errors="replace")
+        if EDIT_ICON_MIRROR_MARKER not in text:
+            text = text.replace("</head>", EDIT_ICON_MIRROR_STYLE + "</head>")
         marker = f'<script src="{ADMIN_ASSET}"></script>'
         if marker not in text:
             text = text.replace("</body>", marker + "</body>")
