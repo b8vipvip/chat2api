@@ -178,5 +178,5 @@ def test_runtime_contract_advertises_playground_chat() -> None:
     assert payload["features"]["assistant_response_semantic_guard"] is True
     assert payload["features"]["assistant_response_semantic_recovery"] is True
     assert "playground-chat-v3" in payload["server"]["feature_revision"]
-    assert "model-capability-routing-v1" in payload["server"]["feature_revision"]
+    assert "model-capability-routing-v2" in payload["server"]["feature_revision"]
     assert "response-semantic-recovery-v51" in payload["server"]["feature_revision"]

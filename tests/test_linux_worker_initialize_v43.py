@@ -94,7 +94,7 @@ def test_admin_initialize_patch_has_full_and_compatibility_paths() -> None:
 
 def test_runtime_contract_publishes_worker_initialize_v43() -> None:
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.45"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.46"' in runtime
     assert "worker-initialize-v43" in runtime
     assert "worker-sudoers-guard-v22-33" in runtime
     assert '"linux_worker_initialize": True' in runtime

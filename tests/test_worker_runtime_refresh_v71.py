@@ -47,8 +47,8 @@ def test_runtime_preflight_hot_heals_before_reload() -> None:
     assert "content_rich_response_v69.js" in preflight
     assert "content_request_v6.js" in preflight
     assert "content_response_stream_recovery_v69.js" in preflight
-    assert "modules.multimodal_v78" in preflight
-    assert "modules.multimodal_main_v78" in preflight
+    assert "result?.modules?.multimodal_v78" in preflight
+    assert "result?.modules?.multimodal_main_v78" in preflight
     assert "result = await heal(tabId)" in preflight
     assert "waitForReloadOrContract" in preflight
     assert "did not finish reloading for Worker runtime refresh" not in preflight
