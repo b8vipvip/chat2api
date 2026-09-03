@@ -7,7 +7,7 @@
       await chrome.scripting.executeScript({
         target: { tabId },
         world: "MAIN",
-        files: ["network_stream_main_v55.js"],
+        files: ["network_stream_main_v55.js", "multimodal_main_v78.js"],
       });
       await chrome.scripting.executeScript({
         target: { tabId },
@@ -28,6 +28,7 @@
           "content_page_smoke_v22.js",
           "content_multimodal.js",
           "content_request_v3.js",
+          "content_multimodal_v78.js",
           "content_multimodal_v68.js",
           "content_multimodal_v4.js",
           "content_request_v4.js",
