@@ -151,7 +151,7 @@
     .pgChatRow{display:flex;flex-direction:column;max-width:min(86%,920px);gap:5px}.pgChatRow.user{align-self:flex-end;align-items:flex-end}.pgChatRow.assistant{align-self:flex-start;align-items:flex-start}.pgChatRole{font-size:11px;color:var(--muted)}
     .pgChatBubble{border:1px solid var(--line);border-radius:14px;padding:11px 13px;white-space:pre-wrap;word-break:break-word;line-height:1.65;background:#111d31;min-width:52px}.pgChatRow.user .pgChatBubble{background:#17375e;border-color:#28517f}.pgChatBubble.pending{color:var(--muted)}.pgChatBubble.error{border-color:#70323c;background:#351b22;color:#ffd5d9}
     .pgChatBubble.rich{white-space:normal;min-width:min(300px,100%)}.pgChatBubble.rich p{margin:.35em 0 .75em}.pgChatBubble.rich p:first-child{margin-top:0}.pgChatBubble.rich p:last-child{margin-bottom:0}.pgChatBubble.rich h1,.pgChatBubble.rich h2,.pgChatBubble.rich h3,.pgChatBubble.rich h4,.pgChatBubble.rich h5,.pgChatBubble.rich h6{margin:.8em 0 .4em;line-height:1.3}.pgChatBubble.rich ul,.pgChatBubble.rich ol{padding-left:24px;margin:.45em 0}.pgChatBubble.rich li{margin:.18em 0}.pgChatBubble.rich blockquote{margin:.6em 0;padding:.4em .8em;border-left:3px solid #56749d;background:#0b1728;color:#cbd8ea}.pgChatBubble.rich hr{border:0;border-top:1px solid var(--line);margin:12px 0}.pgChatBubble.rich a{color:#8bb8ff}.pgChatBubble.rich code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:#07101e;border:1px solid #24344d;border-radius:5px;padding:1px 4px}.pgChatCode{margin:.65em 0;border:1px solid #263a57;border-radius:10px;overflow:hidden;background:#050b14}.pgChatCodeHead{padding:6px 10px;border-bottom:1px solid #263a57;color:#9eb1ce;font-size:11px}.pgChatCode pre{margin:0;padding:12px;overflow:auto;white-space:pre}.pgChatCode pre code{border:0;background:transparent;padding:0}.pgChatTableWrap{overflow:auto;margin:.65em 0}.pgChatTableWrap table{border-collapse:collapse;min-width:360px}.pgChatTableWrap th,.pgChatTableWrap td{border:1px solid #2b3c58;padding:7px 9px;position:static;background:transparent}.pgChatImage{display:block;max-width:min(100%,720px);max-height:520px;object-fit:contain;border-radius:10px;margin:8px 0;border:1px solid #293d59}.pgChatImageMissing{display:inline-block;padding:3px 7px;border-radius:8px;background:#13233a;color:#adc7eb}
-    .pgChatMeta{font-size:11px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap}.pgChatAttachment{font-size:11px;color:#adc7eb;border:1px solid #294363;background:#0d1b2e;border-radius:999px;padding:2px 8px}.pgChatComposer{display:grid;grid-template-columns:1fr auto;gap:9px;margin-top:10px;align-items:end}.pgChatComposer textarea{width:100%;min-height:76px;max-height:220px;resize:vertical;line-height:1.55}.pgChatComposer button{height:42px;min-width:94px}.pgChatAttachHint{font-size:11px;color:var(--muted);margin-top:6px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}.pgChatBadge{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:2px 8px;background:#0d1728}
+    .pgChatMeta{font-size:11px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap}.pgChatActions{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:8px}.pgChatCopy{border:0;background:transparent;color:var(--muted);padding:2px 5px;border-radius:6px;cursor:pointer;line-height:1}.pgChatCopy:hover{background:#17263d;color:var(--text)}.pgChatAttachment{font-size:11px;color:#adc7eb;border:1px solid #294363;background:#0d1b2e;border-radius:999px;padding:2px 8px}.pgChatComposer{display:grid;grid-template-columns:1fr auto;gap:9px;margin-top:10px;align-items:end}.pgChatComposer textarea{width:100%;min-height:76px;max-height:220px;resize:vertical;line-height:1.55}.pgChatComposer button{height:42px;min-width:94px}.pgChatAttachHint{font-size:11px;color:var(--muted);margin-top:6px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}.pgChatBadge{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:2px 8px;background:#0d1728}
     @media(max-width:1180px){.pgChatToolbar{grid-template-columns:1fr 1fr}.pgChatMessages{height:480px}}@media(max-width:760px){.pgChatToolbar{grid-template-columns:1fr}.pgChatMessages{height:420px;min-height:300px;padding:12px}.pgChatRow{max-width:94%}.pgChatComposer{grid-template-columns:1fr}.pgChatComposer button{width:100%}}
   `;
   document.head.appendChild(style);
@@ -184,6 +184,28 @@
         .map(item => ({...item, attachment_names: Array.isArray(item.attachment_names) ? item.attachment_names.map(String).slice(0, 4) : [], include_in_context: item.include_in_context !== false})).slice(-MAX_HISTORY_MESSAGES) : [];
     } catch (_) { messages = []; }
   }
+  function formatMessageTime(value) {
+    if (!value) return "";
+    const date = new Date(value);
+    if (!Number.isFinite(date.getTime())) return "";
+    return new Intl.DateTimeFormat("zh-CN", {month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false}).format(date);
+  }
+  async function copyMessage(index, button) {
+    const item = messages[index];
+    if (!item) return;
+    const value = String(item.content || "");
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(value);
+      else {
+        const area = document.createElement("textarea");
+        area.value = value; area.style.position = "fixed"; area.style.opacity = "0";
+        document.body.appendChild(area); area.select(); document.execCommand("copy"); area.remove();
+      }
+      const before = button.textContent;
+      button.textContent = "✓"; button.title = "已复制";
+      setTimeout(() => { button.textContent = before; button.title = "复制消息"; }, 900);
+    } catch (_) { button.title = "复制失败"; }
+  }
   function renderMessages() {
     const box = $chat("pgChatMessages");
     if (!messages.length) {
@@ -195,7 +217,8 @@
       const errorClass = item.error ? " error" : "";
       const richClass = item.role === "assistant" && !item.error ? " rich" : "";
       const content = item.role === "assistant" && !item.error ? renderMarkdown(item.content) : escHtml(item.content);
-      return `<div class="pgChatRow ${item.role}" data-chat-index="${index}"><div class="pgChatRole">${item.role === "user" ? "你" : "模型"}</div><div class="pgChatBubble${errorClass}${richClass}">${content}</div>${(attachments || item.meta) ? `<div class="pgChatMeta">${attachments}${item.meta ? `<span>${escHtml(item.meta.request_id || "")}</span><span>${escHtml(item.meta.model || "")}</span><span>${item.meta.total_ms != null ? `${Math.round(item.meta.total_ms)} ms` : ""}</span>` : ""}</div>` : ""}</div>`;
+      const messageTime = formatMessageTime(item.created_at);
+      return `<div class="pgChatRow ${item.role}" data-chat-index="${index}"><div class="pgChatRole">${item.role === "user" ? "你" : "模型"}</div><div class="pgChatBubble${errorClass}${richClass}">${content}</div>${(attachments || item.meta) ? `<div class="pgChatMeta">${attachments}${item.meta ? `<span>${escHtml(item.meta.request_id || "")}</span><span>${escHtml(item.meta.model || "")}</span><span>${item.meta.total_ms != null ? `${Math.round(item.meta.total_ms)} ms` : ""}</span>` : ""}</div>` : ""}<div class="pgChatActions"><span>${escHtml(messageTime)}</span><button type="button" class="pgChatCopy" data-copy-index="${index}" title="复制消息" aria-label="复制消息">⧉</button></div></div>`;
     }).join("");
     box.scrollTop = box.scrollHeight;
   }
@@ -282,7 +305,7 @@
     sending = true; $chat("pgChatSend").disabled = true; $chat("pgChatSend").textContent = "生成中"; input.disabled = true;
     let uploaded = [], credential = null, assistantText = "", firstTokenMs = null, diagnostics = null;
     const userFiles = [...$chat("pgChatFiles").files].slice(0, 4), userIndex = messages.length;
-    messages.push({role:"user",content:text,attachment_names:userFiles.map(file=>file.name),include_in_context:true}); input.value=""; renderMessages(); addPendingAssistant();
+    messages.push({role:"user",content:text,attachment_names:userFiles.map(file=>file.name),include_in_context:true,created_at:new Date().toISOString()}); input.value=""; renderMessages(); addPendingAssistant();
     const requestId = "req_" + (globalThis.crypto?.randomUUID ? crypto.randomUUID().replaceAll("-", "") : `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`);
     const model = $chat("pgChatModel").value || "gpt-5.6-sol", started = performance.now();
     try {
@@ -300,14 +323,14 @@
       if (!assistantText.trim()) throw new Error("请求完成，但没有捕获到模型文本输出");
       const totalMs = performance.now() - started;
       document.getElementById("pgChatPending")?.remove();
-      messages.push({role:"assistant",content:assistantText,include_in_context:true,meta:{request_id:requestId,model,total_ms:totalMs,first_token_ms:firstTokenMs,response_format:String(diagnostics?.diagnostics?.response_format||"markdown")}});
+      messages.push({role:"assistant",content:assistantText,include_in_context:true,created_at:new Date().toISOString(),meta:{request_id:requestId,model,total_ms:totalMs,first_token_ms:firstTokenMs,response_format:String(diagnostics?.diagnostics?.response_format||"markdown")}});
       lastRequest = {request_id:requestId,model,total_ms:totalMs,first_token_ms:firstTokenMs,diagnostics}; saveHistory(); renderMessages();
       $chat("pgChatLast").innerHTML = `<span class="pgChatBadge">${escHtml(requestId)}</span> <span class="pgChatBadge">${Math.round(totalMs)} ms</span>`; status(`聊天请求完成：${requestId}`, "ok"); $chat("pgChatFiles").value="";
       await recordChatTurn({requestId,model,credential,text,statusValue:"passed",totalMs,firstTokenMs,responseChars:assistantText.length,attachmentsCount:userFiles.length,error:null});
     } catch (error) {
       const totalMs = performance.now() - started, errorText = String(error?.message || error), failedStatus = /(stalled|watchdog|timed out|timeout|no observable|no response progress)/i.test(errorText) ? "stalled" : "failed";
       document.getElementById("pgChatPending")?.remove(); if (messages[userIndex]) messages[userIndex].include_in_context=false;
-      messages.push({role:"assistant",content:`请求失败：${errorText}`,include_in_context:false,error:true,meta:{request_id:requestId,model,total_ms:totalMs}}); lastRequest={request_id:requestId,model,total_ms:totalMs,error:errorText,diagnostics}; saveHistory(); renderMessages(); status(`聊天请求失败：${errorText}`,"bad");
+      messages.push({role:"assistant",content:`请求失败：${errorText}`,include_in_context:false,error:true,created_at:new Date().toISOString(),meta:{request_id:requestId,model,total_ms:totalMs}}); lastRequest={request_id:requestId,model,total_ms:totalMs,error:errorText,diagnostics}; saveHistory(); renderMessages(); status(`聊天请求失败：${errorText}`,"bad");
       await recordChatTurn({requestId,model,credential,text,statusValue:failedStatus,totalMs,firstTokenMs,responseChars:assistantText.length,attachmentsCount:userFiles.length,error:errorText});
     } finally {
       if (credential && uploaded.length) await cleanupFiles(uploaded, credential.token);
@@ -320,7 +343,7 @@
     messages=[]; lastRequest=null; saveHistory(); renderMessages(); $chat("pgChatFiles").value=""; $chat("pgChatLast").textContent="新对话已创建"; $chat("pgChatInput").focus();
   }
 
-  $chat("pgChatSend").addEventListener("click", sendMessage); $chat("pgChatNew").addEventListener("click", newConversation);
+  $chat("pgChatSend").addEventListener("click", sendMessage); $chat("pgChatNew").addEventListener("click", newConversation); $chat("pgChatMessages").addEventListener("click", event => { const button = event.target.closest?.("[data-copy-index]"); if (!button) return; copyMessage(Number(button.dataset.copyIndex), button); });
   $chat("pgChatInput").addEventListener("keydown", event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendMessage(); } });
   $chat("pgChatModel").addEventListener("change", updateReasoningState); $chat("pgChatModel").addEventListener("focus", syncModels); $chat("pgChatKey").addEventListener("focus", syncKeys);
   loadHistory(); renderMessages(); updateReasoningState(); setTimeout(syncModels,100); setTimeout(syncKeys,180); setTimeout(syncModels,900);

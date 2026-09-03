@@ -4,7 +4,7 @@
 
   const STORAGE_KEY = "chat2apiConversationRoutesV1";
   const NEW_CHAT_URL = "https://chatgpt.com/";
-  const IDLE_CLOSE_MS = 300000;
+  const IDLE_CLOSE_MS = 2 * 60 * 1000;
   const SLOW_LOAD_MS = 8000;
   const HARD_SLOW_LOAD_MS = 15000;
   const MAX_TURNS = 32;

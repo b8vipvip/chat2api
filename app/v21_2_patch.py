@@ -40,10 +40,8 @@ def install_v21_2_patch(app: FastAPI) -> FastAPI:
                 payload: Any = json.loads(raw.decode("utf-8"))
             except Exception:
                 return Response(raw, status_code=response.status_code, media_type="application/json")
-            if isinstance(payload, dict):
-                payload["version"] = PATCH_VERSION
-                if "server_version" in payload or path.endswith("/log"):
-                    payload["server_version"] = PATCH_VERSION
+            # Historical v21.2 owns only compatibility behavior. Runtime
+            # identity belongs to runtime_contract and is not rewritten here.
             headers = {
                 key: value
                 for key, value in response.headers.items()
