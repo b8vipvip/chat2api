@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 from app.runtime_contract import CHROME_BRIDGE_BUNDLE_VERSION, SERVER_RUNTIME_VERSION, version_contract_payload
@@ -28,6 +29,18 @@ def test_multimodal_ready_gate_waits_for_real_upload_completion() -> None:
     assert "const ready = await waitForReady(count" in source
 
 
+def test_multimodal_ready_gate_javascript_syntax() -> None:
+    completed = subprocess.run(
+        ["node", "--check", str(ROOT / "chrome_extension" / "content_multimodal_settle_v84.js")],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
 def test_worker_manifest_loads_ready_gate_immediately_after_v78_uploader() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
     assert manifest["version"] == "0.8.22"
@@ -41,6 +54,7 @@ def test_runtime_preflight_requires_v84_ready_gate() -> None:
     source = text("chrome_extension/background_runtime_preflight_v48.js")
     contract = text("chrome_extension/content_runtime_contract_v71.js")
     assert '"content_multimodal_settle_v84.js"' in source
+    assert "result?.modules?.multimodal_v78" in source
     assert "result?.modules?.multimodal_v84" in source
     assert "multimodal revision 84" in source
     assert "multimodal_v84" in contract
