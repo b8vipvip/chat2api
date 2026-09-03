@@ -66,8 +66,7 @@ jobs:
               raise SystemExit("reserve report metadata marker missing")
           reserve_path.write_text(reserve.replace(old_meta, new_meta, 1), encoding="utf-8")
 
-          entry_path = Path("chrome_extension/background_entry.js")
-          entry = entry_path.read_text(encoding="utf-8")
+          entry = Path("chrome_extension/background_entry.js").read_text(encoding="utf-8")
           if '"background_window_truth_v83.js"' not in entry:
               raise SystemExit("background_window_truth_v83.js is not loaded")
 
@@ -115,9 +114,6 @@ jobs:
           )
           runtime_path.write_text(runtime, encoding="utf-8")
 
-          # The repository intentionally pins the current release/runtime identity
-          # in many regression tests. This is a browser-bundle release, so align all
-          # current-contract fixtures while leaving historical release notes alone.
           for p in sorted(Path("tests").rglob("*")):
               if not p.is_file() or p.suffix not in {".py", ".mjs", ".js"}:
                   continue
@@ -126,20 +122,12 @@ jobs:
               updated = updated.replace("当前真实受管 ChatGPT 窗口", "当前实际 ChatGPT 浏览器窗口")
               if updated != source:
                   p.write_text(updated, encoding="utf-8")
-
-          ci_path = Path(".github/workflows/ci.yml")
-          ci = ci_path.read_text(encoding="utf-8")
-          marker = "          node --check chrome_extension/background_tab_supervisor_v32.js\n"
-          if marker not in ci:
-              raise SystemExit("CI tab supervisor syntax marker missing")
-          ci = ci.replace(marker, marker + "          node --check chrome_extension/background_window_truth_v83.js\n", 1)
-          ci_path.write_text(ci, encoding="utf-8")
           PY
       - name: Verify current-version references
         run: |
           set -euo pipefail
-          ! grep -R "0\.22\.50" -n app tests chrome_extension --exclude='tmp-v02251-window-truth.yml'
-          ! grep -R "0\.8\.20" -n app tests chrome_extension --exclude='tmp-v02251-window-truth.yml'
+          ! grep -R "0\.22\.50" -n app tests chrome_extension
+          ! grep -R "0\.8\.20" -n app tests chrome_extension
       - name: JavaScript syntax
         run: node --check chrome_extension/background_window_truth_v83.js
       - name: Full test suite
@@ -153,6 +141,6 @@ jobs:
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app chrome_extension tests docs .github/workflows/ci.yml
+          git add app chrome_extension tests docs
           git commit -m 'Release v0.22.51 with physical window truth v83'
           git push origin HEAD:fix/physical-window-truth-v83-20260903
