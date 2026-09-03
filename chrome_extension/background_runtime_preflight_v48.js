@@ -2,14 +2,16 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__";
   if (globalThis[KEY]) return;
 
-  // Worker bundle 0.8.21 keeps the v71 request/response epoch while requiring
-  // the v78 multimodal controller plus its MAIN-world upload bridge.
-  const REQUIRED_BUNDLE = "0.8.21";
+  // Worker bundle 0.8.22 keeps the v71 request/response epoch while requiring
+  // the v78 MAIN-world upload bridge plus the v84 attachment readiness gate.
+  const REQUIRED_BUNDLE = "0.8.22";
   const REQUIRED_REVISION = 71;
   const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"];
   const OVERLAY_FILES = [
     "content_rate_limit_guard_v52.js",
     "content_tool_isolation_v48.js",
+    "content_multimodal_v78.js",
+    "content_multimodal_settle_v84.js",
     "content_request_lifecycle_v50.js",
     "content_request_hygiene_v42.js",
     "content_draft_managed_recovery_v55.js",
@@ -29,7 +31,7 @@
     version: 71,
     required_bundle: REQUIRED_BUNDLE,
     required_revision: REQUIRED_REVISION,
-    multimodal_revision: 78,
+    multimodal_revision: 84,
     checks: 0,
     hot_heals: 0,
     reloads: 0,
@@ -62,7 +64,7 @@
       result?.modules?.request_v6 &&
       result?.modules?.rich_response_v69 &&
       result?.modules?.response_stream_v69 &&
-      result?.modules?.multimodal_v78 &&
+      result?.modules?.multimodal_v84 &&
       result?.modules?.multimodal_main_v78
     );
   }
@@ -127,7 +129,7 @@
       state.failures += 1;
       state.last = {tab_id: tabId, ok: false, reloaded, hot_healed: hotHealed, result, elapsed_ms: Date.now() - started, at_ms: Date.now()};
       await chrome.storage.local.set({chat2apiRuntimePreflightV71: state.last}).catch(() => {});
-      throw new Error(`ChatGPT tab Worker runtime is stale or incomplete; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 78`);
+      throw new Error(`ChatGPT tab Worker runtime is stale or incomplete; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 84`);
     }
 
     let toolPreflight = null;
