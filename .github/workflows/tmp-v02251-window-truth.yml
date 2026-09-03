@@ -80,8 +80,10 @@ jobs:
 
           for path in (
               "chrome_extension/content_bundle_marker_v48.js",
+              "chrome_extension/content_bundle_marker_v71.js",
               "chrome_extension/background_runtime_preflight_v48.js",
               "chrome_extension/content_runtime_contract_v48.js",
+              "chrome_extension/content_runtime_contract_v71.js",
           ):
               p = Path(path)
               source = p.read_text(encoding="utf-8")
@@ -113,11 +115,17 @@ jobs:
           )
           runtime_path.write_text(runtime, encoding="utf-8")
 
-          current_test = Path("tests/test_v02250_attachment_window_telemetry.py")
-          source = current_test.read_text(encoding="utf-8")
-          source = source.replace('SERVER_RUNTIME_VERSION == "0.22.50"', 'SERVER_RUNTIME_VERSION == "0.22.51"')
-          source = source.replace('CHROME_BRIDGE_BUNDLE_VERSION == "0.8.20"', 'CHROME_BRIDGE_BUNDLE_VERSION == "0.8.21"')
-          current_test.write_text(source, encoding="utf-8")
+          # The repository intentionally pins the current release/runtime identity
+          # in many regression tests. This is a browser-bundle release, so align all
+          # current-contract fixtures while leaving historical release notes alone.
+          for p in sorted(Path("tests").rglob("*")):
+              if not p.is_file() or p.suffix not in {".py", ".mjs", ".js"}:
+                  continue
+              source = p.read_text(encoding="utf-8")
+              updated = source.replace("0.22.50", "0.22.51").replace("0.8.20", "0.8.21")
+              updated = updated.replace("当前真实受管 ChatGPT 窗口", "当前实际 ChatGPT 浏览器窗口")
+              if updated != source:
+                  p.write_text(updated, encoding="utf-8")
 
           ci_path = Path(".github/workflows/ci.yml")
           ci = ci_path.read_text(encoding="utf-8")
@@ -127,12 +135,11 @@ jobs:
           ci = ci.replace(marker, marker + "          node --check chrome_extension/background_window_truth_v83.js\n", 1)
           ci_path.write_text(ci, encoding="utf-8")
           PY
-      - name: Show remaining current-version references
+      - name: Verify current-version references
         run: |
-          echo '--- 0.22.50 ---'
-          grep -R "0\.22\.50" -n app tests chrome_extension .github docs || true
-          echo '--- 0.8.20 ---'
-          grep -R "0\.8\.20" -n app tests chrome_extension .github docs || true
+          set -euo pipefail
+          ! grep -R "0\.22\.50" -n app tests chrome_extension --exclude='tmp-v02251-window-truth.yml'
+          ! grep -R "0\.8\.20" -n app tests chrome_extension --exclude='tmp-v02251-window-truth.yml'
       - name: JavaScript syntax
         run: node --check chrome_extension/background_window_truth_v83.js
       - name: Full test suite
