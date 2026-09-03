@@ -1,0 +1,85 @@
+name: Temporary v0.22.52 multimodal ready alignment
+
+on:
+  push:
+    branches:
+      - fix/multimodal-upload-spinner-gate-v84-20260903
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/multimodal-upload-spinner-gate-v84-20260903
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Align v0.22.52 runtime contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path('.')
+          runtime = root / 'app/runtime_contract.py'
+          source = runtime.read_text(encoding='utf-8')
+          source = source.replace('SERVER_RUNTIME_VERSION = "0.22.51"', 'SERVER_RUNTIME_VERSION = "0.22.52"')
+          source = source.replace('CHROME_BRIDGE_BUNDLE_VERSION = "0.8.21"', 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.22"')
+          source = source.replace('physical-window-truth-v83-release-v02251"', 'physical-window-truth-v83-multimodal-upload-ready-v84-release-v02252"')
+          source = source.replace('physical-window-truth-v83-release-v0821"', 'physical-window-truth-v83-multimodal-upload-ready-v84-release-v0822"')
+          source = source.replace('"multimodal_revision": 78,', '"multimodal_revision": 84,')
+          needle = '            "multimodal_upload_settle_v79": True,\n'
+          if '"multimodal_upload_ready_v84"' not in source:
+              source = source.replace(needle, needle + '            "multimodal_upload_ready_v84": True,\n')
+          runtime.write_text(source, encoding='utf-8')
+
+          for path in (root / 'tests').rglob('*'):
+              if not path.is_file() or path.suffix not in {'.py', '.mjs', '.js'}:
+                  continue
+              text = path.read_text(encoding='utf-8')
+              updated = text.replace('0.22.51', '0.22.52').replace('0.8.21', '0.8.22')
+              if path.name == 'runtime_preflight_refresh_v71.mjs':
+                  updated = updated.replace('multimodal_revision: 78', 'multimodal_revision: 84')
+                  updated = updated.replace('multimodal_revision:78', 'multimodal_revision:84')
+              if updated != text:
+                  path.write_text(updated, encoding='utf-8')
+
+          release = root / 'docs/releases/v0.22.52.md'
+          release.write_text('''# chat2api v0.22.52\n\n- Server Runtime: `0.22.52`\n- Chrome Worker Bundle: `0.8.22`\n- Bridge Protocol: `0.8.1`\n\n## Fix\n\nWindows Worker multimodal uploads now wait for the real ChatGPT attachment readiness boundary instead of treating the first visible thumbnail as proof that upload/processing completed. The v84 ready gate detects semantic upload indicators and visible CSS animation spinners inside the attachment tile, requires the attachment to remain present and non-busy for a stable interval, and emits explicit waiting/ready/timeout diagnostics. This prevents the prompt from being submitted while the image thumbnail is still spinning, which previously caused ChatGPT to clear both the prompt and attachment without creating an accepted user turn.\n''', encoding='utf-8')
+          PY
+      - name: Verify current-version references
+        run: |
+          grep -q 'SERVER_RUNTIME_VERSION = "0.22.52"' app/runtime_contract.py
+          grep -q 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.22"' app/runtime_contract.py
+          grep -q '"multimodal_revision": 84' app/runtime_contract.py
+          grep -q '"multimodal_upload_ready_v84": True' app/runtime_contract.py
+          grep -q '"version": "0.8.22"' chrome_extension/manifest.json
+          grep -q 'multimodal_v84' chrome_extension/content_runtime_contract_v71.js
+      - name: JavaScript syntax
+        run: |
+          node --check chrome_extension/content_multimodal_settle_v84.js
+          node --check chrome_extension/background_runtime_preflight_v48.js
+          node --check chrome_extension/content_runtime_contract_v71.js
+      - name: Full test suite
+        run: pytest -q
+      - name: Commit aligned contracts
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/runtime_contract.py tests docs/releases/v0.22.52.md
+          if git diff --cached --quiet; then
+            echo 'No alignment changes to commit.'
+          else
+            git commit -m 'Release v0.22.52 with multimodal upload ready gate v84'
+            git push origin HEAD:fix/multimodal-upload-spinner-gate-v84-20260903
+          fi
