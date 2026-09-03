@@ -107,8 +107,6 @@
         "content_voice_v2.js",
         "content_voice_fix_v3.js",
         "content_voice_fix_v4.js",
-        "content_voice_live.js",
-        "content_voice_live_text_v24.js",
         "content_runtime_log.js",
         "content_runtime_contract_v48.js",
         "content_runtime_contract_v71.js"
