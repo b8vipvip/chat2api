@@ -30,9 +30,67 @@ jobs:
               '"return finalize(file, before, after, tracker, attempts, result.reason, result.duplicate, result.duplicateClosed, result);",',
               '"if (result.ok) return finalize(file, before, lastSeen, tracker, attempts, result.reason, duplicate, duplicateClosed, result);",',
           )
+          start = text.index("old_occupancy = '''")
+          end = text.index("new_occupancy = '''", start)
+          actual = '''old_occupancy = \'\'\'    const capacity = row?.capacity && typeof row.capacity === "object" ? row.capacity : {};
+    const usedRaw = capacity.used_units ?? row?.active_api_calls ?? 0;
+    const limitRaw = capacity.limit_units ?? row?.max_concurrency ?? row?.configured_max_concurrency ?? 0;
+    const queueRaw = capacity.queued_requests ?? 0;
+    const used = Number.isFinite(Number(usedRaw)) ? Number(usedRaw) : 0;
+    const limit = Number.isFinite(Number(limitRaw)) ? Number(limitRaw) : 0;
+    const queued = Number.isFinite(Number(queueRaw)) ? Number(queueRaw) : 0;
+    const cooling = capacity.rate_limit_cooldown_active === true;
+    const remaining = Number(capacity.rate_limit_cooldown_remaining_seconds || 0);
+    return {
+      text: `${used} / ${limit || "-"}${queued > 0 ? ` · 排队 ${queued}` : ""}`,
+      title: `当前占用 ${used}${limit ? ` / ${limit}` : ""}${queued > 0 ? `；排队 ${queued}` : ""}${cooling ? `；额度冷却 ${Math.max(0, Math.ceil(remaining))} 秒` : ""}`,
+      cls: used > 0 ? "warnText" : "muted",
+    };
+\'\'\'
+'''
+          text = text[:start] + actual + text[end:]
+          start = text.index("new_occupancy = '''")
+          end = text.index("if presentation.count(old_occupancy)", start)
+          replacement = '''new_occupancy = \'\'\'    const capacity = row?.capacity && typeof row.capacity === "object" ? row.capacity : {};
+    const usedRaw = capacity.used_units ?? row?.active_api_calls ?? 0;
+    const limitRaw = capacity.limit_units ?? row?.max_concurrency ?? row?.configured_max_concurrency ?? 0;
+    const physicalRaw = row?.metadata?.reserve_window_total ?? 0;
+    const queueRaw = capacity.queued_requests ?? 0;
+    const used = Number.isFinite(Number(usedRaw)) ? Number(usedRaw) : 0;
+    const limit = Number.isFinite(Number(limitRaw)) ? Number(limitRaw) : 0;
+    const physical = Number.isFinite(Number(physicalRaw)) ? Number(physicalRaw) : 0;
+    const denominator = physical > 0 ? physical : limit;
+    const queued = Number.isFinite(Number(queueRaw)) ? Number(queueRaw) : 0;
+    const cooling = capacity.rate_limit_cooldown_active === true;
+    const remaining = Number(capacity.rate_limit_cooldown_remaining_seconds || 0);
+    return {
+      text: `${used} / ${denominator || "-"}${queued > 0 ? ` · 排队 ${queued}` : ""}`,
+      title: `当前占用 ${used}${denominator ? ` / ${denominator}` : ""}；当前受管窗口 ${physical || denominator || 0}；并发上限 ${limit || "-"}${queued > 0 ? `；排队 ${queued}` : ""}${cooling ? `；额度冷却 ${Math.max(0, Math.ceil(remaining))} 秒` : ""}`,
+      cls: used > 0 ? "warnText" : "muted",
+    };
+\'\'\'
+'''
+          text = text[:start] + replacement + text[end:]
           path.write_text(text, encoding='utf-8')
           PY
           python3 .github/scripts/apply_v02249.py
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('chrome_extension/content_multimodal_v78.js')
+          text = path.read_text(encoding='utf-8')
+          old = '''        mutation_evidence: item.mutation_evidence,
+        main_world_bridge: item.main_world_bridge,
+'''
+          new = '''        mutation_evidence: item.mutation_evidence,
+        upload_settled: item.upload_settled === true,
+        upload_settle_ms: Number(item.upload_settle_ms || 0),
+        upload_settle_revision: Number(item.upload_settle_revision || 0),
+        main_world_bridge: item.main_world_bridge,
+'''
+          if text.count(old) != 1:
+              raise SystemExit(f'multimodal diagnostic mapping anchor count={text.count(old)}')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
       - name: Syntax checks
         run: |
           node --check chrome_extension/background_reserve_pool_v29.js
@@ -42,6 +100,7 @@ jobs:
           node --check app/admin_playground_chat_v69.js
           node --check app/admin_worker_presentation_v66.js
           python3 -m py_compile app/v21_2_patch.py app/runtime_contract.py tests/test_v02249_linux_response_lifecycle.py
+          pytest -q tests/test_v02249_linux_response_lifecycle.py
       - name: Commit patch
         run: |
           git rm .github/workflows/tmp-v02249-linux-lifecycle-response-ui.yml .github/scripts/apply_v02249.py
