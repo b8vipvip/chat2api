@@ -381,7 +381,9 @@
     if (current.isNew) return { reason: current.reason, composerCleared: composerText(findComposer()).length === 0, generating: false, current };
     const user = currentUserTurn(active);
     if (user) return { reason: "current-user-turn-visible", composerCleared: composerText(findComposer()).length === 0, generating: false, current };
-    if (!composerText(findComposer())) return { reason: "composer-cleared", composerCleared: true, generating: false, current };
+    // A cleared composer is only weak evidence: ChatGPT may consume the draft
+    // while an attachment is still settling or while submission is rejected.
+    // Never promote that UI mutation to a successful API submission by itself.
     return null;
   }
 
@@ -399,9 +401,10 @@
       composer_chars: composerText(findComposer()).length,
       generating_observed: isGenerating(),
     });
-    const confirmed = await waitAfterSend(active, "late", 20000);
+    const lateBudget = active.attachmentCount > 0 ? 45000 : 20000;
+    const confirmed = await waitAfterSend(active, "late", lateBudget);
     if (confirmed) return confirmed;
-    throw new Error("ChatGPT prompt left the composer after send, but submission could not be confirmed; duplicate send was suppressed");
+    throw new Error("ChatGPT cleared the composer but did not expose an accepted user turn, generation state, or response; duplicate send was suppressed");
   }
 
   async function submitAndConfirm(active) {
@@ -450,6 +453,8 @@
           submission_confirm_reason: confirmed.reason,
           enter_fallback_used: enterFallbackUsed,
           historical_hydration_ignored: true,
+          submission_liveness_revision: 79,
+          submission_attachment_count: active.attachmentCount,
         });
         return;
       }
@@ -538,6 +543,7 @@
       prompt,
       promptNormalized: normalize(prompt),
       options: message.options || {},
+      attachmentCount: Array.isArray(message.attachments) ? message.attachments.length : 0,
       cancelled: false,
       completed: false,
       responseStarted: false,

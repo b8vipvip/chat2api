@@ -212,6 +212,36 @@
     });
   }
 
+  async function waitForUploadSettled(file, before, initialReason, timeoutMs = 30000, stableMs = 1600) {
+    const deadline = Date.now() + timeoutMs;
+    let stableSince = 0;
+    let lastSeen = before;
+    while (Date.now() < deadline) {
+      const error = uploadErrorFor(file.name);
+      if (error) throw new Error(`${file.name}: ${error}`);
+      const seen = fileVisible(file, before);
+      lastSeen = seen.now;
+      if (!seen.ok || uploadBusy()) {
+        stableSince = 0;
+        await delay(150);
+        continue;
+      }
+      if (!stableSince) stableSince = Date.now();
+      if (Date.now() - stableSince >= stableMs) {
+        return {
+          ok: true,
+          reason: initialReason || seen.reason,
+          lastSeen,
+          upload_settled: true,
+          upload_settle_ms: Date.now() - stableSince,
+          upload_settle_revision: 79,
+        };
+      }
+      await delay(150);
+    }
+    throw new Error(`${file.name}: attachment appeared in ChatGPT but upload/processing did not settle before timeout`);
+  }
+
   async function waitForUpload(file, before, tracker, timeoutMs, strongSignal = false) {
     const deadline = Date.now() + timeoutMs;
     let duplicate = false;
@@ -228,10 +258,8 @@
       const seen = fileVisible(file, before);
       lastSeen = seen.now;
       if (seen.ok) {
-        await delay(550);
-        const late = uploadErrorFor(file.name);
-        if (late) throw new Error(`${file.name}: ${late}`);
-        return { ok: true, reason: seen.reason, lastSeen, duplicate, duplicateClosed, signal: true };
+        const settled = await waitForUploadSettled(file, before, seen.reason);
+        return { ...settled, duplicate, duplicateClosed, signal: true };
       }
       if (!strongSignal && (uploadBusy() || hasMutation(tracker))) {
         return { ok: false, pending: true, reason: uploadBusy() ? "upload-busy" : "dom-mutation", lastSeen, duplicate, duplicateClosed, signal: true };

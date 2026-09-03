@@ -9,7 +9,7 @@ function currentContract() {
     ok: true,
     contract_revision: 71,
     multimodal_revision: 78,
-    marker: { bundle: "0.8.18", revision: 71 },
+    marker: { bundle: "0.8.19", revision: 71 },
     modules: {
       request_v6: true,
       rich_response_v69: true,

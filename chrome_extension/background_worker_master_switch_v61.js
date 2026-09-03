@@ -5,6 +5,7 @@
   const CONTROL_KEY = "__CHAT2API_CAPACITY_CONTROL_V35__";
   const RESERVE_KEY = "__CHAT2API_RESERVE_POOL_V29__";
   const ROUTER_KEY = "__CHAT2API_CONVERSATION_ROUTING_V1__";
+  const DISPATCH_KEY = "__CHAT2API_CONVERSATION_DISPATCH_V1__";
   const WARM_KEY = "__CHAT2API_CONVERSATION_WARM_POOL_V2__";
   const DISABLED_STORAGE_KEY = "chat2apiWorkerMasterDisabledV61";
   const AWAIT_DISCONNECT_KEY = "chat2apiWorkerMasterAwaitDisconnectV62";
@@ -208,6 +209,7 @@
         extension_control_result: result,
         worker_master_switch_version: 61,
         worker_master_switch_revision: 62,
+        active_request_disable_lease_revision: 79,
         worker_master_enabled: !(result.action === "worker.disable" && result.ok),
       },
     });
@@ -215,8 +217,25 @@
     return result;
   }
 
+  function activeRequestLease() {
+    const dispatch = globalThis[DISPATCH_KEY];
+    const requestTabs = dispatch?.requestTabs;
+    if (!(requestTabs instanceof Map) || requestTabs.size <= 0) return { count: 0, ids: [] };
+    return { count: requestTabs.size, ids: [...requestTabs.keys()].map(String).slice(0, 20) };
+  }
+
   async function handleDisable(message) {
     try {
+      const lease = activeRequestLease();
+      if (lease.count > 0) {
+        return emitResult(message, false, {
+          blocked: true,
+          retryable: true,
+          active_request_count: lease.count,
+          active_request_ids: lease.ids,
+          lease_revision: 79,
+        }, "Worker has active requests; disable is blocked until terminal completion");
+      }
       const keep = Math.max(1, Math.floor(Number(message?.payload?.keep_windows || 1)));
       const data = await collapseManagedWindows(keep);
       const result = await emitResult(message, true, data);
