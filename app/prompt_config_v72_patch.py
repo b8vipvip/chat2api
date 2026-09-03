@@ -123,11 +123,13 @@ def install_prompt_config_v72_patch(app: FastAPI) -> FastAPI:
 
     # Keep full prompts out of the paginated request-list payload. The detail API
     # remains authoritative and is fetched only when the administrator clicks the
-    # new 提示词 column.
+    # new 提示词 column. TelemetryStore.query is intentionally synchronous and the
+    # /api/admin/requests endpoint spreads its returned mapping immediately, so the
+    # decorator must preserve that synchronous contract.
     base_query = telemetry.query
 
-    async def query_without_full_prompt(*args, **kwargs):
-        result = await base_query(*args, **kwargs)
+    def query_without_full_prompt(*args, **kwargs):
+        result = base_query(*args, **kwargs)
         rows = result.get("data") if isinstance(result, dict) else None
         if isinstance(rows, list):
             for row in rows:
