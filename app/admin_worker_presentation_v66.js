@@ -33,20 +33,25 @@
 
   function occupancy(row) {
     const capacity = row?.capacity && typeof row.capacity === "object" ? row.capacity : {};
+    const metadata = row?.metadata && typeof row.metadata === "object" ? row.metadata : {};
     const usedRaw = capacity.used_units ?? row?.active_api_calls ?? 0;
     const limitRaw = capacity.limit_units ?? row?.max_concurrency ?? row?.configured_max_concurrency ?? 0;
-    const physicalRaw = row?.metadata?.reserve_window_total ?? 0;
+    const liveWindowCandidates = [metadata.reserve_window_total, metadata.reserve_window_all_chatgpt_windows];
+    const physicalRaw = liveWindowCandidates.find(value => value !== null && value !== undefined && Number.isFinite(Number(value)));
     const queueRaw = capacity.queued_requests ?? 0;
-    const used = Number.isFinite(Number(usedRaw)) ? Number(usedRaw) : 0;
-    const limit = Number.isFinite(Number(limitRaw)) ? Number(limitRaw) : 0;
-    const physical = Number.isFinite(Number(physicalRaw)) ? Number(physicalRaw) : 0;
-    const denominator = physical > 0 ? physical : limit;
-    const queued = Number.isFinite(Number(queueRaw)) ? Number(queueRaw) : 0;
+    const used = Number.isFinite(Number(usedRaw)) ? Math.max(0, Number(usedRaw)) : 0;
+    const limit = Number.isFinite(Number(limitRaw)) ? Math.max(0, Number(limitRaw)) : 0;
+    const physicalKnown = physicalRaw !== undefined;
+    const physical = physicalKnown ? Math.max(0, Number(physicalRaw)) : 0;
+    const queued = Number.isFinite(Number(queueRaw)) ? Math.max(0, Number(queueRaw)) : 0;
     const cooling = capacity.rate_limit_cooldown_active === true;
     const remaining = Number(capacity.rate_limit_cooldown_remaining_seconds || 0);
+    const physicalText = physicalKnown ? String(physical) : "-";
+    const queueText = queued > 0 ? ` · 排队 ${queued}` : "";
     return {
-      text: `${used} / ${denominator || "-"}${queued > 0 ? ` · 排队 ${queued}` : ""}`,
-      title: `当前占用 ${used}${denominator ? ` / ${denominator}` : ""}；当前受管窗口 ${physical || denominator || 0}；并发上限 ${limit || "-"}${queued > 0 ? `；排队 ${queued}` : ""}${cooling ? `；额度冷却 ${Math.max(0, Math.ceil(remaining))} 秒` : ""}`,
+      text: `${used} / ${physicalText}${queueText}`,
+      html: `${used} / <span data-chat2api-live-window-count="1" style="color:#22c55e;font-weight:700">${physicalText}</span>${queueText}`,
+      title: `当前占用 ${used} / ${physicalText}；当前真实受管 ChatGPT 窗口 ${physicalText}；并发上限 ${limit || "-"}${queued > 0 ? `；排队 ${queued}` : ""}${cooling ? `；额度冷却 ${Math.max(0, Math.ceil(remaining))} 秒` : ""}`,
       cls: used > 0 ? "warnText" : "muted",
     };
   }
@@ -103,7 +108,7 @@
         tr.appendChild(occupancyCell);
       }
       const value = occupancy(row);
-      if (occupancyCell.textContent !== value.text) occupancyCell.textContent = value.text;
+      if (occupancyCell.innerHTML !== value.html) occupancyCell.innerHTML = value.html;
       if (occupancyCell.className !== value.cls) occupancyCell.className = value.cls;
       if (occupancyCell.title !== value.title) occupancyCell.title = value.title;
     }
