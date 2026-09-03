@@ -14,7 +14,7 @@ text = text.replace(
 
 block_start = text.index('# Worker occupancy:')
 block_end = text.index('# Playground timestamps/copy actions.', block_start)
-occupancy_patch = r'''# Worker occupancy: current physical managed-window count is the denominator;
+occupancy_patch = r"""# Worker occupancy: current physical managed-window count is the denominator;
 # configured generation concurrency remains independent and visible in tooltip.
 presentation = read("app/admin_worker_presentation_v66.js")
 fn_start = presentation.index("  function occupancy(row) {")
@@ -42,6 +42,6 @@ new_occupancy_fn = r'''  function occupancy(row) {
 presentation = presentation[:fn_start] + new_occupancy_fn + presentation[fn_end:]
 write("app/admin_worker_presentation_v66.js", presentation)
 
-'''
+"""
 text = text[:block_start] + occupancy_patch + text[block_end:]
 path.write_text(text, encoding='utf-8')
