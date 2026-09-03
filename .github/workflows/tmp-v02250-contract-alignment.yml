@@ -19,6 +19,8 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
       - name: Align release contracts and final patch ordering
         shell: bash
         run: |
