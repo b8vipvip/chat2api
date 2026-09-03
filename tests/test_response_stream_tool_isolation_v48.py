@@ -65,7 +65,7 @@ def test_background_preflight_wraps_final_conversation_dispatch():
     marker = (ROOT / "chrome_extension" / "content_bundle_marker_v71.js").read_text(encoding="utf-8")
     assert 'REQUIRED_BUNDLE = "0.8.18"' in preflight
     assert 'REQUIRED_REVISION = 71' in preflight
-    assert 'const MAIN_FILES = ["network_stream_main_v55.js"]' in preflight
+    assert 'const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"]' in preflight
     for token in ('"content_rate_limit_guard_v52.js"','"content_request_lifecycle_v50.js"','"content_draft_managed_recovery_v55.js"','"content_rich_response_v69.js"','"content_request_v6.js"','"content_response_stream_recovery_v69.js"','"content_network_stream_recovery_v55.js"','"content_response_semantic_recovery_v51.js"','"content_transient_retry_v50.js"','"content_generation_liveness_v49.js"','"content_bundle_marker_v71.js"','"content_runtime_contract_v71.js"'):
         assert token in preflight
     assert '"content_response_stream_recovery_v49.js"' not in preflight
