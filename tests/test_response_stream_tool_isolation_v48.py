@@ -113,7 +113,7 @@ def test_runtime_contract_exposes_v48_v49_v50_v51_and_v55_features():
     app = FastAPI(version=SERVER_RUNTIME_VERSION)
     payload = version_contract_payload(app)
     assert SERVER_RUNTIME_VERSION == "0.22.47"
-    assert payload["chrome_bridge"]["bundle_version"] == "0.8.18"
+    assert payload["chrome_bridge"]["bundle_version"] == "0.8.19"
     assert payload["chrome_bridge"]["network_response_recovery_version"] == 55
     assert payload["chrome_bridge"]["network_response_parser_revision"] == 62
     assert payload["chrome_bridge"]["worker_master_switch_version"] == 61
