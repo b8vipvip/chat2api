@@ -36,7 +36,7 @@
     const metadata = row?.metadata && typeof row.metadata === "object" ? row.metadata : {};
     const usedRaw = capacity.used_units ?? row?.active_api_calls ?? 0;
     const limitRaw = capacity.limit_units ?? row?.max_concurrency ?? row?.configured_max_concurrency ?? 0;
-    const liveWindowCandidates = [metadata.reserve_window_total, metadata.reserve_window_all_chatgpt_windows];
+    const liveWindowCandidates = [metadata.reserve_window_all_chatgpt_windows, metadata.reserve_window_total];
     const physicalRaw = liveWindowCandidates.find(value => value !== null && value !== undefined && Number.isFinite(Number(value)));
     const queueRaw = capacity.queued_requests ?? 0;
     const used = Number.isFinite(Number(usedRaw)) ? Math.max(0, Number(usedRaw)) : 0;
@@ -51,7 +51,7 @@
     return {
       text: `${used} / ${physicalText}${queueText}`,
       html: `${used} / <span data-chat2api-live-window-count="1" style="color:#22c55e;font-weight:700">${physicalText}</span>${queueText}`,
-      title: `当前占用 ${used} / ${physicalText}；当前真实受管 ChatGPT 窗口 ${physicalText}；并发上限 ${limit || "-"}${queued > 0 ? `；排队 ${queued}` : ""}${cooling ? `；额度冷却 ${Math.max(0, Math.ceil(remaining))} 秒` : ""}`,
+      title: `当前占用 ${used} / ${physicalText}；当前实际 ChatGPT 浏览器窗口 ${physicalText}；并发上限 ${limit || "-"}${queued > 0 ? `；排队 ${queued}` : ""}${cooling ? `；额度冷却 ${Math.max(0, Math.ceil(remaining))} 秒` : ""}`,
       cls: used > 0 ? "warnText" : "muted",
     };
   }
