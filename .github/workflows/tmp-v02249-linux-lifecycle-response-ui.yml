@@ -32,7 +32,7 @@ jobs:
           python3 -m py_compile app/v21_2_patch.py app/runtime_contract.py tests/test_v02249_linux_response_lifecycle.py
       - name: Commit patch
         run: |
-          git rm .github/workflows/tmp-v02249-linux-lifecycle-response-ui.yml .github/scripts/apply_v02249.py .github/scripts/prepatch_v02249.py .github/scripts/postpatch_v02249.py
+          git rm -f .github/workflows/tmp-v02249-linux-lifecycle-response-ui.yml .github/scripts/apply_v02249.py .github/scripts/prepatch_v02249.py .github/scripts/postpatch_v02249.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
