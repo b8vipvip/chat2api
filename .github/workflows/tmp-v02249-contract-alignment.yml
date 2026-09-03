@@ -1,0 +1,42 @@
+name: Temporary v0.22.49 contract alignment
+
+on:
+  push:
+    branches:
+      - fix/linux-lifecycle-response-ui-v81-20260903
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/linux-lifecycle-response-ui-v81-20260903
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Align source and tests
+        run: python3 .github/scripts/align_v02249_contracts.py
+      - name: Focused checks
+        run: |
+          python3 -m pip install -e '.[dev]'
+          python3 -m py_compile app/v21_13_patch.py tests/test_v02249_linux_response_lifecycle.py tests/test_linux_worker_tab_init.py tests/test_reserve_window_telemetry_v29.py
+          node tests/reserve_pool_v29.mjs
+          pytest -q tests/test_v02249_linux_response_lifecycle.py tests/test_linux_worker_tab_init.py tests/test_reserve_pool_vm_v29.py tests/test_reserve_window_telemetry_v29.py
+      - name: Full test suite
+        run: pytest -q
+      - name: Commit aligned contracts
+        run: |
+          git rm -f .github/workflows/tmp-v02249-contract-alignment.yml .github/scripts/align_v02249_contracts.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "Align v0.22.49 runtime, reserve and release contracts"
+          git push origin HEAD:fix/linux-lifecycle-response-ui-v81-20260903
