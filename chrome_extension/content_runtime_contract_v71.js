@@ -5,7 +5,7 @@
     try { chrome.runtime.onMessage.removeListener(prior.listener); } catch (_) {}
   }
 
-  const REQUIRED_BUNDLE = "0.8.22";
+  const REQUIRED_BUNDLE = "0.8.23";
   const REQUIRED_REVISION = 71;
 
   function snapshot() {
@@ -23,6 +23,7 @@
       response_stream_v69: Number(recovery?.version || 0) >= 69,
       multimodal_v78: Number(multimodal?.revision || 0) >= 78,
       multimodal_v84: Number(multimodal?.revision || 0) >= 84 && typeof multimodal?.waitForReady === "function",
+      multimodal_v85: Number(multimodal?.revision || 0) >= 85 && typeof multimodal?.waitForSafeSubmit === "function",
       multimodal_main_v78: document.documentElement?.getAttribute?.("data-chat2api-multimodal-main-v78") === "78",
       request_lifecycle_v50: Number(globalThis.__CHAT2API_REQUEST_LIFECYCLE_V50__?.version || 0) === 50,
       response_capture_v41: Number(globalThis.__CHAT2API_RESPONSE_CAPTURE_V41__?.version || 0) === 41,

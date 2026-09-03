@@ -20,6 +20,9 @@
     poolPatched: false,
   };
   globalThis[KEY] = state;
+  const createManagedWindow = (options, reason) => typeof globalThis.chat2apiCreateWindowStaggered === "function"
+    ? globalThis.chat2apiCreateWindowStaggered(options, { reason })
+    : chrome.windows.create(options);
 
   function validChatGptTab(tab) {
     if (!Number.isInteger(tab?.id)) return false;
@@ -108,7 +111,7 @@
     if (warm) return { warm_exists: true, tab: warm, tab_id: warm.id, window_id: warm.windowId };
 
     const createdAt = Date.now();
-    const created = await chrome.windows.create({ url: "https://chatgpt.com/", focused: false, type: "normal" });
+    const created = await createManagedWindow({ url: "https://chatgpt.com/", focused: false, type: "normal" }, "external-warm-bootstrap");
     if (!Number.isInteger(created?.id)) throw new Error("Chrome did not create the external-network ChatGPT warm window");
     let tab = Array.isArray(created.tabs) ? created.tabs.find(item => Number.isInteger(item?.id)) : null;
     if (!tab) {

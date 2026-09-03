@@ -31,6 +31,9 @@
   globalThis[KEY] = state;
 
   const sleepWarm = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const createManagedWindow = (options, reason) => typeof globalThis.chat2apiCreateWindowStaggered === "function"
+    ? globalThis.chat2apiCreateWindowStaggered(options, { reason })
+    : chrome.windows.create(options);
   const baseResolver = globalThis.resolveTargetTabForRequest;
   if (typeof baseResolver !== "function") return;
 
@@ -345,7 +348,7 @@
     const createdAt = Date.now();
     const accountType = definition.account_type || await cachedAccountType();
     const requireModelPicker = accountType === "paid" || Boolean(definition.preset && definition.preset.model !== "gpt-5.5-mini");
-    const created = await chrome.windows.create({ url: WARM_URL, focused: false, type: "normal" });
+    const created = await createManagedWindow({ url: WARM_URL, focused: false, type: "normal" }, "warm-pool");
     if (!created?.id) throw new Error("Chrome did not create the ChatGPT warm-up window");
     let tab = Array.isArray(created.tabs) ? created.tabs.find(item => Number.isInteger(item.id)) : null;
     if (!tab) {
