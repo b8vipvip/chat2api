@@ -24,7 +24,9 @@ jobs:
         with:
           node-version: '22'
       - name: Apply repairs
-        run: python scripts/tmp_v02253_repair.py
+        run: |
+          python scripts/tmp_v02253_repair.py
+          python scripts/tmp_v02253_fix_tests.py
       - name: Verify contracts
         run: |
           grep -q 'SERVER_RUNTIME_VERSION = "0.22.53"' app/runtime_contract.py
@@ -52,13 +54,14 @@ jobs:
       - name: VM contracts
         run: |
           node tests/tab_supervisor_v32.mjs
+          node tests/reserve_pool_v29.mjs
           node tests/runtime_preflight_refresh_v71.mjs
       - name: Commit repaired release
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add app chrome_extension tests docs .github/workflows/ci.yml
-          git rm scripts/tmp_v02253_repair.py
+          git rm scripts/tmp_v02253_repair.py scripts/tmp_v02253_fix_tests.py
           if git diff --cached --quiet; then
             echo 'No repair changes to commit.'
           else
