@@ -58,3 +58,4 @@ def test_runtime_identity_and_v82_features_are_current() -> None:
     assert payload["features"]["runtime_version_observability_v82"] is True
     runtime_source = text("app/runtime_contract.py")
     assert 'payload["server_version"] = SERVER_RUNTIME_VERSION' in runtime_source
+    assert 'payload["server_version"] = PATCH_VERSION' not in text("app/v21_1_patch.py")
