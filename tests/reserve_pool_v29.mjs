@@ -185,7 +185,7 @@ assert.equal(routeFreshness.diagnostics.conversation_prewarm_freshness_gate, "sp
 assert.ok(routeFreshness.diagnostics.conversation_reserve_prewarm_ready_age_ms < 30 * 60 * 1000);
 await new Promise(resolve => setTimeout(resolve, 260));
 snapshot = await reserve.snapshot();
-assert.equal(snapshot.total, 3, "claiming a reserve window must not increase total");
+assert.equal(snapshot.total, 4, "one routed request plus three reserve spares should keep four managed windows");
 assert.equal(snapshot.active, 1, "claimed routed window should be counted as active");
 
 const route = router.routes["key-1"];
@@ -195,8 +195,8 @@ route.last_active_at = Date.now();
 route.close_after = route.last_active_at + 5 * 60 * 1000;
 await chrome.storage.local.set({chat2apiConversationRoutesV1: router.routes});
 await reserve.patchIdleDeadlines();
-assert.ok(Math.abs(route.close_after - (route.last_active_at + 10 * 60 * 1000)) <= 1000, "idle deadline must be extended to ten minutes");
-assert.ok(alarms.has(`chat2api-route-close:${route.window_id}`), "ten-minute route close alarm should replace historical deadline");
+assert.ok(Math.abs(route.close_after - (route.last_active_at + 2 * 60 * 1000)) <= 1000, "idle deadline must be normalized to two minutes");
+assert.ok(alarms.has(`chat2api-route-close:${route.window_id}`), "two-minute route close alarm should replace historical deadline");
 
 const closedWindowId = route.window_id;
 await chrome.windows.remove(closedWindowId);
@@ -222,7 +222,7 @@ assert.ok(latest, "reserve telemetry status should be emitted");
 assert.equal(latest.metadata.reserve_window_total, 3);
 assert.equal(latest.metadata.reserve_window_active, 0);
 assert.equal(latest.metadata.reserve_window_target, 3);
-assert.equal(latest.metadata.reserve_window_idle_close_seconds, 600);
+assert.equal(latest.metadata.reserve_window_idle_close_seconds, 120);
 assert.equal(latest.metadata.reserve_window_freshness_version, 39);
 assert.equal(latest.metadata.reserve_window_max_ready_age_seconds, 1800);
 

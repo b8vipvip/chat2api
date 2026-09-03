@@ -504,28 +504,56 @@
           active.lastCandidateReason = current.reason;
         }
       }
-      if (responseStarted && lastText && !generating && stableSince && Date.now() - stableSince >= 1500) {
-        await delay(300);
-        const finalState = currentAssistantState(active);
-        if (!isGenerating() && finalState.isNew && finalState.latest) {
-          const final = await finalNodeText(finalState.latest);
-          const finalText = final.text || finalState.text || lastText;
-          lastText = await updateCapturedText(active, finalText, lastText);
+      if (responseStarted && lastText && !generating && stableSince && Date.now() - stableSince >= 1000) {
+        let settleStableSince = Date.now();
+        let settledText = lastText;
+        let settledState = current;
+        let settledFinal = { text: lastText, image_inlined_count: 0, image_inlined_bytes: 0 };
+        while (!active.cancelled && Date.now() - settleStableSince < 3000) {
+          if (isGenerating()) {
+            settleStableSince = 0;
+            break;
+          }
+          const candidateState = currentAssistantState(active);
+          if (!candidateState.isNew || !candidateState.latest) {
+            settleStableSince = 0;
+            break;
+          }
+          const candidateFinal = await finalNodeText(candidateState.latest);
+          const candidateText = candidateFinal.text || candidateState.text || settledText;
+          if (candidateText && (candidateText !== settledText || candidateState.identity !== settledState.identity)) {
+            settledText = candidateText;
+            settledState = candidateState;
+            settledFinal = candidateFinal;
+            lastText = await updateCapturedText(active, candidateText, lastText);
+            lastIdentity = candidateState.identity || lastIdentity;
+            settleStableSince = Date.now();
+          } else {
+            settledState = candidateState;
+            settledFinal = candidateFinal;
+          }
+          await delay(180);
+        }
+        if (settleStableSince && !isGenerating() && Date.now() - settleStableSince >= 3000) {
+          const finalText = settledText || lastText;
           await emit({
             type: "chat.completed",
             request_id: active.requestId,
             text: finalText,
             diagnostics: {
               response_epoch_revision: 69,
-              response_epoch_candidate_reason: finalState.reason,
+              response_terminal_settle_revision: 81,
+              response_terminal_stable_ms: Date.now() - settleStableSince,
+              response_epoch_candidate_reason: settledState.reason,
               response_format: "markdown",
-              response_image_inlined_count: final.image_inlined_count || 0,
-              response_image_inlined_bytes: final.image_inlined_bytes || 0,
+              response_image_inlined_count: settledFinal.image_inlined_count || 0,
+              response_image_inlined_bytes: settledFinal.image_inlined_bytes || 0,
             },
           });
           active.completed = true;
           return;
         }
+        stableSince = Date.now();
       }
       await delay(120);
     }

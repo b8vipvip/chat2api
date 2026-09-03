@@ -106,12 +106,14 @@ server_host="${server_host%%/*}"
 server_host="${server_host%%:*}"
 log "starting Chrome for Testing ${version}; Chrome Bridge=${EXTENSION_DIR}"
 
-# Belt-and-suspenders cleanup: if Chrome restores page targets from another
-# profile journal format, prune duplicate ChatGPT targets through loopback CDP
-# during the first seconds of this Chrome process. This is intentionally
-# one-shot; steady-state capacity remains owned by the Extension supervisor.
-if [[ -f "$TAB_INIT_HELPER" ]]; then
-  python3 "$TAB_INIT_HELPER" --debug-url http://127.0.0.1:9222 --keep 1 --wait 45 &
+# Session metadata above is the normal stale-window cleanup boundary. Never
+# run a host-side CDP window pruner while the MV3 supervisor is creating
+# reserve/routed windows: that helper cannot distinguish a restored tab from a
+# live API request and used to close legitimate task windows.
+# Keep the legacy helper only as an explicit one-shot recovery opt-in.
+if [[ "${CHAT2API_TAB_INIT_PRUNE:-0}" == "1" && -f "$TAB_INIT_HELPER" ]]; then
+  log "legacy CDP tab pruning explicitly enabled for this start"
+  python3 "$TAB_INIT_HELPER" --debug-url http://127.0.0.1:9222 --keep 1 --wait 8 &
 fi
 
 exec "$CURRENT_LINK" \

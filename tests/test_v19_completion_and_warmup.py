@@ -155,7 +155,7 @@ def test_warm_pool_reuses_closed_routes_as_fresh_chat_and_refills_on_claim() -> 
     assert 'changes.socketState?.newValue === "connected"' in source
     assert "tab.status" not in source
 
-    assert "IDLE_CLOSE_MS = 300000" in routing
+    assert "IDLE_CLOSE_MS = 2 * 60 * 1000" in routing
     assert "resetClosedRoute" in routing
     assert "reopen-saved-conversation" not in routing
     assert '"closed-window-new-chat"' in routing

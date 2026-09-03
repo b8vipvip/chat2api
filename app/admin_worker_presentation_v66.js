@@ -35,15 +35,18 @@
     const capacity = row?.capacity && typeof row.capacity === "object" ? row.capacity : {};
     const usedRaw = capacity.used_units ?? row?.active_api_calls ?? 0;
     const limitRaw = capacity.limit_units ?? row?.max_concurrency ?? row?.configured_max_concurrency ?? 0;
+    const physicalRaw = row?.metadata?.reserve_window_total ?? 0;
     const queueRaw = capacity.queued_requests ?? 0;
     const used = Number.isFinite(Number(usedRaw)) ? Number(usedRaw) : 0;
     const limit = Number.isFinite(Number(limitRaw)) ? Number(limitRaw) : 0;
+    const physical = Number.isFinite(Number(physicalRaw)) ? Number(physicalRaw) : 0;
+    const denominator = physical > 0 ? physical : limit;
     const queued = Number.isFinite(Number(queueRaw)) ? Number(queueRaw) : 0;
     const cooling = capacity.rate_limit_cooldown_active === true;
     const remaining = Number(capacity.rate_limit_cooldown_remaining_seconds || 0);
     return {
-      text: `${used} / ${limit || "-"}${queued > 0 ? ` · 排队 ${queued}` : ""}`,
-      title: `当前占用 ${used}${limit ? ` / ${limit}` : ""}${queued > 0 ? `；排队 ${queued}` : ""}${cooling ? `；额度冷却 ${Math.max(0, Math.ceil(remaining))} 秒` : ""}`,
+      text: `${used} / ${denominator || "-"}${queued > 0 ? ` · 排队 ${queued}` : ""}`,
+      title: `当前占用 ${used}${denominator ? ` / ${denominator}` : ""}；当前受管窗口 ${physical || denominator || 0}；并发上限 ${limit || "-"}${queued > 0 ? `；排队 ${queued}` : ""}${cooling ? `；额度冷却 ${Math.max(0, Math.ceil(remaining))} 秒` : ""}`,
       cls: used > 0 ? "warnText" : "muted",
     };
   }

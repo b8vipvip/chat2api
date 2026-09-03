@@ -47,7 +47,7 @@ def test_extension_runtime_config_uses_live_concurrency_as_reserve_target():
     assert response.status_code == 200
     payload = response.json()
     assert payload["reserve_window_target"] == 10
-    assert payload["route_idle_close_seconds"] == ROUTE_IDLE_CLOSE_SECONDS == 600
+    assert payload["route_idle_close_seconds"] == ROUTE_IDLE_CLOSE_SECONDS == 120
     assert payload["max_reserve_window_target"] == MAX_RESERVE_WINDOW_TARGET == 32
 
 
@@ -63,7 +63,7 @@ def test_reserve_pool_is_loaded_between_warm_pool_and_worker_router():
 def test_reserve_pool_tracks_real_managed_windows_and_active_subset():
     source = (ROOT / "chrome_extension" / "background_reserve_pool_v29.js").read_text(encoding="utf-8")
     for token in (
-        'const ROUTE_IDLE_CLOSE_MS = 10 * 60 * 1000',
+        'const ROUTE_IDLE_CLOSE_MS = 2 * 60 * 1000',
         'const MAX_TARGET = 32',
         'reserve_window_total: snapshot.total',
         'reserve_window_active: snapshot.active',
@@ -76,8 +76,8 @@ def test_reserve_pool_tracks_real_managed_windows_and_active_subset():
         'for (const route of Object.values(router?.routes || {}))',
         'if (route.inflight_request_id) active.add(route.window_id)',
         'managed.add(route.window_id)',
-        'state.target - snapshot.total - warmOpening',
-        'if (snapshot.total > state.target && state.reserveSlots.size)',
+        'state.target - spareTotal - warmOpening',
+        'if (spareTotal > state.target && state.reserveSlots.size)',
     ):
         assert token in source
 
@@ -85,7 +85,7 @@ def test_reserve_pool_tracks_real_managed_windows_and_active_subset():
     assert "tab_count" not in source
 
 
-def test_reserve_pool_reuses_spares_and_extends_route_idle_close_to_ten_minutes():
+def test_reserve_pool_reuses_spares_and_normalizes_route_idle_close_to_two_minutes():
     source = (ROOT / "chrome_extension" / "background_reserve_pool_v29.js").read_text(encoding="utf-8")
     for token in (
         'if (Number(warmPool?.warmSlots?.size || 0) > 0) return null',

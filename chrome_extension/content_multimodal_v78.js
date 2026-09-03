@@ -212,7 +212,7 @@
     });
   }
 
-  async function waitForUploadSettled(file, before, initialReason, timeoutMs = 30000, stableMs = 1600) {
+  async function waitForUploadSettled(file, before, initialReason, timeoutMs = 60000, stableMs = 3000) {
     const deadline = Date.now() + timeoutMs;
     let stableSince = 0;
     let lastSeen = before;
@@ -269,10 +269,13 @@
     return { ok: false, pending: false, reason: "no-confirmation", lastSeen, duplicate, duplicateClosed, signal: strongSignal || uploadBusy() || hasMutation(tracker) };
   }
 
-  function finalize(file, before, after, tracker, attempts, reason, duplicate, duplicateClosed) {
+  function finalize(file, before, after, tracker, attempts, reason, duplicate, duplicateClosed, settled = {}) {
     const last = attempts[attempts.length - 1] || {};
     const result = {
       file,
+      upload_settled: settled.upload_settled === true,
+      upload_settle_ms: Number(settled.upload_settle_ms || 0),
+      upload_settle_revision: Number(settled.upload_settle_revision || 0),
       input_id: last.input_id || null,
       attempts: attempts.length,
       attempt_history: attempts,
@@ -334,7 +337,7 @@
         duplicate ||= Boolean(result.duplicate);
         duplicateClosed ||= Boolean(result.duplicateClosed);
         lastSeen = result.lastSeen || lastSeen;
-        if (result.ok) return finalize(file, before, lastSeen, tracker, attempts, result.reason, duplicate, duplicateClosed);
+        if (result.ok) return finalize(file, before, lastSeen, tracker, attempts, result.reason, duplicate, duplicateClosed, result);
         // Once ChatGPT has emitted any upload signal, never inject the same file a
         // second time. WaitForUpload already consumed the long settle window.
         if (result.signal) break;
@@ -376,6 +379,9 @@
         verify_reason: item.verify_reason,
         input_consumed: item.input_consumed,
         mutation_evidence: item.mutation_evidence,
+        upload_settled: item.upload_settled === true,
+        upload_settle_ms: Number(item.upload_settle_ms || 0),
+        upload_settle_revision: Number(item.upload_settle_revision || 0),
         main_world_bridge: item.main_world_bridge,
       })),
       attachment_verified: true,

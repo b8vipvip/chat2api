@@ -11,7 +11,7 @@
   const RECONCILE_DELAY_MS = 180;
   const CREATE_BATCH = 4;
   const READY_TIMEOUT_MS = 45000;
-  const ROUTE_IDLE_CLOSE_MS = 10 * 60 * 1000;
+  const ROUTE_IDLE_CLOSE_MS = 2 * 60 * 1000;
   const MAX_RESERVE_READY_AGE_MS = 30 * 60 * 1000;
   const MAX_TARGET = 32;
   const ROUTE_ALARM_PREFIX = "chat2api-route-close:";
@@ -541,19 +541,25 @@
       await patchRouteIdleDeadlines();
       let snapshot = await managedSnapshot();
 
-      if (snapshot.total > state.target && state.reserveSlots.size) {
-        await trimOwnReserve(Math.min(snapshot.total - state.target, state.reserveSlots.size));
+      // reserve_window_target is a spare target, not a total-window cap.
+      // Routed conversation windows remain alive for affinity and must not
+      // consume a reserve slot. target=3 + routed=1 therefore means total=4.
+      let spareTotal = Math.max(0, snapshot.total - snapshot.routed);
+      if (spareTotal > state.target && state.reserveSlots.size) {
+        await trimOwnReserve(Math.min(spareTotal - state.target, state.reserveSlots.size));
         snapshot = await managedSnapshot();
+        spareTotal = Math.max(0, snapshot.total - snapshot.routed);
       }
 
-      if (snapshot.total < state.target && await bulkPrewarmEligible()) {
+      if (spareTotal < state.target && await bulkPrewarmEligible()) {
         const warmOpening = Number(globalThis[WARM_POOL_KEY]?.openingSlots?.size || 0);
-        const missing = Math.max(0, state.target - snapshot.total - warmOpening);
+        const missing = Math.max(0, state.target - spareTotal - warmOpening);
         const batch = Math.min(CREATE_BATCH, missing);
         if (batch > 0) {
           await Promise.all(Array.from({ length: batch }, () => createReserveWindow().catch(() => null)));
           snapshot = await managedSnapshot();
-          if (snapshot.total < state.target) scheduleReconcile(250);
+          spareTotal = Math.max(0, snapshot.total - snapshot.routed);
+          if (spareTotal < state.target) scheduleReconcile(250);
         }
       }
 
