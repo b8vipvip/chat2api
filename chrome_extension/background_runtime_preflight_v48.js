@@ -64,6 +64,7 @@
       result?.modules?.request_v6 &&
       result?.modules?.rich_response_v69 &&
       result?.modules?.response_stream_v69 &&
+      result?.modules?.multimodal_v78 &&
       result?.modules?.multimodal_v84 &&
       result?.modules?.multimodal_main_v78
     );
