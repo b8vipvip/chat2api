@@ -17,7 +17,22 @@ jobs:
           ref: fix/linux-lifecycle-response-ui-v81-20260903
           fetch-depth: 0
       - name: Apply patch
-        run: python3 .github/scripts/apply_v02249.py
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/apply_v02249.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'old_finalize = "return finalize(file, before, after, tracker, attempts, result.reason, result.duplicate, result.duplicateClosed);"',
+              'old_finalize = "if (result.ok) return finalize(file, before, lastSeen, tracker, attempts, result.reason, duplicate, duplicateClosed);"',
+          )
+          text = text.replace(
+              '"return finalize(file, before, after, tracker, attempts, result.reason, result.duplicate, result.duplicateClosed, result);",',
+              '"if (result.ok) return finalize(file, before, lastSeen, tracker, attempts, result.reason, duplicate, duplicateClosed, result);",',
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
+          python3 .github/scripts/apply_v02249.py
       - name: Syntax checks
         run: |
           node --check chrome_extension/background_reserve_pool_v29.js
