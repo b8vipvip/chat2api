@@ -1,0 +1,87 @@
+name: Temporary v0.22.50 contract alignment
+
+on:
+  push:
+    branches:
+      - fix/worker-window-vision-download-v82-20260903
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/worker-window-vision-download-v82-20260903
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Align release contracts and final patch ordering
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          release_tests = [
+              "tests/test_capacity_queue_v57.py",
+              "tests/test_capacity_runtime_v22_24.py",
+              "tests/test_generation_backend_health_v54.py",
+              "tests/test_linux_worker_initialize_v43.py",
+              "tests/test_linux_worker_install_ux_v22_20.py",
+              "tests/test_linux_worker_login_diagnostics_v22_22.py",
+              "tests/test_linux_worker_online_upgrade_v22_25.py",
+              "tests/test_release_proxy_health_v22_38.py",
+              "tests/test_request_hygiene_worker_toggle_v46.py",
+              "tests/test_response_stream_tool_isolation_v48.py",
+              "tests/test_runtime_lifecycle_multimodal_v79.py",
+              "tests/test_runtime_version_observability_v80.py",
+              "tests/test_server_update_github_transport_v22_30.py",
+              "tests/test_server_update_poll_timeout_v22_29.py",
+              "tests/test_server_worker_sync_v22_36.py",
+              "tests/test_single_response_observer_v53.py",
+              "tests/test_starlette_lifespan_worker_sync.py",
+              "tests/test_worker_lifecycle_retry_quarantine_v50.py",
+          ]
+          for name in release_tests:
+              path = Path(name)
+              source = path.read_text(encoding="utf-8")
+              updated = source.replace("0.22.49", "0.22.50")
+              if source == updated:
+                  raise SystemExit(f"expected stale v0.22.49 contract not found in {name}")
+              path.write_text(updated, encoding="utf-8")
+
+          entry_path = Path("app/entry.py")
+          entry = entry_path.read_text(encoding="utf-8")
+          marker = "# Prompt configuration is the final request boundary:"
+          pos = entry.rfind(marker)
+          if pos < 0:
+              raise SystemExit("prompt final-boundary marker not found")
+          prefix = entry[:pos].rstrip() + "\n\n"
+          tail = '''# v82 is the final file-transfer boundary before prompt decoration. It replaces
+          # the historical extension download route so Unicode filenames cannot crash
+          # Starlette header encoding while leaving prompt construction untouched.
+          install_attachment_download_v82_patch(app)
+          # Prompt configuration remains the final request boundary: it decorates the
+          # canonical build_prompt symbol, audits the exact Worker payload, and adds the
+          # administrator prompt viewer/configuration UI without changing API shapes.
+          install_prompt_config_v72_patch(app)
+          '''
+          entry_path.write_text(prefix + tail, encoding="utf-8")
+          PY
+      - name: Full test suite
+        run: pytest -q
+      - name: Commit aligned contracts
+        shell: bash
+        run: |
+          if git diff --quiet -- app/entry.py tests; then
+            echo 'No alignment changes required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/entry.py tests
+          git commit -m 'Align v0.22.50 runtime contracts'
+          git push origin HEAD:fix/worker-window-vision-download-v82-20260903
