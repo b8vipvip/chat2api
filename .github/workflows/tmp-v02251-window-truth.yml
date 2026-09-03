@@ -1,0 +1,151 @@
+name: Temporary v0.22.51 window truth alignment
+
+on:
+  push:
+    branches:
+      - fix/physical-window-truth-v83-20260903
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/physical-window-truth-v83-20260903
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Install test dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Align v0.22.51 physical-window contracts
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          def replace(path: str, old: str, new: str, *, count: int | None = 1) -> None:
+              p = Path(path)
+              source = p.read_text(encoding="utf-8")
+              found = source.count(old)
+              if found == 0:
+                  raise SystemExit(f"missing replacement marker in {path}: {old[:100]!r}")
+              if count is not None and found != count:
+                  raise SystemExit(f"unexpected marker count in {path}: expected {count}, found {found}")
+              p.write_text(source.replace(old, new), encoding="utf-8")
+
+          replace(
+              "app/admin_worker_presentation_v66.js",
+              "const liveWindowCandidates = [metadata.reserve_window_total, metadata.reserve_window_all_chatgpt_windows];",
+              "const liveWindowCandidates = [metadata.reserve_window_all_chatgpt_windows, metadata.reserve_window_total];",
+          )
+          replace(
+              "app/admin_worker_presentation_v66.js",
+              "当前真实受管 ChatGPT 窗口 ${physicalText}",
+              "当前实际 ChatGPT 浏览器窗口 ${physicalText}",
+          )
+
+          reserve_path = Path("chrome_extension/background_reserve_pool_v29.js")
+          reserve = reserve_path.read_text(encoding="utf-8")
+          old_signature = """        snapshot.routed,\n        snapshot.target,\n      ]);"""
+          new_signature = """        snapshot.routed,\n        snapshot.target,\n        snapshot.live instanceof Set ? snapshot.live.size : snapshot.total,\n      ]);"""
+          if old_signature not in reserve:
+              raise SystemExit("reserve report signature marker missing")
+          reserve = reserve.replace(old_signature, new_signature, 1)
+          old_meta = """            reserve_window_target: snapshot.target,\n            reserve_window_own_spare: snapshot.own,"""
+          new_meta = """            reserve_window_target: snapshot.target,\n            reserve_window_all_chatgpt_windows: snapshot.live instanceof Set ? snapshot.live.size : snapshot.total,\n            reserve_window_physical_telemetry_version: 83,\n            reserve_window_own_spare: snapshot.own,"""
+          if old_meta not in reserve:
+              raise SystemExit("reserve report metadata marker missing")
+          reserve_path.write_text(reserve.replace(old_meta, new_meta, 1), encoding="utf-8")
+
+          entry_path = Path("chrome_extension/background_entry.js")
+          entry = entry_path.read_text(encoding="utf-8")
+          if '"background_window_truth_v83.js"' not in entry:
+              raise SystemExit("background_window_truth_v83.js is not loaded")
+
+          manifest_path = Path("chrome_extension/manifest.json")
+          manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+          if manifest.get("version") != "0.8.20":
+              raise SystemExit(f"unexpected manifest version {manifest.get('version')}")
+          manifest["version"] = "0.8.21"
+          manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+          for path in (
+              "chrome_extension/content_bundle_marker_v48.js",
+              "chrome_extension/background_runtime_preflight_v48.js",
+              "chrome_extension/content_runtime_contract_v48.js",
+          ):
+              p = Path(path)
+              source = p.read_text(encoding="utf-8")
+              if "0.8.20" not in source:
+                  raise SystemExit(f"expected 0.8.20 in {path}")
+              p.write_text(source.replace("0.8.20", "0.8.21"), encoding="utf-8")
+
+          runtime_path = Path("app/runtime_contract.py")
+          runtime = runtime_path.read_text(encoding="utf-8")
+          runtime = runtime.replace('SERVER_RUNTIME_VERSION = "0.22.50"', 'SERVER_RUNTIME_VERSION = "0.22.51"', 1)
+          runtime = runtime.replace('CHROME_BRIDGE_BUNDLE_VERSION = "0.8.20"', 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.21"', 1)
+          runtime = runtime.replace(
+              "unicode-attachment-download-v82-live-worker-window-count-v82-runtime-version-observability-v82-release-v02250",
+              "unicode-attachment-download-v82-live-worker-window-count-v82-runtime-version-observability-v82-physical-window-truth-v83-release-v02251",
+              1,
+          )
+          runtime = runtime.replace(
+              "submission-liveness-v79-release-v0819",
+              "submission-liveness-v79-physical-window-truth-v83-release-v0821",
+              1,
+          )
+          feature_marker = '            "worker_live_window_count_v82": True,\n'
+          if feature_marker not in runtime:
+              raise SystemExit("runtime feature insertion marker missing")
+          runtime = runtime.replace(
+              feature_marker,
+              feature_marker + '            "worker_physical_window_truth_v83": True,\n',
+              1,
+          )
+          runtime_path.write_text(runtime, encoding="utf-8")
+
+          current_test = Path("tests/test_v02250_attachment_window_telemetry.py")
+          source = current_test.read_text(encoding="utf-8")
+          source = source.replace('SERVER_RUNTIME_VERSION == "0.22.50"', 'SERVER_RUNTIME_VERSION == "0.22.51"')
+          source = source.replace('CHROME_BRIDGE_BUNDLE_VERSION == "0.8.20"', 'CHROME_BRIDGE_BUNDLE_VERSION == "0.8.21"')
+          current_test.write_text(source, encoding="utf-8")
+
+          ci_path = Path(".github/workflows/ci.yml")
+          ci = ci_path.read_text(encoding="utf-8")
+          marker = "          node --check chrome_extension/background_tab_supervisor_v32.js\n"
+          if marker not in ci:
+              raise SystemExit("CI tab supervisor syntax marker missing")
+          ci = ci.replace(marker, marker + "          node --check chrome_extension/background_window_truth_v83.js\n", 1)
+          ci_path.write_text(ci, encoding="utf-8")
+          PY
+      - name: Show remaining current-version references
+        run: |
+          echo '--- 0.22.50 ---'
+          grep -R "0\.22\.50" -n app tests chrome_extension .github docs || true
+          echo '--- 0.8.20 ---'
+          grep -R "0\.8\.20" -n app tests chrome_extension .github docs || true
+      - name: JavaScript syntax
+        run: node --check chrome_extension/background_window_truth_v83.js
+      - name: Full test suite
+        run: pytest -q
+      - name: Commit aligned contracts
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No alignment changes required.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app chrome_extension tests docs .github/workflows/ci.yml
+          git commit -m 'Release v0.22.51 with physical window truth v83'
+          git push origin HEAD:fix/physical-window-truth-v83-20260903
