@@ -38,7 +38,7 @@ def test_playground_messages_have_time_and_copy_actions():
 def test_worker_occupancy_can_show_live_physical_window_count():
     source = text("app/admin_worker_presentation_v66.js")
     assert "reserve_window_total" in source
-    assert "当前受管窗口" in source
+    assert "当前真实受管 ChatGPT 窗口" in source
 
 def test_historical_v212_does_not_stamp_runtime_identity():
     assert 'payload["server_version"] = PATCH_VERSION' not in text("app/v21_2_patch.py")
@@ -46,6 +46,6 @@ def test_historical_v212_does_not_stamp_runtime_identity():
 def test_release_versions():
     runtime = text("app/runtime_contract.py")
     manifest = text("chrome_extension/manifest.json")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.49"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.50"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.20"' in runtime
     assert '"version": "0.8.20"' in manifest
