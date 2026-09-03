@@ -3,7 +3,6 @@
   if (globalThis[KEY]) return;
 
   const RESERVE_KEY = "__CHAT2API_RESERVE_POOL_V29__";
-  const SUPERVISOR_KEY = "__CHAT2API_TAB_SUPERVISOR_V32__";
   const WARM_KEY = "__CHAT2API_CONVERSATION_WARM_POOL_V2__";
   const ROUTER_KEY = "__CHAT2API_CONVERSATION_ROUTING_V1__";
   const INIT_TAB_KEY = "chat2apiInitializationTabIdV32";
@@ -44,11 +43,11 @@
     catch (_) { return null; }
   }
 
-  function candidateWorkerWindows(initWindowId) {
+  function candidateWorkerWindows() {
     const preferred = [];
     const seen = new Set();
     const add = (windowId, priority) => {
-      if (!Number.isInteger(windowId) || windowId === initWindowId || seen.has(windowId)) return;
+      if (!Number.isInteger(windowId) || seen.has(windowId)) return;
       seen.add(windowId);
       preferred.push({ window_id: windowId, priority });
     };
@@ -83,11 +82,22 @@
     }
 
     const initWindowId = initTab.windowId;
-    let candidates = candidateWorkerWindows(initWindowId);
-    if (Number.isInteger(stored[EXTERNAL_WARM_WINDOW_KEY]) && stored[EXTERNAL_WARM_WINDOW_KEY] !== initWindowId) {
+    let candidates = candidateWorkerWindows();
+    if (Number.isInteger(stored[EXTERNAL_WARM_WINDOW_KEY])) {
       candidates.push(stored[EXTERNAL_WARM_WINDOW_KEY]);
     }
     candidates = [...new Set(candidates)];
+
+    // Once the initialization/auth tab already shares a managed Worker window,
+    // keep it there. Without this guard every reconciliation would choose a
+    // different reserve window and bounce the auth tab forever.
+    if (candidates.includes(initWindowId)) {
+      if (stored[INIT_WINDOW_KEY] !== initWindowId) {
+        await chrome.storage.local.set({ [INIT_WINDOW_KEY]: initWindowId }).catch(() => {});
+      }
+      return { compacted: false, reason: "already-shared", window_id: initWindowId };
+    }
+    candidates = candidates.filter(windowId => windowId !== initWindowId);
 
     let targetWindowId = null;
     for (const windowId of candidates) {
@@ -99,7 +109,6 @@
       }
     }
     if (!Number.isInteger(targetWindowId)) return { compacted: false, reason: "no-worker-window" };
-    if (targetWindowId === initWindowId) return { compacted: false, reason: "already-shared" };
 
     try {
       const moved = await chrome.tabs.move(initTabId, { windowId: targetWindowId, index: -1 });
@@ -129,8 +138,12 @@
     const reserve = globalThis[RESERVE_KEY];
     const managed = typeof reserve?.snapshot === "function" ? await reserve.snapshot().catch(() => null) : null;
     const live = await liveChatGptWindowIds();
-    const supervisor = globalThis[SUPERVISOR_KEY];
-    const supervised = typeof supervisor?.snapshot === "function" ? supervisor.snapshot() : null;
+    const stored = await chrome.storage.local.get({ [INIT_TAB_KEY]: null }).catch(() => ({}));
+    let initWindowId = null;
+    if (Number.isInteger(stored[INIT_TAB_KEY])) {
+      try { initWindowId = (await chrome.tabs.get(stored[INIT_TAB_KEY])).windowId; } catch (_) {}
+    }
+    const workerWindows = candidateWorkerWindows();
     return {
       revision: REVISION,
       total: Number(managed?.total || 0),
@@ -141,9 +154,7 @@
       warm: Number(managed?.warm || 0),
       routed: Number(managed?.routed || 0),
       all_chatgpt_windows: live.size,
-      initialization_window_shared: Number.isInteger(supervised?.initialization_tab_id)
-        ? Number(supervised?.chatgpt_tabs_seen || 0) > live.size
-        : null,
+      initialization_window_shared: Number.isInteger(initWindowId) ? workerWindows.includes(initWindowId) : null,
       observed_at_ms: Date.now(),
     };
   }
@@ -158,6 +169,7 @@
       snapshot.warm,
       snapshot.routed,
       snapshot.all_chatgpt_windows,
+      snapshot.initialization_window_shared,
     ]);
     state.lastSnapshot = snapshot;
     if (!force && signature === state.lastSignature) return snapshot;
@@ -175,6 +187,7 @@
           reserve_window_routed: snapshot.routed,
           reserve_window_all_chatgpt_windows: snapshot.all_chatgpt_windows,
           reserve_window_physical_telemetry_version: REVISION,
+          reserve_window_initialization_shared: snapshot.initialization_window_shared,
           reserve_window_physical_updated_at: snapshot.observed_at_ms,
         },
       }).catch(() => false);
