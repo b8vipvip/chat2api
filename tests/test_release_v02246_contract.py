@@ -16,6 +16,8 @@ def test_formal_release_v02246_versions_and_notes_are_aligned() -> None:
     assert CHROME_BRIDGE_VERSION == "0.8.1"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.18"
     assert manifest["version"] == "0.8.18"
+    assert "multimodal_main_v78.js" in manifest["content_scripts"][0]["js"]
+    assert "content_multimodal_v78.js" in manifest["content_scripts"][1]["js"]
     assert (ROOT / "docs" / "releases" / "v0.22.46.md").is_file()
 
 
