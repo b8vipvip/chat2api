@@ -35,6 +35,9 @@ def test_initialization_tab_is_compacted_into_a_worker_window() -> None:
     assert "liveChatGptWindowIds" in source
     assert "reserve_window_all_chatgpt_windows" in source
     assert "chat2apiInitializationCompactedAtV83" in source
+    assert "if (candidates.includes(initWindowId))" in source
+    assert 'reason: "already-shared"' in source
+    assert "reserve_window_initialization_shared" in source
 
 
 def test_v02251_runtime_and_worker_bundle_contract() -> None:
