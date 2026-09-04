@@ -11,7 +11,7 @@ EXT = ROOT / "chrome_extension"
 
 def test_worker_bundle_formally_seals_revisioned_content_epoch() -> None:
     manifest = json.loads((EXT / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.26"
+    assert manifest["version"] == "0.8.27"
     main_scripts = manifest["content_scripts"][0]["js"]
     scripts = manifest["content_scripts"][1]["js"]
     assert "multimodal_main_v78.js" in main_scripts
@@ -42,7 +42,7 @@ def test_programmatic_bootstrap_matches_current_text_request_chain() -> None:
 
 def test_runtime_preflight_hot_heals_before_reload() -> None:
     preflight = (EXT / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
-    assert 'REQUIRED_BUNDLE = "0.8.26"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.27"' in preflight
     assert "REQUIRED_REVISION = 71" in preflight
     assert '"multimodal_main_v78.js"' in preflight
     assert 'world: "MAIN"' in preflight
@@ -61,7 +61,7 @@ def test_runtime_preflight_hot_heals_before_reload() -> None:
 
 def test_v71_contract_preserves_full_v48_runtime_checks_and_current_text_epoch() -> None:
     contract = (EXT / "content_runtime_contract_v71.js").read_text(encoding="utf-8")
-    assert 'REQUIRED_BUNDLE = "0.8.26"' in contract
+    assert 'REQUIRED_BUNDLE = "0.8.27"' in contract
     assert "REQUIRED_REVISION = 71" in contract
     for token in (
         "__CHAT2API_REQUEST_CONTENT_V6__",

@@ -283,7 +283,7 @@ def test_generation_liveness_is_diagnostic_only_and_hard_timeout_remains():
 def test_bundle_load_order_and_new_scripts_parse():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.8.26"
+    assert manifest["version"] == "0.8.27"
     assert scripts.index("content_request_v5.js") < scripts.index("content_request_lifecycle_v50.js") < scripts.index("content_request_hygiene_v42.js") < scripts.index("content_draft_ownership_v43.js")
     assert scripts.index("content_draft_ownership_v43.js") < scripts.index("content_draft_managed_recovery_v55.js") < scripts.index("content_response_capture_v41.js")
     assert scripts.index("content_response_stream_recovery_v49.js") < scripts.index("content_network_stream_recovery_v55.js") < scripts.index("content_response_semantic_recovery_v51.js") < scripts.index("content_transient_retry_v50.js") < scripts.index("content_request_stall_guard_v34.js") < scripts.index("content_generation_liveness_v49.js")
@@ -331,8 +331,8 @@ def test_runtime_advertises_v62_worker_authority_and_network_parser_features():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     patch = (ROOT / "app" / "linux_worker_enable_patch.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.57"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.26"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.58"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.27"' in runtime
     assert '"network_response_recovery": True' in runtime
     assert '"network_response_parser_v62": True' in runtime
     assert '"linux_worker_master_switch": True' in runtime

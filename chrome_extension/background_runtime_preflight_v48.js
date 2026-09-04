@@ -2,9 +2,9 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__";
   if (globalThis[KEY]) return;
 
-  // Worker bundle 0.8.26 keeps the v71 request/response epoch while requiring
+  // Worker bundle 0.8.27 keeps the v71 request/response epoch while requiring
   // the v78 MAIN-world upload bridge, v85 safe-submit gate and v88 terminal/prompt guard.
-  const REQUIRED_BUNDLE = "0.8.26";
+  const REQUIRED_BUNDLE = "0.8.27";
   const REQUIRED_REVISION = 71;
   const CONTRACT_TIMEOUT_MS = 700;
   const HOT_HEAL_BUDGET_MS = 2400;
@@ -180,7 +180,7 @@
     }
 
     // The whole recovery path remains wall-clock bounded by the v87 algorithm.
-    // Bundle 0.8.26 additionally requires the v88 terminal/prompt guard, so
+    // Bundle 0.8.27 additionally requires the v88 terminal/prompt guard, so
     // repaired tabs cannot silently lose successful-terminal protection or the
     // long-prompt fast insert path.
     result = await heal(tabId);
