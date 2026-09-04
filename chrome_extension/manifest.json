@@ -81,6 +81,7 @@
         "content_request_v5.js",
         "content_rich_response_v69.js",
         "content_request_v6.js",
+        "content_submit_rescue_v87.js",
         "content_interruption_guard_v72.js",
         "content_request_interruption_bridge_v72.js",
         "content_request_lifecycle_v50.js",
