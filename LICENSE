@@ -1,0 +1,86 @@
+chat2api Proprietary License
+All Rights Reserved
+
+Copyright (c) 2026 b8vipvip. All rights reserved.
+
+中文
+====
+
+本软件、源代码、文档、界面、设计、构建产物及其他相关材料（以下统称“本项目”）受著作权及其他适用法律保护。
+
+1. 查看许可
+
+本项目以公开仓库形式提供时，仅授予任何人查看源代码及相关材料的有限、可撤销、非独占、不可转让许可。GitHub 平台依据其服务条款提供的查看、Fork 或其他平台功能，不构成本许可证项下额外权利的授予。
+
+2. 未经书面授权禁止的行为
+
+除非事先获得版权所有者明确的书面授权，否则不得直接或间接：
+
+- 修改、改编、翻译、移植、重构或以其他方式变更本项目；
+- 基于本项目进行二次开发，或制作、发布任何衍生作品；
+- 将本项目全部或部分用于任何商业用途、营利用途或收费服务，包括但不限于商业软件、SaaS、托管服务、代部署、技术服务、销售、出租或其他有偿业务；
+- 复制、再发布、公开分发、镜像分发、打包分发或以其他方式向第三方提供本项目全部或实质性部分；
+- 出售、出租、转让、再许可或以其他方式授予第三方使用本项目的权利；
+- 删除、隐藏或修改本项目中的版权、许可、署名或其他权利声明。
+
+3. 无默示授权
+
+除本许可证明确授予的“查看”权利外，未授予任何其他版权、专利、商标、商业秘密或其他知识产权许可。任何未明确授予的权利均由版权所有者保留。
+
+4. 第三方材料
+
+本项目可能包含或依赖第三方软件、库、素材或其他组件。第三方材料继续受其各自许可证和权利声明约束；本许可证不会扩大或限制第三方权利人依法或依其许可证享有的权利。
+
+5. 书面商业或开发授权
+
+如需修改、二次开发、商业使用、再分发、再许可或其他超出本许可证范围的使用，必须事先取得版权所有者单独出具的书面授权或商业许可。授权范围以该书面文件为准。
+
+6. 终止
+
+任何违反本许可证的行为将导致本许可证授予的有限查看许可自动终止，且不影响版权所有者依法主张停止侵权、损害赔偿或其他救济的权利。
+
+7. 免责声明
+
+在适用法律允许的最大范围内，本项目按“现状”提供，不作任何明示或默示保证。版权所有者不对因查看、获取、使用或无法使用本项目而产生的任何直接或间接损失承担责任，但适用法律另有强制规定的除外。
+
+English
+=======
+
+This software, source code, documentation, user interfaces, designs, build artifacts, and related materials (collectively, the “Project”) are protected by copyright and other applicable laws.
+
+1. Permission to View
+
+When the Project is made available in a public repository, you are granted only a limited, revocable, non-exclusive, non-transferable permission to view the source code and related materials. Any ability to view, fork, or otherwise interact with the repository provided by GitHub under its Terms of Service does not grant additional rights under this License.
+
+2. Prohibited Uses Without Prior Written Permission
+
+Unless you have obtained the copyright holder’s explicit prior written permission, you may not, directly or indirectly:
+
+- modify, adapt, translate, port, refactor, or otherwise alter the Project;
+- develop derivative works or conduct secondary development based on the Project;
+- use any part of the Project for commercial, revenue-generating, or paid purposes, including commercial software, SaaS, hosted services, deployment services, consulting or technical services, sale, rental, or other compensated activity;
+- copy, republish, redistribute, mirror, package, distribute, or otherwise provide all or a substantial part of the Project to any third party;
+- sell, rent, transfer, sublicense, or otherwise grant third parties rights to use the Project; or
+- remove, conceal, or alter copyright, license, attribution, or other proprietary notices.
+
+3. No Implied License
+
+Except for the limited permission to view expressly stated above, no copyright, patent, trademark, trade-secret, or other intellectual-property license is granted. All rights not expressly granted are reserved by the copyright holder.
+
+4. Third-Party Materials
+
+The Project may include or depend on third-party software, libraries, assets, or other components. Such third-party materials remain subject to their respective licenses and notices. Nothing in this License expands or restricts rights granted by their respective owners under applicable third-party licenses.
+
+5. Written Development or Commercial License
+
+Any modification, derivative development, commercial use, redistribution, sublicensing, or other use beyond the scope of this License requires a separate prior written authorization or commercial license from the copyright holder. The terms of that written authorization control the permitted scope.
+
+6. Termination
+
+Any violation of this License automatically terminates the limited permission granted herein, without limiting the copyright holder’s right to seek injunctive relief, damages, or any other remedies available under applicable law.
+
+7. Disclaimer
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE PROJECT IS PROVIDED “AS IS”, WITHOUT WARRANTIES OF ANY KIND, EXPRESS OR IMPLIED. THE COPYRIGHT HOLDER SHALL NOT BE LIABLE FOR DIRECT OR INDIRECT DAMAGES ARISING FROM VIEWING, OBTAINING, USING, OR BEING UNABLE TO USE THE PROJECT, EXCEPT WHERE LIABILITY CANNOT LAWFULLY BE EXCLUDED.
+
+ALL RIGHTS RESERVED.
