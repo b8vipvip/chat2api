@@ -12,8 +12,9 @@ from fastapi.routing import APIRoute
 
 
 logger = logging.getLogger("chat2api.admin_requests")
-PATCH_ID = "request-device-identity-v47-request-stability-v92"
+PATCH_ID = "request-device-identity-v47-request-stability-v93"
 ASSET_PATH = "/assets/chat2api-request-device-identity-v47.js"
+REQUEST_HISTORY_ASSET = "/assets/chat2api-request-history-v93.js"
 
 
 def _canonical_label(value: Any) -> str:
@@ -28,14 +29,12 @@ async def _maybe_await(value: Any) -> Any:
 
 
 def _install_request_route_stability(app: FastAPI, telemetry: Any) -> None:
-    """Make request-history routes tolerant of sync/async telemetry decorators.
+    """Install the sole server-side owner for request-history GET routes.
 
-    Older console patches have changed TelemetryStore.query/get between sync and
-    async implementations. The base endpoint historically unpacked query() as a
-    mapping immediately, which turns an async decorator into
-    ``TypeError: 'coroutine' object is not a mapping``. Keep FastAPI's original
-    dependency graph but replace only the route call target with a final owner that
-    accepts either contract.
+    Historical decorators changed TelemetryStore.query/get between sync and async
+    implementations while the legacy endpoint unpacked query() synchronously. The
+    route owner keeps FastAPI's original dependency graph and normalizes either
+    telemetry contract before returning a mapping.
     """
 
     for route in app.routes:
@@ -43,7 +42,7 @@ def _install_request_route_stability(app: FastAPI, telemetry: Any) -> None:
             continue
 
         if route.path == "/api/admin/requests":
-            if getattr(route.dependant.call, "__chat2api_request_stability_v92__", False):
+            if getattr(route.dependant.call, "__chat2api_request_stability_v93__", False):
                 continue
 
             async def stable_admin_requests(**kwargs: Any) -> dict[str, Any]:
@@ -72,12 +71,12 @@ def _install_request_route_stability(app: FastAPI, telemetry: Any) -> None:
                     summary = {}
                 return {**result, "summary": summary}
 
-            stable_admin_requests.__chat2api_request_stability_v92__ = True
+            stable_admin_requests.__chat2api_request_stability_v93__ = True
             route.dependant.call = stable_admin_requests
             route.endpoint = stable_admin_requests
 
         elif route.path == "/api/admin/requests/{request_id}":
-            if getattr(route.dependant.call, "__chat2api_request_stability_v92__", False):
+            if getattr(route.dependant.call, "__chat2api_request_stability_v93__", False):
                 continue
 
             async def stable_admin_request_detail(**kwargs: Any) -> dict[str, Any]:
@@ -90,13 +89,13 @@ def _install_request_route_stability(app: FastAPI, telemetry: Any) -> None:
                     raise HTTPException(status_code=500, detail="Request history detail returned an invalid result")
                 return row
 
-            stable_admin_request_detail.__chat2api_request_stability_v92__ = True
+            stable_admin_request_detail.__chat2api_request_stability_v93__ = True
             route.dependant.call = stable_admin_request_detail
             route.endpoint = stable_admin_request_detail
 
 
 def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
-    """Add stable device identity and a bounded request-history stability owner."""
+    """Decorate request telemetry and install the canonical request-history owner."""
 
     telemetry = app.state.telemetry
     registry = app.state.registry
@@ -215,6 +214,11 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
         source = Path(__file__).with_name("admin_request_device_identity_v47.js").read_text(encoding="utf-8")
         return Response(source, media_type="application/javascript", headers={"Cache-Control": "no-store"})
 
+    @app.get(REQUEST_HISTORY_ASSET, include_in_schema=False)
+    async def request_history_asset() -> Response:
+        source = Path(__file__).with_name("admin_request_history_v93.js").read_text(encoding="utf-8")
+        return Response(source, media_type="application/javascript", headers={"Cache-Control": "no-store"})
+
     @app.middleware("http")
     async def inject_request_device_identity(request: Request, call_next: Callable):
         response = await call_next(request)
@@ -229,9 +233,12 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
                     chunks.append(chunk.encode() if isinstance(chunk, str) else bytes(chunk))
             body = b"".join(chunks)
         text = bytes(body).decode("utf-8", errors="replace")
-        marker = f'<script src="{ASSET_PATH}"></script>'
-        if marker not in text:
-            text = text.replace("</body>", marker + "</body>")
+        identity_marker = f'<script src="{ASSET_PATH}"></script>'
+        history_marker = f'<script src="{REQUEST_HISTORY_ASSET}"></script>'
+        if identity_marker not in text:
+            text = text.replace("</body>", identity_marker + "</body>")
+        if history_marker not in text:
+            text = text.replace("</body>", history_marker + "</body>")
         headers = {
             key: value
             for key, value in response.headers.items()
