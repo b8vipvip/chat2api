@@ -331,7 +331,7 @@ def test_runtime_advertises_v62_worker_authority_and_network_parser_features():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     patch = (ROOT / "app" / "linux_worker_enable_patch.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.60"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.61"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.28"' in runtime
     assert '"network_response_recovery": True' in runtime
     assert '"network_response_parser_v62": True' in runtime

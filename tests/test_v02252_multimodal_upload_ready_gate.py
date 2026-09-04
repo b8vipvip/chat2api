@@ -62,7 +62,7 @@ def test_runtime_preflight_requires_v84_ready_gate() -> None:
 
 
 def test_v02255_runtime_and_bundle_contract() -> None:
-    assert SERVER_RUNTIME_VERSION == "0.22.60"
+    assert SERVER_RUNTIME_VERSION == "0.22.61"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.28"
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["chrome_bridge"]["multimodal_revision"] == 85
