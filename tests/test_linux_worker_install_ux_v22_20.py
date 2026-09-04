@@ -33,7 +33,7 @@ def test_progress_details_gain_one_click_copy_without_changing_base_asset_file(t
 def test_v22_20_ux_patch_remains_before_newer_worker_patches():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.57"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.58"' in runtime
     assert 'from .linux_worker_install_ux_patch import install_linux_worker_install_ux_patch' in entry
     assert 'install_linux_worker_install_ux_patch(app)' in entry
     assert entry.index('install_linux_worker_table_stability_patch(app)') < entry.index('install_linux_worker_install_ux_patch(app)')

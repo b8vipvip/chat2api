@@ -37,10 +37,10 @@ def test_multimodal_waits_for_upload_processing_to_settle() -> None:
 def test_v02255_release_contract() -> None:
     runtime = read("app/runtime_contract.py")
     manifest = read("chrome_extension/manifest.json")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.57"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.58"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.26"' in runtime
-    assert '"version": "0.8.26"' in manifest
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.27"' in runtime
+    assert '"version": "0.8.27"' in manifest
     assert '"active_request_disable_lease_v79": True' in runtime
     assert '"multimodal_upload_settle_v79": True' in runtime
     assert '"submission_liveness_v79": True' in runtime
