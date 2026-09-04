@@ -115,9 +115,11 @@ def test_worker_presentation_asset_is_bounded_and_replaces_v65_loop_owner():
 
     assert 'const VERSION = 66' in script
     assert 'th.dataset.chat2apiColumnKey = "device_name"' in script
-    assert 'th.dataset.chat2apiColumnKey = "occupancy"' in script
+    assert 'occupancyHeader.dataset.chat2apiColumnKey = "occupancy"' in script
+    assert "请求 / 实际窗口" in script
     assert "capacity.used_units" in script
     assert "capacity.limit_units" in script
+    assert 'callApi("/api/admin/window-manager")' in script
     assert "button.dataset.v66PairingRename" in script
     assert "设备名称已更新" in script
 
