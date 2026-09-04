@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.22.56 — 2026-09-04
+
+### Worker window routing
+
+- Make v88 the final browser-window routing authority and claim the oldest ready warm/reserve window by FIFO opening time before legacy fallback wrappers can open a new window.
+- Assign stable window numbers and expose loading, ready, in-use and closed lifecycle state in the administrator Window Management view.
+- Register newly created Worker windows immediately as loading so management telemetry starts at browser-window creation rather than only after warm-pool readiness.
+
+### Request lifecycle and latency
+
+- Make a successful network completion monotonic so a later synthetic cancel/error cannot downgrade the same request and trigger route/window recycling.
+- Preserve successful routed windows for the existing five-minute lease and repair a route if an older recovery layer already began resetting it.
+- Replace multi-kilobyte synchronous contenteditable `execCommand("insertText")` writes with the bounded v88 direct-text insertion path while retaining request-v6 validation and submit ownership.
+- Ensure programmatic content bootstrap and runtime preflight both inject and verify the v88 terminal/prompt guard, so a hot-healed or reloaded tab cannot silently lose these fixes.
+
+### Admin console
+
+- Add `窗口管理` with active and closed window lists, stable window number, device-code name, request ID, opened time, lifecycle state and on-demand screenshots.
+- Surface the existing authoritative `req_*` request ID in request history for direct correlation with Worker windows and diagnostics.
+
+### Versions
+
+- Server Runtime `0.22.56`.
+- Chrome Worker Bundle `0.8.26`.
+- Chrome Bridge wire protocol remains `0.8.1`.
+- Python package remains `0.7.1`.
+
 ## v0.22.54 — 2026-09-04
 
 ### Worker lifecycle

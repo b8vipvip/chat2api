@@ -2,12 +2,13 @@
   const KEY = "__CHAT2API_CONTENT_RUNTIME_CONTRACT_V48__";
   if (globalThis[KEY]) return;
 
-  const REQUIRED_BUNDLE = "0.8.25";
+  const REQUIRED_BUNDLE = "0.8.26";
   const snapshot = () => {
     const marker = globalThis.__CHAT2API_CONTENT_BUNDLE_MARKER_V48__ || null;
     const responseOwner = globalThis.__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__ || null;
     const networkRecovery = globalThis.__CHAT2API_NETWORK_STREAM_RECOVERY_V55__ || null;
     const semanticHelper = globalThis.__CHAT2API_RESPONSE_SEMANTIC_RECOVERY_V51__ || null;
+    const terminalPrompt = globalThis.__CHAT2API_REQUEST_TERMINAL_PROMPT_V88__ || null;
     const modules = {
       request_v5: Boolean(globalThis.__CHAT2API_REQUEST_CONTENT_V5__),
       request_lifecycle_v50: Number(globalThis.__CHAT2API_REQUEST_LIFECYCLE_V50__?.version || 0) === 50,
@@ -24,6 +25,7 @@
       response_semantic_recovery_v51: Number(semanticHelper?.version || 0) === 51 && semanticHelper?.timer == null,
       transient_retry_v50: Number(globalThis.__CHAT2API_TRANSIENT_RETRY_V50__?.version || 0) === 50,
       generation_liveness_v49: Number(globalThis.__CHAT2API_GENERATION_LIVENESS_V49__?.version || 0) === 49,
+      terminal_prompt_v88: Number(terminalPrompt?.revision || 0) >= 88,
     };
     const markerOk = Number(marker?.version || 0) === 48 && String(marker?.bundle || "") === REQUIRED_BUNDLE;
     const modulesOk = Object.values(modules).every(Boolean);
@@ -35,6 +37,7 @@
       marker_ok: markerOk,
       modules,
       modules_ok: modulesOk,
+      terminal_prompt_revision: Number(terminalPrompt?.revision || 0),
       response_observer_owner: responseOwner?.owner || null,
       response_observer_revision: Number(responseOwner?.owner_revision || 0),
       network_response_recovery: Number(networkRecovery?.version || 0) === 55 ? "conversation-sse-v55-parser-v62" : null,
