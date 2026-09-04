@@ -181,7 +181,7 @@
     // therefore expanded into a minute-scale request stall. v87 applies a wall-
     // clock budget to the whole repair path so an unhealthy spare cannot hold a
     // request for 50-120 seconds before the prompt is submitted.
-    result = await heal(tabId, HOT_HEAL_BUDGET_MS);
+    result = await heal(tabId);
     let reloaded = false;
     const hotHealed = current(result);
     if (hotHealed) state.hot_heals += 1;
@@ -212,7 +212,7 @@
         budget_ms: CONTRACT_TIMEOUT_MS + HOT_HEAL_BUDGET_MS + RELOAD_BUDGET_MS + FINAL_HEAL_BUDGET_MS,
         at_ms: Date.now(),
       });
-      const error = new Error(`ChatGPT tab Worker runtime did not recover inside the v87 preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85`);
+      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the v87 preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85`);
       error.code = "chatgpt_runtime_preflight_budget";
       throw error;
     }
