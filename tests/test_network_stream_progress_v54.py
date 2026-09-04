@@ -16,7 +16,7 @@ def test_manifest_installs_v55_main_world_stream_recovery_without_v54_double_wra
     manifest = json.loads(read("chrome_extension/manifest.json"))
     main = manifest["content_scripts"][0]
     isolated = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.8.24"
+    assert manifest["version"] == "0.8.25"
     assert main["world"] == "MAIN"
     assert main["run_at"] == "document_start"
     assert "network_stream_main_v55.js" in main["js"]
@@ -94,14 +94,14 @@ def test_runtime_preflight_requires_v55_parser_62_main_and_isolated_recovery_mod
     assert 'world: "MAIN"' in bootstrap
     assert '"network_stream_main_v55.js"' in bootstrap
     assert '"content_network_stream_recovery_v55.js"' in bootstrap
-    assert 'const REQUIRED_BUNDLE = "0.8.24"' in preflight
+    assert 'const REQUIRED_BUNDLE = "0.8.25"' in preflight
     assert 'const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"]' in preflight
     assert '"content_network_stream_recovery_v55.js"' in preflight
     assert "network_stream_recovery_v55" in contract
     assert "network_stream_main_v55" in contract
     assert "network_stream_parser_v62" in contract
     assert "data-chat2api-network-stream-parser" in contract
-    assert 'bundle: "0.8.24"' in marker
+    assert 'bundle: "0.8.25"' in marker
     assert "network_stream_main_v54.js" not in preflight
     assert "content_network_stream_progress_v54.js" not in preflight
 
