@@ -113,7 +113,7 @@ def test_modified_v86_javascript_parses() -> None:
 
 def test_v02255_runtime_contract_and_worker_bundle_are_aligned() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert SERVER_RUNTIME_VERSION == "0.22.58"
+    assert SERVER_RUNTIME_VERSION == "0.22.59"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.27"
     assert manifest["version"] == "0.8.27"
     for path in [

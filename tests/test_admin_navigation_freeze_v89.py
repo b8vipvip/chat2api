@@ -29,7 +29,7 @@ def test_device_identity_never_treewalks_request_data_after_background_api_calls
     source = text("app/admin_request_device_identity_v47.js")
     # v0.22.57 removed the broad document observer, but its api wrapper still
     # scheduled active-view canonicalization after *every* successful console API
-    # request. v0.22.58 added more live-window truth traffic, which exposed that
+    # request. v0.22.59 added more live-window truth traffic, which exposed that
     # latent starvation path while the 100-row request table was visible.
     assert 'captureRequestRows(path, payload);\n      queueCanonicalizeActiveView();' not in source
     assert 'canonicalizeElement(document.getElementById("view-requests"));' not in source
