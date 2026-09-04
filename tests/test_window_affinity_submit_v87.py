@@ -44,6 +44,17 @@ def test_healthy_idle_spares_are_lease_refreshed_instead_of_periodically_rotated
     assert "refreshHealthySpareLeases?.().catch?.(() => {})" in entry
 
 
+def test_orphaned_stale_route_window_is_closed_before_replacement() -> None:
+    source = text("chrome_extension/background_orphan_route_cleanup_v87.js")
+    entry = text("chrome_extension/background_entry.js")
+    assert entry.index('"background_window_affinity_v87.js"') < entry.index('"background_orphan_route_cleanup_v87.js"')
+    assert "if (route.inflight_request_id) return false" in source
+    assert 'route.last_rotation_reason = "orphan-route-cleanup-v87"' in source
+    assert "await chrome.windows.remove(oldWindowId)" in source
+    assert 'action: "orphan-route-cleaned"' in source
+    assert "return baseResolver(message)" in source
+
+
 def test_submit_path_remains_single_owner_and_keeps_v6_confirmed_fallback() -> None:
     source = text("chrome_extension/content_request_v6.js")
     manifest = json.loads(text("chrome_extension/manifest.json"))
@@ -72,6 +83,7 @@ def test_v87_runtime_preflight_uses_whole_path_wall_clock_budgets() -> None:
 def test_v87_javascript_assets_parse() -> None:
     for path in [
         "chrome_extension/background_window_affinity_v87.js",
+        "chrome_extension/background_orphan_route_cleanup_v87.js",
         "chrome_extension/background_runtime_preflight_v48.js",
         "chrome_extension/content_request_v6.js",
         "app/admin_prompt_config_v75.js",
