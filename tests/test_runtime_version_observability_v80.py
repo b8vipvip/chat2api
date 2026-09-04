@@ -15,11 +15,11 @@ def test_historical_v213_admin_patch_no_longer_overwrites_runtime_identity() -> 
     assert "owned by runtime_contract" in source
 
 
-def test_v02248_runtime_contract_owns_current_identity_without_bundle_bump() -> None:
+def test_v02255_runtime_contract_owns_current_identity() -> None:
     runtime = read("app/runtime_contract.py")
     manifest = read("chrome_extension/manifest.json")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.54"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.55"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.24"' in runtime
-    assert '"version": "0.8.24"' in manifest
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.25"' in runtime
+    assert '"version": "0.8.25"' in manifest
     assert '"runtime_version_observability_v80": True' in runtime
