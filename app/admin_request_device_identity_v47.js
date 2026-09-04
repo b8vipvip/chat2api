@@ -1,7 +1,7 @@
 (() => {
   const KEY = "__CHAT2API_ADMIN_DEVICE_IDENTITY_V47__";
   if (globalThis[KEY]) return;
-  const state = { rows: [], apiHooked: false, canonicalizeTimer: null };
+  const state = { rows: [], apiHooked: false, canonicalizeTimer: null, requestPaintTimer: null };
   globalThis[KEY] = state;
 
   const replacements = [
@@ -31,18 +31,14 @@
       if (!root.parentElement?.closest("script,style,tbody,pre,code")) canonicalizeTextNode(root);
       return;
     }
-    if (!(root instanceof Element) && root !== document.body) return;
+    if (!(root instanceof Element)) return;
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode();
     while (node) {
-      // Runtime data rows and diagnostic/code payloads are intentionally outside
-      // the terminology-rewrite surface. Traversing up to 100 request rows after
-      // unrelated background API completions was enough to starve Chromium's UI
-      // thread even though no JavaScript exception was emitted.
       if (!node.parentElement?.closest("script,style,tbody,pre,code")) canonicalizeTextNode(node);
       node = walker.nextNode();
     }
-    const elements = root instanceof Element ? [root, ...root.querySelectorAll("[placeholder],[title],[aria-label]")] : [];
+    const elements = [root, ...root.querySelectorAll("[placeholder],[title],[aria-label]")];
     for (const element of elements) {
       if (element.closest?.("tbody,pre,code")) continue;
       for (const attr of ["placeholder", "title", "aria-label"]) {
@@ -65,10 +61,16 @@
 
   function queueCanonicalizeActiveView() {
     if (state.canonicalizeTimer !== null) return;
-    // Navigation is a bounded lifecycle boundary. Do not schedule this work from
-    // every API completion: hidden Worker/window pollers are unrelated to the
-    // visible view and can otherwise create an effectively permanent TreeWalker.
+    // Navigation is the only bounded lifecycle boundary for terminology repaint.
+    // Never connect this work to background API traffic or request-row mutation.
     state.canonicalizeTimer = setTimeout(canonicalizeActiveView, 0);
+  }
+
+  function canonicalizeStaticChrome() {
+    for (const selector of [".brand", ".nav", ".topbar"]) {
+      canonicalizeElement(document.querySelector(selector));
+    }
+    canonicalizeActiveView();
   }
 
   function requestHeader() {
@@ -91,6 +93,7 @@
   }
 
   function paintRequestRows() {
+    state.requestPaintTimer = null;
     const tbody = document.getElementById("rqBody");
     if (!tbody) return;
     const index = ensureDeviceHeader();
@@ -115,9 +118,15 @@
       const title = clientId ? `Worker ID：${clientId}${row.device_code_id ? ` · 设备码 ID：${row.device_code_id}` : ""}` : "";
       if (cell.title !== title) cell.title = title;
     });
-    // Structural request-row decoration must remain O(number of changed rows).
-    // Do not TreeWalk the whole request view here; the table can contain 100
-    // retained records and this function is already driven by rqBody mutations.
+  }
+
+  function scheduleRequestPaint() {
+    if (state.requestPaintTimer !== null) return;
+    // The API wrapper runs before base loadRequests writes rqBody.innerHTML.
+    // A single macrotask runs after that synchronous render without observing the
+    // table. This makes request decoration one-shot and removes the observer ->
+    // DOM write -> observer feedback path that repeatedly froze the console.
+    state.requestPaintTimer = setTimeout(paintRequestRows, 0);
   }
 
   function captureRequestRows(path, payload) {
@@ -125,7 +134,7 @@
     if (!/^\/api\/admin\/requests(?:\?|$)/.test(clean)) return;
     if (!Array.isArray(payload?.data)) return;
     state.rows = payload.data.map(row => ({...row}));
-    queueMicrotask(paintRequestRows);
+    scheduleRequestPaint();
   }
 
   function hookApi() {
@@ -141,10 +150,6 @@
     const wrapped = async function(path, opt = {}) {
       const payload = await base(path, opt);
       captureRequestRows(path, payload);
-      // Deliberately no active-view canonicalization here. This wrapper sees all
-      // console API traffic, including hidden-view pollers. Coupling a DOM-wide
-      // repaint to every successful request recreated the same no-error main-thread
-      // starvation that the v89 navigation hotfix was meant to remove.
       return payload;
     };
     wrapped.__chat2apiDeviceIdentityV47 = true;
@@ -154,17 +159,11 @@
     return true;
   }
 
-  const tbody = document.getElementById("rqBody");
-  if (tbody) {
-    // Request rows are the only DOM surface this layer owns structurally. Keep a
-    // narrow observer here so identity cells follow request-table replacement.
-    new MutationObserver(() => queueMicrotask(paintRequestRows)).observe(tbody, {childList:true,subtree:false});
-  }
-
-  // Normalize only static/presentation chrome. High-volume table/code content is
-  // excluded by canonicalizeElement and later normalization runs only at explicit
-  // navigation boundaries, never on background API traffic.
-  canonicalizeElement(document.body);
+  // Do not install a MutationObserver on rqBody. Request rendering is a bounded
+  // fetch -> synchronous table write -> one-shot decoration lifecycle. An observer
+  // here is unnecessary and has historically turned additive column patches into
+  // main-thread starvation with no JavaScript exception.
+  canonicalizeStaticChrome();
   document.addEventListener("click", event => {
     const button = event.target?.closest?.(".nav button[data-view]");
     if (button) queueCanonicalizeActiveView();
@@ -179,5 +178,5 @@
     }, 50);
   }
 
-  paintRequestRows();
+  scheduleRequestPaint();
 })();
