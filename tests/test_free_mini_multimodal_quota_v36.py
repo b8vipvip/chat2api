@@ -16,6 +16,7 @@ def test_free_mini_multimodal_quota_detector_is_loaded_before_account_status_ove
     entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")
     detector = (EXTENSION / "content_multimodal_quota_v36.js").read_text(encoding="utf-8")
     background = (EXTENSION / "background_multimodal_quota_v36.js").read_text(encoding="utf-8")
+    settle = (EXTENSION / "content_multimodal_settle_v85.js").read_text(encoding="utf-8")
 
     assert "content_multimodal_quota_v36.js" in scripts
     assert scripts.index("content_multimodal_quota_v36.js") < scripts.index("content_multimodal_v4.js")
@@ -26,9 +27,15 @@ def test_free_mini_multimodal_quota_detector_is_loaded_before_account_status_ove
     assert 'capabilities.delete("vision")' in background
     assert 'capabilities.delete("file-understanding")' in background
     assert 'accountType !== "free"' in background
-    assert 'reason: "restore-time-not-parsed"' in background
+    assert "UNPARSED_RETRY_MS = 5 * 60 * 1000" in background
+    assert "file_upload_quota_cooling" in background
+    assert "file-upload-quota-aware-v91" in background
     assert "chat2api.multimodal.quota.v36" in detector
     assert "ACTIVE_MS = 120000" in detector
+    assert "multimodal-upload-quota-v91" in detector
+    assert "一次|单次" in detector
+    assert "CHAT2API_FILE_UPLOAD_QUOTA_EXHAUSTED" in settle
+    assert "upload-quota-exhausted" in settle
 
 
 def test_quota_reset_parser_vm_contract() -> None:
@@ -43,7 +50,7 @@ def test_quota_reset_parser_vm_contract() -> None:
     assert "contract passed" in result.stdout
 
 
-def test_server_routes_only_mini_multimodal_away_from_cooling_free_accounts() -> None:
+def test_server_routes_attachment_requests_away_from_cooling_free_accounts() -> None:
     script = r'''
 import tempfile
 import time
@@ -93,12 +100,16 @@ with tempfile.TemporaryDirectory() as tmp:
     registry.clients["free-cooling"] = client(
         "free-cooling",
         "free",
+        file_upload_available=False,
+        file_upload_cooldown_until_ms=future,
         mini_multimodal_available=False,
         mini_multimodal_cooldown_until_ms=future,
     )
     registry.clients["free-ready"] = client(
         "free-ready",
         "free",
+        file_upload_available=True,
+        file_upload_cooldown_until_ms=0,
         mini_multimodal_available=True,
         mini_multimodal_cooldown_until_ms=0,
     )
@@ -116,9 +127,9 @@ with tempfile.TemporaryDirectory() as tmp:
         assert registry.resolve_client(None) == "free-ready"
         try:
             registry.resolve_client("free-cooling")
-            raise AssertionError("explicit cooling Free client must reject Mini multimodal")
-        except LookupError:
-            pass
+            raise AssertionError("explicit cooling Free client must reject attachment input")
+        except LookupError as error:
+            assert "file upload quota" in str(error)
     finally:
         v13_patch._target_context.reset(token)
 
@@ -129,14 +140,23 @@ with tempfile.TemporaryDirectory() as tmp:
     finally:
         v13_patch._target_context.reset(token)
 
+    # Account upload quota is not model-specific. A generic/default attachment
+    # request must also skip the cooling Free Worker.
+    generic_attachment = {"model": "default", "needs_multimodal": True}
+    token = v13_patch._target_context.set(generic_attachment)
+    try:
+        assert registry.resolve_client(None) == "paid-fallback"
+    finally:
+        v13_patch._target_context.reset(token)
+
     registry.sockets.pop("paid-fallback")
     token = v13_patch._target_context.set(multimodal)
     try:
         try:
             registry.resolve_client(None)
-            raise AssertionError("all cooling Free Mini multimodal clients must fail until reset")
+            raise AssertionError("all cooling Free attachment clients must fail until reset")
         except ConnectionError as error:
-            assert "cooling down" in str(error)
+            assert "file upload quotas are cooling down" in str(error)
     finally:
         v13_patch._target_context.reset(token)
 
@@ -161,6 +181,7 @@ with tempfile.TemporaryDirectory() as tmp:
     assert mini["native_free_multimodal_cooling_clients"] == ["free-cooling"]
     assert mini["multimodal_resume_at"] is not None
 
+    registry.clients["free-cooling"].metadata["file_upload_cooldown_until_ms"] = int(time.time() * 1000) - 1
     registry.clients["free-cooling"].metadata["mini_multimodal_cooldown_until_ms"] = int(time.time() * 1000) - 1
     catalog = {row["id"]: row for row in registry.model_catalog(online_only=True)}
     mini = catalog["gpt-5.5-mini"]
