@@ -147,25 +147,29 @@ def test_prompt_config_patch_audits_exact_worker_prompt_and_marks_server_policy_
 def test_admin_assets_have_editable_system_prompt_inline_save_defaults_and_copy_modal() -> None:
     legacy = (ROOT / "app" / "admin_prompt_config_v72.js").read_text(encoding="utf-8")
     overlay = (ROOT / "app" / "admin_prompt_config_v75.js").read_text(encoding="utf-8")
+    request_owner = (ROOT / "app" / "admin_request_history_v93.js").read_text(encoding="utf-8")
     assert "提示词配置" in legacy
     assert "系统默认前置提示词" in legacy
     assert 'id="pcSystemDefaultPrefix"' in legacy
     assert "自定义前置提示词" in legacy
     assert "自定义后置提示词" in legacy
     assert "脱敏配置" in legacy
-    assert "查看提示词" in legacy
     assert "最终完整提示词" in legacy
     assert "复制提示词" in legacy
     assert "/api/admin/prompt-config" in legacy
     assert "/api/admin/requests/" in legacy
-    assert 'system.removeAttribute("readonly")' in overlay
+    assert 'showRequestPromptV72' in legacy
+    assert 'data-request-action="prompt"' in request_owner
+    assert '>提示词</button>' in request_owner
+    assert 'input.removeAttribute("readonly")' in overlay
     assert 'addPromptActionBar("pcSystemDefaultPrefix", "system_default_prefix")' in overlay
     assert 'addPromptActionBar("pcPrefix", "prefix")' in overlay
     assert 'addPromptActionBar("pcSuffix", "suffix")' in overlay
     assert "默认推荐" in overlay
     assert "保存" in overlay
-    assert 'globalSave.remove()' in overlay
     assert "saveRedaction" in overlay
+    assert "MutationObserver" not in overlay
+    assert "rqBody" not in overlay
 
 
 def test_entry_installs_prompt_config_as_final_boundary() -> None:
@@ -181,5 +185,6 @@ def test_new_javascript_syntax() -> None:
         "chrome_extension/background_tool_isolation_v48.js",
         "app/admin_prompt_config_v72.js",
         "app/admin_prompt_config_v75.js",
+        "app/admin_request_history_v93.js",
     ):
         subprocess.run(["node", "--check", str(ROOT / relative)], check=True, capture_output=True, text=True)
