@@ -42,11 +42,13 @@ def test_extension_download_route_is_replaced_by_v82_boundary() -> None:
 
 def test_worker_window_denominator_never_falls_back_to_concurrency_limit() -> None:
     source = text("app/admin_worker_presentation_v66.js")
-    assert "liveWindowCandidates" in source
+    assert "liveWindowTruth" in source
+    assert "truth.byClient.get(clientId)" in source
     assert "physical > 0 ? physical : limit" not in source
     assert 'data-chat2api-live-window-count="1"' in source
     assert "#22c55e" in source
-    assert "physicalRaw !== undefined" in source
+    assert "liveVerified" in source
+    assert "physicalKnown = physicalRaw !== undefined" in source  # legacy fallback only
 
 
 def test_runtime_identity_and_v82_features_are_current() -> None:

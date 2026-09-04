@@ -13,11 +13,14 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_worker_occupancy_prefers_all_physical_chatgpt_windows() -> None:
+def test_worker_occupancy_prefers_fresh_verified_managed_windows() -> None:
     source = text("app/admin_worker_presentation_v66.js")
     expected = "[metadata.reserve_window_all_chatgpt_windows, metadata.reserve_window_total]"
-    assert expected in source
-    assert "当前实际 ChatGPT 浏览器窗口" in source
+    assert expected in source  # explicit legacy fallback remains for old servers
+    assert "WINDOW_TRUTH_REVISION = 89" in source
+    assert "liveVerified" in source
+    assert "physical: authoritative && worker?.live_verified === true" in source
+    assert "旧版遥测（未实时核验）" in source
     assert 'data-chat2api-live-window-count="1"' in source
 
 

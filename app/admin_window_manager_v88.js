@@ -4,8 +4,11 @@
   const state = {
     revision: 88,
     navigation_revision: 89,
+    truth_revision: 89,
     active: [],
     closed: [],
+    workers: [],
+    truth: null,
     signature: "",
     timer: null,
     refreshPromise: null,
@@ -92,6 +95,7 @@
             <div><h2 style="margin:0">窗口管理</h2><div class="muted">选择策略：按开启时间从早到晚，只调用最早的“可接待”备用窗口。请求中的窗口保持“正在调用”，成功后保留并进入 5 分钟同 Key 可接待租约。</div></div>
             <button class="action" id="wmRefresh">刷新</button>
           </div>
+          <div id="wmTruthStatus" class="muted" style="margin-top:10px"></div>
           <h3>接待中窗口</h3>
           <div class="scroll"><table><thead><tr><th>窗口编号</th><th>设备码名称</th><th>请求ID</th><th>开启时间</th><th>状态</th><th>截图当前界面</th><th>查看</th></tr></thead><tbody id="wmActiveBody"></tbody></table></div>
           <h3 style="margin-top:22px">已关闭窗口</h3>
@@ -133,10 +137,11 @@
     const hasShot = String(row.screenshot_data_url || "").startsWith("data:image/");
     const device = String(row.device_name || row.device_code_id || clientId || "-");
     const req = String(row.request_id || "-");
-    const canCapture = !closed && row.worker_online !== false && clientId && Number.isInteger(windowId);
+    const canCapture = !closed && row.worker_online !== false && row.live_verified !== false && clientId && Number.isInteger(windowId);
     const title = [
       `window_id=${windowId}`,
       row.source ? `source=${row.source}` : "",
+      row.live_verified === true ? "physical_truth=v89" : "",
       row.screenshot_error ? `截图错误=${row.screenshot_error}` : "",
     ].filter(Boolean).join(" · ");
     return `<tr data-client="${esc(clientId)}" data-window="${esc(windowId)}" title="${esc(title)}">
@@ -166,9 +171,41 @@
     });
   }
 
+  function renderTruthStatus() {
+    const box = document.getElementById("wmTruthStatus");
+    if (!box) return;
+    const truth = state.truth && typeof state.truth === "object" ? state.truth : {};
+    const online = Math.max(0, Number(truth.online_workers || 0));
+    const verified = Math.max(0, Number(truth.verified_workers || 0));
+    const unverified = Math.max(0, Number(truth.unverified_workers || 0));
+    const suppressed = Math.max(0, Number(truth.cached_active_rows_suppressed || 0));
+    if (Number(state.truth_revision || 0) < 89) {
+      box.className = "warnText";
+      box.textContent = "当前服务端尚未启用 v89 物理窗口核验；列表可能来自 Worker 历史遥测。";
+      return;
+    }
+    if (online <= 0) {
+      box.className = "muted";
+      box.textContent = "实时物理核验：暂无在线 Worker。历史缓存不会计入“接待中窗口”。";
+      return;
+    }
+    if (unverified > 0) {
+      const reasons = state.workers
+        .filter(row => row?.online && row?.live_verified !== true)
+        .map(row => `${row.device_name || row.client_id || "Worker"}：${row.truth_status === "upgrade-required" ? "需升级到 Worker 0.8.27+" : row.truth_status === "refresh-timeout" ? "核验超时" : "未核验"}`)
+        .join("；");
+      box.className = "warnText";
+      box.textContent = `实时物理核验：${verified}/${online} 个在线 Worker 已核验；${unverified} 个未核验。已抑制 ${suppressed} 条历史缓存窗口，不计入“接待中窗口”。${reasons ? ` ${reasons}` : ""}`;
+      return;
+    }
+    box.className = "muted";
+    box.textContent = `实时物理核验：${verified}/${online} 个在线 Worker 已核验。当前“接待中窗口”只显示本次从 Chrome 实际窗口图重新确认存在的窗口。`;
+  }
+
   function render() {
     bindRows(document.getElementById("wmActiveBody"), state.active, false);
     bindRows(document.getElementById("wmClosedBody"), state.closed, true);
+    renderTruthStatus();
   }
 
   async function refresh(force = false) {
@@ -193,15 +230,26 @@
         if (!isActive()) return payload;
         const active = Array.isArray(payload.active) ? payload.active : [];
         const closed = Array.isArray(payload.closed) ? payload.closed : [];
+        const workers = Array.isArray(payload.workers) ? payload.workers : [];
+        const truth = payload.truth && typeof payload.truth === "object" ? payload.truth : null;
+        const truthRevision = Number(payload.truth_revision || 0);
         const signature = JSON.stringify([
+          truthRevision,
+          truth,
+          workers.map(row => [row.client_id, row.live_verified, row.truth_status, row.snapshot_updated_at_ms, row.cached_active_count]),
           active.map(row => [row.client_id, row.window_no, row.status, row.request_id, row.screenshot_at_ms]),
           closed.map(row => [row.client_id, row.window_no, row.closed_at_ms, row.screenshot_at_ms]),
         ]);
         state.active = active;
         state.closed = closed;
+        state.workers = workers;
+        state.truth = truth;
+        state.truth_revision = truthRevision;
         if (force || signature !== state.signature) {
           state.signature = signature;
           render();
+        } else {
+          renderTruthStatus();
         }
         return payload;
       } catch (error) {
