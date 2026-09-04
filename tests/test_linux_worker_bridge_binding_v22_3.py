@@ -209,8 +209,8 @@ def test_binding_versions_are_aligned():
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert _runtime_version(runtime) >= (0, 22, 4)
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.27"' in runtime
-    assert '"version": "0.8.27"' in manifest
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.28"' in runtime
+    assert '"version": "0.8.28"' in manifest
     assert 'agent_version:"0.3.2"' in bootstrap
     assert "install_linux_worker_bridge_binding_patch(app)" in entry
     assert "install_worker_disable_authority_patch(app)" in entry
