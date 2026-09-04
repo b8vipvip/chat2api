@@ -28,15 +28,18 @@ def _cooldown_until_ms(registry: Any, client_id: str) -> int:
     if not isinstance(metadata, dict):
         return 0
 
-    try:
-        value = int(float(metadata.get("mini_multimodal_cooldown_until_ms") or 0))
-    except (TypeError, ValueError):
-        value = 0
-    if value > int(time.time() * 1000):
-        return value
+    for key in ("file_upload_cooldown_until_ms", "mini_multimodal_cooldown_until_ms"):
+        try:
+            value = int(float(metadata.get(key) or 0))
+        except (TypeError, ValueError):
+            value = 0
+        if value > int(time.time() * 1000):
+            return value
 
-    raw = str(metadata.get("mini_multimodal_cooldown_until") or "").strip()
-    if raw:
+    for key in ("file_upload_cooldown_until", "mini_multimodal_cooldown_until"):
+        raw = str(metadata.get(key) or "").strip()
+        if not raw:
+            continue
         try:
             parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
             if parsed.tzinfo is None:
@@ -99,9 +102,8 @@ def install_mini_multimodal_quota_patch(app: FastAPI) -> FastAPI:
 
     def resolve_client_with_mini_multimodal_quota(requested: str | None) -> str:
         target = v13_patch._target_context.get() or {}
-        model = str(target.get("model") or "").strip().lower()
         needs_multimodal = bool(target.get("needs_multimodal"))
-        if model != MINI_MODEL or not needs_multimodal:
+        if not needs_multimodal:
             return base_resolve_client(requested)
 
         if requested:
@@ -109,7 +111,7 @@ def install_mini_multimodal_quota_patch(app: FastAPI) -> FastAPI:
             if _account_type(registry, selected) == "free" and not _multimodal_available(registry, selected):
                 until_ms = _cooldown_until_ms(registry, selected)
                 raise LookupError(
-                    "Requested ChatGPT Free extension has gpt-5.5-mini vision/file quota cooling down"
+                    "Requested ChatGPT Free Worker has file upload quota cooling down"
                     + (f" until {_iso_from_ms(until_ms)}" if until_ms else "")
                 )
             return selected
@@ -142,10 +144,10 @@ def install_mini_multimodal_quota_patch(app: FastAPI) -> FastAPI:
             )
             restore = _iso_from_ms(restore_times[0]) if restore_times else None
             raise ConnectionError(
-                "All available ChatGPT Free gpt-5.5-mini vision/file quotas are cooling down"
+                "All available ChatGPT Free file upload quotas are cooling down"
                 + (f" until {restore}" if restore else "")
             )
-        raise ConnectionError("No compatible Chrome extension is available for gpt-5.5-mini multimodal input")
+        raise ConnectionError("No compatible Chrome extension is available for attachment input")
 
     registry.resolve_client = resolve_client_with_mini_multimodal_quota
 
@@ -183,7 +185,7 @@ def install_mini_multimodal_quota_patch(app: FastAPI) -> FastAPI:
             row["native_free_multimodal_cooling_clients"] = cooling_free
             row["multimodal_fallback_clients"] = fallback_clients
             row["multimodal_resume_at"] = _iso_from_ms(restore_times[0]) if restore_times else None
-            row["multimodal_quota_policy"] = "enabled-until-chatgpt-reports-quota-reset-time"
+            row["multimodal_quota_policy"] = "account-file-upload-circuit-breaker-v91"
         return rows
 
     registry.model_catalog = model_catalog_with_mini_multimodal_quota

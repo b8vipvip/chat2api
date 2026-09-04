@@ -4,6 +4,7 @@
   if (!prior || Number(prior.revision || 0) < 84 || Number(prior.revision || 0) >= 85) return;
 
   const REVISION = 85;
+  const QUOTA_REVISION = 91;
   const CONTROLLER = "multimodal-upload-safe-submit-v85";
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   const state = prior.state || {};
@@ -29,6 +30,38 @@
   ].join(",");
 
   function unique(rows) { return [...new Set((rows || []).filter(Boolean))]; }
+
+  function quotaController() { return globalThis.__CHAT2API_MULTIMODAL_QUOTA_V36__ || null; }
+
+  function quotaFailure() {
+    const controller = quotaController();
+    if (!controller) return null;
+    let hit = null;
+    try { hit = controller.scan?.() || controller.recentDetection?.(12000) || null; } catch (_) {}
+    if (!hit) return null;
+    const retryAt = Number(hit.recovery_at_ms || 0);
+    const error = new Error(`CHAT2API_FILE_UPLOAD_QUOTA_EXHAUSTED${retryAt > Date.now() ? ` retry_at_ms=${retryAt}` : ""}`);
+    error.code = "file_upload_quota_exhausted";
+    error.retry_at_ms = retryAt > Date.now() ? retryAt : 0;
+    error.quota_revision = QUOTA_REVISION;
+    return error;
+  }
+
+  async function watchQuota(stop, requestId) {
+    while (!stop.done) {
+      const error = quotaFailure();
+      if (error) {
+        await emitDiagnostic(requestId, "upload-quota-exhausted", {
+          file_upload_quota_revision: QUOTA_REVISION,
+          file_upload_quota_code: error.code,
+          file_upload_retry_at_ms: error.retry_at_ms || 0,
+        });
+        throw error;
+      }
+      await delay(120);
+    }
+    return new Promise(() => {});
+  }
 
   function attachmentContainers() {
     const root = composerRoot();
@@ -116,8 +149,8 @@
           request_id: requestId,
           diagnostics: {
             attachment_safe_submit_revision: REVISION,
-            attachment_safe_submit_stage: stage,
             ...extra,
+            attachment_safe_submit_stage: stage,
           },
         },
       });
@@ -141,6 +174,15 @@
       attachment_busy_reason: last.reason,
     });
     while (Date.now() < deadline) {
+      const quota = quotaFailure();
+      if (quota) {
+        await emitDiagnostic(requestId, "upload-quota-exhausted", {
+          file_upload_quota_revision: QUOTA_REVISION,
+          file_upload_quota_code: quota.code,
+          file_upload_retry_at_ms: quota.retry_at_ms || 0,
+        });
+        throw quota;
+      }
       last = visualBusySnapshot();
       const present = last.visible_attachments >= Math.max(1, Number(expectedCount || 1));
       if (!present || last.busy) {
@@ -188,7 +230,25 @@
   }
 
   async function attach(specs = [], options = {}) {
-    const data = await prior.attach(specs, options);
+    const requestId = String(options.request_id || "");
+    try {
+      quotaController()?.markActive?.((specs || []).map(item => item?.filename || item?.file_id || ""));
+    } catch (_) {}
+    const stop = { done: false };
+    let data;
+    try {
+      data = await Promise.race([
+        prior.attach(specs, options),
+        watchQuota(stop, requestId),
+      ]);
+    } catch (error) {
+      if (String(error?.code || "") === "file_upload_quota_exhausted" || /CHAT2API_FILE_UPLOAD_QUOTA_EXHAUSTED/.test(String(error?.message || error))) {
+        try { await prior.cleanup((specs || []).map(item => item?.filename || item?.file_id || "").filter(Boolean)); } catch (_) {}
+      }
+      throw error;
+    } finally {
+      stop.done = true;
+    }
     const count = Number(data?.attachments_count || 0);
     if (!count) return { ...data, attachment_safe_submit_v85: true, attachment_safe_submit_revision: REVISION };
     const bytes = Number(data?.attachment_bytes || 0);
@@ -214,6 +274,7 @@
       attachment_attempts: attempts,
       attachment_safe_submit_v85: true,
       attachment_safe_submit_revision: REVISION,
+      file_upload_quota_revision: QUOTA_REVISION,
       attachment_safe_busy_seen: safe.busy_seen,
       attachment_safe_grace_ms: safe.grace_ms,
       attachment_safe_wait_ms: safe.waited_ms,
@@ -229,13 +290,13 @@
 
   const listener = (message, _sender, sendResponse) => {
     if (message.type === "chat2api.attach.ping.v4") {
-      sendResponse({ ok: true, controller: CONTROLLER, revision: REVISION });
+      sendResponse({ ok: true, controller: CONTROLLER, revision: REVISION, quota_revision: QUOTA_REVISION });
       return false;
     }
     if (message.type === "chat2api.attach.prepare.v4") {
       attach(message.attachments || [], { request_id: message.request_id })
         .then(data => sendResponse({ ok: true, data, controller: CONTROLLER, revision: REVISION }))
-        .catch(error => sendResponse({ ok: false, error: String(error?.message || error), controller: CONTROLLER, revision: REVISION }));
+        .catch(error => sendResponse({ ok: false, error: String(error?.message || error), error_code: error?.code || null, retry_at_ms: Number(error?.retry_at_ms || 0), controller: CONTROLLER, revision: REVISION }));
       return true;
     }
     if (message.type === "chat2api.attach.cleanup.v4") {
@@ -252,10 +313,12 @@
     attach,
     cleanup,
     revision: REVISION,
+    quota_revision: QUOTA_REVISION,
     controller: CONTROLLER,
     listener,
     visualBusySnapshot,
     waitForSafeSubmit,
+    quotaFailure,
     safeSubmitGate: state.safeSubmitGate,
   };
   chrome.runtime.onMessage.addListener(listener);

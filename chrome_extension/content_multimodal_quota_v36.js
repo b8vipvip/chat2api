@@ -2,12 +2,14 @@
   const KEY = "__CHAT2API_MULTIMODAL_QUOTA_V36__";
   if (globalThis[KEY]) return;
 
+  const REVISION = 91;
   const ACTIVE_MS = 120000;
   const MAX_RESET_MS = 31 * 24 * 60 * 60 * 1000;
   const state = {
     activeUntil: 0,
     attachmentNames: [],
     lastFingerprint: "",
+    lastDetection: null,
     observer: null,
     interval: null,
   };
@@ -26,10 +28,10 @@
 
   function quotaText(value) {
     const text = normalize(value);
-    if (!text || text.length < 8 || text.length > 2400) return false;
-    const quota = /(?:reached|hit|exceeded|used up|ran out of).{0,45}(?:limit|quota)|(?:limit|quota).{0,45}(?:reached|exceeded|used up)|too many (?:files|uploads)|file upload limit|upload quota|已达到.{0,36}(?:限制|上限|额度)|(?:限制|上限|额度).{0,36}(?:已用完|已耗尽|已达到)|(?:文件|图片|上传|视觉).{0,36}(?:限制|上限|额度)/i.test(text);
-    const recovery = /(?:reset|resets|available again|try again|come back|after|until|in \d+\s*(?:min|minute|hour|hr))|(?:恢复|重置|后重试|再试|分钟后|小时后|明天)/i.test(text);
-    return quota && recovery;
+    if (!text || text.length < 6 || text.length > 2400) return false;
+    const english = /(?:file|image|attachment|upload).{0,55}(?:limit|quota|used up|exhausted|ran out)|(?:reached|hit|exceeded|used up|exhausted|ran out of).{0,55}(?:file|image|attachment|upload).{0,24}(?:limit|quota)?|too many (?:files|uploads)|file upload limit|upload quota/i.test(text);
+    const chinese = /(?:文件|图片|附件|上传).{0,40}(?:次数|额度|限制|上限).{0,30}(?:已)?(?:全部)?(?:用完|耗尽|达到)|(?:文件|图片|附件).{0,24}(?:上传)?(?:次数)?(?:已)?(?:全部)?(?:用完|耗尽)|(?:一次|单次)?最多可上传\s*0\s*个(?:文件|附件)|无法上传.{0,80}最多可上传\s*0\s*个(?:文件|附件)/i.test(text);
+    return english || chinese;
   }
 
   function clampRecovery(candidate, nowMs) {
@@ -47,7 +49,7 @@
       const multiplier = unit.startsWith("h") ? 60 * 60 * 1000 : 60 * 1000;
       return clampRecovery(nowMs + amount * multiplier, nowMs);
     }
-    match = text.match(/(\d{1,4})\s*(分钟|小时)\s*(?:后|以后)/);
+    match = text.match(/(?:在\s*)?(\d{1,4})\s*(分钟|小时)\s*(?:以内|内)?\s*(?:后|以后)?\s*(?:重试|再试|可重试|再次尝试)?/);
     if (match) {
       const amount = Number(match[1]);
       const multiplier = match[2] === "小时" ? 60 * 60 * 1000 : 60 * 1000;
@@ -123,6 +125,25 @@
     return result;
   }
 
+  function dismissQuotaUi(node) {
+    let root = node?.closest?.("[role='dialog'],[aria-modal='true']") || null;
+    if (!root && node?.matches?.("[role='dialog'],[aria-modal='true']")) root = node;
+    if (!root || !visible(root)) return false;
+    const candidates = [...root.querySelectorAll("button,[role='button']")].filter(visible);
+    const safeText = /^(?:以后再说|稍后|暂不|关闭|not now|maybe later|close)$/i;
+    for (const button of candidates) {
+      const label = normalize(button.innerText || button.textContent || button.getAttribute?.("aria-label") || "");
+      if (!safeText.test(label)) continue;
+      try { button.click(); return true; } catch (_) {}
+    }
+    for (const button of candidates) {
+      const label = normalize(`${button.getAttribute?.("aria-label") || ""} ${button.getAttribute?.("data-testid") || ""}`);
+      if (!/(?:close|dismiss|关闭)/i.test(label) || /upgrade|升级/i.test(label)) continue;
+      try { button.click(); return true; } catch (_) {}
+    }
+    return false;
+  }
+
   async function report(text, recoveryAt) {
     const fingerprint = `${normalize(text).slice(0, 700)}|${Number(recoveryAt || 0)}`;
     if (fingerprint === state.lastFingerprint) return;
@@ -135,7 +156,8 @@
           recovery_at_ms: recoveryAt,
           source_text: normalize(text).slice(0, 1200),
           attachment_names: [...state.attachmentNames],
-          detector: "multimodal-quota-v36",
+          detector: "multimodal-upload-quota-v91",
+          detector_revision: REVISION,
         },
       });
     } catch (_) {}
@@ -146,16 +168,27 @@
     for (const node of candidateNodes()) {
       const text = normalize(node.innerText || node.textContent || "");
       if (!quotaText(text)) continue;
-      const recoveryAt = parseRecoveryAt(text, Date.now());
+      const detectedAt = Date.now();
+      const recoveryAt = parseRecoveryAt(text, detectedAt);
+      const result = { detected_at_ms: detectedAt, text, recovery_at_ms: recoveryAt, revision: REVISION };
+      state.lastDetection = result;
       report(text, recoveryAt).catch(() => {});
-      return { text, recovery_at_ms: recoveryAt };
+      setTimeout(() => dismissQuotaUi(node), 0);
+      return result;
     }
     return null;
+  }
+
+  function recentDetection(maxAgeMs = 10000) {
+    const item = state.lastDetection;
+    if (!item || Date.now() - Number(item.detected_at_ms || 0) > Math.max(500, Number(maxAgeMs || 0))) return null;
+    return { ...item };
   }
 
   function markActive(names = []) {
     state.activeUntil = Math.max(state.activeUntil, Date.now() + ACTIVE_MS);
     state.attachmentNames = Array.isArray(names) ? names.map(normalize).filter(Boolean).slice(0, 4) : [];
+    state.lastDetection = null;
     queueMicrotask(scan);
     setTimeout(scan, 250);
     setTimeout(scan, 800);
@@ -164,7 +197,7 @@
 
   const listener = (message, _sender, sendResponse) => {
     if (message?.type === "chat2api.multimodal.quota.ping.v36") {
-      sendResponse({ ok: true, controller: "multimodal-quota-v36" });
+      sendResponse({ ok: true, controller: "multimodal-upload-quota-v91", revision: REVISION });
       return false;
     }
     if (message?.type === "chat2api.attach.prepare.v4") {
@@ -190,11 +223,14 @@
   state.interval = setInterval(scan, 750);
 
   globalThis[KEY] = {
+    revision: REVISION,
     state,
     quotaText,
     parseRecoveryAt,
     markActive,
     scan,
+    recentDetection,
+    dismissQuotaUi,
     listener,
   };
 })();
