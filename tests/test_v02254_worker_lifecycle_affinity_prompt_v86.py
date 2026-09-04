@@ -27,6 +27,19 @@ def test_worker_disable_guard_blocks_refill_and_closes_late_window() -> None:
     assert "base(meta)" in source
 
 
+def test_worker_disable_guard_vm_contract() -> None:
+    result = subprocess.run(
+        ["node", str(ROOT / "tests" / "worker_disabled_window_guard_v86.mjs")],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "worker disabled window guard v86: ok" in result.stdout
+
+
 def test_successful_terminal_never_recycles_affinity_window() -> None:
     source = text("chrome_extension/background_route_quarantine_v50.js")
     start = source.index("async function settleCompletedRoute")
@@ -44,6 +57,8 @@ def test_runtime_preflight_has_current_bundle_fast_path_before_heal() -> None:
     source = text("chrome_extension/background_runtime_preflight_v48.js")
     preflight = source[source.index("async function preflight"):]
     assert "fast_path_hits" in source
+    assert "CONTRACT_TIMEOUT_MS = 1200" in source
+    assert "Promise.race([request, timeout])" in source
     assert 'mode: "current-fast-path-v86"' in source
     assert 'mode: "hot-repair-v86"' in source
     assert 'mode: "reload-repair-v86"' in source
