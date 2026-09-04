@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_formal_release_v02256_versions_and_notes_are_aligned() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert SERVER_RUNTIME_VERSION == "0.22.56"
+    assert SERVER_RUNTIME_VERSION == "0.22.57"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.26"
     assert manifest["version"] == "0.8.26"
