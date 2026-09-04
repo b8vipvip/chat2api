@@ -2,9 +2,11 @@
   const KEY = "__CHAT2API_MULTIMODAL_QUOTA_BACKGROUND_V36__";
   if (globalThis[KEY]) return;
 
+  const REVISION = 91;
   const ALARM_NAME = "chat2api-mini-multimodal-quota-cooldown";
   const MINI_MODEL = "gpt-5.5-mini";
   const MAX_RESET_MS = 31 * 24 * 60 * 60 * 1000;
+  const UNPARSED_RETRY_MS = 5 * 60 * 1000;
   const STORAGE_DEFAULTS = {
     miniMultimodalCooldownUntilMs: 0,
     miniMultimodalCooldownDetectedAtMs: 0,
@@ -80,6 +82,7 @@
   function snapshot() {
     const active = cooling();
     return {
+      revision: REVISION,
       cooling: active,
       available: !active,
       cooldown_until_ms: active ? Number(state.cooldownUntilMs) : 0,
@@ -106,8 +109,9 @@
 
   async function activateCooldown(data = {}) {
     await loadState();
-    const detectedAt = Number(data.detected_at_ms || Date.now());
-    const recoveryAt = Number(data.recovery_at_ms || 0);
+    const now = Date.now();
+    const detectedAt = Number(data.detected_at_ms || now);
+    let recoveryAt = Number(data.recovery_at_ms || 0);
     const sourceText = String(data.source_text || "").replace(/\s+/g, " ").trim().slice(0, 1200);
     state.lastDetectedAtMs = detectedAt;
 
@@ -121,42 +125,35 @@
       return { activated: false, reason: "account-not-free", account_type: accountType };
     }
 
-    const delta = recoveryAt - Date.now();
-    if (!Number.isFinite(recoveryAt) || delta <= 1000 || delta > MAX_RESET_MS) {
-      state.lastUnparsed = true;
-      await chrome.storage.local.set({
-        miniMultimodalQuotaLastDetectedAtMs: state.lastDetectedAtMs,
-        miniMultimodalQuotaLastUnparsed: true,
-      });
-      return { activated: false, reason: "restore-time-not-parsed", account_type: accountType };
-    }
+    const parsedDelta = recoveryAt - now;
+    const parsed = Number.isFinite(recoveryAt) && parsedDelta > 1000 && parsedDelta <= MAX_RESET_MS;
+    if (!parsed) recoveryAt = now + UNPARSED_RETRY_MS;
 
     state.cooldownUntilMs = Math.round(recoveryAt);
     state.detectedAtMs = detectedAt;
-    state.reason = "chatgpt-page-multimodal-quota";
+    state.reason = parsed ? "chatgpt-page-file-upload-quota" : "chatgpt-page-file-upload-quota-unparsed";
     state.sourceText = sourceText;
-    state.lastUnparsed = false;
+    state.lastUnparsed = !parsed;
     await chrome.storage.local.set({
       miniMultimodalCooldownUntilMs: state.cooldownUntilMs,
       miniMultimodalCooldownDetectedAtMs: state.detectedAtMs,
       miniMultimodalCooldownReason: state.reason,
       miniMultimodalCooldownSourceText: state.sourceText,
       miniMultimodalQuotaLastDetectedAtMs: state.lastDetectedAtMs,
-      miniMultimodalQuotaLastUnparsed: false,
+      miniMultimodalQuotaLastUnparsed: state.lastUnparsed,
     });
     try { chrome.alarms.create(ALARM_NAME, { when: state.cooldownUntilMs }); } catch (_) {}
-    return { activated: true, account_type: accountType, ...snapshot() };
+    return { activated: true, account_type: accountType, parsed_recovery: parsed, ...snapshot() };
   }
 
   function adaptModel(model, status) {
     const item = { ...(model || {}) };
-    if (String(item.id || "").trim().toLowerCase() !== MINI_MODEL) return item;
     const capabilities = new Set(Array.isArray(item.capabilities) ? item.capabilities : []);
-    capabilities.add("text");
+    if (String(item.id || "").trim().toLowerCase() === MINI_MODEL) capabilities.add("text");
     if (status.cooling) {
       capabilities.delete("vision");
       capabilities.delete("file-understanding");
-    } else {
+    } else if (String(item.id || "").trim().toLowerCase() === MINI_MODEL) {
       capabilities.add("vision");
       capabilities.add("file-understanding");
     }
@@ -165,6 +162,8 @@
     item.multimodal_cooldown_until = status.cooldown_until;
     item.multimodal_cooldown_until_ms = status.cooldown_until_ms;
     item.multimodal_cooldown_reason = status.cooling ? status.reason : null;
+    item.file_upload_available = !status.cooling;
+    item.file_upload_cooldown_until = status.cooldown_until;
     return item;
   }
 
@@ -192,6 +191,7 @@
     const capabilities = new Set(Array.isArray(base.capabilities) ? base.capabilities : []);
     capabilities.add("text");
     capabilities.add("mini-multimodal-quota-aware");
+    capabilities.add("file-upload-quota-aware-v91");
     if (status.cooling) {
       capabilities.delete("vision");
       capabilities.delete("file-understanding");
@@ -207,6 +207,13 @@
     base.mini_multimodal_cooldown_reason = status.cooling ? status.reason : null;
     base.mini_multimodal_quota_last_detected_at_ms = status.last_detected_at_ms;
     base.mini_multimodal_quota_last_unparsed = status.last_unparsed;
+    base.file_upload_available = !status.cooling;
+    base.file_upload_quota_cooling = status.cooling;
+    base.file_upload_cooldown_until = status.cooldown_until;
+    base.file_upload_cooldown_until_ms = status.cooldown_until_ms;
+    base.file_upload_quota_detected_at_ms = status.detected_at_ms;
+    base.file_upload_quota_reason = status.cooling ? status.reason : null;
+    base.file_upload_quota_revision = REVISION;
     return base;
   }
 
@@ -261,6 +268,7 @@
     .catch(() => {});
 
   globalThis.chat2apiMiniMultimodalQuotaV36 = {
+    revision: REVISION,
     state,
     snapshot,
     ensureFresh,
