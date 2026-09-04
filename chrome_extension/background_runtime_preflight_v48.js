@@ -22,7 +22,6 @@
     "content_draft_managed_recovery_v55.js",
     "content_rich_response_v69.js",
     "content_request_v6.js",
-    "content_submit_rescue_v87.js",
     "content_response_stream_recovery_v69.js",
     "content_network_stream_recovery_v55.js",
     "content_response_semantic_recovery_v51.js",
