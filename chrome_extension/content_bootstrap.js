@@ -43,6 +43,7 @@
           "content_response_stream_recovery_v49.js",
           "content_response_stream_recovery_v69.js",
           "content_network_stream_recovery_v55.js",
+          "content_request_terminal_prompt_v88.js",
           "content_response_semantic_recovery_v51.js",
           "content_transient_retry_v50.js",
           "content_request_stall_guard_v34.js",
