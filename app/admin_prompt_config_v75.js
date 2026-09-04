@@ -187,8 +187,17 @@
 
   function requestIdFromRow(tr) {
     if (!tr) return "";
-    const direct = tr.dataset?.requestId || tr.getAttribute("data-request-id") || "";
-    if (/^req_[A-Za-z0-9]+$/.test(direct)) return direct;
+    const candidates = [
+      tr.dataset?.requestId,
+      tr.getAttribute("data-request-id"),
+      tr.getAttribute("onclick"),
+      tr.getAttribute("data-id"),
+      tr.id,
+    ];
+    for (const value of candidates) {
+      const match = String(value || "").match(/\breq_[A-Za-z0-9]+\b/);
+      if (match) return match[0];
+    }
     for (const node of tr.querySelectorAll("button,a,[data-request-id],[onclick],[href]")) {
       for (const attr of ["data-request-id", "onclick", "href", "value", "title", "aria-label"]) {
         const value = node.getAttribute?.(attr) || "";
@@ -200,22 +209,65 @@
     return htmlMatch?.[0] || "";
   }
 
+  function promptColumnIndex() {
+    const header = $("rqBody")?.closest("table")?.querySelector("thead tr");
+    if (!header) return -1;
+    let prompt = header.querySelector('[data-prompt-column="1"]');
+    if (!prompt) {
+      prompt = [...header.children].find(cell => String(cell.textContent || "").trim() === "提示词") || null;
+    }
+    if (!prompt) {
+      prompt = document.createElement("th");
+      prompt.dataset.promptColumn = "1";
+      prompt.textContent = "提示词";
+      const log = [...header.children].find(cell => /日志/.test(String(cell.textContent || ""))) || null;
+      header.insertBefore(prompt, log);
+    }
+    prompt.dataset.promptColumn = "1";
+    return [...header.children].indexOf(prompt);
+  }
+
+  function ensurePromptCell(tr, index) {
+    let cell = tr.querySelector('[data-prompt-cell="1"]');
+    if (cell) return cell;
+    if (tr.children.length === 1 && Number(tr.children[0]?.colSpan || 1) > 1) {
+      tr.children[0].colSpan = Math.max(Number(tr.children[0].colSpan || 1), index + 1);
+      return null;
+    }
+    cell = document.createElement("td");
+    cell.dataset.promptCell = "1";
+    const logCell = [...tr.children].find(td => /日志/.test(String(td.textContent || ""))) || null;
+    const reference = tr.children[index] || logCell || null;
+    tr.insertBefore(cell, reference);
+    return cell;
+  }
+
   function repairPromptCells() {
     const body = $("rqBody");
     if (!body || typeof window.showRequestPromptV72 !== "function") return;
-    for (const tr of body.querySelectorAll("tr")) {
-      let cell = tr.querySelector('[data-prompt-cell="1"]');
-      if (!cell) continue;
+    const index = promptColumnIndex();
+    if (index < 0) return;
+    for (const tr of body.querySelectorAll(":scope > tr")) {
       const requestId = requestIdFromRow(tr);
-      if (!requestId) continue;
-      const existing = cell.querySelector("button");
+      const cell = ensurePromptCell(tr, index);
+      if (!cell) continue;
+      if (!requestId) {
+        if (!cell.textContent?.trim()) cell.textContent = "-";
+        continue;
+      }
+      const existing = cell.querySelector("button[data-request-id]");
       if (existing?.dataset?.requestId === requestId) continue;
       cell.textContent = "";
       const button = document.createElement("button");
+      button.type = "button";
       button.className = "secondary";
       button.textContent = "查看提示词";
       button.dataset.requestId = requestId;
-      button.onclick = () => window.showRequestPromptV72(requestId);
+      button.onclick = event => {
+        event.preventDefault();
+        event.stopPropagation();
+        window.showRequestPromptV72(requestId);
+      };
       cell.appendChild(button);
     }
   }
