@@ -31,9 +31,9 @@ def _install_request_route_stability(app: FastAPI, telemetry: Any) -> None:
     """Make request-history routes tolerant of sync/async telemetry decorators.
 
     Older console patches have changed TelemetryStore.query/get between sync and
-    async implementations.  The base endpoint historically unpacked query() as a
+    async implementations. The base endpoint historically unpacked query() as a
     mapping immediately, which turns an async decorator into
-    ``TypeError: 'coroutine' object is not a mapping``.  Keep FastAPI's original
+    ``TypeError: 'coroutine' object is not a mapping``. Keep FastAPI's original
     dependency graph but replace only the route call target with a final owner that
     accepts either contract.
     """
@@ -102,8 +102,6 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
     registry = app.state.registry
     pairings = getattr(app.state, "pairings", None)
     if pairings is None or getattr(telemetry, "_chat2api_request_device_identity_v47", False):
-        # Even when identity decoration was installed by an earlier compatibility
-        # layer, keep the route stability owner final and idempotent.
         _install_request_route_stability(app, telemetry)
         return app
 
@@ -177,18 +175,33 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
         result["device_name"] = _canonical_label((pairing or {}).get("name")) or None
         return result
 
-    def recent_with_device(limit: int = 100) -> list[dict[str, Any]]:
-        maps = device_maps()
-        return [decorate(row, maps) or {} for row in base_recent(limit)]
-
-    def query_with_device(*args: Any, **kwargs: Any) -> dict[str, Any]:
-        result = dict(base_query(*args, **kwargs))
+    def decorate_query_result(raw: Any) -> dict[str, Any]:
+        result = dict(raw)
         maps = device_maps()
         result["data"] = [decorate(row, maps) or {} for row in result.get("data") or []]
         return result
 
-    def get_with_device(request_id: str) -> dict[str, Any] | None:
-        return decorate(base_get(request_id), device_maps())
+    def recent_with_device(limit: int = 100) -> list[dict[str, Any]]:
+        maps = device_maps()
+        return [decorate(row, maps) or {} for row in base_recent(limit)]
+
+    def query_with_device(*args: Any, **kwargs: Any) -> Any:
+        raw = base_query(*args, **kwargs)
+        if inspect.isawaitable(raw):
+            async def resolve_query() -> dict[str, Any]:
+                return decorate_query_result(await raw)
+
+            return resolve_query()
+        return decorate_query_result(raw)
+
+    def get_with_device(request_id: str) -> Any:
+        raw = base_get(request_id)
+        if inspect.isawaitable(raw):
+            async def resolve_get() -> dict[str, Any] | None:
+                return decorate(await raw, device_maps())
+
+            return resolve_get()
+        return decorate(raw, device_maps())
 
     telemetry.recent = recent_with_device
     telemetry.query = query_with_device
