@@ -46,6 +46,6 @@ def test_historical_v212_does_not_stamp_runtime_identity():
 def test_release_versions():
     runtime = text("app/runtime_contract.py")
     manifest = text("chrome_extension/manifest.json")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.55"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.25"' in runtime
-    assert '"version": "0.8.25"' in manifest
+    assert 'SERVER_RUNTIME_VERSION = "0.22.56"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.26"' in runtime
+    assert '"version": "0.8.26"' in manifest
