@@ -24,7 +24,6 @@ importScripts(
   "voice_routing.js",
   "audio_routing_v2.js",
   "image_routing_v3.js",
-  "audio_routing_v3.js",
   "audio_routing_v4.js",
   "background_logging.js",
   "model_affinity_v23.js",
@@ -52,6 +51,7 @@ importScripts(
   "background_window_affinity_v87.js",
   "background_orphan_route_cleanup_v87.js",
   "background_window_manager_v88.js",
+  "background_window_lifecycle_observer_v88.js",
 );
 
 // Refresh the lease of already healthy standby windows before the historical
@@ -59,7 +59,10 @@ importScripts(
 // their readiness timestamp aged out. Broken/missing windows still fail the
 // health probe and are replaced by the normal pool reconcilers.
 globalThis.__CHAT2API_WINDOW_AFFINITY_V87__?.refreshHealthySpareLeases?.().catch?.(() => {});
-// v88 is intentionally last: it sees the final route/warm/reserve ownership graph
-// and turns the previous wrapper stack into one deterministic oldest-ready FIFO
-// decision before any legacy resolver is allowed to open another browser window.
+// v88 is intentionally the final routing authority: it sees the final
+// route/warm/reserve ownership graph and turns the previous wrapper stack into
+// one deterministic oldest-ready FIFO decision before any legacy resolver is
+// allowed to open another browser window. The lifecycle observer loaded after it
+// is telemetry-only and records creation time/loading state; it never selects or
+// closes a route.
 globalThis.__CHAT2API_WINDOW_MANAGER_V88__?.reconcile?.(true).catch?.(() => {});
