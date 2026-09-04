@@ -2,9 +2,9 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__";
   if (globalThis[KEY]) return;
 
-  // Worker bundle 0.8.24 keeps the v71 request/response epoch while requiring
+  // Worker bundle 0.8.25 keeps the v71 request/response epoch while requiring
   // the v78 MAIN-world upload bridge plus the v84 readiness plus the v85 conservative safe-submit gate.
-  const REQUIRED_BUNDLE = "0.8.24";
+  const REQUIRED_BUNDLE = "0.8.25";
   const REQUIRED_REVISION = 71;
   const CONTRACT_TIMEOUT_MS = 700;
   const HOT_HEAL_BUDGET_MS = 2400;
