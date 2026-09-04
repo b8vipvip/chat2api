@@ -50,3 +50,9 @@ importScripts(
   "background_worker_master_switch_v61.js",
   "background_window_affinity_v87.js",
 );
+
+// Refresh the lease of already healthy standby windows before the historical
+// warm/reserve reconciliation timers get a chance to retire them purely because
+// their readiness timestamp aged out. Broken/missing windows still fail the
+// health probe and are replaced by the normal pool reconcilers.
+globalThis.__CHAT2API_WINDOW_AFFINITY_V87__?.refreshHealthySpareLeases?.().catch?.(() => {});
