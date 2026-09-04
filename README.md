@@ -1,5 +1,15 @@
 # chat2api
 
+## 当前版本与运行契约
+
+- Python package：`0.7.1`
+- Server runtime / console：`0.22.54`
+- Chrome Bridge：`0.8.24`
+- 运行中的服务端可通过 `GET /version` 查询服务器运行时、Chrome Bridge 与功能契约版本。
+- 完整版本规则见 `docs/VERSIONING.md`。
+
+语音生成与语音对话由当前运行时能力与 Worker 能力协同提供，具体可用状态以控制台和 `/version` 返回的能力契约为准。
+
 ## 隐私、版权与使用限制协议
 
 **Copyright © 2026 b8vipvip. All Rights Reserved.**
