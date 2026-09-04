@@ -28,18 +28,23 @@
   function canonicalizeElement(root) {
     if (!root) return;
     if (root.nodeType === Node.TEXT_NODE) {
-      canonicalizeTextNode(root);
+      if (!root.parentElement?.closest("script,style,tbody,pre,code")) canonicalizeTextNode(root);
       return;
     }
     if (!(root instanceof Element) && root !== document.body) return;
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     let node = walker.nextNode();
     while (node) {
-      if (!node.parentElement?.closest("script,style")) canonicalizeTextNode(node);
+      // Runtime data rows and diagnostic/code payloads are intentionally outside
+      // the terminology-rewrite surface. Traversing up to 100 request rows after
+      // unrelated background API completions was enough to starve Chromium's UI
+      // thread even though no JavaScript exception was emitted.
+      if (!node.parentElement?.closest("script,style,tbody,pre,code")) canonicalizeTextNode(node);
       node = walker.nextNode();
     }
     const elements = root instanceof Element ? [root, ...root.querySelectorAll("[placeholder],[title],[aria-label]")] : [];
     for (const element of elements) {
+      if (element.closest?.("tbody,pre,code")) continue;
       for (const attr of ["placeholder", "title", "aria-label"]) {
         if (!element.hasAttribute?.(attr)) continue;
         const before = element.getAttribute(attr) || "";
@@ -60,9 +65,9 @@
 
   function queueCanonicalizeActiveView() {
     if (state.canonicalizeTimer !== null) return;
-    // Renderers generally mutate the DOM after their awaited API promise resumes.
-    // A zero-delay task therefore runs after that bounded render without watching
-    // the entire document for every character/child mutation.
+    // Navigation is a bounded lifecycle boundary. Do not schedule this work from
+    // every API completion: hidden Worker/window pollers are unrelated to the
+    // visible view and can otherwise create an effectively permanent TreeWalker.
     state.canonicalizeTimer = setTimeout(canonicalizeActiveView, 0);
   }
 
@@ -110,7 +115,9 @@
       const title = clientId ? `Worker ID：${clientId}${row.device_code_id ? ` · 设备码 ID：${row.device_code_id}` : ""}` : "";
       if (cell.title !== title) cell.title = title;
     });
-    canonicalizeElement(document.getElementById("view-requests"));
+    // Structural request-row decoration must remain O(number of changed rows).
+    // Do not TreeWalk the whole request view here; the table can contain 100
+    // retained records and this function is already driven by rqBody mutations.
   }
 
   function captureRequestRows(path, payload) {
@@ -134,7 +141,10 @@
     const wrapped = async function(path, opt = {}) {
       const payload = await base(path, opt);
       captureRequestRows(path, payload);
-      queueCanonicalizeActiveView();
+      // Deliberately no active-view canonicalization here. This wrapper sees all
+      // console API traffic, including hidden-view pollers. Coupling a DOM-wide
+      // repaint to every successful request recreated the same no-error main-thread
+      // starvation that the v89 navigation hotfix was meant to remove.
       return payload;
     };
     wrapped.__chat2apiDeviceIdentityV47 = true;
@@ -151,11 +161,9 @@
     new MutationObserver(() => queueMicrotask(paintRequestRows)).observe(tbody, {childList:true,subtree:false});
   }
 
-  // Normalize the static shell once. Previous console-freeze fixes deliberately
-  // removed whole-document MutationObservers: watching document.body recursively
-  // makes every async renderer/poller feed another TreeWalker pass and can starve
-  // the UI thread without producing a console exception. New async content is
-  // normalized after API completions and navigation instead.
+  // Normalize only static/presentation chrome. High-volume table/code content is
+  // excluded by canonicalizeElement and later normalization runs only at explicit
+  // navigation boundaries, never on background API traffic.
   canonicalizeElement(document.body);
   document.addEventListener("click", event => {
     const button = event.target?.closest?.(".nav button[data-view]");
