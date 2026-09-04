@@ -15,7 +15,7 @@ def test_bridge_protocol_stays_stable_while_bundle_busts_mv3_cache() -> None:
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     dispatcher = (ROOT / "chrome_extension" / "background_capacity_control_v36.js").read_text(encoding="utf-8")
 
-    assert manifest["version"] == "0.8.23"
+    assert manifest["version"] == "0.8.24"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
     assert CHROME_BRIDGE_BUNDLE_VERSION == manifest["version"]
     assert '"background_capacity_control_v36.js"' in entry
