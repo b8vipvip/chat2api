@@ -15,9 +15,9 @@ def text(path: str) -> str:
 
 def test_v02253_versions_and_v85_safe_submit_are_shipped() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert SERVER_RUNTIME_VERSION == "0.22.53"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.23"
-    assert manifest["version"] == "0.8.23"
+    assert SERVER_RUNTIME_VERSION == "0.22.54"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.24"
+    assert manifest["version"] == "0.8.24"
     scripts = next(item for item in manifest["content_scripts"] if item.get("world") != "MAIN")["js"]
     assert scripts.index("content_multimodal_settle_v84.js") < scripts.index("content_multimodal_settle_v85.js")
     assert scripts.index("content_multimodal_settle_v85.js") < scripts.index("content_multimodal_v68.js")

@@ -190,12 +190,12 @@ def test_release_contract_is_v02246_and_worker_bundle_0818() -> None:
     marker = read("chrome_extension/content_bundle_marker_v48.js")
     preflight = read("chrome_extension/background_runtime_preflight_v48.js")
     contract = read("chrome_extension/content_runtime_contract_v48.js")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.53"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.23"' in runtime
-    assert '"version": "0.8.23"' in manifest
-    assert 'bundle: "0.8.23"' in marker
-    assert 'REQUIRED_BUNDLE = "0.8.23"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.23"' in contract
+    assert 'SERVER_RUNTIME_VERSION = "0.22.54"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.24"' in runtime
+    assert '"version": "0.8.24"' in manifest
+    assert 'bundle: "0.8.24"' in marker
+    assert 'REQUIRED_BUNDLE = "0.8.24"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.24"' in contract
     assert '"worker_key_capacity_fifo_queue": True' in runtime
     assert '"active_rate_limit_terminal_error": True' in runtime
     assert '"routed_dispatch_terminal_error": True' in runtime

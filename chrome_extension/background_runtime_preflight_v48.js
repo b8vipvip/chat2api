@@ -2,10 +2,11 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__";
   if (globalThis[KEY]) return;
 
-  // Worker bundle 0.8.23 keeps the v71 request/response epoch while requiring
+  // Worker bundle 0.8.24 keeps the v71 request/response epoch while requiring
   // the v78 MAIN-world upload bridge plus the v84 readiness plus the v85 conservative safe-submit gate.
-  const REQUIRED_BUNDLE = "0.8.23";
+  const REQUIRED_BUNDLE = "0.8.24";
   const REQUIRED_REVISION = 71;
+  const CONTRACT_TIMEOUT_MS = 1200;
   const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"];
   const OVERLAY_FILES = [
     "content_rate_limit_guard_v52.js",
@@ -30,10 +31,13 @@
   const inflight = new Map();
   const state = {
     version: 71,
+    revision: 86,
     required_bundle: REQUIRED_BUNDLE,
     required_revision: REQUIRED_REVISION,
     multimodal_revision: 85,
     checks: 0,
+    fast_path_hits: 0,
+    contract_timeouts: 0,
     hot_heals: 0,
     reloads: 0,
     reload_timeouts: 0,
@@ -50,11 +54,20 @@
     await chrome.scripting.executeScript({ target: {tabId}, files: OVERLAY_FILES });
   }
 
+  async function sendMessageBounded(tabId, message, timeoutMs = CONTRACT_TIMEOUT_MS) {
+    let timedOut = false;
+    const timeout = sleep(timeoutMs).then(() => {
+      timedOut = true;
+      return null;
+    });
+    const request = chrome.tabs.sendMessage(tabId, message).catch(() => null);
+    const result = await Promise.race([request, timeout]);
+    if (timedOut) state.contract_timeouts += 1;
+    return result && typeof result === "object" ? result : null;
+  }
+
   async function contract(tabId) {
-    try {
-      const result = await chrome.tabs.sendMessage(tabId, {type: "chat2api.runtime.contract.v71"});
-      return result && typeof result === "object" ? result : null;
-    } catch (_) { return null; }
+    return sendMessageBounded(tabId, {type: "chat2api.runtime.contract.v71"});
   }
 
   function current(result) {
@@ -104,13 +117,51 @@
     return { ready: false, complete: false, result: last };
   }
 
+  async function recordLast(last) {
+    state.last = last;
+    await chrome.storage.local.set({chat2apiRuntimePreflightV71: state.last}).catch(() => {});
+  }
+
+  async function toolIsolationPreflight(tabId) {
+    return sendMessageBounded(tabId, {type: "chat2api.tool-isolation.preflight"});
+  }
+
   async function preflight(tabId) {
     state.checks += 1;
     const started = Date.now();
-    let result = await heal(tabId);
+
+    // v85/v0.22.53 always ran the full repair path here. A prewarmed tab had
+    // already passed ensureContent before entering the pool, yet every request
+    // repeated baseEnsureContent + overlay injection and could then enter a
+    // 20-second reload/repair loop. The API had already ACKed dispatch, so this
+    // appeared as a 40+ second pause before the prompt was pasted. v86 first asks
+    // the existing content runtime for its contract and returns immediately when
+    // it is already current. The probe itself is bounded so an unresponsive tab
+    // cannot recreate the same long pre-prompt stall.
+    let result = await contract(tabId);
+    if (current(result)) {
+      state.fast_path_hits += 1;
+      const toolPreflight = await toolIsolationPreflight(tabId);
+      await recordLast({
+        tab_id: tabId,
+        ok: true,
+        mode: "current-fast-path-v86",
+        reloaded: false,
+        hot_healed: false,
+        marker: result.marker,
+        modules: result.modules,
+        contract_revision: result.contract_revision,
+        multimodal_revision: result.multimodal_revision,
+        tool_preflight: toolPreflight,
+        elapsed_ms: Date.now() - started,
+        at_ms: Date.now(),
+      });
+      return true;
+    }
+
+    result = await heal(tabId);
     let reloaded = false;
     const hotHealed = current(result);
-
     if (hotHealed) state.hot_heals += 1;
 
     if (!hotHealed) {
@@ -130,16 +181,15 @@
 
     if (!current(result)) {
       state.failures += 1;
-      state.last = {tab_id: tabId, ok: false, reloaded, hot_healed: hotHealed, result, elapsed_ms: Date.now() - started, at_ms: Date.now()};
-      await chrome.storage.local.set({chat2apiRuntimePreflightV71: state.last}).catch(() => {});
+      await recordLast({tab_id: tabId, ok: false, mode: "repair-failed-v86", reloaded, hot_healed: hotHealed, result, elapsed_ms: Date.now() - started, at_ms: Date.now()});
       throw new Error(`ChatGPT tab Worker runtime is stale or incomplete; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85`);
     }
 
-    let toolPreflight = null;
-    try { toolPreflight = await chrome.tabs.sendMessage(tabId, {type: "chat2api.tool-isolation.preflight"}); } catch (_) {}
-    state.last = {
+    const toolPreflight = await toolIsolationPreflight(tabId);
+    await recordLast({
       tab_id: tabId,
       ok: true,
+      mode: reloaded ? "reload-repair-v86" : "hot-repair-v86",
       reloaded,
       hot_healed: hotHealed,
       marker: result.marker,
@@ -149,8 +199,7 @@
       tool_preflight: toolPreflight,
       elapsed_ms: Date.now() - started,
       at_ms: Date.now(),
-    };
-    await chrome.storage.local.set({chat2apiRuntimePreflightV71: state.last}).catch(() => {});
+    });
     return true;
   }
 

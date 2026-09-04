@@ -3,7 +3,7 @@
   if (window[KEY]) return;
 
   const legacy = window.__CHAT2API_PROMPT_CONFIG_V72__;
-  const state = { revision: 75, legacy };
+  const state = { revision: 86, legacy };
   window[KEY] = state;
   const $ = id => document.getElementById(id);
   const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
@@ -185,5 +185,108 @@
     if (previewCardTitle) previewCardTitle.textContent = "预览";
   }
 
+  function requestIdFromRow(tr) {
+    if (!tr) return "";
+    const candidates = [
+      tr.dataset?.requestId,
+      tr.getAttribute("data-request-id"),
+      tr.getAttribute("onclick"),
+      tr.getAttribute("data-id"),
+      tr.id,
+    ];
+    for (const value of candidates) {
+      const match = String(value || "").match(/\breq_[A-Za-z0-9]+\b/);
+      if (match) return match[0];
+    }
+    for (const node of tr.querySelectorAll("button,a,[data-request-id],[onclick],[href]")) {
+      for (const attr of ["data-request-id", "onclick", "href", "value", "title", "aria-label"]) {
+        const value = node.getAttribute?.(attr) || "";
+        const match = String(value).match(/\breq_[A-Za-z0-9]+\b/);
+        if (match) return match[0];
+      }
+    }
+    const htmlMatch = tr.innerHTML.match(/\breq_[A-Za-z0-9]+\b/);
+    return htmlMatch?.[0] || "";
+  }
+
+  function promptColumnIndex() {
+    const header = $("rqBody")?.closest("table")?.querySelector("thead tr");
+    if (!header) return -1;
+    let prompt = header.querySelector('[data-prompt-column="1"]');
+    if (!prompt) {
+      prompt = [...header.children].find(cell => String(cell.textContent || "").trim() === "提示词") || null;
+    }
+    if (!prompt) {
+      prompt = document.createElement("th");
+      prompt.dataset.promptColumn = "1";
+      prompt.textContent = "提示词";
+      const log = [...header.children].find(cell => /日志/.test(String(cell.textContent || ""))) || null;
+      header.insertBefore(prompt, log);
+    }
+    prompt.dataset.promptColumn = "1";
+    return [...header.children].indexOf(prompt);
+  }
+
+  function ensurePromptCell(tr, index) {
+    let cell = tr.querySelector('[data-prompt-cell="1"]');
+    if (cell) return cell;
+    if (tr.children.length === 1 && Number(tr.children[0]?.colSpan || 1) > 1) {
+      tr.children[0].colSpan = Math.max(Number(tr.children[0].colSpan || 1), index + 1);
+      return null;
+    }
+    cell = document.createElement("td");
+    cell.dataset.promptCell = "1";
+    const logCell = [...tr.children].find(td => /日志/.test(String(td.textContent || ""))) || null;
+    const reference = tr.children[index] || logCell || null;
+    tr.insertBefore(cell, reference);
+    return cell;
+  }
+
+  function repairPromptCells() {
+    const body = $("rqBody");
+    if (!body || typeof window.showRequestPromptV72 !== "function") return;
+    const index = promptColumnIndex();
+    if (index < 0) return;
+    for (const tr of body.querySelectorAll(":scope > tr")) {
+      const requestId = requestIdFromRow(tr);
+      const cell = ensurePromptCell(tr, index);
+      if (!cell) continue;
+      if (!requestId) {
+        if (!cell.textContent?.trim()) cell.textContent = "-";
+        continue;
+      }
+      const existing = cell.querySelector("button[data-request-id]");
+      if (existing?.dataset?.requestId === requestId) continue;
+      cell.textContent = "";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "secondary";
+      button.textContent = "查看提示词";
+      button.dataset.requestId = requestId;
+      button.onclick = event => {
+        event.preventDefault();
+        event.stopPropagation();
+        window.showRequestPromptV72(requestId);
+      };
+      cell.appendChild(button);
+    }
+  }
+
+  function observeRequestRows() {
+    const body = $("rqBody");
+    if (!body || body.dataset.promptRepairV86 === "1") return;
+    body.dataset.promptRepairV86 = "1";
+    let queued = false;
+    const schedule = () => {
+      if (queued) return;
+      queued = true;
+      queueMicrotask(() => { queued = false; repairPromptCells(); });
+    };
+    new MutationObserver(schedule).observe(body, { childList: true, subtree: true, attributes: true });
+    schedule();
+  }
+
   install();
+  observeRequestRows();
+  setTimeout(observeRequestRows, 0);
 })();

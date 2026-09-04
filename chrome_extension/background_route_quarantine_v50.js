@@ -5,17 +5,19 @@
   const WORKERS_KEY = "__CHAT2API_CONVERSATION_WORKERS_V25__";
   const ROUTER_KEY = "__CHAT2API_CONVERSATION_ROUTING_V1__";
   const STORAGE_KEY = "chat2apiConversationRoutesV1";
-  const COMPLETION_SETTLE_MS = 2500;
+  const COMPLETION_SETTLE_MS = 1200;
   const ERROR_RECYCLE_DELAY_MS = 100;
   const POLL_MS = 100;
 
   const state = {
     version: 50,
+    revision: 86,
     pending: new Map(),
     quarantined: new Map(),
     captured: 0,
     recycled: 0,
     settled: 0,
+    preserved_after_completion: 0,
     forced_after_completion: 0,
   };
   globalThis[KEY] = state;
@@ -48,9 +50,10 @@
       sentinel: `quarantine:${requestId}`,
     };
 
-    // Mark the route busy synchronously before the normal terminal listener
-    // releases its per-request reservation. conversation_workers_v25 treats an
-    // inflight id present in router.activeRequests as authoritative busy state.
+    // Keep a very short terminal handoff sentinel so a second request cannot
+    // enter the tab while content_request_v6 is still running its finally block.
+    // v86 deliberately never converts a successful completion into a route
+    // recycle merely because that finally block is slow.
     route.inflight_request_id = snapshot.sentinel;
     router.activeRequests.set(snapshot.sentinel, {
       key: routeKey,
@@ -131,6 +134,7 @@
         route_key: snapshot.routeKey,
         action: "recycled",
         reason: String(reason || "terminal-error"),
+        revision: 86,
         at_ms: Date.now(),
       },
     }).catch(() => {});
@@ -146,16 +150,39 @@
         clearSentinel(snapshot);
         await persistRoutes();
         state.settled += 1;
+        await chrome.storage.local.set({
+          chat2apiRouteQuarantineV50: {
+            request_id: snapshot.requestId,
+            route_key: snapshot.routeKey,
+            action: "settled-preserved",
+            revision: 86,
+            at_ms: Date.now(),
+          },
+        }).catch(() => {});
         return;
       }
       await sleep(POLL_MS);
     }
 
-    // A successful outward terminal event is not enough to make a browser tab
-    // reusable. If its content controller still owns the old request, discard
-    // that route instead of allowing the next API call to enter a poisoned tab.
-    state.forced_after_completion += 1;
-    await resetFailedRoute(snapshot, "completed-controller-did-not-settle-v50");
+    // v50 used to close the entire routed window here after 2.5 seconds. That
+    // turned a successful API response into an affinity reset whenever the
+    // content finally block lagged. Successful terminals must be authoritative:
+    // release the sentinel and keep the route for its normal 5-minute idle
+    // deadline. content_request_lifecycle_v50 remains the final guard against a
+    // genuinely overlapping request on the same tab.
+    clearSentinel(snapshot);
+    await persistRoutes();
+    state.preserved_after_completion += 1;
+    await chrome.storage.local.set({
+      chat2apiRouteQuarantineV50: {
+        request_id: snapshot.requestId,
+        route_key: snapshot.routeKey,
+        action: "completion-cleanup-lag-preserved",
+        active_request_id: String(last?.active_request_id || ""),
+        revision: 86,
+        at_ms: Date.now(),
+      },
+    }).catch(() => {});
   }
 
   chrome.runtime.onMessage.addListener(message => {
@@ -176,7 +203,14 @@
       const snapshot = state.pending.get(requestId);
       if (!snapshot) return;
       if (event.type === "chat.completed" || event.type === "image.completed") {
-        settleCompletedRoute(snapshot).catch(() => resetFailedRoute(snapshot, "completion-settle-error-v50"));
+        settleCompletedRoute(snapshot).catch(async () => {
+          // A bookkeeping failure after a successful answer is not a reason to
+          // destroy the conversation. Preserve it and let the router's normal
+          // idle/budget policy decide when to rotate.
+          clearSentinel(snapshot);
+          await persistRoutes();
+          state.preserved_after_completion += 1;
+        });
       } else {
         resetFailedRoute(snapshot, `${event.type}-quarantine-v50`).catch(() => {});
       }
@@ -187,5 +221,5 @@
   state.controllerStatus = controllerStatus;
   state.resetFailedRoute = resetFailedRoute;
   state.settleCompletedRoute = settleCompletedRoute;
-  state.constants = Object.freeze({ completion_settle_ms: COMPLETION_SETTLE_MS, error_recycle_delay_ms: ERROR_RECYCLE_DELAY_MS });
+  state.constants = Object.freeze({ completion_settle_ms: COMPLETION_SETTLE_MS, error_recycle_delay_ms: ERROR_RECYCLE_DELAY_MS, success_recycle: false });
 })();
