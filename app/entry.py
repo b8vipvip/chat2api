@@ -53,6 +53,7 @@ from .request_stall_patch import install_request_stall_patch
 from .request_recovery_patch import install_request_recovery_patch
 from .worker_transport_recovery_patch import install_worker_transport_recovery_patch
 from .request_device_identity_patch import install_request_device_identity_patch
+from .window_manager_v88_patch import install_window_manager_v88_patch
 from .playground_lifecycle_patch import install_playground_lifecycle_patch
 from .playground_multimodal_defaults_patch import install_playground_multimodal_defaults_patch
 from .playground_random_prompt_patch import install_playground_random_prompt_patch
@@ -193,6 +194,10 @@ install_linux_worker_console_polling_patch(app)
 # Request history resolves ext_* transport identities to the administrator's
 # human device-code name and injects the canonical Worker/设备码 terminology layer.
 install_request_device_identity_patch(app)
+# v88 exposes the browser-owned FIFO window registry and authenticated screenshot
+# command after device-name decoration, so Window Management can show stable
+# device names without adding another identity authority.
+install_window_manager_v88_patch(app)
 
 # Docker deployments cannot safely update their own host by exposing the Docker
 # socket to the web container. The server update patch writes a bounded request
