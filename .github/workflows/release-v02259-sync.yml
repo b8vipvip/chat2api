@@ -1,0 +1,66 @@
+name: Release v0.22.59 assertion sync
+
+on:
+  push:
+    branches:
+      - release/v0.22.59-admin-freeze-v90
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: ${{ !contains(github.event.head_commit.message, '[release-v02259-sync]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: release/v0.22.59-admin-freeze-v90
+          fetch-depth: 0
+      - name: Align runtime and current release assertions
+        shell: python
+        run: |
+          from pathlib import Path
+
+          runtime = Path("app/runtime_contract.py")
+          text = runtime.read_text(encoding="utf-8")
+          old = text
+          text = text.replace('SERVER_RUNTIME_VERSION = "0.22.58"', 'SERVER_RUNTIME_VERSION = "0.22.59"')
+          text = text.replace(
+              'admin-navigation-freeze-v89-physical-window-live-truth-v89-release-v02258"',
+              'admin-navigation-freeze-v89-physical-window-live-truth-v89-admin-navigation-bounded-v90-release-v02259"',
+          )
+          feature_anchor = '            "admin_navigation_freeze_v89": True,\n'
+          if '"admin_navigation_bounded_v90"' not in text:
+              text = text.replace(feature_anchor, feature_anchor + '            "admin_navigation_bounded_v90": True,\n')
+          if text == old:
+              raise SystemExit("runtime contract release markers were not found")
+          runtime.write_text(text, encoding="utf-8")
+
+          for filename in ("README.md", "docs/VERSIONING.md"):
+              path = Path(filename)
+              current = path.read_text(encoding="utf-8")
+              updated = current.replace("0.22.58", "0.22.59")
+              if updated == current:
+                  raise SystemExit(f"{filename}: current runtime marker not found")
+              path.write_text(updated, encoding="utf-8")
+
+          changed_tests = 0
+          for path in sorted(Path("tests").rglob("*.py")):
+              current = path.read_text(encoding="utf-8")
+              updated = current.replace("0.22.58", "0.22.59")
+              if updated != current:
+                  path.write_text(updated, encoding="utf-8")
+                  changed_tests += 1
+          print(f"updated {changed_tests} current-release test files")
+      - name: Remove one-shot workflow and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/release-v02259-sync.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/runtime_contract.py README.md docs/VERSIONING.md tests .github/workflows/release-v02259-sync.yml
+          git commit -m 'release: align v0.22.59 runtime assertions [release-v02259-sync]'
+          git push origin HEAD:release/v0.22.59-admin-freeze-v90
