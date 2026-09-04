@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_CONTENT_RUNTIME_CONTRACT_V48__";
   if (globalThis[KEY]) return;
 
-  const REQUIRED_BUNDLE = "0.8.27";
+  const REQUIRED_BUNDLE = "0.8.28";
   const snapshot = () => {
     const marker = globalThis.__CHAT2API_CONTENT_BUNDLE_MARKER_V48__ || null;
     const responseOwner = globalThis.__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__ || null;
