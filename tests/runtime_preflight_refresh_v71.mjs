@@ -66,10 +66,11 @@ async function runScenario({ hotHealWorks }) {
     Promise,
     Date,
     setTimeout(callback) {
-      callback();
-      return 1;
+      return setImmediate(callback);
     },
-    clearTimeout() {},
+    clearTimeout(handle) {
+      clearImmediate(handle);
+    },
     ensureContent: async () => {
       baseEnsures += 1;
       return true;
