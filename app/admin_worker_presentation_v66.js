@@ -3,6 +3,7 @@
   if (globalThis[KEY]) return;
 
   const VERSION = 66;
+  const WINDOW_TRUTH_REVISION = 89;
   let refreshTask = null;
 
   function esc(value) {
@@ -31,27 +32,79 @@
     return [...(parent?.children || [])].find(node => String(node.dataset?.chat2apiColumnKey || "") === key) || null;
   }
 
-  function occupancy(row) {
+  function liveWindowTruth(payload) {
+    const authoritative = Number(payload?.truth_revision || 0) >= WINDOW_TRUTH_REVISION;
+    const activeCounts = new Map();
+    for (const row of Array.isArray(payload?.active) ? payload.active : []) {
+      const clientId = String(row?.client_id || "");
+      if (!clientId) continue;
+      activeCounts.set(clientId, (activeCounts.get(clientId) || 0) + 1);
+    }
+    const result = new Map();
+    for (const worker of Array.isArray(payload?.workers) ? payload.workers : []) {
+      const clientId = String(worker?.client_id || "");
+      if (!clientId) continue;
+      result.set(clientId, {
+        authoritative,
+        liveVerified: authoritative && worker?.live_verified === true,
+        status: String(worker?.truth_status || (authoritative ? "unverified" : "legacy")),
+        physical: authoritative && worker?.live_verified === true ? (activeCounts.get(clientId) || 0) : null,
+        cachedSuppressed: Math.max(0, Number(worker?.cached_active_count || 0)),
+      });
+    }
+    return { authoritative, byClient: result };
+  }
+
+  function truthLabel(info) {
+    if (!info?.authoritative || info?.liveVerified) return "";
+    if (info.status === "upgrade-required") return "Worker 版本过旧，需升级后实时核验窗口";
+    if (info.status === "offline") return "Worker 离线，无法实时核验窗口";
+    if (info.status === "refresh-timeout") return "窗口实时核验超时";
+    return "窗口尚未完成实时核验";
+  }
+
+  function occupancy(row, info = null) {
     const capacity = row?.capacity && typeof row.capacity === "object" ? row.capacity : {};
     const metadata = row?.metadata && typeof row.metadata === "object" ? row.metadata : {};
     const usedRaw = capacity.used_units ?? row?.active_api_calls ?? 0;
     const limitRaw = capacity.limit_units ?? row?.max_concurrency ?? row?.configured_max_concurrency ?? 0;
-    const liveWindowCandidates = [metadata.reserve_window_all_chatgpt_windows, metadata.reserve_window_total];
-    const physicalRaw = liveWindowCandidates.find(value => value !== null && value !== undefined && Number.isFinite(Number(value)));
     const queueRaw = capacity.queued_requests ?? 0;
     const used = Number.isFinite(Number(usedRaw)) ? Math.max(0, Number(usedRaw)) : 0;
     const limit = Number.isFinite(Number(limitRaw)) ? Math.max(0, Number(limitRaw)) : 0;
-    const physicalKnown = physicalRaw !== undefined;
-    const physical = physicalKnown ? Math.max(0, Number(physicalRaw)) : 0;
     const queued = Number.isFinite(Number(queueRaw)) ? Math.max(0, Number(queueRaw)) : 0;
     const cooling = capacity.rate_limit_cooldown_active === true;
     const remaining = Number(capacity.rate_limit_cooldown_remaining_seconds || 0);
-    const physicalText = physicalKnown ? String(physical) : "-";
+
+    let physicalKnown = false;
+    let physical = 0;
+    let source = "";
+    if (info?.authoritative) {
+      physicalKnown = info.liveVerified === true && Number.isFinite(Number(info.physical));
+      physical = physicalKnown ? Math.max(0, Number(info.physical)) : 0;
+      source = physicalKnown ? "实时物理核验" : truthLabel(info);
+    } else {
+      // Backward compatibility only. On v0.22.58+ the server provides v89
+      // physical truth; older servers can still show their last Worker telemetry,
+      // but the tooltip labels it as legacy so it is never confused with v89.
+      const candidates = [metadata.reserve_window_all_chatgpt_windows, metadata.reserve_window_total];
+      const physicalRaw = candidates.find(value => value !== null && value !== undefined && Number.isFinite(Number(value)));
+      physicalKnown = physicalRaw !== undefined;
+      physical = physicalKnown ? Math.max(0, Number(physicalRaw)) : 0;
+      source = physicalKnown ? "旧版遥测（未实时核验）" : "未核验";
+    }
+
+    const physicalText = physicalKnown ? String(physical) : "?";
+    const physicalStyle = physicalKnown
+      ? "color:#22c55e;font-weight:700"
+      : "color:#f59e0b;font-weight:700";
     const queueText = queued > 0 ? ` · 排队 ${queued}` : "";
+    const suppressed = Number(info?.cachedSuppressed || 0) > 0
+      ? `；已忽略 ${Math.max(0, Number(info.cachedSuppressed))} 条未核验历史窗口记录`
+      : "";
     return {
       text: `${used} / ${physicalText}${queueText}`,
-      html: `${used} / <span data-chat2api-live-window-count="1" style="color:#22c55e;font-weight:700">${physicalText}</span>${queueText}`,
-      title: `当前占用 ${used} / ${physicalText}；当前实际 ChatGPT 浏览器窗口 ${physicalText}；并发上限 ${limit || "-"}${queued > 0 ? `；排队 ${queued}` : ""}${cooling ? `；额度冷却 ${Math.max(0, Math.ceil(remaining))} 秒` : ""}`,
+      html: `${used} / <span data-chat2api-live-window-count="1" style="${physicalStyle}">${physicalText}</span>${queueText}`,
+      title: `正在执行请求 ${used}；实际 ChatGPT 窗口 ${physicalText}（${source || "未核验"}）；并发上限 ${limit || "-"}${queued > 0 ? `；排队 ${queued}` : ""}${cooling ? `；额度冷却 ${Math.max(0, Math.ceil(remaining))} 秒` : ""}${suppressed}`,
       cls: used > 0 ? "warnText" : "muted",
     };
   }
@@ -66,19 +119,22 @@
       th.textContent = "设备名称";
       header.appendChild(th);
     }
-    if (!keyedChild(header, "occupancy")) {
-      const th = document.createElement("th");
-      th.dataset.chat2apiColumnKey = "occupancy";
-      th.dataset.chat2apiPresentationV66 = "1";
-      th.textContent = "当前占用";
-      header.appendChild(th);
+    let occupancyHeader = keyedChild(header, "occupancy");
+    if (!occupancyHeader) {
+      occupancyHeader = document.createElement("th");
+      occupancyHeader.dataset.chat2apiColumnKey = "occupancy";
+      occupancyHeader.dataset.chat2apiPresentationV66 = "1";
+      header.appendChild(occupancyHeader);
     }
+    occupancyHeader.textContent = "请求 / 实际窗口";
+    occupancyHeader.title = "正在执行的请求数 / 经 Worker 实时物理核验的 ChatGPT 窗口数；并发上限在“并发设置”列单独配置。";
   }
 
-  function applyRows(rows) {
+  function applyRows(rows, truthPayload = null) {
     const { body, header } = parts();
     if (!body || !header) return;
     ensureHeader();
+    const truth = liveWindowTruth(truthPayload);
     const byClient = new Map((Array.isArray(rows) ? rows : []).map(row => [String(row?.client_id || ""), row]));
     for (const tr of body.rows) {
       if (tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan")) {
@@ -107,7 +163,7 @@
         occupancyCell.dataset.chat2apiPresentationV66 = "1";
         tr.appendChild(occupancyCell);
       }
-      const value = occupancy(row);
+      const value = occupancy(row, truth.byClient.get(clientId) || (truth.authoritative ? { authoritative: true, liveVerified: false, status: "unverified", physical: null, cachedSuppressed: 0 } : null));
       if (occupancyCell.innerHTML !== value.html) occupancyCell.innerHTML = value.html;
       if (occupancyCell.className !== value.cls) occupancyCell.className = value.cls;
       if (occupancyCell.title !== value.title) occupancyCell.title = value.title;
@@ -142,10 +198,17 @@
     const view = document.getElementById("view-extensions");
     if (!force && view && !view.classList.contains("active")) return null;
     const task = (async () => {
-      const data = await callApi("/api/admin/extensions");
-      applyRows(data?.clients);
+      const [data, truthPayload] = await Promise.all([
+        callApi("/api/admin/extensions"),
+        callApi("/api/admin/window-manager").catch(error => {
+          console.warn("chat2api physical window truth refresh failed", error);
+          return null;
+        }),
+      ]);
+      applyRows(data?.clients, truthPayload);
       applyPairings(data?.pairing_codes);
       document.documentElement.dataset.chat2apiWorkerPresentationRevision = String(VERSION);
+      document.documentElement.dataset.chat2apiWindowTruthRevision = String(Number(truthPayload?.truth_revision || 0));
       return data;
     })().catch(error => {
       console.warn("chat2api worker presentation v66 refresh failed", error);
@@ -213,7 +276,7 @@
     setTimeout(() => refresh(true), 900);
   }
 
-  globalThis[KEY] = Object.freeze({ version: VERSION, refresh, applyRows, applyPairings });
+  globalThis[KEY] = Object.freeze({ version: VERSION, refresh, applyRows, applyPairings, liveWindowTruth });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
   else start();
 })();
