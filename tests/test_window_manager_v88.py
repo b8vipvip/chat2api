@@ -17,7 +17,9 @@ def text(path: str) -> str:
 def test_v88_is_the_final_background_window_authority() -> None:
     entry = text("chrome_extension/background_entry.js")
     assert '"background_window_manager_v88.js"' in entry
+    assert '"background_window_lifecycle_observer_v88.js"' in entry
     assert entry.index('"background_window_affinity_v87.js"') < entry.index('"background_window_manager_v88.js"')
+    assert entry.index('"background_window_manager_v88.js"') < entry.index('"background_window_lifecycle_observer_v88.js"')
     manager = text("chrome_extension/background_window_manager_v88.js")
     assert 'policy: "oldest-ready-fifo-v88"' in manager
     assert 'source: "reserve"' in manager
@@ -27,6 +29,17 @@ def test_v88_is_the_final_background_window_authority() -> None:
     assert "claimOldestReady" in manager
     assert "window_opened_at_ms" in manager
     assert "window_no" in manager
+
+
+def test_window_creation_is_registered_as_loading_before_pool_readiness() -> None:
+    source = text("chrome_extension/background_window_lifecycle_observer_v88.js")
+    assert "const baseCreate = chrome.windows.create.bind(chrome.windows)" in source
+    assert "openedAt = Date.now()" in source
+    assert 'status: "loading"' in source
+    assert 'source: "creation-observer-v88"' in source
+    assert "wm.nextWindowNo" in source
+    assert "wm.active.set(win.id, record)" in source
+    assert "wm.reconcile?.(true)" in source
 
 
 def test_success_terminal_cannot_be_downgraded_to_cancel() -> None:
@@ -69,6 +82,7 @@ def test_v88_javascript_syntax() -> None:
         return
     for filename in (
         "chrome_extension/background_window_manager_v88.js",
+        "chrome_extension/background_window_lifecycle_observer_v88.js",
         "chrome_extension/content_request_terminal_prompt_v88.js",
         "app/admin_window_manager_v88.js",
     ):
