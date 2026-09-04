@@ -17,7 +17,7 @@ def test_production_entry_imports_with_current_fastapi_starlette() -> None:
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
-    assert "0.22.60" in result.stdout
+    assert "0.22.61" in result.stdout
 
 
 def test_worker_sync_uses_lifespan_compatibility_adapter() -> None:
