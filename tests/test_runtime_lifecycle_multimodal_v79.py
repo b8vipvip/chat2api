@@ -34,13 +34,13 @@ def test_multimodal_waits_for_upload_processing_to_settle() -> None:
     assert "await delay(550)" not in multimodal
 
 
-def test_v02247_release_contract() -> None:
+def test_v02255_release_contract() -> None:
     runtime = read("app/runtime_contract.py")
     manifest = read("chrome_extension/manifest.json")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.54"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.55"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.24"' in runtime
-    assert '"version": "0.8.24"' in manifest
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.25"' in runtime
+    assert '"version": "0.8.25"' in manifest
     assert '"active_request_disable_lease_v79": True' in runtime
     assert '"multimodal_upload_settle_v79": True' in runtime
     assert '"submission_liveness_v79": True' in runtime
