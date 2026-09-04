@@ -48,8 +48,6 @@ def test_request_history_final_owner_accepts_async_telemetry_contract() -> None:
         key_id: str | None = Query(default=None),
         q: str | None = Query(default=None),
     ):
-        # This intentionally reproduces the historical crash contract: query()
-        # became async while the endpoint still unpacked it synchronously.
         result = telemetry.query(limit=limit, offset=offset, status=status_filter, model=model, key_id=key_id, q=q)
         return {**result, "summary": telemetry.summary()}
 
@@ -60,7 +58,7 @@ def test_request_history_final_owner_accepts_async_telemetry_contract() -> None:
     _install_request_route_stability(app, telemetry)
 
     request_call = route_for(app, "/api/admin/requests").dependant.call
-    assert getattr(request_call, "__chat2api_request_stability_v92__", False)
+    assert getattr(request_call, "__chat2api_request_stability_v93__", False)
     payload = asyncio.run(
         request_call(
             limit=100,
@@ -76,6 +74,7 @@ def test_request_history_final_owner_accepts_async_telemetry_contract() -> None:
     assert payload["summary"] == {"requests": 1}
 
     detail_call = route_for(app, "/api/admin/requests/{request_id}").dependant.call
+    assert getattr(detail_call, "__chat2api_request_stability_v93__", False)
     detail = asyncio.run(detail_call(request_id="req_async"))
     assert detail["request_id"] == "req_async"
 
