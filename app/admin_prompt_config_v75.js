@@ -1,14 +1,14 @@
 (() => {
   const KEY = "__CHAT2API_PROMPT_CONFIG_V75__";
-  if (window[KEY]) return;
+  if (globalThis[KEY]) return;
 
-  const legacy = window.__CHAT2API_PROMPT_CONFIG_V72__;
-  const state = { revision: 87, legacy };
-  window[KEY] = state;
+  const legacy = globalThis.__CHAT2API_PROMPT_CONFIG_V72__;
+  const state = { revision: 93, legacy };
+  globalThis[KEY] = state;
   const $ = id => document.getElementById(id);
   const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 
-  async function api(url, options = {}) {
+  async function request(url, options = {}) {
     const response = await fetch(url, {
       credentials: "same-origin",
       cache: "no-store",
@@ -48,8 +48,7 @@
 
   function recommended(field) {
     const defaults = config().recommended || {};
-    if (Object.prototype.hasOwnProperty.call(defaults, field)) return defaults[field];
-    return "";
+    return Object.prototype.hasOwnProperty.call(defaults, field) ? defaults[field] : "";
   }
 
   async function savePromptField(field, input, button) {
@@ -57,15 +56,14 @@
     const previous = button.textContent;
     button.disabled = true;
     button.textContent = "保存中…";
-    setStatus(`正在保存${field === "system_default_prefix" ? "系统默认前置提示词" : field === "prefix" ? "自定义前置提示词" : "自定义后置提示词"}…`);
     try {
-      const payload = await api("/api/admin/prompt-config", {
+      const payload = await request("/api/admin/prompt-config", {
         method: "PUT",
         body: JSON.stringify(savedPayload({ [field]: input.value })),
       });
       setConfig(payload.config || {});
       input.value = payload.config?.[field] ?? "";
-      setStatus(`保存成功 · revision=${payload.config?.revision || "-"} · 当前提示词已立即生效`);
+      setStatus(`保存成功 · revision=${payload.config?.revision || "-"} · 新请求立即生效`);
     } catch (error) {
       setStatus(`保存失败：${error.message || error}`);
     } finally {
@@ -77,22 +75,24 @@
   function addPromptActionBar(inputId, field) {
     const input = $(inputId);
     if (!input || document.querySelector(`[data-pc-actions="${field}"]`)) return;
+    input.readOnly = false;
+    input.removeAttribute("readonly");
     const bar = document.createElement("div");
     bar.className = "pc-inline-actions";
     bar.dataset.pcActions = field;
     bar.innerHTML = `<button type="button" data-pc-default="1">默认推荐</button><button type="button" data-pc-save="1">保存</button>`;
     input.insertAdjacentElement("afterend", bar);
-    bar.querySelector('[data-pc-default="1"]').onclick = () => {
+    bar.querySelector('[data-pc-default="1"]')?.addEventListener("click", () => {
       input.value = String(recommended(field) ?? "");
       input.focus();
-      setStatus("已填充系统默认推荐值；确认后点击右侧“保存”即可立即生效。");
-    };
+      setStatus("已填充系统默认推荐值；点击右侧“保存”后生效。");
+    });
     const save = bar.querySelector('[data-pc-save="1"]');
-    save.onclick = () => savePromptField(field, input, save);
+    save?.addEventListener("click", () => savePromptField(field, input, save));
   }
 
   function collectRules() {
-    return [...$("pcRules").querySelectorAll("tr")].map(tr => ({
+    return [...($("pcRules")?.querySelectorAll("tr") || [])].map(tr => ({
       enabled: tr.querySelector('[data-field="enabled"]')?.checked === true,
       name: tr.querySelector('[data-field="name"]')?.value || "",
       pattern: tr.querySelector('[data-field="pattern"]')?.value || "",
@@ -114,7 +114,7 @@
         <td><input data-field="replacement" value="${esc(rule.replacement || "")}" style="min-width:180px"></td>
         <td><input data-field="flags" value="${esc(rule.flags || "")}" style="width:64px"></td>
         <td><button type="button" data-remove="1">删除</button></td>`;
-      tr.querySelector('[data-remove="1"]').onclick = () => tr.remove();
+      tr.querySelector('[data-remove="1"]')?.addEventListener("click", () => tr.remove());
       body.appendChild(tr);
     }
   }
@@ -123,9 +123,8 @@
     const previous = button.textContent;
     button.disabled = true;
     button.textContent = "保存中…";
-    setStatus("正在保存脱敏配置并校验正则…");
     try {
-      const payload = await api("/api/admin/prompt-config", {
+      const payload = await request("/api/admin/prompt-config", {
         method: "PUT",
         body: JSON.stringify(savedPayload({
           redaction_enabled: $("pcRedactionEnabled")?.checked === true,
@@ -151,162 +150,30 @@
     bar.dataset.pcActions = "redaction";
     bar.innerHTML = `<button type="button" data-pc-default="1">默认推荐</button><button type="button" data-pc-save="1">保存</button>`;
     add.insertAdjacentElement("afterend", bar);
-    bar.querySelector('[data-pc-default="1"]').onclick = () => {
+    bar.querySelector('[data-pc-default="1"]')?.addEventListener("click", () => {
       const defaults = config().recommended || {};
       if ($("pcRedactionEnabled")) $("pcRedactionEnabled").checked = Boolean(defaults.redaction_enabled);
       if ($("pcAudit")) $("pcAudit").checked = defaults.audit_final_prompt !== false;
       renderRules(Array.isArray(defaults.rules) ? defaults.rules : []);
       setStatus("已填充脱敏配置默认推荐值；点击右侧“保存”后生效。");
-    };
+    });
     const save = bar.querySelector('[data-pc-save="1"]');
-    save.onclick = () => saveRedaction(save);
+    save?.addEventListener("click", () => saveRedaction(save));
   }
 
   function install() {
-    const system = $("pcSystemDefaultPrefix");
-    if (!system) return;
-
-    const oldHelp = system.nextElementSibling;
-    system.readOnly = false;
-    system.removeAttribute("readonly");
-    system.placeholder = "可编辑；留空表示不添加系统默认前置提示词";
-    if (oldHelp?.classList?.contains("muted")) {
-      oldHelp.textContent = "该提示词现在可编辑并持久化。修改后点击输入框右下角“保存”即可立即应用到新请求；“默认推荐”可恢复 chat2api 推荐值。";
-    }
-
+    if (!$("pcSystemDefaultPrefix")) return false;
     addPromptActionBar("pcSystemDefaultPrefix", "system_default_prefix");
     addPromptActionBar("pcPrefix", "prefix");
     addPromptActionBar("pcSuffix", "suffix");
     installRedactionActions();
-
-    const globalSave = $("pcSave");
-    if (globalSave) globalSave.remove();
-    const previewCardTitle = $("pcPreviewInput")?.closest(".card")?.querySelector("h3");
-    if (previewCardTitle) previewCardTitle.textContent = "预览";
+    return true;
   }
 
-  function requestIdFromRow(tr) {
-    if (!tr) return "";
-    const candidates = [
-      tr.dataset?.requestId,
-      tr.getAttribute("data-request-id"),
-      tr.getAttribute("onclick"),
-      tr.getAttribute("data-id"),
-      tr.id,
-    ];
-    for (const value of candidates) {
-      const match = String(value || "").match(/\breq_[A-Za-z0-9]+\b/);
-      if (match) return match[0];
-    }
-    for (const node of tr.querySelectorAll("button,a,[data-request-id],[onclick],[href]")) {
-      for (const attr of ["data-request-id", "onclick", "href", "value", "title", "aria-label"]) {
-        const value = node.getAttribute?.(attr) || "";
-        const match = String(value).match(/\breq_[A-Za-z0-9]+\b/);
-        if (match) return match[0];
-      }
-    }
-    const htmlMatch = tr.innerHTML.match(/\breq_[A-Za-z0-9]+\b/);
-    return htmlMatch?.[0] || "";
-  }
-
-  function promptColumnIndex() {
-    const header = $("rqBody")?.closest("table")?.querySelector("thead tr");
-    if (!header) return -1;
-    let prompt = header.querySelector('[data-prompt-column="1"]');
-    if (!prompt) {
-      prompt = [...header.children].find(cell => String(cell.textContent || "").trim() === "提示词") || null;
-    }
-    if (!prompt) {
-      prompt = document.createElement("th");
-      prompt.dataset.promptColumn = "1";
-      prompt.textContent = "提示词";
-      const log = [...header.children].find(cell => /日志/.test(String(cell.textContent || ""))) || null;
-      header.insertBefore(prompt, log);
-    }
-    prompt.dataset.promptColumn = "1";
-    return [...header.children].indexOf(prompt);
-  }
-
-  function ensurePromptCell(tr, index) {
-    let cell = tr.querySelector('[data-prompt-cell="1"]');
-    if (cell) return cell;
-    if (tr.children.length === 1 && Number(tr.children[0]?.colSpan || 1) > 1) {
-      tr.children[0].colSpan = Math.max(Number(tr.children[0].colSpan || 1), index + 1);
-      return null;
-    }
-    cell = document.createElement("td");
-    cell.dataset.promptCell = "1";
-    const logCell = [...tr.children].find(td => /日志/.test(String(td.textContent || ""))) || null;
-    const reference = tr.children[index] || logCell || null;
-    tr.insertBefore(cell, reference);
-    return cell;
-  }
-
-  function promptButtonStyleSource(tr) {
-    return [...tr.querySelectorAll("button,a")]
-      .find(node => /下载日志/.test(String(node.textContent || "").trim())) || null;
-  }
-
-  function applyPromptButtonStyle(button, tr) {
-    button.textContent = "提示词";
-    const source = promptButtonStyleSource(tr);
-    if (!source) {
-      button.className = "";
-      button.removeAttribute("style");
-      return;
-    }
-    button.className = source.className || "";
-    if (source.getAttribute("style")) button.setAttribute("style", source.getAttribute("style"));
-    else button.removeAttribute("style");
-  }
-
-  function repairPromptCells() {
-    const body = $("rqBody");
-    if (!body || typeof window.showRequestPromptV72 !== "function") return;
-    const index = promptColumnIndex();
-    if (index < 0) return;
-    for (const tr of body.querySelectorAll(":scope > tr")) {
-      const requestId = requestIdFromRow(tr);
-      const cell = ensurePromptCell(tr, index);
-      if (!cell) continue;
-      if (!requestId) {
-        if (!cell.textContent?.trim()) cell.textContent = "-";
-        continue;
-      }
-      const existing = cell.querySelector("button[data-request-id]");
-      if (existing?.dataset?.requestId === requestId) {
-        applyPromptButtonStyle(existing, tr);
-        continue;
-      }
-      cell.textContent = "";
-      const button = document.createElement("button");
-      button.type = "button";
-      button.dataset.requestId = requestId;
-      applyPromptButtonStyle(button, tr);
-      button.onclick = event => {
-        event.preventDefault();
-        event.stopPropagation();
-        window.showRequestPromptV72(requestId);
-      };
-      cell.appendChild(button);
-    }
-  }
-
-  function observeRequestRows() {
-    const body = $("rqBody");
-    if (!body || body.dataset.promptRepairV87 === "1") return;
-    body.dataset.promptRepairV87 = "1";
-    let queued = false;
-    const schedule = () => {
-      if (queued) return;
-      queued = true;
-      queueMicrotask(() => { queued = false; repairPromptCells(); });
-    };
-    new MutationObserver(schedule).observe(body, { childList: true, subtree: true, attributes: true });
-    schedule();
-  }
-
-  install();
-  observeRequestRows();
-  setTimeout(observeRequestRows, 0);
+  // v93 authority boundary: prompt configuration owns only its editor and modal.
+  // Request history rows are rendered once by admin_request_history_v93.js. This
+  // module must never observe or mutate #rqBody and must never replace show() or
+  // loadRequests().
+  if (!install()) setTimeout(install, 0);
+  document.addEventListener("chat2api:prompt-config-loaded", install);
 })();
