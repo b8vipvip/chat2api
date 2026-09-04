@@ -46,17 +46,17 @@ def test_release_versions_are_explicit_and_consistent() -> None:
     contract71 = read("chrome_extension/content_runtime_contract_v71.js")
     package = read("app/__init__.py")
     project = read("pyproject.toml")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.54"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.24"' in runtime
-    assert manifest["version"] == "0.8.24"
-    assert 'bundle: "0.8.24"' in marker
-    assert 'bundle: "0.8.24"' in marker71
-    assert 'REQUIRED_BUNDLE = "0.8.24"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.24"' in contract
-    assert 'REQUIRED_BUNDLE = "0.8.24"' in contract71
+    assert 'SERVER_RUNTIME_VERSION = "0.22.55"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.25"' in runtime
+    assert manifest["version"] == "0.8.25"
+    assert 'bundle: "0.8.25"' in marker
+    assert 'bundle: "0.8.25"' in marker71
+    assert 'REQUIRED_BUNDLE = "0.8.25"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.25"' in contract
+    assert 'REQUIRED_BUNDLE = "0.8.25"' in contract71
     assert '__version__ = "0.7.1"' in package
     assert 'version = "0.7.1"' in project
-    for token in ('"network_response_recovery": True','"network_response_parser_v62": True','"linux_worker_master_switch": True','"linux_worker_disable_authority": True','"worker_live_occupancy": True','"worker_device_name_column": True','"worker_pairing_rename": True','"worker_presentation_console_liveness_v65": True','"worker_presentation_console_liveness_v66": True','"worker_column_registry_v67": True','"multimodal_upload_confirmation_v64": True','"multimodal_upload_v68": True','"api_key_console_v68": True','"rich_response_v69": True','"request_response_epoch_v69": True','"worker_content_runtime_epoch_v71": True','"linux_worker_proxy_health_facets": True','"worker_key_capacity_fifo_queue": True','"active_rate_limit_terminal_error": True','"routed_dispatch_terminal_error": True','"admin_single_render_owner": True','"worker_disabled_window_guard_v86": True','"successful_route_preservation_v86": True','"runtime_preflight_fast_path_v86": True','"request_prompt_viewer_repair_v86": True'):
+    for token in ('"network_response_recovery": True','"network_response_parser_v62": True','"linux_worker_master_switch": True','"linux_worker_disable_authority": True','"worker_live_occupancy": True','"worker_device_name_column": True','"worker_pairing_rename": True','"worker_presentation_console_liveness_v65": True','"worker_presentation_console_liveness_v66": True','"worker_column_registry_v67": True','"multimodal_upload_confirmation_v64": True','"multimodal_upload_v68": True','"api_key_console_v68": True','"rich_response_v69": True','"request_response_epoch_v69": True','"worker_content_runtime_epoch_v71": True','"linux_worker_proxy_health_facets": True','"worker_key_capacity_fifo_queue": True','"active_rate_limit_terminal_error": True','"routed_dispatch_terminal_error": True','"admin_single_render_owner": True','"worker_disabled_window_guard_v86": True','"successful_route_preservation_v86": True','"runtime_preflight_fast_path_v86": True','"request_prompt_viewer_repair_v86": True','"window_affinity_v87": True','"healthy_spare_lease_refresh_v87": True','"stale_route_window_cleanup_v87": True','"runtime_preflight_budget_v87": True'):
         assert token in runtime
 
 

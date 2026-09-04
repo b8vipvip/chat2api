@@ -2,11 +2,14 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__";
   if (globalThis[KEY]) return;
 
-  // Worker bundle 0.8.24 keeps the v71 request/response epoch while requiring
+  // Worker bundle 0.8.25 keeps the v71 request/response epoch while requiring
   // the v78 MAIN-world upload bridge plus the v84 readiness plus the v85 conservative safe-submit gate.
-  const REQUIRED_BUNDLE = "0.8.24";
+  const REQUIRED_BUNDLE = "0.8.25";
   const REQUIRED_REVISION = 71;
-  const CONTRACT_TIMEOUT_MS = 1200;
+  const CONTRACT_TIMEOUT_MS = 700;
+  const HOT_HEAL_BUDGET_MS = 2400;
+  const RELOAD_BUDGET_MS = 3500;
+  const FINAL_HEAL_BUDGET_MS = 1800;
   const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"];
   const OVERLAY_FILES = [
     "content_rate_limit_guard_v52.js",
@@ -31,13 +34,14 @@
   const inflight = new Map();
   const state = {
     version: 71,
-    revision: 86,
+    revision: 87,
     required_bundle: REQUIRED_BUNDLE,
     required_revision: REQUIRED_REVISION,
     multimodal_revision: 85,
     checks: 0,
     fast_path_hits: 0,
     contract_timeouts: 0,
+    preflight_budget_exhausted: 0,
     hot_heals: 0,
     reloads: 0,
     reload_timeouts: 0,
@@ -54,6 +58,18 @@
     await chrome.scripting.executeScript({ target: {tabId}, files: OVERLAY_FILES });
   }
 
+  async function settleWithin(promise, timeoutMs, fallback = null) {
+    let timer = null;
+    try {
+      return await Promise.race([
+        Promise.resolve(promise).catch(() => fallback),
+        new Promise(resolve => { timer = setTimeout(() => resolve(fallback), Math.max(50, Number(timeoutMs || 0))); }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   async function sendMessageBounded(tabId, message, timeoutMs = CONTRACT_TIMEOUT_MS) {
     let timedOut = false;
     const timeout = sleep(timeoutMs).then(() => {
@@ -66,8 +82,8 @@
     return result && typeof result === "object" ? result : null;
   }
 
-  async function contract(tabId) {
-    return sendMessageBounded(tabId, {type: "chat2api.runtime.contract.v71"});
+  async function contract(tabId, timeoutMs = CONTRACT_TIMEOUT_MS) {
+    return sendMessageBounded(tabId, {type: "chat2api.runtime.contract.v71"}, timeoutMs);
   }
 
   function current(result) {
@@ -85,34 +101,42 @@
     );
   }
 
-  async function waitForContract(tabId, attempts = 20, delayMs = 100) {
+  async function waitForContract(tabId, timeoutMs = HOT_HEAL_BUDGET_MS, delayMs = 100) {
+    const deadline = Date.now() + Math.max(200, Number(timeoutMs || 0));
     let last = null;
-    for (let index = 0; index < attempts; index += 1) {
-      last = await contract(tabId);
+    while (Date.now() < deadline) {
+      const remaining = Math.max(100, deadline - Date.now());
+      last = await contract(tabId, Math.min(CONTRACT_TIMEOUT_MS, remaining));
       if (current(last)) return last;
-      if (index + 1 < attempts) await sleep(delayMs);
+      if (Date.now() < deadline) await sleep(Math.min(delayMs, Math.max(20, deadline - Date.now())));
     }
     return last;
   }
 
-  async function heal(tabId) {
-    try { await baseEnsureContent(tabId); } catch (_) {}
-    try { await injectOverlays(tabId); } catch (_) {}
-    return waitForContract(tabId, 24, 100);
+  async function heal(tabId, budgetMs = HOT_HEAL_BUDGET_MS) {
+    const started = Date.now();
+    const firstBudget = Math.min(700, Math.max(150, budgetMs));
+    await settleWithin(baseEnsureContent(tabId), firstBudget, null);
+    const elapsed = Date.now() - started;
+    const injectBudget = Math.min(900, Math.max(150, budgetMs - elapsed));
+    await settleWithin(injectOverlays(tabId), injectBudget, null);
+    const remaining = Math.max(200, budgetMs - (Date.now() - started));
+    return waitForContract(tabId, remaining, 80);
   }
 
-  async function waitForReloadOrContract(tabId, timeoutMs = 20000) {
+  async function waitForReloadOrContract(tabId, timeoutMs = RELOAD_BUDGET_MS) {
     const started = Date.now();
     let last = null;
     while (Date.now() - started < timeoutMs) {
-      last = await contract(tabId);
+      const remaining = Math.max(100, timeoutMs - (Date.now() - started));
+      last = await contract(tabId, Math.min(CONTRACT_TIMEOUT_MS, remaining));
       if (current(last)) return { ready: true, complete: false, result: last };
       let tab = null;
       try { tab = await chrome.tabs.get(tabId); } catch (_) { return { ready: false, complete: false, result: last }; }
       if (tab?.status === "complete" && /^https:\/\/(?:www\.)?(?:chatgpt\.com|chat\.openai\.com)\//i.test(String(tab.url || ""))) {
         return { ready: false, complete: true, result: last };
       }
-      await sleep(100);
+      await sleep(80);
     }
     return { ready: false, complete: false, result: last };
   }
@@ -130,14 +154,6 @@
     state.checks += 1;
     const started = Date.now();
 
-    // v85/v0.22.53 always ran the full repair path here. A prewarmed tab had
-    // already passed ensureContent before entering the pool, yet every request
-    // repeated baseEnsureContent + overlay injection and could then enter a
-    // 20-second reload/repair loop. The API had already ACKed dispatch, so this
-    // appeared as a 40+ second pause before the prompt was pasted. v86 first asks
-    // the existing content runtime for its contract and returns immediately when
-    // it is already current. The probe itself is bounded so an unresponsive tab
-    // cannot recreate the same long pre-prompt stall.
     let result = await contract(tabId);
     if (current(result)) {
       state.fast_path_hits += 1;
@@ -145,7 +161,7 @@
       await recordLast({
         tab_id: tabId,
         ok: true,
-        mode: "current-fast-path-v86",
+        mode: "current-fast-path-v87",
         reloaded: false,
         hot_healed: false,
         marker: result.marker,
@@ -159,6 +175,11 @@
       return true;
     }
 
+    // v86 bounded each individual contract probe, but a stale tab could still
+    // execute dozens of probes plus a 20-second reload path. The per-probe bound
+    // therefore expanded into a minute-scale request stall. v87 applies a wall-
+    // clock budget to the whole repair path so an unhealthy spare cannot hold a
+    // request for 50-120 seconds before the prompt is submitted.
     result = await heal(tabId);
     let reloaded = false;
     const hotHealed = current(result);
@@ -168,28 +189,38 @@
       state.reloads += 1;
       reloaded = true;
       try { await chrome.tabs.reload(tabId, {bypassCache: true}); } catch (_) {}
-      const reloadState = await waitForReloadOrContract(tabId, 20000);
+      const reloadState = await waitForReloadOrContract(tabId, RELOAD_BUDGET_MS);
       result = reloadState.result;
       if (!reloadState.ready) {
         if (!reloadState.complete) state.reload_timeouts += 1;
-        // A ChatGPT document can already be usable while chrome.tabs still
-        // reports the navigation as loading. Re-establish the content epoch
-        // and trust the runtime contract instead of tab.status alone.
-        result = await heal(tabId);
+        result = await heal(tabId, FINAL_HEAL_BUDGET_MS);
       }
     }
 
     if (!current(result)) {
       state.failures += 1;
-      await recordLast({tab_id: tabId, ok: false, mode: "repair-failed-v86", reloaded, hot_healed: hotHealed, result, elapsed_ms: Date.now() - started, at_ms: Date.now()});
-      throw new Error(`ChatGPT tab Worker runtime is stale or incomplete; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85`);
+      state.preflight_budget_exhausted += 1;
+      await recordLast({
+        tab_id: tabId,
+        ok: false,
+        mode: "repair-budget-exhausted-v87",
+        reloaded,
+        hot_healed: hotHealed,
+        result,
+        elapsed_ms: Date.now() - started,
+        budget_ms: CONTRACT_TIMEOUT_MS + HOT_HEAL_BUDGET_MS + RELOAD_BUDGET_MS + FINAL_HEAL_BUDGET_MS,
+        at_ms: Date.now(),
+      });
+      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the v87 preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85`);
+      error.code = "chatgpt_runtime_preflight_budget";
+      throw error;
     }
 
     const toolPreflight = await toolIsolationPreflight(tabId);
     await recordLast({
       tab_id: tabId,
       ok: true,
-      mode: reloaded ? "reload-repair-v86" : "hot-repair-v86",
+      mode: reloaded ? "reload-repair-v87" : "hot-repair-v87",
       reloaded,
       hot_healed: hotHealed,
       marker: result.marker,

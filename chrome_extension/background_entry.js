@@ -29,6 +29,7 @@ importScripts(
   "background_logging.js",
   "model_affinity_v23.js",
   "model_contract_v25.js",
+  "background_standby_storage_lease_v87.js",
   "conversation_routing.js",
   "conversation_warm_pool_v2.js",
   "background_external_warm_v28.js",
@@ -48,4 +49,12 @@ importScripts(
   "background_capacity_control_v36.js",
   "background_capacity_capability_v37.js",
   "background_worker_master_switch_v61.js",
+  "background_window_affinity_v87.js",
+  "background_orphan_route_cleanup_v87.js",
 );
+
+// Refresh the lease of already healthy standby windows before the historical
+// warm/reserve reconciliation timers get a chance to retire them purely because
+// their readiness timestamp aged out. Broken/missing windows still fail the
+// health probe and are replaced by the normal pool reconcilers.
+globalThis.__CHAT2API_WINDOW_AFFINITY_V87__?.refreshHealthySpareLeases?.().catch?.(() => {});
