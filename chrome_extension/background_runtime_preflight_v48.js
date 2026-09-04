@@ -2,9 +2,9 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__";
   if (globalThis[KEY]) return;
 
-  // Worker bundle 0.8.25 keeps the v71 request/response epoch while requiring
-  // the v78 MAIN-world upload bridge plus the v84 readiness plus the v85 conservative safe-submit gate.
-  const REQUIRED_BUNDLE = "0.8.25";
+  // Worker bundle 0.8.26 keeps the v71 request/response epoch while requiring
+  // the v78 MAIN-world upload bridge, v85 safe-submit gate and v88 terminal/prompt guard.
+  const REQUIRED_BUNDLE = "0.8.26";
   const REQUIRED_REVISION = 71;
   const CONTRACT_TIMEOUT_MS = 700;
   const HOT_HEAL_BUDGET_MS = 2400;
@@ -24,6 +24,7 @@
     "content_request_v6.js",
     "content_response_stream_recovery_v69.js",
     "content_network_stream_recovery_v55.js",
+    "content_request_terminal_prompt_v88.js",
     "content_response_semantic_recovery_v51.js",
     "content_transient_retry_v50.js",
     "content_generation_liveness_v49.js",
@@ -34,10 +35,11 @@
   const inflight = new Map();
   const state = {
     version: 71,
-    revision: 87,
+    revision: 88,
     required_bundle: REQUIRED_BUNDLE,
     required_revision: REQUIRED_REVISION,
     multimodal_revision: 85,
+    terminal_prompt_revision: 88,
     checks: 0,
     fast_path_hits: 0,
     contract_timeouts: 0,
@@ -97,7 +99,8 @@
       result?.modules?.multimodal_v78 &&
       result?.modules?.multimodal_v84 &&
       result?.modules?.multimodal_v85 &&
-      result?.modules?.multimodal_main_v78
+      result?.modules?.multimodal_main_v78 &&
+      result?.modules?.terminal_prompt_v88
     );
   }
 
@@ -161,13 +164,14 @@
       await recordLast({
         tab_id: tabId,
         ok: true,
-        mode: "current-fast-path-v87",
+        mode: "current-fast-path-v88",
         reloaded: false,
         hot_healed: false,
         marker: result.marker,
         modules: result.modules,
         contract_revision: result.contract_revision,
         multimodal_revision: result.multimodal_revision,
+        terminal_prompt_revision: 88,
         tool_preflight: toolPreflight,
         elapsed_ms: Date.now() - started,
         at_ms: Date.now(),
@@ -175,11 +179,9 @@
       return true;
     }
 
-    // v86 bounded each individual contract probe, but a stale tab could still
-    // execute dozens of probes plus a 20-second reload path. The per-probe bound
-    // therefore expanded into a minute-scale request stall. v87 applies a wall-
-    // clock budget to the whole repair path so an unhealthy spare cannot hold a
-    // request for 50-120 seconds before the prompt is submitted.
+    // The whole recovery path remains wall-clock bounded. Bundle 0.8.26 also
+    // requires the v88 terminal/prompt guard, so repaired tabs cannot silently
+    // lose successful-terminal protection or the long-prompt fast insert path.
     result = await heal(tabId);
     let reloaded = false;
     const hotHealed = current(result);
@@ -203,7 +205,7 @@
       await recordLast({
         tab_id: tabId,
         ok: false,
-        mode: "repair-budget-exhausted-v87",
+        mode: "repair-budget-exhausted-v88",
         reloaded,
         hot_healed: hotHealed,
         result,
@@ -211,7 +213,7 @@
         budget_ms: CONTRACT_TIMEOUT_MS + HOT_HEAL_BUDGET_MS + RELOAD_BUDGET_MS + FINAL_HEAL_BUDGET_MS,
         at_ms: Date.now(),
       });
-      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the v87 preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85`);
+      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the v88 preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85 terminal/prompt revision 88`);
       error.code = "chatgpt_runtime_preflight_budget";
       throw error;
     }
@@ -220,13 +222,14 @@
     await recordLast({
       tab_id: tabId,
       ok: true,
-      mode: reloaded ? "reload-repair-v87" : "hot-repair-v87",
+      mode: reloaded ? "reload-repair-v88" : "hot-repair-v88",
       reloaded,
       hot_healed: hotHealed,
       marker: result.marker,
       modules: result.modules,
       contract_revision: result.contract_revision,
       multimodal_revision: result.multimodal_revision,
+      terminal_prompt_revision: 88,
       tool_preflight: toolPreflight,
       elapsed_ms: Date.now() - started,
       at_ms: Date.now(),
