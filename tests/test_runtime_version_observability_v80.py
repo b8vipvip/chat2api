@@ -18,7 +18,7 @@ def test_historical_v213_admin_patch_no_longer_overwrites_runtime_identity() -> 
 def test_v02255_runtime_contract_owns_current_identity() -> None:
     runtime = read("app/runtime_contract.py")
     manifest = read("chrome_extension/manifest.json")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.56"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.57"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.26"' in runtime
     assert '"version": "0.8.26"' in manifest
