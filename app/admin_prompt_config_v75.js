@@ -3,7 +3,7 @@
   if (window[KEY]) return;
 
   const legacy = window.__CHAT2API_PROMPT_CONFIG_V72__;
-  const state = { revision: 86, legacy };
+  const state = { revision: 87, legacy };
   window[KEY] = state;
   const $ = id => document.getElementById(id);
   const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
@@ -242,6 +242,24 @@
     return cell;
   }
 
+  function promptButtonStyleSource(tr) {
+    return [...tr.querySelectorAll("button,a")]
+      .find(node => /下载日志/.test(String(node.textContent || "").trim())) || null;
+  }
+
+  function applyPromptButtonStyle(button, tr) {
+    button.textContent = "提示词";
+    const source = promptButtonStyleSource(tr);
+    if (!source) {
+      button.className = "";
+      button.removeAttribute("style");
+      return;
+    }
+    button.className = source.className || "";
+    if (source.getAttribute("style")) button.setAttribute("style", source.getAttribute("style"));
+    else button.removeAttribute("style");
+  }
+
   function repairPromptCells() {
     const body = $("rqBody");
     if (!body || typeof window.showRequestPromptV72 !== "function") return;
@@ -256,13 +274,15 @@
         continue;
       }
       const existing = cell.querySelector("button[data-request-id]");
-      if (existing?.dataset?.requestId === requestId) continue;
+      if (existing?.dataset?.requestId === requestId) {
+        applyPromptButtonStyle(existing, tr);
+        continue;
+      }
       cell.textContent = "";
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "secondary";
-      button.textContent = "查看提示词";
       button.dataset.requestId = requestId;
+      applyPromptButtonStyle(button, tr);
       button.onclick = event => {
         event.preventDefault();
         event.stopPropagation();
@@ -274,8 +294,8 @@
 
   function observeRequestRows() {
     const body = $("rqBody");
-    if (!body || body.dataset.promptRepairV86 === "1") return;
-    body.dataset.promptRepairV86 = "1";
+    if (!body || body.dataset.promptRepairV87 === "1") return;
+    body.dataset.promptRepairV87 = "1";
     let queued = false;
     const schedule = () => {
       if (queued) return;
