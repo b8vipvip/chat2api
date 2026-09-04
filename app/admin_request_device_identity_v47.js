@@ -1,7 +1,8 @@
 (() => {
   const KEY = "__CHAT2API_ADMIN_DEVICE_IDENTITY_V47__";
   if (globalThis[KEY]) return;
-  const state = { rows: [], apiHooked: false, canonicalizeTimer: null, requestPaintTimer: null };
+
+  const state = { revision: 93, canonicalizeTimer: null };
   globalThis[KEY] = state;
 
   const replacements = [
@@ -61,122 +62,22 @@
 
   function queueCanonicalizeActiveView() {
     if (state.canonicalizeTimer !== null) return;
-    // Navigation is the only bounded lifecycle boundary for terminology repaint.
-    // Never connect this work to background API traffic or request-row mutation.
     state.canonicalizeTimer = setTimeout(canonicalizeActiveView, 0);
   }
 
   function canonicalizeStaticChrome() {
-    for (const selector of [".brand", ".nav", ".topbar"]) {
-      canonicalizeElement(document.querySelector(selector));
-    }
+    for (const selector of [".brand", ".nav", ".topbar"]) canonicalizeElement(document.querySelector(selector));
     canonicalizeActiveView();
   }
 
-  function requestHeader() {
-    return document.querySelector("#view-requests table thead tr");
-  }
-
-  function ensureDeviceHeader() {
-    const header = requestHeader();
-    if (!header) return -1;
-    const existing = header.querySelector("th[data-chat2api-device-identity]");
-    if (existing) return Array.from(header.children).indexOf(existing);
-    const headers = Array.from(header.children);
-    let index = headers.findIndex(cell => String(cell.textContent || "").trim() === "模型");
-    if (index < 0) index = Math.min(4, headers.length);
-    const th = document.createElement("th");
-    th.dataset.chat2apiDeviceIdentity = "1";
-    th.textContent = "设备标识";
-    header.insertBefore(th, header.children[index] || null);
-    return index;
-  }
-
-  function paintRequestRows() {
-    state.requestPaintTimer = null;
-    const tbody = document.getElementById("rqBody");
-    if (!tbody) return;
-    const index = ensureDeviceHeader();
-    if (index < 0) return;
-    const domRows = Array.from(tbody.querySelectorAll(":scope > tr"));
-    domRows.forEach((tr, rowIndex) => {
-      if (tr.children.length === 1) {
-        tr.children[0].colSpan = Math.max(Number(tr.children[0].colSpan || 1), requestHeader()?.children.length || 1);
-        return;
-      }
-      const row = state.rows[rowIndex] || {};
-      let cell = tr.querySelector("td[data-chat2api-device-identity]");
-      if (!cell) {
-        cell = document.createElement("td");
-        cell.dataset.chat2apiDeviceIdentity = "1";
-        tr.insertBefore(cell, tr.children[index] || null);
-      }
-      const clientId = String(row.worker_client_id || row.client_id || "");
-      const label = String(row.device_name || "").trim();
-      const next = label || (clientId ? `未绑定 · ${clientId}` : "-");
-      if (cell.textContent !== next) cell.textContent = next;
-      const title = clientId ? `Worker ID：${clientId}${row.device_code_id ? ` · 设备码 ID：${row.device_code_id}` : ""}` : "";
-      if (cell.title !== title) cell.title = title;
-    });
-  }
-
-  function scheduleRequestPaint() {
-    if (state.requestPaintTimer !== null) return;
-    // The API wrapper runs before base loadRequests writes rqBody.innerHTML.
-    // A single macrotask runs after that synchronous render without observing the
-    // table. This makes request decoration one-shot and removes the observer ->
-    // DOM write -> observer feedback path that repeatedly froze the console.
-    state.requestPaintTimer = setTimeout(paintRequestRows, 0);
-  }
-
-  function captureRequestRows(path, payload) {
-    const clean = String(path || "").split("#", 1)[0];
-    if (!/^\/api\/admin\/requests(?:\?|$)/.test(clean)) return;
-    if (!Array.isArray(payload?.data)) return;
-    state.rows = payload.data.map(row => ({...row}));
-    scheduleRequestPaint();
-  }
-
-  function hookApi() {
-    if (state.apiHooked) return true;
-    let base = null;
-    try { if (typeof api === "function") base = api; } catch (_) {}
-    if (!base && typeof globalThis.api === "function") base = globalThis.api;
-    if (typeof base !== "function") return false;
-    if (base.__chat2apiDeviceIdentityV47) {
-      state.apiHooked = true;
-      return true;
-    }
-    const wrapped = async function(path, opt = {}) {
-      const payload = await base(path, opt);
-      captureRequestRows(path, payload);
-      return payload;
-    };
-    wrapped.__chat2apiDeviceIdentityV47 = true;
-    try { api = wrapped; } catch (_) { globalThis.api = wrapped; }
-    if (typeof globalThis.api === "function" && globalThis.api === base) globalThis.api = wrapped;
-    state.apiHooked = true;
-    return true;
-  }
-
-  // Do not install a MutationObserver on rqBody. Request rendering is a bounded
-  // fetch -> synchronous table write -> one-shot decoration lifecycle. An observer
-  // here is unnecessary and has historically turned additive column patches into
-  // main-thread starvation with no JavaScript exception.
+  // v93 authority boundary: this file owns terminology presentation only.
+  // Device identity for request history is already decorated by the server API and
+  // is rendered directly by admin_request_history_v93.js. No API wrapping, table
+  // mutation, timers, or observers are allowed here.
   canonicalizeStaticChrome();
   document.addEventListener("click", event => {
     const button = event.target?.closest?.(".nav button[data-view]");
     if (button) queueCanonicalizeActiveView();
   }, true);
   window.addEventListener("hashchange", queueCanonicalizeActiveView);
-
-  if (!hookApi()) {
-    let attempts = 0;
-    const timer = setInterval(() => {
-      attempts += 1;
-      if (hookApi() || attempts >= 40) clearInterval(timer);
-    }, 50);
-  }
-
-  scheduleRequestPaint();
 })();
