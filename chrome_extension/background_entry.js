@@ -49,6 +49,7 @@ importScripts(
   "background_capacity_capability_v37.js",
   "background_worker_master_switch_v61.js",
   "background_window_affinity_v87.js",
+  "background_orphan_route_cleanup_v87.js",
 );
 
 // Refresh the lease of already healthy standby windows before the historical
