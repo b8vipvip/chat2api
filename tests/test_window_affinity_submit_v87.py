@@ -35,24 +35,28 @@ def test_successful_route_receives_hard_five_minute_idle_lease() -> None:
 
 def test_healthy_idle_spares_are_lease_refreshed_instead_of_periodically_rotated() -> None:
     source = text("chrome_extension/background_window_affinity_v87.js")
+    entry = text("chrome_extension/background_entry.js")
     assert "LEASE_TOUCH_AGE_MS = 10 * 60 * 1000" in source
     assert "LEASE_REFRESH_INTERVAL_MS = 5 * 60 * 1000" in source
     assert "async function refreshHealthySpareLeases" in source
     assert source.count("slot.ready_at_ms = now") >= 2
     assert 'action: "healthy-spare-lease-refreshed"' in source
+    assert "refreshHealthySpareLeases?.().catch?.(() => {})" in entry
 
 
-def test_stuck_automation_prompt_has_bounded_click_and_enter_rescue() -> None:
-    source = text("chrome_extension/content_submit_rescue_v87.js")
+def test_submit_path_remains_single_owner_and_keeps_v6_confirmed_fallback() -> None:
+    source = text("chrome_extension/content_request_v6.js")
     manifest = json.loads(text("chrome_extension/manifest.json"))
+    preflight = text("chrome_extension/background_runtime_preflight_v48.js")
     isolated = next(item for item in manifest["content_scripts"] if item.get("world") != "MAIN")
     scripts = isolated["js"]
-    assert scripts.index("content_request_v6.js") < scripts.index("content_submit_rescue_v87.js") < scripts.index("content_request_lifecycle_v50.js")
-    assert "now - state.promptSeenAt < 4500" in source
-    assert "state.attempts >= 2" in source
-    assert '"clicked-stuck-draft"' in source
-    assert '"enter-stuck-draft"' in source
-    assert "active.prompt" in source
+    assert "content_submit_rescue_v87.js" not in scripts
+    assert "content_submit_rescue_v87.js" not in preflight
+    assert "ready.button.click()" in source
+    assert "if (!confirmed && promptStillPresent(active))" in source
+    assert "dispatchEnter(findComposer())" in source
+    assert 'diagnostic(active, "enter-fallback"' in source
+    assert 'waitAfterSend(active, "enter", 6000)' in source
 
 
 def test_v87_runtime_preflight_uses_whole_path_wall_clock_budgets() -> None:
@@ -61,7 +65,6 @@ def test_v87_runtime_preflight_uses_whole_path_wall_clock_budgets() -> None:
     assert "HOT_HEAL_BUDGET_MS = 2400" in source
     assert "RELOAD_BUDGET_MS = 3500" in source
     assert "FINAL_HEAL_BUDGET_MS = 1800" in source
-    assert '"content_submit_rescue_v87.js"' in source
     assert 'mode: "repair-budget-exhausted-v87"' in source
     assert 'error.code = "chatgpt_runtime_preflight_budget"' in source
 
@@ -69,8 +72,8 @@ def test_v87_runtime_preflight_uses_whole_path_wall_clock_budgets() -> None:
 def test_v87_javascript_assets_parse() -> None:
     for path in [
         "chrome_extension/background_window_affinity_v87.js",
-        "chrome_extension/content_submit_rescue_v87.js",
         "chrome_extension/background_runtime_preflight_v48.js",
+        "chrome_extension/content_request_v6.js",
         "app/admin_prompt_config_v75.js",
     ]:
         result = subprocess.run(
