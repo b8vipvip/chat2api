@@ -1,7 +1,7 @@
 (() => {
   const KEY = "__CHAT2API_ADMIN_DEVICE_IDENTITY_V47__";
   if (globalThis[KEY]) return;
-  const state = { rows: [], apiHooked: false };
+  const state = { rows: [], apiHooked: false, canonicalizeTimer: null };
   globalThis[KEY] = state;
 
   const replacements = [
@@ -47,6 +47,23 @@
         if (after !== before) element.setAttribute(attr, after);
       }
     }
+  }
+
+  function activeView() {
+    return document.querySelector(".view.active") || null;
+  }
+
+  function canonicalizeActiveView() {
+    state.canonicalizeTimer = null;
+    canonicalizeElement(activeView());
+  }
+
+  function queueCanonicalizeActiveView() {
+    if (state.canonicalizeTimer !== null) return;
+    // Renderers generally mutate the DOM after their awaited API promise resumes.
+    // A zero-delay task therefore runs after that bounded render without watching
+    // the entire document for every character/child mutation.
+    state.canonicalizeTimer = setTimeout(canonicalizeActiveView, 0);
   }
 
   function requestHeader() {
@@ -117,6 +134,7 @@
     const wrapped = async function(path, opt = {}) {
       const payload = await base(path, opt);
       captureRequestRows(path, payload);
+      queueCanonicalizeActiveView();
       return payload;
     };
     wrapped.__chat2apiDeviceIdentityV47 = true;
@@ -128,19 +146,22 @@
 
   const tbody = document.getElementById("rqBody");
   if (tbody) {
+    // Request rows are the only DOM surface this layer owns structurally. Keep a
+    // narrow observer here so identity cells follow request-table replacement.
     new MutationObserver(() => queueMicrotask(paintRequestRows)).observe(tbody, {childList:true,subtree:false});
   }
 
-  // Normalize every currently visible administrator/developer label, then only
-  // inspect changed/added nodes. Writes are conditional so this observer cannot
-  // recreate the self-triggering loop that previously froze Linux Worker.
+  // Normalize the static shell once. Previous console-freeze fixes deliberately
+  // removed whole-document MutationObservers: watching document.body recursively
+  // makes every async renderer/poller feed another TreeWalker pass and can starve
+  // the UI thread without producing a console exception. New async content is
+  // normalized after API completions and navigation instead.
   canonicalizeElement(document.body);
-  new MutationObserver(mutations => {
-    for (const mutation of mutations) {
-      if (mutation.type === "characterData") canonicalizeTextNode(mutation.target);
-      for (const node of mutation.addedNodes || []) canonicalizeElement(node);
-    }
-  }).observe(document.body, {childList:true,subtree:true,characterData:true});
+  document.addEventListener("click", event => {
+    const button = event.target?.closest?.(".nav button[data-view]");
+    if (button) queueCanonicalizeActiveView();
+  }, true);
+  window.addEventListener("hashchange", queueCanonicalizeActiveView);
 
   if (!hookApi()) {
     let attempts = 0;

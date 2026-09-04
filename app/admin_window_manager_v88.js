@@ -3,14 +3,18 @@
   if (globalThis[KEY]) return;
   const state = {
     revision: 88,
+    navigation_revision: 89,
     active: [],
     closed: [],
     signature: "",
     timer: null,
-    refreshing: false,
+    refreshPromise: null,
+    refreshController: null,
   };
   globalThis[KEY] = state;
 
+  const POLL_MS = 2500;
+  const FETCH_TIMEOUT_MS = 8000;
   const esc = value => String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -36,6 +40,32 @@
       }).format(new Date(ms));
     } catch (_) { return new Date(ms).toLocaleString(); }
   };
+
+  function isActive() {
+    return Boolean(document.getElementById("view-window-manager")?.classList.contains("active"));
+  }
+
+  function stopPolling() {
+    if (state.timer !== null) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    if (state.refreshController) {
+      try { state.refreshController.abort(); } catch (_) {}
+    }
+  }
+
+  function schedulePoll(delay = POLL_MS) {
+    if (state.timer !== null) clearTimeout(state.timer);
+    state.timer = null;
+    if (!isActive() || document.hidden) return;
+    state.timer = setTimeout(async () => {
+      state.timer = null;
+      if (!isActive() || document.hidden) return;
+      await refresh(false);
+      if (isActive() && !document.hidden) schedulePoll(POLL_MS);
+    }, Math.max(250, Number(delay || POLL_MS)));
+  }
 
   function installView() {
     const nav = document.querySelector(".nav");
@@ -68,7 +98,9 @@
           <div class="scroll"><table><thead><tr><th>窗口编号</th><th>设备码名称</th><th>请求ID</th><th>开启时间</th><th>状态</th><th>截图当前界面</th><th>查看</th></tr></thead><tbody id="wmClosedBody"></tbody></table></div>
         </div>`;
       content.appendChild(section);
-      section.querySelector("#wmRefresh")?.addEventListener("click", () => refresh(true));
+      section.querySelector("#wmRefresh")?.addEventListener("click", () => {
+        refresh(true).finally(() => schedulePoll(POLL_MS));
+      });
     }
     ensureScreenshotDialog();
     return true;
@@ -86,12 +118,13 @@
   }
 
   function showWindowManager() {
-    installView();
+    if (!installView()) return;
     document.querySelectorAll(".view").forEach(view => view.classList.toggle("active", view.id === "view-window-manager"));
     document.querySelectorAll(".nav button").forEach(button => button.classList.toggle("active", button.dataset.view === "window-manager"));
     const title = document.getElementById("pageTitle");
     if (title) title.textContent = "窗口管理";
-    refresh(true);
+    if (location.hash !== "#window-manager") location.hash = "window-manager";
+    refresh(true).finally(() => schedulePoll(POLL_MS));
   }
 
   function rowHtml(row, closed = false) {
@@ -139,32 +172,48 @@
   }
 
   async function refresh(force = false) {
-    if (state.refreshing || !document.getElementById("view-window-manager")?.classList.contains("active")) return;
-    state.refreshing = true;
-    try {
-      const response = await fetch("/api/admin/window-manager", { credentials: "same-origin", cache: "no-store" });
-      if (!response.ok) {
-        if (force) console.warn("window manager refresh failed", response.status);
-        return;
+    if (!isActive()) return null;
+    if (state.refreshPromise) return state.refreshPromise;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    state.refreshController = controller;
+    const task = (async () => {
+      try {
+        const response = await fetch("/api/admin/window-manager", {
+          credentials: "same-origin",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          if (force) console.warn("window manager refresh failed", response.status);
+          return null;
+        }
+        const payload = await response.json();
+        if (!isActive()) return payload;
+        const active = Array.isArray(payload.active) ? payload.active : [];
+        const closed = Array.isArray(payload.closed) ? payload.closed : [];
+        const signature = JSON.stringify([
+          active.map(row => [row.client_id, row.window_no, row.status, row.request_id, row.screenshot_at_ms]),
+          closed.map(row => [row.client_id, row.window_no, row.closed_at_ms, row.screenshot_at_ms]),
+        ]);
+        state.active = active;
+        state.closed = closed;
+        if (force || signature !== state.signature) {
+          state.signature = signature;
+          render();
+        }
+        return payload;
+      } catch (error) {
+        if (error?.name !== "AbortError" && force) console.warn("window manager refresh failed", error);
+        return null;
+      } finally {
+        clearTimeout(timeout);
+        if (state.refreshController === controller) state.refreshController = null;
       }
-      const payload = await response.json();
-      const active = Array.isArray(payload.active) ? payload.active : [];
-      const closed = Array.isArray(payload.closed) ? payload.closed : [];
-      const signature = JSON.stringify([
-        active.map(row => [row.client_id, row.window_no, row.status, row.request_id, row.screenshot_at_ms]),
-        closed.map(row => [row.client_id, row.window_no, row.closed_at_ms, row.screenshot_at_ms]),
-      ]);
-      state.active = active;
-      state.closed = closed;
-      if (force || signature !== state.signature) {
-        state.signature = signature;
-        render();
-      }
-    } catch (error) {
-      if (force) console.warn("window manager refresh failed", error);
-    } finally {
-      state.refreshing = false;
-    }
+    })();
+    state.refreshPromise = task;
+    try { return await task; } finally { if (state.refreshPromise === task) state.refreshPromise = null; }
   }
 
   async function capture(row, button) {
@@ -185,6 +234,7 @@
       const before = Number(row.screenshot_at_ms || 0);
       for (let attempt = 0; attempt < 10; attempt += 1) {
         await new Promise(resolve => setTimeout(resolve, 350));
+        if (!isActive()) break;
         await refresh(true);
         const updated = state.active.find(item => item.client_id === row.client_id && Number(item.window_id) === Number(row.window_id));
         if (Number(updated?.screenshot_at_ms || 0) > before) {
@@ -196,6 +246,7 @@
       alert(`截图失败：${String(error?.message || error)}`);
     } finally {
       if (button) { button.disabled = false; button.textContent = original; }
+      if (isActive()) schedulePoll(POLL_MS);
     }
   }
 
@@ -237,8 +288,9 @@
         tr.insertBefore(cell, tr.children[index] || null);
       }
       const requestId = String(rows[rowIndex]?.request_id || "");
-      cell.innerHTML = requestId ? `<code>${esc(requestId)}</code>` : "-";
-      cell.title = requestId;
+      const next = requestId || "-";
+      if (cell.textContent !== next) cell.innerHTML = requestId ? `<code>${esc(requestId)}</code>` : "-";
+      if (cell.title !== requestId) cell.title = requestId;
     });
   }
 
@@ -250,17 +302,34 @@
     paintRequestIds();
   }
 
+  function installNavigationLifecycle() {
+    document.addEventListener("click", event => {
+      const button = event.target?.closest?.(".nav button[data-view]");
+      if (!button) return;
+      const view = String(button.dataset.view || "");
+      if (view !== "window-manager") stopPolling();
+      if (view === "requests") setTimeout(paintRequestIds, 0);
+    }, true);
+    window.addEventListener("hashchange", () => {
+      const view = (location.hash || "").slice(1);
+      if (view !== "window-manager") stopPolling();
+      else if (isActive()) schedulePoll(0);
+      if (view === "requests") setTimeout(paintRequestIds, 0);
+    });
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) stopPolling();
+      else if (isActive()) schedulePoll(0);
+    });
+  }
+
   function start() {
     if (!installView()) {
       setTimeout(start, 100);
       return;
     }
     installRequestIdObserver();
-    clearInterval(state.timer);
-    state.timer = setInterval(() => {
-      if (document.getElementById("view-window-manager")?.classList.contains("active")) refresh(false);
-      paintRequestIds();
-    }, 2500);
+    installNavigationLifecycle();
+    if ((location.hash || "").slice(1) === "window-manager") showWindowManager();
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
