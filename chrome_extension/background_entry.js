@@ -29,6 +29,7 @@ importScripts(
   "background_logging.js",
   "model_affinity_v23.js",
   "model_contract_v25.js",
+  "background_standby_storage_lease_v87.js",
   "conversation_routing.js",
   "conversation_warm_pool_v2.js",
   "background_external_warm_v28.js",
