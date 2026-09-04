@@ -14,30 +14,31 @@ def text(path: str) -> str:
 
 def test_device_identity_no_longer_watches_the_entire_admin_dom() -> None:
     source = text("app/admin_request_device_identity_v47.js")
-    # This exact whole-document observer pattern previously caused the console to
-    # become unresponsive without a JavaScript exception. Identity decoration now
-    # runs once for the shell and after bounded navigation events instead.
-    assert 'canonicalizeElement(document.body);' in source
+    # Terminology normalization is now limited to static chrome plus explicit
+    # navigation boundaries; it must never start from the whole document body.
+    assert 'canonicalizeStaticChrome();' in source
     assert 'queueCanonicalizeActiveView' in source
     assert '.nav button[data-view]' in source
     assert 'window.addEventListener("hashchange", queueCanonicalizeActiveView)' in source
+    assert 'canonicalizeElement(document.body);' not in source
     assert '.observe(document.body' not in source
     assert 'subtree:true,characterData:true' not in source
 
 
-def test_device_identity_never_treewalks_request_data_after_background_api_calls() -> None:
+def test_device_identity_request_table_is_observer_free_and_one_shot() -> None:
     source = text("app/admin_request_device_identity_v47.js")
-    # v0.22.57 removed the broad document observer, but its api wrapper still
-    # scheduled active-view canonicalization after *every* successful console API
-    # request. v0.22.60 added more live-window truth traffic, which exposed that
-    # latent starvation path while the 100-row request table was visible.
-    assert 'captureRequestRows(path, payload);\n      queueCanonicalizeActiveView();' not in source
+    # Request history is the highest-volume console table. The API wrapper runs
+    # before base loadRequests writes tbody, so v92 schedules exactly one macrotask
+    # after the synchronous table render. No MutationObserver or queueMicrotask may
+    # react to the additive device cell writes themselves.
+    assert 'function scheduleRequestPaint()' in source
+    assert 'state.requestPaintTimer = setTimeout(paintRequestRows, 0);' in source
+    assert 'scheduleRequestPaint();' in source
+    assert 'new MutationObserver' not in source
+    assert 'queueMicrotask(paintRequestRows)' not in source
     assert 'canonicalizeElement(document.getElementById("view-requests"));' not in source
     assert 'closest("script,style,tbody,pre,code")' in source
     assert 'element.closest?.("tbody,pre,code")' in source
-    # Request identity remains mutation-driven on exactly rqBody, not a parent or
-    # the whole document, so table replacement still gets its additive cells.
-    assert 'new MutationObserver(() => queueMicrotask(paintRequestRows)).observe(tbody, {childList:true,subtree:false});' in source
 
 
 def test_window_manager_polling_exists_only_while_its_view_is_active() -> None:
