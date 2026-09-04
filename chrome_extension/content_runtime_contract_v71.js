@@ -5,7 +5,7 @@
     try { chrome.runtime.onMessage.removeListener(prior.listener); } catch (_) {}
   }
 
-  const REQUIRED_BUNDLE = "0.8.25";
+  const REQUIRED_BUNDLE = "0.8.26";
   const REQUIRED_REVISION = 71;
 
   function snapshot() {
@@ -17,6 +17,7 @@
     const semanticHelper = globalThis.__CHAT2API_RESPONSE_SEMANTIC_RECOVERY_V51__ || null;
     const legacyResponseOwner = globalThis.__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__ || null;
     const multimodal = globalThis.__CHAT2API_MULTIMODAL_V4__ || null;
+    const terminalPrompt = globalThis.__CHAT2API_REQUEST_TERMINAL_PROMPT_V88__ || null;
     const modules = {
       request_v6: Number(request?.revision || 0) >= 69,
       rich_response_v69: Boolean(rich),
@@ -25,6 +26,7 @@
       multimodal_v84: Number(multimodal?.revision || 0) >= 84 && typeof multimodal?.waitForReady === "function",
       multimodal_v85: Number(multimodal?.revision || 0) >= 85 && typeof multimodal?.waitForSafeSubmit === "function",
       multimodal_main_v78: document.documentElement?.getAttribute?.("data-chat2api-multimodal-main-v78") === "78",
+      terminal_prompt_v88: Number(terminalPrompt?.revision || 0) >= 88,
       request_lifecycle_v50: Number(globalThis.__CHAT2API_REQUEST_LIFECYCLE_V50__?.version || 0) === 50,
       response_capture_v41: Number(globalThis.__CHAT2API_RESPONSE_CAPTURE_V41__?.version || 0) === 41,
       completion_recovery_v6: Boolean(globalThis.__CHAT2API_COMPLETION_RECOVERY_V6__),
@@ -53,6 +55,7 @@
       request_revision: Number(request?.revision || 0),
       response_revision: Number(recovery?.version || 0),
       multimodal_revision: Number(multimodal?.revision || 0),
+      terminal_prompt_revision: Number(terminalPrompt?.revision || 0),
       network_response_recovery: Number(networkRecovery?.version || 0) === 55 ? "conversation-sse-v55-parser-v62" : null,
       network_response_parser_revision: Number(document.documentElement?.getAttribute?.("data-chat2api-network-stream-parser") || 0),
       semantic_helper_mode: semanticHelper?.mode || null,
