@@ -97,7 +97,7 @@ def test_modified_v86_javascript_parses() -> None:
         "chrome_extension/content_runtime_contract_v48.js",
         "chrome_extension/content_runtime_contract_v71.js",
         "chrome_extension/background_window_affinity_v87.js",
-        "chrome_extension/content_submit_rescue_v87.js",
+        "chrome_extension/content_request_v6.js",
     ]
     for path in paths:
         result = subprocess.run(
