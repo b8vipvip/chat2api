@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -26,12 +27,11 @@ def test_request_history_has_exactly_one_frontend_owner() -> None:
     assert 'data-request-action="detail"' in owner
     assert 'new MutationObserver' not in owner
 
-    # Prompt configuration is presentation/configuration-only. It must never own
-    # request navigation, request loading, or request-row repair.
-    assert 'window.loadRequests =' not in prompt_base
-    assert 'globalThis.loadRequests =' not in prompt_base
-    assert 'window.show =' not in prompt_base
-    assert 'globalThis.show =' not in prompt_base
+    # Prompt configuration is presentation/configuration-only. It may call the
+    # canonical navigation function, but it must never assign/replace it and must
+    # never own request loading or request-row repair.
+    assert re.search(r"\b(?:window|globalThis)\.loadRequests\s*=", prompt_base) is None
+    assert re.search(r"\b(?:window|globalThis)\.show\s*=", prompt_base) is None
     assert 'augmentRequestRows' not in prompt_base
     assert 'repairPromptCells' not in prompt_editor
     assert 'observeRequestRows' not in prompt_editor
@@ -47,6 +47,16 @@ def test_request_history_has_exactly_one_frontend_owner() -> None:
     assert 'installRequestIdObserver' not in windows
     assert 'rqBody' not in windows
     assert 'new MutationObserver' not in windows
+
+
+def test_no_admin_asset_observes_request_history_table() -> None:
+    """Future admin features must not recreate the freeze through a side owner."""
+    offenders: list[str] = []
+    for path in sorted((ROOT / "app").glob("admin*.js")):
+        source = path.read_text(encoding="utf-8")
+        if "rqBody" in source and "MutationObserver" in source:
+            offenders.append(path.name)
+    assert offenders == []
 
 
 def test_device_identity_normalization_is_bounded_to_navigation() -> None:
