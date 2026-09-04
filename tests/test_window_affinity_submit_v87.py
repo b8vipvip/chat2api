@@ -35,6 +35,7 @@ def test_successful_route_receives_hard_five_minute_idle_lease() -> None:
 
 def test_healthy_idle_spares_are_lease_refreshed_instead_of_periodically_rotated() -> None:
     source = text("chrome_extension/background_window_affinity_v87.js")
+    boot = text("chrome_extension/background_standby_storage_lease_v87.js")
     entry = text("chrome_extension/background_entry.js")
     assert "LEASE_TOUCH_AGE_MS = 10 * 60 * 1000" in source
     assert "LEASE_REFRESH_INTERVAL_MS = 5 * 60 * 1000" in source
@@ -42,6 +43,11 @@ def test_healthy_idle_spares_are_lease_refreshed_instead_of_periodically_rotated
     assert source.count("slot.ready_at_ms = now") >= 2
     assert 'action: "healthy-spare-lease-refreshed"' in source
     assert "refreshHealthySpareLeases?.().catch?.(() => {})" in entry
+    assert entry.index('"background_standby_storage_lease_v87.js"') < entry.index('"conversation_warm_pool_v2.js"')
+    assert entry.index('"background_standby_storage_lease_v87.js"') < entry.index('"background_reserve_pool_v29.js"')
+    assert 'const WARM_KEY = "chat2apiConversationWarmPoolV2"' in boot
+    assert 'const RESERVE_KEY = "chat2apiReservePoolV29"' in boot
+    assert "standby_lease_recovered_v87" in boot
 
 
 def test_orphaned_stale_route_window_is_closed_before_replacement() -> None:
@@ -82,6 +88,7 @@ def test_v87_runtime_preflight_uses_whole_path_wall_clock_budgets() -> None:
 
 def test_v87_javascript_assets_parse() -> None:
     for path in [
+        "chrome_extension/background_standby_storage_lease_v87.js",
         "chrome_extension/background_window_affinity_v87.js",
         "chrome_extension/background_orphan_route_cleanup_v87.js",
         "chrome_extension/background_runtime_preflight_v48.js",
