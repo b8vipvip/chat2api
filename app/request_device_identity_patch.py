@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import inspect
 import json
+import logging
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
+from fastapi.routing import APIRoute
 
 
-PATCH_ID = "request-device-identity-v47"
+logger = logging.getLogger("chat2api.admin_requests")
+PATCH_ID = "request-device-identity-v47-request-stability-v92"
 ASSET_PATH = "/assets/chat2api-request-device-identity-v47.js"
 
 
@@ -17,22 +21,90 @@ def _canonical_label(value: Any) -> str:
     return text.replace("配对码", "设备码").replace("扩展", "Worker")
 
 
-def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
-    """Add a stable device-code name to request-history rows.
+async def _maybe_await(value: Any) -> Any:
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
-    Request telemetry already records the browser client_id.  This patch resolves
-    that ID through the one-device code store so the admin console can show the
-    human name (for example ``ubuntu03`` or ``free``) instead of forcing the
-    operator to cross-reference an ``ext_*`` identifier manually.
 
-    Legacy storage/API field names remain readable for installed clients.  New
-    presentation aliases are additive and do not invalidate old Worker tokens.
+def _install_request_route_stability(app: FastAPI, telemetry: Any) -> None:
+    """Make request-history routes tolerant of sync/async telemetry decorators.
+
+    Older console patches have changed TelemetryStore.query/get between sync and
+    async implementations.  The base endpoint historically unpacked query() as a
+    mapping immediately, which turns an async decorator into
+    ``TypeError: 'coroutine' object is not a mapping``.  Keep FastAPI's original
+    dependency graph but replace only the route call target with a final owner that
+    accepts either contract.
     """
+
+    for route in app.routes:
+        if not isinstance(route, APIRoute) or "GET" not in route.methods:
+            continue
+
+        if route.path == "/api/admin/requests":
+            if getattr(route.dependant.call, "__chat2api_request_stability_v92__", False):
+                continue
+
+            async def stable_admin_requests(**kwargs: Any) -> dict[str, Any]:
+                limit = int(kwargs.get("limit", 50))
+                offset = int(kwargs.get("offset", 0))
+                status_filter = kwargs.get("status_filter")
+                model = kwargs.get("model")
+                key_id = kwargs.get("key_id")
+                q = kwargs.get("q")
+                result = await _maybe_await(
+                    telemetry.query(
+                        limit=limit,
+                        offset=offset,
+                        status=status_filter,
+                        model=model,
+                        key_id=key_id,
+                        q=q,
+                    )
+                )
+                if not isinstance(result, dict):
+                    logger.error("Request history query returned non-mapping type=%s", type(result).__name__)
+                    raise HTTPException(status_code=500, detail="Request history query returned an invalid result")
+                summary = await _maybe_await(telemetry.summary())
+                if not isinstance(summary, dict):
+                    logger.warning("Request history summary returned non-mapping type=%s", type(summary).__name__)
+                    summary = {}
+                return {**result, "summary": summary}
+
+            stable_admin_requests.__chat2api_request_stability_v92__ = True
+            route.dependant.call = stable_admin_requests
+            route.endpoint = stable_admin_requests
+
+        elif route.path == "/api/admin/requests/{request_id}":
+            if getattr(route.dependant.call, "__chat2api_request_stability_v92__", False):
+                continue
+
+            async def stable_admin_request_detail(**kwargs: Any) -> dict[str, Any]:
+                request_id = str(kwargs.get("request_id") or "")
+                row = await _maybe_await(telemetry.get(request_id))
+                if not row:
+                    raise HTTPException(status_code=404, detail="Request record not found")
+                if not isinstance(row, dict):
+                    logger.error("Request history detail returned non-mapping type=%s", type(row).__name__)
+                    raise HTTPException(status_code=500, detail="Request history detail returned an invalid result")
+                return row
+
+            stable_admin_request_detail.__chat2api_request_stability_v92__ = True
+            route.dependant.call = stable_admin_request_detail
+            route.endpoint = stable_admin_request_detail
+
+
+def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
+    """Add stable device identity and a bounded request-history stability owner."""
 
     telemetry = app.state.telemetry
     registry = app.state.registry
     pairings = getattr(app.state, "pairings", None)
     if pairings is None or getattr(telemetry, "_chat2api_request_device_identity_v47", False):
+        # Even when identity decoration was installed by an earlier compatibility
+        # layer, keep the route stability owner final and idempotent.
+        _install_request_route_stability(app, telemetry)
         return app
 
     base_recent = telemetry.recent
@@ -77,7 +149,10 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
                 by_client[client_id] = item
         return by_client, by_id
 
-    def decorate(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    def decorate(
+        row: dict[str, Any] | None,
+        maps: tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]] | None = None,
+    ) -> dict[str, Any] | None:
         if not isinstance(row, dict):
             return row
         result = dict(row)
@@ -88,7 +163,7 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
             result.setdefault("worker_client_id", None)
             return result
 
-        by_client, by_id = device_maps()
+        by_client, by_id = maps or device_maps()
         pairing = by_client.get(client_id)
         client = registry.clients.get(client_id)
         pairing_id = str(getattr(client, "pairing_id", "") or "") if client else ""
@@ -103,20 +178,24 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
         return result
 
     def recent_with_device(limit: int = 100) -> list[dict[str, Any]]:
-        return [decorate(row) or {} for row in base_recent(limit)]
+        maps = device_maps()
+        return [decorate(row, maps) or {} for row in base_recent(limit)]
 
-    def query_with_device(*args, **kwargs) -> dict[str, Any]:
+    def query_with_device(*args: Any, **kwargs: Any) -> dict[str, Any]:
         result = dict(base_query(*args, **kwargs))
-        result["data"] = [decorate(row) or {} for row in result.get("data") or []]
+        maps = device_maps()
+        result["data"] = [decorate(row, maps) or {} for row in result.get("data") or []]
         return result
 
     def get_with_device(request_id: str) -> dict[str, Any] | None:
-        return decorate(base_get(request_id))
+        return decorate(base_get(request_id), device_maps())
 
     telemetry.recent = recent_with_device
     telemetry.query = query_with_device
     telemetry.get = get_with_device
     telemetry._chat2api_request_device_identity_v47 = True
+
+    _install_request_route_stability(app, telemetry)
 
     @app.get(ASSET_PATH, include_in_schema=False)
     async def request_device_identity_asset() -> Response:
