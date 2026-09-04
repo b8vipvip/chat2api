@@ -48,7 +48,7 @@ await new Promise(resolve => setTimeout(resolve, 0));
 
 await assert.rejects(
   () => context.chat2apiCreateWindowStaggered({ source: "reserve" }),
-  /managed window refill is blocked/,
+  /managed ChatGPT window creation is blocked by v86/,
 );
 assert.equal(baseCalls, 0, "disabled Worker must not call the real window creator");
 
