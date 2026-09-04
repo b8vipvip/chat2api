@@ -164,7 +164,7 @@
       await recordLast({
         tab_id: tabId,
         ok: true,
-        mode: "current-fast-path-v88",
+        mode: "current-fast-path-v87",
         reloaded: false,
         hot_healed: false,
         marker: result.marker,
@@ -179,9 +179,10 @@
       return true;
     }
 
-    // The whole recovery path remains wall-clock bounded. Bundle 0.8.26 also
-    // requires the v88 terminal/prompt guard, so repaired tabs cannot silently
-    // lose successful-terminal protection or the long-prompt fast insert path.
+    // The whole recovery path remains wall-clock bounded by the v87 algorithm.
+    // Bundle 0.8.26 additionally requires the v88 terminal/prompt guard, so
+    // repaired tabs cannot silently lose successful-terminal protection or the
+    // long-prompt fast insert path.
     result = await heal(tabId);
     let reloaded = false;
     const hotHealed = current(result);
@@ -205,7 +206,7 @@
       await recordLast({
         tab_id: tabId,
         ok: false,
-        mode: "repair-budget-exhausted-v88",
+        mode: "repair-budget-exhausted-v87",
         reloaded,
         hot_healed: hotHealed,
         result,
@@ -213,7 +214,7 @@
         budget_ms: CONTRACT_TIMEOUT_MS + HOT_HEAL_BUDGET_MS + RELOAD_BUDGET_MS + FINAL_HEAL_BUDGET_MS,
         at_ms: Date.now(),
       });
-      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the v88 preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85 terminal/prompt revision 88`);
+      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the v87-bounded preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85 terminal/prompt revision 88`);
       error.code = "chatgpt_runtime_preflight_budget";
       throw error;
     }
@@ -222,7 +223,7 @@
     await recordLast({
       tab_id: tabId,
       ok: true,
-      mode: reloaded ? "reload-repair-v88" : "hot-repair-v88",
+      mode: reloaded ? "reload-repair-v87" : "hot-repair-v87",
       reloaded,
       hot_healed: hotHealed,
       marker: result.marker,
