@@ -22,9 +22,10 @@ def test_worker_disable_guard_blocks_refill_and_closes_late_window() -> None:
     assert '"background_worker_disabled_window_guard_v86.js"' in entry
     assert 'DISABLED_KEY = "chat2apiWorkerMasterDisabledV61"' in source
     assert "Worker is disabled; managed ChatGPT window creation is blocked by v86" in source
-    assert "if (state.disabled && Number.isInteger(created?.id))" in source
+    assert source.count("if (await disabled())") >= 2
+    assert "if (Number.isInteger(created?.id))" in source
     assert "await chrome.windows.remove(created.id)" in source
-    assert "base(meta)" in source
+    assert "baseCreate(options, meta)" in source
 
 
 def test_worker_disable_guard_vm_contract() -> None:
