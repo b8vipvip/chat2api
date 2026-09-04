@@ -118,6 +118,7 @@ def test_request_history_resolves_worker_to_device_code_name(tmp_path):
     [
         "chrome_extension/background_transport_recovery_v47.js",
         "app/admin_request_device_identity_v47.js",
+        "app/admin_request_history_v93.js",
     ],
 )
 def test_new_worker_assets_parse(filename):
@@ -135,12 +136,15 @@ def test_background_loads_transport_outbox_after_request_recovery():
     assert entry.index('"background_request_recovery_v40.js"') < entry.index('"background_transport_recovery_v47.js"')
 
 
-def test_admin_asset_uses_canonical_device_and_worker_terms():
-    source = (ROOT / "app" / "admin_request_device_identity_v47.js").read_text(encoding="utf-8")
-    assert 'th.textContent = "设备标识"' in source
-    assert '[/配对码/g, "设备码"]' in source
-    assert '[/扩展/g, "Worker"]' in source
-    assert "worker_client_id" in source
+def test_admin_assets_use_canonical_device_and_worker_terms_with_single_row_owner():
+    terminology = (ROOT / "app" / "admin_request_device_identity_v47.js").read_text(encoding="utf-8")
+    requests = (ROOT / "app" / "admin_request_history_v93.js").read_text(encoding="utf-8")
+    assert '[/配对码/g, "设备码"]' in terminology
+    assert '[/扩展/g, "Worker"]' in terminology
+    assert "rqBody" not in terminology
+    assert '<th data-chat2api-device-identity="1">设备标识</th>' in requests
+    assert "worker_client_id" in requests
+    assert "device_code_id" in requests
 
 
 def test_entry_installs_transport_recovery_after_request_recovery_and_identity_last():

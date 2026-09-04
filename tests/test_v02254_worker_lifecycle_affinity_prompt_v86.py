@@ -73,22 +73,25 @@ def test_runtime_preflight_has_current_bundle_fast_path_before_heal() -> None:
     assert first_contract < current_check < first_heal
 
 
-def test_prompt_viewer_recovers_request_id_from_current_row_renderer() -> None:
-    source = text("app/admin_prompt_config_v75.js")
-    assert 'tr.getAttribute("onclick")' in source
-    assert "function promptColumnIndex()" in source
-    assert "function ensurePromptCell(tr, index)" in source
-    assert 'button.textContent = "提示词"' in source
-    assert "promptButtonStyleSource" in source
-    assert "/下载日志/" in source
-    assert "window.showRequestPromptV72(requestId)" in source
-    assert "event.stopPropagation()" in source
-    assert 'new MutationObserver(schedule).observe(body, { childList: true, subtree: true, attributes: true })' in source
+def test_prompt_viewer_uses_request_id_owned_by_canonical_request_renderer() -> None:
+    renderer = text("app/admin_request_history_v93.js")
+    prompt = text("app/admin_prompt_config_v72.js")
+    editor = text("app/admin_prompt_config_v75.js")
+    assert 'data-request-id="${esc(requestId)}"' in renderer
+    assert 'data-request-action="prompt"' in renderer
+    assert 'button.dataset.requestId' in renderer
+    assert 'globalThis.showRequestPromptV72(requestId)' in renderer
+    assert "event.stopPropagation()" in renderer
+    assert "async function showRequestPrompt(requestId)" in prompt
+    assert "/api/admin/requests/" in prompt
+    assert "rqBody" not in editor
+    assert "MutationObserver" not in editor
 
 
 def test_modified_v86_javascript_parses() -> None:
     paths = [
         "app/admin_prompt_config_v75.js",
+        "app/admin_request_history_v93.js",
         "chrome_extension/background_worker_disabled_window_guard_v86.js",
         "chrome_extension/background_route_quarantine_v50.js",
         "chrome_extension/background_runtime_preflight_v48.js",
