@@ -1,0 +1,92 @@
+name: Release v0.22.58 window truth sync
+
+on:
+  push:
+    branches:
+      - release/v0.22.58-window-truth-v89
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: ${{ !contains(github.event.head_commit.message, '[release-v02258-sync]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: release/v0.22.58-window-truth-v89
+          fetch-depth: 0
+      - name: Align server and Worker release contracts
+        shell: python
+        run: |
+          from pathlib import Path
+
+          runtime = Path("app/runtime_contract.py")
+          text = runtime.read_text(encoding="utf-8")
+          old = text
+          text = text.replace('SERVER_RUNTIME_VERSION = "0.22.57"', 'SERVER_RUNTIME_VERSION = "0.22.58"')
+          text = text.replace('CHROME_BRIDGE_BUNDLE_VERSION = "0.8.26"', 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.27"')
+          text = text.replace(
+              'admin-window-manager-v88-admin-navigation-freeze-v89-release-v02257"',
+              'admin-window-manager-v88-admin-navigation-freeze-v89-physical-window-live-truth-v89-release-v02258"',
+          )
+          if '"worker_physical_window_live_truth_v89": True' not in text:
+              text = text.replace(
+                  '            "worker_physical_window_truth_v83": True,\n',
+                  '            "worker_physical_window_truth_v83": True,\n            "worker_physical_window_live_truth_v89": True,\n',
+              )
+          if '"admin_window_live_truth_v89": True' not in text:
+              text = text.replace(
+                  '            "admin_navigation_freeze_v89": True,\n',
+                  '            "admin_navigation_freeze_v89": True,\n            "admin_window_live_truth_v89": True,\n',
+              )
+          if text == old:
+              raise SystemExit("runtime contract release markers were not found")
+          runtime.write_text(text, encoding="utf-8")
+
+          bundle_files = (
+              "chrome_extension/manifest.json",
+              "chrome_extension/content_bundle_marker_v48.js",
+              "chrome_extension/content_bundle_marker_v71.js",
+              "chrome_extension/background_runtime_preflight_v48.js",
+              "chrome_extension/content_runtime_contract_v48.js",
+              "chrome_extension/content_runtime_contract_v71.js",
+          )
+          for filename in bundle_files:
+              path = Path(filename)
+              current = path.read_text(encoding="utf-8")
+              updated = current.replace("0.8.26", "0.8.27")
+              if updated == current:
+                  raise SystemExit(f"{filename}: bundle 0.8.26 marker not found")
+              path.write_text(updated, encoding="utf-8")
+
+          for filename in ("README.md", "docs/VERSIONING.md"):
+              path = Path(filename)
+              current = path.read_text(encoding="utf-8")
+              updated = current.replace("0.22.57", "0.22.58").replace("0.8.26", "0.8.27")
+              if updated == current:
+                  raise SystemExit(f"{filename}: current release marker not found")
+              path.write_text(updated, encoding="utf-8")
+
+          changed_tests = 0
+          for path in sorted(Path("tests").rglob("*")):
+              if not path.is_file() or path.suffix not in {".py", ".js", ".mjs"}:
+                  continue
+              current = path.read_text(encoding="utf-8")
+              updated = current.replace("0.22.57", "0.22.58").replace("0.8.26", "0.8.27")
+              if updated != current:
+                  path.write_text(updated, encoding="utf-8")
+                  changed_tests += 1
+          print(f"updated {changed_tests} current-release test files")
+      - name: Remove one-shot workflow and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -f .github/workflows/release-v02258-sync.yml
+          git diff --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'release: align v0.22.58 and Worker 0.8.27 [release-v02258-sync]'
+          git push origin HEAD:release/v0.22.58-window-truth-v89
