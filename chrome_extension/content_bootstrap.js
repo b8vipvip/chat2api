@@ -36,6 +36,7 @@
           "content_rich_response_v69.js",
           "content_request_v6.js",
           "content_request_lifecycle_v50.js",
+          "content_conversation_quota_failover_v95.js",
           "content_request_hygiene_v42.js",
           "content_draft_ownership_v43.js",
           "content_draft_managed_recovery_v55.js",
