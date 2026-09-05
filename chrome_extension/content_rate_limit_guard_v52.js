@@ -8,6 +8,15 @@
   // limit must become a rate-limit terminal first, otherwise it is recorded as
   // a generic ChatGPT UI failure and the shared Worker cooldown never arms.
   const CHECK_MS = 180;
+  const CONVERSATION_LOCAL_MATCHERS = [
+    /聊天已暂停.{0,80}(?:额度|使用额度).{0,80}(?:重置|恢复)/i,
+    /(?:额度|使用额度).{0,80}(?:重置|恢复).{0,80}聊天已暂停/i,
+    /达到.{0,40}(?:包含|含有).{0,30}(?:文件|图像|图片).{0,40}(?:聊天次数)?上限/i,
+    /请(?:发起|开始|新建).{0,30}(?:新的)?纯文本聊天/i,
+    /chat (?:is )?paused.{0,100}(?:limit|usage|reset)/i,
+    /(?:start|begin|create).{0,40}(?:a )?new (?:text-only|text only|plain text) chat/i,
+    /(?:files?|images?).{0,80}(?:chat|conversation).{0,80}(?:limit|maximum)/i,
+  ];
   const MATCHERS = [
     /请求过于频繁/i,
     /暂时限制.*访问对话记录/i,
@@ -37,6 +46,7 @@
   const state = {
     version: 52,
     detection_revision: 63,
+    conversation_local_exclusion_revision: 95,
     timer: null,
     observer: null,
     lastFingerprint: "",
@@ -45,13 +55,19 @@
   globalThis[KEY] = state;
 
   const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
+  const matchesConversationLocalText = value => {
+    const text = normalize(value);
+    return Boolean(text && CONVERSATION_LOCAL_MATCHERS.some(pattern => pattern.test(text)));
+  };
   const matchesRateLimitText = value => {
     const text = normalize(value);
-    return Boolean(text && MATCHERS.some(pattern => pattern.test(text)));
+    if (!text || matchesConversationLocalText(text)) return false;
+    return MATCHERS.some(pattern => pattern.test(text));
   };
   const matchesHardLimitText = value => {
     const text = normalize(value);
-    return Boolean(text && HARD_LIMIT_MATCHERS.some(pattern => pattern.test(text)));
+    if (!text || matchesConversationLocalText(text)) return false;
+    return HARD_LIMIT_MATCHERS.some(pattern => pattern.test(text));
   };
 
   function visible(node) {
@@ -191,6 +207,7 @@
   state.text = rateLimitText;
   state.matches = matchesRateLimitText;
   state.matchesHard = matchesHardLimitText;
+  state.matchesConversationLocal = matchesConversationLocalText;
   state.latestAssistantLimitText = latestAssistantLimitText;
   state.terminateActiveRequest = terminateActiveRequest;
 
