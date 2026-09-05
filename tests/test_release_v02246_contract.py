@@ -10,9 +10,9 @@ from fastapi import FastAPI
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_formal_release_v02256_versions_and_notes_are_aligned() -> None:
+def test_formal_release_v02263_versions_and_notes_are_aligned() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert SERVER_RUNTIME_VERSION == "0.22.62"
+    assert SERVER_RUNTIME_VERSION == "0.22.63"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.28"
     assert manifest["version"] == "0.8.28"
@@ -20,10 +20,11 @@ def test_formal_release_v02256_versions_and_notes_are_aligned() -> None:
     assert "content_multimodal_v78.js" in manifest["content_scripts"][1]["js"]
     assert "content_multimodal_settle_v84.js" in manifest["content_scripts"][1]["js"]
     assert "content_request_terminal_prompt_v88.js" in manifest["content_scripts"][1]["js"]
+    assert "content_conversation_quota_failover_v95.js" in manifest["content_scripts"][1]["js"]
     assert (ROOT / "docs" / "releases" / "v0.22.46.md").is_file()
 
 
-def test_formal_release_advertises_v88_window_and_terminal_repairs() -> None:
+def test_formal_release_advertises_v95_conversation_quota_failover() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["chrome_bridge"]["version"] == "0.8.1"
     assert payload["chrome_bridge"]["bundle_version"] == "0.8.28"
@@ -37,7 +38,10 @@ def test_formal_release_advertises_v88_window_and_terminal_repairs() -> None:
     assert payload["features"]["long_prompt_fast_insert_v88"] is True
     assert payload["features"]["admin_window_manager_v88"] is True
     assert payload["features"]["request_id_window_correlation_v88"] is True
+    assert payload["features"]["conversation_quota_failover_v95"] is True
     assert "multimodal-main-world-v78" in payload["server"]["feature_revision"]
     assert "window-manager-fifo-v88" in payload["server"]["feature_revision"]
     assert "success-terminal-monotonic-v88" in payload["server"]["feature_revision"]
     assert "long-prompt-fast-insert-v88" in payload["server"]["feature_revision"]
+    assert "conversation-quota-failover-v95" in payload["server"]["feature_revision"]
+    assert "release-v02263" in payload["server"]["feature_revision"]
