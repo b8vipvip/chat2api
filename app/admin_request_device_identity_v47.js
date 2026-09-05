@@ -1,7 +1,13 @@
 (() => {
   const KEY = "__CHAT2API_ADMIN_DEVICE_IDENTITY_V47__";
   if (globalThis[KEY]) return;
-  const state = { rows: [], apiHooked: false, canonicalizeTimer: null, requestPaintTimer: null };
+  const state = {
+    rows: [],
+    apiHooked: false,
+    canonicalizeTimer: null,
+    requestPaintTimer: null,
+    requestStabilityRevision: 93,
+  };
   globalThis[KEY] = state;
 
   const replacements = [
@@ -77,6 +83,30 @@
     return document.querySelector("#view-requests table thead tr");
   }
 
+  function suppressLegacyRequestIdObserver() {
+    const body = document.getElementById("rqBody");
+    if (!body) return false;
+    // admin_window_manager_v88.js historically owned a second rqBody observer.
+    // Mark that legacy hook as already installed before v88 starts, then render the
+    // request-id column from this bounded request lifecycle instead. This keeps one
+    // structural owner for the request table and prevents render/observer feedback.
+    body.dataset.chat2apiRequestIdObserverV88 = "1";
+    body.dataset.chat2apiRequestOwnerV93 = "device-identity";
+    return true;
+  }
+
+  function ensureRequestIdHeader() {
+    const header = requestHeader();
+    if (!header) return -1;
+    const existing = header.querySelector("th[data-chat2api-request-id-v88]");
+    if (existing) return Array.from(header.children).indexOf(existing);
+    const th = document.createElement("th");
+    th.dataset.chat2apiRequestIdV88 = "1";
+    th.textContent = "请求ID";
+    header.insertBefore(th, header.children[1] || null);
+    return Array.from(header.children).indexOf(th);
+  }
+
   function ensureDeviceHeader() {
     const header = requestHeader();
     if (!header) return -1;
@@ -89,15 +119,17 @@
     th.dataset.chat2apiDeviceIdentity = "1";
     th.textContent = "设备标识";
     header.insertBefore(th, header.children[index] || null);
-    return index;
+    return Array.from(header.children).indexOf(th);
   }
 
   function paintRequestRows() {
     state.requestPaintTimer = null;
     const tbody = document.getElementById("rqBody");
     if (!tbody) return;
-    const index = ensureDeviceHeader();
-    if (index < 0) return;
+    suppressLegacyRequestIdObserver();
+    const requestIdIndex = ensureRequestIdHeader();
+    const deviceIndex = ensureDeviceHeader();
+    if (requestIdIndex < 0 || deviceIndex < 0) return;
     const domRows = Array.from(tbody.querySelectorAll(":scope > tr"));
     domRows.forEach((tr, rowIndex) => {
       if (tr.children.length === 1) {
@@ -105,11 +137,32 @@
         return;
       }
       const row = state.rows[rowIndex] || {};
+
+      let requestIdCell = tr.querySelector("td[data-chat2api-request-id-v88]");
+      if (!requestIdCell) {
+        requestIdCell = document.createElement("td");
+        requestIdCell.dataset.chat2apiRequestIdV88 = "1";
+        tr.insertBefore(requestIdCell, tr.children[requestIdIndex] || null);
+      }
+      const requestId = String(row.request_id || "");
+      const requestIdText = requestId || "-";
+      if (requestIdCell.textContent !== requestIdText) {
+        requestIdCell.textContent = "";
+        if (requestId) {
+          const code = document.createElement("code");
+          code.textContent = requestId;
+          requestIdCell.appendChild(code);
+        } else {
+          requestIdCell.textContent = "-";
+        }
+      }
+      if (requestIdCell.title !== requestId) requestIdCell.title = requestId;
+
       let cell = tr.querySelector("td[data-chat2api-device-identity]");
       if (!cell) {
         cell = document.createElement("td");
         cell.dataset.chat2apiDeviceIdentity = "1";
-        tr.insertBefore(cell, tr.children[index] || null);
+        tr.insertBefore(cell, tr.children[deviceIndex] || null);
       }
       const clientId = String(row.worker_client_id || row.client_id || "");
       const label = String(row.device_name || "").trim();
@@ -159,10 +212,12 @@
     return true;
   }
 
-  // Do not install a MutationObserver on rqBody. Request rendering is a bounded
-  // fetch -> synchronous table write -> one-shot decoration lifecycle. An observer
-  // here is unnecessary and has historically turned additive column patches into
-  // main-thread starvation with no JavaScript exception.
+  // Do not install an rqBody MutationObserver here. Request rendering is a bounded
+  // fetch -> synchronous table write -> one-shot decoration lifecycle. The legacy
+  // v88 request-id observer is suppressed above before window-manager startup.
+  if (!suppressLegacyRequestIdObserver() && document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", suppressLegacyRequestIdObserver, { once: true });
+  }
   canonicalizeStaticChrome();
   document.addEventListener("click", event => {
     const button = event.target?.closest?.(".nav button[data-view]");
