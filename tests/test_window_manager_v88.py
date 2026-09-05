@@ -63,7 +63,7 @@ def test_long_prompt_avoids_unbounded_execcommand_inserttext() -> None:
     assert 'prompt_fast_insert_method: "direct-text-node+input-event"' in guard
 
 
-def test_admin_window_management_and_request_id_are_installed() -> None:
+def test_admin_window_management_is_installed_and_isolated_from_request_history() -> None:
     entry = text("app/entry.py")
     patch = text("app/window_manager_v88_patch.py")
     ui = text("app/admin_window_manager_v88.js")
@@ -72,8 +72,10 @@ def test_admin_window_management_and_request_id_are_installed() -> None:
     assert '"/api/admin/window-manager/{client_id}/{window_id}/capture"' in patch
     for token in ("窗口管理", "接待中窗口", "已关闭窗口", "窗口编号", "设备码名称", "请求ID", "截图当前界面"):
         assert token in ui
-    assert "data-chat2api-request-id-v88" in ui
     assert "request_id" in ui
+    assert "rqBody" not in ui
+    assert "MutationObserver" not in ui
+    assert 'structural_owner: "window-manager-only"' in ui
 
 
 def test_v88_javascript_syntax() -> None:
