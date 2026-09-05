@@ -112,7 +112,7 @@ def test_external_account_tools_are_fail_closed_at_prompt_and_ui_layers():
 def test_runtime_contract_exposes_v48_v49_v50_v51_and_v55_features():
     app = FastAPI(version=SERVER_RUNTIME_VERSION)
     payload = version_contract_payload(app)
-    assert SERVER_RUNTIME_VERSION == "0.22.62"
+    assert SERVER_RUNTIME_VERSION == "0.22.63"
     assert payload["chrome_bridge"]["bundle_version"] == "0.8.28"
     assert payload["chrome_bridge"]["network_response_recovery_version"] == 55
     assert payload["chrome_bridge"]["network_response_parser_revision"] == 62
