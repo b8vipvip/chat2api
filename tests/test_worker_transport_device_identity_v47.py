@@ -135,15 +135,20 @@ def test_background_loads_transport_outbox_after_request_recovery():
     assert entry.index('"background_request_recovery_v40.js"') < entry.index('"background_transport_recovery_v47.js"')
 
 
-def test_admin_asset_uses_canonical_device_and_worker_terms():
-    source = (ROOT / "app" / "admin_request_device_identity_v47.js").read_text(encoding="utf-8")
-    assert 'th.textContent = "设备标识"' in source
-    assert '[/配对码/g, "设备码"]' in source
-    assert '[/扩展/g, "Worker"]' in source
-    assert "worker_client_id" in source
+def test_admin_identity_asset_only_canonicalizes_terms_and_server_owns_device_values():
+    identity = (ROOT / "app" / "admin_request_device_identity_v47.js").read_text(encoding="utf-8")
+    requests = (ROOT / "app" / "request_history_v94_patch.py").read_text(encoding="utf-8")
+    assert '[/配对码/g, "设备码"]' in identity
+    assert '[/扩展/g, "Worker"]' in identity
+    assert 'th.textContent = "设备标识"' not in identity
+    assert "paintRequestRows" not in identity
+    assert "<th>设备标识</th>" in requests
+    assert "r?.worker_client_id||r?.client_id" in requests
+    assert "r?.device_name" in requests
 
 
-def test_entry_installs_transport_recovery_after_request_recovery_and_identity_last():
+def test_entry_installs_transport_recovery_after_request_recovery_and_identity_before_final_requests():
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert entry.index("install_request_recovery_patch(app)") < entry.index("install_worker_transport_recovery_patch(app)")
     assert entry.index("install_linux_worker_console_polling_patch(app)") < entry.index("install_request_device_identity_patch(app)")
+    assert entry.index("install_request_device_identity_patch(app)") < entry.index("install_request_history_v94_patch(app)")
