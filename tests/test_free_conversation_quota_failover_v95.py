@@ -22,7 +22,7 @@ def test_free_conversation_quota_is_rotated_instead_of_honoring_five_minute_affi
         "聊天已暂停",
         "纯文本聊天",
         "activePromptStillPresent(active)",
-        'stage: "pre-dispatch-disabled-conversation"',
+        '"pre-dispatch-disabled-conversation"',
         'controller: "conversation-quota-failover-v95"',
     ):
         assert token in content
@@ -53,7 +53,9 @@ def test_conversation_local_quota_does_not_arm_account_wide_rate_limit() -> None
     assert "CONVERSATION_LOCAL_MATCHERS" in rate
     assert "matchesConversationLocalText(text)" in rate
     assert "if (!text || matchesConversationLocalText(text)) return false;" in rate
+    assert "pageHasConversationLocalQuota()" in rate
     assert "state.matchesConversationLocal = matchesConversationLocalText" in rate
+    assert "state.pageHasConversationLocalQuota = pageHasConversationLocalQuota" in rate
 
     # The background recovery may clear v52 only when the stored cooldown came
     # from the same conversation-local surface; a genuine account-wide cooldown
