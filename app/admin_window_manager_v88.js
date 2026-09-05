@@ -2,9 +2,10 @@
   const KEY = "__CHAT2API_ADMIN_WINDOW_MANAGER_V88__";
   if (globalThis[KEY]) return;
   const state = {
-    revision: 88,
-    navigation_revision: 89,
+    revision: 94,
+    navigation_revision: 94,
     truth_revision: 89,
+    structural_owner: "window-manager-only",
     active: [],
     closed: [],
     workers: [],
@@ -25,21 +26,13 @@
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 
-  const statusLabel = value => ({
-    loading: "加载中",
-    ready: "可接待",
-    in_use: "正在调用",
-    closed: "已关闭",
-  })[String(value || "")] || String(value || "-");
-
+  const statusLabel = value => ({ loading: "加载中", ready: "可接待", in_use: "正在调用", closed: "已关闭" })[String(value || "")] || String(value || "-");
   const formatTime = value => {
     const ms = Number(value || 0);
     if (!Number.isFinite(ms) || ms <= 0) return "-";
     try {
       return new Intl.DateTimeFormat("zh-CN", {
-        year: "numeric", month: "2-digit", day: "2-digit",
-        hour: "2-digit", minute: "2-digit", second: "2-digit",
-        hour12: false,
+        year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
       }).format(new Date(ms));
     } catch (_) { return new Date(ms).toLocaleString(); }
   };
@@ -160,12 +153,12 @@
     root.innerHTML = rows.length ? rows.map(row => rowHtml(row, closed)).join("") : `<tr><td colspan="7" class="muted">暂无窗口</td></tr>`;
     root.querySelectorAll("tr[data-window]").forEach((tr, index) => {
       const row = rows[index];
-      tr.querySelector("[data-capture]")?.addEventListener("click", buttonEvent => {
-        buttonEvent.preventDefault();
-        capture(row, buttonEvent.currentTarget);
+      tr.querySelector("[data-capture]")?.addEventListener("click", event => {
+        event.preventDefault();
+        capture(row, event.currentTarget);
       });
-      tr.querySelector("[data-view-shot]")?.addEventListener("click", buttonEvent => {
-        buttonEvent.preventDefault();
+      tr.querySelector("[data-view-shot]")?.addEventListener("click", event => {
+        event.preventDefault();
         viewScreenshot(row);
       });
     });
@@ -211,16 +204,13 @@
   async function refresh(force = false) {
     if (!isActive()) return null;
     if (state.refreshPromise) return state.refreshPromise;
-
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     state.refreshController = controller;
     const task = (async () => {
       try {
         const response = await fetch("/api/admin/window-manager", {
-          credentials: "same-origin",
-          cache: "no-store",
-          signal: controller.signal,
+          credentials: "same-origin", cache: "no-store", signal: controller.signal,
         });
         if (!response.ok) {
           if (force) console.warn("window manager refresh failed", response.status);
@@ -248,9 +238,7 @@
         if (force || signature !== state.signature) {
           state.signature = signature;
           render();
-        } else {
-          renderTruthStatus();
-        }
+        } else renderTruthStatus();
         return payload;
       } catch (error) {
         if (error?.name !== "AbortError" && force) console.warn("window manager refresh failed", error);
@@ -270,9 +258,7 @@
     if (button) { button.disabled = true; button.textContent = "截图中…"; }
     try {
       const response = await fetch(`/api/admin/window-manager/${encodeURIComponent(row.client_id)}/${encodeURIComponent(row.window_id)}/capture`, {
-        method: "POST",
-        credentials: "same-origin",
-        cache: "no-store",
+        method: "POST", credentials: "same-origin", cache: "no-store",
       });
       if (!response.ok) {
         let detail = `HTTP ${response.status}`;
@@ -310,59 +296,16 @@
     dialog.showModal();
   }
 
-  function paintRequestIds() {
-    const header = document.querySelector("#view-requests table thead tr");
-    const body = document.getElementById("rqBody");
-    if (!header || !body) return;
-    let th = header.querySelector("th[data-chat2api-request-id-v88]");
-    if (!th) {
-      th = document.createElement("th");
-      th.dataset.chat2apiRequestIdV88 = "1";
-      th.textContent = "请求ID";
-      header.insertBefore(th, header.children[1] || null);
-    }
-    const index = Array.from(header.children).indexOf(th);
-    const requestState = globalThis.__CHAT2API_ADMIN_DEVICE_IDENTITY_V47__;
-    const rows = Array.isArray(requestState?.rows) ? requestState.rows : [];
-    Array.from(body.querySelectorAll(":scope > tr")).forEach((tr, rowIndex) => {
-      if (tr.children.length === 1) {
-        tr.children[0].colSpan = Math.max(Number(tr.children[0].colSpan || 1), header.children.length);
-        return;
-      }
-      let cell = tr.querySelector("td[data-chat2api-request-id-v88]");
-      if (!cell) {
-        cell = document.createElement("td");
-        cell.dataset.chat2apiRequestIdV88 = "1";
-        tr.insertBefore(cell, tr.children[index] || null);
-      }
-      const requestId = String(rows[rowIndex]?.request_id || "");
-      const next = requestId || "-";
-      if (cell.textContent !== next) cell.innerHTML = requestId ? `<code>${esc(requestId)}</code>` : "-";
-      if (cell.title !== requestId) cell.title = requestId;
-    });
-  }
-
-  function installRequestIdObserver() {
-    const body = document.getElementById("rqBody");
-    if (!body || body.dataset.chat2apiRequestIdObserverV88) return;
-    body.dataset.chat2apiRequestIdObserverV88 = "1";
-    new MutationObserver(() => queueMicrotask(paintRequestIds)).observe(body, { childList: true, subtree: false });
-    paintRequestIds();
-  }
-
   function installNavigationLifecycle() {
     document.addEventListener("click", event => {
       const button = event.target?.closest?.(".nav button[data-view]");
       if (!button) return;
-      const view = String(button.dataset.view || "");
-      if (view !== "window-manager") stopPolling();
-      if (view === "requests") setTimeout(paintRequestIds, 0);
+      if (String(button.dataset.view || "") !== "window-manager") stopPolling();
     }, true);
     window.addEventListener("hashchange", () => {
       const view = (location.hash || "").slice(1);
       if (view !== "window-manager") stopPolling();
       else if (isActive()) schedulePoll(0);
-      if (view === "requests") setTimeout(paintRequestIds, 0);
     });
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) stopPolling();
@@ -375,11 +318,12 @@
       setTimeout(start, 100);
       return;
     }
-    installRequestIdObserver();
     installNavigationLifecycle();
     if ((location.hash || "").slice(1) === "window-manager") showWindowManager();
   }
 
+  // v94: window-manager owns only #view-window-manager. It never observes,
+  // decorates, or schedules work against #rqBody.
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
   else start();
 })();

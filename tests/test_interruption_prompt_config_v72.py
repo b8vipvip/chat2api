@@ -153,25 +153,32 @@ def test_admin_assets_have_editable_system_prompt_inline_save_defaults_and_copy_
     assert "自定义前置提示词" in legacy
     assert "自定义后置提示词" in legacy
     assert "脱敏配置" in legacy
-    assert "查看提示词" in legacy
     assert "最终完整提示词" in legacy
     assert "复制提示词" in legacy
     assert "/api/admin/prompt-config" in legacy
     assert "/api/admin/requests/" in legacy
+    assert 'document.getElementById("rqBody")' not in legacy
+    assert '$("rqBody")' not in legacy
+    assert "window.loadRequests" not in legacy
     assert 'system.removeAttribute("readonly")' in overlay
     assert 'addPromptActionBar("pcSystemDefaultPrefix", "system_default_prefix")' in overlay
     assert 'addPromptActionBar("pcPrefix", "prefix")' in overlay
     assert 'addPromptActionBar("pcSuffix", "suffix")' in overlay
     assert "默认推荐" in overlay
     assert "保存" in overlay
-    assert 'globalSave.remove()' in overlay
+    assert '$("pcSave")?.remove();' in overlay
     assert "saveRedaction" in overlay
+    assert "MutationObserver" not in overlay
+    assert 'document.getElementById("rqBody")' not in overlay
+    assert '$("rqBody")' not in overlay
 
 
-def test_entry_installs_prompt_config_as_final_boundary() -> None:
+def test_entry_installs_prompt_config_before_request_history_final_owner() -> None:
     source = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert "from .prompt_config_v72_patch import install_prompt_config_v72_patch" in source
-    assert source.rstrip().endswith("install_prompt_config_v72_patch(app)")
+    assert "from .request_history_v94_patch import install_request_history_v94_patch" in source
+    assert source.index("install_prompt_config_v72_patch(app)") < source.index("install_request_history_v94_patch(app)")
+    assert source.rstrip().endswith("install_request_history_v94_patch(app)")
 
 
 def test_new_javascript_syntax() -> None:

@@ -73,17 +73,18 @@ def test_runtime_preflight_has_current_bundle_fast_path_before_heal() -> None:
     assert first_contract < current_check < first_heal
 
 
-def test_prompt_viewer_recovers_request_id_from_current_row_renderer() -> None:
-    source = text("app/admin_prompt_config_v75.js")
-    assert 'tr.getAttribute("onclick")' in source
-    assert "function promptColumnIndex()" in source
-    assert "function ensurePromptCell(tr, index)" in source
-    assert 'button.textContent = "提示词"' in source
-    assert "promptButtonStyleSource" in source
-    assert "/下载日志/" in source
-    assert "window.showRequestPromptV72(requestId)" in source
-    assert "event.stopPropagation()" in source
-    assert 'new MutationObserver(schedule).observe(body, { childList: true, subtree: true, attributes: true })' in source
+def test_prompt_viewer_action_is_owned_by_canonical_request_renderer() -> None:
+    presentation = text("app/admin_prompt_config_v75.js")
+    prompt_ui = text("app/admin_prompt_config_v72.js")
+    requests = text("app/request_history_v94_patch.py")
+    assert 'tr.getAttribute("onclick")' not in presentation
+    assert "repairPromptCells" not in presentation
+    assert "MutationObserver" not in presentation
+    assert "function promptColumnIndex()" not in presentation
+    assert "window.showRequestPromptV72 = showRequestPrompt" in prompt_ui
+    assert "window.showRequestPromptV72(requestId)" in requests
+    assert "event.stopPropagation()" in requests
+    assert "requestHistoryButton" in requests
 
 
 def test_modified_v86_javascript_parses() -> None:
