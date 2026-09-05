@@ -84,6 +84,13 @@
     return globalThis.__CHAT2API_REQUEST_CONTENT_V5__?.active || globalThis.__CHAT2API_CONTENT__?.active || null;
   }
 
+  function pageHasConversationLocalQuota() {
+    const root = document.querySelector("main") || document.querySelector("[role='main']") || document.body;
+    const raw = normalize(root?.innerText || root?.textContent || "");
+    const bounded = raw.length > 24000 ? raw.slice(-24000) : raw;
+    return matchesConversationLocalText(bounded);
+  }
+
   function latestAssistantLimitText() {
     // Do not scan historical assistant messages while idle; only a currently
     // owned request may use the assistant-shell compatibility path.
@@ -94,7 +101,8 @@
     const latest = nodes[nodes.length - 1];
     if (!latest) return "";
     const text = normalize(latest.innerText || latest.textContent || "");
-    return matchesHardLimitText(text) ? text.slice(0, 500) : "";
+    if (!matchesHardLimitText(text)) return "";
+    return pageHasConversationLocalQuota() ? "" : text.slice(0, 500);
   }
 
   function rateLimitText() {
@@ -109,7 +117,12 @@
     const nodes = [...document.querySelectorAll(selectors.join(","))].filter(visible).slice(-12);
     for (const node of nodes.reverse()) {
       const text = normalize(node.innerText || node.textContent || "");
-      if (matchesRateLimitText(text)) return text.slice(0, 500);
+      if (!matchesRateLimitText(text)) continue;
+      // A nested alert can contain only the generic "limit reached" sentence
+      // while the surrounding composer card says "start a new text chat". In
+      // that case v95 owns recovery and v52 must not arm an account-wide block.
+      if (pageHasConversationLocalQuota()) return "";
+      return text.slice(0, 500);
     }
     return latestAssistantLimitText();
   }
@@ -208,6 +221,7 @@
   state.matches = matchesRateLimitText;
   state.matchesHard = matchesHardLimitText;
   state.matchesConversationLocal = matchesConversationLocalText;
+  state.pageHasConversationLocalQuota = pageHasConversationLocalQuota;
   state.latestAssistantLimitText = latestAssistantLimitText;
   state.terminateActiveRequest = terminateActiveRequest;
 
