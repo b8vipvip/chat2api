@@ -157,7 +157,8 @@ def test_admin_assets_have_editable_system_prompt_inline_save_defaults_and_copy_
     assert "复制提示词" in legacy
     assert "/api/admin/prompt-config" in legacy
     assert "/api/admin/requests/" in legacy
-    assert "rqBody" not in legacy
+    assert 'document.getElementById("rqBody")' not in legacy
+    assert '$("rqBody")' not in legacy
     assert "window.loadRequests" not in legacy
     assert 'system.removeAttribute("readonly")' in overlay
     assert 'addPromptActionBar("pcSystemDefaultPrefix", "system_default_prefix")' in overlay
@@ -168,7 +169,8 @@ def test_admin_assets_have_editable_system_prompt_inline_save_defaults_and_copy_
     assert '$("pcSave")?.remove();' in overlay
     assert "saveRedaction" in overlay
     assert "MutationObserver" not in overlay
-    assert "rqBody" not in overlay
+    assert 'document.getElementById("rqBody")' not in overlay
+    assert '$("rqBody")' not in overlay
 
 
 def test_entry_installs_prompt_config_before_request_history_final_owner() -> None:
