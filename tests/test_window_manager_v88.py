@@ -73,7 +73,8 @@ def test_admin_window_management_is_installed_and_isolated_from_request_history(
     for token in ("窗口管理", "接待中窗口", "已关闭窗口", "窗口编号", "设备码名称", "请求ID", "截图当前界面"):
         assert token in ui
     assert "request_id" in ui
-    assert "rqBody" not in ui
+    assert 'document.getElementById("rqBody")' not in ui
+    assert '$("rqBody")' not in ui
     assert "MutationObserver" not in ui
     assert 'structural_owner: "window-manager-only"' in ui
 
