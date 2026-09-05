@@ -16,9 +16,11 @@ from .live_voice_patch import LIVE_PROTOCOL_VERSION
 # server runtime/console, the Worker wire protocol, the shipped unpacked
 # Worker bundle, and the realtime wire protocol can evolve independently.
 SERVER_RUNTIME_VERSION = "0.22.64"
-# Retain the immediately previous server runtime as explicit release-lineage
-# metadata for compatibility diagnostics and upgrade reporting.
+# Retain recent server-runtime lineage explicitly for compatibility diagnostics
+# and upgrade reporting. A number of historical contract tests also inspect the
+# older lineage marker while newer release tests assert SERVER_RUNTIME_VERSION.
 PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.63"
+PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.62"
 # v0.22.24 remains the compatibility baseline for Workers that first gained the
 # bounded initialize/recovery command. Later runtimes can evolve control-plane
 # behavior without changing that bootstrap compatibility floor.
