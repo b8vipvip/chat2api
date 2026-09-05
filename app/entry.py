@@ -73,6 +73,7 @@ from .api_key_console_v68_patch import install_api_key_console_v68_patch
 from .rich_response_docs_patch import install_rich_response_docs_patch
 from .prompt_config_v72_patch import install_prompt_config_v72_patch
 from .attachment_download_v82_patch import install_attachment_download_v82_patch
+from .request_history_v94_patch import install_request_history_v94_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -192,11 +193,11 @@ install_generation_backend_routing_patch(app)
 # stable renderer consume the base page's shared snapshot instead of polling twice.
 install_linux_worker_console_polling_patch(app)
 # Request history resolves ext_* transport identities to the administrator's
-# human device-code name and injects the canonical Worker/设备码 terminology layer.
+# human device-code name. Its browser asset is terminology-only; it no longer
+# owns or repairs request-history table structure.
 install_request_device_identity_patch(app)
-# v88 exposes the browser-owned FIFO window registry and authenticated screenshot
-# command after device-name decoration, so Window Management can show stable
-# device names without adding another identity authority.
+# Window Management owns only its own view/polling/capture lifecycle. It does not
+# observe or decorate the request-history table.
 install_window_manager_v88_patch(app)
 
 # Docker deployments cannot safely update their own host by exposing the Docker
@@ -233,7 +234,11 @@ install_rich_response_docs_patch(app)
 # the historical extension download route so Unicode filenames cannot crash
 # Starlette header encoding while leaving prompt construction untouched.
 install_attachment_download_v82_patch(app)
-# Prompt configuration remains the final request boundary: it decorates the
-# canonical build_prompt symbol, audits the exact Worker payload, and adds the
-# administrator prompt viewer/configuration UI without changing API shapes.
+# Prompt configuration owns prompt construction, auditing, and its own UI only.
+# Its browser assets no longer wrap loadRequests or mutate #rqBody.
 install_prompt_config_v72_patch(app)
+# Final admin request-history normalization happens once on the server after all
+# historical HTML patches. The browser receives one canonical loadRequests owner;
+# feature modules may provide actions (for example the prompt modal) but never
+# own request-table structure or rendering.
+install_request_history_v94_patch(app)
