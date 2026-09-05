@@ -13,9 +13,9 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_v02263_versions_and_v85_safe_submit_are_shipped() -> None:
+def test_v02264_versions_and_v85_safe_submit_are_shipped() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert SERVER_RUNTIME_VERSION == "0.22.63"
+    assert SERVER_RUNTIME_VERSION == "0.22.64"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.28"
     assert manifest["version"] == "0.8.28"
     scripts = next(item for item in manifest["content_scripts"] if item.get("world") != "MAIN")["js"]
