@@ -190,7 +190,7 @@ def test_release_contract_is_v02256_and_worker_bundle_0826() -> None:
     marker = read("chrome_extension/content_bundle_marker_v48.js")
     preflight = read("chrome_extension/background_runtime_preflight_v48.js")
     contract = read("chrome_extension/content_runtime_contract_v48.js")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.61"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.62"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.28"' in runtime
     assert '"version": "0.8.28"' in manifest
     assert 'bundle: "0.8.28"' in marker
