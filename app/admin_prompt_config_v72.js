@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_PROMPT_CONFIG_V72__";
   if (window[KEY]) return;
 
-  const state = { revision: 73, config: null, baseShow: window.show, baseLoadRequests: window.loadRequests };
+  const state = { revision: 94, config: null, structural_owner: false, loadConfig: null };
   window[KEY] = state;
   const $ = id => document.getElementById(id);
   const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
@@ -20,15 +20,35 @@
     return payload || {};
   }
 
+  function activatePromptView() {
+    document.querySelectorAll(".view").forEach(view => view.classList.toggle("active", view.id === "view-prompt-config"));
+    document.querySelectorAll(".nav button[data-view]").forEach(button => button.classList.toggle("active", button.dataset.view === "prompt-config"));
+    const title = $("pageTitle");
+    if (title) title.textContent = "提示词配置";
+    if (location.hash !== "#prompt-config") location.hash = "prompt-config";
+    loadConfig();
+  }
+
   function ensureNavigation() {
     const nav = document.querySelector(".nav");
-    if (!nav || nav.querySelector('[data-view="prompt-config"]')) return;
-    const button = document.createElement("button");
-    button.className = "nav-btn";
-    button.dataset.view = "prompt-config";
-    button.textContent = "提示词配置";
-    const settings = nav.querySelector('[data-view="settings"]');
-    nav.insertBefore(button, settings || null);
+    if (!nav) return null;
+    let button = nav.querySelector('[data-view="prompt-config"]');
+    if (!button) {
+      button = document.createElement("button");
+      button.className = "nav-btn";
+      button.dataset.view = "prompt-config";
+      button.textContent = "提示词配置";
+      const settings = nav.querySelector('[data-view="settings"]');
+      nav.insertBefore(button, settings || null);
+    }
+    if (button.dataset.promptConfigOwnerV94 !== "1") {
+      button.dataset.promptConfigOwnerV94 = "1";
+      button.addEventListener("click", event => {
+        event.preventDefault();
+        activatePromptView();
+      });
+    }
+    return button;
   }
 
   function ensureView() {
@@ -44,7 +64,7 @@
         <div class="muted">处理顺序：系统默认前置提示词 → 自定义前置提示词 → OpenAI messages/chat2api 基础提示词 → 自定义后置提示词 → 脱敏规则 → Worker/ChatGPT。请求记录中的“提示词”显示最终实际发送内容。</div>
         <label style="display:block;margin-top:12px">系统默认前置提示词</label>
         <textarea id="pcSystemDefaultPrefix" rows="9" readonly style="width:100%;margin-top:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--surface-2,#f6f7f9)" placeholder="系统当前没有默认前置提示词"></textarea>
-        <div class="muted" style="margin-top:6px">该内容由 chat2api 运行时内置，用于保证 API 请求不调用 ChatGPT 外部账户连接器。这里只读显示，避免控制台配置意外关闭运行时安全边界。</div>
+        <div class="muted" style="margin-top:6px">该内容由 chat2api 运行时内置，用于保证 API 请求不调用 ChatGPT 外部账户连接器。</div>
         <label style="display:block;margin-top:12px">自定义前置提示词</label>
         <textarea id="pcPrefix" rows="7" style="width:100%;margin-top:6px" placeholder="留空表示不添加。会插入到系统默认前置提示词之后。"></textarea>
         <label style="display:block;margin-top:12px">自定义后置提示词</label>
@@ -97,30 +117,34 @@
 
   function renderConfig(config) {
     state.config = config || {};
-    $("pcSystemDefaultPrefix").value = config?.system_default_prefix || "";
-    $("pcPrefix").value = config?.prefix || "";
-    $("pcSuffix").value = config?.suffix || "";
-    $("pcRedactionEnabled").checked = Boolean(config?.redaction_enabled);
-    $("pcAudit").checked = config?.audit_final_prompt !== false;
-    $("pcRules").innerHTML = "";
-    for (const rule of config?.rules || []) addRule(rule);
+    if ($("pcSystemDefaultPrefix")) $("pcSystemDefaultPrefix").value = config?.system_default_prefix || "";
+    if ($("pcPrefix")) $("pcPrefix").value = config?.prefix || "";
+    if ($("pcSuffix")) $("pcSuffix").value = config?.suffix || "";
+    if ($("pcRedactionEnabled")) $("pcRedactionEnabled").checked = Boolean(config?.redaction_enabled);
+    if ($("pcAudit")) $("pcAudit").checked = config?.audit_final_prompt !== false;
+    if ($("pcRules")) {
+      $("pcRules").innerHTML = "";
+      for (const rule of config?.rules || []) addRule(rule);
+    }
     const systemChars = (config?.system_default_prefix || "").length;
-    $("pcStatus").textContent = `配置版本 revision=${config?.revision || 1} · 系统默认前置提示词 ${systemChars} 字符${config?.updated_at ? ` · 更新时间 ${config.updated_at}` : ""}${config?.last_error ? `\n加载警告：${config.last_error}` : ""}`;
+    if ($("pcStatus")) $("pcStatus").textContent = `配置版本 revision=${config?.revision || 1} · 系统默认前置提示词 ${systemChars} 字符${config?.updated_at ? ` · 更新时间 ${config.updated_at}` : ""}${config?.last_error ? `\n加载警告：${config.last_error}` : ""}`;
   }
 
   function collectConfig() {
-    const rules = [...$("pcRules").querySelectorAll("tr")].map(tr => ({
-      enabled: tr.querySelector('[data-field="enabled"]').checked,
-      name: tr.querySelector('[data-field="name"]').value,
-      pattern: tr.querySelector('[data-field="pattern"]').value,
-      replacement: tr.querySelector('[data-field="replacement"]').value,
-      flags: tr.querySelector('[data-field="flags"]').value,
-    }));
+    const body = $("pcRules");
+    const rules = body ? [...body.querySelectorAll("tr")].map(tr => ({
+      enabled: tr.querySelector('[data-field="enabled"]')?.checked === true,
+      name: tr.querySelector('[data-field="name"]')?.value || "",
+      pattern: tr.querySelector('[data-field="pattern"]')?.value || "",
+      replacement: tr.querySelector('[data-field="replacement"]')?.value || "",
+      flags: tr.querySelector('[data-field="flags"]')?.value || "",
+    })) : [];
     return {
-      prefix: $("pcPrefix").value,
-      suffix: $("pcSuffix").value,
-      redaction_enabled: $("pcRedactionEnabled").checked,
-      audit_final_prompt: $("pcAudit").checked,
+      system_default_prefix: $("pcSystemDefaultPrefix")?.value || "",
+      prefix: $("pcPrefix")?.value || "",
+      suffix: $("pcSuffix")?.value || "",
+      redaction_enabled: $("pcRedactionEnabled")?.checked === true,
+      audit_final_prompt: $("pcAudit")?.checked !== false,
       rules,
     };
   }
@@ -135,26 +159,27 @@
       $("pcStatus").textContent = `加载失败：${error.message || error}`;
     }
   }
+  state.loadConfig = loadConfig;
 
   async function saveConfig() {
-    $("pcStatus").textContent = "正在保存并校验正则…";
+    if ($("pcStatus")) $("pcStatus").textContent = "正在保存并校验正则…";
     try {
       const payload = await api("/api/admin/prompt-config", { method: "PUT", body: JSON.stringify(collectConfig()) });
       renderConfig(payload.config || {});
-      $("pcStatus").textContent = `保存成功 · revision=${payload.config?.revision || "-"} · 系统默认前置提示词保持只读 · 新请求立即生效`;
+      if ($("pcStatus")) $("pcStatus").textContent = `保存成功 · revision=${payload.config?.revision || "-"} · 新请求立即生效`;
     } catch (error) {
-      $("pcStatus").textContent = `保存失败：${error.message || error}`;
+      if ($("pcStatus")) $("pcStatus").textContent = `保存失败：${error.message || error}`;
     }
   }
 
   async function previewConfig() {
     try {
-      const payload = await api("/api/admin/prompt-config/preview", { method: "POST", body: JSON.stringify({ prompt: $("pcPreviewInput").value }) });
-      $("pcPreviewOutput").value = payload.output || "";
+      const payload = await api("/api/admin/prompt-config/preview", { method: "POST", body: JSON.stringify({ prompt: $("pcPreviewInput")?.value || "" }) });
+      if ($("pcPreviewOutput")) $("pcPreviewOutput").value = payload.output || "";
       const redactions = payload.meta?.redaction_count || 0;
-      $("pcStatus").textContent = `预览完成 · revision=${payload.meta?.revision || "-"} · 系统默认前置提示词=${payload.meta?.system_default_prefix_applied ? "已应用" : "未应用"} · 脱敏替换 ${redactions} 处`;
+      if ($("pcStatus")) $("pcStatus").textContent = `预览完成 · revision=${payload.meta?.revision || "-"} · 脱敏替换 ${redactions} 处`;
     } catch (error) {
-      $("pcStatus").textContent = `预览失败：${error.message || error}`;
+      if ($("pcStatus")) $("pcStatus").textContent = `预览失败：${error.message || error}`;
     }
   }
 
@@ -200,67 +225,10 @@
   }
   window.showRequestPromptV72 = showRequestPrompt;
 
-  function ensurePromptColumnHeader() {
-    const table = $("rqBody")?.closest("table");
-    const row = table?.querySelector("thead tr");
-    if (!row || row.querySelector('[data-prompt-column="1"]')) return;
-    const th = document.createElement("th");
-    th.dataset.promptColumn = "1";
-    th.textContent = "提示词";
-    row.appendChild(th);
-  }
-
-  function augmentRequestRows() {
-    ensurePromptColumnHeader();
-    const body = $("rqBody");
-    if (!body) return;
-    for (const tr of body.querySelectorAll("tr")) {
-      if (tr.querySelector('[data-prompt-cell="1"]')) continue;
-      const logButton = [...tr.querySelectorAll("button")].find(button => /日志/.test(button.textContent || ""));
-      const onclick = logButton?.getAttribute("onclick") || "";
-      const match = onclick.match(/showReq\(['\"]([^'\"]+)/);
-      const td = document.createElement("td");
-      td.dataset.promptCell = "1";
-      if (match?.[1]) {
-        const button = document.createElement("button");
-        button.className = "secondary";
-        button.textContent = "查看提示词";
-        button.onclick = () => showRequestPrompt(match[1]);
-        td.appendChild(button);
-      } else {
-        td.textContent = "-";
-      }
-      tr.appendChild(td);
-    }
-  }
-
-  function patchRequestLoader() {
-    if (typeof state.baseLoadRequests !== "function") return;
-    window.loadRequests = async (...args) => {
-      const result = await state.baseLoadRequests(...args);
-      augmentRequestRows();
-      return result;
-    };
-    if ($("rqGo")) $("rqGo").onclick = window.loadRequests;
-    augmentRequestRows();
-  }
-
-  function patchShow() {
-    if (typeof state.baseShow !== "function") return;
-    window.show = async view => {
-      const result = await state.baseShow(view);
-      if (view === "prompt-config") await loadConfig();
-      if (view === "requests") augmentRequestRows();
-      return result;
-    };
-    for (const button of document.querySelectorAll(".nav-btn")) {
-      button.onclick = () => window.show(button.dataset.view);
-    }
-  }
-
-  ensureNavigation();
+  // v94: prompt configuration owns only its own view/modal. It does not wrap
+  // window.show/loadRequests and never mutates the request-history table.
   ensureView();
+  ensureNavigation();
   ensurePromptModal();
-  patchRequestLoader();
-  patchShow();
+  if (location.hash === "#prompt-config") setTimeout(activatePromptView, 0);
 })();
