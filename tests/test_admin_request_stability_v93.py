@@ -26,6 +26,15 @@ def test_request_history_v94_feature_assets_do_not_own_rqbody() -> None:
     assert 'structural_owner: "window-manager-only"' in window
 
 
+def test_request_history_v94_no_admin_asset_has_a_second_rqbody_owner() -> None:
+    offenders = []
+    for path in sorted((ROOT / "app").glob("admin*.js")):
+        source = path.read_text(encoding="utf-8")
+        if "rqBody" in source:
+            offenders.append(path.name)
+    assert offenders == [], f"request-history browser owners remain: {offenders}"
+
+
 def test_request_history_v94_normalizer_replaces_base_owner_instead_of_wrapping_it() -> None:
     html = _normalize_admin_html(admin_module.ADMIN_HTML)
 
