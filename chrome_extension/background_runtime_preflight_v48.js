@@ -3,7 +3,8 @@
   if (globalThis[KEY]) return;
 
   // Worker bundle 0.8.28 keeps the v71 request/response epoch while requiring
-  // the v78 MAIN-world upload bridge, v85 safe-submit gate and v88 terminal/prompt guard.
+  // the v78 MAIN-world upload bridge, v85 safe-submit gate, v88 terminal/prompt
+  // guard, and v95 conversation-local quota failover owner.
   const REQUIRED_BUNDLE = "0.8.28";
   const REQUIRED_REVISION = 71;
   const CONTRACT_TIMEOUT_MS = 700;
@@ -18,6 +19,7 @@
     "content_multimodal_settle_v84.js",
     "content_multimodal_settle_v85.js",
     "content_request_lifecycle_v50.js",
+    "content_conversation_quota_failover_v95.js",
     "content_request_hygiene_v42.js",
     "content_draft_managed_recovery_v55.js",
     "content_rich_response_v69.js",
@@ -35,11 +37,12 @@
   const inflight = new Map();
   const state = {
     version: 71,
-    revision: 88,
+    revision: 95,
     required_bundle: REQUIRED_BUNDLE,
     required_revision: REQUIRED_REVISION,
     multimodal_revision: 85,
     terminal_prompt_revision: 88,
+    conversation_quota_failover_revision: 95,
     checks: 0,
     fast_path_hits: 0,
     contract_timeouts: 0,
@@ -100,7 +103,8 @@
       result?.modules?.multimodal_v84 &&
       result?.modules?.multimodal_v85 &&
       result?.modules?.multimodal_main_v78 &&
-      result?.modules?.terminal_prompt_v88
+      result?.modules?.terminal_prompt_v88 &&
+      result?.modules?.conversation_quota_failover_v95
     );
   }
 
@@ -172,6 +176,7 @@
         contract_revision: result.contract_revision,
         multimodal_revision: result.multimodal_revision,
         terminal_prompt_revision: 88,
+        conversation_quota_failover_revision: 95,
         tool_preflight: toolPreflight,
         elapsed_ms: Date.now() - started,
         at_ms: Date.now(),
@@ -180,9 +185,9 @@
     }
 
     // The whole recovery path remains wall-clock bounded by the v87 algorithm.
-    // Bundle 0.8.28 additionally requires the v88 terminal/prompt guard, so
-    // repaired tabs cannot silently lose successful-terminal protection or the
-    // long-prompt fast insert path.
+    // Bundle 0.8.28 additionally requires the v88 terminal/prompt guard and v95
+    // conversation-local quota failover, so repaired tabs cannot keep a poisoned
+    // affinity conversation after ChatGPT explicitly asks for a fresh chat.
     result = await heal(tabId);
     let reloaded = false;
     const hotHealed = current(result);
@@ -214,7 +219,7 @@
         budget_ms: CONTRACT_TIMEOUT_MS + HOT_HEAL_BUDGET_MS + RELOAD_BUDGET_MS + FINAL_HEAL_BUDGET_MS,
         at_ms: Date.now(),
       });
-      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the v87-bounded preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85 terminal/prompt revision 88`);
+      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the v87-bounded preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85 terminal/prompt revision 88 conversation-quota-failover revision 95`);
       error.code = "chatgpt_runtime_preflight_budget";
       throw error;
     }
@@ -231,6 +236,7 @@
       contract_revision: result.contract_revision,
       multimodal_revision: result.multimodal_revision,
       terminal_prompt_revision: 88,
+      conversation_quota_failover_revision: 95,
       tool_preflight: toolPreflight,
       elapsed_ms: Date.now() - started,
       at_ms: Date.now(),
