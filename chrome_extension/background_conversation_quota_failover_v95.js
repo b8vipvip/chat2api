@@ -6,6 +6,14 @@
   const RATE_LIMIT_STORAGE_KEY = "chatgptRateLimitGuardV52";
   const MAX_ROTATIONS = 2;
   const RETAIN_MS = 120000;
+  const LOCAL_QUOTA_PATTERNS = [
+    /聊天已暂停.{0,80}(?:额度|使用额度).{0,80}(?:重置|恢复)/i,
+    /达到.{0,40}(?:包含|含有).{0,30}(?:文件|图像|图片).{0,40}(?:聊天次数)?上限/i,
+    /请(?:发起|开始|新建).{0,30}(?:新的)?纯文本聊天/i,
+    /chat (?:is )?paused.{0,100}(?:limit|usage|reset)/i,
+    /(?:start|begin|create).{0,40}(?:a )?new (?:text-only|text only|plain text) chat/i,
+    /(?:files?|images?).{0,80}(?:chat|conversation).{0,80}(?:limit|maximum)/i,
+  ];
   const state = {
     version: 95,
     revision: 95,
@@ -19,6 +27,11 @@
   globalThis[KEY] = state;
 
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const normalize = value => String(value || "").replace(/\s+/g, " ").trim();
+  const looksConversationLocal = value => {
+    const text = normalize(value);
+    return Boolean(text && LOCAL_QUOTA_PATTERNS.some(pattern => pattern.test(text)));
+  };
 
   function cloneMessage(message) {
     try { return structuredClone(message); } catch (_) {}
@@ -49,10 +62,15 @@
     setTimeout(() => cleanup(requestId), RETAIN_MS);
   }
 
-  async function clearConversationLocalGlobalCooldown(text) {
+  async function clearConversationLocalGlobalCooldown(text, href) {
     const stored = await chrome.storage.local.get({ [RATE_LIMIT_STORAGE_KEY]: null }).catch(() => ({}));
     const current = stored?.[RATE_LIMIT_STORAGE_KEY];
     if (!current?.active) return false;
+    const sameSurface = Boolean(
+      looksConversationLocal(current?.text) ||
+      (looksConversationLocal(text) && String(current?.url || "") === String(href || ""))
+    );
+    if (!sameSurface) return false;
     await chrome.storage.local.set({
       [RATE_LIMIT_STORAGE_KEY]: {
         ...current,
@@ -96,7 +114,7 @@
 
   async function terminalExhausted(requestId, detail) {
     state.exhausted += 1;
-    await clearConversationLocalGlobalCooldown(detail?.text);
+    await clearConversationLocalGlobalCooldown(detail?.text, detail?.href);
     await recycle(requestId, "conversation-quota-failover-exhausted-v95");
     globalThis.__CHAT2API_CONVERSATION_WORKERS_V25__?.releaseRequest?.(requestId);
     globalThis.__CHAT2API_CONVERSATION_DISPATCH_V1__?.requestTabs?.delete?.(requestId);
@@ -145,10 +163,10 @@
       conversation_quota_block_text: state.last.text,
     });
 
-    // This surface is local to the current conversation. Never leave the generic
-    // account-wide v52 cooldown armed, otherwise its window-create guard would
-    // prevent the exact fresh-chat recovery ChatGPT is asking us to perform.
-    await clearConversationLocalGlobalCooldown(detail?.text);
+    // This surface is local to the current conversation. Clear v52 only when the
+    // stored cooldown came from the same local surface; never erase an unrelated
+    // account-wide rate limit detected by another Worker window.
+    await clearConversationLocalGlobalCooldown(detail?.text, detail?.href);
 
     const recycled = await recycle(requestId, "conversation-local-quota-blocked-v95");
     if (!recycled) {
@@ -181,6 +199,7 @@
 
   state.rotateAndReplay = rotateAndReplay;
   state.cleanup = cleanup;
+  state.looksConversationLocal = looksConversationLocal;
 
   const baseHandleServerMessage = handleServerMessage;
   handleServerMessage = async function handleConversationQuotaFailoverV95(message) {
