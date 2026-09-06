@@ -115,16 +115,13 @@ def test_actual_served_admin_and_assets_have_one_request_history_owner() -> None
 def test_canonical_renderer_has_exact_thirteen_cell_contract() -> None:
     probe = _run_fresh_entry_probe()
     page = probe["page"]
-    # Count canonical row construction calls in loadRequests. Status and two
-    # action columns each append one cell, so this contract must total 13.
     start = page.index("async function loadRequests()")
     end = page.index("requestHistoryEnsureControls();", start)
     loader = page[start:end]
-    assert loader.count("requestHistoryCell(tr,") == 9
+    # time, request ID, type, key, device, model, attachment, first-token,
+    # total-time and token are normal cells; status is one cell; conversation
+    # and log are two action cells. No historical renderer may append extras.
+    assert loader.count("requestHistoryCell(tr,") == 10
     assert loader.count("requestHistoryStatusCell(tr,") == 1
     assert loader.count("requestHistoryButton(tr,") == 2
-    # The remaining cell is request ID, also created through requestHistoryCell;
-    # the 9 count above already includes it: time, ID, type, key, device, model,
-    # attachment, first-token, total-time, token = 10. Keep an explicit total
-    # calculation below so a future column edit cannot silently misalign rows.
     assert loader.count("requestHistoryCell(tr,") + loader.count("requestHistoryStatusCell(tr,") + loader.count("requestHistoryButton(tr,") == 13
