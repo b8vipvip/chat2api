@@ -112,7 +112,10 @@ class TelemetryStore:
         key_id: str | None = None,
         q: str | None = None,
     ) -> dict[str, Any]:
-        rows = list(self.items)[::-1]
+        # Query consumers are allowed to decorate/redact list rows. Return copies
+        # so list-only redaction (final_prompt/response_text) can never mutate the
+        # authoritative in-memory detail record used by /api/admin/requests/{id}.
+        rows = [dict(row) for row in reversed(self.items)]
         status_value = (status or "").strip().lower()
         model_value = (model or "").strip().lower()
         key_value = (key_id or "").strip()

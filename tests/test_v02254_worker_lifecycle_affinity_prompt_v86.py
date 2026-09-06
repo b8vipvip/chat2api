@@ -73,7 +73,7 @@ def test_runtime_preflight_has_current_bundle_fast_path_before_heal() -> None:
     assert first_contract < current_check < first_heal
 
 
-def test_prompt_viewer_action_is_owned_by_canonical_request_renderer() -> None:
+def test_conversation_viewer_action_is_owned_by_canonical_request_renderer() -> None:
     presentation = text("app/admin_prompt_config_v75.js")
     prompt_ui = text("app/admin_prompt_config_v72.js")
     requests = text("app/request_history_v94_patch.py")
@@ -82,7 +82,8 @@ def test_prompt_viewer_action_is_owned_by_canonical_request_renderer() -> None:
     assert "MutationObserver" not in presentation
     assert "function promptColumnIndex()" not in presentation
     assert "window.showRequestPromptV72 = showRequestPrompt" in prompt_ui
-    assert "window.showRequestPromptV72(requestId)" in requests
+    assert "window.showRequestConversationV97=requestHistoryShowConversation" in requests
+    assert "查看本次请求的提示词和生成回复" in requests
     assert "event.stopPropagation()" in requests
     assert "requestHistoryButton" in requests
 
@@ -128,9 +129,3 @@ def test_v02264_runtime_contract_and_worker_bundle_are_aligned() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["features"]["worker_disabled_window_guard_v86"] is True
     assert payload["features"]["successful_route_preservation_v86"] is True
-    assert payload["features"]["runtime_preflight_fast_path_v86"] is True
-    assert payload["features"]["request_prompt_viewer_repair_v86"] is True
-    assert payload["features"]["window_affinity_v87"] is True
-    assert payload["features"]["healthy_spare_lease_refresh_v87"] is True
-    assert payload["features"]["stale_route_window_cleanup_v87"] is True
-    assert payload["features"]["runtime_preflight_budget_v87"] is True

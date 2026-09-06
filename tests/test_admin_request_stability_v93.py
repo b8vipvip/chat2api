@@ -34,6 +34,9 @@ def test_request_history_v94_compiles_historical_request_owners_out_before_deliv
         assert "rqBody" not in compiled
         assert "loadRequestsV7" not in compiled
         assert "loadRequestsV8" not in compiled
+    v8 = (ROOT / "app" / "admin_v8.js").read_text(encoding="utf-8")
+    assert "data-chat2api-log" not in v8
+    assert "loadRequestsV8" not in v8
     v10 = compile_legacy_admin_asset("admin_v10.js", (ROOT / "app" / "admin_v10.js").read_text(encoding="utf-8"))
     assert '"recentBody", "keysBody", "testHistory"' in v10
     assert '"#recentBody,#testHistory"' in v10
@@ -47,16 +50,28 @@ def test_request_history_v94_normalizer_replaces_base_owner_instead_of_wrapping_
     assert "时间（北京时间）" in html
     assert "<th>请求ID</th>" in html
     assert "<th>设备标识</th>" in html
-    assert "<th>提示词</th>" in html
-    assert "<th>日志</th>" in html
+    assert "<th>对话</th>" in html
+    assert html.count("<th>日志</th>") == 1
     assert "body.replaceChildren()" in html
     assert "requestHistoryCell" in html
     assert "requestHistoryButton" in html
     assert "textContent=requestHistoryText(value)" in html
+    assert "requestId.slice(-4)" in html
+    assert "查看对话" in html
+    assert "requestHistoryShowConversation" in html
+    assert "生成回复" in html
     assert "requestHistoryDownload" in html
     assert "下载诊断日志包" in html
     assert "下载日志" in html
     assert ".innerHTML=d.data.map" not in html
+
+
+def test_request_history_v94_persists_reply_outside_list_payload() -> None:
+    patch = (ROOT / "app" / "request_history_v94_patch.py").read_text(encoding="utf-8")
+
+    assert '"response_text": response_text' in patch
+    assert 'row.pop("response_text", None)' in patch
+    assert 'event_type in {"chat.completed", "chat.error", "chat.cancelled"}' in patch
 
 
 def test_request_history_v94_is_installed_after_prompt_ui_and_is_fail_fast() -> None:

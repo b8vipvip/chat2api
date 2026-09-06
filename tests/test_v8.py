@@ -101,10 +101,13 @@ def test_diagnostic_zip_contains_sanitized_failure_context(tmp_path: Path) -> No
             assert b"private diagnostic prompt" not in combined
 
 
-def test_admin_v8_adds_global_and_per_request_log_downloads() -> None:
+def test_admin_v8_request_history_ui_is_retired_to_canonical_owner() -> None:
     root = Path(__file__).resolve().parents[1]
-    source = (root / "app" / "admin_v8.js").read_text(encoding="utf-8")
-    assert "下载诊断日志包" in source
-    assert "data-request-log" in source
-    assert "/api/admin/diagnostics/export" in source
-    assert "/log" in source
+    legacy = (root / "app" / "admin_v8.js").read_text(encoding="utf-8")
+    canonical = (root / "app" / "request_history_v94_patch.py").read_text(encoding="utf-8")
+    assert "loadRequestsV8" not in legacy
+    assert "data-chat2api-log" not in legacy
+    assert "rqBody" not in legacy
+    assert "下载诊断日志包" in canonical
+    assert "/api/admin/diagnostics/export" in canonical
+    assert "/log" in canonical
