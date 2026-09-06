@@ -1,6 +1,6 @@
 (() => {
   if (globalThis.__CHAT2API_SERVER_UPDATE_UI__) return;
-  globalThis.__CHAT2API_SERVER_UPDATE_UI__ = {version: 2};
+  globalThis.__CHAT2API_SERVER_UPDATE_UI__ = {version: 3};
 
   const nav = document.querySelector(".nav");
   const content = document.querySelector(".content");
@@ -229,8 +229,6 @@
   };
   $("updStart").onclick = async () => {
     const useBuildCache = Boolean($("updUseBuildCache")?.checked);
-    const cacheText = useBuildCache ? "使用现有 Docker/BuildKit 缓存构建" : "执行 --no-cache 全量构建";
-    if (!confirm(`确定从 GitHub main 自动更新 chat2api 服务端吗？\n\n本次将${cacheText}。更新过程中控制台会短暂断线；失败会尝试自动回滚。`)) return;
     try {
       await callApi("/api/admin/server-update/start", {method: "POST", body: {confirm: true, use_build_cache: useBuildCache}});
       active = true;
