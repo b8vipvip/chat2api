@@ -8,6 +8,8 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
+from .request_history_v94_patch import compile_legacy_admin_asset
+
 
 PATCH_VERSION = "0.21.3"
 BUNDLE_ASSET = "/assets/chat2api-admin-latest.js"
@@ -34,6 +36,7 @@ ADMIN_SCRIPT_ORDER = [
     "admin_v21.js",
     "admin_v21_1.js",
 ]
+REQUEST_HISTORY_LEGACY_ASSETS = {"admin_v7.js", "admin_v8.js", "admin_v10.js"}
 
 
 async def _response_bytes(response) -> bytes:
@@ -63,6 +66,13 @@ def _bundle_source() -> str:
             )
             continue
         source = path.read_text(encoding="utf-8")
+        # The v21.3 bundle is the actual production delivery path for these old
+        # assets. Feed every historical Request History owner through the same
+        # source compiler used by its direct asset route. This is a build-time
+        # ownership boundary, not a browser repair layer: only the canonical
+        # inline loadRequests renderer may decide request-table rows/events.
+        if filename in REQUEST_HISTORY_LEGACY_ASSETS:
+            source = compile_legacy_admin_asset(filename, source)
         parts.extend([
             f'\n/* BEGIN {filename} */',
             'try {',
