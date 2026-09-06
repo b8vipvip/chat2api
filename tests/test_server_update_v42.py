@@ -125,6 +125,8 @@ def test_update_console_and_host_scripts_use_narrow_systemd_boundary():
         "previousState !== data.status",
     ):
         assert token in ui
+    assert "confirm(" not in ui
+    assert 'body: {confirm: true, use_build_cache: useBuildCache}' in ui
     assert 'GITHUB_REPOSITORY = "b8vipvip/chat2api"' in patch
     assert "GITHUB_SMART_REFS" in patch
     assert '"source": "git-smart-http"' in patch

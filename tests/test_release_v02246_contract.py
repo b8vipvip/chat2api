@@ -10,9 +10,9 @@ from fastapi import FastAPI
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_formal_release_v02264_versions_and_notes_are_aligned() -> None:
+def test_formal_release_v02265_versions_and_notes_are_aligned() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert SERVER_RUNTIME_VERSION == "0.22.64"
+    assert SERVER_RUNTIME_VERSION == "0.22.65"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.28"
     assert manifest["version"] == "0.8.28"
@@ -26,7 +26,7 @@ def test_formal_release_v02264_versions_and_notes_are_aligned() -> None:
     assert (ROOT / "docs" / "releases" / "v0.22.46.md").is_file()
 
 
-def test_formal_release_advertises_v96_file_upload_quota_terminal_recycle() -> None:
+def test_formal_release_advertises_v97_console_fixes() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["chrome_bridge"]["version"] == "0.8.1"
     assert payload["chrome_bridge"]["bundle_version"] == "0.8.28"
@@ -42,10 +42,14 @@ def test_formal_release_advertises_v96_file_upload_quota_terminal_recycle() -> N
     assert payload["features"]["request_id_window_correlation_v88"] is True
     assert payload["features"]["conversation_quota_failover_v95"] is True
     assert payload["features"]["file_upload_quota_terminal_recycle_v96"] is True
+    assert payload["features"]["request_history_conversation_viewer_v97"] is True
+    assert payload["features"]["server_update_direct_start_v97"] is True
     assert "multimodal-main-world-v78" in payload["server"]["feature_revision"]
     assert "window-manager-fifo-v88" in payload["server"]["feature_revision"]
     assert "success-terminal-monotonic-v88" in payload["server"]["feature_revision"]
     assert "long-prompt-fast-insert-v88" in payload["server"]["feature_revision"]
     assert "conversation-quota-failover-v95" in payload["server"]["feature_revision"]
     assert "file-upload-quota-terminal-recycle-v96" in payload["server"]["feature_revision"]
-    assert "release-v02264" in payload["server"]["feature_revision"]
+    assert "request-history-conversation-v97" in payload["server"]["feature_revision"]
+    assert "server-update-direct-start-v97" in payload["server"]["feature_revision"]
+    assert "release-v02265" in payload["server"]["feature_revision"]
