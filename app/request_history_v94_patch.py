@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Callable
 
 from fastapi import FastAPI
 from fastapi.responses import Response
@@ -13,11 +12,13 @@ from . import admin as admin_module
 
 PATCH_ID = "admin-request-single-owner-v94"
 CONVERSATION_PATCH_ID = "admin-request-conversation-v97"
+ASSET_COMPILER_REVISION = "request-history-served-asset-single-owner-v98"
 
-# Request history is normalized once on the server before browser delivery.
-# Historical admin assets are also compiled once at startup so old versions may
-# keep unrelated features without retaining any request-table ownership in the
-# browser. No runtime observer/guard chain participates in this decision.
+# Request History has one browser-side renderer. Historical admin assets are
+# compiled once on the server before delivery so they can keep unrelated
+# features without retaining any request-table ownership. There is deliberately
+# no browser MutationObserver, repair loop, fallback renderer, or competing
+# onclick owner for this table.
 _BASE_HEADER = (
     '<thead><tr><th>时间</th><th>类型</th><th>状态</th><th>Key</th><th>模型</th>'
     '<th>附件</th><th>首包</th><th>总耗时</th><th>Token</th></tr></thead>'
@@ -199,21 +200,25 @@ def _replace_once(pattern: str, replacement: str, source: str, label: str) -> st
 
 
 def compile_legacy_admin_asset(filename: str, source: str) -> str:
-    """Remove historical request-table owners while preserving unrelated features."""
+    """Compile a historical asset into a request-history-passive asset."""
 
     if filename == "admin_v7.js":
-        return _replace_once(
+        result = _replace_once(
             r"\n  function simplifyRequestPage\(\) \{.*?\n  if \(\$\(\"rqGo\"\)\) \$\(\"rqGo\"\)\.onclick = loadRequests;\n",
-            "\n  // Request History ownership retired by v94 source compiler.\n",
+            "\n  // Request History ownership retired by the canonical source compiler.\n",
             source,
             "v7 request-history override",
         )
+        result = result.replace('if (view === "requests") simplifyRequestPage();', "")
+        if "simplifyRequestPage" in result or "loadRequestsV7" in result:
+            raise RuntimeError(f"{PATCH_ID}: unable to retire all v7 request-history ownership")
+        return result
     if filename == "admin_v8.js":
         if "loadRequestsV8" not in source and "rqBody" not in source and "data-chat2api-log" not in source:
             return source
         return _replace_once(
             r"\n  function ensureDiagnosticControls\(\) \{.*?\n  if \(\$\(\"rqGo\"\)\) \$\(\"rqGo\"\)\.onclick = loadRequests;\n",
-            "\n  // Diagnostics endpoints remain; Request History UI is rendered by v94.\n",
+            "\n  // Diagnostics endpoints remain; Request History UI is rendered canonically.\n",
             source,
             "v8 request-history override",
         )
@@ -224,6 +229,23 @@ def compile_legacy_admin_asset(filename: str, source: str) -> str:
             raise RuntimeError(f"{PATCH_ID}: unable to retire v10 request-time decorator")
         return result
     raise ValueError(f"unsupported legacy admin asset: {filename}")
+
+
+def _compiled_asset_asgi(source: str):
+    """Return the actual ASGI endpoint used by APIRoute after construction.
+
+    FastAPI builds APIRoute.app when a route is created. Updating only
+    route.endpoint/dependant.call later changes introspection but does not change
+    the already-built ASGI callable. v0.22.65 did exactly that, so browsers still
+    received admin_v7.js with its old nine-column loadRequests renderer. Replacing
+    route.app makes the served asset and the declared endpoint the same owner.
+    """
+
+    async def asgi(scope, receive, send) -> None:
+        response = Response(source, media_type="application/javascript", headers={"Cache-Control": "no-store"})
+        await response(scope, receive, send)
+
+    return asgi
 
 
 def _compile_legacy_assets(app: FastAPI) -> None:
@@ -250,12 +272,17 @@ def _compile_legacy_assets(app: FastAPI) -> None:
         compiled_asset.__chat2api_request_history_compiled_v94__ = True
         route.dependant.call = compiled_asset
         route.endpoint = compiled_asset
+        # This is the decisive v98 fix. APIRoute.app is the callable Starlette
+        # actually dispatches; replacing only endpoint/dependant.call is not
+        # sufficient after route construction.
+        route.app = _compiled_asset_asgi(source)
         found.add(route_path)
 
     missing = set(specs) - found
     if missing:
         raise RuntimeError(f"{PATCH_ID}: legacy admin asset routes missing: {sorted(missing)}")
     app.state.request_history_compiled_assets = compiled
+    app.state.request_history_asset_compiler_revision = ASSET_COMPILER_REVISION
 
 
 def _install_conversation_capture(app: FastAPI) -> None:
