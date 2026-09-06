@@ -43,8 +43,6 @@ def test_actual_production_bundle_uses_passive_historical_request_assets() -> No
     assert "BEGIN admin_v7.js" in bundle
     assert "BEGIN admin_v8.js" in bundle
     assert "BEGIN admin_v10.js" in bundle
-    # Unrelated historical features remain in the bundle; we are removing only
-    # Request History decision rights rather than deleting whole legacy assets.
     assert "window.__chat2apiAdminPatchErrors" in bundle
     assert "admin bundle ready" in bundle
 
@@ -116,7 +114,7 @@ def test_canonical_renderer_has_exact_thirteen_cell_contract() -> None:
     probe = _run_fresh_entry_probe()
     page = probe["page"]
     start = page.index("async function loadRequests()")
-    end = page.index("requestHistoryEnsureControls();", start)
+    end = page.index("\nrequestHistoryEnsureControls();\n$('rqGo').onclick=loadRequests;", start)
     loader = page[start:end]
     # time, request ID, type, key, device, model, attachment, first-token,
     # total-time and token are normal cells; status is one cell; conversation
