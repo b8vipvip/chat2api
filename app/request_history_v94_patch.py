@@ -203,12 +203,16 @@ def compile_legacy_admin_asset(filename: str, source: str) -> str:
     """Compile a historical asset into a request-history-passive asset."""
 
     if filename == "admin_v7.js":
-        return _replace_once(
+        result = _replace_once(
             r"\n  function simplifyRequestPage\(\) \{.*?\n  if \(\$\(\"rqGo\"\)\) \$\(\"rqGo\"\)\.onclick = loadRequests;\n",
             "\n  // Request History ownership retired by the canonical source compiler.\n",
             source,
             "v7 request-history override",
         )
+        result = result.replace('if (view === "requests") simplifyRequestPage();', "")
+        if "simplifyRequestPage" in result or "loadRequestsV7" in result:
+            raise RuntimeError(f"{PATCH_ID}: unable to retire all v7 request-history ownership")
+        return result
     if filename == "admin_v8.js":
         if "loadRequestsV8" not in source and "rqBody" not in source and "data-chat2api-log" not in source:
             return source
