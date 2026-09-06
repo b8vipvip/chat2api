@@ -30,6 +30,17 @@ _FINAL_HEADER = (
     '<th>对话</th><th>日志</th></tr></thead><tbody id="rqBody"></tbody>'
 )
 
+_BASE_REQUEST_VIEW_OPEN = '<section class="view" id="view-requests"><div class="split">'
+_FINAL_REQUEST_VIEW_OPEN = '<section class="view" id="view-requests"><div>'
+_BASE_REQUEST_DETAIL_PANEL = (
+    '<div class="panel detail"><h3>请求详情</h3>'
+    '<div id="rqDetail" class="muted">点击记录查看诊断。</div></div>'
+)
+_BASE_REQUEST_DETAIL_RE = re.compile(
+    r"async function requestDetail\(id\)\{.*?\}\s*window\.requestDetail=requestDetail;",
+    re.DOTALL,
+)
+
 _BASE_LOADER_RE = re.compile(
     r"async function loadRequests\(\)\{.*?\}\s*\$\('rqGo'\)\.onclick=loadRequests;",
     re.DOTALL,
@@ -149,9 +160,8 @@ async function loadRequests(){
     const rows=Array.isArray(d?.data)?d.data:[];
     const fragment=document.createDocumentFragment();
     for(const r of rows){
-      const tr=document.createElement('tr');tr.className='clickable';
+      const tr=document.createElement('tr');
       const requestId=requestHistoryText(r?.request_id,'');
-      tr.addEventListener('click',()=>{if(requestId)requestDetail(requestId);});
       requestHistoryCell(tr,fmtTime(r?.recorded_at||r?.created_at));
       const shortRequestId=requestId?requestId.slice(-4):'-';
       const idCell=requestHistoryCell(tr,shortRequestId);idCell.title=requestId;
@@ -336,12 +346,33 @@ def _normalize_admin_html(html: str) -> str:
         raise RuntimeError(
             f"{PATCH_ID}: expected exactly one base request-history header, found {html.count(_BASE_HEADER)}"
         )
+    if html.count(_BASE_REQUEST_VIEW_OPEN) != 1:
+        raise RuntimeError(
+            f"{PATCH_ID}: expected exactly one split request-history layout, found {html.count(_BASE_REQUEST_VIEW_OPEN)}"
+        )
+    if html.count(_BASE_REQUEST_DETAIL_PANEL) != 1:
+        raise RuntimeError(
+            f"{PATCH_ID}: expected exactly one legacy request-detail panel, found {html.count(_BASE_REQUEST_DETAIL_PANEL)}"
+        )
+
     html = html.replace(_BASE_HEADER, _FINAL_HEADER, 1)
+    html = html.replace(_BASE_REQUEST_VIEW_OPEN, _FINAL_REQUEST_VIEW_OPEN, 1)
+    html = html.replace(_BASE_REQUEST_DETAIL_PANEL, "", 1)
+
     html, replacements = _BASE_LOADER_RE.subn(lambda _match: _FINAL_LOADER, html, count=1)
     if replacements != 1:
         raise RuntimeError(f"{PATCH_ID}: expected exactly one base loadRequests owner, found {replacements}")
+
+    html, detail_replacements = _BASE_REQUEST_DETAIL_RE.subn("", html, count=1)
+    if detail_replacements != 1:
+        raise RuntimeError(
+            f"{PATCH_ID}: expected exactly one legacy requestDetail owner, found {detail_replacements}"
+        )
+
     if html.count("async function loadRequests()") != 1:
         raise RuntimeError(f"{PATCH_ID}: final admin HTML must contain exactly one loadRequests owner")
+    if 'id="rqDetail"' in html or "requestDetail(" in html or "window.requestDetail" in html:
+        raise RuntimeError(f"{PATCH_ID}: legacy request-detail UI/owner survived canonical normalization")
     return html
 
 
