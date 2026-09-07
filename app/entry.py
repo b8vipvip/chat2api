@@ -75,6 +75,7 @@ from .prompt_config_v72_patch import install_prompt_config_v72_patch
 from .attachment_download_v82_patch import install_attachment_download_v82_patch
 from .request_history_v94_patch import install_request_history_v94_patch
 from .user_console_v104_patch import install_user_console_v104_patch
+from .user_console_privacy_v105_patch import install_user_console_privacy_v105_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -244,7 +245,8 @@ install_prompt_config_v72_patch(app)
 # own request-table structure or rendering.
 install_request_history_v94_patch(app)
 # User commerce is deliberately request-history-passive. Install its isolated
-# routes and admin pricing/payment surfaces, then reassert the idempotent request
-# history owner as the final installation boundary for the existing contract.
+# routes and administrator pricing/payment surfaces, then enforce a separate
+# user-facing privacy boundary before reasserting the legacy final-owner sentinel.
 install_user_console_v104_patch(app)
+install_user_console_privacy_v105_patch(app)
 install_request_history_v94_patch(app)
