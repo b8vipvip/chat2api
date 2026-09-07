@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.runtime_contract import SERVER_RUNTIME_VERSION
 from app.v7_patch import install_v7_patch
 from app.v8_patch import install_v8_patch
 from app.voice_patch import install_voice_patch
@@ -94,7 +95,7 @@ def test_diagnostic_zip_contains_sanitized_failure_context(tmp_path: Path) -> No
             names = set(archive.namelist())
             assert {"summary.json", "requests.json", "server_events.json", "failures.json", "extensions.json", "models.json", "README.txt"}.issubset(names)
             summary = json.loads(archive.read("summary.json"))
-            assert summary["server_version"] == "0.8.0"
+            assert summary["server_version"] == SERVER_RUNTIME_VERSION
             assert summary["privacy"]["api_keys_included"] is False
             combined = b"\n".join(archive.read(name) for name in names if name.endswith((".json", ".txt")))
             assert b"master-key" not in combined
