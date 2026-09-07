@@ -1,6 +1,7 @@
 (() => {
   const KEY = "__CHAT2API_UI_HYGIENE_V31__";
-  if (globalThis[KEY]) return;
+  const prior = globalThis[KEY];
+  if (Number(prior?.state?.revision || 0) >= 101) return;
 
   const state = {
     version: 31,
