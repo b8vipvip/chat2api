@@ -15,17 +15,6 @@ on:
       - '.github/workflows/production-image-smoke.yml'
   push:
     branches: [main]
-    paths:
-      - 'Dockerfile'
-      - '.dockerignore'
-      - 'requirements.txt'
-      - 'app/**'
-      - 'chrome_extension/**'
-      - 'scripts/bootstrap_linux_worker.sh'
-      - 'scripts/linux_worker_*.py'
-      - 'scripts/linux_worker_*.sh'
-      - 'scripts/linux_extension_autoreload.sh'
-      - '.github/workflows/production-image-smoke.yml'
 
 jobs:
   build:
