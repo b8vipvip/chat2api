@@ -163,6 +163,61 @@ def _server_runtime_for_worker(app: FastAPI, worker_id: str, client_id: str) -> 
     return "\n".join(json.dumps(row, ensure_ascii=False, default=str) for row in selected) + "\n"
 
 
+def _pairing_evidence(
+    *,
+    worker_id: str,
+    client_id: str,
+    worker: dict,
+    extension_state: dict,
+    worker_log: str,
+    server_runtime: str,
+) -> str:
+    worker_lines = [
+        line
+        for line in worker_log.splitlines()
+        if "pairing" in line.lower() or "worker-bind" in line.lower()
+    ]
+    server_tokens = (
+        "chatgpt login detected",
+        "extension detected",
+        "pairing matched",
+        "binding completed",
+        "pairing_id=",
+    )
+    server_lines = [
+        line
+        for line in server_runtime.splitlines()
+        if any(token in line.lower() for token in server_tokens)
+    ]
+    metadata = dict(extension_state.get("metadata") or {})
+    current = {
+        "worker_id": worker_id,
+        "client_id": client_id or None,
+        "online": bool(extension_state.get("online")),
+        "connection_enabled": bool(extension_state.get("connection_enabled")),
+        "worker_extension_client_id": worker.get("extension_client_id") or None,
+        "pairing_id": metadata.get("linux_worker_pairing_id") or worker.get("pairing_id") or None,
+        "binding_source": metadata.get("linux_worker_binding_source") or None,
+        "binding_version": metadata.get("linux_worker_binding_version") or None,
+        "chatgpt_login_state": metadata.get("chatgpt_login_state") or None,
+        "chatgpt_login_confidence": metadata.get("chatgpt_login_confidence") or None,
+        "extension_status": metadata.get("status") or None,
+    }
+
+    sections = [
+        "[worker-bounded-window]",
+        *(worker_lines or ["No pairing/worker-bind lines in the Worker's bounded 90-minute window."]),
+        "",
+        "[server-current-binding]",
+        json.dumps(current, ensure_ascii=False, indent=2, default=str),
+        "",
+        "[server-runtime-pairing-events]",
+        *(server_lines or ["No pairing lifecycle events retained in the current server runtime buffer."]),
+        "",
+    ]
+    return "\n".join(sections)
+
+
 def install_linux_worker_diagnostics_patch(app: FastAPI) -> FastAPI:
     if getattr(app.state, "linux_worker_diagnostics_patch_installed", False):
         return app
@@ -193,7 +248,6 @@ def install_linux_worker_diagnostics_patch(app: FastAPI) -> FastAPI:
                 "worker-runtime.log": ("chat2api-worker-agent",),
                 "chrome.log": ("chat2api-chrome",),
                 "xvfb.log": ("chat2api-xvfb",),
-                "pairing.log": ("pairing", "worker-bind"),
                 "extension-sync.log": ("extension", "bridge"),
                 "extension-runtime.log": (
                     "extension service worker runtime",
@@ -217,14 +271,24 @@ def install_linux_worker_diagnostics_patch(app: FastAPI) -> FastAPI:
                 "version": getattr(registry_item, "version", None) if registry_item else None,
                 "metadata": _safe_extension_metadata(registry_metadata),
             }
+            server_runtime = _server_runtime_for_worker(app, worker_id, client_id)
+            pairing_evidence = _pairing_evidence(
+                worker_id=worker_id,
+                client_id=client_id,
+                worker=worker,
+                extension_state=extension_state,
+                worker_log=text_log,
+                server_runtime=server_runtime,
+            )
 
             output = io.BytesIO()
             with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
                 for filename, needles in categories.items():
                     lines = [line for line in text_log.splitlines() if any(needle in line.lower() for needle in needles)]
                     archive.writestr(filename, "\n".join(lines) + ("\n" if lines else "No matching entries in the bounded diagnostic window.\n"))
+                archive.writestr("pairing.log", pairing_evidence)
                 archive.writestr("server-extension-state.json", json.dumps(extension_state, ensure_ascii=False, indent=2, default=str))
-                archive.writestr("server-runtime.log", _server_runtime_for_worker(app, worker_id, client_id))
+                archive.writestr("server-runtime.log", server_runtime)
                 archive.writestr("diagnostics-full.log", raw)
             payload = output.getvalue()
             logger.info(
