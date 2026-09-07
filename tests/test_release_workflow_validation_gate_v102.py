@@ -34,3 +34,24 @@ def test_release_workflow_still_validates_runtime_contract_before_gating() -> No
     assert "server = one(" in workflow
     assert "bundle = one(" in workflow
     assert 'manifest.get("version") != bundle' in workflow
+
+
+def test_production_image_smoke_runs_for_every_main_push() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "production-image-smoke.yml").read_text(encoding="utf-8")
+
+    push = workflow.index("  push:\n")
+    jobs = workflow.index("\njobs:\n", push)
+    push_block = workflow[push:jobs]
+    assert "branches: [main]" in push_block
+    assert "paths:" not in push_block
+
+    pull_request = workflow.index("  pull_request:\n")
+    assert pull_request < push
+    assert "paths:" in workflow[pull_request:push]
+
+
+def test_validated_release_epoch_is_not_blocked_by_legacy_gate_run() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    assert "group: chat2api-release-validated" in workflow
+    assert "cancel-in-progress: false" in workflow
