@@ -5,9 +5,9 @@ chat2api 同时包含服务端 Python 包、分层运行时/控制台、Chrome B
 ## 当前版本面
 
 - Python package：`0.7.1`
-- Server runtime / console：`0.22.59`
+- Server runtime / console：`0.22.66`
 - Chrome Bridge wire protocol：`0.8.1`
-- Chrome Bundle / manifest：`0.8.27`
+- Chrome Bundle / manifest：`0.8.29`
 - Realtime Voice protocol：`chat2api-live-v1`
 - 生产入口：`app.entry:app`
 
@@ -39,14 +39,14 @@ GET /version
   "contract_version": 1,
   "server": {
     "package_version": "0.7.1",
-    "runtime_version": "0.22.59",
-    "expected_runtime_version": "0.22.59",
+    "runtime_version": "0.22.66",
+    "expected_runtime_version": "0.22.66",
     "entrypoint": "app.entry:app",
     "runtime_aligned": true
   },
   "chrome_bridge": {
     "version": "0.8.1",
-    "bundle_version": "0.8.27",
+    "bundle_version": "0.8.29",
     "multimodal_revision": 85
   },
   "protocols": {
@@ -69,3 +69,4 @@ GET /version
 6. README 只引用版本契约中的当前值，不再单独维护一套互相矛盾的“当前版本”。
 7. `tests/test_runtime_contract.py` 必须保持通过，用来阻止 package、manifest、protocol 和文档再次漂移。
 8. Worker 内容运行时升级时，manifest、bundle marker、content runtime contract、programmatic bootstrap 和 background runtime preflight 必须在同一次发布中对齐；涉及页面 MAIN-world 能力时还必须把 MAIN-world marker 纳入 runtime contract。
+9. 自动处理 ChatGPT 页面弹窗只能执行无副作用的关闭/跳过动作；涉及授权、连接健康数据、付款、登录、验证、删除账号等动作必须保持人工确认，且 runtime preflight 必须把当前 UI hygiene revision 纳入完整性检查。
