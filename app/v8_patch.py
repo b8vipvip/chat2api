@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, Response
 
 from .api_keys import ApiPrincipal
 from .diagnostics import DiagnosticMiddleware, DiagnosticStore, configure_file_logging
+from .runtime_contract import SERVER_RUNTIME_VERSION
 
 
 PATCH_VERSION = "0.8.0"
@@ -85,7 +86,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             "report_type": "chat2api-request-diagnostic",
             "report_version": 1,
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "server_version": PATCH_VERSION,
+            "server_version": SERVER_RUNTIME_VERSION,
             "request": row,
             "http_trace": diagnostic_store.by_trace(trace_id) if trace_id else [],
             "extension_snapshot": _safe_client_rows(registry),
@@ -129,7 +130,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             "report_type": "chat2api-diagnostic-bundle",
             "report_version": 1,
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "server_version": PATCH_VERSION,
+            "server_version": SERVER_RUNTIME_VERSION,
             "public_url": settings.public_url or None,
             "request_timeout_seconds": settings.request_timeout_seconds,
             "allowed_origins": settings.origins,
