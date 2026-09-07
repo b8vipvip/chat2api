@@ -26,9 +26,11 @@ def test_formal_release_v02267_versions_and_notes_are_aligned() -> None:
     background_entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     assert '"background_file_upload_quota_recycle_v96.js"' in background_entry
     assert "## v0.22.67" in changelog
-    assert "用户控制台" in changelog
-    assert "价格配置" in changelog
-    assert "支付配置" in changelog
+    assert "### User console" in changelog
+    assert "### Pricing and billing" in changelog
+    assert "### Payments" in changelog
+    assert "`价格配置`" in changelog
+    assert "`支付配置`" in changelog
 
 
 def test_formal_release_advertises_v104_user_commerce_and_carried_runtime_fixes() -> None:
