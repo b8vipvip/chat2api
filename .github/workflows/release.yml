@@ -65,6 +65,41 @@ jobs:
           print(f"tag=v{server}")
           PY
 
+      - name: Wait for post-merge validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 900))
+          while (( SECONDS < deadline )); do
+            runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${SHA}&event=push&per_page=100")"
+            ci="$(jq -r '[.workflow_runs[] | select(.name=="CI")][0] | if . == null then "missing" else (.status + ":" + (.conclusion // "")) end' <<<"$runs")"
+            smoke="$(jq -r '[.workflow_runs[] | select(.name=="Production image smoke")][0] | if . == null then "missing" else (.status + ":" + (.conclusion // "")) end' <<<"$runs")"
+            echo "post-merge validation: CI=${ci} | Production image smoke=${smoke}"
+
+            for result in "$ci" "$smoke"; do
+              case "$result" in
+                completed:success|missing|queued:|in_progress:|waiting:|pending:|requested:)
+                  ;;
+                completed:*)
+                  echo "required post-merge validation failed: ${result}" >&2
+                  exit 1
+                  ;;
+              esac
+            done
+
+            if [[ "$ci" == "completed:success" && "$smoke" == "completed:success" ]]; then
+              echo "post-merge CI and production image smoke both passed for ${SHA}"
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "timed out waiting for CI and Production image smoke for ${SHA}" >&2
+          exit 1
+
       - name: Check whether release already exists
         id: existing
         env:
