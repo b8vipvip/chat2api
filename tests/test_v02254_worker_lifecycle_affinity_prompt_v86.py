@@ -113,11 +113,11 @@ def test_modified_v86_javascript_parses() -> None:
         assert result.returncode == 0, f"{path}: {result.stderr}"
 
 
-def test_v02265_runtime_contract_and_worker_bundle_are_aligned() -> None:
+def test_worker_lifecycle_runtime_contract_and_worker_bundle_are_aligned() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert SERVER_RUNTIME_VERSION == "0.22.65"
+    assert SERVER_RUNTIME_VERSION
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.28"
-    assert manifest["version"] == "0.8.28"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     for path in [
         "chrome_extension/content_bundle_marker_v48.js",
         "chrome_extension/content_bundle_marker_v71.js",
@@ -125,7 +125,8 @@ def test_v02265_runtime_contract_and_worker_bundle_are_aligned() -> None:
         "chrome_extension/content_runtime_contract_v71.js",
         "chrome_extension/background_runtime_preflight_v48.js",
     ]:
-        assert "0.8.28" in text(path), path
+        assert CHROME_BRIDGE_BUNDLE_VERSION in text(path), path
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
+    assert payload["server"]["runtime_version"] == SERVER_RUNTIME_VERSION
     assert payload["features"]["worker_disabled_window_guard_v86"] is True
     assert payload["features"]["successful_route_preservation_v86"] is True

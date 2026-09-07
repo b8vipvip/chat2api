@@ -6,6 +6,7 @@
     request_revision: 69,
     response_revision: 69,
     multimodal_revision: 85,
+    ui_hygiene_revision: 101,
     installed_at_ms: Date.now(),
   };
 })();

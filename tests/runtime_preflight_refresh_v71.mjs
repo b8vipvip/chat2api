@@ -11,16 +11,19 @@ function currentContract() {
     multimodal_revision: 85,
     terminal_prompt_revision: 88,
     conversation_quota_failover_revision: 95,
+    ui_hygiene_revision: 101,
     marker: { bundle: "0.8.28", revision: 71 },
     modules: {
       request_v6: true,
       rich_response_v69: true,
       response_stream_v69: true,
       multimodal_v78: true,
-      multimodal_v84: true, multimodal_v85: true,
+      multimodal_v84: true,
+      multimodal_v85: true,
       multimodal_main_v78: true,
       terminal_prompt_v88: true,
       conversation_quota_failover_v95: true,
+      ui_hygiene_v101: true,
     },
   };
 }
@@ -98,6 +101,7 @@ assert.equal(hot.state.last?.contract_revision, 71);
 assert.equal(hot.state.last?.multimodal_revision, 85);
 assert.equal(hot.state.last?.terminal_prompt_revision, 88);
 assert.equal(hot.state.last?.conversation_quota_failover_revision, 95);
+assert.equal(hot.state.last?.ui_hygiene_revision, 101);
 
 const loading = await runScenario({ hotHealWorks: false });
 assert.equal(loading.reloads, 1, "reload remains a bounded fallback when hot-heal cannot establish the epoch");
@@ -107,5 +111,6 @@ assert.equal(loading.state.last?.marker?.bundle, "0.8.28");
 assert.equal(loading.state.last?.multimodal_revision, 85);
 assert.equal(loading.state.last?.terminal_prompt_revision, 88);
 assert.equal(loading.state.last?.conversation_quota_failover_revision, 95);
+assert.equal(loading.state.last?.ui_hygiene_revision, 101);
 
 console.log("runtime preflight v71 regression scenarios passed");

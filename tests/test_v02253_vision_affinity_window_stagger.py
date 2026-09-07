@@ -13,11 +13,11 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_v02265_versions_and_v85_safe_submit_are_shipped() -> None:
+def test_v85_safe_submit_is_shipped() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert SERVER_RUNTIME_VERSION == "0.22.65"
+    assert SERVER_RUNTIME_VERSION
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.28"
-    assert manifest["version"] == "0.8.28"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     scripts = next(item for item in manifest["content_scripts"] if item.get("world") != "MAIN")["js"]
     assert scripts.index("content_multimodal_settle_v84.js") < scripts.index("content_multimodal_settle_v85.js")
     assert scripts.index("content_multimodal_settle_v85.js") < scripts.index("content_multimodal_v68.js")
@@ -30,6 +30,7 @@ def test_v02265_versions_and_v85_safe_submit_are_shipped() -> None:
     assert "return 18000" in source
     assert "attachment_safe_submit_revision" in source
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
+    assert payload["server"]["runtime_version"] == SERVER_RUNTIME_VERSION
     assert payload["chrome_bridge"]["multimodal_revision"] == 85
     assert payload["features"]["multimodal_safe_submit_v85"] is True
 

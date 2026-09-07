@@ -10,23 +10,26 @@ from fastapi import FastAPI
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_formal_release_v02265_versions_and_notes_are_aligned() -> None:
+def test_formal_release_v02266_versions_and_notes_are_aligned() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert SERVER_RUNTIME_VERSION == "0.22.65"
+    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert SERVER_RUNTIME_VERSION == "0.22.66"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.28"
-    assert manifest["version"] == "0.8.28"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     assert "multimodal_main_v78.js" in manifest["content_scripts"][0]["js"]
     assert "content_multimodal_v78.js" in manifest["content_scripts"][1]["js"]
     assert "content_multimodal_settle_v84.js" in manifest["content_scripts"][1]["js"]
     assert "content_request_terminal_prompt_v88.js" in manifest["content_scripts"][1]["js"]
     assert "content_conversation_quota_failover_v95.js" in manifest["content_scripts"][1]["js"]
+    assert "content_ui_hygiene_v31.js" in manifest["content_scripts"][1]["js"]
     background_entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     assert '"background_file_upload_quota_recycle_v96.js"' in background_entry
-    assert (ROOT / "docs" / "releases" / "v0.22.46.md").is_file()
+    assert "## v0.22.66" in changelog
+    assert "Health promotion modal" in changelog
 
 
-def test_formal_release_advertises_v97_console_fixes() -> None:
+def test_formal_release_advertises_v101_health_modal_and_carried_console_fixes() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["chrome_bridge"]["version"] == "0.8.1"
     assert payload["chrome_bridge"]["bundle_version"] == "0.8.28"
@@ -44,6 +47,7 @@ def test_formal_release_advertises_v97_console_fixes() -> None:
     assert payload["features"]["file_upload_quota_terminal_recycle_v96"] is True
     assert payload["features"]["request_history_conversation_viewer_v97"] is True
     assert payload["features"]["server_update_direct_start_v97"] is True
+    assert payload["features"]["worker_ui_hygiene_health_modal_v101"] is True
     assert "multimodal-main-world-v78" in payload["server"]["feature_revision"]
     assert "window-manager-fifo-v88" in payload["server"]["feature_revision"]
     assert "success-terminal-monotonic-v88" in payload["server"]["feature_revision"]
@@ -52,4 +56,6 @@ def test_formal_release_advertises_v97_console_fixes() -> None:
     assert "file-upload-quota-terminal-recycle-v96" in payload["server"]["feature_revision"]
     assert "request-history-conversation-v97" in payload["server"]["feature_revision"]
     assert "server-update-direct-start-v97" in payload["server"]["feature_revision"]
-    assert "release-v02265" in payload["server"]["feature_revision"]
+    assert "diagnostic-runtime-truth-v100" in payload["server"]["feature_revision"]
+    assert "health-promo-safe-dismiss-v101" in payload["server"]["feature_revision"]
+    assert "release-v02266" in payload["server"]["feature_revision"]

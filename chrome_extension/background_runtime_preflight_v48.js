@@ -4,7 +4,7 @@
 
   // Worker bundle 0.8.28 keeps the v71 request/response epoch while requiring
   // the v78 MAIN-world upload bridge, v85 safe-submit gate, v88 terminal/prompt
-  // guard, and v95 conversation-local quota failover owner.
+  // guard, v95 conversation-local quota failover owner, and v101 safe UI hygiene.
   const REQUIRED_BUNDLE = "0.8.28";
   const REQUIRED_REVISION = 71;
   const CONTRACT_TIMEOUT_MS = 700;
@@ -13,6 +13,7 @@
   const FINAL_HEAL_BUDGET_MS = 1800;
   const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"];
   const OVERLAY_FILES = [
+    "content_ui_hygiene_v31.js",
     "content_rate_limit_guard_v52.js",
     "content_tool_isolation_v48.js",
     "content_multimodal_v78.js",
@@ -37,12 +38,13 @@
   const inflight = new Map();
   const state = {
     version: 71,
-    revision: 95,
+    revision: 101,
     required_bundle: REQUIRED_BUNDLE,
     required_revision: REQUIRED_REVISION,
     multimodal_revision: 85,
     terminal_prompt_revision: 88,
     conversation_quota_failover_revision: 95,
+    ui_hygiene_revision: 101,
     checks: 0,
     fast_path_hits: 0,
     contract_timeouts: 0,
@@ -104,7 +106,8 @@
       result?.modules?.multimodal_v85 &&
       result?.modules?.multimodal_main_v78 &&
       result?.modules?.terminal_prompt_v88 &&
-      result?.modules?.conversation_quota_failover_v95
+      result?.modules?.conversation_quota_failover_v95 &&
+      result?.modules?.ui_hygiene_v101
     );
   }
 
@@ -177,6 +180,7 @@
         multimodal_revision: result.multimodal_revision,
         terminal_prompt_revision: 88,
         conversation_quota_failover_revision: 95,
+        ui_hygiene_revision: result.ui_hygiene_revision,
         tool_preflight: toolPreflight,
         elapsed_ms: Date.now() - started,
         at_ms: Date.now(),
@@ -185,9 +189,8 @@
     }
 
     // The whole recovery path remains wall-clock bounded by the v87 algorithm.
-    // Bundle 0.8.28 additionally requires the v88 terminal/prompt guard and v95
-    // conversation-local quota failover, so repaired tabs cannot keep a poisoned
-    // affinity conversation after ChatGPT explicitly asks for a fresh chat.
+    // Bundle 0.8.28 additionally requires the v88 terminal/prompt guard, v95
+    // conversation-local quota failover, and v101 safe promotional-modal cleanup.
     result = await heal(tabId);
     let reloaded = false;
     const hotHealed = current(result);
@@ -219,7 +222,7 @@
         budget_ms: CONTRACT_TIMEOUT_MS + HOT_HEAL_BUDGET_MS + RELOAD_BUDGET_MS + FINAL_HEAL_BUDGET_MS,
         at_ms: Date.now(),
       });
-      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the v87-bounded preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85 terminal/prompt revision 88 conversation-quota-failover revision 95`);
+      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the v87-bounded preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85 terminal/prompt revision 88 conversation-quota-failover revision 95 UI-hygiene revision 101`);
       error.code = "chatgpt_runtime_preflight_budget";
       throw error;
     }
@@ -237,6 +240,7 @@
       multimodal_revision: result.multimodal_revision,
       terminal_prompt_revision: 88,
       conversation_quota_failover_revision: 95,
+      ui_hygiene_revision: result.ui_hygiene_revision,
       tool_preflight: toolPreflight,
       elapsed_ms: Date.now() - started,
       at_ms: Date.now(),

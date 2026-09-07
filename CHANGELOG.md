@@ -1,5 +1,27 @@
 # Changelog
 
+## v0.22.66 — 2026-09-07
+
+### ChatGPT page resilience
+
+- Recognize the new ChatGPT Health promotion modal shown over the chat composer and dismiss it only through an explicit Close/关闭 control or a tightly bounded top-right SVG X fallback.
+- Never click the Health modal's `开始使用` / `Get started` action, and continue refusing to automate authentication, payment, account deletion, identity-verification or other high-impact confirmation surfaces.
+- Promote UI hygiene to revision 101 and require it in both content runtime contracts and the background runtime preflight so hot-healed Worker tabs cannot silently miss the modal handler.
+- Keep the compatible Chrome Worker Bundle epoch at `0.8.28`; server-side Worker auto-sync detects the changed `chrome_extension/` payload and forces the online Worker refresh for this hotfix.
+
+### Request history and diagnostics carried into this release
+
+- Keep Request History on a single canonical renderer, remove the obsolete side detail panel, preserve explicit conversation/log actions, and prevent legacy asset routes from repainting old request rows.
+- Report the canonical Server Runtime version in diagnostic bundles instead of the historical v8 patch version.
+- Preserve current Worker binding truth in `pairing.log` even when the bounded Worker log window no longer contains the original pairing event.
+
+### Versions
+
+- Server Runtime `0.22.66`.
+- Chrome Worker Bundle `0.8.28`.
+- Chrome Bridge wire protocol remains `0.8.1`.
+- Python package remains `0.7.1`.
+
 ## v0.22.56 — 2026-09-04
 
 ### Worker window routing
