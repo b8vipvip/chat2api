@@ -2,10 +2,10 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__";
   if (globalThis[KEY]) return;
 
-  // Worker bundle 0.8.29 keeps the v71 request/response epoch while requiring
+  // Worker bundle 0.8.28 keeps the v71 request/response epoch while requiring
   // the v78 MAIN-world upload bridge, v85 safe-submit gate, v88 terminal/prompt
   // guard, v95 conversation-local quota failover owner, and v101 safe UI hygiene.
-  const REQUIRED_BUNDLE = "0.8.29";
+  const REQUIRED_BUNDLE = "0.8.28";
   const REQUIRED_REVISION = 71;
   const CONTRACT_TIMEOUT_MS = 700;
   const HOT_HEAL_BUDGET_MS = 2400;
@@ -171,7 +171,7 @@
       await recordLast({
         tab_id: tabId,
         ok: true,
-        mode: "current-fast-path-v101",
+        mode: "current-fast-path-v87",
         reloaded: false,
         hot_healed: false,
         marker: result.marker,
@@ -189,7 +189,7 @@
     }
 
     // The whole recovery path remains wall-clock bounded by the v87 algorithm.
-    // Bundle 0.8.29 additionally requires the v88 terminal/prompt guard, v95
+    // Bundle 0.8.28 additionally requires the v88 terminal/prompt guard, v95
     // conversation-local quota failover, and v101 safe promotional-modal cleanup.
     result = await heal(tabId);
     let reloaded = false;
@@ -214,7 +214,7 @@
       await recordLast({
         tab_id: tabId,
         ok: false,
-        mode: "repair-budget-exhausted-v101",
+        mode: "repair-budget-exhausted-v87",
         reloaded,
         hot_healed: hotHealed,
         result,
@@ -222,7 +222,7 @@
         budget_ms: CONTRACT_TIMEOUT_MS + HOT_HEAL_BUDGET_MS + RELOAD_BUDGET_MS + FINAL_HEAL_BUDGET_MS,
         at_ms: Date.now(),
       });
-      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the bounded preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85 terminal/prompt revision 88 conversation-quota-failover revision 95 UI-hygiene revision 101`);
+      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the v87-bounded preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85 terminal/prompt revision 88 conversation-quota-failover revision 95 UI-hygiene revision 101`);
       error.code = "chatgpt_runtime_preflight_budget";
       throw error;
     }
@@ -231,7 +231,7 @@
     await recordLast({
       tab_id: tabId,
       ok: true,
-      mode: reloaded ? "reload-repair-v101" : "hot-repair-v101",
+      mode: reloaded ? "reload-repair-v87" : "hot-repair-v87",
       reloaded,
       hot_healed: hotHealed,
       marker: result.marker,
