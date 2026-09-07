@@ -11,7 +11,7 @@ def test_release_workflow_waits_for_post_merge_ci_and_image_smoke() -> None:
     assert "head_sha=${SHA}" in workflow
     assert 'select(.name=="CI")' in workflow
     assert 'select(.name=="Production image smoke")' in workflow
-    assert 'completed:success' in workflow
+    assert "completed:success" in workflow
     assert "deadline=$((SECONDS + 900))" in workflow
     assert "sleep 5" in workflow
     assert "required post-merge validation failed" in workflow
@@ -29,6 +29,8 @@ def test_release_workflow_still_validates_runtime_contract_before_gating() -> No
     resolve = workflow.index("- name: Resolve and validate release versions")
     gate = workflow.index("- name: Wait for post-merge validation")
     assert resolve < gate
-    assert 'SERVER_RUNTIME_VERSION = \\"([^\\"]+)\\"' in workflow
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = \\"([^\\"]+)\\"' in workflow
+    assert "SERVER_RUNTIME_VERSION" in workflow
+    assert "CHROME_BRIDGE_BUNDLE_VERSION" in workflow
+    assert "server = one(" in workflow
+    assert "bundle = one(" in workflow
     assert 'manifest.get("version") != bundle' in workflow
