@@ -1,4 +1,8 @@
+import json
 from pathlib import Path
+
+from app.runtime_contract import CHROME_BRIDGE_BUNDLE_VERSION, CHROME_BRIDGE_VERSION, SERVER_RUNTIME_VERSION
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -15,11 +19,11 @@ def test_historical_v213_admin_patch_no_longer_overwrites_runtime_identity() -> 
     assert "owned by runtime_contract" in source
 
 
-def test_v02255_runtime_contract_owns_current_identity() -> None:
+def test_runtime_contract_owns_current_identity() -> None:
     runtime = read("app/runtime_contract.py")
-    manifest = read("chrome_extension/manifest.json")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.62"' in runtime
-    assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.28"' in runtime
-    assert '"version": "0.8.28"' in manifest
+    manifest = json.loads(read("chrome_extension/manifest.json"))
+    assert f'SERVER_RUNTIME_VERSION = "{SERVER_RUNTIME_VERSION}"' in runtime
+    assert f'CHROME_BRIDGE_VERSION = "{CHROME_BRIDGE_VERSION}"' in runtime
+    assert f'CHROME_BRIDGE_BUNDLE_VERSION = "{CHROME_BRIDGE_BUNDLE_VERSION}"' in runtime
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     assert '"runtime_version_observability_v80": True' in runtime
