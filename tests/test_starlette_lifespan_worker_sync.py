@@ -4,6 +4,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from app.runtime_contract import SERVER_RUNTIME_VERSION
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -17,7 +19,7 @@ def test_production_entry_imports_with_current_fastapi_starlette() -> None:
         timeout=30,
     )
     assert result.returncode == 0, result.stderr
-    assert "0.22.65" in result.stdout
+    assert result.stdout.strip() == SERVER_RUNTIME_VERSION
 
 
 def test_worker_sync_uses_lifespan_compatibility_adapter() -> None:
