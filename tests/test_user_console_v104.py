@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
+from app.runtime_contract import SERVER_RUNTIME_VERSION, version_contract_payload
 from app.user_commerce import BillingStore, PaymentConfigStore, PricingStore, UserAccountStore
 from app.user_console_v104_patch import _verify_zpay, _zpay_sign
 
@@ -118,6 +119,16 @@ def test_user_console_contains_requested_modules_without_runtime_disclosure() ->
         assert forbidden not in public_surface
 
 
+def test_user_api_privacy_boundary_does_not_relay_runtime_failure_text() -> None:
+    source = (ROOT / "app" / "user_console_privacy_v105_patch.py").read_text(encoding="utf-8")
+    entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
+    assert 'path == "/api/user/playground"' in source
+    assert "测试请求失败，请稍后重试或查看请求记录" in source
+    assert "response.status_code >= 500" in source
+    assert "install_user_console_privacy_v105_patch(app)" in entry
+    assert entry.rstrip().endswith("install_request_history_v94_patch(app)")
+
+
 def test_admin_console_extension_adds_price_and_payment_navigation() -> None:
     js = (ROOT / "app" / "admin_user_commerce_v104.js").read_text(encoding="utf-8")
     assert "价格配置" in js
@@ -125,3 +136,15 @@ def test_admin_console_extension_adds_price_and_payment_navigation() -> None:
     assert "/api/admin/user-pricing" in js
     assert "/api/admin/user-payments" in js
     assert "测试 API 连接" in js
+
+
+def test_user_commerce_runtime_and_production_dependencies_are_published() -> None:
+    assert SERVER_RUNTIME_VERSION == "0.22.67"
+    runtime_source = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+    project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"user_console_v104": True' in runtime_source
+    assert '"user_pricing_billing_v104": True' in runtime_source
+    assert '"user_payment_zpay_v104": True' in runtime_source
+    assert "python-multipart" in requirements
+    assert "python-multipart" in project
