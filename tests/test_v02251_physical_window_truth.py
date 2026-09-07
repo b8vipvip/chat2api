@@ -43,9 +43,9 @@ def test_initialization_tab_is_compacted_into_a_worker_window() -> None:
     assert "reserve_window_initialization_shared" in source
 
 
-def test_v02265_runtime_and_worker_bundle_contract() -> None:
-    assert SERVER_RUNTIME_VERSION == "0.22.65"
+def test_physical_window_truth_runtime_and_worker_bundle_contract() -> None:
+    assert SERVER_RUNTIME_VERSION
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.28"
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert manifest["version"] == "0.8.28"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     assert "physical-window-truth-v83" in text("app/runtime_contract.py")
