@@ -10,10 +10,10 @@ from fastapi import FastAPI
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_formal_release_v02266_versions_and_notes_are_aligned() -> None:
+def test_formal_release_v02267_versions_and_notes_are_aligned() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert SERVER_RUNTIME_VERSION == "0.22.66"
+    assert SERVER_RUNTIME_VERSION == "0.22.67"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.28"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
@@ -25,11 +25,15 @@ def test_formal_release_v02266_versions_and_notes_are_aligned() -> None:
     assert "content_ui_hygiene_v31.js" in manifest["content_scripts"][1]["js"]
     background_entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     assert '"background_file_upload_quota_recycle_v96.js"' in background_entry
-    assert "## v0.22.66" in changelog
-    assert "Health promotion modal" in changelog
+    assert "## v0.22.67" in changelog
+    assert "### User console" in changelog
+    assert "### Pricing and billing" in changelog
+    assert "### Payments" in changelog
+    assert "`价格配置`" in changelog
+    assert "`支付配置`" in changelog
 
 
-def test_formal_release_advertises_v101_health_modal_and_carried_console_fixes() -> None:
+def test_formal_release_advertises_v104_user_commerce_and_carried_runtime_fixes() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["chrome_bridge"]["version"] == "0.8.1"
     assert payload["chrome_bridge"]["bundle_version"] == "0.8.28"
@@ -48,6 +52,10 @@ def test_formal_release_advertises_v101_health_modal_and_carried_console_fixes()
     assert payload["features"]["request_history_conversation_viewer_v97"] is True
     assert payload["features"]["server_update_direct_start_v97"] is True
     assert payload["features"]["worker_ui_hygiene_health_modal_v101"] is True
+    assert payload["features"]["user_console_v104"] is True
+    assert payload["features"]["user_account_api_key_isolation_v104"] is True
+    assert payload["features"]["user_pricing_billing_v104"] is True
+    assert payload["features"]["user_payment_zpay_v104"] is True
     assert "multimodal-main-world-v78" in payload["server"]["feature_revision"]
     assert "window-manager-fifo-v88" in payload["server"]["feature_revision"]
     assert "success-terminal-monotonic-v88" in payload["server"]["feature_revision"]
@@ -59,3 +67,8 @@ def test_formal_release_advertises_v101_health_modal_and_carried_console_fixes()
     assert "diagnostic-runtime-truth-v100" in payload["server"]["feature_revision"]
     assert "health-promo-safe-dismiss-v101" in payload["server"]["feature_revision"]
     assert "release-v02266" in payload["server"]["feature_revision"]
+    assert "user-console-v104" in payload["server"]["feature_revision"]
+    assert "user-commerce-v104" in payload["server"]["feature_revision"]
+    assert "pricing-v104" in payload["server"]["feature_revision"]
+    assert "payment-v104" in payload["server"]["feature_revision"]
+    assert "release-v02267" in payload["server"]["feature_revision"]
