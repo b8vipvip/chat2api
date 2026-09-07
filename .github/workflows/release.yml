@@ -10,7 +10,9 @@ permissions:
   contents: write
 
 concurrency:
-  group: chat2api-release
+  # Keep validated release runs isolated from pre-v103 runs that did not have
+  # a guaranteed Production image smoke for every main commit.
+  group: chat2api-release-validated
   cancel-in-progress: false
 
 jobs:
