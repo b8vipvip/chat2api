@@ -1,5 +1,34 @@
 # Changelog
 
+## v0.22.67 — 2026-09-07
+
+### User console
+
+- Add the isolated `/console` user portal with Dashboard, API Keys, Request History, Account Profile, Billing Center, Model Marketplace, Playground and Developer Documentation.
+- Bind user-generated managed API Keys to exactly one user account and filter user request history and analytics by that ownership mapping.
+- Keep user-facing request/history/playground surfaces free of Worker, browser-extension, device, routing and other internal runtime implementation details; sanitize proxied failures at the user boundary.
+- Use HttpOnly user sessions with only session-token hashes persisted server-side and scrypt password hashes with per-user random salts.
+
+### Pricing and billing
+
+- Add administrator `价格配置` for per-model input, cached-input and output prices plus a configurable USD/CNY billing conversion rate.
+- Seed the model price table from the current OpenAI public API pricing reference as of 2026-09-07 while keeping every value administrator-editable.
+- Keep user billing disabled by default on upgrade. When explicitly enabled, completed user-owned requests create idempotent price snapshots and debit the user's wallet; legacy/admin-managed keys remain outside the user billing boundary.
+- Mark token and cost values in the user console as estimated where the request telemetry itself is estimated.
+
+### Payments
+
+- Add administrator `支付配置` and a ZPAY integration derived from the existing GPTWork payment contract: PID, encrypted merchant key, Alipay/WeChat enablement, optional channel IDs, public callback origin and API connectivity testing.
+- Add user recharge orders, ZPAY MAPI checkout, signed asynchronous callbacks, PID/status/amount/channel verification and idempotent wallet settlement.
+- Store payment secrets encrypted at rest and never return the merchant key through administrator or user read APIs.
+
+### Versions
+
+- Server Runtime `0.22.67`.
+- Chrome Worker Bundle remains `0.8.28`.
+- Chrome Bridge wire protocol remains `0.8.1`.
+- Python package remains `0.7.1`.
+
 ## v0.22.66 — 2026-09-07
 
 ### ChatGPT page resilience
