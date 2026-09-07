@@ -243,6 +243,8 @@ install_prompt_config_v72_patch(app)
 # feature modules may provide actions (for example the prompt modal) but never
 # own request-table structure or rendering.
 install_request_history_v94_patch(app)
-# Final user-commerce boundary: expose only account-scoped API surfaces and a
-# sanitized user console, then add isolated administrator pricing/payment panels.
+# User commerce is deliberately request-history-passive. Install its isolated
+# routes and admin pricing/payment surfaces, then reassert the idempotent request
+# history owner as the final installation boundary for the existing contract.
 install_user_console_v104_patch(app)
+install_request_history_v94_patch(app)
