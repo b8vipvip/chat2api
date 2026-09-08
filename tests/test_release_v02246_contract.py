@@ -10,10 +10,10 @@ from fastapi import FastAPI
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_formal_release_v02267_versions_and_notes_are_aligned() -> None:
+def test_formal_release_v02268_versions_and_carried_notes_are_aligned() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert SERVER_RUNTIME_VERSION == "0.22.67"
+    assert SERVER_RUNTIME_VERSION == "0.22.68"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.28"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
@@ -25,6 +25,8 @@ def test_formal_release_v02267_versions_and_notes_are_aligned() -> None:
     assert "content_ui_hygiene_v31.js" in manifest["content_scripts"][1]["js"]
     background_entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     assert '"background_file_upload_quota_recycle_v96.js"' in background_entry
+    # v0.22.68 carries the v0.22.67 user-console/billing release and extends its
+    # payment layer; keep the historical notes available rather than rewriting it.
     assert "## v0.22.67" in changelog
     assert "### User console" in changelog
     assert "### Pricing and billing" in changelog
@@ -33,7 +35,7 @@ def test_formal_release_v02267_versions_and_notes_are_aligned() -> None:
     assert "`支付配置`" in changelog
 
 
-def test_formal_release_advertises_v104_user_commerce_and_carried_runtime_fixes() -> None:
+def test_formal_release_advertises_v106_payment_channels_and_carried_runtime_fixes() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["chrome_bridge"]["version"] == "0.8.1"
     assert payload["chrome_bridge"]["bundle_version"] == "0.8.28"
@@ -56,6 +58,10 @@ def test_formal_release_advertises_v104_user_commerce_and_carried_runtime_fixes(
     assert payload["features"]["user_account_api_key_isolation_v104"] is True
     assert payload["features"]["user_pricing_billing_v104"] is True
     assert payload["features"]["user_payment_zpay_v104"] is True
+    assert payload["features"]["user_payment_channels_v106"] is True
+    assert payload["features"]["user_payment_paypal_v106"] is True
+    assert payload["features"]["user_payment_usdt_trc20_v106"] is True
+    assert payload["features"]["user_payment_settlement_safety_v107"] is True
     assert "multimodal-main-world-v78" in payload["server"]["feature_revision"]
     assert "window-manager-fifo-v88" in payload["server"]["feature_revision"]
     assert "success-terminal-monotonic-v88" in payload["server"]["feature_revision"]
@@ -72,3 +78,6 @@ def test_formal_release_advertises_v104_user_commerce_and_carried_runtime_fixes(
     assert "pricing-v104" in payload["server"]["feature_revision"]
     assert "payment-v104" in payload["server"]["feature_revision"]
     assert "release-v02267" in payload["server"]["feature_revision"]
+    assert "payment-channels-v106" in payload["server"]["feature_revision"]
+    assert "payment-settlement-safety-v107" in payload["server"]["feature_revision"]
+    assert "release-v02268" in payload["server"]["feature_revision"]
