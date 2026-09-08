@@ -77,6 +77,7 @@ from .request_history_v94_patch import install_request_history_v94_patch
 from .user_console_v104_patch import install_user_console_v104_patch
 from .user_console_privacy_v105_patch import install_user_console_privacy_v105_patch
 from .payment_channels_v106_patch import install_payment_channels_v106_patch
+from .payment_channels_v107_safety_patch import install_payment_channels_v107_safety_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -251,5 +252,6 @@ install_request_history_v94_patch(app)
 # the legacy final-owner sentinel.
 install_user_console_v104_patch(app)
 install_payment_channels_v106_patch(app)
+install_payment_channels_v107_safety_patch(app)
 install_user_console_privacy_v105_patch(app)
 install_request_history_v94_patch(app)
