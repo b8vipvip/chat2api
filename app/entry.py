@@ -76,6 +76,8 @@ from .attachment_download_v82_patch import install_attachment_download_v82_patch
 from .request_history_v94_patch import install_request_history_v94_patch
 from .user_console_v104_patch import install_user_console_v104_patch
 from .user_console_privacy_v105_patch import install_user_console_privacy_v105_patch
+from .payment_channels_v106_patch import install_payment_channels_v106_patch
+from .payment_channels_v107_safety_patch import install_payment_channels_v107_safety_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -245,8 +247,11 @@ install_prompt_config_v72_patch(app)
 # own request-table structure or rendering.
 install_request_history_v94_patch(app)
 # User commerce is deliberately request-history-passive. Install its isolated
-# routes and administrator pricing/payment surfaces, then enforce a separate
-# user-facing privacy boundary before reasserting the legacy final-owner sentinel.
+# routes and administrator pricing/payment surfaces, then add provider-separated
+# payment channels and enforce the user-facing privacy boundary before reasserting
+# the legacy final-owner sentinel.
 install_user_console_v104_patch(app)
+install_payment_channels_v106_patch(app)
+install_payment_channels_v107_safety_patch(app)
 install_user_console_privacy_v105_patch(app)
 install_request_history_v94_patch(app)

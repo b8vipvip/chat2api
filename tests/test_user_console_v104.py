@@ -139,12 +139,16 @@ def test_admin_console_extension_adds_price_and_payment_navigation() -> None:
 
 
 def test_user_commerce_runtime_and_production_dependencies_are_published() -> None:
-    assert SERVER_RUNTIME_VERSION == "0.22.67"
+    assert SERVER_RUNTIME_VERSION == "0.22.68"
     runtime_source = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     project = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert '"user_console_v104": True' in runtime_source
     assert '"user_pricing_billing_v104": True' in runtime_source
     assert '"user_payment_zpay_v104": True' in runtime_source
+    assert '"user_payment_channels_v106": True' in runtime_source
+    assert '"user_payment_paypal_v106": True' in runtime_source
+    assert '"user_payment_usdt_trc20_v106": True' in runtime_source
+    assert '"user_payment_settlement_safety_v107": True' in runtime_source
     assert "python-multipart" in requirements
     assert "python-multipart" in project
