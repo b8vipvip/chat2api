@@ -7,7 +7,7 @@
       await chrome.scripting.executeScript({
         target: { tabId },
         world: "MAIN",
-        files: ["network_stream_main_v55.js", "multimodal_main_v78.js"],
+        files: ["network_stream_main_v55.js", "native_tool_stream_main_v63.js", "multimodal_main_v78.js"],
       });
       await chrome.scripting.executeScript({
         target: { tabId },
@@ -44,6 +44,7 @@
           "content_response_stream_recovery_v49.js",
           "content_response_stream_recovery_v69.js",
           "content_network_stream_recovery_v55.js",
+          "content_native_tool_stream_v63.js",
           "content_request_terminal_prompt_v88.js",
           "content_response_semantic_recovery_v51.js",
           "content_transient_retry_v50.js",

@@ -8,6 +8,7 @@ function currentContract() {
   return {
     ok: true,
     contract_revision: 71,
+    native_tool_stream_revision: 63,
     multimodal_revision: 85,
     terminal_prompt_revision: 88,
     conversation_quota_failover_revision: 95,
@@ -17,6 +18,8 @@ function currentContract() {
       request_v6: true,
       rich_response_v69: true,
       response_stream_v69: true,
+      native_tool_stream_v63: true,
+      native_tool_stream_main_v63: true,
       multimodal_v78: true,
       multimodal_v84: true,
       multimodal_v85: true,
@@ -94,10 +97,11 @@ async function runScenario({ hotHealWorks }) {
 const hot = await runScenario({ hotHealWorks: true });
 assert.equal(hot.reloads, 0, "a stale tab that can be hot-healed must not be reloaded");
 assert.ok(hot.injected >= 2);
-assert.equal(hot.worlds[0], "MAIN", "the multimodal/page bridge must be injected into the page MAIN world first");
+assert.equal(hot.worlds[0], "MAIN", "the page bridges must be injected into the page MAIN world first");
 assert.equal(hot.state.last?.ok, true);
 assert.equal(hot.state.last?.hot_healed, true);
 assert.equal(hot.state.last?.contract_revision, 71);
+assert.equal(hot.state.last?.native_tool_stream_revision, 63);
 assert.equal(hot.state.last?.multimodal_revision, 85);
 assert.equal(hot.state.last?.terminal_prompt_revision, 88);
 assert.equal(hot.state.last?.conversation_quota_failover_revision, 95);
@@ -108,6 +112,7 @@ assert.equal(loading.reloads, 1, "reload remains a bounded fallback when hot-hea
 assert.equal(loading.state.last?.ok, true, "a current content contract must win even while tabs.get reports loading");
 assert.equal(loading.state.last?.reloaded, true);
 assert.equal(loading.state.last?.marker?.bundle, "0.8.28");
+assert.equal(loading.state.last?.native_tool_stream_revision, 63);
 assert.equal(loading.state.last?.multimodal_revision, 85);
 assert.equal(loading.state.last?.terminal_prompt_revision, 88);
 assert.equal(loading.state.last?.conversation_quota_failover_revision, 95);

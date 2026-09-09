@@ -14,6 +14,7 @@
     const rich = globalThis.__CHAT2API_RICH_RESPONSE_V69__ || null;
     const recovery = globalThis.__CHAT2API_RESPONSE_STREAM_RECOVERY_V69__ || null;
     const networkRecovery = globalThis.__CHAT2API_NETWORK_STREAM_RECOVERY_V55__ || null;
+    const nativeTool = globalThis.__CHAT2API_NATIVE_TOOL_STREAM_CONTENT_V63__ || null;
     const semanticHelper = globalThis.__CHAT2API_RESPONSE_SEMANTIC_RECOVERY_V51__ || null;
     const legacyResponseOwner = globalThis.__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__ || null;
     const multimodal = globalThis.__CHAT2API_MULTIMODAL_V4__ || null;
@@ -41,6 +42,8 @@
       network_stream_recovery_v55: Number(networkRecovery?.version || 0) === 55,
       network_stream_main_v55: document.documentElement?.getAttribute?.("data-chat2api-network-stream-main-v55") === "55",
       network_stream_parser_v62: document.documentElement?.getAttribute?.("data-chat2api-network-stream-parser") === "62",
+      native_tool_stream_v63: Number(nativeTool?.revision || 0) === 63,
+      native_tool_stream_main_v63: document.documentElement?.getAttribute?.("data-chat2api-native-tool-stream") === "63",
       response_semantic_recovery_v51: Number(semanticHelper?.version || 0) === 51 && semanticHelper?.timer == null,
       transient_retry_v50: Number(globalThis.__CHAT2API_TRANSIENT_RETRY_V50__?.version || 0) === 50,
       generation_liveness_v49: Number(globalThis.__CHAT2API_GENERATION_LIVENESS_V49__?.version || 0) === 49,
@@ -62,6 +65,7 @@
       terminal_prompt_revision: Number(terminalPrompt?.revision || 0),
       conversation_quota_failover_revision: Number(conversationQuota?.revision || 0),
       ui_hygiene_revision: Number(uiHygiene?.state?.revision || 0),
+      native_tool_stream_revision: Number(nativeTool?.revision || 0),
       network_response_recovery: Number(networkRecovery?.version || 0) === 55 ? "conversation-sse-v55-parser-v62" : null,
       network_response_parser_revision: Number(document.documentElement?.getAttribute?.("data-chat2api-network-stream-parser") || 0),
       semantic_helper_mode: semanticHelper?.mode || null,

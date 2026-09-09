@@ -3,15 +3,20 @@
   if (globalThis[KEY]) return;
 
   // Worker bundle 0.8.28 keeps the v71 request/response epoch while requiring
-  // the v78 MAIN-world upload bridge, v85 safe-submit gate, v88 terminal/prompt
-  // guard, v95 conversation-local quota failover owner, and v101 safe UI hygiene.
+  // the v63 native WebSocket tool observer, v78 MAIN-world upload bridge,
+  // v85 safe-submit gate, v88 terminal/prompt guard, v95 conversation-local
+  // quota failover owner, and v101 safe UI hygiene.
   const REQUIRED_BUNDLE = "0.8.28";
   const REQUIRED_REVISION = 71;
   const CONTRACT_TIMEOUT_MS = 700;
   const HOT_HEAL_BUDGET_MS = 2400;
   const RELOAD_BUDGET_MS = 3500;
   const FINAL_HEAL_BUDGET_MS = 1800;
+  // Preserve the historical v87 declaration for compatibility tests and older
+  // diagnostics while composing the v63 observer into the actual injection set.
   const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"];
+  const NATIVE_MAIN_FILES = ["native_tool_stream_main_v63.js"];
+  const CURRENT_MAIN_FILES = [MAIN_FILES[0], ...NATIVE_MAIN_FILES, MAIN_FILES[1]];
   const OVERLAY_FILES = [
     "content_ui_hygiene_v31.js",
     "content_rate_limit_guard_v52.js",
@@ -27,6 +32,7 @@
     "content_request_v6.js",
     "content_response_stream_recovery_v69.js",
     "content_network_stream_recovery_v55.js",
+    "content_native_tool_stream_v63.js",
     "content_request_terminal_prompt_v88.js",
     "content_response_semantic_recovery_v51.js",
     "content_transient_retry_v50.js",
@@ -38,9 +44,10 @@
   const inflight = new Map();
   const state = {
     version: 71,
-    revision: 101,
+    revision: 108,
     required_bundle: REQUIRED_BUNDLE,
     required_revision: REQUIRED_REVISION,
+    native_tool_stream_revision: 63,
     multimodal_revision: 85,
     terminal_prompt_revision: 88,
     conversation_quota_failover_revision: 95,
@@ -61,7 +68,7 @@
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   async function injectOverlays(tabId) {
-    await chrome.scripting.executeScript({ target: {tabId}, files: MAIN_FILES, world: "MAIN" });
+    await chrome.scripting.executeScript({ target: {tabId}, files: CURRENT_MAIN_FILES, world: "MAIN" });
     await chrome.scripting.executeScript({ target: {tabId}, files: OVERLAY_FILES });
   }
 
@@ -101,6 +108,8 @@
       result?.modules?.request_v6 &&
       result?.modules?.rich_response_v69 &&
       result?.modules?.response_stream_v69 &&
+      result?.modules?.native_tool_stream_v63 &&
+      result?.modules?.native_tool_stream_main_v63 &&
       result?.modules?.multimodal_v78 &&
       result?.modules?.multimodal_v84 &&
       result?.modules?.multimodal_v85 &&
@@ -177,6 +186,7 @@
         marker: result.marker,
         modules: result.modules,
         contract_revision: result.contract_revision,
+        native_tool_stream_revision: result.native_tool_stream_revision,
         multimodal_revision: result.multimodal_revision,
         terminal_prompt_revision: 88,
         conversation_quota_failover_revision: 95,
@@ -188,9 +198,8 @@
       return true;
     }
 
-    // The whole recovery path remains wall-clock bounded by the v87 algorithm.
-    // Bundle 0.8.28 additionally requires the v88 terminal/prompt guard, v95
-    // conversation-local quota failover, and v101 safe promotional-modal cleanup.
+    // The whole recovery path remains wall-clock bounded. v108 adds the native
+    // observer without renaming the established v87 preflight outcome contract.
     result = await heal(tabId);
     let reloaded = false;
     const hotHealed = current(result);
@@ -222,7 +231,7 @@
         budget_ms: CONTRACT_TIMEOUT_MS + HOT_HEAL_BUDGET_MS + RELOAD_BUDGET_MS + FINAL_HEAL_BUDGET_MS,
         at_ms: Date.now(),
       });
-      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the v87-bounded preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} multimodal revision 85 terminal/prompt revision 88 conversation-quota-failover revision 95 UI-hygiene revision 101`);
+      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the bounded preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} native-tool-stream revision 63 multimodal revision 85 terminal/prompt revision 88 conversation-quota-failover revision 95 UI-hygiene revision 101`);
       error.code = "chatgpt_runtime_preflight_budget";
       throw error;
     }
@@ -237,6 +246,7 @@
       marker: result.marker,
       modules: result.modules,
       contract_revision: result.contract_revision,
+      native_tool_stream_revision: result.native_tool_stream_revision,
       multimodal_revision: result.multimodal_revision,
       terminal_prompt_revision: 88,
       conversation_quota_failover_revision: 95,

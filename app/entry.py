@@ -78,6 +78,8 @@ from .user_console_v104_patch import install_user_console_v104_patch
 from .user_console_privacy_v105_patch import install_user_console_privacy_v105_patch
 from .payment_channels_v106_patch import install_payment_channels_v106_patch
 from .payment_channels_v107_safety_patch import install_payment_channels_v107_safety_patch
+from .responses_v108_patch import install_responses_v108_patch
+from .responses_model_routing_v108_patch import install_responses_model_routing_v108_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -254,4 +256,9 @@ install_user_console_v104_patch(app)
 install_payment_channels_v106_patch(app)
 install_payment_channels_v107_safety_patch(app)
 install_user_console_privacy_v105_patch(app)
+# Responses v108 inherits the same paid/free model routing context as legacy Chat
+# Completions, then owns the new Responses route and native WebSocket tool/final
+# lifecycle without changing /v1/chat/completions behavior.
+install_responses_model_routing_v108_patch(app)
+install_responses_v108_patch(app)
 install_request_history_v94_patch(app)
