@@ -2,11 +2,11 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__";
   if (globalThis[KEY]) return;
 
-  // Worker bundle 0.8.29 keeps the v71 request/response epoch while requiring
+  // Worker bundle 0.8.28 keeps the v71 request/response epoch while requiring
   // the v63 native WebSocket tool observer, v78 MAIN-world upload bridge,
   // v85 safe-submit gate, v88 terminal/prompt guard, v95 conversation-local
   // quota failover owner, and v101 safe UI hygiene.
-  const REQUIRED_BUNDLE = "0.8.29";
+  const REQUIRED_BUNDLE = "0.8.28";
   const REQUIRED_REVISION = 71;
   const CONTRACT_TIMEOUT_MS = 700;
   const HOT_HEAL_BUDGET_MS = 2400;
