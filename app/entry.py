@@ -80,6 +80,7 @@ from .payment_channels_v106_patch import install_payment_channels_v106_patch
 from .payment_channels_v107_safety_patch import install_payment_channels_v107_safety_patch
 from .responses_v108_patch import install_responses_v108_patch
 from .responses_model_routing_v108_patch import install_responses_model_routing_v108_patch
+from .responses_console_v110_patch import install_responses_console_v110_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -261,4 +262,8 @@ install_user_console_privacy_v105_patch(app)
 # lifecycle without changing /v1/chat/completions behavior.
 install_responses_model_routing_v108_patch(app)
 install_responses_v108_patch(app)
+# v110 exposes the new Responses contract in both developer consoles and lets the
+# user Playground choose Responses or the backward-compatible Chat Completions
+# protocol. It is presentation/test-only and does not replace either public API.
+install_responses_console_v110_patch(app)
 install_request_history_v94_patch(app)
