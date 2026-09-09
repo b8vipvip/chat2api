@@ -13,7 +13,8 @@ from fastapi.responses import JSONResponse
 from . import model_capability_routing_patch as model_routing
 from . import v13_patch
 from .api_keys import ApiPrincipal
-from .responses_emulated_tools_v109_patch import ResponsesEmulatedToolsMiddleware
+from .responses_emulated_tools_v109_patch import ResponsesEmulatedToolsMiddleware, _request_tools
+from .responses_tool_stream_v111_patch import install_responses_tool_stream_v111_patch
 from .responses_v108_patch import _decorate_prompt, _input_prompt, _tool_config
 from .token_usage import usage_for
 
@@ -185,7 +186,7 @@ async def _record_telemetry(
         status = "cancelled"
     else:
         status = "error"
-    tools = payload.get("tools") if isinstance(payload.get("tools"), list) else []
+    tools = _request_tools(payload)
     tool_types = [str(item.get("type") or "") for item in tools if isinstance(item, dict) and item.get("type")]
     await server_app.state.telemetry.upsert(
         {
@@ -208,6 +209,7 @@ async def _record_telemetry(
             "diagnostics": {
                 "response_protocol": "responses-v108",
                 "responses_patch_revision": PATCH_REVISION,
+                "responses_tool_stream_revision": int(getattr(server_app.state, "responses_tool_stream_revision", 0) or 0),
                 "tool_types": tool_types,
             },
             "error": error_text or (f"HTTP {http_status}" if http_status >= 400 else None),
@@ -315,6 +317,10 @@ class _ResponsesModelContextMiddleware:
 def install_responses_model_routing_v108_patch(app: FastAPI) -> FastAPI:
     if getattr(app.state, "responses_model_routing_v108_installed", False):
         return app
+    # Normalize emulated function/custom tool streams before the middleware is
+    # installed. Older Codex runtimes rely on the argument/input delta+done
+    # lifecycle even when output_item.done already carries the completed item.
+    install_responses_tool_stream_v111_patch(app)
     # Install the emulated tool middleware first, then the model/telemetry owner.
     # Starlette inserts later middleware on the outside, so every emulated tool
     # response remains inside the canonical routing + ownership + billing boundary.
