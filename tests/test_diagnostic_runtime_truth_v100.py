@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from app.linux_worker_diagnostics_patch import _pairing_evidence
+from app.runtime_contract import SERVER_RUNTIME_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +21,9 @@ def test_v8_diagnostics_use_canonical_runtime_contract_not_historical_patch_vers
     assert "from .runtime_contract import SERVER_RUNTIME_VERSION" in source
     assert source.count('"server_version": SERVER_RUNTIME_VERSION') == 2
     assert '"server_version": PATCH_VERSION' not in source
-    assert 'SERVER_RUNTIME_VERSION = "0.22.65"' in runtime
+    match = re.search(r'^SERVER_RUNTIME_VERSION = "([^"]+)"$', runtime, re.MULTILINE)
+    assert match is not None
+    assert match.group(1) == SERVER_RUNTIME_VERSION
 
 
 def test_pairing_diagnostics_keep_current_server_binding_when_worker_window_is_empty() -> None:

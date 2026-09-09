@@ -10,10 +10,10 @@ from fastapi import FastAPI
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_formal_release_v02269_versions_and_carried_notes_are_aligned() -> None:
+def test_formal_release_v02270_versions_and_carried_notes_are_aligned() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert SERVER_RUNTIME_VERSION == "0.22.69"
+    assert SERVER_RUNTIME_VERSION == "0.22.70"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.28"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
@@ -27,8 +27,8 @@ def test_formal_release_v02269_versions_and_carried_notes_are_aligned() -> None:
     assert "content_ui_hygiene_v31.js" in manifest["content_scripts"][1]["js"]
     background_entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     assert '"background_file_upload_quota_recycle_v96.js"' in background_entry
-    # v0.22.69 carries the v0.22.67 user-console/billing release and v0.22.68
-    # payment layer while adding the Responses protocol stack.
+    # v0.22.70 carries the user-console/billing/payment surfaces and the v0.22.69
+    # Responses protocol stack, then publishes the v110 docs/playground surface.
     assert "## v0.22.67" in changelog
     assert "### User console" in changelog
     assert "### Pricing and billing" in changelog
@@ -37,7 +37,7 @@ def test_formal_release_v02269_versions_and_carried_notes_are_aligned() -> None:
     assert "`支付配置`" in changelog
 
 
-def test_formal_release_advertises_responses_bridge_and_carried_runtime_fixes() -> None:
+def test_formal_release_advertises_responses_console_and_carried_runtime_fixes() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["chrome_bridge"]["version"] == "0.8.1"
     assert payload["chrome_bridge"]["bundle_version"] == "0.8.28"
@@ -70,6 +70,8 @@ def test_formal_release_advertises_responses_bridge_and_carried_runtime_fixes() 
     assert payload["features"]["responses_emulated_tools_v109"] is True
     assert payload["features"]["responses_function_call_output_v109"] is True
     assert payload["features"]["responses_owner_isolation_v109"] is True
+    assert payload["features"]["responses_console_docs_v110"] is True
+    assert payload["features"]["responses_playground_v110"] is True
     assert "multimodal-main-world-v78" in payload["server"]["feature_revision"]
     assert "window-manager-fifo-v88" in payload["server"]["feature_revision"]
     assert "success-terminal-monotonic-v88" in payload["server"]["feature_revision"]
@@ -92,3 +94,6 @@ def test_formal_release_advertises_responses_bridge_and_carried_runtime_fixes() 
     assert "native-responses-v108" in payload["server"]["feature_revision"]
     assert "emulated-responses-tools-v109" in payload["server"]["feature_revision"]
     assert "release-v02269" in payload["server"]["feature_revision"]
+    assert "responses-console-docs-v110" in payload["server"]["feature_revision"]
+    assert "responses-playground-v110" in payload["server"]["feature_revision"]
+    assert "release-v02270" in payload["server"]["feature_revision"]
