@@ -1,4 +1,7 @@
+import json
 from pathlib import Path
+
+import pytest
 
 from app.responses_tool_stream_v111_patch import (
     PATCH_REVISION,
@@ -7,8 +10,10 @@ from app.responses_tool_stream_v111_patch import (
     _pending_item,
     _tool_argument_events,
 )
-from app.responses_tool_stream_v113_patch import (
+from app.responses_tool_stream_v114_patch import (
+    _call_item_with_nested_custom_recovery,
     _canonical_response_tool_items,
+    _normalize_nested_custom_call,
     _recover_single_custom_tool_envelope,
     _restore_tool_namespaces,
 )
@@ -94,6 +99,40 @@ def test_actual_fdex_style_unescaped_custom_input_is_recovered() -> None:
     )
 
 
+def test_actual_fdex_mcp_nested_custom_wrapper_is_promoted_to_raw_javascript() -> None:
+    # This is the structural shape captured from the 2026-09-09 FDEX MCP smoke:
+    # ChatGPT wrapped custom-tool raw input inside arguments:{name,input}.
+    raw = r'''{"kind":"tool_calls","calls":[{"namespace":"functions","name":"exec","arguments":{"name":"exec","input":"const hit = ALL_TOOLS.find(x => x.name === 'mcp__fdex_smoke__fdex_smoke_echo');\nconst fn = tools[hit.name];\nconst r = await fn({marker:'FDEX_CODEX_SMOKE_3304ce6f5f0f476e_MCP'});\ntext(r);"}}]}'''
+    envelope = json.loads(raw)
+    catalog = [{"type": "custom", "namespace": "functions", "name": "exec"}]
+    call = envelope["calls"][0]
+
+    normalized = _normalize_nested_custom_call(call, catalog)
+    assert "arguments" not in normalized
+    assert normalized["namespace"] == "functions"
+    assert normalized["name"] == "exec"
+    assert normalized["input"].startswith("const hit = ALL_TOOLS.find")
+    assert "FDEX_CODEX_SMOKE_3304ce6f5f0f476e_MCP" in normalized["input"]
+
+    item = _call_item_with_nested_custom_recovery(call, catalog)
+    assert item["type"] == "custom_tool_call"
+    assert item["namespace"] == "functions"
+    assert item["name"] == "exec"
+    assert item["input"] == normalized["input"]
+    assert not item["input"].lstrip().startswith("{")
+
+
+def test_nested_custom_wrapper_identity_mismatch_fails_closed() -> None:
+    catalog = [{"type": "custom", "namespace": "functions", "name": "exec"}]
+    call = {
+        "namespace": "functions",
+        "name": "exec",
+        "arguments": {"name": "other_tool", "input": "text('bad');"},
+    }
+    with pytest.raises(ValueError, match="does not match outer tool"):
+        _normalize_nested_custom_call(call, catalog)
+
+
 def test_missing_namespace_is_restored_from_unique_catalog_match() -> None:
     items = [
         {
@@ -138,7 +177,7 @@ def test_tool_response_explicitly_requires_follow_up() -> None:
     _mark_tool_follow_up(response, [{"type": "custom_tool_call"}])
     assert response["end_turn"] is False
     assert response["metadata"]["chat2api_tool_stream"] == "responses-v113-codex-0149"
-    assert PATCH_REVISION == 113
+    assert PATCH_REVISION == 114
 
 
 def test_model_routing_installs_v111_compatibility_entry_before_emulated_middleware() -> None:
@@ -157,10 +196,20 @@ def test_v111_compatibility_module_delegates_to_v112() -> None:
     assert "responses_tool_stream_revision = PATCH_REVISION" in source
 
 
-def test_v112_compatibility_module_delegates_to_v113() -> None:
+def test_v112_compatibility_module_delegates_to_v114() -> None:
     source = (ROOT / "app" / "responses_tool_stream_v112_patch.py").read_text(encoding="utf-8")
-    assert "install_responses_tool_stream_v113_patch(app)" in source
+    assert "install_responses_tool_stream_v114_patch(app)" in source
     assert "responses_tool_stream_revision = PATCH_REVISION" in source
+
+
+def test_terminal_event_can_reuse_same_worker_route_before_async_route_cleanup() -> None:
+    source = (ROOT / "chrome_extension" / "conversation_workers_v25.js").read_text(encoding="utf-8")
+    assert "terminalRequests: new Map()" in source
+    assert "state.terminalRequests.has(inflight)" in source
+    assert "route.inflight_request_id = null" in source
+    assert "markTerminal(requestId);" in source
+    assert source.index("markTerminal(requestId);") < source.index("state.releaseRequest(requestId);")
+    assert "per-api-key-v26-terminal-reuse" in source
 
 
 def test_background_entry_loads_routed_window_cap_after_manager() -> None:
