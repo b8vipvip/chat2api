@@ -100,7 +100,9 @@ def test_runtime_preflight_requires_v55_parser_62_main_and_isolated_recovery_mod
     assert '"content_network_stream_recovery_v55.js"' in bootstrap
     assert '"content_native_tool_stream_v63.js"' in bootstrap
     assert 'const REQUIRED_BUNDLE = "0.8.28"' in preflight
-    assert 'const MAIN_FILES = ["network_stream_main_v55.js", "native_tool_stream_main_v63.js", "multimodal_main_v78.js"]' in preflight
+    assert 'const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"]' in preflight
+    assert 'const NATIVE_MAIN_FILES = ["native_tool_stream_main_v63.js"]' in preflight
+    assert 'const CURRENT_MAIN_FILES = [MAIN_FILES[0], ...NATIVE_MAIN_FILES, MAIN_FILES[1]]' in preflight
     assert '"content_network_stream_recovery_v55.js"' in preflight
     assert '"content_native_tool_stream_v63.js"' in preflight
     assert "network_stream_recovery_v55" in contract
