@@ -7,6 +7,11 @@ from app.responses_tool_stream_v111_patch import (
     _pending_item,
     _tool_argument_events,
 )
+from app.responses_tool_stream_v113_patch import (
+    _canonical_response_tool_items,
+    _recover_single_custom_tool_envelope,
+    _restore_tool_namespaces,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -75,12 +80,65 @@ def test_codex_0149_done_item_is_minimal_and_keeps_namespace() -> None:
     }
 
 
+def test_actual_fdex_style_unescaped_custom_input_is_recovered() -> None:
+    malformed = r'''<<<CHAT2API_RESPONSES_TOOL_V109>>>
+{"kind":"tool_calls","calls":[{"name":"exec","input":"const w = await tools.exec_command({cmd:"printf '%s\\n' 'MARKER' > fdex_codex_provider_smoke.txt",workdir:"/tmp/workspace"});\ntext(w.output);"}]}
+<<<END_CHAT2API_RESPONSES_TOOL_V109>>>'''
+    parsed = _recover_single_custom_tool_envelope(malformed)
+    assert parsed is not None
+    assert parsed["kind"] == "tool_calls"
+    assert parsed["calls"][0]["name"] == "exec"
+    assert parsed["calls"][0]["input"] == (
+        'const w = await tools.exec_command({cmd:"printf \'%s\\n\' \'MARKER\' > '
+        'fdex_codex_provider_smoke.txt",workdir:"/tmp/workspace"});\ntext(w.output);'
+    )
+
+
+def test_missing_namespace_is_restored_from_unique_catalog_match() -> None:
+    items = [
+        {
+            "id": "ctc_1",
+            "type": "custom_tool_call",
+            "status": "completed",
+            "call_id": "call_1",
+            "name": "exec",
+            "input": "text('ok');",
+        }
+    ]
+    catalog = [{"type": "custom", "namespace": "functions", "name": "exec"}]
+    restored = _restore_tool_namespaces(items, catalog)
+    assert restored[0]["namespace"] == "functions"
+
+
+def test_response_completed_uses_same_canonical_tool_shape_as_done_event() -> None:
+    items = [
+        {
+            "id": "ctc_1",
+            "type": "custom_tool_call",
+            "status": "completed",
+            "call_id": "call_1",
+            "namespace": "functions",
+            "name": "exec",
+            "input": "text('ok');",
+        }
+    ]
+    assert _canonical_response_tool_items(items) == [
+        {
+            "type": "custom_tool_call",
+            "call_id": "call_1",
+            "namespace": "functions",
+            "name": "exec",
+            "input": "text('ok');",
+        }
+    ]
+
+
 def test_tool_response_explicitly_requires_follow_up() -> None:
     response = {"id": "resp_1", "metadata": {}}
     _mark_tool_follow_up(response, [{"type": "custom_tool_call"}])
     assert response["end_turn"] is False
-    assert response["metadata"]["chat2api_tool_stream"] == "responses-v112-codex-0149"
-    assert PATCH_REVISION == 112
+    assert response["metadata"]["chat2api_tool_stream"] == "responses-v113-codex-0149"
+    assert PATCH_REVISION == 113
 
 
 def test_model_routing_installs_v111_compatibility_entry_before_emulated_middleware() -> None:
@@ -96,6 +154,12 @@ def test_model_routing_installs_v111_compatibility_entry_before_emulated_middlew
 def test_v111_compatibility_module_delegates_to_v112() -> None:
     source = (ROOT / "app" / "responses_tool_stream_v111_patch.py").read_text(encoding="utf-8")
     assert "install_responses_tool_stream_v112_patch(app)" in source
+    assert "responses_tool_stream_revision = PATCH_REVISION" in source
+
+
+def test_v112_compatibility_module_delegates_to_v113() -> None:
+    source = (ROOT / "app" / "responses_tool_stream_v112_patch.py").read_text(encoding="utf-8")
+    assert "install_responses_tool_stream_v113_patch(app)" in source
     assert "responses_tool_stream_revision = PATCH_REVISION" in source
 
 
