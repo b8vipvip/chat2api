@@ -15,7 +15,7 @@ def test_formal_release_v02269_versions_and_carried_notes_are_aligned() -> None:
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     assert SERVER_RUNTIME_VERSION == "0.22.69"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.29"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.28"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     assert "native_tool_stream_main_v63.js" in manifest["content_scripts"][0]["js"]
     assert "multimodal_main_v78.js" in manifest["content_scripts"][0]["js"]
@@ -40,7 +40,7 @@ def test_formal_release_v02269_versions_and_carried_notes_are_aligned() -> None:
 def test_formal_release_advertises_responses_bridge_and_carried_runtime_fixes() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["chrome_bridge"]["version"] == "0.8.1"
-    assert payload["chrome_bridge"]["bundle_version"] == "0.8.29"
+    assert payload["chrome_bridge"]["bundle_version"] == "0.8.28"
     assert payload["chrome_bridge"]["multimodal_revision"] == 85
     assert payload["features"]["multimodal_main_world_v78"] is True
     assert payload["features"]["multimodal_upload_ready_v84"] is True
