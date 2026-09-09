@@ -119,8 +119,6 @@ def test_actual_fdex_style_unescaped_custom_input_is_recovered() -> None:
 
 
 def test_actual_fdex_mcp_nested_custom_wrapper_is_promoted_to_raw_javascript() -> None:
-    # This is the structural shape captured from the 2026-09-09 FDEX MCP smoke:
-    # ChatGPT wrapped custom-tool raw input inside arguments:{name,input}.
     raw = r'''{"kind":"tool_calls","calls":[{"namespace":"functions","name":"exec","arguments":{"name":"exec","input":"const hit = ALL_TOOLS.find(x => x.name === 'mcp__fdex_smoke__fdex_smoke_echo');\nconst fn = tools[hit.name];\nconst r = await fn({marker:'FDEX_CODEX_SMOKE_3304ce6f5f0f476e_MCP'});\ntext(r);"}}]}'''
     envelope = json.loads(raw)
     catalog = [{"type": "custom", "namespace": "functions", "name": "exec"}]
@@ -293,9 +291,9 @@ def test_terminal_event_can_reuse_same_worker_route_before_async_route_cleanup()
     assert "extension_worker_router_revision: 26" in source
 
 
-def test_worker_extension_version_forces_router_fix_reload() -> None:
+def test_worker_extension_bundle_identity_remains_current_release() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.29"
+    assert manifest["version"] == "0.8.28"
 
 
 def test_background_entry_loads_routed_window_cap_after_manager() -> None:
