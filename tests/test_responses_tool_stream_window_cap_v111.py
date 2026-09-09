@@ -12,14 +12,33 @@ from app.responses_tool_stream_v111_patch import (
 )
 from app.responses_tool_stream_v114_patch import (
     _call_item_with_nested_custom_recovery,
-    _canonical_response_tool_items,
     _normalize_nested_custom_call,
+)
+from app.responses_tool_stream_v115_patch import (
+    _call_item_with_nested_exec_recovery,
+    _canonical_response_tool_items,
+    _normalize_undeclared_nested_exec_call,
     _recover_single_custom_tool_envelope,
     _restore_tool_namespaces,
 )
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _fdex_exec_catalog() -> list[dict[str, object]]:
+    return [
+        {
+            "type": "custom",
+            "namespace": "functions",
+            "name": "exec",
+            "description": (
+                "Run JavaScript.\n"
+                "declare const tools: { collaboration__spawn_agent(args: { task_name: string; message: string; fork_turns?: string; }): Promise<unknown>; };\n"
+                "declare const tools: { collaboration__wait_agent(args: { timeout_ms?: number; }): Promise<unknown>; };"
+            ),
+        }
+    ]
 
 
 def test_custom_tool_stream_emits_input_delta_and_done() -> None:
@@ -100,8 +119,6 @@ def test_actual_fdex_style_unescaped_custom_input_is_recovered() -> None:
 
 
 def test_actual_fdex_mcp_nested_custom_wrapper_is_promoted_to_raw_javascript() -> None:
-    # This is the structural shape captured from the 2026-09-09 FDEX MCP smoke:
-    # ChatGPT wrapped custom-tool raw input inside arguments:{name,input}.
     raw = r'''{"kind":"tool_calls","calls":[{"namespace":"functions","name":"exec","arguments":{"name":"exec","input":"const hit = ALL_TOOLS.find(x => x.name === 'mcp__fdex_smoke__fdex_smoke_echo');\nconst fn = tools[hit.name];\nconst r = await fn({marker:'FDEX_CODEX_SMOKE_3304ce6f5f0f476e_MCP'});\ntext(r);"}}]}'''
     envelope = json.loads(raw)
     catalog = [{"type": "custom", "namespace": "functions", "name": "exec"}]
@@ -131,6 +148,66 @@ def test_nested_custom_wrapper_identity_mismatch_fails_closed() -> None:
     }
     with pytest.raises(ValueError, match="does not match outer tool"):
         _normalize_nested_custom_call(call, catalog)
+
+
+@pytest.mark.parametrize(
+    ("namespace", "name"),
+    [
+        ("functions.collaboration", "spawn_agent"),
+        ("functions.collaboration", "collaboration__spawn_agent"),
+        ("collaboration", "collaboration__spawn_agent"),
+    ],
+)
+def test_actual_fdex_collaboration_spawn_variants_are_rewrapped_through_exec(
+    namespace: str,
+    name: str,
+) -> None:
+    catalog = _fdex_exec_catalog()
+    call = {
+        "namespace": namespace,
+        "name": name,
+        "arguments": {
+            "task_name": "fdex_smoke_subagent",
+            "message": "Return exactly FDEX_CODEX_SMOKE_b9e3a0486c90447f_SUBAGENT",
+            "fork_turns": "all",
+        },
+    }
+    normalized = _normalize_undeclared_nested_exec_call(call, catalog)
+    assert normalized["namespace"] == "functions"
+    assert normalized["name"] == "exec"
+    assert "tools.collaboration__spawn_agent" in normalized["input"]
+    assert '"task_name":"fdex_smoke_subagent"' in normalized["input"]
+
+    item = _call_item_with_nested_exec_recovery(call, catalog)
+    assert item["type"] == "custom_tool_call"
+    assert item["namespace"] == "functions"
+    assert item["name"] == "exec"
+    assert "tools.collaboration__spawn_agent" in item["input"]
+
+
+def test_fdex_collaboration_wait_variant_is_rewrapped_through_exec() -> None:
+    catalog = _fdex_exec_catalog()
+    call = {
+        "namespace": "functions.collaboration",
+        "name": "wait_agent",
+        "arguments": {"timeout_ms": 60000},
+    }
+    item = _call_item_with_nested_exec_recovery(call, catalog)
+    assert item["type"] == "custom_tool_call"
+    assert "tools.collaboration__wait_agent" in item["input"]
+    assert '"timeout_ms":60000' in item["input"]
+
+
+def test_undeclared_nested_exec_tool_still_fails_closed() -> None:
+    catalog = _fdex_exec_catalog()
+    call = {
+        "namespace": "functions.collaboration",
+        "name": "delete_everything",
+        "arguments": {},
+    }
+    assert _normalize_undeclared_nested_exec_call(call, catalog) == call
+    with pytest.raises(ValueError, match="Model requested undeclared tool"):
+        _call_item_with_nested_exec_recovery(call, catalog)
 
 
 def test_missing_namespace_is_restored_from_unique_catalog_match() -> None:
@@ -177,7 +254,7 @@ def test_tool_response_explicitly_requires_follow_up() -> None:
     _mark_tool_follow_up(response, [{"type": "custom_tool_call"}])
     assert response["end_turn"] is False
     assert response["metadata"]["chat2api_tool_stream"] == "responses-v113-codex-0149"
-    assert PATCH_REVISION == 114
+    assert PATCH_REVISION == 115
 
 
 def test_model_routing_installs_v111_compatibility_entry_before_emulated_middleware() -> None:
@@ -196,9 +273,9 @@ def test_v111_compatibility_module_delegates_to_v112() -> None:
     assert "responses_tool_stream_revision = PATCH_REVISION" in source
 
 
-def test_v112_compatibility_module_delegates_to_v114() -> None:
+def test_v112_compatibility_module_delegates_to_v115() -> None:
     source = (ROOT / "app" / "responses_tool_stream_v112_patch.py").read_text(encoding="utf-8")
-    assert "install_responses_tool_stream_v114_patch(app)" in source
+    assert "install_responses_tool_stream_v115_patch(app)" in source
     assert "responses_tool_stream_revision = PATCH_REVISION" in source
 
 
@@ -212,6 +289,11 @@ def test_terminal_event_can_reuse_same_worker_route_before_async_route_cleanup()
     assert 'extension_worker_router: "per-api-key-v25-request-reservation"' in source
     assert "extension_worker_terminal_reuse: true" in source
     assert "extension_worker_router_revision: 26" in source
+
+
+def test_worker_extension_bundle_identity_remains_current_release() -> None:
+    manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["version"] == "0.8.28"
 
 
 def test_background_entry_loads_routed_window_cap_after_manager() -> None:
