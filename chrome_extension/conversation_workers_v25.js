@@ -8,15 +8,18 @@
   const MIN_WORKERS_PER_KEY = 1;
   const HARD_MAX_WORKERS_PER_KEY = 32;
   const ROUTE_RESERVATION_STALE_MS = 30000;
+  const TERMINAL_MARKER_STALE_MS = 30000;
   const baseResolver = globalThis.resolveTargetTabForRequest;
   if (typeof baseResolver !== "function") return;
 
   const state = {
     requestRoutes: new Map(),
     routeReservations: new Map(),
+    terminalRequests: new Map(),
     maxWorkers: MAX_WORKERS_PER_KEY,
     lastAuthoritativeLimitSource: null,
     lastLimitSource: "default",
+    revision: 26,
   };
   globalThis[KEY] = state;
   globalThis.chat2apiConversationWorkersV25 = state;
@@ -77,9 +80,29 @@
     return index <= 1 ? baseKey : `${baseKey}::worker${index}`;
   }
 
+  function pruneTerminalRequests(now = Date.now()) {
+    for (const [requestId, finishedAt] of state.terminalRequests.entries()) {
+      if (now - Number(finishedAt || 0) > TERMINAL_MARKER_STALE_MS) {
+        state.terminalRequests.delete(requestId);
+      }
+    }
+  }
+
+  function markTerminal(requestId) {
+    const key = String(requestId || "");
+    if (!key) return;
+    const now = Date.now();
+    state.terminalRequests.set(key, now);
+    pruneTerminalRequests(now);
+  }
+
   function reservationBusy(router, routeKey, requestId) {
     const reservation = state.routeReservations.get(routeKey);
     if (!reservation || reservation.requestId === requestId) return false;
+    if (state.terminalRequests.has(String(reservation.requestId || ""))) {
+      state.routeReservations.delete(routeKey);
+      return false;
+    }
     const active = router?.activeRequests;
     if (active instanceof Map && active.has(reservation.requestId)) return true;
     if (Date.now() - Number(reservation.reservedAt || 0) < ROUTE_RESERVATION_STALE_MS) return true;
@@ -91,6 +114,18 @@
     if (reservationBusy(router, routeKey, requestId)) return true;
     const inflight = String(route?.inflight_request_id || "");
     if (!inflight || inflight === requestId) return false;
+
+    // conversation_routing.finishRequest() intentionally performs async
+    // conversation capture/persistence before deleting activeRequests. A new
+    // server request can arrive during that short window after the browser has
+    // already emitted chat.completed. Treat the synchronous terminal event as
+    // authoritative for generation ownership so a sequential Responses/Codex
+    // chain stays on worker1 instead of spuriously spilling to ::worker2.
+    if (state.terminalRequests.has(inflight)) {
+      route.inflight_request_id = null;
+      return false;
+    }
+
     const active = router?.activeRequests;
     if (active instanceof Map && !active.has(inflight)) {
       route.inflight_request_id = null;
@@ -117,6 +152,7 @@
     const baseKey = logicalKey(message);
     if (!baseKey || !requestId) return null;
 
+    pruneTerminalRequests();
     const existing = state.requestRoutes.get(requestId);
     if (existing) return existing;
 
@@ -138,8 +174,8 @@
         tabId: null,
         windowId: null,
       };
-      // Reserve synchronously before awaiting tab allocation. This is the key v25
-      // guarantee: two simultaneous requests with byte-identical prompts but
+      // Reserve synchronously before awaiting tab allocation. This is the key
+      // concurrency guarantee: two genuinely simultaneous requests with
       // different request_ids cannot both observe the same worker route as free.
       state.requestRoutes.set(requestId, selected);
       reserve(selected);
@@ -158,6 +194,7 @@
     releaseReservation(selected);
     state.requestRoutes.delete(key);
   };
+  state.markTerminal = markTerminal;
 
   globalThis.resolveTargetTabForRequest = async function resolveConcurrentWorker(message) {
     const selected = await chooseWorker(message);
@@ -181,6 +218,8 @@
         kind: message.type === "voice.request" || message.type === "voice.live.start" ? "voice" : undefined,
         request_id: requestIdOf(message),
         diagnostics: {
+          // Keep the long-lived diagnostic identifier stable for admin/tests.
+          // The new behavior is advertised separately below.
           extension_worker_router: "per-api-key-v25-request-reservation",
           extension_worker_index: selected.workerIndex,
           extension_worker_limit: selected.workerLimit,
@@ -188,6 +227,8 @@
           extension_worker_logical_api_key_id: selected.baseKey,
           extension_worker_limit_source: selected.workerLimitSource,
           extension_worker_request_reservation: true,
+          extension_worker_terminal_reuse: true,
+          extension_worker_router_revision: 26,
           routed_tab_id: selected.tabId,
           routed_window_id: selected.windowId,
         },
@@ -208,7 +249,13 @@
     const event = message.event || {};
     if (!["chat.completed", "chat.error", "chat.cancelled", "image.completed", "image.error", "image.cancelled"].includes(event.type)) return false;
     const requestId = String(event.request_id || "");
-    if (requestId) state.releaseRequest(requestId);
+    if (requestId) {
+      // Mark synchronously before conversation_routing's async finishRequest
+      // completes. The next sequential server request can therefore safely
+      // reuse the same route/window without defeating true parallel workers.
+      markTerminal(requestId);
+      state.releaseRequest(requestId);
+    }
     return false;
   });
 })();
