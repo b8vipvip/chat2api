@@ -209,7 +209,9 @@ def test_terminal_event_can_reuse_same_worker_route_before_async_route_cleanup()
     assert "route.inflight_request_id = null" in source
     assert "markTerminal(requestId);" in source
     assert source.index("markTerminal(requestId);") < source.index("state.releaseRequest(requestId);")
-    assert "per-api-key-v26-terminal-reuse" in source
+    assert 'extension_worker_router: "per-api-key-v25-request-reservation"' in source
+    assert "extension_worker_terminal_reuse: true" in source
+    assert "extension_worker_router_revision: 26" in source
 
 
 def test_background_entry_loads_routed_window_cap_after_manager() -> None:
