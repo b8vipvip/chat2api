@@ -53,9 +53,11 @@
     await chrome.storage.local.set({ [ROUTE_STORAGE_KEY]: router.routes }).catch(() => {});
   }
 
-  async function closeIdleRoute(router, routeKey, route) {
+  async function closeIdleRoute(router, route) {
     const windowId = Number(route?.window_id);
-    delete router.routes[routeKey];
+    for (const [key, candidate] of Object.entries(router?.routes || {})) {
+      if (Number(candidate?.window_id) === windowId) delete router.routes[key];
+    }
     try { await chrome.alarms.clear(`${ROUTE_ALARM_PREFIX}${windowId}`); } catch (_) {}
     const manager = globalThis[MANAGER_KEY];
     if (manager?.protectedUntil instanceof Map && Number.isInteger(windowId)) {
@@ -75,12 +77,12 @@
 
       const active = activeWindowIds(router);
       const byWindow = new Map();
-      for (const [routeKey, route] of Object.entries(router.routes)) {
+      for (const route of Object.values(router.routes)) {
         const windowId = Number(route?.window_id);
         if (route?.window_owned === false || !Number.isInteger(windowId)) continue;
         const current = byWindow.get(windowId);
-        if (!current || Number(route?.last_active_at || 0) > Number(current.route?.last_active_at || 0)) {
-          byWindow.set(windowId, { routeKey, route });
+        if (!current || Number(route?.last_active_at || 0) > Number(current?.last_active_at || 0)) {
+          byWindow.set(windowId, route);
         }
       }
 
@@ -92,12 +94,12 @@
       }
 
       const idle = [...byWindow.entries()]
-        .filter(([windowId, entry]) => !active.has(windowId) && !entry.route?.inflight_request_id)
-        .sort((left, right) => Number(left[1].route?.last_active_at || 0) - Number(right[1].route?.last_active_at || 0));
+        .filter(([windowId, route]) => !active.has(windowId) && !route?.inflight_request_id)
+        .sort((left, right) => Number(left[1]?.last_active_at || 0) - Number(right[1]?.last_active_at || 0));
       let closed = 0;
-      for (const [, entry] of idle) {
+      for (const [, route] of idle) {
         if (closed >= excess) break;
-        await closeIdleRoute(router, entry.routeKey, entry.route);
+        await closeIdleRoute(router, route);
         closed += 1;
       }
       if (closed) await persistRoutes(router);
