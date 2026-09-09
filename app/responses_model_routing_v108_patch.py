@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from . import model_capability_routing_patch as model_routing
 from . import v13_patch
 from .api_keys import ApiPrincipal
+from .responses_emulated_tools_v109_patch import ResponsesEmulatedToolsMiddleware
 from .responses_v108_patch import _decorate_prompt, _input_prompt, _tool_config
 from .token_usage import usage_for
 
@@ -276,6 +277,10 @@ class _ResponsesModelContextMiddleware:
 def install_responses_model_routing_v108_patch(app: FastAPI) -> FastAPI:
     if getattr(app.state, "responses_model_routing_v108_installed", False):
         return app
+    # Install the emulated tool middleware first, then the model/telemetry owner.
+    # Starlette inserts later middleware on the outside, so every emulated tool
+    # response remains inside the canonical routing + billing boundary.
+    app.add_middleware(ResponsesEmulatedToolsMiddleware, server_app=app)
     app.add_middleware(_ResponsesModelContextMiddleware, server_app=app)
     app.state.responses_model_routing_v108_installed = True
     return app
