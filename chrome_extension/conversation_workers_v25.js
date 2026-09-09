@@ -218,7 +218,9 @@
         kind: message.type === "voice.request" || message.type === "voice.live.start" ? "voice" : undefined,
         request_id: requestIdOf(message),
         diagnostics: {
-          extension_worker_router: "per-api-key-v26-terminal-reuse",
+          // Keep the long-lived diagnostic identifier stable for admin/tests.
+          // The new behavior is advertised separately below.
+          extension_worker_router: "per-api-key-v25-request-reservation",
           extension_worker_index: selected.workerIndex,
           extension_worker_limit: selected.workerLimit,
           extension_worker_route_key: selected.routeKey,
@@ -226,6 +228,7 @@
           extension_worker_limit_source: selected.workerLimitSource,
           extension_worker_request_reservation: true,
           extension_worker_terminal_reuse: true,
+          extension_worker_router_revision: 26,
           routed_tab_id: selected.tabId,
           routed_window_id: selected.windowId,
         },
