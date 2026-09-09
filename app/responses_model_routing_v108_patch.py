@@ -4,13 +4,16 @@ import json
 import secrets
 import time
 import uuid
+from collections import OrderedDict
 from typing import Any, Awaitable, Callable
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from . import model_capability_routing_patch as model_routing
 from . import v13_patch
 from .api_keys import ApiPrincipal
+from .responses_emulated_tools_v109_patch import ResponsesEmulatedToolsMiddleware
 from .responses_v108_patch import _decorate_prompt, _input_prompt, _tool_config
 from .token_usage import usage_for
 
@@ -57,6 +60,29 @@ async def _principal(server_app: FastAPI, scope: dict[str, Any]) -> ApiPrincipal
     if master and secrets.compare_digest(supplied, master):
         return ApiPrincipal(key_id="master", name="CHAT2API_API_KEY", kind="master", scopes=("admin", "chat", "models", "files", "images"))
     return await server_app.state.api_keys.authenticate(supplied)
+
+
+def _owners(server_app: FastAPI) -> OrderedDict[str, str]:
+    owners = getattr(server_app.state, "responses_response_owners", None)
+    if not isinstance(owners, OrderedDict):
+        owners = OrderedDict()
+        server_app.state.responses_response_owners = owners
+    return owners
+
+
+def _owner_allows(server_app: FastAPI, principal: ApiPrincipal | None, response_id: str) -> bool:
+    if principal is None or not response_id:
+        return True
+    owner = _owners(server_app).get(str(response_id))
+    return not owner or owner == principal.key_id or principal.kind == "master"
+
+
+async def _not_found(scope, receive, send) -> None:
+    response = JSONResponse(
+        {"error": {"message": "Response not found", "type": "invalid_request_error", "param": None, "code": "response_not_found"}},
+        status_code=404,
+    )
+    await response(scope, receive, send)
 
 
 def _prompt(payload: dict[str, Any]) -> str:
@@ -144,6 +170,11 @@ async def _record_telemetry(
         error_text = str(error_value.get("message") or error_value.get("code") or "")
     elif error_value:
         error_text = str(error_value)
+    if response_id:
+        owners = _owners(server_app)
+        owners[response_id] = principal.key_id
+        while len(owners) > 512:
+            owners.popitem(last=False)
     if http_status >= 400:
         status = "error"
     elif response_status == "completed":
@@ -185,20 +216,24 @@ async def _record_telemetry(
 
 
 class _ResponsesModelContextMiddleware:
-    """Route Responses through the existing model resolver and metering boundary.
-
-    The historical routing middleware only owns /v1/chat/completions. Responses
-    requests must carry the same model ContextVar and must also flow through the
-    canonical telemetry.upsert path so request history and user billing cannot be
-    bypassed by choosing /v1/responses.
-    """
+    """Route Responses through the existing model resolver, ownership and metering boundary."""
 
     def __init__(self, app: Callable[..., Awaitable[None]], server_app: FastAPI) -> None:
         self.app = app
         self.server_app = server_app
 
     async def __call__(self, scope: dict[str, Any], receive, send) -> None:
-        if scope.get("type") != "http" or scope.get("method") != "POST" or scope.get("path") != "/v1/responses":
+        path = str(scope.get("path") or "")
+        method = str(scope.get("method") or "")
+        if scope.get("type") == "http" and method == "GET" and path.startswith("/v1/responses/"):
+            principal = await _principal(self.server_app, scope)
+            response_id = path.rsplit("/", 1)[-1]
+            if not _owner_allows(self.server_app, principal, response_id):
+                await _not_found(scope, receive, send)
+                return
+            await self.app(scope, receive, send)
+            return
+        if scope.get("type") != "http" or method != "POST" or scope.get("path") != "/v1/responses":
             await self.app(scope, receive, send)
             return
 
@@ -234,6 +269,10 @@ class _ResponsesModelContextMiddleware:
             target = None
 
         principal = await _principal(self.server_app, scope)
+        previous_response_id = str(payload.get("previous_response_id") or "").strip()
+        if previous_response_id and not _owner_allows(self.server_app, principal, previous_response_id):
+            await _not_found(scope, replay_receive, send)
+            return
         prompt = _prompt(payload)
         started_mono = time.perf_counter()
         status_code = 500
@@ -276,6 +315,10 @@ class _ResponsesModelContextMiddleware:
 def install_responses_model_routing_v108_patch(app: FastAPI) -> FastAPI:
     if getattr(app.state, "responses_model_routing_v108_installed", False):
         return app
+    # Install the emulated tool middleware first, then the model/telemetry owner.
+    # Starlette inserts later middleware on the outside, so every emulated tool
+    # response remains inside the canonical routing + ownership + billing boundary.
+    app.add_middleware(ResponsesEmulatedToolsMiddleware, server_app=app)
     app.add_middleware(_ResponsesModelContextMiddleware, server_app=app)
     app.state.responses_model_routing_v108_installed = True
     return app
