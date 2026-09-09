@@ -54,6 +54,7 @@ importScripts(
   "background_window_affinity_v87.js",
   "background_orphan_route_cleanup_v87.js",
   "background_window_manager_v88.js",
+  "background_routed_window_cap_v111.js",
   "background_window_lifecycle_observer_v88.js",
   "background_window_truth_refresh_v89.js",
 );
@@ -63,8 +64,9 @@ importScripts(
 // their readiness timestamp aged out. Broken/missing windows still fail the
 // health probe and are replaced by the normal pool reconcilers.
 globalThis.__CHAT2API_WINDOW_AFFINITY_V87__?.refreshHealthySpareLeases?.().catch?.(() => {});
-// v88 remains the final routing authority. v89 is telemetry/control only: after
-// v88 has built the final ownership graph, it can demand-reconcile that graph
-// against chrome.windows.getAll() before the server presents it as live truth.
+// v88 remains the final routing authority. v111 caps only retained idle routed
+// windows at the configured Worker concurrency; reserve windows remain a separate
+// spare target. v89 is telemetry/control only and reports the reconciled truth.
 globalThis.__CHAT2API_WINDOW_MANAGER_V88__?.reconcile?.(true).catch?.(() => {});
+globalThis.__CHAT2API_ROUTED_WINDOW_CAP_V111__?.reconcile?.("background-entry").catch?.(() => {});
 globalThis.__CHAT2API_WINDOW_TRUTH_REFRESH_V89__?.refresh?.("background-entry").catch?.(() => {});
