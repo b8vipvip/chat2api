@@ -14,6 +14,7 @@ NEW_JS = [
     "chrome_extension/content_request_lifecycle_v50.js", "chrome_extension/content_rich_response_v69.js",
     "chrome_extension/content_request_v6.js", "chrome_extension/content_response_stream_recovery_v49.js",
     "chrome_extension/content_response_stream_recovery_v69.js", "chrome_extension/content_network_stream_recovery_v55.js",
+    "chrome_extension/content_native_tool_stream_v63.js", "chrome_extension/native_tool_stream_main_v63.js",
     "chrome_extension/content_response_semantic_recovery_v51.js", "chrome_extension/content_transient_retry_v50.js",
     "chrome_extension/content_generation_liveness_v49.js", "chrome_extension/content_runtime_contract_v48.js",
     "chrome_extension/content_runtime_contract_v71.js", "chrome_extension/network_stream_main_v55.js",
@@ -34,12 +35,14 @@ def test_manifest_requires_fresh_document_marker_and_passive_recovery():
     main_scripts = manifest["content_scripts"][0]["js"]
     scripts = manifest["content_scripts"][1]["js"]
     assert "network_stream_main_v55.js" in main_scripts
+    assert "native_tool_stream_main_v63.js" in main_scripts
+    assert main_scripts.index("network_stream_main_v55.js") < main_scripts.index("native_tool_stream_main_v63.js")
     assert "network_stream_main_v54.js" not in main_scripts
     assert scripts.index("content.js") < scripts.index("content_bundle_marker_v48.js") < scripts.index("content_bundle_marker_v71.js")
     assert scripts.index("content_ui_hygiene_v31.js") < scripts.index("content_rate_limit_guard_v52.js") < scripts.index("content_tool_isolation_v48.js")
     assert scripts.index("content_request_v5.js") < scripts.index("content_rich_response_v69.js") < scripts.index("content_request_v6.js") < scripts.index("content_request_lifecycle_v50.js")
     assert scripts.index("content_draft_ownership_v43.js") < scripts.index("content_draft_managed_recovery_v55.js")
-    assert scripts.index("content_response_capture_v41.js") < scripts.index("content_response_stream_recovery_v49.js") < scripts.index("content_response_stream_recovery_v69.js") < scripts.index("content_network_stream_recovery_v55.js") < scripts.index("content_response_semantic_recovery_v51.js") < scripts.index("content_transient_retry_v50.js")
+    assert scripts.index("content_response_capture_v41.js") < scripts.index("content_response_stream_recovery_v49.js") < scripts.index("content_response_stream_recovery_v69.js") < scripts.index("content_network_stream_recovery_v55.js") < scripts.index("content_native_tool_stream_v63.js") < scripts.index("content_response_semantic_recovery_v51.js") < scripts.index("content_transient_retry_v50.js")
     assert scripts.index("content_request_stall_guard_v34.js") < scripts.index("content_generation_liveness_v49.js")
     assert scripts.index("content_runtime_contract_v48.js") < scripts.index("content_runtime_contract_v71.js")
     assert scripts[-1] == "content_runtime_contract_v71.js"
@@ -49,7 +52,7 @@ def test_bundle_marker_cannot_be_spoofed_by_dynamic_bootstrap():
     bootstrap = (ROOT / "chrome_extension" / "content_bootstrap.js").read_text(encoding="utf-8")
     assert "content_bundle_marker_v48.js" not in bootstrap
     assert "content_bundle_marker_v71.js" in bootstrap
-    for token in ("network_stream_main_v55.js","content_rate_limit_guard_v52.js","content_tool_isolation_v48.js","content_draft_managed_recovery_v55.js","content_rich_response_v69.js","content_request_v6.js","content_response_stream_recovery_v69.js","content_network_stream_recovery_v55.js","content_generation_liveness_v49.js","content_runtime_contract_v48.js","content_runtime_contract_v71.js"):
+    for token in ("network_stream_main_v55.js","native_tool_stream_main_v63.js","content_rate_limit_guard_v52.js","content_tool_isolation_v48.js","content_draft_managed_recovery_v55.js","content_rich_response_v69.js","content_request_v6.js","content_response_stream_recovery_v69.js","content_network_stream_recovery_v55.js","content_native_tool_stream_v63.js","content_generation_liveness_v49.js","content_runtime_contract_v48.js","content_runtime_contract_v71.js"):
         assert token in bootstrap
 
 
@@ -65,14 +68,14 @@ def test_background_preflight_wraps_final_conversation_dispatch():
     marker = (ROOT / "chrome_extension" / "content_bundle_marker_v71.js").read_text(encoding="utf-8")
     assert 'REQUIRED_BUNDLE = "0.8.28"' in preflight
     assert 'REQUIRED_REVISION = 71' in preflight
-    assert 'const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"]' in preflight
-    for token in ('"content_rate_limit_guard_v52.js"','"content_request_lifecycle_v50.js"','"content_draft_managed_recovery_v55.js"','"content_rich_response_v69.js"','"content_request_v6.js"','"content_response_stream_recovery_v69.js"','"content_network_stream_recovery_v55.js"','"content_response_semantic_recovery_v51.js"','"content_transient_retry_v50.js"','"content_generation_liveness_v49.js"','"content_bundle_marker_v71.js"','"content_runtime_contract_v71.js"'):
+    assert 'const MAIN_FILES = ["network_stream_main_v55.js", "native_tool_stream_main_v63.js", "multimodal_main_v78.js"]' in preflight
+    for token in ('"content_rate_limit_guard_v52.js"','"content_request_lifecycle_v50.js"','"content_draft_managed_recovery_v55.js"','"content_rich_response_v69.js"','"content_request_v6.js"','"content_response_stream_recovery_v69.js"','"content_network_stream_recovery_v55.js"','"content_native_tool_stream_v63.js"','"content_response_semantic_recovery_v51.js"','"content_transient_retry_v50.js"','"content_generation_liveness_v49.js"','"content_bundle_marker_v71.js"','"content_runtime_contract_v71.js"'):
         assert token in preflight
     assert '"content_response_stream_recovery_v49.js"' not in preflight
     assert 'REQUIRED_BUNDLE = "0.8.28"' in legacy_contract
     assert 'REQUIRED_BUNDLE = "0.8.28"' in contract
     assert 'REQUIRED_REVISION = 71' in contract
-    for token in ("__CHAT2API_RATE_LIMIT_CONTENT_V52__","__CHAT2API_REQUEST_LIFECYCLE_V50__","__CHAT2API_DRAFT_MANAGED_RECOVERY_V55__","__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__","__CHAT2API_RESPONSE_STREAM_RECOVERY_V69__","__CHAT2API_NETWORK_STREAM_RECOVERY_V55__","network_stream_main_v55","network_stream_parser_v62","data-chat2api-network-stream-parser","__CHAT2API_RESPONSE_SEMANTIC_RECOVERY_V51__","response_single_owner_v53","semanticHelper?.timer == null","__CHAT2API_TRANSIENT_RETRY_V50__","__CHAT2API_GENERATION_LIVENESS_V49__"):
+    for token in ("__CHAT2API_RATE_LIMIT_CONTENT_V52__","__CHAT2API_REQUEST_LIFECYCLE_V50__","__CHAT2API_DRAFT_MANAGED_RECOVERY_V55__","__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__","__CHAT2API_RESPONSE_STREAM_RECOVERY_V69__","__CHAT2API_NETWORK_STREAM_RECOVERY_V55__","__CHAT2API_NATIVE_TOOL_STREAM_CONTENT_V63__","network_stream_main_v55","network_stream_parser_v62","native_tool_stream_v63","data-chat2api-network-stream-parser","data-chat2api-native-tool-stream","__CHAT2API_RESPONSE_SEMANTIC_RECOVERY_V51__","response_single_owner_v53","semanticHelper?.timer == null","__CHAT2API_TRANSIENT_RETRY_V50__","__CHAT2API_GENERATION_LIVENESS_V49__"):
         assert token in contract
     assert 'bundle: "0.8.28"' in legacy_marker
     assert 'bundle: "0.8.28"' in marker
@@ -104,8 +107,8 @@ def test_external_account_tools_are_fail_closed_at_prompt_and_ui_layers():
     assert "preventPositiveAction" in content
     assert 'document.addEventListener("click", preventPositiveAction, true)' in content
     assert "negativeAction" in content
-    assert "重新连接" in content
-    assert "暂不" in content
+    assert '重新连接' in content
+    assert '暂不' in content
     assert "external_account_tools_disabled: true" in content
 
 
