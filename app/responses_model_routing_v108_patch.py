@@ -10,6 +10,7 @@ from . import v13_patch
 
 
 PATCH_REVISION = 108
+DEFAULT_RESPONSES_MODEL = "gpt-5.6-sol"
 
 
 class _ResponsesModelContextMiddleware:
@@ -51,7 +52,7 @@ class _ResponsesModelContextMiddleware:
         try:
             payload = json.loads(raw.decode("utf-8")) if raw else {}
             if isinstance(payload, dict):
-                model = str(payload.get("model") or "").strip().lower()
+                model = str(payload.get("model") or DEFAULT_RESPONSES_MODEL).strip().lower()
                 target = {"model": model, "needs_multimodal": False}
         except (UnicodeDecodeError, ValueError, TypeError):
             target = None
