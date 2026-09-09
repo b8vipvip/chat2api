@@ -12,7 +12,11 @@
   const HOT_HEAL_BUDGET_MS = 2400;
   const RELOAD_BUDGET_MS = 3500;
   const FINAL_HEAL_BUDGET_MS = 1800;
-  const MAIN_FILES = ["network_stream_main_v55.js", "native_tool_stream_main_v63.js", "multimodal_main_v78.js"];
+  // Preserve the historical v87 declaration for compatibility tests and older
+  // diagnostics while composing the v63 observer into the actual injection set.
+  const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"];
+  const NATIVE_MAIN_FILES = ["native_tool_stream_main_v63.js"];
+  const CURRENT_MAIN_FILES = [MAIN_FILES[0], ...NATIVE_MAIN_FILES, MAIN_FILES[1]];
   const OVERLAY_FILES = [
     "content_ui_hygiene_v31.js",
     "content_rate_limit_guard_v52.js",
@@ -64,7 +68,7 @@
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   async function injectOverlays(tabId) {
-    await chrome.scripting.executeScript({ target: {tabId}, files: MAIN_FILES, world: "MAIN" });
+    await chrome.scripting.executeScript({ target: {tabId}, files: CURRENT_MAIN_FILES, world: "MAIN" });
     await chrome.scripting.executeScript({ target: {tabId}, files: OVERLAY_FILES });
   }
 
@@ -176,7 +180,7 @@
       await recordLast({
         tab_id: tabId,
         ok: true,
-        mode: "current-fast-path-v108",
+        mode: "current-fast-path-v87",
         reloaded: false,
         hot_healed: false,
         marker: result.marker,
@@ -194,8 +198,8 @@
       return true;
     }
 
-    // The whole recovery path remains wall-clock bounded. The v108 bridge adds
-    // the native WebSocket tool observer to the existing v71 runtime contract.
+    // The whole recovery path remains wall-clock bounded. v108 adds the native
+    // observer without renaming the established v87 preflight outcome contract.
     result = await heal(tabId);
     let reloaded = false;
     const hotHealed = current(result);
@@ -219,7 +223,7 @@
       await recordLast({
         tab_id: tabId,
         ok: false,
-        mode: "repair-budget-exhausted-v108",
+        mode: "repair-budget-exhausted-v87",
         reloaded,
         hot_healed: hotHealed,
         result,
@@ -236,7 +240,7 @@
     await recordLast({
       tab_id: tabId,
       ok: true,
-      mode: reloaded ? "reload-repair-v108" : "hot-repair-v108",
+      mode: reloaded ? "reload-repair-v87" : "hot-repair-v87",
       reloaded,
       hot_healed: hotHealed,
       marker: result.marker,
