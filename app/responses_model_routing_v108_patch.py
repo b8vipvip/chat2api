@@ -233,7 +233,7 @@ class _ResponsesModelContextMiddleware:
                 return
             await self.app(scope, receive, send)
             return
-        if scope.get("type") != "http" or method != "POST" or path != "/v1/responses":
+        if scope.get("type") != "http" or method != "POST" or scope.get("path") != "/v1/responses":
             await self.app(scope, receive, send)
             return
 
