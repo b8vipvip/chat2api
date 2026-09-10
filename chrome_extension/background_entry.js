@@ -32,17 +32,15 @@ importScripts(
 
   // v0.8.30 ownership boundary:
   // conversation_routing.js is the only authority allowed to select, create,
-  // reuse, rotate, or idle-close a ChatGPT route window for an API key.
+  // reuse, rotate, retire, or idle-close a ChatGPT route window for an API key.
   // conversation_dispatch.js only transports an already admitted request to
-  // that route. Same-key FIFO admission lives on the server (scheduler v58),
-  // never in another browser-side allocator/queue.
+  // that route. Same-key FIFO admission lives on server scheduler v58.
   "conversation_routing.js",
   "conversation_dispatch.js",
 
   "background_tool_isolation_v48.js",
   "background_runtime_preflight_v48.js",
   "background_request_hygiene_v42.js",
-  "background_request_recovery_v40.js",
   "background_transport_recovery_v47.js",
   "audio_routing_live.js",
   "background_capacity_control_v35.js",
@@ -54,6 +52,6 @@ importScripts(
   "background_window_observer_v90.js",
 );
 
-// Report current physical route truth without reconciling, allocating or
-// recycling windows. All lifecycle decisions remain in conversation_routing.js.
+// Report physical route truth without reconciling, allocating, recycling or
+// protecting windows. All lifecycle decisions remain in conversation_routing.js.
 globalThis.__CHAT2API_WINDOW_OBSERVER_V90__?.report?.(true).catch?.(() => {});
