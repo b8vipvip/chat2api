@@ -43,19 +43,20 @@ def test_multimodal_v68_is_loaded_before_legacy_v4_and_owns_same_runtime_key():
     assert "dispatchDrop(file)" in source
 
 
-def test_routed_dispatch_failure_releases_conversation_worker_reservation():
+def test_routed_dispatch_failure_delegates_lifecycle_to_v30_router_authority():
     source = read("chrome_extension/conversation_dispatch.js")
-    assert "function releaseConversationReservation(requestId)" in source
-    assert "router?.activeRequests" in source
-    assert "router?.routes" in source
-    assert "route.inflight_request_id = null" in source
-    assert "activeRequests.delete(id)" in source
-    publish = source.index("async function publishRoutedDispatchFailure")
-    release = source.index("releaseConversationReservation(requestId)", publish)
-    socket = source.index("trySendSocket(event)", publish)
-    assert publish < release < socket
-    assert "routed_dispatch_reservation_release_v68: true" in source
-    assert "route_reservation_released: routeReservationReleased" in source
+    assert "async function publishRoutedDispatchFailure" in source
+    assert "const router = globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__" in source
+    assert 'typeof router?.failRequest === "function"' in source
+    assert "await router.failRequest(requestId" in source
+    assert "route_retired_by_authority_v30: routeRetired" in source
+    assert "routed_dispatch_terminal_v58: true" in source
+    assert "const sent = await trySendSocket(event)" in source
+    assert "state.requestTabs.delete(requestId)" in source
+    # Transport no longer owns route/window mutation.
+    assert "route.inflight_request_id = null" not in source
+    assert "activeRequests.delete(id)" not in source
+    assert "chrome.windows.remove" not in source
 
 
 def build_api_key_app(tmp_path: Path) -> tuple[FastAPI, ApiKeyStore]:
