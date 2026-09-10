@@ -30,7 +30,7 @@ def test_background_circuit_breaker_blocks_request_resolution_and_all_chatgpt_wi
         assert token in source
 
 
-def test_bundle_0829_load_order_and_runtime_contract_include_rate_limit_guard() -> None:
+def test_bundle_0830_load_order_and_runtime_contract_include_rate_limit_guard() -> None:
     manifest = json.loads((EXT / "manifest.json").read_text(encoding="utf-8"))
     entry = (EXT / "background_entry.js").read_text(encoding="utf-8")
     bootstrap = (EXT / "content_bootstrap.js").read_text(encoding="utf-8")
@@ -38,17 +38,18 @@ def test_bundle_0829_load_order_and_runtime_contract_include_rate_limit_guard() 
     content_contract = (EXT / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     marker = (EXT / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert manifest["version"] == "0.8.29"
+    assert manifest["version"] == "0.8.30"
     content_scripts = manifest["content_scripts"][1]["js"]
     assert content_scripts.index("content_ui_hygiene_v31.js") < content_scripts.index("content_rate_limit_guard_v52.js") < content_scripts.index("content_tool_isolation_v48.js")
-    assert entry.index('"browser_tabs.js"') < entry.index('"background_rate_limit_guard_v52.js"') < entry.index('"background_tab_supervisor_v32.js"')
+    assert entry.index('"browser_tabs.js"') < entry.index('"background_rate_limit_guard_v52.js"') < entry.index('"conversation_routing.js"')
+    assert '"background_tab_supervisor_v32.js"' not in entry
     assert '"content_rate_limit_guard_v52.js"' in bootstrap
-    assert 'REQUIRED_BUNDLE = "0.8.29"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.30"' in preflight
     assert '"content_rate_limit_guard_v52.js"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.29"' in content_contract
+    assert 'REQUIRED_BUNDLE = "0.8.30"' in content_contract
     assert '__CHAT2API_RATE_LIMIT_CONTENT_V52__' in content_contract
-    assert 'bundle: "0.8.29"' in marker
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.29"' in runtime
+    assert 'bundle: "0.8.30"' in marker
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.30"' in runtime
     assert '"chatgpt_rate_limit_circuit_breaker": True' in runtime
     assert '"worker_window_reopen_loop_guard": True' in runtime
     assert '"active_rate_limit_terminal_error": True' in runtime
