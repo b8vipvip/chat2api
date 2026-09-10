@@ -15,14 +15,14 @@ from .live_voice_patch import LIVE_PROTOCOL_VERSION
 # collapse them into a single version number: package releases, the layered
 # server runtime/console, the Worker wire protocol, the shipped unpacked
 # Worker bundle, and the realtime wire protocol can evolve independently.
-SERVER_RUNTIME_VERSION = "0.22.71"
+SERVER_RUNTIME_VERSION = "0.22.72"
 # Retain recent server-runtime lineage explicitly for compatibility diagnostics
 # and upgrade reporting. A number of historical contract tests also inspect the
 # older lineage marker while newer release tests assert SERVER_RUNTIME_VERSION.
-PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.70"
-PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.69"
-PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.68"
-PREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.67"
+PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.71"
+PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.70"
+PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.69"
+PREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.68"
 # Compatibility sentinel for historical v0.22.62 feature-contract tests. This
 # is not the active runtime version; it keeps old capability tests independent
 # from the rolling four-release diagnostics lineage above.
@@ -35,7 +35,7 @@ CHROME_BRIDGE_VERSION = "0.8.1"
 CHROME_BRIDGE_BUNDLE_VERSION = "0.8.28"
 PRODUCTION_ENTRYPOINT = "app.entry:app"
 VERSION_CONTRACT_VERSION = 1
-RUNTIME_FEATURE_REVISION = "capacity-native-v37-bundle-0819-runtime-logs-v1-playground-lifecycle-v1-playground-chat-v3-spare-freshness-v39-response-capture-v41-request-hygiene-v42-persistent-draft-ownership-v43-generation-liveness-v49-worker-initialize-v43-worker-online-upgrade-v44-worker-master-switch-v61-r62-worker-disable-authority-v62-worker-console-freeze-v22-27-server-update-recreate-guard-v22-28-server-update-poll-timeout-v22-29-github-transport-failover-v22-30-worker-transport-v47-device-identity-v47-response-stream-v49-network-response-v55-parser-v62-same-api-concurrency-v25-tool-isolation-v48-runtime-preflight-v48-worker-sudoers-guard-v22-33-request-lifecycle-v50-route-quarantine-v50-transient-retry-v50-autoreload-self-heal-v50-server-worker-auto-sync-v1-response-semantic-guard-v1-response-semantic-recovery-v51-helper-model-capability-routing-v2-rate-limit-guard-v52-single-response-owner-v53-generation-backend-health-v54-proxy-health-v55-worker-key-capacity-queue-v57-active-rate-limit-terminal-v56-admin-render-owner-v58-routed-dispatch-terminal-v58-worker-live-occupancy-v61-multimodal-upload-v64-worker-presentation-v64-worker-presentation-v65-console-liveness-v65-worker-presentation-v66-column-registry-v67-multimodal-upload-v68-api-key-console-v68-rich-response-v69-content-runtime-v71-multimodal-main-world-v78-active-request-disable-lease-v79-multimodal-upload-settle-v79-submission-liveness-v79-linux-window-response-lifecycle-v81-unicode-attachment-download-v82-live-worker-window-count-v82-runtime-version-observability-v82-physical-window-truth-v83-multimodal-upload-ready-v84-multimodal-safe-submit-v85-affinity-idle-5m-window-stagger-v85-spare-target-semantics-v85-worker-disabled-window-guard-v86-success-route-preservation-v86-runtime-preflight-fast-path-v86-request-prompt-viewer-repair-v86-window-affinity-v87-healthy-spare-lease-v87-stale-route-cleanup-v87-runtime-preflight-budget-v87-window-manager-fifo-v88-window-lifecycle-observer-v88-success-terminal-monotonic-v88-long-prompt-fast-insert-v88-admin-window-manager-v88-admin-navigation-freeze-v89-physical-window-live-truth-v89-admin-navigation-bounded-v90-file-upload-quota-v91-admin-request-stability-v92-admin-request-single-owner-v94-conversation-quota-failover-v95-file-upload-quota-terminal-recycle-v96-request-history-conversation-v97-server-update-direct-start-v97-diagnostic-runtime-truth-v100-health-promo-safe-dismiss-v101-release-v02266-user-console-v104-user-commerce-v104-pricing-v104-payment-v104-release-v02267-payment-channels-v106-payment-settlement-safety-v107-release-v02268-native-responses-v108-emulated-responses-tools-v109-release-v02269-responses-console-docs-v110-responses-playground-v110-release-v02270-responses-tool-stream-v115-worker-terminal-reuse-v26-release-v02271"
+RUNTIME_FEATURE_REVISION = "capacity-native-v37-bundle-0819-runtime-logs-v1-playground-lifecycle-v1-playground-chat-v3-spare-freshness-v39-response-capture-v41-request-hygiene-v42-persistent-draft-ownership-v43-generation-liveness-v49-worker-initialize-v43-worker-online-upgrade-v44-worker-master-switch-v61-r62-worker-disable-authority-v62-worker-console-freeze-v22-27-server-update-recreate-guard-v22-28-server-update-poll-timeout-v22-29-github-transport-failover-v22-30-worker-transport-v47-device-identity-v47-response-stream-v49-network-response-v55-parser-v62-same-api-concurrency-v25-tool-isolation-v48-runtime-preflight-v48-worker-sudoers-guard-v22-33-request-lifecycle-v50-route-quarantine-v50-transient-retry-v50-autoreload-self-heal-v50-server-worker-auto-sync-v1-response-semantic-guard-v1-response-semantic-recovery-v51-helper-model-capability-routing-v2-rate-limit-guard-v52-single-response-owner-v53-generation-backend-health-v54-proxy-health-v55-worker-key-capacity-queue-v57-active-rate-limit-terminal-v56-admin-render-owner-v58-routed-dispatch-terminal-v58-worker-live-occupancy-v61-multimodal-upload-v64-worker-presentation-v64-worker-presentation-v65-console-liveness-v65-worker-presentation-v66-column-registry-v67-multimodal-upload-v68-api-key-console-v68-rich-response-v69-content-runtime-v71-multimodal-main-world-v78-active-request-disable-lease-v79-multimodal-upload-settle-v79-submission-liveness-v79-linux-window-response-lifecycle-v81-unicode-attachment-download-v82-live-worker-window-count-v82-runtime-version-observability-v82-physical-window-truth-v83-multimodal-upload-ready-v84-multimodal-safe-submit-v85-affinity-idle-5m-window-stagger-v85-spare-target-semantics-v85-worker-disabled-window-guard-v86-success-route-preservation-v86-runtime-preflight-fast-path-v86-request-prompt-viewer-repair-v86-window-affinity-v87-healthy-spare-lease-v87-stale-route-cleanup-v87-runtime-preflight-budget-v87-window-manager-fifo-v88-window-lifecycle-observer-v88-success-terminal-monotonic-v88-long-prompt-fast-insert-v88-admin-window-manager-v88-admin-navigation-freeze-v89-physical-window-live-truth-v89-admin-navigation-bounded-v90-file-upload-quota-v91-admin-request-stability-v92-admin-request-single-owner-v94-conversation-quota-failover-v95-file-upload-quota-terminal-recycle-v96-request-history-conversation-v97-server-update-direct-start-v97-diagnostic-runtime-truth-v100-health-promo-safe-dismiss-v101-release-v02266-user-console-v104-user-commerce-v104-pricing-v104-payment-v104-release-v02267-payment-channels-v106-payment-settlement-safety-v107-release-v02268-native-responses-v108-emulated-responses-tools-v109-release-v02269-responses-console-docs-v110-responses-playground-v110-release-v02270-responses-tool-stream-v115-worker-terminal-reuse-v26-release-v02271-responses-tool-stream-v116-request-window-observability-v117-worker-sequential-affinity-v27-release-v02272"
 ADMIN_VERSION_ASSET = "/assets/chat2api-runtime-version.js"
 ADMIN_EXTENSION_COLUMNS_ASSET = "/assets/chat2api-extension-columns.js"
 ADMIN_LINUX_WORKERS_ASSET = "/assets/chat2api-linux-workers.js"
@@ -58,7 +58,7 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
         "chrome_bridge": {
             "version": CHROME_BRIDGE_VERSION,
             "bundle_version": CHROME_BRIDGE_BUNDLE_VERSION,
-            "build_revision": "capacity-native-v37-r2-spare-freshness-v39-response-capture-v41-request-hygiene-v42-persistent-draft-ownership-v43-generation-liveness-v49-response-stream-v49-network-response-v55-parser-v62-same-api-concurrency-v25-tool-isolation-v48-runtime-preflight-v48-request-lifecycle-v50-route-quarantine-v50-transient-retry-v50-autoreload-self-heal-v50-response-semantic-recovery-v51-helper-model-capability-routing-v2-rate-limit-guard-v52-single-response-owner-v53-generation-backend-health-v54-proxy-health-v55-active-rate-limit-terminal-v56-worker-key-capacity-queue-v57-routed-dispatch-terminal-v58-worker-master-switch-v61-r62-multimodal-upload-v64-multimodal-upload-v68-rich-response-v69-content-runtime-v71-multimodal-main-world-v78-active-request-disable-lease-v79-multimodal-upload-settle-v79-submission-liveness-v79-physical-window-truth-v83-multimodal-upload-ready-v84-multimodal-safe-submit-v85-affinity-idle-5m-window-stagger-v85-spare-target-semantics-v85-worker-disabled-window-guard-v86-success-route-preservation-v86-runtime-preflight-fast-path-v86-request-prompt-viewer-repair-v86-window-affinity-v87-healthy-spare-lease-v87-stale-route-cleanup-v87-runtime-preflight-budget-v87-window-manager-fifo-v88-window-lifecycle-observer-v88-success-terminal-monotonic-v88-long-prompt-fast-insert-v88-ui-hygiene-health-promo-v101-native-tool-stream-v63-worker-terminal-reuse-v26-release-v0828",
+            "build_revision": "capacity-native-v37-r2-spare-freshness-v39-response-capture-v41-request-hygiene-v42-persistent-draft-ownership-v43-generation-liveness-v49-response-stream-v49-network-response-v55-parser-v62-same-api-concurrency-v25-tool-isolation-v48-runtime-preflight-v48-request-lifecycle-v50-route-quarantine-v50-transient-retry-v50-autoreload-self-heal-v50-response-semantic-recovery-v51-helper-model-capability-routing-v2-rate-limit-guard-v52-single-response-owner-v53-generation-backend-health-v54-proxy-health-v55-active-rate-limit-terminal-v56-worker-key-capacity-queue-v57-routed-dispatch-terminal-v58-worker-master-switch-v61-r62-multimodal-upload-v64-multimodal-upload-v68-rich-response-v69-content-runtime-v71-multimodal-main-world-v78-active-request-disable-lease-v79-multimodal-upload-settle-v79-submission-liveness-v79-physical-window-truth-v83-multimodal-upload-ready-v84-multimodal-safe-submit-v85-affinity-idle-5m-window-stagger-v85-spare-target-semantics-v85-worker-disabled-window-guard-v86-success-route-preservation-v86-runtime-preflight-fast-path-v86-request-prompt-viewer-repair-v86-window-affinity-v87-healthy-spare-lease-v87-stale-route-cleanup-v87-runtime-preflight-budget-v87-window-manager-fifo-v88-window-lifecycle-observer-v88-success-terminal-monotonic-v88-long-prompt-fast-insert-v88-ui-hygiene-health-promo-v101-native-tool-stream-v63-worker-terminal-reuse-v26-worker-sequential-affinity-v27-request-window-observability-v117-release-v0828",
             "capacity_control_version": 36,
             "capacity_reporter_version": 37,
             "worker_master_switch_version": 61,
@@ -88,6 +88,7 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
             "worker_window_concurrency_controls": True,
             "api_key_concurrency_controls": True,
             "worker_terminal_reuse_v26": True,
+            "worker_sequential_affinity_v27": True,
             "running_request_history": True,
             "playground_cancellation": True,
             "generation_activity_watchdog": True,
@@ -108,6 +109,7 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
             "responses_console_docs_v110": True,
             "responses_playground_v110": True,
             "responses_tool_stream_v115": True,
+            "responses_tool_stream_v116": True,
             "single_response_observer": True,
             "assistant_response_semantic_guard": True,
             "assistant_response_semantic_recovery": True,
@@ -172,6 +174,7 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
             "request_history_conversation_viewer_v97": True,
             "admin_window_live_truth_v89": True,
             "request_id_window_correlation_v88": True,
+            "request_window_observability_v117": True,
             "submission_liveness_v79": True,
             "runtime_version_observability_v80": True,
             "runtime_version_observability_v82": True,
