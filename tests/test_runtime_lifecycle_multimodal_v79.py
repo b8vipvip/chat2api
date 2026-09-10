@@ -39,8 +39,8 @@ def test_v02255_release_contract() -> None:
     manifest = read("chrome_extension/manifest.json")
     assert 'SERVER_RUNTIME_VERSION = "0.22.62"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.28"' in runtime
-    assert '"version": "0.8.28"' in manifest
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.29"' in runtime
+    assert '"version": "0.8.29"' in manifest
     assert '"active_request_disable_lease_v79": True' in runtime
     assert '"multimodal_upload_settle_v79": True' in runtime
     assert '"submission_liveness_v79": True' in runtime
