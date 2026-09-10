@@ -8,7 +8,8 @@ model-produced ``arguments: {name, input}`` custom-tool payloads. v115 additiona
 recovers explicitly declared nested exec tools (notably collaboration spawn/wait)
 when the model lifts them into the outer bridge envelope. v116 closes the real
 FDEX full-smoke gap where ``arguments.input`` itself contains unescaped raw-JS
-quotes and therefore cannot be parsed before v114 gets a chance to normalize it.
+quotes. v118 additionally accepts the exact equivalent duplicated identity
+``functions.exec`` for an outer ``namespace=functions, name=exec`` custom tool.
 Keep this module name because older installers import it.
 """
 
@@ -16,11 +17,12 @@ from typing import Any
 
 from fastapi import FastAPI
 
-from .responses_tool_stream_v116_patch import (
+from .responses_tool_stream_v118_patch import (
     PATCH_REVISION,
     _json_object_v116,
+    _normalize_nested_custom_call_v118,
     _recover_nested_arguments_custom_tool_envelope,
-    install_responses_tool_stream_v116_patch,
+    install_responses_tool_stream_v118_patch,
 )
 from .responses_tool_stream_v115_patch import (
     _call_item_with_nested_exec_recovery,
@@ -39,10 +41,10 @@ from .responses_tool_stream_v115_patch import (
 
 def install_responses_tool_stream_v112_patch(app: FastAPI) -> FastAPI:
     if getattr(app.state, "responses_tool_stream_v112_installed", False) and getattr(
-        app.state, "responses_tool_stream_v116_installed", False
+        app.state, "responses_tool_stream_v118_installed", False
     ):
         return app
-    install_responses_tool_stream_v116_patch(app)
+    install_responses_tool_stream_v118_patch(app)
     app.state.responses_tool_stream_v112_installed = True
     app.state.responses_tool_stream_revision = PATCH_REVISION
     return app
@@ -57,6 +59,7 @@ __all__ = [
     "_json_object_v116",
     "_mark_tool_follow_up",
     "_normalize_nested_custom_call",
+    "_normalize_nested_custom_call_v118",
     "_normalize_undeclared_nested_exec_call",
     "_pending_item",
     "_recover_nested_arguments_custom_tool_envelope",
