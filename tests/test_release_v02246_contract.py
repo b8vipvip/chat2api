@@ -3,122 +3,115 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from app.runtime_contract import CHROME_BRIDGE_BUNDLE_VERSION, CHROME_BRIDGE_VERSION, SERVER_RUNTIME_VERSION, version_contract_payload
+from app.runtime_contract import (
+    CHROME_BRIDGE_BUNDLE_VERSION,
+    CHROME_BRIDGE_VERSION,
+    SERVER_RUNTIME_VERSION,
+    version_contract_payload,
+)
 from fastapi import FastAPI
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_formal_release_v02273_versions_and_carried_notes_are_aligned() -> None:
-    manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert SERVER_RUNTIME_VERSION == "0.22.73"
+def read(path: str) -> str:
+    return (ROOT / path).read_text(encoding="utf-8")
+
+
+def test_formal_release_v02274_versions_and_worker_entry_are_aligned() -> None:
+    manifest = json.loads(read("chrome_extension/manifest.json"))
+    entry = read("chrome_extension/background_entry.js")
+
+    assert SERVER_RUNTIME_VERSION == "0.22.74"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.29"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.30"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
-    assert "native_tool_stream_main_v63.js" in manifest["content_scripts"][0]["js"]
-    assert "multimodal_main_v78.js" in manifest["content_scripts"][0]["js"]
-    assert "content_native_tool_stream_v63.js" in manifest["content_scripts"][1]["js"]
-    assert "content_multimodal_v78.js" in manifest["content_scripts"][1]["js"]
-    assert "content_multimodal_settle_v84.js" in manifest["content_scripts"][1]["js"]
-    assert "content_request_terminal_prompt_v88.js" in manifest["content_scripts"][1]["js"]
-    assert "content_conversation_quota_failover_v95.js" in manifest["content_scripts"][1]["js"]
-    assert "content_ui_hygiene_v31.js" in manifest["content_scripts"][1]["js"]
-    background_entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
-    assert '"background_file_upload_quota_recycle_v96.js"' in background_entry
-    assert '"conversation_workers_v27.js"' in background_entry
-    assert '"conversation_workers_v28.js"' in background_entry
-    assert '"conversation_dispatch_v29.js"' in background_entry
-    # v0.22.73 formally carries the prior v116/v117/v27 fixes plus v118 and
-    # strict per-logical-API Worker #1 FIFO routing in bundle 0.8.29.
-    assert "## v0.22.73" in changelog
-    assert "Chrome Worker Bundle `0.8.29`" in changelog
-    assert "strict" in changelog.lower()
-    assert "## v0.22.67" in changelog
-    assert "### User console" in changelog
-    assert "### Pricing and billing" in changelog
-    assert "### Payments" in changelog
-    assert "`价格配置`" in changelog
-    assert "`支付配置`" in changelog
+    assert '"conversation_routing.js"' in entry
+    assert '"conversation_dispatch.js"' in entry
+    assert '"background_window_observer_v90.js"' in entry
+
+    # Retired browser-side decision owners must not be imported into production.
+    for retired in (
+        "conversation_warm_pool_v2.js",
+        "background_external_warm_v28.js",
+        "background_reserve_pool_v29.js",
+        "background_tab_supervisor_v32.js",
+        "conversation_workers_v25.js",
+        "conversation_workers_v27.js",
+        "conversation_workers_v28.js",
+        "conversation_dispatch_v29.js",
+        "background_route_quarantine_v50.js",
+        "background_request_recovery_v40.js",
+        "background_window_manager_v88.js",
+        "background_routed_window_cap_v111.js",
+    ):
+        assert f'"{retired}"' not in entry
 
 
-def test_formal_release_advertises_responses_console_and_carried_runtime_fixes() -> None:
+def test_v02274_runtime_contract_advertises_only_active_authorities() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
-    assert payload["chrome_bridge"]["version"] == "0.8.1"
-    assert payload["chrome_bridge"]["bundle_version"] == "0.8.29"
-    assert payload["chrome_bridge"]["multimodal_revision"] == 85
-    assert payload["features"]["multimodal_main_world_v78"] is True
-    assert payload["features"]["multimodal_upload_ready_v84"] is True
-    assert payload["features"]["model_capability_routing_v2"] is True
-    assert payload["features"]["worker_window_fifo_manager_v88"] is True
-    assert payload["features"]["worker_window_lifecycle_observer_v88"] is True
-    assert payload["features"]["successful_terminal_monotonic_v88"] is True
-    assert payload["features"]["long_prompt_fast_insert_v88"] is True
-    assert payload["features"]["admin_window_manager_v88"] is True
-    assert payload["features"]["request_id_window_correlation_v88"] is True
-    assert payload["features"]["request_window_observability_v117"] is True
-    assert payload["features"]["conversation_quota_failover_v95"] is True
-    assert payload["features"]["file_upload_quota_terminal_recycle_v96"] is True
-    assert payload["features"]["request_history_conversation_viewer_v97"] is True
-    assert payload["features"]["server_update_direct_start_v97"] is True
-    assert payload["features"]["worker_ui_hygiene_health_modal_v101"] is True
-    assert payload["features"]["user_console_v104"] is True
-    assert payload["features"]["user_account_api_key_isolation_v104"] is True
-    assert payload["features"]["user_pricing_billing_v104"] is True
-    assert payload["features"]["user_payment_zpay_v104"] is True
-    assert payload["features"]["user_payment_channels_v106"] is True
-    assert payload["features"]["user_payment_paypal_v106"] is True
-    assert payload["features"]["user_payment_usdt_trc20_v106"] is True
-    assert payload["features"]["user_payment_settlement_safety_v107"] is True
-    assert payload["features"]["native_tool_stream_v63"] is True
-    assert payload["features"]["responses_api_v108"] is True
-    assert payload["features"]["responses_native_web_search_v108"] is True
-    assert payload["features"]["responses_emulated_tools_v109"] is True
-    assert payload["features"]["responses_function_call_output_v109"] is True
-    assert payload["features"]["responses_owner_isolation_v109"] is True
-    assert payload["features"]["responses_console_docs_v110"] is True
-    assert payload["features"]["responses_playground_v110"] is True
-    assert payload["features"]["responses_tool_stream_v115"] is True
-    assert payload["features"]["responses_tool_stream_v116"] is True
-    assert payload["features"]["responses_tool_stream_v118"] is True
-    assert payload["features"]["worker_terminal_reuse_v26"] is True
-    assert payload["features"]["worker_sequential_affinity_v27"] is True
-    assert payload["features"]["worker_single_route_v28"] is True
-    assert payload["features"]["worker_strict_api_fifo_v29"] is True
-    assert payload["features"]["same_api_parallel_requests"] is False
-    assert "multimodal-main-world-v78" in payload["server"]["feature_revision"]
-    assert "window-manager-fifo-v88" in payload["server"]["feature_revision"]
-    assert "success-terminal-monotonic-v88" in payload["server"]["feature_revision"]
-    assert "long-prompt-fast-insert-v88" in payload["server"]["feature_revision"]
-    assert "conversation-quota-failover-v95" in payload["server"]["feature_revision"]
-    assert "file-upload-quota-terminal-recycle-v96" in payload["server"]["feature_revision"]
-    assert "request-history-conversation-v97" in payload["server"]["feature_revision"]
-    assert "server-update-direct-start-v97" in payload["server"]["feature_revision"]
-    assert "diagnostic-runtime-truth-v100" in payload["server"]["feature_revision"]
-    assert "health-promo-safe-dismiss-v101" in payload["server"]["feature_revision"]
-    assert "release-v02266" in payload["server"]["feature_revision"]
-    assert "user-console-v104" in payload["server"]["feature_revision"]
-    assert "user-commerce-v104" in payload["server"]["feature_revision"]
-    assert "pricing-v104" in payload["server"]["feature_revision"]
-    assert "payment-v104" in payload["server"]["feature_revision"]
-    assert "release-v02267" in payload["server"]["feature_revision"]
-    assert "payment-channels-v106" in payload["server"]["feature_revision"]
-    assert "payment-settlement-safety-v107" in payload["server"]["feature_revision"]
-    assert "release-v02268" in payload["server"]["feature_revision"]
-    assert "native-responses-v108" in payload["server"]["feature_revision"]
-    assert "emulated-responses-tools-v109" in payload["server"]["feature_revision"]
-    assert "release-v02269" in payload["server"]["feature_revision"]
-    assert "responses-console-docs-v110" in payload["server"]["feature_revision"]
-    assert "responses-playground-v110" in payload["server"]["feature_revision"]
-    assert "release-v02270" in payload["server"]["feature_revision"]
-    assert "responses-tool-stream-v115" in payload["server"]["feature_revision"]
-    assert "worker-terminal-reuse-v26" in payload["server"]["feature_revision"]
-    assert "release-v02271" in payload["server"]["feature_revision"]
-    assert "responses-tool-stream-v116" in payload["server"]["feature_revision"]
-    assert "request-window-observability-v117" in payload["server"]["feature_revision"]
-    assert "worker-sequential-affinity-v27" in payload["server"]["feature_revision"]
-    assert "release-v02272" in payload["server"]["feature_revision"]
-    assert "responses-tool-stream-v118" in payload["server"]["feature_revision"]
-    assert "worker-strict-api-fifo-v28-v29" in payload["server"]["feature_revision"]
-    assert "release-v02273" in payload["server"]["feature_revision"]
+    features = payload["features"]
+    bridge = payload["chrome_bridge"]
+
+    assert bridge["bundle_version"] == "0.8.30"
+    assert bridge["route_window_authority_revision"] == 30
+    assert bridge["window_observer_revision"] == 90
+    assert features["capacity_scheduler_v58"] is True
+    assert features["server_side_same_api_fifo_v58"] is True
+    assert features["worker_single_route_authority_v30"] is True
+    assert features["window_observer_v90"] is True
+    assert features["same_api_parallel_requests"] is False
+    assert features["browser_side_same_api_queue"] is False
+    assert features["speculative_worker_windows"] is False
+
+    # Historical v57/v27/v28/v29/v88 owners remain code history only.
+    assert features["worker_key_capacity_fifo_queue"] is False
+    assert features["worker_sequential_affinity_v27"] is False
+    assert features["worker_single_route_v28"] is False
+    assert features["worker_strict_api_fifo_v29"] is False
+    assert features["worker_window_fifo_manager_v88"] is False
+    assert features["worker_window_lifecycle_observer_v88"] is False
+    assert features["terminal_request_recovery"] is False
+    assert features["failed_route_quarantine"] is False
+
+    revision = payload["server"]["feature_revision"]
+    for marker in (
+        "capacity-scheduler-v58",
+        "single-route-window-authority-v30",
+        "window-observer-v90",
+        "no-speculative-windows",
+        "release-v02274",
+    ):
+        assert marker in revision
+
+
+def test_v02274_bundle_markers_contracts_and_preflight_match_manifest() -> None:
+    for path in (
+        "chrome_extension/content_bundle_marker_v48.js",
+        "chrome_extension/content_bundle_marker_v71.js",
+        "chrome_extension/content_runtime_contract_v48.js",
+        "chrome_extension/content_runtime_contract_v71.js",
+        "chrome_extension/background_runtime_preflight_v48.js",
+    ):
+        assert "0.8.30" in read(path), path
+        assert "0.8.29" not in read(path), path
+
+
+def test_carried_responses_and_multimodal_contracts_remain_enabled() -> None:
+    payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
+    features = payload["features"]
+    for key in (
+        "multimodal_main_world_v78",
+        "multimodal_upload_ready_v84",
+        "multimodal_safe_submit_v85",
+        "model_capability_routing_v2",
+        "responses_api_v108",
+        "responses_emulated_tools_v109",
+        "responses_tool_stream_v115",
+        "responses_tool_stream_v116",
+        "responses_tool_stream_v118",
+        "native_tool_stream_v63",
+        "worker_ui_hygiene_health_modal_v101",
+    ):
+        assert features[key] is True
