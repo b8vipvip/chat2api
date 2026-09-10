@@ -6,7 +6,7 @@ from typing import Any, Callable
 
 from fastapi import FastAPI
 
-from .capacity_queue_v57_patch import install_capacity_queue_v57_patch
+from .capacity_scheduler_v58 import install_capacity_scheduler_v58
 from .server_worker_sync_patch import install_server_worker_sync_patch as _install_server_worker_sync_patch
 
 
@@ -20,15 +20,18 @@ async def _run_handler(handler: Callable[[], Any]) -> None:
 
 
 def _install_final_capacity(app: FastAPI) -> FastAPI:
-    return install_capacity_queue_v57_patch(app)
+    # v58 replaces v57 rather than wrapping it. This module is the final
+    # server-side admission owner installed by entry.py.
+    return install_capacity_scheduler_v58(app)
 
 
 def install_server_worker_sync_patch(app: FastAPI) -> FastAPI:
-    """Install Worker sync plus the final v57 admission/settings owner.
+    """Install Worker sync plus the single v58 admission authority.
 
-    This module is the last server patch installed by entry.py, which makes it the
-    correct ownership boundary for replacing historical free-account clamping and
-    the older coupling between API concurrency and reserve-window count.
+    Historical account/free/v57 admission layers are not reinstalled here. The
+    final broker.create/release owner is v58: one active request per logical API
+    key, FIFO waiting on the server, and independent concurrency only across
+    distinct API keys.
     """
 
     if hasattr(app, "add_event_handler"):
