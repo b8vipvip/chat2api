@@ -20,7 +20,9 @@ def test_successful_worker_disable_closes_socket_only_after_control_result_send(
     assert emit < close
     assert 'socketState: "disconnecting"' in source
     assert "await markDisabling()" in source
-    assert 'worker_master_switch_revision: 62' in source
+    assert 'worker_master_switch_revision: 90' in source
+    assert 'window_decision_authority: "conversation-routing-v30"' in source
+    assert 'extension_control_transport: "worker-master-switch-v61-r90"' in source
 
 
 def test_transient_connected_state_cannot_clear_disabled_flag_before_real_disconnect() -> None:
@@ -32,7 +34,8 @@ def test_transient_connected_state_cannot_clear_disabled_flag_before_real_discon
     assert 'previousState !== "disconnected"' in source
     assert 'stored[DISABLED_STORAGE_KEY] && stored[AWAIT_DISCONNECT_KEY]' in source
     # The old implementation unconditionally cleared the flag on every connected
-    # storage event; the v62 revision must consult persisted disable state first.
+    # storage event; the v62 storage guard is preserved while v90 owns the current
+    # window-observer/control revision.
     connected = source.index('if (nextState === "connected")')
     guard = source.index('stored[DISABLED_STORAGE_KEY] && stored[AWAIT_DISCONNECT_KEY]', connected)
     clear = source.index('[DISABLED_STORAGE_KEY]: false', guard)

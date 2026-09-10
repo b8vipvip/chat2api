@@ -283,7 +283,7 @@ def test_generation_liveness_is_diagnostic_only_and_hard_timeout_remains():
 def test_bundle_load_order_and_new_scripts_parse():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.8.29"
+    assert manifest["version"] == "0.8.30"
     assert scripts.index("content_request_v5.js") < scripts.index("content_request_lifecycle_v50.js") < scripts.index("content_request_hygiene_v42.js") < scripts.index("content_draft_ownership_v43.js")
     assert scripts.index("content_draft_ownership_v43.js") < scripts.index("content_draft_managed_recovery_v55.js") < scripts.index("content_response_capture_v41.js")
     assert scripts.index("content_response_stream_recovery_v49.js") < scripts.index("content_network_stream_recovery_v55.js") < scripts.index("content_response_semantic_recovery_v51.js") < scripts.index("content_transient_retry_v50.js") < scripts.index("content_request_stall_guard_v34.js") < scripts.index("content_generation_liveness_v49.js")
@@ -296,7 +296,9 @@ def test_bundle_load_order_and_new_scripts_parse():
     assert '"content_generation_liveness_v49.js"' in bootstrap
 
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
-    assert entry.index("conversation_dispatch.js") < entry.index("background_route_quarantine_v50.js") < entry.index("background_request_hygiene_v42.js") < entry.index("background_request_recovery_v40.js")
+    assert entry.index("conversation_dispatch.js") < entry.index("background_request_hygiene_v42.js") < entry.index("background_transport_recovery_v47.js")
+    assert "background_route_quarantine_v50.js" not in entry
+    assert "background_request_recovery_v40.js" not in entry
     assert entry.index("background_capacity_control_v35.js") < entry.index("background_worker_master_switch_v61.js")
 
     for filename in (
@@ -331,8 +333,8 @@ def test_runtime_advertises_v62_worker_authority_and_network_parser_features():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     patch = (ROOT / "app" / "linux_worker_enable_patch.py").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.62"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.29"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.74"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.30"' in runtime
     assert '"network_response_recovery": True' in runtime
     assert '"network_response_parser_v62": True' in runtime
     assert '"linux_worker_master_switch": True' in runtime
@@ -344,13 +346,19 @@ def test_runtime_advertises_v62_worker_authority_and_network_parser_features():
     assert '"managed_request_draft_recovery": True' in runtime
     assert '"visible_generation_liveness": True' in runtime
     assert '"same_api_parallel_requests": False' in runtime
-    assert '"failed_route_quarantine": True' in runtime
+    assert '"failed_route_quarantine": False' in runtime
     assert '"request_controller_lifecycle_guard": True' in runtime
     assert '"chatgpt_transient_retry": True' in runtime
     assert '"single_response_observer": True' in runtime
     assert '"assistant_response_semantic_recovery": True' in runtime
     assert '"model_capability_routing_guard": True' in runtime
-    assert '"worker_key_capacity_fifo_queue": True' in runtime
+    assert '"worker_key_capacity_fifo_queue": False' in runtime
+    assert '"capacity_scheduler_v58": True' in runtime
+    assert '"server_side_same_api_fifo_v58": True' in runtime
+    assert '"worker_single_route_authority_v30": True' in runtime
+    assert '"browser_side_same_api_queue": False' in runtime
+    assert '"speculative_worker_windows": False' in runtime
+    assert '"window_observer_v90": True' in runtime
     assert 'RUNTIME_ASSET_PATH = "/assets/chat2api-worker-runtime-v61.js"' in patch
     assert '"worker.disable"' in patch
     assert "install_linux_worker_enable_patch(app)" in entry
