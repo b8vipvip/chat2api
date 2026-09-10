@@ -28,7 +28,7 @@ class _Registry:
         return client_id == "ext_test" and token == "token_test"
 
 
-def test_extension_runtime_config_uses_live_concurrency_as_reserve_target():
+def test_extension_runtime_config_advertises_server_capacity_without_speculative_reserve_windows():
     app = FastAPI()
     app.state.registry = _Registry()
     app.state.broker = SimpleNamespace(max_concurrency=3)
@@ -46,18 +46,23 @@ def test_extension_runtime_config_uses_live_concurrency_as_reserve_target():
     )
     assert response.status_code == 200
     payload = response.json()
-    assert payload["reserve_window_target"] == 10
-    assert payload["route_idle_close_seconds"] == ROUTE_IDLE_CLOSE_SECONDS == 120
-    assert payload["max_reserve_window_target"] == MAX_RESERVE_WINDOW_TARGET == 32
+    assert payload["reserve_window_target"] == 0
+    assert payload["worker_concurrency"] == 10
+    assert payload["speculative_worker_windows"] is False
+    assert payload["window_decision_authority"] == "conversation-routing-v30"
+    assert payload["server_scheduler_authority"] == "server-single-authority-scheduler-v58"
+    assert payload["route_idle_close_seconds"] == ROUTE_IDLE_CLOSE_SECONDS == 300
+    assert payload["max_reserve_window_target"] == MAX_RESERVE_WINDOW_TARGET == 0
 
 
-def test_reserve_pool_is_loaded_between_warm_pool_and_worker_router():
+def test_legacy_reserve_pool_is_retained_as_source_but_not_loaded_by_production_entry():
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
-    warm = entry.index('"conversation_warm_pool_v2.js"')
-    external = entry.index('"background_external_warm_v28.js"')
-    reserve = entry.index('"background_reserve_pool_v29.js"')
-    workers = entry.index('"conversation_workers_v25.js"')
-    assert warm < external < reserve < workers
+    assert '"conversation_routing.js"' in entry
+    assert '"conversation_dispatch.js"' in entry
+    assert '"conversation_warm_pool_v2.js"' not in entry
+    assert '"background_external_warm_v28.js"' not in entry
+    assert '"background_reserve_pool_v29.js"' not in entry
+    assert '"conversation_workers_v25.js"' not in entry
 
 
 def test_reserve_pool_tracks_real_managed_windows_and_active_subset():
