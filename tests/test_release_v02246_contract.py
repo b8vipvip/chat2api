@@ -10,10 +10,10 @@ from fastapi import FastAPI
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_formal_release_v02271_versions_and_carried_notes_are_aligned() -> None:
+def test_formal_release_v02272_versions_and_carried_notes_are_aligned() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert SERVER_RUNTIME_VERSION == "0.22.71"
+    assert SERVER_RUNTIME_VERSION == "0.22.72"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.28"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
@@ -27,8 +27,10 @@ def test_formal_release_v02271_versions_and_carried_notes_are_aligned() -> None:
     assert "content_ui_hygiene_v31.js" in manifest["content_scripts"][1]["js"]
     background_entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     assert '"background_file_upload_quota_recycle_v96.js"' in background_entry
-    # v0.22.71 formally carries the v115 Responses nested-tool bridge and the
-    # Worker terminal-reuse router revision 26 while preserving bundle 0.8.28.
+    assert '"conversation_workers_v27.js"' in background_entry
+    # v0.22.72 formally carries the v116 Responses bridge, request-window
+    # observability v117 and Worker sequential-affinity v27 while preserving
+    # the independently-versioned Worker bundle 0.8.28.
     assert "## v0.22.67" in changelog
     assert "### User console" in changelog
     assert "### Pricing and billing" in changelog
@@ -51,6 +53,7 @@ def test_formal_release_advertises_responses_console_and_carried_runtime_fixes()
     assert payload["features"]["long_prompt_fast_insert_v88"] is True
     assert payload["features"]["admin_window_manager_v88"] is True
     assert payload["features"]["request_id_window_correlation_v88"] is True
+    assert payload["features"]["request_window_observability_v117"] is True
     assert payload["features"]["conversation_quota_failover_v95"] is True
     assert payload["features"]["file_upload_quota_terminal_recycle_v96"] is True
     assert payload["features"]["request_history_conversation_viewer_v97"] is True
@@ -73,7 +76,9 @@ def test_formal_release_advertises_responses_console_and_carried_runtime_fixes()
     assert payload["features"]["responses_console_docs_v110"] is True
     assert payload["features"]["responses_playground_v110"] is True
     assert payload["features"]["responses_tool_stream_v115"] is True
+    assert payload["features"]["responses_tool_stream_v116"] is True
     assert payload["features"]["worker_terminal_reuse_v26"] is True
+    assert payload["features"]["worker_sequential_affinity_v27"] is True
     assert "multimodal-main-world-v78" in payload["server"]["feature_revision"]
     assert "window-manager-fifo-v88" in payload["server"]["feature_revision"]
     assert "success-terminal-monotonic-v88" in payload["server"]["feature_revision"]
@@ -102,3 +107,7 @@ def test_formal_release_advertises_responses_console_and_carried_runtime_fixes()
     assert "responses-tool-stream-v115" in payload["server"]["feature_revision"]
     assert "worker-terminal-reuse-v26" in payload["server"]["feature_revision"]
     assert "release-v02271" in payload["server"]["feature_revision"]
+    assert "responses-tool-stream-v116" in payload["server"]["feature_revision"]
+    assert "request-window-observability-v117" in payload["server"]["feature_revision"]
+    assert "worker-sequential-affinity-v27" in payload["server"]["feature_revision"]
+    assert "release-v02272" in payload["server"]["feature_revision"]
