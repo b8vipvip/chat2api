@@ -14,21 +14,24 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_v88_is_the_final_background_window_authority() -> None:
+def test_v88_window_manager_is_retired_as_browser_authority_and_v90_is_observer_only() -> None:
     entry = text("chrome_extension/background_entry.js")
-    assert '"background_window_manager_v88.js"' in entry
-    assert '"background_window_lifecycle_observer_v88.js"' in entry
-    assert entry.index('"background_window_affinity_v87.js"') < entry.index('"background_window_manager_v88.js"')
-    assert entry.index('"background_window_manager_v88.js"') < entry.index('"background_window_lifecycle_observer_v88.js"')
+    assert '"background_window_manager_v88.js"' not in entry
+    assert '"background_window_lifecycle_observer_v88.js"' not in entry
+    assert '"background_window_affinity_v87.js"' not in entry
+    assert '"conversation_routing.js"' in entry
+    assert '"background_window_observer_v90.js"' in entry
+    assert entry.index('"conversation_routing.js"') < entry.index('"background_window_observer_v90.js"')
+
     manager = text("chrome_extension/background_window_manager_v88.js")
+    observer = text("chrome_extension/background_window_observer_v90.js")
     assert 'policy: "oldest-ready-fifo-v88"' in manager
-    assert 'source: "reserve"' in manager
-    assert 'source: "warm"' in manager
-    assert "rows.sort((a, b) =>" in manager
-    assert "a.opened_at_ms" in manager and "b.opened_at_ms" in manager
     assert "claimOldestReady" in manager
-    assert "window_opened_at_ms" in manager
-    assert "window_no" in manager
+    assert 'policy: "observe-only-single-route-authority-v90"' in observer
+    assert "decision_authority: false" in observer
+    assert "speculative_windows: false" in observer
+    assert "chrome.windows.create" not in observer
+    assert "chrome.windows.remove" not in observer
 
 
 def test_window_creation_is_registered_as_loading_before_pool_readiness() -> None:
