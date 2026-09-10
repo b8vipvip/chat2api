@@ -45,13 +45,19 @@ def test_v117_promotes_worker_slot_and_physical_window_identity():
     }
 
 
-def test_worker_v27_is_loaded_after_parallel_allocator_and_before_dispatch():
+def test_v30_single_route_authority_replaces_v25_v27_allocator_chain_in_production():
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
-    assert entry.index('"conversation_workers_v25.js"') < entry.index('"conversation_workers_v27.js"')
-    assert entry.index('"conversation_workers_v27.js"') < entry.index('"conversation_dispatch.js"')
+    router = (ROOT / "chrome_extension" / "conversation_routing.js").read_text(encoding="utf-8")
+    assert '"conversation_workers_v25.js"' not in entry
+    assert '"conversation_workers_v27.js"' not in entry
+    assert entry.index('"conversation_routing.js"') < entry.index('"conversation_dispatch.js"')
+    assert 'revision: 30' in router
+    assert 'authority: "single-route-window-authority-v30"' in router
+    assert "Server scheduler invariant violated" in router
+    assert "browser_side_same_api_queue: false" in router
 
 
-def test_worker_v27_preserves_sequential_affinity_and_only_spills_after_busy_grace():
+def test_worker_v27_legacy_source_preserves_sequential_affinity_contract():
     source = (ROOT / "chrome_extension" / "conversation_workers_v27.js").read_text(encoding="utf-8")
 
     assert "HANDOFF_GRACE_MS = 450" in source

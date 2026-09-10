@@ -17,18 +17,13 @@
 
   async function withCurrentTab(tab, callback) {
     state.currentTab = tab;
-    try {
-      return await callback();
-    } finally {
-      state.currentTab = null;
-    }
+    try { return await callback(); }
+    finally { state.currentTab = null; }
   }
 
   async function resolveRoutedTab(message) {
     const resolver = globalThis.resolveTargetTabForRequest;
-    const tab = typeof resolver === "function"
-      ? await resolver(message)
-      : await baseResolveTargetTab();
+    const tab = typeof resolver === "function" ? await resolver(message) : await baseResolveTargetTab();
     if (!tab?.id) throw new Error("Per-key conversation router returned no usable ChatGPT tab");
     if (message?.request_id) {
       state.requestTabs.set(String(message.request_id), { tabId: tab.id, windowId: tab.windowId });
@@ -49,50 +44,29 @@
     return "chat.error";
   }
 
-  function releaseConversationReservation(requestId) {
-    const id = String(requestId || "");
-    if (!id) return false;
-    const router = globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
-    const routes = router?.routes;
-    const activeRequests = router?.activeRequests;
-    let released = false;
-
-    if (routes instanceof Map) {
-      for (const route of routes.values()) {
-        if (String(route?.inflight_request_id || "") !== id) continue;
-        route.inflight_request_id = null;
-        route.last_used_at = Date.now();
-        released = true;
-      }
-    }
-    if (activeRequests instanceof Map && activeRequests.has(id)) {
-      activeRequests.delete(id);
-      released = true;
-    }
-    return released;
-  }
-
   async function publishRoutedDispatchFailure(message, error) {
     const requestId = String(message?.request_id || "");
     if (!requestId) throw error;
     const text = String(error?.message || error || "Worker route dispatch failed");
     const retryAfterMs = Math.max(0, Number(error?.retry_after_ms || 0));
     const rateLimited = error?.code === "chatgpt_rate_limited" || /temporarily rate limited|too many requests/i.test(text);
-    // resolveTargetTabForRequest reserves a per-key route before background.js
-    // performs attachment preparation. If preparation fails before the request is
-    // handed to the content request controller, no content terminal event exists to
-    // release that reservation. Release it here before reporting the terminal error
-    // so one failed visual upload cannot permanently consume a conversation Worker.
-    const routeReservationReleased = releaseConversationReservation(requestId);
+
+    // Dispatch owns transport only. It never clears route fields or closes a
+    // window. Any allocation/preflight failure is handed to the single router
+    // authority, which performs exactly one lifecycle transition.
+    const router = globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
+    const routeRetired = typeof router?.failRequest === "function"
+      ? await router.failRequest(requestId, `dispatch-failure:${String(error?.code || "unknown")}`).catch(() => false)
+      : false;
+
     const event = {
       type: terminalTypeFor(message),
       request_id: requestId,
       error: text,
       diagnostics: {
         routed_dispatch_terminal_v58: true,
-        routed_dispatch_reservation_release_v68: true,
-        route_reservation_released: routeReservationReleased,
         route_failure_code: String(error?.code || "route_dispatch_failed"),
+        route_retired_by_authority_v30: routeRetired,
         rate_limit_terminal: rateLimited,
         retry_after_ms: retryAfterMs,
       },
@@ -104,9 +78,6 @@
     return null;
   }
 
-  // GPT Live is loaded outside this handler so it can stream many audio/control
-  // frames without walking the generic dispatch chain. Its start phase still must
-  // use exactly the same serialized worker allocation as chat/image/voice requests.
   globalThis.chat2apiResolveRoutedWorkerTabV24 = function resolveExternalRoutedWorkerTab(message) {
     return enqueueDispatch(() => resolveRoutedTab(message));
   };
@@ -130,20 +101,14 @@
       && Boolean(message?.routing?.api_key_id);
     const isTargetedControl = ["chat.cancel", "image.cancel", "voice.cancel"].includes(message?.type)
       && state.requestTabs.has(String(message?.request_id || ""));
-
     if (!isRoutedRequest && !isTargetedControl) return baseHandleServerMessage(message);
 
-    // Serialize only route allocation / page dispatch. Content scripts return as soon
-    // as work starts, so generations continue independently in their own worker tabs.
+    // This chain serializes only brief route allocation/page hand-off operations.
+    // Same-logical-API request admission is exclusively server scheduler v58.
     return enqueueDispatch(async () => {
       try {
         return isRoutedRequest ? await routedDispatch(message) : await dispatchKnownRequest(message);
       } catch (error) {
-        // resolveRoutedTab() runs outside background.js's per-request try/catch. A
-        // rate-limit guard or window-allocation failure here used to escape only to
-        // console.error, leaving the server request active until its watchdog. The
-        // v68 boundary additionally releases any route reservation already claimed
-        // before an attachment/preflight dispatch failure.
         if (isRoutedRequest) return publishRoutedDispatchFailure(message, error);
         throw error;
       }

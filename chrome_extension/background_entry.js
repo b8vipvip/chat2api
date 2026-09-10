@@ -14,7 +14,6 @@ importScripts(
   "background_window_open_stagger_v85.js",
   "background_worker_disabled_window_guard_v86.js",
   "background_rate_limit_guard_v52.js",
-  "background_tab_supervisor_v32.js",
   "model_routing_v2.js",
   "background_page_smoke_v22.js",
   "background_multimodal_quota_v36.js",
@@ -29,47 +28,27 @@ importScripts(
   "background_logging.js",
   "model_affinity_v23.js",
   "model_contract_v25.js",
-  "background_standby_storage_lease_v87.js",
+
+  // v0.8.30 request/window ownership boundary:
+  // conversation_routing.js is the only authority allowed to select, create,
+  // reuse, rotate, retire, or idle-close API route windows. There is no warm,
+  // reserve, tab-supervisor, browser FIFO, quarantine, or window-manager owner.
+  // conversation_dispatch.js is transport-only; same-key FIFO is server v58.
   "conversation_routing.js",
-  "conversation_warm_pool_v2.js",
-  "background_external_warm_v28.js",
-  "background_reserve_pool_v29.js",
-  "background_window_truth_v83.js",
-  "background_reserve_status_reconnect_v29.js",
-  "conversation_workers_v25.js",
-  "conversation_workers_v27.js",
-  "conversation_workers_v28.js",
   "conversation_dispatch.js",
-  "conversation_dispatch_v29.js",
-  "background_route_quarantine_v50.js",
+
   "background_tool_isolation_v48.js",
   "background_runtime_preflight_v48.js",
   "background_request_hygiene_v42.js",
-  "background_request_recovery_v40.js",
-  "background_file_upload_quota_recycle_v96.js",
-  "background_conversation_quota_failover_v95.js",
   "background_transport_recovery_v47.js",
   "audio_routing_live.js",
   "background_capacity_control_v35.js",
   "background_capacity_control_v36.js",
   "background_capacity_capability_v37.js",
   "background_worker_master_switch_v61.js",
-  "background_window_affinity_v87.js",
-  "background_orphan_route_cleanup_v87.js",
-  "background_window_manager_v88.js",
-  "background_routed_window_cap_v111.js",
-  "background_window_lifecycle_observer_v88.js",
-  "background_window_truth_refresh_v89.js",
+
+  // Observation/capture only. It has no route/window mutation authority.
+  "background_window_observer_v90.js",
 );
 
-// Refresh the lease of already healthy standby windows before the historical
-// warm/reserve reconciliation timers get a chance to retire them purely because
-// their readiness timestamp aged out. Broken/missing windows still fail the
-// health probe and are replaced by the normal pool reconcilers.
-globalThis.__CHAT2API_WINDOW_AFFINITY_V87__?.refreshHealthySpareLeases?.().catch?.(() => {});
-// v88 remains the final routing authority. v111 caps only retained idle routed
-// windows at the configured Worker concurrency; reserve windows remain a separate
-// spare target. v89 is telemetry/control only and reports the reconciled truth.
-globalThis.__CHAT2API_WINDOW_MANAGER_V88__?.reconcile?.(true).catch?.(() => {});
-globalThis.__CHAT2API_ROUTED_WINDOW_CAP_V111__?.reconcile?.("background-entry").catch?.(() => {});
-globalThis.__CHAT2API_WINDOW_TRUTH_REFRESH_V89__?.refresh?.("background-entry").catch?.(() => {});
+globalThis.__CHAT2API_WINDOW_OBSERVER_V90__?.report?.(true).catch?.(() => {});

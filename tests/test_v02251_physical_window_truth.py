@@ -30,22 +30,32 @@ def test_reserve_status_always_reports_all_chatgpt_window_count() -> None:
     assert "snapshot.live instanceof Set ? snapshot.live.size : snapshot.total" in source
 
 
-def test_initialization_tab_is_compacted_into_a_worker_window() -> None:
-    source = text("chrome_extension/background_window_truth_v83.js")
+def test_legacy_v83_compaction_is_not_loaded_and_v90_observer_is_read_only() -> None:
+    legacy = text("chrome_extension/background_window_truth_v83.js")
+    observer = text("chrome_extension/background_window_observer_v90.js")
     entry = text("chrome_extension/background_entry.js")
-    assert '"background_window_truth_v83.js"' in entry
-    assert "chrome.tabs.move(initTabId" in source
-    assert "liveChatGptWindowIds" in source
-    assert "reserve_window_all_chatgpt_windows" in source
-    assert "chat2apiInitializationCompactedAtV83" in source
-    assert "if (candidates.includes(initWindowId))" in source
-    assert 'reason: "already-shared"' in source
-    assert "reserve_window_initialization_shared" in source
+
+    # Keep the historical implementation inspectable, but do not let it own
+    # production window lifecycle after the v30 single-authority cutover.
+    assert "chrome.tabs.move(initTabId" in legacy
+    assert "liveChatGptWindowIds" in legacy
+    assert "chat2apiInitializationCompactedAtV83" in legacy
+    assert '"background_window_truth_v83.js"' not in entry
+
+    assert '"background_window_observer_v90.js"' in entry
+    assert 'policy: "observe-only-single-route-authority-v90"' in observer
+    assert "decision_authority: false" in observer
+    assert "speculative_windows: false" in observer
+    assert "chrome.windows.create" not in observer
+    assert "chrome.windows.remove" not in observer
 
 
 def test_physical_window_truth_runtime_and_worker_bundle_contract() -> None:
     assert SERVER_RUNTIME_VERSION
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.29"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.30"
     manifest = json.loads(text("chrome_extension/manifest.json"))
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
-    assert "physical-window-truth-v83" in text("app/runtime_contract.py")
+    runtime = text("app/runtime_contract.py")
+    assert "physical-window-truth-v83" in runtime
+    assert '"window_observer_v90": True' in runtime
+    assert '"worker_physical_window_live_truth_v89": False' in runtime

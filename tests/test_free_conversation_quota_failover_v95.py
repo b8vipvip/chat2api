@@ -65,7 +65,7 @@ def test_conversation_local_quota_does_not_arm_account_wide_rate_limit() -> None
     assert "if (!sameSurface) return false;" in background
 
 
-def test_v95_is_loaded_after_request_lifecycle_and_recovery_and_required_by_preflight() -> None:
+def test_v95_content_detector_remains_required_while_background_replay_owner_is_retired() -> None:
     manifest = json.loads(read("chrome_extension/manifest.json"))
     isolated = next(item for item in manifest["content_scripts"] if item.get("world") != "MAIN")
     scripts = isolated["js"]
@@ -74,8 +74,11 @@ def test_v95_is_loaded_after_request_lifecycle_and_recovery_and_required_by_pref
     assert scripts.index("content_conversation_quota_failover_v95.js") < scripts.index("content_request_hygiene_v42.js")
 
     entry = read("chrome_extension/background_entry.js")
-    assert entry.index('"background_request_recovery_v40.js"') < entry.index('"background_conversation_quota_failover_v95.js"')
-    assert entry.index('"background_conversation_quota_failover_v95.js"') < entry.index('"background_transport_recovery_v47.js"')
+    assert '"background_conversation_quota_failover_v95.js"' not in entry
+    assert '"background_request_recovery_v40.js"' not in entry
+    assert '"conversation_routing.js"' in entry
+    assert '"conversation_dispatch.js"' in entry
+    assert entry.index('"conversation_routing.js"') < entry.index('"conversation_dispatch.js"')
 
     bootstrap = read("chrome_extension/content_bootstrap.js")
     preflight = read("chrome_extension/background_runtime_preflight_v48.js")

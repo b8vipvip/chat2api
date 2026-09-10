@@ -135,7 +135,7 @@ def test_force_refresh_is_completed_only_after_upgrade_terminal_success(tmp_path
 
 def test_runtime_and_entry_expose_auto_sync_contract() -> None:
     assert SERVER_RUNTIME_VERSION
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.29"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.30"
     root = Path(__file__).resolve().parents[1]
     entry = root.joinpath("app", "entry.py").read_text(encoding="utf-8")
     runtime = root.joinpath("app", "runtime_contract.py").read_text(encoding="utf-8")

@@ -26,14 +26,8 @@ const context = {
     return { id: 202, options, meta };
   },
   chrome: {
-    storage: {
-      local: {
-        async get() { return { chat2apiWorkerMasterDisabledV61: disabled }; },
-      },
-    },
-    windows: {
-      async remove(id) { removed.push(id); },
-    },
+    storage: { local: { async get() { return { chat2apiWorkerMasterDisabledV61: disabled }; } } },
+    windows: { async remove(id) { removed.push(id); } },
   },
 };
 context.globalThis = context;
@@ -41,22 +35,25 @@ vm.createContext(context);
 vm.runInContext(source, context, { filename: "background_worker_disabled_window_guard_v86.js" });
 
 await assert.rejects(
-  () => context.chat2apiCreateWindowStaggered({ url: "https://chatgpt.com/" }, { source: "reserve" }),
+  () => context.chat2apiCreateWindowStaggered({ url: "https://chatgpt.com/" }, { source: "router" }),
   /managed ChatGPT window creation is blocked by v86/,
 );
 assert.equal(baseCalls, 0, "disabled Worker must not call the real window creator");
 
 disabled = false;
-const normal = await context.chat2apiCreateWindowStaggered({ url: "https://chatgpt.com/" }, { source: "reserve" });
+const normal = await context.chat2apiCreateWindowStaggered({ url: "https://chatgpt.com/" }, { source: "router" });
 assert.equal(normal.id, 202);
 assert.equal(baseCalls, 1);
 
+// Once the sole router has admitted creation, this guard must not become a
+// second lifecycle owner. A disable race is handled through router.retireRoute.
 lateMode = true;
-const pending = context.chat2apiCreateWindowStaggered({ url: "https://chatgpt.com/" }, { source: "reserve" });
+const pending = context.chat2apiCreateWindowStaggered({ url: "https://chatgpt.com/" }, { source: "router" });
 await new Promise(resolve => setTimeout(resolve, 0));
 disabled = true;
 releaseLate();
-await assert.rejects(() => pending, /disabled while a managed ChatGPT window was being created/);
-assert.deepEqual(removed, [303], "a delayed refill that lands after disable must be closed immediately");
+const late = await pending;
+assert.equal(late.id, 303);
+assert.deepEqual(removed, [], "admission guard must never post-close a router-owned window");
 
-console.log("worker disabled window guard v86: ok");
+console.log("worker disabled window guard v86 admission-only contract: ok");

@@ -20,7 +20,7 @@ def read(path: Path) -> str:
 def test_current_bridge_loads_login_detector_for_new_and_existing_tabs():
     manifest = json.loads(read(EXT / "manifest.json"))
     assert CHROME_BRIDGE_VERSION == "0.8.1"
-    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.30"
     scripts = manifest["content_scripts"][1]["js"]
     assert CONTENT in scripts
     assert scripts.index("content_page_adapter_v22.js") < scripts.index(CONTENT) < scripts.index("content_page_driver_v22.js")
@@ -51,32 +51,21 @@ def test_login_detector_is_strictly_passive_and_auth_evidence_beats_guest_compos
 
 def test_guest_composer_auth_precedence_vm_contract():
     result = subprocess.run(
-        ["node", GUEST_VM_CONTRACT],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        timeout=20,
-        check=False,
+        ["node", GUEST_VM_CONTRACT], cwd=ROOT, capture_output=True, text=True, timeout=20, check=False
     )
     assert result.returncode == 0, result.stderr or result.stdout
     assert "content_login_guest_precedence_v27 VM contract passed" in result.stdout
 
 
-def test_background_login_coordinator_loads_before_warm_pool_and_gates_network_prewarm():
+def test_background_login_coordinator_loads_before_request_route_authority():
     entry = read(EXT / "background_entry.js")
     source = read(EXT / BACKGROUND)
-    assert entry.index('"content_bootstrap.js"') < entry.index(f'"{BACKGROUND}"') < entry.index('"conversation_warm_pool_v2.js"')
-    for token in (
-        'NETWORK_GATE_KEY = "__CHAT2API_NETWORK_GATE_V26__"',
-        'WARM_POOL_KEY = "__CHAT2API_CONVERSATION_WARM_POOL_V2__"',
-        "async function readyForPrewarm()",
-        "const networkAllowed = await baseAllowPrewarm()",
-        "if (!networkAllowed) return false",
-        "return readyForPrewarm()",
-        "login_readiness_gate_v27 = true",
-        "patchWarmPoolAffinityGate",
-    ):
-        assert token in source
+    assert entry.index('"content_bootstrap.js"') < entry.index(f'"{BACKGROUND}"') < entry.index('"conversation_routing.js"')
+    assert '"conversation_warm_pool_v2.js"' not in entry
+    # The legacy source may still recognize a warm-pool hook for compatibility,
+    # but the production 0.8.30 entry has no speculative warm-window owner.
+    assert 'NETWORK_GATE_KEY = "__CHAT2API_NETWORK_GATE_V26__"' in source
+    assert "async function readyForPrewarm()" in source
 
 
 def test_startup_probe_is_single_unfocused_and_manual_login_reuses_it():

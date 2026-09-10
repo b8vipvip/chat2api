@@ -293,15 +293,19 @@ def test_terminal_event_can_reuse_same_worker_route_before_async_route_cleanup()
 
 def test_worker_extension_bundle_identity_remains_current_release() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.29"
+    assert manifest["version"] == "0.8.30"
 
 
-def test_background_entry_loads_routed_window_cap_after_manager() -> None:
+def test_background_entry_retires_routed_window_cap_under_v30_authority() -> None:
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     cap = (ROOT / "chrome_extension" / "background_routed_window_cap_v111.js").read_text(encoding="utf-8")
-    assert entry.index('"background_window_manager_v88.js"') < entry.index(
-        '"background_routed_window_cap_v111.js"'
+    assert '"background_window_manager_v88.js"' not in entry
+    assert '"background_routed_window_cap_v111.js"' not in entry
+    assert entry.index('"conversation_routing.js"') < entry.index('"conversation_dispatch.js"') < entry.index(
+        '"background_window_observer_v90.js"'
     )
+    # Keep the retired source regression-testable without restoring it as a
+    # production decision owner.
     assert "routedCount - cap" in cap
     assert "!active.has(windowId)" in cap
     assert "manager.protectedUntil.delete(windowId)" in cap

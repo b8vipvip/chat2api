@@ -46,17 +46,57 @@ def test_release_versions_are_explicit_and_consistent() -> None:
     contract71 = read("chrome_extension/content_runtime_contract_v71.js")
     package = read("app/__init__.py")
     project = read("pyproject.toml")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.62"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.29"' in runtime
-    assert manifest["version"] == "0.8.29"
-    assert 'bundle: "0.8.29"' in marker
-    assert 'bundle: "0.8.29"' in marker71
-    assert 'REQUIRED_BUNDLE = "0.8.29"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.29"' in contract
-    assert 'REQUIRED_BUNDLE = "0.8.29"' in contract71
+    assert 'SERVER_RUNTIME_VERSION = "0.22.74"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.30"' in runtime
+    assert manifest["version"] == "0.8.30"
+    assert 'bundle: "0.8.30"' in marker
+    assert 'bundle: "0.8.30"' in marker71
+    assert 'REQUIRED_BUNDLE = "0.8.30"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.30"' in contract
+    assert 'REQUIRED_BUNDLE = "0.8.30"' in contract71
     assert '__version__ = "0.7.1"' in package
     assert 'version = "0.7.1"' in project
-    for token in ('"network_response_recovery": True','"network_response_parser_v62": True','"linux_worker_master_switch": True','"linux_worker_disable_authority": True','"worker_live_occupancy": True','"worker_device_name_column": True','"worker_pairing_rename": True','"worker_presentation_console_liveness_v65": True','"worker_presentation_console_liveness_v66": True','"worker_column_registry_v67": True','"multimodal_upload_confirmation_v64": True','"multimodal_upload_v68": True','"api_key_console_v68": True','"rich_response_v69": True','"request_response_epoch_v69": True','"worker_content_runtime_epoch_v71": True','"linux_worker_proxy_health_facets": True','"worker_key_capacity_fifo_queue": True','"active_rate_limit_terminal_error": True','"routed_dispatch_terminal_error": True','"admin_single_render_owner": True','"worker_disabled_window_guard_v86": True','"successful_route_preservation_v86": True','"runtime_preflight_fast_path_v86": True','"request_prompt_viewer_repair_v86": True','"window_affinity_v87": True','"healthy_spare_lease_refresh_v87": True','"stale_route_window_cleanup_v87": True','"runtime_preflight_budget_v87": True'):
+
+    for token in (
+        '"network_response_recovery": True',
+        '"network_response_parser_v62": True',
+        '"linux_worker_master_switch": True',
+        '"linux_worker_disable_authority": True',
+        '"worker_live_occupancy": True',
+        '"worker_device_name_column": True',
+        '"worker_pairing_rename": True',
+        '"multimodal_upload_confirmation_v64": True',
+        '"multimodal_upload_v68": True',
+        '"api_key_console_v68": True',
+        '"rich_response_v69": True',
+        '"request_response_epoch_v69": True',
+        '"worker_content_runtime_epoch_v71": True',
+        '"linux_worker_proxy_health_facets": True',
+        '"active_rate_limit_terminal_error": True',
+        '"routed_dispatch_terminal_error": True',
+        '"admin_single_render_owner": True',
+        '"worker_disabled_window_guard_v86": True',
+        '"successful_route_preservation_v86": True',
+        '"runtime_preflight_fast_path_v86": True',
+        '"request_prompt_viewer_repair_v86": True',
+        '"runtime_preflight_budget_v87": True',
+        '"capacity_scheduler_v58": True',
+        '"server_side_same_api_fifo_v58": True',
+        '"worker_single_route_authority_v30": True',
+        '"window_observer_v90": True',
+        '"browser_side_same_api_queue": False',
+        '"speculative_worker_windows": False',
+        '"worker_key_capacity_fifo_queue": False',
+        '"worker_sequential_affinity_v27": False',
+        '"worker_single_route_v28": False',
+        '"worker_strict_api_fifo_v29": False',
+        '"window_affinity_v87": False',
+        '"healthy_spare_lease_refresh_v87": False',
+        '"stale_route_window_cleanup_v87": False',
+        '"worker_window_fifo_manager_v88": False',
+        '"worker_window_lifecycle_observer_v88": False',
+        '"request_window_observability_v117": False',
+    ):
         assert token in runtime
 
 

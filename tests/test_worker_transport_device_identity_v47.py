@@ -130,9 +130,11 @@ def test_new_worker_assets_parse(filename):
     assert result.returncode == 0, result.stderr
 
 
-def test_background_loads_transport_outbox_after_request_recovery():
+def test_background_loads_transport_outbox_without_retired_request_recovery_owner():
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
-    assert entry.index('"background_request_recovery_v40.js"') < entry.index('"background_transport_recovery_v47.js"')
+    assert '"background_request_recovery_v40.js"' not in entry
+    assert entry.index('"background_request_hygiene_v42.js"') < entry.index('"background_transport_recovery_v47.js"')
+    assert entry.index('"conversation_routing.js"') < entry.index('"conversation_dispatch.js"')
 
 
 def test_admin_identity_asset_only_canonicalizes_terms_and_server_owns_device_values():

@@ -133,7 +133,7 @@ def test_completion_recovery_is_conservative_and_loaded_after_request_v5() -> No
     assert '"content_completion_v6.js"' in bootstrap
 
 
-def test_warm_pool_reuses_closed_routes_as_fresh_chat_and_refills_on_claim() -> None:
+def test_legacy_warm_pool_logic_remains_inspectable_but_production_uses_v30_router_only() -> None:
     source = (EXTENSION / "conversation_warm_pool_v2.js").read_text(encoding="utf-8")
     routing = (EXTENSION / "conversation_routing.js").read_text(encoding="utf-8")
     entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")
@@ -159,9 +159,10 @@ def test_warm_pool_reuses_closed_routes_as_fresh_chat_and_refills_on_claim() -> 
     assert "resetClosedRoute" in routing
     assert "reopen-saved-conversation" not in routing
     assert '"closed-window-new-chat"' in routing
+    assert 'authority: "single-route-window-authority-v30"' in routing
 
-    assert entry.index('"conversation_routing.js"') < entry.index('"conversation_warm_pool_v2.js"')
-    assert entry.index('"conversation_warm_pool_v2.js"') < entry.index('"conversation_dispatch.js"')
+    assert '"conversation_warm_pool_v2.js"' not in entry
+    assert entry.index('"conversation_routing.js"') < entry.index('"conversation_dispatch.js"')
 
 
 def test_v19_disconnect_guard_sends_cancel_and_releases_through_existing_finally() -> None:

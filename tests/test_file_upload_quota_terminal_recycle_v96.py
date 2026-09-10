@@ -11,11 +11,14 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_file_upload_quota_recycler_loads_after_request_recovery() -> None:
+def test_file_upload_quota_recycler_is_retained_as_legacy_source_but_not_loaded_in_v0830() -> None:
     entry = text("chrome_extension/background_entry.js")
-    assert '"background_file_upload_quota_recycle_v96.js"' in entry
-    assert entry.index('"background_request_recovery_v40.js"') < entry.index('"background_file_upload_quota_recycle_v96.js"')
-    assert entry.index('"background_file_upload_quota_recycle_v96.js"') < entry.index('"background_conversation_quota_failover_v95.js"')
+    source = text("chrome_extension/background_file_upload_quota_recycle_v96.js")
+    assert '"background_file_upload_quota_recycle_v96.js"' not in entry
+    assert '"background_request_recovery_v40.js"' not in entry
+    assert '"background_conversation_quota_failover_v95.js"' not in entry
+    assert '"conversation_routing.js"' in entry
+    assert 'file_upload_quota_terminal_recycle_action: "close-routed-window-no-replay"' in source
 
 
 def test_file_upload_quota_recycler_is_terminal_only_and_does_not_replay() -> None:
