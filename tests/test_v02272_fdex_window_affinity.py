@@ -79,10 +79,10 @@ def test_request_history_exposes_window_number_and_download_log_persists_identit
     assert "await telemetry.upsert" in source
 
 
-def test_responses_compatibility_chain_installs_v116():
+def test_responses_compatibility_chain_installs_v118():
     source = (ROOT / "app" / "responses_tool_stream_v112_patch.py").read_text(encoding="utf-8")
-    assert "responses_tool_stream_v116_patch" in source
-    assert "install_responses_tool_stream_v116_patch(app)" in source
+    assert "responses_tool_stream_v118_patch" in source
+    assert "install_responses_tool_stream_v118_patch(app)" in source
 
 
 def test_worker_v27_javascript_syntax_when_node_is_available():

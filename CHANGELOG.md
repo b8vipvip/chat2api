@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.22.73 — 2026-09-10
+
+### Strict per-API Worker FIFO
+
+- Replace the bounded v27 handoff grace with a hard per-logical-API FIFO: the same API key is pinned to Worker #1 and the next browser submission waits until the previous request reaches a completed, error, or cancelled terminal state.
+- Prevent historical `::worker2` / `::worker3` spill for the same logical API while keeping different API keys independently concurrent.
+- Keep queued cancellation fail-closed so a request cancelled before admission is never submitted to ChatGPT.
+
+### Responses / FDEX compatibility
+
+- Add Responses Tool Stream v118 to normalize only the exact qualified identity equivalence `functions.exec` == `namespace=functions, name=exec`; mismatched nested tool identities remain rejected.
+- Carry request-window observability v117 and the prior v116 malformed nested custom-exec recovery into the new release.
+
+### Worker packaging and version contract
+
+- Publish the changed browser-worker source as Chrome Worker Bundle `0.8.29` rather than reusing `0.8.28`.
+- Align the manifest, content bundle markers, runtime contracts, bounded runtime preflight, central Worker Bundle sync, and release diagnostics on `0.8.29` so stale `0.8.28` Workers are detectable and refreshed.
+- Package `conversation_workers_v28.js` and `conversation_dispatch_v29.js` through the production Worker bundle entrypoint.
+
+### Versions
+
+- Server Runtime `0.22.73`.
+- Chrome Worker Bundle `0.8.29`.
+- Chrome Bridge wire protocol remains `0.8.1`.
+- Python package remains `0.7.1`.
+
 ## v0.22.67 — 2026-09-07
 
 ### User console

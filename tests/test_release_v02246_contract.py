@@ -10,12 +10,12 @@ from fastapi import FastAPI
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_formal_release_v02272_versions_and_carried_notes_are_aligned() -> None:
+def test_formal_release_v02273_versions_and_carried_notes_are_aligned() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert SERVER_RUNTIME_VERSION == "0.22.72"
+    assert SERVER_RUNTIME_VERSION == "0.22.73"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.28"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.29"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     assert "native_tool_stream_main_v63.js" in manifest["content_scripts"][0]["js"]
     assert "multimodal_main_v78.js" in manifest["content_scripts"][0]["js"]
@@ -28,9 +28,13 @@ def test_formal_release_v02272_versions_and_carried_notes_are_aligned() -> None:
     background_entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     assert '"background_file_upload_quota_recycle_v96.js"' in background_entry
     assert '"conversation_workers_v27.js"' in background_entry
-    # v0.22.72 formally carries the v116 Responses bridge, request-window
-    # observability v117 and Worker sequential-affinity v27 while preserving
-    # the independently-versioned Worker bundle 0.8.28.
+    assert '"conversation_workers_v28.js"' in background_entry
+    assert '"conversation_dispatch_v29.js"' in background_entry
+    # v0.22.73 formally carries the prior v116/v117/v27 fixes plus v118 and
+    # strict per-logical-API Worker #1 FIFO routing in bundle 0.8.29.
+    assert "## v0.22.73" in changelog
+    assert "Chrome Worker Bundle `0.8.29`" in changelog
+    assert "strict" in changelog.lower()
     assert "## v0.22.67" in changelog
     assert "### User console" in changelog
     assert "### Pricing and billing" in changelog
@@ -42,7 +46,7 @@ def test_formal_release_v02272_versions_and_carried_notes_are_aligned() -> None:
 def test_formal_release_advertises_responses_console_and_carried_runtime_fixes() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["chrome_bridge"]["version"] == "0.8.1"
-    assert payload["chrome_bridge"]["bundle_version"] == "0.8.28"
+    assert payload["chrome_bridge"]["bundle_version"] == "0.8.29"
     assert payload["chrome_bridge"]["multimodal_revision"] == 85
     assert payload["features"]["multimodal_main_world_v78"] is True
     assert payload["features"]["multimodal_upload_ready_v84"] is True
@@ -77,8 +81,12 @@ def test_formal_release_advertises_responses_console_and_carried_runtime_fixes()
     assert payload["features"]["responses_playground_v110"] is True
     assert payload["features"]["responses_tool_stream_v115"] is True
     assert payload["features"]["responses_tool_stream_v116"] is True
+    assert payload["features"]["responses_tool_stream_v118"] is True
     assert payload["features"]["worker_terminal_reuse_v26"] is True
     assert payload["features"]["worker_sequential_affinity_v27"] is True
+    assert payload["features"]["worker_single_route_v28"] is True
+    assert payload["features"]["worker_strict_api_fifo_v29"] is True
+    assert payload["features"]["same_api_parallel_requests"] is False
     assert "multimodal-main-world-v78" in payload["server"]["feature_revision"]
     assert "window-manager-fifo-v88" in payload["server"]["feature_revision"]
     assert "success-terminal-monotonic-v88" in payload["server"]["feature_revision"]
@@ -111,3 +119,6 @@ def test_formal_release_advertises_responses_console_and_carried_runtime_fixes()
     assert "request-window-observability-v117" in payload["server"]["feature_revision"]
     assert "worker-sequential-affinity-v27" in payload["server"]["feature_revision"]
     assert "release-v02272" in payload["server"]["feature_revision"]
+    assert "responses-tool-stream-v118" in payload["server"]["feature_revision"]
+    assert "worker-strict-api-fifo-v28-v29" in payload["server"]["feature_revision"]
+    assert "release-v02273" in payload["server"]["feature_revision"]
