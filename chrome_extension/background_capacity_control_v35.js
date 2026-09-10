@@ -2,15 +2,9 @@
   const KEY = "__CHAT2API_CAPACITY_CONTROL_V35__";
   if (globalThis[KEY]) return;
 
-  const RESERVE_KEY = "__CHAT2API_RESERVE_POOL_V29__";
-  const SUPERVISOR_KEY = "__CHAT2API_TAB_SUPERVISOR_V32__";
-  const MAX_ROUNDS = 8;
-  const RESIZE_DEADLINE_MS = 55000;
-
-  const state = { lastResult: null };
+  const OBSERVER_KEY = "__CHAT2API_WINDOW_OBSERVER_V90__";
+  const state = { version: 35, revision: 90, lastResult: null };
   globalThis[KEY] = state;
-
-  const sleepControl = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   function targetValue(value) {
     const parsed = Number(value);
@@ -20,100 +14,47 @@
     return Math.floor(parsed);
   }
 
-  function reservePool() {
-    const reserve = globalThis[RESERVE_KEY];
-    if (!reserve || typeof reserve.snapshot !== "function" || typeof reserve.reconcile !== "function") {
-      throw new Error("Reserve Pool v29 is not ready");
+  function observer() {
+    const value = globalThis[OBSERVER_KEY];
+    if (!value || typeof value.snapshot !== "function" || typeof value.report !== "function") {
+      throw new Error("Window Observer v90 is not ready");
     }
-    return reserve;
+    return value;
   }
 
   async function windowSnapshot() {
-    const reserve = reservePool();
-    const raw = await reserve.snapshot();
-    const total = Math.max(0, Math.floor(Number(raw?.total || 0)));
-    const active = Math.max(0, Math.min(total, Math.floor(Number(raw?.active || 0))));
-    const target = Math.max(1, Math.min(32, Math.floor(Number(raw?.target || reserve.target || 1))));
+    const value = observer();
+    await value.report(true).catch(() => {});
+    const raw = value.snapshot();
+    const activeRows = Array.isArray(raw?.active) ? raw.active : [];
+    const inUse = activeRows.filter(row => String(row?.status || "") === "in_use").length;
     return {
-      total,
-      active,
-      idle: Math.max(0, total - active),
-      target,
-      own: Math.max(0, Math.floor(Number(raw?.own || 0))),
-      warm: Math.max(0, Math.floor(Number(raw?.warm || 0))),
-      routed: Math.max(0, Math.floor(Number(raw?.routed || 0))),
-      all_chatgpt_windows: raw?.live instanceof Set ? raw.live.size : total,
+      total: activeRows.length,
+      active: inUse,
+      idle: Math.max(0, activeRows.length - inUse),
+      target: 0,
+      own: activeRows.length,
+      warm: 0,
+      routed: activeRows.length,
+      all_chatgpt_windows: activeRows.length,
+      speculative_windows: false,
+      route_window_authority: "conversation-routing-v30",
       observed_at: new Date().toISOString(),
     };
   }
 
-  async function reportFreshStatus() {
-    const reserve = reservePool();
-    if (typeof reserve.report === "function") await reserve.report(true).catch(() => {});
-  }
-
   async function resizeWorkers(requestedTarget) {
     const target = targetValue(requestedTarget);
-    const reserve = reservePool();
-    const supervisor = globalThis[SUPERVISOR_KEY];
-
-    if (typeof reserve.refreshConfig === "function") {
-      const authoritativeTarget = targetValue(await reserve.refreshConfig(true));
-      if (authoritativeTarget !== target) {
-        throw new Error(`Server runtime target mismatch (expected ${target}, received ${authoritativeTarget})`);
-      }
-    } else {
-      throw new Error("Reserve Pool runtime-config refresh is unavailable");
-    }
-
-    let snapshot = await windowSnapshot();
-    let previousTotal = -1;
-    let stagnantRounds = 0;
-    let rounds = 0;
-    let pendingReason = "";
-    const deadline = Date.now() + RESIZE_DEADLINE_MS;
-
-    while (Date.now() < deadline && rounds < MAX_ROUNDS && snapshot.total !== target) {
-      if (snapshot.total > target && snapshot.active > target) {
-        pendingReason = "active-windows-protected";
-        break;
-      }
-
-      previousTotal = snapshot.total;
-      rounds += 1;
-      await reserve.reconcile();
-      if (supervisor && typeof supervisor.reconcile === "function") {
-        await supervisor.reconcile().catch(() => null);
-      }
-      snapshot = await windowSnapshot();
-
-      if (snapshot.total === target) break;
-      if (snapshot.total === previousTotal) stagnantRounds += 1;
-      else stagnantRounds = 0;
-
-      if (stagnantRounds >= 2) {
-        pendingReason = snapshot.total < target
-          ? "prewarm-not-ready-or-ineligible"
-          : "managed-windows-still-protected";
-        break;
-      }
-      await sleepControl(250);
-    }
-
-    await reportFreshStatus();
-    snapshot = await windowSnapshot();
-    const targetReached = snapshot.total === target;
-    if (!targetReached && !pendingReason) {
-      pendingReason = snapshot.total > target && snapshot.active > target
-        ? "active-windows-protected"
-        : "target-not-reached-before-control-deadline";
-    }
-
+    // v0.8.30 deliberately has no browser window pool to resize. This control
+    // acknowledges the server's distinct-API concurrency value but never creates
+    // or closes ChatGPT windows. Routes are opened on demand by the sole router.
+    const snapshot = await windowSnapshot();
     return {
       target,
-      target_reached: targetReached,
-      pending_reason: pendingReason,
-      rounds,
+      target_reached: true,
+      pending_reason: "",
+      rounds: 0,
+      window_policy: "on-demand-single-authority-v30",
       window_snapshot: snapshot,
     };
   }
@@ -121,12 +62,11 @@
   async function emitResult(message, ok, data = {}, error = "") {
     const controlId = String(message?.control_id || "");
     const action = String(message?.action || "");
-    const snapshot = data?.window_snapshot && typeof data.window_snapshot === "object"
-      ? data.window_snapshot
-      : null;
+    const snapshot = data?.window_snapshot && typeof data.window_snapshot === "object" ? data.window_snapshot : null;
     const observedAt = snapshot?.observed_at || new Date().toISOString();
     const result = {
       version: 35,
+      revision: 90,
       control_id: controlId,
       action,
       ok: Boolean(ok),
@@ -142,8 +82,7 @@
       && globalThis.__CHAT2API_NATIVE_CAPACITY_DISPATCH_V37__ === true
     );
     const overlayReady = Boolean(
-      dispatcher
-      && Number(dispatcher.version || 0) >= 36
+      dispatcher && Number(dispatcher.version || 0) >= 36
       && globalThis.handleServerMessage?.__chat2apiCapacityControlV36 === true
     );
     const controlReady = nativeReady || overlayReady;
@@ -155,16 +94,15 @@
         : (overlayReady ? "capacity-result-v35-via-dispatch-v36" : "capacity-controller-v35"),
       extension_control_capability_reporter: nativeReady ? 37 : null,
       extension_control_result: result,
+      reserve_window_telemetry_version: 90,
+      reserve_window_total: Number(snapshot?.total || 0),
+      reserve_window_active: Number(snapshot?.active || 0),
+      reserve_window_idle: Number(snapshot?.idle || 0),
+      reserve_window_target: 0,
+      reserve_window_updated_at: observedAt,
+      window_decision_authority: "conversation-routing-v30",
+      speculative_windows: false,
     };
-    if (snapshot) {
-      metadata.reserve_window_telemetry_version = 29;
-      metadata.reserve_window_total = Number(snapshot.total || 0);
-      metadata.reserve_window_active = Number(snapshot.active || 0);
-      metadata.reserve_window_idle = Number(snapshot.idle || 0);
-      metadata.reserve_window_target = Number(snapshot.target || 0);
-      metadata.reserve_window_updated_at = observedAt;
-      metadata.reserve_window_all_chatgpt_windows = Number(snapshot.all_chatgpt_windows || 0);
-    }
 
     if (typeof trySendSocket !== "function") throw new Error("Extension WebSocket sender is unavailable");
     const sent = await trySendSocket({
@@ -184,36 +122,23 @@
     const action = String(message?.action || "");
     try {
       if (action === "windows.snapshot") {
-        const snapshot = await windowSnapshot();
-        await reportFreshStatus();
-        return emitResult(message, true, { window_snapshot: snapshot });
+        return emitResult(message, true, { window_snapshot: await windowSnapshot() });
       }
       if (action === "workers.resize") {
-        const result = await resizeWorkers(message?.payload?.target);
-        return emitResult(message, true, result);
+        return emitResult(message, true, await resizeWorkers(message?.payload?.target));
       }
       throw new Error(`Unsupported Extension control action: ${action || "(empty)"}`);
     } catch (error) {
       let snapshot = null;
       try { snapshot = await windowSnapshot(); } catch (_) {}
-      return emitResult(
-        message,
-        false,
-        snapshot ? { window_snapshot: snapshot } : {},
-        String(error?.message || error),
-      );
+      return emitResult(message, false, snapshot ? { window_snapshot: snapshot } : {}, String(error?.message || error));
     }
   }
 
-  // Native background.js dispatches extension.control directly into this API.
-  // Publish it before installing any legacy wrapper so MV3 global binding quirks
-  // cannot leave the controller permanently at control=v0.
   state.handle = handleControl;
   state.snapshot = windowSnapshot;
   state.resize = resizeWorkers;
 
-  // Retain the historical overlay path for older Bridge entrypoints. It is now
-  // optional: absence of a global base handler must not disable the controller.
   const baseHandler = globalThis.handleServerMessage;
   if (typeof baseHandler === "function") {
     const wrappedHandler = async message => {
