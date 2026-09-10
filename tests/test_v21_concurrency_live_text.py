@@ -112,24 +112,26 @@ def test_live_text_accepts_simple_and_realtime_item_shapes() -> None:
     assert _input_text_from_control({"type": "conversation.item.create", "item": {"role": "assistant", "content": "x"}}) == ""
 
 
-def test_extension_uses_three_per_key_workers_after_affinity_warm_pool() -> None:
+def test_production_uses_server_capacity_and_v30_single_route_authority() -> None:
     workers = (EXTENSION / "conversation_workers_v25.js").read_text(encoding="utf-8")
     dispatch = (EXTENSION / "conversation_dispatch.js").read_text(encoding="utf-8")
+    routing = (EXTENSION / "conversation_routing.js").read_text(encoding="utf-8")
     entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")
     warm = (EXTENSION / "conversation_warm_pool_v2.js").read_text(encoding="utf-8")
 
+    # Historical v25/warm-pool source remains regression-testable but is retired
+    # from the production entry to prevent browser-side duplicate admission.
     assert "MAX_WORKERS_PER_KEY = 3" in workers
-    assert "::worker${index}" in workers
-    assert "logical_api_key_id" in workers
-    assert "worker_index" in workers
-    assert "extension_worker_router" in workers
-    assert "routeReservations: new Map()" in workers
+    assert "MAX_WARM_SLOTS = 2" in warm
+    assert '"conversation_workers_v25.js"' not in entry
+    assert '"conversation_warm_pool_v2.js"' not in entry
+
     assert "requestTabs: new Map()" in dispatch
     assert '"voice.live.start"' in dispatch
-    assert "Serialize only route allocation / page dispatch" in dispatch
-    assert "MAX_WARM_SLOTS = 2" in warm
-    assert entry.index('"conversation_warm_pool_v2.js"') < entry.index('"conversation_workers_v25.js"')
-    assert entry.index('"conversation_workers_v25.js"') < entry.index('"conversation_dispatch.js"')
+    assert "Same-logical-API request admission is exclusively server scheduler v58" in dispatch
+    assert 'authority: "single-route-window-authority-v30"' in routing
+    assert "browser_side_same_api_queue: false" in routing
+    assert entry.index('"conversation_routing.js"') < entry.index('"conversation_dispatch.js"')
 
 
 def test_live_voice_routes_text_to_same_bound_tab_without_stopping_audio() -> None:
