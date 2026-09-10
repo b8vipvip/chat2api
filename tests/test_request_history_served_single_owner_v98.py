@@ -96,9 +96,10 @@ def test_actual_served_admin_and_assets_have_one_request_history_owner() -> None
     assert "时间（北京时间）" in page
     for label in ("请求ID", "设备标识", "对话", "日志"):
         assert f"<th>{label}</th>" in page
+    assert ">窗口编号</th>" in page
     assert "requestHistoryButton(tr,'查看对话'" in page
     assert "requestHistoryButton(tr,'下载日志'" in page
-    assert "cell.colSpan=13" in page
+    assert "cell.colSpan=14" in page
 
     bundle = probe["bundle"]
     for signature in OLD_OWNER_SIGNATURES:
@@ -110,16 +111,16 @@ def test_actual_served_admin_and_assets_have_one_request_history_owner() -> None
             assert signature not in payload["text"], (route, signature)
 
 
-def test_canonical_renderer_has_exact_thirteen_cell_contract() -> None:
+def test_canonical_renderer_has_exact_fourteen_cell_contract() -> None:
     probe = _run_fresh_entry_probe()
     page = probe["page"]
     start = page.index("async function loadRequests()")
     end = page.index("\nrequestHistoryEnsureControls();\n$('rqGo').onclick=loadRequests;", start)
     loader = page[start:end]
-    # time, request ID, type, key, device, model, attachment, first-token,
-    # total-time and token are normal cells; status is one cell; conversation
-    # and log are two action cells. No historical renderer may append extras.
-    assert loader.count("requestHistoryCell(tr,") == 10
+    # time, request ID, type, key, device, window number, model, attachment,
+    # first-token, total-time and token are normal cells; status is one cell;
+    # conversation and log are two action cells. No historical renderer may append extras.
+    assert loader.count("requestHistoryCell(tr,") == 11
     assert loader.count("requestHistoryStatusCell(tr,") == 1
     assert loader.count("requestHistoryButton(tr,") == 2
-    assert loader.count("requestHistoryCell(tr,") + loader.count("requestHistoryStatusCell(tr,") + loader.count("requestHistoryButton(tr,") == 13
+    assert loader.count("requestHistoryCell(tr,") + loader.count("requestHistoryStatusCell(tr,") + loader.count("requestHistoryButton(tr,") == 14

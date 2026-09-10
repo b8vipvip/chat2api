@@ -254,7 +254,7 @@ def test_tool_response_explicitly_requires_follow_up() -> None:
     _mark_tool_follow_up(response, [{"type": "custom_tool_call"}])
     assert response["end_turn"] is False
     assert response["metadata"]["chat2api_tool_stream"] == "responses-v113-codex-0149"
-    assert PATCH_REVISION == 115
+    assert PATCH_REVISION == 116
 
 
 def test_model_routing_installs_v111_compatibility_entry_before_emulated_middleware() -> None:
@@ -273,9 +273,9 @@ def test_v111_compatibility_module_delegates_to_v112() -> None:
     assert "responses_tool_stream_revision = PATCH_REVISION" in source
 
 
-def test_v112_compatibility_module_delegates_to_v115() -> None:
+def test_v112_compatibility_module_delegates_to_v116() -> None:
     source = (ROOT / "app" / "responses_tool_stream_v112_patch.py").read_text(encoding="utf-8")
-    assert "install_responses_tool_stream_v115_patch(app)" in source
+    assert "install_responses_tool_stream_v116_patch(app)" in source
     assert "responses_tool_stream_revision = PATCH_REVISION" in source
 
 
