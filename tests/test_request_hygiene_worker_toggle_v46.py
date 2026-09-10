@@ -283,7 +283,7 @@ def test_generation_liveness_is_diagnostic_only_and_hard_timeout_remains():
 def test_bundle_load_order_and_new_scripts_parse():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.8.28"
+    assert manifest["version"] == "0.8.29"
     assert scripts.index("content_request_v5.js") < scripts.index("content_request_lifecycle_v50.js") < scripts.index("content_request_hygiene_v42.js") < scripts.index("content_draft_ownership_v43.js")
     assert scripts.index("content_draft_ownership_v43.js") < scripts.index("content_draft_managed_recovery_v55.js") < scripts.index("content_response_capture_v41.js")
     assert scripts.index("content_response_stream_recovery_v49.js") < scripts.index("content_network_stream_recovery_v55.js") < scripts.index("content_response_semantic_recovery_v51.js") < scripts.index("content_transient_retry_v50.js") < scripts.index("content_request_stall_guard_v34.js") < scripts.index("content_generation_liveness_v49.js")
@@ -332,7 +332,7 @@ def test_runtime_advertises_v62_worker_authority_and_network_parser_features():
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     patch = (ROOT / "app" / "linux_worker_enable_patch.py").read_text(encoding="utf-8")
     assert 'SERVER_RUNTIME_VERSION = "0.22.62"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.28"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.29"' in runtime
     assert '"network_response_recovery": True' in runtime
     assert '"network_response_parser_v62": True' in runtime
     assert '"linux_worker_master_switch": True' in runtime
@@ -343,7 +343,7 @@ def test_runtime_advertises_v62_worker_authority_and_network_parser_features():
     assert '"multimodal_upload_confirmation_v64": True' in runtime
     assert '"managed_request_draft_recovery": True' in runtime
     assert '"visible_generation_liveness": True' in runtime
-    assert '"same_api_parallel_requests": True' in runtime
+    assert '"same_api_parallel_requests": False' in runtime
     assert '"failed_route_quarantine": True' in runtime
     assert '"request_controller_lifecycle_guard": True' in runtime
     assert '"chatgpt_transient_retry": True' in runtime
