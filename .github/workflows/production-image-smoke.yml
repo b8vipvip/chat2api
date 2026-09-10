@@ -36,18 +36,31 @@ jobs:
           assert hashlib.sha256(bundle.read_bytes()).hexdigest() == digest
           with tarfile.open(bundle, "r:gz") as archive:
               names = set(archive.getnames())
-          required = {
-              "chrome_extension/manifest.json",
-              "scripts/linux_worker_agent.py",
-              "scripts/linux_worker_proxy.py",
-              "scripts/linux_worker_remote_login.py",
-              "scripts/linux_worker_tab_init.py",
-              "scripts/linux_worker_watchdog.sh",
-              "scripts/linux_extension_autoreload.sh",
-              "scripts/linux_worker_proxy_apply.sh",
-          }
-          assert required <= names, sorted(required - names)
-          print(json.dumps({"bootstrap": True, "bundle_files": len(names), "sha256": digest}))
+              required = {
+                  "chrome_extension/manifest.json",
+                  "chrome_extension/background_entry.js",
+                  "chrome_extension/conversation_workers_v28.js",
+                  "chrome_extension/conversation_dispatch_v29.js",
+                  "scripts/linux_worker_agent.py",
+                  "scripts/linux_worker_proxy.py",
+                  "scripts/linux_worker_remote_login.py",
+                  "scripts/linux_worker_tab_init.py",
+                  "scripts/linux_worker_watchdog.sh",
+                  "scripts/linux_extension_autoreload.sh",
+                  "scripts/linux_worker_proxy_apply.sh",
+              }
+              assert required <= names, sorted(required - names)
+              manifest = json.load(archive.extractfile("chrome_extension/manifest.json"))
+              entry = archive.extractfile("chrome_extension/background_entry.js").read().decode("utf-8")
+              router = archive.extractfile("chrome_extension/conversation_workers_v28.js").read().decode("utf-8")
+              fifo = archive.extractfile("chrome_extension/conversation_dispatch_v29.js").read().decode("utf-8")
+          assert manifest["version"] == "0.8.29", manifest["version"]
+          assert '"conversation_workers_v28.js"' in entry
+          assert '"conversation_dispatch_v29.js"' in entry
+          assert "STRICT_WORKER_LIMIT = 1" in router
+          assert "strict-api-fifo-v29" in fifo
+          assert Path("/app/app/responses_tool_stream_v118_patch.py").is_file()
+          print(json.dumps({"bootstrap": True, "bundle_files": len(names), "bundle_version": manifest["version"], "strict_fifo": True, "responses_v118": True, "sha256": digest}))
           '
       - name: Boot production ASGI entrypoint and verify health
         run: |
@@ -71,5 +84,11 @@ jobs:
           payload = json.load(open('/tmp/chat2api-version.json', encoding='utf-8'))
           assert payload['server']['runtime_aligned'] is True
           assert payload['server']['entrypoint'] == 'app.entry:app'
-          print(json.dumps({'production_entrypoint': True, 'runtime': payload['server']['runtime_version']}))
+          assert payload['server']['runtime_version'] == '0.22.73'
+          assert payload['chrome_bridge']['bundle_version'] == '0.8.29'
+          assert payload['features']['worker_single_route_v28'] is True
+          assert payload['features']['worker_strict_api_fifo_v29'] is True
+          assert payload['features']['responses_tool_stream_v118'] is True
+          assert payload['features']['same_api_parallel_requests'] is False
+          print(json.dumps({'production_entrypoint': True, 'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'strict_fifo': True}))
           PY
