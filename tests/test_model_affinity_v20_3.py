@@ -94,7 +94,7 @@ def test_extension_affinity_endpoint_uses_extension_headers_not_query_token(tmp_
         assert payload["presets"][0]["count"] == 2
 
 
-def test_extension_refreshes_every_ten_minutes_and_prepares_model_reasoning() -> None:
+def test_extension_refreshes_every_ten_minutes_and_prepares_model_reasoning_before_route_authority() -> None:
     source = (EXTENSION / "model_affinity_v23.js").read_text(encoding="utf-8")
     entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")
     assert "periodInMinutes: 10" in source
@@ -106,11 +106,13 @@ def test_extension_refreshes_every_ten_minutes_and_prepares_model_reasoning() ->
     assert "chat2api.reasoning.prepare.v7" in source
     assert "chat2api.model.probe.v7" in source
     assert "gpt-5.5-mini" in source
-    assert entry.index('"model_affinity_v23.js"') < entry.index('"conversation_warm_pool_v2.js"')
+    assert entry.index('"model_affinity_v23.js"') < entry.index('"conversation_routing.js"')
+    assert '"conversation_warm_pool_v2.js"' not in entry
 
 
-def test_warm_pool_keeps_two_affinity_slots_and_matches_requests_first() -> None:
+def test_legacy_warm_pool_source_still_documents_affinity_slot_behavior_but_is_not_production_owner() -> None:
     source = (EXTENSION / "conversation_warm_pool_v2.js").read_text(encoding="utf-8")
+    entry = (EXTENSION / "background_entry.js").read_text(encoding="utf-8")
     assert "MAX_WARM_SLOTS = 2" in source
     assert "warmSlots: new Map()" in source
     assert "desiredSlotDefinitions" in source
@@ -121,6 +123,7 @@ def test_warm_pool_keeps_two_affinity_slots_and_matches_requests_first() -> None
     assert "scheduleWarm(350, warm.slot_key)" in source
     assert "onAffinityChanged" in source
     assert "conversation_warm_pool_slots: MAX_WARM_SLOTS" in source
+    assert '"conversation_warm_pool_v2.js"' not in entry
 
 
 def test_entry_installs_v20_3_patch_after_v20_2_and_docs_overlay() -> None:
