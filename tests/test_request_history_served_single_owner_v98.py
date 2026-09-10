@@ -94,8 +94,9 @@ def test_actual_served_admin_and_assets_have_one_request_history_owner() -> None
     assert page.count('id="rqBody"') == 1
     assert page.count('id="rqGo"') == 1
     assert "时间（北京时间）" in page
-    for label in ("请求ID", "设备标识", "窗口编号", "对话", "日志"):
+    for label in ("请求ID", "设备标识", "对话", "日志"):
         assert f"<th>{label}</th>" in page
+    assert ">窗口编号</th>" in page
     assert "requestHistoryButton(tr,'查看对话'" in page
     assert "requestHistoryButton(tr,'下载日志'" in page
     assert "cell.colSpan=14" in page
