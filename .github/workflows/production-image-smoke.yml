@@ -57,8 +57,8 @@ jobs:
           assert manifest["version"] == "0.8.29", manifest["version"]
           assert '"conversation_workers_v28.js"' in entry
           assert '"conversation_dispatch_v29.js"' in entry
-          assert "STRICT_WORKER_LIMIT = 1" in router
-          assert "strict-api-fifo-v29" in fifo
+          assert "workerLimit: 1" in router and "worker_limit: 1" in router
+          assert "per-logical-api-terminal-fifo-v29" in fifo
           assert Path("/app/app/responses_tool_stream_v118_patch.py").is_file()
           print(json.dumps({"bootstrap": True, "bundle_files": len(names), "bundle_version": manifest["version"], "strict_fifo": True, "responses_v118": True, "sha256": digest}))
           '
