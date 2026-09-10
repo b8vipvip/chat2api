@@ -55,8 +55,8 @@ jobs:
               router = archive.extractfile("chrome_extension/conversation_workers_v28.js").read().decode("utf-8")
               fifo = archive.extractfile("chrome_extension/conversation_dispatch_v29.js").read().decode("utf-8")
           assert manifest["version"] == "0.8.29", manifest["version"]
-          assert '"conversation_workers_v28.js"' in entry
-          assert '"conversation_dispatch_v29.js"' in entry
+          assert "\"conversation_workers_v28.js\"" in entry
+          assert "\"conversation_dispatch_v29.js\"" in entry
           assert "workerLimit: 1" in router and "worker_limit: 1" in router
           assert "per-logical-api-terminal-fifo-v29" in fifo
           assert Path("/app/app/responses_tool_stream_v118_patch.py").is_file()
