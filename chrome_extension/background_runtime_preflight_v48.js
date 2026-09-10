@@ -2,18 +2,17 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__";
   if (globalThis[KEY]) return;
 
-  // Worker bundle 0.8.29 keeps the v71 request/response epoch while requiring
+  // Worker bundle 0.8.30 keeps the v71 request/response epoch while requiring
   // the v63 native WebSocket tool observer, v78 MAIN-world upload bridge,
   // v85 safe-submit gate, v88 terminal/prompt guard, v95 conversation-local
-  // quota failover owner, and v101 safe UI hygiene.
-  const REQUIRED_BUNDLE = "0.8.29";
+  // quota failover owner, and v101 safe UI hygiene. Browser route/window
+  // ownership is independently enforced by background entry v0.8.30.
+  const REQUIRED_BUNDLE = "0.8.30";
   const REQUIRED_REVISION = 71;
   const CONTRACT_TIMEOUT_MS = 700;
   const HOT_HEAL_BUDGET_MS = 2400;
   const RELOAD_BUDGET_MS = 3500;
   const FINAL_HEAL_BUDGET_MS = 1800;
-  // Preserve the historical v87 declaration for compatibility tests and older
-  // diagnostics while composing the v63 observer into the actual injection set.
   const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"];
   const NATIVE_MAIN_FILES = ["native_tool_stream_main_v63.js"];
   const CURRENT_MAIN_FILES = [MAIN_FILES[0], ...NATIVE_MAIN_FILES, MAIN_FILES[1]];
@@ -44,7 +43,7 @@
   const inflight = new Map();
   const state = {
     version: 71,
-    revision: 108,
+    revision: 109,
     required_bundle: REQUIRED_BUNDLE,
     required_revision: REQUIRED_REVISION,
     native_tool_stream_revision: 63,
@@ -172,7 +171,6 @@
   async function preflight(tabId) {
     state.checks += 1;
     const started = Date.now();
-
     let result = await contract(tabId);
     if (current(result)) {
       state.fast_path_hits += 1;
@@ -198,8 +196,6 @@
       return true;
     }
 
-    // The whole recovery path remains wall-clock bounded. v108 adds the native
-    // observer without renaming the established v87 preflight outcome contract.
     result = await heal(tabId);
     let reloaded = false;
     const hotHealed = current(result);
