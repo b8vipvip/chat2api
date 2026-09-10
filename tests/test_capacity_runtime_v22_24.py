@@ -10,7 +10,7 @@ def test_bridge_082_busts_mv3_script_cache_without_touching_login_state():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     launcher = (ROOT / "scripts" / "linux_worker_chrome_launcher.sh").read_text(encoding="utf-8")
 
-    assert manifest["version"] == "0.8.28"
+    assert manifest["version"] == "0.8.29"
     assert 'Default/Service Worker/ScriptCache' in launcher
     assert 'Default/Code Cache/js' in launcher
     assert '--disable-extensions-except="$EXTENSION_DIR"' in launcher
@@ -39,7 +39,7 @@ def test_runtime_contract_separates_protocol_from_new_bundle_build():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     assert 'SERVER_RUNTIME_VERSION = "0.22.62"' in runtime
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.28"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.29"' in runtime
     assert '"bundle_version": CHROME_BRIDGE_BUNDLE_VERSION' in runtime
     assert 'request-hygiene-v42-persistent-draft-ownership-v43-generation-liveness-v49' in runtime
     assert 'response-stream-v49-network-response-v55-parser-v62-same-api-concurrency-v25' in runtime
@@ -81,7 +81,9 @@ def test_runtime_contract_separates_protocol_from_new_bundle_build():
     assert '"persistent_request_draft_ownership": True' in runtime
     assert '"visible_generation_liveness": True' in runtime
     assert '"browser_page_progress_probe": True' in runtime
-    assert '"same_api_parallel_requests": True' in runtime
+    assert '"same_api_parallel_requests": False' in runtime
+    assert '"worker_single_route_v28": True' in runtime
+    assert '"worker_strict_api_fifo_v29": True' in runtime
     assert '"failed_route_quarantine": True' in runtime
     assert '"request_controller_lifecycle_guard": True' in runtime
     assert '"chatgpt_transient_retry": True' in runtime
