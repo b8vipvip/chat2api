@@ -12,10 +12,11 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_ready_reserve_is_used_when_warm_slot_is_not_immediately_claimable() -> None:
+def test_legacy_v87_reserve_affinity_source_is_retired_from_production() -> None:
     source = text("chrome_extension/background_window_affinity_v87.js")
     entry = text("chrome_extension/background_entry.js")
-    assert '"background_window_affinity_v87.js"' in entry
+    assert '"background_window_affinity_v87.js"' not in entry
+    assert '"conversation_routing.js"' in entry
     assert "async function immediateWarmClaimable" in source
     assert "async function claimReadyReserve" in source
     assert "if (await immediateWarmClaimable(message)) return null" in source
@@ -24,16 +25,19 @@ def test_ready_reserve_is_used_when_warm_slot_is_not_immediately_claimable() -> 
     assert "reserve.reserveSlots.delete(selectedKey)" in source
 
 
-def test_successful_route_receives_hard_five_minute_idle_lease() -> None:
-    source = text("chrome_extension/background_window_affinity_v87.js")
-    assert "const IDLE_CLOSE_MS = 5 * 60 * 1000" in source
-    assert "selected.route.close_after = now + IDLE_CLOSE_MS" in source
-    assert 'action: "successful-route-protected-5m"' in source
-    assert 'action: "blocked-early-success-route-close"' in source
-    assert "chat2apiWorkerMasterDisabledV61" in source
+def test_successful_route_five_minute_lease_is_owned_by_v30_router_in_production() -> None:
+    legacy = text("chrome_extension/background_window_affinity_v87.js")
+    router = text("chrome_extension/conversation_routing.js")
+    entry = text("chrome_extension/background_entry.js")
+    assert "const IDLE_CLOSE_MS = 5 * 60 * 1000" in legacy
+    assert "selected.route.close_after = now + IDLE_CLOSE_MS" in legacy
+    assert 'action: "successful-route-protected-5m"' in legacy
+    assert '"background_window_affinity_v87.js"' not in entry
+    assert "const IDLE_CLOSE_MS = 5 * 60 * 1000" in router
+    assert 'authority: "single-route-window-authority-v30"' in router
 
 
-def test_healthy_idle_spares_are_lease_refreshed_instead_of_periodically_rotated() -> None:
+def test_legacy_spare_lease_refresh_layers_are_not_loaded_in_no_speculation_runtime() -> None:
     source = text("chrome_extension/background_window_affinity_v87.js")
     boot = text("chrome_extension/background_standby_storage_lease_v87.js")
     entry = text("chrome_extension/background_entry.js")
@@ -42,23 +46,31 @@ def test_healthy_idle_spares_are_lease_refreshed_instead_of_periodically_rotated
     assert "async function refreshHealthySpareLeases" in source
     assert source.count("slot.ready_at_ms = now") >= 2
     assert 'action: "healthy-spare-lease-refreshed"' in source
-    assert "refreshHealthySpareLeases?.().catch?.(() => {})" in entry
-    assert entry.index('"background_standby_storage_lease_v87.js"') < entry.index('"conversation_warm_pool_v2.js"')
-    assert entry.index('"background_standby_storage_lease_v87.js"') < entry.index('"background_reserve_pool_v29.js"')
+    for retired in (
+        "background_standby_storage_lease_v87.js",
+        "background_window_affinity_v87.js",
+        "conversation_warm_pool_v2.js",
+        "background_reserve_pool_v29.js",
+    ):
+        assert f'"{retired}"' not in entry
     assert 'const WARM_KEY = "chat2apiConversationWarmPoolV2"' in boot
     assert 'const RESERVE_KEY = "chat2apiReservePoolV29"' in boot
     assert "standby_lease_recovered_v87" in boot
 
 
-def test_orphaned_stale_route_window_is_closed_before_replacement() -> None:
+def test_legacy_orphan_cleanup_is_retired_and_v30_router_owns_replacement() -> None:
     source = text("chrome_extension/background_orphan_route_cleanup_v87.js")
+    router = text("chrome_extension/conversation_routing.js")
     entry = text("chrome_extension/background_entry.js")
-    assert entry.index('"background_window_affinity_v87.js"') < entry.index('"background_orphan_route_cleanup_v87.js"')
+    assert '"background_orphan_route_cleanup_v87.js"' not in entry
+    assert '"background_window_affinity_v87.js"' not in entry
     assert "if (route.inflight_request_id) return false" in source
     assert 'route.last_rotation_reason = "orphan-route-cleanup-v87"' in source
     assert "await chrome.windows.remove(oldWindowId)" in source
     assert 'action: "orphan-route-cleaned"' in source
     assert "return baseResolver(message)" in source
+    assert 'authority: "single-route-window-authority-v30"' in router
+    assert "async function retireRoute" in router
 
 
 def test_submit_path_remains_single_owner_and_keeps_v6_confirmed_fallback() -> None:
