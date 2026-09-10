@@ -12,24 +12,34 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_v89_refresh_is_loaded_after_v88_window_lifecycle() -> None:
+def test_v89_browser_truth_refresh_is_retired_and_v90_observer_is_loaded() -> None:
     entry = text("chrome_extension/background_entry.js")
-    manager = '"background_window_manager_v88.js"'
-    lifecycle = '"background_window_lifecycle_observer_v88.js"'
-    truth = '"background_window_truth_refresh_v89.js"'
-    assert manager in entry and lifecycle in entry and truth in entry
-    assert entry.index(manager) < entry.index(lifecycle) < entry.index(truth)
-    assert '__CHAT2API_WINDOW_TRUTH_REFRESH_V89__?.refresh?.("background-entry")' in entry
+    for retired in (
+        "background_window_manager_v88.js",
+        "background_window_lifecycle_observer_v88.js",
+        "background_window_truth_refresh_v89.js",
+    ):
+        assert f'"{retired}"' not in entry
+    assert '"conversation_routing.js"' in entry
+    assert '"background_window_observer_v90.js"' in entry
+    assert '__CHAT2API_WINDOW_OBSERVER_V90__?.report?.(true)' in entry
 
 
-def test_worker_refresh_reconciles_against_physical_truth_before_reporting() -> None:
+def test_legacy_v89_refresh_source_remains_inspectable_but_v90_observer_owns_reporting() -> None:
     source = text("chrome_extension/background_window_truth_refresh_v89.js")
+    observer = text("chrome_extension/background_window_observer_v90.js")
     assert 'message?.type === "window.manager.refresh"' in source
     assert "physical.reconcile()" in source
     assert "manager.reconcile(true)" in source
     assert "manager.report(true)" in source
     assert 'refreshPhysicalTruth("service-worker-start")' in source
     assert "updated_at_ms" in source
+
+    assert 'policy: "observe-only-single-route-authority-v90"' in observer
+    assert "state.reconcile = liveRoutes" in observer
+    assert "state.report = report" in observer
+    assert 'window_decision_authority: "conversation-routing-v30"' in observer
+    assert "decision_authority: false" in observer
 
 
 def test_server_never_promotes_cached_active_rows_without_fresh_proof() -> None:
