@@ -31,7 +31,7 @@ def test_v48_javascript_assets_parse():
 
 def test_manifest_requires_fresh_document_marker_and_passive_recovery():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.28"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.29"
     main_scripts = manifest["content_scripts"][0]["js"]
     scripts = manifest["content_scripts"][1]["js"]
     assert "network_stream_main_v55.js" in main_scripts
@@ -66,7 +66,7 @@ def test_background_preflight_wraps_final_conversation_dispatch():
     contract = (ROOT / "chrome_extension" / "content_runtime_contract_v71.js").read_text(encoding="utf-8")
     legacy_marker = (ROOT / "chrome_extension" / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
     marker = (ROOT / "chrome_extension" / "content_bundle_marker_v71.js").read_text(encoding="utf-8")
-    assert 'REQUIRED_BUNDLE = "0.8.28"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.29"' in preflight
     assert 'REQUIRED_REVISION = 71' in preflight
     assert 'const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"]' in preflight
     assert 'const NATIVE_MAIN_FILES = ["native_tool_stream_main_v63.js"]' in preflight
@@ -75,13 +75,13 @@ def test_background_preflight_wraps_final_conversation_dispatch():
     for token in ('"content_rate_limit_guard_v52.js"','"content_request_lifecycle_v50.js"','"content_draft_managed_recovery_v55.js"','"content_rich_response_v69.js"','"content_request_v6.js"','"content_response_stream_recovery_v69.js"','"content_network_stream_recovery_v55.js"','"content_native_tool_stream_v63.js"','"content_response_semantic_recovery_v51.js"','"content_transient_retry_v50.js"','"content_generation_liveness_v49.js"','"content_bundle_marker_v71.js"','"content_runtime_contract_v71.js"'):
         assert token in preflight
     assert '"content_response_stream_recovery_v49.js"' not in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.28"' in legacy_contract
-    assert 'REQUIRED_BUNDLE = "0.8.28"' in contract
+    assert 'REQUIRED_BUNDLE = "0.8.29"' in legacy_contract
+    assert 'REQUIRED_BUNDLE = "0.8.29"' in contract
     assert 'REQUIRED_REVISION = 71' in contract
     for token in ("__CHAT2API_RATE_LIMIT_CONTENT_V52__","__CHAT2API_REQUEST_LIFECYCLE_V50__","__CHAT2API_DRAFT_MANAGED_RECOVERY_V55__","__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__","__CHAT2API_RESPONSE_STREAM_RECOVERY_V69__","__CHAT2API_NETWORK_STREAM_RECOVERY_V55__","__CHAT2API_NATIVE_TOOL_STREAM_CONTENT_V63__","network_stream_main_v55","network_stream_parser_v62","native_tool_stream_v63","data-chat2api-network-stream-parser","data-chat2api-native-tool-stream","__CHAT2API_RESPONSE_SEMANTIC_RECOVERY_V51__","response_single_owner_v53","semanticHelper?.timer == null","__CHAT2API_TRANSIENT_RETRY_V50__","__CHAT2API_GENERATION_LIVENESS_V49__"):
         assert token in contract
-    assert 'bundle: "0.8.28"' in legacy_marker
-    assert 'bundle: "0.8.28"' in marker
+    assert 'bundle: "0.8.29"' in legacy_marker
+    assert 'bundle: "0.8.29"' in marker
     assert 'revision: 71' in marker
     assert "content_bundle_marker_v48.js" not in preflight
     assert "chrome.tabs.reload" in preflight
@@ -120,10 +120,11 @@ def test_runtime_contract_exposes_v48_v49_v50_v51_and_v55_features():
     payload = version_contract_payload(app)
     assert payload["server"]["runtime_version"] == SERVER_RUNTIME_VERSION
     assert payload["server"]["expected_runtime_version"] == SERVER_RUNTIME_VERSION
-    assert payload["chrome_bridge"]["bundle_version"] == "0.8.28"
+    assert payload["chrome_bridge"]["bundle_version"] == "0.8.29"
     assert payload["chrome_bridge"]["network_response_recovery_version"] == 55
     assert payload["chrome_bridge"]["network_response_parser_revision"] == 62
     assert payload["chrome_bridge"]["worker_master_switch_version"] == 61
     assert payload["chrome_bridge"]["worker_master_switch_revision"] == 62
-    for feature in ("response_stream_recovery","network_response_recovery","network_response_parser_v62","single_response_observer","assistant_response_semantic_guard","assistant_response_semantic_recovery","model_capability_routing_guard","chatgpt_rate_limit_circuit_breaker","worker_window_reopen_loop_guard","active_rate_limit_terminal_error","routed_dispatch_terminal_error","admin_single_render_owner","worker_key_capacity_fifo_queue","worker_window_concurrency_controls","api_key_concurrency_controls","playground_chat_running_records","browser_page_progress_probe","same_api_parallel_requests","failed_route_quarantine","request_controller_lifecycle_guard","chatgpt_transient_retry","worker_runtime_preflight","external_account_tool_isolation","linux_worker_master_switch","linux_worker_disable_authority","worker_live_occupancy","worker_device_name_column","worker_pairing_rename","worker_presentation_console_liveness_v65","worker_presentation_console_liveness_v66","worker_column_registry_v67","multimodal_upload_confirmation_v64","multimodal_upload_v68","api_key_console_v68","rich_response_v69","request_response_epoch_v69","worker_content_runtime_epoch_v71","linux_worker_sudoers_guard","linux_worker_autoreload_self_heal","linux_worker_proxy_health_facets"):
+    for feature in ("response_stream_recovery","network_response_recovery","network_response_parser_v62","single_response_observer","assistant_response_semantic_guard","assistant_response_semantic_recovery","model_capability_routing_guard","chatgpt_rate_limit_circuit_breaker","worker_window_reopen_loop_guard","active_rate_limit_terminal_error","routed_dispatch_terminal_error","admin_single_render_owner","worker_key_capacity_fifo_queue","worker_window_concurrency_controls","api_key_concurrency_controls","playground_chat_running_records","browser_page_progress_probe","failed_route_quarantine","request_controller_lifecycle_guard","chatgpt_transient_retry","worker_runtime_preflight","external_account_tool_isolation","linux_worker_master_switch","linux_worker_disable_authority","worker_live_occupancy","worker_device_name_column","worker_pairing_rename","worker_presentation_console_liveness_v65","worker_presentation_console_liveness_v66","worker_column_registry_v67","multimodal_upload_confirmation_v64","multimodal_upload_v68","api_key_console_v68","rich_response_v69","request_response_epoch_v69","worker_content_runtime_epoch_v71","linux_worker_sudoers_guard","linux_worker_autoreload_self_heal","linux_worker_proxy_health_facets","worker_single_route_v28","worker_strict_api_fifo_v29"):
         assert payload["features"][feature] is True
+    assert payload["features"]["same_api_parallel_requests"] is False
