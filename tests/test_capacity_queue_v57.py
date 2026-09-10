@@ -81,8 +81,7 @@ def test_v57_remains_historical_but_v58_is_final_entry_owner() -> None:
 def test_v58_same_api_is_fifo_one_active_while_distinct_keys_can_share_worker_capacity() -> None:
     async def scenario() -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            app, registry, broker = build_v58(tmp)
-            app.state.capacity_scheduler_v58_config["workers"]["ext_test"] = {"max_concurrency": 2}
+            _app, registry, broker = build_v58(tmp)
 
             token = registry.routing_key_context.set("key_a")
             first = await broker.create("req_a1", "ext_test")
