@@ -16,16 +16,16 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_worker_disable_guard_blocks_refill_and_closes_late_window() -> None:
+def test_worker_disable_guard_is_admission_only_and_never_closes_after_create() -> None:
     source = text("chrome_extension/background_worker_disabled_window_guard_v86.js")
     entry = text("chrome_extension/background_entry.js")
     assert '"background_worker_disabled_window_guard_v86.js"' in entry
     assert 'DISABLED_KEY = "chat2apiWorkerMasterDisabledV61"' in source
     assert "Worker is disabled; managed ChatGPT window creation is blocked by v86" in source
-    assert source.count("if (await disabled())") >= 2
-    assert "if (Number.isInteger(created?.id))" in source
-    assert "await chrome.windows.remove(created.id)" in source
-    assert "baseCreate(options, meta)" in source
+    assert source.count("if (await disabled())") == 1
+    assert "chrome.windows.remove" not in source
+    assert "return baseCreate(options, meta)" in source
+    assert "lifecycle transition belongs to conversation_routing.js" in source
 
 
 def test_worker_disable_guard_vm_contract() -> None:
@@ -38,26 +38,20 @@ def test_worker_disable_guard_vm_contract() -> None:
         timeout=10,
     )
     assert result.returncode == 0, result.stderr
-    assert "worker disabled window guard v86: ok" in result.stdout
+    assert "worker disabled window guard v86 admission-only contract: ok" in result.stdout
 
 
-def test_successful_terminal_never_recycles_affinity_window() -> None:
+def test_legacy_route_quarantine_source_is_not_a_production_owner() -> None:
     source = text("chrome_extension/background_route_quarantine_v50.js")
-    start = source.index("async function settleCompletedRoute")
-    end = source.index("chrome.runtime.onMessage.addListener", start)
-    completed = source[start:end]
-    assert "resetFailedRoute(" not in completed
-    assert "clearSentinel(snapshot)" in completed
-    assert 'action: "settled-preserved"' in completed
-    assert 'action: "completion-cleanup-lag-preserved"' in completed
-    assert "active_request_id" in completed
-    assert "success_recycle: false" in source
-    assert "ERROR_RECYCLE_DELAY_MS" in source
+    entry = text("chrome_extension/background_entry.js")
+    assert "async function settleCompletedRoute" in source
+    assert '"background_route_quarantine_v50.js"' not in entry
 
 
 def test_runtime_preflight_has_current_bundle_fast_path_before_heal() -> None:
     source = text("chrome_extension/background_runtime_preflight_v48.js")
     preflight = source[source.index("async function preflight"):]
+    assert 'REQUIRED_BUNDLE = "0.8.30"' in source
     assert "fast_path_hits" in source
     assert "CONTRACT_TIMEOUT_MS = 700" in source
     assert "HOT_HEAL_BUDGET_MS = 2400" in source
@@ -92,31 +86,24 @@ def test_modified_v86_javascript_parses() -> None:
     paths = [
         "app/admin_prompt_config_v75.js",
         "chrome_extension/background_worker_disabled_window_guard_v86.js",
-        "chrome_extension/background_route_quarantine_v50.js",
         "chrome_extension/background_runtime_preflight_v48.js",
         "chrome_extension/content_bundle_marker_v48.js",
         "chrome_extension/content_bundle_marker_v71.js",
         "chrome_extension/content_runtime_contract_v48.js",
         "chrome_extension/content_runtime_contract_v71.js",
-        "chrome_extension/background_window_affinity_v87.js",
         "chrome_extension/content_request_v6.js",
     ]
     for path in paths:
         result = subprocess.run(
-            ["node", "--check", str(ROOT / path)],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=10,
+            ["node", "--check", str(ROOT / path)], cwd=ROOT, capture_output=True, text=True, check=False, timeout=10
         )
         assert result.returncode == 0, f"{path}: {result.stderr}"
 
 
 def test_worker_lifecycle_runtime_contract_and_worker_bundle_are_aligned() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert SERVER_RUNTIME_VERSION
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.29"
+    assert SERVER_RUNTIME_VERSION == "0.22.74"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.30"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     for path in [
         "chrome_extension/content_bundle_marker_v48.js",
@@ -127,6 +114,6 @@ def test_worker_lifecycle_runtime_contract_and_worker_bundle_are_aligned() -> No
     ]:
         assert CHROME_BRIDGE_BUNDLE_VERSION in text(path), path
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
-    assert payload["server"]["runtime_version"] == SERVER_RUNTIME_VERSION
     assert payload["features"]["worker_disabled_window_guard_v86"] is True
-    assert payload["features"]["successful_route_preservation_v86"] is True
+    assert payload["features"]["worker_single_route_authority_v30"] is True
+    assert payload["features"]["speculative_worker_windows"] is False

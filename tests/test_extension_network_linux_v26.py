@@ -13,13 +13,15 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_background_entry_loads_platform_and_network_before_warm_pool():
+def test_background_entry_loads_platform_and_network_before_route_authority():
     entry = read(EXT / "background_entry.js")
     platform_pos = entry.index(f'"{PLATFORM}"')
     network_pos = entry.index(f'"{NETWORK}"')
     socket_pos = entry.index('"background_socket_singleflight_v21.js"')
-    warm_pos = entry.index('"conversation_warm_pool_v2.js"')
-    assert platform_pos < network_pos < socket_pos < warm_pos
+    router_pos = entry.index('"conversation_routing.js"')
+    assert platform_pos < network_pos < socket_pos < router_pos
+    assert '"conversation_warm_pool_v2.js"' not in entry
+    assert '"background_reserve_pool_v29.js"' not in entry
 
 
 def test_existing_browser_start_connection_behavior_is_preserved():
@@ -57,15 +59,11 @@ def test_network_probe_is_cached_singleflight_and_never_persists_public_ip():
     assert "networkIp" not in source
 
 
-def test_proactive_warm_pool_is_gated_but_request_time_reconcile_remains_available():
+def test_legacy_warm_pool_source_still_documents_network_gate_but_is_not_production_owner():
     source = read(EXT / "conversation_warm_pool_v2.js")
+    entry = read(EXT / "background_entry.js")
     assert '__CHAT2API_NETWORK_GATE_V26__' in source
-    schedule_pos = source.index("function scheduleWarm(")
-    proactive_pos = source.index("if (!await proactivePrewarmAllowed()) return;", schedule_pos)
-    candidate_pos = source.index("async function boundedWarmCandidate")
-    request_reconcile_pos = source.index("const pending = reconcileWarmSlots().catch(() => null);", candidate_pos)
-    assert schedule_pos < proactive_pos < candidate_pos < request_reconcile_pos
-    assert 'changes.networkExternalReady?.newValue === true' in source
+    assert '"conversation_warm_pool_v2.js"' not in entry
 
 
 def test_popup_exposes_linux_and_network_state():

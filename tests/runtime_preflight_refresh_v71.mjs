@@ -13,7 +13,7 @@ function currentContract() {
     terminal_prompt_revision: 88,
     conversation_quota_failover_revision: 95,
     ui_hygiene_revision: 101,
-    marker: { bundle: "0.8.29", revision: 71 },
+    marker: { bundle: "0.8.30", revision: 71 },
     modules: {
       request_v6: true,
       rich_response_v69: true,
@@ -54,20 +54,10 @@ async function runScenario({ hotHealWorks }) {
         if (reloads > 0) return currentContract();
         return null;
       },
-      async reload() {
-        reloads += 1;
-      },
-      async get() {
-        return { status: "loading", url: "https://chatgpt.com/" };
-      },
+      async reload() { reloads += 1; },
+      async get() { return { status: "loading", url: "https://chatgpt.com/" }; },
     },
-    storage: {
-      local: {
-        async set(value) {
-          saved.push(value);
-        },
-      },
-    },
+    storage: { local: { async set(value) { saved.push(value); } } },
   };
 
   const context = {
@@ -75,16 +65,9 @@ async function runScenario({ hotHealWorks }) {
     console,
     Promise,
     Date,
-    setTimeout(callback) {
-      return setImmediate(callback);
-    },
-    clearTimeout(handle) {
-      clearImmediate(handle);
-    },
-    ensureContent: async () => {
-      baseEnsures += 1;
-      return true;
-    },
+    setTimeout(callback) { return setImmediate(callback); },
+    clearTimeout(handle) { clearImmediate(handle); },
+    ensureContent: async () => { baseEnsures += 1; return true; },
   };
   context.globalThis = context;
   vm.createContext(context);
@@ -97,7 +80,7 @@ async function runScenario({ hotHealWorks }) {
 const hot = await runScenario({ hotHealWorks: true });
 assert.equal(hot.reloads, 0, "a stale tab that can be hot-healed must not be reloaded");
 assert.ok(hot.injected >= 2);
-assert.equal(hot.worlds[0], "MAIN", "the page bridges must be injected into the page MAIN world first");
+assert.equal(hot.worlds[0], "MAIN");
 assert.equal(hot.state.last?.ok, true);
 assert.equal(hot.state.last?.hot_healed, true);
 assert.equal(hot.state.last?.contract_revision, 71);
@@ -109,9 +92,9 @@ assert.equal(hot.state.last?.ui_hygiene_revision, 101);
 
 const loading = await runScenario({ hotHealWorks: false });
 assert.equal(loading.reloads, 1, "reload remains a bounded fallback when hot-heal cannot establish the epoch");
-assert.equal(loading.state.last?.ok, true, "a current content contract must win even while tabs.get reports loading");
+assert.equal(loading.state.last?.ok, true);
 assert.equal(loading.state.last?.reloaded, true);
-assert.equal(loading.state.last?.marker?.bundle, "0.8.29");
+assert.equal(loading.state.last?.marker?.bundle, "0.8.30");
 assert.equal(loading.state.last?.native_tool_stream_revision, 63);
 assert.equal(loading.state.last?.multimodal_revision, 85);
 assert.equal(loading.state.last?.terminal_prompt_revision, 88);

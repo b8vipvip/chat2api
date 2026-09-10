@@ -6,8 +6,11 @@ from fastapi import FastAPI, Header, HTTPException
 
 
 PATCH_VERSION = "0.21.13"
-ROUTE_IDLE_CLOSE_SECONDS = 2 * 60
-MAX_RESERVE_WINDOW_TARGET = 32
+# v0.8.30 removes the speculative browser reserve pool. Keep this historical
+# endpoint for bridge compatibility, but publish the current single-authority
+# policy instead of advertising a non-existent warm-window target.
+ROUTE_IDLE_CLOSE_SECONDS = 5 * 60
+MAX_RESERVE_WINDOW_TARGET = 0
 
 
 def install_v21_13_patch(app: FastAPI) -> FastAPI:
@@ -31,18 +34,24 @@ def install_v21_13_patch(app: FastAPI) -> FastAPI:
         broker = getattr(app.state, "broker", None)
         limit_for = runtime.get("limit_for") if isinstance(runtime, dict) else None
         if callable(limit_for):
-            configured = int(limit_for(client_id))
+            configured = max(1, int(limit_for(client_id)))
         else:
-            configured = int(
-                (runtime.get("max_concurrency") if isinstance(runtime, dict) else 0)
-                or getattr(broker, "max_concurrency", 0)
-                or 1
+            configured = max(
+                1,
+                int(
+                    (runtime.get("max_concurrency") if isinstance(runtime, dict) else 0)
+                    or getattr(broker, "max_concurrency", 0)
+                    or 1
+                ),
             )
-        target = max(1, min(MAX_RESERVE_WINDOW_TARGET, configured))
         return {
-            "reserve_window_target": target,
+            "reserve_window_target": 0,
             "route_idle_close_seconds": ROUTE_IDLE_CLOSE_SECONDS,
             "max_reserve_window_target": MAX_RESERVE_WINDOW_TARGET,
+            "worker_concurrency": configured,
+            "speculative_worker_windows": False,
+            "window_decision_authority": "conversation-routing-v30",
+            "server_scheduler_authority": "server-single-authority-scheduler-v58",
             "version": PATCH_VERSION,
         }
 
