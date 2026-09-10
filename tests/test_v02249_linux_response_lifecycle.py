@@ -50,5 +50,5 @@ def test_release_versions():
     runtime = text("app/runtime_contract.py")
     manifest = text("chrome_extension/manifest.json")
     assert 'SERVER_RUNTIME_VERSION = "0.22.62"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.28"' in runtime
-    assert '"version": "0.8.28"' in manifest
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.29"' in runtime
+    assert '"version": "0.8.29"' in manifest
