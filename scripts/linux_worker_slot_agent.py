@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Run one isolated chat2api Worker slot on a shared Linux host.
 
-The canonical linux_worker_agent keeps legacy unit names for slot 1.  This
-wrapper remaps only host-local service names while preserving the Worker wire
-protocol, binding flow, proxy parser, and remote-login implementation.
+The canonical Linux Worker keeps legacy unit names for slot 1. This wrapper
+loads the current v44 Agent stack, then remaps only host-local service names and
+Xray listener allocation while preserving the Worker wire/binding contracts.
 """
 from __future__ import annotations
 
@@ -23,9 +23,11 @@ def _slot() -> int:
 
 SLOT = _slot()
 
-# Import after validating the slot. The base module and its remote-login helper
-# read all per-instance paths/ports from the systemd environment at import time.
+# Import the base first, then the current compatibility shim. v44 patches the
+# base module in place (Agent version, generation probe and upgrade command), so
+# this process remains on the same runtime contract as the primary Worker.
 import linux_worker_agent as agent  # noqa: E402
+import linux_worker_agent_v44  # noqa: E402,F401
 
 _SUFFIX = f"slot{SLOT}"
 _UNIT_MAP = {
