@@ -1,0 +1,87 @@
+name: One-shot v123 release contract sync
+
+on:
+  push:
+    branches:
+      - fix/linux-worker-console-v123-20260911
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/linux-worker-console-v123-20260911
+          fetch-depth: 0
+      - name: Synchronize 0.22.78 and Worker bundle 0.8.33 contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path('.')
+          bundle_files = [
+              Path('chrome_extension/content_bundle_marker_v48.js'),
+              Path('chrome_extension/content_bundle_marker_v71.js'),
+              Path('chrome_extension/content_runtime_contract_v48.js'),
+              Path('chrome_extension/content_runtime_contract_v71.js'),
+              Path('chrome_extension/background_runtime_preflight_v48.js'),
+              Path('.github/workflows/production-image-smoke.yml'),
+          ]
+          for path in bundle_files:
+              text = path.read_text(encoding='utf-8')
+              text = text.replace('0.8.32', '0.8.33')
+              path.write_text(text, encoding='utf-8')
+
+          runtime = Path('app/runtime_contract.py')
+          text = runtime.read_text(encoding='utf-8')
+          exact = [
+              ('SERVER_RUNTIME_VERSION = "0.22.77"', 'SERVER_RUNTIME_VERSION = "0.22.78"'),
+              ('PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.76"', 'PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.77"'),
+              ('PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.75"', 'PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.76"'),
+              ('PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.74"', 'PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.75"'),
+              ('PREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.73"', 'PREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.74"'),
+              ('CHROME_BRIDGE_BUNDLE_VERSION = "0.8.32"', 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.33"'),
+              ('linux-device-worker-console-v122-release-v02277', 'linux-device-worker-console-v122-release-v02277-linux-worker-console-v123-physical-window-observer-v90-release-v02278'),
+              ('routed-window-limit-v121-release-v0832"', 'routed-window-limit-v121-release-v0832-physical-startup-window-observer-v90-release-v0833"'),
+          ]
+          for old, new in exact:
+              if old not in text:
+                  raise SystemExit(f'missing runtime contract token: {old}')
+              text = text.replace(old, new, 1)
+          feature_anchor = '            "linux_worker_device_console_v122": True,\n'
+          if feature_anchor not in text:
+              raise SystemExit('missing v122 feature anchor')
+          text = text.replace(
+              feature_anchor,
+              feature_anchor + '            "linux_worker_console_v123": True,\n            "physical_startup_window_observer_v90": True,\n',
+              1,
+          )
+          runtime.write_text(text, encoding='utf-8')
+
+          smoke = Path('.github/workflows/production-image-smoke.yml')
+          text = smoke.read_text(encoding='utf-8').replace("'0.22.77'", "'0.22.78'")
+          file_anchor = '          assert Path("/app/app/linux_worker_device_console_v122_patch.py").is_file()\n'
+          if file_anchor in text and 'linux_worker_console_v123_patch.py' not in text:
+              text = text.replace(file_anchor, file_anchor + '          assert Path("/app/app/linux_worker_console_v123_patch.py").is_file()\n', 1)
+          feature_anchor = "          assert payload['features']['linux_worker_device_console_v122'] is True\n"
+          if feature_anchor in text and "linux_worker_console_v123" not in text:
+              text = text.replace(feature_anchor, feature_anchor + "          assert payload['features']['linux_worker_console_v123'] is True\n          assert payload['features']['physical_startup_window_observer_v90'] is True\n", 1)
+          smoke.write_text(text, encoding='utf-8')
+
+          for path in sorted(Path('tests').rglob('*')):
+              if not path.is_file() or path.suffix not in {'.py', '.js', '.mjs'}:
+                  continue
+              old = path.read_text(encoding='utf-8')
+              new = old.replace('0.22.77', '0.22.78').replace('0.8.32', '0.8.33')
+              if new != old:
+                  path.write_text(new, encoding='utf-8')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/runtime_contract.py chrome_extension tests .github/workflows/production-image-smoke.yml
+          git commit -m 'release: synchronize 0.22.78 and Worker bundle 0.8.33 contracts'
+          git push origin HEAD:fix/linux-worker-console-v123-20260911
