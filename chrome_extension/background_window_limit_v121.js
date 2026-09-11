@@ -14,7 +14,7 @@
 
   const state = {
     version: 121,
-    revision: 1,
+    revision: 2,
     limit: null,
     source: "unset",
     loaded: false,
@@ -23,6 +23,8 @@
     lastResult: null,
   };
   globalThis[KEY] = state;
+
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   function normalizeLimit(value) {
     const parsed = Number(value);
@@ -58,6 +60,17 @@
   function router() {
     const value = globalThis[ROUTER_KEY];
     return value && value.routes && typeof value.routes === "object" ? value : null;
+  }
+
+  async function routerReady() {
+    // conversation_routing.js starts its storage restore asynchronously at load
+    // time. Never make a cap decision against its temporary empty route map.
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const value = router();
+      if (value?.loaded === true) return value;
+      await sleep(10);
+    }
+    return router();
   }
 
   function routeKey(message) {
@@ -97,13 +110,16 @@
     await chrome.storage.local.set({ [ROUTE_STORAGE_KEY]: value.routes }).catch(() => {});
   }
 
-  async function closeIdleEntry(value, entry, reason) {
-    const route = entry?.route;
-    const windowId = Number(route?.window_id);
-    if (!route || !Number.isInteger(windowId) || route.inflight_request_id) return false;
-    try { await chrome.alarms.clear(`${ROUTE_ALARM_PREFIX}${windowId}`); } catch (_) {}
-    try { await chrome.windows.remove(windowId); } catch (_) {}
-
+  function resetIdleRoute(route, windowId, reason) {
+    // The router's chrome.windows.onRemoved listener can win the race with this
+    // guard. If it already cleared the exact window, it is the lifecycle owner
+    // and we must not increment generation a second time.
+    if (Number(route?.window_id) !== Number(windowId)) return false;
+    const hadSession = Boolean(
+      route.conversation_id || route.conversation_url || Number(route.turn_count || 0) ||
+      Number(route.text_chars || 0) || Number(route.attachment_count || 0) ||
+      Number.isInteger(route.tab_id) || Number.isInteger(route.window_id)
+    );
     route.conversation_id = null;
     route.conversation_url = null;
     route.turn_count = 0;
@@ -116,14 +132,26 @@
     route.inflight_request_id = null;
     route.close_after = null;
     route.last_active_at = Date.now();
-    route.generation = Number(route.generation || 1) + 1;
-    route.last_rotation_reason = reason || "worker-window-limit-evicted";
+    if (hadSession) {
+      route.generation = Number(route.generation || 1) + 1;
+      route.last_rotation_reason = reason || "worker-window-limit-evicted";
+    }
+    return true;
+  }
+
+  async function closeIdleEntry(value, entry, reason) {
+    const route = entry?.route;
+    const windowId = Number(route?.window_id);
+    if (!route || !Number.isInteger(windowId) || route.inflight_request_id) return false;
+    try { await chrome.alarms.clear(`${ROUTE_ALARM_PREFIX}${windowId}`); } catch (_) {}
+    try { await chrome.windows.remove(windowId); } catch (_) {}
+    resetIdleRoute(route, windowId, reason);
     return true;
   }
 
   async function reconcile(reason = "scheduled") {
     await ensureLoaded();
-    const value = router();
+    const value = await routerReady();
     const limit = normalizeLimit(state.limit);
     if (!value || !limit) return null;
 
@@ -195,7 +223,7 @@
 
   async function reserveForRequest(message) {
     await ensureLoaded();
-    const value = router();
+    const value = await routerReady();
     const limit = normalizeLimit(state.limit);
     const key = routeKey(message);
     if (!value || !limit || !key) return false;
