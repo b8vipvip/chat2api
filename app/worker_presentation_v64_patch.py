@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 from .admin_auth import SESSION_COOKIE
 from .worker_limits_clipboard_v121_patch import install_worker_limits_clipboard_v121_patch
 from .linux_worker_device_console_v122_patch import install_linux_worker_device_console_v122_patch
+from .linux_worker_console_v123_patch import install_linux_worker_console_v123_patch
 
 
 PATCH_REVISION = 66
@@ -54,6 +55,19 @@ def _install_v122_if_ready(app: FastAPI) -> None:
         install_linux_worker_device_console_v122_patch(app)
 
 
+def _install_v123_if_ready(app: FastAPI) -> None:
+    required = (
+        "linux_workers",
+        "linux_worker_installs",
+        "linux_worker_proxy_catalog",
+        "pairings",
+        "admin_sessions",
+        "send_linux_worker_command",
+    )
+    if all(hasattr(app.state, name) for name in required):
+        install_linux_worker_console_v123_patch(app)
+
+
 def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
     """Expose Worker presentation data with a bounded passive console enhancer.
 
@@ -65,10 +79,9 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
     from starving the admin console while preserving the presentation features.
     """
     if getattr(app.state, "worker_presentation_v66_installed", False):
-        # The v121/v122 layers are independently idempotent; calling them here also
-        # makes hot-reload/test app factories converge once the full Worker plane exists.
         _install_v121_if_ready(app)
         _install_v122_if_ready(app)
+        _install_v123_if_ready(app)
         return app
     app.state.worker_presentation_v66_installed = True
 
@@ -125,6 +138,41 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
             item.name = clean[:120]
             await pairings.save()
             payload = item.public()
+
+        # The pairing name is the single administrator-facing device-name source.
+        # Mirror the new value into Linux compatibility caches so every page changes
+        # atomically instead of waiting for the next extension reconciliation.
+        workers = getattr(app.state, "linux_workers", None)
+        if workers is not None:
+            with workers._lock:
+                changed = False
+                for worker in workers.data.get("workers", {}).values():
+                    metadata = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}
+                    pairing_meta = metadata.get("worker_pairing") if isinstance(metadata.get("worker_pairing"), dict) else {}
+                    if str(pairing_meta.get("pairing_id") or "") != pairing_id:
+                        continue
+                    metadata = dict(metadata)
+                    pairing_meta = dict(pairing_meta)
+                    pairing_meta["name"] = payload.get("name")
+                    metadata["worker_pairing"] = pairing_meta
+                    worker["metadata"] = metadata
+                    worker["name"] = str(payload.get("name") or worker.get("name") or "Linux Worker")[:80]
+                    changed = True
+                if changed:
+                    workers._save()
+
+        installs = getattr(app.state, "linux_worker_installs", None)
+        if installs is not None:
+            with installs._lock:
+                changed = False
+                for install in installs.data.get("installs", {}).values():
+                    if str(install.get("setup_pairing_id") or "") != pairing_id:
+                        continue
+                    install["setup_pairing_name"] = payload.get("name")
+                    install["name"] = payload.get("name")
+                    changed = True
+                if changed:
+                    installs._save()
         return {"pairing": payload, "device_name": payload.get("name"), "revision": PATCH_REVISION}
 
     @app.get(ADMIN_ASSET, include_in_schema=False)
@@ -154,12 +202,9 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
         headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
 
-    # v121 is the final Worker settings/remote-login console layer. Installing it
-    # here keeps app.entry ordering stable while guaranteeing that it wraps the
-    # already-decorated v66 registry summaries and is injected after v66 assets.
     _install_v121_if_ready(app)
-    # v122 is presentation/control-plane only: it groups same-host logical Workers
-    # into one physical-device row and exposes slot creation/management without
-    # changing the existing Worker routing or per-extension capacity authorities.
     _install_v122_if_ready(app)
+    # v123 supersedes only the Linux physical-device presentation/provisioning
+    # surface. Worker routing, capacity and same-host slot authorities stay intact.
+    _install_v123_if_ready(app)
     return app
