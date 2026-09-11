@@ -173,7 +173,7 @@ def send_input(arguments: dict[str, Any]) -> dict[str, Any]:
             return _copy_selection()
         return {"ok": False, "error": "unsupported_clipboard_action"}
 
-    if kind == "mouse" and str(arguments.get("action") or "") in {"down", "up"}:
+    if kind == "mouse" and str(arguments.get("action") or "") in {"down", "move", "up"}:
         error = remote._check_session()
         if error:
             return error
@@ -185,7 +185,10 @@ def send_input(arguments: dict[str, Any]) -> dict[str, Any]:
             return {"ok": False, "error": "invalid_mouse_coordinates"}
         if button not in {1, 2, 3}:
             return {"ok": False, "error": "invalid_mouse_button"}
-        verb = "mousedown" if str(arguments.get("action")) == "down" else "mouseup"
+        action = str(arguments.get("action") or "")
+        if action == "move":
+            return remote._run_xdotool(["mousemove", str(x), str(y)])
+        verb = "mousedown" if action == "down" else "mouseup"
         return remote._run_xdotool(["mousemove", str(x), str(y), verb, str(button)])
 
     return remote.send_input(arguments)
