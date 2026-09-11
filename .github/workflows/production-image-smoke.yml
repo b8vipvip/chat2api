@@ -69,15 +69,17 @@ jobs:
           assert "linux_worker_extension_pair.py" in slot and "--pairing-code" in slot
           assert Path("/app/app/linux_worker_device_authority_v124_patch.py").is_file()
           assert Path("/app/app/admin_linux_device_authority_v124.js").is_file()
-          assert Path("/app/app/linux_worker_device_console_v122_patch.py").is_file()
-          assert Path("/app/app/linux_worker_console_v123_patch.py").is_file()
           presentation = Path("/app/app/worker_presentation_v64_patch.py").read_text()
+          authority = Path("/app/app/linux_worker_device_authority_v124_patch.py").read_text()
           assert "install_linux_worker_device_authority_v124_patch(app)" in presentation
+          assert "\"worker_enrollment\"," not in presentation
+          assert "worker_enrollment" not in authority
+          assert "linux_worker_installs.list_admin()" in authority
           assert "install_linux_worker_device_console_v122_patch" not in presentation
           assert "install_linux_worker_console_v123_patch" not in presentation
           print(json.dumps({"bundle_version": manifest["version"], "linux_device_authority_v124": True, "extension_autopair": True, "sha256": digest}))
           '
-      - name: Boot production ASGI entrypoint and verify health
+      - name: Boot production ASGI entrypoint and verify health and admin authority
         run: |
           set -euo pipefail
           cid="$(docker run -d -p 127.0.0.1:18765:8765 chat2api-production-smoke)"
@@ -88,12 +90,16 @@ jobs:
             sleep 1
           done
           [ "$ok" -eq 1 ] || { echo 'production ASGI entrypoint failed to become healthy' >&2; exit 1; }
+          curl -fsS http://127.0.0.1:18765/admin > /tmp/chat2api-admin.html
+          curl -fsS http://127.0.0.1:18765/assets/chat2api-linux-device-authority-v124.js > /tmp/chat2api-v124.js
+          linux_devices_status="$(curl -sS -o /tmp/chat2api-linux-devices.json -w '%{http_code}' http://127.0.0.1:18765/api/admin/linux-devices)"
+          [ "$linux_devices_status" = "401" ] || { echo "expected authenticated v124 route, got HTTP $linux_devices_status" >&2; cat /tmp/chat2api-linux-devices.json >&2; exit 1; }
           python - <<'PY'
-          import json
+          import json, re
           payload = json.load(open('/tmp/chat2api-version.json', encoding='utf-8'))
           assert payload['server']['runtime_aligned'] is True
           assert payload['server']['entrypoint'] == 'app.entry:app'
-          assert payload['server']['runtime_version'] == '0.22.79'
+          assert payload['server']['runtime_version'] == '0.22.80'
           assert payload['chrome_bridge']['bundle_version'] == '0.8.34'
           assert payload['chrome_bridge']['route_window_authority_revision'] == 30
           assert payload['chrome_bridge']['window_observer_revision'] == 90
@@ -107,5 +113,13 @@ jobs:
           assert payload['features']['same_api_parallel_requests'] is False
           assert payload['features']['browser_side_same_api_queue'] is False
           assert payload['features']['speculative_worker_windows'] is False
-          print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'linux_device_authority_v124': True}))
+
+          html = open('/tmp/chat2api-admin.html', encoding='utf-8').read()
+          assets = re.findall(r'<script[^>]+src=["\'](/assets/chat2api-linux-[^"\']+)["\']', html, re.I)
+          assert assets == ['/assets/chat2api-linux-device-authority-v124.js?v=124'], assets
+          v124 = open('/tmp/chat2api-v124.js', encoding='utf-8').read()
+          assert 'linuxDeviceTableV124' in v124
+          assert '新增设备' in v124
+          assert '管理设备 Worker' in v124
+          print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'linux_device_authority_v124': True, 'admin_linux_assets': assets}))
           PY

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from .worker_limits_clipboard_v121_patch import install_worker_limits_clipboard_
 
 PATCH_REVISION = 66
 ADMIN_ASSET = "/assets/chat2api-worker-presentation-v66.js"
+logger = logging.getLogger(__name__)
 
 
 class PairingNameUpdate(BaseModel):
@@ -38,7 +40,11 @@ def _install_v121_if_ready(app: FastAPI) -> None:
         install_worker_limits_clipboard_v121_patch(app)
 
 
-def _install_v124_if_ready(app: FastAPI) -> None:
+def _install_v124_if_ready(app: FastAPI) -> bool:
+    # These are the actual production stores created by v17/linux_worker_* before
+    # this final presentation patch. v0.22.79 accidentally required a nonexistent
+    # app.state.worker_enrollment object, so v124 was silently skipped and the old
+    # Linux Worker console remained visible even though /version advertised v124.
     required = (
         "registry",
         "pairings",
@@ -46,11 +52,14 @@ def _install_v124_if_ready(app: FastAPI) -> None:
         "linux_workers",
         "linux_worker_installs",
         "linux_worker_proxy_catalog",
-        "worker_enrollment",
         "send_linux_worker_command",
     )
-    if all(hasattr(app.state, name) for name in required):
-        install_linux_worker_device_authority_v124_patch(app)
+    missing = [name for name in required if not hasattr(app.state, name)]
+    if missing:
+        logger.warning("Linux device authority v124 not installed; missing state=%s", ",".join(missing))
+        return False
+    install_linux_worker_device_authority_v124_patch(app)
+    return True
 
 
 def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
@@ -122,7 +131,9 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
         if workers is not None:
             with workers._lock:
                 changed = False
-                for worker in workers._workers:
+                for worker in workers.data.get("workers", {}).values():
+                    if not isinstance(worker, dict):
+                        continue
                     metadata = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}
                     worker_pairing = metadata.get("worker_pairing") if isinstance(metadata.get("worker_pairing"), dict) else {}
                     worker_pairing_id = str(metadata.get("device_pairing_id") or worker_pairing.get("pairing_id") or "")
@@ -143,7 +154,7 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
         if installs is not None:
             with installs._lock:
                 changed = False
-                for install in installs.data.get("installations", []):
+                for install in installs.data.get("installs", {}).values():
                     if not isinstance(install, dict):
                         continue
                     metadata = install.get("metadata") if isinstance(install.get("metadata"), dict) else {}
