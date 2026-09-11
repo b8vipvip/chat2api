@@ -29,7 +29,13 @@ importScripts(
   "model_affinity_v23.js",
   "model_contract_v25.js",
 
-  // v0.8.30 request/window ownership boundary:
+  // Terminal reporting only. Register its tab/window removal listeners before
+  // the router listeners so it can snapshot an active request before the sole
+  // lifecycle authority clears route state for the removed browser object.
+  // This module still has no create/remove/mutation authority of its own.
+  "background_route_close_terminal_v91.js",
+
+  // v0.8.31 request/window ownership boundary:
   // conversation_routing.js is the only authority allowed to select, create,
   // reuse, rotate, retire, or idle-close API route windows. There is no warm,
   // reserve, tab-supervisor, browser FIFO, quarantine, or window-manager owner.

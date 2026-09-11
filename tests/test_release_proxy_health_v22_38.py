@@ -46,14 +46,14 @@ def test_release_versions_are_explicit_and_consistent() -> None:
     contract71 = read("chrome_extension/content_runtime_contract_v71.js")
     package = read("app/__init__.py")
     project = read("pyproject.toml")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.74"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.30"' in runtime
-    assert manifest["version"] == "0.8.30"
-    assert 'bundle: "0.8.30"' in marker
-    assert 'bundle: "0.8.30"' in marker71
-    assert 'REQUIRED_BUNDLE = "0.8.30"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.30"' in contract
-    assert 'REQUIRED_BUNDLE = "0.8.30"' in contract71
+    assert 'SERVER_RUNTIME_VERSION = "0.22.75"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.31"' in runtime
+    assert manifest["version"] == "0.8.31"
+    assert 'bundle: "0.8.31"' in marker
+    assert 'bundle: "0.8.31"' in marker71
+    assert 'REQUIRED_BUNDLE = "0.8.31"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.31"' in contract
+    assert 'REQUIRED_BUNDLE = "0.8.31"' in contract71
     assert '__version__ = "0.7.1"' in package
     assert 'version = "0.7.1"' in project
 
@@ -74,6 +74,7 @@ def test_release_versions_are_explicit_and_consistent() -> None:
         '"linux_worker_proxy_health_facets": True',
         '"active_rate_limit_terminal_error": True',
         '"routed_dispatch_terminal_error": True',
+        '"unexpected_route_close_terminal_v91": True',
         '"admin_single_render_owner": True',
         '"worker_disabled_window_guard_v86": True',
         '"successful_route_preservation_v86": True',

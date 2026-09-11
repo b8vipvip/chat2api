@@ -52,7 +52,7 @@ def test_legacy_v83_compaction_is_not_loaded_and_v90_observer_is_read_only() -> 
 
 def test_physical_window_truth_runtime_and_worker_bundle_contract() -> None:
     assert SERVER_RUNTIME_VERSION
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.30"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.31"
     manifest = json.loads(text("chrome_extension/manifest.json"))
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     runtime = text("app/runtime_contract.py")

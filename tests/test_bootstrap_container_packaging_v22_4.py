@@ -31,10 +31,11 @@ def test_bootstrap_packaging_feature_remains_available_after_v22_4():
 
     version_line = next(line for line in runtime.splitlines() if line.startswith("SERVER_RUNTIME_VERSION = "))
     version = version_line.split('"', 2)[1]
-    assert tuple(map(int, version.split("."))) >= (0, 22, 74)
+    assert tuple(map(int, version.split("."))) >= (0, 22, 75)
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.30"' in runtime
-    assert '"version": "0.8.30"' in manifest
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.31"' in runtime
+    assert '"version": "0.8.31"' in manifest
     assert '"conversation_routing.js"' in entry
     assert '"conversation_dispatch.js"' in entry
+    assert '"background_route_close_terminal_v91.js"' in entry
     assert '"background_window_observer_v90.js"' in entry

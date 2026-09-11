@@ -51,7 +51,7 @@ def test_legacy_route_quarantine_source_is_not_a_production_owner() -> None:
 def test_runtime_preflight_has_current_bundle_fast_path_before_heal() -> None:
     source = text("chrome_extension/background_runtime_preflight_v48.js")
     preflight = source[source.index("async function preflight"):]
-    assert 'REQUIRED_BUNDLE = "0.8.30"' in source
+    assert 'REQUIRED_BUNDLE = "0.8.31"' in source
     assert "fast_path_hits" in source
     assert "CONTRACT_TIMEOUT_MS = 700" in source
     assert "HOT_HEAL_BUDGET_MS = 2400" in source
@@ -102,8 +102,8 @@ def test_modified_v86_javascript_parses() -> None:
 
 def test_worker_lifecycle_runtime_contract_and_worker_bundle_are_aligned() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert SERVER_RUNTIME_VERSION == "0.22.74"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.30"
+    assert SERVER_RUNTIME_VERSION == "0.22.75"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.31"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     for path in [
         "chrome_extension/content_bundle_marker_v48.js",
