@@ -2,10 +2,24 @@
 set -Eeuo pipefail
 
 MODE="${1:---schedule}"
-CONFIG="${CHAT2API_WORKER_CONFIG:-/etc/chat2api-worker/worker.json}"
-STATE_DIR="${CHAT2API_WORKER_STATE_DIR:-/var/lib/chat2api-worker}"
+HELPER_NAME="$(basename -- "$0")"
+if [[ "$HELPER_NAME" =~ ^chat2api-worker-upgrade-slot([0-9]+)$ ]]; then
+  SLOT="${BASH_REMATCH[1]}"
+  if (( SLOT < 2 || SLOT > 32 )); then
+    echo '{"ok":false,"error":"invalid_worker_slot"}'
+    exit 2
+  fi
+  CONFIG="/etc/chat2api-worker/slot${SLOT}/worker.json"
+  STATE_DIR="/var/lib/chat2api-worker/slot${SLOT}"
+else
+  CONFIG="${CHAT2API_WORKER_CONFIG:-/etc/chat2api-worker/worker.json}"
+  STATE_DIR="${CHAT2API_WORKER_STATE_DIR:-/var/lib/chat2api-worker}"
+fi
 STATE_FILE="${STATE_DIR}/upgrade-state.json"
 LOG_FILE="${STATE_DIR}/upgrade.log"
+# One physical host owns one shared /opt/chat2api-worker runtime. Keep one lock
+# across primary and slot-specific helper names so it cannot be replaced twice
+# concurrently by different logical Workers on that host.
 LOCK_FILE="/run/chat2api-worker-upgrade.lock"
 
 log() {
@@ -76,20 +90,50 @@ stage_percent() {
     enrollment) echo 74;;
     systemd) echo 84;;
     health) echo 94;;
+    shared-slots) echo 98;;
     complete) echo 100;;
     *) echo 5;;
   esac
 }
 
+restart_same_host_slots() {
+  local unit
+  local -a chrome_units=() agent_units=()
+  mapfile -t chrome_units < <(
+    systemctl list-unit-files --type=service --no-legend 'chat2api-chrome-slot*.service' 2>/dev/null \
+      | awk '{print $1}' | sort -u
+  )
+  mapfile -t agent_units < <(
+    systemctl list-unit-files --type=service --no-legend 'chat2api-worker-agent-slot*.service' 2>/dev/null \
+      | awk '{print $1}' | sort -u
+  )
+
+  # Chrome must reload the new unpacked extension source; Agent must reload the
+  # new shared Python runtime. Xray/Xvfb keep their slot-local state and do not
+  # need a disruptive restart for a normal bundle update.
+  for unit in "${chrome_units[@]}"; do
+    [[ -n "$unit" ]] || continue
+    if ! systemctl restart "$unit" >/dev/null 2>&1; then
+      log "warning: failed to restart same-host Chrome unit $unit"
+    fi
+  done
+  for unit in "${agent_units[@]}"; do
+    [[ -n "$unit" ]] || continue
+    if ! systemctl restart "$unit" >/dev/null 2>&1; then
+      log "warning: failed to restart same-host Agent unit $unit"
+    fi
+  done
+}
+
 run_upgrade() {
   exec 9>"$LOCK_FILE"
   if ! flock -n 9; then
-    report running queued 1 "已有 Worker 更新任务正在执行"
+    report running queued 1 "已有同机 Worker 更新任务正在执行"
     return 0
   fi
 
   # The request arrives through the Agent. Give it time to return command.result
-  # before bootstrap restarts chat2api-worker-agent.service.
+  # before bootstrap restarts the primary chat2api-worker-agent.service.
   sleep 2
   install -d -m 0755 "$STATE_DIR"
   : >"$LOG_FILE"
@@ -137,7 +181,9 @@ run_upgrade() {
     return "$rc"
   fi
 
-  report succeeded complete 100 "Worker 已更新到中心服务器当前版本"
+  report running shared-slots 98 "共享 Worker 运行时已更新，正在重启同机隔离 Slot"
+  restart_same_host_slots
+  report succeeded complete 100 "Worker 及同机隔离 Slot 已更新到中心服务器当前版本"
   log "online upgrade completed successfully"
   trap - EXIT
   rm -f "$bootstrap"
@@ -161,7 +207,7 @@ case "$MODE" in
       printf '{"ok":true,"scheduled":true,"already_running":true,"unit":"existing"}\n'
       exit 0
     fi
-    systemd-run --quiet --collect --no-block --unit="$unit" /usr/local/sbin/chat2api-worker-upgrade --run
+    systemd-run --quiet --collect --no-block --unit="$unit" "$0" --run
     printf '{"ok":true,"scheduled":true,"unit":"%s"}\n' "$unit"
     ;;
   --run)
