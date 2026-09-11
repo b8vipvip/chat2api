@@ -67,6 +67,7 @@ jobs:
           assert "\"conversation_dispatch.js\"" in entry
           assert "\"background_route_close_terminal_v91.js\"" in entry
           assert "\"background_window_observer_v90.js\"" in entry
+          assert entry.index("\"background_route_close_terminal_v91.js\"") < entry.index("\"conversation_routing.js\"") < entry.index("\"conversation_dispatch.js\"")
           retired = (
               "conversation_warm_pool_v2.js", "background_external_warm_v28.js",
               "background_reserve_pool_v29.js", "background_tab_supervisor_v32.js",
