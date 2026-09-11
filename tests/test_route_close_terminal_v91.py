@@ -12,13 +12,13 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_v91_terminal_reporter_is_loaded_after_route_and_transport_owners() -> None:
+def test_v91_terminal_reporter_registers_before_router_cleanup_listeners() -> None:
     entry = text("chrome_extension/background_entry.js")
     router = entry.index('"conversation_routing.js"')
     dispatch = entry.index('"conversation_dispatch.js"')
     terminal = entry.index('"background_route_close_terminal_v91.js"')
     observer = entry.index('"background_window_observer_v90.js"')
-    assert router < dispatch < terminal < observer
+    assert terminal < router < dispatch < observer
     assert '"background_request_recovery_v40.js"' not in entry
 
 
