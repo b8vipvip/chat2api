@@ -138,21 +138,22 @@ def test_v57_rate_limit_behavior_remains_available_to_v58() -> None:
     assert 'type: "chat.error"' in content
 
 
-def test_release_contract_is_v02274_and_worker_bundle_0830() -> None:
+def test_release_contract_is_v02275_and_worker_bundle_0831() -> None:
     runtime = read("app/runtime_contract.py")
     manifest = read("chrome_extension/manifest.json")
     marker = read("chrome_extension/content_bundle_marker_v48.js")
     preflight = read("chrome_extension/background_runtime_preflight_v48.js")
     contract = read("chrome_extension/content_runtime_contract_v48.js")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.74"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.30"' in runtime
-    assert '"version": "0.8.30"' in manifest
-    assert 'bundle: "0.8.30"' in marker
-    assert 'REQUIRED_BUNDLE = "0.8.30"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.8.30"' in contract
+    assert 'SERVER_RUNTIME_VERSION = "0.22.75"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.31"' in runtime
+    assert '"version": "0.8.31"' in manifest
+    assert 'bundle: "0.8.31"' in marker
+    assert 'REQUIRED_BUNDLE = "0.8.31"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.31"' in contract
     assert '"capacity_scheduler_v58": True' in runtime
     assert '"worker_single_route_authority_v30": True' in runtime
     assert '"window_observer_v90": True' in runtime
+    assert '"unexpected_route_close_terminal_v91": True' in runtime
 
 
 def test_capacity_and_runtime_javascript_parse() -> None:
@@ -162,6 +163,7 @@ def test_capacity_and_runtime_javascript_parse() -> None:
         "chrome_extension/background_worker_disabled_window_guard_v86.js",
         "chrome_extension/background_worker_master_switch_v61.js",
         "chrome_extension/background_runtime_preflight_v48.js",
+        "chrome_extension/background_route_close_terminal_v91.js",
         "chrome_extension/content_runtime_contract_v48.js",
         "chrome_extension/content_runtime_contract_v71.js",
         "chrome_extension/conversation_routing.js",
