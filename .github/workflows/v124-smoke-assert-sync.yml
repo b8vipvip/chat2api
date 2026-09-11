@@ -19,7 +19,7 @@ jobs:
           p=Path('.github/workflows/production-image-smoke.yml')
           t=p.read_text(encoding='utf-8')
           old='          assert "worker_enrollment" not in presentation\n'
-          new='          assert '\''"worker_enrollment",'\'' not in presentation\n'
+          new="          assert '\"worker_enrollment\",' not in presentation\n"
           assert t.count(old)==1
           p.write_text(t.replace(old,new,1),encoding='utf-8')
           PY
