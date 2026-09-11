@@ -3,9 +3,7 @@
   if (globalThis[KEY]) return;
 
   const ROUTER_KEY = "__CHAT2API_CONVERSATION_ROUTING_V1__";
-  const ROUTE_STORAGE_KEY = "chat2apiConversationRoutesV1";
   const LIMIT_STORAGE_KEY = "chat2apiRoutedWindowLimitV121";
-  const ROUTE_ALARM_PREFIX = "chat2api-route-close:";
   const TERMINAL_TYPES = new Set([
     "chat.completed", "chat.error", "chat.cancelled",
     "image.completed", "image.error", "image.cancelled",
@@ -14,7 +12,7 @@
 
   const state = {
     version: 121,
-    revision: 2,
+    revision: 3,
     limit: null,
     source: "unset",
     loaded: false,
@@ -106,47 +104,16 @@
     return active;
   }
 
-  async function persistRoutes(value) {
-    await chrome.storage.local.set({ [ROUTE_STORAGE_KEY]: value.routes }).catch(() => {});
-  }
-
-  function resetIdleRoute(route, windowId, reason) {
-    // The router's chrome.windows.onRemoved listener can win the race with this
-    // guard. If it already cleared the exact window, it is the lifecycle owner
-    // and we must not increment generation a second time.
-    if (Number(route?.window_id) !== Number(windowId)) return false;
-    const hadSession = Boolean(
-      route.conversation_id || route.conversation_url || Number(route.turn_count || 0) ||
-      Number(route.text_chars || 0) || Number(route.attachment_count || 0) ||
-      Number.isInteger(route.tab_id) || Number.isInteger(route.window_id)
-    );
-    route.conversation_id = null;
-    route.conversation_url = null;
-    route.turn_count = 0;
-    route.text_chars = 0;
-    route.attachment_count = 0;
-    route.slow_load_strikes = 0;
-    route.last_open_ms = null;
-    route.tab_id = null;
-    route.window_id = null;
-    route.inflight_request_id = null;
-    route.close_after = null;
-    route.last_active_at = Date.now();
-    if (hadSession) {
-      route.generation = Number(route.generation || 1) + 1;
-      route.last_rotation_reason = reason || "worker-window-limit-evicted";
-    }
-    return true;
-  }
-
   async function closeIdleEntry(value, entry, reason) {
     const route = entry?.route;
     const windowId = Number(route?.window_id);
     if (!route || !Number.isInteger(windowId) || route.inflight_request_id) return false;
-    try { await chrome.alarms.clear(`${ROUTE_ALARM_PREFIX}${windowId}`); } catch (_) {}
-    try { await chrome.windows.remove(windowId); } catch (_) {}
-    resetIdleRoute(route, windowId, reason);
-    return true;
+    // v121 owns only admission/cap policy. Delegate the actual route reset,
+    // alarm cleanup, persistence and chrome.windows.remove to the router's
+    // existing lifecycle authority so one eviction has exactly one generation
+    // transition and onRemoved cannot race a second reset.
+    if (typeof value.retireRoute !== "function") return false;
+    return Boolean(await value.retireRoute(entry.key, route, "", reason));
   }
 
   async function reconcile(reason = "scheduled") {
@@ -182,7 +149,6 @@
       if (closed >= excess) break;
       if (await closeIdleEntry(value, entry, "worker-window-limit-reconcile")) closed += 1;
     }
-    if (closed) await persistRoutes(value);
     state.lastResult = {
       ok: true,
       reason,
@@ -249,7 +215,6 @@
           error.retry_after_ms = 350;
           throw error;
         }
-        await persistRoutes(value);
         byWindow = windowsById(value);
       }
       if (byWindow.size + state.reservations.size >= limit) {
