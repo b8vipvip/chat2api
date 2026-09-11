@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from .admin_auth import SESSION_COOKIE
 from .worker_limits_clipboard_v121_patch import install_worker_limits_clipboard_v121_patch
+from .linux_worker_device_console_v122_patch import install_linux_worker_device_console_v122_patch
 
 
 PATCH_REVISION = 66
@@ -43,6 +44,16 @@ def _install_v121_if_ready(app: FastAPI) -> None:
         install_worker_limits_clipboard_v121_patch(app)
 
 
+def _install_v122_if_ready(app: FastAPI) -> None:
+    required = (
+        "linux_workers",
+        "linux_worker_installs",
+        "admin_sessions",
+    )
+    if all(hasattr(app.state, name) for name in required):
+        install_linux_worker_device_console_v122_patch(app)
+
+
 def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
     """Expose Worker presentation data with a bounded passive console enhancer.
 
@@ -54,9 +65,10 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
     from starving the admin console while preserving the presentation features.
     """
     if getattr(app.state, "worker_presentation_v66_installed", False):
-        # The v121 layer is independently idempotent; calling it here also makes
-        # hot-reload/test app factories converge once the full Worker plane exists.
+        # The v121/v122 layers are independently idempotent; calling them here also
+        # makes hot-reload/test app factories converge once the full Worker plane exists.
         _install_v121_if_ready(app)
+        _install_v122_if_ready(app)
         return app
     app.state.worker_presentation_v66_installed = True
 
@@ -146,4 +158,8 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
     # here keeps app.entry ordering stable while guaranteeing that it wraps the
     # already-decorated v66 registry summaries and is injected after v66 assets.
     _install_v121_if_ready(app)
+    # v122 is presentation/control-plane only: it groups same-host logical Workers
+    # into one physical-device row and exposes slot creation/management without
+    # changing the existing Worker routing or per-extension capacity authorities.
+    _install_v122_if_ready(app)
     return app
