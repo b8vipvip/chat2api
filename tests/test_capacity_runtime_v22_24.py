@@ -9,11 +9,11 @@ from fastapi import FastAPI
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_bridge_0830_busts_mv3_script_cache_without_touching_login_state():
+def test_bridge_0831_busts_mv3_script_cache_without_touching_login_state():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     launcher = (ROOT / "scripts" / "linux_worker_chrome_launcher.sh").read_text(encoding="utf-8")
 
-    assert manifest["version"] == "0.8.30"
+    assert manifest["version"] == "0.8.31"
     assert 'Default/Service Worker/ScriptCache' in launcher
     assert 'Default/Code Cache/js' in launcher
     assert '--disable-extensions-except="$EXTENSION_DIR"' in launcher
@@ -38,17 +38,19 @@ def test_capacity_controller_vm_contracts_cover_native_and_reporter_paths():
         assert result.returncode == 0, f"{script}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
 
-def test_runtime_contract_publishes_single_authority_v02274():
-    assert SERVER_RUNTIME_VERSION == "0.22.74"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.30"
+def test_runtime_contract_publishes_single_authority_v02275():
+    assert SERVER_RUNTIME_VERSION == "0.22.75"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.31"
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["chrome_bridge"]["version"] == "0.8.1"
-    assert payload["chrome_bridge"]["bundle_version"] == "0.8.30"
+    assert payload["chrome_bridge"]["bundle_version"] == "0.8.31"
     assert payload["chrome_bridge"]["route_window_authority_revision"] == 30
     assert payload["chrome_bridge"]["window_observer_revision"] == 90
+    assert payload["chrome_bridge"]["route_close_terminal_revision"] == 91
     assert payload["features"]["capacity_scheduler_v58"] is True
     assert payload["features"]["server_side_same_api_fifo_v58"] is True
     assert payload["features"]["worker_single_route_authority_v30"] is True
+    assert payload["features"]["unexpected_route_close_terminal_v91"] is True
     assert payload["features"]["window_observer_v90"] is True
     assert payload["features"]["same_api_parallel_requests"] is False
     assert payload["features"]["browser_side_same_api_queue"] is False
@@ -80,4 +82,5 @@ def test_runtime_contract_publishes_single_authority_v02274():
     assert "capacity-scheduler-v58" in revision
     assert "single-route-window-authority-v30" in revision
     assert "window-observer-v90" in revision
-    assert "release-v02274" in revision
+    assert "route-close-terminal-v91" in revision
+    assert "release-v02275" in revision
