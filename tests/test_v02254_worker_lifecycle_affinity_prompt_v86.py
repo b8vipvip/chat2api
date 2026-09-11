@@ -102,7 +102,7 @@ def test_modified_v86_javascript_parses() -> None:
 
 def test_worker_lifecycle_runtime_contract_and_worker_bundle_are_aligned() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert SERVER_RUNTIME_VERSION == "0.22.76"
+    assert SERVER_RUNTIME_VERSION == "0.22.77"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.32"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     for path in [
@@ -116,4 +116,5 @@ def test_worker_lifecycle_runtime_contract_and_worker_bundle_are_aligned() -> No
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["features"]["worker_disabled_window_guard_v86"] is True
     assert payload["features"]["worker_single_route_authority_v30"] is True
+    assert payload["features"]["linux_worker_device_console_v122"] is True
     assert payload["features"]["speculative_worker_windows"] is False
