@@ -72,7 +72,7 @@ jobs:
           presentation = Path("/app/app/worker_presentation_v64_patch.py").read_text()
           authority = Path("/app/app/linux_worker_device_authority_v124_patch.py").read_text()
           assert "install_linux_worker_device_authority_v124_patch(app)" in presentation
-          assert '"worker_enrollment",' not in presentation
+          assert "\"worker_enrollment\"," not in presentation
           assert "worker_enrollment" not in authority
           assert "linux_worker_installs.list_admin()" in authority
           assert "install_linux_worker_device_console_v122_patch" not in presentation
