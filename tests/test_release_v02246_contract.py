@@ -65,7 +65,10 @@ def test_v02275_runtime_contract_advertises_only_active_authorities() -> None:
     assert features["worker_single_route_authority_v30"] is True
     assert features["unexpected_route_close_terminal_v91"] is True
     assert features["window_observer_v90"] is True
-    assert features["linux_worker_device_console_v122"] is True
+    assert features["linux_worker_device_console_v122"] is False
+    assert features["linux_worker_console_v123"] is False
+    assert features["linux_worker_device_authority_v124"] is True
+    assert features["linux_worker_extension_autopair_v124"] is True
     assert features["same_api_parallel_requests"] is False
     assert features["browser_side_same_api_queue"] is False
     assert features["speculative_worker_windows"] is False

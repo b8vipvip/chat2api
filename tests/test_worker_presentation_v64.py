@@ -150,4 +150,6 @@ def test_old_v65_asset_is_not_referenced_by_server_patch():
     assert "admin_worker_presentation_v65.js" not in source
     assert "/assets/chat2api-worker-presentation-v65.js" not in source
     assert "admin_worker_presentation_v66.js" in source
-    assert "autonomous MutationObservers" in source
+    assert "install_linux_worker_device_authority_v124_patch(app)" in source
+    assert "install_linux_worker_device_console_v122_patch" not in source
+    assert "install_linux_worker_console_v123_patch" not in source
