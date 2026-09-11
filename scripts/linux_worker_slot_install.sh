@@ -22,11 +22,13 @@ done
 (( SLOT >= 2 && SLOT <= 32 )) || { echo "--slot must be between 2 and 32" >&2; exit 2; }
 [[ -n "$ENROLL_CODE" ]] || { echo "--enroll-code is required" >&2; exit 2; }
 [[ "$SERVER" == https://* || "${CHAT2API_ALLOW_INSECURE_HTTP:-0}" == "1" ]] || { echo "Server must use HTTPS" >&2; exit 2; }
-[[ -d "$WORKER_DIR/chrome_extension" && -f "$WORKER_DIR/scripts/linux_worker_agent.py" ]] || {
+[[ -d "$WORKER_DIR/chrome_extension" && -f "$WORKER_DIR/scripts/linux_worker_agent_v44.py" ]] || {
   echo "Primary chat2api Worker must be installed/upgraded before adding another slot" >&2; exit 1;
 }
 [[ -x "$VENV_DIR/bin/python" ]] || { echo "Primary Worker Python environment is missing" >&2; exit 1; }
 [[ -x /home/chat2api/.cache/chat2api-chrome-for-testing/chrome ]] || { echo "Primary Worker Chrome for Testing is not ready" >&2; exit 1; }
+[[ -x /usr/local/sbin/chat2api-worker-proxy-apply ]] || { echo "Primary Worker proxy helper is missing; upgrade/repair slot 1 first" >&2; exit 1; }
+[[ -x /usr/local/sbin/chat2api-worker-upgrade ]] || { echo "Primary Worker online-upgrade helper is missing; upgrade/repair slot 1 first" >&2; exit 1; }
 
 INSTANCE="slot${SLOT}"
 CONFIG_DIR="/etc/chat2api-worker/${INSTANCE}"
@@ -42,6 +44,7 @@ AGENT_UNIT="chat2api-worker-agent-${INSTANCE}.service"
 WATCHDOG_UNIT="chat2api-worker-watchdog-${INSTANCE}"
 AUTORELOAD_UNIT="chat2api-extension-autoreload-${INSTANCE}"
 PROXY_HELPER="/usr/local/sbin/chat2api-worker-proxy-apply-${INSTANCE}"
+UPGRADE_HELPER="/usr/local/sbin/chat2api-worker-upgrade-${INSTANCE}"
 SUDOERS_FILE="/etc/sudoers.d/chat2api-worker-${INSTANCE}"
 ENV_FILE="/etc/default/chat2api-worker-${INSTANCE}"
 
@@ -69,7 +72,7 @@ chown root:chat2api "$CONFIG_DIR/xray.json"
 chmod 640 "$CONFIG_DIR/xray.json"
 
 if [[ ! -s "$CONFIG_DIR/worker.json" ]]; then
-  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$(. /etc/os-release; printf '%s' "${PRETTY_NAME:-Linux}")" --arg slot "$INSTANCE" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.4",worker_slot:$slot}')"
+  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$(. /etc/os-release; printf '%s' "${PRETTY_NAME:-Linux}")" --arg slot "$INSTANCE" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.6",worker_slot:$slot}')"
   response="$(mktemp)"
   trap 'rm -f "${response:-}"' EXIT
   printf '%s' "$payload" | curl -fsSL --retry 3 --retry-all-errors -H 'Content-Type: application/json' --data-binary @- -o "$response" "$SERVER/api/workers/enroll"
@@ -80,28 +83,12 @@ if [[ ! -s "$CONFIG_DIR/worker.json" ]]; then
 fi
 jq -e 'type == "object" and (.worker_id|type=="string" and length>0) and (.worker_token|type=="string" and length>0) and (.websocket_url|type=="string" and length>0)' "$CONFIG_DIR/worker.json" >/dev/null
 
-# Produce a root-owned helper whose paths/units are fixed to this slot. The
-# unprivileged agent cannot redirect privileged writes through environment data.
-python3 - "$WORKER_DIR/scripts/linux_worker_proxy_apply.sh" "$PROXY_HELPER" "$CONFIG_DIR" "$XRAY_UNIT" "$CHROME_UNIT" "$PROXY_PORT" <<'PY'
-from pathlib import Path
-import sys
-src, dst, config_dir, xray_unit, chrome_unit, proxy_port = sys.argv[1:]
-text = Path(src).read_text(encoding="utf-8")
-replacements = {
-    'XRAY_CONFIG="/etc/chat2api-worker/xray.json"': f'XRAY_CONFIG="{config_dir}/xray.json"',
-    'XRAY_UNIT="chat2api-xray.service"': f'XRAY_UNIT="{xray_unit}"',
-    'CHROME_UNIT="chat2api-chrome.service"': f'CHROME_UNIT="{chrome_unit}"',
-    'PROXY_PORT="10808"': f'PROXY_PORT="{proxy_port}"',
-    'WORKSPACE_PARENT="/etc/chat2api-worker"': f'WORKSPACE_PARENT="{config_dir}"',
-}
-for old, new in replacements.items():
-    if old not in text:
-        raise SystemExit(f"proxy helper template contract changed: {old}")
-    text = text.replace(old, new, 1)
-Path(dst).write_text(text, encoding="utf-8")
-PY
-chown root:root "$PROXY_HELPER"
-chmod 755 "$PROXY_HELPER"
+# Root-owned helper aliases carry the validated slot in argv[0]. The canonical
+# helpers derive only fixed slot paths/units/ports from that basename; the
+# unprivileged Agent cannot redirect privileged writes with arguments or env.
+ln -sfn /usr/local/sbin/chat2api-worker-proxy-apply "$PROXY_HELPER"
+ln -sfn /usr/local/sbin/chat2api-worker-upgrade "$UPGRADE_HELPER"
+chown -h root:root "$PROXY_HELPER" "$UPGRADE_HELPER"
 
 cat >"/etc/systemd/system/$XRAY_UNIT" <<UNIT
 [Unit]
@@ -157,7 +144,9 @@ Environment=CHAT2API_WORKER_SLOT=${SLOT}
 Environment=CHAT2API_WORKER_CONFIG=${CONFIG_DIR}/worker.json
 Environment=CHAT2API_XRAY_CONFIG=${CONFIG_DIR}/xray.json
 Environment=CHAT2API_PROXY_APPLY_HELPER=${PROXY_HELPER}
+Environment=CHAT2API_UPGRADE_HELPER=${UPGRADE_HELPER}
 Environment=CHAT2API_PROXY_PORT=${PROXY_PORT}
+Environment=CHAT2API_GENERATION_HEALTH_FILE=${STATE_DIR}/generation-backend-health.json
 Environment=CHAT2API_LOGIN_DISPLAY=:${DISPLAY_NUM}
 Environment=CHAT2API_LOGIN_CHROME_PROFILE=${PROFILE_DIR}
 Environment=CHAT2API_LOGIN_CHROME_DEBUG_URL=http://127.0.0.1:${CDP_PORT}
@@ -216,7 +205,7 @@ WantedBy=timers.target
 UNIT
 
 cat >"$SUDOERS_FILE" <<SUDO
-chat2api ALL=(root) NOPASSWD: /bin/systemctl restart ${CHROME_UNIT}, /bin/systemctl restart ${XRAY_UNIT}, /bin/systemctl restart ${XVFB_UNIT}, ${PROXY_HELPER}
+chat2api ALL=(root) NOPASSWD: /bin/systemctl restart ${CHROME_UNIT}, /bin/systemctl restart ${XRAY_UNIT}, /bin/systemctl restart ${XVFB_UNIT}, ${PROXY_HELPER}, ${UPGRADE_HELPER}
 SUDO
 chmod 440 "$SUDOERS_FILE"
 visudo -cf "$SUDOERS_FILE" >/dev/null
