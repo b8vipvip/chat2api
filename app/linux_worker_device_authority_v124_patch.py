@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import Response
 
 from .admin_auth import SESSION_COOKIE
 
@@ -373,13 +373,13 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
                 _delete_install(app.state.linux_worker_installs, install_id)
         return {"deleted": True, "device_id": device_id, "workers_deleted": worker_ids, "installations_deleted": install_ids}
 
-    @app.get("/api/admin/linux-devices/legacy-records")
+    @app.get("/api/admin/linux-legacy-records")
     async def list_legacy_linux_records(request: Request) -> dict[str, Any]:
         admin(request)
         snapshot = _legacy_snapshot(app)
         return {**snapshot, "worker_count": len(snapshot["workers"]), "installation_count": len(snapshot["installations"])}
 
-    @app.delete("/api/admin/linux-devices/legacy-records")
+    @app.delete("/api/admin/linux-legacy-records")
     async def purge_legacy_linux_records(request: Request) -> dict[str, Any]:
         admin(request)
         body = await request.json()
