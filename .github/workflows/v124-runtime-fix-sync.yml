@@ -23,6 +23,18 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
+          authority = Path('app/linux_worker_device_authority_v124_patch.py')
+          source = authority.read_text(encoding='utf-8')
+          old_line = '        html = LEGACY_LINUX_ASSET_RE.sub("", html)\n'
+          comment = (
+              '        # Historical Linux console scripts are removed instead of hidden so they\n'
+              '        # cannot poll, render, relay actions, or make device decisions.\n'
+          )
+          assert source.count(old_line) == 1
+          if 'cannot poll, render, relay actions, or make device decisions' not in source:
+              source = source.replace(old_line, comment + old_line, 1)
+          authority.write_text(source, encoding='utf-8')
+
           runtime = Path('app/runtime_contract.py')
           text = runtime.read_text(encoding='utf-8')
           old = '''SERVER_RUNTIME_VERSION = "0.22.79"
@@ -58,6 +70,6 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add app/runtime_contract.py tests
+          git add app/runtime_contract.py app/linux_worker_device_authority_v124_patch.py tests
           git commit -m 'release: bump v124 runtime activation fix to 0.22.80'
           git push origin HEAD:fix/linux-device-v124-runtime-install-20260911
