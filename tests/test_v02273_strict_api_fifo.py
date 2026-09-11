@@ -66,8 +66,8 @@ def test_worker_bundle_and_runtime_are_v02275_and_0831() -> None:
 
 def test_background_entry_has_one_request_route_authority_and_no_browser_fifo() -> None:
     source = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
+    assert source.index('"background_route_close_terminal_v91.js"') < source.index('"conversation_routing.js"')
     assert source.index('"conversation_routing.js"') < source.index('"conversation_dispatch.js"')
-    assert source.index('"conversation_dispatch.js"') < source.index('"background_route_close_terminal_v91.js"')
     assert '"background_window_observer_v90.js"' in source
     for retired in (
         "conversation_warm_pool_v2.js",
