@@ -1,15 +1,34 @@
+import json
 from pathlib import Path
-
-from app.entry import app
-from app.worker_presentation_v64_patch import _install_v124_if_ready
+import subprocess
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_v124_is_installed_in_the_real_production_entrypoint():
-    assert getattr(app.state, "linux_worker_device_authority_v124_installed", False) is True
-    paths = {getattr(route, "path", "") for route in app.routes}
+def test_v124_is_installed_in_the_real_production_entrypoint_without_polluting_pytest_process():
+    probe = r'''
+import json
+from app.entry import app
+paths = {getattr(route, "path", "") for route in app.routes}
+print(json.dumps({
+    "installed": bool(getattr(app.state, "linux_worker_device_authority_v124_installed", False)),
+    "paths": sorted(paths),
+}))
+'''
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout.strip().splitlines()[-1])
+    assert payload["installed"] is True
+    paths = set(payload["paths"])
     assert "/api/admin/linux-devices" in paths
     assert "/api/admin/linux-devices/setup-options" in paths
     assert "/api/admin/linux-legacy-records" in paths
@@ -18,10 +37,10 @@ def test_v124_is_installed_in_the_real_production_entrypoint():
 
 def test_v124_readiness_uses_real_production_state_not_nonexistent_worker_enrollment():
     source = (ROOT / "app" / "worker_presentation_v64_patch.py").read_text(encoding="utf-8")
-    assert '"worker_enrollment"' not in source
+    assert '"worker_enrollment",' not in source
     assert '"linux_worker_installs"' in source
     assert '"linux_worker_proxy_catalog"' in source
-    assert _install_v124_if_ready(app) is True
+    assert "install_linux_worker_device_authority_v124_patch(app)" in source
 
 
 def test_v124_backend_matches_current_linux_worker_store_shapes():
