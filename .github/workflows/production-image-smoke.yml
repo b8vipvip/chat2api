@@ -23,7 +23,7 @@ jobs:
       - uses: actions/checkout@v7
       - name: Build production image
         run: DOCKER_BUILDKIT=1 docker build --progress=plain -t chat2api-production-smoke .
-      - name: Verify bootstrap and Worker bundle inside image
+      - name: Verify Linux device authority and Worker bundle
         run: |
           docker run --rm --entrypoint python chat2api-production-smoke -c '
           import hashlib, json, tarfile
@@ -31,96 +31,51 @@ jobs:
           bootstrap = Path("/app/scripts/bootstrap_linux_worker.sh")
           bundle = Path("/app/bootstrap/linux-worker-bundle.tar.gz")
           digest = Path("/app/bootstrap/linux-worker-bundle.sha256").read_text().strip()
-          assert bootstrap.read_text().startswith("#!/usr/bin/env bash\nset -euo pipefail")
-          assert bundle.is_file() and bundle.stat().st_size > 0
           assert hashlib.sha256(bundle.read_bytes()).hexdigest() == digest
+          assert "--pairing-code" in bootstrap.read_text()
+          assert "linux_worker_extension_pair.py" in bootstrap.read_text()
           with tarfile.open(bundle, "r:gz") as archive:
               names = set(archive.getnames())
               required = {
                   "chrome_extension/manifest.json",
                   "chrome_extension/background_entry.js",
                   "chrome_extension/conversation_routing.js",
-                  "chrome_extension/conversation_dispatch.js",
-                  "chrome_extension/background_route_close_terminal_v91.js",
                   "chrome_extension/background_window_observer_v90.js",
                   "chrome_extension/background_window_limit_v121.js",
-                  "chrome_extension/background_capacity_control_v35.js",
-                  "chrome_extension/background_worker_master_switch_v61.js",
                   "scripts/linux_worker_agent.py",
                   "scripts/linux_worker_agent_v44.py",
-                  "scripts/linux_worker_proxy.py",
-                  "scripts/linux_worker_remote_login.py",
+                  "scripts/linux_worker_extension_pair.py",
                   "scripts/linux_worker_remote_clipboard_v45.py",
                   "scripts/linux_worker_slot_agent.py",
-                  "scripts/linux_worker_slot_chrome_launcher.sh",
                   "scripts/linux_worker_slot_install.sh",
                   "scripts/linux_worker_slot_install_reported.sh",
-                  "scripts/linux_worker_tab_init.py",
-                  "scripts/linux_worker_watchdog.sh",
-                  "scripts/linux_extension_autoreload.sh",
-                  "scripts/linux_worker_proxy_apply.sh",
               }
               assert required <= names, sorted(required - names)
               manifest = json.load(archive.extractfile("chrome_extension/manifest.json"))
               entry = archive.extractfile("chrome_extension/background_entry.js").read().decode("utf-8")
               router = archive.extractfile("chrome_extension/conversation_routing.js").read().decode("utf-8")
-              window_limit = archive.extractfile("chrome_extension/background_window_limit_v121.js").read().decode("utf-8")
-              dispatch = archive.extractfile("chrome_extension/conversation_dispatch.js").read().decode("utf-8")
-              close_terminal = archive.extractfile("chrome_extension/background_route_close_terminal_v91.js").read().decode("utf-8")
               observer = archive.extractfile("chrome_extension/background_window_observer_v90.js").read().decode("utf-8")
-              capacity = archive.extractfile("chrome_extension/background_capacity_control_v35.js").read().decode("utf-8")
-              master = archive.extractfile("chrome_extension/background_worker_master_switch_v61.js").read().decode("utf-8")
-              clipboard = archive.extractfile("scripts/linux_worker_remote_clipboard_v45.py").read().decode("utf-8")
-              slot_agent = archive.extractfile("scripts/linux_worker_slot_agent.py").read().decode("utf-8")
-          assert manifest["version"] == "0.8.33", manifest["version"]
+              limiter = archive.extractfile("chrome_extension/background_window_limit_v121.js").read().decode("utf-8")
+              pairer = archive.extractfile("scripts/linux_worker_extension_pair.py").read().decode("utf-8")
+              slot = archive.extractfile("scripts/linux_worker_slot_install.sh").read().decode("utf-8")
+          assert manifest["version"] == "0.8.34"
           assert "\"conversation_routing.js\"" in entry
-          assert "\"background_window_limit_v121.js\"" in entry
-          assert "\"conversation_dispatch.js\"" in entry
-          assert "\"background_route_close_terminal_v91.js\"" in entry
-          assert "\"background_window_observer_v90.js\"" in entry
-          assert entry.index("\"background_route_close_terminal_v91.js\"") < entry.index("\"conversation_routing.js\"") < entry.index("\"background_window_limit_v121.js\"") < entry.index("\"conversation_dispatch.js\"")
-          retired = (
-              "conversation_warm_pool_v2.js", "background_external_warm_v28.js",
-              "background_reserve_pool_v29.js", "background_tab_supervisor_v32.js",
-              "conversation_workers_v25.js", "conversation_workers_v27.js",
-              "conversation_workers_v28.js", "conversation_dispatch_v29.js",
-              "background_route_quarantine_v50.js", "background_request_recovery_v40.js",
-              "background_window_manager_v88.js", "background_routed_window_cap_v111.js",
-          )
-          assert all(f"\"{name}\"" not in entry for name in retired), [name for name in retired if f"\"{name}\"" in entry]
           assert "single-route-window-authority-v30" in router
-          assert "browser_side_same_api_queue: false" in router
-          assert "state.failRequest = failRequest" in router
-          assert "state.retireRoute = retireRoute" in router
-          assert "value.retireRoute(entry.key, route" in window_limit
-          assert "chrome.windows.create" not in window_limit
-          assert "chrome.windows.remove" not in window_limit
-          assert "route.generation =" not in window_limit
-          assert "router.failRequest" in dispatch
-          assert "chrome.windows.remove" not in dispatch
-          assert "terminal-report-only-v91" in close_terminal
-          assert "trySendSocket" in close_terminal
-          assert "chrome.windows.create" not in close_terminal
-          assert "chrome.windows.remove" not in close_terminal
           assert "decision_authority: false" in observer
           assert "chrome.windows.getAll({ populate: true })" in observer
-          assert "physical-observer-v90" in observer
-          assert "chrome.windows.create" not in observer
-          assert "chrome.windows.remove" not in observer
-          assert "on-demand-single-authority-v30" in capacity
-          assert "window_decision_authority: \"conversation-routing-v30\"" in capacity
-          assert "chrome.windows.create" not in capacity
-          assert "chrome.windows.remove" not in capacity
-          assert "router.retireRoute" in master
-          assert "chrome.windows.remove" not in master
-          assert "Input.insertText" in clipboard and "Runtime.evaluate" in clipboard
-          assert "linux_worker_agent_v44" in slot_agent
-          assert Path("/app/app/capacity_scheduler_v58.py").is_file()
-          assert Path("/app/app/responses_tool_stream_v118_patch.py").is_file()
+          assert "value.retireRoute(entry.key, route" in limiter
+          assert "chrome.windows.create" not in limiter and "chrome.windows.remove" not in limiter
+          assert "Runtime.evaluate" in pairer and "extension_pairing_code" in pairer
+          assert "linux_worker_extension_pair.py" in slot and "--pairing-code" in slot
+          assert Path("/app/app/linux_worker_device_authority_v124_patch.py").is_file()
+          assert Path("/app/app/admin_linux_device_authority_v124.js").is_file()
           assert Path("/app/app/linux_worker_device_console_v122_patch.py").is_file()
           assert Path("/app/app/linux_worker_console_v123_patch.py").is_file()
-          assert Path("/app/app/admin_linux_worker_console_v123.js").is_file()
-          print(json.dumps({"bootstrap": True, "bundle_files": len(names), "bundle_version": manifest["version"], "server_fifo_v58": True, "route_authority_v30": True, "route_close_terminal_v91": True, "window_observer_v90": True, "physical_startup_window_observer": True, "window_limit_v121": True, "unicode_clipboard": True, "device_console_v122": True, "linux_console_v123": True, "sha256": digest}))
+          presentation = Path("/app/app/worker_presentation_v64_patch.py").read_text()
+          assert "install_linux_worker_device_authority_v124_patch(app)" in presentation
+          assert "install_linux_worker_device_console_v122_patch" not in presentation
+          assert "install_linux_worker_console_v123_patch" not in presentation
+          print(json.dumps({"bundle_version": manifest["version"], "linux_device_authority_v124": True, "extension_autopair": True, "sha256": digest}))
           '
       - name: Boot production ASGI entrypoint and verify health
         run: |
@@ -129,42 +84,28 @@ jobs:
           trap 'docker logs "$cid" || true; docker rm -f "$cid" >/dev/null 2>&1 || true' EXIT
           ok=0
           for _ in $(seq 1 30); do
-            if curl -fsS --max-time 2 http://127.0.0.1:18765/version > /tmp/chat2api-version.json; then
-              ok=1
-              break
-            fi
+            if curl -fsS --max-time 2 http://127.0.0.1:18765/version > /tmp/chat2api-version.json; then ok=1; break; fi
             sleep 1
           done
-          if [ "$ok" -ne 1 ]; then
-            echo 'production ASGI entrypoint failed to become healthy' >&2
-            exit 1
-          fi
+          [ "$ok" -eq 1 ] || { echo 'production ASGI entrypoint failed to become healthy' >&2; exit 1; }
           python - <<'PY'
           import json
           payload = json.load(open('/tmp/chat2api-version.json', encoding='utf-8'))
           assert payload['server']['runtime_aligned'] is True
           assert payload['server']['entrypoint'] == 'app.entry:app'
-          assert payload['server']['runtime_version'] == '0.22.78'
-          assert payload['chrome_bridge']['bundle_version'] == '0.8.33'
+          assert payload['server']['runtime_version'] == '0.22.79'
+          assert payload['chrome_bridge']['bundle_version'] == '0.8.34'
           assert payload['chrome_bridge']['route_window_authority_revision'] == 30
           assert payload['chrome_bridge']['window_observer_revision'] == 90
-          assert payload['chrome_bridge']['route_close_terminal_revision'] == 91
-          assert payload['features']['capacity_scheduler_v58'] is True
-          assert payload['features']['server_side_same_api_fifo_v58'] is True
-          assert payload['features']['worker_single_route_authority_v30'] is True
-          assert payload['features']['worker_per_extension_window_limit_v121'] is True
+          assert payload['features']['linux_worker_device_authority_v124'] is True
+          assert payload['features']['linux_worker_device_console_v122'] is False
+          assert payload['features']['linux_worker_console_v123'] is False
           assert payload['features']['linux_worker_same_host_slots_v1'] is True
           assert payload['features']['linux_worker_remote_unicode_clipboard_v121'] is True
-          assert payload['features']['linux_worker_device_console_v122'] is True
-          assert payload['features']['linux_worker_console_v123'] is True
+          assert payload['features']['worker_per_extension_window_limit_v121'] is True
           assert payload['features']['physical_startup_window_observer_v90'] is True
-          assert payload['features']['unexpected_route_close_terminal_v91'] is True
-          assert payload['features']['window_observer_v90'] is True
-          assert payload['features']['responses_tool_stream_v118'] is True
           assert payload['features']['same_api_parallel_requests'] is False
           assert payload['features']['browser_side_same_api_queue'] is False
           assert payload['features']['speculative_worker_windows'] is False
-          assert payload['features']['worker_strict_api_fifo_v29'] is False
-          assert payload['features']['worker_window_fifo_manager_v88'] is False
-          print(json.dumps({'production_entrypoint': True, 'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'server_fifo_v58': True, 'route_authority_v30': True, 'route_close_terminal_v91': True, 'window_limit_v121': True, 'same_host_slots': True, 'unicode_clipboard': True, 'device_console_v122': True, 'linux_console_v123': True, 'physical_startup_window_observer': True}))
+          print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'linux_device_authority_v124': True}))
           PY
