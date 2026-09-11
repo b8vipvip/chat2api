@@ -27,6 +27,7 @@ scripts/*
 !scripts/linux_worker_slot_agent.py
 !scripts/linux_worker_slot_chrome_launcher.sh
 !scripts/linux_worker_slot_install.sh
+!scripts/linux_worker_slot_install_reported.sh
 !scripts/linux_worker_watchdog.sh
 !scripts/linux_worker_generation_probe.sh
 !scripts/linux_extension_autoreload.sh
