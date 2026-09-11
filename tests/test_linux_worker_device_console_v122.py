@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 from app.linux_worker_device_console_v122_patch import (
     MAX_SLOT,
@@ -40,6 +41,27 @@ def test_console_labels_linux_hosts_as_devices_and_exposes_worker_manager():
     assert 'data-v122-action="login"' in source
     assert 'data-v122-action="proxy"' in source
     assert 'data-v122-action="pairing"' in source
+
+
+def test_device_console_javascript_and_reported_installer_parse():
+    js = subprocess.run(
+        ["node", "--check", str(ROOT / "app" / "admin_linux_device_workers_v122.js")],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert js.returncode == 0, js.stderr
+    shell = subprocess.run(
+        ["bash", "-n", str(ROOT / "scripts" / "linux_worker_slot_install_reported.sh")],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=10,
+    )
+    assert shell.returncode == 0, shell.stderr
 
 
 def test_slot_install_uses_isolated_existing_slot_runtime_and_reports_progress():
