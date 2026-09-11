@@ -1,0 +1,51 @@
+name: v124 authority rewrite
+
+on:
+  push:
+    branches:
+      - feat/linux-device-single-authority-v124-20260911
+
+permissions:
+  contents: write
+
+jobs:
+  rewrite:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/linux-device-single-authority-v124-20260911
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply exact v124 rewrites
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          backend = Path('app/linux_worker_device_authority_v124_patch.py')
+          text = backend.read_text(encoding='utf-8')
+          text = text.replace('from fastapi.responses import JSONResponse, Response', 'from fastapi.responses import Response')
+          assert text.count('/api/admin/linux-devices/legacy-records') == 2
+          text = text.replace('/api/admin/linux-devices/legacy-records', '/api/admin/linux-legacy-records')
+          backend.write_text(text, encoding='utf-8')
+
+          frontend = Path('app/admin_linux_device_authority_v124.js')
+          text = frontend.read_text(encoding='utf-8')
+          assert text.count('/api/admin/linux-devices/legacy-records') == 2
+          text = text.replace('/api/admin/linux-devices/legacy-records', '/api/admin/linux-legacy-records')
+          frontend.write_text(text, encoding='utf-8')
+          PY
+      - name: Validate parsers
+        run: |
+          python -m py_compile app/linux_worker_device_authority_v124_patch.py app/worker_presentation_v64_patch.py
+          node --check app/admin_linux_device_authority_v124.js
+      - name: Commit rewrite
+        run: |
+          if git diff --quiet; then exit 0; fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add app/linux_worker_device_authority_v124_patch.py app/admin_linux_device_authority_v124.js
+          git commit -m 'chore: apply v124 authority rewrite'
+          git push origin HEAD:feat/linux-device-single-authority-v124-20260911
