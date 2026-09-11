@@ -7,6 +7,7 @@ from typing import Any, Callable
 from fastapi import FastAPI
 
 from .capacity_scheduler_v58 import install_capacity_scheduler_v58
+from .same_host_worker_sync_patch import install_same_host_worker_sync_patch
 from .server_worker_sync_patch import install_server_worker_sync_patch as _install_server_worker_sync_patch
 
 
@@ -25,17 +26,24 @@ def _install_final_capacity(app: FastAPI) -> FastAPI:
     return install_capacity_scheduler_v58(app)
 
 
+def _install_worker_sync_stack(app: FastAPI) -> FastAPI:
+    result = _install_server_worker_sync_patch(app)
+    return install_same_host_worker_sync_patch(result)
+
+
 def install_server_worker_sync_patch(app: FastAPI) -> FastAPI:
-    """Install Worker sync plus the single v58 admission authority.
+    """Install Worker sync plus same-host coalescing and v58 admission.
 
     Historical account/free/v57 admission layers are not reinstalled here. The
     final broker.create/release owner is v58: one active request per logical API
     key, FIFO waiting on the server, and independent concurrency only across
-    distinct API keys.
+    distinct API keys. Multiple isolated Worker slots on one physical host share
+    one Worker runtime install, so their server-driven update is coalesced into
+    one host-level update before final capacity is installed.
     """
 
     if hasattr(app, "add_event_handler"):
-        result = _install_server_worker_sync_patch(app)
+        result = _install_worker_sync_stack(app)
         return _install_final_capacity(result)
 
     captured: dict[str, list[Callable[[], Any]]] = {"startup": [], "shutdown": []}
@@ -47,7 +55,7 @@ def install_server_worker_sync_patch(app: FastAPI) -> FastAPI:
 
     setattr(app, "add_event_handler", capture_event_handler)
     try:
-        result = _install_server_worker_sync_patch(app)
+        result = _install_worker_sync_stack(app)
     finally:
         try:
             delattr(app, "add_event_handler")
