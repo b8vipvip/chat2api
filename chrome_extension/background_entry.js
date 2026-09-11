@@ -29,13 +29,18 @@ importScripts(
   "model_affinity_v23.js",
   "model_contract_v25.js",
 
-  // v0.8.30 request/window ownership boundary:
+  // v0.8.31 request/window ownership boundary:
   // conversation_routing.js is the only authority allowed to select, create,
   // reuse, rotate, retire, or idle-close API route windows. There is no warm,
   // reserve, tab-supervisor, browser FIFO, quarantine, or window-manager owner.
   // conversation_dispatch.js is transport-only; same-key FIFO is server v58.
   "conversation_routing.js",
   "conversation_dispatch.js",
+
+  // Terminal reporting only: if an active routed tab/window disappears outside
+  // the router lifecycle, fail the request immediately so server FIFO capacity
+  // is released without restoring the retired Request Recovery owner.
+  "background_route_close_terminal_v91.js",
 
   "background_tool_isolation_v48.js",
   "background_runtime_preflight_v48.js",
