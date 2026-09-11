@@ -21,9 +21,6 @@
   };
   globalThis[KEY] = state;
   globalThis.chat2apiWindowObserverV90 = state;
-  // Compatibility alias for the existing admin Window Management surface.
-  // v90 is observation/capture only: it never creates, closes, claims, repairs,
-  // reroutes, or protects a browser window.
   globalThis.__CHAT2API_WINDOW_MANAGER_V88__ = state;
   globalThis.chat2apiWindowManagerV88 = state;
 
@@ -48,7 +45,7 @@
       status: String(record?.status || "ready"),
       request_id: record?.request_id || null,
       route_key: record?.route_key || null,
-      source: record?.source || "route-observer-v90",
+      source: record?.source || "physical-observer-v90",
       ready_at_ms: Number(record?.ready_at_ms || 0),
       last_seen_at_ms: Number(record?.last_seen_at_ms || 0),
       closed_at_ms: Number(record?.closed_at_ms || 0),
@@ -97,7 +94,7 @@
         status: source.status || "ready",
         request_id: source.request_id || null,
         route_key: source.route_key || null,
-        source: source.source || "route-observer-v90",
+        source: source.source || "physical-observer-v90",
         ready_at_ms: Number(source.ready_at_ms || 0),
         last_seen_at_ms: Date.now(),
         screenshot_data_url: null,
@@ -108,6 +105,7 @@
       state.active.set(windowId, record);
     }
     if (Number.isInteger(tabId)) record.tab_id = tabId;
+    if (source.source) record.source = source.source;
     record.status = source.status || record.status;
     record.request_id = source.request_id ?? record.request_id;
     record.route_key = source.route_key ?? record.route_key;
@@ -132,32 +130,38 @@
   async function liveRoutes() {
     await load();
     const routes = globalThis[ROUTER_KEY]?.routes || {};
-    const seen = new Set();
+    const routeByWindow = new Map();
     for (const [key, route] of Object.entries(routes)) {
-      if (!Number.isInteger(route?.window_id) || !Number.isInteger(route?.tab_id)) continue;
-      try {
-        const tab = await chrome.tabs.get(route.tab_id);
-        if (!isChatGpt(tab.url || tab.pendingUrl || "")) continue;
-        seen.add(route.window_id);
-        recordFor(route.window_id, route.tab_id, {
-          source: "route-observer-v90",
-          route_key: key,
-          request_id: route.inflight_request_id || null,
-          status: route.inflight_request_id ? "in_use" : "ready",
-          opened_at_ms: Number(route.window_opened_at_ms || route.last_active_at || Date.now()),
-        });
-      } catch (_) {}
+      if (Number.isInteger(route?.window_id)) routeByWindow.set(route.window_id, {key, route});
     }
-    for (const [windowId, record] of [...state.active.entries()]) {
-      if (seen.has(windowId)) continue;
-      try {
-        const win = await chrome.windows.get(windowId, { populate: true });
-        const tab = (win.tabs || []).find(item => Number.isInteger(item?.id) && isChatGpt(item.url || item.pendingUrl || ""));
-        if (!tab) markClosed(windowId, "not-a-live-route");
-        else record.last_seen_at_ms = Date.now();
-      } catch (_) {
-        markClosed(windowId, "window-not-live");
-      }
+
+    // The launcher creates one real ChatGPT browser window before any API request
+    // has a route. v90 used to inspect only router-owned windows, so that initial
+    // window was invisible until the first routed request. Observe every physical
+    // ChatGPT window instead, then enrich it with route state when a route exists.
+    // This remains strictly observation-only: no create/close/reroute operation is
+    // performed here and conversation_routing.js stays the sole lifecycle owner.
+    const physical = await chrome.windows.getAll({ populate: true }).catch(() => []);
+    const seen = new Set();
+    for (const win of physical) {
+      const windowId = Number(win?.id);
+      if (!Number.isInteger(windowId)) continue;
+      const tab = (win.tabs || []).find(item => Number.isInteger(item?.id) && isChatGpt(item.url || item.pendingUrl || ""));
+      if (!tab) continue;
+      seen.add(windowId);
+      const routed = routeByWindow.get(windowId);
+      const route = routed?.route || null;
+      recordFor(windowId, tab.id, {
+        source: routed ? "route-observer-v90" : "physical-observer-v90",
+        route_key: routed?.key || null,
+        request_id: route?.inflight_request_id || null,
+        status: route?.inflight_request_id ? "in_use" : "ready",
+        opened_at_ms: Number(route?.window_opened_at_ms || route?.last_active_at || state.active.get(windowId)?.opened_at_ms || Date.now()),
+      });
+    }
+
+    for (const windowId of [...state.active.keys()]) {
+      if (!seen.has(windowId)) markClosed(windowId, "window-not-live-or-not-chatgpt");
     }
     await persist();
     return [...state.active.values()].map(serializable);
@@ -182,7 +186,7 @@
     state.reportInFlight = (async () => {
       await liveRoutes();
       const value = snapshot();
-      const signature = JSON.stringify(value.active.map(row => [row.window_no, row.window_id, row.tab_id, row.status, row.request_id]));
+      const signature = JSON.stringify(value.active.map(row => [row.window_no, row.window_id, row.tab_id, row.status, row.request_id, row.route_key, row.source]));
       if (!force && signature === state.lastSignature) return value;
       state.lastSignature = signature;
       if (typeof trySendSocket === "function") {
@@ -241,19 +245,9 @@
       if (message?.type !== "window.manager.capture") return baseHandleServerMessage(message);
       try {
         const data = await capture(Number(message.window_id));
-        await trySendSocket?.({
-          type: "window.manager.result",
-          control_id: String(message.control_id || ""),
-          ok: true,
-          data,
-        });
+        await trySendSocket?.({ type: "window.manager.result", control_id: String(message.control_id || ""), ok: true, data });
       } catch (error) {
-        await trySendSocket?.({
-          type: "window.manager.result",
-          control_id: String(message.control_id || ""),
-          ok: false,
-          error: String(error?.message || error),
-        });
+        await trySendSocket?.({ type: "window.manager.result", control_id: String(message.control_id || ""), ok: false, error: String(error?.message || error) });
       }
       return undefined;
     };
@@ -288,14 +282,9 @@
     persist().catch(() => {});
     scheduleReport(0, true);
   });
-
-  chrome.windows.onCreated.addListener(win => {
-    const tab = (win?.tabs || []).find(item => Number.isInteger(item?.id) && isChatGpt(item.url || item.pendingUrl || ""));
-    if (tab) {
-      recordFor(win.id, tab.id, { source: "route-observer-v90", status: "loading" });
-      persist().catch(() => {});
-      scheduleReport(0, true);
-    }
+  chrome.windows.onCreated.addListener(() => scheduleReport(120, true));
+  chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
+    if (changeInfo.url || changeInfo.status === "complete") scheduleReport(120, true);
   });
 
   load().then(() => report(true)).catch(() => {});
