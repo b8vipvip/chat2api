@@ -44,12 +44,60 @@ def _targets() -> list[dict[str, Any]]:
     return [item for item in payload if isinstance(item, dict) and item.get("type") == "page"]
 
 
+def _cdp_once(debugger_url: str, method: str, params: dict[str, Any], timeout: float = 2.0) -> dict[str, Any] | None:
+    if not str(debugger_url or "").startswith(("ws://127.0.0.1:", "ws://localhost:")):
+        return None
+    command_id = int(time.time_ns() % 1_000_000_000)
+    try:
+        with websocket_connect(debugger_url, open_timeout=timeout, close_timeout=0.5) as socket:
+            socket.send(json.dumps({"id": command_id, "method": method, "params": params}, separators=(",", ":"), ensure_ascii=False))
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                raw = socket.recv(timeout=max(0.05, deadline - time.monotonic()))
+                message = json.loads(raw)
+                if not isinstance(message, dict) or message.get("id") != command_id:
+                    continue
+                if message.get("error"):
+                    return None
+                return message.get("result") if isinstance(message.get("result"), dict) else {}
+    except Exception:
+        return None
+    return None
+
+
+def _target_has_focus(item: dict[str, Any]) -> bool:
+    debugger_url = str(item.get("webSocketDebuggerUrl") or "")
+    result = _cdp_once(
+        debugger_url,
+        "Runtime.evaluate",
+        {"expression": "Boolean(document.hasFocus && document.hasFocus())", "returnByValue": True},
+        timeout=0.8,
+    )
+    remote_object = result.get("result") if isinstance(result, dict) and isinstance(result.get("result"), dict) else {}
+    return remote_object.get("value") is True
+
+
 def _target() -> dict[str, Any] | None:
     global _ACTIVE_TARGET_ID
     rows = _targets()
+    usable = [
+        item for item in rows
+        if str(item.get("webSocketDebuggerUrl") or "").startswith(("ws://127.0.0.1:", "ws://localhost:"))
+        and not str(item.get("url") or "").startswith(("chrome-extension://", "devtools://"))
+    ]
+    if not usable:
+        return None
+
+    # OAuth can open a new Chrome window/target. Follow the document that actually
+    # owns focus in Xvfb so paste/copy cannot remain pinned to the previous target.
+    for item in usable:
+        if _target_has_focus(item):
+            _ACTIVE_TARGET_ID = str(item.get("id") or "")
+            return item
+
     if _ACTIVE_TARGET_ID:
-        current = next((item for item in rows if str(item.get("id") or "") == _ACTIVE_TARGET_ID), None)
-        if current and str(current.get("webSocketDebuggerUrl") or "").startswith(("ws://127.0.0.1:", "ws://localhost:")):
+        current = next((item for item in usable if str(item.get("id") or "") == _ACTIVE_TARGET_ID), None)
+        if current:
             return current
 
     def score(item: dict[str, Any]) -> tuple[int, int]:
@@ -66,13 +114,6 @@ def _target() -> dict[str, Any] | None:
             points += 10
         return points, len(url)
 
-    usable = [
-        item for item in rows
-        if str(item.get("webSocketDebuggerUrl") or "").startswith(("ws://127.0.0.1:", "ws://localhost:"))
-        and not str(item.get("url") or "").startswith(("chrome-extension://", "devtools://"))
-    ]
-    if not usable:
-        return None
     chosen = max(usable, key=score)
     _ACTIVE_TARGET_ID = str(chosen.get("id") or "")
     return chosen
@@ -83,23 +124,10 @@ def _command(method: str, params: dict[str, Any]) -> dict[str, Any]:
     debugger_url = str(target.get("webSocketDebuggerUrl") or "") if target else ""
     if not debugger_url:
         return {"ok": False, "error": "login_cdp_target_unavailable"}
-    command_id = int(time.time() * 1000) % 1_000_000_000
-    try:
-        with websocket_connect(debugger_url, open_timeout=4, close_timeout=1) as socket:
-            socket.send(json.dumps({"id": command_id, "method": method, "params": params}, separators=(",", ":"), ensure_ascii=False))
-            deadline = time.monotonic() + 4.0
-            while time.monotonic() < deadline:
-                raw = socket.recv(timeout=max(0.05, deadline - time.monotonic()))
-                message = json.loads(raw)
-                if not isinstance(message, dict) or message.get("id") != command_id:
-                    continue
-                if message.get("error"):
-                    return {"ok": False, "error": "login_cdp_command_failed"}
-                result = message.get("result") if isinstance(message.get("result"), dict) else {}
-                return {"ok": True, "result": result}
-    except Exception:
+    result = _cdp_once(debugger_url, method, params, timeout=4.0)
+    if result is None:
         return {"ok": False, "error": "login_cdp_command_failed"}
-    return {"ok": False, "error": "login_cdp_command_timeout"}
+    return {"ok": True, "result": result}
 
 
 def _paste_text(value: Any) -> dict[str, Any]:
