@@ -4,6 +4,8 @@ set -euo pipefail
 STAGE="arguments"
 SERVER="https://chat2api.mv3.cn"
 ENROLL_CODE=""
+PAIRING_CODE=""
+EXTENSION_NAME="Linux Worker"
 UPGRADE_ONLY=0
 WORKER_DIR="/opt/chat2api-worker"
 PROFILE_DIR="/home/chat2api/.config/chat2api-chrome-worker-01"
@@ -15,6 +17,8 @@ while (($#)); do
   case "$1" in
     --server) SERVER="${2%/}"; shift 2;;
     --enroll-code) ENROLL_CODE="$2"; shift 2;;
+    --pairing-code) PAIRING_CODE="$2"; shift 2;;
+    --device-name) EXTENSION_NAME="$2"; shift 2;;
     --upgrade) UPGRADE_ONLY=1; shift;;
     --repo-url) echo "[INFO] --repo-url 已弃用；Worker 代码现在从中心服务器 Bundle 获取" >&2; shift 2;;
     *) echo "Unknown argument: $1" >&2; exit 2;;
@@ -213,6 +217,12 @@ if ! jq -e 'type == "object" and (.worker_id | type == "string" and length > 0) 
   LAST_MESSAGE="Worker 身份文件无效，请使用新的安装命令重新注册"
   exit 1
 fi
+if [[ -n "$PAIRING_CODE" ]]; then
+  identity_tmp="$(mktemp)"
+  jq --arg pairing "$PAIRING_CODE" --arg name "$EXTENSION_NAME" '. + {extension_pairing_code:$pairing,extension_name:$name}' /etc/chat2api-worker/worker.json >"$identity_tmp"
+  install -o root -g chat2api -m 640 "$identity_tmp" /etc/chat2api-worker/worker.json
+  rm -f "$identity_tmp"
+fi
 chown root:chat2api /etc/chat2api-worker/worker.json
 chmod 640 /etc/chat2api-worker/worker.json
 install -d -o chat2api -g chat2api -m 700 "$PROFILE_DIR"
@@ -362,8 +372,16 @@ if [[ $BROWSER_READY -ne 1 ]]; then
   exit 1
 fi
 
+if [[ -n "$PAIRING_CODE" ]]; then
+  set_stage "extension-pairing" "使用所选设备码自动配对 Chrome Bridge"
+  if ! "$WORKER_DIR/../chat2api-worker-venv/bin/python" "$WORKER_DIR/scripts/linux_worker_extension_pair.py" --config /etc/chat2api-worker/worker.json --cdp-url http://127.0.0.1:9222; then
+    LAST_MESSAGE="Chrome Bridge 自动配对失败"
+    exit 1
+  fi
+fi
+
 INSTALL_SUCCESS=1
-report_progress "installed" "complete" "Worker 安装完成，Chrome Bridge 将自动加载并自动配对"
+report_progress "installed" "complete" "Worker 安装完成，Chrome Bridge 已自动加载并配对"
 echo "=== chat2api Linux Worker installed ==="
 echo "Worker ID: $(jq -r .worker_id /etc/chat2api-worker/worker.json)"
 echo "Server: $SERVER"

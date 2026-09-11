@@ -26,7 +26,7 @@ def _enroll(store: LinuxWorkerStore, name: str, hostname: str) -> str:
             "arch": "x86_64",
             "os_version": "Ubuntu 24.04",
             "agent_version": "0.3.6",
-            "chrome_bridge_version": "0.8.33",
+            "chrome_bridge_version": "0.8.34",
         },
     )
     return result["worker_id"]

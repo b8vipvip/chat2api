@@ -3,6 +3,8 @@ set -euo pipefail
 
 SERVER="https://chat2api.mv3.cn"
 ENROLL_CODE=""
+PAIRING_CODE=""
+EXTENSION_NAME="Linux Worker"
 SLOT=""
 WORKER_DIR="/opt/chat2api-worker"
 VENV_DIR="/opt/chat2api-worker-venv"
@@ -12,6 +14,8 @@ while (($#)); do
   case "$1" in
     --server) SERVER="${2%/}"; shift 2;;
     --enroll-code) ENROLL_CODE="$2"; shift 2;;
+    --pairing-code) PAIRING_CODE="$2"; shift 2;;
+    --device-name) EXTENSION_NAME="$2"; shift 2;;
     --slot) SLOT="$2"; shift 2;;
     *) echo "Unknown argument: $1" >&2; exit 2;;
   esac
@@ -82,6 +86,12 @@ if [[ ! -s "$CONFIG_DIR/worker.json" ]]; then
   trap - EXIT
 fi
 jq -e 'type == "object" and (.worker_id|type=="string" and length>0) and (.worker_token|type=="string" and length>0) and (.websocket_url|type=="string" and length>0)' "$CONFIG_DIR/worker.json" >/dev/null
+if [[ -n "$PAIRING_CODE" ]]; then
+  identity_tmp="$(mktemp)"
+  jq --arg pairing "$PAIRING_CODE" --arg name "$EXTENSION_NAME" '. + {extension_pairing_code:$pairing,extension_name:$name}' "$CONFIG_DIR/worker.json" >"$identity_tmp"
+  install -o root -g chat2api -m 640 "$identity_tmp" "$CONFIG_DIR/worker.json"
+  rm -f "$identity_tmp"
+fi
 
 # Root-owned helper aliases carry the validated slot in argv[0]. The canonical
 # helpers derive only fixed slot paths/units/ports from that basename; the
@@ -231,6 +241,9 @@ for _ in $(seq 1 90); do
   sleep 1
 done
 (( ready == 1 )) || { echo "Worker slot ${SLOT} did not become healthy" >&2; exit 1; }
+if [[ -n "$PAIRING_CODE" ]]; then
+  "$VENV_DIR/bin/python" "$WORKER_DIR/scripts/linux_worker_extension_pair.py" --config "$CONFIG_DIR/worker.json" --cdp-url "http://127.0.0.1:${CDP_PORT}" || { echo "Worker slot ${SLOT} extension auto-pair failed" >&2; exit 1; }
+fi
 
 echo "=== chat2api same-host Worker slot installed ==="
 echo "Worker ID: $(jq -r .worker_id "$CONFIG_DIR/worker.json")"
