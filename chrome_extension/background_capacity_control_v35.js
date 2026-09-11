@@ -3,7 +3,8 @@
   if (globalThis[KEY]) return;
 
   const OBSERVER_KEY = "__CHAT2API_WINDOW_OBSERVER_V90__";
-  const state = { version: 35, revision: 90, lastResult: null };
+  const WINDOW_LIMIT_KEY = "__CHAT2API_ROUTED_WINDOW_LIMIT_V121__";
+  const state = { version: 35, revision: 121, lastResult: null };
   globalThis[KEY] = state;
 
   function targetValue(value) {
@@ -22,12 +23,21 @@
     return value;
   }
 
+  function windowLimiter() {
+    const value = globalThis[WINDOW_LIMIT_KEY];
+    if (!value || typeof value.setLimit !== "function" || typeof value.snapshot !== "function") {
+      throw new Error("Routed Window Limit v121 is not ready");
+    }
+    return value;
+  }
+
   async function windowSnapshot() {
     const value = observer();
     await value.report(true).catch(() => {});
     const raw = value.snapshot();
     const activeRows = Array.isArray(raw?.active) ? raw.active : [];
     const inUse = activeRows.filter(row => String(row?.status || "") === "in_use").length;
+    const limitState = globalThis[WINDOW_LIMIT_KEY]?.snapshot?.() || {};
     return {
       total: activeRows.length,
       active: inUse,
@@ -37,6 +47,8 @@
       warm: 0,
       routed: activeRows.length,
       all_chatgpt_windows: activeRows.length,
+      routed_window_limit: Number(limitState?.limit || 0) || null,
+      routed_window_limit_source: String(limitState?.source || "unset"),
       speculative_windows: false,
       route_window_authority: "conversation-routing-v30",
       observed_at: new Date().toISOString(),
@@ -45,7 +57,7 @@
 
   async function resizeWorkers(requestedTarget) {
     const target = targetValue(requestedTarget);
-    // v0.8.30 deliberately has no browser window pool to resize. This control
+    // v0.8.30+ deliberately has no browser window pool to resize. This control
     // acknowledges the server's distinct-API concurrency value but never creates
     // or closes ChatGPT windows. Routes are opened on demand by the sole router.
     const snapshot = await windowSnapshot();
@@ -59,6 +71,21 @@
     };
   }
 
+  async function applyWindowLimit(requestedTarget, source) {
+    const target = targetValue(requestedTarget);
+    const limiter = windowLimiter();
+    const applied = await limiter.setLimit(target, String(source || "explicit"));
+    const snapshot = await windowSnapshot();
+    return {
+      target,
+      target_reached: Number(applied?.limit || 0) === target,
+      pending_reason: String(applied?.reconcile?.deferred > 0 ? "busy_windows_protected" : ""),
+      window_policy: "on-demand-hard-cap-v121",
+      window_limit: applied,
+      window_snapshot: snapshot,
+    };
+  }
+
   async function emitResult(message, ok, data = {}, error = "") {
     const controlId = String(message?.control_id || "");
     const action = String(message?.action || "");
@@ -66,7 +93,7 @@
     const observedAt = snapshot?.observed_at || new Date().toISOString();
     const result = {
       version: 35,
-      revision: 90,
+      revision: 121,
       control_id: controlId,
       action,
       ok: Boolean(ok),
@@ -99,7 +126,11 @@
       reserve_window_active: Number(snapshot?.active || 0),
       reserve_window_idle: Number(snapshot?.idle || 0),
       reserve_window_target: 0,
+      routed_window_limit: Number(snapshot?.routed_window_limit || 0) || null,
+      routed_window_limit_source: String(snapshot?.routed_window_limit_source || "unset"),
       reserve_window_updated_at: observedAt,
+      // v121 is an admission/limit coordinator only. The conversation router
+      // remains the sole authority for routed-window lifecycle mutation.
       window_decision_authority: "conversation-routing-v30",
       speculative_windows: false,
     };
@@ -127,6 +158,13 @@
       if (action === "workers.resize") {
         return emitResult(message, true, await resizeWorkers(message?.payload?.target));
       }
+      if (action === "windows.limit") {
+        return emitResult(
+          message,
+          true,
+          await applyWindowLimit(message?.payload?.target, message?.payload?.source),
+        );
+      }
       throw new Error(`Unsupported Extension control action: ${action || "(empty)"}`);
     } catch (error) {
       let snapshot = null;
@@ -138,6 +176,7 @@
   state.handle = handleControl;
   state.snapshot = windowSnapshot;
   state.resize = resizeWorkers;
+  state.applyWindowLimit = applyWindowLimit;
 
   const baseHandler = globalThis.handleServerMessage;
   if (typeof baseHandler === "function") {

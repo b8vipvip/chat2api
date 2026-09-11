@@ -1,16 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Fixed privileged paths: the unprivileged Worker agent is allowed to invoke
-# this exact helper, but it must not be able to redirect the root helper toward
-# arbitrary files or units through environment variables or command arguments.
+# Fixed privileged paths: the unprivileged Worker agent may invoke only a
+# root-owned, sudo-allowlisted helper path. Additional same-host slots use a
+# root-owned symlink whose basename carries the validated slot number; no
+# unprivileged environment variable or command argument can redirect privileged
+# writes toward arbitrary paths or units.
+HELPER_NAME="$(basename -- "$0")"
+if [[ "$HELPER_NAME" =~ ^chat2api-worker-proxy-apply-slot([0-9]+)$ ]]; then
+  SLOT="${BASH_REMATCH[1]}"
+  if (( SLOT < 2 || SLOT > 32 )); then
+    printf '{"ok":false,"error":"invalid_worker_slot","stage":"startup","rolled_back":false,"exit_code":2}\n'
+    exit 2
+  fi
+  INSTANCE="slot${SLOT}"
+  XRAY_CONFIG="/etc/chat2api-worker/${INSTANCE}/xray.json"
+  XRAY_UNIT="chat2api-xray-${INSTANCE}.service"
+  CHROME_UNIT="chat2api-chrome-${INSTANCE}.service"
+  PROXY_PORT="$((10807 + SLOT))"
+  WORKSPACE_PARENT="/etc/chat2api-worker/${INSTANCE}"
+else
+  XRAY_CONFIG="/etc/chat2api-worker/xray.json"
+  XRAY_UNIT="chat2api-xray.service"
+  CHROME_UNIT="chat2api-chrome.service"
+  PROXY_PORT="10808"
+  WORKSPACE_PARENT="/etc/chat2api-worker"
+fi
 XRAY_BIN="/usr/local/bin/xray"
-XRAY_CONFIG="/etc/chat2api-worker/xray.json"
-XRAY_UNIT="chat2api-xray.service"
-CHROME_UNIT="chat2api-chrome.service"
-PROXY_PORT="10808"
 GENERATION_PROBE="/opt/chat2api-worker/scripts/linux_worker_generation_probe.sh"
-WORKSPACE_PARENT="/etc/chat2api-worker"
 
 RESULT_EMITTED=0
 CURRENT_STAGE="startup"
@@ -42,10 +59,9 @@ fi
 umask 077
 CURRENT_STAGE="temporary_workspace"
 # The Worker Agent runs with ProtectSystem=strict and explicitly grants write
-# access only to /etc/chat2api-worker. A sudo child stays inside that mount
-# namespace, so /tmp may be read-only even though the helper itself is root.
-# Keep the short-lived candidate/rollback files inside the already allowlisted
-# Worker configuration directory and remove them via the EXIT trap above.
+# access only to its Worker configuration directory. A sudo child stays inside
+# that mount namespace, so keep short-lived candidate/rollback files inside the
+# already allowlisted per-slot configuration directory.
 work_dir="$(mktemp -d "${WORKSPACE_PARENT}/.proxy-apply.XXXXXX")"
 candidate="${work_dir}/xray.candidate.json"
 backup="${work_dir}/xray.previous.json"
@@ -128,7 +144,7 @@ if [[ "${listener_ready}" -ne 1 ]]; then
 fi
 
 # Historical compatibility term: chatgpt_connectivity_test. The old check used
-# socks5h://127.0.0.1:${PROXY_PORT} against only the landing page. The new shared
+# socks5h://127.0.0.1:${PROXY_PORT} against only the landing page. The shared
 # probe keeps that exact SOCKS path but also exercises the real text conversation
 # and Sentinel HTTP routes. Telemetry (bzr) and realtime/voice WebSocket traffic
 # are deliberately not hard gates for ordinary text generation.
@@ -154,8 +170,8 @@ fi
 http_code="$(printf '%s\n' "${probe_output}" | sed -n 's/^probe=chatgpt_home .*http_status=\([^ ]*\).*/\1/p' | tail -n1)"
 http_code="${http_code:-000}"
 
-# Ensure the browser is alive after the dependency restart and uses the newly
-# validated local SOCKS listener. This preserves the persistent Chrome profile.
+# Ensure the slot browser is alive after the dependency restart and uses the
+# newly validated local SOCKS listener. Persistent Chrome profile data remains.
 CURRENT_STAGE="restart_chrome"
 systemctl restart "${CHROME_UNIT}" >/dev/null 2>&1 || true
 

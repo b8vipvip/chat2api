@@ -293,7 +293,7 @@ def test_terminal_event_can_reuse_same_worker_route_before_async_route_cleanup()
 
 def test_worker_extension_bundle_identity_remains_current_release() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.31"
+    assert manifest["version"] == "0.8.32"
 
 
 def test_background_entry_retires_routed_window_cap_under_v30_authority() -> None:

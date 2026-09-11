@@ -13,7 +13,7 @@ from .runtime_contract import CHROME_BRIDGE_BUNDLE_VERSION, SERVER_RUNTIME_VERSI
 
 
 PATCH_VERSION = "0.22.33"
-TARGET_AGENT_VERSION = "0.3.6"
+TARGET_AGENT_VERSION = "0.3.7"
 ASSET_PATH = "/assets/chat2api-linux-worker-upgrade-v44.js"
 BOOTSTRAP_PATH = "/bootstrap/linux-worker.sh"
 TERMINAL_STATES = frozenset({"succeeded", "failed", "unsupported"})
