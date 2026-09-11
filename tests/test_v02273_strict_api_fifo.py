@@ -45,26 +45,29 @@ def test_v118_still_rejects_a_different_nested_custom_tool() -> None:
         _normalize_nested_custom_call_v118(call, _exec_catalog())
 
 
-def test_worker_bundle_and_runtime_are_v02274_and_0830() -> None:
+def test_worker_bundle_and_runtime_are_v02275_and_0831() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert SERVER_RUNTIME_VERSION == "0.22.74"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.30"
-    assert manifest["version"] == "0.8.30"
+    assert SERVER_RUNTIME_VERSION == "0.22.75"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.31"
+    assert manifest["version"] == "0.8.31"
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["features"]["capacity_scheduler_v58"] is True
     assert payload["features"]["server_side_same_api_fifo_v58"] is True
     assert payload["features"]["worker_single_route_authority_v30"] is True
+    assert payload["features"]["unexpected_route_close_terminal_v91"] is True
+    assert payload["chrome_bridge"]["route_close_terminal_revision"] == 91
     assert payload["features"]["responses_tool_stream_v118"] is True
     assert payload["features"]["same_api_parallel_requests"] is False
     assert payload["features"]["browser_side_same_api_queue"] is False
     assert payload["features"]["worker_strict_api_fifo_v29"] is False
-    assert "release-v02274" in payload["server"]["feature_revision"]
+    assert "release-v02275" in payload["server"]["feature_revision"]
     assert SCHEDULER_PATCH_ID == "server-single-authority-scheduler-v58"
 
 
 def test_background_entry_has_one_request_route_authority_and_no_browser_fifo() -> None:
     source = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     assert source.index('"conversation_routing.js"') < source.index('"conversation_dispatch.js"')
+    assert source.index('"conversation_dispatch.js"') < source.index('"background_route_close_terminal_v91.js"')
     assert '"background_window_observer_v90.js"' in source
     for retired in (
         "conversation_warm_pool_v2.js",
@@ -82,15 +85,20 @@ def test_background_entry_has_one_request_route_authority_and_no_browser_fifo() 
         assert f'"{retired}"' not in source, retired
 
 
-def test_router_owns_window_lifecycle_and_dispatch_is_transport_only() -> None:
+def test_router_owns_window_lifecycle_dispatch_is_transport_only_and_v91_only_reports_terminal() -> None:
     router = (ROOT / "chrome_extension" / "conversation_routing.js").read_text(encoding="utf-8")
     dispatch = (ROOT / "chrome_extension" / "conversation_dispatch.js").read_text(encoding="utf-8")
+    terminal = (ROOT / "chrome_extension" / "background_route_close_terminal_v91.js").read_text(encoding="utf-8")
     observer = (ROOT / "chrome_extension" / "background_window_observer_v90.js").read_text(encoding="utf-8")
     assert "single-route-window-authority-v30" in router
     assert "browser_side_same_api_queue: false" in router
     assert "state.failRequest = failRequest" in router
     assert "router.failRequest" in dispatch
     assert "chrome.windows.remove" not in dispatch
+    assert "terminal-report-only-v91" in terminal
+    assert "trySendSocket" in terminal
+    assert "chrome.windows.create" not in terminal
+    assert "chrome.windows.remove" not in terminal
     assert "decision_authority: false" in observer
     assert "chrome.windows.create" not in observer
     assert "chrome.windows.remove" not in observer
