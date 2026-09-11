@@ -1,0 +1,46 @@
+name: One-shot release snapshot migration
+
+on:
+  push:
+    branches:
+      - feat/same-host-multi-worker-slots-20260911
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/same-host-multi-worker-slots-20260911
+          fetch-depth: 0
+      - name: Migrate release snapshot assertions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          changed = []
+          for path in sorted(Path('tests').rglob('*')):
+              if not path.is_file() or path.suffix not in {'.py', '.mjs', '.js'}:
+                  continue
+              old = path.read_text(encoding='utf-8')
+              new = old.replace('0.22.75', '0.22.76').replace('0.8.31', '0.8.32')
+              if new != old:
+                  path.write_text(new, encoding='utf-8')
+                  changed.append(str(path))
+          print(f'migrated {len(changed)} release snapshot files')
+          for path in changed:
+              print(path)
+          PY
+          if git diff --quiet -- tests; then
+            echo 'No release snapshot changes needed.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add tests
+          git commit -m 'test: migrate release snapshots to 0.22.76 and 0.8.32'
+          git push origin HEAD:feat/same-host-multi-worker-slots-20260911
