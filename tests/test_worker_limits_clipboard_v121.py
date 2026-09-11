@@ -25,18 +25,25 @@ def test_window_limit_config_round_trip_and_bounds(tmp_path: Path) -> None:
     assert _normalize_limit(99) == 32
 
 
-def test_window_limit_guard_preserves_single_creation_authority() -> None:
+def test_window_limit_guard_preserves_single_creation_and_lifecycle_authority() -> None:
     entry = (ROOT / "chrome_extension/background_entry.js").read_text(encoding="utf-8")
+    router = (ROOT / "chrome_extension/conversation_routing.js").read_text(encoding="utf-8")
     guard = (ROOT / "chrome_extension/background_window_limit_v121.js").read_text(encoding="utf-8")
     control = (ROOT / "chrome_extension/background_capacity_control_v35.js").read_text(encoding="utf-8")
     server = (ROOT / "app/worker_limits_clipboard_v121_patch.py").read_text(encoding="utf-8")
 
     assert entry.index('"conversation_routing.js"') < entry.index('"background_window_limit_v121.js"') < entry.index('"conversation_dispatch.js"')
     assert "chrome.windows.create" not in guard
+    assert "chrome.windows.remove" not in guard
+    assert "route.generation =" not in guard
+    assert 'typeof value.retireRoute !== "function"' in guard
+    assert 'value.retireRoute(entry.key, route, "", reason)' in guard
+    assert "state.retireRoute = retireRoute" in router
     assert "route.inflight_request_id" in guard
     assert "worker_window_limit_exhausted" in guard
     assert "worker-window-limit-admission" in guard
     assert 'action === "windows.limit"' in control
+    assert 'window_decision_authority: "conversation-routing-v30"' in control
     assert 'routing["worker_window_limit"] = window_limit_for(client_id)' in server
     assert 'return max(concurrency, _normalize_limit(configured, concurrency))' in server
     assert "最大窗口数不能小于并发上限" in server
