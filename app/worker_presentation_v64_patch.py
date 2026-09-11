@@ -8,6 +8,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from .admin_auth import SESSION_COOKIE
+from .worker_limits_clipboard_v121_patch import install_worker_limits_clipboard_v121_patch
 
 
 PATCH_REVISION = 66
@@ -41,6 +42,9 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
     from starving the admin console while preserving the presentation features.
     """
     if getattr(app.state, "worker_presentation_v66_installed", False):
+        # The v121 layer is independently idempotent; calling it here also makes
+        # hot-reload/test app factories converge if v66 was preinstalled first.
+        install_worker_limits_clipboard_v121_patch(app)
         return app
     app.state.worker_presentation_v66_installed = True
 
@@ -126,4 +130,8 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
         headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
 
+    # v121 is the final Worker settings/remote-login console layer. Installing it
+    # here keeps app.entry ordering stable while guaranteeing that it wraps the
+    # already-decorated v66 registry summaries and is injected after v66 assets.
+    install_worker_limits_clipboard_v121_patch(app)
     return app
