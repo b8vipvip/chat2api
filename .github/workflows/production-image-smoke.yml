@@ -41,6 +41,7 @@ jobs:
                   "chrome_extension/background_entry.js",
                   "chrome_extension/conversation_routing.js",
                   "chrome_extension/conversation_dispatch.js",
+                  "chrome_extension/background_route_close_terminal_v91.js",
                   "chrome_extension/background_window_observer_v90.js",
                   "chrome_extension/background_capacity_control_v35.js",
                   "chrome_extension/background_worker_master_switch_v61.js",
@@ -57,12 +58,14 @@ jobs:
               entry = archive.extractfile("chrome_extension/background_entry.js").read().decode("utf-8")
               router = archive.extractfile("chrome_extension/conversation_routing.js").read().decode("utf-8")
               dispatch = archive.extractfile("chrome_extension/conversation_dispatch.js").read().decode("utf-8")
+              close_terminal = archive.extractfile("chrome_extension/background_route_close_terminal_v91.js").read().decode("utf-8")
               observer = archive.extractfile("chrome_extension/background_window_observer_v90.js").read().decode("utf-8")
               capacity = archive.extractfile("chrome_extension/background_capacity_control_v35.js").read().decode("utf-8")
               master = archive.extractfile("chrome_extension/background_worker_master_switch_v61.js").read().decode("utf-8")
-          assert manifest["version"] == "0.8.30", manifest["version"]
+          assert manifest["version"] == "0.8.31", manifest["version"]
           assert "\"conversation_routing.js\"" in entry
           assert "\"conversation_dispatch.js\"" in entry
+          assert "\"background_route_close_terminal_v91.js\"" in entry
           assert "\"background_window_observer_v90.js\"" in entry
           retired = (
               "conversation_warm_pool_v2.js", "background_external_warm_v28.js",
@@ -78,6 +81,10 @@ jobs:
           assert "state.failRequest = failRequest" in router
           assert "router.failRequest" in dispatch
           assert "chrome.windows.remove" not in dispatch
+          assert "terminal-report-only-v91" in close_terminal
+          assert "trySendSocket" in close_terminal
+          assert "chrome.windows.create" not in close_terminal
+          assert "chrome.windows.remove" not in close_terminal
           assert "decision_authority: false" in observer
           assert "chrome.windows.create" not in observer
           assert "chrome.windows.remove" not in observer
@@ -88,7 +95,7 @@ jobs:
           assert "chrome.windows.remove" not in master
           assert Path("/app/app/capacity_scheduler_v58.py").is_file()
           assert Path("/app/app/responses_tool_stream_v118_patch.py").is_file()
-          print(json.dumps({"bootstrap": True, "bundle_files": len(names), "bundle_version": manifest["version"], "server_fifo_v58": True, "route_authority_v30": True, "window_observer_v90": True, "sha256": digest}))
+          print(json.dumps({"bootstrap": True, "bundle_files": len(names), "bundle_version": manifest["version"], "server_fifo_v58": True, "route_authority_v30": True, "route_close_terminal_v91": True, "window_observer_v90": True, "sha256": digest}))
           '
       - name: Boot production ASGI entrypoint and verify health
         run: |
@@ -112,13 +119,15 @@ jobs:
           payload = json.load(open('/tmp/chat2api-version.json', encoding='utf-8'))
           assert payload['server']['runtime_aligned'] is True
           assert payload['server']['entrypoint'] == 'app.entry:app'
-          assert payload['server']['runtime_version'] == '0.22.74'
-          assert payload['chrome_bridge']['bundle_version'] == '0.8.30'
+          assert payload['server']['runtime_version'] == '0.22.75'
+          assert payload['chrome_bridge']['bundle_version'] == '0.8.31'
           assert payload['chrome_bridge']['route_window_authority_revision'] == 30
           assert payload['chrome_bridge']['window_observer_revision'] == 90
+          assert payload['chrome_bridge']['route_close_terminal_revision'] == 91
           assert payload['features']['capacity_scheduler_v58'] is True
           assert payload['features']['server_side_same_api_fifo_v58'] is True
           assert payload['features']['worker_single_route_authority_v30'] is True
+          assert payload['features']['unexpected_route_close_terminal_v91'] is True
           assert payload['features']['window_observer_v90'] is True
           assert payload['features']['responses_tool_stream_v118'] is True
           assert payload['features']['same_api_parallel_requests'] is False
@@ -126,5 +135,5 @@ jobs:
           assert payload['features']['speculative_worker_windows'] is False
           assert payload['features']['worker_strict_api_fifo_v29'] is False
           assert payload['features']['worker_window_fifo_manager_v88'] is False
-          print(json.dumps({'production_entrypoint': True, 'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'server_fifo_v58': True, 'route_authority_v30': True}))
+          print(json.dumps({'production_entrypoint': True, 'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'server_fifo_v58': True, 'route_authority_v30': True, 'route_close_terminal_v91': True}))
           PY
