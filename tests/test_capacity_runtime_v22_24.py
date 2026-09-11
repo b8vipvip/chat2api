@@ -39,7 +39,7 @@ def test_capacity_controller_vm_contracts_cover_native_and_reporter_paths():
 
 
 def test_runtime_contract_publishes_single_authority_v02275():
-    assert SERVER_RUNTIME_VERSION == "0.22.76"
+    assert SERVER_RUNTIME_VERSION == "0.22.77"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.32"
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["chrome_bridge"]["version"] == "0.8.1"
@@ -52,6 +52,7 @@ def test_runtime_contract_publishes_single_authority_v02275():
     assert payload["features"]["worker_single_route_authority_v30"] is True
     assert payload["features"]["unexpected_route_close_terminal_v91"] is True
     assert payload["features"]["window_observer_v90"] is True
+    assert payload["features"]["linux_worker_device_console_v122"] is True
     assert payload["features"]["same_api_parallel_requests"] is False
     assert payload["features"]["browser_side_same_api_queue"] is False
     assert payload["features"]["speculative_worker_windows"] is False
@@ -84,3 +85,4 @@ def test_runtime_contract_publishes_single_authority_v02275():
     assert "window-observer-v90" in revision
     assert "route-close-terminal-v91" in revision
     assert "release-v02275" in revision
+    assert "linux-device-worker-console-v122" in revision
