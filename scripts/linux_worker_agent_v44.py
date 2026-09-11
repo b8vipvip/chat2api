@@ -21,9 +21,10 @@ from pathlib import Path
 
 import linux_worker_agent as base
 import linux_worker_agent_v43  # noqa: F401 - installs the v43 initialize wrapper on base
+import linux_worker_remote_clipboard_v45 as remote_clipboard
 
 
-AGENT_VERSION = "0.3.6"
+AGENT_VERSION = "0.3.7"
 UPGRADE_HELPER = Path(os.environ.get("CHAT2API_UPGRADE_HELPER", "/usr/local/sbin/chat2api-worker-upgrade"))
 GENERATION_PROBE_HELPER = Path(
     os.environ.get(
@@ -42,6 +43,13 @@ GENERATION_HEALTH_MAX_AGE_SECONDS = 300
 base.AGENT_VERSION = AGENT_VERSION
 base.ALLOWED_COMMANDS = set(base.ALLOWED_COMMANDS) | {"upgrade_worker"}
 base.IMPLEMENTED_COMMANDS = set(base.IMPLEMENTED_COMMANDS) | {"upgrade_worker"}
+# Keep pointer/mouse and special-key input on the historical X11 path, but route
+# committed Unicode text and selected-text copy through the CDP overlay. Because
+# base.run_allowed resolves these names from the base module at call time, the
+# substitution also applies to same-host slot agents importing this v44 shim.
+base.open_session = remote_clipboard.open_session
+base.close_session = remote_clipboard.close_session
+base.send_input = remote_clipboard.send_input
 
 
 def _probe_line(line: str) -> dict[str, object] | None:
