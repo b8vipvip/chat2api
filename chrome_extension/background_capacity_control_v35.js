@@ -129,7 +129,9 @@
       routed_window_limit: Number(snapshot?.routed_window_limit || 0) || null,
       routed_window_limit_source: String(snapshot?.routed_window_limit_source || "unset"),
       reserve_window_updated_at: observedAt,
-      window_decision_authority: "conversation-routing-v30+window-limit-v121",
+      // v121 is an admission/limit coordinator only. The conversation router
+      // remains the sole authority for routed-window lifecycle mutation.
+      window_decision_authority: "conversation-routing-v30",
       speculative_windows: false,
     };
 
