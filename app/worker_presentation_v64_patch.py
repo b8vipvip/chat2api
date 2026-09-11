@@ -31,6 +31,18 @@ async def _response_bytes(response: Response) -> bytes:
     return b"".join(chunks)
 
 
+def _install_v121_if_ready(app: FastAPI) -> None:
+    required = (
+        "registry",
+        "admin_sessions",
+        "linux_workers",
+        "worker_login_sessions",
+        "send_linux_worker_command",
+    )
+    if all(hasattr(app.state, name) for name in required):
+        install_worker_limits_clipboard_v121_patch(app)
+
+
 def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
     """Expose Worker presentation data with a bounded passive console enhancer.
 
@@ -43,8 +55,8 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
     """
     if getattr(app.state, "worker_presentation_v66_installed", False):
         # The v121 layer is independently idempotent; calling it here also makes
-        # hot-reload/test app factories converge if v66 was preinstalled first.
-        install_worker_limits_clipboard_v121_patch(app)
+        # hot-reload/test app factories converge once the full Worker plane exists.
+        _install_v121_if_ready(app)
         return app
     app.state.worker_presentation_v66_installed = True
 
@@ -133,5 +145,5 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
     # v121 is the final Worker settings/remote-login console layer. Installing it
     # here keeps app.entry ordering stable while guaranteeing that it wraps the
     # already-decorated v66 registry summaries and is injected after v66 assets.
-    install_worker_limits_clipboard_v121_patch(app)
+    _install_v121_if_ready(app)
     return app
