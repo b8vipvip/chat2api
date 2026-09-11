@@ -120,185 +120,199 @@ def install_linux_worker_upgrade_patch(app: FastAPI) -> FastAPI:
         reset: bool = False,
     ) -> dict[str, Any]:
         now = iso(utcnow())
+        safe_state = str(state or "running")[:32]
+        safe_stage = str(stage or "running")[:80]
+        safe_message = str(message or "").replace("\r", " ").replace("\n", " ").strip()[:700]
+        safe_percent = max(0, min(int(percent or 0), 100))
         with store._lock:
-            item = worker(worker_id)
-            metadata = dict(item.get("metadata") or {}) if isinstance(item.get("metadata"), dict) else {}
+            item = store.data["workers"].get(worker_id)
+            if not item:
+                raise KeyError(worker_id)
+            metadata = dict(item.get("metadata") or {})
             previous = metadata.get("worker_upgrade") if isinstance(metadata.get("worker_upgrade"), dict) else {}
             history = [] if reset else list(previous.get("history") or [])[-79:]
-            entry = {
-                "at": now,
-                "state": state,
-                "stage": stage,
-                "percent": max(0, min(int(percent), 100)),
-                "message": str(message or "")[:700],
-            }
-            history.append(entry)
-            payload = {
-                "state": state,
-                "stage": stage,
-                "percent": entry["percent"],
-                "message": entry["message"],
-                "started_at": now if reset or not previous.get("started_at") else str(previous.get("started_at")),
+            last = history[-1] if history else {}
+            if last.get("stage") != safe_stage or last.get("message") != safe_message or last.get("state") != safe_state:
+                history.append({
+                    "at": now,
+                    "state": safe_state,
+                    "stage": safe_stage,
+                    "percent": safe_percent,
+                    "message": safe_message,
+                })
+            started_at = now if reset or not previous.get("started_at") else str(previous.get("started_at"))
+            current = {
+                "state": safe_state,
+                "stage": safe_stage,
+                "percent": safe_percent,
+                "message": safe_message,
+                "started_at": started_at,
                 "updated_at": now,
-                "completed_at": now if state in TERMINAL_STATES else "",
+                "completed_at": now if safe_state in TERMINAL_STATES else "",
                 "target_server_runtime": SERVER_RUNTIME_VERSION,
                 "target_agent_version": TARGET_AGENT_VERSION,
                 "target_chrome_bridge_version": CHROME_BRIDGE_BUNDLE_VERSION,
                 "history": history[-80:],
             }
-            metadata["worker_upgrade"] = payload
+            metadata["worker_upgrade"] = current
             item["metadata"] = metadata
             store._save()
-            return dict(payload)
+            return dict(current)
 
-    @app.get(ASSET_PATH, include_in_schema=False)
-    async def worker_upgrade_asset() -> Response:
-        path = Path(__file__).with_name("admin_linux_worker_upgrade_v44.js")
-        return Response(
-            path.read_text(encoding="utf-8"),
-            media_type="application/javascript",
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
-        )
-
-    @app.get(BOOTSTRAP_PATH, include_in_schema=False)
-    async def worker_bootstrap_script() -> Response:
-        path = Path(__file__).resolve().parents[1] / "scripts" / "bootstrap_linux_worker.sh"
-        text = _patch_bootstrap(path.read_text(encoding="utf-8"))
-        return Response(
-            text,
-            media_type="text/x-shellscript",
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
-        )
-
-    @app.post("/api/admin/linux-workers/{worker_id}/upgrade")
-    async def upgrade_worker(worker_id: str, request: Request) -> dict[str, Any]:
-        admin(request)
-        item = worker(worker_id)
-        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-        previous = metadata.get("worker_upgrade") if isinstance(metadata.get("worker_upgrade"), dict) else {}
-        if str(previous.get("state") or "") in {"queued", "running"}:
-            return {
-                "scheduled": True,
-                "already_running": True,
-                "upgrade": dict(previous),
-                "target_agent_version": TARGET_AGENT_VERSION,
-                "target_chrome_bridge_version": CHROME_BRIDGE_BUNDLE_VERSION,
-            }
-
-        write_state(
-            worker_id,
-            state="queued",
-            stage="queued",
-            message="已提交 Worker 在线更新任务",
-            percent=0,
-            reset=True,
-        )
-        send = getattr(app.state, "send_linux_worker_command", None)
-        if not callable(send):
-            write_state(
-                worker_id,
-                state="failed",
-                stage="schedule",
-                message="Worker 控制通道不可用",
-                percent=100,
-            )
-            raise HTTPException(503, "Worker command channel is unavailable")
-        try:
-            command = await send(worker_id, "upgrade_worker", {}, wait=True, timeout=20)
-        except HTTPException as exc:
-            message = str(exc.detail or "Worker 更新命令发送失败")[:500]
-            write_state(
-                worker_id,
-                state="failed",
-                stage="schedule",
-                message=message,
-                percent=100,
-            )
-            raise
-        result = command.get("result") if isinstance(command.get("result"), dict) else {}
-        if not result.get("ok"):
-            error = str(result.get("error") or "upgrade_schedule_failed")[:200]
-            write_state(
-                worker_id,
-                state="failed",
-                stage="schedule",
-                message=f"Worker 无法启动在线更新：{error}",
-                percent=100,
-            )
-            raise HTTPException(422, f"Worker upgrade could not start: {error}")
-        payload = write_state(
-            worker_id,
-            state="queued",
-            stage="scheduled",
-            message="Worker 已接受在线更新任务，等待 root updater 接管",
-            percent=1,
-        )
-        return {
-            "scheduled": True,
-            "already_running": bool(result.get("already_running")),
-            "unit": str(result.get("unit") or "")[:160],
-            "upgrade": payload,
-            "target_agent_version": TARGET_AGENT_VERSION,
-            "target_chrome_bridge_version": CHROME_BRIDGE_BUNDLE_VERSION,
-        }
-
-    @app.get("/api/admin/linux-workers/{worker_id}/upgrade")
-    async def worker_upgrade_status(worker_id: str, request: Request) -> dict[str, Any]:
-        admin(request)
+    def public_status(worker_id: str) -> dict[str, Any]:
         item = worker(worker_id)
         metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
         upgrade = metadata.get("worker_upgrade") if isinstance(metadata.get("worker_upgrade"), dict) else {}
         return {
             "worker_id": worker_id,
+            "name": str(item.get("name") or item.get("hostname") or worker_id),
+            "online": worker_id in app.state.worker_sockets,
+            "current": {
+                "agent_version": str(item.get("agent_version") or ""),
+                "chrome_bridge_version": str(item.get("chrome_bridge_version") or ""),
+            },
+            "target": {
+                "server_runtime": SERVER_RUNTIME_VERSION,
+                "agent_version": TARGET_AGENT_VERSION,
+                "chrome_bridge_version": CHROME_BRIDGE_BUNDLE_VERSION,
+            },
             "upgrade": dict(upgrade),
-            "agent_version": str(item.get("agent_version") or ""),
-            "chrome_bridge_version": str(item.get("chrome_bridge_version") or ""),
-            "target_agent_version": TARGET_AGENT_VERSION,
-            "target_chrome_bridge_version": CHROME_BRIDGE_BUNDLE_VERSION,
         }
 
     @app.post("/api/workers/{worker_id}/upgrade-progress")
-    async def worker_upgrade_progress(worker_id: str, request: Request) -> dict[str, Any]:
-        item = worker(worker_id)
-        worker_id_header = str(request.headers.get("X-Worker-ID") or "")
-        worker_token = str(request.headers.get("X-Worker-Token") or "")
-        if worker_id_header != worker_id or not worker_token or not store.authenticate(worker_id, worker_token):
-            raise HTTPException(401, "Invalid Worker credentials")
+    async def worker_upgrade_progress(worker_id: str, request: Request) -> dict[str, bool]:
+        header_id = str(request.headers.get("x-worker-id") or "")
+        token = str(request.headers.get("x-worker-token") or "")
+        if header_id != worker_id or not store.authenticate(worker_id, token):
+            raise HTTPException(401, "Worker authentication required")
         body = await request.json()
-        state = str(body.get("state") or "running").lower()
-        if state not in {"queued", "running", "succeeded", "failed", "unsupported"}:
-            state = "running"
-        stage = str(body.get("stage") or "running")[:120]
-        message = str(body.get("message") or "")[:700]
-        try:
-            percent = max(0, min(int(body.get("percent") or 0), 100))
-        except (TypeError, ValueError):
-            percent = 0
-        payload = write_state(
+        if not isinstance(body, dict):
+            raise HTTPException(400, "Upgrade progress must be an object")
+        write_state(
             worker_id,
-            state=state,
-            stage=stage,
-            message=message,
-            percent=percent,
+            state=str(body.get("state") or "running"),
+            stage=str(body.get("stage") or "running"),
+            message=str(body.get("message") or ""),
+            percent=int(body.get("percent") or 0),
         )
-        return {"ok": True, "upgrade": payload}
+        return {"ok": True}
+
+    @app.get("/api/admin/linux-workers/{worker_id}/upgrade-status")
+    async def admin_upgrade_status(worker_id: str, request: Request) -> dict[str, Any]:
+        admin(request)
+        return public_status(worker_id)
+
+    @app.post("/api/admin/linux-workers/{worker_id}/upgrade")
+    async def admin_upgrade_worker(worker_id: str, request: Request) -> dict[str, Any]:
+        admin(request)
+        worker(worker_id)
+        write_state(
+            worker_id,
+            state="queued",
+            stage="queued",
+            message="中心服务器已接收更新请求，正在通知 Worker",
+            percent=1,
+            reset=True,
+        )
+        try:
+            command = await app.state.send_linux_worker_command(
+                worker_id,
+                "upgrade_worker",
+                {},
+                wait=True,
+                timeout=20,
+            )
+        except HTTPException as exc:
+            write_state(
+                worker_id,
+                state="failed",
+                stage="control-plane",
+                message=str(exc.detail),
+                percent=1,
+            )
+            raise
+
+        result = command.get("result") if isinstance(command, dict) else None
+        if isinstance(result, dict) and result.get("ok"):
+            write_state(
+                worker_id,
+                state="running",
+                stage="scheduled",
+                message="Worker 已接受在线更新任务",
+                percent=2,
+            )
+            return {
+                "accepted": True,
+                "scheduled": bool(result.get("scheduled")),
+                "unit": str(result.get("unit") or "")[:160],
+                **public_status(worker_id),
+            }
+
+        error = str((result or {}).get("error") or "") if isinstance(result, dict) else "unknown_error"
+        detail = str((result or {}).get("detail") or "") if isinstance(result, dict) else ""
+        detail = detail.replace("\r", " ").replace("\n", " ").strip()[:300]
+        diagnostic = error + (f" · {detail}" if detail else "")
+        server = app.state.settings.resolved_public_url(str(request.base_url)).rstrip("/")
+        command_text = f"curl -fsSL {server}/bootstrap/linux-worker.sh | sudo bash -s -- --server {server} --upgrade"
+
+        if error in {
+            "command_not_allowed",
+            "not_implemented",
+            "upgrade_helper_missing",
+            "upgrade_schedule_failed",
+            "upgrade_schedule_timeout",
+            "upgrade_helper_launch_failed",
+        }:
+            write_state(
+                worker_id,
+                state="unsupported",
+                stage="one-time-enable",
+                message=f"Worker 在线更新无法启动：{diagnostic}。请执行一次幂等修复升级；完成后可继续使用在线更新按钮。",
+                percent=0,
+            )
+            return {
+                "accepted": False,
+                "needs_bootstrap_once": True,
+                "bootstrap_command": command_text,
+                "error": error,
+                "detail": detail,
+                **public_status(worker_id),
+            }
+
+        write_state(
+            worker_id,
+            state="failed",
+            stage="schedule",
+            message=f"Worker 无法启动在线更新：{diagnostic}",
+            percent=1,
+        )
+        raise HTTPException(502, f"Worker 无法启动在线更新：{diagnostic}")
+
+    @app.get(ASSET_PATH, include_in_schema=False)
+    async def linux_worker_upgrade_asset() -> Response:
+        source = Path(__file__).with_name("admin_linux_worker_upgrade_v44.js").read_text(encoding="utf-8")
+        return Response(source, media_type="application/javascript", headers={"Cache-Control": "no-store"})
 
     @app.middleware("http")
-    async def linux_worker_upgrade_console(request: Request, call_next):
+    async def linux_worker_upgrade_runtime(request: Request, call_next):
         response = await call_next(request)
-        if request.url.path != "/admin" or "text/html" not in response.headers.get("content-type", ""):
-            return response
-        raw = await _response_bytes(response)
-        text = raw.decode("utf-8", errors="replace")
-        marker = f'<script src="{ASSET_PATH}"></script>'
-        if marker not in text:
-            text = text.replace("</body>", marker + "</body>")
-        headers = {
-            key: value
-            for key, value in response.headers.items()
-            if key.lower() not in {"content-length", "content-type"}
-        }
-        headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
-        return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
+        path = request.url.path
+        if path == BOOTSTRAP_PATH and "text" in response.headers.get("content-type", ""):
+            raw = await _response_bytes(response)
+            text = _patch_bootstrap(raw.decode("utf-8", errors="replace"))
+            headers = {k: v for k, v in response.headers.items() if k.lower() not in {"content-length", "content-type"}}
+            headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            return Response(text, status_code=response.status_code, media_type="text/x-shellscript", headers=headers)
+
+        if path == "/admin" and "text/html" in response.headers.get("content-type", ""):
+            raw = await _response_bytes(response)
+            text = raw.decode("utf-8", errors="replace")
+            marker = f'<script src="{ASSET_PATH}"></script>'
+            if marker not in text:
+                text = text.replace("</body>", marker + "</body>")
+            headers = {k: v for k, v in response.headers.items() if k.lower() not in {"content-length", "content-type"}}
+            headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+            return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
+        return response
 
     return app
