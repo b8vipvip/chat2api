@@ -47,7 +47,7 @@ def test_v118_still_rejects_a_different_nested_custom_tool() -> None:
 
 def test_worker_bundle_and_runtime_are_v02275_and_0831() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert SERVER_RUNTIME_VERSION == "0.22.76"
+    assert SERVER_RUNTIME_VERSION == "0.22.77"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.32"
     assert manifest["version"] == "0.8.32"
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
@@ -55,12 +55,14 @@ def test_worker_bundle_and_runtime_are_v02275_and_0831() -> None:
     assert payload["features"]["server_side_same_api_fifo_v58"] is True
     assert payload["features"]["worker_single_route_authority_v30"] is True
     assert payload["features"]["unexpected_route_close_terminal_v91"] is True
+    assert payload["features"]["linux_worker_device_console_v122"] is True
     assert payload["chrome_bridge"]["route_close_terminal_revision"] == 91
     assert payload["features"]["responses_tool_stream_v118"] is True
     assert payload["features"]["same_api_parallel_requests"] is False
     assert payload["features"]["browser_side_same_api_queue"] is False
     assert payload["features"]["worker_strict_api_fifo_v29"] is False
     assert "release-v02275" in payload["server"]["feature_revision"]
+    assert "linux-device-worker-console-v122" in payload["server"]["feature_revision"]
     assert SCHEDULER_PATCH_ID == "server-single-authority-scheduler-v58"
 
 
