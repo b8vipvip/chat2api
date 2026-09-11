@@ -22,14 +22,12 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          root = Path('.')
           bundle_files = [
               Path('chrome_extension/content_bundle_marker_v48.js'),
               Path('chrome_extension/content_bundle_marker_v71.js'),
               Path('chrome_extension/content_runtime_contract_v48.js'),
               Path('chrome_extension/content_runtime_contract_v71.js'),
               Path('chrome_extension/background_runtime_preflight_v48.js'),
-              Path('.github/workflows/production-image-smoke.yml'),
           ]
           for path in bundle_files:
               text = path.read_text(encoding='utf-8')
@@ -62,16 +60,6 @@ jobs:
           )
           runtime.write_text(text, encoding='utf-8')
 
-          smoke = Path('.github/workflows/production-image-smoke.yml')
-          text = smoke.read_text(encoding='utf-8').replace("'0.22.77'", "'0.22.78'")
-          file_anchor = '          assert Path("/app/app/linux_worker_device_console_v122_patch.py").is_file()\n'
-          if file_anchor in text and 'linux_worker_console_v123_patch.py' not in text:
-              text = text.replace(file_anchor, file_anchor + '          assert Path("/app/app/linux_worker_console_v123_patch.py").is_file()\n', 1)
-          feature_anchor = "          assert payload['features']['linux_worker_device_console_v122'] is True\n"
-          if feature_anchor in text and "linux_worker_console_v123" not in text:
-              text = text.replace(feature_anchor, feature_anchor + "          assert payload['features']['linux_worker_console_v123'] is True\n          assert payload['features']['physical_startup_window_observer_v90'] is True\n", 1)
-          smoke.write_text(text, encoding='utf-8')
-
           for path in sorted(Path('tests').rglob('*')):
               if not path.is_file() or path.suffix not in {'.py', '.js', '.mjs'}:
                   continue
@@ -82,6 +70,6 @@ jobs:
           PY
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app/runtime_contract.py chrome_extension tests .github/workflows/production-image-smoke.yml
+          git add app/runtime_contract.py chrome_extension tests
           git commit -m 'release: synchronize 0.22.78 and Worker bundle 0.8.33 contracts'
           git push origin HEAD:fix/linux-worker-console-v123-20260911
