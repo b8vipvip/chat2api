@@ -43,7 +43,7 @@ def test_multimodal_ready_gate_javascript_syntax() -> None:
 
 def test_worker_manifest_loads_ready_gate_immediately_after_v78_uploader() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.31"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.32"
     isolated = next(item for item in manifest["content_scripts"] if item.get("world") != "MAIN")
     scripts = isolated["js"]
     assert scripts.index("content_multimodal_v78.js") < scripts.index("content_multimodal_settle_v84.js")
@@ -63,7 +63,7 @@ def test_runtime_preflight_requires_v84_ready_gate() -> None:
 
 def test_multimodal_ready_runtime_and_bundle_contract() -> None:
     assert SERVER_RUNTIME_VERSION
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.31"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.32"
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["server"]["runtime_version"] == SERVER_RUNTIME_VERSION
     assert payload["chrome_bridge"]["multimodal_revision"] == 85
