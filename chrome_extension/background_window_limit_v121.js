@@ -108,10 +108,10 @@
     const route = entry?.route;
     const windowId = Number(route?.window_id);
     if (!route || !Number.isInteger(windowId) || route.inflight_request_id) return false;
-    // v121 owns only admission/cap policy. Delegate the actual route reset,
-    // alarm cleanup, persistence and chrome.windows.remove to the router's
-    // existing lifecycle authority so one eviction has exactly one generation
-    // transition and onRemoved cannot race a second reset.
+    // v121 owns only admission/cap policy. Delegate route reset, alarm cleanup,
+    // persistence and physical window closure to the router's existing lifecycle
+    // authority so one eviction has exactly one generation transition and the
+    // browser removal event cannot race a second reset.
     if (typeof value.retireRoute !== "function") return false;
     return Boolean(await value.retireRoute(entry.key, route, "", reason));
   }
