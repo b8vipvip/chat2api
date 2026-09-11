@@ -550,6 +550,8 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
         async for chunk in response.body_iterator:
             body += chunk
         html = body.decode("utf-8", errors="replace")
+        # Historical Linux console scripts are removed instead of hidden so they
+        # cannot poll, render, relay actions, or make device decisions.
         html = LEGACY_LINUX_ASSET_RE.sub("", html)
         marker = f'<script src="{ASSET_PATH}?v={PATCH_REVISION}"></script>'
         if marker not in html:
