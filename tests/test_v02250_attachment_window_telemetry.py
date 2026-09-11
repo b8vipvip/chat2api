@@ -53,7 +53,7 @@ def test_worker_window_denominator_never_falls_back_to_concurrency_limit() -> No
 
 def test_runtime_identity_and_v82_features_are_current() -> None:
     assert SERVER_RUNTIME_VERSION
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.33"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.34"
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["server"]["runtime_version"] == SERVER_RUNTIME_VERSION
     assert payload["features"]["unicode_attachment_download_v82"] is True

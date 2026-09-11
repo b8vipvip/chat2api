@@ -212,23 +212,24 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(401, "Administrator session required")
 
     async def setup_options() -> dict[str, Any]:
-        pairings = await app.state.registry.list_pairing_codes()
+        await app.state.pairings.ensure_loaded()
+        pairings = app.state.pairings.list_public()
         proxies = app.state.linux_worker_proxy_catalog.list()
         return {
             "pairing_codes": [
                 {
                     "pairing_id": str(item.get("pairing_id") or ""),
                     "device_name": str(item.get("name") or "未命名设备"),
-                    "prefix": str(item.get("code_prefix") or ""),
+                    "prefix": str(item.get("prefix") or ""),
                     "enabled": bool(item.get("enabled", True)),
-                    "paired": bool(item.get("client_id")),
+                    "paired": bool(item.get("bound_client_id")),
                 }
                 for item in pairings if isinstance(item, dict)
             ],
             "proxies": proxies,
         }
 
-    def create_install(request: Request, *, pairing: dict[str, Any], proxy: dict[str, Any], slot: int, parent_device_id: str = "") -> dict[str, Any]:
+    def create_install(request: Request, *, pairing: dict[str, Any], pairing_code: str, proxy: dict[str, Any], slot: int, parent_device_id: str = "") -> dict[str, Any]:
         device_name = str(pairing.get("device_name") or "Linux 设备").strip()[:80] or "Linux 设备"
         worker_name = device_name if slot == 1 else f"{device_name} · Worker {slot}"
         metadata = {
@@ -252,12 +253,12 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
         if slot == 1:
             command = (
                 f"curl -fsSL {shlex.quote(server + '/api/workers/bootstrap')} | "
-                f"sudo bash -s -- --server {shlex.quote(server)} --enroll-code {shlex.quote(enrollment['code'])}"
+                f"sudo bash -s -- --server {shlex.quote(server)} --enroll-code {shlex.quote(enrollment['code'])} --pairing-code {shlex.quote(pairing_code)} --device-name {shlex.quote(device_name)}"
             )
         else:
             command = (
                 "sudo bash /opt/chat2api-worker/scripts/linux_worker_slot_install_reported.sh "
-                f"--server {shlex.quote(server)} --enroll-code {shlex.quote(enrollment['code'])} --slot {slot}"
+                f"--server {shlex.quote(server)} --enroll-code {shlex.quote(enrollment['code'])} --slot {slot} --pairing-code {shlex.quote(pairing_code)} --device-name {shlex.quote(device_name)}"
             )
         app.state.linux_worker_installs.mark_command(str(install["install_id"]), command)
         row = app.state.linux_worker_installs.get(str(install["install_id"])) or {}
@@ -286,7 +287,7 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
             async def apply_proxy() -> None:
                 await asyncio.sleep(1.0)
                 try:
-                    await app.state.send_linux_worker_command(worker_id, "apply_proxy", {"share_link": share_link}, 90)
+                    await app.state.send_linux_worker_command(worker_id, "apply_proxy_config", {"share_link": share_link}, wait=True, timeout=90)
                     app.state.linux_workers.update_metadata(worker_id, {"proxy_catalog_name": proxy_name})
                 except Exception:
                     return
@@ -324,7 +325,8 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
         for row in _device_rows(app):
             if str(row.get("device_pairing_id") or "") == pairing_id:
                 raise HTTPException(409, "这个设备码已经属于一个 Linux 设备")
-        return create_install(request, pairing=pairing, proxy=proxy, slot=1)
+        pairing_code, _ = await app.state.pairings.reveal_or_rotate(pairing_id)
+        return create_install(request, pairing=pairing, pairing_code=pairing_code, proxy=proxy, slot=1)
 
     @app.post("/api/admin/linux-devices/{device_id}/workers")
     async def add_linux_device_worker(device_id: str, request: Request) -> dict[str, Any]:
@@ -352,7 +354,8 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
         slot = next((value for value in range(MIN_SLOT, MAX_SLOT + 1) if value not in occupied), None)
         if slot is None:
             raise HTTPException(409, "此设备已达到 32 个 Worker 上限")
-        return create_install(request, pairing=pairing, proxy=proxy, slot=slot, parent_device_id=device_id)
+        pairing_code, _ = await app.state.pairings.reveal_or_rotate(pairing_id)
+        return create_install(request, pairing=pairing, pairing_code=pairing_code, proxy=proxy, slot=slot, parent_device_id=device_id)
 
     @app.delete("/api/admin/linux-devices/{device_id}")
     async def delete_linux_device(device_id: str, request: Request) -> dict[str, Any]:

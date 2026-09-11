@@ -20,6 +20,7 @@ scripts/*
 !scripts/linux_worker_agent.py
 !scripts/linux_worker_agent_v43.py
 !scripts/linux_worker_agent_v44.py
+!scripts/linux_worker_extension_pair.py
 !scripts/linux_worker_proxy.py
 !scripts/linux_worker_remote_login.py
 !scripts/linux_worker_remote_clipboard_v45.py
