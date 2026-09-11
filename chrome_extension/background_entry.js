@@ -35,12 +35,13 @@ importScripts(
   // This module still has no create/remove/mutation authority of its own.
   "background_route_close_terminal_v91.js",
 
-  // v0.8.31 request/window ownership boundary:
-  // conversation_routing.js is the only authority allowed to select, create,
-  // reuse, rotate, retire, or idle-close API route windows. There is no warm,
-  // reserve, tab-supervisor, browser FIFO, quarantine, or window-manager owner.
-  // conversation_dispatch.js is transport-only; same-key FIFO is server v58.
+  // v0.8.32 request/window ownership boundary:
+  // conversation_routing.js remains the only module that creates/selects API
+  // route windows. background_window_limit_v121.js is a bounded admission and
+  // idle-eviction guard around that authority: it never creates a window and it
+  // never closes an in-flight route. There is still no speculative warm pool.
   "conversation_routing.js",
+  "background_window_limit_v121.js",
   "conversation_dispatch.js",
 
   "background_tool_isolation_v48.js",
