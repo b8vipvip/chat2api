@@ -49,6 +49,7 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add app scripts chrome_extension tests .github/workflows/production-image-smoke.yml
+          git add app scripts chrome_extension tests
+          git checkout -- .github/workflows/production-image-smoke.yml
           git commit -m 'feat: isolate Linux Worker management operations'
           git push origin HEAD:feat/linux-worker-isolated-manager-v126-20260912
