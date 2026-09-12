@@ -211,7 +211,7 @@ def test_binding_versions_are_aligned():
     assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.35"' in runtime
     assert '"version": "0.8.35"' in manifest
-    assert 'agent_version:"0.3.2"' in bootstrap
+    assert 'agent_version:"0.3.8"' in bootstrap
     assert "install_linux_worker_bridge_binding_patch(app)" in entry
     assert "install_worker_disable_authority_patch(app)" in entry
     assert entry.index("install_linux_worker_patch(app)") < entry.index("install_linux_worker_bridge_binding_patch(app)") < entry.index("install_runtime_contract(app)")

@@ -90,7 +90,7 @@ def test_bootstrap_installs_only_headless_capture_dependencies_not_desktop_or_re
     source = (ROOT / "scripts" / "bootstrap_linux_worker.sh").read_text(encoding="utf-8")
     assert "x11-apps xdotool imagemagick" in source
     assert "Environment=DISPLAY=:99" in source
-    assert 'agent_version:"0.3.2"' in source
+    assert 'agent_version:"0.3.8"' in source
     lowered = source.lower()
     for forbidden in ("x11vnc", "novnc", "xrdp", "xfce", "gnome", "5900", "6080", "3389"):
         assert forbidden not in lowered
