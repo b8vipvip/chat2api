@@ -28,6 +28,6 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add app/linux_worker_device_authority_v124_patch.py app/runtime_contract.py .github/workflows/production-image-smoke.yml tests
+          git add app/linux_worker_device_authority_v124_patch.py app/runtime_contract.py tests
           git commit -m 'fix: generate Linux install commands with public HTTPS origin'
           git push origin HEAD:fix/linux-device-https-origin-v125-20260912
