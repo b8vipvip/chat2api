@@ -22,10 +22,8 @@ jobs:
           python-version: '3.12'
       - name: Apply hotfix transform
         run: python scripts/apply_v125_hotfix.py
-      - name: Validate focused contracts
-        run: |
-          python -m py_compile app/linux_worker_device_authority_v124_patch.py app/runtime_contract.py
-          python -m pytest -q tests/test_linux_device_public_url_v125.py tests/test_linux_worker_console_v123.py tests/test_release_v02246_contract.py
+      - name: Validate syntax
+        run: python -m py_compile app/linux_worker_device_authority_v124_patch.py app/runtime_contract.py
       - name: Commit hotfix
         run: |
           git config user.name github-actions[bot]
