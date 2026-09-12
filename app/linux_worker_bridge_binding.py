@@ -189,13 +189,18 @@ def install_linux_worker_bridge_binding_patch(app: FastAPI) -> FastAPI:
 
     @app.post("/api/workers/extension-binding-ticket")
     async def issue_extension_binding_ticket(request: Request) -> dict[str, Any]:
-        worker_id = _safe_text(request.headers.get("x-worker-id"), 120)
+        auth_worker_id = _safe_text(request.headers.get("x-worker-id"), 120)
         worker_token = str(request.headers.get("x-worker-token") or "")
-        if not worker_id or not worker_token or not workers.authenticate(worker_id, worker_token):
+        if not auth_worker_id or not worker_token or not workers.authenticate(auth_worker_id, worker_token):
             raise HTTPException(401, "Invalid Worker credentials")
+        worker_id = _safe_text(request.headers.get("x-target-worker-id"), 120) or auth_worker_id
         worker = workers.data["workers"].get(worker_id)
         if not worker or worker.get("revoked_at"):
             raise HTTPException(409, "Worker is unavailable")
+        if worker_id != auth_worker_id:
+            metadata = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}
+            if str(metadata.get("controller_worker_id") or "") != auth_worker_id:
+                raise HTTPException(403, "Target Worker does not belong to this device controller")
 
         current_client_id = _safe_text(worker.get("extension_client_id"), 160)
         if current_client_id:

@@ -109,19 +109,22 @@ def install_linux_worker_patch(app: FastAPI) -> FastAPI:
     ) -> dict[str, Any]:
         if command not in ALLOWED_COMMANDS:
             raise HTTPException(400, "Command is not in the worker allowlist")
-        worker_exists(worker_id)
-        socket = app.state.worker_sockets.get(worker_id)
+        worker = worker_exists(worker_id)
+        metadata = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}
+        controller_id = str(metadata.get("controller_worker_id") or worker_id)
+        socket = app.state.worker_sockets.get(controller_id)
         if not socket:
-            raise HTTPException(409, "Worker is offline")
+            raise HTTPException(409, "Worker device controller is offline")
         request_id = "cmd_" + uuid.uuid4().hex
+        payload = {"type": "command", "request_id": request_id, "command": command, "arguments": arguments, "target_worker_id": worker_id}
         if not wait:
-            await socket.send_json({"type": "command", "request_id": request_id, "command": command, "arguments": arguments})
+            await socket.send_json(payload)
             return {"accepted": True, "request_id": request_id}
 
         future = asyncio.get_running_loop().create_future()
-        app.state.worker_command_waiters[request_id] = (worker_id, future)
+        app.state.worker_command_waiters[request_id] = (controller_id, future)
         try:
-            await socket.send_json({"type": "command", "request_id": request_id, "command": command, "arguments": arguments})
+            await socket.send_json(payload)
             try:
                 result = await asyncio.wait_for(future, timeout=timeout)
             except asyncio.TimeoutError as exc:
@@ -350,6 +353,12 @@ def install_linux_worker_patch(app: FastAPI) -> FastAPI:
                 message_type = message.get("type")
                 if message_type == "heartbeat":
                     await websocket.send_json({"type": "heartbeat.ack", "worker": store.heartbeat(worker_id, message.get("data") or {})})
+                elif message_type == "worker.heartbeat":
+                    child_id = str(message.get("worker_id") or "")
+                    child = store.data.get("workers", {}).get(child_id)
+                    child_meta = child.get("metadata") if isinstance(child, dict) and isinstance(child.get("metadata"), dict) else {}
+                    if child and not child.get("revoked_at") and str(child_meta.get("controller_worker_id") or "") == worker_id:
+                        store.heartbeat(child_id, message.get("data") or {})
                 elif message_type == "command.result":
                     request_id = str(message.get("request_id") or "")
                     waiter = app.state.worker_command_waiters.get(request_id)
