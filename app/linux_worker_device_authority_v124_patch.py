@@ -31,11 +31,85 @@ def _utc_iso() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _server_url(request: Request) -> str:
-    forwarded = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip()
-    scheme = forwarded or request.url.scheme
-    host = str(request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",", 1)[0].strip()
-    return f"{scheme}://{host}".rstrip("/")
+def _server_url(app: FastAPI, request: Request) -> str:
+    """Resolve the externally reachable control-plane origin for install commands.
+
+    The admin console is commonly HTTPS behind an HTTP reverse proxy. Never let
+    that internal hop leak into generated Worker commands: prefer an explicit
+    CHAT2API_PUBLIC_URL, then the browser's same-host HTTPS origin/referrer, then
+    forwarded headers. For a non-loopback host with no proxy metadata, HTTPS is
+    the safe default because the bootstrap installer rejects insecure HTTP.
+    """
+    settings = getattr(app.state, "settings", None)
+    configured = str(getattr(settings, "public_url", "") or "").strip().rstrip("/")
+    if configured:
+        return configured
+
+    forwarded_host = str(request.headers.get("x-forwarded-host") or "").split(",", 1)[0].strip()
+    request_host = str(request.headers.get("host") or "").split(",", 1)[0].strip()
+    public_host = forwarded_host or request_host
+
+    def browser_origin(value: str) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+        try:
+            from urllib.parse import urlsplit
+            parsed = urlsplit(raw)
+        except Exception:
+            return ""
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            return ""
+        if public_host and parsed.netloc.lower() != public_host.lower():
+            return ""
+        return f"{parsed.scheme}://{parsed.netloc}"
+
+    origin = browser_origin(str(request.headers.get("origin") or ""))
+    if origin:
+        return origin.rstrip("/")
+    referer = browser_origin(str(request.headers.get("referer") or ""))
+    if referer:
+        return referer.rstrip("/")
+
+    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()
+    if forwarded_proto in {"http", "https"} and public_host:
+        return f"{forwarded_proto}://{public_host}".rstrip("/")
+
+    host_only = public_host.rsplit(":", 1)[0].strip("[]").lower()
+    if public_host and host_only not in {"localhost", "127.0.0.1", "::1"}:
+        return f"https://{public_host}".rstrip("/")
+
+    return f"{request.url.scheme}://{public_host or request.url.netloc}".rstrip("/")
+
+
+def _repair_install_command_origin(command: str, public_url: str) -> str:
+    """Rewrite only the control-plane origin in a previously generated command.
+
+    v0.22.80 could persist an http:// origin when TLS terminated at the reverse
+    proxy. Preserve enrollment/pairing secrets and every other argument while
+    repairing the bootstrap URL and --server value after the server upgrades.
+    """
+    value = str(command or "").strip()
+    if not value:
+        return ""
+    base = str(public_url or "").strip().rstrip("/")
+    if not base:
+        return value
+    quoted_server = shlex.quote(base)
+    quoted_bootstrap = shlex.quote(base + "/bootstrap/linux-worker.sh")
+    value = re.sub(
+        r"(?<=curl -fsSL )\S+/bootstrap/linux-worker\.sh",
+        lambda _match: quoted_bootstrap,
+        value,
+        count=1,
+    )
+    value = re.sub(
+        r"(--server\s+)\S+",
+        lambda match: match.group(1) + quoted_server,
+        value,
+        count=1,
+    )
+    return value
 
 
 def _install_meta(row: dict[str, Any]) -> dict[str, Any]:
@@ -304,7 +378,7 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
             "install_kind": "device" if slot == 1 else "worker_slot",
             "parent_device_id": parent_device_id,
         }
-        server = _server_url(request)
+        server = _server_url(app, request)
         code = str(install.get("code") or "")
         if slot == 1:
             command = (
@@ -427,7 +501,23 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
     @app.get("/api/admin/linux-devices")
     async def list_linux_devices(request: Request) -> dict[str, Any]:
         admin(request)
-        return {"data": _device_rows(app), "authority": "linux-device-v124", "revision": PATCH_REVISION}
+        rows = _device_rows(app)
+        public_url = _server_url(app, request)
+        for device in rows:
+            install_id = str(device.get("install_id") or "")
+            command = str(device.get("install_command") or "")
+            repaired = _repair_install_command_origin(command, public_url)
+            if install_id and repaired and repaired != command:
+                _persist_install_fields(installs, install_id, install_command=repaired)
+                device["install_command"] = repaired
+            for slot in device.get("slot_installations", []):
+                slot_install_id = str(slot.get("install_id") or "")
+                slot_command = str(slot.get("command") or "")
+                repaired_slot = _repair_install_command_origin(slot_command, public_url)
+                if slot_install_id and repaired_slot and repaired_slot != slot_command:
+                    _persist_install_fields(installs, slot_install_id, install_command=repaired_slot)
+                    slot["command"] = repaired_slot
+        return {"data": rows, "authority": "linux-device-v124", "revision": PATCH_REVISION}
 
     @app.get("/api/admin/linux-devices/setup-options")
     async def linux_device_setup_options(request: Request) -> dict[str, Any]:
