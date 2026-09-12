@@ -75,9 +75,13 @@ jobs:
           assert "\"worker_enrollment\"," not in presentation
           assert "worker_enrollment" not in authority
           assert "linux_worker_installs.list_admin()" in authority
+          assert "configured = str(getattr(settings, \"public_url\"" in authority
+          assert "request.headers.get(\"origin\")" in authority
+          assert "return f\"https://{public_host}\"" in authority
+          assert "_repair_install_command_origin" in authority
           assert "install_linux_worker_device_console_v122_patch" not in presentation
           assert "install_linux_worker_console_v123_patch" not in presentation
-          print(json.dumps({"bundle_version": manifest["version"], "linux_device_authority_v124": True, "extension_autopair": True, "sha256": digest}))
+          print(json.dumps({"bundle_version": manifest["version"], "linux_device_authority_v124": True, "public_https_origin_v125": True, "extension_autopair": True, "sha256": digest}))
           '
       - name: Boot production ASGI entrypoint and verify health and admin authority
         run: |
@@ -99,11 +103,12 @@ jobs:
           payload = json.load(open('/tmp/chat2api-version.json', encoding='utf-8'))
           assert payload['server']['runtime_aligned'] is True
           assert payload['server']['entrypoint'] == 'app.entry:app'
-          assert payload['server']['runtime_version'] == '0.22.80'
+          assert payload['server']['runtime_version'] == '0.22.81'
           assert payload['chrome_bridge']['bundle_version'] == '0.8.34'
           assert payload['chrome_bridge']['route_window_authority_revision'] == 30
           assert payload['chrome_bridge']['window_observer_revision'] == 90
           assert payload['features']['linux_worker_device_authority_v124'] is True
+          assert payload['features']['linux_worker_public_https_origin_v125'] is True
           assert payload['features']['linux_worker_device_console_v122'] is False
           assert payload['features']['linux_worker_console_v123'] is False
           assert payload['features']['linux_worker_same_host_slots_v1'] is True
@@ -121,5 +126,5 @@ jobs:
           assert 'linuxDeviceTableV124' in v124
           assert '新增设备' in v124
           assert '管理设备 Worker' in v124
-          print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'linux_device_authority_v124': True, 'admin_linux_assets': assets}))
+          print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'linux_device_authority_v124': True, 'public_https_origin_v125': True, 'admin_linux_assets': assets}))
           PY
