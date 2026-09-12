@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 
 
 def _slot() -> int:
@@ -28,6 +29,7 @@ SLOT = _slot()
 # this process remains on the same runtime contract as the primary Worker.
 import linux_worker_agent as agent  # noqa: E402
 import linux_worker_agent_v44  # noqa: E402,F401
+import linux_worker_agent_v43 as initialize_shim  # noqa: E402
 
 _SUFFIX = f"slot{SLOT}"
 _UNIT_MAP = {
@@ -35,6 +37,8 @@ _UNIT_MAP = {
     "chat2api-xvfb.service": f"chat2api-xvfb-{_SUFFIX}.service",
     "chat2api-chrome.service": f"chat2api-chrome-{_SUFFIX}.service",
 }
+agent.DIAGNOSTICS_HELPER = Path(f"/usr/local/sbin/chat2api-worker-diagnostics-{_SUFFIX}")
+initialize_shim.INITIALIZE_HELPER = Path(f"/usr/local/sbin/chat2api-worker-initialize-{_SUFFIX}")
 _base_service_active = agent.service_active
 _base_build_xray_config = agent.build_xray_config
 

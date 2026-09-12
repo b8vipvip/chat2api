@@ -47,9 +47,9 @@ def test_v118_still_rejects_a_different_nested_custom_tool() -> None:
 
 def test_worker_bundle_and_runtime_are_v02275_and_0831() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert SERVER_RUNTIME_VERSION == "0.22.81"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.34"
-    assert manifest["version"] == "0.8.34"
+    assert SERVER_RUNTIME_VERSION == "0.22.82"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.35"
+    assert manifest["version"] == "0.8.35"
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["features"]["capacity_scheduler_v58"] is True
     assert payload["features"]["server_side_same_api_fifo_v58"] is True

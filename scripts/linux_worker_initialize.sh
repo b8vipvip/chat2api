@@ -2,12 +2,33 @@
 set -Eeuo pipefail
 
 MODE="${1:---schedule}"
-PROFILE_DIR="${CHAT2API_CHROME_PROFILE:-/home/chat2api/.config/chat2api-chrome-worker-01}"
-DEBUG_URL="${CHAT2API_CHROME_DEBUG_URL:-http://127.0.0.1:9222}"
+HELPER_NAME="$(basename -- "$0")"
+SLOT=""
+if [[ "$HELPER_NAME" =~ ^chat2api-worker-initialize-slot([0-9]+)$ ]]; then
+  SLOT="${BASH_REMATCH[1]}"
+  (( SLOT >= 2 && SLOT <= 32 )) || { echo '{"ok":false,"error":"invalid_worker_slot"}'; exit 2; }
+  SLOT_TAG="slot${SLOT}"
+  PROFILE_DIR="/home/chat2api/.config/chat2api-chrome-worker-$(printf '%02d' "$SLOT")"
+  DEBUG_URL="http://127.0.0.1:$((9221 + SLOT))"
+  STATE_DIR="/var/lib/chat2api-worker/${SLOT_TAG}"
+  XRAY_UNIT="chat2api-xray-${SLOT_TAG}.service"
+  XVFB_UNIT="chat2api-xvfb-${SLOT_TAG}.service"
+  CHROME_UNIT="chat2api-chrome-${SLOT_TAG}.service"
+  AGENT_UNIT="chat2api-worker-agent-${SLOT_TAG}.service"
+else
+  SLOT_TAG="primary"
+  PROFILE_DIR="${CHAT2API_CHROME_PROFILE:-/home/chat2api/.config/chat2api-chrome-worker-01}"
+  DEBUG_URL="${CHAT2API_CHROME_DEBUG_URL:-http://127.0.0.1:9222}"
+  STATE_DIR="${CHAT2API_WORKER_STATE_DIR:-/var/lib/chat2api-worker}"
+  XRAY_UNIT="chat2api-xray.service"
+  XVFB_UNIT="chat2api-xvfb.service"
+  CHROME_UNIT="chat2api-chrome.service"
+  AGENT_UNIT="chat2api-worker-agent.service"
+fi
 CHATGPT_URL="${CHATGPT_URL:-https://chatgpt.com/}"
 TAB_INIT_HELPER="${CHAT2API_TAB_INIT_HELPER:-/opt/chat2api-worker/scripts/linux_worker_tab_init.py}"
-LOCK_FILE="/run/chat2api-worker-initialize.lock"
-STATE_FILE="/var/lib/chat2api-worker/initialize-state.json"
+LOCK_FILE="/run/chat2api-worker-initialize-${SLOT_TAG}.lock"
+STATE_FILE="${STATE_DIR}/initialize-state.json"
 
 log() {
   printf '%s [chat2api-worker-initialize] %s\n' "$(date -Is)" "$*"
@@ -15,7 +36,7 @@ log() {
 
 write_state() {
   local status="$1" stage="$2" message="$3"
-  install -d -m 0755 /var/lib/chat2api-worker
+  install -d -m 0755 "$STATE_DIR"
   python3 - "$STATE_FILE" "$status" "$stage" "$message" <<'PY'
 from __future__ import annotations
 import json, os, sys, tempfile
@@ -146,20 +167,20 @@ run_initialize() {
   local failed=0
   cleanup() {
     # Keep the control plane recoverable even when Chrome initialization fails.
-    systemctl start chat2api-worker-agent.service >/dev/null 2>&1 || true
+    systemctl start "$AGENT_UNIT" >/dev/null 2>&1 || true
   }
   trap cleanup EXIT
 
   write_state starting starting "正在初始化 Linux Worker"
   log "stopping Agent and Chrome before a clean browser initialization"
   write_state running stop "停止 Agent 与 Chrome"
-  systemctl stop chat2api-worker-agent.service chat2api-chrome.service || true
+  systemctl stop "$AGENT_UNIT" "$CHROME_UNIT" || true
 
   write_state running services "重启 Xray 与 Xvfb"
-  systemctl restart chat2api-xray.service
-  wait_active chat2api-xray.service 30 || { log "Xray failed to become active"; failed=1; }
-  systemctl restart chat2api-xvfb.service
-  wait_active chat2api-xvfb.service 30 || { log "Xvfb failed to become active"; failed=1; }
+  systemctl restart "$XRAY_UNIT"
+  wait_active "$XRAY_UNIT" 30 || { log "Xray failed to become active"; failed=1; }
+  systemctl restart "$XVFB_UNIT"
+  wait_active "$XVFB_UNIT" 30 || { log "Xvfb failed to become active"; failed=1; }
 
   # A source update under the same unpacked-extension ID can leave Chromium's
   # persisted ServiceWorker registration in a failed state even after ScriptCache
@@ -169,16 +190,16 @@ run_initialize() {
   rm -rf "${PROFILE_DIR}/Default/Service Worker" 2>/dev/null || true
 
   write_state running chrome "启动 Chrome 并打开一个 ChatGPT 窗口"
-  systemctl start chat2api-chrome.service
-  wait_active chat2api-chrome.service 45 || { log "Chrome service failed to become active"; failed=1; }
+  systemctl start "$CHROME_UNIT"
+  wait_active "$CHROME_UNIT" 45 || { log "Chrome service failed to become active"; failed=1; }
   if [[ "$failed" -eq 0 ]] && wait_cdp; then
     ensure_one_chatgpt_page || true
     if ! wait_extension_runtime; then
       log "Chrome Bridge Service Worker did not start; retrying one clean browser cycle"
-      systemctl stop chat2api-chrome.service || true
+      systemctl stop "$CHROME_UNIT" || true
       rm -rf "${PROFILE_DIR}/Default/Service Worker" 2>/dev/null || true
-      systemctl start chat2api-chrome.service
-      wait_active chat2api-chrome.service 45 || failed=1
+      systemctl start "$CHROME_UNIT"
+      wait_active "$CHROME_UNIT" 45 || failed=1
       if [[ "$failed" -eq 0 ]] && wait_cdp; then
         ensure_one_chatgpt_page || true
         wait_extension_runtime || failed=1
@@ -192,8 +213,8 @@ run_initialize() {
   fi
 
   write_state running agent "启动 Worker Agent"
-  systemctl restart chat2api-worker-agent.service
-  wait_active chat2api-worker-agent.service 30 || failed=1
+  systemctl restart "$AGENT_UNIT"
+  wait_active "$AGENT_UNIT" 30 || failed=1
 
   if [[ "$failed" -ne 0 ]]; then
     write_state failed failed "Worker 初始化未完全成功，请下载诊断日志"
@@ -214,8 +235,8 @@ fi
 
 case "$MODE" in
   --schedule)
-    unit="chat2api-worker-initialize-$(date +%s)-$$"
-    systemd-run --quiet --collect --no-block --unit="$unit" /usr/local/sbin/chat2api-worker-initialize --run
+    unit="chat2api-worker-initialize-${SLOT_TAG}-$(date +%s)-$$"
+    systemd-run --quiet --collect --no-block --unit="$unit" "$0" --run
     printf '{"ok":true,"scheduled":true,"unit":"%s"}\n' "$unit"
     ;;
   --run)

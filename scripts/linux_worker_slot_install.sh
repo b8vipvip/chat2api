@@ -33,6 +33,8 @@ done
 [[ -x /home/chat2api/.cache/chat2api-chrome-for-testing/chrome ]] || { echo "Primary Worker Chrome for Testing is not ready" >&2; exit 1; }
 [[ -x /usr/local/sbin/chat2api-worker-proxy-apply ]] || { echo "Primary Worker proxy helper is missing; upgrade/repair slot 1 first" >&2; exit 1; }
 [[ -x /usr/local/sbin/chat2api-worker-upgrade ]] || { echo "Primary Worker online-upgrade helper is missing; upgrade/repair slot 1 first" >&2; exit 1; }
+[[ -x /usr/local/sbin/chat2api-worker-initialize ]] || { echo "Primary Worker initialize helper is missing; upgrade/repair slot 1 first" >&2; exit 1; }
+[[ -x /usr/local/sbin/chat2api-worker-diagnostics ]] || { echo "Primary Worker diagnostics helper is missing; upgrade/repair slot 1 first" >&2; exit 1; }
 
 INSTANCE="slot${SLOT}"
 CONFIG_DIR="/etc/chat2api-worker/${INSTANCE}"
@@ -49,6 +51,8 @@ WATCHDOG_UNIT="chat2api-worker-watchdog-${INSTANCE}"
 AUTORELOAD_UNIT="chat2api-extension-autoreload-${INSTANCE}"
 PROXY_HELPER="/usr/local/sbin/chat2api-worker-proxy-apply-${INSTANCE}"
 UPGRADE_HELPER="/usr/local/sbin/chat2api-worker-upgrade-${INSTANCE}"
+INITIALIZE_HELPER="/usr/local/sbin/chat2api-worker-initialize-${INSTANCE}"
+DIAGNOSTICS_HELPER="/usr/local/sbin/chat2api-worker-diagnostics-${INSTANCE}"
 SUDOERS_FILE="/etc/sudoers.d/chat2api-worker-${INSTANCE}"
 ENV_FILE="/etc/default/chat2api-worker-${INSTANCE}"
 
@@ -76,7 +80,7 @@ chown root:chat2api "$CONFIG_DIR/xray.json"
 chmod 640 "$CONFIG_DIR/xray.json"
 
 if [[ ! -s "$CONFIG_DIR/worker.json" ]]; then
-  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$(. /etc/os-release; printf '%s' "${PRETTY_NAME:-Linux}")" --arg slot "$INSTANCE" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.6",worker_slot:$slot}')"
+  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$(. /etc/os-release; printf '%s' "${PRETTY_NAME:-Linux}")" --arg slot "$INSTANCE" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.8",worker_slot:$slot}')"
   response="$(mktemp)"
   trap 'rm -f "${response:-}"' EXIT
   printf '%s' "$payload" | curl -fsSL --retry 3 --retry-all-errors -H 'Content-Type: application/json' --data-binary @- -o "$response" "$SERVER/api/workers/enroll"
@@ -98,7 +102,9 @@ fi
 # unprivileged Agent cannot redirect privileged writes with arguments or env.
 ln -sfn /usr/local/sbin/chat2api-worker-proxy-apply "$PROXY_HELPER"
 ln -sfn /usr/local/sbin/chat2api-worker-upgrade "$UPGRADE_HELPER"
-chown -h root:root "$PROXY_HELPER" "$UPGRADE_HELPER"
+ln -sfn /usr/local/sbin/chat2api-worker-initialize "$INITIALIZE_HELPER"
+ln -sfn /usr/local/sbin/chat2api-worker-diagnostics "$DIAGNOSTICS_HELPER"
+chown -h root:root "$PROXY_HELPER" "$UPGRADE_HELPER" "$INITIALIZE_HELPER" "$DIAGNOSTICS_HELPER"
 
 cat >"/etc/systemd/system/$XRAY_UNIT" <<UNIT
 [Unit]
@@ -155,6 +161,8 @@ Environment=CHAT2API_WORKER_CONFIG=${CONFIG_DIR}/worker.json
 Environment=CHAT2API_XRAY_CONFIG=${CONFIG_DIR}/xray.json
 Environment=CHAT2API_PROXY_APPLY_HELPER=${PROXY_HELPER}
 Environment=CHAT2API_UPGRADE_HELPER=${UPGRADE_HELPER}
+Environment=CHAT2API_INITIALIZE_HELPER=${INITIALIZE_HELPER}
+Environment=CHAT2API_DIAGNOSTICS_HELPER=${DIAGNOSTICS_HELPER}
 Environment=CHAT2API_PROXY_PORT=${PROXY_PORT}
 Environment=CHAT2API_GENERATION_HEALTH_FILE=${STATE_DIR}/generation-backend-health.json
 Environment=CHAT2API_LOGIN_DISPLAY=:${DISPLAY_NUM}
@@ -215,7 +223,7 @@ WantedBy=timers.target
 UNIT
 
 cat >"$SUDOERS_FILE" <<SUDO
-chat2api ALL=(root) NOPASSWD: /bin/systemctl restart ${CHROME_UNIT}, /bin/systemctl restart ${XRAY_UNIT}, /bin/systemctl restart ${XVFB_UNIT}, ${PROXY_HELPER}, ${UPGRADE_HELPER}
+chat2api ALL=(root) NOPASSWD: /bin/systemctl restart ${CHROME_UNIT}, /bin/systemctl restart ${XRAY_UNIT}, /bin/systemctl restart ${XVFB_UNIT}, ${PROXY_HELPER}, ${UPGRADE_HELPER}, ${INITIALIZE_HELPER}, ${DIAGNOSTICS_HELPER}
 SUDO
 chmod 440 "$SUDOERS_FILE"
 visudo -cf "$SUDOERS_FILE" >/dev/null
