@@ -1,0 +1,90 @@
+name: v125 Linux installer HTTPS hotfix
+
+on:
+  push:
+    branches:
+      - fix/linux-device-https-origin-v125-20260912
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/linux-device-https-origin-v125-20260912
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply HTTPS origin resolver and release bump
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text(encoding='utf-8')
+              actual = text.count(old)
+              if actual != count:
+                  raise SystemExit(f'{path}: expected {count} occurrences, found {actual}: {old[:120]!r}')
+              p.write_text(text.replace(old, new, count), encoding='utf-8')
+
+          authority = Path('app/linux_worker_device_authority_v124_patch.py')
+          text = authority.read_text(encoding='utf-8')
+          old = '''def _server_url(request: Request) -> str:\n    forwarded = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip()\n    scheme = forwarded or request.url.scheme\n    host = str(request.headers.get("x-forwarded-host") or request.headers.get("host") or "").split(",", 1)[0].strip()\n    return f"{scheme}://{host}".rstrip("/")\n'''
+          new = '''def _server_url(app: FastAPI, request: Request) -> str:\n    \"\"\"Resolve the externally reachable control-plane origin for install commands.\n\n    The admin console is commonly HTTPS behind an HTTP reverse proxy. Never let\n    that internal hop leak into generated Worker commands: prefer an explicit\n    CHAT2API_PUBLIC_URL, then the browser's same-host HTTPS origin/referrer, then\n    forwarded headers. For a non-loopback host with no proxy metadata, HTTPS is\n    the safe default because the bootstrap installer rejects insecure HTTP.\n    \"\"\"\n    settings = getattr(app.state, "settings", None)\n    configured = str(getattr(settings, "public_url", "") or "").strip().rstrip("/")\n    if configured:\n        return configured\n\n    forwarded_host = str(request.headers.get("x-forwarded-host") or "").split(",", 1)[0].strip()\n    request_host = str(request.headers.get("host") or "").split(",", 1)[0].strip()\n    public_host = forwarded_host or request_host\n\n    def browser_origin(value: str) -> str:\n        raw = str(value or "").strip()\n        if not raw:\n            return ""\n        try:\n            from urllib.parse import urlsplit\n            parsed = urlsplit(raw)\n        except Exception:\n            return ""\n        if parsed.scheme not in {"http", "https"} or not parsed.netloc:\n            return ""\n        if public_host and parsed.netloc.lower() != public_host.lower():\n            return ""\n        return f"{parsed.scheme}://{parsed.netloc}"\n\n    origin = browser_origin(str(request.headers.get("origin") or ""))\n    if origin:\n        return origin.rstrip("/")\n    referer = browser_origin(str(request.headers.get("referer") or ""))\n    if referer:\n        return referer.rstrip("/")\n\n    forwarded_proto = str(request.headers.get("x-forwarded-proto") or "").split(",", 1)[0].strip().lower()\n    if forwarded_proto in {"http", "https"} and public_host:\n        return f"{forwarded_proto}://{public_host}".rstrip("/")\n\n    host_only = public_host.rsplit(":", 1)[0].strip("[]").lower()\n    if public_host and host_only not in {"localhost", "127.0.0.1", "::1"}:\n        return f"https://{public_host}".rstrip("/")\n\n    return f"{request.url.scheme}://{public_host or request.url.netloc}".rstrip("/")\n'''
+          if text.count(old) != 1:
+              raise SystemExit('linux_worker_device_authority_v124_patch.py: old _server_url block not found exactly once')
+          text = text.replace(old, new, 1)
+          if text.count('server = _server_url(request)') != 1:
+              raise SystemExit('expected one create_install _server_url call')
+          text = text.replace('server = _server_url(request)', 'server = _server_url(app, request)', 1)
+          authority.write_text(text, encoding='utf-8')
+
+          runtime = Path('app/runtime_contract.py')
+          text = runtime.read_text(encoding='utf-8')
+          old_versions = '''SERVER_RUNTIME_VERSION = "0.22.80"\nPREVIOUS_SERVER_RUNTIME_VERSION = "0.22.79"\nPREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.78"\nPREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.77"\nPREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.76"'''
+          new_versions = '''SERVER_RUNTIME_VERSION = "0.22.81"\nPREVIOUS_SERVER_RUNTIME_VERSION = "0.22.80"\nPREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.79"\nPREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.78"\nPREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.77"'''
+          if text.count(old_versions) != 1:
+              raise SystemExit('runtime version block did not match 0.22.80')
+          text = text.replace(old_versions, new_versions, 1)
+          text = text.replace('v124-runtime-activation-fix-release-v02280"', 'v124-runtime-activation-fix-release-v02280-linux-installer-public-https-v125-release-v02281"', 1)
+          marker = '            "linux_worker_extension_autopair_v124": True,\n'
+          if marker not in text:
+              raise SystemExit('runtime v124 feature marker missing')
+          text = text.replace(marker, marker + '            "linux_worker_public_https_origin_v125": True,\n', 1)
+          runtime.write_text(text, encoding='utf-8')
+
+          smoke = Path('.github/workflows/production-image-smoke.yml')
+          text = smoke.read_text(encoding='utf-8')
+          if text.count("payload['server']['runtime_version'] == '0.22.80'") != 1:
+              raise SystemExit('production smoke runtime expectation did not match 0.22.80')
+          text = text.replace("payload['server']['runtime_version'] == '0.22.80'", "payload['server']['runtime_version'] == '0.22.81'", 1)
+          marker = "          assert payload['features']['linux_worker_device_authority_v124'] is True\n"
+          if marker not in text:
+              raise SystemExit('production smoke v124 feature assertion missing')
+          text = text.replace(marker, marker + "          assert payload['features']['linux_worker_public_https_origin_v125'] is True\n", 1)
+          smoke.write_text(text, encoding='utf-8')
+
+          # Release snapshots intentionally assert the exact server runtime. Keep\n          # their behavior intact while moving the release contract forward.\n          for p in Path('tests').rglob('*'):
+              if not p.is_file() or p.suffix not in {'.py', '.js', '.mjs'}:
+                  continue
+              t = p.read_text(encoding='utf-8')
+              if '0.22.80' in t:
+                  p.write_text(t.replace('0.22.80', '0.22.81'), encoding='utf-8')
+          PY
+      - name: Validate focused contracts
+        run: |
+          python -m py_compile app/linux_worker_device_authority_v124_patch.py app/runtime_contract.py
+          python -m pytest -q tests/test_linux_device_public_url_v125.py tests/test_linux_worker_console_v123.py tests/test_release_v02246_contract.py
+      - name: Commit hotfix
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add app/linux_worker_device_authority_v124_patch.py app/runtime_contract.py .github/workflows/production-image-smoke.yml tests
+          git commit -m 'fix: generate Linux install commands with public HTTPS origin'
+          git push origin HEAD:fix/linux-device-https-origin-v125-20260912
