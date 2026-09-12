@@ -1,0 +1,152 @@
+name: v127 apply shared device controller
+
+on:
+  push:
+    branches:
+      - feat/device-controller-shared-config-v127-20260912
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/device-controller-shared-config-v127-20260912
+      - name: Apply architecture changes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def read(path): return Path(path).read_text(encoding='utf-8')
+          def write(path, text): Path(path).write_text(text, encoding='utf-8')
+          def one(text, old, new, label):
+              if old not in text:
+                  raise SystemExit(f'missing anchor: {label}')
+              return text.replace(old, new, 1)
+
+          # Controller-aware command transport: every logical Worker keeps its own
+          # server identity, but Worker 2..N rides the device controller websocket.
+          path='app/linux_worker_patch.py'; text=read(path)
+          old='''        worker_exists(worker_id)\n        socket = app.state.worker_sockets.get(worker_id)\n        if not socket:\n            raise HTTPException(409, "Worker is offline")\n        request_id = "cmd_" + uuid.uuid4().hex\n        if not wait:\n            await socket.send_json({"type": "command", "request_id": request_id, "command": command, "arguments": arguments})\n            return {"accepted": True, "request_id": request_id}\n\n        future = asyncio.get_running_loop().create_future()\n        app.state.worker_command_waiters[request_id] = (worker_id, future)\n        try:\n            await socket.send_json({"type": "command", "request_id": request_id, "command": command, "arguments": arguments})\n'''
+          new='''        worker = worker_exists(worker_id)\n        metadata = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}\n        controller_id = str(metadata.get("controller_worker_id") or worker_id)\n        socket = app.state.worker_sockets.get(controller_id)\n        if not socket:\n            raise HTTPException(409, "Worker device controller is offline")\n        request_id = "cmd_" + uuid.uuid4().hex\n        payload = {"type": "command", "request_id": request_id, "command": command, "arguments": arguments, "target_worker_id": worker_id}\n        if not wait:\n            await socket.send_json(payload)\n            return {"accepted": True, "request_id": request_id}\n\n        future = asyncio.get_running_loop().create_future()\n        app.state.worker_command_waiters[request_id] = (controller_id, future)\n        try:\n            await socket.send_json(payload)\n'''
+          text=one(text,old,new,'controller command transport')
+          old='''                if message_type == "heartbeat":\n                    await websocket.send_json({"type": "heartbeat.ack", "worker": store.heartbeat(worker_id, message.get("data") or {})})\n                elif message_type == "command.result":\n'''
+          new='''                if message_type == "heartbeat":\n                    await websocket.send_json({"type": "heartbeat.ack", "worker": store.heartbeat(worker_id, message.get("data") or {})})\n                elif message_type == "worker.heartbeat":\n                    child_id = str(message.get("worker_id") or "")\n                    child = store.data.get("workers", {}).get(child_id)\n                    child_meta = child.get("metadata") if isinstance(child, dict) and isinstance(child.get("metadata"), dict) else {}\n                    if child and not child.get("revoked_at") and str(child_meta.get("controller_worker_id") or "") == worker_id:\n                        store.heartbeat(child_id, message.get("data") or {})\n                elif message_type == "command.result":\n'''
+          text=one(text,old,new,'multiplexed child heartbeat')
+          write(path,text)
+
+          # A controller may request an extension-binding ticket for one of its
+          # logical Workers; the device token never grants access outside its device.
+          path='app/linux_worker_bridge_binding.py'; text=read(path)
+          old='''        worker_id = _safe_text(request.headers.get("x-worker-id"), 120)\n        worker_token = str(request.headers.get("x-worker-token") or "")\n        if not worker_id or not worker_token or not workers.authenticate(worker_id, worker_token):\n            raise HTTPException(401, "Invalid Worker credentials")\n        worker = workers.data["workers"].get(worker_id)\n        if not worker or worker.get("revoked_at"):\n            raise HTTPException(409, "Worker is unavailable")\n'''
+          new='''        auth_worker_id = _safe_text(request.headers.get("x-worker-id"), 120)\n        worker_token = str(request.headers.get("x-worker-token") or "")\n        if not auth_worker_id or not worker_token or not workers.authenticate(auth_worker_id, worker_token):\n            raise HTTPException(401, "Invalid Worker credentials")\n        worker_id = _safe_text(request.headers.get("x-target-worker-id"), 120) or auth_worker_id\n        worker = workers.data["workers"].get(worker_id)\n        if not worker or worker.get("revoked_at"):\n            raise HTTPException(409, "Worker is unavailable")\n        if worker_id != auth_worker_id:\n            metadata = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}\n            if str(metadata.get("controller_worker_id") or "") != auth_worker_id:\n                raise HTTPException(403, "Target Worker does not belong to this device controller")\n'''
+          text=one(text,old,new,'controller binding ticket auth')
+          write(path,text)
+
+          # Device authority: Worker 2..N are created directly in the control
+          # plane and provisioned by Worker 1's controller, with no extra pairing,
+          # proxy selection, enrollment command, or per-slot Agent.
+          path='app/linux_worker_device_authority_v124_patch.py'; text=read(path)
+          text=one(text,'import re\nimport shlex\n','import re\nimport secrets\nimport shlex\n','secrets import')
+          text=one(text,'from .admin_auth import SESSION_COOKIE\nfrom .linux_worker_installs import code_hash\n','from . import linux_worker_patch as worker_control\nfrom .admin_auth import SESSION_COOKIE\nfrom .linux_worker_installs import code_hash\nfrom .linux_workers import iso, token_hash, utcnow\n','authority imports')
+
+          start=text.index('def _device_rows(app: FastAPI) -> list[dict[str, Any]]:')
+          end=text.index('\ndef _legacy_snapshot(app: FastAPI)', start)
+          replacement='''def _device_rows(app: FastAPI) -> list[dict[str, Any]]:\n    installs = app.state.linux_worker_installs.list_admin()\n    workers = app.state.linux_workers.list_public()\n    device_installs = [row for row in installs if _is_device_install(row)]\n    slot_installs = [row for row in installs if _is_slot_install(row)]\n    result: list[dict[str, Any]] = []\n    for device in device_installs:\n        meta = _install_meta(device)\n        device_id = _device_id(device)\n        related_installs = [row for row in slot_installs if str(_install_meta(row).get("parent_device_id") or "") == device_id]\n        primary_id = str(device.get("worker_id") or "")\n        worker_rows: list[dict[str, Any]] = []\n        for source in workers:\n            worker_id = str(source.get("worker_id") or "")\n            worker_meta = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}\n            worker_device = str(worker_meta.get("device_id_v124") or "")\n            if worker_id != primary_id and worker_device != device_id:\n                continue\n            worker = dict(source)\n            try:\n                slot = int(worker_meta.get("worker_slot") or (1 if worker_id == primary_id else 0))\n            except (TypeError, ValueError):\n                slot = 1 if worker_id == primary_id else 0\n            if slot < 1:\n                continue\n            worker["worker_slot"] = slot\n            worker_rows.append(worker)\n        worker_rows.sort(key=lambda row: int(row.get("worker_slot") or 1))\n        result.append({\n            "device_id": device_id,\n            "device_name": str(meta.get("device_name") or device.get("name") or "Linux 设备"),\n            "device_pairing_id": str(meta.get("pairing_id") or ""),\n            "proxy_id": str(meta.get("proxy_id") or ""),\n            "proxy_name": str(meta.get("proxy_name") or ""),\n            "install_id": str(device.get("install_id") or ""),\n            "install_state": str(device.get("state") or "pending"),\n            "install_stage": str(device.get("stage") or ""),\n            "install_message": str(device.get("message") or ""),\n            "install_command": str(device.get("install_command") or ""),\n            "install_enabled": bool(device.get("enabled", True)),\n            "install_created_at": device.get("created_at"),\n            "install_updated_at": device.get("updated_at"),\n            "workers": worker_rows,\n            "worker_count": len(worker_rows),\n            "slot_installations": [\n                {\n                    "install_id": str(row.get("install_id") or ""),\n                    "slot": int(_install_meta(row).get("worker_slot") or 0),\n                    "state": str(row.get("state") or "pending"),\n                    "command": str(row.get("install_command") or ""),\n                    "worker_id": str(row.get("worker_id") or ""),\n                }\n                for row in sorted(related_installs, key=lambda item: int(_install_meta(item).get("worker_slot") or 0))\n            ],\n            "authority": "linux-device-v124",\n            "device_controller_revision": 127,\n        })\n    result.sort(key=lambda row: str(row.get("install_created_at") or ""), reverse=True)\n    return result\n\n\ndef _create_controller_child(store: Any, *, device: dict[str, Any], primary: dict[str, Any], slot: int) -> dict[str, Any]:\n    worker_id = "wrk_" + secrets.token_hex(12)\n    now = iso(utcnow())\n    primary_meta = primary.get("metadata") if isinstance(primary.get("metadata"), dict) else {}\n    proxy_summary = primary_meta.get("proxy_summary") if isinstance(primary_meta.get("proxy_summary"), dict) else {}\n    metadata = {\n        "device_authority_revision": PATCH_REVISION,\n        "device_controller_revision": 127,\n        "device_id_v124": str(device.get("device_id") or ""),\n        "device_name": str(device.get("device_name") or "Linux 设备"),\n        "device_pairing_id": str(device.get("device_pairing_id") or ""),\n        "worker_slot": slot,\n        "controller_worker_id": str(primary.get("worker_id") or ""),\n        "shared_device_pairing": True,\n        "shared_device_proxy": True,\n        "profile_only_isolation": True,\n        "proxy_catalog_id": str(device.get("proxy_id") or ""),\n        "proxy_catalog_name": str(device.get("proxy_name") or ""),\n    }\n    if proxy_summary:\n        metadata["proxy_summary"] = copy.deepcopy(proxy_summary)\n    worker = {\n        "worker_id": worker_id,\n        "name": f"{device.get('device_name') or 'Linux 设备'} · Worker {slot}",\n        "token_hash": token_hash("controller-only-" + secrets.token_urlsafe(32)),\n        "revoked_at": None,\n        "created_at": now,\n        "last_seen_at": None,\n        "status": "enrolling",\n        "network_status": "unknown",\n        "proxy_status": str(primary.get("proxy_status") or "waiting"),\n        "chatgpt_status": "waiting_login",\n        "extension_client_id": "",\n        "extension_device_id": "",\n        "metadata": metadata,\n        "device_id": str(primary.get("device_id") or ""),\n        "hostname": str(primary.get("hostname") or ""),\n        "platform": "linux",\n        "arch": str(primary.get("arch") or ""),\n        "os_version": str(primary.get("os_version") or ""),\n        "agent_version": "0.3.9",\n        "chrome_bridge_version": "",\n    }\n    with store._lock:\n        store.data.setdefault("workers", {})[worker_id] = worker\n        store._save()\n    return store.public(worker)\n\n'''
+          text=text[:start]+replacement+text[end+1:]
+
+          anchor='''    workers.enroll = enroll_with_device_authority\n\n    @app.get("/api/admin/linux-devices")\n'''
+          replacement='''    workers.enroll = enroll_with_device_authority\n    worker_control.ALLOWED_COMMANDS = frozenset(set(worker_control.ALLOWED_COMMANDS) | {"provision_worker"})\n\n    @app.get("/api/admin/linux-devices")\n'''
+          text=one(text,anchor,replacement,'provision allowlist')
+
+          pattern=re.compile(r'    @app\.post\("/api/admin/linux-devices/\{device_id\}/workers"\)\n    async def add_linux_device_worker\(.*?\n(?=    @app\.delete\("/api/admin/linux-devices/\{device_id\}"\))',re.S)
+          match=pattern.search(text)
+          if not match: raise SystemExit('add worker endpoint block not found')
+          new_endpoint='''    @app.post("/api/admin/linux-devices/{device_id}/workers")\n    async def add_linux_device_worker(device_id: str, request: Request) -> dict[str, Any]:\n        admin(request)\n        device = next((row for row in _device_rows(app) if row["device_id"] == device_id), None)\n        if not device:\n            raise HTTPException(404, "Linux 设备不存在")\n        primary = next((row for row in device.get("workers", []) if int(row.get("worker_slot") or 0) == 1), None)\n        if not primary:\n            raise HTTPException(409, "请先完成设备首次安装，再增加 Worker")\n        occupied = {int(row.get("worker_slot") or 0) for row in device.get("workers", [])}\n        slot = next((value for value in range(MIN_SLOT, MAX_SLOT + 1) if value not in occupied), None)\n        if slot is None:\n            raise HTTPException(409, "此设备已达到 32 个 Worker 上限")\n        child = _create_controller_child(workers, device=device, primary=primary, slot=slot)\n        child_id = str(child.get("worker_id") or "")\n        try:\n            command = await app.state.send_linux_worker_command(\n                str(primary.get("worker_id") or ""),\n                "provision_worker",\n                {"worker_id": child_id, "worker_slot": slot, "device_name": str(device.get("device_name") or "")},\n                wait=True,\n                timeout=150,\n            )\n            result = command.get("result") if isinstance(command, dict) else {}\n            if not isinstance(result, dict) or result.get("ok") is not True:\n                raise HTTPException(502, f"设备总控 Agent 增加 Worker 失败：{str((result or {}).get('error') or 'unknown_error')[:120]}")\n        except Exception:\n            _delete_worker(workers, child_id)\n            raise\n        return {\n            "created": True,\n            "device_id": device_id,\n            "worker_id": child_id,\n            "worker_slot": slot,\n            "shared_pairing": True,\n            "shared_proxy": True,\n            "profile_only_isolation": True,\n            "worker": next((row for row in _device_rows(app) if row["device_id"] == device_id), {}).get("workers", []),\n        }\n\n'''
+          text=text[:match.start()]+new_endpoint+text[match.end():]
+          write(path,text)
+
+          # UI follows physical-device semantics: device install state on the main
+          # table, no ChatGPT column there, and Worker management has no proxy
+          # column or install-command modal. Add Worker is one direct controller API call.
+          path='app/admin_linux_device_authority_v124.js'; text=read(path)
+          text=one(text,'const workerStatus = worker => {','const deviceInstallStatus = device => { const map={pending:["待安装","warn"],installing:["安装中","warn"],enrolling:["注册中","warn"],installed:["安装完成","good"],failed:["安装失败","bad"],disabled:["已停用","bad"]}; return map[String(device?.install_state||"pending").toLowerCase()]||[String(device?.install_state||"未知"),"warn"]; };\n  const workerStatus = worker => {','install status helper')
+          text=one(text,'<th>系统</th><th>代理</th><th>ChatGPT</th><th>最后更新</th>','<th>系统</th><th>代理</th><th>最后更新</th>','remove device ChatGPT header')
+          text=text.replace('min-width:1160px','min-width:1040px',1)
+          text=one(text,'先选择配对码和代理，再生成安装命令。设备名称唯一取自配对码的设备名称。','首次安装只配置一次设备配对码和代理；后续新增 Worker 共享该设备配置，只创建独立 Chrome Profile。','device create note')
+          text=one(text,'本窗口中的初始化、登录和诊断只作用于所点击的 Worker','本窗口中的 Worker 共享设备配对与代理；每个 Worker 仅使用独立 Chrome Profile，初始化、登录和诊断按 Worker 隔离。','manager note')
+          # Remove the separate add-worker dialog.
+          text=re.sub(r'\n    dialog\("linuxAddWorkerV124".*?;\n    dialog\("linuxProxyQuickV124"', '\n    dialog("linuxProxyQuickV124"', text, count=1, flags=re.S)
+          text=text.replace('if(body)body.innerHTML=`<tr><td colspan="9">${esc(error.message)}</td></tr>`','if(body)body.innerHTML=`<tr><td colspan="8">${esc(error.message)}</td></tr>`',1)
+
+          render_start=text.index('  function renderDevices()')
+          render_end=text.index('\n\n  function renderManager()',render_start)
+          new_render='''  function renderDevices(){const body=document.getElementById("linuxDeviceRowsV124");if(!body)return;let online=0;body.innerHTML=state.devices.map((d,i)=>{const w=primary(d);const [status,tone]=deviceInstallStatus(d);if(w&&workerStatus(w)[1]==="good")online++;const proxy=proxyView(w);const version=workerVersionView(d);const cmd=d.install_command&&!w?`<button class="action" data-copy-device="${i}">复制</button>`:"-";const system=w?(String(w.os_version||"").match(/ubuntu/i)?"Ubuntu":esc(String(w.platform||"Linux"))):"-";const updated=w?.last_seen_at||d.install_updated_at||d.install_created_at;return `<tr><td><b>${esc(d.device_name)}</b><div class="v124-muted">${d.worker_count||0} Worker</div></td><td><span class="v124-pill ${tone}">${esc(status)}</span></td><td><b>${esc(version.main)}</b><div class="v124-muted">${esc(version.sub)}</div></td><td>${cmd}</td><td>${system}</td><td><div class="v124-proxy-main"><span class="v124-pill ${proxy.tone}">${esc(proxy.main)}</span>${w?`<button class="v124-gear" data-proxy-worker="${esc(w.worker_id)}" data-device="${i}">⚙</button>`:""}</div><div class="v124-muted">${esc(proxy.sub)}</div></td><td class="v124-muted">${esc(beijing(updated))}</td><td><div class="v124-actions">${w?`<button class="action" data-worker-action="upgrade" data-worker="${esc(w.worker_id)}">更新</button>`:""}<button class="action good" data-manage-device="${esc(d.device_id)}">管理Worker</button><button class="action danger" data-delete-device="${esc(d.device_id)}">彻底删除设备</button></div></td></tr>`;}).join("")||'<tr><td colspan="8" class="v124-muted">暂无新版 Linux 设备。请点击“新增设备”重新安装。</td></tr>';const summary=document.getElementById("linuxDeviceSummaryV124");if(summary)summary.textContent=`设备：${state.devices.length} · Worker：${state.devices.reduce((n,d)=>n+Number(d.worker_count||0),0)} · 在线设备：${online}`;}'''
+          text=text[:render_start]+new_render+text[render_end:]
+
+          manager_start=text.index('  function renderManager()')
+          manager_end=text.index('\n\n  function renamePairingHeader()',manager_start)
+          new_manager='''  function renderManager(){const box=document.getElementById("managerWorkersV124"),name=document.getElementById("managerDeviceNameV124");if(!box)return;const d=state.devices.find(x=>x.device_id===state.selectedDevice);if(!d){if(name)name.textContent="未选择设备";box.innerHTML='<div class="v124-muted">请从设备列表点击“管理Worker”。</div>';return;}if(name)name.textContent=`${d.device_name} · ${d.worker_count||0} Worker`;box.innerHTML=`<table style="width:100%"><thead><tr><th>Worker</th><th>状态</th><th>ChatGPT</th><th>Extension</th><th>操作</th></tr></thead><tbody>${(d.workers||[]).map(w=>{const [s,t]=workerStatus(w);const v=String(w.agent_version||"-");return `<tr><td><b>Worker ${Number(w.worker_slot||1)}</b><div class="v124-muted">v${esc(v)} · 独立 Profile</div></td><td><span class="v124-pill ${t}">${esc(s)}</span></td><td>${esc(chatgpt(w))}</td><td>${w.extension_client_id?"已连接":"未连接"}</td><td><div class="v124-actions" style="min-width:260px"><button class="action" data-worker-action="initialize" data-worker="${esc(w.worker_id)}">初始化</button><button class="action" data-login-worker="${esc(w.worker_id)}" data-name="${esc(d.device_name)} · Worker ${Number(w.worker_slot||1)}">登录</button><button class="action" data-diagnostics="${esc(w.worker_id)}">诊断日志</button></div></td></tr>`;}).join("")}</tbody></table>`;}'''
+          text=text[:manager_start]+new_manager+text[manager_end:]
+
+          old='''      if(t.id==="openAddWorkerV124"){const d=state.devices.find(x=>x.device_id===state.selectedDevice);if(!d)throw new Error("当前设备不存在，请刷新后重试");await loadOptions();fillSelect(document.getElementById("slotPairingV124"),availablePairings(d.device_name),"pairing_id",p=>`${p.device_name} · ${p.prefix}`);fillSelect(document.getElementById("slotProxyV124"),state.proxies,"proxy_id",p=>p.name||p.proxy_id);document.getElementById("slotResultV124").textContent="";document.getElementById("linuxAddWorkerV124").showModal();return;} if(t.id==="generateSlotV124"){const d=state.selectedDevice;if(!d)throw new Error("当前设备不存在，请重新打开管理窗口");const r=await api(`/api/admin/linux-devices/${encodeURIComponent(d)}/workers`,{method:"POST",body:{pairing_id:document.getElementById("slotPairingV124").value,proxy_id:document.getElementById("slotProxyV124").value}});document.getElementById("slotResultV124").textContent=`Worker ${r.worker_slot} 安装命令已生成`;document.getElementById("linuxAddWorkerV124").close();await refreshAll(true);return;}\n'''
+          new='''      if(t.id==="openAddWorkerV124"){const d=state.selectedDevice;if(!d)throw new Error("当前设备不存在，请重新打开管理窗口");t.disabled=true;const original=t.textContent;t.textContent="增加中…";try{const r=await api(`/api/admin/linux-devices/${encodeURIComponent(d)}/workers`,{method:"POST",body:{}});await refreshAll(true);alert(`Worker ${r.worker_slot} 已由设备总控 Agent 创建，无需执行安装命令。`);}finally{t.disabled=false;t.textContent=original;}return;}\n'''
+          text=one(text,old,new,'direct add worker event')
+          write(path,text)
+
+          # Bootstrap installs exactly one device controller Agent. All extra
+          # Workers share Xray/pairing and receive only profile-specific Chrome/Xvfb.
+          path='scripts/bootstrap_linux_worker.sh'; text=read(path)
+          text=text.replace('agent_version:"0.3.8"','agent_version:"0.3.9"')
+          text=one(text,'set_stage "systemd" "安装并启动 Xray、Xvfb、Chrome for Testing、Agent、Watchdog"','set_stage "systemd" "安装并启动共享 Xray、Worker 1 Chrome 和设备总控 Agent"','bootstrap systemd stage')
+          text=one(text,'ExecStart=/opt/chat2api-worker-venv/bin/python ${WORKER_DIR}/scripts/linux_worker_agent.py','Environment=CHAT2API_DEVICE_WORKERS=/var/lib/chat2api-worker/controller/workers.json\nEnvironment=CHAT2API_DEVICE_CONTROLLER_HELPER=/usr/local/sbin/chat2api-device-controller\nExecStart=/opt/chat2api-worker-venv/bin/python ${WORKER_DIR}/scripts/linux_worker_device_controller.py','controller ExecStart')
+          text=one(text,'ReadWritePaths=/etc/chat2api-worker','ReadWritePaths=/etc/chat2api-worker /var/lib/chat2api-worker/controller','controller state write path')
+          anchor='install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_diagnostics.sh" /usr/local/sbin/chat2api-worker-diagnostics'
+          extra=anchor+'\ninstall -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_device_controller_helper.sh" /usr/local/sbin/chat2api-device-controller\ninstall -d -o chat2api -g chat2api -m 700 /var/lib/chat2api-worker/controller\ncat >/etc/default/chat2api-worker-controller <<ENV\nWORKER_DIR=$WORKER_DIR\nWORKER_USER=chat2api\nPROXY_PORT=10808\nCHAT2API_SERVER_URL=$SERVER\nENV\nchmod 640 /etc/default/chat2api-worker-controller'
+          text=one(text,anchor,extra,'install controller helper')
+          text=one(text,'/usr/local/sbin/chat2api-worker-initialize, /usr/local/sbin/chat2api-worker-diagnostics','/usr/local/sbin/chat2api-worker-initialize, /usr/local/sbin/chat2api-worker-diagnostics, /usr/local/sbin/chat2api-device-controller','controller sudoer')
+          cleanup='rm -f /usr/local/sbin/chat2api-linux-worker-watchdog /usr/local/sbin/chat2api-linux-extension-autoreload /usr/local/sbin/chat2api-worker-proxy-apply /usr/local/sbin/chat2api-worker-initialize /usr/local/sbin/chat2api-worker-diagnostics'
+          if cleanup in text:
+              text=text.replace(cleanup,cleanup+' /usr/local/sbin/chat2api-device-controller',1)
+          write(path,text)
+
+          path='app/linux_worker_upgrade_patch.py'; text=read(path)
+          text=one(text,'TARGET_AGENT_VERSION = "0.3.8"','TARGET_AGENT_VERSION = "0.3.9"','target agent version')
+          write(path,text)
+
+          path='Dockerfile'; text=read(path)
+          text=one(text,'scripts/linux_worker_agent.py scripts/linux_worker_agent_v43.py scripts/linux_worker_agent_v44.py scripts/linux_worker_extension_pair.py','scripts/linux_worker_agent.py scripts/linux_worker_agent_v43.py scripts/linux_worker_agent_v44.py scripts/linux_worker_device_controller.py scripts/linux_worker_extension_pair.py','controller python payload')
+          text=one(text,'scripts/linux_worker_chrome_launcher.sh scripts/linux_worker_diagnostics.sh scripts/linux_worker_slot_chrome_launcher.sh','scripts/linux_worker_chrome_launcher.sh scripts/linux_worker_diagnostics.sh scripts/linux_worker_device_controller_helper.sh scripts/linux_worker_slot_chrome_launcher.sh','controller helper payload')
+          text=one(text,'/app/worker_payload/scripts/linux_worker_generation_probe.sh /app/worker_payload/scripts/linux_worker_slot_chrome_launcher.sh','/app/worker_payload/scripts/linux_worker_generation_probe.sh /app/worker_payload/scripts/linux_worker_device_controller_helper.sh /app/worker_payload/scripts/linux_worker_slot_chrome_launcher.sh','controller helper chmod')
+          write(path,text)
+
+          path='.dockerignore'; text=read(path)
+          text=one(text,'!scripts/linux_worker_agent_v44.py\n','!scripts/linux_worker_agent_v44.py\n!scripts/linux_worker_device_controller.py\n','dockerignore controller py')
+          text=one(text,'!scripts/linux_worker_diagnostics.sh\n','!scripts/linux_worker_diagnostics.sh\n!scripts/linux_worker_device_controller_helper.sh\n','dockerignore controller helper')
+          write(path,text)
+
+          path='app/runtime_contract.py'; text=read(path)
+          text=one(text,'SERVER_RUNTIME_VERSION = "0.22.82"\nPREVIOUS_SERVER_RUNTIME_VERSION = "0.22.81"\nPREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.80"\nPREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.79"\nPREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.78"','SERVER_RUNTIME_VERSION = "0.22.83"\nPREVIOUS_SERVER_RUNTIME_VERSION = "0.22.82"\nPREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.81"\nPREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.80"\nPREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.79"','runtime version chain')
+          text=one(text,'linux-worker-isolated-manager-v126-release-v02282"','linux-worker-isolated-manager-v126-release-v02282-device-controller-shared-config-v127-release-v02283"','feature revision')
+          text=one(text,'"linux_worker_same_host_slots_v1": True,','"linux_worker_same_host_slots_v1": False,','retire slot installer authority')
+          text=one(text,'"linux_worker_isolated_management_v126": True,\n            "linux_worker_slot_isolated_ops_v126": True,','"linux_worker_isolated_management_v126": False,\n            "linux_worker_slot_isolated_ops_v126": False,\n            "linux_worker_device_controller_agent_v127": True,\n            "linux_worker_shared_device_pairing_v127": True,\n            "linux_worker_shared_device_proxy_v127": True,\n            "linux_worker_profile_only_isolation_v127": True,','v127 feature flags')
+          write(path,text)
+          PY
+      - name: Basic syntax checks
+        run: |
+          python -m py_compile app/linux_worker_patch.py app/linux_worker_bridge_binding.py app/linux_worker_device_authority_v124_patch.py scripts/linux_worker_device_controller.py
+          bash -n scripts/bootstrap_linux_worker.sh
+          bash -n scripts/linux_worker_device_controller_helper.sh
+          node --check app/admin_linux_device_authority_v124.js
+      - name: Commit changes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add app scripts Dockerfile .dockerignore
+          git commit -m 'feat: switch Linux devices to one shared controller agent'
+          git push origin HEAD:feat/device-controller-shared-config-v127-20260912
