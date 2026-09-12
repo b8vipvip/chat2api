@@ -1,0 +1,439 @@
+name: v126 isolated Worker manager sync
+
+on:
+  push:
+    branches:
+      - feat/linux-worker-isolated-manager-v126-20260912
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/linux-worker-isolated-manager-v126-20260912
+      - name: Apply v126 implementation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def read(path):
+              return Path(path).read_text(encoding='utf-8')
+
+          def write(path, text):
+              Path(path).write_text(text, encoding='utf-8')
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              return text.replace(old, new, 1)
+
+          # ------------------------------------------------------------------
+          # Linux device console: device rows own only device-level actions;
+          # every Worker-specific action is routed by the clicked worker_id.
+          # ------------------------------------------------------------------
+          path = 'app/admin_linux_device_authority_v124.js'
+          text = read(path)
+          text = replace_once(
+              text,
+              '<button class="action good" id="manageDeviceWorkersV124">管理设备 Worker</button>',
+              '',
+              'remove global Worker manager button',
+          )
+          text = replace_once(text, '<th>安装进度</th>', '<th>Worker版本</th>', 'device version column')
+          text = replace_once(
+              text,
+              '  const primary = device => Array.isArray(device?.workers) ? device.workers.find(w=>Number(w.worker_slot||1)===1)||device.workers[0] : null;\n',
+              '''  const primary = device => Array.isArray(device?.workers) ? device.workers.find(w=>Number(w.worker_slot||1)===1)||device.workers[0] : null;\n  const workerVersionView = device => {\n    const rows=Array.isArray(device?.workers)?device.workers:[];\n    if(!rows.length)return {main:"-",sub:"未安装"};\n    const agents=[...new Set(rows.map(w=>String(w.agent_version||"").trim()).filter(Boolean))];\n    const bundles=[...new Set(rows.map(w=>String(w.chrome_bridge_version||"").trim()).filter(Boolean))];\n    const main=agents.length===1?agents[0]:(agents.length?`多版本：${agents.join(" / ")}`:"-");\n    const sub=bundles.length===1?`Bridge ${bundles[0]}`:(bundles.length?`Bridge 多版本：${bundles.join(" / ")}`:"版本待上报");\n    return {main,sub};\n  };\n''',
+              'worker version view helper',
+          )
+          old_dialog = 'dialog("linuxWorkerManagerV124","设备 Worker 管理",`<div style="display:flex;gap:8px;align-items:center;margin-top:14px"><select id="managerDeviceV124" style="max-width:360px"></select><button class="action" id="refreshManagerV124">刷新</button><button class="action good" id="openAddWorkerV124">增加 Worker</button></div><div id="managerWorkersV124" style="margin-top:12px"></div><div id="managerCommandV124" style="margin-top:12px"></div>`);'
+          new_dialog = 'dialog("linuxWorkerManagerV124","设备 Worker 管理",`<div style="display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:14px"><div><b id="managerDeviceNameV124">-</b><div class="v124-muted">本窗口中的初始化、登录和诊断只作用于所点击的 Worker</div></div><div style="display:flex;gap:8px"><button class="action" id="refreshManagerV124">刷新</button><button class="action good" id="openAddWorkerV124">增加 Worker</button></div></div><div id="managerWorkersV124" style="margin-top:12px"></div><div id="managerCommandV124" style="margin-top:12px"></div>`);'
+          text = replace_once(text, old_dialog, new_dialog, 'device-pinned manager dialog')
+
+          pattern = re.compile(r'  function renderDevices\(\)\{.*?\n\n  function renderManager\(\)\{.*?\n\n  function renamePairingHeader', re.S)
+          replacement = '''  function renderDevices(){const body=document.getElementById("linuxDeviceRowsV124");if(!body)return;let online=0;body.innerHTML=state.devices.map((d,i)=>{const w=primary(d);const [status,tone]=workerStatus(w);if(tone==="good")online++;const proxy=proxyView(w);const version=workerVersionView(d);const cmd=d.install_command&&!w?`<button class="action" data-copy-device="${i}">复制</button>`:"-";const system=w?(String(w.os_version||"").match(/ubuntu/i)?"Ubuntu":esc(String(w.platform||"Linux"))):"-";const updated=w?.last_seen_at||d.install_updated_at||d.install_created_at;return `<tr><td><b>${esc(d.device_name)}</b><div class="v124-muted">${d.worker_count||0} Worker</div></td><td><span class="v124-pill ${tone}">${esc(status)}</span></td><td><b>${esc(version.main)}</b><div class="v124-muted">${esc(version.sub)}</div></td><td>${cmd}</td><td>${system}</td><td><div class="v124-proxy-main"><span class="v124-pill ${proxy.tone}">${esc(proxy.main)}</span>${w?`<button class="v124-gear" data-proxy-worker="${esc(w.worker_id)}" data-device="${i}">⚙</button>`:""}</div><div class="v124-muted">${esc(proxy.sub)}</div></td><td>${esc(chatgpt(w))}</td><td class="v124-muted">${esc(beijing(updated))}</td><td><div class="v124-actions">${w?`<button class="action" data-worker-action="upgrade" data-worker="${esc(w.worker_id)}">更新</button>`:""}<button class="action good" data-manage-device="${esc(d.device_id)}">管理Worker</button><button class="action danger" data-delete-device="${esc(d.device_id)}">彻底删除设备</button></div></td></tr>`;}).join("")||'<tr><td colspan="9" class="v124-muted">暂无新版 Linux 设备。请点击“新增设备”重新安装。</td></tr>';const summary=document.getElementById("linuxDeviceSummaryV124");if(summary)summary.textContent=`设备：${state.devices.length} · Worker：${state.devices.reduce((n,d)=>n+Number(d.worker_count||0),0)} · 在线设备：${online}`;}\n\n  function renderManager(){const box=document.getElementById("managerWorkersV124"),name=document.getElementById("managerDeviceNameV124");if(!box)return;const d=state.devices.find(x=>x.device_id===state.selectedDevice);if(!d){if(name)name.textContent="未选择设备";box.innerHTML='<div class="v124-muted">请从设备列表点击“管理Worker”。</div>';const command=document.getElementById("managerCommandV124");if(command)command.innerHTML="";return;}if(name)name.textContent=`${d.device_name} · ${d.worker_count||0} Worker`;box.innerHTML=`<table style="width:100%"><thead><tr><th>Worker</th><th>状态</th><th>代理</th><th>ChatGPT</th><th>Extension</th><th>操作</th></tr></thead><tbody>${(d.workers||[]).map(w=>{const [s,t]=workerStatus(w);const v=String(w.agent_version||"-");const p=String(w.metadata?.proxy_catalog_name||proxySummary(w).name||"-");return `<tr><td><b>Worker ${Number(w.worker_slot||1)}</b><div class="v124-muted">v${esc(v)}</div></td><td><span class="v124-pill ${t}">${esc(s)}</span></td><td><div style="display:flex;align-items:center;gap:6px"><span>${esc(p)}</span><button class="v124-gear" data-proxy-worker="${esc(w.worker_id)}">⚙</button></div></td><td>${esc(chatgpt(w))}</td><td>${w.extension_client_id?"已连接":"未连接"}</td><td><div class="v124-actions" style="min-width:260px"><button class="action" data-worker-action="initialize" data-worker="${esc(w.worker_id)}">初始化</button><button class="action" data-login-worker="${esc(w.worker_id)}" data-name="${esc(d.device_name)} · Worker ${Number(w.worker_slot||1)}">登录</button><button class="action" data-diagnostics="${esc(w.worker_id)}">诊断日志</button></div></td></tr>`;}).join("")}</tbody></table>`;const pending=(d.slot_installations||[]).filter(x=>!x.worker_id&&x.command);const command=document.getElementById("managerCommandV124");if(command)command.innerHTML=pending.map(x=>`<div style="margin-top:8px;padding:10px;border:1px solid #334155;border-radius:8px"><b>Worker ${x.slot} 待执行安装命令</b><div style="margin-top:6px"><code style="word-break:break-all">${esc(x.command)}</code></div><button class="action" data-copy-text="${esc(x.command)}" style="margin-top:7px">复制</button></div>`).join("");}\n\n  function renamePairingHeader'''
+          text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'console render replacement: expected 1, found {count}')
+
+          text = replace_once(
+              text,
+              'if(t.id==="createLinuxDeviceV124"){await openCreate();return;} if(t.id==="proxyManagerV124"){await openProxyManager();return;} if(t.id==="manageDeviceWorkersV124"){renderManager();document.getElementById("linuxWorkerManagerV124").showModal();return;} if(t.id==="refreshLinuxDevicesV124"||t.id==="refreshManagerV124"){await refreshAll(true);return;}',
+              'if(t.id==="createLinuxDeviceV124"){await openCreate();return;} if(t.id==="proxyManagerV124"){await openProxyManager();return;} if(t.dataset.manageDevice){state.selectedDevice=String(t.dataset.manageDevice||"");renderManager();document.getElementById("linuxWorkerManagerV124").showModal();return;} if(t.id==="refreshLinuxDevicesV124"||t.id==="refreshManagerV124"){await refreshAll(true);return;}',
+              'manager click routing',
+          )
+          old_slots = 'if(t.id==="openAddWorkerV124"){const d=state.devices.find(x=>x.device_id===document.getElementById("managerDeviceV124").value);if(!d)throw new Error("请先选择设备");await loadOptions();fillSelect(document.getElementById("slotPairingV124"),availablePairings(d.device_name),"pairing_id",p=>`${p.device_name} · ${p.prefix}`);fillSelect(document.getElementById("slotProxyV124"),state.proxies,"proxy_id",p=>p.name||p.proxy_id);document.getElementById("slotResultV124").textContent="";document.getElementById("linuxAddWorkerV124").showModal();return;} if(t.id==="generateSlotV124"){const d=document.getElementById("managerDeviceV124").value;const r=await api(`/api/admin/linux-devices/${encodeURIComponent(d)}/workers`,{method:"POST",body:{pairing_id:document.getElementById("slotPairingV124").value,proxy_id:document.getElementById("slotProxyV124").value}});document.getElementById("slotResultV124").textContent=`Worker ${r.worker_slot} 安装命令已生成`;document.getElementById("linuxAddWorkerV124").close();await refreshAll(true);return;}'
+          new_slots = 'if(t.id==="openAddWorkerV124"){const d=state.devices.find(x=>x.device_id===state.selectedDevice);if(!d)throw new Error("当前设备不存在，请刷新后重试");await loadOptions();fillSelect(document.getElementById("slotPairingV124"),availablePairings(d.device_name),"pairing_id",p=>`${p.device_name} · ${p.prefix}`);fillSelect(document.getElementById("slotProxyV124"),state.proxies,"proxy_id",p=>p.name||p.proxy_id);document.getElementById("slotResultV124").textContent="";document.getElementById("linuxAddWorkerV124").showModal();return;} if(t.id==="generateSlotV124"){const d=state.selectedDevice;if(!d)throw new Error("当前设备不存在，请重新打开管理窗口");const r=await api(`/api/admin/linux-devices/${encodeURIComponent(d)}/workers`,{method:"POST",body:{pairing_id:document.getElementById("slotPairingV124").value,proxy_id:document.getElementById("slotProxyV124").value}});document.getElementById("slotResultV124").textContent=`Worker ${r.worker_slot} 安装命令已生成`;document.getElementById("linuxAddWorkerV124").close();await refreshAll(true);return;}'
+          text = replace_once(text, old_slots, new_slots, 'slot manager device pinning')
+          text = replace_once(text, '    document.getElementById("managerDeviceV124").addEventListener("change",renderManager);\n', '', 'remove manager device selector listener')
+          if 'manageDeviceWorkersV124' in text or 'managerDeviceV124' in text:
+              raise SystemExit('legacy global/device-selector Worker manager references remain')
+          write(path, text)
+
+          # ------------------------------------------------------------------
+          # Slot-safe initialization helper. Privileged slot identity is derived
+          # solely from the root-owned sudo-allowlisted helper basename.
+          # ------------------------------------------------------------------
+          path = 'scripts/linux_worker_initialize.sh'
+          text = read(path)
+          old = '''MODE="${1:---schedule}"
+PROFILE_DIR="${CHAT2API_CHROME_PROFILE:-/home/chat2api/.config/chat2api-chrome-worker-01}"
+DEBUG_URL="${CHAT2API_CHROME_DEBUG_URL:-http://127.0.0.1:9222}"
+CHATGPT_URL="${CHATGPT_URL:-https://chatgpt.com/}"
+TAB_INIT_HELPER="${CHAT2API_TAB_INIT_HELPER:-/opt/chat2api-worker/scripts/linux_worker_tab_init.py}"
+LOCK_FILE="/run/chat2api-worker-initialize.lock"
+STATE_FILE="/var/lib/chat2api-worker/initialize-state.json"
+'''
+          new = '''MODE="${1:---schedule}"
+HELPER_NAME="$(basename -- "$0")"
+SLOT=""
+if [[ "$HELPER_NAME" =~ ^chat2api-worker-initialize-slot([0-9]+)$ ]]; then
+  SLOT="${BASH_REMATCH[1]}"
+  (( SLOT >= 2 && SLOT <= 32 )) || { echo '{"ok":false,"error":"invalid_worker_slot"}'; exit 2; }
+  SLOT_TAG="slot${SLOT}"
+  PROFILE_DIR="/home/chat2api/.config/chat2api-chrome-worker-$(printf '%02d' "$SLOT")"
+  DEBUG_URL="http://127.0.0.1:$((9221 + SLOT))"
+  STATE_DIR="/var/lib/chat2api-worker/${SLOT_TAG}"
+  XRAY_UNIT="chat2api-xray-${SLOT_TAG}.service"
+  XVFB_UNIT="chat2api-xvfb-${SLOT_TAG}.service"
+  CHROME_UNIT="chat2api-chrome-${SLOT_TAG}.service"
+  AGENT_UNIT="chat2api-worker-agent-${SLOT_TAG}.service"
+else
+  SLOT_TAG="primary"
+  PROFILE_DIR="${CHAT2API_CHROME_PROFILE:-/home/chat2api/.config/chat2api-chrome-worker-01}"
+  DEBUG_URL="${CHAT2API_CHROME_DEBUG_URL:-http://127.0.0.1:9222}"
+  STATE_DIR="${CHAT2API_WORKER_STATE_DIR:-/var/lib/chat2api-worker}"
+  XRAY_UNIT="chat2api-xray.service"
+  XVFB_UNIT="chat2api-xvfb.service"
+  CHROME_UNIT="chat2api-chrome.service"
+  AGENT_UNIT="chat2api-worker-agent.service"
+fi
+CHATGPT_URL="${CHATGPT_URL:-https://chatgpt.com/}"
+TAB_INIT_HELPER="${CHAT2API_TAB_INIT_HELPER:-/opt/chat2api-worker/scripts/linux_worker_tab_init.py}"
+LOCK_FILE="/run/chat2api-worker-initialize-${SLOT_TAG}.lock"
+STATE_FILE="${STATE_DIR}/initialize-state.json"
+'''
+          text = replace_once(text, old, new, 'initialize slot identity')
+          text = replace_once(text, '  install -d -m 0755 /var/lib/chat2api-worker\n', '  install -d -m 0755 "$STATE_DIR"\n', 'initialize state directory')
+          replacements = {
+              'systemctl start chat2api-worker-agent.service': 'systemctl start "$AGENT_UNIT"',
+              'systemctl stop chat2api-worker-agent.service chat2api-chrome.service': 'systemctl stop "$AGENT_UNIT" "$CHROME_UNIT"',
+              'systemctl restart chat2api-xray.service': 'systemctl restart "$XRAY_UNIT"',
+              'wait_active chat2api-xray.service 30': 'wait_active "$XRAY_UNIT" 30',
+              'systemctl restart chat2api-xvfb.service': 'systemctl restart "$XVFB_UNIT"',
+              'wait_active chat2api-xvfb.service 30': 'wait_active "$XVFB_UNIT" 30',
+              'systemctl start chat2api-chrome.service': 'systemctl start "$CHROME_UNIT"',
+              'systemctl stop chat2api-chrome.service': 'systemctl stop "$CHROME_UNIT"',
+              'wait_active chat2api-chrome.service 45': 'wait_active "$CHROME_UNIT" 45',
+              'systemctl restart chat2api-worker-agent.service': 'systemctl restart "$AGENT_UNIT"',
+              'wait_active chat2api-worker-agent.service 30': 'wait_active "$AGENT_UNIT" 30',
+              'unit="chat2api-worker-initialize-$(date +%s)-$$"': 'unit="chat2api-worker-initialize-${SLOT_TAG}-$(date +%s)-$$"',
+              'systemd-run --quiet --collect --no-block --unit="$unit" /usr/local/sbin/chat2api-worker-initialize --run': 'systemd-run --quiet --collect --no-block --unit="$unit" "$0" --run',
+          }
+          for old_value, new_value in replacements.items():
+              if old_value not in text:
+                  raise SystemExit(f'initialize replacement missing: {old_value}')
+              text = text.replace(old_value, new_value)
+          if 'chat2api-worker-agent.service chat2api-chrome.service' in text:
+              raise SystemExit('initialize helper still contains fixed primary stop target')
+          write(path, text)
+
+          # ------------------------------------------------------------------
+          # Slot-safe diagnostics helper: only this Worker slot's units, state,
+          # Chrome profile and CDP endpoint are inspected.
+          # ------------------------------------------------------------------
+          path = 'scripts/linux_worker_diagnostics.sh'
+          text = read(path)
+          old = '''UNITS=(
+  chat2api-worker-agent.service
+  chat2api-chrome.service
+  chat2api-xray.service
+  chat2api-xvfb.service
+  chat2api-worker-watchdog.service
+  chat2api-extension-autoreload.service
+)
+EXTENSION_DIR=/opt/chat2api-worker/chrome_extension
+STATE_DIR=/var/lib/chat2api-worker
+WORKER_PYTHON=/opt/chat2api-worker-venv/bin/python
+'''
+          new = '''HELPER_NAME="$(basename -- "$0")"
+SLOT=""
+if [[ "$HELPER_NAME" =~ ^chat2api-worker-diagnostics-slot([0-9]+)$ ]]; then
+  SLOT="${BASH_REMATCH[1]}"
+  (( SLOT >= 2 && SLOT <= 32 )) || { echo 'invalid Worker slot' >&2; exit 2; }
+  SLOT_TAG="slot${SLOT}"
+  AGENT_UNIT="chat2api-worker-agent-${SLOT_TAG}.service"
+  CHROME_UNIT="chat2api-chrome-${SLOT_TAG}.service"
+  XRAY_UNIT="chat2api-xray-${SLOT_TAG}.service"
+  XVFB_UNIT="chat2api-xvfb-${SLOT_TAG}.service"
+  WATCHDOG_SERVICE="chat2api-worker-watchdog-${SLOT_TAG}.service"
+  WATCHDOG_TIMER="chat2api-worker-watchdog-${SLOT_TAG}.timer"
+  AUTORELOAD_SERVICE="chat2api-extension-autoreload-${SLOT_TAG}.service"
+  AUTORELOAD_TIMER="chat2api-extension-autoreload-${SLOT_TAG}.timer"
+  STATE_DIR="/var/lib/chat2api-worker/${SLOT_TAG}"
+  PROFILE_DIR="/home/chat2api/.config/chat2api-chrome-worker-$(printf '%02d' "$SLOT")"
+  CDP_PORT=$((9221 + SLOT))
+else
+  SLOT_TAG="primary"
+  AGENT_UNIT="chat2api-worker-agent.service"
+  CHROME_UNIT="chat2api-chrome.service"
+  XRAY_UNIT="chat2api-xray.service"
+  XVFB_UNIT="chat2api-xvfb.service"
+  WATCHDOG_SERVICE="chat2api-worker-watchdog.service"
+  WATCHDOG_TIMER="chat2api-worker-watchdog.timer"
+  AUTORELOAD_SERVICE="chat2api-extension-autoreload.service"
+  AUTORELOAD_TIMER="chat2api-extension-autoreload.timer"
+  STATE_DIR="/var/lib/chat2api-worker"
+  PROFILE_DIR="/home/chat2api/.config/chat2api-chrome-worker-01"
+  CDP_PORT=9222
+fi
+DEBUG_URL="http://127.0.0.1:${CDP_PORT}"
+UNITS=("$AGENT_UNIT" "$CHROME_UNIT" "$XRAY_UNIT" "$XVFB_UNIT" "$WATCHDOG_SERVICE" "$AUTORELOAD_SERVICE")
+EXTENSION_DIR=/opt/chat2api-worker/chrome_extension
+WORKER_PYTHON=/opt/chat2api-worker-venv/bin/python
+'''
+          text = replace_once(text, old, new, 'diagnostics slot identity')
+          text = replace_once(text, '  "$WORKER_PYTHON" <<\'PY\'\n', '  "$WORKER_PYTHON" "$DEBUG_URL" <<\'PY\'\n', 'diagnostics CDP argument')
+          text = replace_once(text, 'BASE = "http://127.0.0.1:9222"', 'BASE = sys.argv[1].rstrip("/")', 'diagnostics dynamic CDP base')
+          text = replace_once(text, 'for unit in "${UNITS[@]}" chat2api-worker-watchdog.timer chat2api-extension-autoreload.timer; do', 'for unit in "${UNITS[@]}" "$WATCHDOG_TIMER" "$AUTORELOAD_TIMER"; do', 'diagnostics timers')
+          text = replace_once(text, 'for unit in chat2api-worker-agent.service chat2api-chrome.service chat2api-xray.service chat2api-xvfb.service; do', 'for unit in "$AGENT_UNIT" "$CHROME_UNIT" "$XRAY_UNIT" "$XVFB_UNIT"; do', 'diagnostics unit properties')
+          old_process = '''printf 'chrome_processes=%s\\n' "$(pgrep -u chat2api -fc 'chrome' 2>/dev/null || true)"
+printf 'cdp_9222='; ss -lnt 2>/dev/null | awk '$4 ~ /127\\.0\\.0\\.1:9222$/ {found=1} END {print found ? "listening" : "not_listening"}'
+'''
+          new_process = '''printf 'chrome_processes_for_profile=%s\\n' "$(ps -u chat2api -o args= 2>/dev/null | grep -F -- "--user-data-dir=${PROFILE_DIR}" | grep -Ec '[Cc]hrome' || true)"
+printf 'cdp_endpoint=%s\\n' "$DEBUG_URL"
+if curl -fsS --connect-timeout 1 --max-time 2 "${DEBUG_URL}/json/version" >/dev/null 2>&1; then printf 'cdp_status=listening\\n'; else printf 'cdp_status=not_listening\\n'; fi
+'''
+          text = replace_once(text, old_process, new_process, 'diagnostics profile/CDP summary')
+          write(path, text)
+
+          # ------------------------------------------------------------------
+          # Slot installer + wrapper: fixed helper aliases are part of the slot
+          # sandbox, and sudo permits only the slot-specific helper paths.
+          # ------------------------------------------------------------------
+          path = 'scripts/linux_worker_slot_install.sh'
+          text = read(path)
+          text = replace_once(text, '[[ -x /usr/local/sbin/chat2api-worker-upgrade ]] || { echo "Primary Worker online-upgrade helper is missing; upgrade/repair slot 1 first" >&2; exit 1; }\n', '[[ -x /usr/local/sbin/chat2api-worker-upgrade ]] || { echo "Primary Worker online-upgrade helper is missing; upgrade/repair slot 1 first" >&2; exit 1; }\n[[ -x /usr/local/sbin/chat2api-worker-initialize ]] || { echo "Primary Worker initialize helper is missing; upgrade/repair slot 1 first" >&2; exit 1; }\n[[ -x /usr/local/sbin/chat2api-worker-diagnostics ]] || { echo "Primary Worker diagnostics helper is missing; upgrade/repair slot 1 first" >&2; exit 1; }\n', 'slot prerequisite helpers')
+          text = replace_once(text, 'UPGRADE_HELPER="/usr/local/sbin/chat2api-worker-upgrade-${INSTANCE}"\n', 'UPGRADE_HELPER="/usr/local/sbin/chat2api-worker-upgrade-${INSTANCE}"\nINITIALIZE_HELPER="/usr/local/sbin/chat2api-worker-initialize-${INSTANCE}"\nDIAGNOSTICS_HELPER="/usr/local/sbin/chat2api-worker-diagnostics-${INSTANCE}"\n', 'slot helper paths')
+          text = replace_once(text, 'agent_version:"0.3.6"', 'agent_version:"0.3.8"', 'slot enrollment agent version')
+          text = replace_once(text, 'ln -sfn /usr/local/sbin/chat2api-worker-upgrade "$UPGRADE_HELPER"\nchown -h root:root "$PROXY_HELPER" "$UPGRADE_HELPER"\n', 'ln -sfn /usr/local/sbin/chat2api-worker-upgrade "$UPGRADE_HELPER"\nln -sfn /usr/local/sbin/chat2api-worker-initialize "$INITIALIZE_HELPER"\nln -sfn /usr/local/sbin/chat2api-worker-diagnostics "$DIAGNOSTICS_HELPER"\nchown -h root:root "$PROXY_HELPER" "$UPGRADE_HELPER" "$INITIALIZE_HELPER" "$DIAGNOSTICS_HELPER"\n', 'slot helper aliases')
+          text = replace_once(text, 'Environment=CHAT2API_UPGRADE_HELPER=${UPGRADE_HELPER}\n', 'Environment=CHAT2API_UPGRADE_HELPER=${UPGRADE_HELPER}\nEnvironment=CHAT2API_INITIALIZE_HELPER=${INITIALIZE_HELPER}\nEnvironment=CHAT2API_DIAGNOSTICS_HELPER=${DIAGNOSTICS_HELPER}\n', 'slot helper env')
+          text = replace_once(text, 'chat2api ALL=(root) NOPASSWD: /bin/systemctl restart ${CHROME_UNIT}, /bin/systemctl restart ${XRAY_UNIT}, /bin/systemctl restart ${XVFB_UNIT}, ${PROXY_HELPER}, ${UPGRADE_HELPER}', 'chat2api ALL=(root) NOPASSWD: /bin/systemctl restart ${CHROME_UNIT}, /bin/systemctl restart ${XRAY_UNIT}, /bin/systemctl restart ${XVFB_UNIT}, ${PROXY_HELPER}, ${UPGRADE_HELPER}, ${INITIALIZE_HELPER}, ${DIAGNOSTICS_HELPER}', 'slot sudoers helpers')
+          write(path, text)
+
+          path = 'scripts/linux_worker_slot_agent.py'
+          text = read(path)
+          text = replace_once(text, 'import asyncio\nimport os\n', 'import asyncio\nimport os\nfrom pathlib import Path\n', 'slot Path import')
+          text = replace_once(text, 'import linux_worker_agent_v44  # noqa: E402,F401\n', 'import linux_worker_agent_v44  # noqa: E402,F401\nimport linux_worker_agent_v43 as initialize_shim  # noqa: E402\n', 'slot initialize shim import')
+          text = replace_once(text, '_base_service_active = agent.service_active\n', 'agent.DIAGNOSTICS_HELPER = Path(f"/usr/local/sbin/chat2api-worker-diagnostics-{_SUFFIX}")\ninitialize_shim.INITIALIZE_HELPER = Path(f"/usr/local/sbin/chat2api-worker-initialize-{_SUFFIX}")\n_base_service_active = agent.service_active\n', 'slot helper binding')
+          write(path, text)
+
+          # Existing slots predate these aliases. Every shared-runtime upgrade
+          # repairs root-owned aliases and the slot sudoers before agents restart.
+          path = 'scripts/linux_worker_upgrade.sh'
+          text = read(path)
+          marker = 'restart_same_host_slots() {\n'
+          repair = r'''repair_same_host_slot_privileged_helpers() {
+  local config_dir instance slot sudoers_file proxy_helper upgrade_helper initialize_helper diagnostics_helper
+  for config_dir in /etc/chat2api-worker/slot*; do
+    [[ -d "$config_dir" ]] || continue
+    instance="$(basename -- "$config_dir")"
+    [[ "$instance" =~ ^slot([0-9]+)$ ]] || continue
+    slot="${BASH_REMATCH[1]}"
+    (( slot >= 2 && slot <= 32 )) || continue
+    [[ -s "${config_dir}/worker.json" ]] || continue
+    proxy_helper="/usr/local/sbin/chat2api-worker-proxy-apply-${instance}"
+    upgrade_helper="/usr/local/sbin/chat2api-worker-upgrade-${instance}"
+    initialize_helper="/usr/local/sbin/chat2api-worker-initialize-${instance}"
+    diagnostics_helper="/usr/local/sbin/chat2api-worker-diagnostics-${instance}"
+    ln -sfn /usr/local/sbin/chat2api-worker-proxy-apply "$proxy_helper"
+    ln -sfn /usr/local/sbin/chat2api-worker-upgrade "$upgrade_helper"
+    ln -sfn /usr/local/sbin/chat2api-worker-initialize "$initialize_helper"
+    ln -sfn /usr/local/sbin/chat2api-worker-diagnostics "$diagnostics_helper"
+    chown -h root:root "$proxy_helper" "$upgrade_helper" "$initialize_helper" "$diagnostics_helper"
+    sudoers_file="/etc/sudoers.d/chat2api-worker-${instance}"
+    cat >"$sudoers_file" <<SUDO
+chat2api ALL=(root) NOPASSWD: /bin/systemctl restart chat2api-chrome-${instance}.service, /bin/systemctl restart chat2api-xray-${instance}.service, /bin/systemctl restart chat2api-xvfb-${instance}.service, ${proxy_helper}, ${upgrade_helper}, ${initialize_helper}, ${diagnostics_helper}
+SUDO
+    chmod 440 "$sudoers_file"
+    visudo -cf "$sudoers_file" >/dev/null
+  done
+}
+
+'''
+          text = replace_once(text, marker, repair + marker, 'upgrade slot helper repair function')
+          text = replace_once(text, '  report running shared-slots 98 "共享 Worker 运行时已更新，正在重启同机隔离 Slot"\n  restart_same_host_slots\n', '  report running shared-slots 98 "共享 Worker 运行时已更新，正在修复并重启同机隔离 Slot"\n  repair_same_host_slot_privileged_helpers\n  restart_same_host_slots\n', 'upgrade invokes slot helper repair')
+          write(path, text)
+
+          # ------------------------------------------------------------------
+          # Primary bootstrap is self-contained even without historical response
+          # middleware. This also guarantees primary + future slot helper parity.
+          # ------------------------------------------------------------------
+          path = 'scripts/bootstrap_linux_worker.sh'
+          text = read(path)
+          text = text.replace('agent_version:"0.3.2"', 'agent_version:"0.3.8"')
+          text = replace_once(text, 'rm -f /usr/local/sbin/chat2api-linux-worker-watchdog /usr/local/sbin/chat2api-linux-extension-autoreload /usr/local/sbin/chat2api-worker-proxy-apply\n', 'rm -f /usr/local/sbin/chat2api-linux-worker-watchdog /usr/local/sbin/chat2api-linux-extension-autoreload /usr/local/sbin/chat2api-worker-proxy-apply /usr/local/sbin/chat2api-worker-initialize /usr/local/sbin/chat2api-worker-diagnostics\n', 'bootstrap cleanup helpers')
+          anchor = 'install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_proxy_apply.sh" /usr/local/sbin/chat2api-worker-proxy-apply\n'
+          text = replace_once(text, anchor, anchor + 'install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_initialize.sh" /usr/local/sbin/chat2api-worker-initialize\ninstall -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_diagnostics.sh" /usr/local/sbin/chat2api-worker-diagnostics\n', 'bootstrap helper install')
+          text = replace_once(text, 'chat2api ALL=(root) NOPASSWD: /bin/systemctl restart chat2api-chrome.service, /bin/systemctl restart chat2api-xray.service, /bin/systemctl restart chat2api-xvfb.service, /usr/local/sbin/chat2api-worker-proxy-apply', 'chat2api ALL=(root) NOPASSWD: /bin/systemctl restart chat2api-chrome.service, /bin/systemctl restart chat2api-xray.service, /bin/systemctl restart chat2api-xvfb.service, /usr/local/sbin/chat2api-worker-proxy-apply, /usr/local/sbin/chat2api-worker-initialize, /usr/local/sbin/chat2api-worker-diagnostics', 'bootstrap sudoers helpers')
+          write(path, text)
+
+          # Agent identity changes because v126 materially changes privileged
+          # Worker operation isolation in the shipped bundle.
+          path = 'scripts/linux_worker_agent_v44.py'
+          text = read(path)
+          text = replace_once(text, 'AGENT_VERSION = "0.3.7"', 'AGENT_VERSION = "0.3.8"', 'active Agent version')
+          write(path, text)
+
+          # ------------------------------------------------------------------
+          # Runtime/bundle release contract.
+          # ------------------------------------------------------------------
+          path = 'app/runtime_contract.py'
+          text = read(path)
+          text = replace_once(text, 'SERVER_RUNTIME_VERSION = "0.22.81"\nPREVIOUS_SERVER_RUNTIME_VERSION = "0.22.80"\nPREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.79"\nPREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.78"\nPREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.77"', 'SERVER_RUNTIME_VERSION = "0.22.82"\nPREVIOUS_SERVER_RUNTIME_VERSION = "0.22.81"\nPREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.80"\nPREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.79"\nPREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.78"', 'runtime version chain')
+          text = replace_once(text, 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.34"', 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.35"', 'bundle runtime version')
+          text = replace_once(text, '-linux-installer-public-https-v125-release-v02281"', '-linux-installer-public-https-v125-release-v02281-linux-worker-isolated-manager-v126-release-v02282"', 'runtime feature revision')
+          text = replace_once(text, '-linux-device-authority-v124-extension-autopair-v1-release-v0834"', '-linux-device-authority-v124-extension-autopair-v1-release-v0834-worker-isolated-ops-v126-release-v0835"', 'bundle build revision')
+          text = replace_once(text, '            "linux_worker_public_https_origin_v125": True,\n', '            "linux_worker_public_https_origin_v125": True,\n            "linux_worker_isolated_management_v126": True,\n            "linux_worker_slot_isolated_ops_v126": True,\n', 'v126 feature flags')
+          write(path, text)
+
+          bundle_files = [
+              'chrome_extension/manifest.json',
+              'chrome_extension/content_bundle_marker_v48.js',
+              'chrome_extension/content_bundle_marker_v71.js',
+              'chrome_extension/content_runtime_contract_v48.js',
+              'chrome_extension/content_runtime_contract_v71.js',
+              'chrome_extension/background_runtime_preflight_v48.js',
+          ]
+          for name in bundle_files:
+              value = read(name)
+              if '0.8.34' not in value:
+                  raise SystemExit(f'{name}: expected current bundle 0.8.34')
+              write(name, value.replace('0.8.34', '0.8.35'))
+
+          # Production image contract tracks both changed surfaces.
+          path = '.github/workflows/production-image-smoke.yml'
+          text = read(path)
+          if 'EXPECTED_RUNTIME = "0.22.81"' not in text or 'EXPECTED_BUNDLE = "0.8.34"' not in text:
+              raise SystemExit('production smoke expected versions not found')
+          text = text.replace('EXPECTED_RUNTIME = "0.22.81"', 'EXPECTED_RUNTIME = "0.22.82"')
+          text = text.replace('EXPECTED_BUNDLE = "0.8.34"', 'EXPECTED_BUNDLE = "0.8.35"')
+          # Add source-level release gates next to the existing v125 resolver gate.
+          smoke_anchor = 'assert \'"linux_worker_public_https_origin_v125": True\' in runtime\n'
+          if smoke_anchor not in text:
+              raise SystemExit('production smoke v125 feature anchor not found')
+          smoke_extra = smoke_anchor + '''assert '\"linux_worker_isolated_management_v126\": True' in runtime\nassert '\"linux_worker_slot_isolated_ops_v126\": True' in runtime\nassert 'Worker版本' in device_ui\nassert 'data-manage-device' in device_ui\nassert 'manageDeviceWorkersV124' not in device_ui\nassert 'managerDeviceV124' not in device_ui\nassert 'chat2api-worker-initialize-slot([0-9]+)' in initialize_helper\nassert 'chat2api-worker-diagnostics-slot([0-9]+)' in diagnostics_helper\nassert 'CHAT2API_INITIALIZE_HELPER=${INITIALIZE_HELPER}' in slot_installer\nassert 'CHAT2API_DIAGNOSTICS_HELPER=${DIAGNOSTICS_HELPER}' in slot_installer\n'''
+          text = text.replace(smoke_anchor, smoke_extra, 1)
+          # Ensure the variables used by the new assertions are loaded in the smoke Python block.
+          load_anchor = 'slot_installer = (root / "scripts/linux_worker_slot_install.sh").read_text(encoding="utf-8")\n'
+          if load_anchor not in text:
+              raise SystemExit('production smoke slot installer load anchor missing')
+          text = text.replace(load_anchor, load_anchor + 'initialize_helper = (root / "scripts/linux_worker_initialize.sh").read_text(encoding="utf-8")\ndiagnostics_helper = (root / "scripts/linux_worker_diagnostics.sh").read_text(encoding="utf-8")\ndevice_ui = (root / "app/admin_linux_device_authority_v124.js").read_text(encoding="utf-8")\n', 1)
+          write(path, text)
+
+          # Current-version tests are release snapshots. Move only the immediately
+          # previous current contract values; historical older-version fixtures stay untouched.
+          for p in Path('tests').glob('test_*.py'):
+              value = p.read_text(encoding='utf-8')
+              new_value = value.replace('0.22.81', '0.22.82').replace('0.8.34', '0.8.35').replace('0.3.7', '0.3.8')
+              if new_value != value:
+                  p.write_text(new_value, encoding='utf-8')
+
+          # Strengthen the existing same-host test with privileged-operation isolation.
+          path = 'tests/test_same_host_worker_slots.py'
+          text = read(path)
+          text = replace_once(text, '    upgrade_helper = (ROOT / "scripts/linux_worker_upgrade.sh").read_text(encoding="utf-8")\n', '    upgrade_helper = (ROOT / "scripts/linux_worker_upgrade.sh").read_text(encoding="utf-8")\n    initialize_helper = (ROOT / "scripts/linux_worker_initialize.sh").read_text(encoding="utf-8")\n    diagnostics_helper = (ROOT / "scripts/linux_worker_diagnostics.sh").read_text(encoding="utf-8")\n', 'same-host helper sources')
+          test_anchor = '    assert "chat2api-worker-upgrade-slot([0-9]+)" in upgrade_helper\n'
+          text = replace_once(text, test_anchor, test_anchor + '    assert "chat2api-worker-initialize-slot([0-9]+)" in initialize_helper\n    assert "chat2api-worker-diagnostics-slot([0-9]+)" in diagnostics_helper\n    assert "CHAT2API_INITIALIZE_HELPER=${INITIALIZE_HELPER}" in installer\n    assert "CHAT2API_DIAGNOSTICS_HELPER=${DIAGNOSTICS_HELPER}" in installer\n    assert "repair_same_host_slot_privileged_helpers" in upgrade_helper\n', 'same-host privileged operation assertions')
+          write(path, text)
+
+          # Dedicated v126 UI/operation ownership regression test.
+          Path('tests/test_linux_worker_isolated_manager_v126.py').write_text(r'''from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def source(path: str) -> str:
+    return (ROOT / path).read_text(encoding="utf-8")
+
+
+def test_device_table_owns_only_device_actions_and_worker_version() -> None:
+    ui = source("app/admin_linux_device_authority_v124.js")
+    assert "管理设备 Worker" not in ui
+    assert "manageDeviceWorkersV124" not in ui
+    assert "<th>Worker版本</th>" in ui
+    assert "data-manage-device" in ui
+    render_device = ui.split("function renderDevices()", 1)[1].split("function renderManager()", 1)[0]
+    assert 'data-worker-action="upgrade"' in render_device
+    assert 'data-worker-action="initialize"' not in render_device
+    assert "data-login-worker" not in render_device
+    assert "data-diagnostics" not in render_device
+    assert "管理Worker" in render_device
+
+
+def test_worker_manager_is_pinned_to_clicked_device_and_routes_by_worker_id() -> None:
+    ui = source("app/admin_linux_device_authority_v124.js")
+    assert "managerDeviceV124" not in ui
+    assert "state.selectedDevice=String(t.dataset.manageDevice" in ui
+    manager = ui.split("function renderManager()", 1)[1].split("function renamePairingHeader", 1)[0]
+    assert 'data-worker-action="initialize"' in manager
+    assert "data-login-worker" in manager
+    assert "data-diagnostics" in manager
+    assert 'data-worker="${esc(w.worker_id)}"' in manager
+    assert 'data-login-worker="${esc(w.worker_id)}"' in manager
+    assert 'data-diagnostics="${esc(w.worker_id)}"' in manager
+
+
+def test_slot_privileged_actions_are_fixed_to_the_worker_slot() -> None:
+    slot = source("scripts/linux_worker_slot_install.sh")
+    wrapper = source("scripts/linux_worker_slot_agent.py")
+    initialize = source("scripts/linux_worker_initialize.sh")
+    diagnostics = source("scripts/linux_worker_diagnostics.sh")
+    upgrade = source("scripts/linux_worker_upgrade.sh")
+    assert "chat2api-worker-initialize-slot([0-9]+)" in initialize
+    assert "chat2api-worker-diagnostics-slot([0-9]+)" in diagnostics
+    assert 'systemctl stop "$AGENT_UNIT" "$CHROME_UNIT"' in initialize
+    assert 'DEBUG_URL="http://127.0.0.1:$((9221 + SLOT))"' in initialize
+    assert 'BASE = sys.argv[1].rstrip("/")' in diagnostics
+    assert 'agent.DIAGNOSTICS_HELPER = Path(f"/usr/local/sbin/chat2api-worker-diagnostics-{_SUFFIX}")' in wrapper
+    assert 'initialize_shim.INITIALIZE_HELPER = Path(f"/usr/local/sbin/chat2api-worker-initialize-{_SUFFIX}")' in wrapper
+    assert "${INITIALIZE_HELPER}, ${DIAGNOSTICS_HELPER}" in slot
+    assert "repair_same_host_slot_privileged_helpers" in upgrade
+
+
+def test_v126_release_contract() -> None:
+    runtime = source("app/runtime_contract.py")
+    manifest = source("chrome_extension/manifest.json")
+    agent = source("scripts/linux_worker_agent_v44.py")
+    assert 'SERVER_RUNTIME_VERSION = "0.22.82"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.35"' in runtime
+    assert '"linux_worker_isolated_management_v126": True' in runtime
+    assert '"linux_worker_slot_isolated_ops_v126": True' in runtime
+    assert '"version": "0.8.35"' in manifest
+    assert 'AGENT_VERSION = "0.3.8"' in agent
+''', encoding='utf-8')
+
+          # JS/shell syntax checks are intentionally duplicated here so this bot
+          # cannot push a mechanically broken management console or helper.
+          PY
+          node --check app/admin_linux_device_authority_v124.js
+          bash -n scripts/linux_worker_initialize.sh
+          bash -n scripts/linux_worker_diagnostics.sh
+          bash -n scripts/linux_worker_slot_install.sh
+          bash -n scripts/linux_worker_upgrade.sh
+          python -m py_compile scripts/linux_worker_slot_agent.py scripts/linux_worker_agent_v44.py
+          python -m pytest -q tests/test_linux_worker_isolated_manager_v126.py tests/test_same_host_worker_slots.py
+      - name: Commit v126 implementation
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add app scripts chrome_extension tests .github/workflows/production-image-smoke.yml
+          git commit -m 'feat: isolate Linux Worker management operations'
+          git push origin HEAD:feat/linux-worker-isolated-manager-v126-20260912
