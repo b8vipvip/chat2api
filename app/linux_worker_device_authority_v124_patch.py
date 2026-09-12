@@ -213,26 +213,28 @@ def _recent(worker: dict[str, Any], seconds: int = 45) -> bool:
 def _device_rows(app: FastAPI) -> list[dict[str, Any]]:
     installs = app.state.linux_worker_installs.list_admin()
     workers = app.state.linux_workers.list_public()
-    device_installs = [row for row in installs if _is_device_install(row)]
-    slot_installs = [row for row in installs if _is_slot_install(row)]
     result: list[dict[str, Any]] = []
-    for device in device_installs:
+    for device in [row for row in installs if _is_device_install(row)]:
         meta = _install_meta(device)
         device_id = _device_id(device)
-        related_installs = [row for row in slot_installs if str(_install_meta(row).get("parent_device_id") or "") == device_id]
         primary_id = str(device.get("worker_id") or "")
         worker_rows: list[dict[str, Any]] = []
         for source in workers:
             worker_id = str(source.get("worker_id") or "")
             worker_meta = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
-            worker_device = str(worker_meta.get("device_id_v124") or "")
-            if worker_id != primary_id and worker_device != device_id:
+            is_primary = bool(primary_id and worker_id == primary_id)
+            is_controller_child = (
+                int(worker_meta.get("device_controller_revision") or 0) == 127
+                and str(worker_meta.get("controller_worker_id") or "") == primary_id
+                and str(worker_meta.get("device_id_v124") or "") == device_id
+            )
+            if not is_primary and not is_controller_child:
                 continue
             worker = dict(source)
             try:
-                slot = int(worker_meta.get("worker_slot") or (1 if worker_id == primary_id else 0))
+                slot = int(worker_meta.get("worker_slot") or (1 if is_primary else 0))
             except (TypeError, ValueError):
-                slot = 1 if worker_id == primary_id else 0
+                slot = 1 if is_primary else 0
             if slot < 1:
                 continue
             worker["worker_slot"] = slot
@@ -254,22 +256,11 @@ def _device_rows(app: FastAPI) -> list[dict[str, Any]]:
             "install_updated_at": device.get("updated_at"),
             "workers": worker_rows,
             "worker_count": len(worker_rows),
-            "slot_installations": [
-                {
-                    "install_id": str(row.get("install_id") or ""),
-                    "slot": int(_install_meta(row).get("worker_slot") or 0),
-                    "state": str(row.get("state") or "pending"),
-                    "command": str(row.get("install_command") or ""),
-                    "worker_id": str(row.get("worker_id") or ""),
-                }
-                for row in sorted(related_installs, key=lambda item: int(_install_meta(item).get("worker_slot") or 0))
-            ],
             "authority": "linux-device-v124",
             "device_controller_revision": 127,
         })
     result.sort(key=lambda row: str(row.get("install_created_at") or ""), reverse=True)
     return result
-
 
 def _create_controller_child(store: Any, *, device: dict[str, Any], primary: dict[str, Any], slot: int) -> dict[str, Any]:
     worker_id = "wrk_" + secrets.token_hex(12)
@@ -322,13 +313,23 @@ def _create_controller_child(store: Any, *, device: dict[str, Any], primary: dic
 def _legacy_snapshot(app: FastAPI) -> dict[str, Any]:
     installs = app.state.linux_worker_installs.list_admin()
     workers = app.state.linux_workers.list_public()
-    v124_worker_ids = {
-        str(row.get("worker_id") or "")
-        for row in installs
-        if _is_v124(row) and row.get("worker_id")
-    }
-    legacy_workers = [row for row in workers if str(row.get("worker_id") or "") not in v124_worker_ids]
-    legacy_installs = [row for row in installs if not _is_v124(row)]
+    device_installs = [row for row in installs if _is_device_install(row)]
+    current_primary_ids = {str(row.get("worker_id") or "") for row in device_installs if row.get("worker_id")}
+    current_device_ids = {_device_id(row) for row in device_installs}
+    current_worker_ids = set(current_primary_ids)
+    for row in workers:
+        worker_id = str(row.get("worker_id") or "")
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        if (
+            int(metadata.get("device_controller_revision") or 0) == 127
+            and str(metadata.get("controller_worker_id") or "") in current_primary_ids
+            and str(metadata.get("device_id_v124") or "") in current_device_ids
+        ):
+            current_worker_ids.add(worker_id)
+    legacy_workers = [row for row in workers if str(row.get("worker_id") or "") not in current_worker_ids]
+    # Any non-device install row, including the retired v126 worker_slot rows, is
+    # explicit legacy data. v127 never reads such a row to make device decisions.
+    legacy_installs = [row for row in installs if not _is_device_install(row)]
     return {
         "workers": [
             {
@@ -409,15 +410,13 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
         pairing: dict[str, Any],
         pairing_code: str,
         proxy: dict[str, Any],
-        slot: int,
-        parent_device_id: str = "",
     ) -> dict[str, Any]:
         device_name = str(pairing.get("device_name") or "Linux 设备").strip()[:80] or "Linux 设备"
-        worker_name = device_name if slot == 1 else f"{device_name} · Worker {slot}"
-        install = installs.create(worker_name)
-        device_id = parent_device_id or str(install.get("install_id") or "")
+        install = installs.create(device_name)
+        device_id = str(install.get("install_id") or "")
         metadata = {
             "device_authority_revision": PATCH_REVISION,
+            "device_controller_revision": 127,
             "device_id": device_id,
             "device_name": device_name,
             "pairing_id": str(pairing.get("pairing_id") or ""),
@@ -425,31 +424,23 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
             "proxy_id": str(proxy.get("proxy_id") or ""),
             "proxy_name": str(proxy.get("name") or ""),
             "proxy_share_link": str(proxy.get("share_link") or ""),
-            "worker_slot": slot,
-            "install_kind": "device" if slot == 1 else "worker_slot",
-            "parent_device_id": parent_device_id,
+            "worker_slot": 1,
+            "install_kind": "device",
+            "parent_device_id": "",
         }
         server = _server_url(app, request)
         code = str(install.get("code") or "")
-        if slot == 1:
-            command = (
-                f"curl -fsSL {shlex.quote(server + '/bootstrap/linux-worker.sh')} | "
-                f"sudo bash -s -- --server {shlex.quote(server)} --enroll-code {shlex.quote(code)} "
-                f"--pairing-code {shlex.quote(pairing_code)} --device-name {shlex.quote(device_name)}"
-            )
-        else:
-            command = (
-                "sudo bash /opt/chat2api-worker/scripts/linux_worker_slot_install_reported.sh "
-                f"--server {shlex.quote(server)} --enroll-code {shlex.quote(code)} --slot {slot} "
-                f"--pairing-code {shlex.quote(pairing_code)} --device-name {shlex.quote(device_name)}"
-            )
-
+        command = (
+            f"curl -fsSL {shlex.quote(server + '/bootstrap/linux-worker.sh')} | "
+            f"sudo bash -s -- --server {shlex.quote(server)} --enroll-code {shlex.quote(code)} "
+            f"--pairing-code {shlex.quote(pairing_code)} --device-name {shlex.quote(device_name)}"
+        )
         _persist_install_fields(installs, str(install["install_id"]), metadata=metadata, install_command=command)
         digest = code_hash(code.strip().upper())
         with workers._lock:
             workers.data.setdefault("enrollments", {})[digest] = {
                 "code_hash": digest,
-                "name": worker_name,
+                "name": device_name,
                 "created_at": install.get("created_at") or _utc_iso(),
                 "expires_at": "9999-12-31T23:59:59Z",
                 "used_at": None,
@@ -470,11 +461,12 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
         if int(enroll_meta.get("device_authority_revision") or 0) != PATCH_REVISION:
             return result
 
-        slot = max(1, int(enroll_meta.get("worker_slot") or 1))
+        slot = 1
         pairing_id = str(enroll_meta.get("pairing_id") or "")
         pairing_name = str(enroll_meta.get("device_name") or "Linux 设备")
         safe_meta = {
             "device_authority_revision": PATCH_REVISION,
+            "device_controller_revision": 127,
             "device_id_v124": str(enroll_meta.get("device_id") or ""),
             "device_name": pairing_name,
             "device_pairing_id": pairing_id,
@@ -562,13 +554,6 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
             if install_id and repaired and repaired != command:
                 _persist_install_fields(installs, install_id, install_command=repaired)
                 device["install_command"] = repaired
-            for slot in device.get("slot_installations", []):
-                slot_install_id = str(slot.get("install_id") or "")
-                slot_command = str(slot.get("command") or "")
-                repaired_slot = _repair_install_command_origin(slot_command, public_url)
-                if slot_install_id and repaired_slot and repaired_slot != slot_command:
-                    _persist_install_fields(installs, slot_install_id, install_command=repaired_slot)
-                    slot["command"] = repaired_slot
         return {"data": rows, "authority": "linux-device-v124", "revision": PATCH_REVISION}
 
     @app.get("/api/admin/linux-devices/setup-options")
@@ -593,7 +578,7 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
             if str(row.get("device_pairing_id") or "") == pairing_id:
                 raise HTTPException(409, "这个设备码已经属于一个 Linux 设备")
         pairing_code, _ = await app.state.pairings.reveal_or_rotate(pairing_id)
-        return create_install(request, pairing=pairing, pairing_code=pairing_code, proxy=proxy, slot=1)
+        return create_install(request, pairing=pairing, pairing_code=pairing_code, proxy=proxy)
 
     @app.post("/api/admin/linux-devices/{device_id}/workers")
     async def add_linux_device_worker(device_id: str, request: Request) -> dict[str, Any]:
@@ -604,6 +589,8 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
         primary = next((row for row in device.get("workers", []) if int(row.get("worker_slot") or 0) == 1), None)
         if not primary:
             raise HTTPException(409, "请先完成设备首次安装，再增加 Worker")
+        if str(primary.get("agent_version") or "") != "0.3.9":
+            raise HTTPException(409, "请先点击设备列表中的更新，将该设备升级到总控 Agent 0.3.9 后再增加 Worker")
         occupied = {int(row.get("worker_slot") or 0) for row in device.get("workers", [])}
         slot = next((value for value in range(MIN_SLOT, MAX_SLOT + 1) if value not in occupied), None)
         if slot is None:
@@ -646,7 +633,6 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(409, "设备仍有在线 Worker，请先在目标 Linux 主机卸载后再彻底删除")
         worker_ids = [str(row.get("worker_id") or "") for row in device.get("workers", []) if row.get("worker_id")]
         install_ids = [str(device.get("install_id") or "")]
-        install_ids.extend(str(row.get("install_id") or "") for row in device.get("slot_installations", []))
         for worker_id in worker_ids:
             _delete_worker(workers, worker_id)
         for install_id in install_ids:

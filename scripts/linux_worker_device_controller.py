@@ -260,6 +260,8 @@ def _execute(config: dict[str, Any], target: dict[str, Any], command: str, argum
     if command == "test_proxy":
         return legacy.base._proxy_test()
     if command == "apply_proxy_config":
+        if not primary:
+            return {"ok": False, "error": "shared_proxy_via_primary_only"}
         return legacy.base._apply_proxy(arguments)
     if command == "upgrade_worker":
         if not primary:

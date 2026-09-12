@@ -71,7 +71,7 @@ def test_bootstrap_upgrade_preserves_identity_and_chrome_starts_chatgpt():
     assert "--upgrade) UPGRADE_ONLY=1" in source
     assert "use --upgrade only on an already enrolled Worker" in source
     assert "升级模式要求现有有效 Worker 身份" in source
-    assert 'agent_version:"0.3.8"' in source
+    assert 'agent_version:"0.3.9"' in source
     chrome_unit = source.split("cat >/etc/systemd/system/chat2api-chrome.service", 1)[1].split("\nUNIT\n", 1)[0]
     assert "linux_worker_chrome_launcher.sh" in chrome_unit
     assert "https://chatgpt.com/" not in chrome_unit

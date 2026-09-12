@@ -47,7 +47,7 @@ def test_v118_still_rejects_a_different_nested_custom_tool() -> None:
 
 def test_worker_bundle_and_runtime_are_v02275_and_0831() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert SERVER_RUNTIME_VERSION == "0.22.82"
+    assert SERVER_RUNTIME_VERSION == "0.22.83"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.35"
     assert manifest["version"] == "0.8.35"
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))

@@ -41,7 +41,7 @@ def test_autoreload_v43_does_not_accept_running_chrome_without_bridge_runtime() 
 def test_final_bootstrap_installs_v43_agent_initializer_and_runtime_validator() -> None:
     source = (ROOT / "scripts" / "bootstrap_linux_worker.sh").read_text(encoding="utf-8")
     patched = patch_initialize_bootstrap(patch_diagnostics_bootstrap(source))
-    assert "scripts/linux_worker_agent_v43.py" in patched
+    assert "scripts/linux_worker_device_controller.py" in patched
     assert 'scripts/linux_extension_autoreload_v43.sh" /usr/local/sbin/chat2api-linux-extension-autoreload' in patched
     assert 'scripts/linux_worker_initialize.sh" /usr/local/sbin/chat2api-worker-initialize' in patched
     assert "/usr/local/sbin/chat2api-worker-diagnostics" in patched

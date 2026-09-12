@@ -104,6 +104,19 @@ if [[ $VALID_IDENTITY -eq 0 ]]; then
   systemctl reset-failed >/dev/null 2>&1 || true
 else
   echo "[cleanup] 检测到完整 Worker 身份，按幂等升级处理，不删除身份和 Profile"
+  for slot in $(seq 2 32); do
+    agent_unit="chat2api-worker-agent-slot${slot}.service"
+    xray_unit="chat2api-xray-slot${slot}.service"
+    if [[ -e "/etc/systemd/system/${agent_unit}" || -e "/etc/systemd/system/${xray_unit}" ]]; then
+      echo "[cleanup] 退役旧 Slot ${slot} 独立 Agent/Xray 控制层（保留 Chrome Profile）"
+      for unit in "$agent_unit" "$xray_unit" "chat2api-chrome-slot${slot}.service" "chat2api-xvfb-slot${slot}.service"; do
+        systemctl disable --now "$unit" >/dev/null 2>&1 || true
+        rm -f "/etc/systemd/system/${unit}"
+      done
+      rm -rf "/etc/chat2api-worker-slot${slot}" "/var/lib/chat2api-worker-slot${slot}" "/opt/chat2api-worker-venv-slot${slot}"
+    fi
+  done
+  systemctl daemon-reload
 fi
 
 set_stage "packages" "安装 Worker 基础依赖（沿用系统现有 APT 镜像）"
@@ -128,7 +141,7 @@ EXPECTED_SHA="$(jq -er '.sha256' "$BUNDLE_META")"
 curl -fSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 300 -o "$BUNDLE_FILE" "$SERVER/bootstrap/linux-worker-bundle.tar.gz"
 echo "$EXPECTED_SHA  $BUNDLE_FILE" | sha256sum -c -
 tar -xzf "$BUNDLE_FILE" -C "$BUNDLE_TMP"
-[[ -f "$BUNDLE_TMP/chrome_extension/manifest.json" && -f "$BUNDLE_TMP/scripts/linux_worker_agent.py" && -f "$BUNDLE_TMP/scripts/linux_worker_chrome_launcher.sh" ]] || { LAST_MESSAGE="Worker Bundle 内容不完整"; exit 1; }
+[[ -f "$BUNDLE_TMP/chrome_extension/manifest.json" && -f "$BUNDLE_TMP/scripts/linux_worker_device_controller.py" && -f "$BUNDLE_TMP/scripts/linux_worker_device_controller_helper.sh" && -f "$BUNDLE_TMP/scripts/linux_worker_chrome_launcher.sh" ]] || { LAST_MESSAGE="Worker Bundle 内容不完整"; exit 1; }
 rm -rf "${WORKER_DIR}.new"
 install -d -m 755 "${WORKER_DIR}.new"
 cp -a "$BUNDLE_TMP"/. "${WORKER_DIR}.new"/

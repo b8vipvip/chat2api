@@ -13,10 +13,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_bootstrap_installs_v44_agent_and_fixed_online_upgrade_helper():
     source = (ROOT / "scripts" / "bootstrap_linux_worker.sh").read_text(encoding="utf-8")
     patched = patch_upgrade_bootstrap(patch_initialize_bootstrap(patch_diagnostics_bootstrap(patch_install_ux_bootstrap(source))))
-    assert "${WORKER_DIR}/scripts/linux_worker_agent_v44.py" in patched
+    assert "${WORKER_DIR}/scripts/linux_worker_device_controller.py" in patched
     assert 'install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_upgrade.sh" /usr/local/sbin/chat2api-worker-upgrade' in patched
     assert "/usr/local/sbin/chat2api-worker-upgrade" in patched
-    assert 'echo "Worker Agent: 0.3.8 (支持后台一键更新 / 实时进度)"' in patched
+    assert 'echo "Worker Agent: 0.3.9 (支持后台一键更新 / 实时进度)"' in patched
 
 
 def test_online_upgrade_helper_and_agent_shim_have_valid_syntax():
@@ -39,7 +39,7 @@ def test_online_upgrade_control_plane_is_worker_authenticated_and_progress_survi
     helper = (ROOT / "scripts" / "linux_worker_upgrade.sh").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    for token in ('@app.post("/api/workers/{worker_id}/upgrade-progress")','store.authenticate(worker_id, token)','@app.post("/api/admin/linux-workers/{worker_id}/upgrade")','"upgrade_worker"','needs_bootstrap_once','TARGET_AGENT_VERSION = "0.3.8"'):
+    for token in ('@app.post("/api/workers/{worker_id}/upgrade-progress")','store.authenticate(worker_id, token)','@app.post("/api/admin/linux-workers/{worker_id}/upgrade")','"upgrade_worker"','needs_bootstrap_once','TARGET_AGENT_VERSION = "0.3.9"'):
         assert token in source
     assert 'systemd-run --quiet --collect --no-block' in helper
     assert 'X-Worker-Token' in helper

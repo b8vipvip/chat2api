@@ -23,7 +23,7 @@ def test_formal_release_v02275_versions_and_worker_entry_are_aligned() -> None:
     manifest = json.loads(read("chrome_extension/manifest.json"))
     entry = read("chrome_extension/background_entry.js")
 
-    assert SERVER_RUNTIME_VERSION == "0.22.82"
+    assert SERVER_RUNTIME_VERSION == "0.22.83"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.35"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION

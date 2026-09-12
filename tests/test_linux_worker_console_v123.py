@@ -28,7 +28,8 @@ def test_v124_new_device_requires_pairing_and_saved_proxy_before_command():
     assert "代理不存在，请先在代理管理中添加" in source
     assert '"device_name": device_name' in source
     assert '"device_authority_revision": PATCH_REVISION' in source
-    assert '"install_kind": "device" if slot == 1 else "worker_slot"' in source
+    assert '"install_kind": "device"' in source
+    assert '"device_controller_revision": 127' in source
 
 
 def test_v124_console_is_not_a_hidden_legacy_table_or_action_relay():
