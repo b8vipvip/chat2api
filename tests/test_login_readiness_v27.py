@@ -20,7 +20,7 @@ def read(path: Path) -> str:
 def test_current_bridge_loads_login_detector_for_new_and_existing_tabs():
     manifest = json.loads(read(EXT / "manifest.json"))
     assert CHROME_BRIDGE_VERSION == "0.8.1"
-    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.34"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.8.35"
     scripts = manifest["content_scripts"][1]["js"]
     assert CONTENT in scripts
     assert scripts.index("content_page_adapter_v22.js") < scripts.index(CONTENT) < scripts.index("content_page_driver_v22.js")
@@ -63,7 +63,7 @@ def test_background_login_coordinator_loads_before_request_route_authority():
     assert entry.index('"content_bootstrap.js"') < entry.index(f'"{BACKGROUND}"') < entry.index('"conversation_routing.js"')
     assert '"conversation_warm_pool_v2.js"' not in entry
     # The legacy source may still recognize a warm-pool hook for compatibility,
-    # but the production 0.8.34 entry has no speculative warm-window owner.
+    # but the production 0.8.35 entry has no speculative warm-window owner.
     assert 'NETWORK_GATE_KEY = "__CHAT2API_NETWORK_GATE_V26__"' in source
     assert "async function readyForPrewarm()" in source
 

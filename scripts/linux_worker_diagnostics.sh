@@ -5,16 +5,40 @@ set -euo pipefail
 # It accepts no arguments so a compromised unprivileged Agent cannot turn it
 # into an arbitrary journal reader or command runner.
 
-UNITS=(
-  chat2api-worker-agent.service
-  chat2api-chrome.service
-  chat2api-xray.service
-  chat2api-xvfb.service
-  chat2api-worker-watchdog.service
-  chat2api-extension-autoreload.service
-)
+HELPER_NAME="$(basename -- "$0")"
+SLOT=""
+if [[ "$HELPER_NAME" =~ ^chat2api-worker-diagnostics-slot([0-9]+)$ ]]; then
+  SLOT="${BASH_REMATCH[1]}"
+  (( SLOT >= 2 && SLOT <= 32 )) || { echo 'invalid Worker slot' >&2; exit 2; }
+  SLOT_TAG="slot${SLOT}"
+  AGENT_UNIT="chat2api-worker-agent-${SLOT_TAG}.service"
+  CHROME_UNIT="chat2api-chrome-${SLOT_TAG}.service"
+  XRAY_UNIT="chat2api-xray-${SLOT_TAG}.service"
+  XVFB_UNIT="chat2api-xvfb-${SLOT_TAG}.service"
+  WATCHDOG_SERVICE="chat2api-worker-watchdog-${SLOT_TAG}.service"
+  WATCHDOG_TIMER="chat2api-worker-watchdog-${SLOT_TAG}.timer"
+  AUTORELOAD_SERVICE="chat2api-extension-autoreload-${SLOT_TAG}.service"
+  AUTORELOAD_TIMER="chat2api-extension-autoreload-${SLOT_TAG}.timer"
+  STATE_DIR="/var/lib/chat2api-worker/${SLOT_TAG}"
+  PROFILE_DIR="/home/chat2api/.config/chat2api-chrome-worker-$(printf '%02d' "$SLOT")"
+  CDP_PORT=$((9221 + SLOT))
+else
+  SLOT_TAG="primary"
+  AGENT_UNIT="chat2api-worker-agent.service"
+  CHROME_UNIT="chat2api-chrome.service"
+  XRAY_UNIT="chat2api-xray.service"
+  XVFB_UNIT="chat2api-xvfb.service"
+  WATCHDOG_SERVICE="chat2api-worker-watchdog.service"
+  WATCHDOG_TIMER="chat2api-worker-watchdog.timer"
+  AUTORELOAD_SERVICE="chat2api-extension-autoreload.service"
+  AUTORELOAD_TIMER="chat2api-extension-autoreload.timer"
+  STATE_DIR="/var/lib/chat2api-worker"
+  PROFILE_DIR="/home/chat2api/.config/chat2api-chrome-worker-01"
+  CDP_PORT=9222
+fi
+DEBUG_URL="http://127.0.0.1:${CDP_PORT}"
+UNITS=("$AGENT_UNIT" "$CHROME_UNIT" "$XRAY_UNIT" "$XVFB_UNIT" "$WATCHDOG_SERVICE" "$AUTORELOAD_SERVICE")
 EXTENSION_DIR=/opt/chat2api-worker/chrome_extension
-STATE_DIR=/var/lib/chat2api-worker
 WORKER_PYTHON=/opt/chat2api-worker-venv/bin/python
 
 redact() {
@@ -31,7 +55,7 @@ run_extension_runtime_probe() {
     printf 'probe_status=skipped worker_python_missing=%s\n' "${WORKER_PYTHON}"
     return 0
   fi
-  "${WORKER_PYTHON}" <<'PY'
+  "${WORKER_PYTHON}" "$DEBUG_URL" <<'PY'
 import asyncio
 import json
 import sys
@@ -43,7 +67,7 @@ except Exception as exc:
     print(f"probe_status=skipped websockets_import_error={exc}")
     raise SystemExit(0)
 
-BASE = "http://127.0.0.1:9222"
+BASE = sys.argv[1].rstrip("/")
 
 
 def http_json(path):
@@ -299,13 +323,13 @@ printf 'generated_at=%s\n' "$(date -Is)"
 printf 'hostname=%s\n' "$(hostname 2>/dev/null || true)"
 printf 'kernel=%s\n' "$(uname -srmo 2>/dev/null || true)"
 printf '\n===== service state =====\n'
-for unit in "${UNITS[@]}" chat2api-worker-watchdog.timer chat2api-extension-autoreload.timer; do
+for unit in "${UNITS[@]}" "$WATCHDOG_TIMER" "$AUTORELOAD_TIMER"; do
   printf '%s: ' "$unit"
   systemctl is-active "$unit" 2>/dev/null || true
 done
 
 printf '\n===== service properties =====\n'
-for unit in chat2api-worker-agent.service chat2api-chrome.service chat2api-xray.service chat2api-xvfb.service; do
+for unit in "$AGENT_UNIT" "$CHROME_UNIT" "$XRAY_UNIT" "$XVFB_UNIT"; do
   printf '\n--- %s ---\n' "$unit"
   systemctl show "$unit" \
     -p ActiveState -p SubState -p MainPID -p ExecMainPID -p ExecMainStatus \
@@ -334,8 +358,9 @@ for marker in extension-applied.sha256 extension-failed.sha256 extension-central
     printf '%s=%s\n' "${marker}" "$(head -c 80 "${STATE_DIR}/${marker}" 2>/dev/null || true)"
   fi
 done
-printf 'chrome_processes=%s\n' "$(pgrep -u chat2api -fc 'chrome' 2>/dev/null || true)"
-printf 'cdp_9222='; ss -lnt 2>/dev/null | awk '$4 ~ /127\.0\.0\.1:9222$/ {found=1} END {print found ? "listening" : "not_listening"}'
+printf 'chrome_processes_for_profile=%s\n' "$(ps -u chat2api -o args= 2>/dev/null | grep -F -- "--user-data-dir=${PROFILE_DIR}" | grep -Ec '[Cc]hrome' || true)"
+printf 'cdp_endpoint=%s\n' "$DEBUG_URL"
+if curl -fsS --connect-timeout 1 --max-time 2 "${DEBUG_URL}/json/version" >/dev/null 2>&1; then printf 'cdp_status=listening\n'; else printf 'cdp_status=not_listening\n'; fi
 
 printf '\n===== extension service worker runtime / CDP probe =====\n'
 run_extension_runtime_probe 2>&1 | redact || true

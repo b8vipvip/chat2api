@@ -23,9 +23,9 @@ def test_formal_release_v02275_versions_and_worker_entry_are_aligned() -> None:
     manifest = json.loads(read("chrome_extension/manifest.json"))
     entry = read("chrome_extension/background_entry.js")
 
-    assert SERVER_RUNTIME_VERSION == "0.22.81"
+    assert SERVER_RUNTIME_VERSION == "0.22.82"
     assert CHROME_BRIDGE_VERSION == "0.8.1"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.34"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.35"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     assert '"background_route_close_terminal_v91.js"' in entry
     assert '"conversation_routing.js"' in entry
@@ -56,7 +56,7 @@ def test_v02275_runtime_contract_advertises_only_active_authorities() -> None:
     features = payload["features"]
     bridge = payload["chrome_bridge"]
 
-    assert bridge["bundle_version"] == "0.8.34"
+    assert bridge["bundle_version"] == "0.8.35"
     assert bridge["route_window_authority_revision"] == 30
     assert bridge["window_observer_revision"] == 90
     assert bridge["route_close_terminal_revision"] == 91
@@ -104,7 +104,7 @@ def test_v02275_bundle_markers_contracts_and_preflight_match_manifest() -> None:
         "chrome_extension/content_runtime_contract_v71.js",
         "chrome_extension/background_runtime_preflight_v48.js",
     ):
-        assert "0.8.34" in read(path), path
+        assert "0.8.35" in read(path), path
         assert "0.8.29" not in read(path), path
 
 

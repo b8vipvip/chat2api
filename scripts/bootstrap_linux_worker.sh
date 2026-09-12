@@ -98,7 +98,7 @@ if [[ $VALID_IDENTITY -eq 0 ]]; then
     rm -f "/etc/systemd/system/$unit"
   done
   rm -f /etc/default/chat2api-worker-watchdog /etc/sudoers.d/chat2api-worker
-  rm -f /usr/local/sbin/chat2api-linux-worker-watchdog /usr/local/sbin/chat2api-linux-extension-autoreload /usr/local/sbin/chat2api-worker-proxy-apply
+  rm -f /usr/local/sbin/chat2api-linux-worker-watchdog /usr/local/sbin/chat2api-linux-extension-autoreload /usr/local/sbin/chat2api-worker-proxy-apply /usr/local/sbin/chat2api-worker-initialize /usr/local/sbin/chat2api-worker-diagnostics
   rm -rf /opt/chat2api-worker-venv "$WORKER_DIR" /etc/chat2api-worker /var/lib/chat2api-worker
   systemctl daemon-reload
   systemctl reset-failed >/dev/null 2>&1 || true
@@ -196,7 +196,7 @@ else
   report_progress "enrolling" "$STAGE" "$LAST_MESSAGE"
 fi
 if [[ ! -s /etc/chat2api-worker/worker.json ]]; then
-  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$PRETTY_NAME" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.2"}')"
+  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$PRETTY_NAME" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.8"}')"
   ENROLL_RESPONSE="$(mktemp)"
   if ! printf '%s' "$payload" | curl -fsSL --retry 3 --retry-all-errors -H 'Content-Type: application/json' --data-binary @- -o "$ENROLL_RESPONSE" "$SERVER/api/workers/enroll"; then
     rm -f "$ENROLL_RESPONSE"
@@ -285,6 +285,8 @@ UNIT
 install -m 755 "$WORKER_DIR/scripts/linux_worker_watchdog.sh" /usr/local/sbin/chat2api-linux-worker-watchdog
 install -m 755 "$WORKER_DIR/scripts/linux_extension_autoreload.sh" /usr/local/sbin/chat2api-linux-extension-autoreload
 install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_proxy_apply.sh" /usr/local/sbin/chat2api-worker-proxy-apply
+install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_initialize.sh" /usr/local/sbin/chat2api-worker-initialize
+install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_diagnostics.sh" /usr/local/sbin/chat2api-worker-diagnostics
 cat >/etc/default/chat2api-worker-watchdog <<ENV
 REPO_DIR=$WORKER_DIR
 WORKER_USER=chat2api
@@ -325,7 +327,7 @@ Persistent=true
 WantedBy=timers.target
 UNIT
 cat >/etc/sudoers.d/chat2api-worker <<'SUDO'
-chat2api ALL=(root) NOPASSWD: /bin/systemctl restart chat2api-chrome.service, /bin/systemctl restart chat2api-xray.service, /bin/systemctl restart chat2api-xvfb.service, /usr/local/sbin/chat2api-worker-proxy-apply
+chat2api ALL=(root) NOPASSWD: /bin/systemctl restart chat2api-chrome.service, /bin/systemctl restart chat2api-xray.service, /bin/systemctl restart chat2api-xvfb.service, /usr/local/sbin/chat2api-worker-proxy-apply, /usr/local/sbin/chat2api-worker-initialize, /usr/local/sbin/chat2api-worker-diagnostics
 SUDO
 chmod 440 /etc/sudoers.d/chat2api-worker
 visudo -cf /etc/sudoers.d/chat2api-worker

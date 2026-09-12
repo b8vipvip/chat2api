@@ -62,7 +62,7 @@ def test_remote_login_unicode_clipboard_is_ticket_scoped_and_bidirectional() -> 
     assert '"down", "move", "up"' in helper
     assert "xclip" not in helper
     assert 'import linux_worker_remote_clipboard_v45 as remote_clipboard' in agent
-    assert 'AGENT_VERSION = "0.3.7"' in agent
+    assert 'AGENT_VERSION = "0.3.8"' in agent
     assert "scripts/linux_worker_remote_clipboard_v45.py" in dockerfile
 
     assert 'LOGIN_TICKET_HEADER = "x-chat2api-login-ticket"' in server

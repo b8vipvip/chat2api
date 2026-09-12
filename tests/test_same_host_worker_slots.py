@@ -26,7 +26,7 @@ def _enroll(store: LinuxWorkerStore, name: str, hostname: str) -> str:
             "arch": "x86_64",
             "os_version": "Ubuntu 24.04",
             "agent_version": "0.3.6",
-            "chrome_bridge_version": "0.8.34",
+            "chrome_bridge_version": "0.8.35",
         },
     )
     return result["worker_id"]
@@ -162,6 +162,8 @@ def test_slot_runtime_contract_isolated_and_packaged() -> None:
     wrapper = (ROOT / "scripts/linux_worker_slot_agent.py").read_text(encoding="utf-8")
     proxy_helper = (ROOT / "scripts/linux_worker_proxy_apply.sh").read_text(encoding="utf-8")
     upgrade_helper = (ROOT / "scripts/linux_worker_upgrade.sh").read_text(encoding="utf-8")
+    initialize_helper = (ROOT / "scripts/linux_worker_initialize.sh").read_text(encoding="utf-8")
+    diagnostics_helper = (ROOT / "scripts/linux_worker_diagnostics.sh").read_text(encoding="utf-8")
     sync_lifespan = (ROOT / "app/server_worker_sync_lifespan_patch.py").read_text(encoding="utf-8")
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
 
@@ -194,6 +196,11 @@ def test_slot_runtime_contract_isolated_and_packaged() -> None:
     # basename and the server coalesces one shared-runtime update per host.
     assert "chat2api-worker-proxy-apply-slot([0-9]+)" in proxy_helper
     assert "chat2api-worker-upgrade-slot([0-9]+)" in upgrade_helper
+    assert "chat2api-worker-initialize-slot([0-9]+)" in initialize_helper
+    assert "chat2api-worker-diagnostics-slot([0-9]+)" in diagnostics_helper
+    assert "CHAT2API_INITIALIZE_HELPER=${INITIALIZE_HELPER}" in installer
+    assert "CHAT2API_DIAGNOSTICS_HELPER=${DIAGNOSTICS_HELPER}" in installer
+    assert "repair_same_host_slot_privileged_helpers" in upgrade_helper
     assert "restart_same_host_slots" in upgrade_helper
     assert "install_same_host_worker_sync_patch" in sync_lifespan
 

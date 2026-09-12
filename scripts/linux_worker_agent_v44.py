@@ -24,7 +24,7 @@ import linux_worker_agent_v43  # noqa: F401 - installs the v43 initialize wrappe
 import linux_worker_remote_clipboard_v45 as remote_clipboard
 
 
-AGENT_VERSION = "0.3.7"
+AGENT_VERSION = "0.3.8"
 UPGRADE_HELPER = Path(os.environ.get("CHAT2API_UPGRADE_HELPER", "/usr/local/sbin/chat2api-worker-upgrade"))
 GENERATION_PROBE_HELPER = Path(
     os.environ.get(

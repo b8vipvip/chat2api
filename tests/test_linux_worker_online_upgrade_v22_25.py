@@ -16,7 +16,7 @@ def test_bootstrap_installs_v44_agent_and_fixed_online_upgrade_helper():
     assert "${WORKER_DIR}/scripts/linux_worker_agent_v44.py" in patched
     assert 'install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_upgrade.sh" /usr/local/sbin/chat2api-worker-upgrade' in patched
     assert "/usr/local/sbin/chat2api-worker-upgrade" in patched
-    assert 'echo "Worker Agent: 0.3.7 (支持后台一键更新 / 实时进度)"' in patched
+    assert 'echo "Worker Agent: 0.3.8 (支持后台一键更新 / 实时进度)"' in patched
 
 
 def test_online_upgrade_helper_and_agent_shim_have_valid_syntax():
@@ -39,7 +39,7 @@ def test_online_upgrade_control_plane_is_worker_authenticated_and_progress_survi
     helper = (ROOT / "scripts" / "linux_worker_upgrade.sh").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    for token in ('@app.post("/api/workers/{worker_id}/upgrade-progress")','store.authenticate(worker_id, token)','@app.post("/api/admin/linux-workers/{worker_id}/upgrade")','"upgrade_worker"','needs_bootstrap_once','TARGET_AGENT_VERSION = "0.3.7"'):
+    for token in ('@app.post("/api/workers/{worker_id}/upgrade-progress")','store.authenticate(worker_id, token)','@app.post("/api/admin/linux-workers/{worker_id}/upgrade")','"upgrade_worker"','needs_bootstrap_once','TARGET_AGENT_VERSION = "0.3.8"'):
         assert token in source
     assert 'systemd-run --quiet --collect --no-block' in helper
     assert 'X-Worker-Token' in helper
@@ -48,7 +48,7 @@ def test_online_upgrade_control_plane_is_worker_authenticated_and_progress_survi
     assert entry.index("install_linux_worker_initialize_patch(app)") < entry.index("install_linux_worker_upgrade_patch(app)")
     assert entry.rindex("install_worker_disable_authority_patch(app)") > entry.rindex("install_server_worker_sync_patch(app)")
     assert 'LEGACY_SERVER_RUNTIME_VERSION = "0.22.62"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.34"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.35"' in runtime
     assert '"linux_worker_online_upgrade": True' in runtime
     assert '"linux_worker_upgrade_live_progress": True' in runtime
     assert '"linux_worker_sudoers_guard": True' in runtime

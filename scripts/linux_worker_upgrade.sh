@@ -96,6 +96,33 @@ stage_percent() {
   esac
 }
 
+repair_same_host_slot_privileged_helpers() {
+  local config_dir instance slot sudoers_file proxy_helper upgrade_helper initialize_helper diagnostics_helper
+  for config_dir in /etc/chat2api-worker/slot*; do
+    [[ -d "$config_dir" ]] || continue
+    instance="$(basename -- "$config_dir")"
+    [[ "$instance" =~ ^slot([0-9]+)$ ]] || continue
+    slot="${BASH_REMATCH[1]}"
+    (( slot >= 2 && slot <= 32 )) || continue
+    [[ -s "${config_dir}/worker.json" ]] || continue
+    proxy_helper="/usr/local/sbin/chat2api-worker-proxy-apply-${instance}"
+    upgrade_helper="/usr/local/sbin/chat2api-worker-upgrade-${instance}"
+    initialize_helper="/usr/local/sbin/chat2api-worker-initialize-${instance}"
+    diagnostics_helper="/usr/local/sbin/chat2api-worker-diagnostics-${instance}"
+    ln -sfn /usr/local/sbin/chat2api-worker-proxy-apply "$proxy_helper"
+    ln -sfn /usr/local/sbin/chat2api-worker-upgrade "$upgrade_helper"
+    ln -sfn /usr/local/sbin/chat2api-worker-initialize "$initialize_helper"
+    ln -sfn /usr/local/sbin/chat2api-worker-diagnostics "$diagnostics_helper"
+    chown -h root:root "$proxy_helper" "$upgrade_helper" "$initialize_helper" "$diagnostics_helper"
+    sudoers_file="/etc/sudoers.d/chat2api-worker-${instance}"
+    cat >"$sudoers_file" <<SUDO
+chat2api ALL=(root) NOPASSWD: /bin/systemctl restart chat2api-chrome-${instance}.service, /bin/systemctl restart chat2api-xray-${instance}.service, /bin/systemctl restart chat2api-xvfb-${instance}.service, ${proxy_helper}, ${upgrade_helper}, ${initialize_helper}, ${diagnostics_helper}
+SUDO
+    chmod 440 "$sudoers_file"
+    visudo -cf "$sudoers_file" >/dev/null
+  done
+}
+
 restart_same_host_slots() {
   local unit
   local -a chrome_units=() agent_units=()
@@ -181,7 +208,8 @@ run_upgrade() {
     return "$rc"
   fi
 
-  report running shared-slots 98 "共享 Worker 运行时已更新，正在重启同机隔离 Slot"
+  report running shared-slots 98 "共享 Worker 运行时已更新，正在修复并重启同机隔离 Slot"
+  repair_same_host_slot_privileged_helpers
   restart_same_host_slots
   report succeeded complete 100 "Worker 及同机隔离 Slot 已更新到中心服务器当前版本"
   log "online upgrade completed successfully"
