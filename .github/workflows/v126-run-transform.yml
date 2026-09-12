@@ -43,6 +43,7 @@ jobs:
           bash -n scripts/linux_worker_slot_install.sh
           bash -n scripts/linux_worker_upgrade.sh
           python -m py_compile scripts/linux_worker_slot_agent.py scripts/linux_worker_agent_v44.py
+          python -m pip install -q pytest
           python -m pytest -q tests/test_linux_worker_isolated_manager_v126.py tests/test_same_host_worker_slots.py
       - name: Commit implementation
         run: |
