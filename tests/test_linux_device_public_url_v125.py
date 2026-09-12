@@ -4,7 +4,7 @@ from fastapi import FastAPI
 from starlette.requests import Request
 
 from app.config import Settings
-from app.linux_worker_device_authority_v124_patch import _server_url
+from app.linux_worker_device_authority_v124_patch import _repair_install_command_origin, _server_url
 
 
 def _request(*, scheme="http", host="chat2api.mv3.cn", headers=None):
@@ -62,3 +62,29 @@ def test_public_host_defaults_to_https_when_proxy_drops_forwarded_proto():
 def test_loopback_keeps_request_scheme_for_local_development():
     request = _request(scheme="http", host="127.0.0.1:8765")
     assert _server_url(_app(), request) == "http://127.0.0.1:8765"
+
+
+def test_pending_v02280_command_is_repaired_without_rotating_secrets():
+    original = (
+        "curl -fsSL http://chat2api.mv3.cn/bootstrap/linux-worker.sh | "
+        "sudo bash -s -- --server http://chat2api.mv3.cn --enroll-code BGMK-GAZE-H2U3 "
+        "--pairing-code pair-secret-value --device-name TX03"
+    )
+    repaired = _repair_install_command_origin(original, "https://chat2api.mv3.cn")
+    assert repaired.startswith("curl -fsSL https://chat2api.mv3.cn/bootstrap/linux-worker.sh | ")
+    assert "--server https://chat2api.mv3.cn" in repaired
+    assert "--enroll-code BGMK-GAZE-H2U3" in repaired
+    assert "--pairing-code pair-secret-value" in repaired
+    assert "http://chat2api.mv3.cn" not in repaired
+
+
+def test_pending_slot_command_repairs_server_origin_only():
+    original = (
+        "sudo bash /opt/chat2api-worker/scripts/linux_worker_slot_install_reported.sh "
+        "--server http://chat2api.mv3.cn --enroll-code ABCD-EFGH-IJKL --slot 2 "
+        "--pairing-code pair-slot-secret --device-name TX03"
+    )
+    repaired = _repair_install_command_origin(original, "https://chat2api.mv3.cn")
+    assert "--server https://chat2api.mv3.cn" in repaired
+    assert "--slot 2" in repaired
+    assert "--pairing-code pair-slot-secret" in repaired
