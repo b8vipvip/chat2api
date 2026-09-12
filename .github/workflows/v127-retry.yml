@@ -1,0 +1,75 @@
+name: v127 retry final validation
+
+on:
+  push:
+    branches:
+      - feat/device-controller-shared-config-v127-20260912
+
+permissions:
+  contents: write
+
+jobs:
+  retry:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/device-controller-shared-config-v127-20260912
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Replay v127 source and test transformations
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          def execute_step(workflow: str, name: str) -> None:
+              lines = Path(workflow).read_text(encoding='utf-8').splitlines()
+              marker = f'      - name: {name}'
+              start = lines.index(marker)
+              run = next(i for i in range(start + 1, len(lines)) if lines[i] == '        run: |')
+              out = []
+              for line in lines[run + 1:]:
+                  if line.startswith('      - name: '):
+                      break
+                  if line.startswith('          '):
+                      out.append(line[10:])
+                  elif line.strip():
+                      raise SystemExit(f'unexpected workflow indentation: {line!r}')
+                  else:
+                      out.append('')
+              completed = subprocess.run(['bash', '-e', '-c', '\n'.join(out) + '\n'], text=True, check=False)
+              if completed.returncode:
+                  raise SystemExit(completed.returncode)
+
+          execute_step('.github/workflows/v127-align.yml', 'Replay finalized source transformations')
+          execute_step('.github/workflows/v127-align.yml', 'Align historical tests to v127 release contract')
+
+          path = Path('tests/test_same_host_worker_slots.py')
+          text = path.read_text(encoding='utf-8')
+          bad = "    assert 'PROFILE_DIR=\"/home/chat2api/.config/chat2api-chrome-worker-$(printf '%02d' \"$SLOT\")\"' in helper\n"
+          good = "    assert 'PROFILE_DIR=\"/home/chat2api/.config/chat2api-chrome-worker-' in helper\n    assert \"printf '%02d'\" in helper\n"
+          if bad not in text:
+              raise SystemExit('expected generated profile assertion not found')
+          path.write_text(text.replace(bad, good, 1), encoding='utf-8')
+          PY
+      - name: Full validation
+        run: |
+          python -m pip install -q -e '.[dev]'
+          python -m compileall -q app scripts tests
+          bash -n scripts/bootstrap_linux_worker.sh
+          bash -n scripts/linux_worker_device_controller_helper.sh
+          node --check app/admin_linux_device_authority_v124.js
+          pytest -q
+      - name: Commit v127 source and aligned tests
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add app scripts tests Dockerfile .dockerignore .github/workflows/production-image-smoke.yml
+          git commit -m 'feat: finalize v127 shared device controller'
+          git push origin HEAD:feat/device-controller-shared-config-v127-20260912
