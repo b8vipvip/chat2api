@@ -16,7 +16,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: feat/linux-worker-isolated-manager-v126-20260912
-      - name: Extract and run staged transform
+      - name: Extract staged transform
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -31,10 +31,11 @@ jobs:
               if line.startswith('          '):
                   line = line[10:]
               lines.append(line)
-          script = '\n'.join(lines) + '\n'
-          script = script.replace("'  \\\"$WORKER_PYTHON\\\" <<\\'PY\\'\\n'", "'  \\\"${WORKER_PYTHON}\\\" <<\\'PY\\'\\n'")
-          Path('/tmp/v126_transform.py').write_text(script, encoding='utf-8')
+          Path('/tmp/v126_transform.py').write_text('\n'.join(lines) + '\n', encoding='utf-8')
           PY
+          python .github/v126_transform_fix.py
+      - name: Apply and validate transform
+        run: |
           python /tmp/v126_transform.py
           node --check app/admin_linux_device_authority_v124.js
           bash -n scripts/linux_worker_initialize.sh
