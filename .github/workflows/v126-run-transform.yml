@@ -31,7 +31,9 @@ jobs:
               if line.startswith('          '):
                   line = line[10:]
               lines.append(line)
-          Path('/tmp/v126_transform.py').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+          script = '\n'.join(lines) + '\n'
+          script = script.replace("'  \\\"$WORKER_PYTHON\\\" <<\\'PY\\'\\n'", "'  \\\"${WORKER_PYTHON}\\\" <<\\'PY\\'\\n'")
+          Path('/tmp/v126_transform.py').write_text(script, encoding='utf-8')
           PY
           python /tmp/v126_transform.py
           node --check app/admin_linux_device_authority_v124.js
