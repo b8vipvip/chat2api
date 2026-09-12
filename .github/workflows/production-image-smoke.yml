@@ -75,9 +75,9 @@ jobs:
           authority = Path("/app/app/linux_worker_device_authority_v124_patch.py").read_text()
           runtime = Path("/app/app/runtime_contract.py").read_text()
           device_ui = Path("/app/app/admin_linux_device_authority_v124.js").read_text()
-          initialize_helper = Path("/app/scripts/linux_worker_initialize.sh").read_text()
-          diagnostics_helper = Path("/app/scripts/linux_worker_diagnostics.sh").read_text()
-          slot_installer = Path("/app/scripts/linux_worker_slot_install.sh").read_text()
+          initialize_helper = Path("/app/worker_payload/scripts/linux_worker_initialize.sh").read_text()
+          diagnostics_helper = Path("/app/worker_payload/scripts/linux_worker_diagnostics.sh").read_text()
+          slot_installer = Path("/app/worker_payload/scripts/linux_worker_slot_install.sh").read_text()
           assert "install_linux_worker_device_authority_v124_patch(app)" in presentation
           assert "\"worker_enrollment\"," not in presentation
           assert "worker_enrollment" not in authority
