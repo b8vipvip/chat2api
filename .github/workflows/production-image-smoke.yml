@@ -49,6 +49,8 @@ jobs:
                   "scripts/linux_worker_slot_agent.py",
                   "scripts/linux_worker_slot_install.sh",
                   "scripts/linux_worker_slot_install_reported.sh",
+                  "scripts/linux_worker_initialize.sh",
+                  "scripts/linux_worker_diagnostics.sh",
               }
               assert required <= names, sorted(required - names)
               manifest = json.load(archive.extractfile("chrome_extension/manifest.json"))
@@ -58,7 +60,7 @@ jobs:
               limiter = archive.extractfile("chrome_extension/background_window_limit_v121.js").read().decode("utf-8")
               pairer = archive.extractfile("scripts/linux_worker_extension_pair.py").read().decode("utf-8")
               slot = archive.extractfile("scripts/linux_worker_slot_install.sh").read().decode("utf-8")
-          assert manifest["version"] == "0.8.34"
+          assert manifest["version"] == "0.8.35"
           assert "\"conversation_routing.js\"" in entry
           assert "single-route-window-authority-v30" in router
           assert "decision_authority: false" in observer
@@ -71,6 +73,11 @@ jobs:
           assert Path("/app/app/admin_linux_device_authority_v124.js").is_file()
           presentation = Path("/app/app/worker_presentation_v64_patch.py").read_text()
           authority = Path("/app/app/linux_worker_device_authority_v124_patch.py").read_text()
+          runtime = Path("/app/app/runtime_contract.py").read_text()
+          device_ui = Path("/app/app/admin_linux_device_authority_v124.js").read_text()
+          initialize_helper = Path("/app/scripts/linux_worker_initialize.sh").read_text()
+          diagnostics_helper = Path("/app/scripts/linux_worker_diagnostics.sh").read_text()
+          slot_installer = Path("/app/scripts/linux_worker_slot_install.sh").read_text()
           assert "install_linux_worker_device_authority_v124_patch(app)" in presentation
           assert "\"worker_enrollment\"," not in presentation
           assert "worker_enrollment" not in authority
@@ -79,9 +86,19 @@ jobs:
           assert "request.headers.get(\"origin\")" in authority
           assert "return f\"https://{public_host}\"" in authority
           assert "_repair_install_command_origin" in authority
+          assert "\"linux_worker_isolated_management_v126\": True" in runtime
+          assert "\"linux_worker_slot_isolated_ops_v126\": True" in runtime
+          assert "Worker版本" in device_ui
+          assert "data-manage-device" in device_ui
+          assert "manageDeviceWorkersV124" not in device_ui
+          assert "managerDeviceV124" not in device_ui
+          assert "chat2api-worker-initialize-slot([0-9]+)" in initialize_helper
+          assert "chat2api-worker-diagnostics-slot([0-9]+)" in diagnostics_helper
+          assert "CHAT2API_INITIALIZE_HELPER=${INITIALIZE_HELPER}" in slot_installer
+          assert "CHAT2API_DIAGNOSTICS_HELPER=${DIAGNOSTICS_HELPER}" in slot_installer
           assert "install_linux_worker_device_console_v122_patch" not in presentation
           assert "install_linux_worker_console_v123_patch" not in presentation
-          print(json.dumps({"bundle_version": manifest["version"], "linux_device_authority_v124": True, "public_https_origin_v125": True, "extension_autopair": True, "sha256": digest}))
+          print(json.dumps({"bundle_version": manifest["version"], "linux_device_authority_v124": True, "public_https_origin_v125": True, "isolated_management_v126": True, "extension_autopair": True, "sha256": digest}))
           '
       - name: Boot production ASGI entrypoint and verify health and admin authority
         run: |
@@ -103,12 +120,14 @@ jobs:
           payload = json.load(open('/tmp/chat2api-version.json', encoding='utf-8'))
           assert payload['server']['runtime_aligned'] is True
           assert payload['server']['entrypoint'] == 'app.entry:app'
-          assert payload['server']['runtime_version'] == '0.22.81'
-          assert payload['chrome_bridge']['bundle_version'] == '0.8.34'
+          assert payload['server']['runtime_version'] == '0.22.82'
+          assert payload['chrome_bridge']['bundle_version'] == '0.8.35'
           assert payload['chrome_bridge']['route_window_authority_revision'] == 30
           assert payload['chrome_bridge']['window_observer_revision'] == 90
           assert payload['features']['linux_worker_device_authority_v124'] is True
           assert payload['features']['linux_worker_public_https_origin_v125'] is True
+          assert payload['features']['linux_worker_isolated_management_v126'] is True
+          assert payload['features']['linux_worker_slot_isolated_ops_v126'] is True
           assert payload['features']['linux_worker_device_console_v122'] is False
           assert payload['features']['linux_worker_console_v123'] is False
           assert payload['features']['linux_worker_same_host_slots_v1'] is True
@@ -125,6 +144,8 @@ jobs:
           v124 = open('/tmp/chat2api-v124.js', encoding='utf-8').read()
           assert 'linuxDeviceTableV124' in v124
           assert '新增设备' in v124
-          assert '管理设备 Worker' in v124
-          print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'linux_device_authority_v124': True, 'public_https_origin_v125': True, 'admin_linux_assets': assets}))
+          assert '管理设备 Worker' not in v124
+          assert 'Worker版本' in v124
+          assert 'data-manage-device' in v124
+          print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'linux_device_authority_v124': True, 'public_https_origin_v125': True, 'isolated_management_v126': True, 'admin_linux_assets': assets}))
           PY
