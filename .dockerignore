@@ -20,15 +20,13 @@ scripts/*
 !scripts/linux_worker_agent.py
 !scripts/linux_worker_agent_v43.py
 !scripts/linux_worker_agent_v44.py
+!scripts/linux_worker_device_controller.py
 !scripts/linux_worker_extension_pair.py
 !scripts/linux_worker_proxy.py
 !scripts/linux_worker_remote_login.py
 !scripts/linux_worker_remote_clipboard_v45.py
 !scripts/linux_worker_tab_init.py
-!scripts/linux_worker_slot_agent.py
 !scripts/linux_worker_slot_chrome_launcher.sh
-!scripts/linux_worker_slot_install.sh
-!scripts/linux_worker_slot_install_reported.sh
 !scripts/linux_worker_watchdog.sh
 !scripts/linux_worker_generation_probe.sh
 !scripts/linux_extension_autoreload.sh
@@ -38,5 +36,6 @@ scripts/*
 !scripts/linux_worker_upgrade.sh
 !scripts/linux_worker_chrome_launcher.sh
 !scripts/linux_worker_diagnostics.sh
+!scripts/linux_worker_device_controller_helper.sh
 tests
 *.md

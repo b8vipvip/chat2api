@@ -17,22 +17,25 @@ def test_v122_source_is_retained_only_as_history_and_not_installed():
 def test_v124_no_longer_groups_devices_by_hostname_or_physical_key_guessing():
     source = (ROOT / "app" / "linux_worker_device_authority_v124_patch.py").read_text(encoding="utf-8")
     assert "_physical_key" not in source
-    assert "hostname" not in source
+    grouping = source.split("def _device_rows", 1)[1].split("def _create_controller_child", 1)[0]
+    assert "hostname" not in grouping
     assert '"device_id": device_id' in source
-    assert '"parent_device_id": parent_device_id' in source
+    assert '"install_kind": "device"' in source
     assert '"device_authority_revision": PATCH_REVISION' in source
 
 
-def test_slot_installer_stays_isolated_and_reports_progress():
+def test_retired_slot_installers_are_not_runtime_authorities_or_packaged():
     authority = (ROOT / "app" / "linux_worker_device_authority_v124_patch.py").read_text(encoding="utf-8")
-    wrapper = (ROOT / "scripts" / "linux_worker_slot_install_reported.sh").read_text(encoding="utf-8")
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
-    assert "linux_worker_slot_install_reported.sh" in authority
-    assert "/opt/chat2api-worker/scripts/linux_worker_slot_install.sh" in wrapper
-    assert "/api/workers/install-progress" in wrapper
-    assert 'report "installed" "complete"' in wrapper
-    assert "linux_worker_slot_install_reported.sh" in dockerfile
-    shell = subprocess.run(["bash", "-n", str(ROOT / "scripts" / "linux_worker_slot_install_reported.sh")], cwd=ROOT, capture_output=True, text=True, check=False, timeout=10)
+    helper = (ROOT / "scripts" / "linux_worker_device_controller_helper.sh").read_text(encoding="utf-8")
+    assert "linux_worker_slot_install" not in authority
+    assert "slot_installations" not in authority
+    assert "linux_worker_slot_agent.py" not in dockerfile
+    assert "linux_worker_slot_install.sh" not in dockerfile
+    assert "linux_worker_slot_install_reported.sh" not in dockerfile
+    assert "provision) provision" in helper
+    assert "chat2api-xray.service" in helper
+    shell = subprocess.run(["bash", "-n", str(ROOT / "scripts" / "linux_worker_device_controller_helper.sh")], cwd=ROOT, capture_output=True, text=True, check=False, timeout=10)
     assert shell.returncode == 0, shell.stderr
 
 

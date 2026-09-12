@@ -98,12 +98,25 @@ if [[ $VALID_IDENTITY -eq 0 ]]; then
     rm -f "/etc/systemd/system/$unit"
   done
   rm -f /etc/default/chat2api-worker-watchdog /etc/sudoers.d/chat2api-worker
-  rm -f /usr/local/sbin/chat2api-linux-worker-watchdog /usr/local/sbin/chat2api-linux-extension-autoreload /usr/local/sbin/chat2api-worker-proxy-apply /usr/local/sbin/chat2api-worker-initialize /usr/local/sbin/chat2api-worker-diagnostics
+  rm -f /usr/local/sbin/chat2api-linux-worker-watchdog /usr/local/sbin/chat2api-linux-extension-autoreload /usr/local/sbin/chat2api-worker-proxy-apply /usr/local/sbin/chat2api-worker-initialize /usr/local/sbin/chat2api-worker-diagnostics /usr/local/sbin/chat2api-device-controller
   rm -rf /opt/chat2api-worker-venv "$WORKER_DIR" /etc/chat2api-worker /var/lib/chat2api-worker
   systemctl daemon-reload
   systemctl reset-failed >/dev/null 2>&1 || true
 else
   echo "[cleanup] 检测到完整 Worker 身份，按幂等升级处理，不删除身份和 Profile"
+  for slot in $(seq 2 32); do
+    agent_unit="chat2api-worker-agent-slot${slot}.service"
+    xray_unit="chat2api-xray-slot${slot}.service"
+    if [[ -e "/etc/systemd/system/${agent_unit}" || -e "/etc/systemd/system/${xray_unit}" ]]; then
+      echo "[cleanup] 退役旧 Slot ${slot} 独立 Agent/Xray 控制层（保留 Chrome Profile）"
+      for unit in "$agent_unit" "$xray_unit" "chat2api-chrome-slot${slot}.service" "chat2api-xvfb-slot${slot}.service"; do
+        systemctl disable --now "$unit" >/dev/null 2>&1 || true
+        rm -f "/etc/systemd/system/${unit}"
+      done
+      rm -rf "/etc/chat2api-worker-slot${slot}" "/var/lib/chat2api-worker-slot${slot}" "/opt/chat2api-worker-venv-slot${slot}"
+    fi
+  done
+  systemctl daemon-reload
 fi
 
 set_stage "packages" "安装 Worker 基础依赖（沿用系统现有 APT 镜像）"
@@ -128,7 +141,7 @@ EXPECTED_SHA="$(jq -er '.sha256' "$BUNDLE_META")"
 curl -fSL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 300 -o "$BUNDLE_FILE" "$SERVER/bootstrap/linux-worker-bundle.tar.gz"
 echo "$EXPECTED_SHA  $BUNDLE_FILE" | sha256sum -c -
 tar -xzf "$BUNDLE_FILE" -C "$BUNDLE_TMP"
-[[ -f "$BUNDLE_TMP/chrome_extension/manifest.json" && -f "$BUNDLE_TMP/scripts/linux_worker_agent.py" && -f "$BUNDLE_TMP/scripts/linux_worker_chrome_launcher.sh" ]] || { LAST_MESSAGE="Worker Bundle 内容不完整"; exit 1; }
+[[ -f "$BUNDLE_TMP/chrome_extension/manifest.json" && -f "$BUNDLE_TMP/scripts/linux_worker_device_controller.py" && -f "$BUNDLE_TMP/scripts/linux_worker_device_controller_helper.sh" && -f "$BUNDLE_TMP/scripts/linux_worker_chrome_launcher.sh" ]] || { LAST_MESSAGE="Worker Bundle 内容不完整"; exit 1; }
 rm -rf "${WORKER_DIR}.new"
 install -d -m 755 "${WORKER_DIR}.new"
 cp -a "$BUNDLE_TMP"/. "${WORKER_DIR}.new"/
@@ -196,7 +209,7 @@ else
   report_progress "enrolling" "$STAGE" "$LAST_MESSAGE"
 fi
 if [[ ! -s /etc/chat2api-worker/worker.json ]]; then
-  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$PRETTY_NAME" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.8"}')"
+  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$PRETTY_NAME" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.9"}')"
   ENROLL_RESPONSE="$(mktemp)"
   if ! printf '%s' "$payload" | curl -fsSL --retry 3 --retry-all-errors -H 'Content-Type: application/json' --data-binary @- -o "$ENROLL_RESPONSE" "$SERVER/api/workers/enroll"; then
     rm -f "$ENROLL_RESPONSE"
@@ -227,7 +240,7 @@ chown root:chat2api /etc/chat2api-worker/worker.json
 chmod 640 /etc/chat2api-worker/worker.json
 install -d -o chat2api -g chat2api -m 700 "$PROFILE_DIR"
 
-set_stage "systemd" "安装并启动 Xray、Xvfb、Chrome for Testing、Agent、Watchdog"
+set_stage "systemd" "安装并启动共享 Xray、Worker 1 Chrome 和设备总控 Agent"
 cat >/etc/systemd/system/chat2api-xray.service <<'UNIT'
 [Unit]
 After=network-online.target
@@ -274,11 +287,13 @@ After=network-online.target chat2api-chrome.service
 [Service]
 User=chat2api
 Environment=DISPLAY=:99
-ExecStart=/opt/chat2api-worker-venv/bin/python ${WORKER_DIR}/scripts/linux_worker_agent.py
+Environment=CHAT2API_DEVICE_WORKERS=/var/lib/chat2api-worker/controller/workers.json
+Environment=CHAT2API_DEVICE_CONTROLLER_HELPER=/usr/local/sbin/chat2api-device-controller
+ExecStart=/opt/chat2api-worker-venv/bin/python ${WORKER_DIR}/scripts/linux_worker_device_controller.py
 Restart=always
 RestartSec=5
 ProtectSystem=strict
-ReadWritePaths=/etc/chat2api-worker
+ReadWritePaths=/etc/chat2api-worker /var/lib/chat2api-worker/controller
 [Install]
 WantedBy=multi-user.target
 UNIT
@@ -287,6 +302,15 @@ install -m 755 "$WORKER_DIR/scripts/linux_extension_autoreload.sh" /usr/local/sb
 install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_proxy_apply.sh" /usr/local/sbin/chat2api-worker-proxy-apply
 install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_initialize.sh" /usr/local/sbin/chat2api-worker-initialize
 install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_diagnostics.sh" /usr/local/sbin/chat2api-worker-diagnostics
+install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_device_controller_helper.sh" /usr/local/sbin/chat2api-device-controller
+install -d -o chat2api -g chat2api -m 700 /var/lib/chat2api-worker/controller
+cat >/etc/default/chat2api-worker-controller <<ENV
+WORKER_DIR=$WORKER_DIR
+WORKER_USER=chat2api
+PROXY_PORT=10808
+CHAT2API_SERVER_URL=$SERVER
+ENV
+chmod 640 /etc/default/chat2api-worker-controller
 cat >/etc/default/chat2api-worker-watchdog <<ENV
 REPO_DIR=$WORKER_DIR
 WORKER_USER=chat2api
@@ -327,7 +351,7 @@ Persistent=true
 WantedBy=timers.target
 UNIT
 cat >/etc/sudoers.d/chat2api-worker <<'SUDO'
-chat2api ALL=(root) NOPASSWD: /bin/systemctl restart chat2api-chrome.service, /bin/systemctl restart chat2api-xray.service, /bin/systemctl restart chat2api-xvfb.service, /usr/local/sbin/chat2api-worker-proxy-apply, /usr/local/sbin/chat2api-worker-initialize, /usr/local/sbin/chat2api-worker-diagnostics
+chat2api ALL=(root) NOPASSWD: /bin/systemctl restart chat2api-chrome.service, /bin/systemctl restart chat2api-xray.service, /bin/systemctl restart chat2api-xvfb.service, /usr/local/sbin/chat2api-worker-proxy-apply, /usr/local/sbin/chat2api-worker-initialize, /usr/local/sbin/chat2api-worker-diagnostics, /usr/local/sbin/chat2api-device-controller
 SUDO
 chmod 440 /etc/sudoers.d/chat2api-worker
 visudo -cf /etc/sudoers.d/chat2api-worker

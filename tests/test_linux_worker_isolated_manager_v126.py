@@ -51,13 +51,17 @@ def test_slot_privileged_actions_are_fixed_to_the_worker_slot() -> None:
     assert "repair_same_host_slot_privileged_helpers" in upgrade
 
 
-def test_v126_release_contract() -> None:
+def test_v127_release_contract() -> None:
     runtime = source("app/runtime_contract.py")
     manifest = source("chrome_extension/manifest.json")
-    agent = source("scripts/linux_worker_agent_v44.py")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.82"' in runtime
+    controller = source("scripts/linux_worker_device_controller.py")
+    assert 'SERVER_RUNTIME_VERSION = "0.22.83"' in runtime
     assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.35"' in runtime
-    assert '"linux_worker_isolated_management_v126": True' in runtime
-    assert '"linux_worker_slot_isolated_ops_v126": True' in runtime
+    assert '"linux_worker_isolated_management_v126": False' in runtime
+    assert '"linux_worker_slot_isolated_ops_v126": False' in runtime
+    assert '"linux_worker_device_controller_agent_v127": True' in runtime
+    assert '"linux_worker_shared_device_pairing_v127": True' in runtime
+    assert '"linux_worker_shared_device_proxy_v127": True' in runtime
+    assert '"linux_worker_profile_only_isolation_v127": True' in runtime
     assert '"version": "0.8.35"' in manifest
-    assert 'AGENT_VERSION = "0.3.8"' in agent
+    assert 'AGENT_VERSION = "0.3.9"' in controller

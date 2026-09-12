@@ -39,7 +39,7 @@ def test_capacity_controller_vm_contracts_cover_native_and_reporter_paths():
 
 
 def test_runtime_contract_publishes_single_authority_v02275():
-    assert SERVER_RUNTIME_VERSION == "0.22.82"
+    assert SERVER_RUNTIME_VERSION == "0.22.83"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.35"
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["chrome_bridge"]["version"] == "0.8.1"

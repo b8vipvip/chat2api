@@ -58,7 +58,7 @@ def test_v124_backend_matches_current_linux_worker_store_shapes():
 
 def test_v124_first_install_reuses_one_code_for_install_progress_and_worker_enrollment():
     source = (ROOT / "app" / "linux_worker_device_authority_v124_patch.py").read_text(encoding="utf-8")
-    assert "install = installs.create(worker_name)" in source
+    assert "install = installs.create(device_name)" in source
     assert 'code = str(install.get("code") or "")' in source
     assert 'workers.data.setdefault("enrollments", {})[digest]' in source
     assert '"install_id": str(install.get("install_id") or "")' in source

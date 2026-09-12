@@ -32,8 +32,11 @@ jobs:
           bundle = Path("/app/bootstrap/linux-worker-bundle.tar.gz")
           digest = Path("/app/bootstrap/linux-worker-bundle.sha256").read_text().strip()
           assert hashlib.sha256(bundle.read_bytes()).hexdigest() == digest
-          assert "--pairing-code" in bootstrap.read_text()
-          assert "linux_worker_extension_pair.py" in bootstrap.read_text()
+          bootstrap_text = bootstrap.read_text()
+          assert "--pairing-code" in bootstrap_text
+          assert "linux_worker_extension_pair.py" in bootstrap_text
+          assert "linux_worker_device_controller.py" in bootstrap_text
+          assert "linux_worker_device_controller_helper.sh" in bootstrap_text
           with tarfile.open(bundle, "r:gz") as archive:
               names = set(archive.getnames())
               required = {
@@ -44,22 +47,26 @@ jobs:
                   "chrome_extension/background_window_limit_v121.js",
                   "scripts/linux_worker_agent.py",
                   "scripts/linux_worker_agent_v44.py",
+                  "scripts/linux_worker_device_controller.py",
+                  "scripts/linux_worker_device_controller_helper.sh",
                   "scripts/linux_worker_extension_pair.py",
                   "scripts/linux_worker_remote_clipboard_v45.py",
-                  "scripts/linux_worker_slot_agent.py",
-                  "scripts/linux_worker_slot_install.sh",
-                  "scripts/linux_worker_slot_install_reported.sh",
+                  "scripts/linux_worker_slot_chrome_launcher.sh",
                   "scripts/linux_worker_initialize.sh",
                   "scripts/linux_worker_diagnostics.sh",
               }
               assert required <= names, sorted(required - names)
+              assert "scripts/linux_worker_slot_agent.py" not in names
+              assert "scripts/linux_worker_slot_install.sh" not in names
+              assert "scripts/linux_worker_slot_install_reported.sh" not in names
               manifest = json.load(archive.extractfile("chrome_extension/manifest.json"))
               entry = archive.extractfile("chrome_extension/background_entry.js").read().decode("utf-8")
               router = archive.extractfile("chrome_extension/conversation_routing.js").read().decode("utf-8")
               observer = archive.extractfile("chrome_extension/background_window_observer_v90.js").read().decode("utf-8")
               limiter = archive.extractfile("chrome_extension/background_window_limit_v121.js").read().decode("utf-8")
               pairer = archive.extractfile("scripts/linux_worker_extension_pair.py").read().decode("utf-8")
-              slot = archive.extractfile("scripts/linux_worker_slot_install.sh").read().decode("utf-8")
+              controller = archive.extractfile("scripts/linux_worker_device_controller.py").read().decode("utf-8")
+              controller_helper = archive.extractfile("scripts/linux_worker_device_controller_helper.sh").read().decode("utf-8")
           assert manifest["version"] == "0.8.35"
           assert "\"conversation_routing.js\"" in entry
           assert "single-route-window-authority-v30" in router
@@ -68,16 +75,15 @@ jobs:
           assert "value.retireRoute(entry.key, route" in limiter
           assert "chrome.windows.create" not in limiter and "chrome.windows.remove" not in limiter
           assert "Runtime.evaluate" in pairer and "extension_pairing_code" in pairer
-          assert "linux_worker_extension_pair.py" in slot and "--pairing-code" in slot
+          assert "worker.heartbeat" in controller and "target_worker_id" in controller
+          assert "provision_worker" in controller and "shared_proxy_via_primary_only" in controller
+          assert "provision) provision" in controller_helper and "chat2api-xray.service" in controller_helper
           assert Path("/app/app/linux_worker_device_authority_v124_patch.py").is_file()
           assert Path("/app/app/admin_linux_device_authority_v124.js").is_file()
           presentation = Path("/app/app/worker_presentation_v64_patch.py").read_text()
           authority = Path("/app/app/linux_worker_device_authority_v124_patch.py").read_text()
           runtime = Path("/app/app/runtime_contract.py").read_text()
           device_ui = Path("/app/app/admin_linux_device_authority_v124.js").read_text()
-          initialize_helper = Path("/app/worker_payload/scripts/linux_worker_initialize.sh").read_text()
-          diagnostics_helper = Path("/app/worker_payload/scripts/linux_worker_diagnostics.sh").read_text()
-          slot_installer = Path("/app/worker_payload/scripts/linux_worker_slot_install.sh").read_text()
           assert "install_linux_worker_device_authority_v124_patch(app)" in presentation
           assert "\"worker_enrollment\"," not in presentation
           assert "worker_enrollment" not in authority
@@ -86,19 +92,29 @@ jobs:
           assert "request.headers.get(\"origin\")" in authority
           assert "return f\"https://{public_host}\"" in authority
           assert "_repair_install_command_origin" in authority
-          assert "\"linux_worker_isolated_management_v126\": True" in runtime
-          assert "\"linux_worker_slot_isolated_ops_v126\": True" in runtime
+          assert "linux_worker_slot_install" not in authority
+          assert "slot_installations" not in authority
+          assert "\"linux_worker_isolated_management_v126\": False" in runtime
+          assert "\"linux_worker_slot_isolated_ops_v126\": False" in runtime
+          assert "\"linux_worker_same_host_slots_v1\": False" in runtime
+          assert "\"linux_worker_device_controller_agent_v127\": True" in runtime
+          assert "\"linux_worker_shared_device_pairing_v127\": True" in runtime
+          assert "\"linux_worker_shared_device_proxy_v127\": True" in runtime
+          assert "\"linux_worker_profile_only_isolation_v127\": True" in runtime
           assert "Worker版本" in device_ui
           assert "data-manage-device" in device_ui
           assert "manageDeviceWorkersV124" not in device_ui
           assert "managerDeviceV124" not in device_ui
-          assert "chat2api-worker-initialize-slot([0-9]+)" in initialize_helper
-          assert "chat2api-worker-diagnostics-slot([0-9]+)" in diagnostics_helper
-          assert "CHAT2API_INITIALIZE_HELPER=${INITIALIZE_HELPER}" in slot_installer
-          assert "CHAT2API_DIAGNOSTICS_HELPER=${DIAGNOSTICS_HELPER}" in slot_installer
+          device_header = device_ui.split("id=\"linuxDeviceTableV124\"", 1)[1].split("</thead>", 1)[0]
+          assert "<th>状态</th>" in device_header
+          assert "<th>ChatGPT</th>" not in device_header
+          manager = device_ui.split("function renderManager()", 1)[1].split("function renamePairingHeader", 1)[0]
+          assert "<th>代理</th>" not in manager
+          assert "<th>ChatGPT</th>" in manager
+          assert "增加 Worker" in device_ui
           assert "install_linux_worker_device_console_v122_patch" not in presentation
           assert "install_linux_worker_console_v123_patch" not in presentation
-          print(json.dumps({"bundle_version": manifest["version"], "linux_device_authority_v124": True, "public_https_origin_v125": True, "isolated_management_v126": True, "extension_autopair": True, "sha256": digest}))
+          print(json.dumps({"bundle_version": manifest["version"], "linux_device_authority_v124": True, "public_https_origin_v125": True, "device_controller_v127": True, "extension_autopair": True, "sha256": digest}))
           '
       - name: Boot production ASGI entrypoint and verify health and admin authority
         run: |
@@ -120,17 +136,21 @@ jobs:
           payload = json.load(open('/tmp/chat2api-version.json', encoding='utf-8'))
           assert payload['server']['runtime_aligned'] is True
           assert payload['server']['entrypoint'] == 'app.entry:app'
-          assert payload['server']['runtime_version'] == '0.22.82'
+          assert payload['server']['runtime_version'] == '0.22.83'
           assert payload['chrome_bridge']['bundle_version'] == '0.8.35'
           assert payload['chrome_bridge']['route_window_authority_revision'] == 30
           assert payload['chrome_bridge']['window_observer_revision'] == 90
           assert payload['features']['linux_worker_device_authority_v124'] is True
           assert payload['features']['linux_worker_public_https_origin_v125'] is True
-          assert payload['features']['linux_worker_isolated_management_v126'] is True
-          assert payload['features']['linux_worker_slot_isolated_ops_v126'] is True
+          assert payload['features']['linux_worker_isolated_management_v126'] is False
+          assert payload['features']['linux_worker_slot_isolated_ops_v126'] is False
+          assert payload['features']['linux_worker_device_controller_agent_v127'] is True
+          assert payload['features']['linux_worker_shared_device_pairing_v127'] is True
+          assert payload['features']['linux_worker_shared_device_proxy_v127'] is True
+          assert payload['features']['linux_worker_profile_only_isolation_v127'] is True
           assert payload['features']['linux_worker_device_console_v122'] is False
           assert payload['features']['linux_worker_console_v123'] is False
-          assert payload['features']['linux_worker_same_host_slots_v1'] is True
+          assert payload['features']['linux_worker_same_host_slots_v1'] is False
           assert payload['features']['linux_worker_remote_unicode_clipboard_v121'] is True
           assert payload['features']['worker_per_extension_window_limit_v121'] is True
           assert payload['features']['physical_startup_window_observer_v90'] is True
@@ -147,5 +167,10 @@ jobs:
           assert '管理设备 Worker' not in v124
           assert 'Worker版本' in v124
           assert 'data-manage-device' in v124
-          print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'linux_device_authority_v124': True, 'public_https_origin_v125': True, 'isolated_management_v126': True, 'admin_linux_assets': assets}))
+          device_header = v124.split('id="linuxDeviceTableV124"', 1)[1].split('</thead>', 1)[0]
+          assert '<th>ChatGPT</th>' not in device_header
+          manager = v124.split('function renderManager()', 1)[1].split('function renamePairingHeader', 1)[0]
+          assert '<th>代理</th>' not in manager
+          assert '增加 Worker' in v124
+          print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'linux_device_authority_v124': True, 'public_https_origin_v125': True, 'device_controller_v127': True, 'admin_linux_assets': assets}))
           PY
