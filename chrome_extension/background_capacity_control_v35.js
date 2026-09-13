@@ -4,7 +4,8 @@
 
   const OBSERVER_KEY = "__CHAT2API_WINDOW_OBSERVER_V90__";
   const WINDOW_LIMIT_KEY = "__CHAT2API_ROUTED_WINDOW_LIMIT_V121__";
-  const state = { version: 35, revision: 121, lastResult: null };
+  const PERSISTENT_POOL_KEY = "__CHAT2API_PERSISTENT_WINDOW_POOL_V132__";
+  const state = { version: 35, revision: 132, lastResult: null };
   globalThis[KEY] = state;
 
   function targetValue(value) {
@@ -31,18 +32,49 @@
     return value;
   }
 
+  function persistentPool() {
+    const value = globalThis[PERSISTENT_POOL_KEY];
+    if (!value || typeof value.setTarget !== "function" || typeof value.snapshot !== "function") {
+      throw new Error("Persistent Window Pool v132 is not ready");
+    }
+    return value;
+  }
+
   async function windowSnapshot() {
+    const limitState = globalThis[WINDOW_LIMIT_KEY]?.snapshot?.() || {};
+    const pool = globalThis[PERSISTENT_POOL_KEY];
+    if (pool && typeof pool.snapshot === "function") {
+      const raw = await pool.snapshot();
+      return {
+        ...raw,
+        target: Number(raw?.target || 0),
+        total: Number(raw?.total || 0),
+        active: Number(raw?.active || 0),
+        idle: Number(raw?.idle || 0),
+        warm: Number(raw?.warm || raw?.standby || 0),
+        routed_window_limit: Number(limitState?.limit || 0) || null,
+        routed_window_limit_source: String(limitState?.source || raw?.source || "unset"),
+        speculative_windows: false,
+        prewarmed_windows: true,
+        route_window_authority: "conversation-routing-v30+persistent-pool-v132",
+        window_decision_authority: "persistent-window-pool-v132",
+        observed_at: raw?.observed_at || new Date().toISOString(),
+      };
+    }
+
+    // Compatibility fallback for a partially upgraded Worker. v132-capable builds
+    // normally never use this branch because the persistent pool is imported
+    // before the capacity-control stack.
     const value = observer();
     await value.report(true).catch(() => {});
     const raw = value.snapshot();
     const activeRows = Array.isArray(raw?.active) ? raw.active : [];
     const inUse = activeRows.filter(row => String(row?.status || "") === "in_use").length;
-    const limitState = globalThis[WINDOW_LIMIT_KEY]?.snapshot?.() || {};
     return {
       total: activeRows.length,
       active: inUse,
       idle: Math.max(0, activeRows.length - inUse),
-      target: 0,
+      target: Number(limitState?.limit || 0),
       own: activeRows.length,
       warm: 0,
       routed: activeRows.length,
@@ -50,38 +82,54 @@
       routed_window_limit: Number(limitState?.limit || 0) || null,
       routed_window_limit_source: String(limitState?.source || "unset"),
       speculative_windows: false,
+      prewarmed_windows: false,
       route_window_authority: "conversation-routing-v30",
+      window_decision_authority: "conversation-routing-v30",
       observed_at: new Date().toISOString(),
     };
   }
 
   async function resizeWorkers(requestedTarget) {
     const target = targetValue(requestedTarget);
-    // v0.8.30+ deliberately has no browser window pool to resize. This control
-    // acknowledges the server's distinct-API concurrency value but never creates
-    // or closes ChatGPT windows. Routes are opened on demand by the sole router.
+    // Concurrency remains an independent server scheduler setting. The physical
+    // persistent-window target is changed only by windows.limit; the server keeps
+    // the invariant window_target >= concurrency before sending either control.
     const snapshot = await windowSnapshot();
     return {
       target,
       target_reached: true,
       pending_reason: "",
       rounds: 0,
-      window_policy: "on-demand-single-authority-v30",
+      window_policy: "persistent-window-target-independent-v132",
       window_snapshot: snapshot,
     };
   }
 
   async function applyWindowLimit(requestedTarget, source) {
     const target = targetValue(requestedTarget);
+    const cleanSource = String(source || "explicit");
+    // Keep v121's stored limit as a backwards-compatible admission guard, while
+    // v132 becomes the physical lifecycle authority and prewarms to the target.
     const limiter = windowLimiter();
-    const applied = await limiter.setLimit(target, String(source || "explicit"));
+    const pool = persistentPool();
+    const [limitApplied, poolApplied] = await Promise.all([
+      limiter.setLimit(target, cleanSource),
+      pool.setTarget(target, cleanSource),
+    ]);
     const snapshot = await windowSnapshot();
+    const reached = snapshot.login_ready === true && snapshot.worker_disabled !== true && Number(snapshot.total || 0) === target;
+    let pendingReason = "";
+    if (snapshot.worker_disabled === true) pendingReason = "worker_disabled";
+    else if (snapshot.login_ready !== true) pendingReason = "login_not_ready";
+    else if (Number(snapshot.total || 0) < target) pendingReason = "warming";
+    else if (Number(snapshot.total || 0) > target) pendingReason = "busy_windows_protected";
     return {
       target,
-      target_reached: Number(applied?.limit || 0) === target,
-      pending_reason: String(applied?.reconcile?.deferred > 0 ? "busy_windows_protected" : ""),
-      window_policy: "on-demand-hard-cap-v121",
-      window_limit: applied,
+      target_reached: reached,
+      pending_reason: pendingReason,
+      window_policy: "persistent-prewarmed-total-window-pool-v132",
+      window_limit: limitApplied,
+      persistent_pool: poolApplied,
       window_snapshot: snapshot,
     };
   }
@@ -93,7 +141,7 @@
     const observedAt = snapshot?.observed_at || new Date().toISOString();
     const result = {
       version: 35,
-      revision: 121,
+      revision: 132,
       control_id: controlId,
       action,
       ok: Boolean(ok),
@@ -121,18 +169,22 @@
         : (overlayReady ? "capacity-result-v35-via-dispatch-v36" : "capacity-controller-v35"),
       extension_control_capability_reporter: nativeReady ? 37 : null,
       extension_control_result: result,
-      reserve_window_telemetry_version: 90,
+      reserve_window_telemetry_version: 132,
       reserve_window_total: Number(snapshot?.total || 0),
       reserve_window_active: Number(snapshot?.active || 0),
       reserve_window_idle: Number(snapshot?.idle || 0),
-      reserve_window_target: 0,
+      reserve_window_target: Number(snapshot?.target || 0),
+      persistent_window_pool_revision: 132,
+      persistent_window_pool_policy: "persistent-prewarmed-total-window-pool-v132",
+      persistent_window_pool_warm: Number(snapshot?.warm || 0),
+      persistent_window_pool_login_ready: snapshot?.login_ready === true,
       routed_window_limit: Number(snapshot?.routed_window_limit || 0) || null,
       routed_window_limit_source: String(snapshot?.routed_window_limit_source || "unset"),
       reserve_window_updated_at: observedAt,
-      // v121 is an admission/limit coordinator only. The conversation router
-      // remains the sole authority for routed-window lifecycle mutation.
-      window_decision_authority: "conversation-routing-v30",
+      window_decision_authority: "persistent-window-pool-v132",
+      route_window_authority: "conversation-routing-v30+persistent-pool-v132",
       speculative_windows: false,
+      prewarmed_windows: true,
     };
 
     if (typeof trySendSocket !== "function") throw new Error("Extension WebSocket sender is unavailable");

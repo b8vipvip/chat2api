@@ -30,18 +30,22 @@ importScripts(
   "model_contract_v25.js",
 
   // Terminal reporting only. Register its tab/window removal listeners before
-  // the router listeners so it can snapshot an active request before the sole
-  // lifecycle authority clears route state for the removed browser object.
-  // This module still has no create/remove/mutation authority of its own.
+  // the router listeners so it can snapshot an active request before the route
+  // lifecycle clears state for the removed browser object.
   "background_route_close_terminal_v91.js",
 
-  // v0.8.32 request/window ownership boundary:
-  // conversation_routing.js remains the only module that creates/selects API
-  // route windows. background_window_limit_v121.js is a bounded admission and
-  // idle-eviction guard around that authority: it never creates a window and it
-  // never closes an in-flight route. There is still no speculative warm pool.
+  // Persistent-pool request/window ownership boundary:
+  // conversation_routing.js still owns logical conversation history and terminal
+  // route state. v121 remains a compatibility admission cap. v132 is the physical
+  // Worker window authority: it keeps the configured total number of ChatGPT
+  // windows prewarmed, leases those persistent slots to routes, reassigns only
+  // idle slots, and replaces a poisoned/closed slot without exceeding the target.
+  // The restore guard validates a reassigned saved /c/<id> before the request is
+  // submitted, falling back to a fresh conversation if ChatGPT redirected home.
   "conversation_routing.js",
   "background_window_limit_v121.js",
+  "conversation_persistent_pool_v132.js",
+  "conversation_persistent_route_restore_v132.js",
   "conversation_dispatch.js",
 
   "background_tool_isolation_v48.js",
