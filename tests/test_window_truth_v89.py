@@ -22,7 +22,17 @@ def test_v89_browser_truth_refresh_is_retired_and_v90_observer_is_loaded() -> No
         assert f'"{retired}"' not in entry
     assert '"conversation_routing.js"' in entry
     assert '"background_window_observer_v90.js"' in entry
+    assert '"background_window_refresh_v129.js"' in entry
     assert '__CHAT2API_WINDOW_OBSERVER_V90__?.report?.(true)' in entry
+
+
+def test_v129_refresh_bridge_forces_a_fresh_v90_physical_report() -> None:
+    source = text("chrome_extension/background_window_refresh_v129.js")
+    assert 'message?.type !== "window.manager.refresh"' in source
+    assert "observer.reportInFlight" in source
+    assert "await observer.report(true)" in source
+    assert 'type: "window.manager.refresh.result"' in source
+    assert 'globalThis.__CHAT2API_WINDOW_OBSERVER_V90__' in source
 
 
 def test_legacy_v89_refresh_source_remains_inspectable_but_v90_observer_owns_reporting() -> None:
@@ -79,8 +89,10 @@ def test_v89_javascript_syntax() -> None:
     for filename in (
         "chrome_extension/background_entry.js",
         "chrome_extension/background_window_truth_refresh_v89.js",
+        "chrome_extension/background_window_refresh_v129.js",
         "app/admin_window_manager_v88.js",
         "app/admin_worker_presentation_v66.js",
+        "app/admin_linux_device_authority_v124.js",
     ):
         completed = subprocess.run(
             [node, "--check", str(ROOT / filename)],
