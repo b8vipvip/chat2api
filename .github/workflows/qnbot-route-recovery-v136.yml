@@ -1,0 +1,524 @@
+name: One-shot qnbot route recovery v136
+
+on:
+  push:
+    branches:
+      - fix/qnbot-route-recovery-v136
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/qnbot-route-recovery-v136
+          fetch-depth: 0
+      - name: Apply qnbot recovery patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path('.')
+
+          recovery_js = r'''(() => {
+            const KEY = "__CHAT2API_CONVERSATION_ROUTE_RECOVERY_V136__";
+            if (globalThis[KEY]) return;
+
+            const ROUTER_KEY = "__CHAT2API_CONVERSATION_ROUTING_V1__";
+            const ROUTES_STORAGE_KEY = "chat2apiConversationRoutesV1";
+            const SERVER_SCHEDULER_AUTHORITY = "server-single-authority-scheduler-v58";
+            const SERVER_FIFO_REVISION = 58;
+            const CANCEL_TYPES = new Set(["chat.cancel", "image.cancel", "voice.cancel"]);
+            const state = {
+              revision: 136,
+              stale_inflight_recoveries: 0,
+              explicit_cancel_retirements: 0,
+              last_recovery: null,
+              last_cancel: null,
+            };
+            globalThis[KEY] = state;
+
+            function routerState() {
+              const value = globalThis[ROUTER_KEY];
+              return value && typeof value === "object" ? value : null;
+            }
+
+            async function ensureRouterLoaded(router) {
+              if (!router || router.loaded) return;
+              const stored = await chrome.storage.local.get(ROUTES_STORAGE_KEY).catch(() => ({}));
+              const value = stored?.[ROUTES_STORAGE_KEY];
+              if (router.loaded) return;
+              router.routes = value && typeof value === "object" && !Array.isArray(value) ? value : (router.routes || {});
+              router.loaded = true;
+            }
+
+            function logicalKey(message) {
+              const value = message?.routing?.logical_api_key_id || message?.routing?.api_key_id;
+              return typeof value === "string" && value.trim() ? value.trim() : null;
+            }
+
+            function authoritativeServerAdmission(message) {
+              return String(message?.routing?.scheduler_authority || "") === SERVER_SCHEDULER_AUTHORITY
+                && Number(message?.routing?.server_api_fifo_revision || 0) >= SERVER_FIFO_REVISION;
+            }
+
+            async function recoverStaleOwner(message) {
+              const router = routerState();
+              const key = logicalKey(message);
+              const requestId = String(message?.request_id || "");
+              if (!router || !key || !requestId) return false;
+              await ensureRouterLoaded(router);
+              const route = router.routes?.[key];
+              const staleRequestId = String(route?.inflight_request_id || "");
+              if (!staleRequestId || staleRequestId === requestId) return false;
+              if (!authoritativeServerAdmission(message) || typeof router.failRequest !== "function") return false;
+
+              // Scheduler v58 admits exactly one live request per logical API key.
+              // Therefore a newly dispatched v58-authoritative request proves that
+              // any different persisted browser owner is stale server state. Retire
+              // the uncertain old route/window before admitting the new request so a
+              // timed-out ChatGPT generation cannot poison this API key forever.
+              const retired = await router.failRequest(staleRequestId, "server-authority-stale-inflight-v136").catch(() => false);
+              if (!retired) return false;
+              state.stale_inflight_recoveries += 1;
+              state.last_recovery = {
+                api_key_id: key,
+                stale_request_id: staleRequestId,
+                replacement_request_id: requestId,
+                at_ms: Date.now(),
+              };
+              return true;
+            }
+
+            const baseResolver = globalThis.resolveTargetTabForRequest;
+            if (typeof baseResolver === "function" && !baseResolver.__chat2apiRouteRecoveryV136) {
+              const wrappedResolver = async message => {
+                await recoverStaleOwner(message);
+                return baseResolver(message);
+              };
+              wrappedResolver.__chat2apiRouteRecoveryV136 = true;
+              globalThis.resolveTargetTabForRequest = wrappedResolver;
+            }
+
+            const baseHandleServerMessage = globalThis.handleServerMessage;
+            if (typeof baseHandleServerMessage === "function" && !baseHandleServerMessage.__chat2apiRouteRecoveryV136) {
+              const wrappedHandleServerMessage = async message => {
+                if (!CANCEL_TYPES.has(String(message?.type || ""))) {
+                  return baseHandleServerMessage(message);
+                }
+                const requestId = String(message?.request_id || "");
+                try {
+                  return await baseHandleServerMessage(message);
+                } finally {
+                  const router = routerState();
+                  if (!requestId || typeof router?.failRequest !== "function") return;
+                  const retired = await router.failRequest(requestId, "server-cancel-control-v136").catch(() => false);
+                  if (retired) {
+                    state.explicit_cancel_retirements += 1;
+                    state.last_cancel = { request_id: requestId, at_ms: Date.now() };
+                  }
+                }
+              };
+              wrappedHandleServerMessage.__chat2apiRouteRecoveryV136 = true;
+              globalThis.handleServerMessage = wrappedHandleServerMessage;
+            }
+
+            state.recoverStaleOwner = recoverStaleOwner;
+          })();
+          '''
+          (root / 'chrome_extension/conversation_route_recovery_v136.js').write_text(recovery_js, encoding='utf-8')
+
+          entry = root / 'chrome_extension/background_entry.js'
+          text = entry.read_text(encoding='utf-8')
+          marker = '  "background_window_refresh_v129.js",\n'
+          addition = marker + '  // Recover persisted per-API route ownership after a server timeout/cancel.\n  // Loaded last so it wraps the final resolver/control-handler chain.\n  "conversation_route_recovery_v136.js",\n'
+          if '"conversation_route_recovery_v136.js"' not in text:
+              if marker not in text:
+                  raise SystemExit('background entry insertion point missing')
+              text = text.replace(marker, addition, 1)
+              entry.write_text(text, encoding='utf-8')
+
+          request_id_patch = r'''from __future__ import annotations
+
+import logging
+import re
+import uuid
+from typing import Any
+
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+
+
+PATCH_REVISION = 136
+LOGGER = logging.getLogger("chat2api.request_id_namespace")
+SAFE_REQUEST_ID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+PATH_PREFIXES = {
+    "/v1/chat/completions": ("req_", "chat"),
+    "/v1/completions": ("req_", "completions"),
+    "/v1/images/generations": ("imgreq_", "images"),
+    "/v1/responses": ("resp_req_", "responses"),
+}
+
+
+def _native_request_id(value: str, prefix: str) -> bool:
+    return bool(re.fullmatch(re.escape(prefix) + r"[A-Za-z0-9_-]{8,120}", value))
+
+
+def _header_value(headers: list[tuple[bytes, bytes]], name: bytes) -> str:
+    lowered = name.lower()
+    for key, value in headers:
+        if key.lower() == lowered:
+            return value.decode("latin-1").strip()
+    return ""
+
+
+def _replace_header(headers: list[tuple[bytes, bytes]], name: bytes, value: str) -> list[tuple[bytes, bytes]]:
+    lowered = name.lower()
+    result = [(key, item) for key, item in headers if key.lower() != lowered]
+    result.append((name, value.encode("ascii")))
+    return result
+
+
+class RequestIdNamespaceMiddlewareV136:
+    def __init__(self, app: Any):
+        self.app = app
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = str(scope.get("path") or "")
+        contract = PATH_PREFIXES.get(path)
+        if not contract:
+            await self.app(scope, receive, send)
+            return
+
+        prefix, protocol = contract
+        trace_id = "api_" + uuid.uuid4().hex
+        headers = list(scope.get("headers") or [])
+        upstream_id = _header_value(headers, b"x-chat2api-request-id")
+        normalized = False
+
+        if not upstream_id:
+            internal_id = prefix + uuid.uuid4().hex
+        elif _native_request_id(upstream_id, prefix):
+            internal_id = upstream_id
+        elif upstream_id.startswith(prefix) or not SAFE_REQUEST_ID.fullmatch(upstream_id):
+            LOGGER.warning(
+                "API ingress rejected invalid request id trace_id=%s path=%s protocol=%s expected_prefix=%s supplied=%s",
+                trace_id,
+                path,
+                protocol,
+                prefix,
+                upstream_id[:160],
+            )
+            response = JSONResponse(
+                {"detail": f"Invalid {prefix} request ID"},
+                status_code=400,
+                headers={"X-Chat2API-Trace-ID": trace_id},
+            )
+            await response(scope, receive, send)
+            return
+        else:
+            # A syntactically safe ID from a different protocol is correlation
+            # metadata, not this endpoint's broker identity. Generate a native ID
+            # instead of failing a Responses->Chat (or Chat->Responses) fallback.
+            internal_id = prefix + uuid.uuid4().hex
+            normalized = True
+
+        headers = _replace_header(headers, b"x-chat2api-request-id", internal_id)
+        headers = _replace_header(headers, b"x-chat2api-trace-id", trace_id)
+        next_scope = dict(scope)
+        next_scope["headers"] = headers
+
+        LOGGER.info(
+            "API ingress trace_id=%s path=%s protocol=%s internal_request_id=%s upstream_request_id=%s normalized=%s",
+            trace_id,
+            path,
+            protocol,
+            internal_id,
+            upstream_id or "-",
+            normalized,
+        )
+
+        async def send_with_trace(message: dict[str, Any]) -> None:
+            if message.get("type") == "http.response.start":
+                response_headers = list(message.get("headers") or [])
+                response_headers.append((b"x-chat2api-trace-id", trace_id.encode("ascii")))
+                response_headers.append((b"x-chat2api-internal-request-id", internal_id.encode("ascii")))
+                if normalized and upstream_id:
+                    response_headers.append((b"x-chat2api-upstream-request-id", upstream_id.encode("ascii")))
+                LOGGER.info(
+                    "API response trace_id=%s path=%s protocol=%s internal_request_id=%s status_code=%s",
+                    trace_id,
+                    path,
+                    protocol,
+                    internal_id,
+                    int(message.get("status") or 0),
+                )
+                message = dict(message)
+                message["headers"] = response_headers
+            await send(message)
+
+        await self.app(next_scope, receive, send_with_trace)
+
+
+def install_request_id_namespace_v136_patch(app: FastAPI) -> FastAPI:
+    if getattr(app.state, "request_id_namespace_v136_installed", False):
+        return app
+    app.add_middleware(RequestIdNamespaceMiddlewareV136)
+    app.state.request_id_namespace_v136_installed = True
+    app.state.request_id_namespace_v136 = {
+        "revision": PATCH_REVISION,
+        "paths": sorted(PATH_PREFIXES),
+        "cross_protocol_ids_normalized": True,
+        "trace_header": "X-Chat2API-Trace-ID",
+    }
+    return app
+'''
+          (root / 'app/request_id_namespace_v136_patch.py').write_text(request_id_patch, encoding='utf-8')
+
+          app_entry = root / 'app/entry.py'
+          text = app_entry.read_text(encoding='utf-8')
+          import_marker = 'from .responses_console_v110_patch import install_responses_console_v110_patch\n'
+          if 'from .request_id_namespace_v136_patch import install_request_id_namespace_v136_patch' not in text:
+              if import_marker not in text:
+                  raise SystemExit('entry import insertion point missing')
+              text = text.replace(import_marker, import_marker + 'from .request_id_namespace_v136_patch import install_request_id_namespace_v136_patch\n', 1)
+          install_marker = 'install_responses_console_v110_patch(app)\ninstall_request_history_v94_patch(app)\n'
+          if 'install_request_id_namespace_v136_patch(app)' not in text:
+              if install_marker not in text:
+                  raise SystemExit('entry install insertion point missing')
+              text = text.replace(install_marker, 'install_responses_console_v110_patch(app)\n# Final public API ingress boundary: keep internal broker request IDs protocol-native\n# and attach a trace ID without buffering streaming Responses/Chat output.\ninstall_request_id_namespace_v136_patch(app)\ninstall_request_history_v94_patch(app)\n', 1)
+          app_entry.write_text(text, encoding='utf-8')
+
+          node_test = r'''import assert from "node:assert/strict";
+import fs from "node:fs";
+import vm from "node:vm";
+
+const source = fs.readFileSync(new URL("../chrome_extension/conversation_route_recovery_v136.js", import.meta.url), "utf8");
+const events = [];
+const routes = {
+  key_bot2: {
+    api_key_id: "key_bot2",
+    inflight_request_id: "req_stale_owner_12345678",
+    window_id: 9,
+    tab_id: 7,
+  },
+};
+const router = {
+  loaded: true,
+  routes,
+  activeRequests: new Map(),
+  async failRequest(requestId, reason) {
+    events.push(["fail", requestId, reason]);
+    for (const route of Object.values(this.routes)) {
+      if (route.inflight_request_id === requestId) {
+        route.inflight_request_id = null;
+        return true;
+      }
+    }
+    return false;
+  },
+};
+
+const context = {
+  console,
+  Date,
+  Map,
+  Set,
+  URL,
+  Promise,
+  setTimeout,
+  clearTimeout,
+  chrome: {
+    storage: {
+      local: {
+        async get() { return { chat2apiConversationRoutesV1: routes }; },
+      },
+    },
+  },
+  async resolveTargetTabForRequest(message) {
+    const route = routes[message?.routing?.api_key_id];
+    if (route?.inflight_request_id && route.inflight_request_id !== message.request_id) {
+      throw new Error(`Server scheduler invariant violated: logical API ${message.routing.api_key_id} already owns request ${route.inflight_request_id}`);
+    }
+    events.push(["resolve", message.request_id]);
+    return { id: 7, windowId: 9 };
+  },
+  async handleServerMessage(message) {
+    events.push(["handle", message.type, message.request_id || ""]);
+    return { ok: true };
+  },
+  __CHAT2API_CONVERSATION_ROUTING_V1__: router,
+};
+context.globalThis = context;
+vm.createContext(context);
+vm.runInContext(source, context, { filename: "conversation_route_recovery_v136.js" });
+
+const authorized = {
+  type: "chat.request",
+  request_id: "req_replacement_12345678",
+  routing: {
+    api_key_id: "key_bot2",
+    logical_api_key_id: "key_bot2",
+    scheduler_authority: "server-single-authority-scheduler-v58",
+    server_api_fifo_revision: 58,
+  },
+};
+const tab = await context.resolveTargetTabForRequest(authorized);
+assert.equal(tab.id, 7);
+assert.equal(routes.key_bot2.inflight_request_id, null);
+assert.deepEqual(events[0], ["fail", "req_stale_owner_12345678", "server-authority-stale-inflight-v136"]);
+assert.deepEqual(events[1], ["resolve", "req_replacement_12345678"]);
+assert.equal(context.__CHAT2API_CONVERSATION_ROUTE_RECOVERY_V136__.stale_inflight_recoveries, 1);
+
+routes.key_bot2.inflight_request_id = "req_non_authoritative_12345678";
+await assert.rejects(
+  context.resolveTargetTabForRequest({
+    type: "chat.request",
+    request_id: "req_other_12345678",
+    routing: { api_key_id: "key_bot2" },
+  }),
+  /Server scheduler invariant violated/,
+);
+assert.equal(routes.key_bot2.inflight_request_id, "req_non_authoritative_12345678");
+
+routes.key_bot2.inflight_request_id = "req_cancel_12345678";
+const cancelResult = await context.handleServerMessage({ type: "chat.cancel", request_id: "req_cancel_12345678" });
+assert.deepEqual(cancelResult, { ok: true });
+const handleIndex = events.findIndex(row => row[0] === "handle" && row[1] === "chat.cancel");
+const cancelRetireIndex = events.findIndex(row => row[0] === "fail" && row[1] === "req_cancel_12345678");
+assert.ok(handleIndex >= 0 && cancelRetireIndex > handleIndex, "cancel must reach the transport before route retirement");
+assert.equal(routes.key_bot2.inflight_request_id, null);
+assert.equal(context.__CHAT2API_CONVERSATION_ROUTE_RECOVERY_V136__.explicit_cancel_retirements, 1);
+
+console.log("qnbot route recovery v136 VM contract passed");
+'''
+          (root / 'tests/qnbot_route_recovery_v136.mjs').write_text(node_test, encoding='utf-8')
+
+          py_test = r'''from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+
+from fastapi import FastAPI, Request
+from fastapi.testclient import TestClient
+
+from app.request_id_namespace_v136_patch import install_request_id_namespace_v136_patch
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_route_recovery_vm_contract() -> None:
+    result = subprocess.run(
+        ["node", str(ROOT / "tests/qnbot_route_recovery_v136.mjs")],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=20,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+def _namespace_test_app() -> FastAPI:
+    app = FastAPI()
+
+    @app.post("/v1/chat/completions")
+    async def chat(request: Request) -> dict[str, str]:
+        return {"request_id": request.headers.get("x-chat2api-request-id", "")}
+
+    @app.post("/v1/responses")
+    async def responses(request: Request) -> dict[str, str]:
+        return {"request_id": request.headers.get("x-chat2api-request-id", "")}
+
+    install_request_id_namespace_v136_patch(app)
+    return app
+
+
+def test_cross_protocol_request_id_is_normalized_instead_of_400() -> None:
+    client = TestClient(_namespace_test_app())
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"X-Chat2API-Request-ID": "resp_req_crossprotocol12345678"},
+    )
+    assert response.status_code == 200, response.text
+    internal = response.json()["request_id"]
+    assert internal.startswith("req_")
+    assert not internal.startswith("resp_req_")
+    assert response.headers["x-chat2api-internal-request-id"] == internal
+    assert response.headers["x-chat2api-upstream-request-id"] == "resp_req_crossprotocol12345678"
+    assert response.headers["x-chat2api-trace-id"].startswith("api_")
+
+
+def test_responses_internal_id_is_always_resp_req_namespace() -> None:
+    client = TestClient(_namespace_test_app())
+    response = client.post(
+        "/v1/responses",
+        headers={"X-Chat2API-Request-ID": "req_chatfallback12345678"},
+    )
+    assert response.status_code == 200, response.text
+    internal = response.json()["request_id"]
+    assert internal.startswith("resp_req_")
+    assert response.headers["x-chat2api-upstream-request-id"] == "req_chatfallback12345678"
+
+
+def test_native_request_id_is_preserved_and_missing_id_is_generated() -> None:
+    client = TestClient(_namespace_test_app())
+    native = "req_native12345678"
+    preserved = client.post("/v1/chat/completions", headers={"X-Chat2API-Request-ID": native})
+    assert preserved.status_code == 200
+    assert preserved.json()["request_id"] == native
+    assert "x-chat2api-upstream-request-id" not in preserved.headers
+
+    generated = client.post("/v1/responses")
+    assert generated.status_code == 200
+    assert generated.json()["request_id"].startswith("resp_req_")
+    assert generated.headers["x-chat2api-internal-request-id"].startswith("resp_req_")
+
+
+def test_invalid_same_namespace_id_remains_a_400() -> None:
+    client = TestClient(_namespace_test_app())
+    response = client.post(
+        "/v1/chat/completions",
+        headers={"X-Chat2API-Request-ID": "req_bad!"},
+    )
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid req_ request ID"
+    assert response.headers["x-chat2api-trace-id"].startswith("api_")
+
+
+def test_runtime_loads_recovery_after_final_window_refresh_and_installs_ingress_boundary() -> None:
+    background = (ROOT / "chrome_extension/background_entry.js").read_text(encoding="utf-8")
+    assert '"conversation_route_recovery_v136.js"' in background
+    assert background.index('"conversation_route_recovery_v136.js"') > background.index('"background_window_refresh_v129.js"')
+
+    entry = (ROOT / "app/entry.py").read_text(encoding="utf-8")
+    assert "install_request_id_namespace_v136_patch(app)" in entry
+
+    recovery = (ROOT / "chrome_extension/conversation_route_recovery_v136.js").read_text(encoding="utf-8")
+    assert 'server-single-authority-scheduler-v58' in recovery
+    assert 'server-authority-stale-inflight-v136' in recovery
+    assert 'server-cancel-control-v136' in recovery
+'''
+          (root / 'tests/test_qnbot_route_recovery_v136.py').write_text(py_test, encoding='utf-8')
+          PY
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add app/request_id_namespace_v136_patch.py app/entry.py chrome_extension/background_entry.js chrome_extension/conversation_route_recovery_v136.js tests/qnbot_route_recovery_v136.mjs tests/test_qnbot_route_recovery_v136.py
+          if git diff --cached --quiet; then
+            echo "qnbot recovery patch already applied"
+            exit 0
+          fi
+          git diff --cached --check
+          git commit -m "fix: recover qnbot stale routes and request IDs"
+          git push origin HEAD:fix/qnbot-route-recovery-v136
