@@ -56,6 +56,9 @@ importScripts(
 
   // Observation/capture only. It has no route/window mutation authority.
   "background_window_observer_v90.js",
+  // Server physical verification compatibility bridge. v90 stays the only
+  // physical truth owner; this module only forces a fresh report on demand.
+  "background_window_refresh_v129.js",
 );
 
 globalThis.__CHAT2API_WINDOW_OBSERVER_V90__?.report?.(true).catch?.(() => {});
