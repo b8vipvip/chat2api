@@ -93,7 +93,7 @@
 
   function start() {
     decorate();
-    const root = document.querySelector(".content") || document.body;
+    const root = document.body;
     if (!root) return;
     const observer = new MutationObserver(() => decorate());
     observer.observe(root, { childList: true, subtree: true });
