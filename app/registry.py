@@ -12,6 +12,7 @@ from typing import Any
 from fastapi import WebSocket
 
 from .timezone_utils import beijing_now_iso, to_beijing_iso
+from .login_readiness import chatgpt_routing_ready
 
 
 def utc_now() -> str:
@@ -275,6 +276,10 @@ class ClientRegistry:
             if self.clients.get(client_id) and self.clients[client_id].connection_enabled
         )
 
+    def chatgpt_routing_ready(self, client_id: str) -> bool:
+        client = self.clients.get(str(client_id))
+        return bool(client and chatgpt_routing_ready(client.metadata))
+
     def resolve_client(self, requested: str | None) -> str:
         key_id = self.routing_key_context.get()
         if requested:
@@ -285,12 +290,21 @@ class ClientRegistry:
                 raise ConnectionError("Requested Chrome extension is disabled by administrator")
             if requested not in self.sockets:
                 raise ConnectionError("Requested Chrome extension is offline")
+            if not self.chatgpt_routing_ready(requested):
+                raise ConnectionError(
+                    "Requested Chrome extension is online but ChatGPT is not logged in or the composer is not ready"
+                )
             self._remember_route(key_id, requested)
             return requested
 
-        online = self.online_client_ids()
-        if not online:
+        transport_online = self.online_client_ids()
+        if not transport_online:
             raise ConnectionError("No Chrome extension is online. Open Chrome with a paired chat2api extension.")
+        online = [client_id for client_id in transport_online if self.chatgpt_routing_ready(client_id)]
+        if not online:
+            raise ConnectionError(
+                "No ChatGPT-ready Chrome extension is available. Log in to ChatGPT on an enabled Worker first."
+            )
 
         if key_id:
             previous = self.api_key_routes.get(key_id)
@@ -359,7 +373,7 @@ class ClientRegistry:
                 "capabilities": ["voice-generation", "voice-conversation", "text"], "clients": [],
             },
         }
-        client_ids = self.online_client_ids() if online_only else [
+        client_ids = [client_id for client_id in self.online_client_ids() if self.chatgpt_routing_ready(client_id)] if online_only else [
             client_id for client_id, item in self.clients.items() if item.connection_enabled
         ]
         base_ids = ("default", "chatgpt-web", "gpt-image", "gpt-live", "gpt-live-mini")
@@ -409,6 +423,7 @@ class ClientRegistry:
                 "last_seen_at": to_beijing_iso(item.last_seen_at) if item.last_seen_at else None,
                 "created_at": to_beijing_iso(item.created_at) if item.created_at else None,
                 "metadata": item.metadata,
+                "chatgpt_routing_ready": self.chatgpt_routing_ready(item.client_id),
             }
             for item in self.clients.values()
         ]

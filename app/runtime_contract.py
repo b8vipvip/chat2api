@@ -75,6 +75,8 @@ def version_contract_payload(app: FastAPI) -> dict[str, Any]:
             "playground_chat_running_records": True,
             "model_capability_routing_guard": True,
             "model_capability_routing_v2": True,
+            "chatgpt_login_ready_admission_v137": True,
+            "window_manager_login_ready_filter_v137": True,
             "chatgpt_rate_limit_circuit_breaker": True,
             "worker_window_reopen_loop_guard": True,
             "active_rate_limit_terminal_error": True,

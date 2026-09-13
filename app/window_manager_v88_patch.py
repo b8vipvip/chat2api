@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 
 from .admin_auth import SESSION_COOKIE
+from .login_readiness import login_readiness
 
 
 PATCH_REVISION = 88
@@ -142,10 +143,14 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
             device_code_id = str(row.get("device_code_id") or row.get("pairing_id") or metadata.get("pairing_id") or "").strip() or None
             bundle_version = _worker_bundle_version(row)
             online = bool(row.get("online"))
+            login = login_readiness(metadata)
+            login_ready = bool(login.get("ready"))
             refresh_capable = _version_tuple(bundle_version) >= LIVE_TRUTH_MIN_BUNDLE
             live_verified = client_id in verified
             cached_active = [item for item in (snapshot.get("active") or []) if isinstance(item, dict)]
-            if live_verified:
+            if live_verified and not login_ready:
+                truth_status = "login-required" if login.get("state") == "login_required" else "login-not-ready"
+            elif live_verified:
                 truth_status = "verified"
             elif not online:
                 truth_status = "offline"
@@ -167,6 +172,10 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
                 "snapshot_updated_at_ms": snapshot.get("updated_at_ms"),
                 "cached_active_count": len(cached_active),
                 "live_verified": live_verified,
+                "chatgpt_login_state": login.get("state"),
+                "chatgpt_login_composer_ready": bool(login.get("composer_ready")),
+                "chatgpt_routing_ready": login_ready,
+                "reception_ready": bool(online and live_verified and login_ready),
                 "truth_status": truth_status,
                 "truth_revision": LIVE_TRUTH_REVISION,
             })
@@ -175,7 +184,7 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
             # this administrator refresh is allowed into "接待中窗口". Persisted
             # rows from an old Worker session are historical telemetry, not proof
             # that a Chrome window still exists now.
-            if live_verified:
+            if live_verified and login_ready:
                 for raw in cached_active:
                     item = dict(raw)
                     item.update({
@@ -202,6 +211,8 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
         active.sort(key=lambda item: (int(item.get("window_no") or 10**9), int(item.get("opened_at_ms") or 10**18)))
         closed.sort(key=lambda item: int(item.get("closed_at_ms") or 0), reverse=True)
         unverified = [row for row in workers if row.get("online") and not row.get("live_verified")]
+        login_blocked = [row for row in workers if row.get("online") and row.get("chatgpt_routing_ready") is not True]
+        reception_ready = [row for row in workers if row.get("reception_ready") is True]
         return {
             "revision": PATCH_REVISION,
             "truth_revision": LIVE_TRUTH_REVISION,
@@ -213,6 +224,9 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
                 "verified_workers": sum(1 for row in workers if row.get("live_verified")),
                 "online_workers": sum(1 for row in workers if row.get("online")),
                 "unverified_workers": len(unverified),
+                "reception_ready_workers": len(reception_ready),
+                "login_blocked_workers": len(login_blocked),
+                "login_blocked_active_rows_suppressed": sum(int(row.get("cached_active_count") or 0) for row in login_blocked),
                 "cached_active_rows_suppressed": sum(int(row.get("cached_active_count") or 0) for row in unverified),
             },
         }

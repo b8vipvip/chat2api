@@ -171,6 +171,9 @@
     const online = Math.max(0, Number(truth.online_workers || 0));
     const verified = Math.max(0, Number(truth.verified_workers || 0));
     const unverified = Math.max(0, Number(truth.unverified_workers || 0));
+    const receptionReady = Math.max(0, Number(truth.reception_ready_workers || 0));
+    const loginBlocked = Math.max(0, Number(truth.login_blocked_workers || 0));
+    const loginSuppressed = Math.max(0, Number(truth.login_blocked_active_rows_suppressed || 0));
     const suppressed = Math.max(0, Number(truth.cached_active_rows_suppressed || 0));
     if (Number(state.truth_revision || 0) < 89) {
       box.className = "warnText";
@@ -188,11 +191,12 @@
         .map(row => `${row.device_name || row.client_id || "Worker"}：${row.truth_status === "upgrade-required" ? "需升级到 Worker 0.8.27+" : row.truth_status === "refresh-timeout" ? "核验超时" : "未核验"}`)
         .join("；");
       box.className = "warnText";
-      box.textContent = `实时物理核验：${verified}/${online} 个在线 Worker 已核验；${unverified} 个未核验。已抑制 ${suppressed} 条历史缓存窗口，不计入“接待中窗口”。${reasons ? ` ${reasons}` : ""}`;
+      const loginNote = loginBlocked > 0 ? ` ChatGPT 未登录/未就绪 Worker ${loginBlocked} 个，已屏蔽其 ${loginSuppressed} 个物理窗口。` : "";
+      box.textContent = `实时物理核验：${verified}/${online} 个在线 Worker 已核验；${unverified} 个未核验。已抑制 ${suppressed} 条历史缓存窗口，不计入“接待中窗口”。${loginNote}${reasons ? ` ${reasons}` : ""}`;
       return;
     }
-    box.className = "muted";
-    box.textContent = `实时物理核验：${verified}/${online} 个在线 Worker 已核验。当前“接待中窗口”只显示本次从 Chrome 实际窗口图重新确认存在的窗口。`;
+    box.className = loginBlocked > 0 ? "warnText" : "muted";
+    box.textContent = `实时物理核验：${verified}/${online} 个在线 Worker 已核验；ChatGPT 可接待 Worker ${receptionReady} 个。${loginBlocked > 0 ? ` 未登录/未就绪 ${loginBlocked} 个，其 ${loginSuppressed} 个物理窗口已屏蔽，不计入“接待中窗口”，也不会参与 API 路由。` : " 当前“接待中窗口”只显示本次从 Chrome 实际窗口图重新确认存在且 ChatGPT 已登录的窗口。"}`;
   }
 
   function render() {
