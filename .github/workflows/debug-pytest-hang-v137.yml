@@ -21,13 +21,13 @@ jobs:
           python-version: '3.12'
       - name: Install dependencies
         run: python -m pip install -e '.[dev]'
-      - name: Locate pytest hang
+      - name: Locate pytest failures or hang
         shell: bash
         env:
           PYTHONUNBUFFERED: '1'
         run: |
           set +e
-          timeout --signal=TERM --kill-after=10s 180s stdbuf -oL -eL pytest -vv -s -x
+          timeout --signal=TERM --kill-after=10s 180s stdbuf -oL -eL pytest -vv -s --maxfail=20
           status=$?
           echo "pytest exit status: $status"
           exit $status
