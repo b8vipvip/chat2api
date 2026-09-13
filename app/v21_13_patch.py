@@ -6,11 +6,22 @@ from fastapi import FastAPI, Header, HTTPException
 
 
 PATCH_VERSION = "0.21.13"
-# v0.8.30 removes the speculative browser reserve pool. Keep this historical
-# endpoint for bridge compatibility, but publish the current single-authority
-# policy instead of advertising a non-existent warm-window target.
+# The historical reserve-window endpoint remains for bridge compatibility. The
+# old speculative reserve pool is still retired (reserve target stays zero), but
+# v132 now maintains a separate persistent/prewarmed physical window pool.
 ROUTE_IDLE_CLOSE_SECONDS = 5 * 60
+PERSISTENT_WINDOW_IDLE_CLOSE_SECONDS = 0
 MAX_RESERVE_WINDOW_TARGET = 0
+MIN_WINDOW_TARGET = 1
+MAX_WINDOW_TARGET = 32
+
+
+def _window_target(value: Any, fallback: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = int(fallback)
+    return max(MIN_WINDOW_TARGET, min(MAX_WINDOW_TARGET, parsed))
 
 
 def install_v21_13_patch(app: FastAPI) -> FastAPI:
@@ -44,13 +55,46 @@ def install_v21_13_patch(app: FastAPI) -> FastAPI:
                     or 1
                 ),
             )
+
+        # worker_limits_clipboard_v121_patch installs this state later in the
+        # application bootstrap. Resolve it at request time so this compatibility
+        # endpoint reports the same effective target used by windows.limit.
+        window_runtime = getattr(app.state, "worker_window_limits", {})
+        window_limit_for = window_runtime.get("limit_for") if isinstance(window_runtime, dict) else None
+        window_source_for = window_runtime.get("source_for") if isinstance(window_runtime, dict) else None
+        if callable(window_limit_for):
+            try:
+                persistent_target = _window_target(window_limit_for(client_id), configured)
+            except Exception:
+                persistent_target = _window_target(configured, configured)
+        else:
+            persistent_target = _window_target(configured, configured)
+        if callable(window_source_for):
+            try:
+                persistent_source = str(window_source_for(client_id) or "concurrency")[:40]
+            except Exception:
+                persistent_source = "concurrency"
+        else:
+            persistent_source = "concurrency"
+
         return {
+            # Legacy speculative-reserve compatibility fields. These intentionally
+            # remain zero/false; the v132 persistent pool is not the retired v29
+            # speculative spare pool.
             "reserve_window_target": 0,
-            "route_idle_close_seconds": ROUTE_IDLE_CLOSE_SECONDS,
             "max_reserve_window_target": MAX_RESERVE_WINDOW_TARGET,
-            "worker_concurrency": configured,
             "speculative_worker_windows": False,
-            "window_decision_authority": "conversation-routing-v30",
+
+            "worker_concurrency": configured,
+            "route_idle_close_seconds": ROUTE_IDLE_CLOSE_SECONDS,
+            "persistent_window_pool": True,
+            "persistent_window_pool_revision": 132,
+            "persistent_window_target": persistent_target,
+            "persistent_window_target_source": persistent_source,
+            "persistent_window_idle_close_seconds": PERSISTENT_WINDOW_IDLE_CLOSE_SECONDS,
+            "prewarmed_worker_windows": True,
+            "logical_route_authority": "conversation-routing-v30",
+            "window_decision_authority": "persistent-window-pool-v132",
             "server_scheduler_authority": "server-single-authority-scheduler-v58",
             "version": PATCH_VERSION,
         }
