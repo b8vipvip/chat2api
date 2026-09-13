@@ -2,8 +2,7 @@ name: v128 fix controller provisioning
 
 on:
   push:
-    branches:
-      - fix/linux-device-provision-v128-20260913
+    branches: [fix/linux-device-provision-v128-20260913]
 
 permissions:
   contents: write
@@ -26,84 +25,76 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          def replace(path, old, new, count=None):
-              p=Path(path); s=p.read_text(encoding='utf-8')
-              n=s.count(old)
-              if n == 0:
-                  raise SystemExit(f'missing replacement in {path}: {old[:100]!r}')
-              if count is not None and n != count:
-                  raise SystemExit(f'unexpected replacement count in {path}: {n} != {count}')
-              p.write_text(s.replace(old,new),encoding='utf-8')
+          def rep(path, old, new, expected=1):
+              p=Path(path); s=p.read_text(encoding='utf-8'); n=s.count(old)
+              if n != expected: raise SystemExit(f'{path}: expected {expected} matches, got {n}: {old[:100]!r}')
+              p.write_text(s.replace(old,new), encoding='utf-8')
 
-          replace('scripts/bootstrap_linux_worker.sh',
-                  'ReadWritePaths=/etc/chat2api-worker /var/lib/chat2api-worker/controller',
-                  'ReadWritePaths=/etc/chat2api-worker /var/lib/chat2api-worker/controller /etc/systemd/system /home/chat2api/.config',1)
-          replace('scripts/bootstrap_linux_worker.sh','agent_version:"0.3.9"','agent_version:"0.3.10"',1)
-          replace('scripts/linux_worker_device_controller.py','AGENT_VERSION = "0.3.9"','AGENT_VERSION = "0.3.10"',1)
-          replace('app/linux_worker_upgrade_patch.py','TARGET_AGENT_VERSION = "0.3.9"','TARGET_AGENT_VERSION = "0.3.10"',1)
-          replace('app/linux_worker_device_authority_v124_patch.py',
-                  '        if str(primary.get("agent_version") or "") != "0.3.9":\n            raise HTTPException(409, "请先点击设备列表中的更新，将该设备升级到总控 Agent 0.3.9 后再增加 Worker")',
-                  '        if str(primary.get("agent_version") or "") != "0.3.10":\n            raise HTTPException(409, "请先点击设备列表中的更新，将该设备升级到总控 Agent 0.3.10 后再增加 Worker")',1)
+          rep('scripts/bootstrap_linux_worker.sh',
+              'ReadWritePaths=/etc/chat2api-worker /var/lib/chat2api-worker/controller',
+              'ReadWritePaths=/etc/chat2api-worker /var/lib/chat2api-worker/controller /etc/systemd/system /home/chat2api/.config')
+          rep('scripts/bootstrap_linux_worker.sh','agent_version:"0.3.9"','agent_version:"0.3.10"')
+          rep('scripts/linux_worker_device_controller.py','AGENT_VERSION = "0.3.9"','AGENT_VERSION = "0.3.10"')
+          rep('app/linux_worker_upgrade_patch.py','TARGET_AGENT_VERSION = "0.3.9"','TARGET_AGENT_VERSION = "0.3.10"')
+          rep('app/linux_worker_device_authority_v124_patch.py',
+              '        if str(primary.get("agent_version") or "") != "0.3.9":\n            raise HTTPException(409, "请先点击设备列表中的更新，将该设备升级到总控 Agent 0.3.9 后再增加 Worker")',
+              '        if str(primary.get("agent_version") or "") != "0.3.10":\n            raise HTTPException(409, "请先点击设备列表中的更新，将该设备升级到总控 Agent 0.3.10 后再增加 Worker")')
 
           p=Path('app/runtime_contract.py'); s=p.read_text(encoding='utf-8')
           old='''SERVER_RUNTIME_VERSION = "0.22.83"\nPREVIOUS_SERVER_RUNTIME_VERSION = "0.22.82"\nPREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.81"\nPREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.80"\nPREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.79"'''
           new='''SERVER_RUNTIME_VERSION = "0.22.84"\nPREVIOUS_SERVER_RUNTIME_VERSION = "0.22.83"\nPREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.82"\nPREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.81"\nPREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.80"'''
-          if old not in s: raise SystemExit('runtime version block drifted')
+          if s.count(old)!=1: raise SystemExit('runtime version block drifted')
           s=s.replace(old,new,1)
-          if 'device-controller-shared-config-v127-release-v02283"' not in s:
-              raise SystemExit('runtime revision anchor missing')
-          s=s.replace('device-controller-shared-config-v127-release-v02283"', 'device-controller-shared-config-v127-release-v02283-device-controller-provision-rw-v128-device-diagnostics-v128-release-v02284"',1)
+          old_rev='device-controller-shared-config-v127-release-v02283"'
+          if s.count(old_rev)!=1: raise SystemExit('runtime revision anchor drifted')
+          s=s.replace(old_rev,'device-controller-shared-config-v127-release-v02283-device-controller-provision-rw-v128-device-diagnostics-v128-release-v02284"',1)
           anchor='            "linux_worker_profile_only_isolation_v127": True,\n'
-          if anchor not in s: raise SystemExit('runtime feature anchor missing')
-          s=s.replace(anchor, anchor+'            "linux_worker_device_controller_provision_rw_v128": True,\n            "linux_worker_device_diagnostics_v128": True,\n',1)
+          if s.count(anchor)!=1: raise SystemExit('runtime feature anchor drifted')
+          s=s.replace(anchor,anchor+'            "linux_worker_device_controller_provision_rw_v128": True,\n            "linux_worker_device_diagnostics_v128": True,\n',1)
           p.write_text(s,encoding='utf-8')
 
           p=Path('app/admin_linux_device_authority_v124.js'); s=p.read_text(encoding='utf-8')
-          needle='${w?`<button class="action" data-worker-action="upgrade" data-worker="${esc(w.worker_id)}">更新</button>`:""}<button class="action good" data-manage-device="${esc(d.device_id)}">管理Worker</button>'
-          repl='${w?`<button class="action" data-worker-action="upgrade" data-worker="${esc(w.worker_id)}">更新</button><button class="action" data-diagnostics="${esc(w.worker_id)}">诊断日志</button>`:""}<button class="action good" data-manage-device="${esc(d.device_id)}">管理Worker</button>'
-          if needle not in s: raise SystemExit('device action render anchor drifted')
-          s=s.replace(needle,repl,1)
-          if s.count('data-diagnostics=') < 2 or s.count('诊断日志') < 2:
-              raise SystemExit('both device and Worker diagnostics buttons must remain')
+          old='${w?`<button class="action" data-worker-action="upgrade" data-worker="${esc(w.worker_id)}">更新</button>`:""}<button class="action good" data-manage-device="${esc(d.device_id)}">管理Worker</button>'
+          new='${w?`<button class="action" data-worker-action="upgrade" data-worker="${esc(w.worker_id)}">更新</button><button class="action" data-diagnostics="${esc(w.worker_id)}">诊断日志</button>`:""}<button class="action good" data-manage-device="${esc(d.device_id)}">管理Worker</button>'
+          if s.count(old)!=1: raise SystemExit('device diagnostic UI anchor drifted')
+          s=s.replace(old,new,1)
+          if s.count('data-diagnostics=') < 2 or s.count('诊断日志') < 2: raise SystemExit('device + Worker diagnostics must both exist')
           p.write_text(s,encoding='utf-8')
 
           p=Path('app/linux_worker_device_authority_v124_patch.py'); s=p.read_text(encoding='utf-8')
           old='''            if not isinstance(result, dict) or result.get("ok") is not True:\n                raise HTTPException(502, f"设备总控 Agent 增加 Worker 失败：{str((result or {}).get('error') or 'unknown_error')[:120]}")'''
           new='''            if not isinstance(result, dict) or result.get("ok") is not True:\n                failure = result if isinstance(result, dict) else {}\n                error = str(failure.get("error") or "unknown_error").replace("\\r", " ").replace("\\n", " ").strip()[:120]\n                detail = str(failure.get("detail") or "").replace("\\r", " ").replace("\\n", " ").strip()[:360]\n                helper_exit = failure.get("helper_exit_code")\n                suffix = (f" · exit={helper_exit}" if helper_exit is not None else "") + (f" · {detail}" if detail else "")\n                raise HTTPException(502, f"设备总控 Agent 增加 Worker 失败：{error}{suffix}")'''
-          if old not in s: raise SystemExit('provision error anchor drifted')
-          s=s.replace(old,new,1)
-          p.write_text(s,encoding='utf-8')
+          if s.count(old)!=1: raise SystemExit('provision failure UI detail anchor drifted')
+          s=s.replace(old,new,1); p.write_text(s,encoding='utf-8')
 
           p=Path('scripts/linux_worker_device_controller.py'); s=p.read_text(encoding='utf-8')
           old='return {"ok": False, "error": "worker_provision_failed", "detail": (result.stderr or result.stdout or "")[-300:]}'
           new='return {"ok": False, "error": "worker_provision_failed", "helper_exit_code": int(result.returncode), "detail": (result.stderr or result.stdout or "")[-600:]}'
-          if old not in s: raise SystemExit('controller failure result anchor drifted')
-          s=s.replace(old,new,1)
-          p.write_text(s,encoding='utf-8')
+          if s.count(old)!=1: raise SystemExit('controller detail anchor drifted')
+          s=s.replace(old,new,1); p.write_text(s,encoding='utf-8')
 
           p=Path('.github/workflows/production-image-smoke.yml'); s=p.read_text(encoding='utf-8')
-          if "payload['server']['runtime_version'] == '0.22.83'" not in s:
-              raise SystemExit('production smoke runtime expectation drifted')
+          if s.count("payload['server']['runtime_version'] == '0.22.83'")!=1: raise SystemExit('smoke runtime drifted')
           s=s.replace("payload['server']['runtime_version'] == '0.22.83'", "payload['server']['runtime_version'] == '0.22.84'",1)
-          marker='          assert "--pairing-code" in bootstrap.read_text()\n'
-          add='''          bootstrap_text = bootstrap.read_text()\n          assert "ReadWritePaths=/etc/chat2api-worker /var/lib/chat2api-worker/controller /etc/systemd/system /home/chat2api/.config" in bootstrap_text\n          assert 'agent_version:"0.3.10"' in bootstrap_text\n'''
-          if marker not in s: raise SystemExit('smoke bootstrap marker missing')
-          s=s.replace(marker,marker+add,1)
-          marker2='          assert "data-manage-device" in device_ui\n'
-          add2='''          assert device_ui.count("data-diagnostics=") >= 2\n          assert device_ui.count("诊断日志") >= 2\n          assert 'AGENT_VERSION = "0.3.10"' in Path("/app/worker_payload/scripts/linux_worker_device_controller.py").read_text()\n'''
-          if marker2 not in s: raise SystemExit('smoke ui marker missing')
-          s=s.replace(marker2,marker2+add2,1)
-          marker3="          assert payload['features']['linux_worker_slot_isolated_ops_v126'] is False\n"
-          add3="          assert payload['features']['linux_worker_device_controller_provision_rw_v128'] is True\n          assert payload['features']['linux_worker_device_diagnostics_v128'] is True\n"
-          if marker3 not in s: raise SystemExit('smoke feature marker missing')
-          s=s.replace(marker3,marker3+add3,1)
+          marker='          assert "--pairing-code" in bootstrap_text\n'
+          extra='          assert "ReadWritePaths=/etc/chat2api-worker /var/lib/chat2api-worker/controller /etc/systemd/system /home/chat2api/.config" in bootstrap_text\n          assert \'agent_version:"0.3.10"\' in bootstrap_text\n'
+          if s.count(marker)!=1: raise SystemExit('smoke bootstrap assertion drifted')
+          s=s.replace(marker,marker+extra,1)
+          marker='          assert "data-manage-device" in device_ui\n'
+          extra='          assert device_ui.count("data-diagnostics=") >= 2\n          assert device_ui.count("诊断日志") >= 2\n          assert \'AGENT_VERSION = "0.3.10"\' in controller\n'
+          if s.count(marker)!=1: raise SystemExit('smoke UI assertion drifted')
+          s=s.replace(marker,marker+extra,1)
+          marker="          assert payload['features']['linux_worker_slot_isolated_ops_v126'] is False\n"
+          extra="          assert payload['features']['linux_worker_device_controller_provision_rw_v128'] is True\n          assert payload['features']['linux_worker_device_diagnostics_v128'] is True\n"
+          if s.count(marker)!=1: raise SystemExit('smoke feature assertion drifted')
+          s=s.replace(marker,marker+extra,1)
           p.write_text(s,encoding='utf-8')
 
           for p in Path('tests').rglob('*.py'):
               s=p.read_text(encoding='utf-8')
               t=s.replace('"0.22.83"','"0.22.84"').replace("'0.22.83'","'0.22.84'")
               t=t.replace('"0.3.9"','"0.3.10"').replace("'0.3.9'","'0.3.10'")
-              if t != s: p.write_text(t,encoding='utf-8')
+              if t!=s: p.write_text(t,encoding='utf-8')
           PY
       - name: Validate source and tests
         run: |
@@ -112,7 +103,7 @@ jobs:
           bash -n scripts/bootstrap_linux_worker.sh scripts/linux_worker_device_controller_helper.sh
           pip install -q -r requirements.txt pytest
           pytest -q
-      - name: Remove temporary files and commit
+      - name: Remove temporary workflow and commit
         run: |
           git rm .github/workflows/v128-fix-provision.yml
           rm -f NOPE.tmp NOPE2.tmp NOPE3.tmp NOPE4.tmp NOPE5.tmp
