@@ -25,14 +25,22 @@ def test_window_limit_config_round_trip_and_bounds(tmp_path: Path) -> None:
     assert _normalize_limit(99) == 32
 
 
-def test_window_limit_guard_preserves_single_creation_and_lifecycle_authority() -> None:
+def test_window_limit_guard_remains_compatibility_admission_layer_for_persistent_pool() -> None:
     entry = (ROOT / "chrome_extension/background_entry.js").read_text(encoding="utf-8")
     router = (ROOT / "chrome_extension/conversation_routing.js").read_text(encoding="utf-8")
     guard = (ROOT / "chrome_extension/background_window_limit_v121.js").read_text(encoding="utf-8")
+    pool = (ROOT / "chrome_extension/conversation_persistent_pool_v132.js").read_text(encoding="utf-8")
     control = (ROOT / "chrome_extension/background_capacity_control_v35.js").read_text(encoding="utf-8")
     server = (ROOT / "app/worker_limits_clipboard_v121_patch.py").read_text(encoding="utf-8")
 
-    assert entry.index('"conversation_routing.js"') < entry.index('"background_window_limit_v121.js"') < entry.index('"conversation_dispatch.js"')
+    router_index = entry.index('"conversation_routing.js"')
+    guard_index = entry.index('"background_window_limit_v121.js"')
+    pool_index = entry.index('"conversation_persistent_pool_v132.js"')
+    dispatch_index = entry.index('"conversation_dispatch.js"')
+    assert router_index < guard_index < pool_index < dispatch_index
+
+    # v121 is still the compatibility admission guard and therefore must not
+    # create/remove physical windows itself. v132 owns that lifecycle.
     assert "chrome.windows.create" not in guard
     assert "chrome.windows.remove" not in guard
     assert "route.generation =" not in guard
@@ -42,12 +50,17 @@ def test_window_limit_guard_preserves_single_creation_and_lifecycle_authority() 
     assert "route.inflight_request_id" in guard
     assert "worker_window_limit_exhausted" in guard
     assert "worker-window-limit-admission" in guard
+
+    assert "chrome.windows.create" in pool
+    assert "chrome.windows.remove" in pool
+    assert "persistent-prewarmed-total-window-pool-v132" in pool
     assert 'action === "windows.limit"' in control
-    assert 'window_decision_authority: "conversation-routing-v30"' in control
+    assert 'window_decision_authority: "persistent-window-pool-v132"' in control
     assert 'routing["worker_window_limit"] = window_limit_for(client_id)' in server
     assert 'return max(concurrency, _normalize_limit(configured, concurrency))' in server
     assert "最大窗口数不能小于并发上限" in server
-    assert "on-demand-hard-cap-no-warm-pool" in server
+    assert "persistent-prewarmed-total-window-pool-v132" in server
+    assert "on-demand-hard-cap-no-warm-pool" not in server
 
 
 def test_remote_login_unicode_clipboard_is_ticket_scoped_and_bidirectional() -> None:
@@ -82,11 +95,14 @@ def test_remote_login_unicode_clipboard_is_ticket_scoped_and_bidirectional() -> 
 
 
 def test_worker_settings_ui_keeps_concurrency_and_windows_distinct() -> None:
-    console = (ROOT / "app/admin_worker_limits_clipboard_v121.js").read_text(encoding="utf-8")
-    presentation = (ROOT / "app/worker_presentation_v64_patch.py").read_text(encoding="utf-8")
+    console = (ROOT / "app" / "admin_worker_limits_clipboard_v121.js").read_text(encoding="utf-8")
+    presentation = (ROOT / "app" / "worker_presentation_v64_patch.py").read_text(encoding="utf-8")
+    identity = (ROOT / "app" / "admin_worker_identity_v131.js").read_text(encoding="utf-8")
 
     assert 'headerCell.textContent = "并发 / 窗口"' in console
     assert "窗口数不能小于并发数" in console
     assert '/concurrency`' in console
     assert '/windows/limit`' in console
     assert 'install_worker_limits_clipboard_v121_patch(app)' in presentation
+    assert "持续维持的 ChatGPT 物理窗口总数" in identity
+    assert "空闲窗口常驻并预热" in identity

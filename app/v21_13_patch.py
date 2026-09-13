@@ -6,11 +6,16 @@ from fastapi import FastAPI, Header, HTTPException
 
 
 PATCH_VERSION = "0.21.13"
-# v0.8.30 removes the speculative browser reserve pool. Keep this historical
-# endpoint for bridge compatibility, but publish the current single-authority
-# policy instead of advertising a non-existent warm-window target.
+# The historical reserve-window fields remain zero because the speculative
+# reserve pool is retired. The configured Worker window target is now an
+# explicit persistent/prewarmed physical pool owned by v132, while the legacy
+# five-minute value describes logical route compatibility only and never closes
+# physical pooled windows.
 ROUTE_IDLE_CLOSE_SECONDS = 5 * 60
 MAX_RESERVE_WINDOW_TARGET = 0
+PERSISTENT_WINDOW_POLICY = "persistent-prewarmed-total-window-pool-v132"
+WINDOW_DECISION_AUTHORITY = "persistent-window-pool-v132"
+ROUTE_WINDOW_AUTHORITY = "conversation-routing-v30+persistent-pool-v132"
 
 
 def install_v21_13_patch(app: FastAPI) -> FastAPI:
@@ -47,10 +52,15 @@ def install_v21_13_patch(app: FastAPI) -> FastAPI:
         return {
             "reserve_window_target": 0,
             "route_idle_close_seconds": ROUTE_IDLE_CLOSE_SECONDS,
+            "route_idle_close_applies_to_physical_pool": False,
             "max_reserve_window_target": MAX_RESERVE_WINDOW_TARGET,
             "worker_concurrency": configured,
             "speculative_worker_windows": False,
-            "window_decision_authority": "conversation-routing-v30",
+            "persistent_worker_windows": True,
+            "prewarmed_worker_windows": True,
+            "persistent_window_policy": PERSISTENT_WINDOW_POLICY,
+            "window_decision_authority": WINDOW_DECISION_AUTHORITY,
+            "route_window_authority": ROUTE_WINDOW_AUTHORITY,
             "server_scheduler_authority": "server-single-authority-scheduler-v58",
             "version": PATCH_VERSION,
         }

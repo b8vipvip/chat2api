@@ -24,6 +24,9 @@ MAX_CLIPBOARD_CHARS = 16_384
 ROUTED_REQUEST_TYPES = {"chat.request", "image.request", "voice.request", "voice.live.start"}
 LOGIN_TICKET_HEADER = "x-chat2api-login-ticket"
 CONTROL_RESULT_KEY = "extension_control_result"
+PERSISTENT_WINDOW_POLICY = "persistent-prewarmed-total-window-pool-v132"
+WINDOW_DECISION_AUTHORITY = "persistent-window-pool-v132"
+ROUTE_WINDOW_AUTHORITY = "conversation-routing-v30+persistent-pool-v132"
 
 
 class WindowLimitUpdate(BaseModel):
@@ -126,9 +129,10 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
         configured = explicit_limits.get(str(client_id or ""))
         if configured is None:
             return concurrency
-        # A physical-window hard cap lower than the admitted concurrency cannot
-        # be satisfied without adding a second browser-side queue. Keep server
-        # admission authoritative by clamping the effective cap upward.
+        # v121 remains the compatibility/configuration layer for the physical
+        # target. v132 is the lifecycle authority and continuously converges the
+        # Worker/Profile to this target. A target below admitted concurrency is
+        # unsatisfiable without a second browser-side queue, so clamp upward.
         return max(concurrency, _normalize_limit(configured, concurrency))
 
     def window_source_for(client_id: str) -> str:
@@ -154,7 +158,11 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
             "inherits_concurrency": configured is None,
             "min": MIN_LIMIT,
             "max": MAX_LIMIT,
-            "policy": "on-demand-hard-cap-no-warm-pool",
+            "policy": PERSISTENT_WINDOW_POLICY,
+            "window_decision_authority": WINDOW_DECISION_AUTHORITY,
+            "route_window_authority": ROUTE_WINDOW_AUTHORITY,
+            "prewarmed_windows": True,
+            "speculative_windows": False,
             "revision": PATCH_REVISION,
         }
 
@@ -209,9 +217,9 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
             await asyncio.sleep(0.1)
         return {"ok": False, "pending": True, "reason": "extension_control_timeout", "control_id": control_id}
 
-    # This final wrapper is deliberately passive: it only decorates summaries
-    # and routed payloads with the independent window cap. It never chooses a
-    # Worker and never performs browser window lifecycle work itself.
+    # v121 decorates summaries/routed payloads with the configured physical
+    # target. It does not choose a Worker or mutate Chrome windows; v132 owns the
+    # persistent window lifecycle and consumes this target on the Worker.
     base_summaries = registry.summaries
     if not getattr(registry, "_chat2api_window_limits_v121_summaries", False):
         def summaries_with_window_limits() -> list[dict[str, Any]]:
@@ -227,6 +235,11 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
                 if isinstance(capacity, dict):
                     capacity["window_limit"] = row["max_windows"]
                     capacity["window_limit_source"] = row["window_limit_source"]
+                    capacity["window_policy"] = PERSISTENT_WINDOW_POLICY
+                    capacity["window_decision_authority"] = WINDOW_DECISION_AUTHORITY
+                    capacity["route_window_authority"] = ROUTE_WINDOW_AUTHORITY
+                    capacity["prewarmed_windows"] = True
+                    capacity["speculative_windows"] = False
                     row["capacity"] = capacity
             return rows
 
