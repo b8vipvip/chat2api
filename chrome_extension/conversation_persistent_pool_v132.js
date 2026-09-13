@@ -380,7 +380,10 @@
       reused_total: state.reused,
       reassigned_total: state.reassigned,
       closed_total: state.closed,
-      speculative_windows: true,
+      persistent_window_pool: true,
+      prewarmed_windows: true,
+      speculative_windows: false,
+      logical_route_authority: "conversation-routing-v30",
       route_window_authority: "conversation-routing-v30+persistent-pool-v132",
       window_decision_authority: "persistent-window-pool-v132",
       observed_at: new Date().toISOString(),
@@ -512,7 +515,7 @@
 
   async function reconcile(reason = "scheduled") {
     if (state.reconcilePromise) return state.reconcilePromise;
-    const task = reconcileNow(reason).finally(() => {
+    const task = serial(() => reconcileNow(reason)).finally(() => {
       if (state.reconcilePromise === task) state.reconcilePromise = null;
     });
     state.reconcilePromise = task;
