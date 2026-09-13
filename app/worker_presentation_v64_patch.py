@@ -87,7 +87,8 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
             rows = base_summaries()
             by_pairing: dict[str, str] = {}
             by_client: dict[str, tuple[str, str]] = {}
-            by_linux_worker: dict[str, tuple[str, str]] = {}
+            linux_by_client: dict[str, str] = {}
+            linux_by_worker: dict[str, str] = {}
             for pairing in pairings.items.values():
                 name = str(pairing.name or "").strip()
                 pairing_id = str(pairing.pairing_id or "").strip()
@@ -101,8 +102,8 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
             # ChatGPT in that Profile. PairingStore intentionally binds only after
             # login readiness, so PairingStore alone cannot name that Worker yet.
             # The Linux Worker store already owns the authoritative device/slot
-            # relationship; use it only as a presentation fallback so an unlogged
-            # TX03 Worker 2 is still labelled TX03 rather than generic "Chrome".
+            # relationship; use its device name only as a presentation fallback.
+            # Do not synthesize a device_code_id/pairing binding before login.
             linux_workers = getattr(app.state, "linux_workers", None)
             if linux_workers is not None:
                 try:
@@ -116,17 +117,14 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
                     metadata = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}
                     worker_pairing = metadata.get("worker_pairing") if isinstance(metadata.get("worker_pairing"), dict) else {}
                     device_name = str(metadata.get("device_name") or worker_pairing.get("name") or "").strip()
-                    pairing_id = str(metadata.get("device_pairing_id") or worker_pairing.get("pairing_id") or "").strip()
                     client_id = str(worker.get("extension_client_id") or "").strip()
                     worker_id = str(worker.get("worker_id") or "").strip()
                     if not device_name:
                         continue
-                    if pairing_id:
-                        by_pairing.setdefault(pairing_id, device_name)
                     if client_id:
-                        by_client.setdefault(client_id, (pairing_id, device_name))
+                        linux_by_client[client_id] = device_name
                     if worker_id:
-                        by_linux_worker[worker_id] = (pairing_id, device_name)
+                        linux_by_worker[worker_id] = device_name
 
             decorated: list[dict[str, Any]] = []
             for raw in rows:
@@ -136,9 +134,9 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
                 client_id = str(row.get("client_id") or "").strip()
                 fallback_pairing, fallback_name = by_client.get(client_id, ("", ""))
                 linux_worker_id = str(metadata.get("linux_worker_id") or metadata.get("worker_id") or "").strip()
-                linux_pairing, linux_name = by_linux_worker.get(linux_worker_id, ("", ""))
+                linux_name = linux_by_client.get(client_id) or linux_by_worker.get(linux_worker_id) or ""
                 if not pairing_id:
-                    pairing_id = fallback_pairing or linux_pairing
+                    pairing_id = fallback_pairing
                 row["device_code_id"] = pairing_id or None
                 row["device_name"] = by_pairing.get(pairing_id) or fallback_name or linux_name or None
                 decorated.append(row)
