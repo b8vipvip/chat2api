@@ -69,7 +69,7 @@ jobs:
               pairer = archive.extractfile("scripts/linux_worker_extension_pair.py").read().decode("utf-8")
               controller = archive.extractfile("scripts/linux_worker_device_controller.py").read().decode("utf-8")
               controller_helper = archive.extractfile("scripts/linux_worker_device_controller_helper.sh").read().decode("utf-8")
-          assert manifest["version"] == "0.8.35"
+          assert manifest["version"] == "0.8.36"
           assert "\"conversation_routing.js\"" in entry
           assert "single-route-window-authority-v30" in router
           assert "decision_authority: false" in observer
@@ -145,10 +145,12 @@ jobs:
           payload = json.load(open('/tmp/chat2api-version.json', encoding='utf-8'))
           assert payload['server']['runtime_aligned'] is True
           assert payload['server']['entrypoint'] == 'app.entry:app'
-          assert payload['server']['runtime_version'] == '0.22.84'
-          assert payload['chrome_bridge']['bundle_version'] == '0.8.35'
+          assert payload['server']['runtime_version'] == '0.22.85'
+          assert payload['chrome_bridge']['bundle_version'] == '0.8.36'
           assert payload['chrome_bridge']['route_window_authority_revision'] == 30
           assert payload['chrome_bridge']['window_observer_revision'] == 90
+          assert payload['chrome_bridge']['persistent_window_pool_revision'] == 132
+          assert payload['chrome_bridge']['persistent_window_pool_contract_revision'] == 135
           assert payload['features']['linux_worker_device_authority_v124'] is True
           assert payload['features']['linux_worker_public_https_origin_v125'] is True
           assert payload['features']['linux_worker_isolated_management_v126'] is False
