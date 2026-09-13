@@ -41,11 +41,14 @@ importScripts(
   // windows prewarmed, leases those persistent slots to routes, reassigns only
   // idle slots, and replaces a poisoned/closed slot without exceeding the target.
   // The restore guard validates a reassigned saved /c/<id> before the request is
-  // submitted, falling back to a fresh conversation if ChatGPT redirected home.
+  // submitted. v133 adds a request-admission reconciliation barrier so pool repair
+  // cannot transiently create N+1 windows, and compacts explicit logged-out state
+  // to one interactive/login surface without touching in-flight windows.
   "conversation_routing.js",
   "background_window_limit_v121.js",
   "conversation_persistent_pool_v132.js",
   "conversation_persistent_route_restore_v132.js",
+  "conversation_persistent_pool_guard_v133.js",
   "conversation_dispatch.js",
 
   "background_tool_isolation_v48.js",
@@ -60,6 +63,9 @@ importScripts(
 
   // Observation/capture only. It has no route/window mutation authority.
   "background_window_observer_v90.js",
+  // Correct the historical v90 authority label while keeping v90 as the physical
+  // truth source. The persistent pool, not the observer, owns window lifecycle.
+  "background_window_authority_v133.js",
   // Server physical verification compatibility bridge. v90 stays the only
   // physical truth owner; this module only forces a fresh report on demand.
   "background_window_refresh_v129.js",
