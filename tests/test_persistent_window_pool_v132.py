@@ -43,6 +43,22 @@ def test_persistent_pool_keeps_configured_total_not_per_route_extra() -> None:
     assert 'effective_target: effective' in source
 
 
+def test_persistent_pool_serializes_reconcile_and_request_admission() -> None:
+    source = text("chrome_extension/conversation_persistent_pool_v132.js")
+    assert 'const task = serial(() => reconcileNow(reason)).finally(() => {' in source
+    assert 'return serial(async () => {' in source
+    assert 'gate: Promise.resolve()' in source
+
+
+def test_persistent_pool_telemetry_distinguishes_prewarm_from_legacy_speculation() -> None:
+    source = text("chrome_extension/conversation_persistent_pool_v132.js")
+    assert 'persistent_window_pool: true' in source
+    assert 'prewarmed_windows: true' in source
+    assert 'speculative_windows: false' in source
+    assert 'logical_route_authority: "conversation-routing-v30"' in source
+    assert 'window_decision_authority: "persistent-window-pool-v132"' in source
+
+
 def test_saved_conversation_is_validated_after_slot_reassignment() -> None:
     source = text("chrome_extension/conversation_persistent_route_restore_v132.js")
     assert 'const expectedId = String(before?.conversation_id || "").trim()' in source

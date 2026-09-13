@@ -49,7 +49,12 @@ def test_extension_runtime_config_advertises_server_capacity_without_speculative
     assert payload["reserve_window_target"] == 0
     assert payload["worker_concurrency"] == 10
     assert payload["speculative_worker_windows"] is False
-    assert payload["window_decision_authority"] == "conversation-routing-v30"
+    assert payload["persistent_window_pool"] is True
+    assert payload["persistent_window_pool_revision"] == 132
+    assert payload["persistent_window_target"] == 10
+    assert payload["prewarmed_worker_windows"] is True
+    assert payload["logical_route_authority"] == "conversation-routing-v30"
+    assert payload["window_decision_authority"] == "persistent-window-pool-v132"
     assert payload["server_scheduler_authority"] == "server-single-authority-scheduler-v58"
     assert payload["route_idle_close_seconds"] == ROUTE_IDLE_CLOSE_SECONDS == 300
     assert payload["max_reserve_window_target"] == MAX_RESERVE_WINDOW_TARGET == 0
@@ -59,6 +64,7 @@ def test_legacy_reserve_pool_is_retained_as_source_but_not_loaded_by_production_
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     assert '"conversation_routing.js"' in entry
     assert '"conversation_dispatch.js"' in entry
+    assert '"conversation_persistent_pool_v132.js"' in entry
     assert '"conversation_warm_pool_v2.js"' not in entry
     assert '"background_external_warm_v28.js"' not in entry
     assert '"background_reserve_pool_v29.js"' not in entry
