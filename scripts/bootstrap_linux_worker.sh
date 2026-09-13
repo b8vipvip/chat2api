@@ -209,7 +209,7 @@ else
   report_progress "enrolling" "$STAGE" "$LAST_MESSAGE"
 fi
 if [[ ! -s /etc/chat2api-worker/worker.json ]]; then
-  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$PRETTY_NAME" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.9"}')"
+  payload="$(jq -n --arg code "$ENROLL_CODE" --arg host "$(hostname)" --arg arch "$(uname -m)" --arg os "$PRETTY_NAME" '{enroll_code:$code,hostname:$host,device_id:$host,platform:"linux",arch:$arch,os_version:$os,agent_version:"0.3.10"}')"
   ENROLL_RESPONSE="$(mktemp)"
   if ! printf '%s' "$payload" | curl -fsSL --retry 3 --retry-all-errors -H 'Content-Type: application/json' --data-binary @- -o "$ENROLL_RESPONSE" "$SERVER/api/workers/enroll"; then
     rm -f "$ENROLL_RESPONSE"
@@ -293,7 +293,7 @@ ExecStart=/opt/chat2api-worker-venv/bin/python ${WORKER_DIR}/scripts/linux_worke
 Restart=always
 RestartSec=5
 ProtectSystem=strict
-ReadWritePaths=/etc/chat2api-worker /var/lib/chat2api-worker/controller
+ReadWritePaths=/etc/chat2api-worker /var/lib/chat2api-worker/controller /etc/systemd/system /home/chat2api/.config
 [Install]
 WantedBy=multi-user.target
 UNIT

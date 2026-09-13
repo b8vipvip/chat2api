@@ -589,8 +589,8 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
         primary = next((row for row in device.get("workers", []) if int(row.get("worker_slot") or 0) == 1), None)
         if not primary:
             raise HTTPException(409, "请先完成设备首次安装，再增加 Worker")
-        if str(primary.get("agent_version") or "") != "0.3.9":
-            raise HTTPException(409, "请先点击设备列表中的更新，将该设备升级到总控 Agent 0.3.9 后再增加 Worker")
+        if str(primary.get("agent_version") or "") != "0.3.10":
+            raise HTTPException(409, "请先点击设备列表中的更新，将该设备升级到总控 Agent 0.3.10 后再增加 Worker")
         occupied = {int(row.get("worker_slot") or 0) for row in device.get("workers", [])}
         slot = next((value for value in range(MIN_SLOT, MAX_SLOT + 1) if value not in occupied), None)
         if slot is None:
@@ -607,7 +607,12 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
             )
             result = command.get("result") if isinstance(command, dict) else {}
             if not isinstance(result, dict) or result.get("ok") is not True:
-                raise HTTPException(502, f"设备总控 Agent 增加 Worker 失败：{str((result or {}).get('error') or 'unknown_error')[:120]}")
+                failure = result if isinstance(result, dict) else {}
+                error = str(failure.get("error") or "unknown_error").replace("\r", " ").replace("\n", " ").strip()[:120]
+                detail = str(failure.get("detail") or "").replace("\r", " ").replace("\n", " ").strip()[:360]
+                helper_exit = failure.get("helper_exit_code")
+                suffix = (f" · exit={helper_exit}" if helper_exit is not None else "") + (f" · {detail}" if detail else "")
+                raise HTTPException(502, f"设备总控 Agent 增加 Worker 失败：{error}{suffix}")
         except Exception:
             _delete_worker(workers, child_id)
             raise

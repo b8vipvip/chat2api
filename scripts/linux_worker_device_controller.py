@@ -25,7 +25,7 @@ import websockets
 
 import linux_worker_agent_v44 as legacy
 
-AGENT_VERSION = "0.3.9"
+AGENT_VERSION = "0.3.10"
 CONFIG = Path(os.environ.get("CHAT2API_WORKER_CONFIG", "/etc/chat2api-worker/worker.json"))
 REGISTRY = Path(os.environ.get("CHAT2API_DEVICE_WORKERS", "/var/lib/chat2api-worker/controller/workers.json"))
 CONTROLLER_HELPER = Path(os.environ.get("CHAT2API_DEVICE_CONTROLLER_HELPER", "/usr/local/sbin/chat2api-device-controller"))
@@ -253,7 +253,7 @@ def _execute(config: dict[str, Any], target: dict[str, Any], command: str, argum
         except subprocess.TimeoutExpired:
             return {"ok": False, "error": "worker_provision_timeout"}
         if result.returncode != 0:
-            return {"ok": False, "error": "worker_provision_failed", "detail": (result.stderr or result.stdout or "")[-300:]}
+            return {"ok": False, "error": "worker_provision_failed", "helper_exit_code": int(result.returncode), "detail": (result.stderr or result.stdout or "")[-600:]}
         _register_child(worker_id, child_slot, device_name)
         _load_remote_modules(child_slot)
         return {"ok": True, "worker_id": worker_id, "worker_slot": child_slot, "profile": _slot_layout(child_slot)["profile"]}
