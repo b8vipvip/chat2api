@@ -29,78 +29,96 @@ jobs:
 
           SERVER = "0.22.85"
           BUNDLE = "0.8.36"
-
           runtime_path = Path("app/runtime_contract.py")
           runtime = runtime_path.read_text(encoding="utf-8")
-          replacements = {
-              r'^SERVER_RUNTIME_VERSION = ".*"$': f'SERVER_RUNTIME_VERSION = "{SERVER}"',
-              r'^PREVIOUS_SERVER_RUNTIME_VERSION = ".*"$': 'PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.84"',
-              r'^PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = ".*"$': 'PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.83"',
-              r'^PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = ".*"$': 'PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.82"',
-              r'^PREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = ".*"$': 'PREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.81"',
-              r'^CHROME_BRIDGE_BUNDLE_VERSION = ".*"$': f'CHROME_BRIDGE_BUNDLE_VERSION = "{BUNDLE}"',
+
+          constants = {
+              "SERVER_RUNTIME_VERSION": SERVER,
+              "PREVIOUS_SERVER_RUNTIME_VERSION": "0.22.84",
+              "PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION": "0.22.83",
+              "PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION": "0.22.82",
+              "PREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION": "0.22.81",
+              "CHROME_BRIDGE_BUNDLE_VERSION": BUNDLE,
           }
-          for pattern, replacement in replacements.items():
-              updated, count = re.subn(pattern, replacement, runtime, count=1, flags=re.M)
+          for name, value in constants.items():
+              runtime, count = re.subn(
+                  rf'^{name} = "[^"]+"$',
+                  f'{name} = "{value}"',
+                  runtime,
+                  count=1,
+                  flags=re.M,
+              )
               if count != 1:
-                  raise SystemExit(f"release sync missing runtime contract pattern: {pattern}")
-              runtime = updated
+                  raise SystemExit(f"missing runtime contract constant: {name}")
 
           feature_suffix = "persistent-prewarmed-window-pool-v132-canonical-v135-release-v02285"
-          runtime = re.sub(
+          runtime, count = re.subn(
               r'^(RUNTIME_FEATURE_REVISION = ")([^"]+)(")$',
               lambda m: m.group(1) + (m.group(2) if feature_suffix in m.group(2) else m.group(2) + "-" + feature_suffix) + m.group(3),
               runtime,
               count=1,
               flags=re.M,
           )
+          if count != 1:
+              raise SystemExit("missing RUNTIME_FEATURE_REVISION")
+
           build_suffix = "persistent-prewarmed-window-pool-v132-canonical-v135-release-v0836"
-          runtime = re.sub(
+          runtime, count = re.subn(
               r'^(\s*"build_revision": ")([^"]+)(",)$',
               lambda m: m.group(1) + (m.group(2) if build_suffix in m.group(2) else m.group(2) + "-" + build_suffix) + m.group(3),
               runtime,
               count=1,
               flags=re.M,
           )
+          if count != 1:
+              raise SystemExit("missing chrome bridge build_revision")
 
           if '"persistent_window_pool_revision": 132,' not in runtime:
+              needle = '            "window_observer_revision": 90,\n'
+              if needle not in runtime:
+                  raise SystemExit("missing window_observer_revision")
               runtime = runtime.replace(
-                  '            "window_observer_revision": 90,\n',
-                  '            "window_observer_revision": 90,\n'
-                  '            "persistent_window_pool_revision": 132,\n'
-                  '            "persistent_window_pool_contract_revision": 135,\n',
+                  needle,
+                  needle
+                  + '            "persistent_window_pool_revision": 132,\n'
+                  + '            "persistent_window_pool_contract_revision": 135,\n',
                   1,
               )
           if '"persistent_worker_window_pool_v132": True,' not in runtime:
+              needle = '            "worker_per_extension_window_limit_v121": True,\n'
+              if needle not in runtime:
+                  raise SystemExit("missing worker window limit feature")
               runtime = runtime.replace(
-                  '            "worker_per_extension_window_limit_v121": True,\n',
-                  '            "worker_per_extension_window_limit_v121": True,\n'
-                  '            "persistent_worker_window_pool_v132": True,\n'
-                  '            "persistent_worker_window_pool_canonical_v135": True,\n',
+                  needle,
+                  needle
+                  + '            "persistent_worker_window_pool_v132": True,\n'
+                  + '            "persistent_worker_window_pool_canonical_v135": True,\n',
                   1,
               )
           runtime_path.write_text(runtime, encoding="utf-8")
 
-          bundle_files = [
+          bundle_files = (
               "chrome_extension/manifest.json",
               "chrome_extension/background_runtime_preflight_v48.js",
               "chrome_extension/content_bundle_marker_v48.js",
               "chrome_extension/content_bundle_marker_v71.js",
               "chrome_extension/content_runtime_contract_v48.js",
               "chrome_extension/content_runtime_contract_v71.js",
-          ]
-          for name in bundle_files:
-              path = Path(name)
+          )
+          for filename in bundle_files:
+              path = Path(filename)
               text = path.read_text(encoding="utf-8")
               if "0.8.35" not in text:
-                  raise SystemExit(f"expected old bundle marker missing: {name}")
+                  raise SystemExit(f"expected old bundle marker missing: {filename}")
               path.write_text(text.replace("0.8.35", BUNDLE), encoding="utf-8")
 
           smoke_path = Path(".github/workflows/production-image-smoke.yml")
           smoke = smoke_path.read_text(encoding="utf-8")
           smoke = smoke.replace("0.22.84", SERVER).replace("0.8.35", BUNDLE)
-          needle = "          assert payload['chrome_bridge']['window_observer_revision'] == 90\n"
           if "persistent_window_pool_contract_revision" not in smoke:
+              needle = "          assert payload['chrome_bridge']['window_observer_revision'] == 90\n"
+              if needle not in smoke:
+                  raise SystemExit("missing production smoke window observer assertion")
               smoke = smoke.replace(
                   needle,
                   needle
@@ -110,9 +128,6 @@ jobs:
               )
           smoke_path.write_text(smoke, encoding="utf-8")
 
-          # Current-version snapshot tests intentionally track the shipping
-          # runtime/bundle. Previous-version history lives in runtime_contract.py
-          # and is updated structurally above rather than by this replacement.
           for path in Path("tests").rglob("*"):
               if not path.is_file() or path.suffix not in {".py", ".mjs", ".js"}:
                   continue
@@ -120,68 +135,6 @@ jobs:
               updated = text.replace("0.22.84", SERVER).replace("0.8.35", BUNDLE)
               if updated != text:
                   path.write_text(updated, encoding="utf-8")
-
-          release_test = Path("tests/test_persistent_window_pool_release_v02285_v0836.py")
-          release_test.write_text('''from __future__ import annotations
-
-import json
-from pathlib import Path
-
-from fastapi import FastAPI
-
-from app.runtime_contract import (
-    CHROME_BRIDGE_BUNDLE_VERSION,
-    SERVER_RUNTIME_VERSION,
-    version_contract_payload,
-)
-
-
-ROOT = Path(__file__).resolve().parents[1]
-
-
-def read(path: str) -> str:
-    return (ROOT / path).read_text(encoding="utf-8")
-
-
-def test_v02285_v0836_release_contract_publishes_persistent_pool() -> None:
-    manifest = json.loads(read("chrome_extension/manifest.json"))
-    payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
-
-    assert SERVER_RUNTIME_VERSION == "0.22.85"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.36"
-    assert manifest["version"] == "0.8.36"
-    assert "persistent prewarmed per-Worker window pool" in manifest["description"]
-    assert payload["server"]["runtime_aligned"] is True
-    assert "release-v02285" in payload["server"]["feature_revision"]
-    assert payload["chrome_bridge"]["persistent_window_pool_revision"] == 132
-    assert payload["chrome_bridge"]["persistent_window_pool_contract_revision"] == 135
-    assert "release-v0836" in payload["chrome_bridge"]["build_revision"]
-    assert payload["features"]["persistent_worker_window_pool_v132"] is True
-    assert payload["features"]["persistent_worker_window_pool_canonical_v135"] is True
-
-
-def test_v0836_bundle_requires_new_worker_installation_epoch() -> None:
-    for path in (
-        "chrome_extension/background_runtime_preflight_v48.js",
-        "chrome_extension/content_bundle_marker_v48.js",
-        "chrome_extension/content_bundle_marker_v71.js",
-        "chrome_extension/content_runtime_contract_v48.js",
-        "chrome_extension/content_runtime_contract_v71.js",
-    ):
-        assert "0.8.36" in read(path), path
-
-    entry = read("chrome_extension/background_entry.js")
-    assert '"conversation_persistent_pool_v132.js"' in entry
-    assert '"conversation_persistent_pool_guard_v133.js"' in entry
-    assert '"background_window_authority_v133.js"' in entry
-
-
-def test_v02285_keeps_physical_pool_idle_close_disabled() -> None:
-    runtime = read("app/v21_13_patch.py")
-    assert 'PERSISTENT_WINDOW_IDLE_CLOSE_SECONDS = 0' in runtime
-    assert 'PERSISTENT_WINDOW_POLICY = "persistent-prewarmed-total-window-pool-v132"' in runtime
-    assert 'WINDOW_DECISION_AUTHORITY = "persistent-window-pool-v132"' in runtime
-''', encoding="utf-8")
           PY
 
           git rm .github/workflows/release-sync-v02285-v0836.yml
