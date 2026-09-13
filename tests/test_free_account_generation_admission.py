@@ -38,10 +38,16 @@ async def add_online_client(app, name: str, account_type: str, models: list[str]
         name,
         "Chrome",
         "0.8.11",
-        {"account_type": account_type, "models": models},
+        {
+            "account_type": account_type,
+            "models": models,
+            "chatgpt_login_state": "ready",
+            "chatgpt_login_composer_ready": True,
+        },
     )
-    # Selection only needs the registry to regard this client as online. No
-    # websocket send is performed by these admission tests.
+    # These are generation-admission tests, so the synthetic online Worker must
+    # also represent a positively confirmed logged-in ChatGPT page. No websocket
+    # send is performed by these tests.
     app.state.registry.sockets[client_id] = object()
     return client_id
 
