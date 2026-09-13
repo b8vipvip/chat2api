@@ -135,7 +135,7 @@ def test_offline_extension_returns_truthful_unconfirmed_result() -> None:
     assert applied.json()["error_code"] == "extension_offline"
 
 
-def test_runtime_config_retires_speculative_reserve_target_but_keeps_server_concurrency() -> None:
+def test_runtime_config_retires_legacy_speculation_and_publishes_persistent_pool() -> None:
     app = FastAPI()
     app.state.registry = RuntimeRegistry()
     app.state.broker = SimpleNamespace(max_concurrency=9)
@@ -150,11 +150,40 @@ def test_runtime_config_retires_speculative_reserve_target_but_keeps_server_conc
     payload = response.json()
     assert payload["reserve_window_target"] == 0
     assert payload["max_reserve_window_target"] == 0
+    assert payload["speculative_worker_windows"] is False
     assert payload["worker_concurrency"] == 5
     assert payload["route_idle_close_seconds"] == 300
-    assert payload["speculative_worker_windows"] is False
-    assert payload["window_decision_authority"] == "conversation-routing-v30"
+    assert payload["persistent_window_pool"] is True
+    assert payload["persistent_window_pool_revision"] == 132
+    assert payload["persistent_window_target"] == 5
+    assert payload["persistent_window_target_source"] == "concurrency"
+    assert payload["persistent_window_idle_close_seconds"] == 0
+    assert payload["prewarmed_worker_windows"] is True
+    assert payload["logical_route_authority"] == "conversation-routing-v30"
+    assert payload["window_decision_authority"] == "persistent-window-pool-v132"
     assert payload["server_scheduler_authority"] == "server-single-authority-scheduler-v58"
+
+
+def test_runtime_config_uses_effective_per_worker_window_target_when_installed() -> None:
+    app = FastAPI()
+    app.state.registry = RuntimeRegistry()
+    app.state.broker = SimpleNamespace(max_concurrency=3)
+    app.state.concurrency_config = {"max_concurrency": 3, "limit_for": lambda _client_id: 3}
+    install_v21_13_patch(app)
+    app.state.worker_window_limits = {
+        "limit_for": lambda client_id: 7 if client_id == "ext_test" else 3,
+        "source_for": lambda client_id: "explicit" if client_id == "ext_test" else "concurrency",
+    }
+    client = TestClient(app)
+    response = client.get(
+        "/api/extensions/runtime-config",
+        headers={"X-Extension-Client-ID": "ext_test", "X-Extension-Token": "token_test"},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["worker_concurrency"] == 3
+    assert payload["persistent_window_target"] == 7
+    assert payload["persistent_window_target_source"] == "explicit"
 
 
 def test_console_and_bridge_expose_server_capacity_and_persistent_window_controls() -> None:
@@ -162,6 +191,7 @@ def test_console_and_bridge_expose_server_capacity_and_persistent_window_control
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     control = (ROOT / "chrome_extension" / "background_capacity_control_v35.js").read_text(encoding="utf-8")
     pool = (ROOT / "chrome_extension" / "conversation_persistent_pool_v132.js").read_text(encoding="utf-8")
+    observer = (ROOT / "chrome_extension" / "background_window_observer_v90.js").read_text(encoding="utf-8")
     dispatcher = (ROOT / "chrome_extension" / "background_capacity_control_v36.js").read_text(encoding="utf-8")
     assert "data-worker-max" in concurrency
     assert '/capacity-v57' in concurrency
@@ -183,6 +213,8 @@ def test_console_and_bridge_expose_server_capacity_and_persistent_window_control
     assert "chrome.windows.remove" not in control
     assert "chrome.windows.create" in pool
     assert "chrome.windows.remove" in pool
+    assert 'window_decision_authority: pool ? "persistent-window-pool-v132" : "conversation-routing-v30"' in observer
+    assert 'persistent_window_pool_revision: pool ? 132 : null' in observer
     assert "extension.control.result" in control
     assert "authoritative-global-dispatch-v36" in dispatcher
 
@@ -198,6 +230,6 @@ def test_capacity_control_vm_contracts() -> None:
 
 
 def test_capacity_control_javascript_syntax() -> None:
-    for filename in ("background_capacity_control_v35.js", "background_capacity_control_v36.js"):
+    for filename in ("background_capacity_control_v35.js", "background_capacity_control_v36.js", "background_window_observer_v90.js"):
         result = subprocess.run(["node", "--check", str(ROOT / "chrome_extension" / filename)], cwd=ROOT, capture_output=True, text=True)
         assert result.returncode == 0, result.stderr
