@@ -12,10 +12,22 @@ PATCH_VERSION = "0.21.13"
 # five-minute value describes logical route compatibility only and never closes
 # physical pooled windows.
 ROUTE_IDLE_CLOSE_SECONDS = 5 * 60
+PERSISTENT_WINDOW_IDLE_CLOSE_SECONDS = 0
 MAX_RESERVE_WINDOW_TARGET = 0
+MIN_WINDOW_TARGET = 1
+MAX_WINDOW_TARGET = 32
 PERSISTENT_WINDOW_POLICY = "persistent-prewarmed-total-window-pool-v132"
 WINDOW_DECISION_AUTHORITY = "persistent-window-pool-v132"
+LOGICAL_ROUTE_AUTHORITY = "conversation-routing-v30"
 ROUTE_WINDOW_AUTHORITY = "conversation-routing-v30+persistent-pool-v132"
+
+
+def _window_target(value: Any, fallback: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = int(fallback)
+    return max(MIN_WINDOW_TARGET, min(MAX_WINDOW_TARGET, parsed))
 
 
 def install_v21_13_patch(app: FastAPI) -> FastAPI:
@@ -49,17 +61,49 @@ def install_v21_13_patch(app: FastAPI) -> FastAPI:
                     or 1
                 ),
             )
+
+        # worker_limits_clipboard_v121_patch is installed later in the bootstrap.
+        # Resolve it at request time so this compatibility endpoint reports the
+        # same effective per-Worker target that windows.limit sends to v132.
+        window_runtime = getattr(app.state, "worker_window_limits", {})
+        window_limit_for = window_runtime.get("limit_for") if isinstance(window_runtime, dict) else None
+        window_source_for = window_runtime.get("source_for") if isinstance(window_runtime, dict) else None
+        if callable(window_limit_for):
+            try:
+                persistent_target = _window_target(window_limit_for(client_id), configured)
+            except Exception:
+                persistent_target = _window_target(configured, configured)
+        else:
+            persistent_target = _window_target(configured, configured)
+        if callable(window_source_for):
+            try:
+                persistent_source = str(window_source_for(client_id) or "concurrency")[:40]
+            except Exception:
+                persistent_source = "concurrency"
+        else:
+            persistent_source = "concurrency"
+
         return {
+            # Legacy speculative-reserve compatibility fields. The v132 pool is
+            # persistent/prewarmed and must not be represented as the retired v29
+            # speculative spare pool.
             "reserve_window_target": 0,
             "route_idle_close_seconds": ROUTE_IDLE_CLOSE_SECONDS,
             "route_idle_close_applies_to_physical_pool": False,
             "max_reserve_window_target": MAX_RESERVE_WINDOW_TARGET,
-            "worker_concurrency": configured,
             "speculative_worker_windows": False,
+
+            "worker_concurrency": configured,
             "persistent_worker_windows": True,
             "prewarmed_worker_windows": True,
+            "persistent_window_pool": True,
+            "persistent_window_pool_revision": 132,
+            "persistent_window_target": persistent_target,
+            "persistent_window_target_source": persistent_source,
+            "persistent_window_idle_close_seconds": PERSISTENT_WINDOW_IDLE_CLOSE_SECONDS,
             "persistent_window_policy": PERSISTENT_WINDOW_POLICY,
             "window_decision_authority": WINDOW_DECISION_AUTHORITY,
+            "logical_route_authority": LOGICAL_ROUTE_AUTHORITY,
             "route_window_authority": ROUTE_WINDOW_AUTHORITY,
             "server_scheduler_authority": "server-single-authority-scheduler-v58",
             "version": PATCH_VERSION,

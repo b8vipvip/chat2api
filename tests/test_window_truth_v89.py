@@ -48,8 +48,12 @@ def test_legacy_v89_refresh_source_remains_inspectable_but_v90_observer_owns_rep
     assert 'policy: "observe-only-single-route-authority-v90"' in observer
     assert "state.reconcile = liveRoutes" in observer
     assert "state.report = report" in observer
-    assert 'window_decision_authority: "conversation-routing-v30"' in observer
+    assert 'const POOL_KEY = "__CHAT2API_PERSISTENT_WINDOW_POOL_V132__"' in observer
+    assert 'window_decision_authority: pool ? "persistent-window-pool-v132" : "conversation-routing-v30"' in observer
+    assert 'logical_route_authority: "conversation-routing-v30"' in observer
     assert "decision_authority: false" in observer
+    assert "chrome.windows.create" not in observer
+    assert "chrome.windows.remove" not in observer
 
 
 def test_server_never_promotes_cached_active_rows_without_fresh_proof() -> None:
