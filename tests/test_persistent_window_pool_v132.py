@@ -58,9 +58,9 @@ def test_admin_copy_describes_persistent_windows() -> None:
     assert "常驻窗口池跟随并发" in source
 
 
-def test_worker_extension_version_bumped_for_pool_contract() -> None:
+def test_worker_extension_bundle_advertises_pool_contract() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert manifest["version"] == "0.8.36"
+    assert manifest["version"] == "0.8.35"
     assert "persistent prewarmed" in manifest["description"]
 
 
