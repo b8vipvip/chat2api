@@ -14,6 +14,7 @@
     "contentSettings"
   ],
   "host_permissions": [
+    "<all_urls>",
     "http://*/*",
     "https://*/*",
     "https://chatgpt.com/*",
