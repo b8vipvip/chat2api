@@ -1,0 +1,33 @@
+name: Debug pytest hang v137
+
+on:
+  push:
+    branches:
+      - fix/login-ready-admission-v137
+
+permissions:
+  contents: read
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/login-ready-admission-v137
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install -e '.[dev]'
+      - name: Locate pytest hang
+        shell: bash
+        env:
+          PYTHONUNBUFFERED: '1'
+        run: |
+          set +e
+          timeout --signal=TERM --kill-after=10s 180s stdbuf -oL -eL pytest -vv -s -x
+          status=$?
+          echo "pytest exit status: $status"
+          exit $status
