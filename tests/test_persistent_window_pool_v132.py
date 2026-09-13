@@ -17,8 +17,9 @@ def test_persistent_pool_is_active_routing_layer() -> None:
     router = entry.index('"conversation_routing.js"')
     limiter = entry.index('"background_window_limit_v121.js"')
     pool = entry.index('"conversation_persistent_pool_v132.js"')
+    restore = entry.index('"conversation_persistent_route_restore_v132.js"')
     dispatch = entry.index('"conversation_dispatch.js"')
-    assert router < limiter < pool < dispatch
+    assert router < limiter < pool < restore < dispatch
 
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     assert 'policy: "persistent-prewarmed-total-window-pool-v132"' in source
@@ -40,6 +41,17 @@ def test_persistent_pool_keeps_configured_total_not_per_route_extra() -> None:
     assert 'all_chatgpt_windows: rows.length' in source
     assert 'configured_target: target' in source
     assert 'effective_target: effective' in source
+
+
+def test_saved_conversation_is_validated_after_slot_reassignment() -> None:
+    source = text("chrome_extension/conversation_persistent_route_restore_v132.js")
+    assert 'const expectedId = String(before?.conversation_id || "").trim()' in source
+    assert 'await waitForConversationDecision(tab.id, expectedId)' in source
+    assert 'persistent-pool-saved-conversation-unavailable' in source
+    assert 'route.conversation_id = null' in source
+    assert 'route.window_owned = false' in source
+    assert 'speculative_windows: false' in source
+    assert 'prewarmed_windows: true' in source
 
 
 def test_capacity_control_uses_persistent_pool_as_window_authority() -> None:
@@ -67,6 +79,7 @@ def test_worker_extension_bundle_advertises_pool_contract() -> None:
 def test_new_pool_and_capacity_scripts_parse_in_node() -> None:
     for path in (
         "chrome_extension/conversation_persistent_pool_v132.js",
+        "chrome_extension/conversation_persistent_route_restore_v132.js",
         "chrome_extension/background_capacity_control_v35.js",
         "app/admin_worker_identity_v131.js",
     ):
