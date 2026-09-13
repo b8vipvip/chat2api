@@ -33,8 +33,9 @@ class FakeRegistry:
         assert client_id == "ext_test"
         self.sent.append(dict(payload))
         action = payload["action"]
-        # v0.8.30 acknowledges server concurrency without resizing physical
-        # browser windows. The current observer snapshot therefore stays stable.
+        # This fake models a pre-v132 online Worker. Server compatibility tests
+        # still verify that concurrency control remains independent from physical
+        # window lifecycle while the real v132 bridge reports its persistent pool.
         snapshot = {
             "total": 2,
             "active": 1,
@@ -156,10 +157,11 @@ def test_runtime_config_retires_speculative_reserve_target_but_keeps_server_conc
     assert payload["server_scheduler_authority"] == "server-single-authority-scheduler-v58"
 
 
-def test_console_and_bridge_expose_server_capacity_and_observer_only_window_controls() -> None:
+def test_console_and_bridge_expose_server_capacity_and_persistent_window_controls() -> None:
     concurrency = (ROOT / "app" / "admin_v21_5.js").read_text(encoding="utf-8")
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     control = (ROOT / "chrome_extension" / "background_capacity_control_v35.js").read_text(encoding="utf-8")
+    pool = (ROOT / "chrome_extension" / "conversation_persistent_pool_v132.js").read_text(encoding="utf-8")
     dispatcher = (ROOT / "chrome_extension" / "background_capacity_control_v36.js").read_text(encoding="utf-8")
     assert "data-worker-max" in concurrency
     assert '/capacity-v57' in concurrency
@@ -168,21 +170,26 @@ def test_console_and_bridge_expose_server_capacity_and_observer_only_window_cont
     assert '"background_capacity_control_v35.js"' in entry
     assert '"background_capacity_control_v36.js"' in entry
     assert '"background_window_observer_v90.js"' in entry
+    assert '"conversation_persistent_pool_v132.js"' in entry
     assert 'action === "windows.snapshot"' in control
     assert 'action === "workers.resize"' in control
+    assert 'action === "windows.limit"' in control
     assert "__CHAT2API_WINDOW_OBSERVER_V90__" in control
-    assert "on-demand-single-authority-v30" in control
+    assert "__CHAT2API_PERSISTENT_WINDOW_POOL_V132__" in control
+    assert "persistent-prewarmed-total-window-pool-v132" in control
     assert "__CHAT2API_RESERVE_POOL_V29__" not in control
     assert "__CHAT2API_TAB_SUPERVISOR_V32__" not in control
     assert "chrome.windows.create" not in control
     assert "chrome.windows.remove" not in control
+    assert "chrome.windows.create" in pool
+    assert "chrome.windows.remove" in pool
     assert "extension.control.result" in control
     assert "authoritative-global-dispatch-v36" in dispatcher
 
 
 def test_capacity_control_vm_contracts() -> None:
     for filename, marker in (
-        ("capacity_control_v35.mjs", "capacity_control_v35 single-authority VM contract passed"),
+        ("capacity_control_v35.mjs", "capacity_control_v35 persistent-pool VM contract passed"),
         ("capacity_control_v36.mjs", "capacity_control_v36 VM contract passed"),
     ):
         result = subprocess.run(["node", str(ROOT / "tests" / filename)], cwd=ROOT, capture_output=True, text=True)
