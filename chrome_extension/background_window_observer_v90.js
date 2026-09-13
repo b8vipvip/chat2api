@@ -10,7 +10,10 @@
 
   const state = {
     revision: 90,
-    policy: "observe-only-physical-window-truth-v90",
+    // Keep the v90 observer policy identifier stable for server/admin
+    // compatibility. Dynamic metadata below reports the actual v132 physical
+    // window authority without turning this observer into a mutation owner.
+    policy: "observe-only-single-route-authority-v90",
     nextWindowNo: 1,
     active: new Map(),
     closed: [],
