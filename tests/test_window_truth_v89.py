@@ -21,6 +21,7 @@ def test_v89_browser_truth_refresh_is_retired_and_v90_observer_is_loaded() -> No
     ):
         assert f'"{retired}"' not in entry
     assert '"conversation_routing.js"' in entry
+    assert '"conversation_persistent_pool_v132.js"' in entry
     assert '"background_window_observer_v90.js"' in entry
     assert '"background_window_refresh_v129.js"' in entry
     assert '__CHAT2API_WINDOW_OBSERVER_V90__?.report?.(true)' in entry
@@ -48,7 +49,10 @@ def test_legacy_v89_refresh_source_remains_inspectable_but_v90_observer_owns_rep
     assert 'policy: "observe-only-single-route-authority-v90"' in observer
     assert "state.reconcile = liveRoutes" in observer
     assert "state.report = report" in observer
-    assert 'window_decision_authority: "conversation-routing-v30"' in observer
+    assert 'const POOL_KEY = "__CHAT2API_PERSISTENT_WINDOW_POOL_V132__"' in observer
+    assert 'logical_route_authority: "conversation-routing-v30"' in observer
+    assert 'window_decision_authority: pool ? "persistent-window-pool-v132" : "conversation-routing-v30"' in observer
+    assert 'persistent_window_pool_revision: pool ? 132 : null' in observer
     assert "decision_authority: false" in observer
 
 
