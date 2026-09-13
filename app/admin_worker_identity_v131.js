@@ -30,7 +30,7 @@
     ensureWindowHeader(table);
     for (const tr of body.rows) {
       if (tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan")) {
-        tr.cells[0].colSpan = 8;
+        if (tr.cells[0].colSpan !== 8) tr.cells[0].colSpan = 8;
         continue;
       }
       if (tr.querySelector('[data-v131-worker-id-cell]')) continue;
@@ -68,8 +68,9 @@
     const body = table?.querySelector("tbody");
     if (!header || !body) return;
     if (header.cells[0]) {
-      header.cells[0].textContent = "Worker ID";
-      header.cells[0].title = "对应 Worker 管理列表中的 Worker ID；下方保留设备内 Worker 序号和中心 Worker ID";
+      if (header.cells[0].textContent !== "Worker ID") header.cells[0].textContent = "Worker ID";
+      const title = "对应 Worker 管理列表中的 Worker ID；下方保留设备内 Worker 序号和中心 Worker ID";
+      if (header.cells[0].title !== title) header.cells[0].title = title;
     }
     const workers = selectedWorkers();
     [...body.rows].forEach((tr, index) => {
@@ -80,7 +81,8 @@
       const slot = Math.max(1, Number(worker.worker_slot || index + 1));
       const version = String(worker.agent_version || "-");
       const primary = extensionId || "Extension 待连接";
-      tr.cells[0].innerHTML = `<b>${esc(primary)}</b><div class="v124-muted">设备 Worker ${slot} · 中心 ${esc(controllerId || "-")} · v${esc(version)} · 独立 Profile</div>`;
+      const html = `<b>${esc(primary)}</b><div class="v124-muted">设备 Worker ${slot} · 中心 ${esc(controllerId || "-")} · v${esc(version)} · 独立 Profile</div>`;
+      if (tr.cells[0].innerHTML !== html) tr.cells[0].innerHTML = html;
     });
   }
 
