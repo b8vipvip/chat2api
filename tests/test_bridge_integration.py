@@ -20,7 +20,14 @@ def pair(client: TestClient) -> tuple[str, str]:
     response = client.post(
         "/api/extensions/register",
         headers={"X-Pairing-Code": "pair-code"},
-        json={"name": "Integration Chrome", "version": "0.1.0"},
+        json={
+            "name": "Integration Chrome",
+            "version": "0.1.0",
+            "metadata": {
+                "chatgpt_login_state": "ready",
+                "chatgpt_login_composer_ready": True,
+            },
+        },
     )
     assert response.status_code == 200
     return response.json()["client_id"], response.json()["token"]
@@ -81,7 +88,7 @@ def test_stream_bridge_round_trip(tmp_path: Path) -> None:
                 status_code, lines = future.result(timeout=5)
             assert status_code == 200
             joined = "\n".join(lines)
-            assert '"content": "A"' in joined
-            assert '"content": "B"' in joined
-            assert '"content": "C"' in joined
+            assert '\"content\": \"A\"' in joined
+            assert '\"content\": \"B\"' in joined
+            assert '\"content\": \"C\"' in joined
             assert "data: [DONE]" in joined
