@@ -15,6 +15,7 @@ from .worker_limits_clipboard_v121_patch import install_worker_limits_clipboard_
 
 PATCH_REVISION = 66
 ADMIN_ASSET = "/assets/chat2api-worker-presentation-v66.js"
+IDENTITY_ASSET = "/assets/chat2api-worker-identity-v131.js"
 logger = logging.getLogger(__name__)
 
 
@@ -86,6 +87,8 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
             rows = base_summaries()
             by_pairing: dict[str, str] = {}
             by_client: dict[str, tuple[str, str]] = {}
+            linux_by_client: dict[str, str] = {}
+            linux_by_worker: dict[str, str] = {}
             for pairing in pairings.items.values():
                 name = str(pairing.name or "").strip()
                 pairing_id = str(pairing.pairing_id or "").strip()
@@ -94,6 +97,35 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
                 client_id = str(pairing.bound_client_id or "").strip()
                 if client_id and name:
                     by_client[client_id] = (pairing_id, name)
+
+            # A v127 device child can have a live Extension before the user logs
+            # ChatGPT in that Profile. PairingStore intentionally binds only after
+            # login readiness, so PairingStore alone cannot name that Worker yet.
+            # The Linux Worker store already owns the authoritative device/slot
+            # relationship; use its device name only as a presentation fallback.
+            # Do not synthesize a device_code_id/pairing binding before login.
+            linux_workers = getattr(app.state, "linux_workers", None)
+            if linux_workers is not None:
+                try:
+                    linux_rows = linux_workers.list_public()
+                except Exception:
+                    logger.exception("Could not read Linux Worker identity fallback")
+                    linux_rows = []
+                for worker in linux_rows:
+                    if not isinstance(worker, dict):
+                        continue
+                    metadata = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}
+                    worker_pairing = metadata.get("worker_pairing") if isinstance(metadata.get("worker_pairing"), dict) else {}
+                    device_name = str(metadata.get("device_name") or worker_pairing.get("name") or "").strip()
+                    client_id = str(worker.get("extension_client_id") or "").strip()
+                    worker_id = str(worker.get("worker_id") or "").strip()
+                    if not device_name:
+                        continue
+                    if client_id:
+                        linux_by_client[client_id] = device_name
+                    if worker_id:
+                        linux_by_worker[worker_id] = device_name
+
             decorated: list[dict[str, Any]] = []
             for raw in rows:
                 row = dict(raw)
@@ -101,10 +133,12 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
                 pairing_id = str(row.get("pairing_id") or metadata.get("pairing_id") or "").strip()
                 client_id = str(row.get("client_id") or "").strip()
                 fallback_pairing, fallback_name = by_client.get(client_id, ("", ""))
+                linux_worker_id = str(metadata.get("linux_worker_id") or metadata.get("worker_id") or "").strip()
+                linux_name = linux_by_client.get(client_id) or linux_by_worker.get(linux_worker_id) or ""
                 if not pairing_id:
                     pairing_id = fallback_pairing
                 row["device_code_id"] = pairing_id or None
-                row["device_name"] = by_pairing.get(pairing_id) or fallback_name or None
+                row["device_name"] = by_pairing.get(pairing_id) or fallback_name or linux_name or None
                 decorated.append(row)
             return decorated
 
@@ -175,6 +209,11 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
         path = Path(__file__).with_name("admin_worker_presentation_v66.js")
         return Response(path.read_text(encoding="utf-8"), media_type="application/javascript", headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
 
+    @app.get(IDENTITY_ASSET, include_in_schema=False)
+    async def worker_identity_asset() -> Response:
+        path = Path(__file__).with_name("admin_worker_identity_v131.js")
+        return Response(path.read_text(encoding="utf-8"), media_type="application/javascript", headers={"Cache-Control": "no-store, no-cache, must-revalidate"})
+
     @app.middleware("http")
     async def worker_presentation_v66(request: Request, call_next):
         response = await call_next(request)
@@ -183,8 +222,14 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
         raw = await _response_bytes(response)
         text = raw.decode("utf-8", errors="replace")
         marker = f'<script src="{ADMIN_ASSET}"></script>'
+        identity_marker = f'<script src="{IDENTITY_ASSET}"></script>'
+        injection = ""
         if marker not in text:
-            text = text.replace("</body>", marker + "</body>")
+            injection += marker
+        if identity_marker not in text:
+            injection += identity_marker
+        if injection:
+            text = text.replace("</body>", injection + "</body>")
         headers = {key: value for key, value in response.headers.items() if key.lower() not in {"content-length", "content-type"}}
         headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
