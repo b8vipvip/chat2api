@@ -391,3 +391,5 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
         }
         headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
+
+    return app
