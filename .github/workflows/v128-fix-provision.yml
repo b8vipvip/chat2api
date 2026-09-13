@@ -95,6 +95,13 @@ jobs:
               t=s.replace('"0.22.83"','"0.22.84"').replace("'0.22.83'","'0.22.84'")
               t=t.replace('"0.3.9"','"0.3.10"').replace("'0.3.9'","'0.3.10'")
               if t!=s: p.write_text(t,encoding='utf-8')
+
+          rep('tests/test_linux_worker_isolated_manager_v126.py',
+              'assert "data-diagnostics" not in render_device',
+              'assert "data-diagnostics" in render_device')
+          rep('tests/test_linux_worker_online_upgrade_v22_25.py',
+              'Worker Agent: 0.3.9',
+              'Worker Agent: 0.3.10')
           PY
       - name: Validate source and tests
         run: |
