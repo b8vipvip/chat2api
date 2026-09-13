@@ -35,7 +35,9 @@ def test_unlogged_linux_child_can_inherit_device_name_before_pairing_bind() -> N
     assert 'linux_workers = getattr(app.state, "linux_workers", None)' in source
     assert 'client_id = str(worker.get("extension_client_id") or "").strip()' in source
     assert 'device_name = str(metadata.get("device_name") or worker_pairing.get("name") or "").strip()' in source
-    assert 'by_client.setdefault(client_id, (pairing_id, device_name))' in source
+    assert 'linux_by_client[client_id] = device_name' in source
+    assert 'linux_name = linux_by_client.get(client_id) or linux_by_worker.get(linux_worker_id) or ""' in source
+    assert 'if not pairing_id:\n                    pairing_id = fallback_pairing' in source
     assert 'row["device_name"] = by_pairing.get(pairing_id) or fallback_name or linux_name or None' in source
 
 
