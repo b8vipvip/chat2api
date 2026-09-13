@@ -41,12 +41,17 @@ jobs:
           replace('scripts/bootstrap_linux_worker.sh','agent_version:"0.3.9"','agent_version:"0.3.10"',1)
           replace('scripts/linux_worker_device_controller.py','AGENT_VERSION = "0.3.9"','AGENT_VERSION = "0.3.10"',1)
           replace('app/linux_worker_upgrade_patch.py','TARGET_AGENT_VERSION = "0.3.9"','TARGET_AGENT_VERSION = "0.3.10"',1)
+          replace('app/linux_worker_device_authority_v124_patch.py',
+                  '        if str(primary.get("agent_version") or "") != "0.3.9":\n            raise HTTPException(409, "请先点击设备列表中的更新，将该设备升级到总控 Agent 0.3.9 后再增加 Worker")',
+                  '        if str(primary.get("agent_version") or "") != "0.3.10":\n            raise HTTPException(409, "请先点击设备列表中的更新，将该设备升级到总控 Agent 0.3.10 后再增加 Worker")',1)
 
           p=Path('app/runtime_contract.py'); s=p.read_text(encoding='utf-8')
           old='''SERVER_RUNTIME_VERSION = "0.22.83"\nPREVIOUS_SERVER_RUNTIME_VERSION = "0.22.82"\nPREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.81"\nPREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.80"\nPREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.79"'''
           new='''SERVER_RUNTIME_VERSION = "0.22.84"\nPREVIOUS_SERVER_RUNTIME_VERSION = "0.22.83"\nPREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.82"\nPREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.81"\nPREVIOUS_PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.80"'''
           if old not in s: raise SystemExit('runtime version block drifted')
           s=s.replace(old,new,1)
+          if 'device-controller-shared-config-v127-release-v02283"' not in s:
+              raise SystemExit('runtime revision anchor missing')
           s=s.replace('device-controller-shared-config-v127-release-v02283"', 'device-controller-shared-config-v127-release-v02283-device-controller-provision-rw-v128-device-diagnostics-v128-release-v02284"',1)
           anchor='            "linux_worker_profile_only_isolation_v127": True,\n'
           if anchor not in s: raise SystemExit('runtime feature anchor missing')
@@ -63,8 +68,8 @@ jobs:
           p.write_text(s,encoding='utf-8')
 
           p=Path('app/linux_worker_device_authority_v124_patch.py'); s=p.read_text(encoding='utf-8')
-          old='''        if not isinstance(result, dict) or result.get("ok") is not True:\n            raise HTTPException(502, f"设备总控 Agent 增加 Worker 失败：{str((result or {}).get('error') or 'unknown_error')[:120]}")'''
-          new='''        if not isinstance(result, dict) or result.get("ok") is not True:\n            failure = result if isinstance(result, dict) else {}\n            error = str(failure.get("error") or "unknown_error").replace("\\r", " ").replace("\\n", " ").strip()[:120]\n            detail = str(failure.get("detail") or "").replace("\\r", " ").replace("\\n", " ").strip()[:360]\n            helper_exit = failure.get("helper_exit_code")\n            suffix = (f" · exit={helper_exit}" if helper_exit is not None else "") + (f" · {detail}" if detail else "")\n            raise HTTPException(502, f"设备总控 Agent 增加 Worker 失败：{error}{suffix}")'''
+          old='''            if not isinstance(result, dict) or result.get("ok") is not True:\n                raise HTTPException(502, f"设备总控 Agent 增加 Worker 失败：{str((result or {}).get('error') or 'unknown_error')[:120]}")'''
+          new='''            if not isinstance(result, dict) or result.get("ok") is not True:\n                failure = result if isinstance(result, dict) else {}\n                error = str(failure.get("error") or "unknown_error").replace("\\r", " ").replace("\\n", " ").strip()[:120]\n                detail = str(failure.get("detail") or "").replace("\\r", " ").replace("\\n", " ").strip()[:360]\n                helper_exit = failure.get("helper_exit_code")\n                suffix = (f" · exit={helper_exit}" if helper_exit is not None else "") + (f" · {detail}" if detail else "")\n                raise HTTPException(502, f"设备总控 Agent 增加 Worker 失败：{error}{suffix}")'''
           if old not in s: raise SystemExit('provision error anchor drifted')
           s=s.replace(old,new,1)
           p.write_text(s,encoding='utf-8')
@@ -94,7 +99,6 @@ jobs:
           s=s.replace(marker3,marker3+add3,1)
           p.write_text(s,encoding='utf-8')
 
-          # Current-version contract tests follow the new release; historical literal tests are left alone unless they tracked v0.22.83 as current.
           for p in Path('tests').rglob('*.py'):
               s=p.read_text(encoding='utf-8')
               t=s.replace('"0.22.83"','"0.22.84"').replace("'0.22.83'","'0.22.84'")
