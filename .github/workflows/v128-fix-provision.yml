@@ -20,10 +20,15 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
-      - name: Apply v128 fixes
+      - name: Apply v128 source fixes
         run: |
           python - <<'PY'
           from pathlib import Path
+
+          runtime = Path('app/runtime_contract.py').read_text(encoding='utf-8')
+          if 'SERVER_RUNTIME_VERSION = "0.22.84"' in runtime:
+              print('v128 source already applied')
+              raise SystemExit(0)
 
           def rep(path, old, new, expected=1):
               p=Path(path); s=p.read_text(encoding='utf-8'); n=s.count(old)
@@ -64,38 +69,20 @@ jobs:
           p=Path('app/linux_worker_device_authority_v124_patch.py'); s=p.read_text(encoding='utf-8')
           old='''            if not isinstance(result, dict) or result.get("ok") is not True:\n                raise HTTPException(502, f"设备总控 Agent 增加 Worker 失败：{str((result or {}).get('error') or 'unknown_error')[:120]}")'''
           new='''            if not isinstance(result, dict) or result.get("ok") is not True:\n                failure = result if isinstance(result, dict) else {}\n                error = str(failure.get("error") or "unknown_error").replace("\\r", " ").replace("\\n", " ").strip()[:120]\n                detail = str(failure.get("detail") or "").replace("\\r", " ").replace("\\n", " ").strip()[:360]\n                helper_exit = failure.get("helper_exit_code")\n                suffix = (f" · exit={helper_exit}" if helper_exit is not None else "") + (f" · {detail}" if detail else "")\n                raise HTTPException(502, f"设备总控 Agent 增加 Worker 失败：{error}{suffix}")'''
-          if s.count(old)!=1: raise SystemExit('provision failure UI detail anchor drifted')
+          if s.count(old)!=1: raise SystemExit('provision failure detail anchor drifted')
           s=s.replace(old,new,1); p.write_text(s,encoding='utf-8')
 
           p=Path('scripts/linux_worker_device_controller.py'); s=p.read_text(encoding='utf-8')
           old='return {"ok": False, "error": "worker_provision_failed", "detail": (result.stderr or result.stdout or "")[-300:]}'
           new='return {"ok": False, "error": "worker_provision_failed", "helper_exit_code": int(result.returncode), "detail": (result.stderr or result.stdout or "")[-600:]}'
-          if s.count(old)!=1: raise SystemExit('controller detail anchor drifted')
+          if s.count(old)!=1: raise SystemExit('controller failure detail anchor drifted')
           s=s.replace(old,new,1); p.write_text(s,encoding='utf-8')
-
-          p=Path('.github/workflows/production-image-smoke.yml'); s=p.read_text(encoding='utf-8')
-          if s.count("payload['server']['runtime_version'] == '0.22.83'")!=1: raise SystemExit('smoke runtime drifted')
-          s=s.replace("payload['server']['runtime_version'] == '0.22.83'", "payload['server']['runtime_version'] == '0.22.84'",1)
-          marker='          assert "--pairing-code" in bootstrap_text\n'
-          extra='          assert "ReadWritePaths=/etc/chat2api-worker /var/lib/chat2api-worker/controller /etc/systemd/system /home/chat2api/.config" in bootstrap_text\n          assert \'agent_version:"0.3.10"\' in bootstrap_text\n'
-          if s.count(marker)!=1: raise SystemExit('smoke bootstrap assertion drifted')
-          s=s.replace(marker,marker+extra,1)
-          marker='          assert "data-manage-device" in device_ui\n'
-          extra='          assert device_ui.count("data-diagnostics=") >= 2\n          assert device_ui.count("诊断日志") >= 2\n          assert \'AGENT_VERSION = "0.3.10"\' in controller\n'
-          if s.count(marker)!=1: raise SystemExit('smoke UI assertion drifted')
-          s=s.replace(marker,marker+extra,1)
-          marker="          assert payload['features']['linux_worker_slot_isolated_ops_v126'] is False\n"
-          extra="          assert payload['features']['linux_worker_device_controller_provision_rw_v128'] is True\n          assert payload['features']['linux_worker_device_diagnostics_v128'] is True\n"
-          if s.count(marker)!=1: raise SystemExit('smoke feature assertion drifted')
-          s=s.replace(marker,marker+extra,1)
-          p.write_text(s,encoding='utf-8')
 
           for p in Path('tests').rglob('*.py'):
               s=p.read_text(encoding='utf-8')
               t=s.replace('"0.22.83"','"0.22.84"').replace("'0.22.83'","'0.22.84'")
               t=t.replace('"0.3.9"','"0.3.10"').replace("'0.3.9'","'0.3.10'")
               if t!=s: p.write_text(t,encoding='utf-8')
-
           rep('tests/test_linux_worker_isolated_manager_v126.py',
               'assert "data-diagnostics" not in render_device',
               'assert "data-diagnostics" in render_device')
@@ -110,12 +97,14 @@ jobs:
           bash -n scripts/bootstrap_linux_worker.sh scripts/linux_worker_device_controller_helper.sh
           pip install -q -r requirements.txt pytest
           pytest -q
-      - name: Remove temporary workflow and commit
+      - name: Commit source only
         run: |
-          git rm .github/workflows/v128-fix-provision.yml
-          rm -f NOPE.tmp NOPE2.tmp NOPE3.tmp NOPE4.tmp NOPE5.tmp
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
+          git add app scripts tests
+          if git diff --cached --quiet; then
+            echo 'No source changes to push'
+            exit 0
+          fi
           git commit -m "fix: unblock device controller Worker provisioning"
           git push origin HEAD:fix/linux-device-provision-v128-20260913
