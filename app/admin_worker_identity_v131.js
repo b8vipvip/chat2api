@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_ADMIN_WORKER_IDENTITY_V131__";
   if (globalThis[KEY]) return;
 
-  const state = { version: 131, observer: null };
+  const state = { version: 132, observer: null };
   globalThis[KEY] = state;
 
   const esc = value => String(value ?? "")
@@ -86,9 +86,29 @@
     });
   }
 
+  function decoratePersistentWindowCopy() {
+    const header = document.querySelector('#extensionDeviceBody')?.closest('table')?.querySelector('thead [data-chat2api-column-key="worker_settings"]');
+    if (header) {
+      const title = "并发=同时执行的请求上限；窗口=该 Worker 登录后持续维持的 ChatGPT 物理窗口总数。空闲窗口常驻并预热，不再按 5 分钟租约自动关闭。";
+      if (header.title !== title) header.title = title;
+    }
+    document.querySelectorAll("[data-v121-limit-note]").forEach(node => {
+      const text = String(node.textContent || "").trim();
+      const next = text === "窗口跟随并发"
+        ? "常驻窗口池跟随并发"
+        : text === "窗口已随并发自动抬高"
+          ? "常驻窗口池已随并发自动抬高"
+          : text === "窗口独立设置"
+            ? "常驻窗口池独立设置"
+            : text;
+      if (next && next !== text) node.textContent = next;
+    });
+  }
+
   function decorate() {
     decorateWindowManager();
     decorateLinuxWorkerManager();
+    decoratePersistentWindowCopy();
   }
 
   function start() {
@@ -98,7 +118,7 @@
     const observer = new MutationObserver(() => decorate());
     observer.observe(root, { childList: true, subtree: true });
     state.observer = observer;
-    document.documentElement.dataset.chat2apiWorkerIdentityRevision = "131";
+    document.documentElement.dataset.chat2apiWorkerIdentityRevision = "132";
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
