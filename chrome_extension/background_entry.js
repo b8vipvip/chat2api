@@ -69,6 +69,9 @@ importScripts(
   // Server physical verification compatibility bridge. v90 stays the only
   // physical truth owner; this module only forces a fresh report on demand.
   "background_window_refresh_v129.js",
+  // Recover persisted per-API route ownership after a server timeout/cancel.
+  // Loaded last so it wraps the final resolver/control-handler chain.
+  "conversation_route_recovery_v136.js",
 );
 
 globalThis.__CHAT2API_WINDOW_OBSERVER_V90__?.report?.(true).catch?.(() => {});
