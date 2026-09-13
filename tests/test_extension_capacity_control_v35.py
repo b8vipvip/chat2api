@@ -135,7 +135,7 @@ def test_offline_extension_returns_truthful_unconfirmed_result() -> None:
     assert applied.json()["error_code"] == "extension_offline"
 
 
-def test_runtime_config_retires_speculative_reserve_target_but_keeps_server_concurrency() -> None:
+def test_runtime_config_retires_speculative_reserve_but_advertises_persistent_pool() -> None:
     app = FastAPI()
     app.state.registry = RuntimeRegistry()
     app.state.broker = SimpleNamespace(max_concurrency=9)
@@ -152,8 +152,13 @@ def test_runtime_config_retires_speculative_reserve_target_but_keeps_server_conc
     assert payload["max_reserve_window_target"] == 0
     assert payload["worker_concurrency"] == 5
     assert payload["route_idle_close_seconds"] == 300
+    assert payload["route_idle_close_applies_to_physical_pool"] is False
     assert payload["speculative_worker_windows"] is False
-    assert payload["window_decision_authority"] == "conversation-routing-v30"
+    assert payload["persistent_worker_windows"] is True
+    assert payload["prewarmed_worker_windows"] is True
+    assert payload["persistent_window_policy"] == "persistent-prewarmed-total-window-pool-v132"
+    assert payload["window_decision_authority"] == "persistent-window-pool-v132"
+    assert payload["route_window_authority"] == "conversation-routing-v30+persistent-pool-v132"
     assert payload["server_scheduler_authority"] == "server-single-authority-scheduler-v58"
 
 
