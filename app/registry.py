@@ -263,6 +263,13 @@ class ClientRegistry:
         client = self.clients.get(client_id)
         if not client or not client.connection_enabled:
             raise RuntimeError("Chrome extension connection is disabled")
+        request_type = str(payload.get("type") or "") if isinstance(payload, dict) else ""
+        if request_type in {
+            "chat.request", "image.request", "voice.request", "voice.live.start", "voice.live.request",
+        } and not self.chatgpt_routing_ready(client_id):
+            raise RuntimeError(
+                "Chrome extension is online but ChatGPT is not logged in or the composer is not ready"
+            )
         websocket = self.sockets.get(client_id)
         if not websocket:
             raise RuntimeError("Chrome extension is offline")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import asyncio
 
 import pytest
 from fastapi import FastAPI
@@ -144,3 +145,28 @@ def test_runtime_contract_advertises_v137_login_guard() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["features"]["chatgpt_login_ready_admission_v137"] is True
     assert payload["features"]["window_manager_login_ready_filter_v137"] is True
+
+
+class _Socket:
+    def __init__(self) -> None:
+        self.payloads = []
+
+    async def send_json(self, payload) -> None:
+        self.payloads.append(payload)
+
+
+def test_generation_send_is_guarded_at_the_last_transport_boundary(tmp_path) -> None:
+    registry = ClientRegistry(tmp_path)
+    logged_out = _client("ext_logged_out", state="login_required", composer=False)
+    registry.clients = {logged_out.client_id: logged_out}
+    socket = _Socket()
+    registry.sockets = {logged_out.client_id: socket}
+
+    with pytest.raises(RuntimeError, match="ChatGPT is not logged in"):
+        asyncio.run(registry.send("ext_logged_out", {"type": "chat.request", "request_id": "req_x"}))
+    assert socket.payloads == []
+
+    # Control traffic stays available so a transport-online Worker can still be
+    # verified, remotely logged in and repaired while generation stays blocked.
+    asyncio.run(registry.send("ext_logged_out", {"type": "window.manager.refresh"}))
+    assert socket.payloads == [{"type": "window.manager.refresh"}]
