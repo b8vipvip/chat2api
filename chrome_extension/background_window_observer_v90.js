@@ -3,13 +3,14 @@
   if (globalThis[KEY]) return;
 
   const ROUTER_KEY = "__CHAT2API_CONVERSATION_ROUTING_V1__";
+  const POOL_KEY = "__CHAT2API_PERSISTENT_WINDOW_POOL_V132__";
   const STORAGE_KEY = "chat2apiWindowObserverV90";
   const CLOSED_LIMIT = 80;
   const REPORT_DELAY_MS = 80;
 
   const state = {
     revision: 90,
-    policy: "observe-only-single-route-authority-v90",
+    policy: "observe-only-physical-window-truth-v90",
     nextWindowNo: 1,
     active: new Map(),
     closed: [],
@@ -33,6 +34,25 @@
     try {
       return ["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(new URL(value).hostname);
     } catch (_) { return false; }
+  }
+
+  function poolState() {
+    const value = globalThis[POOL_KEY];
+    return value && Number(value.version || 0) >= 132 ? value : null;
+  }
+
+  function authorityMetadata() {
+    const pool = poolState();
+    return {
+      decision_authority: false,
+      logical_route_authority: "conversation-routing-v30",
+      window_decision_authority: pool ? "persistent-window-pool-v132" : "conversation-routing-v30",
+      persistent_window_pool: Boolean(pool),
+      persistent_window_pool_revision: pool ? 132 : null,
+      persistent_window_target: pool ? (Number(pool.target || 0) || null) : null,
+      prewarmed_windows: Boolean(pool),
+      speculative_windows: false,
+    };
   }
 
   function serializable(record) {
@@ -135,12 +155,10 @@
       if (Number.isInteger(route?.window_id)) routeByWindow.set(route.window_id, {key, route});
     }
 
-    // The launcher creates one real ChatGPT browser window before any API request
-    // has a route. v90 used to inspect only router-owned windows, so that initial
-    // window was invisible until the first routed request. Observe every physical
-    // ChatGPT window instead, then enrich it with route state when a route exists.
-    // This remains strictly observation-only: no create/close/reroute operation is
-    // performed here and conversation_routing.js stays the sole lifecycle owner.
+    // Observe every physical ChatGPT window, including prewarmed v132 standby
+    // slots that have not yet been leased to a logical API route. This module is
+    // read-only: conversation_routing.js owns logical route history while the
+    // persistent v132 pool owns physical window creation, shrink and replacement.
     const physical = await chrome.windows.getAll({ populate: true }).catch(() => []);
     const seen = new Set();
     for (const win of physical) {
@@ -171,8 +189,7 @@
     return {
       revision: 90,
       policy: state.policy,
-      decision_authority: false,
-      speculative_windows: false,
+      ...authorityMetadata(),
       fifo_claims: 0,
       new_window_fallbacks: 0,
       active: [...state.active.values()].map(serializable).sort((a, b) => a.window_no - b.window_no),
@@ -197,7 +214,13 @@
             window_manager_v90: value,
             window_manager_revision: 90,
             window_selection_policy: state.policy,
-            window_decision_authority: "conversation-routing-v30",
+            logical_route_authority: value.logical_route_authority,
+            window_decision_authority: value.window_decision_authority,
+            persistent_window_pool: value.persistent_window_pool,
+            persistent_window_pool_revision: value.persistent_window_pool_revision,
+            persistent_window_target: value.persistent_window_target,
+            prewarmed_windows: value.prewarmed_windows,
+            speculative_windows: false,
           },
         }).catch(() => false);
       }
