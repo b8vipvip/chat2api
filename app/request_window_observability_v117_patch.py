@@ -63,16 +63,17 @@ def _registry_window_fields(registry: Any, request_id: str) -> dict[str, Any]:
         client_id = str(summary.get("client_id") or "").strip() or None
         metadata = summary.get("metadata") if isinstance(summary.get("metadata"), dict) else {}
         snapshot = metadata.get("window_manager_v88") if isinstance(metadata.get("window_manager_v88"), dict) else {}
-        for bucket in (snapshot.get("active") or [], snapshot.get("closed") or []):
-            if not isinstance(bucket, dict) or str(bucket.get("request_id") or "").strip() != request_id:
-                continue
-            return {
-                "window_number": _int_or_none(bucket.get("window_no") or bucket.get("window_number")),
-                "window_id": _int_or_none(bucket.get("window_id")),
-                "tab_id": _int_or_none(bucket.get("tab_id")),
-                "window_route_key": str(bucket.get("route_key") or bucket.get("api_key_id") or "").strip() or None,
-                "worker_client_id": client_id,
-            }
+        for collection in (snapshot.get("active") or [], snapshot.get("closed") or []):
+            for bucket in collection:
+                if not isinstance(bucket, dict) or str(bucket.get("request_id") or "").strip() != request_id:
+                    continue
+                return {
+                    "window_number": _int_or_none(bucket.get("window_no") or bucket.get("window_number")),
+                    "window_id": _int_or_none(bucket.get("window_id")),
+                    "tab_id": _int_or_none(bucket.get("tab_id")),
+                    "window_route_key": str(bucket.get("route_key") or bucket.get("api_key_id") or "").strip() or None,
+                    "worker_client_id": client_id,
+                }
     return {}
 
 
@@ -167,5 +168,6 @@ def install_request_window_observability_v117_patch(app: FastAPI) -> FastAPI:
 __all__ = [
     "PATCH_REVISION",
     "_window_fields",
+    "_registry_window_fields",
     "install_request_window_observability_v117_patch",
 ]
