@@ -83,12 +83,12 @@ const authorized = {
 let tab = await context.resolveTargetTabForRequest(authorized);
 assert.equal(tab.id, 7);
 assert.equal(routes.key_bot2.inflight_request_id, null);
-assert.deepEqual(events[0], ["fail", "req_stale_owner_12345678", "server-authority-stale-inflight-v140"]);
+assert.deepEqual(events[0], ["fail", "req_stale_owner_12345678", "server-authority-stale-inflight-v136"]);
 assert.deepEqual(events[1], ["resolve", "req_replacement_12345678"]);
 assert.equal(recovery.stale_inflight_recoveries, 1);
 assert.equal(recovery.server_authority_recoveries, 1);
 
-// Regression: deployed messages can omit the v58 metadata.  A persisted owner
+// Regression: deployed messages can omit the v58 metadata. A persisted owner
 // that is absent from the current process' activeRequests map is still orphaned
 // and must not permanently lock the logical API key.
 routes.key_bot2.inflight_request_id = "req_orphan_without_metadata_12345678";
@@ -103,7 +103,7 @@ assert.ok(events.some(row => row[0] === "fail" && row[1] === "req_orphan_without
 assert.equal(recovery.orphan_owner_recoveries, 1);
 
 // A truly live owner in this service-worker process must still reject a second
-// request.  The recovery is not a concurrency bypass.
+// request. The recovery is not a concurrency bypass.
 routes.key_bot2.inflight_request_id = "req_live_owner_12345678";
 router.activeRequests.set("req_live_owner_12345678", { key: "key_bot2" });
 await assert.rejects(
@@ -118,7 +118,7 @@ assert.equal(routes.key_bot2.inflight_request_id, "req_live_owner_12345678");
 router.activeRequests.delete("req_live_owner_12345678");
 
 // A stale de-dup marker from a late terminal callback must not make the owner
-// immortal.  Recovery removes only the exact orphan marker before retrying.
+// immortal. Recovery removes only the exact orphan marker before retrying.
 routes.key_bot2.inflight_request_id = "req_retired_but_stuck_12345678";
 router.retiredRequests.add("req_retired_but_stuck_12345678");
 tab = await context.resolveTargetTabForRequest({

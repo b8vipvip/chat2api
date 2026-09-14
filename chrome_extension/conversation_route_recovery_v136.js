@@ -62,9 +62,9 @@
 
     // The browser map is process-local while route ownership is persisted.
     // A service-worker restart can therefore leave inflight_request_id behind
-    // after the server/Broker has already terminally released the request.  A
+    // after the server/Broker has already terminally released the request. A
     // newly dispatched request for the same logical key must not be rejected by
-    // that orphaned persisted owner.  Conversely, if the old request is still
+    // that orphaned persisted owner. Conversely, if the old request is still
     // present in the current process' activeRequests map, it is genuinely live
     // and the strict one-request-per-key invariant must continue to reject the
     // replacement.
@@ -72,15 +72,17 @@
 
     const serverAuthoritative = authoritativeServerAdmission(message);
 
-    // retireRoute keeps a short de-duplication set.  A late terminal callback
+    // retireRoute keeps a short de-duplication set. A late terminal callback
     // can mark an old request retired before all persisted state is reconciled;
     // remove only this exact orphan's marker before the exact-owner cleanup so
-    // the stale lock cannot become permanent.  Exact request-id checks inside
+    // the stale lock cannot become permanent. Exact request-id checks inside
     // the router still prevent a late old cleanup from clearing a newer owner.
     if (router.retiredRequests instanceof Set) router.retiredRequests.delete(staleRequestId);
 
+    // Keep the historical v136 reason token for production bundle compatibility;
+    // state.revision=140 and diagnostics below identify the corrected behavior.
     const reason = serverAuthoritative
-      ? "server-authority-stale-inflight-v140"
+      ? "server-authority-stale-inflight-v136"
       : "orphaned-persisted-inflight-v140";
     const retired = await router.failRequest(staleRequestId, reason).catch(() => false);
     if (!retired) return false;
@@ -127,7 +129,7 @@
       const router = routerState();
       if (requestId && typeof router?.failRequest === "function") {
         if (router.retiredRequests instanceof Set) router.retiredRequests.delete(requestId);
-        const retired = await router.failRequest(requestId, "server-cancel-control-v140").catch(() => false);
+        const retired = await router.failRequest(requestId, "server-cancel-control-v136").catch(() => false);
         if (retired) {
           state.explicit_cancel_retirements += 1;
           state.last_cancel = { request_id: requestId, at_ms: Date.now() };
