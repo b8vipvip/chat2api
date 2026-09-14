@@ -53,7 +53,7 @@ concurrency:
 
 jobs:
   recover:
-    name: Repair and resubmit abnormal workflow
+    name: Repair and summarize abnormal workflow
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -74,6 +74,7 @@ jobs:
           set -Eeuo pipefail
           mkdir -p .actions-recovery
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > .actions-recovery/run.json
+          gh run view "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs > .actions-recovery/jobs.json 2>/dev/null || echo '{"jobs":[]}' > .actions-recovery/jobs.json
           gh run view "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --log > .actions-recovery/source.log 2>&1 || true
 
           workflow_path="$SOURCE_WORKFLOW_PATH"
@@ -81,14 +82,10 @@ jobs:
             workflow_path="$(jq -r '.path // ""' .actions-recovery/run.json)"
           fi
           echo "workflow_path=$workflow_path" >> "$GITHUB_OUTPUT"
+          echo "run_attempt=$(jq -r '.run_attempt // 1' .actions-recovery/run.json)" >> "$GITHUB_OUTPUT"
+          echo "default_branch=$(gh api "repos/$GITHUB_REPOSITORY" --jq '.default_branch')" >> "$GITHUB_OUTPUT"
 
-          run_attempt="$(jq -r '.run_attempt // 1' .actions-recovery/run.json)"
-          echo "run_attempt=$run_attempt" >> "$GITHUB_OUTPUT"
-
-          default_branch="$(gh api "repos/$GITHUB_REPOSITORY" --jq '.default_branch')"
-          echo "default_branch=$default_branch" >> "$GITHUB_OUTPUT"
-
-      - name: Load current Strategy v3 repair logic
+      - name: Load current GitHub Agent repair logic
         shell: bash
         env:
           DEFAULT_BRANCH: ${{ steps.evidence.outputs.default_branch }}
@@ -101,7 +98,7 @@ jobs:
             chmod +x /tmp/actions-recovery.sh
           fi
 
-      - name: Apply safe automatic repair
+      - name: Apply deterministic automatic repair
         id: repair
         shell: bash
         env:
@@ -115,32 +112,23 @@ jobs:
           WORKFLOW_PATH: ${{ steps.evidence.outputs.workflow_path }}
         run: |
           set -Eeuo pipefail
-
           repaired=false
           if [[ -n "$WORKFLOW_PATH" && -f "$WORKFLOW_PATH" && -f /tmp/actions_strategy_autofix.py ]]; then
             before="$(git status --porcelain)"
             python /tmp/actions_strategy_autofix.py "$WORKFLOW_PATH"
             after="$(git status --porcelain)"
-            if [[ "$after" != "$before" ]]; then
-              repaired=true
-            fi
+            [[ "$after" != "$before" ]] && repaired=true
           fi
-
-          # Repositories may add .github/actions-recovery.sh for deterministic,
-          # idempotent project-specific repairs based on ACTIONS_RECOVERY_LOG.
           if [[ -f /tmp/actions-recovery.sh ]]; then
             before="$(git status --porcelain)"
             bash /tmp/actions-recovery.sh
             after="$(git status --porcelain)"
-            if [[ "$after" != "$before" ]]; then
-              repaired=true
-            fi
+            [[ "$after" != "$before" ]] && repaired=true
           fi
-
           echo "repaired=$repaired" >> "$GITHUB_OUTPUT"
           git status --short
 
-      - name: Submit automatic repair
+      - name: Submit deterministic repair
         if: steps.repair.outputs.repaired == 'true'
         id: submit
         shell: bash
@@ -151,39 +139,29 @@ jobs:
           DEFAULT_BRANCH: ${{ steps.evidence.outputs.default_branch }}
         run: |
           set -Eeuo pipefail
-
           repair_branch="actions-recovery/run-${SOURCE_RUN_ID}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -C "$repair_branch"
           git add -A
           git reset -- .actions-recovery 2>/dev/null || true
-
           if git diff --cached --quiet; then
-            echo "No committable repair remains."
             echo "repair_ref=$SOURCE_BRANCH" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
           git commit -m "ci(recovery): repair Actions run ${SOURCE_RUN_ID}"
           git push --force origin "HEAD:${repair_branch}"
-
           base="$SOURCE_BRANCH"
-          if [[ -z "$base" ]]; then
-            base="$DEFAULT_BRANCH"
-          fi
-
+          [[ -z "$base" ]] && base="$DEFAULT_BRANCH"
           existing_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$repair_branch" --state open --json url --jq '.[0].url // ""')"
           if [[ -z "$existing_pr" ]]; then
-            pr_body="Automated GitHub Actions Strategy v3 recovery."$'\n\n'"Source run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}"$'\n\n'"The repair is limited to policy-level workflow hardening and any repository-defined deterministic recovery hook. It is resubmitted on a dedicated recovery branch for validation."
+            pr_body="GitHub Agent deterministic recovery."$'\n\n'"Source run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}"$'\n\n'"This PR contains only policy-level or repository-defined deterministic repairs."
             existing_pr="$(gh pr create --repo "$GITHUB_REPOSITORY" --base "$base" --head "$repair_branch" --title "ci(recovery): repair abnormal Actions run ${SOURCE_RUN_ID}" --body "$pr_body")"
           fi
-
           echo "repair_ref=$repair_branch" >> "$GITHUB_OUTPUT"
           echo "repair_pr=$existing_pr" >> "$GITHUB_OUTPUT"
-          echo "::notice::Automatic repair submitted: $existing_pr"
 
-      - name: Classify side-effectful workflow
+      - name: Classify workflow and evidence
         id: classify
         shell: bash
         env:
@@ -192,14 +170,17 @@ jobs:
           set -Eeuo pipefail
           lower="$(tr '[:upper:]' '[:lower:]' <<<"$WORKFLOW_NAME")"
           side_effectful=false
-          if [[ "$lower" == *release* || "$lower" == *deploy* || "$lower" == *publish* || "$lower" == *store*package* ]]; then
-            side_effectful=true
-          fi
+          if [[ "$lower" == *release* || "$lower" == *deploy* || "$lower" == *publish* || "$lower" == *store*package* ]]; then side_effectful=true; fi
           echo "side_effectful=$side_effectful" >> "$GITHUB_OUTPUT"
+
+          transient=false
+          if grep -Eiq 'ECONNRESET|ETIMEDOUT|ENOTFOUND|temporary failure|connection reset|connection timed out|runner.*lost|service unavailable|HTTP (502|503|504)|TLS handshake timeout' .actions-recovery/source.log; then
+            transient=true
+          fi
+          echo "transient=$transient" >> "$GITHUB_OUTPUT"
 
       - name: Resubmit repaired workflow
         if: steps.repair.outputs.repaired == 'true' && steps.classify.outputs.side_effectful != 'true'
-        id: redispatch
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -207,21 +188,11 @@ jobs:
           REPAIR_REF: ${{ steps.submit.outputs.repair_ref }}
         run: |
           set -Eeuo pipefail
-          ref="$REPAIR_REF"
-          if [[ -z "$ref" ]]; then
-            echo "No repair ref available; cannot redispatch."
-            exit 1
-          fi
+          [[ -n "$REPAIR_REF" ]]
+          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/dispatches" -f ref="$REPAIR_REF"
 
-          if gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/dispatches" -f ref="$ref"; then
-            echo "::notice::Re-dispatched workflow $WORKFLOW_ID on repaired ref $ref."
-          else
-            echo "::warning::Workflow does not accept workflow_dispatch on the default-branch definition."
-            exit 1
-          fi
-
-      - name: Retry transient abnormal run once
-        if: steps.repair.outputs.repaired != 'true' && steps.classify.outputs.side_effectful != 'true'
+      - name: Retry clearly transient failure once
+        if: steps.repair.outputs.repaired != 'true' && steps.classify.outputs.side_effectful != 'true' && steps.classify.outputs.transient == 'true'
         id: retry
         shell: bash
         env:
@@ -230,40 +201,119 @@ jobs:
           RUN_ATTEMPT: ${{ steps.evidence.outputs.run_attempt }}
         run: |
           set -Eeuo pipefail
-
           if (( RUN_ATTEMPT >= 2 )); then
+            echo "retry_started=false" >> "$GITHUB_OUTPUT"
             echo "retry_exhausted=true" >> "$GITHUB_OUTPUT"
-            echo "::warning::Automatic fresh-run retry budget exhausted."
             exit 0
           fi
-
           gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/rerun" >/dev/null
+          echo "retry_started=true" >> "$GITHUB_OUTPUT"
           echo "retry_exhausted=false" >> "$GITHUB_OUTPUT"
-          echo "::notice::Re-ran source workflow once on a fresh runner."
 
-      - name: Open recovery incident when automatic repair cannot safely finish
-        if: |
-          steps.classify.outputs.side_effectful == 'true' ||
-          steps.retry.outputs.retry_exhausted == 'true' ||
-          failure()
+      - name: Build AI Repair Brief
+        if: always() && (steps.repair.outputs.repaired != 'true' || steps.classify.outputs.side_effectful == 'true' || failure())
+        id: brief
+        shell: bash
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_WORKFLOW_NAME: ${{ inputs.source_workflow_name }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          SOURCE_HEAD_SHA: ${{ inputs.source_head_sha }}
+          SOURCE_EVENT: ${{ inputs.source_event }}
+          RECOVERY_REASON: ${{ inputs.recovery_reason }}
+          WORKFLOW_PATH: ${{ steps.evidence.outputs.workflow_path }}
+          RUN_ATTEMPT: ${{ steps.evidence.outputs.run_attempt }}
+          SIDE_EFFECTFUL: ${{ steps.classify.outputs.side_effectful }}
+          TRANSIENT: ${{ steps.classify.outputs.transient }}
+          REPAIR_PR: ${{ steps.submit.outputs.repair_pr }}
+          RETRY_STARTED: ${{ steps.retry.outputs.retry_started }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .actions-recovery
+          failing_jobs="$(jq -r '
+            .jobs[]? | select((.conclusion // "") != "success" and (.conclusion // "") != "skipped") |
+            "- Job: **" + (.name // "unknown") + "** — conclusion: `" + (.conclusion // "unknown") + "`" +
+            (([.steps[]? | select((.conclusion // "") == "failure") | .name] | if length > 0 then " — failed step(s): " + join(", ") else "" end))
+          ' .actions-recovery/jobs.json 2>/dev/null || true)"
+          [[ -z "$failing_jobs" ]] && failing_jobs="- GitHub did not expose a failed job/step summary; inspect the source Run directly."
+
+          signal_lines="$(grep -Ein 'error|failed|failure|traceback|assert|exception|timeout|timed out|fatal|hang|cancelled|canceled|ECONNRESET|ETIMEDOUT|ENOTFOUND|502|503|504' .actions-recovery/source.log 2>/dev/null | tail -n 40 | cut -c1-360 || true)"
+          [[ -z "$signal_lines" ]] && signal_lines="No high-signal error lines extracted automatically. Read the full source Run log."
+
+          cat > .actions-recovery/ai-repair-brief.md <<EOF
+# GitHub Agent — AI Repair Brief
+
+GitHub Agent could not safely determine a complete code fix. **No coding-agent provider is called automatically.** This Issue is the handoff package for the AI chosen by the user.
+
+## Source
+
+- Repository: \`${GITHUB_REPOSITORY}\`
+- Source Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}
+- Workflow: **${SOURCE_WORKFLOW_NAME}**
+- Workflow file: \`${WORKFLOW_PATH:-unknown}\`
+- Branch: \`${SOURCE_BRANCH:-unknown}\`
+- Commit: https://github.com/${GITHUB_REPOSITORY}/commit/${SOURCE_HEAD_SHA}
+- Event: \`${SOURCE_EVENT:-unknown}\`
+- Run attempt: \`${RUN_ATTEMPT:-unknown}\`
+- Governor / Recovery reason: **${RECOVERY_REASON}**
+
+## GitHub Agent classification
+
+- Deterministic repair produced: **${{ steps.repair.outputs.repaired }}**
+- Deterministic repair PR: ${REPAIR_PR:-none}
+- Side-effectful workflow: **${SIDE_EFFECTFUL:-unknown}**
+- Transient infrastructure signature detected: **${TRANSIENT:-unknown}**
+- Fresh rerun started: **${RETRY_STARTED:-false}**
+
+## Failed jobs / steps
+
+${failing_jobs}
+
+## High-signal log lines
+
+\`\`\`text
+${signal_lines}
+\`\`\`
+
+> The excerpt is only a locator. The AI must inspect the full Run log before changing code.
+
+## Task for the AI
+
+1. Read this Issue, the full source Run, the source Commit, and the relevant repository code.
+2. Check whether the source Commit has already been superseded by a newer fix; do not repair obsolete code blindly.
+3. Identify the root cause, including why the job hung/failed and why existing tests or guards did not catch it earlier.
+4. Create a dedicated repair branch; **do not write directly to `main`**.
+5. Modify workflow/code/tests/configuration as required by the actual root cause.
+6. Re-run the original failing test/job plus related regression tests and GitHub Agent Policy Check.
+7. Open/update a PR containing: root cause, files changed, verification evidence, remaining risk.
+8. Do not blindly replay Release / Deploy / Publish / Store Package side effects.
+
+## Acceptance criteria
+
+- Original failure/hang is reproducibly addressed.
+- The relevant CI no longer hangs indefinitely.
+- New/changed Workflow remains compliant with GitHub Agent guards.
+- No unrelated behavior is weakened just to make CI green.
+- The repair is auditable through branch + commit + PR + CI.
+EOF
+
+      - name: Open or update AI Repair Issue
+        if: always() && (steps.repair.outputs.repaired != 'true' || steps.classify.outputs.side_effectful == 'true' || failure())
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_RUN_ID: ${{ inputs.source_run_id }}
           SOURCE_WORKFLOW_NAME: ${{ inputs.source_workflow_name }}
-          SOURCE_BRANCH: ${{ inputs.source_branch }}
-          RECOVERY_REASON: ${{ inputs.recovery_reason }}
-          REPAIR_PR: ${{ steps.submit.outputs.repair_pr }}
-          SIDE_EFFECTFUL: ${{ steps.classify.outputs.side_effectful }}
         run: |
           set -Eeuo pipefail
-
-          title="[Actions Recovery] ${SOURCE_WORKFLOW_NAME} run ${SOURCE_RUN_ID}"
-          body="GitHub Actions Strategy v3 detected an abnormal historical/current run and started automatic recovery."$'\n\n'"- Source run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}"$'\n'"- Workflow: ${SOURCE_WORKFLOW_NAME}"$'\n'"- Branch: ${SOURCE_BRANCH}"$'\n'"- Reason: ${RECOVERY_REASON}"$'\n'"- Automatic repair PR: ${REPAIR_PR:-none}"$'\n'"- Side-effectful release/deploy class: ${SIDE_EFFECTFUL}"$'\n\n'"For CI/Test/Smoke, v3 attempts a safe policy repair and one bounded fresh-run retry."$'\n'"For Release/Deploy/Publish/Store Package, v3 never blindly replays side effects; it submits safe workflow repairs when possible and raises this incident for explicit release approval."
-
+          title="[GitHub Agent][AI Repair] ${SOURCE_WORKFLOW_NAME} run ${SOURCE_RUN_ID}"
+          body_file=".actions-recovery/ai-repair-brief.md"
+          if [[ ! -f "$body_file" ]]; then
+            printf '# GitHub Agent — AI Repair Brief\n\nSource Run: https://github.com/%s/actions/runs/%s\n\nAutomatic evidence packaging failed; ask the AI to inspect the full Run directly.\n' "$GITHUB_REPOSITORY" "$SOURCE_RUN_ID" > "$body_file"
+          fi
           existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"${title}\" in:title" --json number --jq '.[0].number // ""')"
           if [[ -n "$existing" ]]; then
-            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body-file "$body_file"
           else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$body_file"
           fi
