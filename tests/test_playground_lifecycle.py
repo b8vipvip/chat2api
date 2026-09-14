@@ -60,7 +60,17 @@ def pair(client: TestClient) -> tuple[str, str]:
     )
     assert response.status_code == 200, response.text
     value = response.json()
-    return value["client_id"], value["token"]
+    client_id = value["client_id"]
+    # Playground lifecycle round trips model a signed-in, usable ChatGPT Worker.
+    # v137 intentionally fails closed without positive login/composer evidence,
+    # so make the fixture readiness explicit instead of weakening admission.
+    client.app.state.registry.clients[client_id].metadata.update(
+        {
+            "chatgpt_login_state": "ready",
+            "chatgpt_login_composer_ready": True,
+        }
+    )
+    return client_id, value["token"]
 
 
 def start_text_run(client: TestClient, key_id: str) -> dict:
