@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/actions-governor.yml'
+      - '.github/workflows/actions-recovery.yml'
+      - '.github/workflows/actions-policy-check.yml'
+      - '.github/scripts/actions_strategy_autofix.py'
+      - '.github/scripts/validate_actions_strategy.py'
       - '.github/ACTIONS_STRATEGY.md'
   schedule:
     - cron: '*/10 * * * *'
@@ -20,14 +24,15 @@ concurrency:
 
 jobs:
   enforce:
-    name: Cancel duplicate and stale workflow runs
+    name: Govern duplicate, stale, and historical runs
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       DEFAULT_MAX_MINUTES: '45'
       PROTECTED_MAX_MINUTES: '180'
+      INTERNAL_MAX_MINUTES: '20'
     steps:
-      - name: Enforce repository Actions strategy
+      - name: Enforce GitHub Actions Strategy v3
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
@@ -40,9 +45,6 @@ jobs:
           runs_file="$(mktemp)"
           trap 'rm -f "$runs_file"' EXIT
 
-          # Stream only the small fields needed by the governor. Do not store full
-          # workflow-run JSON in shell arguments: action-heavy repositories can
-          # exceed the operating system ARG_MAX limit.
           {
             for status_filter in in_progress queued; do
               gh api --paginate \
@@ -53,21 +55,36 @@ jobs:
                   (.workflow_id | tostring),
                   (.name // ""),
                   (.head_branch // ""),
+                  (.head_sha // ""),
                   (.event // ""),
                   (.status // ""),
-                  (.run_started_at // .created_at // "")
+                  (.run_started_at // .created_at // ""),
+                  (.path // ""),
+                  (.run_attempt | tostring)
                 ] | join("\u001f")'
             done
           } | LC_ALL=C sort -r > "$runs_file"
 
           scanned_count="$(wc -l < "$runs_file" | tr -d ' ')"
           cancelled_count=0
+          recovery_count=0
           declare -A seen=()
           declare -A cancelled=()
 
+          lower_name() {
+            tr '[:upper:]' '[:lower:]' <<<"$1"
+          }
+
           protected_serial_workflow() {
-            local lower="${1,,}"
+            local lower
+            lower="$(lower_name "$1")"
             [[ "$lower" == *release* || "$lower" == *deploy* || "$lower" == *publish* || "$lower" == *store*package* ]]
+          }
+
+          internal_strategy_workflow() {
+            local lower
+            lower="$(lower_name "$1")"
+            [[ "$lower" == "actions governor" || "$lower" == "actions recovery" || "$lower" == "actions policy check" ]]
           }
 
           cancel_run() {
@@ -81,31 +98,66 @@ jobs:
               cancelled[$id]=1
               cancelled_count=$((cancelled_count + 1))
               echo "::notice::Cancelled run ${id} (${name}): ${reason}"
+              return 0
+            fi
+            echo "::warning::Run ${id} (${name}) could not be cancelled; it may already have completed."
+            return 1
+          }
+
+          dispatch_recovery() {
+            local id="$1"
+            local workflow_id="$2"
+            local name="$3"
+            local branch="$4"
+            local head_sha="$5"
+            local event="$6"
+            local workflow_path="$7"
+            local run_attempt="$8"
+            local reason="$9"
+
+            if internal_strategy_workflow "$name"; then
+              return 0
+            fi
+
+            if gh workflow run actions-recovery.yml \
+              --repo "$repo" \
+              --ref main \
+              -f source_run_id="$id" \
+              -f source_workflow_id="$workflow_id" \
+              -f source_workflow_name="$name" \
+              -f source_branch="$branch" \
+              -f source_head_sha="$head_sha" \
+              -f source_event="$event" \
+              -f source_workflow_path="$workflow_path" \
+              -f source_run_attempt="$run_attempt" \
+              -f recovery_reason="$reason"; then
+              recovery_count=$((recovery_count + 1))
+              echo "::notice::Dispatched Actions Recovery for run ${id} (${name})."
             else
-              echo "::warning::Run ${id} (${name}) could not be cancelled; it may already have completed."
+              echo "::warning::Failed to dispatch Actions Recovery for run ${id} (${name})."
             fi
           }
 
-          # First pass: for ordinary workflows, keep only the newest active run
-          # for the same workflow + branch + event and cancel superseded runs.
-          while IFS=$'\x1f' read -r created id workflow_id name branch event status started; do
+          # A newer ordinary run is already the resubmission, so superseded
+          # duplicates are cancelled without reviving stale code.
+          while IFS=$'\x1f' read -r created id workflow_id name branch head_sha event status started workflow_path run_attempt; do
             [[ -z "$id" ]] && continue
             [[ "$id" == "$current_run" ]] && continue
-            if protected_serial_workflow "$name"; then
-              continue
-            fi
+            internal_strategy_workflow "$name" && continue
+            protected_serial_workflow "$name" && continue
+
             key="${workflow_id}|${branch}|${event}"
             if [[ -n "${seen[$key]:-}" ]]; then
-              cancel_run "$id" "superseded duplicate; newer run ${seen[$key]} is active" "$name"
+              cancel_run "$id" "superseded duplicate; newer run ${seen[$key]} is active" "$name" || true
             else
               seen[$key]="$id"
             fi
           done < "$runs_file"
 
-          # Second pass: cancel abnormally long active runs. Because this scans
-          # current repository state, it also cleans runs started before this
-          # strategy or this governor existed.
-          while IFS=$'\x1f' read -r created id workflow_id name branch event status started; do
+          # Historical/current stale runs do not stop at cancellation: after a
+          # successful cancel, Actions Recovery is dispatched to repair and
+          # resubmit the work under bounded safety rules.
+          while IFS=$'\x1f' read -r created id workflow_id name branch head_sha event status started workflow_path run_attempt; do
             [[ -z "$id" ]] && continue
             [[ "$id" == "$current_run" ]] && continue
             [[ -n "${cancelled[$id]:-}" ]] && continue
@@ -113,13 +165,21 @@ jobs:
             started_epoch="$(date -u -d "$started" +%s)"
             age_minutes=$(( (now_epoch - started_epoch) / 60 ))
             max_minutes="$DEFAULT_MAX_MINUTES"
-            if protected_serial_workflow "$name"; then
+
+            if internal_strategy_workflow "$name"; then
+              max_minutes="$INTERNAL_MAX_MINUTES"
+            elif protected_serial_workflow "$name"; then
               max_minutes="$PROTECTED_MAX_MINUTES"
             fi
 
             if (( age_minutes >= max_minutes )); then
-              cancel_run "$id" "stale ${status} run aged ${age_minutes}m (limit ${max_minutes}m)" "$name"
+              reason="stale ${status} run aged ${age_minutes}m (limit ${max_minutes}m)"
+              if cancel_run "$id" "$reason" "$name"; then
+                dispatch_recovery \
+                  "$id" "$workflow_id" "$name" "$branch" "$head_sha" \
+                  "$event" "$workflow_path" "$run_attempt" "$reason"
+              fi
             fi
           done < "$runs_file"
 
-          echo "Actions Governor complete. Active runs scanned: ${scanned_count}; cancelled: ${cancelled_count}."
+          echo "Actions Governor v3 complete. Active runs scanned: ${scanned_count}; cancelled: ${cancelled_count}; recovery dispatched: ${recovery_count}."
