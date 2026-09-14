@@ -1,0 +1,269 @@
+name: Actions Recovery
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: Source workflow run ID
+        required: true
+        type: string
+      source_workflow_id:
+        description: Source workflow ID
+        required: true
+        type: string
+      source_workflow_name:
+        description: Source workflow name
+        required: true
+        type: string
+      source_branch:
+        description: Source branch
+        required: false
+        type: string
+      source_head_sha:
+        description: Source head SHA
+        required: true
+        type: string
+      source_event:
+        description: Source event
+        required: false
+        type: string
+      source_workflow_path:
+        description: Source workflow path
+        required: false
+        type: string
+      source_run_attempt:
+        description: Source run attempt
+        required: false
+        default: '1'
+        type: string
+      recovery_reason:
+        description: Recovery reason
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: actions-recovery-${{ inputs.source_workflow_id }}-${{ inputs.source_run_id }}
+  cancel-in-progress: true
+
+jobs:
+  recover:
+    name: Repair and resubmit abnormal workflow
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout source revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_head_sha }}
+          fetch-depth: 0
+
+      - name: Collect source run evidence
+        id: evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_WORKFLOW_PATH: ${{ inputs.source_workflow_path }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p .actions-recovery
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > .actions-recovery/run.json
+          gh run view "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --log > .actions-recovery/source.log 2>&1 || true
+
+          workflow_path="$SOURCE_WORKFLOW_PATH"
+          if [[ -z "$workflow_path" ]]; then
+            workflow_path="$(jq -r '.path // ""' .actions-recovery/run.json)"
+          fi
+          echo "workflow_path=$workflow_path" >> "$GITHUB_OUTPUT"
+
+          run_attempt="$(jq -r '.run_attempt // 1' .actions-recovery/run.json)"
+          echo "run_attempt=$run_attempt" >> "$GITHUB_OUTPUT"
+
+          default_branch="$(gh api "repos/$GITHUB_REPOSITORY" --jq '.default_branch')"
+          echo "default_branch=$default_branch" >> "$GITHUB_OUTPUT"
+
+      - name: Load current Strategy v3 repair logic
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ steps.evidence.outputs.default_branch }}
+        run: |
+          set -Eeuo pipefail
+          git fetch --no-tags origin "$DEFAULT_BRANCH"
+          git show "origin/$DEFAULT_BRANCH:.github/scripts/actions_strategy_autofix.py" > /tmp/actions_strategy_autofix.py
+          if git cat-file -e "origin/$DEFAULT_BRANCH:.github/actions-recovery.sh" 2>/dev/null; then
+            git show "origin/$DEFAULT_BRANCH:.github/actions-recovery.sh" > /tmp/actions-recovery.sh
+            chmod +x /tmp/actions-recovery.sh
+          fi
+
+      - name: Apply safe automatic repair
+        id: repair
+        shell: bash
+        env:
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_WORKFLOW_NAME: ${{ inputs.source_workflow_name }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          SOURCE_HEAD_SHA: ${{ inputs.source_head_sha }}
+          SOURCE_EVENT: ${{ inputs.source_event }}
+          RECOVERY_REASON: ${{ inputs.recovery_reason }}
+          ACTIONS_RECOVERY_LOG: ${{ github.workspace }}/.actions-recovery/source.log
+          WORKFLOW_PATH: ${{ steps.evidence.outputs.workflow_path }}
+        run: |
+          set -Eeuo pipefail
+
+          repaired=false
+          if [[ -n "$WORKFLOW_PATH" && -f "$WORKFLOW_PATH" && -f /tmp/actions_strategy_autofix.py ]]; then
+            before="$(git status --porcelain)"
+            python /tmp/actions_strategy_autofix.py "$WORKFLOW_PATH"
+            after="$(git status --porcelain)"
+            if [[ "$after" != "$before" ]]; then
+              repaired=true
+            fi
+          fi
+
+          # Repositories may add .github/actions-recovery.sh for deterministic,
+          # idempotent project-specific repairs based on ACTIONS_RECOVERY_LOG.
+          if [[ -f /tmp/actions-recovery.sh ]]; then
+            before="$(git status --porcelain)"
+            bash /tmp/actions-recovery.sh
+            after="$(git status --porcelain)"
+            if [[ "$after" != "$before" ]]; then
+              repaired=true
+            fi
+          fi
+
+          echo "repaired=$repaired" >> "$GITHUB_OUTPUT"
+          git status --short
+
+      - name: Submit automatic repair
+        if: steps.repair.outputs.repaired == 'true'
+        id: submit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          DEFAULT_BRANCH: ${{ steps.evidence.outputs.default_branch }}
+        run: |
+          set -Eeuo pipefail
+
+          repair_branch="actions-recovery/run-${SOURCE_RUN_ID}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -C "$repair_branch"
+          git add -A
+          git reset -- .actions-recovery 2>/dev/null || true
+
+          if git diff --cached --quiet; then
+            echo "No committable repair remains."
+            echo "repair_ref=$SOURCE_BRANCH" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git commit -m "ci(recovery): repair Actions run ${SOURCE_RUN_ID}"
+          git push --force origin "HEAD:${repair_branch}"
+
+          base="$SOURCE_BRANCH"
+          if [[ -z "$base" ]]; then
+            base="$DEFAULT_BRANCH"
+          fi
+
+          existing_pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$repair_branch" --state open --json url --jq '.[0].url // ""')"
+          if [[ -z "$existing_pr" ]]; then
+            pr_body="Automated GitHub Actions Strategy v3 recovery."$'\n\n'"Source run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}"$'\n\n'"The repair is limited to policy-level workflow hardening and any repository-defined deterministic recovery hook. It is resubmitted on a dedicated recovery branch for validation."
+            existing_pr="$(gh pr create --repo "$GITHUB_REPOSITORY" --base "$base" --head "$repair_branch" --title "ci(recovery): repair abnormal Actions run ${SOURCE_RUN_ID}" --body "$pr_body")"
+          fi
+
+          echo "repair_ref=$repair_branch" >> "$GITHUB_OUTPUT"
+          echo "repair_pr=$existing_pr" >> "$GITHUB_OUTPUT"
+          echo "::notice::Automatic repair submitted: $existing_pr"
+
+      - name: Classify side-effectful workflow
+        id: classify
+        shell: bash
+        env:
+          WORKFLOW_NAME: ${{ inputs.source_workflow_name }}
+        run: |
+          set -Eeuo pipefail
+          lower="$(tr '[:upper:]' '[:lower:]' <<<"$WORKFLOW_NAME")"
+          side_effectful=false
+          if [[ "$lower" == *release* || "$lower" == *deploy* || "$lower" == *publish* || "$lower" == *store*package* ]]; then
+            side_effectful=true
+          fi
+          echo "side_effectful=$side_effectful" >> "$GITHUB_OUTPUT"
+
+      - name: Resubmit repaired workflow
+        if: steps.repair.outputs.repaired == 'true' && steps.classify.outputs.side_effectful != 'true'
+        id: redispatch
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_ID: ${{ inputs.source_workflow_id }}
+          REPAIR_REF: ${{ steps.submit.outputs.repair_ref }}
+        run: |
+          set -Eeuo pipefail
+          ref="$REPAIR_REF"
+          if [[ -z "$ref" ]]; then
+            echo "No repair ref available; cannot redispatch."
+            exit 1
+          fi
+
+          if gh api --method POST "repos/$GITHUB_REPOSITORY/actions/workflows/$WORKFLOW_ID/dispatches" -f ref="$ref"; then
+            echo "::notice::Re-dispatched workflow $WORKFLOW_ID on repaired ref $ref."
+          else
+            echo "::warning::Workflow does not accept workflow_dispatch on the default-branch definition."
+            exit 1
+          fi
+
+      - name: Retry transient abnormal run once
+        if: steps.repair.outputs.repaired != 'true' && steps.classify.outputs.side_effectful != 'true'
+        id: retry
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          RUN_ATTEMPT: ${{ steps.evidence.outputs.run_attempt }}
+        run: |
+          set -Eeuo pipefail
+
+          if (( RUN_ATTEMPT >= 2 )); then
+            echo "retry_exhausted=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::Automatic fresh-run retry budget exhausted."
+            exit 0
+          fi
+
+          gh api --method POST "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID/rerun" >/dev/null
+          echo "retry_exhausted=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::Re-ran source workflow once on a fresh runner."
+
+      - name: Open recovery incident when automatic repair cannot safely finish
+        if: |
+          steps.classify.outputs.side_effectful == 'true' ||
+          steps.retry.outputs.retry_exhausted == 'true' ||
+          failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          SOURCE_WORKFLOW_NAME: ${{ inputs.source_workflow_name }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          RECOVERY_REASON: ${{ inputs.recovery_reason }}
+          REPAIR_PR: ${{ steps.submit.outputs.repair_pr }}
+          SIDE_EFFECTFUL: ${{ steps.classify.outputs.side_effectful }}
+        run: |
+          set -Eeuo pipefail
+
+          title="[Actions Recovery] ${SOURCE_WORKFLOW_NAME} run ${SOURCE_RUN_ID}"
+          body="GitHub Actions Strategy v3 detected an abnormal historical/current run and started automatic recovery."$'\n\n'"- Source run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}"$'\n'"- Workflow: ${SOURCE_WORKFLOW_NAME}"$'\n'"- Branch: ${SOURCE_BRANCH}"$'\n'"- Reason: ${RECOVERY_REASON}"$'\n'"- Automatic repair PR: ${REPAIR_PR:-none}"$'\n'"- Side-effectful release/deploy class: ${SIDE_EFFECTFUL}"$'\n\n'"For CI/Test/Smoke, v3 attempts a safe policy repair and one bounded fresh-run retry."$'\n'"For Release/Deploy/Publish/Store Package, v3 never blindly replays side effects; it submits safe workflow repairs when possible and raises this incident for explicit release approval."
+
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "\"${title}\" in:title" --json number --jq '.[0].number // ""')"
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi
