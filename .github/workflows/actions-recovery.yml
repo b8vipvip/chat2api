@@ -76,7 +76,6 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID" > .actions-recovery/run.json
           gh run view "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --json jobs > .actions-recovery/jobs.json 2>/dev/null || echo '{"jobs":[]}' > .actions-recovery/jobs.json
           gh run view "$SOURCE_RUN_ID" --repo "$GITHUB_REPOSITORY" --log > .actions-recovery/source.log 2>&1 || true
-
           workflow_path="$SOURCE_WORKFLOW_PATH"
           if [[ -z "$workflow_path" ]]; then
             workflow_path="$(jq -r '.path // ""' .actions-recovery/run.json)"
@@ -172,7 +171,6 @@ jobs:
           side_effectful=false
           if [[ "$lower" == *release* || "$lower" == *deploy* || "$lower" == *publish* || "$lower" == *store*package* ]]; then side_effectful=true; fi
           echo "side_effectful=$side_effectful" >> "$GITHUB_OUTPUT"
-
           transient=false
           if grep -Eiq 'ECONNRESET|ETIMEDOUT|ENOTFOUND|temporary failure|connection reset|connection timed out|runner.*lost|service unavailable|HTTP (502|503|504)|TLS handshake timeout' .actions-recovery/source.log; then
             transient=true
@@ -223,6 +221,7 @@ jobs:
           RECOVERY_REASON: ${{ inputs.recovery_reason }}
           WORKFLOW_PATH: ${{ steps.evidence.outputs.workflow_path }}
           RUN_ATTEMPT: ${{ steps.evidence.outputs.run_attempt }}
+          REPAIRED: ${{ steps.repair.outputs.repaired }}
           SIDE_EFFECTFUL: ${{ steps.classify.outputs.side_effectful }}
           TRANSIENT: ${{ steps.classify.outputs.transient }}
           REPAIR_PR: ${{ steps.submit.outputs.repair_pr }}
@@ -230,72 +229,66 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir -p .actions-recovery
-          failing_jobs="$(jq -r '
-            .jobs[]? | select((.conclusion // "") != "success" and (.conclusion // "") != "skipped") |
-            "- Job: **" + (.name // "unknown") + "** — conclusion: `" + (.conclusion // "unknown") + "`" +
-            (([.steps[]? | select((.conclusion // "") == "failure") | .name] | if length > 0 then " — failed step(s): " + join(", ") else "" end))
-          ' .actions-recovery/jobs.json 2>/dev/null || true)"
+          failing_jobs="$(jq -r '.jobs[]? | select((.conclusion // "") != "success" and (.conclusion // "") != "skipped") | "- Job: **" + (.name // "unknown") + "** — conclusion: `" + (.conclusion // "unknown") + "`" + (([.steps[]? | select((.conclusion // "") == "failure") | .name] | if length > 0 then " — failed step(s): " + join(", ") else "" end))' .actions-recovery/jobs.json 2>/dev/null || true)"
           [[ -z "$failing_jobs" ]] && failing_jobs="- GitHub did not expose a failed job/step summary; inspect the source Run directly."
-
           signal_lines="$(grep -Ein 'error|failed|failure|traceback|assert|exception|timeout|timed out|fatal|hang|cancelled|canceled|ECONNRESET|ETIMEDOUT|ENOTFOUND|502|503|504' .actions-recovery/source.log 2>/dev/null | tail -n 40 | cut -c1-360 || true)"
           [[ -z "$signal_lines" ]] && signal_lines="No high-signal error lines extracted automatically. Read the full source Run log."
-
-          cat > .actions-recovery/ai-repair-brief.md <<EOF
-# GitHub Agent — AI Repair Brief
-
-GitHub Agent could not safely determine a complete code fix. **No coding-agent provider is called automatically.** This Issue is the handoff package for the AI chosen by the user.
-
-## Source
-
-- Repository: \`${GITHUB_REPOSITORY}\`
-- Source Run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}
-- Workflow: **${SOURCE_WORKFLOW_NAME}**
-- Workflow file: \`${WORKFLOW_PATH:-unknown}\`
-- Branch: \`${SOURCE_BRANCH:-unknown}\`
-- Commit: https://github.com/${GITHUB_REPOSITORY}/commit/${SOURCE_HEAD_SHA}
-- Event: \`${SOURCE_EVENT:-unknown}\`
-- Run attempt: \`${RUN_ATTEMPT:-unknown}\`
-- Governor / Recovery reason: **${RECOVERY_REASON}**
-
-## GitHub Agent classification
-
-- Deterministic repair produced: **${{ steps.repair.outputs.repaired }}**
-- Deterministic repair PR: ${REPAIR_PR:-none}
-- Side-effectful workflow: **${SIDE_EFFECTFUL:-unknown}**
-- Transient infrastructure signature detected: **${TRANSIENT:-unknown}**
-- Fresh rerun started: **${RETRY_STARTED:-false}**
-
-## Failed jobs / steps
-
-${failing_jobs}
-
-## High-signal log lines
-
-\`\`\`text
-${signal_lines}
-\`\`\`
-
-> The excerpt is only a locator. The AI must inspect the full Run log before changing code.
-
-## Task for the AI
-
-1. Read this Issue, the full source Run, the source Commit, and the relevant repository code.
-2. Check whether the source Commit has already been superseded by a newer fix; do not repair obsolete code blindly.
-3. Identify the root cause, including why the job hung/failed and why existing tests or guards did not catch it earlier.
-4. Create a dedicated repair branch; **do not write directly to `main`**.
-5. Modify workflow/code/tests/configuration as required by the actual root cause.
-6. Re-run the original failing test/job plus related regression tests and GitHub Agent Policy Check.
-7. Open/update a PR containing: root cause, files changed, verification evidence, remaining risk.
-8. Do not blindly replay Release / Deploy / Publish / Store Package side effects.
-
-## Acceptance criteria
-
-- Original failure/hang is reproducibly addressed.
-- The relevant CI no longer hangs indefinitely.
-- New/changed Workflow remains compliant with GitHub Agent guards.
-- No unrelated behavior is weakened just to make CI green.
-- The repair is auditable through branch + commit + PR + CI.
-EOF
+          {
+            echo "# GitHub Agent — AI Repair Brief"
+            echo
+            echo "GitHub Agent could not safely determine a complete code fix. **No coding-agent provider is called automatically.** This Issue is the handoff package for the AI chosen by the user."
+            echo
+            echo "## Source"
+            echo
+            echo "- Repository: \`$GITHUB_REPOSITORY\`"
+            echo "- Source Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN_ID"
+            echo "- Workflow: **$SOURCE_WORKFLOW_NAME**"
+            echo "- Workflow file: \`${WORKFLOW_PATH:-unknown}\`"
+            echo "- Branch: \`${SOURCE_BRANCH:-unknown}\`"
+            echo "- Commit: https://github.com/$GITHUB_REPOSITORY/commit/$SOURCE_HEAD_SHA"
+            echo "- Event: \`${SOURCE_EVENT:-unknown}\`"
+            echo "- Run attempt: \`${RUN_ATTEMPT:-unknown}\`"
+            echo "- Governor / Recovery reason: **$RECOVERY_REASON**"
+            echo
+            echo "## GitHub Agent classification"
+            echo
+            echo "- Deterministic repair produced: **${REPAIRED:-false}**"
+            echo "- Deterministic repair PR: ${REPAIR_PR:-none}"
+            echo "- Side-effectful workflow: **${SIDE_EFFECTFUL:-unknown}**"
+            echo "- Transient infrastructure signature detected: **${TRANSIENT:-unknown}**"
+            echo "- Fresh rerun started: **${RETRY_STARTED:-false}**"
+            echo
+            echo "## Failed jobs / steps"
+            echo
+            printf '%s\n' "$failing_jobs"
+            echo
+            echo "## High-signal log lines"
+            echo
+            echo '```text'
+            printf '%s\n' "$signal_lines"
+            echo '```'
+            echo
+            echo "> The excerpt is only a locator. The AI must inspect the full Run log before changing code."
+            echo
+            echo "## Task for the AI"
+            echo
+            echo "1. Read this Issue, the full source Run, the source Commit, and the relevant repository code."
+            echo "2. Check whether the source Commit has already been superseded by a newer fix; do not repair obsolete code blindly."
+            echo "3. Identify the root cause, including why the job hung/failed and why existing tests or guards did not catch it earlier."
+            echo "4. Create a dedicated repair branch; **do not write directly to main**."
+            echo "5. Modify workflow/code/tests/configuration as required by the actual root cause."
+            echo "6. Re-run the original failing test/job plus related regression tests and GitHub Agent Policy Check."
+            echo "7. Open/update a PR containing: root cause, files changed, verification evidence, remaining risk."
+            echo "8. Do not blindly replay Release / Deploy / Publish / Store Package side effects."
+            echo
+            echo "## Acceptance criteria"
+            echo
+            echo "- Original failure/hang is reproducibly addressed."
+            echo "- The relevant CI no longer hangs indefinitely."
+            echo "- New/changed Workflow remains compliant with GitHub Agent guards."
+            echo "- No unrelated behavior is weakened just to make CI green."
+            echo "- The repair is auditable through branch + commit + PR + CI."
+          } > .actions-recovery/ai-repair-brief.md
 
       - name: Open or update AI Repair Issue
         if: always() && (steps.repair.outputs.repaired != 'true' || steps.classify.outputs.side_effectful == 'true' || failure())
