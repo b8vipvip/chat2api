@@ -1,0 +1,121 @@
+name: Actions Governor
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/actions-governor.yml'
+      - '.github/ACTIONS_STRATEGY.md'
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: actions-governor-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  enforce:
+    name: Cancel duplicate and stale workflow runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DEFAULT_MAX_MINUTES: '45'
+      PROTECTED_MAX_MINUTES: '180'
+    steps:
+      - name: Enforce repository Actions strategy
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+
+          repo="$GITHUB_REPOSITORY"
+          current_run="$GITHUB_RUN_ID"
+          now_epoch="$(date -u +%s)"
+          active='[]'
+
+          for status in in_progress queued; do
+            payload="$(gh api "repos/${repo}/actions/runs?status=${status}&per_page=100")"
+            rows="$(jq -c '.workflow_runs' <<<"$payload")"
+            active="$(jq -c --argjson rows "$rows" '. + $rows' <<<"$active")"
+          done
+
+          mapfile -t runs < <(
+            jq -r '
+              sort_by(.created_at)
+              | reverse
+              | .[]
+              | [
+                  (.id | tostring),
+                  (.name // ""),
+                  (.head_branch // ""),
+                  (.event // ""),
+                  (.status // ""),
+                  (.run_started_at // .created_at)
+                ]
+              | @tsv
+            ' <<<"$active"
+          )
+
+          declare -A seen=()
+          declare -A cancelled=()
+
+          protected_serial_workflow() {
+            local lower="${1,,}"
+            [[ "$lower" == *release* || "$lower" == *deploy* || "$lower" == *publish* || "$lower" == *store*package* ]]
+          }
+
+          cancel_run() {
+            local id="$1"
+            local reason="$2"
+            local name="$3"
+            if [[ -n "${cancelled[$id]:-}" ]]; then
+              return 0
+            fi
+            if gh api --method POST "repos/${repo}/actions/runs/${id}/cancel" >/dev/null 2>&1; then
+              cancelled[$id]=1
+              echo "::notice::Cancelled run ${id} (${name}): ${reason}"
+            else
+              echo "::warning::Run ${id} (${name}) could not be cancelled; it may already have completed."
+            fi
+          }
+
+          # First pass: keep only the newest ordinary run for the same workflow + branch + event.
+          for row in "${runs[@]}"; do
+            IFS=$'\t' read -r id name branch event status started <<<"$row"
+            [[ "$id" == "$current_run" ]] && continue
+            if protected_serial_workflow "$name"; then
+              continue
+            fi
+            key="${name}|${branch}|${event}"
+            if [[ -n "${seen[$key]:-}" ]]; then
+              cancel_run "$id" "superseded duplicate; newer run ${seen[$key]} is active" "$name"
+            else
+              seen[$key]="$id"
+            fi
+          done
+
+          # Second pass: cancel abnormally long active runs, including runs started before this strategy existed.
+          for row in "${runs[@]}"; do
+            IFS=$'\t' read -r id name branch event status started <<<"$row"
+            [[ "$id" == "$current_run" ]] && continue
+            [[ -n "${cancelled[$id]:-}" ]] && continue
+
+            started_epoch="$(date -u -d "$started" +%s)"
+            age_minutes=$(( (now_epoch - started_epoch) / 60 ))
+            max_minutes="$DEFAULT_MAX_MINUTES"
+            if protected_serial_workflow "$name"; then
+              max_minutes="$PROTECTED_MAX_MINUTES"
+            fi
+
+            if (( age_minutes >= max_minutes )); then
+              cancel_run "$id" "stale ${status} run aged ${age_minutes}m (limit ${max_minutes}m)" "$name"
+            fi
+          done
+
+          echo "Actions Governor complete. Active runs scanned: ${#runs[@]}; cancelled: ${#cancelled[@]}."
