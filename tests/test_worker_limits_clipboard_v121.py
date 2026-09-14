@@ -103,6 +103,12 @@ def test_worker_settings_ui_keeps_concurrency_and_windows_distinct() -> None:
     assert "窗口数不能小于并发数" in console
     assert '/concurrency`' in console
     assert '/windows/limit`' in console
+    assert "data-v121-limit-summary" in console
+    assert "${concurrency}/${windows}" in console
+    assert "data-v121-edit-limits" in console
+    assert "data-v121-limit-popover hidden" in console
     assert 'install_worker_limits_clipboard_v121_patch(app)' in presentation
     assert "持续维持的 ChatGPT 物理窗口总数" in identity
-    assert "空闲窗口常驻并预热" in identity
+    assert "点击编辑按钮修改" in identity
+    assert "空闲窗口常驻并预热" not in identity
+    assert "常驻窗口池跟随并发" not in identity

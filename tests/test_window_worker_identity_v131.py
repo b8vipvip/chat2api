@@ -21,12 +21,14 @@ def test_window_manager_adds_extension_worker_id_column() -> None:
     assert "window_no: state.nextWindowNo++" in observer
 
 
-def test_linux_device_manager_worker_column_uses_extension_worker_id() -> None:
+def test_linux_device_manager_worker_column_uses_extension_worker_id_without_secondary_metadata() -> None:
     source = text("app/admin_worker_identity_v131.js")
     assert 'header.cells[0].textContent !== "Worker ID"' in source
     assert 'String(worker.extension_client_id || "").trim()' in source
-    assert "设备 Worker ${slot}" in source
-    assert "中心 ${esc(controllerId || \"-\")}" in source
+    assert 'const primary = extensionId || "Extension 待连接"' in source
+    assert 'const html = `<b>${esc(primary)}</b>`;' in source
+    assert "设备 Worker ${slot}" not in source
+    assert '中心 ${esc(controllerId || "-")}' not in source
 
 
 def test_unlogged_linux_child_can_inherit_device_name_before_pairing_bind() -> None:

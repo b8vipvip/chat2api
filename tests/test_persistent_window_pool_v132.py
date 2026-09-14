@@ -63,11 +63,13 @@ def test_capacity_control_uses_persistent_pool_as_window_authority() -> None:
     assert 'prewarmed_windows: true' in source
 
 
-def test_admin_copy_describes_persistent_windows() -> None:
+def test_admin_copy_describes_persistent_windows_without_legacy_helper_copy() -> None:
     source = text("app/admin_worker_identity_v131.js")
     assert "持续维持的 ChatGPT 物理窗口总数" in source
-    assert "空闲窗口常驻并预热" in source
-    assert "常驻窗口池跟随并发" in source
+    assert "点击编辑按钮修改" in source
+    assert "空闲窗口常驻并预热" not in source
+    assert "常驻窗口池跟随并发" not in source
+    assert "常驻窗口池独立设置" not in source
 
 
 def test_worker_extension_bundle_advertises_pool_contract() -> None:

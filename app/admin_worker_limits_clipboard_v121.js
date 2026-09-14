@@ -52,17 +52,20 @@
     const id = String(row?.client_id || "");
     const concurrency = Math.max(1, Math.min(32, Number(row?.max_concurrency || row?.capacity?.limit_units || 1)));
     const windows = Math.max(concurrency, Math.min(32, Number(row?.max_windows || concurrency)));
-    const source = String(row?.window_limit_source || "concurrency");
-    const note = source === "concurrency"
-      ? "窗口跟随并发"
-      : source === "clamped-to-concurrency"
-        ? "窗口已随并发自动抬高"
-        : "窗口独立设置";
-    return `<div data-v121-worker-limits="${esc(id)}" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;min-width:260px">
-      <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px">并发 <input data-v121-concurrency type="number" min="1" max="32" value="${concurrency}" style="width:54px;padding:4px 5px"></label>
-      <label style="display:inline-flex;align-items:center;gap:4px;font-size:12px">窗口 <input data-v121-windows type="number" min="1" max="32" value="${windows}" style="width:54px;padding:4px 5px"></label>
-      <button class="action" type="button" data-v121-save-limits>保存</button>
-      <span class="muted" data-v121-limit-note style="font-size:11px">${esc(note)}</span>
+    return `<div data-v121-worker-limits="${esc(id)}" style="position:relative;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;min-width:78px">
+      <strong data-v121-limit-summary style="font-variant-numeric:tabular-nums">${concurrency}/${windows}</strong>
+      <button class="action" type="button" data-v121-edit-limits title="编辑并发 / 窗口" aria-label="编辑并发 / 窗口" style="padding:4px 7px;min-width:30px">✎</button>
+      <div data-v121-limit-popover hidden style="position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:250px;padding:12px;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 14px 34px rgba(0,0,0,.38);white-space:normal">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <label style="display:grid;gap:5px;font-size:12px">并发<input data-v121-concurrency type="number" min="1" max="32" value="${concurrency}" style="width:100%;padding:7px 8px"></label>
+          <label style="display:grid;gap:5px;font-size:12px">窗口<input data-v121-windows type="number" min="1" max="32" value="${windows}" style="width:100%;padding:7px 8px"></label>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:7px;margin-top:10px">
+          <span class="muted" data-v121-limit-note style="font-size:11px;margin-right:auto"></span>
+          <button class="action" type="button" data-v121-cancel-limits>取消</button>
+          <button class="action good" type="button" data-v121-save-limits>保存</button>
+        </div>
+      </div>
     </div>`;
   }
 
@@ -79,7 +82,7 @@
       const headerCell = cellByKey(header, "worker_settings");
       if (headerCell) {
         headerCell.textContent = "并发 / 窗口";
-        headerCell.title = "并发=同时执行的请求上限；窗口=此 Worker 最多保留的按需 ChatGPT 路由窗口。窗口不会预开。";
+        headerCell.title = "并发=同时执行的请求上限；窗口=该 Worker 登录后持续维持的物理窗口总数。点击编辑按钮修改。";
       }
       for (const tr of body.rows) {
         if (tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan")) continue;
@@ -146,6 +149,22 @@
     } finally {
       button.disabled = false;
     }
+  }
+
+  function closeLimitPopovers(except = null) {
+    document.querySelectorAll("[data-v121-limit-popover]").forEach(node => {
+      if (node !== except) node.hidden = true;
+    });
+  }
+
+  function toggleLimitPopover(button) {
+    const editor = button.closest("[data-v121-worker-limits]");
+    const popover = editor?.querySelector("[data-v121-limit-popover]");
+    if (!popover) return;
+    const opening = popover.hidden;
+    closeLimitPopovers(opening ? popover : null);
+    popover.hidden = !opening;
+    if (opening) editor.querySelector("[data-v121-concurrency]")?.focus();
   }
 
   function installWorkerHooks() {
@@ -372,10 +391,32 @@
   }
 
   document.addEventListener("click", event => {
-    const button = event.target?.closest?.("[data-v121-save-limits]");
-    if (!button) return;
-    event.preventDefault();
-    saveLimits(button);
+    const edit = event.target?.closest?.("[data-v121-edit-limits]");
+    if (edit) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleLimitPopover(edit);
+      return;
+    }
+    const cancel = event.target?.closest?.("[data-v121-cancel-limits]");
+    if (cancel) {
+      event.preventDefault();
+      event.stopPropagation();
+      const popover = cancel.closest("[data-v121-limit-popover]");
+      if (popover) popover.hidden = true;
+      return;
+    }
+    const save = event.target?.closest?.("[data-v121-save-limits]");
+    if (save) {
+      event.preventDefault();
+      event.stopPropagation();
+      saveLimits(save);
+      return;
+    }
+    if (!event.target?.closest?.("[data-v121-worker-limits]")) closeLimitPopovers();
+  });
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape") closeLimitPopovers();
   });
 
   function start() {

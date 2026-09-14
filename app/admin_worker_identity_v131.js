@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_ADMIN_WORKER_IDENTITY_V131__";
   if (globalThis[KEY]) return;
 
-  const state = { version: 132, observer: null };
+  const state = { version: 138, observer: null };
   globalThis[KEY] = state;
 
   const esc = value => String(value ?? "")
@@ -62,14 +62,30 @@
   }
 
   function decorateLinuxWorkerManager() {
+    const dialog = document.getElementById("linuxWorkerManagerV124");
+    if (dialog) {
+      dialog.style.width = "min(1280px, calc(100vw - 28px))";
+      dialog.style.maxWidth = "none";
+    }
+    const refresh = document.getElementById("refreshManagerV124");
+    const addWorker = document.getElementById("openAddWorkerV124");
+    for (const button of [refresh, addWorker]) {
+      if (!button) continue;
+      button.style.whiteSpace = "nowrap";
+      button.style.minWidth = button === addWorker ? "108px" : "82px";
+      button.style.flex = "0 0 auto";
+    }
+    const actionWrap = refresh?.parentElement;
+    if (actionWrap && actionWrap === addWorker?.parentElement) actionWrap.style.flexWrap = "nowrap";
     const box = document.getElementById("managerWorkersV124");
+    if (box) box.style.overflowX = "auto";
     const table = box?.querySelector("table");
     const header = table?.querySelector("thead tr");
     const body = table?.querySelector("tbody");
     if (!header || !body) return;
     if (header.cells[0]) {
       if (header.cells[0].textContent !== "Worker ID") header.cells[0].textContent = "Worker ID";
-      const title = "对应 Worker 管理列表中的 Worker ID；下方保留设备内 Worker 序号和中心 Worker ID";
+      const title = "对应 Worker 管理列表中的 Worker ID（Extension client ID）";
       if (header.cells[0].title !== title) header.cells[0].title = title;
     }
     const workers = selectedWorkers();
@@ -77,11 +93,8 @@
       const worker = workers[index];
       if (!worker || !tr.cells[0]) return;
       const extensionId = String(worker.extension_client_id || "").trim();
-      const controllerId = String(worker.worker_id || "").trim();
-      const slot = Math.max(1, Number(worker.worker_slot || index + 1));
-      const version = String(worker.agent_version || "-");
       const primary = extensionId || "Extension 待连接";
-      const html = `<b>${esc(primary)}</b><div class="v124-muted">设备 Worker ${slot} · 中心 ${esc(controllerId || "-")} · v${esc(version)} · 独立 Profile</div>`;
+      const html = `<b>${esc(primary)}</b>`;
       if (tr.cells[0].innerHTML !== html) tr.cells[0].innerHTML = html;
     });
   }
@@ -89,20 +102,8 @@
   function decoratePersistentWindowCopy() {
     const header = document.querySelector('#extensionDeviceBody')?.closest('table')?.querySelector('thead [data-chat2api-column-key="worker_settings"]');
     if (header) {
-      const title = "并发=同时执行的请求上限；窗口=该 Worker 登录后持续维持的 ChatGPT 物理窗口总数。空闲窗口常驻并预热，不再按 5 分钟租约自动关闭。";
-      if (header.title !== title) header.title = title;
+      header.title = "并发=同时执行的请求上限；窗口=该 Worker 登录后持续维持的 ChatGPT 物理窗口总数。点击编辑按钮修改。";
     }
-    document.querySelectorAll("[data-v121-limit-note]").forEach(node => {
-      const text = String(node.textContent || "").trim();
-      const next = text === "窗口跟随并发"
-        ? "常驻窗口池跟随并发"
-        : text === "窗口已随并发自动抬高"
-          ? "常驻窗口池已随并发自动抬高"
-          : text === "窗口独立设置"
-            ? "常驻窗口池独立设置"
-            : text;
-      if (next && next !== text) node.textContent = next;
-    });
   }
 
   function decorate() {
@@ -118,7 +119,7 @@
     const observer = new MutationObserver(() => decorate());
     observer.observe(root, { childList: true, subtree: true });
     state.observer = observer;
-    document.documentElement.dataset.chat2apiWorkerIdentityRevision = "132";
+    document.documentElement.dataset.chat2apiWorkerIdentityRevision = "138";
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });

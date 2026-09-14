@@ -15,7 +15,7 @@ def read(path: str) -> str:
 def test_v02286_v0837_qnbot_recovery_release_contract() -> None:
     manifest = json.loads(read("chrome_extension/manifest.json"))
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
-    assert SERVER_RUNTIME_VERSION == "0.22.87"
+    assert SERVER_RUNTIME_VERSION == "0.22.88"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.37"
     assert manifest["version"] == "0.8.37"
     assert "release-v02286" in payload["server"]["feature_revision"]

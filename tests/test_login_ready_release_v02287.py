@@ -7,7 +7,7 @@ from app.runtime_contract import CHROME_BRIDGE_BUNDLE_VERSION, SERVER_RUNTIME_VE
 
 def test_v02287_login_ready_release_contract() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
-    assert SERVER_RUNTIME_VERSION == "0.22.87"
+    assert SERVER_RUNTIME_VERSION == "0.22.88"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.37"
     assert payload["server"]["runtime_aligned"] is True
     assert "chatgpt-login-ready-admission-v137" in payload["server"]["feature_revision"]

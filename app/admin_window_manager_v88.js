@@ -90,9 +90,9 @@
           </div>
           <div id="wmTruthStatus" class="muted" style="margin-top:10px"></div>
           <h3>接待中窗口</h3>
-          <div class="scroll"><table><thead><tr><th>窗口编号</th><th>设备码名称</th><th>请求ID</th><th>开启时间</th><th>状态</th><th>截图当前界面</th><th>查看</th></tr></thead><tbody id="wmActiveBody"></tbody></table></div>
+          <div class="scroll"><table><thead><tr><th>窗口标识</th><th>设备码名称</th><th>请求ID</th><th>开启时间</th><th>状态</th><th>截图当前界面</th><th>查看</th></tr></thead><tbody id="wmActiveBody"></tbody></table></div>
           <h3 style="margin-top:22px">已关闭窗口</h3>
-          <div class="scroll"><table><thead><tr><th>窗口编号</th><th>设备码名称</th><th>请求ID</th><th>开启时间</th><th>状态</th><th>截图当前界面</th><th>查看</th></tr></thead><tbody id="wmClosedBody"></tbody></table></div>
+          <div class="scroll"><table><thead><tr><th>窗口标识</th><th>设备码名称</th><th>请求ID</th><th>开启时间</th><th>状态</th><th>截图当前界面</th><th>查看</th></tr></thead><tbody id="wmClosedBody"></tbody></table></div>
         </div>`;
       content.appendChild(section);
       section.querySelector("#wmRefresh")?.addEventListener("click", () => {
@@ -124,6 +124,12 @@
     refresh(true).finally(() => schedulePoll(POLL_MS));
   }
 
+  function windowIdentity(clientId, windowNo) {
+    const workerTail = String(clientId || "").trim().slice(-4) || "????";
+    const localNo = Number(windowNo);
+    return Number.isFinite(localNo) && localNo > 0 ? `${workerTail}#${localNo}` : "-";
+  }
+
   function rowHtml(row, closed = false) {
     const clientId = String(row.client_id || "");
     const windowId = Number(row.window_id);
@@ -138,7 +144,7 @@
       row.screenshot_error ? `截图错误=${row.screenshot_error}` : "",
     ].filter(Boolean).join(" · ");
     return `<tr data-client="${esc(clientId)}" data-window="${esc(windowId)}" title="${esc(title)}">
-      <td>#${esc(row.window_no || "-")}</td>
+      <td>${esc(windowIdentity(clientId, row.window_no))}</td>
       <td>${esc(device)}</td>
       <td><code>${esc(req)}</code></td>
       <td>${esc(formatTime(row.opened_at_ms))}</td>
