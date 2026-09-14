@@ -36,7 +36,7 @@ def pair_extension(client: TestClient) -> tuple[str, str]:
     response = client.post(
         "/api/extensions/register",
         headers={"X-Pairing-Code": "pair-code"},
-        json={"name": "Chrome", "version": "0.6.5"},
+        json={"name": "Chrome", "version": "0.6.5", "metadata": {"chatgpt_login_state": "ready", "chatgpt_login_composer_ready": True}},
     )
     assert response.status_code == 200
     body = response.json()
