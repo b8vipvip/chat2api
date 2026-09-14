@@ -96,7 +96,7 @@ def test_actual_served_admin_and_assets_have_one_request_history_owner() -> None
     assert "时间（北京时间）" in page
     for label in ("请求ID", "设备标识", "对话", "日志"):
         assert f"<th>{label}</th>" in page
-    assert ">窗口编号</th>" in page
+    assert ">窗口标识</th>" in page
     assert "requestHistoryButton(tr,'查看对话'" in page
     assert "requestHistoryButton(tr,'下载日志'" in page
     assert "cell.colSpan=14" in page
@@ -117,7 +117,7 @@ def test_canonical_renderer_has_exact_fourteen_cell_contract() -> None:
     start = page.index("async function loadRequests()")
     end = page.index("\nrequestHistoryEnsureControls();\n$('rqGo').onclick=loadRequests;", start)
     loader = page[start:end]
-    # time, request ID, type, key, device, window number, model, attachment,
+    # time, request ID, type, key, device, window identity, model, attachment,
     # first-token, total-time and token are normal cells; status is one cell;
     # conversation and log are two action cells. No historical renderer may append extras.
     assert loader.count("requestHistoryCell(tr,") == 11

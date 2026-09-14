@@ -31,7 +31,9 @@ def test_worker_window_setting_is_a_persistent_prewarmed_pool_target() -> None:
     assert "persistent-window-pool-v132" in server
     assert 'headerCell.textContent = "并发 / 窗口"' in browser
     assert "持续维持的 ChatGPT 物理窗口总数" in identity
-    assert "空闲窗口常驻并预热" in identity
+    assert "点击编辑按钮修改" in identity
+    assert "空闲窗口常驻并预热" not in identity
+    assert "常驻窗口池跟随并发" not in identity
     assert "effective >= limit" in routed_limit
     assert "reserveForRequest" in routed_limit
     assert "while (rows.length < effectiveTarget)" in pool

@@ -42,6 +42,7 @@ def test_v117_promotes_worker_slot_and_physical_window_identity():
         "window_id": 4321,
         "tab_id": 8765,
         "window_route_key": "key_demo",
+        "worker_client_id": None,
     }
 
 
@@ -74,14 +75,15 @@ def test_worker_v27_legacy_source_preserves_sequential_affinity_contract():
     assert "routed_window_id" in source
 
 
-def test_request_history_exposes_window_number_and_download_log_persists_identity():
+def test_request_history_exposes_window_identity_and_download_log_persists_identity():
     source = (ROOT / "app" / "request_window_observability_v117_patch.py").read_text(encoding="utf-8")
 
-    assert "窗口编号" in source
+    assert "窗口标识" in source
     assert '"window_number"' in source
     assert '"window_id"' in source
     assert '"tab_id"' in source
     assert '"window_route_key"' in source
+    assert '"worker_client_id"' in source
     assert "await telemetry.upsert" in source
 
 
