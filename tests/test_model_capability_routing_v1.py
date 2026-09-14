@@ -15,7 +15,18 @@ from app.model_capability_routing_patch import PATCH_ID, install_model_capabilit
 class Registry:
     def __init__(self, rows: dict[str, tuple[str, list[Any]]]) -> None:
         self.clients = {
-            client_id: SimpleNamespace(metadata={"account_type": account}, connection_enabled=True)
+            client_id: SimpleNamespace(
+                metadata={
+                    "account_type": account,
+                    # These routing tests model healthy, signed-in Workers. v137
+                    # deliberately fails closed when login/composer evidence is
+                    # absent, so legacy fixtures must state that readiness rather
+                    # than weakening the production admission rule.
+                    "chatgpt_login_state": "ready",
+                    "chatgpt_login_composer_ready": True,
+                },
+                connection_enabled=True,
+            )
             for client_id, (account, _models) in rows.items()
         }
         self.models = {client_id: list(models) for client_id, (_account, models) in rows.items()}

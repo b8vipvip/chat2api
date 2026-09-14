@@ -100,7 +100,7 @@ def register_device(client: TestClient, code: str, device_id: str, name: str) ->
             "browser_name": "Chrome",
             "version": "0.7.4",
             "device_id": device_id,
-            "metadata": {"runtime_id": "extension-runtime", "device_id": device_id},
+            "metadata": {"runtime_id": "extension-runtime", "device_id": device_id, "chatgpt_login_state": "ready", "chatgpt_login_composer_ready": True},
         },
     )
     assert response.status_code == 200, response.text

@@ -48,7 +48,7 @@ def test_server_dispatch_carries_same_per_extension_worker_limit_as_admission() 
             install_v21_1_patch(app)
 
             registry = app.state.registry
-            client_id, _token = await registry.register("A", "Chrome", "0.8.7", {})
+            client_id, _token = await registry.register("A", "Chrome", "0.8.7", {"chatgpt_login_state": "ready", "chatgpt_login_composer_ready": True})
             app.state.concurrency_config["client_limits"][client_id] = 5
             socket = _Socket()
             await registry.attach(client_id, socket)

@@ -19,7 +19,7 @@ def settings(tmp_path: Path) -> Settings:
 
 
 def pair(client: TestClient) -> tuple[str, str]:
-    response = client.post("/api/extensions/register", headers={"X-Pairing-Code": "pair-code"}, json={"name": "Chrome", "version": "0.4.0"})
+    response = client.post("/api/extensions/register", headers={"X-Pairing-Code": "pair-code"}, json={"name": "Chrome", "version": "0.4.0", "metadata": {"chatgpt_login_state": "ready", "chatgpt_login_composer_ready": True}})
     assert response.status_code == 200
     body = response.json()
     return body["client_id"], body["token"]
@@ -37,7 +37,7 @@ def test_dynamic_model_catalog_from_extension_status(tmp_path: Path) -> None:
         client_id, token = pair(client)
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={token}") as websocket:
             websocket.receive_json()
-            websocket.send_json({"type": "extension.status", "metadata": {"models": [{"id": "gpt-5.6-sol-high", "label": "GPT-5.6 Sol / High", "family": "gpt-5.6-sol", "reasoning": "high", "capabilities": ["text"], "selected": True}], "current_model": "gpt-5.6-sol-high"}})
+            websocket.send_json({"type": "extension.status", "metadata": {"chatgpt_login_state": "ready", "chatgpt_login_composer_ready": True, "models": [{"id": "gpt-5.6-sol-high", "label": "GPT-5.6 Sol / High", "family": "gpt-5.6-sol", "reasoning": "high", "capabilities": ["text"], "selected": True}], "current_model": "gpt-5.6-sol-high"}})
             response = client.get("/v1/models", headers={"Authorization": "Bearer test-key"})
             assert response.status_code == 200
             models = {item["id"]: item for item in response.json()["data"]}
@@ -58,7 +58,7 @@ def test_requested_model_is_forwarded_to_extension(tmp_path: Path) -> None:
         client_id, token = pair(client)
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={token}") as websocket:
             websocket.receive_json()
-            websocket.send_json({"type": "extension.status", "metadata": {"models": [{"id": "gpt-5.6-sol-high", "label": "High"}]}})
+            websocket.send_json({"type": "extension.status", "metadata": {"chatgpt_login_state": "ready", "chatgpt_login_composer_ready": True, "models": [{"id": "gpt-5.6-sol-high", "label": "High"}]}})
 
             def make_request():
                 return client.post("/v1/chat/completions", headers={"Authorization": "Bearer test-key"}, json={"model": "gpt-5.6-sol-high", "messages": [{"role": "user", "content": "hello"}]})
@@ -83,7 +83,7 @@ def test_stale_catalog_does_not_block_request_driven_model_selection(tmp_path: P
         client_id, token = pair(client)
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={token}") as websocket:
             websocket.receive_json()
-            websocket.send_json({"type": "extension.status", "metadata": {"models": [{"id": "gpt-5.6-sol-high", "label": "High"}]}})
+            websocket.send_json({"type": "extension.status", "metadata": {"chatgpt_login_state": "ready", "chatgpt_login_composer_ready": True, "models": [{"id": "gpt-5.6-sol-high", "label": "High"}]}})
 
             def make_request():
                 return client.post("/v1/chat/completions", headers={"Authorization": "Bearer test-key"}, json={"model": "gpt-5.5", "messages": [{"role": "user", "content": "hello"}]})

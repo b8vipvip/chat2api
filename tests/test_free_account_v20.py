@@ -81,7 +81,11 @@ with tempfile.TemporaryDirectory() as tmp:
             version="0.7.5",
             token_hash="x",
             created_at="2026-08-14T10:00:00+08:00",
-            metadata={"account_type": account_type},
+            metadata={
+                "account_type": account_type,
+                "chatgpt_login_state": "ready",
+                "chatgpt_login_composer_ready": True,
+            },
         )
 
     free_socket = DummySocket()

@@ -31,7 +31,18 @@ def pair(client: TestClient) -> tuple[str, str]:
     )
     assert response.status_code == 200
     body = response.json()
-    return body["client_id"], body["token"]
+    client_id = body["client_id"]
+    # Multimodal round-trip tests model an authenticated, usable ChatGPT Worker.
+    # v137 intentionally rejects transport-online registrations until positive
+    # login + composer evidence exists, so make that fixture state explicit.
+    item = client.app.state.registry.clients[client_id]
+    item.metadata.update(
+        {
+            "chatgpt_login_state": "ready",
+            "chatgpt_login_composer_ready": True,
+        }
+    )
+    return client_id, body["token"]
 
 
 def upload(client: TestClient, name: str, mime: str, payload: bytes, purpose: str) -> dict:

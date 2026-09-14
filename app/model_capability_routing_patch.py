@@ -54,6 +54,19 @@ def _advertised_models(registry: Any, client_id: str) -> set[str]:
 
 
 def _compatible(registry: Any, client_id: str, model: str) -> bool:
+    checker = getattr(registry, "chatgpt_routing_ready", None)
+    if callable(checker):
+        try:
+            if not bool(checker(client_id)):
+                return False
+        except Exception:
+            return False
+    else:
+        item = getattr(registry, "clients", {}).get(str(client_id))
+        metadata = getattr(item, "metadata", None) if item else None
+        from .login_readiness import chatgpt_routing_ready
+        if not chatgpt_routing_ready(metadata):
+            return False
     model = str(model or "").strip().lower()
     account = _account_type(registry, client_id)
     advertised = _advertised_models(registry, client_id)
