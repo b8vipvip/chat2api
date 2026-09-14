@@ -16,7 +16,7 @@ def test_manifest_installs_v55_main_world_stream_recovery_without_v54_double_wra
     manifest = json.loads(read("chrome_extension/manifest.json"))
     main = manifest["content_scripts"][0]
     isolated = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.8.37"
+    assert manifest["version"] == "0.8.38"
     assert main["world"] == "MAIN"
     assert main["run_at"] == "document_start"
     assert "network_stream_main_v55.js" in main["js"]
@@ -27,9 +27,9 @@ def test_manifest_installs_v55_main_world_stream_recovery_without_v54_double_wra
     assert "content_network_stream_progress_v54.js" not in isolated
 
 
-def test_main_world_v55_uses_parser_revision_62_for_conversation_sse() -> None:
+def test_main_world_v55_uses_parser_revision_63_for_conversation_sse() -> None:
     source = read("chrome_extension/network_stream_main_v55.js")
-    for token in ('url.pathname === "/backend-api/f/conversation"','const PARSER_REVISION = 62;','data-chat2api-network-stream-parser','type.includes("text/event-stream")',"response.clone()","clone.body?.getReader",'phase: "assistant-snapshot"','phase: "assistant-complete"','type === "message_stream_complete"','patch?.p !== undefined ? patch.p : patch?.path','if (pointer == null || pointer === "") return [];','if (typeof payload === "string") return;'):
+    for token in ('url.pathname === "/backend-api/f/conversation"','const PARSER_REVISION = 63;','data-chat2api-network-stream-parser','type.includes("text/event-stream")',"response.clone()","clone.body?.getReader",'phase: "assistant-snapshot"','phase: "assistant-complete"','type === "message_stream_complete"','patch?.p !== undefined ? patch.p : patch?.path','if (pointer == null || pointer === "") return [];','if (typeof payload === "string") return;'):
         assert token in source
     for forbidden in ("Authorization", "Cookie", "request_body", "prompt_text"):
         assert forbidden not in source
@@ -67,13 +67,13 @@ for (let i = 0; i < 16; i++) await new Promise(resolve => setTimeout(resolve, 0)
 const snapshots = messages.filter(item => item?.phase === "assistant-snapshot");
 const completed = messages.find(item => item?.phase === "assistant-complete");
 const done = messages.find(item => item?.phase === "done");
-assert.equal(attributes.get("data-chat2api-network-stream-parser"), "62");
+assert.equal(attributes.get("data-chat2api-network-stream-parser"), "63");
 assert.equal(snapshots.at(-1)?.text, "Hello");
 assert.equal(snapshots.at(-1)?.parser_source, "json-patch");
-assert.equal(snapshots.at(-1)?.parser_revision, 62);
+assert.equal(snapshots.at(-1)?.parser_revision, 63);
 assert.equal(completed?.text, "Hello");
 assert.equal(completed?.completion_hint, true);
-assert.equal(completed?.parser_revision, 62);
+assert.equal(completed?.parser_revision, 63);
 assert.equal(done?.assistant_chars, 5);
 assert.equal(done?.completion_hint, true);
 '''
@@ -99,7 +99,7 @@ def test_runtime_preflight_requires_v55_parser_62_main_and_isolated_recovery_mod
     assert '"native_tool_stream_main_v63.js"' in bootstrap
     assert '"content_network_stream_recovery_v55.js"' in bootstrap
     assert '"content_native_tool_stream_v63.js"' in bootstrap
-    assert 'const REQUIRED_BUNDLE = "0.8.37"' in preflight
+    assert 'const REQUIRED_BUNDLE = "0.8.38"' in preflight
     assert 'const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"]' in preflight
     assert 'const NATIVE_MAIN_FILES = ["native_tool_stream_main_v63.js"]' in preflight
     assert 'const CURRENT_MAIN_FILES = [MAIN_FILES[0], ...NATIVE_MAIN_FILES, MAIN_FILES[1]]' in preflight
@@ -107,12 +107,12 @@ def test_runtime_preflight_requires_v55_parser_62_main_and_isolated_recovery_mod
     assert '"content_native_tool_stream_v63.js"' in preflight
     assert "network_stream_recovery_v55" in contract
     assert "network_stream_main_v55" in contract
-    assert "network_stream_parser_v62" in contract
+    assert "network_stream_parser_v63" in contract
     assert "data-chat2api-network-stream-parser" in contract
     assert "native_tool_stream_v63" in contract_v71
     assert "native_tool_stream_main_v63" in contract_v71
     assert "data-chat2api-native-tool-stream" in contract_v71
-    assert 'bundle: "0.8.37"' in marker
+    assert 'bundle: "0.8.38"' in marker
     assert "network_stream_main_v54.js" not in preflight
     assert "content_network_stream_progress_v54.js" not in preflight
 
@@ -123,3 +123,45 @@ def test_linux_worker_bundle_actually_packages_generation_probe() -> None:
     assert "scripts/linux_worker_generation_probe.sh" in dockerfile
     assert "/app/worker_payload/scripts/linux_worker_generation_probe.sh" in dockerfile
     assert "!scripts/linux_worker_generation_probe.sh" in dockerignore
+
+
+
+def test_main_world_v55_keeps_complete_answer_when_citation_candidate_regresses_in_vm() -> None:
+    script = r"""
+import fs from "node:fs";
+import vm from "node:vm";
+import assert from "node:assert/strict";
+import {TextDecoder, TextEncoder} from "node:util";
+
+const source = fs.readFileSync("chrome_extension/network_stream_main_v55.js", "utf8");
+const messages = [];
+const attributes = new Map();
+const encoder = new TextEncoder();
+const complete = "今天是公历 2026年9月14日，对应农历丙午年八月初四。下面是日期换算的完整说明。";
+const citation = "今天是公历 2026年9月14huacheng.gz-cmc.com+1";
+const chunks = [
+  encoder.encode(`data: ${JSON.stringify({message:{author:{role:"assistant"},content:{content_type:"text",parts:[complete]},metadata:{citations:[{author:{role:"assistant"},content:{parts:[citation]}}]}}})}\n\n`),
+  encoder.encode(`data: ${JSON.stringify({author:{role:"assistant"},content:{parts:[citation]},metadata:{kind:"citation"}})}\n\n`),
+  encoder.encode('data: {"type":"message_stream_complete"}\n\n'),
+  encoder.encode('data: [DONE]\n\n'),
+];
+let cursor = 0;
+const reader = { async read() { if (cursor >= chunks.length) return {done:true, value:undefined}; return {done:false, value:chunks[cursor++]}; }, releaseLock() {} };
+const response = { ok:true, status:200, body:{}, headers:{get:name => name.toLowerCase() === "content-type" ? "text/event-stream" : ""}, clone:() => ({body:{getReader:() => reader}}) };
+const documentElement = { setAttribute(name,value){attributes.set(name,String(value));}, getAttribute(name){return attributes.get(name) ?? null;} };
+const context = {console,Math,String,Number,Boolean,Promise,Object,Array,Date,URL,TextDecoder,structuredClone,setTimeout,clearTimeout,location:{href:"https://chatgpt.com/",origin:"https://chatgpt.com"},document:{documentElement},postMessage:message => messages.push(message),fetch:async () => response};
+context.globalThis = context;
+vm.createContext(context);
+vm.runInContext(source, context, {filename:"network_stream_main_v55.js"});
+await context.fetch("https://chatgpt.com/backend-api/f/conversation", {method:"POST"});
+for (let i=0;i<16;i++) await new Promise(resolve => setTimeout(resolve,0));
+const snapshots = messages.filter(item => item?.phase === "assistant-snapshot");
+const completed = messages.find(item => item?.phase === "assistant-complete");
+assert.equal(attributes.get("data-chat2api-network-stream-parser"), "63");
+assert.equal(snapshots.at(-1)?.text, complete);
+assert.equal(completed?.text, complete);
+assert.equal(completed?.text.includes("huacheng.gz-cmc.com"), false);
+assert.ok(completed?.text.length > citation.length);
+"""
+    result = subprocess.run(["node", "--input-type=module", "-e", script], cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -4,7 +4,7 @@
 
   const SOURCE = "chat2api-network-stream-v55";
   const CHANNEL = "conversation-fetch-v55";
-  const PARSER_REVISION = 62;
+  const PARSER_REVISION = 63;
   const decoderFactory = () => new TextDecoder("utf-8");
   const state = {
     version: 55,
@@ -118,7 +118,13 @@
     }
     if (typeof node !== "object") return output;
     const direct = assistantText(node);
-    if (direct) output.push(direct);
+    // Once this node is an authoritative assistant message, its nested metadata
+    // (citations, sources, reference cards, etc.) must never compete as a second
+    // assistant answer. The parent content is the response body we own.
+    if (direct) {
+      output.push(direct);
+      return output;
+    }
     for (const value of Object.values(node)) collectAssistantTexts(value, output, depth + 1);
     return output;
   }
@@ -255,9 +261,21 @@
     let assistantRoleSeen = false;
     let fallbackText = "";
 
+    function snapshotAdvances(current, candidate, source) {
+      if (!candidate || candidate === current) return false;
+      if (!current) return true;
+      // Streaming text is monotonic in the normal path. A later direct/message
+      // candidate may be a citation/source card, and must not shrink a longer
+      // answer already recovered from the same response. JSON patch state is
+      // authoritative and may legitimately replace text with a shorter edit.
+      if (candidate.startsWith(current)) return true;
+      if (candidate.length >= current.length) return true;
+      return source === "json-patch" && !current.startsWith(candidate);
+    }
+
     function emitSnapshot(text, source) {
       const normalized = String(text || "");
-      if (!normalized || normalized === latestText) return;
+      if (!snapshotAdvances(latestText, normalized, source)) return;
       latestText = normalized;
       state.snapshots += 1;
       post({
