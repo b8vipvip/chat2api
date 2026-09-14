@@ -8,8 +8,10 @@
   const SERVER_FIFO_REVISION = 58;
   const CANCEL_TYPES = new Set(["chat.cancel", "image.cancel", "voice.cancel"]);
   const state = {
-    revision: 136,
+    revision: 140,
     stale_inflight_recoveries: 0,
+    orphan_owner_recoveries: 0,
+    server_authority_recoveries: 0,
     explicit_cancel_retirements: 0,
     last_recovery: null,
     last_cancel: null,
@@ -40,6 +42,13 @@
       && Number(message?.routing?.server_api_fifo_revision || 0) >= SERVER_FIFO_REVISION;
   }
 
+  function locallyLiveOwner(router, requestId) {
+    requestId = String(requestId || "");
+    if (!requestId) return false;
+    const active = router?.activeRequests;
+    return active instanceof Map && active.has(requestId);
+  }
+
   async function recoverStaleOwner(message) {
     const router = routerState();
     const key = logicalKey(message);
@@ -49,37 +58,61 @@
     const route = router.routes?.[key];
     const staleRequestId = String(route?.inflight_request_id || "");
     if (!staleRequestId || staleRequestId === requestId) return false;
-    if (!authoritativeServerAdmission(message) || typeof router.failRequest !== "function") return false;
+    if (typeof router.failRequest !== "function") return false;
 
-    // Scheduler v58 admits exactly one live request per logical API key.
-    // Therefore a newly dispatched v58-authoritative request proves that any
-    // different persisted browser owner is stale server state. Retire the
-    // uncertain old route/window before admitting the new request so a timed-out
-    // ChatGPT generation cannot poison this API key forever.
-    const retired = await router.failRequest(staleRequestId, "server-authority-stale-inflight-v136").catch(() => false);
+    // The browser map is process-local while route ownership is persisted.
+    // A service-worker restart can therefore leave inflight_request_id behind
+    // after the server/Broker has already terminally released the request. A
+    // newly dispatched request for the same logical key must not be rejected by
+    // that orphaned persisted owner. Conversely, if the old request is still
+    // present in the current process' activeRequests map, it is genuinely live
+    // and the strict one-request-per-key invariant must continue to reject the
+    // replacement.
+    if (locallyLiveOwner(router, staleRequestId)) return false;
+
+    const serverAuthoritative = authoritativeServerAdmission(message);
+
+    // retireRoute keeps a short de-duplication set. A late terminal callback
+    // can mark an old request retired before all persisted state is reconciled;
+    // remove only this exact orphan's marker before the exact-owner cleanup so
+    // the stale lock cannot become permanent. Exact request-id checks inside
+    // the router still prevent a late old cleanup from clearing a newer owner.
+    if (router.retiredRequests instanceof Set) router.retiredRequests.delete(staleRequestId);
+
+    // Keep the historical v136 reason token for production bundle compatibility;
+    // state.revision=140 and diagnostics below identify the corrected behavior.
+    const reason = serverAuthoritative
+      ? "server-authority-stale-inflight-v136"
+      : "orphaned-persisted-inflight-v140";
+    const retired = await router.failRequest(staleRequestId, reason).catch(() => false);
     if (!retired) return false;
+
     state.stale_inflight_recoveries += 1;
+    if (serverAuthoritative) state.server_authority_recoveries += 1;
+    else state.orphan_owner_recoveries += 1;
     state.last_recovery = {
       api_key_id: key,
       stale_request_id: staleRequestId,
       replacement_request_id: requestId,
+      server_authoritative: serverAuthoritative,
       at_ms: Date.now(),
     };
     return true;
   }
 
   const baseResolver = globalThis.resolveTargetTabForRequest;
-  if (typeof baseResolver === "function" && !baseResolver.__chat2apiRouteRecoveryV136) {
+  if (typeof baseResolver === "function" && !baseResolver.__chat2apiRouteRecoveryV140) {
     const wrappedResolver = async message => {
       await recoverStaleOwner(message);
       return baseResolver(message);
     };
     wrappedResolver.__chat2apiRouteRecoveryV136 = true;
+    wrappedResolver.__chat2apiRouteRecoveryV140 = true;
     globalThis.resolveTargetTabForRequest = wrappedResolver;
   }
 
   const baseHandleServerMessage = globalThis.handleServerMessage;
-  if (typeof baseHandleServerMessage === "function" && !baseHandleServerMessage.__chat2apiRouteRecoveryV136) {
+  if (typeof baseHandleServerMessage === "function" && !baseHandleServerMessage.__chat2apiRouteRecoveryV140) {
     const wrappedHandleServerMessage = async message => {
       if (!CANCEL_TYPES.has(String(message?.type || ""))) {
         return baseHandleServerMessage(message);
@@ -95,6 +128,7 @@
 
       const router = routerState();
       if (requestId && typeof router?.failRequest === "function") {
+        if (router.retiredRequests instanceof Set) router.retiredRequests.delete(requestId);
         const retired = await router.failRequest(requestId, "server-cancel-control-v136").catch(() => false);
         if (retired) {
           state.explicit_cancel_retirements += 1;
@@ -105,8 +139,10 @@
       return result;
     };
     wrappedHandleServerMessage.__chat2apiRouteRecoveryV136 = true;
+    wrappedHandleServerMessage.__chat2apiRouteRecoveryV140 = true;
     globalThis.handleServerMessage = wrappedHandleServerMessage;
   }
 
   state.recoverStaleOwner = recoverStaleOwner;
+  state.locallyLiveOwner = locallyLiveOwner;
 })();
