@@ -165,7 +165,7 @@ jobs:
           payload = json.load(open('/tmp/chat2api-version.json', encoding='utf-8'))
           assert payload['server']['runtime_aligned'] is True
           assert payload['server']['entrypoint'] == 'app.entry:app'
-          assert payload['server']['runtime_version'] == '0.22.87'
+          assert payload['server']['runtime_version'] == '0.22.88'
           assert payload['chrome_bridge']['bundle_version'] == '0.8.37'
           assert payload['chrome_bridge']['route_window_authority_revision'] == 30
           assert payload['chrome_bridge']['window_observer_revision'] == 90
@@ -175,6 +175,9 @@ jobs:
           assert payload['features']['request_id_namespace_v136'] is True
           assert payload['features']['chatgpt_login_ready_admission_v137'] is True
           assert payload['features']['window_manager_login_ready_filter_v137'] is True
+          assert payload['features']['admin_worker_manager_layout_v138'] is True
+          assert payload['features']['window_identity_v138'] is True
+          assert payload['features']['worker_limit_popover_v138'] is True
           assert payload['features']['linux_worker_device_authority_v124'] is True
           assert payload['features']['linux_worker_public_https_origin_v125'] is True
           assert payload['features']['linux_worker_isolated_management_v126'] is False

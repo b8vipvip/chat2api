@@ -23,7 +23,7 @@ def test_v02285_v0836_release_contract_publishes_persistent_pool() -> None:
     manifest = json.loads(read("chrome_extension/manifest.json"))
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
 
-    assert SERVER_RUNTIME_VERSION == "0.22.87"
+    assert SERVER_RUNTIME_VERSION == "0.22.88"
     assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.37"
     assert manifest["version"] == "0.8.37"
     assert "persistent prewarmed per-Worker window pool" in manifest["description"]
