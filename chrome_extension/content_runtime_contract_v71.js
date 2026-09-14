@@ -5,7 +5,7 @@
     try { chrome.runtime.onMessage.removeListener(prior.listener); } catch (_) {}
   }
 
-  const REQUIRED_BUNDLE = "0.8.37";
+  const REQUIRED_BUNDLE = "0.8.38";
   const REQUIRED_REVISION = 71;
 
   function snapshot() {
@@ -41,7 +41,7 @@
       response_single_owner_v53: Number(legacyResponseOwner?.owner_revision || 0) === 53,
       network_stream_recovery_v55: Number(networkRecovery?.version || 0) === 55,
       network_stream_main_v55: document.documentElement?.getAttribute?.("data-chat2api-network-stream-main-v55") === "55",
-      network_stream_parser_v62: document.documentElement?.getAttribute?.("data-chat2api-network-stream-parser") === "62",
+      network_stream_parser_v63: document.documentElement?.getAttribute?.("data-chat2api-network-stream-parser") === "63",
       native_tool_stream_v63: Number(nativeTool?.revision || 0) === 63,
       native_tool_stream_main_v63: document.documentElement?.getAttribute?.("data-chat2api-native-tool-stream") === "63",
       response_semantic_recovery_v51: Number(semanticHelper?.version || 0) === 51 && semanticHelper?.timer == null,
@@ -66,7 +66,7 @@
       conversation_quota_failover_revision: Number(conversationQuota?.revision || 0),
       ui_hygiene_revision: Number(uiHygiene?.state?.revision || 0),
       native_tool_stream_revision: Number(nativeTool?.revision || 0),
-      network_response_recovery: Number(networkRecovery?.version || 0) === 55 ? "conversation-sse-v55-parser-v62" : null,
+      network_response_recovery: Number(networkRecovery?.version || 0) === 55 ? "conversation-sse-v55-parser-v63" : null,
       network_response_parser_revision: Number(document.documentElement?.getAttribute?.("data-chat2api-network-stream-parser") || 0),
       semantic_helper_mode: semanticHelper?.mode || null,
       document_url: String(location.href || ""),
