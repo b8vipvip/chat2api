@@ -62,12 +62,10 @@ jobs:
           if "responses_tool_continuation_v141" not in text:
               text = text.replace(marker, marker + "          assert payload['features']['responses_tool_continuation_v141'] is True\n          assert payload['features']['responses_terminal_integrity_v142'] is True\n          assert payload['features']['window_observer_terminal_clear_v90'] is True\n          assert payload['features']['request_device_identity_sibling_v142'] is True\n")
           smoke.write_text(text, encoding='utf-8')
-
-          Path('.github/workflows/release-version-sync.yml').unlink()
           PY
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
+          git add -A ':!.github/workflows/release-version-sync.yml'
           git diff --cached --quiet && exit 0
           git commit -m "release: chat2api v0.22.91 worker v0.8.40"
           git push origin HEAD:release/v02291-v0840
