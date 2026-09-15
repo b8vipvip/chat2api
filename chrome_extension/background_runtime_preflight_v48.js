@@ -2,12 +2,12 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__";
   if (globalThis[KEY]) return;
 
-  // Worker bundle 0.8.39 keeps the v71 request/response epoch while requiring
+  // Worker bundle 0.8.40 keeps the v71 request/response epoch while requiring
   // the v63 native WebSocket tool observer, v78 MAIN-world upload bridge,
-  // v85 safe-submit gate, v88 terminal/prompt guard, v95 conversation-local
-  // quota failover owner, and v101 safe UI hygiene. Browser route/window
-  // ownership is independently enforced by background entry v0.8.39.
-  const REQUIRED_BUNDLE = "0.8.39";
+  // v85 safe-submit gate, v88 terminal/prompt guard, v89 terminal integrity,
+  // v95 conversation-local quota failover owner, and v101 safe UI hygiene.
+  // Browser route/window ownership is independently enforced by background entry v0.8.40.
+  const REQUIRED_BUNDLE = "0.8.40";
   const REQUIRED_REVISION = 71;
   const CONTRACT_TIMEOUT_MS = 700;
   const HOT_HEAL_BUDGET_MS = 2400;
@@ -34,6 +34,7 @@
     "content_native_tool_stream_v63.js",
     "content_request_terminal_prompt_v88.js",
     "content_response_semantic_recovery_v51.js",
+    "content_terminal_integrity_v89.js",
     "content_transient_retry_v50.js",
     "content_generation_liveness_v49.js",
     "content_bundle_marker_v71.js",
@@ -43,12 +44,13 @@
   const inflight = new Map();
   const state = {
     version: 71,
-    revision: 109,
+    revision: 110,
     required_bundle: REQUIRED_BUNDLE,
     required_revision: REQUIRED_REVISION,
     native_tool_stream_revision: 63,
     multimodal_revision: 85,
     terminal_prompt_revision: 88,
+    terminal_integrity_revision: 89,
     conversation_quota_failover_revision: 95,
     ui_hygiene_revision: 101,
     checks: 0,
@@ -114,6 +116,7 @@
       result?.modules?.multimodal_v85 &&
       result?.modules?.multimodal_main_v78 &&
       result?.modules?.terminal_prompt_v88 &&
+      result?.modules?.terminal_integrity_v89 &&
       result?.modules?.conversation_quota_failover_v95 &&
       result?.modules?.ui_hygiene_v101
     );
@@ -187,6 +190,7 @@
         native_tool_stream_revision: result.native_tool_stream_revision,
         multimodal_revision: result.multimodal_revision,
         terminal_prompt_revision: 88,
+        terminal_integrity_revision: result.terminal_integrity_revision,
         conversation_quota_failover_revision: 95,
         ui_hygiene_revision: result.ui_hygiene_revision,
         tool_preflight: toolPreflight,
@@ -227,7 +231,7 @@
         budget_ms: CONTRACT_TIMEOUT_MS + HOT_HEAL_BUDGET_MS + RELOAD_BUDGET_MS + FINAL_HEAL_BUDGET_MS,
         at_ms: Date.now(),
       });
-      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the bounded preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} native-tool-stream revision 63 multimodal revision 85 terminal/prompt revision 88 conversation-quota-failover revision 95 UI-hygiene revision 101`);
+      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the bounded preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} native-tool-stream revision 63 multimodal revision 85 terminal/prompt revision 88 terminal-integrity revision 89 conversation-quota-failover revision 95 UI-hygiene revision 101`);
       error.code = "chatgpt_runtime_preflight_budget";
       throw error;
     }
@@ -245,6 +249,7 @@
       native_tool_stream_revision: result.native_tool_stream_revision,
       multimodal_revision: result.multimodal_revision,
       terminal_prompt_revision: 88,
+      terminal_integrity_revision: result.terminal_integrity_revision,
       conversation_quota_failover_revision: 95,
       ui_hygiene_revision: result.ui_hygiene_revision,
       tool_preflight: toolPreflight,
