@@ -80,7 +80,7 @@ jobs:
               pairer = archive.extractfile("scripts/linux_worker_extension_pair.py").read().decode("utf-8")
               controller = archive.extractfile("scripts/linux_worker_device_controller.py").read().decode("utf-8")
               controller_helper = archive.extractfile("scripts/linux_worker_device_controller_helper.sh").read().decode("utf-8")
-          assert manifest["version"] == "0.8.39"
+          assert manifest["version"] == "0.8.40"
           assert "\"conversation_routing.js\"" in entry
           assert "\"conversation_route_recovery_v136.js\"" in entry
           assert "revision: 140" in recovery
@@ -169,8 +169,8 @@ jobs:
           payload = json.load(open('/tmp/chat2api-version.json', encoding='utf-8'))
           assert payload['server']['runtime_aligned'] is True
           assert payload['server']['entrypoint'] == 'app.entry:app'
-          assert payload['server']['runtime_version'] == '0.22.90'
-          assert payload['chrome_bridge']['bundle_version'] == '0.8.39'
+          assert payload['server']['runtime_version'] == '0.22.91'
+          assert payload['chrome_bridge']['bundle_version'] == '0.8.40'
           assert payload['chrome_bridge']['route_window_authority_revision'] == 30
           assert payload['chrome_bridge']['window_observer_revision'] == 90
           assert payload['chrome_bridge']['persistent_window_pool_revision'] == 132
@@ -178,6 +178,10 @@ jobs:
           assert payload['chrome_bridge']['route_recovery_revision'] == 140
           assert payload['features']['qnbot_stale_route_recovery_v136'] is True
           assert payload['features']['qnbot_orphan_owner_recovery_v140'] is True
+          assert payload['features']['responses_tool_continuation_v141'] is True
+          assert payload['features']['responses_terminal_integrity_v142'] is True
+          assert payload['features']['window_observer_terminal_clear_v90'] is True
+          assert payload['features']['request_device_identity_sibling_v142'] is True
           assert payload['features']['request_id_namespace_v136'] is True
           assert payload['features']['chatgpt_login_ready_admission_v137'] is True
           assert payload['features']['window_manager_login_ready_filter_v137'] is True
