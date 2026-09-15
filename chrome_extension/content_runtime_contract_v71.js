@@ -5,7 +5,7 @@
     try { chrome.runtime.onMessage.removeListener(prior.listener); } catch (_) {}
   }
 
-  const REQUIRED_BUNDLE = "0.8.39";
+  const REQUIRED_BUNDLE = "0.8.40";
   const REQUIRED_REVISION = 71;
 
   function snapshot() {
@@ -19,6 +19,7 @@
     const legacyResponseOwner = globalThis.__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__ || null;
     const multimodal = globalThis.__CHAT2API_MULTIMODAL_V4__ || null;
     const terminalPrompt = globalThis.__CHAT2API_REQUEST_TERMINAL_PROMPT_V88__ || null;
+    const terminalIntegrity = Boolean(globalThis.__CHAT2API_TERMINAL_INTEGRITY_V89__);
     const conversationQuota = globalThis.__CHAT2API_CONVERSATION_QUOTA_FAILOVER_V95__ || null;
     const uiHygiene = globalThis.__CHAT2API_UI_HYGIENE_V31__ || null;
     const modules = {
@@ -30,6 +31,7 @@
       multimodal_v85: Number(multimodal?.revision || 0) >= 85 && typeof multimodal?.waitForSafeSubmit === "function",
       multimodal_main_v78: document.documentElement?.getAttribute?.("data-chat2api-multimodal-main-v78") === "78",
       terminal_prompt_v88: Number(terminalPrompt?.revision || 0) >= 88,
+      terminal_integrity_v89: terminalIntegrity,
       conversation_quota_failover_v95: Number(conversationQuota?.revision || 0) >= 95 && typeof conversationQuota?.matchesConversationQuota === "function",
       ui_hygiene_v101: Number(uiHygiene?.state?.revision || 0) >= 101,
       request_lifecycle_v50: Number(globalThis.__CHAT2API_REQUEST_LIFECYCLE_V50__?.version || 0) === 50,
@@ -63,6 +65,7 @@
       response_revision: Number(recovery?.version || 0),
       multimodal_revision: Number(multimodal?.revision || 0),
       terminal_prompt_revision: Number(terminalPrompt?.revision || 0),
+      terminal_integrity_revision: terminalIntegrity ? 89 : 0,
       conversation_quota_failover_revision: Number(conversationQuota?.revision || 0),
       ui_hygiene_revision: Number(uiHygiene?.state?.revision || 0),
       native_tool_stream_revision: Number(nativeTool?.revision || 0),
