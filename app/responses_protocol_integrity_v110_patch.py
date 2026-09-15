@@ -11,6 +11,7 @@ PROTOCOL_ERROR_CODE = "responses_tool_bridge_protocol_error"
 
 _ORIGINAL_BRIDGE_PROMPT = bridge._bridge_prompt
 _ORIGINAL_INTERPRET = bridge._interpret
+_ORIGINAL_COMPLETED_RESPONSE = bridge._completed_response
 
 
 class ResponsesToolBridgeProtocolError(ValueError):
@@ -89,9 +90,20 @@ A partial marker or a plain-text answer is a transport failure, not a valid fina
     return prompt + "\n\n" + trailer, catalog
 
 
+def _completed_response(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    response = _ORIGINAL_COMPLETED_RESPONSE(*args, **kwargs)
+    metadata = response.get("metadata")
+    if not isinstance(metadata, dict):
+        metadata = {}
+        response["metadata"] = metadata
+    metadata["chat2api_tool_bridge_integrity"] = "v110"
+    return response
+
+
 def install_responses_protocol_integrity_v110_patch() -> None:
     bridge._bridge_prompt = _bridge_prompt
     bridge._interpret = _interpret
+    bridge._completed_response = _completed_response
 
 
 # Imported from app.__init__ so every v109 middleware instance sees the stricter
