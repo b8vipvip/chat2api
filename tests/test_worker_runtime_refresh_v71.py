@@ -11,17 +11,19 @@ EXT = ROOT / "chrome_extension"
 
 def test_worker_bundle_formally_seals_revisioned_content_epoch() -> None:
     manifest = json.loads((EXT / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.8.39"
+    assert manifest["version"] == "0.8.40"
     main_scripts = manifest["content_scripts"][0]["js"]
     scripts = manifest["content_scripts"][1]["js"]
     assert "multimodal_main_v78.js" in main_scripts
     assert "content_bundle_marker_v71.js" in scripts
     assert "content_runtime_contract_v71.js" in scripts
     assert "content_request_terminal_prompt_v88.js" in scripts
+    assert "content_terminal_integrity_v89.js" in scripts
     assert scripts.index("content_multimodal_v78.js") < scripts.index("content_multimodal_v68.js")
     assert scripts.index("content_rich_response_v69.js") < scripts.index("content_request_v6.js")
     assert scripts.index("content_request_v6.js") < scripts.index("content_response_stream_recovery_v69.js")
     assert scripts.index("content_network_stream_recovery_v55.js") < scripts.index("content_request_terminal_prompt_v88.js")
+    assert scripts.index("content_response_semantic_recovery_v51.js") < scripts.index("content_terminal_integrity_v89.js")
 
 
 def test_programmatic_bootstrap_matches_current_text_request_chain() -> None:
@@ -34,6 +36,7 @@ def test_programmatic_bootstrap_matches_current_text_request_chain() -> None:
         "content_request_v6.js",
         "content_response_stream_recovery_v69.js",
         "content_request_terminal_prompt_v88.js",
+        "content_terminal_integrity_v89.js",
         "content_runtime_contract_v71.js",
     ):
         assert name in bootstrap
@@ -42,7 +45,7 @@ def test_programmatic_bootstrap_matches_current_text_request_chain() -> None:
 
 def test_runtime_preflight_hot_heals_before_reload() -> None:
     preflight = (EXT / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
-    assert 'REQUIRED_BUNDLE = "0.8.39"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.8.40"' in preflight
     assert "REQUIRED_REVISION = 71" in preflight
     assert '"multimodal_main_v78.js"' in preflight
     assert 'world: "MAIN"' in preflight
@@ -51,16 +54,18 @@ def test_runtime_preflight_hot_heals_before_reload() -> None:
     assert "content_request_v6.js" in preflight
     assert "content_response_stream_recovery_v69.js" in preflight
     assert "content_request_terminal_prompt_v88.js" in preflight
+    assert "content_terminal_integrity_v89.js" in preflight
     assert "result?.modules?.multimodal_v78" in preflight
     assert "result?.modules?.multimodal_main_v78" in preflight
     assert "result?.modules?.terminal_prompt_v88" in preflight
+    assert "result?.modules?.terminal_integrity_v89" in preflight
     assert "result = await heal(tabId)" in preflight
     assert "waitForReloadOrContract" in preflight
 
 
 def test_v71_contract_preserves_full_v48_runtime_checks_and_current_text_epoch() -> None:
     contract = (EXT / "content_runtime_contract_v71.js").read_text(encoding="utf-8")
-    assert 'REQUIRED_BUNDLE = "0.8.39"' in contract
+    assert 'REQUIRED_BUNDLE = "0.8.40"' in contract
     assert "REQUIRED_REVISION = 71" in contract
     for token in (
         "__CHAT2API_REQUEST_CONTENT_V6__",
@@ -68,7 +73,9 @@ def test_v71_contract_preserves_full_v48_runtime_checks_and_current_text_epoch()
         "__CHAT2API_RESPONSE_STREAM_RECOVERY_V69__",
         "__CHAT2API_MULTIMODAL_V4__",
         "__CHAT2API_REQUEST_TERMINAL_PROMPT_V88__",
+        "__CHAT2API_TERMINAL_INTEGRITY_V89__",
         "terminal_prompt_v88",
+        "terminal_integrity_v89",
         "multimodal_v78",
         "data-chat2api-multimodal-main-v78",
         "__CHAT2API_NETWORK_STREAM_RECOVERY_V55__",
