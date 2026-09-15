@@ -165,3 +165,20 @@ def test_emulated_middleware_stays_inside_model_and_billing_owner() -> None:
     assert '"mcp_tool_call_output"' in emulated
     assert '"custom_tool_call_output"' in emulated
     assert '"tool_search_output"' in emulated
+
+
+def test_v141_tool_continuation_without_repeated_tools_recovers_catalog():
+    from types import SimpleNamespace
+    import app.responses_emulated_tools_v109_patch as mod
+    app = SimpleNamespace(state=SimpleNamespace())
+    first = {"tools": [{"type": "function", "name": "lookup_order", "description": "lookup an order", "parameters": {"type": "object", "properties": {"id": {"type": "string"}}}}]}
+    catalog = mod._catalog(first, app)
+    mod._store(app, {"id": "resp_parent", "output": [], "store": False}, catalog)
+    continuation = {"previous_response_id": "resp_parent", "input": [{"type": "function_call_output", "call_id": "call_1", "output": "order found"}]}
+    assert mod.needs_emulated_tools(continuation, app) is True
+    recovered = mod._catalog(continuation, app)
+    assert recovered and recovered[0]["name"] == "lookup_order"
+    prompt, prompt_catalog = mod._bridge_prompt(app, continuation)
+    assert prompt_catalog[0]["name"] == "lookup_order"
+    assert "order found" in prompt
+    assert "lookup_order" in prompt

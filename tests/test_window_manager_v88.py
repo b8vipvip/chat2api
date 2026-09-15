@@ -34,6 +34,14 @@ def test_v88_window_manager_is_retired_as_browser_authority_and_v90_is_observer_
     assert "chrome.windows.remove" not in observer
 
 
+def test_v90_terminal_events_explicitly_clear_request_assignment() -> None:
+    observer = text("chrome_extension/background_window_observer_v90.js")
+    assert 'Object.prototype.hasOwnProperty.call(source, "request_id")' in observer
+    assert 'record.request_id = source.request_id' in observer
+    assert 'record.request_id = source.request_id ?? record.request_id' not in observer
+    assert 'request_id: ["chat.completed", "chat.error", "chat.cancelled", "image.completed", "image.error", "image.cancelled"].includes(event.type) ? null : requestId' in observer
+
+
 def test_window_creation_is_registered_as_loading_before_pool_readiness() -> None:
     source = text("chrome_extension/background_window_lifecycle_observer_v88.js")
     assert "const baseCreate = chrome.windows.create.bind(chrome.windows)" in source

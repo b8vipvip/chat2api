@@ -130,7 +130,7 @@
     if (Number.isInteger(tabId)) record.tab_id = tabId;
     if (source.source) record.source = source.source;
     record.status = source.status || record.status;
-    record.request_id = source.request_id ?? record.request_id;
+    if (Object.prototype.hasOwnProperty.call(source, "request_id")) record.request_id = source.request_id;
     record.route_key = source.route_key ?? record.route_key;
     record.last_seen_at_ms = Date.now();
     return record;
