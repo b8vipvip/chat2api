@@ -9,6 +9,7 @@ import app.responses_protocol_integrity_v110_patch as integrity
 
 
 ROOT = Path(__file__).resolve().parents[1]
+MARKER = "FDEX_CODEX_SMOKE_f3e12090582943c0_WIRE"
 
 
 def envelope(value: dict) -> str:
@@ -29,7 +30,7 @@ def body() -> dict:
         "input": [
             {
                 "role": "user",
-                "content": "Reply with exact marker FDEX_CODEX_SMOKE_f3e12090582943c0_WIRE",
+                "content": f"Reply with exact marker {MARKER}",
             }
         ],
     }
@@ -41,11 +42,20 @@ def test_plain_or_truncated_final_is_protocol_failure_not_completed_text() -> No
         bridge._interpret("FDEX_CODEX_SMOKE_f3e120905829_", catalog, body())
 
 
-def test_exact_final_inside_complete_envelope_is_preserved_byte_for_byte() -> None:
-    marker = "FDEX_CODEX_SMOKE_f3e12090582943c0_WIRE"
+def test_truncated_exact_literal_inside_valid_envelope_is_still_protocol_failure() -> None:
     catalog = bridge._catalog(body())
-    text, items = bridge._interpret(envelope({"kind": "final", "text": marker}), catalog, body())
-    assert text == marker
+    with pytest.raises(integrity.ResponsesToolBridgeProtocolError, match="exact literal"):
+        bridge._interpret(
+            envelope({"kind": "final", "text": "FDEX_CODEX_SMOKE_f3e120905829_"}),
+            catalog,
+            body(),
+        )
+
+
+def test_exact_final_inside_complete_envelope_is_preserved_byte_for_byte() -> None:
+    catalog = bridge._catalog(body())
+    text, items = bridge._interpret(envelope({"kind": "final", "text": MARKER}), catalog, body())
+    assert text == MARKER
     assert items == []
 
 
@@ -62,6 +72,7 @@ def test_bridge_prompt_repeats_literal_integrity_contract_at_generation_boundary
     tail = prompt.rsplit("FINAL TRANSPORT INTEGRITY CHECK (v110):", 1)[1]
     assert "byte-for-byte" in tail
     assert "partial marker" in tail.lower()
+    assert MARKER in tail
     assert bridge.BRIDGE_START in tail
     assert bridge.BRIDGE_END in tail
 
