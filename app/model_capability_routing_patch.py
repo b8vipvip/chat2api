@@ -11,9 +11,13 @@ from . import mini_multimodal_quota_patch as mini_quota
 from . import v13_patch
 
 
-PATCH_ID = "model-capability-routing-v2"
+PATCH_ID = "model-capability-routing-v3-dynamic"
+# Compatibility constants are kept for older patches/tests. Routing is no longer
+# limited to this static set: every text model advertised by a ready Worker is a
+# first-class route target.
 PAID_TEXT_MODELS = {"gpt-5.6-sol", "gpt-5.5"}
 MINI_MODEL = "gpt-5.5-mini"
+SPECIAL_MODELS = {"default", "chatgpt-web", "gpt-image", "gpt-live", "gpt-live-mini"}
 _MODEL_CONTEXT: ContextVar[dict[str, Any] | None] = ContextVar(
     "chat2api_model_capability_routing_context",
     default=None,
@@ -24,19 +28,17 @@ def _account_type(registry: Any, client_id: str) -> str:
     item = registry.clients.get(str(client_id))
     metadata = getattr(item, "metadata", None) if item else None
     value = str((metadata or {}).get("account_type") or "unknown").strip().lower()
-    return value if value in {"free", "paid"} else "unknown"
+    if value in {"plus", "pro"}:
+        return value
+    if value == "paid":
+        # Historical Bridges reported all subscriptions as paid. Treat that as
+        # Plus for routing/presentation compatibility until the Bridge can
+        # distinguish a Pro account explicitly.
+        return "plus"
+    return value if value == "free" else "unknown"
 
 
 def _advertised_models(registry: Any, client_id: str) -> set[str]:
-    """Return normalized model ids from the real registry model shape.
-
-    ClientRegistry.client_models() returns dictionaries in production, while the
-    original routing guard accidentally stringified those dictionaries. That made
-    an online unknown/paid Worker advertising gpt-5.5 look incompatible with
-    gpt-5.5-mini and could fail a vision request with HTTP 503 before dispatch.
-    Keep string support for older/fake registries, but parse dict ids explicitly.
-    """
-
     try:
         values = registry.client_models(client_id)
     except Exception:
@@ -53,6 +55,11 @@ def _advertised_models(registry: Any, client_id: str) -> set[str]:
     return result
 
 
+def _is_dynamic_text_model(model: str) -> bool:
+    value = str(model or "").strip().lower()
+    return bool(value) and value not in SPECIAL_MODELS
+
+
 def _compatible(registry: Any, client_id: str, model: str) -> bool:
     checker = getattr(registry, "chatgpt_routing_ready", None)
     if callable(checker):
@@ -67,23 +74,32 @@ def _compatible(registry: Any, client_id: str, model: str) -> bool:
         from .login_readiness import chatgpt_routing_ready
         if not chatgpt_routing_ready(metadata):
             return False
+
     model = str(model or "").strip().lower()
     account = _account_type(registry, client_id)
     advertised = _advertised_models(registry, client_id)
 
-    if model in PAID_TEXT_MODELS:
-        if account == "free":
-            return False
-        return not advertised or model in advertised
-
     if model == MINI_MODEL:
-        if account == "free":
+        if model in advertised:
             return True
-        # Paid/unknown Workers exposing the parent gpt-5.5 model can execute the
-        # mini compatibility route even if the page catalog omits a separate
-        # gpt-5.5-mini row. This is the shape reported by Linux Workers after a
-        # reconnect while account-plan detection is still settling.
-        return not advertised or MINI_MODEL in advertised or "gpt-5.5" in advertised
+        if account == "free":
+            return not advertised or "gpt-5.5" in advertised
+        return not advertised or "gpt-5.5" in advertised
+
+    if _is_dynamic_text_model(model):
+        # The browser's live model picker is the capability authority. A Worker
+        # that explicitly advertises a model may serve it even if an older plan
+        # detector still says free/paid. This prevents stale account metadata
+        # from rejecting a real Plus/Pro capability and makes future models work
+        # without a server release.
+        if advertised:
+            return model in advertised
+        # No catalog means an old Bridge. Preserve the historical paid-family
+        # fallback only for models we already knew; unknown future models require
+        # positive discovery so they cannot be sent blindly.
+        if model in PAID_TEXT_MODELS:
+            return account != "free"
+        return False
 
     return True
 
@@ -108,23 +124,18 @@ def _select_mini(registry: Any, *, needs_multimodal: bool) -> str:
     eligible = _idle_compatible(registry, MINI_MODEL)
     if not eligible:
         raise ConnectionError("No compatible Chrome extension is available for gpt-5.5-mini")
-
     free = [client_id for client_id in eligible if _account_type(registry, client_id) == "free"]
     fallback = [client_id for client_id in eligible if _account_type(registry, client_id) != "free"]
-
     if not needs_multimodal:
-        if free:
-            return secrets.choice(free)
-        if fallback:
-            return secrets.choice(fallback)
+        candidates = free or fallback
+        if candidates:
+            return secrets.choice(candidates)
         raise ConnectionError("No compatible Chrome extension is available for gpt-5.5-mini")
-
     free_ready = [client_id for client_id in free if mini_quota._multimodal_available(registry, client_id)]
     if free_ready:
         return secrets.choice(free_ready)
     if fallback:
         return secrets.choice(fallback)
-
     cooling_free = [client_id for client_id in free if not mini_quota._multimodal_available(registry, client_id)]
     if cooling_free:
         restore_times = sorted(
@@ -148,7 +159,6 @@ class _ModelRequestContextMiddleware:
         if scope.get("type") != "http" or scope.get("method") != "POST" or scope.get("path") != "/v1/chat/completions":
             await self.app(scope, receive, send)
             return
-
         chunks: list[bytes] = []
         while True:
             message = await receive()
@@ -159,7 +169,6 @@ class _ModelRequestContextMiddleware:
             if not message.get("more_body", False):
                 break
         raw = b"".join(chunks)
-
         sent_body = False
 
         async def replay_receive():
@@ -173,20 +182,16 @@ class _ModelRequestContextMiddleware:
         try:
             payload = json.loads(raw.decode("utf-8")) if raw else {}
             if isinstance(payload, dict):
-                # Parse the public model literal first. Historical v13 predates
-                # gpt-5.5-mini and may reject that literal; such a rejection must
-                # not erase the final routing target we already know from the API.
                 raw_model = str(payload.get("model") or "").strip().lower()
                 try:
                     target = dict(v13_patch._target_from_payload(payload))
                 except (ValueError, TypeError, KeyError):
                     target = {}
-                if raw_model in PAID_TEXT_MODELS | {MINI_MODEL}:
+                if raw_model:
                     target["model"] = raw_model
                 target["needs_multimodal"] = bool(target.get("needs_multimodal")) or mini_quota._needs_multimodal(payload)
         except (UnicodeDecodeError, ValueError, TypeError):
             target = None
-
         local_token = _MODEL_CONTEXT.set(target)
         historical_token = v13_patch._target_context.set(target)
         try:
@@ -199,22 +204,18 @@ class _ModelRequestContextMiddleware:
 def install_model_capability_routing_patch(app: FastAPI) -> FastAPI:
     if getattr(app.state, "model_capability_routing_patch_installed", False):
         return app
-
     registry = app.state.registry
     base_resolve_client = registry.resolve_client
 
     def resolve_client_with_model_capability(requested: str | None) -> str:
         target = _MODEL_CONTEXT.get() or v13_patch._target_context.get() or {}
         model = str(target.get("model") or "").strip().lower()
-        if model not in PAID_TEXT_MODELS | {MINI_MODEL}:
+        if not _is_dynamic_text_model(model):
             return base_resolve_client(requested)
-
         if requested:
             selected = base_resolve_client(requested)
             if not _compatible(registry, selected, model):
-                raise LookupError(
-                    f"Requested Worker is not compatible with {model}: {_description(registry, selected)}"
-                )
+                raise LookupError(f"Requested Worker is not compatible with {model}: {_description(registry, selected)}")
             if model == MINI_MODEL and bool(target.get("needs_multimodal")):
                 if _account_type(registry, selected) == "free" and not mini_quota._multimodal_available(registry, selected):
                     until_ms = mini_quota._cooldown_until_ms(registry, selected)
@@ -223,28 +224,21 @@ def install_model_capability_routing_patch(app: FastAPI) -> FastAPI:
                         + (f" until {mini_quota._iso_from_ms(until_ms)}" if until_ms else "")
                     )
             return selected
-
         if model == MINI_MODEL:
             return _select_mini(registry, needs_multimodal=bool(target.get("needs_multimodal")))
-
         eligible = _idle_compatible(registry, model)
         if not eligible:
-            online_idle = [
-                client_id for client_id in registry.online_client_ids()
-                if client_id not in registry.busy_clients
-            ]
+            online_idle = [client_id for client_id in registry.online_client_ids() if client_id not in registry.busy_clients]
             available = "; ".join(_description(registry, client_id) for client_id in online_idle)
             raise ConnectionError(
-                f"No online Worker is compatible with {model}. Available: {available or 'none'}. "
-                f"ChatGPT Free Workers can serve {MINI_MODEL} only; connect a paid/unknown Worker that advertises {model}."
+                f"No online Worker advertises requested model {model}. Available: {available or 'none'}. "
+                "Refresh/login the Worker so its live ChatGPT model catalog is reported."
             )
-
         key_id = registry.routing_key_context.get()
         if key_id:
             previous = registry.api_key_routes.get(key_id)
             if previous in eligible:
                 return previous
-
         selected = secrets.choice(eligible)
         registry._remember_route(key_id, selected)
         return selected
