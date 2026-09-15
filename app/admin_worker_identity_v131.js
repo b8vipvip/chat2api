@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_ADMIN_WORKER_IDENTITY_V131__";
   if (globalThis[KEY]) return;
 
-  const state = { version: 138, observer: null };
+  const state = { version: 143, observer: null };
   globalThis[KEY] = state;
 
   const esc = value => String(value ?? "")
@@ -101,8 +101,20 @@
 
   function decoratePersistentWindowCopy() {
     const header = document.querySelector('#extensionDeviceBody')?.closest('table')?.querySelector('thead [data-chat2api-column-key="worker_settings"]');
-    if (header) {
-      header.title = "并发=同时执行的请求上限；窗口=该 Worker 登录后持续维持的 ChatGPT 物理窗口总数。点击编辑按钮修改。";
+    if (header) header.title = "并发=同时执行的请求上限；窗口=该 Worker 登录后持续维持的 ChatGPT 物理窗口总数。点击编辑按钮修改。";
+  }
+
+  function decorateAccountTierLabels() {
+    const body = document.getElementById("extensionDeviceBody");
+    if (!body) return;
+    for (const row of body.rows) {
+      const cell = row.querySelector('[data-chat2api-column-key="account_type"]');
+      const pill = cell?.querySelector(".pill");
+      if (!pill) continue;
+      const value = String(pill.textContent || "").trim().toLowerCase();
+      if (value === "付费" || value === "paid") pill.textContent = "Plus";
+      else if (value === "pro") pill.textContent = "Pro";
+      else if (value === "free") pill.textContent = "Free";
     }
   }
 
@@ -110,6 +122,7 @@
     decorateWindowManager();
     decorateLinuxWorkerManager();
     decoratePersistentWindowCopy();
+    decorateAccountTierLabels();
   }
 
   function start() {
@@ -119,7 +132,7 @@
     const observer = new MutationObserver(() => decorate());
     observer.observe(root, { childList: true, subtree: true });
     state.observer = observer;
-    document.documentElement.dataset.chat2apiWorkerIdentityRevision = "138";
+    document.documentElement.dataset.chat2apiWorkerIdentityRevision = "143";
   }
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
