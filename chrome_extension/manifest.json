@@ -97,6 +97,7 @@
         "content_native_tool_stream_v63.js",
         "content_request_terminal_prompt_v88.js",
         "content_response_semantic_recovery_v51.js",
+        "content_terminal_integrity_v89.js",
         "content_transient_retry_v50.js",
         "content_request_stall_guard_v34.js",
         "content_generation_liveness_v49.js",
