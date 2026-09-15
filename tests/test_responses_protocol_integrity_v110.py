@@ -69,7 +69,7 @@ def test_bridge_prompt_repeats_literal_integrity_contract_at_generation_boundary
 def test_worker_terminal_integrity_is_loaded_after_semantic_recovery() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.8.40"
+    assert manifest["version"] == "0.8.39"
     assert scripts.index("content_terminal_integrity_v89.js") > scripts.index("content_response_semantic_recovery_v51.js")
     source = (ROOT / "chrome_extension" / "content_terminal_integrity_v89.js").read_text(encoding="utf-8")
     assert "next.startsWith(current)" in source
