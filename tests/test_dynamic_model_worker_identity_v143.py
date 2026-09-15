@@ -46,11 +46,11 @@ def test_paid_legacy_value_normalizes_to_plus():
 
 
 def test_worker_console_uses_plus_and_reserves_pro_label():
-    source = Path("app/admin_extension_columns.js").read_text(encoding="utf-8")
-    assert 'if(v==="paid")return"plus"' in source
-    assert '>Plus</span>' in source
-    assert '>Pro</span>' in source
-    assert '>付费</span>' not in source
+    source = Path("app/admin_worker_identity_v131.js").read_text(encoding="utf-8")
+    assert 'value === "付费" || value === "paid"' in source
+    assert 'pill.textContent = "Plus"' in source
+    assert 'pill.textContent = "Pro"' in source
+    assert 'pill.textContent = "Free"' in source
 
 
 def test_request_identity_uses_linux_worker_authority():
