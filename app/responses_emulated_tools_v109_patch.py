@@ -48,17 +48,49 @@ def _request_tools(body: dict[str, Any]) -> list[dict[str, Any]]:
     return tools
 
 
-def needs_emulated_tools(body: dict[str, Any]) -> bool:
+def _tool_catalog_store(app: FastAPI) -> OrderedDict[str, list[dict[str, Any]]]:
+    store = getattr(app.state, "responses_v109_tool_catalog_store", None)
+    if not isinstance(store, OrderedDict):
+        store = OrderedDict()
+        app.state.responses_v109_tool_catalog_store = store
+    return store
+
+
+def _stored_tool_catalog(app: FastAPI, body: dict[str, Any]) -> list[dict[str, Any]]:
+    previous = str(body.get("previous_response_id") or "").strip()
+    if not previous:
+        return []
+    store = _tool_catalog_store(app)
+    catalog = store.get(previous)
+    if not isinstance(catalog, list):
+        return []
+    store.move_to_end(previous)
+    return [dict(item) for item in catalog if isinstance(item, dict)]
+
+
+def _has_tool_output_input(body: dict[str, Any]) -> bool:
+    value = body.get("input")
+    if not isinstance(value, list):
+        return False
+    return any(isinstance(item, dict) and str(item.get("type") or "").strip() in {"function_call_output", "custom_tool_call_output", "mcp_tool_call_output", "tool_search_output"} for item in value)
+
+
+def needs_emulated_tools(body: dict[str, Any], app: FastAPI | None = None) -> bool:
     for tool in _request_tools(body):
         kind = str(tool.get("type") or "").strip()
         if kind and kind not in SUPPORTED_NATIVE_TOOLS:
             return True
+    if app is not None and _has_tool_output_input(body):
+        return bool(_stored_tool_catalog(app, body))
     return False
 
 
-def _catalog(body: dict[str, Any]) -> list[dict[str, Any]]:
+def _catalog(body: dict[str, Any], app: FastAPI | None = None) -> list[dict[str, Any]]:
+    requested = _request_tools(body)
+    if not requested and app is not None:
+        return _stored_tool_catalog(app, body)
     catalog: list[dict[str, Any]] = []
-    for tool in _request_tools(body):
+    for tool in requested:
         kind = str(tool.get("type") or "").strip()
         if kind in SUPPORTED_NATIVE_TOOLS:
             continue
@@ -184,7 +216,7 @@ def _stored_context(app: FastAPI, body: dict[str, Any]) -> str:
 
 
 def _bridge_prompt(app: FastAPI, body: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
-    catalog = _catalog(body)
+    catalog = _catalog(body, app)
     if not catalog:
         raise ValueError("No emulatable Responses tools were supplied")
     context = _input_context(body)
@@ -350,7 +382,7 @@ def _interpret(text: str, catalog: list[dict[str, Any]], body: dict[str, Any]) -
     return str(text or "").strip(), []
 
 
-def _store(app: FastAPI, response: dict[str, Any]) -> None:
+def _store(app: FastAPI, response: dict[str, Any], catalog: list[dict[str, Any]] | None = None) -> None:
     store = getattr(app.state, "responses_v109_context_store", None)
     if not isinstance(store, OrderedDict):
         store = OrderedDict()
@@ -360,6 +392,12 @@ def _store(app: FastAPI, response: dict[str, Any]) -> None:
         store[response_id] = response
         while len(store) > 256:
             store.popitem(last=False)
+        if catalog:
+            tool_store = _tool_catalog_store(app)
+            tool_store[response_id] = [dict(item) for item in catalog]
+            tool_store.move_to_end(response_id)
+            while len(tool_store) > 256:
+                tool_store.popitem(last=False)
     if bool(response.get("store", False)):
         public_store = getattr(app.state, "responses_v108_store", None)
         if isinstance(public_store, OrderedDict) and response_id:
@@ -433,7 +471,7 @@ async def _emulated_stream(
             seq += 1
             yield _sse("response.output_item.done", seq, output_index=0, item=_message_item(message_id, output_text))
         completed = _completed_response(response_id, body, prompt, bridge_text, output_text, tool_items, created_at)
-        _store(app, completed)
+        _store(app, completed, catalog)
         seq += 1
         yield _sse("response.completed", seq, response=completed)
     except asyncio.TimeoutError:
@@ -487,7 +525,7 @@ async def _handle(app: FastAPI, request: Request, body: dict[str, Any]):
         bridge_text, _ = await _collect(state, timeout, False)
         output_text, tool_items = _interpret(bridge_text, catalog, body)
         response = _completed_response(response_id, body, prompt, bridge_text, output_text, tool_items, created_at)
-        _store(app, response)
+        _store(app, response, catalog)
         return JSONResponse(response, headers={"X-Chat2API-Tool-Bridge": "emulated-v109"})
     except asyncio.TimeoutError:
         try:
@@ -542,7 +580,7 @@ class ResponsesEmulatedToolsMiddleware:
                 return {"type": "http.request", "body": raw, "more_body": False}
             return await receive()
 
-        if not isinstance(body, dict) or not needs_emulated_tools(body):
+        if not isinstance(body, dict) or not needs_emulated_tools(body, self.server_app):
             await self.app(scope, replay_receive, send)
             return
         request = Request(scope, replay_receive)
