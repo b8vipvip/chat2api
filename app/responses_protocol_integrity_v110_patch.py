@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from . import responses_emulated_tools_v109_patch as bridge
@@ -12,10 +13,65 @@ PROTOCOL_ERROR_CODE = "responses_tool_bridge_protocol_error"
 _ORIGINAL_BRIDGE_PROMPT = bridge._bridge_prompt
 _ORIGINAL_INTERPRET = bridge._interpret
 _ORIGINAL_COMPLETED_RESPONSE = bridge._completed_response
+_LITERAL_TOKEN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{11,}")
 
 
 class ResponsesToolBridgeProtocolError(ValueError):
     """Raised when ChatGPT returns a transport-invalid emulated-tool response."""
+
+
+def _input_texts(body: dict[str, Any]) -> list[str]:
+    value = body.get("input")
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, list):
+        return []
+    texts: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            texts.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("type") or "message")
+        if kind not in {"message", "input_message", "easy_input_message"}:
+            continue
+        content = item.get("content")
+        if isinstance(content, str):
+            texts.append(content)
+        elif isinstance(content, list):
+            for piece in content:
+                if isinstance(piece, str):
+                    texts.append(piece)
+                elif isinstance(piece, dict):
+                    text = piece.get("text") or piece.get("content")
+                    if isinstance(text, str):
+                        texts.append(text)
+    return texts
+
+
+def _required_exact_literals(body: dict[str, Any]) -> list[str]:
+    """Extract only literals the caller explicitly labels exact in input messages."""
+    found: list[str] = []
+    for text in _input_texts(body):
+        lowered = text.lower()
+        for phrase in ("exact marker", "exact string"):
+            offset = 0
+            while True:
+                index = lowered.find(phrase, offset)
+                if index < 0:
+                    break
+                window = text[index : index + 240]
+                candidates = _LITERAL_TOKEN.findall(window)
+                # Ignore prose-like words; exact smoke/request literals normally
+                # contain an underscore and/or a digit. Prefer the longest token.
+                candidates = [token for token in candidates if "_" in token or any(ch.isdigit() for ch in token)]
+                if candidates:
+                    token = max(candidates, key=len)
+                    if token not in found:
+                        found.append(token)
+                offset = index + len(phrase)
+    return found[:4]
 
 
 def _strict_envelope(text: str) -> dict[str, Any]:
@@ -71,12 +127,25 @@ def _interpret(
     # success indistinguishable from protocol success: a truncated literal could
     # be reported as response.completed. v110 requires the contract first, then
     # delegates canonical tool-item validation to v109.
-    _strict_envelope(text)
+    value = _strict_envelope(text)
+    if str(value.get("kind") or "") == "final":
+        final_text = str(value.get("text") or "")
+        missing = [literal for literal in _required_exact_literals(body) if literal not in final_text]
+        if missing:
+            raise ResponsesToolBridgeProtocolError(
+                "ChatGPT truncated or changed an explicitly required exact literal"
+            )
     return _ORIGINAL_INTERPRET(text, catalog, body)
 
 
 def _bridge_prompt(app: Any, body: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     prompt, catalog = _ORIGINAL_BRIDGE_PROMPT(app, body)
+    literals = _required_exact_literals(body)
+    literal_note = ""
+    if literals:
+        literal_note = "\nExplicit exact literals from caller input (copy whole if required): " + json.dumps(
+            literals, ensure_ascii=False, separators=(",", ":")
+        )
     # Repeat the transport contract at the *end* of the large Codex prompt. The
     # original contract can be tens of thousands of characters away from the
     # model's generation boundary, which makes exact literals easier to shorten
@@ -86,7 +155,7 @@ Your entire response MUST start with {bridge.BRIDGE_START} and MUST end with {br
 Return exactly one JSON object inside those sentinel lines and no text outside them.
 When kind=final, copy the final text literally. Preserve identifiers, request IDs, hashes, markers, underscores, suffixes, capitalization, and punctuation byte-for-byte; never abbreviate, normalize, summarize, or truncate them.
 If the conversation asks for an exact marker/string, put that complete exact string in the JSON field \"text\".
-A partial marker or a plain-text answer is a transport failure, not a valid final response."""
+A partial marker or a plain-text answer is a transport failure, not a valid final response.{literal_note}"""
     return prompt + "\n\n" + trailer, catalog
 
 
