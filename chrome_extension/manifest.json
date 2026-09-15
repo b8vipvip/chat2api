@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "chat2api Worker",
-  "version": "0.8.39",
+  "version": "0.8.40",
   "description": "Turns logged-in ChatGPT browser windows into a remotely callable chat2api Worker with server-side per-API FIFO admission, a persistent prewarmed per-Worker window pool, stable logical-conversation routing, Responses tools, multimodal, image-generation and realtime Voice support.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -83,8 +83,6 @@
         "content_request_v5.js",
         "content_rich_response_v69.js",
         "content_request_v6.js",
-        "content_interruption_guard_v72.js",
-        "content_request_interruption_bridge_v72.js",
         "content_request_lifecycle_v50.js",
         "content_conversation_quota_failover_v95.js",
         "content_request_hygiene_v42.js",
