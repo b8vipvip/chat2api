@@ -1,0 +1,68 @@
+name: Contract Migration Guard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - app/runtime_contract.py
+      - chrome_extension/manifest.json
+      - chrome_extension/content_request_v5.js
+      - chrome_extension/content_request_v6.js
+      - chrome_extension/content_response_stream_recovery_v49.js
+      - chrome_extension/content_response_semantic_recovery_v51.js
+      - chrome_extension/background_runtime_preflight_v48.js
+      - chrome_extension/content_runtime_contract_v48.js
+      - chrome_extension/content_bundle_marker_v48.js
+      - tests/test_runtime_contract.py
+      - tests/test_request_chain_v68.py
+      - tests/test_single_response_observer_v53.py
+      - tests/test_response_epoch_rich_v69.py
+      - tests/test_worker_runtime_refresh_v71.py
+      - tests/runtime_preflight_refresh_v71.mjs
+      - scripts/check_contract_migration.py
+      - .github/workflows/contract-migration-guard.yml
+  pull_request:
+    paths:
+      - app/runtime_contract.py
+      - chrome_extension/manifest.json
+      - chrome_extension/content_request_v5.js
+      - chrome_extension/content_request_v6.js
+      - chrome_extension/content_response_stream_recovery_v49.js
+      - chrome_extension/content_response_semantic_recovery_v51.js
+      - chrome_extension/background_runtime_preflight_v48.js
+      - chrome_extension/content_runtime_contract_v48.js
+      - chrome_extension/content_bundle_marker_v48.js
+      - tests/test_runtime_contract.py
+      - tests/test_request_chain_v68.py
+      - tests/test_single_response_observer_v53.py
+      - tests/test_response_epoch_rich_v69.py
+      - tests/test_worker_runtime_refresh_v71.py
+      - tests/runtime_preflight_refresh_v71.mjs
+      - scripts/check_contract_migration.py
+      - .github/workflows/contract-migration-guard.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: contract-migration-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Validate response/runtime contract migration
+        env:
+          CONTRACT_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python scripts/check_contract_migration.py
