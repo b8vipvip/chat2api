@@ -2,72 +2,48 @@ name: Actions Policy Check
 
 on:
   pull_request:
-    paths:
-      - '.github/workflows/**'
-      - '.github/scripts/**'
-      - '.github/ACTIONS_STRATEGY.md'
+    paths: ['.github/workflows/**', '.github/scripts/**', '.github/ACTIONS_STRATEGY.md', '.github/GITHUB_AGENT.md']
   push:
     branches: [main]
-    paths:
-      - '.github/workflows/**'
-      - '.github/scripts/**'
-      - '.github/ACTIONS_STRATEGY.md'
+    paths: ['.github/workflows/**', '.github/scripts/**', '.github/ACTIONS_STRATEGY.md', '.github/GITHUB_AGENT.md']
   workflow_dispatch:
     inputs:
-      ref:
-        description: Optional ref to validate; blank uses current ref
-        required: false
-        type: string
+      ref: { description: Optional ref to validate, required: false, type: string }
 
 permissions:
   contents: read
 
 concurrency:
   group: actions-policy-check-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   policy:
-    name: Enforce GitHub Actions Strategy v3
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 0
-
-      - name: Resolve workflows changed by this submission
+      - name: Resolve workflows
         id: changed
-        shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: |
           set -Eeuo pipefail
-
           if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
             git ls-files '.github/workflows/*.yml' '.github/workflows/*.yaml' > /tmp/actions-workflows.txt
           elif [[ -n "${BASE_SHA:-}" && "$BASE_SHA" != "0000000000000000000000000000000000000000" ]]; then
-            git diff --name-only "$BASE_SHA" HEAD -- \
-              '.github/workflows/*.yml' '.github/workflows/*.yaml' \
-              | while read -r path; do
-                  [[ -f "$path" ]] && echo "$path"
-                done > /tmp/actions-workflows.txt
+            git diff --name-only "$BASE_SHA" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml' | while read -r path; do [[ -f "$path" ]] && echo "$path"; done > /tmp/actions-workflows.txt
           else
             git ls-files '.github/workflows/*.yml' '.github/workflows/*.yaml' > /tmp/actions-workflows.txt
           fi
-
           sort -u -o /tmp/actions-workflows.txt /tmp/actions-workflows.txt
-          count="$(wc -l < /tmp/actions-workflows.txt | tr -d ' ')"
-          echo "count=$count" >> "$GITHUB_OUTPUT"
-          cat /tmp/actions-workflows.txt
-
-      - name: Validate changed workflows
+          echo "count=$(wc -l < /tmp/actions-workflows.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+      - name: Enforce GitHub Agent v4
         if: steps.changed.outputs.count != '0'
-        shell: bash
         run: |
-          set -Eeuo pipefail
           mapfile -t workflows < /tmp/actions-workflows.txt
           python .github/scripts/validate_actions_strategy.py "${workflows[@]}"

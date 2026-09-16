@@ -2,9 +2,10 @@ name: Actions Governor
 on:
   push:
     branches: [main]
-    paths: ['.github/workflows/actions-governor.yml', '.github/workflows/actions-recovery.yml', '.github/workflows/actions-policy-check.yml', '.github/scripts/actions_strategy_autofix.py', '.github/scripts/validate_actions_strategy.py', '.github/ACTIONS_STRATEGY.md']
+    paths: ['.github/workflows/actions-governor.yml', '.github/workflows/actions-recovery.yml', '.github/workflows/actions-policy-check.yml', '.github/scripts/actions_strategy_autofix.py', '.github/scripts/validate_actions_strategy.py', '.github/ACTIONS_STRATEGY.md', '.github/GITHUB_AGENT.md']
   schedule:
-    - cron: '*/10 * * * *'
+    # Governor is a fallback, not a hot-path poller. Avoid 144 self-generated runs/day.
+    - cron: '17 * * * *'
   workflow_dispatch:
 permissions:
   actions: write
@@ -16,6 +17,8 @@ jobs:
   enforce:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      MAX_GHOST_FORCE_ATTEMPTS: '5'
     steps:
       - name: Govern duplicate, stale and ghost runs
         env:
@@ -24,11 +27,13 @@ jobs:
           set -Eeuo pipefail
           repo="$GITHUB_REPOSITORY"; current="$GITHUB_RUN_ID"; now="$(date -u +%s)"; default="$(gh api "repos/$repo" --jq '.default_branch')"; tmp="$(mktemp)"; trap 'rm -f "$tmp"' EXIT
           for status in queued in_progress; do gh api --paginate "repos/$repo/actions/runs?status=$status&per_page=100" --jq '.workflow_runs[] | [(.created_at//""),(.id|tostring),(.workflow_id|tostring),(.name//""),(.head_branch//""),(.head_sha//""),(.event//""),(.status//""),(.run_started_at//.created_at//""),(.path//""),(.run_attempt|tostring)] | join("\u001f")'; done | sort -r > "$tmp"
+          scanned="$(wc -l < "$tmp" | tr -d ' ')"; resolved=0; forced=0; ghosts=0; platform_ghosts=0; recovered=0; ghost_attempts=0
           declare -A seen=(); declare -A done=()
           protected(){ local x="${1,,}"; [[ "$x" == *release* || "$x" == *deploy* || "$x" == *publish* ]]; }
           internal(){ local x="${1,,}"; [[ "$x" == "actions governor" || "$x" == "actions recovery" || "$x" == "actions policy check" ]]; }
           status_of(){ gh api "repos/$repo/actions/runs/$1" --jq '.status' 2>/dev/null || echo unknown; }
           jobs_of(){ gh api "repos/$repo/actions/runs/$1/jobs?filter=latest&per_page=1" --jq '.total_count // 0' 2>/dev/null || echo 0; }
-          cancel_run(){ local id="$1" reason="$2" name="$3" s; [[ -n "${done[$id]:-}" ]] && return 0; gh api --method POST "repos/$repo/actions/runs/$id/cancel" >/dev/null 2>&1 || true; sleep 2; s="$(status_of "$id")"; if [[ "$s" == queued || "$s" == in_progress ]]; then if gh api --method POST "repos/$repo/actions/runs/$id/force-cancel" >/dev/null 2>&1; then echo "::notice::Force-cancelled $id ($name): $reason"; else return 1; fi; fi; done[$id]=1; }
-          while IFS=$'\x1f' read -r created id wid name branch sha event status started path attempt; do [[ -z "$id" || "$id" == "$current" ]] && continue; internal "$name" && continue; protected "$name" && continue; key="$wid|$branch|$event"; if [[ -n "${seen[$key]:-}" ]]; then if [[ "$event" == pull_request || ( "$event" == push && "$branch" != "$default" ) || "$status" == queued ]]; then cancel_run "$id" "SUPERSEDED by ${seen[$key]}" "$name" || true; fi; else seen[$key]="$id"; fi; done < "$tmp"
-          while IFS=$'\x1f' read -r created id wid name branch sha event status started path attempt; do [[ -z "$id" || "$id" == "$current" || -n "${done[$id]:-}" ]] && continue; age=$(( (now-$(date -u -d "$started" +%s))/60 )); jobs="$(jobs_of "$id")"; if [[ "$status" == queued && "$jobs" == 0 && "$age" -ge 15 ]]; then cancel_run "$id" "GHOST_RUN queued/no-jobs ${age}m" "$name" || true; continue; fi; limit=45; internal "$name" && limit=20; protected "$name" && limit=180; if (( age>=limit )); then reason="stale ${status} ${age}m"; if cancel_run "$id" "$reason" "$name" && [[ "$jobs" -gt 0 ]]; then gh workflow run actions-recovery.yml --repo "$repo" --ref "$default" -f source_run_id="$id" -f source_workflow_id="$wid" -f source_workflow_name="$name" -f source_branch="$branch" -f source_head_sha="$sha" -f source_event="$event" -f source_workflow_path="$path" -f source_run_attempt="$attempt" -f recovery_reason="$reason" || true; fi; fi; done < "$tmp"
+          cancel_run(){ local id="$1" reason="$2" name="$3" s; [[ -n "${done[$id]:-}" ]] && return 0; gh api --method POST "repos/$repo/actions/runs/$id/cancel" >/dev/null 2>&1 || true; sleep 2; s="$(status_of "$id")"; if [[ "$s" == queued || "$s" == in_progress ]]; then if gh api --method POST "repos/$repo/actions/runs/$id/force-cancel" >/dev/null 2>&1; then forced=$((forced+1)); else done[$id]=1; platform_ghosts=$((platform_ghosts+1)); echo "::warning::GITHUB_PLATFORM_GHOST $id ($name): normal and force cancel rejected"; return 1; fi; fi; done[$id]=1; resolved=$((resolved+1)); }
+          while IFS=$'\x1f' read -r created id wid name branch sha event status started path attempt; do [[ -z "$id" || "$id" == "$current" ]] && continue; internal "$name" && continue; protected "$name" && continue; if [[ "$status" == queued && "$(jobs_of "$id")" == 0 ]]; then continue; fi; key="$wid|$branch|$event"; if [[ -n "${seen[$key]:-}" ]]; then if [[ "$event" == pull_request || ( "$event" == push && "$branch" != "$default" ) || "$status" == queued ]]; then cancel_run "$id" "SUPERSEDED by ${seen[$key]}" "$name" || true; fi; else seen[$key]="$id"; fi; done < "$tmp"
+          while IFS=$'\x1f' read -r created id wid name branch sha event status started path attempt; do [[ -z "$id" || "$id" == "$current" || -n "${done[$id]:-}" ]] && continue; age=$(( (now-$(date -u -d "$started" +%s))/60 )); jobs="$(jobs_of "$id")"; if [[ "$status" == queued && "$jobs" == 0 && "$age" -ge 15 ]]; then ghosts=$((ghosts+1)); if (( ghost_attempts < MAX_GHOST_FORCE_ATTEMPTS )); then ghost_attempts=$((ghost_attempts+1)); cancel_run "$id" "GHOST_RUN queued/no-jobs ${age}m" "$name" || true; fi; continue; fi; limit=45; internal "$name" && limit=20; protected "$name" && limit=180; if (( age>=limit )); then reason="stale ${status} ${age}m"; if cancel_run "$id" "$reason" "$name" && [[ "$jobs" -gt 0 ]]; then gh workflow run actions-recovery.yml --repo "$repo" --ref "$default" -f source_run_id="$id" -f source_workflow_id="$wid" -f source_workflow_name="$name" -f source_branch="$branch" -f source_head_sha="$sha" -f source_event="$event" -f source_workflow_path="$path" -f source_run_attempt="$attempt" -f recovery_reason="$reason" && recovered=$((recovered+1)) || true; fi; fi; done < "$tmp"
+          echo "GitHub Agent v4 Governor: scanned=$scanned resolved=$resolved force_cancelled=$forced ghosts_seen=$ghosts platform_ghosts=$platform_ghosts recovery=$recovered"
