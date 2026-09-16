@@ -47,6 +47,15 @@ jobs:
           else
             sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq '.sha')"
           fi
+
+          main_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq '.sha')"
+          compare="$(gh api "repos/$GITHUB_REPOSITORY/compare/$sha...$main_sha")"
+          status="$(jq -r '.status' <<<"$compare")"
+          if [[ "$status" != "ahead" && "$status" != "identical" ]]; then
+            echo "Release candidate $sha is not an ancestor of current main $main_sha (status=$status)." >&2
+            exit 1
+          fi
+
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
           echo "Release candidate: $sha"
 
@@ -59,8 +68,8 @@ jobs:
         run: |
           set -euo pipefail
           runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${SHA}&event=push&per_page=100")"
-          ci="$(jq -r '[.workflow_runs[] | select(.name=="CI")][0] | if . == null then "missing" else (.status + ":" + (.conclusion // "")) end' <<<"$runs")"
-          smoke="$(jq -r '[.workflow_runs[] | select(.name=="Production image smoke")][0] | if . == null then "missing" else (.status + ":" + (.conclusion // "")) end' <<<"$runs")"
+          ci="$(jq -r '[.workflow_runs[] | select(.name=="CI")] | sort_by(.run_started_at // .created_at) | reverse | .[0] | if . == null then "missing" else (.status + ":" + (.conclusion // "")) end' <<<"$runs")"
+          smoke="$(jq -r '[.workflow_runs[] | select(.name=="Production image smoke")] | sort_by(.run_started_at // .created_at) | reverse | .[0] | if . == null then "missing" else (.status + ":" + (.conclusion // "")) end' <<<"$runs")"
           echo "validation snapshot: CI=${ci} | Production image smoke=${smoke}"
 
           for result in "$ci" "$smoke"; do
