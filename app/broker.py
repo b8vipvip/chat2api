@@ -34,6 +34,24 @@ class RequestState:
         }
 
 
+def _terminal_text(accumulated: str, terminal: str) -> tuple[str, str]:
+    """Choose one terminal value without allowing unrelated sources to replace it.
+
+    Stream snapshots and the canonical request controller observe the same assistant
+    turn through different surfaces.  The only safe reconciliation is a monotonic
+    prefix extension; otherwise the controller's terminal value remains authoritative.
+    """
+    current = str(accumulated or "")
+    final = str(terminal or "")
+    if not final:
+        return current, "accumulated"
+    if not current or current == final:
+        return final, "terminal"
+    if current.startswith(final) and len(current) > len(final):
+        return current, "accumulated-prefix-extension"
+    return final, "terminal"
+
+
 class RequestBroker:
     def __init__(self) -> None:
         self.requests: dict[str, RequestState] = {}
@@ -61,10 +79,6 @@ class RequestBroker:
             if not state:
                 return
 
-            # v21+ capacity patches keep a per-client active-request map. Keep
-            # the base broker release idempotently compatible with that state so
-            # later final admission owners (such as v57) never retain a phantom
-            # capacity unit if they capture this base implementation directly.
             active_by_client = getattr(self, "client_active_requests", None)
             if isinstance(active_by_client, dict):
                 active = active_by_client.get(state.client_id)
@@ -108,8 +122,11 @@ class RequestBroker:
             state.text = str(event.get("text") or state.text)
         elif event_type == "chat.completed":
             state.completed_mono = now
-            final = str(event.get("text") or state.text)
+            final, source = _terminal_text(state.text, str(event.get("text") or ""))
             state.text = final
+            state.diagnostics["terminal_text_authority"] = "request-controller"
+            state.diagnostics["terminal_text_source"] = source
+            state.diagnostics["terminal_text_chars"] = len(final)
             if state.final_future and not state.final_future.done():
                 state.final_future.set_result(final)
         elif event_type == "image.completed":
