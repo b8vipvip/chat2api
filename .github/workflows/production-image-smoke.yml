@@ -21,8 +21,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: production-image-smoke-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: production-image-smoke-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
