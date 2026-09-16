@@ -103,11 +103,12 @@ def test_release_versions_are_explicit_and_consistent() -> None:
 
 def test_release_workflow_creates_one_release_per_runtime_version() -> None:
     workflow = read(".github/workflows/release.yml")
-    assert "branches:" in workflow and "- main" in workflow
+    assert "workflow_run:" in workflow
+    assert "branches: [main]" in workflow
     assert "workflow_dispatch:" in workflow
     assert "contents: write" in workflow
     assert 'tag=v{server}' in workflow
     assert 'gh release view "$TAG"' in workflow
     assert 'gh release create "$TAG"' in workflow
-    assert '--target "$GITHUB_SHA"' in workflow
+    assert '--target "$SOURCE_SHA"' in workflow
     assert '--generate-notes' in workflow
