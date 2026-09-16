@@ -6,138 +6,102 @@ import re
 import sys
 from pathlib import Path
 
-PROTECTED_WORDS = ("release", "deploy", "publish", "store package", "store-package")
+PROTECTED_WORDS = ("release", "deploy", "publish")
 DEBUG_WORDS = ("debug", "diagnostic", "one-shot", "oneshot", "tmp-")
+INTERNAL_FILES = {"actions-governor.yml", "actions-recovery.yml"}
 
 
-def top_level_block(text: str, key: str) -> str | None:
+def block(text: str, key: str) -> str | None:
     lines = text.splitlines(keepends=True)
-    start = None
-    key_re = re.compile(rf"^{re.escape(key)}:\s*(?:#.*)?$")
-    for i, line in enumerate(lines):
-        if key_re.match(line.rstrip("\n")):
-            start = i
-            break
+    start = next((i for i, line in enumerate(lines) if re.match(rf"^{re.escape(key)}:\s*(?:#.*)?$", line.rstrip("\n"))), None)
     if start is None:
         return None
     end = len(lines)
-    for j in range(start + 1, len(lines)):
-        line = lines[j]
-        if line.strip() and not line.startswith((" ", "\t", "#")):
-            end = j
+    for i in range(start + 1, len(lines)):
+        if lines[i].strip() and not lines[i].startswith((" ", "\t", "#")):
+            end = i
             break
     return "".join(lines[start:end])
 
 
-def workflow_name(text: str, path: Path) -> str:
-    match = re.search(r"(?m)^name:\s*(.+?)\s*$", text)
-    return match.group(1).strip().strip("'\"") if match else path.stem
-
-
-def is_protected(name: str, path: Path) -> bool:
-    haystack = f"{name} {path.name}".lower()
-    return any(word in haystack for word in PROTECTED_WORDS)
-
-
-def is_debug(name: str, path: Path) -> bool:
-    haystack = f"{name} {path.name}".lower()
-    return any(word in haystack for word in DEBUG_WORDS)
-
-
-def job_blocks(text: str) -> list[tuple[str, str]]:
-    lines = text.splitlines(keepends=True)
-    start = None
-    for i, line in enumerate(lines):
-        if re.match(r"^jobs:\s*(?:#.*)?$", line.rstrip("\n")):
-            start = i
-            break
-    if start is None:
-        return []
-
-    end = len(lines)
-    for j in range(start + 1, len(lines)):
-        line = lines[j]
-        if line.strip() and not line.startswith((" ", "\t", "#")):
-            end = j
-            break
-
-    starts: list[tuple[int, str]] = []
-    pattern = re.compile(r"^  ([A-Za-z0-9_.-]+):\s*(?:#.*)?$")
-    for i in range(start + 1, end):
-        match = pattern.match(lines[i].rstrip("\n"))
-        if match:
-            starts.append((i, match.group(1)))
-
-    blocks: list[tuple[str, str]] = []
-    for index, (line_number, name) in enumerate(starts):
-        block_end = starts[index + 1][0] if index + 1 < len(starts) else end
-        blocks.append((name, "".join(lines[line_number:block_end])))
-    return blocks
-
-
 def validate(path: Path) -> list[str]:
-    errors: list[str] = []
     if not path.exists():
-        return errors
-
+        return []
     text = path.read_text(encoding="utf-8")
-    name = workflow_name(text, path)
-    protected = is_protected(name, path)
-    debug = is_debug(name, path)
+    name_match = re.search(r"(?m)^name:\s*(.+?)\s*$", text)
+    name = name_match.group(1).strip().strip("'\"") if name_match else path.stem
+    hay = f"{name} {path.name}".lower()
+    protected = any(word in hay for word in PROTECTED_WORDS)
+    debug = any(word in hay for word in DEBUG_WORDS)
+    internal = path.name in INTERNAL_FILES
+    errors: list[str] = []
 
-    on_block = top_level_block(text, "on")
-    if on_block is None:
+    on = block(text, "on")
+    if on is None:
         errors.append("missing top-level on:")
     else:
-        if "workflow_dispatch:" not in on_block:
+        if "workflow_dispatch:" not in on:
             errors.append("missing workflow_dispatch recovery entry point")
-        if debug and any(token in on_block for token in ("\n  push:", "\n  pull_request:", "\n  schedule:")):
+        if debug and any(token in on for token in ("\n  push:", "\n  pull_request:", "\n  schedule:")):
             errors.append("debug/diagnostic workflow may only use workflow_dispatch")
 
-    if top_level_block(text, "permissions") is None:
+    if block(text, "permissions") is None:
         errors.append("missing top-level permissions:")
 
-    concurrency = top_level_block(text, "concurrency")
+    concurrency = block(text, "concurrency")
     if concurrency is None:
         errors.append("missing top-level concurrency:")
-    elif protected:
-        if "cancel-in-progress: false" not in concurrency:
-            errors.append("release/deploy/publish workflow must use cancel-in-progress: false")
-    elif "cancel-in-progress: true" not in concurrency:
-        errors.append("ordinary workflow must use cancel-in-progress: true")
+    else:
+        cancel_match = re.search(r"(?m)^\s+cancel-in-progress:\s*(.+?)\s*$", concurrency)
+        if cancel_match is None:
+            errors.append("concurrency is missing cancel-in-progress")
+        else:
+            cancel_value = cancel_match.group(1).strip()
+            has_pr = on is not None and "\n  pull_request:" in on
+            has_push = on is not None and "\n  push:" in on
+            if protected and cancel_value != "false":
+                errors.append("release/deploy/publish workflow must use cancel-in-progress: false")
+            elif not protected and not internal and has_pr and has_push:
+                if cancel_value in {"true", "false"} or "github.event_name" not in cancel_value or "pull_request" not in cancel_value:
+                    errors.append("workflow with push + pull_request must cancel PR superseded work only; use a PR-aware expression")
+            elif not protected and not internal and cancel_value == "false":
+                errors.append("ordinary non-PR workflow should allow superseded work to be cancelled")
 
-    blocks = job_blocks(text)
-    if not blocks:
+    lines = text.splitlines(keepends=True)
+    jobs_start = next((i for i, line in enumerate(lines) if re.match(r"^jobs:\s*(?:#.*)?$", line.rstrip("\n"))), None)
+    if jobs_start is None:
         errors.append("missing jobs:")
-    for job_name, block in blocks:
-        if re.search(r"(?m)^    uses:\s*", block):
+        return errors
+    starts = [i for i in range(jobs_start + 1, len(lines)) if re.match(r"^  [A-Za-z0-9_.-]+:\s*(?:#.*)?$", lines[i].rstrip("\n"))]
+    for n, start in enumerate(starts):
+        end = starts[n + 1] if n + 1 < len(starts) else len(lines)
+        job = "".join(lines[start:end])
+        if re.search(r"(?m)^    uses:", job):
             continue
-        if "runs-on:" in block and not re.search(r"(?m)^    timeout-minutes:\s*\d+", block):
+        if "runs-on:" in job and not re.search(r"(?m)^    timeout-minutes:\s*\d+", job):
+            job_name_match = re.match(r"^  ([A-Za-z0-9_.-]+):", lines[start])
+            job_name = job_name_match.group(1) if job_name_match else "unknown"
             errors.append(f"job '{job_name}' is missing timeout-minutes")
-
     return errors
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate changed GitHub Actions workflows against Strategy v3.")
+    parser = argparse.ArgumentParser()
     parser.add_argument("paths", nargs="+", type=Path)
     args = parser.parse_args()
-
-    all_errors: list[str] = []
+    violations: list[str] = []
     for path in args.paths:
         if path.suffix not in {".yml", ".yaml"}:
             continue
         errors = validate(path)
         if errors:
-            all_errors.append(f"{path}:")
-            all_errors.extend(f"  - {error}" for error in errors)
-
-    if all_errors:
-        print("GitHub Actions Strategy v3 policy violations:", file=sys.stderr)
-        print("\n".join(all_errors), file=sys.stderr)
+            violations.append(f"{path}:")
+            violations.extend(f"  - {error}" for error in errors)
+    if violations:
+        print("GitHub Agent v4 policy violations:", file=sys.stderr)
+        print("\n".join(violations), file=sys.stderr)
         return 1
-
-    print("GitHub Actions Strategy v3 policy check passed.")
+    print("GitHub Agent v4 policy check passed.")
     return 0
 
 
