@@ -45,12 +45,27 @@ def test_paid_legacy_value_normalizes_to_plus():
     assert routing._account_type(registry, "plus") == "plus"
 
 
-def test_worker_console_uses_plus_and_reserves_pro_label():
+def test_worker_identity_decorator_does_not_mutate_canonical_worker_list():
     source = Path("app/admin_worker_identity_v131.js").read_text(encoding="utf-8")
-    assert 'value === "付费" || value === "paid"' in source
-    assert 'pill.textContent = "Plus"' in source
-    assert 'pill.textContent = "Pro"' in source
-    assert 'pill.textContent = "Free"' in source
+    assert "version: 144" in source
+    assert "decorateAccountTierLabels" not in source
+    assert 'data-chat2api-column-key="account_type"' not in source
+    assert "extensionDeviceBody" not in source
+    assert "pill.textContent" not in source
+
+
+def test_canonical_worker_list_declares_single_structural_owner():
+    source = Path("app/admin_extension_columns.js").read_text(encoding="utf-8")
+    assert 'structural_owner: "admin_extension_columns"' in source
+    assert "legacy_renderers_bypassed: true" in source
+
+
+def test_worker_presentation_has_no_autonomous_mutation_observer_loop():
+    source = Path("app/admin_worker_presentation_v66.js").read_text(encoding="utf-8")
+    assert "MutationObserver" not in source
+    assert "setInterval(" not in source
+    assert "setTimeout(() => refresh(true), 120)" in source
+    assert "setTimeout(() => refresh(true), 900)" in source
 
 
 def test_request_identity_uses_linux_worker_authority():
