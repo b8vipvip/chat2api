@@ -4,36 +4,45 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_release_workflow_waits_for_post_merge_ci_and_image_smoke() -> None:
+def test_release_workflow_uses_event_driven_post_merge_gate() -> None:
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-    assert "Wait for post-merge validation" in workflow
+    assert "workflow_run:" in workflow
+    assert "      - CI" in workflow
+    assert "      - Production image smoke" in workflow
+    assert "types: [completed]" in workflow
+    assert "branches: [main]" in workflow
+    assert "Verify both post-merge validations" in workflow
     assert "head_sha=${SHA}" in workflow
-    assert 'select(.name=="CI")' in workflow
-    assert 'select(.name=="Production image smoke")' in workflow
+    assert 'select(.name==\"CI\")' in workflow
+    assert 'select(.name==\"Production image smoke\")' in workflow
     assert "completed:success" in workflow
-    assert "deadline=$((SECONDS + 900))" in workflow
-    assert "sleep 5" in workflow
     assert "required post-merge validation failed" in workflow
-    assert "timed out waiting for CI and Production image smoke" in workflow
+    assert "Peer validation still pending" in workflow
 
-    gate = workflow.index("- name: Wait for post-merge validation")
+    # v4 gate must not occupy a runner while the peer workflow is still running.
+    assert "deadline=$((SECONDS + 900))" not in workflow
+    assert "sleep 5" not in workflow
+    assert "timed out waiting for CI and Production image smoke" not in workflow
+
+    gate = workflow.index("- name: Verify both post-merge validations")
+    checkout = workflow.index("- name: Checkout validated source")
+    resolve = workflow.index("- name: Resolve and validate release versions")
     existing = workflow.index("- name: Check whether release already exists")
     create = workflow.index("- name: Create GitHub Release")
-    assert gate < existing < create
+    assert gate < checkout < resolve < existing < create
 
 
-def test_release_workflow_still_validates_runtime_contract_before_gating() -> None:
+def test_release_workflow_validates_exact_gated_source_before_release() -> None:
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
-    resolve = workflow.index("- name: Resolve and validate release versions")
-    gate = workflow.index("- name: Wait for post-merge validation")
-    assert resolve < gate
+    assert "ref: ${{ steps.candidate.outputs.sha }}" in workflow
     assert "SERVER_RUNTIME_VERSION" in workflow
     assert "CHROME_BRIDGE_BUNDLE_VERSION" in workflow
     assert "server = one(" in workflow
     assert "bundle = one(" in workflow
     assert 'manifest.get("version") != bundle' in workflow
+    assert '--target "$SOURCE_SHA"' in workflow
 
 
 def test_production_image_smoke_runs_for_every_main_push() -> None:
