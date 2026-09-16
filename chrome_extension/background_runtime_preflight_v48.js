@@ -2,11 +2,8 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__";
   if (globalThis[KEY]) return;
 
-  // Worker bundle 0.8.40 keeps the v71 request/response epoch while requiring
-  // the v63 native WebSocket tool observer, v78 MAIN-world upload bridge,
-  // v85 safe-submit gate, v88 terminal/prompt guard, v95 conversation-local
-  // quota failover owner, and v101 safe UI hygiene. Browser route/window
-  // ownership is independently enforced by background entry v0.8.40.
+  // Worker bundle 0.8.40 keeps the v71 request epoch. request-v6 is the sole
+  // response terminal owner; network v55 supplies evidence only.
   const REQUIRED_BUNDLE = "0.8.40";
   const REQUIRED_REVISION = 71;
   const CONTRACT_TIMEOUT_MS = 700;
@@ -29,7 +26,6 @@
     "content_draft_managed_recovery_v55.js",
     "content_rich_response_v69.js",
     "content_request_v6.js",
-    "content_response_stream_recovery_v69.js",
     "content_network_stream_recovery_v55.js",
     "content_native_tool_stream_v63.js",
     "content_request_terminal_prompt_v88.js",
@@ -43,9 +39,10 @@
   const inflight = new Map();
   const state = {
     version: 71,
-    revision: 109,
+    revision: 110,
     required_bundle: REQUIRED_BUNDLE,
     required_revision: REQUIRED_REVISION,
+    response_terminal_owner: "request-v6",
     native_tool_stream_revision: 63,
     multimodal_revision: 85,
     terminal_prompt_revision: 88,
@@ -106,7 +103,7 @@
       Number(result?.marker?.revision || 0) >= REQUIRED_REVISION &&
       result?.modules?.request_v6 &&
       result?.modules?.rich_response_v69 &&
-      result?.modules?.response_stream_v69 &&
+      result?.modules?.network_stream_recovery_v55 &&
       result?.modules?.native_tool_stream_v63 &&
       result?.modules?.native_tool_stream_main_v63 &&
       result?.modules?.multimodal_v78 &&
@@ -148,117 +145,47 @@
     while (Date.now() - started < timeoutMs) {
       const remaining = Math.max(100, timeoutMs - (Date.now() - started));
       last = await contract(tabId, Math.min(CONTRACT_TIMEOUT_MS, remaining));
-      if (current(last)) return { ready: true, complete: false, result: last };
-      let tab = null;
-      try { tab = await chrome.tabs.get(tabId); } catch (_) { return { ready: false, complete: false, result: last }; }
-      if (tab?.status === "complete" && /^https:\/\/(?:www\.)?(?:chatgpt\.com|chat\.openai\.com)\//i.test(String(tab.url || ""))) {
-        return { ready: false, complete: true, result: last };
-      }
-      await sleep(80);
+      if (current(last)) return last;
+      await sleep(Math.min(150, remaining));
     }
-    return { ready: false, complete: false, result: last };
+    return last;
   }
 
-  async function recordLast(last) {
-    state.last = last;
-    await chrome.storage.local.set({chat2apiRuntimePreflightV71: state.last}).catch(() => {});
-  }
-
-  async function toolIsolationPreflight(tabId) {
-    return sendMessageBounded(tabId, {type: "chat2api.tool-isolation.preflight"});
-  }
-
-  async function preflight(tabId) {
-    state.checks += 1;
-    const started = Date.now();
-    let result = await contract(tabId);
-    if (current(result)) {
-      state.fast_path_hits += 1;
-      const toolPreflight = await toolIsolationPreflight(tabId);
-      await recordLast({
-        tab_id: tabId,
-        ok: true,
-        mode: "current-fast-path-v87",
-        reloaded: false,
-        hot_healed: false,
-        marker: result.marker,
-        modules: result.modules,
-        contract_revision: result.contract_revision,
-        native_tool_stream_revision: result.native_tool_stream_revision,
-        multimodal_revision: result.multimodal_revision,
-        terminal_prompt_revision: 88,
-        conversation_quota_failover_revision: 95,
-        ui_hygiene_revision: result.ui_hygiene_revision,
-        tool_preflight: toolPreflight,
-        elapsed_ms: Date.now() - started,
-        at_ms: Date.now(),
-      });
-      return true;
-    }
-
-    result = await heal(tabId);
-    let reloaded = false;
-    const hotHealed = current(result);
-    if (hotHealed) state.hot_heals += 1;
-
-    if (!hotHealed) {
-      state.reloads += 1;
-      reloaded = true;
-      try { await chrome.tabs.reload(tabId, {bypassCache: true}); } catch (_) {}
-      const reloadState = await waitForReloadOrContract(tabId, RELOAD_BUDGET_MS);
-      result = reloadState.result;
-      if (!reloadState.ready) {
-        if (!reloadState.complete) state.reload_timeouts += 1;
-        result = await heal(tabId, FINAL_HEAL_BUDGET_MS);
-      }
-    }
-
-    if (!current(result)) {
-      state.failures += 1;
-      state.preflight_budget_exhausted += 1;
-      await recordLast({
-        tab_id: tabId,
-        ok: false,
-        mode: "repair-budget-exhausted-v87",
-        reloaded,
-        hot_healed: hotHealed,
-        result,
-        elapsed_ms: Date.now() - started,
-        budget_ms: CONTRACT_TIMEOUT_MS + HOT_HEAL_BUDGET_MS + RELOAD_BUDGET_MS + FINAL_HEAL_BUDGET_MS,
-        at_ms: Date.now(),
-      });
-      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the bounded preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} native-tool-stream revision 63 multimodal revision 85 terminal/prompt revision 88 conversation-quota-failover revision 95 UI-hygiene revision 101`);
-      error.code = "chatgpt_runtime_preflight_budget";
-      throw error;
-    }
-
-    const toolPreflight = await toolIsolationPreflight(tabId);
-    await recordLast({
-      tab_id: tabId,
-      ok: true,
-      mode: reloaded ? "reload-repair-v87" : "hot-repair-v87",
-      reloaded,
-      hot_healed: hotHealed,
-      marker: result.marker,
-      modules: result.modules,
-      contract_revision: result.contract_revision,
-      native_tool_stream_revision: result.native_tool_stream_revision,
-      multimodal_revision: result.multimodal_revision,
-      terminal_prompt_revision: 88,
-      conversation_quota_failover_revision: 95,
-      ui_hygiene_revision: result.ui_hygiene_revision,
-      tool_preflight: toolPreflight,
-      elapsed_ms: Date.now() - started,
-      at_ms: Date.now(),
-    });
-    return true;
-  }
-
-  ensureContent = async function ensureCurrentWorkerRuntimeV71(tabId) {
-    const id = Number(tabId);
-    if (!Number.isInteger(id)) throw new Error("A valid ChatGPT tab id is required for Worker runtime preflight");
+  ensureContent = async function ensureChat2apiRuntimeV71(tabId) {
+    const id = Number(tabId || 0);
+    if (!id) return baseEnsureContent(tabId);
     if (inflight.has(id)) return inflight.get(id);
-    const task = preflight(id).finally(() => inflight.delete(id));
+    const task = (async () => {
+      state.checks += 1;
+      let result = await contract(id);
+      if (current(result)) {
+        state.fast_path_hits += 1;
+        state.last = {ok: true, mode: "fast", contract: result};
+        return true;
+      }
+      state.hot_heals += 1;
+      result = await heal(id);
+      if (current(result)) {
+        state.last = {ok: true, mode: "heal", contract: result};
+        return true;
+      }
+      state.reloads += 1;
+      try { await chrome.tabs.reload(id); } catch (_) {}
+      result = await waitForReloadOrContract(id);
+      if (current(result)) {
+        state.last = {ok: true, mode: "reload", contract: result};
+        return true;
+      }
+      state.reload_timeouts += 1;
+      result = await heal(id, FINAL_HEAL_BUDGET_MS);
+      if (current(result)) {
+        state.last = {ok: true, mode: "final-heal", contract: result};
+        return true;
+      }
+      state.failures += 1;
+      state.last = {ok: false, mode: "failed", contract: result};
+      throw new Error("Worker runtime preflight failed: canonical request-v6 response owner is unavailable");
+    })().finally(() => inflight.delete(id));
     inflight.set(id, task);
     return task;
   };
