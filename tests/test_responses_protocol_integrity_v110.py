@@ -4,39 +4,70 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
-from app import responses_emulated_tools_v109_patch as bridge
+import pytest
+
+import app.responses_emulated_tools_v109_patch as bridge
+import app.responses_protocol_integrity_v110_patch as integrity
 
 ROOT = Path(__file__).resolve().parents[1]
 MARKER = "FDEX_CODEX_SMOKE_cdac2df519f84e20_WIRE"
 
 
+def envelope(value: dict) -> str:
+    return bridge.BRIDGE_START + "\n" + json.dumps(value) + "\n" + bridge.BRIDGE_END
+
+
 def body() -> dict:
     return {
         "model": "gpt-5.6-sol",
-        "input": [{"role": "user", "content": [{"type": "input_text", "text": f"Reply exactly {MARKER}"}]}],
-        "tools": [{"type": "namespace", "name": "mcp"}],
+        "tools": [
+            {
+                "type": "function",
+                "name": "noop",
+                "description": "No-op",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+        "input": [
+            {
+                "role": "user",
+                "content": f"Reply with exact marker {MARKER}",
+            }
+        ],
     }
 
 
-def test_bridge_rejects_plain_text_without_envelope() -> None:
-    parsed = bridge._interpret("plain answer", body())
-    assert parsed.get("kind") == "protocol_error"
+def test_plain_or_truncated_final_is_protocol_failure_not_completed_text() -> None:
+    catalog = bridge._catalog(body())
+    with pytest.raises(integrity.ResponsesToolBridgeProtocolError):
+        bridge._interpret("FDEX_CODEX_SMOKE_cdac2df519f84e20_", catalog, body())
 
 
-def test_bridge_accepts_complete_envelope() -> None:
-    raw = f'{bridge.BRIDGE_START}\n{{"kind":"final","text":"{MARKER}"}}\n{bridge.BRIDGE_END}'
-    parsed = bridge._interpret(raw, body())
-    assert parsed.get("kind") == "final"
-    assert parsed.get("text") == MARKER
+def test_truncated_exact_literal_inside_valid_envelope_is_still_protocol_failure() -> None:
+    catalog = bridge._catalog(body())
+    with pytest.raises(integrity.ResponsesToolBridgeProtocolError, match="exact literal"):
+        bridge._interpret(
+            envelope({"kind": "final", "text": "FDEX_CODEX_SMOKE_cdac2df519f84e20_"}),
+            catalog,
+            body(),
+        )
 
 
-def test_bridge_rejects_partial_exact_marker() -> None:
-    raw = f'{bridge.BRIDGE_START}\n{{"kind":"final","text":"{MARKER[:-8]}"}}\n{bridge.BRIDGE_END}'
-    parsed = bridge._interpret(raw, body())
-    assert parsed.get("kind") == "protocol_error"
+def test_exact_final_inside_complete_envelope_is_preserved_byte_for_byte() -> None:
+    catalog = bridge._catalog(body())
+    text, items = bridge._interpret(envelope({"kind": "final", "text": MARKER}), catalog, body())
+    assert text == MARKER
+    assert items == []
 
 
-def test_bridge_prompt_places_exact_marker_at_integrity_boundary() -> None:
+def test_bridge_rejects_text_outside_sentinel() -> None:
+    catalog = bridge._catalog(body())
+    wrapped = "prefix\n" + envelope({"kind": "final", "text": "ok"})
+    with pytest.raises(integrity.ResponsesToolBridgeProtocolError):
+        bridge._interpret(wrapped, catalog, body())
+
+
+def test_bridge_prompt_repeats_literal_integrity_contract_at_generation_boundary() -> None:
     app = SimpleNamespace(state=SimpleNamespace())
     prompt, _ = bridge._bridge_prompt(app, body())
     tail = prompt.rsplit("FINAL TRANSPORT INTEGRITY CHECK (v110):", 1)[1]
