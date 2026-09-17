@@ -57,6 +57,7 @@ jobs:
                   "chrome_extension/conversation_route_recovery_v136.js",
                   "chrome_extension/background_window_observer_v90.js",
                   "chrome_extension/background_window_limit_v121.js",
+                  "chrome_extension/content_chatgpt_choice_policy_v143.js",
                   "scripts/linux_worker_agent.py",
                   "scripts/linux_worker_agent_v44.py",
                   "scripts/linux_worker_device_controller.py",
@@ -77,10 +78,11 @@ jobs:
               recovery = archive.extractfile("chrome_extension/conversation_route_recovery_v136.js").read().decode("utf-8")
               observer = archive.extractfile("chrome_extension/background_window_observer_v90.js").read().decode("utf-8")
               limiter = archive.extractfile("chrome_extension/background_window_limit_v121.js").read().decode("utf-8")
+              choice_policy = archive.extractfile("chrome_extension/content_chatgpt_choice_policy_v143.js").read().decode("utf-8")
               pairer = archive.extractfile("scripts/linux_worker_extension_pair.py").read().decode("utf-8")
               controller = archive.extractfile("scripts/linux_worker_device_controller.py").read().decode("utf-8")
               controller_helper = archive.extractfile("scripts/linux_worker_device_controller_helper.sh").read().decode("utf-8")
-          assert manifest["version"] == "0.8.40"
+          assert manifest["version"] == "0.8.41"
           assert "\"conversation_routing.js\"" in entry
           assert "\"conversation_route_recovery_v136.js\"" in entry
           assert "revision: 140" in recovery
@@ -93,6 +95,8 @@ jobs:
           assert "chrome.windows.getAll({ populate: true })" in observer
           assert "value.retireRoute(entry.key, route" in limiter
           assert "chrome.windows.create" not in limiter and "chrome.windows.remove" not in limiter
+          assert "dual_reply_policy: \"reply1\"" in choice_policy
+          assert "work_mode_offer_action: \"stay-in-chat\"" in choice_policy
           assert "Runtime.evaluate" in pairer and "extension_pairing_code" in pairer
           assert "worker.heartbeat" in controller and "target_worker_id" in controller
           assert "provision_worker" in controller and "shared_proxy_via_primary_only" in controller
@@ -128,6 +132,7 @@ jobs:
           assert "\"linux_worker_device_diagnostics_v128\": True" in runtime
           assert "\"qnbot_stale_route_recovery_v136\": True" in runtime
           assert "\"qnbot_orphan_owner_recovery_v140\": True" in runtime
+          assert "\"chatgpt_choice_policy_v143\": True" in runtime
           assert "\"request_id_namespace_v136\": True" in runtime
           assert "\"chatgpt_login_ready_admission_v137\": True" in runtime
           assert "\"window_manager_login_ready_filter_v137\": True" in runtime
@@ -147,7 +152,7 @@ jobs:
           assert "增加 Worker" in device_ui
           assert "install_linux_worker_device_console_v122_patch" not in presentation
           assert "install_linux_worker_console_v123_patch" not in presentation
-          print(json.dumps({"bundle_version": manifest["version"], "linux_device_authority_v124": True, "public_https_origin_v125": True, "device_controller_v127": True, "controller_provision_rw_v128": True, "device_diagnostics_v128": True, "qnbot_recovery_v136": True, "qnbot_orphan_owner_recovery_v140": True, "login_ready_admission_v137": True, "extension_autopair": True, "sha256": digest}))
+          print(json.dumps({"bundle_version": manifest["version"], "linux_device_authority_v124": True, "public_https_origin_v125": True, "device_controller_v127": True, "controller_provision_rw_v128": True, "device_diagnostics_v128": True, "qnbot_recovery_v136": True, "qnbot_orphan_owner_recovery_v140": True, "chatgpt_choice_policy_v143": True, "login_ready_admission_v137": True, "extension_autopair": True, "sha256": digest}))
           '
       - name: Boot production ASGI entrypoint and verify health and admin authority
         run: |
@@ -169,8 +174,8 @@ jobs:
           payload = json.load(open('/tmp/chat2api-version.json', encoding='utf-8'))
           assert payload['server']['runtime_aligned'] is True
           assert payload['server']['entrypoint'] == 'app.entry:app'
-          assert payload['server']['runtime_version'] == '0.22.91'
-          assert payload['chrome_bridge']['bundle_version'] == '0.8.40'
+          assert payload['server']['runtime_version'] == '0.22.92'
+          assert payload['chrome_bridge']['bundle_version'] == '0.8.41'
           assert payload['chrome_bridge']['route_window_authority_revision'] == 30
           assert payload['chrome_bridge']['window_observer_revision'] == 90
           assert payload['chrome_bridge']['persistent_window_pool_revision'] == 132
@@ -178,6 +183,7 @@ jobs:
           assert payload['chrome_bridge']['route_recovery_revision'] == 140
           assert payload['features']['qnbot_stale_route_recovery_v136'] is True
           assert payload['features']['qnbot_orphan_owner_recovery_v140'] is True
+          assert payload['features']['chatgpt_choice_policy_v143'] is True
           assert payload['features']['responses_tool_continuation_v141'] is True
           assert payload['features']['responses_terminal_integrity_v142'] is True
           assert payload['features']['window_observer_terminal_clear_v90'] is True
@@ -224,5 +230,5 @@ jobs:
           manager = v124.split('function renderManager()', 1)[1].split('function renamePairingHeader', 1)[0]
           assert '<th>代理</th>' not in manager
           assert '增加 Worker' in v124
-          print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'qnbot_recovery_v136': True, 'qnbot_orphan_owner_recovery_v140': True, 'login_ready_admission_v137': True, 'linux_device_authority_v124': True, 'public_https_origin_v125': True, 'device_controller_v127': True, 'controller_provision_rw_v128': True, 'device_diagnostics_v128': True, 'admin_linux_assets': assets}))
+          print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'qnbot_recovery_v136': True, 'qnbot_orphan_owner_recovery_v140': True, 'chatgpt_choice_policy_v143': True, 'login_ready_admission_v137': True, 'linux_device_authority_v124': True, 'public_https_origin_v125': True, 'device_controller_v127': True, 'controller_provision_rw_v128': True, 'device_diagnostics_v128': True, 'admin_linux_assets': assets}))
           PY
