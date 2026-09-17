@@ -1,0 +1,81 @@
+name: One-off release bump v0.22.92
+
+on:
+  push:
+    branches: [release/v0.22.92]
+    paths:
+      - .github/workflows/release-bump-v02292.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: release/v0.22.92
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Bump release contract
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path('.')
+          text_exts = {'.py', '.js', '.mjs', '.json', '.yml', '.yaml'}
+          for base in (root / 'chrome_extension', root / 'tests'):
+              for path in base.rglob('*'):
+                  if not path.is_file() or path.suffix not in text_exts:
+                      continue
+                  text = path.read_text(encoding='utf-8')
+                  updated = text.replace('0.8.40', '0.8.41')
+                  if base.name == 'tests':
+                      updated = updated.replace('0.22.91', '0.22.92')
+                  if updated != text:
+                      path.write_text(updated, encoding='utf-8')
+
+          smoke = root / '.github/workflows/production-image-smoke.yml'
+          text = smoke.read_text(encoding='utf-8')
+          smoke.write_text(text.replace('0.8.40', '0.8.41').replace('0.22.91', '0.22.92'), encoding='utf-8')
+
+          runtime = root / 'app/runtime_contract.py'
+          text = runtime.read_text(encoding='utf-8')
+          replacements = {
+              'SERVER_RUNTIME_VERSION = "0.22.91"': 'SERVER_RUNTIME_VERSION = "0.22.92"',
+              'PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.90"': 'PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.91"',
+              'PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.89"': 'PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.90"',
+              'PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.88"': 'PREVIOUS_PREVIOUS_PREVIOUS_SERVER_RUNTIME_VERSION = "0.22.89"',
+              'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.40"': 'CHROME_BRIDGE_BUNDLE_VERSION = "0.8.41"',
+              'qnbot-orphan-owner-recovery-v140-release-v02290"': 'qnbot-orphan-owner-recovery-v140-release-v02290-chatgpt-choice-policy-v143-release-v02292"',
+              'qnbot-orphan-owner-recovery-v140-release-v0839"': 'qnbot-orphan-owner-recovery-v140-release-v0839-chatgpt-choice-policy-v143-release-v0841"',
+              '"worker_limit_popover_v138": True,': '"worker_limit_popover_v138": True,\n            "chatgpt_choice_policy_v143": True,',
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f'missing runtime token: {old}')
+              text = text.replace(old, new, 1)
+          runtime.write_text(text, encoding='utf-8')
+          PY
+
+          git diff --check
+          git status --short
+      - name: Commit generated release bump
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/runtime_contract.py chrome_extension tests .github/workflows/production-image-smoke.yml
+          if git diff --cached --quiet; then
+            echo 'No bump changes required.'
+            exit 0
+          fi
+          git commit -m 'release: chat2api v0.22.92 worker v0.8.41'
+          git push origin HEAD:release/v0.22.92
