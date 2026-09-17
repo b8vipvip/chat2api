@@ -35,6 +35,7 @@
           "content_request_v5.js",
           "content_rich_response_v69.js",
           "content_request_v6.js",
+          "content_chatgpt_choice_policy_v143.js",
           "content_request_lifecycle_v50.js",
           "content_conversation_quota_failover_v95.js",
           "content_request_hygiene_v42.js",
