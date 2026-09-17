@@ -2,9 +2,9 @@
   const KEY = "__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__";
   if (globalThis[KEY]) return;
 
-  // Worker bundle 0.8.40 keeps the mature bounded v71 preflight lifecycle.
+  // Worker bundle 0.8.41 keeps the mature bounded v71 preflight lifecycle.
   // request-v6 is the sole response terminal owner; network v55 supplies evidence only.
-  const REQUIRED_BUNDLE = "0.8.40";
+  const REQUIRED_BUNDLE = "0.8.41";
   const REQUIRED_REVISION = 71;
   const CONTRACT_TIMEOUT_MS = 700;
   const HOT_HEAL_BUDGET_MS = 2400;
