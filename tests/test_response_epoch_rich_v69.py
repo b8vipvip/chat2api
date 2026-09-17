@@ -23,7 +23,7 @@ def test_request_v6_binds_reply_to_current_prompt_turn_not_assistant_count():
 
 def test_choice_policy_defaults_ab_reply_to_reply1_and_stays_in_chat_mode():
     source=read("chrome_extension/content_chatgpt_choice_policy_v143.js")
-    for token in ('const KEY = "__CHAT2API_CHATGPT_CHOICE_POLICY_V143__"',"function dualReplyPair(active)",'dual_reply_policy: "reply1"',"dual_reply_feedback_clicked: false,"'work_mode_offer_action: "stay-in-chat"',"留在聊天模式","stay in chat mode"):
+    for token in ('const KEY = "__CHAT2API_CHATGPT_CHOICE_POLICY_V143__"',"function dualReplyPair(active)",'dual_reply_policy: "reply1"',"dual_reply_feedback_clicked: false",'work_mode_offer_action: "stay-in-chat"',"留在聊天模式","stay in chat mode"):
         assert token in source
     assert "改用工作模式" not in source
 
