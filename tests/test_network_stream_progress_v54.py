@@ -13,7 +13,7 @@ def test_manifest_installs_v55_main_world_stream_evidence_without_legacy_termina
     manifest = json.loads(read("chrome_extension/manifest.json"))
     main = manifest["content_scripts"][0]
     isolated = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.8.40"
+    assert manifest["version"] == "0.8.41"
     assert main["world"] == "MAIN"
     assert main["run_at"] == "document_start"
     assert "network_stream_main_v55.js" in main["js"]
@@ -58,11 +58,11 @@ def test_runtime_preflight_requires_v55_parser_63_main_and_isolated_evidence_mod
     bootstrap=read("chrome_extension/content_bootstrap.js"); preflight=read("chrome_extension/background_runtime_preflight_v48.js"); contract=read("chrome_extension/content_runtime_contract_v48.js"); contract_v71=read("chrome_extension/content_runtime_contract_v71.js"); marker=read("chrome_extension/content_bundle_marker_v48.js")
     assert 'world: "MAIN"' in bootstrap
     assert '"network_stream_main_v55.js"' in bootstrap and '"content_network_stream_recovery_v55.js"' in bootstrap
-    assert 'const REQUIRED_BUNDLE = "0.8.40"' in preflight
+    assert 'const REQUIRED_BUNDLE = "0.8.41"' in preflight
     assert '"content_network_stream_recovery_v55.js"' in preflight
     assert "network_stream_recovery_v55" in contract and "network_stream_parser_v63" in contract
     assert "native_tool_stream_v63" in contract_v71
-    assert 'bundle: "0.8.40"' in marker
+    assert 'bundle: "0.8.41"' in marker
 
 def test_linux_worker_bundle_actually_packages_generation_probe() -> None:
     dockerfile=read("Dockerfile"); dockerignore=read(".dockerignore")

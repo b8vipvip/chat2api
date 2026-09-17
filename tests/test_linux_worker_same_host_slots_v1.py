@@ -8,7 +8,7 @@ def test_v127_single_device_controller_retires_per_slot_agents_and_installers():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     docker = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     bootstrap = (ROOT / "scripts" / "bootstrap_linux_worker.sh").read_text(encoding="utf-8")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.91"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.92"' in runtime
     assert '"linux_worker_device_controller_agent_v127": True' in runtime
     assert '"linux_worker_shared_device_pairing_v127": True' in runtime
     assert '"linux_worker_shared_device_proxy_v127": True' in runtime
