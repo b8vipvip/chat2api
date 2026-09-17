@@ -12,11 +12,9 @@
     const marker = globalThis.__CHAT2API_CONTENT_BUNDLE_MARKER_V71__ || null;
     const request = globalThis.__CHAT2API_REQUEST_CONTENT_V6__ || null;
     const rich = globalThis.__CHAT2API_RICH_RESPONSE_V69__ || null;
-    const recovery = globalThis.__CHAT2API_RESPONSE_STREAM_RECOVERY_V69__ || null;
     const networkRecovery = globalThis.__CHAT2API_NETWORK_STREAM_RECOVERY_V55__ || null;
     const nativeTool = globalThis.__CHAT2API_NATIVE_TOOL_STREAM_CONTENT_V63__ || null;
     const semanticHelper = globalThis.__CHAT2API_RESPONSE_SEMANTIC_RECOVERY_V51__ || null;
-    const legacyResponseOwner = globalThis.__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__ || null;
     const multimodal = globalThis.__CHAT2API_MULTIMODAL_V4__ || null;
     const terminalPrompt = globalThis.__CHAT2API_REQUEST_TERMINAL_PROMPT_V88__ || null;
     const conversationQuota = globalThis.__CHAT2API_CONVERSATION_QUOTA_FAILOVER_V95__ || null;
@@ -24,7 +22,6 @@
     const modules = {
       request_v6: Number(request?.revision || 0) >= 69,
       rich_response_v69: Boolean(rich),
-      response_stream_v69: Number(recovery?.version || 0) >= 69,
       multimodal_v78: Number(multimodal?.revision || 0) >= 78,
       multimodal_v84: Number(multimodal?.revision || 0) >= 84 && typeof multimodal?.waitForReady === "function",
       multimodal_v85: Number(multimodal?.revision || 0) >= 85 && typeof multimodal?.waitForSafeSubmit === "function",
@@ -38,7 +35,6 @@
       rate_limit_guard_v52: Boolean(globalThis.__CHAT2API_RATE_LIMIT_CONTENT_V52__),
       tool_isolation_v48: Number(globalThis.__CHAT2API_TOOL_ISOLATION_V48__?.version || 0) === 48,
       draft_managed_recovery_v55: Number(globalThis.__CHAT2API_DRAFT_MANAGED_RECOVERY_V55__?.version || 0) === 55,
-      response_single_owner_v53: Number(legacyResponseOwner?.owner_revision || 0) === 53,
       network_stream_recovery_v55: Number(networkRecovery?.version || 0) === 55,
       network_stream_main_v55: document.documentElement?.getAttribute?.("data-chat2api-network-stream-main-v55") === "55",
       network_stream_parser_v63: document.documentElement?.getAttribute?.("data-chat2api-network-stream-parser") === "63",
@@ -60,13 +56,14 @@
       modules,
       modules_ok: modulesCurrent,
       request_revision: Number(request?.revision || 0),
-      response_revision: Number(recovery?.version || 0),
+      response_revision: Number(request?.revision || 0),
+      response_terminal_owner: "request-v6",
       multimodal_revision: Number(multimodal?.revision || 0),
       terminal_prompt_revision: Number(terminalPrompt?.revision || 0),
       conversation_quota_failover_revision: Number(conversationQuota?.revision || 0),
       ui_hygiene_revision: Number(uiHygiene?.state?.revision || 0),
       native_tool_stream_revision: Number(nativeTool?.revision || 0),
-      network_response_recovery: Number(networkRecovery?.version || 0) === 55 ? "conversation-sse-v55-parser-v63" : null,
+      network_response_recovery: Number(networkRecovery?.version || 0) === 55 ? "conversation-sse-evidence-v56-parser-v63" : null,
       network_response_parser_revision: Number(document.documentElement?.getAttribute?.("data-chat2api-network-stream-parser") || 0),
       semantic_helper_mode: semanticHelper?.mode || null,
       document_url: String(location.href || ""),

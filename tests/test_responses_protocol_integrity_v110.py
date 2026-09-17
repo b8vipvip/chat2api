@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -7,9 +9,8 @@ import pytest
 import app.responses_emulated_tools_v109_patch as bridge
 import app.responses_protocol_integrity_v110_patch as integrity
 
-
 ROOT = Path(__file__).resolve().parents[1]
-MARKER = "FDEX_CODEX_SMOKE_f3e12090582943c0_WIRE"
+MARKER = "FDEX_CODEX_SMOKE_cdac2df519f84e20_WIRE"
 
 
 def envelope(value: dict) -> str:
@@ -39,14 +40,14 @@ def body() -> dict:
 def test_plain_or_truncated_final_is_protocol_failure_not_completed_text() -> None:
     catalog = bridge._catalog(body())
     with pytest.raises(integrity.ResponsesToolBridgeProtocolError):
-        bridge._interpret("FDEX_CODEX_SMOKE_f3e120905829_", catalog, body())
+        bridge._interpret("FDEX_CODEX_SMOKE_cdac2df519f84e20_", catalog, body())
 
 
 def test_truncated_exact_literal_inside_valid_envelope_is_still_protocol_failure() -> None:
     catalog = bridge._catalog(body())
     with pytest.raises(integrity.ResponsesToolBridgeProtocolError, match="exact literal"):
         bridge._interpret(
-            envelope({"kind": "final", "text": "FDEX_CODEX_SMOKE_f3e120905829_"}),
+            envelope({"kind": "final", "text": "FDEX_CODEX_SMOKE_cdac2df519f84e20_"}),
             catalog,
             body(),
         )
@@ -77,12 +78,15 @@ def test_bridge_prompt_repeats_literal_integrity_contract_at_generation_boundary
     assert bridge.BRIDGE_END in tail
 
 
-def test_worker_terminal_integrity_is_loaded_after_semantic_recovery() -> None:
+def test_worker_uses_request_v6_terminal_owner_without_v89_wrapper() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
     assert manifest["version"] == "0.8.40"
-    assert scripts.index("content_terminal_integrity_v89.js") > scripts.index("content_response_semantic_recovery_v51.js")
-    source = (ROOT / "chrome_extension" / "content_terminal_integrity_v89.js").read_text(encoding="utf-8")
-    assert "next.startsWith(current)" in source
-    assert "terminal_integrity_upgraded" in source
-    assert "for (let index = 0; index < 8; index += 1)" in source
+    assert "content_request_v6.js" in scripts
+    assert "content_response_semantic_recovery_v51.js" in scripts
+    assert "content_terminal_integrity_v89.js" not in scripts
+    request = (ROOT / "chrome_extension" / "content_request_v6.js").read_text(encoding="utf-8")
+    network = (ROOT / "chrome_extension" / "content_network_stream_recovery_v55.js").read_text(encoding="utf-8")
+    assert 'type: "chat.completed"' in request
+    assert 'type: "chat.completed"' not in network
+    assert 'network_terminal_authority: "request-v6"' in network

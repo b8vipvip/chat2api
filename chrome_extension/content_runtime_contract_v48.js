@@ -5,21 +5,20 @@
   const REQUIRED_BUNDLE = "0.8.40";
   const snapshot = () => {
     const marker = globalThis.__CHAT2API_CONTENT_BUNDLE_MARKER_V48__ || null;
-    const responseOwner = globalThis.__CHAT2API_RESPONSE_STREAM_RECOVERY_V49__ || null;
+    const requestOwner = globalThis.__CHAT2API_REQUEST_CONTENT_V6__ || null;
     const networkRecovery = globalThis.__CHAT2API_NETWORK_STREAM_RECOVERY_V55__ || null;
     const semanticHelper = globalThis.__CHAT2API_RESPONSE_SEMANTIC_RECOVERY_V51__ || null;
     const terminalPrompt = globalThis.__CHAT2API_REQUEST_TERMINAL_PROMPT_V88__ || null;
     const uiHygiene = globalThis.__CHAT2API_UI_HYGIENE_V31__ || null;
     const modules = {
       request_v5: Boolean(globalThis.__CHAT2API_REQUEST_CONTENT_V5__),
+      request_v6: Number(requestOwner?.revision || 0) >= 69,
       request_lifecycle_v50: Number(globalThis.__CHAT2API_REQUEST_LIFECYCLE_V50__?.version || 0) === 50,
       response_capture_v41: Number(globalThis.__CHAT2API_RESPONSE_CAPTURE_V41__?.version || 0) === 41,
       completion_recovery_v6: Boolean(globalThis.__CHAT2API_COMPLETION_RECOVERY_V6__),
       rate_limit_guard_v52: Boolean(globalThis.__CHAT2API_RATE_LIMIT_CONTENT_V52__),
       tool_isolation_v48: Number(globalThis.__CHAT2API_TOOL_ISOLATION_V48__?.version || 0) === 48,
       draft_managed_recovery_v55: Number(globalThis.__CHAT2API_DRAFT_MANAGED_RECOVERY_V55__?.version || 0) === 55,
-      response_stream_recovery_v49: Number(responseOwner?.version || 0) === 49,
-      response_single_owner_v53: Number(responseOwner?.owner_revision || 0) === 53 && Boolean(responseOwner?.timer),
       network_stream_recovery_v55: Number(networkRecovery?.version || 0) === 55,
       network_stream_main_v55: document.documentElement?.getAttribute?.("data-chat2api-network-stream-main-v55") === "55",
       network_stream_parser_v63: document.documentElement?.getAttribute?.("data-chat2api-network-stream-parser") === "63",
@@ -41,9 +40,9 @@
       modules_ok: modulesOk,
       terminal_prompt_revision: Number(terminalPrompt?.revision || 0),
       ui_hygiene_revision: Number(uiHygiene?.state?.revision || 0),
-      response_observer_owner: responseOwner?.owner || null,
-      response_observer_revision: Number(responseOwner?.owner_revision || 0),
-      network_response_recovery: Number(networkRecovery?.version || 0) === 55 ? "conversation-sse-v55-parser-v63" : null,
+      response_observer_owner: "request-v6",
+      response_observer_revision: Number(requestOwner?.revision || 0),
+      network_response_recovery: Number(networkRecovery?.version || 0) === 55 ? "conversation-sse-evidence-v56-parser-v63" : null,
       network_response_parser_revision: Number(document.documentElement?.getAttribute?.("data-chat2api-network-stream-parser") || 0),
       semantic_helper_mode: semanticHelper?.mode || null,
       document_url: String(location.href || ""),

@@ -5,10 +5,11 @@
   const REQUEST_KEY = "__CHAT2API_REQUEST_CONTENT_V5__";
   const LONG_PROMPT_THRESHOLD = 2048;
   const state = {
-    revision: 88,
+    revision: 90,
+    role: "prompt-insertion-only",
+    terminal_authority: "request-v6",
     fast_insert_count: 0,
     fast_insert_chars: 0,
-    suppressed_secondary_terminals: 0,
     last_fast_insert_ms: 0,
     last_fast_insert_chars: 0,
   };
@@ -39,23 +40,19 @@
           request_id: requestId,
           stage: "prompt-fast-insert",
           diagnostics: {
-            prompt_fast_insert_revision: 88,
+            prompt_fast_insert_revision: 90,
             prompt_fast_insert_method: "direct-text-node+input-event",
             prompt_fast_insert_chars: chars,
             prompt_fast_insert_ms: Math.round(elapsedMs * 10) / 10,
+            terminal_authority: "request-v6",
           },
         },
       }).catch?.(() => {});
     } catch (_) {}
   }
 
-  // ChatGPT's Lexical/contenteditable surface can block the page for minutes when
-  // execCommand("insertText") is handed a multi-kilobyte prompt. request-v6 emits
-  // a normal InputEvent immediately after this call, so replace only the expensive
-  // bulk DOM insertion while preserving the existing controller's ownership,
-  // validation and submit path.
   if (nativeExecCommand) {
-    document.execCommand = function chat2apiExecCommandV88(command, showUi, value) {
+    document.execCommand = function chat2apiExecCommandV90(command, showUi, value) {
       const cmd = String(command || "").toLowerCase();
       const text = typeof value === "string" ? value : "";
       const editable = activeEditable();
@@ -78,38 +75,9 @@
           state.last_fast_insert_chars = text.length;
           queueMicrotask(() => reportFastInsert(text.length, elapsed));
           return true;
-        } catch (_) {
-          // Fall back to the browser implementation only if the bounded direct
-          // mutation itself failed. Ordinary/short writes are untouched.
-        }
+        } catch (_) {}
       }
       return nativeExecCommand(command, showUi, value);
     };
   }
-
-  const nativeSendMessage = chrome.runtime.sendMessage.bind(chrome.runtime);
-  chrome.runtime.sendMessage = function chat2apiSendMessageV88(message, ...args) {
-    const event = message?.type === "chat2api.event" ? message.event : null;
-    const active = activeRequest();
-    const requestId = String(event?.request_id || "");
-    const sameRequest = Boolean(requestId && String(active?.requestId || "") === requestId);
-    const successAlreadyOwnedByNetwork = Boolean(sameRequest && active?.networkCompleted === true);
-    const secondaryFailure = event?.type === "chat.cancelled" || event?.type === "chat.error";
-
-    if (successAlreadyOwnedByNetwork && secondaryFailure) {
-      state.suppressed_secondary_terminals += 1;
-      const callback = args.find(value => typeof value === "function");
-      const result = {
-        ok: true,
-        suppressed: true,
-        reason: "network-success-is-terminal-v88",
-      };
-      if (callback) {
-        queueMicrotask(() => callback(result));
-        return undefined;
-      }
-      return Promise.resolve(result);
-    }
-    return nativeSendMessage(message, ...args);
-  };
 })();
