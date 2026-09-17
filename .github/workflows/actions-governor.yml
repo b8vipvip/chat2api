@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      MAX_GHOST_FORCE_ATTEMPTS: '100'
+      MAX_GHOST_FORCE_ATTEMPTS: '5'
     steps:
       - name: Govern duplicate, stale and ghost runs
         env:
