@@ -34,11 +34,26 @@ class RequestState:
         }
 
 
+def _monotonic_text(current: str, candidate: str) -> tuple[str, str]:
+    """Advance one accumulated assistant text only through prefix-compatible growth."""
+    before = str(current or "")
+    next_text = str(candidate or "")
+    if not next_text or next_text == before:
+        return before, "unchanged"
+    if not before:
+        return next_text, "initial"
+    if next_text.startswith(before) and len(next_text) > len(before):
+        return next_text, "prefix-extension"
+    if before.startswith(next_text):
+        return before, "stale-prefix"
+    return before, "divergent-ignored"
+
+
 def _terminal_text(accumulated: str, terminal: str) -> tuple[str, str]:
     """Choose one terminal value without allowing unrelated sources to replace it.
 
     Stream snapshots and the canonical request controller observe the same assistant
-    turn through different surfaces.  The only safe reconciliation is a monotonic
+    turn through different surfaces. The only safe reconciliation is a monotonic
     prefix extension; otherwise the controller's terminal value remains authoritative.
     """
     current = str(accumulated or "")
@@ -119,7 +134,9 @@ class RequestBroker:
             state.text += delta
         elif event_type == "chat.snapshot":
             state.first_token_mono = state.first_token_mono or now
-            state.text = str(event.get("text") or state.text)
+            state.text, snapshot_source = _monotonic_text(state.text, str(event.get("text") or ""))
+            state.diagnostics["snapshot_text_source"] = snapshot_source
+            state.diagnostics["snapshot_text_chars"] = len(state.text)
         elif event_type == "chat.completed":
             state.completed_mono = now
             final, source = _terminal_text(state.text, str(event.get("text") or ""))
