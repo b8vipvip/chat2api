@@ -55,6 +55,8 @@ jobs:
                   "chrome_extension/background_entry.js",
                   "chrome_extension/conversation_routing.js",
                   "chrome_extension/conversation_route_recovery_v136.js",
+                  "chrome_extension/conversation_persistent_pool_v132.js",
+                  "chrome_extension/conversation_persistent_pool_guard_v133.js",
                   "chrome_extension/background_window_observer_v90.js",
                   "chrome_extension/background_window_limit_v121.js",
                   "chrome_extension/content_chatgpt_choice_policy_v143.js",
@@ -76,13 +78,15 @@ jobs:
               entry = archive.extractfile("chrome_extension/background_entry.js").read().decode("utf-8")
               router = archive.extractfile("chrome_extension/conversation_routing.js").read().decode("utf-8")
               recovery = archive.extractfile("chrome_extension/conversation_route_recovery_v136.js").read().decode("utf-8")
+              persistent_pool = archive.extractfile("chrome_extension/conversation_persistent_pool_v132.js").read().decode("utf-8")
+              pool_guard = archive.extractfile("chrome_extension/conversation_persistent_pool_guard_v133.js").read().decode("utf-8")
               observer = archive.extractfile("chrome_extension/background_window_observer_v90.js").read().decode("utf-8")
               limiter = archive.extractfile("chrome_extension/background_window_limit_v121.js").read().decode("utf-8")
               choice_policy = archive.extractfile("chrome_extension/content_chatgpt_choice_policy_v143.js").read().decode("utf-8")
               pairer = archive.extractfile("scripts/linux_worker_extension_pair.py").read().decode("utf-8")
               controller = archive.extractfile("scripts/linux_worker_device_controller.py").read().decode("utf-8")
               controller_helper = archive.extractfile("scripts/linux_worker_device_controller_helper.sh").read().decode("utf-8")
-          assert manifest["version"] == "0.8.41"
+          assert manifest["version"] == "0.8.42"
           assert "\"conversation_routing.js\"" in entry
           assert "\"conversation_route_recovery_v136.js\"" in entry
           assert "revision: 140" in recovery
@@ -90,6 +94,12 @@ jobs:
           assert "__chat2apiRouteRecoveryV140" in recovery
           assert "server-authority-stale-inflight-v136" in recovery
           assert "server-cancel-control-v136" in recovery
+          assert 'await readiness.snapshot()' in persistent_pool
+          assert 'await readiness.readyForPrewarm()' not in persistent_pool
+          assert 'reason: "delegated-to-persistent-window-pool-v137"' in pool_guard
+          assert 'await pool.reconcile(`login-state:${String(login?.state || "unknown")}`)' in pool_guard
+          assert "await chrome.windows.remove" not in pool_guard
+          assert "chrome.windows.create" not in pool_guard
           assert "single-route-window-authority-v30" in router
           assert "decision_authority: false" in observer
           assert "chrome.windows.getAll({ populate: true })" in observer
@@ -174,8 +184,8 @@ jobs:
           payload = json.load(open('/tmp/chat2api-version.json', encoding='utf-8'))
           assert payload['server']['runtime_aligned'] is True
           assert payload['server']['entrypoint'] == 'app.entry:app'
-          assert payload['server']['runtime_version'] == '0.22.92'
-          assert payload['chrome_bridge']['bundle_version'] == '0.8.41'
+          assert payload['server']['runtime_version'] == '0.22.93'
+          assert payload['chrome_bridge']['bundle_version'] == '0.8.42'
           assert payload['chrome_bridge']['route_window_authority_revision'] == 30
           assert payload['chrome_bridge']['window_observer_revision'] == 90
           assert payload['chrome_bridge']['persistent_window_pool_revision'] == 132
