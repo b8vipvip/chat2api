@@ -138,7 +138,7 @@ def test_reserve_versions_match_manifest_and_runtime_contract():
     bundle = re.search(r'CHROME_BRIDGE_BUNDLE_VERSION = "([0-9.]+)"', runtime)
     assert server and protocol and bundle
     assert _semver(server.group(1)) >= (0, 21, 13)
-    assert protocol.group(1) == "0.8.1"
+    assert protocol.group(1) == "0.22.94"
     assert _semver(manifest["version"]) >= (0, 8, 0)
     assert bundle.group(1) == manifest["version"]
 
