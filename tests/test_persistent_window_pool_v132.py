@@ -82,7 +82,7 @@ def test_admin_copy_describes_persistent_windows_without_legacy_helper_copy() ->
 
 def test_worker_extension_bundle_advertises_pool_contract() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert manifest["version"] == "0.8.42"
+    assert manifest["version"] == "0.22.94"
     assert "persistent prewarmed" in manifest["description"]
 
 

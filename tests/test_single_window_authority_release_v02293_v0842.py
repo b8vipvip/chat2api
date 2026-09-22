@@ -19,10 +19,10 @@ def test_v02293_v0842_release_seals_single_window_lifecycle_authority() -> None:
     observer = text("chrome_extension/background_window_observer_v90.js")
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
 
-    assert SERVER_RUNTIME_VERSION == "0.22.93"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.42"
-    assert '"version": "0.8.42"' in manifest
-    assert "single-window-lifecycle-authority-v137-release-v02293" in runtime
+    assert SERVER_RUNTIME_VERSION == "0.22.94"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.94"
+    assert '"version": "0.22.94"' in manifest
+    assert "single-window-lifecycle-authority-v137-standby-cardinality-v144-unified-release-version-v1-release-v02294" in runtime
     assert "single-window-lifecycle-authority-v137-release-v0842" in runtime
     assert payload["chrome_bridge"]["persistent_window_pool_revision"] == 132
     assert payload["chrome_bridge"]["persistent_window_pool_contract_revision"] == 135
