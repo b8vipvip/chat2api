@@ -21,16 +21,14 @@ def test_v133_guard_load_order_wraps_final_request_resolver() -> None:
     assert router < pool < restore < guard < dispatch
 
 
-def test_v133_guard_serialises_repair_and_compacts_only_explicit_logout() -> None:
+def test_v133_guard_serialises_repair_and_delegates_login_lifecycle_to_pool() -> None:
     source = text("chrome_extension/conversation_persistent_pool_guard_v133.js")
     assert 'await pool.reconcile("request-admission-barrier-v133")' in source
-    assert 'String(login?.state || "") !== "login_required"' in source
-    assert 'route?.inflight_request_id' in source
-    assert 'router?.activeRequests instanceof Map' in source
-    assert 'pool?.reservations?.values?.()' in source
-    assert 'await chrome.windows.remove(row.window_id)' in source
-    assert 'route.persistent_pool_revision = 133' in source
-    assert 'chat2apiConversationRoutesV1' in source
+    assert 'reason: "delegated-to-persistent-window-pool-v137"' in source
+    assert 'login-state:' in source
+    assert 'await chrome.windows.remove' not in source
+    assert 'chrome.windows.create' not in source
+    assert 'route.window_id = null' not in source
 
 
 def test_v133_window_authority_overlay_runs_after_observer_before_refresh() -> None:
