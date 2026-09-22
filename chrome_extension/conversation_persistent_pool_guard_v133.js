@@ -88,110 +88,29 @@
     };
   }
 
-  async function preferredWindowId(rows, login) {
-    const live = new Set(rows.map(row => row.window_id));
-    if (Number.isInteger(login?.window_id) && live.has(login.window_id)) return login.window_id;
-
-    const stored = await chrome.storage.local.get({ [INIT_TAB_KEY]: null }).catch(() => ({}));
-    if (Number.isInteger(stored?.[INIT_TAB_KEY])) {
-      try {
-        const tab = await chrome.tabs.get(stored[INIT_TAB_KEY]);
-        if (Number.isInteger(tab?.windowId) && live.has(tab.windowId)) return tab.windowId;
-      } catch (_) {}
-    }
-
-    const focused = rows.find(row => row.focused);
-    return focused?.window_id ?? rows[0]?.window_id ?? null;
-  }
-
-  async function detachIdleRoutes(closeIds, router) {
-    if (!router?.routes || !closeIds.size) return 0;
-    let changed = 0;
-    for (const route of Object.values(router.routes)) {
-      const windowId = Number(route?.window_id);
-      if (!closeIds.has(windowId) || route?.inflight_request_id) continue;
-      try { await chrome.alarms.clear(`${ROUTE_ALARM_PREFIX}${windowId}`); } catch (_) {}
-      route.window_id = null;
-      route.tab_id = null;
-      route.window_owned = false;
-      route.close_after = null;
-      route.persistent_pool_revision = 133;
-      route.last_pool_detach_reason = "explicit-login-required-v133";
-      route.last_pool_detach_at = Date.now();
-      changed += 1;
-    }
-    if (changed) {
-      await chrome.storage.local.set({ [ROUTES_STORAGE_KEY]: router.routes }).catch(() => {});
-      state.routes_detached += changed;
-    }
-    return changed;
-  }
-
+  // v137: this guard is admission ordering only. Physical window creation,
+  // closure and target reconciliation belong exclusively to persistent-pool-v132.
+  // Login readiness is evidence consumed by that authority, never a second
+  // lifecycle owner. Historical logout-compaction counters remain in state only
+  // for backward-compatible diagnostics.
   async function compactExplicitLogout(reason = "login-required") {
-    if (state.compactPromise) return state.compactPromise;
-    const task = (async () => {
-      const login = await loginSnapshot();
-      if (String(login?.state || "") !== "login_required") {
-        state.last = { ok: true, skipped: true, reason: "login-state-transitional", login_state: String(login?.state || "unknown"), at: Date.now() };
-        return state.last;
-      }
-
-      const pool = globalThis[POOL_KEY];
-      const router = globalThis[ROUTER_KEY];
-      const rows = await managedWindows();
-      if (rows.length <= 1) {
-        state.last = { ok: true, skipped: true, reason: "already-compact", login_state: "login_required", total: rows.length, at: Date.now() };
-        return state.last;
-      }
-
-      const busy = busyWindowIds(router, pool);
-      const preferred = await preferredWindowId(rows, login);
-      const keep = new Set(busy);
-      if (Number.isInteger(preferred)) keep.add(preferred);
-      if (!keep.size && rows[0]) keep.add(rows[0].window_id);
-
-      // During an explicit logout, one interactive/login surface is enough. Busy
-      // request windows remain protected until their terminal path releases them.
-      const desired = Math.max(1, busy.size, keep.size);
-      const removable = rows.filter(row => !keep.has(row.window_id));
-      const closeRows = removable.slice(0, Math.max(0, rows.length - desired));
-      const closeIds = new Set(closeRows.map(row => row.window_id));
-      const detached = await detachIdleRoutes(closeIds, router);
-
-      let closed = 0;
-      for (const row of closeRows) {
-        try {
-          await chrome.windows.remove(row.window_id);
-          closed += 1;
-        } catch (_) {}
-      }
-
-      state.logout_compactions += 1;
-      state.windows_closed += closed;
-      state.last = {
-        ok: true,
-        reason,
-        login_state: "login_required",
-        before: rows.length,
-        desired,
-        protected_busy: busy.size,
-        detached,
-        closed,
-        after_expected: Math.max(0, rows.length - closed),
-        at: Date.now(),
-      };
-      if (typeof sendExtensionStatus === "function") {
-        setTimeout(() => sendExtensionStatus(false).catch(() => {}), 250);
-      }
-      return state.last;
-    })().finally(() => {
-      if (state.compactPromise === task) state.compactPromise = null;
-    });
-    state.compactPromise = task;
-    return task;
+    const login = await loginSnapshot();
+    state.last = {
+      ok: true,
+      skipped: true,
+      reason: "delegated-to-persistent-window-pool-v137",
+      trigger: reason,
+      login_state: String(login?.state || "unknown"),
+      at: Date.now(),
+    };
+    const pool = globalThis[POOL_KEY];
+    if (pool && typeof pool.reconcile === "function") {
+      await pool.reconcile(`login-state:${String(login?.state || "unknown")}`);
+    }
+    return state.last;
   }
 
-  function scheduleCompaction(reason = "login-required", delay = 200) {
+  function scheduleCompaction(reason = "login-state-change", delay = 200) {
     if (state.compactTimer) clearTimeout(state.compactTimer);
     state.compactTimer = setTimeout(() => {
       state.compactTimer = null;
@@ -219,7 +138,7 @@
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
-    if (changes.chatgptLoginState?.newValue === "login_required") scheduleCompaction("storage-login-required", 120);
+    if (changes.chatgptLoginState || changes.chatgptLoginComposerReady) scheduleCompaction("storage-login-state-change", 120);
   });
 
   chrome.alarms.onAlarm.addListener(alarm => {

@@ -4,6 +4,8 @@
 
   const ROUTER_KEY = "__CHAT2API_CONVERSATION_ROUTING_V1__";
   const LOGIN_KEY = "__CHAT2API_LOGIN_READINESS_V27__";
+  const LOGIN_STATE_KEY = "chatgptLoginState";
+  const LOGIN_COMPOSER_KEY = "chatgptLoginComposerReady";
   const STORAGE_KEY = "chat2apiPersistentWindowPoolV132";
   const LEGACY_LIMIT_STORAGE_KEY = "chat2apiRoutedWindowLimitV121";
   const ROUTES_STORAGE_KEY = "chat2apiConversationRoutesV1";
@@ -158,15 +160,23 @@
   }
 
   async function loginReady() {
+    // The persistent pool is the sole physical window lifecycle authority.
+    // Consume the login detector's last authoritative state, but never call
+    // readyForPrewarm() here: that helper may create/retire a probe window and
+    // would give login readiness a second mutation path into pool cardinality.
     const readiness = globalThis[LOGIN_KEY];
-    if (typeof readiness?.readyForPrewarm === "function") {
-      try { return await readiness.readyForPrewarm(); } catch (_) {}
+    let snapshot = null;
+    if (typeof readiness?.snapshot === "function") {
+      try { snapshot = await readiness.snapshot(); } catch (_) {}
+    }
+    if (snapshot?.state) {
+      return snapshot.state === "ready" && snapshot.composer_ready === true;
     }
     const stored = await chrome.storage.local.get({
-      chatgptLoginState: "unknown",
-      chatgptLoginComposerReady: false,
+      [LOGIN_STATE_KEY]: "unknown",
+      [LOGIN_COMPOSER_KEY]: false,
     }).catch(() => ({}));
-    return stored.chatgptLoginState === "ready" && stored.chatgptLoginComposerReady === true;
+    return stored[LOGIN_STATE_KEY] === "ready" && stored[LOGIN_COMPOSER_KEY] === true;
   }
 
   async function loginSnapshot() {
@@ -694,7 +704,7 @@
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
-    if (changes[DISABLED_KEY] || changes.chatgptLoginState || changes.chatgptLoginComposerReady || changes[INIT_TAB_KEY]) {
+    if (changes[DISABLED_KEY] || changes[LOGIN_STATE_KEY] || changes[LOGIN_COMPOSER_KEY] || changes[INIT_TAB_KEY]) {
       scheduleReconcile("state-change", 200);
     }
     const legacy = changes[LEGACY_LIMIT_STORAGE_KEY]?.newValue;
