@@ -35,11 +35,11 @@ def test_worker_manager_is_wide_and_secondary_metadata_is_removed() -> None:
     assert "常驻窗口池独立设置" not in source
 
 
-def test_worker_limit_cell_uses_single_inline_settings_editor() -> None:
+def test_worker_limit_cell_uses_compact_summary_with_single_popover_editor() -> None:
     source = read("app/admin_worker_limits_clipboard_v121.js")
-    assert "data-v121-limit-summary" not in source
-    assert "data-v121-edit-limits" not in source
-    assert "data-v121-limit-popover" not in source
+    assert "data-v121-limit-summary" in source
+    assert "data-v121-edit-limits" in source
+    assert "data-v121-limit-popover" in source
     assert "data-v121-concurrency" in source
     assert "data-v121-windows" in source
     assert "data-v121-save-limits" in source
