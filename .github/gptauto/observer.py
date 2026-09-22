@@ -315,6 +315,12 @@ def capture(
             # Preserve durable metadata that a later GitHub event may not carry.
             merged_metadata = dict(previous.metadata)
             merged_metadata.update({k: v for k, v in t.metadata.items() if v not in ("", None)})
+            # Event-scoped fields must always describe this observation, including
+            # explicit empties. Otherwise a PR synchronize/open event can inherit
+            # workflow_conclusion="failure" from the previous CI artifact and
+            # manufacture a repair_request for the new/current head.
+            for key in ("event", "run_id", "workflow_name", "workflow_conclusion", "event_head_sha", "branch", "actor"):
+                merged_metadata[key] = t.metadata.get(key, "")
             t.metadata = merged_metadata
             seen = {(e.at, e.kind, e.reason, e.gate, e.status, e.evidence) for e in previous.history}
             current = [e for e in t.history if (e.at, e.kind, e.reason, e.gate, e.status, e.evidence) not in seen]
