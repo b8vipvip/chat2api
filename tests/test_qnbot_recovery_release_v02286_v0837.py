@@ -15,9 +15,9 @@ def read(path: str) -> str:
 def test_v02286_v0837_qnbot_recovery_release_contract() -> None:
     manifest = json.loads(read("chrome_extension/manifest.json"))
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
-    assert SERVER_RUNTIME_VERSION == "0.22.93"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.42"
-    assert manifest["version"] == "0.8.42"
+    assert SERVER_RUNTIME_VERSION == "0.22.94"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.94"
+    assert manifest["version"] == "0.22.94"
     assert "release-v02286" in payload["server"]["feature_revision"]
     assert "release-v0837" in payload["chrome_bridge"]["build_revision"]
     assert payload["features"]["qnbot_stale_route_recovery_v136"] is True
@@ -36,7 +36,7 @@ def test_v0837_worker_bundle_loads_route_recovery_v136() -> None:
         "chrome_extension/content_runtime_contract_v48.js",
         "chrome_extension/content_runtime_contract_v71.js",
     ):
-        assert "0.8.42" in read(path), path
+        assert "0.22.94" in read(path), path
 
 def test_v02286_installs_request_id_namespace_v136() -> None:
     entry = read("app/entry.py")
