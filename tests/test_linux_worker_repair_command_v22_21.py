@@ -53,7 +53,7 @@ def test_runtime_and_entry_keep_repair_patch_before_diagnostics_patch():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert 'SERVER_RUNTIME_VERSION = "0.22.24"' in runtime
-    assert 'CHROME_BRIDGE_VERSION = "0.8.1"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.22.94"' in runtime
     assert "from .linux_worker_repair_command_patch import install_linux_worker_repair_command_patch" in entry
     assert "install_linux_worker_repair_command_patch(app)" in entry
     assert "install_linux_worker_diagnostics_patch(app)" in entry
