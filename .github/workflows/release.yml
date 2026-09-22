@@ -67,9 +67,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${SHA}&event=push&per_page=100")"
-          ci="$(jq -r '[.workflow_runs[] | select(.name=="CI")] | sort_by(.run_started_at // .created_at) | reverse | .[0] | if . == null then "missing" else (.status + ":" + (.conclusion // "")) end' <<<"$runs")"
-          smoke="$(jq -r '[.workflow_runs[] | select(.name=="Production image smoke")] | sort_by(.run_started_at // .created_at) | reverse | .[0] | if . == null then "missing" else (.status + ":" + (.conclusion // "")) end' <<<"$runs")"
+          # Validate by immutable candidate SHA, not by trigger type. GPTAuto
+          # Reconcile may have to dispatch these gates explicitly after a merge
+          # performed with GITHUB_TOKEN, while a normal human merge may produce
+          # push-triggered runs. Both are valid evidence when head_sha == SHA.
+          runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${SHA}&per_page=100")"
+          ci="$(jq -r '[.workflow_runs[] | select(.name=="CI")] | sort_by(.run_started_at // .created_at, .id) | reverse | .[0] | if . == null then "missing" else (.status + ":" + (.conclusion // "")) end' <<<"$runs")"
+          smoke="$(jq -r '[.workflow_runs[] | select(.name=="Production image smoke")] | sort_by(.run_started_at // .created_at, .id) | reverse | .[0] | if . == null then "missing" else (.status + ":" + (.conclusion // "")) end' <<<"$runs")"
           echo "validation snapshot: CI=${ci} | Production image smoke=${smoke}"
 
           for result in "$ci" "$smoke"; do
