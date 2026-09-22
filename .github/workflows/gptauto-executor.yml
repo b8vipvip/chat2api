@@ -212,10 +212,12 @@ jobs:
               echo "- Head: $HEAD_SHA"
               echo "- Failed run: $FAILED_RUN_ID"
               echo "- Recovery owner: foreground/host agent"
+              echo "- Foreground disposition: CONTINUE (do not end the engineering turn while the lease is ACTIVE)."
               echo "- Completion Lease remains ACTIVE."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::warning::FOREGROUND_RECOVERY_REQUIRED task=$TASK_ID pr=$PR_NUMBER head=$HEAD_SHA failed_run=$FAILED_RUN_ID"
-            exit 0
+            echo "::error::FOREGROUND_RECOVERY_REQUIRED task=$TASK_ID pr=$PR_NUMBER head=$HEAD_SHA failed_run=$FAILED_RUN_ID"
+            echo "::error::Completion Lease is ACTIVE. This Executor run is intentionally non-success so a foreground host cannot treat workflow completion as a safe stopping boundary."
+            exit 1
           fi
           gh workflow run gptauto-repair.yml --repo "$REPOSITORY" \
             --ref "$(gh api "repos/$REPOSITORY" --jq '.default_branch')" \
@@ -250,7 +252,7 @@ jobs:
           body="$marker
           GPTAuto Completion Lease is ACTIVE for task $TASK_ID (decision: $ACTION).
 
-          This engineering task is NOT complete. A PR, commit, successful partial check, repair request, merge, or release-in-progress is non-terminal evidence. Foreground agents must continue/recover and must not report completion until a terminal DONE receipt exists."
+          This engineering task is NOT complete. A PR, commit, successful partial check, repair request, merge, release-in-progress, or merely waiting for GitHub Actions is non-terminal evidence. Foreground agents must remain attached to the task, poll/recover asynchronous gates, and must not end the engineering turn or report completion until a terminal DONE receipt exists or a genuine BLOCKED condition requiring user action is reached."
           comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" 2>/dev/null || echo '[]')"
           comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
           if [[ -n "$comment_id" ]]; then
