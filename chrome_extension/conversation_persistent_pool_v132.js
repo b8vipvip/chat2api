@@ -357,7 +357,7 @@
 
   function snapshotFrom(rows, value, ready, isDisabled) {
     const target = normalizeTarget(state.target) || 0;
-    const effective = target ? (isDisabled ? Math.min(1, target) : (ready ? target : Math.min(1, target))) : 0;
+    const effective = target ? (isDisabled ? Math.min(1, target) : (ready ? target + inUse : Math.min(1, target))) : 0;
     const assigned = routeByWindow(value);
     const busy = busyWindowIds(value);
     const routedRows = rows.filter(row => assigned.has(row.window_id));
@@ -370,7 +370,7 @@
       target,
       configured_target: target,
       effective_target: effective,
-      target_reached: Boolean(target && ready && !isDisabled && rows.length === target) || Boolean(target && isDisabled && rows.length <= effective),
+      target_reached: Boolean(target && ready && !isDisabled && standbyRows.length === target) || Boolean(target && isDisabled && rows.length <= effective),
       total: rows.length,
       active: inUse,
       idle: Math.max(0, rows.length - inUse),
@@ -382,7 +382,7 @@
       all_chatgpt_windows: rows.length,
       login_ready: ready,
       worker_disabled: isDisabled,
-      warming: Boolean(target && ready && !isDisabled && rows.length < target),
+      warming: Boolean(target && ready && !isDisabled && standbyRows.length < target),
       excess: Math.max(0, rows.length - effective),
       reserved: state.reservations.size,
       source: state.source,
@@ -482,7 +482,8 @@
       return snapshotFrom(rows, value, ready, isDisabled);
     }
 
-    const effectiveTarget = isDisabled ? Math.min(1, target) : (ready ? target : Math.min(1, target));
+    const busyBefore = busyWindowIds(value);
+    const effectiveTarget = isDisabled ? Math.min(1, target) : (ready ? target + rows.filter(row => busyBefore.has(row.window_id)).length : Math.min(1, target));
     let closed = 0;
     let deferred = 0;
     if (isDisabled || ready) {
