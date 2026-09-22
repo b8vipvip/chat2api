@@ -99,15 +99,15 @@ def test_worker_settings_ui_keeps_concurrency_and_windows_distinct() -> None:
     presentation = (ROOT / "app" / "worker_presentation_v64_patch.py").read_text(encoding="utf-8")
     identity = (ROOT / "app" / "admin_worker_identity_v131.js").read_text(encoding="utf-8")
 
-    assert 'headerCell.textContent = "并发设置"' in console
+    assert 'headerCell.textContent = "并发 / 备用"' in console
     assert '/concurrency`' in console
     assert '/windows/limit`' in console
-    assert "data-v121-limit-summary" not in console
-    assert "data-v121-edit-limits" not in console
-    assert "data-v121-limit-popover" not in console
+    assert "data-v121-limit-summary" in console
+    assert "data-v121-edit-limits" in console
+    assert "data-v121-limit-popover" in console
     assert 'install_worker_limits_clipboard_v121_patch(app)' in presentation
     assert "持续维持的可接待空闲窗口数量" in console
-    assert "data-v121-refresh-limits" in console
+    assert "data-v121-cancel-limits" in console
     assert "extensionDeviceBody" not in identity
     assert "空闲窗口常驻并预热" not in console
     assert "常驻窗口池跟随并发" not in console
