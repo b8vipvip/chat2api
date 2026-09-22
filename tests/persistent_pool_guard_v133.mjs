@@ -24,7 +24,7 @@ const pool = {
   reservations: new Map(),
   reconcile: async reason => {
     reconcileCalls += 1;
-    assert.equal(reason, 'request-admission-barrier-v133');
+    assert.ok(['login-state:login_required', 'request-admission-barrier-v133'].includes(reason));
     return { total: windows.size, target: 3 };
   },
 };
@@ -79,21 +79,17 @@ assert.equal(guard.version, 133);
 
 const compacted = await guard.compactExplicitLogout('vm-test');
 assert.equal(compacted.ok, true);
-assert.equal(compacted.closed, 2);
-assert.equal(windows.size, 1);
-assert.ok(windows.has(101), 'the interactive/login window must remain');
-assert.equal(routes.a.window_id, null);
-assert.equal(routes.a.tab_id, null);
-assert.equal(routes.b.window_id, null);
-assert.equal(routes.b.tab_id, null);
-assert.equal(routes.a.persistent_pool_revision, 133);
-assert.equal(routes.b.persistent_pool_revision, 133);
-assert.ok(persistedRoutes, 'detached route state must be persisted');
+assert.equal(compacted.skipped, true);
+assert.equal(compacted.reason, 'delegated-to-persistent-window-pool-v137');
+assert.equal(windows.size, 3, 'guard must not mutate physical window cardinality');
+assert.equal(routes.a.window_id, 102);
+assert.equal(routes.b.window_id, 103);
+assert.equal(persistedRoutes, null, 'guard must not mutate persisted route ownership');
 
 loginState = 'ready';
 const resolved = await globalThis.resolveTargetTabForRequest({ type: 'chat.request', request_id: 'req_guard' });
 assert.equal(resolved.id, 201);
-assert.equal(reconcileCalls, 1, 'request admission must reconcile the pool before leasing a slot');
+assert.equal(reconcileCalls, 2, 'login state and request admission both delegate reconciliation to the pool');
 assert.equal(baseResolverCalls, 1);
 
 console.log('persistent pool guard v133 VM contract passed');
