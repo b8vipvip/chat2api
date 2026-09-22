@@ -84,6 +84,8 @@ def capture(
     current_pr_head_sha="",
     release_required_override="",
     provenance="repository_observer",
+    release_published="",
+    release_id="",
 ):
     tid = observed_task_id(repo, pr_number, head_sha, merge_sha)
     goal = pr_title.strip() or ("Observe repository change " + (merge_sha or head_sha)[:12])
@@ -93,12 +95,12 @@ def capture(
     )
     evidence_provenance = str(provenance or "repository_observer").strip() or "repository_observer"
     workflow_success = _passed(workflow_conclusion)
-    release_done = _passed(release_conclusion) or (
+    release_event_published = (
         event == "release" and str(release_state or "").lower() in {"published", "released"}
-    ) or (
-        event == "workflow_run"
-        and workflow_success
-        and _release_workflow(workflow_name)
+    )
+    explicit_release_published = str(release_published or "").strip().lower() in {"true", "1", "yes"}
+    release_done = release_event_published or (
+        explicit_release_published and _passed(release_conclusion)
     )
     main_ci_done = _passed(main_ci_conclusion) or (
         event == "workflow_run"
@@ -180,9 +182,10 @@ def capture(
                     Gate.RELEASE,
                     status=release_status,
                     evidence=(
-                        release_tag or f"Release run {effective_release_run_id or run_id}"
+                        release_tag
+                        or (f"GitHub Release {release_id}" if release_id else f"Release run {effective_release_run_id or run_id}")
                         if release_done
-                        else "Release completion not yet observed"
+                        else "Published release evidence not yet observed"
                     ),
                 )
             )
@@ -216,7 +219,8 @@ def capture(
                     "Requested release completed successfully",
                     CriterionStatus.PASSED if release_done else CriterionStatus.PENDING,
                     (
-                        release_tag or f"release_run={effective_release_run_id or run_id}"
+                        release_tag
+                        or (f"release_id={release_id}" if release_id else f"release_run={effective_release_run_id or run_id}")
                         if release_done
                         else ""
                     ),
@@ -274,6 +278,8 @@ def capture(
             "pr_ci_run_id": effective_pr_ci_run_id,
             "main_ci_run_id": effective_main_ci_run_id,
             "release_run_id": effective_release_run_id,
+            "release_published": bool(release_done),
+            "release_id": str(release_id or ""),
         },
     )
     t.history = [
@@ -362,6 +368,8 @@ def main():
         "current-pr-head-sha",
         "release-required-override",
         "provenance",
+        "release-published",
+        "release-id",
     ]:
         c.add_argument("--" + name, default="")
     a = p.parse_args()
@@ -394,6 +402,8 @@ def main():
                 current_pr_head_sha=a.current_pr_head_sha,
                 release_required_override=a.release_required_override,
                 provenance=a.provenance,
+                release_published=a.release_published,
+                release_id=a.release_id,
             ),
             ensure_ascii=False,
         )
