@@ -169,6 +169,7 @@ jobs:
             fi
           fi
       - name: Dispatch autonomous repair agent
+        id: repair-dispatch
         if: ${{ steps.state.outputs.action == 'repair_request' }}
         env:
           GH_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN || github.token }}
@@ -221,9 +222,10 @@ jobs:
               echo "- Machine guard: $guard"
               echo "- Completion Lease remains ACTIVE."
             } >> "$GITHUB_STEP_SUMMARY"
-            echo "::error::FOREGROUND_RECOVERY_REQUIRED task=$TASK_ID pr=$PR_NUMBER head=$HEAD_SHA failed_run=$FAILED_RUN_ID"
-            echo "::error::Completion Lease is ACTIVE. This Executor run is intentionally non-success so a foreground host cannot treat workflow completion as a safe stopping boundary."
-            exit 1
+            echo "foreground-exit-denied=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::FOREGROUND_RECOVERY_REQUIRED task=$TASK_ID pr=$PR_NUMBER head=$HEAD_SHA failed_run=$FAILED_RUN_ID"
+            echo "::warning::Completion Lease is ACTIVE. Durable exit guard will be published before Executor is intentionally failed."
+            exit 0
           fi
           gh workflow run gptauto-repair.yml --repo "$REPOSITORY" \
             --ref "$(gh api "repos/$REPOSITORY" --jq '.default_branch')" \
@@ -289,6 +291,12 @@ jobs:
             echo "- The current foreground ChatGPT session is no longer required for task continuity."
             echo "- State is checkpointed in the Observer artifact; subsequent GitHub events reattach to the same TASK_ID."
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Enforce foreground exit guard
+        if: ${{ always() && steps.repair-dispatch.outputs.foreground-exit-denied == 'true' }}
+        shell: bash
+        run: |
+          echo "::error::FOREGROUND_EXIT_DENIED: repair ownership is foreground and Completion Lease remains ACTIVE. Resume the same PR; do not end the engineering task."
+          exit 1
       - name: Executor summary
         if: always()
         env:
