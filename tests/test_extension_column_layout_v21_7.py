@@ -76,9 +76,9 @@ def test_canonical_header_and_rows_have_the_same_column_keys():
     assert "function canonicalHeaderHtml()" in text
     assert "function rowHtml(row, truthInfo = null)" in text
     assert 'data-chat2api-canonical-worker-row="1"' in text
-    assert 'DEFAULT_ORDER.every(key => Boolean(keyedChild(tr, key)))' in text
+    assert "rows.map(row => rowHtml(row," in text
     assert 'headerRow.innerHTML !== header' in text
-    assert 'body.innerHTML = rows.length' in text
+    assert "const nextBody = rows.length" in text
     assert 'applyLayout();' in text
     assert 'capacity.used_units' in text
     assert 'capacity.limit_units' in text
@@ -127,7 +127,7 @@ def test_column_settings_modal_exposes_every_effective_worker_column():
         'document.body.style.overflow = bodyOverflowBeforeModal',
         '旧并发列、旧备用窗口列与绑定 API Key 数列已永久移除',
         '{key: "device_name", label: "设备名称"}',
-        '{key: "occupancy", label: "当前占用"}',
+        '{key: "occupancy", label: "请求 / 实际窗口"}',
     ):
         assert token in text
 
