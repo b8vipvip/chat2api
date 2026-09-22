@@ -313,7 +313,8 @@
     for (const row of rows) {
       const network = networkLabel(row);
       const login = chatgptLabel(row);
-      if (row?.connection_enabled === false || row?.online !== true || login.cls === "bad" || network.cls === "bad") counts.bad += 1;
+      if (row?.connection_enabled === false) counts.warn += 1;
+      else if (row?.online !== true || login.cls === "bad" || network.cls === "bad") counts.bad += 1;
       else if (login.cls === "ok" && network.cls === "ok") counts.ok += 1;
       else counts.warn += 1;
     }
