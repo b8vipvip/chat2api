@@ -16,8 +16,8 @@ def read(path: str) -> str:
 
 def test_v02288_server_only_release_contract() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
-    assert SERVER_RUNTIME_VERSION == "0.22.94"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.94"
+    assert SERVER_RUNTIME_VERSION == "0.22.95"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.95"
     assert payload["server"]["runtime_aligned"] is True
     assert payload["features"]["admin_worker_manager_layout_v138"] is True
     assert payload["features"]["window_identity_v138"] is True
@@ -35,11 +35,11 @@ def test_worker_manager_is_wide_and_secondary_metadata_is_removed() -> None:
     assert "常驻窗口池独立设置" not in source
 
 
-def test_worker_limit_cell_uses_single_inline_settings_editor() -> None:
+def test_worker_limit_cell_uses_compact_summary_with_single_popover_editor() -> None:
     source = read("app/admin_worker_limits_clipboard_v121.js")
-    assert "data-v121-limit-summary" not in source
-    assert "data-v121-edit-limits" not in source
-    assert "data-v121-limit-popover" not in source
+    assert "data-v121-limit-summary" in source
+    assert "data-v121-edit-limits" in source
+    assert "data-v121-limit-popover" in source
     assert "data-v121-concurrency" in source
     assert "data-v121-windows" in source
     assert "data-v121-save-limits" in source
