@@ -16,8 +16,8 @@ def read(path: str) -> str:
 
 def test_v02288_server_only_release_contract() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
-    assert SERVER_RUNTIME_VERSION == "0.22.93"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.42"
+    assert SERVER_RUNTIME_VERSION == "0.22.94"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.94"
     assert payload["server"]["runtime_aligned"] is True
     assert payload["features"]["admin_worker_manager_layout_v138"] is True
     assert payload["features"]["window_identity_v138"] is True
