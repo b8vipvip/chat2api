@@ -37,13 +37,13 @@ def test_column_layout_uses_one_canonical_semantic_schema():
         ("version", "版本"),
         ("account_type", "账户类型"),
         ("status", "状态"),
-        ("worker_settings", "并发设置"),
+        ("worker_settings", "并发 / 窗口"),
         ("last_seen", "最后在线"),
         ("network", "网络"),
         ("chatgpt", "ChatGPT"),
         ("actions", "操作"),
         ("device_name", "设备名称"),
-        ("occupancy", "当前占用"),
+        ("occupancy", "请求 / 实际窗口"),
     )
     for key, label in expected:
         assert f'{{key: "{key}", label: "{label}"}}' in text
@@ -74,7 +74,7 @@ def test_column_layout_migrates_only_still_supported_historical_cells():
 def test_canonical_header_and_rows_have_the_same_column_keys():
     text = source()
     assert "function canonicalHeaderHtml()" in text
-    assert "function rowHtml(row)" in text
+    assert "function rowHtml(row, truthInfo = null)" in text
     assert 'data-chat2api-canonical-worker-row="1"' in text
     assert 'DEFAULT_ORDER.every(key => Boolean(keyedChild(tr, key)))' in text
     assert 'headerRow.innerHTML !== header' in text
@@ -91,16 +91,14 @@ def test_worker_view_bypasses_historical_multi_stage_extension_renderers():
     assert 'if (viewName !== "extensions") return baseShow(viewName)' in text
     assert "activateExtensionView();" in text
     assert "return loadCanonicalExtensions(true);" in text
-    assert "legacy_renderers_bypassed: true" in text
+    assert "legacy_renderers_removed: true" in text
 
-    # Late promises from historical wrappers can still finish after the final
-    # owner is installed, so v60 repairs any non-canonical replacement before
-    # the next paint instead of allowing a visible second table style.
-    assert "function queueCanonicalRepair()" in text
-    assert "queueMicrotask(() =>" in text
-    assert "!isCanonical()" in text
-    assert 'new MutationObserver(queueCanonicalRepair).observe(body, {childList: true})' in text
-    assert 'new MutationObserver(queueCanonicalRepair).observe(headerRow, {childList: true})' in text
+    # Historical Worker-table renderers are removed rather than repaired after
+    # they paint. The canonical owner must not need a DOM observer to win races.
+    assert "function queueCanonicalRepair()" not in text
+    assert "function isCanonical()" not in text
+    assert "MutationObserver" not in text
+    assert 'presentation_owner: "admin_extension_columns"' in text
 
 
 def test_initial_worker_table_is_hidden_until_canonical_snapshot_is_ready():

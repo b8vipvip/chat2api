@@ -31,44 +31,22 @@ def test_v21_5_is_installed_after_concurrency_and_before_runtime_contract():
     assert entry.index("install_v21_5_patch(app)") < entry.index("install_runtime_contract(app)")
 
 
-def test_extension_console_uses_canonical_worker_settings_column():
+def test_v21_5_worker_table_renderer_is_retired_instead_of_layered():
     source = read(ROOT / "app" / "admin_v21_5.js")
-    assert 'th.textContent !== "并发设置"' in source
-    assert 'data-chat2api-column-key="worker_settings"' in source
-    assert 'data-chat2api-structural-owner="worker-settings-v59"' in source
-    assert 'globalThis.chat2apiRefreshWorkerWindowEditorsV59' in source
-    assert 'column: "worker_settings"' in source
-    assert 'legacy_columns_removed: ["concurrency", "reserve_windows", "platform"]' in source
-    assert "const POLL_MS = 2000" not in source
-    assert "setInterval(" not in source
-    assert "requestAnimationFrame" in source
-    assert 'structural_updates: "create-once-update-values"' in source
-    assert 'polling: false' in source
-    assert 'api("/api/admin/extensions")' in source
-    assert 'api("/api/admin/capacity-v57")' in source
-    assert "data-worker-window-editor" in source
-    assert "data-worker-max" in source
-    assert "data-worker-reserve" in source
-    assert "data-worker-save" in source
-    assert "data-worker-refresh" in source
-    assert source.index("data-worker-save") < source.index("data-worker-refresh")
-    assert "data-worker-live" not in source
-    assert "data-worker-platform" not in source
-    assert "platformText(" not in source
-    assert "active_api_calls" not in source
-    assert "capacity?.active_requests" not in source
-    assert "bound_api_keys" not in source
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57' in source
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in source
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/refresh' in source
-    assert 'method: "PUT"' in source
-    assert 'method: "POST"' in source
-    assert "showActionResult" in source
-    assert "target_reached" in source
-    assert 'columnCell(tr, "platform", 8)' not in source
-    assert 'patchColumnSettingsLabels' not in source
-    assert 'th.textContent = "最大并发"' in source
+    assert 'owner: "retired-v21-5"' in source
+    assert 'structural_updates: "none"' in source
+    assert 'legacy_renderer_removed: true' in source
+    assert "extensionDeviceBody" not in source
+    assert "data-worker-window-editor" not in source
+    assert "data-worker-max" not in source
+    assert "data-worker-reserve" not in source
+    assert "data-worker-save" not in source
+    assert "data-worker-refresh" not in source
+    assert "/api/admin/extensions" not in source
+    assert "/api/admin/capacity-v57" in source
     assert "data-key-max" in source
+    assert 'th.textContent = "最大并发"' in source
+    assert "setInterval(" not in source
 
 
 def test_live_concurrency_summary_uses_runtime_limit_for_each_client():

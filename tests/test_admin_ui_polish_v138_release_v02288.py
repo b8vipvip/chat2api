@@ -36,7 +36,7 @@ def test_worker_manager_is_wide_and_secondary_metadata_is_removed() -> None:
 
 
 def test_worker_limit_cell_is_compact_summary_with_popover_editor() -> None:
-    source = read("app/admin_worker_limits_clipboard_v121.js")
+    source = read("app/admin_extension_columns.js")
     assert "data-v121-limit-summary" in source
     assert "${concurrency}/${windows}" in source
     assert "data-v121-edit-limits" in source

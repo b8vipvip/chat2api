@@ -69,40 +69,12 @@
     </div>`;
   }
 
-  async function renderLimits(force = false) {
-    if (state.renderTask) return state.renderTask;
-    const task = (async () => {
-      const view = document.getElementById("view-extensions");
-      if (!force && view && !view.classList.contains("active")) return null;
-      const payload = await jsonRequest("/api/admin/extensions");
-      const rows = Array.isArray(payload?.clients) ? payload.clients : [];
-      const byId = new Map(rows.map(row => [String(row?.client_id || ""), row]));
-      const {body, header} = workerTable();
-      if (!body || !header) return payload;
-      const headerCell = cellByKey(header, "worker_settings");
-      if (headerCell) {
-        headerCell.textContent = "并发 / 窗口";
-        headerCell.title = "并发=同时执行的请求上限；窗口=该 Worker 登录后持续维持的物理窗口总数。点击编辑按钮修改。";
-      }
-      for (const tr of body.rows) {
-        if (tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan")) continue;
-        const id = rowClientId(tr);
-        const row = byId.get(id);
-        const cell = cellByKey(tr, "worker_settings");
-        if (!row || !cell) continue;
-        const html = limitEditor(row);
-        if (cell.innerHTML !== html) cell.innerHTML = html;
-      }
-      document.documentElement.dataset.chat2apiWorkerLimitsRevision = "121";
-      return payload;
-    })().catch(error => {
-      console.warn("chat2api worker limits v121 render failed", error);
-      return null;
-    });
-    state.renderTask = task;
-    try { return await task; } finally { if (state.renderTask === task) state.renderTask = null; }
+  async function renderLimits(_force = false) {
+    // Worker-list presentation is owned exclusively by admin_extension_columns.js.
+    // Keep this compatibility hook so save/show callers can await it without
+    // granting this module DOM rendering authority.
+    return null;
   }
-
   async function saveLimits(button) {
     const editor = button.closest("[data-v121-worker-limits]");
     if (!editor) return;

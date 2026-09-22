@@ -9,13 +9,13 @@
     {key: "version", label: "版本"},
     {key: "account_type", label: "账户类型"},
     {key: "status", label: "状态"},
-    {key: "worker_settings", label: "并发设置"},
+    {key: "worker_settings", label: "并发 / 窗口"},
     {key: "last_seen", label: "最后在线"},
     {key: "network", label: "网络"},
     {key: "chatgpt", label: "ChatGPT"},
     {key: "actions", label: "操作"},
     {key: "device_name", label: "设备名称"},
-    {key: "occupancy", label: "当前占用"},
+    {key: "occupancy", label: "请求 / 实际窗口"},
   ];
   const KNOWN_KEYS = new Set(COLUMNS.map(item => item.key));
   const DEFAULT_ORDER = COLUMNS.map(item => item.key);
@@ -29,8 +29,9 @@
   let bodyOverflowBeforeModal = "";
   let renderInFlight = null;
   let extensionSnapshot = null;
+  let windowTruthSnapshot = null;
   let canonicalizing = false;
-  let repairQueued = false;
+  let pollTimer = null;
 
   function esc(value) {
     return String(value ?? "")
@@ -210,23 +211,115 @@
     return {text: "未知", cls: "warnText"};
   }
 
-  function occupancy(row) {
+  function liveWindowTruth(payload) {
+    const authoritative = Number(payload?.truth_revision || 0) >= 89;
+    const activeCounts = new Map();
+    for (const row of Array.isArray(payload?.active) ? payload.active : []) {
+      const clientId = String(row?.client_id || "");
+      if (!clientId) continue;
+      activeCounts.set(clientId, (activeCounts.get(clientId) || 0) + 1);
+    }
+    const result = new Map();
+    for (const worker of Array.isArray(payload?.workers) ? payload.workers : []) {
+      const clientId = String(worker?.client_id || "");
+      if (!clientId) continue;
+      result.set(clientId, {
+        authoritative,
+        liveVerified: authoritative && worker?.live_verified === true,
+        status: String(worker?.truth_status || (authoritative ? "unverified" : "legacy")),
+        physical: authoritative && worker?.live_verified === true ? (activeCounts.get(clientId) || 0) : null,
+        cachedSuppressed: Math.max(0, Number(worker?.cached_active_count || 0)),
+      });
+    }
+    return {authoritative, byClient: result};
+  }
+
+  function truthLabel(info) {
+    if (!info?.authoritative || info?.liveVerified) return "";
+    if (info.status === "upgrade-required") return "Worker 版本过旧，需升级后实时核验窗口";
+    if (info.status === "offline") return "Worker 离线，无法实时核验窗口";
+    if (info.status === "refresh-timeout") return "窗口实时核验超时";
+    return "窗口尚未完成实时核验";
+  }
+
+  function occupancy(row, info = null) {
     const capacity = row?.capacity && typeof row.capacity === "object" ? row.capacity : {};
-    const usedRaw = capacity.used_units ?? row?.active_api_calls ?? 0;
-    const limitRaw = capacity.limit_units ?? row?.max_concurrency ?? row?.configured_max_concurrency ?? 0;
-    const queueRaw = capacity.queued_requests ?? 0;
-    const used = Number.isFinite(Number(usedRaw)) ? Number(usedRaw) : 0;
-    const limit = Number.isFinite(Number(limitRaw)) ? Number(limitRaw) : 0;
-    const queued = Number.isFinite(Number(queueRaw)) ? Number(queueRaw) : 0;
+    const metadata = row?.metadata && typeof row.metadata === "object" ? row.metadata : {};
+    const used = Math.max(0, Number(capacity.used_units ?? row?.active_api_calls ?? 0) || 0);
+    const limit = Math.max(0, Number(capacity.limit_units ?? row?.max_concurrency ?? row?.configured_max_concurrency ?? 0) || 0);
+    const queued = Math.max(0, Number(capacity.queued_requests ?? 0) || 0);
     const cooling = capacity.rate_limit_cooldown_active === true;
     const remaining = Number(capacity.rate_limit_cooldown_remaining_seconds || 0);
+    let physicalKnown = false;
+    let physical = 0;
+    let source = "";
+    if (info?.authoritative) {
+      physicalKnown = info.liveVerified === true && Number.isFinite(Number(info.physical));
+      physical = physicalKnown ? Math.max(0, Number(info.physical)) : 0;
+      source = physicalKnown ? "实时物理核验" : truthLabel(info);
+    } else {
+      const candidates = [metadata.reserve_window_all_chatgpt_windows, metadata.reserve_window_total];
+      const physicalRaw = candidates.find(value => value !== null && value !== undefined && Number.isFinite(Number(value)));
+      physicalKnown = physicalRaw !== undefined;
+      physical = physicalKnown ? Math.max(0, Number(physicalRaw)) : 0;
+      source = physicalKnown ? "旧版遥测（未实时核验）" : "未核验";
+    }
+    const physicalText = physicalKnown ? String(physical) : "?";
+    const physicalStyle = physicalKnown ? "color:#22c55e;font-weight:700" : "color:#f59e0b;font-weight:700";
+    const queueText = queued > 0 ? ` · 排队 ${queued}` : "";
+    const suppressed = Number(info?.cachedSuppressed || 0) > 0 ? `；已忽略 ${Math.max(0, Number(info.cachedSuppressed))} 条未核验历史窗口记录` : "";
     return {
-      text: `${used} / ${limit || "-"}${queued > 0 ? ` · 排队 ${queued}` : ""}`,
-      title: `当前占用 ${used}${limit ? ` / ${limit}` : ""}${queued > 0 ? `；排队 ${queued}` : ""}${cooling ? `；额度冷却 ${Math.max(0, Math.ceil(remaining))} 秒` : ""}`,
+      html: `${used} / <span data-chat2api-live-window-count="1" style="${physicalStyle}">${physicalText}</span>${queueText}`,
+      title: `正在执行请求 ${used}；实际 ChatGPT 窗口 ${physicalText}（${source || "未核验"}）；并发上限 ${limit || "-"}${queued > 0 ? `；排队 ${queued}` : ""}${cooling ? `；额度冷却 ${Math.max(0, Math.ceil(remaining))} 秒` : ""}${suppressed}`,
       cls: used > 0 ? "warnText" : "muted",
     };
   }
 
+  function limitEditor(row) {
+    const id = String(row?.client_id || "");
+    const concurrency = Math.max(1, Math.min(32, Number(row?.max_concurrency || row?.capacity?.limit_units || 1)));
+    const windows = Math.max(concurrency, Math.min(32, Number(row?.max_windows || concurrency)));
+    return `<div data-v121-worker-limits="${esc(id)}" style="position:relative;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;min-width:78px">
+      <strong data-v121-limit-summary style="font-variant-numeric:tabular-nums">${concurrency}/${windows}</strong>
+      <button class="action" type="button" data-v121-edit-limits title="编辑并发 / 窗口" aria-label="编辑并发 / 窗口" style="padding:4px 7px;min-width:30px">✎</button>
+      <div data-v121-limit-popover hidden style="position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:250px;padding:12px;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 14px 34px rgba(0,0,0,.38);white-space:normal">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <label style="display:grid;gap:5px;font-size:12px">并发<input data-v121-concurrency type="number" min="1" max="32" value="${concurrency}" style="width:100%;padding:7px 8px"></label>
+          <label style="display:grid;gap:5px;font-size:12px">窗口<input data-v121-windows type="number" min="1" max="32" value="${windows}" style="width:100%;padding:7px 8px"></label>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:7px;margin-top:10px">
+          <span class="muted" data-v121-limit-note style="font-size:11px;margin-right:auto"></span>
+          <button class="action" type="button" data-v121-cancel-limits>取消</button>
+          <button class="action good" type="button" data-v121-save-limits>保存</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function renderHealthSummary(rows) {
+    const body = document.getElementById("extensionDeviceBody");
+    const panel = body?.closest(".panel");
+    const scroll = body?.closest(".scroll");
+    if (!panel || !scroll) return;
+    let node = document.getElementById("extensionHealthSummary");
+    if (!node) {
+      node = document.createElement("div");
+      node.id = "extensionHealthSummary";
+      node.className = "toolbar";
+      node.style.margin = "8px 0 12px";
+      panel.insertBefore(node, scroll);
+    }
+    const counts = {ok:0,warn:0,bad:0};
+    for (const row of rows) {
+      const network = networkLabel(row);
+      const login = chatgptLabel(row);
+      if (row?.connection_enabled === false || row?.online !== true || login.cls === "bad" || network.cls === "bad") counts.bad += 1;
+      else if (login.cls === "ok" && network.cls === "ok") counts.ok += 1;
+      else counts.warn += 1;
+    }
+    node.textContent = `运行状态中心：共 ${rows.length} · 就绪 ${counts.ok} · 需关注 ${counts.warn} · 故障/离线 ${counts.bad}`;
+    node.className = counts.bad ? "toolbar bad" : counts.warn ? "toolbar warnText" : rows.length ? "toolbar ok" : "toolbar muted";
+  }
   function workerActions(row) {
     const id = esc(row.client_id || "");
     const connect = row.connection_enabled === false
@@ -235,10 +328,10 @@
     return `<div class="rowactions">${connect}<button class="action danger" data-worker-list-action="delete" data-client-id="${id}" data-online="${row.online ? "1" : "0"}">删除</button></div>`;
   }
 
-  function rowHtml(row) {
+  function rowHtml(row, truthInfo = null) {
     const network = networkLabel(row);
     const login = chatgptLabel(row);
-    const occupied = occupancy(row);
+    const occupied = occupancy(row, truthInfo);
     const clientId = esc(row.client_id || "");
     const deviceName = String(row?.device_name || "").trim();
     const deviceNameHtml = deviceName
@@ -250,27 +343,30 @@
       <td data-chat2api-column-key="version">${esc(row.metadata?.extension_version || row.version || "-")}</td>
       <td data-chat2api-column-key="account_type">${accountPill(row)}</td>
       <td data-chat2api-column-key="status">${statusPill(row)}</td>
-      <td data-chat2api-column-key="worker_settings" data-chat2api-structural-owner="worker-settings-v59"><span class="muted">加载中…</span></td>
+      <td data-chat2api-column-key="worker_settings" data-chat2api-structural-owner="canonical-worker-list-v61">${limitEditor(row)}</td>
       <td data-chat2api-column-key="last_seen">${typeof fmtTime === "function" ? fmtTime(row.last_seen_at) : esc(row.last_seen_at || "-")}</td>
       <td data-chat2api-column-key="network" data-chat2api-health-cell="network" class="${network.cls}">${esc(network.text)}</td>
       <td data-chat2api-column-key="chatgpt" data-chat2api-health-cell="chatgpt" class="${login.cls}">${esc(login.text)}</td>
       <td data-chat2api-column-key="actions">${workerActions(row)}</td>
       <td data-chat2api-column-key="device_name">${deviceNameHtml}</td>
-      <td data-chat2api-column-key="occupancy" class="${occupied.cls}" title="${esc(occupied.title)}">${esc(occupied.text)}</td>
+      <td data-chat2api-column-key="occupancy" class="${occupied.cls}" title="${esc(occupied.title)}">${occupied.html}</td>
     </tr>`;
   }
 
-  function renderWorkerRows(rows) {
+  function renderWorkerRows(rows, truthPayload = windowTruthSnapshot) {
     const {body, headerRow, table} = tableParts();
+    const truth = liveWindowTruth(truthPayload);
     if (!body || !headerRow) return;
     canonicalizing = true;
     try {
       const header = canonicalHeaderHtml();
       if (headerRow.innerHTML !== header) headerRow.innerHTML = header;
-      body.innerHTML = rows.length
-        ? rows.map(rowHtml).join("")
+      const nextBody = rows.length
+        ? rows.map(row => rowHtml(row, truth.byClient.get(String(row?.client_id || "")) || (truth.authoritative ? {authoritative:true,liveVerified:false,status:"unverified",physical:null,cachedSuppressed:0} : null))).join("")
         : `<tr><td colspan="${COLUMNS.length}" class="muted">暂无 Worker。</td></tr>`;
+      if (body.innerHTML !== nextBody) body.innerHTML = nextBody;
       applyLayout();
+      renderHealthSummary(rows);
       document.documentElement.dataset.chat2apiWorkerListReady = "1";
       document.documentElement.dataset.chat2apiWorkerListVersion = VERSION;
       document.documentElement.dataset.chat2apiWorkerColumnSchemaRevision = String(COLUMN_SCHEMA_REVISION);
@@ -307,10 +403,14 @@
     if (renderInFlight && !force) return renderInFlight;
     const task = (async () => {
       try {
-        const data = await api("/api/admin/extensions");
+        const [data, truthPayload] = await Promise.all([
+          api("/api/admin/extensions"),
+          api("/api/admin/window-manager").catch(() => null),
+        ]);
         extensionSnapshot = Array.isArray(data.clients) ? data.clients : [];
+        windowTruthSnapshot = truthPayload;
         renderPairings(Array.isArray(data.pairing_codes) ? data.pairing_codes : []);
-        renderWorkerRows(extensionSnapshot);
+        renderWorkerRows(extensionSnapshot, windowTruthSnapshot);
         if (typeof globalThis.status === "function") status(`v${document.documentElement.dataset.chat2apiRuntimeVersion || "0.22.40"}`, "muted");
         return data;
       } catch (error) {
@@ -324,33 +424,16 @@
     try { return await task; } finally { if (renderInFlight === task) renderInFlight = null; }
   }
 
-  function isCanonical() {
-    const {body, headerRow} = tableParts();
-    if (!body || !headerRow) return true;
-    const headers = [...headerRow.children].filter(node => KNOWN_KEYS.has(String(node.dataset?.chat2apiColumnKey || "")));
-    if (headers.length !== COLUMNS.length) return false;
-    for (const tr of body.rows) {
-      if (tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan")) continue;
-      if (!tr.dataset.chat2apiCanonicalWorkerRow) return false;
-      if (!DEFAULT_ORDER.every(key => Boolean(keyedChild(tr, key)))) return false;
-    }
-    return true;
-  }
-
-  function queueCanonicalRepair() {
-    if (canonicalizing || repairQueued || !extensionSnapshot) return;
-    repairQueued = true;
-    queueMicrotask(() => {
-      repairQueued = false;
-      if (!canonicalizing && !isCanonical() && extensionSnapshot) renderWorkerRows(extensionSnapshot);
-    });
-  }
-
-  function observeLegacyRebuilds() {
-    const {body, headerRow} = tableParts();
-    if (typeof MutationObserver !== "function") return;
-    if (body) new MutationObserver(queueCanonicalRepair).observe(body, {childList: true});
-    if (headerRow) new MutationObserver(queueCanonicalRepair).observe(headerRow, {childList: true});
+  function scheduleCanonicalPoll(delay = 5000) {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(async () => {
+      pollTimer = null;
+      const view = document.getElementById("view-extensions");
+      if (!document.hidden && view?.classList.contains("active")) {
+        await loadCanonicalExtensions(false).catch(() => {});
+      }
+      scheduleCanonicalPoll(5000);
+    }, Math.max(500, Number(delay) || 5000));
   }
 
   function activateExtensionView() {
@@ -557,7 +640,7 @@
     ensureSettingsButton();
     installCanonicalShowOwner();
     installActions();
-    observeLegacyRebuilds();
+    scheduleCanonicalPoll(5000);
     globalThis.chat2apiReloadCanonicalWorkerListV59 = () => loadCanonicalExtensions(true);
     globalThis.__CHAT2API_CANONICAL_WORKER_LIST_V59__ = {
       version: VERSION,
@@ -565,7 +648,8 @@
       columns: [...DEFAULT_ORDER],
       removed_columns: ["concurrency", "reserve_windows", "platform", "bound_api_keys", "occupied_windows"],
       structural_owner: "admin_extension_columns",
-      legacy_renderers_bypassed: true,
+      presentation_owner: "admin_extension_columns",
+      legacy_renderers_removed: true,
     };
     if ((location.hash || "").slice(1) === "extensions") {
       activateExtensionView();
