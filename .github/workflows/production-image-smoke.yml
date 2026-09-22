@@ -86,7 +86,7 @@ jobs:
               pairer = archive.extractfile("scripts/linux_worker_extension_pair.py").read().decode("utf-8")
               controller = archive.extractfile("scripts/linux_worker_device_controller.py").read().decode("utf-8")
               controller_helper = archive.extractfile("scripts/linux_worker_device_controller_helper.sh").read().decode("utf-8")
-          assert manifest["version"] == "0.8.42"
+          assert manifest["version"] == "0.22.94"
           assert "\"conversation_routing.js\"" in entry
           assert "\"conversation_route_recovery_v136.js\"" in entry
           assert "revision: 140" in recovery
@@ -184,8 +184,8 @@ jobs:
           payload = json.load(open('/tmp/chat2api-version.json', encoding='utf-8'))
           assert payload['server']['runtime_aligned'] is True
           assert payload['server']['entrypoint'] == 'app.entry:app'
-          assert payload['server']['runtime_version'] == '0.22.93'
-          assert payload['chrome_bridge']['bundle_version'] == '0.8.42'
+          assert payload['server']['runtime_version'] == '0.22.94'
+          assert payload['chrome_bridge']['bundle_version'] == '0.22.94'
           assert payload['chrome_bridge']['route_window_authority_revision'] == 30
           assert payload['chrome_bridge']['window_observer_revision'] == 90
           assert payload['chrome_bridge']['persistent_window_pool_revision'] == 132
