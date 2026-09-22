@@ -255,6 +255,68 @@ jobs:
           echo "release-tag=$release_tag" >> "$GITHUB_OUTPUT"
           echo "Published release evidence: id=$release_id tag=$release_tag merge=$MERGE_SHA"
 
+      - name: Publish post-merge recovery handoff
+        if: ${{ failure() }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          TASK_ID: ${{ inputs.task_id }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          MERGE_SHA: ${{ inputs.merge_sha }}
+          RUN_ID: ${{ github.run_id }}
+          VALIDATION_PLAN_OUTCOME: ${{ steps.validation-plan.outcome }}
+          VALIDATION_GATES_OUTCOME: ${{ steps.gates.outcome }}
+          RELEASE_PROOF_OUTCOME: ${{ steps.release-proof.outcome }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          recovery_marker="<!-- gptauto-post-merge-recovery:$TASK_ID:$MERGE_SHA -->"
+          lease_marker="<!-- gptauto-completion-lease:$TASK_ID -->"
+          run_url="https://github.com/$REPOSITORY/actions/runs/$RUN_ID"
+          recovery_body="$recovery_marker
+          GPTAuto POST_MERGE_RECOVERY_REQUIRED for task $TASK_ID.
+
+          Merge SHA: $MERGE_SHA
+          Reconcile run: $RUN_ID
+          Validation plan: $VALIDATION_PLAN_OUTCOME
+          Validation gates: $VALIDATION_GATES_OUTCOME
+          Release proof: $RELEASE_PROOF_OUTCOME
+
+          This is non-terminal recovery evidence. The merged engineering task is NOT complete. Inspect the Reconcile run, repair the failed post-merge validation/release path, and rerun Reconcile for this same task/merge until published terminal evidence exists. Do not manufacture a release tag or mark the task complete merely because a Release workflow is green.
+
+          Run: $run_url"
+          lease_body="$lease_marker
+          GPTAuto Completion Lease is ACTIVE for task $TASK_ID (decision: reconcile_recovery).
+
+          This engineering task is NOT complete. Post-merge reconciliation failed for merge $MERGE_SHA in run $RUN_ID. Continue recovery until Reconcile produces terminal DONE evidence."
+
+          comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" 2>/dev/null || echo '[]')"
+          recovery_id="$(jq -r --arg marker "$recovery_marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
+          if [[ -n "$recovery_id" ]]; then
+            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$recovery_id" -f body="$recovery_body" >/dev/null
+          else
+            gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$recovery_body" >/dev/null
+          fi
+
+          lease_id="$(jq -r --arg marker "$lease_marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
+          if [[ -n "$lease_id" ]]; then
+            gh api --method PATCH "repos/$REPOSITORY/issues/comments/$lease_id" -f body="$lease_body" >/dev/null
+          else
+            gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$lease_body" >/dev/null
+          fi
+
+          {
+            echo "## GPTAuto post-merge recovery handoff"
+            echo "- Task: $TASK_ID"
+            echo "- Merge: $MERGE_SHA"
+            echo "- Reconcile run: $RUN_ID"
+            echo "- Validation plan: $VALIDATION_PLAN_OUTCOME"
+            echo "- Validation gates: $VALIDATION_GATES_OUTCOME"
+            echo "- Release proof: $RELEASE_PROOF_OUTCOME"
+            echo "- Completion Lease remains ACTIVE as reconcile_recovery."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Capture terminal DONE evidence directly
         id: terminal
         env:
