@@ -57,8 +57,8 @@ def test_window_limit_guard_remains_compatibility_admission_layer_for_persistent
     assert 'action === "windows.limit"' in control
     assert 'window_decision_authority: "persistent-window-pool-v132"' in control
     assert 'routing["worker_window_limit"] = window_limit_for(client_id)' in server
-    assert 'return max(concurrency, _normalize_limit(configured, concurrency))' in server
-    assert "最大窗口数不能小于并发上限" in server
+    assert 'return _normalize_limit(configured, concurrency)' in server
+    assert "最大窗口数不能小于并发上限" not in server
     assert "persistent-prewarmed-total-window-pool-v132" in server
     assert "on-demand-hard-cap-no-warm-pool" not in server
 
@@ -99,17 +99,15 @@ def test_worker_settings_ui_keeps_concurrency_and_windows_distinct() -> None:
     presentation = (ROOT / "app" / "worker_presentation_v64_patch.py").read_text(encoding="utf-8")
     identity = (ROOT / "app" / "admin_worker_identity_v131.js").read_text(encoding="utf-8")
 
-    assert 'headerCell.textContent = "并发 / 窗口"' in console
-    assert "窗口数不能小于并发数" in console
+    assert 'headerCell.textContent = "并发设置"' in console
     assert '/concurrency`' in console
     assert '/windows/limit`' in console
-    assert "data-v121-limit-summary" in console
-    assert "${concurrency}/${windows}" in console
-    assert "data-v121-edit-limits" in console
-    assert "data-v121-limit-popover hidden" in console
+    assert "data-v121-limit-summary" not in console
+    assert "data-v121-edit-limits" not in console
+    assert "data-v121-limit-popover" not in console
     assert 'install_worker_limits_clipboard_v121_patch(app)' in presentation
-    assert "持续维持的物理窗口总数" in console
-    assert "点击编辑按钮修改" in console
+    assert "持续维持的可接待空闲窗口数量" in console
+    assert "data-v121-refresh-limits" in console
     assert "extensionDeviceBody" not in identity
     assert "空闲窗口常驻并预热" not in console
     assert "常驻窗口池跟随并发" not in console
