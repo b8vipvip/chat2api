@@ -23,9 +23,9 @@ def test_v02285_v0836_release_contract_publishes_persistent_pool() -> None:
     manifest = json.loads(read("chrome_extension/manifest.json"))
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
 
-    assert SERVER_RUNTIME_VERSION == "0.22.93"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.8.42"
-    assert manifest["version"] == "0.8.42"
+    assert SERVER_RUNTIME_VERSION == "0.22.94"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.94"
+    assert manifest["version"] == "0.22.94"
     assert "persistent prewarmed per-Worker window pool" in manifest["description"]
     assert payload["server"]["runtime_aligned"] is True
     assert "release-v02285" in payload["server"]["feature_revision"]
@@ -44,7 +44,7 @@ def test_v0836_bundle_requires_new_worker_installation_epoch() -> None:
         "chrome_extension/content_runtime_contract_v48.js",
         "chrome_extension/content_runtime_contract_v71.js",
     ):
-        assert "0.8.42" in read(path), path
+        assert "0.22.94" in read(path), path
 
     entry = read("chrome_extension/background_entry.js")
     assert '"conversation_persistent_pool_v132.js"' in entry
