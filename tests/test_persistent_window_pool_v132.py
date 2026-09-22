@@ -25,6 +25,8 @@ def test_persistent_pool_is_active_routing_layer() -> None:
     assert 'policy: "persistent-prewarmed-total-window-pool-v132"' in source
     assert 'const target = normalizeTarget(state.target)' in source
     assert 'while (rows.length < effectiveTarget)' in source
+    assert 'target + rows.filter(row => busyBefore.has(row.window_id)).length' in source
+    assert 'standbyRows.length === target' in source
     assert 'await createStandby(reason)' in source
     assert 'window_owned = false' in source
     assert 'route.close_after = null' in source
@@ -33,10 +35,12 @@ def test_persistent_pool_is_active_routing_layer() -> None:
     assert 'if (!await loginReady().catch(() => false)) return null;' in source
 
 
-def test_persistent_pool_keeps_configured_total_not_per_route_extra() -> None:
+def test_persistent_pool_keeps_configured_standby_cardinality() -> None:
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     assert 'let rows = await physicalWindows();' in source
     assert 'while (rows.length < effectiveTarget)' in source
+    assert 'target + rows.filter(row => busyBefore.has(row.window_id)).length' in source
+    assert 'standbyRows.length === target' in source
     assert 'Math.max(0, current.length - target)' in source
     assert 'all_chatgpt_windows: rows.length' in source
     assert 'configured_target: target' in source
@@ -68,8 +72,8 @@ def test_admin_copy_describes_persistent_windows_without_legacy_helper_copy() ->
     # regain write authority over the canonical Worker table.
     source = text("app/admin_worker_limits_clipboard_v121.js")
     identity = text("app/admin_worker_identity_v131.js")
-    assert "持续维持的物理窗口总数" in source
-    assert "点击编辑按钮修改" in source
+    assert "持续维持的可接待空闲窗口数量" in source
+    assert "并发=同时执行的请求上限；备用=" in source
     assert "extensionDeviceBody" not in identity
     assert "空闲窗口常驻并预热" not in source
     assert "常驻窗口池跟随并发" not in source
