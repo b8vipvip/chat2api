@@ -16,7 +16,10 @@ def _lease(task: Task) -> dict:
         "completion_gate": str(meta.get("completion_gate") or ""),
         "release_required": bool(meta.get("release_required")),
         "may_finish_foreground": task.state == State.DONE,
-        "foreground_completion_status": "terminal" if task.state == State.DONE else "blocked",
+        "foreground_completion_status": "terminal" if task.state == State.DONE else "continue_required",
+        "foreground_disposition": "EXIT_ALLOWED" if task.state == State.DONE else "CONTINUE_REQUIRED",
+        "allow_foreground_exit": task.state == State.DONE,
+        "requires_foreground_poll": task.state != State.DONE,
         "foreground_instruction": ("Report task completion only from terminal DONE evidence." if task.state == State.DONE else "Do not report the engineering task complete; continue/recover until terminal DONE evidence exists."),
     }
 
