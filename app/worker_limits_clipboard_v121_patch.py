@@ -129,19 +129,16 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
         configured = explicit_limits.get(str(client_id or ""))
         if configured is None:
             return concurrency
-        # v121 remains the compatibility/configuration layer for the physical
-        # target. v132 is the lifecycle authority and continuously converges the
-        # Worker/Profile to this target. A target below admitted concurrency is
-        # unsatisfiable without a second browser-side queue, so clamp upward.
-        return max(concurrency, _normalize_limit(configured, concurrency))
+        # v121 stores the requested standby-window cardinality independently of
+        # request concurrency. v132 is the sole browser lifecycle authority and
+        # must converge the number of idle/standby (可接待) windows to this target.
+        return _normalize_limit(configured, concurrency)
 
     def window_source_for(client_id: str) -> str:
         client_id = str(client_id or "")
         configured = explicit_limits.get(client_id)
         if configured is None:
             return "concurrency"
-        if _normalize_limit(configured) < concurrency_for(client_id):
-            return "clamped-to-concurrency"
         return "explicit"
 
     def window_payload(client_id: str) -> dict[str, Any]:
@@ -277,12 +274,6 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
     async def put_window_limit(client_id: str, body: WindowLimitUpdate, request: Request) -> dict[str, Any]:
         admin(request)
         client_id = ensure_client(client_id)
-        concurrency = concurrency_for(client_id)
-        if int(body.max_windows) < concurrency:
-            raise HTTPException(
-                status_code=409,
-                detail=f"最大窗口数不能小于并发上限（当前并发={concurrency}）",
-            )
         previous = explicit_limits.get(client_id)
         explicit_limits[client_id] = _normalize_limit(body.max_windows)
         try:
