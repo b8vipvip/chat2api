@@ -29,9 +29,9 @@ def test_worker_window_setting_is_a_persistent_prewarmed_pool_target() -> None:
 
     assert "persistent-prewarmed-total-window-pool-v132" in server
     assert "persistent-window-pool-v132" in server
-    assert 'headerCell.textContent = "并发 / 窗口"' in browser
-    assert "持续维持的物理窗口总数" in browser
-    assert "点击编辑按钮修改" in browser
+    assert 'headerCell.textContent = "并发设置"' in browser
+    assert "持续维持的可接待空闲窗口数量" in browser
+    assert "data-v121-refresh-limits" in browser
     assert "extensionDeviceBody" not in identity
     assert "空闲窗口常驻并预热" not in browser
     assert "常驻窗口池跟随并发" not in browser
