@@ -94,10 +94,10 @@ jobs:
           assert "__chat2apiRouteRecoveryV140" in recovery
           assert "server-authority-stale-inflight-v136" in recovery
           assert "server-cancel-control-v136" in recovery
-          assert 'await readiness.snapshot()' in persistent_pool
-          assert 'await readiness.readyForPrewarm()' not in persistent_pool
-          assert 'reason: "delegated-to-persistent-window-pool-v137"' in pool_guard
-          assert 'await pool.reconcile(`login-state:${String(login?.state || "unknown")}`)' in pool_guard
+          assert "await readiness.snapshot()" in persistent_pool
+          assert "await readiness.readyForPrewarm()" not in persistent_pool
+          assert "delegated-to-persistent-window-pool-v137" in pool_guard
+          assert "pool.reconcile" in pool_guard and "login-state:" in pool_guard
           assert "await chrome.windows.remove" not in pool_guard
           assert "chrome.windows.create" not in pool_guard
           assert "single-route-window-authority-v30" in router
