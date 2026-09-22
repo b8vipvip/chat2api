@@ -128,7 +128,9 @@ jobs:
               [[ -n "$MAIN_CI_RUN_ID" ]] && MAIN_CI_CONCLUSION="success"
               RELEASE_RUN_ID="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&status=success&per_page=50" \
                 --jq '[.workflow_runs[] | select(.name == "Release" and .conclusion == "success")][0].id // empty' 2>/dev/null || true)"
-              [[ -n "$RELEASE_RUN_ID" ]] && RELEASE_CONCLUSION="success"
+              # A green Release workflow is process evidence only. Publication is
+              # terminal only when a GitHub Release published event (or Reconcile)
+              # proves a release artifact/tag for the merged commit.
             fi
           fi
 
@@ -169,6 +171,6 @@ jobs:
             echo "- Artifact: \`gptauto-$TASK_ID\`"
             echo "- Provenance: \`repository_observer\`"
             echo "- PR/push/main-CI/release events are re-associated through the PR before TASK_ID generation."
-            echo "- A merged PR is VERIFY, not DONE; release/main-CI evidence is reconstructed from successful historical runs, so event order does not affect DONE."
+            echo "- A merged PR is VERIFY, not DONE; main-CI may be reconstructed from runs, but Release workflow success alone never proves publication."
             echo "- DONE artifacts include completion.json: a single terminal receipt with merge, CI, release, gate, and DoD evidence."
           } >> "$GITHUB_STEP_SUMMARY"

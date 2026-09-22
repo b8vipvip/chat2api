@@ -101,24 +101,9 @@ jobs:
           default_branch="$(gh api "repos/$REPOSITORY" --jq '.default_branch')"
           echo "Merged as $merge_sha; ensuring post-merge workflows are running on $default_branch."
 
-          # A merge performed with GITHUB_TOKEN does not normally emit push-triggered
-          # workflow runs. Explicit workflow_dispatch is therefore the continuation
-          # mechanism; with a dedicated token we first avoid duplicate push runs.
-          sleep 2
-          runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$merge_sha&per_page=100")"
-          ci_count="$(jq '[.workflow_runs[] | select(.name == "CI")] | length' <<<"$runs")"
-          if [[ "$ci_count" == "0" ]]; then
-            gh workflow run CI --repo "$REPOSITORY" --ref "$default_branch"
-          fi
-          if [[ "${{ steps.state.outputs.release-required }}" == "true" ]]; then
-            release_count="$(jq '[.workflow_runs[] | select(.name == "Release")] | length' <<<"$runs")"
-            if [[ "$release_count" == "0" ]]; then
-              gh workflow run Release --repo "$REPOSITORY" --ref "$default_branch"
-            fi
-          fi
-          # workflow_dispatch runs started with GITHUB_TOKEN do not reliably create
-          # another workflow_run chain. A dedicated reconciler owns the long wait
-          # and explicitly re-dispatches Observer once post-merge gates are terminal.
+          # Reconcile is the single post-merge authority. It owns validation
+          # dispatch, release dispatch, durable publication proof, and terminal DONE.
+          # Executor only hands off the immutable merge identity and release intent.
           gh workflow run gptauto-reconcile.yml --repo "$REPOSITORY" --ref "$default_branch" \
             -f task_id="$TASK_ID" -f pr_number="$PR_NUMBER" -f merge_sha="$merge_sha" \
             -f release_required="${{ steps.state.outputs.release-required }}"
