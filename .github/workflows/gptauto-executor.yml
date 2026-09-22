@@ -205,6 +205,10 @@ jobs:
             else
               gh api --method POST "repos/$REPOSITORY/issues/$PR_NUMBER/comments" -f body="$body" >/dev/null
             fi
+            mkdir -p .gptauto/foreground-guards
+            guard=".gptauto/foreground-guards/$TASK_ID.json"
+            jq -n --arg task "$TASK_ID" --arg pr "$PR_NUMBER" --arg head "$HEAD_SHA" --arg run "$FAILED_RUN_ID" \
+              '{schema:"gptauto.foreground-exit-guard/v1",task_id:$task,pr_number:$pr,head_sha:$head,failed_run_id:$run,completion_lease:"ACTIVE",repair_owner:"foreground",foreground_disposition:"CONTINUE_REQUIRED",allow_foreground_exit:false,terminal_done:false}' > "$guard"
             {
               echo "## GPTAuto foreground repair handoff"
               echo "- Task: $TASK_ID"
@@ -212,7 +216,9 @@ jobs:
               echo "- Head: $HEAD_SHA"
               echo "- Failed run: $FAILED_RUN_ID"
               echo "- Recovery owner: foreground/host agent"
-              echo "- Foreground disposition: CONTINUE (do not end the engineering turn while the lease is ACTIVE)."
+              echo "- Foreground disposition: CONTINUE_REQUIRED"
+              echo "- Foreground exit guard: DENY"
+              echo "- Machine guard: $guard"
               echo "- Completion Lease remains ACTIVE."
             } >> "$GITHUB_STEP_SUMMARY"
             echo "::error::FOREGROUND_RECOVERY_REQUIRED task=$TASK_ID pr=$PR_NUMBER head=$HEAD_SHA failed_run=$FAILED_RUN_ID"
@@ -226,6 +232,14 @@ jobs:
           gh pr comment "$PR_NUMBER" --repo "$REPOSITORY" --body "$marker
           GPTAuto dispatched the autonomous repair agent for task $TASK_ID on head $HEAD_SHA. The Completion Lease remains active until the repaired head passes its gates."
           echo "Dispatched autonomous repair agent for $TASK_ID / $HEAD_SHA."
+      - name: Publish foreground exit guard artifact
+        if: ${{ steps.state.outputs.action == 'repair_request' && hashFiles(format('.gptauto/foreground-guards/{0}.json', steps.state.outputs.task-id)) != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gptauto-foreground-guard-${{ steps.state.outputs.task-id }}-${{ steps.state.outputs.head-sha }}
+          path: .gptauto/foreground-guards/${{ steps.state.outputs.task-id }}.json
+          retention-days: 30
+          if-no-files-found: error
       - name: Persist completion lease
         if: ${{ steps.state.outputs.lease-active == 'true' }}
         env:
@@ -252,7 +266,7 @@ jobs:
           body="$marker
           GPTAuto Completion Lease is ACTIVE for task $TASK_ID (decision: $ACTION).
 
-          This engineering task is NOT complete. A PR, commit, successful partial check, repair request, merge, release-in-progress, or merely waiting for GitHub Actions is non-terminal evidence. Foreground agents must remain attached to the task, poll/recover asynchronous gates, and must not end the engineering turn or report completion until a terminal DONE receipt exists or a genuine BLOCKED condition requiring user action is reached."
+          This engineering task is NOT complete. EXIT_GUARD=DENY while this Completion Lease is ACTIVE. A PR, commit, successful partial check, repair request, merge, release-in-progress, or merely waiting for GitHub Actions is non-terminal evidence. Before ending the engineering turn, the foreground host MUST re-read the current task guard. If allow_foreground_exit=false or terminal_done=false, it MUST remain attached, inspect the failed run, repair the same PR, push, and poll/recover asynchronous gates. Exit is permitted only after terminal DONE releases the lease, or a genuine BLOCKED condition explicitly requires user action."
           comments="$(gh api "repos/$REPOSITORY/issues/$PR_NUMBER/comments?per_page=100" 2>/dev/null || echo '[]')"
           comment_id="$(jq -r --arg marker "$marker" '[.[] | select(.body | contains($marker))] | .[0].id // empty' <<<"$comments")"
           if [[ -n "$comment_id" ]]; then
