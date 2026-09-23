@@ -9,23 +9,48 @@ from .model import Gate, GateStatus, State, Task
 _FAILURES = {"failure", "timed_out", "action_required", "startup_failure"}
 
 
-def _lease(task: Task) -> dict:
+def _host_control(task: Task, action: str) -> dict:
+    """Single authority for whether the foreground host may end the engineering turn."""
+    terminal = task.state == State.DONE
+    if terminal:
+        next_host_action = "EXIT_ALLOWED"
+    elif action == "repair_request":
+        next_host_action = "READ_FAILED_RUN_AND_REPAIR_SAME_PR"
+    elif action in {"merge", "reconcile_adopt"}:
+        next_host_action = "CONTINUE_CURRENT_TASK"
+    else:
+        next_host_action = "POLL_CURRENT_TASK_UNTIL_STATE_CHANGES"
+    return {
+        "schema": "gptauto.host-control/v1",
+        "task_id": task.task_id,
+        "lease_state": "RELEASED" if terminal else "ACTIVE",
+        "terminal_done": terminal,
+        "allow_foreground_exit": terminal,
+        "foreground_disposition": "EXIT_ALLOWED" if terminal else "CONTINUE_REQUIRED",
+        "requires_foreground_poll": not terminal,
+        "next_host_action": next_host_action,
+    }
+
+
+def _lease(task: Task, action: str) -> dict:
     meta = task.metadata
+    host_control = _host_control(task, action)
     return {
         "active": task.state != State.DONE,
         "completion_gate": str(meta.get("completion_gate") or ""),
         "release_required": bool(meta.get("release_required")),
         "may_finish_foreground": task.state == State.DONE,
         "foreground_completion_status": "terminal" if task.state == State.DONE else "continue_required",
-        "foreground_disposition": "EXIT_ALLOWED" if task.state == State.DONE else "CONTINUE_REQUIRED",
-        "allow_foreground_exit": task.state == State.DONE,
-        "requires_foreground_poll": task.state != State.DONE,
+        "foreground_disposition": host_control["foreground_disposition"],
+        "allow_foreground_exit": host_control["allow_foreground_exit"],
+        "requires_foreground_poll": host_control["requires_foreground_poll"],
+        "host_control": host_control,
         "foreground_instruction": ("Report task completion only from terminal DONE evidence." if task.state == State.DONE else "Do not report the engineering task complete; continue/recover until terminal DONE evidence exists."),
     }
 
 
 def _with_lease(task: Task, action: dict) -> dict:
-    action["completion_lease"] = _lease(task)
+    action["completion_lease"] = _lease(task, str(action.get("action") or ""))
     return action
 
 

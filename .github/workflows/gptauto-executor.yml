@@ -59,27 +59,25 @@ jobs:
           echo "foreground-status=$(jq -r '.completion_lease.foreground_completion_status // "continue_required"' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "foreground-disposition=$(jq -r '.completion_lease.foreground_disposition // "CONTINUE_REQUIRED"' <<<"$action")" >> "$GITHUB_OUTPUT"
           echo "allow-foreground-exit=$(jq -r '.completion_lease.allow_foreground_exit // false' <<<"$action")" >> "$GITHUB_OUTPUT"
-          echo "requires-foreground-poll=$(jq -r '.completion_lease.requires_foreground_poll // true' <<<"$action")" >> "$GITHUB_OUTPUT"
-      - name: Publish foreground lifecycle bridge
+          echo "requires-foreground-poll=$(jq -r '.completion_lease.host_control.requires_foreground_poll // true' <<<"$action")" >> "$GITHUB_OUTPUT"
+          echo "host-control=$(jq -c '.completion_lease.host_control' <<<"$action")" >> "$GITHUB_OUTPUT"
+      - name: Publish canonical host control
         if: ${{ steps.state.outputs.lease-active == 'true' }}
         env:
+          HOST_CONTROL: ${{ steps.state.outputs.host-control }}
           TASK_ID: ${{ steps.state.outputs.task-id }}
-          ACTION: ${{ steps.state.outputs.action }}
-          PR_NUMBER: ${{ steps.state.outputs.pr-number }}
-          HEAD_SHA: ${{ steps.state.outputs.head-sha }}
         shell: bash
         run: |
           set -Eeuo pipefail
-          mkdir -p .gptauto/foreground-bridge
-          jq -n --arg task "$TASK_ID" --arg action "$ACTION" --arg pr "$PR_NUMBER" --arg head "$HEAD_SHA" \
-            '{schema:"gptauto.foreground-lifecycle-bridge/v1",task_id:$task,action:$action,pr_number:$pr,head_sha:$head,completion_lease:"ACTIVE",foreground_disposition:"CONTINUE_REQUIRED",allow_foreground_exit:false,requires_foreground_poll:true,terminal_done:false,next_host_action:(if $action=="repair_request" then "READ_FAILED_RUN_AND_REPAIR_SAME_PR" else "POLL_CURRENT_TASK_UNTIL_STATE_CHANGES" end)}' > ".gptauto/foreground-bridge/$TASK_ID.json"
-          echo "::notice::FOREGROUND_CONTINUE_REQUIRED task=$TASK_ID action=$ACTION pr=$PR_NUMBER head=$HEAD_SHA"
-      - name: Upload foreground lifecycle bridge
-        if: ${{ steps.state.outputs.lease-active == 'true' && hashFiles(format('.gptauto/foreground-bridge/{0}.json', steps.state.outputs.task-id)) != '' }}
+          mkdir -p .gptauto/host-control
+          jq -e '.schema == "gptauto.host-control/v1" and .allow_foreground_exit == false and .terminal_done == false' <<<"$HOST_CONTROL" > ".gptauto/host-control/$TASK_ID.json"
+          echo "::notice::GPTAUTO_HOST_CONTROL task=$TASK_ID disposition=$(jq -r '.foreground_disposition' <<<"$HOST_CONTROL") next=$(jq -r '.next_host_action' <<<"$HOST_CONTROL")"
+      - name: Upload canonical host control
+        if: ${{ steps.state.outputs.lease-active == 'true' && hashFiles(format('.gptauto/host-control/{0}.json', steps.state.outputs.task-id)) != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: gptauto-foreground-bridge-${{ steps.state.outputs.task-id }}
-          path: .gptauto/foreground-bridge/${{ steps.state.outputs.task-id }}.json
+          name: gptauto-host-control-${{ steps.state.outputs.task-id }}
+          path: .gptauto/host-control/${{ steps.state.outputs.task-id }}.json
           retention-days: 30
           if-no-files-found: error
       - name: Execute safe merge gate
