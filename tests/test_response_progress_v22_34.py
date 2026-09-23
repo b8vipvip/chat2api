@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_worker_bundle_uses_request_v6_with_network_evidence_and_liveness() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.22.94"
+    assert manifest["version"] == "0.22.95"
     scripts = [script for item in manifest.get("content_scripts", []) for script in item.get("js", [])]
     assert "content_request_v6.js" in scripts
     assert "content_network_stream_recovery_v55.js" in scripts

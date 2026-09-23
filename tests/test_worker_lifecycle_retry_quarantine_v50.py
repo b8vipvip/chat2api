@@ -9,7 +9,7 @@ EXT = ROOT / "chrome_extension"
 
 def test_runtime_versions_and_features() -> None:
     source = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.94"' in source
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.95"' in source
     assert '"network_response_recovery": True' in source
     assert '"single_response_observer": True' in source
     assert '"worker_content_runtime_epoch_v71": True' in source
@@ -17,7 +17,7 @@ def test_runtime_versions_and_features() -> None:
 
 def test_manifest_loads_lifecycle_and_retry_overlays_in_order() -> None:
     manifest = json.loads((EXT / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.22.94"
+    assert manifest["version"] == "0.22.95"
     assert "network_stream_main_v55.js" in manifest["content_scripts"][0]["js"]
     scripts = manifest["content_scripts"][1]["js"]
     assert scripts.index("content_rate_limit_guard_v52.js") < scripts.index("content_request_v5.js") < scripts.index("content_request_v6.js")
@@ -58,13 +58,13 @@ def test_runtime_preflight_requires_request_v6_and_evidence_overlays() -> None:
     source = (EXT / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
     contract = (EXT / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     marker = (EXT / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
-    assert 'const REQUIRED_BUNDLE = "0.22.94"' in source
+    assert 'const REQUIRED_BUNDLE = "0.22.95"' in source
     assert 'const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"]' in source
     for token in ('"content_request_v6.js"','"content_rate_limit_guard_v52.js"','"content_request_lifecycle_v50.js"','"content_draft_managed_recovery_v55.js"','"content_network_stream_recovery_v55.js"','"content_response_semantic_recovery_v51.js"','"content_transient_retry_v50.js"'):
         assert token in source
     assert '"content_response_stream_recovery_v69.js"' not in source
-    assert 'const REQUIRED_BUNDLE = "0.22.94"' in contract
+    assert 'const REQUIRED_BUNDLE = "0.22.95"' in contract
     for token in ("request_v6","rate_limit_guard_v52","request_lifecycle_v50","draft_managed_recovery_v55","network_stream_recovery_v55","network_stream_main_v55","response_semantic_recovery_v51","semanticHelper?.timer == null","transient_retry_v50"):
         assert token in contract
     assert 'response_single_owner_v53' not in contract
-    assert 'bundle: "0.22.94"' in marker
+    assert 'bundle: "0.22.95"' in marker

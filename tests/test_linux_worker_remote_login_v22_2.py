@@ -164,6 +164,6 @@ def test_remote_login_runtime_tracks_binding_upgrade():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert _runtime_version(runtime) >= (0, 22, 4)
-    assert 'CHROME_BRIDGE_VERSION = "0.22.94"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.22.95"' in runtime
     assert "install_linux_worker_login_freshness_patch(app)" in entry
     assert entry.index("install_linux_worker_patch(app)") < entry.index("install_linux_worker_login_freshness_patch(app)")

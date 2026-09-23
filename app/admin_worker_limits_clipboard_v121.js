@@ -51,15 +51,21 @@
   function limitEditor(row) {
     const id = String(row?.client_id || "");
     const concurrency = Math.max(1, Math.min(32, Number(row?.max_concurrency || row?.capacity?.limit_units || 1)));
-    const windows = Math.max(concurrency, Math.min(32, Number(row?.max_windows || concurrency)));
-    return `<div data-v121-worker-limits="${esc(id)}" style="display:flex;align-items:center;gap:6px;white-space:nowrap">
-      <span class="muted" style="font-size:12px">并发</span>
-      <input data-v121-concurrency type="number" min="1" max="32" value="${concurrency}" aria-label="并发" style="box-sizing:border-box;width:58px;padding:6px 7px">
-      <span class="muted" style="font-size:12px">备用</span>
-      <input data-v121-windows type="number" min="1" max="32" value="${windows}" aria-label="备用窗口" style="box-sizing:border-box;width:58px;padding:6px 7px">
-      <button class="action" type="button" data-v121-save-limits>保存</button>
-      <button class="action" type="button" data-v121-refresh-limits>刷新</button>
-      <span class="muted" data-v121-limit-note style="font-size:11px"></span>
+    const windows = Math.max(1, Math.min(32, Number(row?.max_windows || 1)));
+    return `<div data-v121-worker-limits="${esc(id)}" style="position:relative;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;min-width:78px">
+      <strong data-v121-limit-summary style="font-variant-numeric:tabular-nums">${concurrency}/${windows}</strong>
+      <button class="action" type="button" data-v121-edit-limits title="编辑并发 / 备用" aria-label="编辑并发 / 备用" style="padding:4px 7px;min-width:30px">✎</button>
+      <div data-v121-limit-popover hidden style="position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:250px;padding:12px;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 14px 34px rgba(0,0,0,.38);white-space:normal">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <label style="display:grid;gap:5px;font-size:12px">并发<input data-v121-concurrency type="number" min="1" max="32" value="${concurrency}" style="width:100%;padding:7px 8px"></label>
+          <label style="display:grid;gap:5px;font-size:12px">备用<input data-v121-windows type="number" min="1" max="32" value="${windows}" style="width:100%;padding:7px 8px"></label>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:7px;margin-top:10px">
+          <span class="muted" data-v121-limit-note style="font-size:11px;margin-right:auto"></span>
+          <button class="action" type="button" data-v121-cancel-limits>取消</button>
+          <button class="action good" type="button" data-v121-save-limits>保存</button>
+        </div>
+      </div>
     </div>`;
   }
 
@@ -75,8 +81,8 @@
       if (!body || !header) return payload;
       const headerCell = cellByKey(header, "worker_settings");
       if (headerCell) {
-        headerCell.textContent = "并发设置";
-        headerCell.title = "并发=同时执行的请求上限；备用=该 Worker 登录后必须持续维持的可接待空闲窗口数量。";
+        headerCell.textContent = "并发 / 备用";
+        headerCell.title = "并发=同时执行的请求上限；备用=登录正常时持续维持的可接待空闲窗口数量。点击编辑按钮修改。";
       }
       for (const tr of body.rows) {
         if (tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan")) continue;
@@ -106,10 +112,6 @@
     const note = editor.querySelector("[data-v121-limit-note]");
     if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32 || !Number.isInteger(windows) || windows < 1 || windows > 32) {
       if (note) note.textContent = "请输入 1~32 的整数";
-      return;
-    }
-    if (windows < concurrency) {
-      if (note) note.textContent = "窗口数不能小于并发数";
       return;
     }
     button.disabled = true;
@@ -145,6 +147,21 @@
     }
   }
 
+  function closeLimitPopovers(except = null) {
+    document.querySelectorAll("[data-v121-limit-popover]").forEach(node => {
+      if (node !== except) node.hidden = true;
+    });
+  }
+
+  function toggleLimitPopover(button) {
+    const editor = button.closest("[data-v121-worker-limits]");
+    const popover = editor?.querySelector("[data-v121-limit-popover]");
+    if (!popover) return;
+    const opening = popover.hidden;
+    closeLimitPopovers(opening ? popover : null);
+    popover.hidden = !opening;
+    if (opening) editor.querySelector("[data-v121-concurrency]")?.focus();
+  }
 
   function installWorkerHooks() {
     const baseReload = globalThis.chat2apiReloadCanonicalWorkerListV59;
@@ -307,6 +324,84 @@
     }, true);
 
     document.addEventListener("click", event => {
+      if (event.target?.id === "linuxLoginFrame" && state.login.ticket) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      }
+      const paste = event.target?.closest?.("[data-v121-paste-remote]");
+      if (paste) {
+        event.preventDefault();
+        (async () => {
+          let text = "";
+          try { text = await navigator.clipboard.readText(); } catch (_) {}
+          if (!text) text = prompt("粘贴到远程 ChatGPT 的文本（支持中文和多行）", "") || "";
+          if (text) await pasteRemote(text);
+        })().catch(error => status(String(error?.message || error), "bad"));
+        return;
+      }
+      const copy = event.target?.closest?.("[data-v121-copy-remote]");
+      if (copy) {
+        event.preventDefault();
+        copyRemoteSelection().catch(error => status(String(error?.message || error), "bad"));
+      }
+    }, true);
+  }
+
+  function updateLoginFromResponse(url, method, payload) {
+    let parsed;
+    try { parsed = new URL(url, location.href); } catch (_) { return; }
+    const match = parsed.pathname.match(/^\/api\/admin\/linux-workers\/([^/]+)\/login-session(?:\/(frame))?$/);
+    if (!match) return;
+    const workerId = decodeURIComponent(match[1] || "");
+    if (method === "POST" && !match[2] && payload?.ticket) {
+      state.login.workerId = workerId;
+      state.login.ticket = String(payload.ticket || "");
+      state.login.sourceWidth = Number(payload.source_width || 1920);
+      state.login.sourceHeight = Number(payload.source_height || 1080);
+      ensureClipboardToolbar();
+      const copyBuffer = document.getElementById("linuxLoginCopyBufferV121");
+      if (copyBuffer) copyBuffer.style.display = "none";
+    } else if (method === "GET" && match[2]) {
+      state.login.sourceWidth = Number(payload?.source_width || state.login.sourceWidth || 1920);
+      state.login.sourceHeight = Number(payload?.source_height || state.login.sourceHeight || 1080);
+    } else if (method === "DELETE" && !match[2]) {
+      state.login = {workerId:"", ticket:"", sourceWidth:1920, sourceHeight:1080};
+      state.dragging = false;
+    }
+  }
+
+  function installFetchObserver() {
+    const baseFetch = globalThis.fetch;
+    if (typeof baseFetch !== "function" || baseFetch.__chat2apiClipboardV121) return;
+    const wrapped = async (input, init = {}) => {
+      const url = typeof input === "string" ? input : String(input?.url || "");
+      const method = String(init?.method || input?.method || "GET").toUpperCase();
+      const response = await baseFetch(input, init);
+      if (response.ok && url.includes("/api/admin/linux-workers/") && url.includes("/login-session")) {
+        response.clone().json().then(payload => updateLoginFromResponse(url, method, payload)).catch(() => {});
+      }
+      return response;
+    };
+    wrapped.__chat2apiClipboardV121 = true;
+    globalThis.fetch = wrapped;
+  }
+
+  document.addEventListener("click", event => {
+    const edit = event.target?.closest?.("[data-v121-edit-limits]");
+    if (edit) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleLimitPopover(edit);
+      return;
+    }
+    const cancel = event.target?.closest?.("[data-v121-cancel-limits]");
+    if (cancel) {
+      event.preventDefault();
+      event.stopPropagation();
+      const popover = cancel.closest("[data-v121-limit-popover]");
+      if (popover) popover.hidden = true;
+      return;
+    }
     const save = event.target?.closest?.("[data-v121-save-limits]");
     if (save) {
       event.preventDefault();
@@ -314,14 +409,11 @@
       saveLimits(save);
       return;
     }
-    const refresh = event.target?.closest?.("[data-v121-refresh-limits]");
-    if (refresh) {
-      event.preventDefault();
-      event.stopPropagation();
-      const reload = globalThis.chat2apiReloadCanonicalWorkerListV59;
-      Promise.resolve(typeof reload === "function" ? reload() : null).then(() => renderLimits(true));
-    }
-  }, true);
+    if (!event.target?.closest?.("[data-v121-worker-limits]")) closeLimitPopovers();
+  });
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape") closeLimitPopovers();
+  });
 
   function start() {
     installFetchObserver();
