@@ -38,7 +38,7 @@ def test_saved_pairing_code_binds_to_the_existing_logged_in_worker_extension(tmp
         registry.register(
             "Linux Worker Bridge",
             "Chrome",
-            "0.22.94",
+            "0.22.95",
             {"device_id": device_id},
             device_id=device_id,
         )
@@ -49,7 +49,7 @@ def test_saved_pairing_code_binds_to_the_existing_logged_in_worker_extension(tmp
         {
             "client_id": client_id,
             "device_id": device_id,
-            "version": "0.22.94",
+            "version": "0.22.95",
             "online": True,
             "connection_enabled": True,
             "metadata": {
@@ -97,7 +97,7 @@ def test_bridge_login_event_automatically_reconciles_saved_pairing(tmp_path):
     workers.record_proxy_success(worker_id, {"protocol": "vless", "server": "us03", "port": 443})
     registry = ClientRegistry(tmp_path)
     device_id = "automatic-device-0001"
-    client_id, _ = asyncio.run(registry.register("Bridge", "Chrome", "0.22.94", {}, device_id=device_id))
+    client_id, _ = asyncio.run(registry.register("Bridge", "Chrome", "0.22.95", {}, device_id=device_id))
     workers.bind_extension(worker_id, client_id, device_id)
     pairings = PairingStore(tmp_path)
     pairing, raw_code = asyncio.run(pairings.create("Automatic Pairing"))
@@ -265,7 +265,7 @@ def test_runtime_marks_worker_release_without_bridge_protocol_bump():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert 'SERVER_RUNTIME_VERSION = "0.22.24"' in runtime
-    assert 'CHROME_BRIDGE_VERSION = "0.22.94"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.22.95"' in runtime
     assert "install_runtime_contract(app)" in entry
     assert "install_linux_worker_pairing_patch(app)" in entry
     assert "install_linux_worker_proxy_name_patch(app)" in entry
