@@ -46,14 +46,14 @@ def test_release_versions_are_explicit_and_consistent() -> None:
     contract71 = read("chrome_extension/content_runtime_contract_v71.js")
     package = read("app/__init__.py")
     project = read("pyproject.toml")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.94"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.94"' in runtime
-    assert manifest["version"] == "0.22.94"
-    assert 'bundle: "0.22.94"' in marker
-    assert 'bundle: "0.22.94"' in marker71
-    assert 'REQUIRED_BUNDLE = "0.22.94"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.22.94"' in contract
-    assert 'REQUIRED_BUNDLE = "0.22.94"' in contract71
+    assert 'SERVER_RUNTIME_VERSION = "0.22.95"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.95"' in runtime
+    assert manifest["version"] == "0.22.95"
+    assert 'bundle: "0.22.95"' in marker
+    assert 'bundle: "0.22.95"' in marker71
+    assert 'REQUIRED_BUNDLE = "0.22.95"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.22.95"' in contract
+    assert 'REQUIRED_BUNDLE = "0.22.95"' in contract71
     assert '__version__ = "0.7.1"' in package
     assert 'version = "0.7.1"' in project
 
