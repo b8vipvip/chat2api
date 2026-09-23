@@ -82,6 +82,7 @@ from .responses_v108_patch import install_responses_v108_patch
 from .responses_model_routing_v108_patch import install_responses_model_routing_v108_patch
 from .responses_console_v110_patch import install_responses_console_v110_patch
 from .request_id_namespace_v136_patch import install_request_id_namespace_v136_patch
+from .worker_limits_clipboard_v121_patch import install_worker_limits_clipboard_v121_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -270,4 +271,8 @@ install_responses_console_v110_patch(app)
 # Final public API ingress boundary: keep internal broker request IDs protocol-native
 # and attach a trace ID without buffering streaming Responses/Chat output.
 install_request_id_namespace_v136_patch(app)
+# Canonical Worker settings authority. This must be installed explicitly after
+# the historical presentation stack so the Worker list has exactly one owner
+# for the compact concurrency/standby editor and its cache-busted asset.
+install_worker_limits_clipboard_v121_patch(app)
 install_request_history_v94_patch(app)
