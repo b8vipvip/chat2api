@@ -16,7 +16,9 @@ from .admin_auth import SESSION_COOKIE
 
 
 PATCH_REVISION = 121
-ASSET_PATH = "/assets/chat2api-worker-limits-clipboard-v121.js"
+ASSET_RELEASE = "0.22.96"
+ASSET_PATH = f"/assets/chat2api-worker-limits-clipboard-v121.js?v={ASSET_RELEASE}"
+ASSET_ROUTE = "/assets/chat2api-worker-limits-clipboard-v121.js"
 WINDOW_CONFIG_FILENAME = "worker_window_limits.json"
 MIN_LIMIT = 1
 MAX_LIMIT = 32
@@ -356,13 +358,13 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
             return {"ok": True, "text": text, "characters": len(text), "transport": str(result.get("transport") or "")[:80]}
         raise HTTPException(status_code=400, detail="Unsupported clipboard action")
 
-    @app.get(ASSET_PATH, include_in_schema=False)
+    @app.get(ASSET_ROUTE, include_in_schema=False)
     async def worker_limits_clipboard_asset() -> Response:
         path = Path(__file__).with_name("admin_worker_limits_clipboard_v121.js")
         return Response(
             path.read_text(encoding="utf-8"),
             media_type="application/javascript",
-            headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate", "X-Chat2API-Asset-Release": ASSET_RELEASE},
         )
 
     @app.middleware("http")
