@@ -80,4 +80,4 @@ def test_server_packages_bundle_and_admin_uses_worker_lifecycle_list():
     assert "安装完成或失败后自动停用" in admin
     assert "有效期至" not in admin
     assert _runtime_version(runtime) >= (0, 22, 5)
-    assert 'CHROME_BRIDGE_VERSION = "0.22.95"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.22.96"' in runtime

@@ -19,8 +19,8 @@ def read(path: Path) -> str:
 
 def test_current_bridge_loads_login_detector_for_new_and_existing_tabs():
     manifest = json.loads(read(EXT / "manifest.json"))
-    assert CHROME_BRIDGE_VERSION == "0.22.95"
-    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.22.95"
+    assert CHROME_BRIDGE_VERSION == "0.22.96"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.22.96"
     scripts = manifest["content_scripts"][1]["js"]
     assert CONTENT in scripts
     assert scripts.index("content_page_adapter_v22.js") < scripts.index(CONTENT) < scripts.index("content_page_driver_v22.js")

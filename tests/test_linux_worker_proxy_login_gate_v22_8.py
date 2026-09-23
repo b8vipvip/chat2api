@@ -132,4 +132,4 @@ def test_admin_disables_login_until_proxy_is_recorded_and_preflights_before_moda
 def test_runtime_bumped_without_chrome_bridge_bump():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     assert _runtime_version(runtime) >= (0, 22, 8)
-    assert 'CHROME_BRIDGE_VERSION = "0.22.95"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.22.96"' in runtime

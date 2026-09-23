@@ -40,4 +40,4 @@ def test_health_waits_for_services_instead_of_single_instant_check():
 def test_runtime_marks_bootstrap_recovery_release():
     runtime = Path("app/runtime_contract.py").read_text(encoding="utf-8")
     assert _runtime_version(runtime) >= (0, 22, 7)
-    assert 'CHROME_BRIDGE_VERSION = "0.22.95"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.22.96"' in runtime

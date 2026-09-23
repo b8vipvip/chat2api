@@ -97,6 +97,8 @@ def test_remote_login_unicode_clipboard_is_ticket_scoped_and_bidirectional() -> 
 def test_worker_settings_ui_keeps_concurrency_and_windows_distinct() -> None:
     console = (ROOT / "app" / "admin_worker_limits_clipboard_v121.js").read_text(encoding="utf-8")
     presentation = (ROOT / "app" / "worker_presentation_v64_patch.py").read_text(encoding="utf-8")
+    entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
+    patch = (ROOT / "app" / "worker_limits_clipboard_v121_patch.py").read_text(encoding="utf-8")
     identity = (ROOT / "app" / "admin_worker_identity_v131.js").read_text(encoding="utf-8")
 
     assert 'headerCell.textContent = "并发 / 备用"' in console
@@ -105,7 +107,10 @@ def test_worker_settings_ui_keeps_concurrency_and_windows_distinct() -> None:
     assert "data-v121-limit-summary" in console
     assert "data-v121-edit-limits" in console
     assert "data-v121-limit-popover" in console
-    assert 'install_worker_limits_clipboard_v121_patch(app)' in presentation
+    assert 'install_worker_limits_clipboard_v121_patch(app)' in entry
+    assert 'install_worker_limits_clipboard_v121_patch(app)' not in presentation
+    assert 'ASSET_RELEASE = "0.22.96"' in patch
+    assert '?v={ASSET_RELEASE}' in patch
     assert "持续维持的可接待空闲窗口数量" in console
     assert "data-v121-cancel-limits" in console
     assert "extensionDeviceBody" not in identity
