@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.95"
+    assert RELEASE_VERSION == "0.22.96"
     assert manifest["version"] == RELEASE_VERSION
 
 
