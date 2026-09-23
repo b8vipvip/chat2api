@@ -4,7 +4,7 @@
 
   // Worker bundle 0.8.42 keeps the mature bounded v71 preflight lifecycle.
   // request-v6 is the sole response terminal owner; network v55 supplies evidence only.
-  const REQUIRED_BUNDLE = "0.22.94";
+  const REQUIRED_BUNDLE = "0.22.95";
   const REQUIRED_REVISION = 71;
   const CONTRACT_TIMEOUT_MS = 700;
   const HOT_HEAL_BUDGET_MS = 2400;
