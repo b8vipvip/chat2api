@@ -5,13 +5,15 @@ import json
 from pathlib import Path
 
 from .model import Gate, GateStatus, State, Task
+from .orchestrator import canonicalize_task
 
 _FAILURES = {"failure", "timed_out", "action_required", "startup_failure"}
 
 
 def _host_control(task: Task, action: str) -> dict:
     """Single authority for whether the foreground host may end the engineering turn."""
-    terminal = task.state == State.DONE
+    authority = canonicalize_task(task)
+    terminal = authority["terminal_done"]
     if terminal:
         next_host_action = "EXIT_ALLOWED"
     elif action == "repair_request":
@@ -23,6 +25,9 @@ def _host_control(task: Task, action: str) -> dict:
     return {
         "schema": "gptauto.host-control/v1",
         "task_id": task.task_id,
+        "phase": authority["phase"],
+        "generation": authority["generation"],
+        "repair_owner": authority["repair_owner"],
         "lease_state": "RELEASED" if terminal else "ACTIVE",
         "terminal_done": terminal,
         "allow_foreground_exit": terminal,
@@ -36,16 +41,16 @@ def _lease(task: Task, action: str) -> dict:
     meta = task.metadata
     host_control = _host_control(task, action)
     return {
-        "active": task.state != State.DONE,
+        "active": not host_control["terminal_done"],
         "completion_gate": str(meta.get("completion_gate") or ""),
         "release_required": bool(meta.get("release_required")),
-        "may_finish_foreground": task.state == State.DONE,
-        "foreground_completion_status": "terminal" if task.state == State.DONE else "continue_required",
+        "may_finish_foreground": host_control["terminal_done"],
+        "foreground_completion_status": "terminal" if host_control["terminal_done"] else "continue_required",
         "foreground_disposition": host_control["foreground_disposition"],
         "allow_foreground_exit": host_control["allow_foreground_exit"],
         "requires_foreground_poll": host_control["requires_foreground_poll"],
         "host_control": host_control,
-        "foreground_instruction": ("Report task completion only from terminal DONE evidence." if task.state == State.DONE else "Do not report the engineering task complete; continue/recover until terminal DONE evidence exists."),
+        "foreground_instruction": ("Report task completion only from terminal DONE evidence." if host_control["terminal_done"] else "Do not report the engineering task complete; continue/recover until terminal DONE evidence exists."),
     }
 
 
@@ -56,6 +61,7 @@ def _with_lease(task: Task, action: dict) -> dict:
 
 def next_action(task: Task) -> dict:
     """Turn observer state into an explicit, machine-consumable executor action."""
+    authority = canonicalize_task(task)
     meta = task.metadata
     failed = [step.gate.value for step in task.plan if step.status == GateStatus.FAILED]
     conclusion = str(meta.get("workflow_conclusion") or "").lower()
@@ -66,7 +72,7 @@ def next_action(task: Task) -> dict:
     time_action = str(meta.get("time_budget_action") or "continue")
     elapsed = meta.get("chat_session_elapsed_minutes", 0)
 
-    if task.state == State.DONE:
+    if authority["terminal_done"]:
         return _with_lease(task, {
             "action": "done",
             "reason": "Definition of Done is satisfied",
