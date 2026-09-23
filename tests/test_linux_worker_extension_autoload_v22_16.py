@@ -65,4 +65,4 @@ def test_shell_launchers_are_syntax_valid():
 def test_runtime_marks_extension_autoload_release_without_changing_bridge_protocol_version():
     runtime = (ROOT / "app" / "runtime_contract.py").read_text(encoding="utf-8")
     assert _runtime_version(runtime) >= (0, 22, 16)
-    assert 'CHROME_BRIDGE_VERSION = "0.22.95"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.22.96"' in runtime
