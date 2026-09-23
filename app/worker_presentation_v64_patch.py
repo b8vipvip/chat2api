@@ -10,7 +10,6 @@ from pydantic import BaseModel, Field
 
 from .admin_auth import SESSION_COOKIE
 from .linux_worker_device_authority_v124_patch import install_linux_worker_device_authority_v124_patch
-from .worker_limits_clipboard_v121_patch import install_worker_limits_clipboard_v121_patch
 
 
 PATCH_REVISION = 66
@@ -33,12 +32,6 @@ async def _response_bytes(response: Response) -> bytes:
         async for chunk in iterator:
             chunks.append(chunk.encode() if isinstance(chunk, str) else bytes(chunk))
     return b"".join(chunks)
-
-
-def _install_v121_if_ready(app: FastAPI) -> None:
-    required = ("registry", "admin_sessions", "linux_workers", "worker_login_sessions", "send_linux_worker_command")
-    if all(hasattr(app.state, name) for name in required):
-        install_worker_limits_clipboard_v121_patch(app)
 
 
 def _install_v124_if_ready(app: FastAPI) -> bool:
@@ -71,7 +64,6 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
     are intentionally not installed and are retained in git only as history.
     """
     if getattr(app.state, "worker_presentation_v66_installed", False):
-        _install_v121_if_ready(app)
         _install_v124_if_ready(app)
         return app
     app.state.worker_presentation_v66_installed = True
@@ -234,6 +226,5 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
         headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
         return Response(text, status_code=response.status_code, media_type="text/html", headers=headers)
 
-    _install_v121_if_ready(app)
     _install_v124_if_ready(app)
     return app
