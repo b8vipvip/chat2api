@@ -43,7 +43,7 @@ def test_worker_limit_cell_uses_compact_summary_with_single_popover_editor() -> 
     assert "data-v121-concurrency" in source
     assert "data-v121-windows" in source
     assert "data-v121-save-limits" in source
-    assert "data-v121-refresh-limits" in source
+    assert "data-v121-refresh-limits" not in source
     assert "窗口跟随并发" not in source
     assert "窗口独立设置" not in source
 
