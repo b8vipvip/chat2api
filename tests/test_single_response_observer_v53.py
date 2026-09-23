@@ -33,13 +33,13 @@ def test_runtime_contract_exposes_request_v6_plus_network_evidence():
     preflight = (EXT / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
     contract = (EXT / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     marker = (EXT / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.95"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.96"' in runtime
     assert '"network_response_recovery": True' in runtime
-    assert 'const REQUIRED_BUNDLE = "0.22.95"' in preflight
+    assert 'const REQUIRED_BUNDLE = "0.22.96"' in preflight
     assert '"content_network_stream_recovery_v55.js"' in preflight
     assert '"content_request_v6.js"' in preflight
-    assert 'const REQUIRED_BUNDLE = "0.22.95"' in contract
+    assert 'const REQUIRED_BUNDLE = "0.22.96"' in contract
     assert 'request_v6' in contract
     assert 'network_stream_recovery_v55' in contract
     assert 'semanticHelper?.timer == null' in contract
-    assert 'bundle: "0.22.95"' in marker
+    assert 'bundle: "0.22.96"' in marker
