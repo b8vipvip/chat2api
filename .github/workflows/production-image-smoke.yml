@@ -88,7 +88,7 @@ jobs:
               pairer = archive.extractfile("scripts/linux_worker_extension_pair.py").read().decode("utf-8")
               controller = archive.extractfile("scripts/linux_worker_device_controller.py").read().decode("utf-8")
               controller_helper = archive.extractfile("scripts/linux_worker_device_controller_helper.sh").read().decode("utf-8")
-          assert manifest["version"] == "0.22.97"
+          assert manifest["version"] == "0.22.98"
           main_scripts = manifest["content_scripts"][0]["js"]
           isolated_scripts = manifest["content_scripts"][1]["js"]
           assert "model_evidence_main_v144.js" in main_scripts
@@ -102,6 +102,8 @@ jobs:
           assert "server-cancel-control-v136" in recovery
           assert "await readiness.snapshot()" in persistent_pool
           assert "await readiness.readyForPrewarm()" not in persistent_pool
+          assert "standby_semantics_revision: 145" in persistent_pool
+          assert "const standbyRows = routableRows.filter(row => !busy.has(row.window_id));" in persistent_pool
           assert "delegated-to-persistent-window-pool-v137" in pool_guard
           assert "pool.reconcile" in pool_guard and "login-state:" in pool_guard
           assert "await chrome.windows.remove" not in pool_guard
@@ -152,6 +154,8 @@ jobs:
           assert "\"model_evidence_v144\": True" in runtime
           assert "\"final_model_authority_v144\": True" in runtime
           assert "\"worker_redesigned_chatgpt_model_evidence_v144\": True" in runtime
+          assert "\"worker_runtime_preflight_repair_v145\": True" in runtime
+          assert "\"routable_standby_semantics_v145\": True" in runtime
           assert "\"request_id_namespace_v136\": True" in runtime
           assert "\"chatgpt_login_ready_admission_v137\": True" in runtime
           assert "\"window_manager_login_ready_filter_v137\": True" in runtime
@@ -171,7 +175,7 @@ jobs:
           assert "增加 Worker" in device_ui
           assert "install_linux_worker_device_console_v122_patch" not in presentation
           assert "install_linux_worker_console_v123_patch" not in presentation
-          print(json.dumps({"bundle_version": manifest["version"], "linux_device_authority_v124": True, "public_https_origin_v125": True, "device_controller_v127": True, "controller_provision_rw_v128": True, "device_diagnostics_v128": True, "qnbot_recovery_v136": True, "qnbot_orphan_owner_recovery_v140": True, "chatgpt_choice_policy_v143": True, "model_evidence_v144": True, "login_ready_admission_v137": True, "extension_autopair": True, "sha256": digest}))
+          print(json.dumps({"bundle_version": manifest["version"], "linux_device_authority_v124": True, "public_https_origin_v125": True, "device_controller_v127": True, "controller_provision_rw_v128": True, "device_diagnostics_v128": True, "qnbot_recovery_v136": True, "qnbot_orphan_owner_recovery_v140": True, "chatgpt_choice_policy_v143": True, "model_evidence_v144": True, "worker_runtime_preflight_repair_v145": True, "routable_standby_semantics_v145": True, "login_ready_admission_v137": True, "extension_autopair": True, "sha256": digest}))
           '
       - name: Boot production ASGI entrypoint and verify health and admin authority
         run: |
@@ -193,8 +197,8 @@ jobs:
           payload = json.load(open('/tmp/chat2api-version.json', encoding='utf-8'))
           assert payload['server']['runtime_aligned'] is True
           assert payload['server']['entrypoint'] == 'app.entry:app'
-          assert payload['server']['runtime_version'] == '0.22.97'
-          assert payload['chrome_bridge']['bundle_version'] == '0.22.97'
+          assert payload['server']['runtime_version'] == '0.22.98'
+          assert payload['chrome_bridge']['bundle_version'] == '0.22.98'
           assert payload['chrome_bridge']['route_window_authority_revision'] == 30
           assert payload['chrome_bridge']['window_observer_revision'] == 90
           assert payload['chrome_bridge']['persistent_window_pool_revision'] == 132
@@ -206,6 +210,8 @@ jobs:
           assert payload['features']['model_evidence_v144'] is True
           assert payload['features']['final_model_authority_v144'] is True
           assert payload['features']['worker_redesigned_chatgpt_model_evidence_v144'] is True
+          assert payload['features']['worker_runtime_preflight_repair_v145'] is True
+          assert payload['features']['routable_standby_semantics_v145'] is True
           assert payload['features']['responses_tool_continuation_v141'] is True
           assert payload['features']['responses_terminal_integrity_v142'] is True
           assert payload['features']['window_observer_terminal_clear_v90'] is True
@@ -252,5 +258,5 @@ jobs:
           manager = v124.split('function renderManager()', 1)[1].split('function renamePairingHeader', 1)[0]
           assert '<th>代理</th>' not in manager
           assert '增加 Worker' in v124
-          print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'qnbot_recovery_v136': True, 'qnbot_orphan_owner_recovery_v140': True, 'chatgpt_choice_policy_v143': True, 'model_evidence_v144': True, 'login_ready_admission_v137': True, 'linux_device_authority_v124': True, 'public_https_origin_v125': True, 'device_controller_v127': True, 'controller_provision_rw_v128': True, 'device_diagnostics_v128': True, 'admin_linux_assets': assets}))
+          print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'qnbot_recovery_v136': True, 'qnbot_orphan_owner_recovery_v140': True, 'chatgpt_choice_policy_v143': True, 'model_evidence_v144': True, 'worker_runtime_preflight_repair_v145': True, 'routable_standby_semantics_v145': True, 'login_ready_admission_v137': True, 'linux_device_authority_v124': True, 'public_https_origin_v125': True, 'device_controller_v127': True, 'controller_provision_rw_v128': True, 'device_diagnostics_v128': True, 'admin_linux_assets': assets}))
           PY
