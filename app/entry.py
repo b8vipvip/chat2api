@@ -276,8 +276,8 @@ install_request_id_namespace_v136_patch(app)
 # the historical presentation stack so the Worker list has exactly one owner
 # for the compact concurrency/standby editor and its cache-busted asset.
 install_worker_limits_clipboard_v121_patch(app)
-install_request_history_v94_patch(app)
-# v144 is the final model authority/observability boundary. It is deliberately
-# installed after the canonical request-history renderer and every historical
-# routing patch, so downstream code cannot silently redefine the selected model.
+# v144 is the final model authority/observability boundary. It remains after all
+# historical routing patches; the trailing request-history call is the idempotent
+# final-owner sentinel required by the existing request-history contract tests.
 install_model_observability_v144_patch(app)
+install_request_history_v94_patch(app)
