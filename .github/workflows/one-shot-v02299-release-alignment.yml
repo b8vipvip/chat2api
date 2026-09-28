@@ -1,0 +1,47 @@
+name: One-shot v0.22.99 release alignment
+
+on:
+  push:
+    branches:
+      - release/v0.22.99-runtime-ready-standby-v146
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: release/v0.22.99-runtime-ready-standby-v146
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Align release contract
+        run: python scripts/one_shot_v02299_release_alignment.py
+      - name: Verify aligned release surface
+        run: |
+          python -m pip install -e '.[dev]' pytest-timeout
+          python -m compileall -q app
+          node --check chrome_extension/background_runtime_preflight_v48.js
+          node --check chrome_extension/conversation_persistent_pool_v132.js
+          pytest -q --timeout=120 tests/test_runtime_contract.py tests/test_worker_runtime_standby_release_v02298.py tests/test_runtime_ready_standby_v146.py tests/test_bootstrap_container_packaging_v22_4.py tests/test_server_worker_sync_v22_36.py
+          node tests/runtime_preflight_refresh_v71.mjs
+          node tests/capacity_control_v35.mjs
+      - name: Commit aligned release
+        run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo 'Release surface already aligned.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app chrome_extension tests .github/workflows/production-image-smoke.yml
+          git commit -m 'release: align Server and Worker to v0.22.99'
+          git push origin HEAD:release/v0.22.99-runtime-ready-standby-v146
