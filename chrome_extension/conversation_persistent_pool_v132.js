@@ -31,6 +31,9 @@
     loaded: false,
     gate: Promise.resolve(),
     reservations: new Map(),
+    runtimeReadyTabs: new Map(),
+    runtimeChecks: 0,
+    runtimeFailures: 0,
     reconcilePromise: null,
     reconcileTimer: null,
     lastResult: null,
@@ -203,6 +206,7 @@
         url,
         status: String(tab.status || ""),
         routable: isChatGpt(url) && !isAuthSurface(url),
+        runtime_ready: state.runtimeReadyTabs.get(tab.id) === true,
         focused: win.focused === true,
       });
     }
@@ -285,6 +289,21 @@
     route.last_pool_detach_at = Date.now();
   }
 
+  async function ensureRuntimeCurrent(tabId) {
+    const id = Number(tabId);
+    if (!Number.isInteger(id)) throw new Error("Persistent ChatGPT runtime preflight requires a valid tab id");
+    state.runtimeChecks += 1;
+    try {
+      if (typeof ensureContent === "function") await ensureContent(id);
+      state.runtimeReadyTabs.set(id, true);
+      return true;
+    } catch (error) {
+      state.runtimeReadyTabs.set(id, false);
+      state.runtimeFailures += 1;
+      throw error;
+    }
+  }
+
   async function waitForReady(tabId, timeoutMs = 30000) {
     const deadline = Date.now() + timeoutMs;
     let lastError = null;
@@ -296,7 +315,7 @@
           await sleep(180);
           continue;
         }
-        if (typeof ensureContent === "function") await ensureContent(tabId);
+        await ensureRuntimeCurrent(tabId);
         return tab;
       } catch (error) { lastError = error; }
       await sleep(220);
@@ -329,7 +348,7 @@
       throw error;
     }
     state.created += 1;
-    return { window_id: created.id, tab_id: tab.id, url: tab.url || NEW_CHAT_URL, routable: true, status: tab.status || "complete" };
+    return { window_id: created.id, tab_id: tab.id, url: tab.url || NEW_CHAT_URL, routable: true, runtime_ready: true, status: tab.status || "complete" };
   }
 
   async function closeWindow(windowId) {
@@ -355,18 +374,66 @@
     return ids;
   }
 
+  async function validateIdleRuntime(value, rows, reason = "runtime-ready-standby-v146") {
+    const preflight = globalThis.__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__;
+    if (!preflight || typeof ensureContent !== "function") {
+      return { rows, checked: 0, failed: 0, closed: 0, routesChanged: false, skipped: true };
+    }
+    const busy = busyWindowIds(value);
+    const candidates = rows.filter(row => row.routable && !busy.has(row.window_id) && row.runtime_ready !== true);
+    if (!candidates.length) return { rows, checked: 0, failed: 0, closed: 0, routesChanged: false, skipped: false };
+
+    const results = await Promise.all(candidates.map(async row => {
+      try {
+        await ensureRuntimeCurrent(row.tab_id);
+        return { row, ok: true, error: "" };
+      } catch (error) {
+        return { row, ok: false, error: String(error?.message || error) };
+      }
+    }));
+
+    let current = rows.slice();
+    let failed = 0;
+    let closed = 0;
+    let routesChanged = false;
+    const assigned = routeByWindow(value);
+    for (const result of results) {
+      const row = result.row;
+      if (result.ok) {
+        current = current.map(item => item.tab_id === row.tab_id ? { ...item, runtime_ready: true } : item);
+        continue;
+      }
+      failed += 1;
+      const entry = assigned.get(row.window_id);
+      if (entry?.route) {
+        await detachRoute(entry.route, `${reason}:runtime-preflight-failed`);
+        routesChanged = true;
+      }
+      if (await closeWindow(row.window_id)) {
+        current = current.filter(item => item.window_id !== row.window_id);
+        state.runtimeReadyTabs.delete(row.tab_id);
+        closed += 1;
+      } else {
+        current = current.map(item => item.window_id === row.window_id ? { ...item, runtime_ready: false } : item);
+      }
+    }
+    if (routesChanged) await persistRoutes(value);
+    return { rows: current, checked: candidates.length, failed, closed, routesChanged, skipped: false };
+  }
+
   function snapshotFrom(rows, value, ready, isDisabled) {
     const target = normalizeTarget(state.target) || 0;
-    const effective = target ? (isDisabled ? Math.min(1, target) : (ready ? target + rows.filter(row => row.routable && busyWindowIds(value).has(row.window_id)).length : Math.min(1, target))) : 0;
     const assigned = routeByWindow(value);
     const busy = busyWindowIds(value);
     const routableRows = rows.filter(row => row.routable);
     const unroutableRows = rows.filter(row => !row.routable);
+    const runtimeReadyRows = routableRows.filter(row => row.runtime_ready === true);
     const routedRows = routableRows.filter(row => assigned.has(row.window_id));
-    // Backup capacity is every routable idle window, including an idle slot
-    // that still retains logical route affinity and can be reused/reassigned.
-    const standbyRows = routableRows.filter(row => !busy.has(row.window_id));
     const inUse = routableRows.filter(row => busy.has(row.window_id)).length;
+    const effective = target ? (isDisabled ? Math.min(1, target) : (ready ? target + inUse : Math.min(1, target))) : 0;
+    // v146 backup capacity requires both a routable ChatGPT surface and a
+    // verified current Worker runtime. URL-only tabs never satisfy standby.
+    const standbyRows = runtimeReadyRows.filter(row => !busy.has(row.window_id));
     return {
       version: 132,
       revision: 132,
@@ -378,6 +445,8 @@
       total: rows.length,
       routable_total: routableRows.length,
       unroutable_total: unroutableRows.length,
+      runtime_ready_total: runtimeReadyRows.length,
+      runtime_stale_total: routableRows.filter(row => row.runtime_ready !== true).length,
       active: inUse,
       idle: standbyRows.length,
       own: rows.length,
@@ -386,11 +455,14 @@
       routed: routedRows.length,
       idle_routed: routedRows.filter(row => !busy.has(row.window_id)).length,
       all_chatgpt_windows: rows.length,
-      standby_semantics_revision: 145,
+      standby_semantics_revision: 146,
+      runtime_ready_standby: true,
+      runtime_preflight_checks: state.runtimeChecks,
+      runtime_preflight_failures: state.runtimeFailures,
       login_ready: ready,
       worker_disabled: isDisabled,
       warming: Boolean(target && ready && !isDisabled && standbyRows.length < target),
-      excess: Math.max(0, routableRows.length - effective),
+      excess: Math.max(0, runtimeReadyRows.length - effective),
       reserved: state.reservations.size,
       source: state.source,
       created_total: state.created,
@@ -424,13 +496,14 @@
     const busy = busyWindowIds(value);
     const assigned = routeByWindow(value);
     const protectedIds = await protectedWindowIds();
-    let excess = Math.max(0, current.filter(row => row.routable).length - target);
+    const capacityRows = current.filter(row => row.routable && (busy.has(row.window_id) || row.runtime_ready === true));
+    let excess = Math.max(0, capacityRows.length - target);
     let routesChanged = false;
     let closed = 0;
     if (!excess) return { rows: current, closed, deferred: 0, routesChanged };
 
     const standby = current
-      .filter(row => row.routable && !assigned.has(row.window_id) && !busy.has(row.window_id))
+      .filter(row => row.routable && row.runtime_ready === true && !assigned.has(row.window_id) && !busy.has(row.window_id))
       .sort((left, right) => Number(protectedIds.has(left.window_id)) - Number(protectedIds.has(right.window_id)));
     for (const row of standby) {
       if (excess <= 0) break;
@@ -484,8 +557,14 @@
       if (routesChanged) await persistRoutes(value);
     }
 
+    let runtimeValidation = { checked: 0, failed: 0, closed: 0, skipped: true };
+    if (ready && !isDisabled) {
+      runtimeValidation = await validateIdleRuntime(value, rows, reason);
+      rows = runtimeValidation.rows;
+    }
+
     if (!target) {
-      state.lastResult = { ok: true, reason, target: null, action: "unconfigured", at: Date.now() };
+      state.lastResult = { ok: true, reason, target: null, action: "unconfigured", runtime_validation: runtimeValidation, at: Date.now() };
       return snapshotFrom(rows, value, ready, isDisabled);
     }
 
@@ -504,7 +583,7 @@
     let opened = 0;
     let lastError = "";
     if (ready && !isDisabled) {
-      while (rows.filter(row => row.routable).length < effectiveTarget) {
+      while (rows.filter(row => row.routable && (busyWindowIds(value).has(row.window_id) || row.runtime_ready === true)).length < effectiveTarget) {
         try {
           const row = await createStandby(reason);
           rows.push(row);
@@ -523,8 +602,10 @@
       effective_target: effectiveTarget,
       before_or_after_total: rows.length,
       routable_before_or_after_total: rows.filter(row => row.routable).length,
-      standby_before_or_after_total: rows.filter(row => row.routable && !busyWindowIds(value).has(row.window_id)).length,
-      standby_semantics_revision: 145,
+      runtime_ready_before_or_after_total: rows.filter(row => row.routable && row.runtime_ready === true).length,
+      standby_before_or_after_total: rows.filter(row => row.routable && row.runtime_ready === true && !busyWindowIds(value).has(row.window_id)).length,
+      standby_semantics_revision: 146,
+      runtime_validation: runtimeValidation,
       opened,
       closed,
       deferred,
@@ -616,14 +697,25 @@
       const value = await routerReady();
       if (!value) return null;
       const route = value.routes[key] || (value.routes[key] = freshRoute(key));
-      const existing = await routeLiveTab(route);
+      let existing = await routeLiveTab(route);
+      if (existing) {
+        try {
+          if (existing.status && existing.status !== "complete") existing = await waitForReady(existing.id, 12000);
+          else { await ensureRuntimeCurrent(existing.id); existing = await chrome.tabs.get(existing.id); }
+        } catch (_) {
+          await detachRoute(route, "persistent-pool-existing-route-runtime-stale-v146");
+          await closeWindow(existing.windowId);
+          state.runtimeReadyTabs.delete(existing.id);
+          existing = null;
+        }
+      }
       if (existing) {
         await markPooledRoute(route);
         route.last_active_at = Date.now();
         state.reservations.set(key, existing.windowId);
         await persistRoutes(value);
         state.reused += 1;
-        return { key, window_id: existing.windowId, tab_id: existing.id, strategy: "reuse-persistent-route" };
+        return { key, window_id: existing.windowId, tab_id: existing.id, strategy: "reuse-runtime-ready-persistent-route-v146" };
       }
 
       if (Number.isInteger(route.window_id)) await clearRouteAlarm(route.window_id);
@@ -632,7 +724,9 @@
       route.window_owned = false;
       route.close_after = null;
 
-      let rows = (await physicalWindows()).filter(row => row.routable);
+      let physical = await physicalWindows();
+      const runtimeValidation = await validateIdleRuntime(value, physical, "request-admission-v146");
+      let rows = runtimeValidation.rows.filter(row => row.routable && row.runtime_ready === true);
       let assigned = routeByWindow(value);
       const busy = busyWindowIds(value);
       let slot = rows.find(row => !assigned.has(row.window_id) && !busy.has(row.window_id)) || null;
@@ -658,7 +752,7 @@
         }
       }
 
-      if (!slot && rows.length < target) {
+      if (!slot && rows.filter(row => !busy.has(row.window_id)).length < target) {
         slot = await createStandby("request-admission");
         rows.push(slot);
         strategy = "warm-on-admission";
@@ -710,9 +804,11 @@
 
   chrome.windows.onCreated.addListener(() => scheduleReconcile("window-created", 500));
   chrome.windows.onRemoved.addListener(() => scheduleReconcile("window-removed", 250));
-  chrome.tabs.onUpdated.addListener((_tabId, changeInfo) => {
+  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (changeInfo.url || changeInfo.status) state.runtimeReadyTabs.delete(Number(tabId));
     if (changeInfo.url || changeInfo.status === "complete") scheduleReconcile("tab-updated", 700);
   });
+  chrome.tabs.onRemoved.addListener(tabId => state.runtimeReadyTabs.delete(Number(tabId)));
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;

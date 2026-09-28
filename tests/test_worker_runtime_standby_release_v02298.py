@@ -43,8 +43,9 @@ def test_v02298_standby_is_routable_idle_capacity() -> None:
     pool = text("chrome_extension/conversation_persistent_pool_v132.js")
     capacity = text("chrome_extension/background_capacity_control_v35.js")
     assert "const routableRows = rows.filter(row => row.routable);" in pool
-    assert "const standbyRows = routableRows.filter(row => !busy.has(row.window_id));" in pool
-    assert "standby_semantics_revision: 145" in pool
-    assert "while (rows.filter(row => row.routable).length < effectiveTarget)" in pool
+    assert "const standbyRows = runtimeReadyRows.filter(row => !busy.has(row.window_id));" in pool
+    assert "standby_semantics_revision: 146" in pool
+    assert "runtime_ready_standby: true" in pool
+    assert "validateIdleRuntime" in pool
     assert "const standby = Number(snapshot.idle || snapshot.standby || 0);" in capacity
     assert "standby === target" in capacity

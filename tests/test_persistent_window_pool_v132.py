@@ -24,13 +24,13 @@ def test_persistent_pool_is_active_routing_layer() -> None:
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     assert 'policy: "persistent-prewarmed-total-window-pool-v132"' in source
     assert 'const target = normalizeTarget(state.target)' in source
+    assert 'row.runtime_ready === true' in source
+    assert 'validateIdleRuntime' in source
     assert 'while (rows.filter(row => row.routable && (busyWindowIds(value).has(row.window_id) || row.runtime_ready === true)).length < effectiveTarget)' in source
     assert 'target + busyRoutableBefore' in source
     assert 'standbyRows.length === target' in source
     assert 'const standbyRows = runtimeReadyRows.filter(row => !busy.has(row.window_id));' in source
     assert 'standby_semantics_revision: 146' in source
-    assert 'row.runtime_ready === true' in source
-    assert 'validateIdleRuntime' in source
     assert 'await createStandby(reason)' in source
     assert 'window_owned = false' in source
     assert 'route.close_after = null' in source
