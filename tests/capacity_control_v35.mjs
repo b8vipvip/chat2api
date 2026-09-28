@@ -59,6 +59,8 @@ const pool = {
       total: activeRows.length,
       routable_total: activeRows.length,
       unroutable_total: 0,
+      runtime_ready_total: activeRows.length,
+      runtime_stale_total: 0,
       active,
       idle: standby,
       own: activeRows.length,
@@ -66,7 +68,7 @@ const pool = {
       standby,
       routed: active,
       all_chatgpt_windows: activeRows.length,
-      standby_semantics_revision: 145,
+      standby_semantics_revision: 146,
       login_ready: true,
       worker_disabled: false,
       speculative_windows: false,
@@ -113,7 +115,9 @@ assert.equal(result.data.window_snapshot.route_window_authority, 'conversation-r
 assert.equal(result.metadata.reserve_window_target, 3);
 assert.equal(result.metadata.reserve_window_routable_total, 3);
 assert.equal(result.metadata.reserve_window_unroutable_total, 0);
-assert.equal(result.metadata.reserve_window_standby_semantics_revision, 145);
+assert.equal(result.metadata.reserve_window_runtime_ready_total, 3);
+assert.equal(result.metadata.reserve_window_runtime_stale_total, 0);
+assert.equal(result.metadata.reserve_window_standby_semantics_revision, 146);
 assert.equal(result.metadata.window_decision_authority, 'persistent-window-pool-v132');
 assert.equal(result.metadata.prewarmed_windows, true);
 assert.equal(result.metadata.speculative_windows, false);
