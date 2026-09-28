@@ -1,0 +1,87 @@
+name: One-shot v0.22.97 release alignment
+
+on:
+  push:
+    branches:
+      - release/v0.22.97-model-evidence-v144
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: release/v0.22.97-model-evidence-v144
+          fetch-depth: 0
+      - name: Align unified Server/Worker release contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          old = "0.22.96"
+          new = "0.22.97"
+          fixed = [
+              Path('.github/workflows/production-image-smoke.yml'),
+              Path('app/runtime_contract.py'),
+              Path('app/worker_limits_clipboard_v121_patch.py'),
+              Path('chrome_extension/background_runtime_preflight_v48.js'),
+              Path('chrome_extension/content_bundle_marker_v48.js'),
+              Path('chrome_extension/content_bundle_marker_v71.js'),
+              Path('chrome_extension/content_runtime_contract_v48.js'),
+              Path('chrome_extension/content_runtime_contract_v71.js'),
+              Path('chrome_extension/manifest.json'),
+          ]
+          tests = [p for p in Path('tests').rglob('*') if p.is_file() and p.suffix in {'.py', '.js', '.mjs'}]
+          changed = []
+          for path in fixed + tests:
+              text = path.read_text(encoding='utf-8')
+              updated = text.replace(old, new)
+              if updated != text:
+                  path.write_text(updated, encoding='utf-8')
+                  changed.append(str(path))
+
+          runtime = Path('app/runtime_contract.py')
+          text = runtime.read_text(encoding='utf-8')
+          text = text.replace(
+              'single-window-lifecycle-authority-v137-standby-cardinality-v144-unified-release-version-v1-release-v02294"',
+              'single-window-lifecycle-authority-v137-standby-cardinality-v144-unified-release-version-v1-release-v02294-model-evidence-v144-final-model-authority-v144-release-v02297"',
+          )
+          text = text.replace(
+              'single-window-lifecycle-authority-v137-release-v0842",',
+              'single-window-lifecycle-authority-v137-release-v0842-model-evidence-v144-release-v0843",',
+          )
+          needle = '            "chatgpt_choice_policy_v143": True,\n'
+          flags = (
+              '            "chatgpt_choice_policy_v143": True,\n'
+              '            "model_evidence_v144": True,\n'
+              '            "final_model_authority_v144": True,\n'
+              '            "worker_redesigned_chatgpt_model_evidence_v144": True,\n'
+          )
+          if needle not in text:
+              raise SystemExit('runtime feature insertion anchor missing')
+          text = text.replace(needle, flags, 1)
+          runtime.write_text(text, encoding='utf-8')
+
+          required = {
+              'app/runtime_contract.py': 'RELEASE_VERSION = "0.22.97"',
+              'chrome_extension/manifest.json': '"version": "0.22.97"',
+              'chrome_extension/content_bundle_marker_v48.js': 'bundle: "0.22.97"',
+              'chrome_extension/background_runtime_preflight_v48.js': 'REQUIRED_BUNDLE = "0.22.97"',
+              'chrome_extension/content_runtime_contract_v48.js': 'REQUIRED_BUNDLE = "0.22.97"',
+          }
+          for name, token in required.items():
+              if token not in Path(name).read_text(encoding='utf-8'):
+                  raise SystemExit(f'{name}: missing {token}')
+          print(f'aligned {len(changed)} files to {new}')
+          PY
+          git rm .github/workflows/one-shot-release-v02297.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "release: align Server and Worker to v0.22.97"
+          git push origin HEAD:release/v0.22.97-model-evidence-v144
