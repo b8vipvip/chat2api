@@ -26,7 +26,6 @@ jobs:
           old = "0.22.96"
           new = "0.22.97"
           fixed = [
-              Path('.github/workflows/production-image-smoke.yml'),
               Path('app/runtime_contract.py'),
               Path('app/worker_limits_clipboard_v121_patch.py'),
               Path('chrome_extension/background_runtime_preflight_v48.js'),
@@ -79,9 +78,8 @@ jobs:
                   raise SystemExit(f'{name}: missing {token}')
           print(f'aligned {len(changed)} files to {new}')
           PY
-          git rm .github/workflows/one-shot-release-v02297.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
+          git add app chrome_extension tests
           git commit -m "release: align Server and Worker to v0.22.97"
           git push origin HEAD:release/v0.22.97-model-evidence-v144
