@@ -37,6 +37,14 @@ def test_chrome_bridge_contract_matches_manifest_bundle():
     assert manifest["version"] == RELEASE_VERSION
 
 
+def test_v144_model_evidence_runtime_owners_are_in_manifest():
+    manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
+    main_scripts = manifest["content_scripts"][0]["js"]
+    isolated_scripts = manifest["content_scripts"][1]["js"]
+    assert main_scripts.index("network_stream_main_v55.js") < main_scripts.index("model_evidence_main_v144.js")
+    assert "content_model_evidence_v144.js" in isolated_scripts
+
+
 def test_realtime_protocol_contract_matches_live_bridge():
     assert LIVE_PROTOCOL_VERSION == "chat2api-live-v1"
 
