@@ -24,7 +24,20 @@ jobs:
         with:
           node-version: '24'
       - name: Apply v146 patch
-        run: python scripts/one_shot_v146_runtime_ready_standby.py
+        run: |
+          # Rebase this generated test surface on main so the one-shot script
+          # always sees its original v145 anchors, regardless of a prior failed run.
+          git checkout origin/main -- tests/test_persistent_window_pool_v132.py
+          python scripts/one_shot_v146_runtime_ready_standby.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tests/test_persistent_window_pool_v132.py')
+          text = path.read_text(encoding='utf-8')
+          old = "    assert 'while (rows.filter(row => row.routable).length < effectiveTarget)' in source"
+          new = "    assert 'while (rows.filter(row => row.routable && (busyWindowIds(value).has(row.window_id) || row.runtime_ready === true)).length < effectiveTarget)' in source"
+          text = text.replace(old, new)
+          path.write_text(text, encoding='utf-8')
+          PY
       - name: JavaScript syntax
         run: |
           node --check chrome_extension/conversation_persistent_pool_v132.js
