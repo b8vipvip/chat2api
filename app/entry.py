@@ -127,47 +127,154 @@ install_linux_worker_proxy_catalog_patch(app)
 install_stream_keepalive_patch(app)
 install_request_stall_patch(app)
 install_request_recovery_patch(app)
+# Preserve active browser requests through brief Worker WebSocket reconnects.
+# This sits after request-stall/recovery so the synthetic disconnect filter owns
+# the final terminal decision while existing timeout/watchdog limits stay intact.
 install_worker_transport_recovery_patch(app)
 install_playground_lifecycle_patch(app)
+# The console promises that an empty attachment chooser generates a default
+# sample. Make vision/file tests dispatch real multimodal requests instead of
+# being silently skipped when the administrator leaves the chooser empty.
 install_playground_multimodal_defaults_patch(app)
+# Every dispatched Playground case gets a fresh prompt variant and opaque marker.
+# Install after multimodal defaults so generated vision/file samples flow through
+# the same randomized chat boundary as administrator-supplied attachments.
 install_playground_random_prompt_patch(app)
+# Manual Playground chat is deliberately separate from the randomized automatic
+# test layer: administrator-authored messages must reach /v1/chat/completions
+# verbatim while still exercising the same production routing boundary.
 install_playground_chat_patch(app)
+
+# Install the runtime contract after the historical patch stack so /version
+# describes the production app rather than the legacy base layer in app.main.
 install_runtime_contract(app)
+
+# Capture server runtime logs before the final control-plane patches are installed
+# so their diagnostics and exception traces are available from the admin console.
 install_runtime_logs_patch(app)
+
+# Live extension capacity controls add admin/Bridge control endpoints without
+# owning the runtime version. They are installed after the runtime contract so
+# the version surface remains stable while the control plane can evolve.
 install_extension_capacity_control_patch(app)
+
+# Keep gpt-5.5-mini vision/file routing enabled for Free accounts until the
+# browser reports an actual ChatGPT quota reset time. This is installed after
+# the historical routing stack so it decorates the final resolver/catalog.
 install_mini_multimodal_quota_patch(app)
+
+# These final Worker patches do not own the runtime version. They are installed
+# last so the presentation assets can refine the legacy Worker console without
+# changing the established Worker/Bridge transport contracts.
 install_linux_worker_pairing_patch(app)
 install_linux_worker_proxy_name_patch(app)
 install_linux_worker_table_stability_patch(app)
 install_linux_worker_install_ux_patch(app)
 install_linux_worker_repair_command_patch(app)
 install_linux_worker_diagnostics_patch(app)
+# Initialization is deliberately installed after diagnostics: its bootstrap
+# transformation extends the final helper/sudo rules and its admin button can
+# use the stable diagnostics-tagged Worker rows.
 install_linux_worker_initialize_patch(app)
+# Online upgrade is installed last in the bounded remote-command Worker stack so
+# it can extend the fully-patched bootstrap, including the v43 initialization
+# helper and sudo rule.
 install_linux_worker_upgrade_patch(app)
+# The reversible routing toggle is presentation/routing-only and is deliberately
+# installed after pairing. Pairing may keep the physical extension transport
+# healthy, while this final boundary decides whether it is eligible for requests.
 install_linux_worker_enable_patch(app)
+# Route text requests only to Workers that can actually serve the requested
+# model. Install after the Worker routing toggle and mini quota policy so the
+# final resolver preserves those constraints while rejecting Free->paid family
+# mismatches before browser dispatch.
 install_model_capability_routing_patch(app)
+# Browser-route capacity is not the same as account-wide generation capacity.
+# Keep warm tabs available, but serialize confirmed ChatGPT Free generations and
+# queue additional API calls at the broker instead of dispatching them in parallel.
 install_account_generation_admission_patch(app)
+# A healthy ChatGPT landing page does not prove that the generation transports
+# are healthy. Install this after model routing and Free-account queueing so both
+# idle selection and the busy Free fallback respect fresh Linux Worker backend
+# probe failures before dispatching a request.
 install_generation_backend_routing_patch(app)
+# The Worker console polling guard is the final Worker presentation boundary.
+# It serializes list refreshes, suppresses unchanged tbody rewrites, and lets the
+# stable renderer consume the base page's shared snapshot instead of polling twice.
 install_linux_worker_console_polling_patch(app)
+# Request history resolves ext_* transport identities to the administrator's
+# human device-code name. Its browser asset is terminology-only; it no longer
+# owns or repairs request-history table structure.
 install_request_device_identity_patch(app)
+# Window Management owns only its own view/polling/capture lifecycle. It does not
+# observe or decorate the request-history table.
 install_window_manager_v88_patch(app)
+
+# Docker deployments cannot safely update their own host by exposing the Docker
+# socket to the web container. The server update patch writes a bounded request
+# into the persisted data volume; a one-time host systemd.path helper executes
+# the fixed transactional updater outside the container.
 install_server_update_patch(app)
+# After the host updater has finished its health check, reconcile every Linux
+# Worker with the newly deployed server. Worker-impacting GitHub diffs force a
+# refresh even when the semantic bundle version did not change; server-only
+# updates leave already-current Workers untouched. Offline Workers stay pending
+# and continue automatically when they reconnect. The lifespan compatibility
+# adapter keeps this safe on Starlette 1.x where app.add_event_handler is gone.
 install_server_worker_sync_patch(app)
+
+# Final authority boundary: no pairing/token/background sync path may revive a
+# Worker after an administrator disables it from either Worker management view.
 install_worker_disable_authority_patch(app)
+# Final presentation layer: resolve the pairing-code name onto Worker rows, expose
+# live occupancy as its own configurable column, and allow pairing-code renames.
+# It intentionally wraps the already-authoritative summaries without changing
+# routing/connection state.
 install_worker_presentation_v64_patch(app)
+# API Key presentation/editing is a separate bounded final console layer. It adds
+# Chinese permission labels plus name/scope editing without introducing a poll or
+# MutationObserver over the admin page.
 install_api_key_console_v68_patch(app)
+# Console developer documentation is the final presentation-only layer. It
+# explains how the v69 rich ChatGPT Markdown response travels through the normal
+# OpenAI-compatible response fields without changing request routing or runtime.
 install_rich_response_docs_patch(app)
+
+# v82 is the final file-transfer boundary before prompt decoration. It replaces
+# the historical extension download route so Unicode filenames cannot crash
+# Starlette header encoding while leaving prompt construction untouched.
 install_attachment_download_v82_patch(app)
+# Prompt configuration owns prompt construction, auditing, and its own UI only.
+# Its browser assets no longer wrap loadRequests or mutate #rqBody.
 install_prompt_config_v72_patch(app)
+# Final admin request-history normalization happens once on the server after all
+# historical HTML patches. The browser receives one canonical loadRequests owner;
+# feature modules may provide actions (for example the prompt modal) but never
+# own request-table structure or rendering.
 install_request_history_v94_patch(app)
+# User commerce is deliberately request-history-passive. Install its isolated
+# routes and administrator pricing/payment surfaces, then add provider-separated
+# payment channels and enforce the user-facing privacy boundary before reasserting
+# the legacy final-owner sentinel.
 install_user_console_v104_patch(app)
 install_payment_channels_v106_patch(app)
 install_payment_channels_v107_safety_patch(app)
 install_user_console_privacy_v105_patch(app)
+# Responses v108 inherits the same paid/free model routing context as legacy Chat
+# Completions, then owns the new Responses route and native WebSocket tool/final
+# lifecycle without changing /v1/chat/completions behavior.
 install_responses_model_routing_v108_patch(app)
 install_responses_v108_patch(app)
+# v110 exposes the new Responses contract in both developer consoles and lets the
+# user Playground choose Responses or the backward-compatible Chat Completions
+# protocol. It is presentation/test-only and does not replace either public API.
 install_responses_console_v110_patch(app)
+# Final public API ingress boundary: keep internal broker request IDs protocol-native
+# and attach a trace ID without buffering streaming Responses/Chat output.
 install_request_id_namespace_v136_patch(app)
+# Canonical Worker settings authority. This must be installed explicitly after
+# the historical presentation stack so the Worker list has exactly one owner
+# for the compact concurrency/standby editor and its cache-busted asset.
 install_worker_limits_clipboard_v121_patch(app)
 install_request_history_v94_patch(app)
 # v144 is the final model authority/observability boundary. It is deliberately
