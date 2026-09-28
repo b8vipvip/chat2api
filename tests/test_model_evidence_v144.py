@@ -58,7 +58,18 @@ def test_redesigned_hidden_work_default_profile_remains_distinct_evidence() -> N
 
 def test_v144_is_final_server_and_worker_boundary() -> None:
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
-    assert entry.rstrip().endswith("install_model_observability_v144_patch(app)")
+    v144 = entry.rindex("install_model_observability_v144_patch(app)")
+    request_history = entry.rindex("install_request_history_v94_patch(app)")
+    assert v144 < request_history
+    assert entry.rstrip().endswith("install_request_history_v94_patch(app)")
+    for authority in (
+        "install_model_capability_routing_patch(app)",
+        "install_generation_backend_routing_patch(app)",
+        "install_responses_model_routing_v108_patch(app)",
+        "install_request_id_namespace_v136_patch(app)",
+        "install_worker_limits_clipboard_v121_patch(app)",
+    ):
+        assert entry.rindex(authority) < v144
 
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     main_scripts = manifest["content_scripts"][0]["js"]
