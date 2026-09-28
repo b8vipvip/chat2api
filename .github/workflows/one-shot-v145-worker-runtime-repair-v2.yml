@@ -1,0 +1,210 @@
+name: One-shot v145 Worker runtime repair v2
+
+on:
+  push:
+    branches:
+      - fix/v145-worker-preflight-routable-standby
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/v145-worker-preflight-routable-standby
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Apply and validate repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              s = p.read_text(encoding='utf-8')
+              if s.count(old) < count:
+                  raise SystemExit(f'{path}: missing replacement anchor: {old[:100]!r}')
+              p.write_text(s.replace(old, new, count), encoding='utf-8')
+
+          def sub(path, pattern, repl, count=1):
+              p = Path(path)
+              s = p.read_text(encoding='utf-8')
+              out, n = re.subn(pattern, repl, s, count=count, flags=re.S)
+              if n != count:
+                  raise SystemExit(f'{path}: regex replacement expected {count}, got {n}: {pattern[:100]!r}')
+              p.write_text(out, encoding='utf-8')
+
+          pool = 'chrome_extension/conversation_persistent_pool_v132.js'
+          replace(pool,
+              '    const effective = target ? (isDisabled ? Math.min(1, target) : (ready ? target + inUse : Math.min(1, target))) : 0;',
+              '    const effective = target ? (isDisabled ? Math.min(1, target) : (ready ? target + rows.filter(row => row.routable && busyWindowIds(value).has(row.window_id)).length : Math.min(1, target))) : 0;')
+          replace(pool,
+              '    const routedRows = rows.filter(row => assigned.has(row.window_id));',
+              '    const routableRows = rows.filter(row => row.routable);\n    const unroutableRows = rows.filter(row => !row.routable);\n    const routedRows = routableRows.filter(row => assigned.has(row.window_id));')
+          replace(pool,
+              '    const standbyRows = rows.filter(row => !assigned.has(row.window_id));',
+              '    // Backup capacity is every routable idle window, including an idle slot\n    // that still retains logical route affinity and can be reused/reassigned.\n    const standbyRows = routableRows.filter(row => !busy.has(row.window_id));')
+          replace(pool,
+              '    const inUse = rows.filter(row => busy.has(row.window_id)).length;',
+              '    const inUse = routableRows.filter(row => busy.has(row.window_id)).length;')
+          replace(pool,
+              '      active: inUse,\n      idle: Math.max(0, rows.length - inUse),',
+              '      routable_total: routableRows.length,\n      unroutable_total: unroutableRows.length,\n      active: inUse,\n      idle: standbyRows.length,')
+          replace(pool,
+              '      all_chatgpt_windows: rows.length,\n      login_ready: ready,',
+              '      all_chatgpt_windows: rows.length,\n      standby_semantics_revision: 145,\n      login_ready: ready,')
+          replace(pool,
+              '      excess: Math.max(0, rows.length - effective),',
+              '      excess: Math.max(0, routableRows.length - effective),')
+          replace(pool,
+              '    let excess = Math.max(0, current.length - target);',
+              '    let excess = Math.max(0, current.filter(row => row.routable).length - target);')
+          replace(pool,
+              '.filter(row => !assigned.has(row.window_id) && !busy.has(row.window_id))',
+              '.filter(row => row.routable && !assigned.has(row.window_id) && !busy.has(row.window_id))')
+          replace(pool,
+              '    const effectiveTarget = isDisabled ? Math.min(1, target) : (ready ? target + rows.filter(row => busyBefore.has(row.window_id)).length : Math.min(1, target));',
+              '    const busyRoutableBefore = rows.filter(row => row.routable && busyBefore.has(row.window_id)).length;\n    const effectiveTarget = isDisabled ? Math.min(1, target) : (ready ? target + busyRoutableBefore : Math.min(1, target));')
+          replace(pool,
+              '      while (rows.length < effectiveTarget) {',
+              '      while (rows.filter(row => row.routable).length < effectiveTarget) {')
+          replace(pool,
+              '      before_or_after_total: rows.length,\n      opened,',
+              '      before_or_after_total: rows.length,\n      routable_before_or_after_total: rows.filter(row => row.routable).length,\n      standby_before_or_after_total: rows.filter(row => row.routable && !busyWindowIds(value).has(row.window_id)).length,\n      standby_semantics_revision: 145,\n      opened,')
+
+          capacity = 'chrome_extension/background_capacity_control_v35.js'
+          old = '''    const reached = snapshot.login_ready === true && snapshot.worker_disabled !== true && Number(snapshot.total || 0) === target;
+    let pendingReason = "";
+    if (snapshot.worker_disabled === true) pendingReason = "worker_disabled";
+    else if (snapshot.login_ready !== true) pendingReason = "login_not_ready";
+    else if (Number(snapshot.total || 0) < target) pendingReason = "warming";
+    else if (Number(snapshot.total || 0) > target) pendingReason = "busy_windows_protected";'''
+          new = '''    const standby = Number(snapshot.idle || snapshot.standby || 0);
+    const reached = snapshot.login_ready === true && snapshot.worker_disabled !== true && standby === target;
+    let pendingReason = "";
+    if (snapshot.worker_disabled === true) pendingReason = "worker_disabled";
+    else if (snapshot.login_ready !== true) pendingReason = "login_not_ready";
+    else if (standby < target) pendingReason = "warming";
+    else if (standby > target) pendingReason = "excess_standby";'''
+          replace(capacity, old, new)
+          replace(capacity,
+              '      reserve_window_target: Number(snapshot?.target || 0),',
+              '      reserve_window_target: Number(snapshot?.target || 0),\n      reserve_window_routable_total: Number(snapshot?.routable_total || 0),\n      reserve_window_unroutable_total: Number(snapshot?.unroutable_total || 0),\n      reserve_window_standby_semantics_revision: Number(snapshot?.standby_semantics_revision || 145),')
+
+          bootstrap = 'chrome_extension/content_bootstrap.js'
+          replace(bootstrap,
+              'files: ["network_stream_main_v55.js", "native_tool_stream_main_v63.js", "multimodal_main_v78.js"]',
+              'files: ["network_stream_main_v55.js", "model_evidence_main_v144.js", "native_tool_stream_main_v63.js", "multimodal_main_v78.js"]')
+          replace(bootstrap,
+              '          "content_page_adapter_v22.js",',
+              '          "content_page_adapter_v22.js",\n          "content_model_evidence_v144.js",')
+
+          evidence_main = 'chrome_extension/model_evidence_main_v144.js'
+          replace(evidence_main,
+              '  globalThis[KEY] = state;\n\n  const nativeFetch',
+              '  globalThis[KEY] = state;\n  try { document.documentElement?.setAttribute?.("data-chat2api-model-evidence-main-v144", "144"); } catch (_) {}\n\n  const nativeFetch')
+
+          contract = 'chrome_extension/content_runtime_contract_v71.js'
+          replace(contract,
+              '    const rich = globalThis.__CHAT2API_RICH_RESPONSE_V69__ || null;\n    const choicePolicy',
+              '    const rich = globalThis.__CHAT2API_RICH_RESPONSE_V69__ || null;\n    const modelEvidence = globalThis.__CHAT2API_MODEL_EVIDENCE_V144__ || null;\n    const choicePolicy')
+          replace(contract,
+              '      rich_response_v69: Boolean(rich),\n      chatgpt_choice_policy_v143:',
+              '      rich_response_v69: Boolean(rich),\n      model_evidence_v144: Number(modelEvidence?.version || 0) >= 144,\n      model_evidence_main_v144: document.documentElement?.getAttribute?.("data-chat2api-model-evidence-main-v144") === "144",\n      chatgpt_choice_policy_v143:')
+
+          preflight = 'chrome_extension/background_runtime_preflight_v48.js'
+          replace(preflight,
+              '  const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"];\n  const NATIVE_MAIN_FILES = ["native_tool_stream_main_v63.js"];\n  const CURRENT_MAIN_FILES = [MAIN_FILES[0], ...NATIVE_MAIN_FILES, MAIN_FILES[1]];',
+              '  const MAIN_FILES = ["network_stream_main_v55.js", "model_evidence_main_v144.js", "multimodal_main_v78.js"];\n  const NATIVE_MAIN_FILES = ["native_tool_stream_main_v63.js"];\n  const CURRENT_MAIN_FILES = [MAIN_FILES[0], MAIN_FILES[1], ...NATIVE_MAIN_FILES, MAIN_FILES[2]];')
+          replace(preflight,
+              '    "content_ui_hygiene_v31.js", "content_rate_limit_guard_v52.js", "content_tool_isolation_v48.js",',
+              '    "content_model_evidence_v144.js", "content_ui_hygiene_v31.js", "content_rate_limit_guard_v52.js", "content_tool_isolation_v48.js",')
+          replace(preflight,
+              '      result?.modules?.rich_response_v69 && result?.modules?.network_stream_recovery_v55 &&',
+              '      result?.modules?.rich_response_v69 && result?.modules?.model_evidence_v144 && result?.modules?.model_evidence_main_v144 &&\n      result?.modules?.network_stream_recovery_v55 &&')
+          sub(preflight,
+              r'  async function waitForReloadOrContract\(tabId, timeoutMs = RELOAD_BUDGET_MS\) \{.*?\n  \}\n(?=  async function recordLast)',
+              '''  async function waitForReloadOrContract(tabId, timeoutMs = RELOAD_BUDGET_MS) {
+    const started = Date.now(); let last = null; let complete = false;
+    // A just-issued reload may still expose the outgoing document as "complete".
+    // Never return early on that state; keep polling the v71 contract until the
+    // replacement document actually reports the required runtime epoch.
+    while (Date.now() - started < timeoutMs) {
+      const remaining = Math.max(100, timeoutMs - (Date.now() - started));
+      last = await contract(tabId, Math.min(CONTRACT_TIMEOUT_MS, remaining));
+      if (current(last)) return {ready: true, complete: true, result: last};
+      let tab = null;
+      try { tab = await chrome.tabs.get(tabId); } catch (_) { return {ready: false, complete: false, result: last}; }
+      complete = tab?.status === "complete" && /^https:\\/\\/(?:www\\.)?(?:chatgpt\\.com|chat\\.openai\\.com)\\//i.test(String(tab.url || ""));
+      await sleep(80);
+    }
+    return {ready: false, complete, result: last};
+  }
+''')
+          replace(preflight,
+              '  async function recordLast(last) {',
+              '  function missingModules(result) {\n    const modules = result?.modules && typeof result.modules === "object" ? result.modules : {};\n    return Object.entries(modules).filter(([, ok]) => !ok).map(([name]) => name);\n  }\n  async function recordLast(last) {')
+          sub(preflight,
+              r'      await recordLast\(\{tab_id: tabId, ok: false, mode: "repair-budget-exhausted-v87".*?error\.code = "chatgpt_runtime_preflight_budget";',
+              '''      const missing = missingModules(result);
+      await recordLast({tab_id: tabId, ok: false, mode: "repair-budget-exhausted-v145", response_terminal_owner: "request-v6",
+        reloaded, hot_healed: hotHealed, result, missing_modules: missing, elapsed_ms: Date.now()-started,
+        budget_ms: CONTRACT_TIMEOUT_MS + HOT_HEAL_BUDGET_MS + RELOAD_BUDGET_MS + FINAL_HEAL_BUDGET_MS, at_ms: Date.now()});
+      const marker = result?.marker ? `${String(result.marker.bundle || "?")}/${Number(result.marker.revision || 0)}` : "missing";
+      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the bounded preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} native-tool-stream revision 63 multimodal revision 85 terminal/prompt revision 88 conversation-quota-failover revision 95 UI-hygiene revision 101 model-evidence revision 144; response terminal owner request-v6; observed marker ${marker}; missing modules ${missing.join(",") || "unknown"}`);
+      error.code = "chatgpt_runtime_preflight_budget";''')
+
+          tp = 'tests/test_persistent_window_pool_v132.py'
+          s = Path(tp).read_text(encoding='utf-8')
+          s = s.replace("assert 'while (rows.length < effectiveTarget)' in source", "assert 'while (rows.filter(row => row.routable).length < effectiveTarget)' in source")
+          s = s.replace("assert 'target + rows.filter(row => busyBefore.has(row.window_id)).length' in source", "assert 'target + busyRoutableBefore' in source")
+          s = s.replace("assert 'Math.max(0, current.length - target)' in source", "assert 'Math.max(0, current.filter(row => row.routable).length - target)' in source")
+          anchor = "    assert 'standbyRows.length === target' in source\n"
+          if anchor not in s: raise SystemExit('pool test standby anchor missing')
+          s = s.replace(anchor, anchor + "    assert 'const standbyRows = routableRows.filter(row => !busy.has(row.window_id));' in source\n    assert 'standby_semantics_revision: 145' in source\n", 1)
+          s = s.replace("    assert 'all_chatgpt_windows: rows.length' in source\n", "    assert 'routable_total: routableRows.length' in source\n    assert 'unroutable_total: unroutableRows.length' in source\n    assert 'all_chatgpt_windows: rows.length' in source\n", 1)
+          cap_anchor = "    assert 'persistent-prewarmed-total-window-pool-v132' in source\n"
+          if cap_anchor not in s: raise SystemExit('capacity test anchor missing')
+          s = s.replace(cap_anchor, cap_anchor + "    assert 'const standby = Number(snapshot.idle || snapshot.standby || 0);' in source\n    assert 'standby === target' in source\n", 1)
+          Path(tp).write_text(s, encoding='utf-8')
+
+          tr = 'tests/runtime_preflight_refresh_v71.mjs'
+          replace(tr, '      rich_response_v69: true,\n      network_stream_recovery_v55: true,', '      rich_response_v69: true,\n      model_evidence_v144: true,\n      model_evidence_main_v144: true,\n      network_stream_recovery_v55: true,')
+          replace(tr, '  const worlds = [];', '  const worlds = [];\n  const injectedFiles = [];')
+          replace(tr, '        worlds.push(options?.world || "ISOLATED");\n        return [];', '        worlds.push(options?.world || "ISOLATED");\n        injectedFiles.push(...(options?.files || []));\n        return [];')
+          replace(tr, '  return { injected, reloads, baseEnsures, saved, worlds, state: context.__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__ };', '  return { injected, reloads, baseEnsures, saved, worlds, injectedFiles, state: context.__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__ };')
+          replace(tr, 'assert.equal(hot.worlds[0], "MAIN");\nassert.equal(hot.state.last?.ok, true);', 'assert.equal(hot.worlds[0], "MAIN");\nassert.ok(hot.injectedFiles.includes("model_evidence_main_v144.js"));\nassert.ok(hot.injectedFiles.includes("content_model_evidence_v144.js"));\nassert.equal(hot.state.last?.ok, true);')
+
+          tm = 'tests/test_model_evidence_v144.py'
+          replace(tm,
+              '    assert "content_model_evidence_v144.js" in isolated_scripts\n',
+              '    assert "content_model_evidence_v144.js" in isolated_scripts\n\n    bootstrap = (ROOT / "chrome_extension" / "content_bootstrap.js").read_text(encoding="utf-8")\n    preflight = (ROOT / "chrome_extension" / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")\n    contract = (ROOT / "chrome_extension" / "content_runtime_contract_v71.js").read_text(encoding="utf-8")\n    assert "model_evidence_main_v144.js" in bootstrap\n    assert "content_model_evidence_v144.js" in bootstrap\n    assert "model_evidence_main_v144.js" in preflight\n    assert "content_model_evidence_v144.js" in preflight\n    assert "model_evidence_v144" in contract\n    assert "model_evidence_main_v144" in contract\n')
+
+          print('v145 patch applied')
+          PY
+
+          node --check chrome_extension/conversation_persistent_pool_v132.js
+          node --check chrome_extension/background_capacity_control_v35.js
+          node --check chrome_extension/content_bootstrap.js
+          node --check chrome_extension/background_runtime_preflight_v48.js
+          node --check chrome_extension/content_runtime_contract_v71.js
+          node --check chrome_extension/model_evidence_main_v144.js
+          node tests/runtime_preflight_refresh_v71.mjs
+          python -m pytest -q tests/test_persistent_window_pool_v132.py tests/test_model_evidence_v144.py
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add chrome_extension tests
+          git commit -m "fix: heal upgraded Worker tabs and maintain routable standby windows"
+          git push origin HEAD:fix/v145-worker-preflight-routable-standby
