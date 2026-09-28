@@ -7,13 +7,14 @@
       await chrome.scripting.executeScript({
         target: { tabId },
         world: "MAIN",
-        files: ["network_stream_main_v55.js", "native_tool_stream_main_v63.js", "multimodal_main_v78.js"],
+        files: ["network_stream_main_v55.js", "model_evidence_main_v144.js", "native_tool_stream_main_v63.js", "multimodal_main_v78.js"],
       });
       await chrome.scripting.executeScript({
         target: { tabId },
         files: [
           "content_bundle_marker_v71.js",
           "content_page_adapter_v22.js",
+          "content_model_evidence_v144.js",
           "content_login_v27.js",
           "content_rate_limit_guard_v52.js",
           "content_tool_isolation_v48.js",

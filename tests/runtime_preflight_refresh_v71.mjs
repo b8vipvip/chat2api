@@ -17,6 +17,8 @@ function currentContract() {
     modules: {
       request_v6: true,
       rich_response_v69: true,
+      model_evidence_v144: true,
+      model_evidence_main_v144: true,
       network_stream_recovery_v55: true,
       native_tool_stream_v63: true,
       native_tool_stream_main_v63: true,
@@ -37,12 +39,14 @@ async function runScenario({ hotHealWorks }) {
   let baseEnsures = 0;
   const saved = [];
   const worlds = [];
+  const injectedFiles = [];
 
   const chrome = {
     scripting: {
       async executeScript(options) {
         injected += 1;
         worlds.push(options?.world || "ISOLATED");
+        injectedFiles.push(...(options?.files || []));
         return [];
       },
     },
@@ -74,13 +78,15 @@ async function runScenario({ hotHealWorks }) {
   vm.runInContext(source, context, { filename: "background_runtime_preflight_v48.js" });
 
   await context.ensureContent(123);
-  return { injected, reloads, baseEnsures, saved, worlds, state: context.__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__ };
+  return { injected, reloads, baseEnsures, saved, worlds, injectedFiles, state: context.__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__ };
 }
 
 const hot = await runScenario({ hotHealWorks: true });
 assert.equal(hot.reloads, 0, "a stale tab that can be hot-healed must not be reloaded");
 assert.ok(hot.injected >= 2);
 assert.equal(hot.worlds[0], "MAIN");
+assert.ok(hot.injectedFiles.includes("model_evidence_main_v144.js"));
+assert.ok(hot.injectedFiles.includes("content_model_evidence_v144.js"));
 assert.equal(hot.state.last?.ok, true);
 
 const loading = await runScenario({ hotHealWorks: false });

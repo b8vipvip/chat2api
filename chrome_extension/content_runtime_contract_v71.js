@@ -12,6 +12,7 @@
     const marker = globalThis.__CHAT2API_CONTENT_BUNDLE_MARKER_V71__ || null;
     const request = globalThis.__CHAT2API_REQUEST_CONTENT_V6__ || null;
     const rich = globalThis.__CHAT2API_RICH_RESPONSE_V69__ || null;
+    const modelEvidence = globalThis.__CHAT2API_MODEL_EVIDENCE_V144__ || null;
     const choicePolicy = globalThis.__CHAT2API_CHATGPT_CHOICE_POLICY_V143__ || null;
     const networkRecovery = globalThis.__CHAT2API_NETWORK_STREAM_RECOVERY_V55__ || null;
     const nativeTool = globalThis.__CHAT2API_NATIVE_TOOL_STREAM_CONTENT_V63__ || null;
@@ -23,6 +24,8 @@
     const modules = {
       request_v6: Number(request?.revision || 0) >= 69,
       rich_response_v69: Boolean(rich),
+      model_evidence_v144: Number(modelEvidence?.version || 0) >= 144,
+      model_evidence_main_v144: document.documentElement?.getAttribute?.("data-chat2api-model-evidence-main-v144") === "144",
       chatgpt_choice_policy_v143: Number(choicePolicy?.revision || 0) >= 143,
       multimodal_v78: Number(multimodal?.revision || 0) >= 78,
       multimodal_v84: Number(multimodal?.revision || 0) >= 84 && typeof multimodal?.waitForReady === "function",

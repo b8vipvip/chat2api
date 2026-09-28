@@ -357,12 +357,16 @@
 
   function snapshotFrom(rows, value, ready, isDisabled) {
     const target = normalizeTarget(state.target) || 0;
-    const effective = target ? (isDisabled ? Math.min(1, target) : (ready ? target + inUse : Math.min(1, target))) : 0;
+    const effective = target ? (isDisabled ? Math.min(1, target) : (ready ? target + rows.filter(row => row.routable && busyWindowIds(value).has(row.window_id)).length : Math.min(1, target))) : 0;
     const assigned = routeByWindow(value);
     const busy = busyWindowIds(value);
-    const routedRows = rows.filter(row => assigned.has(row.window_id));
-    const standbyRows = rows.filter(row => !assigned.has(row.window_id));
-    const inUse = rows.filter(row => busy.has(row.window_id)).length;
+    const routableRows = rows.filter(row => row.routable);
+    const unroutableRows = rows.filter(row => !row.routable);
+    const routedRows = routableRows.filter(row => assigned.has(row.window_id));
+    // Backup capacity is every routable idle window, including an idle slot
+    // that still retains logical route affinity and can be reused/reassigned.
+    const standbyRows = routableRows.filter(row => !busy.has(row.window_id));
+    const inUse = routableRows.filter(row => busy.has(row.window_id)).length;
     return {
       version: 132,
       revision: 132,
@@ -372,18 +376,21 @@
       effective_target: effective,
       target_reached: Boolean(target && ready && !isDisabled && standbyRows.length === target) || Boolean(target && isDisabled && rows.length <= effective),
       total: rows.length,
+      routable_total: routableRows.length,
+      unroutable_total: unroutableRows.length,
       active: inUse,
-      idle: Math.max(0, rows.length - inUse),
+      idle: standbyRows.length,
       own: rows.length,
       warm: standbyRows.length,
       standby: standbyRows.length,
       routed: routedRows.length,
       idle_routed: routedRows.filter(row => !busy.has(row.window_id)).length,
       all_chatgpt_windows: rows.length,
+      standby_semantics_revision: 145,
       login_ready: ready,
       worker_disabled: isDisabled,
       warming: Boolean(target && ready && !isDisabled && standbyRows.length < target),
-      excess: Math.max(0, rows.length - effective),
+      excess: Math.max(0, routableRows.length - effective),
       reserved: state.reservations.size,
       source: state.source,
       created_total: state.created,
@@ -417,13 +424,13 @@
     const busy = busyWindowIds(value);
     const assigned = routeByWindow(value);
     const protectedIds = await protectedWindowIds();
-    let excess = Math.max(0, current.length - target);
+    let excess = Math.max(0, current.filter(row => row.routable).length - target);
     let routesChanged = false;
     let closed = 0;
     if (!excess) return { rows: current, closed, deferred: 0, routesChanged };
 
     const standby = current
-      .filter(row => !assigned.has(row.window_id) && !busy.has(row.window_id))
+      .filter(row => row.routable && !assigned.has(row.window_id) && !busy.has(row.window_id))
       .sort((left, right) => Number(protectedIds.has(left.window_id)) - Number(protectedIds.has(right.window_id)));
     for (const row of standby) {
       if (excess <= 0) break;
@@ -483,7 +490,8 @@
     }
 
     const busyBefore = busyWindowIds(value);
-    const effectiveTarget = isDisabled ? Math.min(1, target) : (ready ? target + rows.filter(row => busyBefore.has(row.window_id)).length : Math.min(1, target));
+    const busyRoutableBefore = rows.filter(row => row.routable && busyBefore.has(row.window_id)).length;
+    const effectiveTarget = isDisabled ? Math.min(1, target) : (ready ? target + busyRoutableBefore : Math.min(1, target));
     let closed = 0;
     let deferred = 0;
     if (isDisabled || ready) {
@@ -496,7 +504,7 @@
     let opened = 0;
     let lastError = "";
     if (ready && !isDisabled) {
-      while (rows.length < effectiveTarget) {
+      while (rows.filter(row => row.routable).length < effectiveTarget) {
         try {
           const row = await createStandby(reason);
           rows.push(row);
@@ -514,6 +522,9 @@
       target,
       effective_target: effectiveTarget,
       before_or_after_total: rows.length,
+      routable_before_or_after_total: rows.filter(row => row.routable).length,
+      standby_before_or_after_total: rows.filter(row => row.routable && !busyWindowIds(value).has(row.window_id)).length,
+      standby_semantics_revision: 145,
       opened,
       closed,
       deferred,

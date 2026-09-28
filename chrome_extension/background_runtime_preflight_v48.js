@@ -10,11 +10,11 @@
   const HOT_HEAL_BUDGET_MS = 2400;
   const RELOAD_BUDGET_MS = 3500;
   const FINAL_HEAL_BUDGET_MS = 1800;
-  const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"];
+  const MAIN_FILES = ["network_stream_main_v55.js", "model_evidence_main_v144.js", "multimodal_main_v78.js"];
   const NATIVE_MAIN_FILES = ["native_tool_stream_main_v63.js"];
-  const CURRENT_MAIN_FILES = [MAIN_FILES[0], ...NATIVE_MAIN_FILES, MAIN_FILES[1]];
+  const CURRENT_MAIN_FILES = [MAIN_FILES[0], MAIN_FILES[1], ...NATIVE_MAIN_FILES, MAIN_FILES[2]];
   const OVERLAY_FILES = [
-    "content_ui_hygiene_v31.js", "content_rate_limit_guard_v52.js", "content_tool_isolation_v48.js",
+    "content_model_evidence_v144.js", "content_ui_hygiene_v31.js", "content_rate_limit_guard_v52.js", "content_tool_isolation_v48.js",
     "content_multimodal_v78.js", "content_multimodal_settle_v84.js", "content_multimodal_settle_v85.js",
     "content_request_lifecycle_v50.js", "content_conversation_quota_failover_v95.js", "content_request_hygiene_v42.js",
     "content_draft_managed_recovery_v55.js", "content_rich_response_v69.js", "content_request_v6.js",
@@ -61,7 +61,8 @@
   function current(result) {
     return Boolean(result?.ok && String(result?.marker?.bundle || "") === REQUIRED_BUNDLE &&
       Number(result?.marker?.revision || 0) >= REQUIRED_REVISION && result?.modules?.request_v6 &&
-      result?.modules?.rich_response_v69 && result?.modules?.network_stream_recovery_v55 &&
+      result?.modules?.rich_response_v69 && result?.modules?.model_evidence_v144 && result?.modules?.model_evidence_main_v144 &&
+      result?.modules?.network_stream_recovery_v55 &&
       result?.modules?.native_tool_stream_v63 && result?.modules?.native_tool_stream_main_v63 &&
       result?.modules?.multimodal_v78 && result?.modules?.multimodal_v84 && result?.modules?.multimodal_v85 &&
       result?.modules?.multimodal_main_v78 && result?.modules?.terminal_prompt_v88 &&
@@ -86,18 +87,24 @@
     return waitForContract(tabId, Math.max(200, budgetMs - (Date.now() - started)), 80);
   }
   async function waitForReloadOrContract(tabId, timeoutMs = RELOAD_BUDGET_MS) {
-    const started = Date.now(); let last = null;
+    const started = Date.now(); let last = null; let complete = false;
+    // A just-issued reload may still expose the outgoing document as "complete".
+    // Never return early on that state; keep polling the v71 contract until the
+    // replacement document actually reports the required runtime epoch.
     while (Date.now() - started < timeoutMs) {
       const remaining = Math.max(100, timeoutMs - (Date.now() - started));
       last = await contract(tabId, Math.min(CONTRACT_TIMEOUT_MS, remaining));
-      if (current(last)) return {ready: true, complete: false, result: last};
+      if (current(last)) return {ready: true, complete: true, result: last};
       let tab = null;
       try { tab = await chrome.tabs.get(tabId); } catch (_) { return {ready: false, complete: false, result: last}; }
-      if (tab?.status === "complete" && /^https:\/\/(?:www\.)?(?:chatgpt\.com|chat\.openai\.com)\//i.test(String(tab.url || "")))
-        return {ready: false, complete: true, result: last};
+      complete = tab?.status === "complete" && /^https:\/\/(?:www\.)?(?:chatgpt\.com|chat\.openai\.com)\//i.test(String(tab.url || ""));
       await sleep(80);
     }
-    return {ready: false, complete: false, result: last};
+    return {ready: false, complete, result: last};
+  }
+  function missingModules(result) {
+    const modules = result?.modules && typeof result.modules === "object" ? result.modules : {};
+    return Object.entries(modules).filter(([, ok]) => !ok).map(([name]) => name);
   }
   async function recordLast(last) {
     state.last = last;
@@ -131,10 +138,12 @@
     }
     if (!current(result)) {
       state.failures += 1; state.preflight_budget_exhausted += 1;
-      await recordLast({tab_id: tabId, ok: false, mode: "repair-budget-exhausted-v87", response_terminal_owner: "request-v6",
-        reloaded, hot_healed: hotHealed, result, elapsed_ms: Date.now()-started,
+      const missing = missingModules(result);
+      await recordLast({tab_id: tabId, ok: false, mode: "repair-budget-exhausted-v145", response_terminal_owner: "request-v6",
+        reloaded, hot_healed: hotHealed, result, missing_modules: missing, elapsed_ms: Date.now()-started,
         budget_ms: CONTRACT_TIMEOUT_MS + HOT_HEAL_BUDGET_MS + RELOAD_BUDGET_MS + FINAL_HEAL_BUDGET_MS, at_ms: Date.now()});
-      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the bounded preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} native-tool-stream revision 63 multimodal revision 85 terminal/prompt revision 88 conversation-quota-failover revision 95 UI-hygiene revision 101; response terminal owner request-v6`);
+      const marker = result?.marker ? `${String(result.marker.bundle || "?")}/${Number(result.marker.revision || 0)}` : "missing";
+      const error = new Error(`ChatGPT tab Worker runtime is stale or incomplete after the bounded preflight budget; required bundle ${REQUIRED_BUNDLE} content revision ${REQUIRED_REVISION} native-tool-stream revision 63 multimodal revision 85 terminal/prompt revision 88 conversation-quota-failover revision 95 UI-hygiene revision 101 model-evidence revision 144; response terminal owner request-v6; observed marker ${marker}; missing modules ${missing.join(",") || "unknown"}`);
       error.code = "chatgpt_runtime_preflight_budget"; throw error;
     }
     const toolPreflight = await toolIsolationPreflight(tabId);
