@@ -1,0 +1,30 @@
+name: One-shot v0.22.98 release alignment
+
+on:
+  push:
+    branches:
+      - release/v0.22.98-worker-runtime-standby-v145
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: release/v0.22.98-worker-runtime-standby-v145
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Align release contract
+        run: |
+          set -euo pipefail
+          python scripts/one_shot_v02298_release_alignment.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add app chrome_extension tests
+          git commit -m "release: align Server and Worker to v0.22.98"
+          git push origin HEAD:release/v0.22.98-worker-runtime-standby-v145
