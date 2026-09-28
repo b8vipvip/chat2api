@@ -1,0 +1,41 @@
+name: One-shot v145 Worker runtime repair
+
+on:
+  push:
+    branches:
+      - fix/v145-worker-preflight-routable-standby
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/v145-worker-preflight-routable-standby
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Patch and validate
+        run: |
+          set -euo pipefail
+          python scripts/one_shot_v145_worker_runtime_repair.py
+          node --check chrome_extension/conversation_persistent_pool_v132.js
+          node --check chrome_extension/background_capacity_control_v35.js
+          node --check chrome_extension/content_bootstrap.js
+          node --check chrome_extension/background_runtime_preflight_v48.js
+          node --check chrome_extension/content_runtime_contract_v71.js
+          node --check chrome_extension/model_evidence_main_v144.js
+          node tests/runtime_preflight_refresh_v71.mjs
+          python -m pytest -q tests/test_persistent_window_pool_v132.py tests/test_model_evidence_v144.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add chrome_extension tests
+          git commit -m "fix: heal upgraded Worker tabs and maintain routable standby windows"
+          git push origin HEAD:fix/v145-worker-preflight-routable-standby
