@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from fastapi import FastAPI
+
 from app.model_catalog import model_transport_id, normalize_model_id, normalize_reasoning_level, prioritize_models
 from app.model_evidence import extract_request_evidence, extract_response_evidence
+from app.runtime_contract import CHROME_BRIDGE_BUNDLE_VERSION, SERVER_RUNTIME_VERSION, version_contract_payload
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -76,3 +79,16 @@ def test_v144_is_final_server_and_worker_boundary() -> None:
     isolated_scripts = manifest["content_scripts"][1]["js"]
     assert main_scripts.index("model_evidence_main_v144.js") > main_scripts.index("network_stream_main_v55.js")
     assert "content_model_evidence_v144.js" in isolated_scripts
+
+
+def test_v144_formal_release_contract_is_v02297() -> None:
+    assert SERVER_RUNTIME_VERSION == "0.22.97"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.97"
+    payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
+    assert payload["server"]["runtime_aligned"] is True
+    assert "model-evidence-v144" in payload["server"]["feature_revision"]
+    assert "final-model-authority-v144" in payload["server"]["feature_revision"]
+    assert "model-evidence-v144" in payload["chrome_bridge"]["build_revision"]
+    assert payload["features"]["model_evidence_v144"] is True
+    assert payload["features"]["final_model_authority_v144"] is True
+    assert payload["features"]["worker_redesigned_chatgpt_model_evidence_v144"] is True
