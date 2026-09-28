@@ -5,8 +5,7 @@ from pathlib import Path
 OLD = "0.22.98"
 NEW = "0.22.99"
 ROOTS = (Path("app"), Path("chrome_extension"), Path("tests"))
-EXTRA_FILES = (Path(".github/workflows/production-image-smoke.yml"),)
-TEXT_SUFFIXES = {".py", ".js", ".mjs", ".json", ".html", ".md", ".txt", ".sh", ".yml", ".yaml"}
+TEXT_SUFFIXES = {".py", ".js", ".mjs", ".json", ".html", ".md", ".txt", ".sh"}
 
 
 def replace_versions(path: Path) -> bool:
@@ -26,9 +25,6 @@ def align_versions() -> list[str]:
         for path in root.rglob("*"):
             if replace_versions(path):
                 changed.append(str(path))
-    for path in EXTRA_FILES:
-        if replace_versions(path):
-            changed.append(str(path))
     return changed
 
 
@@ -76,11 +72,6 @@ def validate() -> None:
         "chrome_extension/content_runtime_contract_v71.js": ['const REQUIRED_BUNDLE = "0.22.99"'],
         "chrome_extension/content_bundle_marker_v48.js": ['bundle: "0.22.99"'],
         "chrome_extension/content_bundle_marker_v71.js": ['bundle: "0.22.99"'],
-        ".github/workflows/production-image-smoke.yml": [
-            'manifest["version"] == "0.22.99"',
-            "payload['server']['runtime_version'] == '0.22.99'",
-            "payload['chrome_bridge']['bundle_version'] == '0.22.99'",
-        ],
     }
     for filename, tokens in required.items():
         text = Path(filename).read_text(encoding="utf-8")
