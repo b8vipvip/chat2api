@@ -25,6 +25,7 @@ jobs:
       - name: Patch and validate
         run: |
           set -euo pipefail
+          python -m pip install -q pytest
           python scripts/one_shot_v145_worker_runtime_repair.py
           node --check chrome_extension/conversation_persistent_pool_v132.js
           node --check chrome_extension/background_capacity_control_v35.js
