@@ -80,6 +80,16 @@ def test_v144_is_final_server_and_worker_boundary() -> None:
     assert main_scripts.index("model_evidence_main_v144.js") > main_scripts.index("network_stream_main_v55.js")
     assert "content_model_evidence_v144.js" in isolated_scripts
 
+    bootstrap = (ROOT / "chrome_extension" / "content_bootstrap.js").read_text(encoding="utf-8")
+    preflight = (ROOT / "chrome_extension" / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
+    contract = (ROOT / "chrome_extension" / "content_runtime_contract_v71.js").read_text(encoding="utf-8")
+    assert "model_evidence_main_v144.js" in bootstrap
+    assert "content_model_evidence_v144.js" in bootstrap
+    assert "model_evidence_main_v144.js" in preflight
+    assert "content_model_evidence_v144.js" in preflight
+    assert "model_evidence_v144" in contract
+    assert "model_evidence_main_v144" in contract
+
 
 def test_v144_formal_release_contract_is_v02297() -> None:
     assert SERVER_RUNTIME_VERSION == "0.22.97"

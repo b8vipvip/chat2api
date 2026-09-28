@@ -24,9 +24,11 @@ def test_persistent_pool_is_active_routing_layer() -> None:
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     assert 'policy: "persistent-prewarmed-total-window-pool-v132"' in source
     assert 'const target = normalizeTarget(state.target)' in source
-    assert 'while (rows.length < effectiveTarget)' in source
-    assert 'target + rows.filter(row => busyBefore.has(row.window_id)).length' in source
+    assert 'while (rows.filter(row => row.routable).length < effectiveTarget)' in source
+    assert 'target + busyRoutableBefore' in source
     assert 'standbyRows.length === target' in source
+    assert 'const standbyRows = routableRows.filter(row => !busy.has(row.window_id));' in source
+    assert 'standby_semantics_revision: 145' in source
     assert 'await createStandby(reason)' in source
     assert 'window_owned = false' in source
     assert 'route.close_after = null' in source
@@ -38,10 +40,12 @@ def test_persistent_pool_is_active_routing_layer() -> None:
 def test_persistent_pool_keeps_configured_standby_cardinality() -> None:
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     assert 'let rows = await physicalWindows();' in source
-    assert 'while (rows.length < effectiveTarget)' in source
-    assert 'target + rows.filter(row => busyBefore.has(row.window_id)).length' in source
+    assert 'while (rows.filter(row => row.routable).length < effectiveTarget)' in source
+    assert 'target + busyRoutableBefore' in source
     assert 'standbyRows.length === target' in source
-    assert 'Math.max(0, current.length - target)' in source
+    assert 'Math.max(0, current.filter(row => row.routable).length - target)' in source
+    assert 'routable_total: routableRows.length' in source
+    assert 'unroutable_total: unroutableRows.length' in source
     assert 'all_chatgpt_windows: rows.length' in source
     assert 'configured_target: target' in source
     assert 'effective_target: effective' in source
@@ -63,6 +67,8 @@ def test_capacity_control_uses_persistent_pool_as_window_authority() -> None:
     assert '__CHAT2API_PERSISTENT_WINDOW_POOL_V132__' in source
     assert 'pool.setTarget(target, cleanSource)' in source
     assert 'persistent-prewarmed-total-window-pool-v132' in source
+    assert 'const standby = Number(snapshot.idle || snapshot.standby || 0);' in source
+    assert 'standby === target' in source
     assert 'window_decision_authority: "persistent-window-pool-v132"' in source
     assert 'prewarmed_windows: true' in source
 

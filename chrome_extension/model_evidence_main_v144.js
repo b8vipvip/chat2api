@@ -25,6 +25,7 @@
   const skippedKeys = new Set(["content", "parts", "text", "prompt", "input", "output_text", "arguments"]);
   const state = { version: 144, authority: null, sequence: 0, requests: 0, rewrites: 0, evidence: 0 };
   globalThis[KEY] = state;
+  try { document.documentElement?.setAttribute?.("data-chat2api-model-evidence-main-v144", "144"); } catch (_) {}
 
   const nativeFetch = globalThis.fetch?.bind(globalThis);
   if (typeof nativeFetch !== "function") return;

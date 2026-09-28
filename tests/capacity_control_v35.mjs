@@ -32,31 +32,41 @@ const pool = {
   setTarget: async (target, source) => {
     windowTarget = Number(target);
     windowSource = String(source || 'explicit');
-    while (activeRows.length < windowTarget) {
-      const n = activeRows.length + 101;
+    const idleCount = () => activeRows.filter(row => row.status !== 'in_use').length;
+    while (idleCount() < windowTarget) {
+      const maxId = activeRows.reduce((value, row) => Math.max(value, Number(row.window_id || 0)), 100);
+      const n = maxId + 1;
       activeRows.push({ window_id: n, tab_id: n + 100, status: 'ready' });
     }
-    while (activeRows.length > windowTarget) activeRows.pop();
+    while (idleCount() > windowTarget) {
+      const index = activeRows.map(row => row.status !== 'in_use').lastIndexOf(true);
+      if (index < 0) break;
+      activeRows.splice(index, 1);
+    }
     return { ok: true, target: windowTarget, source: windowSource };
   },
   snapshot: async () => {
     const active = activeRows.filter(row => row.status === 'in_use').length;
+    const standby = activeRows.length - active;
     return {
       version: 132,
       revision: 132,
       policy: 'persistent-prewarmed-total-window-pool-v132',
       target: windowTarget,
       configured_target: windowTarget,
-      effective_target: windowTarget,
-      target_reached: activeRows.length === windowTarget,
+      effective_target: windowTarget + active,
+      target_reached: standby === windowTarget,
       total: activeRows.length,
+      routable_total: activeRows.length,
+      unroutable_total: 0,
       active,
-      idle: activeRows.length - active,
+      idle: standby,
       own: activeRows.length,
-      warm: Math.max(0, activeRows.length - active),
-      standby: Math.max(0, activeRows.length - active),
+      warm: standby,
+      standby,
       routed: active,
       all_chatgpt_windows: activeRows.length,
+      standby_semantics_revision: 145,
       login_ready: true,
       worker_disabled: false,
       speculative_windows: false,
@@ -95,11 +105,15 @@ assert.equal(result.type, 'extension.control.result');
 assert.equal(result.ok, true);
 assert.equal(result.data.window_snapshot.total, 3);
 assert.equal(result.data.window_snapshot.active, 1);
+assert.equal(result.data.window_snapshot.idle, 2);
 assert.equal(result.data.window_snapshot.target, 3);
 assert.equal(result.data.window_snapshot.prewarmed_windows, true);
 assert.equal(result.data.window_snapshot.speculative_windows, false);
 assert.equal(result.data.window_snapshot.route_window_authority, 'conversation-routing-v30+persistent-pool-v132');
 assert.equal(result.metadata.reserve_window_target, 3);
+assert.equal(result.metadata.reserve_window_routable_total, 3);
+assert.equal(result.metadata.reserve_window_unroutable_total, 0);
+assert.equal(result.metadata.reserve_window_standby_semantics_revision, 145);
 assert.equal(result.metadata.window_decision_authority, 'persistent-window-pool-v132');
 assert.equal(result.metadata.prewarmed_windows, true);
 assert.equal(result.metadata.speculative_windows, false);
@@ -125,7 +139,9 @@ assert.equal(result.ok, true);
 assert.equal(result.data.target, 5);
 assert.equal(result.data.target_reached, true);
 assert.equal(result.data.window_policy, 'persistent-prewarmed-total-window-pool-v132');
-assert.equal(result.data.window_snapshot.total, 5);
+assert.equal(result.data.window_snapshot.total, 6, 'one busy routable window is additional to five standby windows');
+assert.equal(result.data.window_snapshot.active, 1);
+assert.equal(result.data.window_snapshot.idle, 5);
 assert.equal(result.data.window_snapshot.target, 5);
 assert.equal(result.data.window_snapshot.window_decision_authority, 'persistent-window-pool-v132');
 

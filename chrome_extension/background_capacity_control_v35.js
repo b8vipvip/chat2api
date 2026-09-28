@@ -117,12 +117,13 @@
       pool.setTarget(target, cleanSource),
     ]);
     const snapshot = await windowSnapshot();
-    const reached = snapshot.login_ready === true && snapshot.worker_disabled !== true && Number(snapshot.total || 0) === target;
+    const standby = Number(snapshot.idle || snapshot.standby || 0);
+    const reached = snapshot.login_ready === true && snapshot.worker_disabled !== true && standby === target;
     let pendingReason = "";
     if (snapshot.worker_disabled === true) pendingReason = "worker_disabled";
     else if (snapshot.login_ready !== true) pendingReason = "login_not_ready";
-    else if (Number(snapshot.total || 0) < target) pendingReason = "warming";
-    else if (Number(snapshot.total || 0) > target) pendingReason = "busy_windows_protected";
+    else if (standby < target) pendingReason = "warming";
+    else if (standby > target) pendingReason = "excess_standby";
     return {
       target,
       target_reached: reached,
@@ -174,6 +175,9 @@
       reserve_window_active: Number(snapshot?.active || 0),
       reserve_window_idle: Number(snapshot?.idle || 0),
       reserve_window_target: Number(snapshot?.target || 0),
+      reserve_window_routable_total: Number(snapshot?.routable_total || 0),
+      reserve_window_unroutable_total: Number(snapshot?.unroutable_total || 0),
+      reserve_window_standby_semantics_revision: Number(snapshot?.standby_semantics_revision || 145),
       persistent_window_pool_revision: 132,
       persistent_window_pool_policy: "persistent-prewarmed-total-window-pool-v132",
       persistent_window_pool_warm: Number(snapshot?.warm || 0),

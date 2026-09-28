@@ -94,7 +94,8 @@ def test_v87_runtime_preflight_uses_whole_path_wall_clock_budgets() -> None:
     assert "HOT_HEAL_BUDGET_MS = 2400" in source
     assert "RELOAD_BUDGET_MS = 3500" in source
     assert "FINAL_HEAL_BUDGET_MS = 1800" in source
-    assert 'mode: "repair-budget-exhausted-v87"' in source
+    assert 'mode: "repair-budget-exhausted-v145"' in source
+    assert "missing_modules: missing" in source
     assert 'error.code = "chatgpt_runtime_preflight_budget"' in source
 
 

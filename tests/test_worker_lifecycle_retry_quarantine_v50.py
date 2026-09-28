@@ -59,8 +59,8 @@ def test_runtime_preflight_requires_request_v6_and_evidence_overlays() -> None:
     contract = (EXT / "content_runtime_contract_v48.js").read_text(encoding="utf-8")
     marker = (EXT / "content_bundle_marker_v48.js").read_text(encoding="utf-8")
     assert 'const REQUIRED_BUNDLE = "0.22.97"' in source
-    assert 'const MAIN_FILES = ["network_stream_main_v55.js", "multimodal_main_v78.js"]' in source
-    for token in ('"content_request_v6.js"','"content_rate_limit_guard_v52.js"','"content_request_lifecycle_v50.js"','"content_draft_managed_recovery_v55.js"','"content_network_stream_recovery_v55.js"','"content_response_semantic_recovery_v51.js"','"content_transient_retry_v50.js"'):
+    assert 'const MAIN_FILES = ["network_stream_main_v55.js", "model_evidence_main_v144.js", "multimodal_main_v78.js"]' in source
+    for token in ('"content_request_v6.js"','"content_model_evidence_v144.js"','"content_rate_limit_guard_v52.js"','"content_request_lifecycle_v50.js"','"content_draft_managed_recovery_v55.js"','"content_network_stream_recovery_v55.js"','"content_response_semantic_recovery_v51.js"','"content_transient_retry_v50.js"'):
         assert token in source
     assert '"content_response_stream_recovery_v69.js"' not in source
     assert 'const REQUIRED_BUNDLE = "0.22.97"' in contract
