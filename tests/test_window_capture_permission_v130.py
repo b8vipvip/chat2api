@@ -37,5 +37,7 @@ def test_worker_window_setting_is_a_persistent_prewarmed_pool_target() -> None:
     assert "常驻窗口池跟随并发" not in browser
     assert "effective >= limit" in routed_limit
     assert "reserveForRequest" in routed_limit
-    assert "while (rows.length < effectiveTarget)" in pool
+    assert "while (rows.filter(row => row.routable).length < effectiveTarget)" in pool
+    assert "const standbyRows = routableRows.filter(row => !busy.has(row.window_id));" in pool
+    assert "standby_semantics_revision: 145" in pool
     assert "await createStandby(reason)" in pool
