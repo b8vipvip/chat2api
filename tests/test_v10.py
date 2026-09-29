@@ -147,7 +147,7 @@ def test_extension_runtime_logs_are_downloadable_and_redacted() -> None:
     assert "visible_alerts" in content
     assert "composer_button_labels" in content
     assert 'id="downloadRuntimeLog"' in html
-    assert 'id="clearRuntimeLog"' in html
+    assert 'id="clearRuntimeLog"' not in html
     assert "chat2api-extension-runtime" in popup
 
 

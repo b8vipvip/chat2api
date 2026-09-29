@@ -109,7 +109,7 @@ def test_popup_exposes_read_only_smoke_diagnostics():
     html = read(EXT / "popup.html")
     script = read(EXT / POPUP_SMOKE)
     assert 'id="pageSmoke"' in html
-    assert "运行页面 Smoke Test（只读）" in html
+    assert "运行只读页面诊断" in html
     assert f'<script src="{POPUP_SMOKE}"></script>' in html
     assert 'type: "popup.pageSmoke"' in script
     assert "Adapter" in script

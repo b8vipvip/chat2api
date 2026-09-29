@@ -19,8 +19,8 @@ def read(path: Path) -> str:
 
 def test_current_bridge_loads_login_detector_for_new_and_existing_tabs():
     manifest = json.loads(read(EXT / "manifest.json"))
-    assert CHROME_BRIDGE_VERSION == "0.22.100"
-    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.22.100"
+    assert CHROME_BRIDGE_VERSION == "0.22.101"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.22.101"
     scripts = manifest["content_scripts"][1]["js"]
     assert CONTENT in scripts
     assert scripts.index("content_page_adapter_v22.js") < scripts.index(CONTENT) < scripts.index("content_page_driver_v22.js")
@@ -96,11 +96,11 @@ def test_popup_exposes_login_state_and_manual_login_action():
     assert 'id="refreshLogin"' in html
     assert "打开 ChatGPT 登录窗口" in html
     for token in (
-        "ChatGPT：已登录，可用",
-        "ChatGPT：需要登录",
+        "已登录 · Composer 可用",
+        "需要登录 · 请在可见 ChatGPT 窗口完成认证",
         'send({ type: "popup.login.open" })',
         'send({ type: "popup.login.refresh" })',
-        "Composer 已确认",
+        "Composer 已确认可用",
     ):
         assert token in popup
 

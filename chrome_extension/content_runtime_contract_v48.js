@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_CONTENT_RUNTIME_CONTRACT_V48__";
   if (globalThis[KEY]) return;
 
-  const REQUIRED_BUNDLE = "0.22.100";
+  const REQUIRED_BUNDLE = "0.22.101";
   const snapshot = () => {
     const marker = globalThis.__CHAT2API_CONTENT_BUNDLE_MARKER_V48__ || null;
     const requestOwner = globalThis.__CHAT2API_REQUEST_CONTENT_V6__ || null;
@@ -19,7 +19,7 @@
       rate_limit_guard_v52: Boolean(globalThis.__CHAT2API_RATE_LIMIT_CONTENT_V52__),
       tool_isolation_v48: Number(globalThis.__CHAT2API_TOOL_ISOLATION_V48__?.version || 0) === 48,
       draft_managed_recovery_v55: Number(globalThis.__CHAT2API_DRAFT_MANAGED_RECOVERY_V55__?.version || 0) === 55,
-      network_stream_recovery_v55: Number(networkRecovery?.version || 0) === 55,
+      network_stream_recovery_v55: Number(networkRecovery?.version || 0) >= 55,
       network_stream_main_v55: document.documentElement?.getAttribute?.("data-chat2api-network-stream-main-v55") === "55",
       network_stream_parser_v63: document.documentElement?.getAttribute?.("data-chat2api-network-stream-parser") === "63",
       response_semantic_recovery_v51: Number(semanticHelper?.version || 0) === 51 && semanticHelper?.timer == null,
@@ -42,7 +42,7 @@
       ui_hygiene_revision: Number(uiHygiene?.state?.revision || 0),
       response_observer_owner: "request-v6",
       response_observer_revision: Number(requestOwner?.revision || 0),
-      network_response_recovery: Number(networkRecovery?.version || 0) === 55 ? "conversation-sse-evidence-v56-parser-v63" : null,
+      network_response_recovery: Number(networkRecovery?.version || 0) >= 55 ? "conversation-sse-evidence-v57-parser-v63" : null,
       network_response_parser_revision: Number(document.documentElement?.getAttribute?.("data-chat2api-network-stream-parser") || 0),
       semantic_helper_mode: semanticHelper?.mode || null,
       document_url: String(location.href || ""),

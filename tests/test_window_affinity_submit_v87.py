@@ -83,7 +83,7 @@ def test_submit_path_remains_single_owner_and_keeps_v6_confirmed_fallback() -> N
     assert "content_submit_rescue_v87.js" not in preflight
     assert "ready.button.click()" in source
     assert "if (!confirmed && promptStillPresent(active))" in source
-    assert "dispatchEnter(findComposer())" in source
+    assert "dispatchEnter(composerHoldingPrompt(active) || active.promptComposer || findComposer())" in source
     assert 'diagnostic(active, "enter-fallback"' in source
     assert 'waitAfterSend(active, "enter", 6000)' in source
 

@@ -21,7 +21,7 @@ def test_conversation_affinity_is_five_minutes():
 
 def test_response_requires_terminal_rich_dom_settlement():
     source = text("chrome_extension/content_request_v6.js")
-    assert "response_terminal_settle_revision: 81" in source
+    assert "response_terminal_settle_revision: 82" in source
     assert "Date.now() - settleStableSince < 3000" in source
 
 def test_multimodal_waits_for_slow_upload_processing():
@@ -49,6 +49,6 @@ def test_historical_v212_does_not_stamp_runtime_identity():
 def test_release_versions():
     runtime = text("app/runtime_contract.py")
     manifest = text("chrome_extension/manifest.json")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.100"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.100"' in runtime
-    assert '"version": "0.22.100"' in manifest
+    assert 'SERVER_RUNTIME_VERSION = "0.22.101"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.101"' in runtime
+    assert '"version": "0.22.101"' in manifest

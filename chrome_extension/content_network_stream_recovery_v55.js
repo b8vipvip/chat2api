@@ -6,8 +6,8 @@
   const REQUEST_KEY = "__CHAT2API_REQUEST_CONTENT_V5__";
   const streams = new Map();
   const state = {
-    version: 56,
-    owner: "network-stream-evidence-v56",
+    version: 57,
+    owner: "network-stream-evidence-v57",
     streams,
     snapshots: 0,
     diagnostics: 0,
@@ -68,6 +68,19 @@
     }
   }
 
+  function recordTerminalEvidence(row, detail) {
+    const active = activeRequest();
+    if (String(active?.requestId || "") !== row.requestId || active?.cancelled) return;
+    const text = String(row.lastText || detail?.text || "");
+    if (!text) return;
+    active.networkTerminalText = text;
+    active.networkTerminalAt = Date.now();
+    active.networkTerminalStreamId = row.streamId;
+    active.networkTerminalSequence = Number(detail?.sequence || 0);
+    active.networkTerminalChunks = Number(detail?.chunks ?? row.chunks ?? 0);
+    active.networkTerminalBytes = Number(detail?.bytes ?? row.bytes ?? 0);
+  }
+
   async function diagnostics(row, detail) {
     state.diagnostics += 1;
     await emit({
@@ -75,7 +88,7 @@
       request_id: row.requestId,
       diagnostics: {
         network_stream_observer: "conversation-fetch-v55",
-        network_response_recovery: "evidence-only-v56",
+        network_response_recovery: "evidence-only-v57",
         network_stream_phase: String(detail.phase || ""),
         network_stream_id: row.streamId,
         network_stream_sequence: Number(detail.sequence || 0),
@@ -103,7 +116,7 @@
       request_id: row.requestId,
       text: row.lastText,
       diagnostics: {
-        response_stream_recovery: "network-sse-evidence-v56",
+        response_stream_recovery: "network-sse-evidence-v57",
         response_semantic_recovery: "assistant-role-only-sse-v55",
         network_stream_id: row.streamId,
         network_recovered_assistant_chars: row.lastText.length,
@@ -116,10 +129,12 @@
   async function terminalHint(row, detail) {
     const text = String(detail.text || row.lastText || "");
     if (text) recordEvidence(row, text);
+    recordTerminalEvidence(row, detail);
     state.terminal_hints += 1;
     await diagnostics(row, { ...detail, phase: "terminal-hint" });
-    // Network completion is evidence only. request-v6 owns the one and only
-    // chat.completed decision after reconciling DOM and network observations.
+    // The network observer never emits chat.completed. It only records terminal
+    // evidence on the exact active request. request-v6 remains the single
+    // terminal authority and reconciles this evidence with live page state.
     streams.delete(row.streamId);
   }
 

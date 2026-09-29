@@ -22,8 +22,8 @@ def test_composer_clear_is_not_submission_confirmation() -> None:
     request = read("chrome_extension/content_request_v6.js")
     assert 'reason: "composer-cleared"' not in request
     assert "active.attachmentCount > 0 ? 45000 : 20000" in request
-    assert "submission_liveness_revision: 79" in request
-    assert "did not expose an accepted user turn, generation state, or response" in request
+    assert "submission_liveness_revision: 80" in request
+    assert "this request's accepted user turn or response evidence; duplicate send was suppressed" in request
 
 
 def test_multimodal_waits_for_upload_processing_to_settle() -> None:
@@ -37,10 +37,10 @@ def test_multimodal_waits_for_upload_processing_to_settle() -> None:
 def test_v02275_release_contract_keeps_v79_lifecycle_guards() -> None:
     runtime = read("app/runtime_contract.py")
     manifest = read("chrome_extension/manifest.json")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.100"' in runtime
-    assert 'CHROME_BRIDGE_VERSION = "0.22.100"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.100"' in runtime
-    assert '"version": "0.22.100"' in manifest
+    assert 'SERVER_RUNTIME_VERSION = "0.22.101"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.22.101"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.101"' in runtime
+    assert '"version": "0.22.101"' in manifest
     assert '"active_request_disable_lease_v79": True' in runtime
     assert '"multimodal_upload_settle_v79": True' in runtime
     assert '"submission_liveness_v79": True' in runtime

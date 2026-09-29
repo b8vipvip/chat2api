@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_worker_bundle_uses_request_v6_with_network_evidence_and_liveness() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
-    assert manifest["version"] == "0.22.100"
+    assert manifest["version"] == "0.22.101"
     scripts = [script for item in manifest.get("content_scripts", []) for script in item.get("js", [])]
     assert "content_request_v6.js" in scripts
     assert "content_network_stream_recovery_v55.js" in scripts
@@ -35,7 +35,7 @@ def test_worker_bundle_uses_request_v6_with_network_evidence_and_liveness() -> N
     network_main = (ROOT / "chrome_extension" / "network_stream_main_v55.js").read_text(encoding="utf-8")
 
     assert 'type: "chat.completed"' in request
-    assert 'network_response_recovery: "evidence-only-v56"' in network
+    assert 'network_response_recovery: "evidence-only-v57"' in network
     assert 'network_terminal_authority: "request-v6"' in network
     assert 'type: "chat.snapshot"' in network
     assert 'type: "chat.completed"' not in network

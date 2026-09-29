@@ -199,7 +199,7 @@ def test_extension_popup_shows_manifest_version() -> None:
     script = (EXTENSION / "popup.js").read_text(encoding="utf-8")
     assert 'id="versionInfo"' in html
     assert "chrome.runtime.getManifest().version" in script
-    assert "Chrome Bridge · v" in script
+    assert "platformLabel(settings)" in script
 
 
 def test_production_entry_installs_v14_after_v13() -> None:
