@@ -31,10 +31,10 @@ def test_persistent_pool_is_active_routing_layer() -> None:
     assert '!busy.has(row.window_id)' in source
     assert 'standby.length === target' in source
     assert 'standby_semantics_revision: STANDBY_SEMANTICS_REVISION' in source
-    assert 'const STANDBY_SEMANTICS_REVISION = 153' in source
+    assert 'const STANDBY_SEMANTICS_REVISION = 152' in source
     assert 'await createStandby(reason)' in source
     assert 'route.window_owned = true' in source
-    assert 'post-admission-standby-refill-v153' in source
+    assert 'post-admission-standby-refill-v152' in source
     assert 'worker_persistent_window_pool_exhausted' in source
     assert 'if (!await loginReady().catch(() => false)) return null;' in source
 
