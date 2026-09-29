@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_ADMIN_WINDOW_MANAGER_V88__";
   if (globalThis[KEY]) return;
   const state = {
-    revision: 94,
+    revision: 152,
     navigation_revision: 94,
     truth_revision: 89,
     structural_owner: "window-manager-only",
@@ -26,13 +26,24 @@
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
 
-  const statusLabel = value => ({ loading: "加载中", ready: "可接待", in_use: "正在调用", closed: "已关闭" })[String(value || "")] || String(value || "-");
+  function statusLabel(row, closed = false) {
+    if (closed || String(row?.status || "") === "closed") return "已关闭";
+    const value = String(row?.status || "");
+    if (value === "ready") return "可接待";
+    if (value === "in_use" || value === "leased") {
+      const name = String(row?.api_key_name || row?.route_key || "").trim();
+      return `正在接待${name || "API请求"}`;
+    }
+    if (value === "loading") return "加载中";
+    return value || "-";
+  }
+
   const formatTime = value => {
     const ms = Number(value || 0);
     if (!Number.isFinite(ms) || ms <= 0) return "-";
     try {
       return new Intl.DateTimeFormat("zh-CN", {
-        year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+        year:"numeric", month:"2-digit", day:"2-digit", hour:"2-digit", minute:"2-digit", second:"2-digit", hour12:false,
       }).format(new Date(ms));
     } catch (_) { return new Date(ms).toLocaleString(); }
   };
@@ -42,10 +53,7 @@
   }
 
   function stopPolling() {
-    if (state.timer !== null) {
-      clearTimeout(state.timer);
-      state.timer = null;
-    }
+    if (state.timer !== null) { clearTimeout(state.timer); state.timer = null; }
     if (state.refreshController) {
       try { state.refreshController.abort(); } catch (_) {}
     }
@@ -85,19 +93,17 @@
       section.innerHTML = `
         <div class="panel">
           <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
-            <div><h2 style="margin:0">窗口管理</h2><div class="muted">选择策略：按开启时间从早到晚，只调用最早的“可接待”备用窗口。请求中的窗口保持“正在调用”，成功后保留并进入 5 分钟同 Key 可接待租约。</div></div>
+            <div><h2 style="margin:0">窗口管理</h2><div class="muted">备用窗口只统计未分配且可接待的物理窗口。窗口一旦被 API Key 调用即退出备用池，显示“正在接待API Key名称”；请求成功后继续保留 5 分钟，同 Key 再请求会复用，5 分钟无新请求则关闭。</div></div>
             <button class="action" id="wmRefresh">刷新</button>
           </div>
           <div id="wmTruthStatus" class="muted" style="margin-top:10px"></div>
-          <h3>接待中窗口</h3>
+          <h3>当前窗口</h3>
           <div class="scroll"><table><thead><tr><th>窗口标识</th><th>设备码名称</th><th>请求ID</th><th>开启时间</th><th>状态</th><th>截图当前界面</th><th>查看</th></tr></thead><tbody id="wmActiveBody"></tbody></table></div>
           <h3 style="margin-top:22px">已关闭窗口</h3>
           <div class="scroll"><table><thead><tr><th>窗口标识</th><th>设备码名称</th><th>请求ID</th><th>开启时间</th><th>状态</th><th>截图当前界面</th><th>查看</th></tr></thead><tbody id="wmClosedBody"></tbody></table></div>
         </div>`;
       content.appendChild(section);
-      section.querySelector("#wmRefresh")?.addEventListener("click", () => {
-        refresh(true).finally(() => schedulePoll(POLL_MS));
-      });
+      section.querySelector("#wmRefresh")?.addEventListener("click", () => refresh(true).finally(() => schedulePoll(POLL_MS)));
     }
     ensureScreenshotDialog();
     return true;
@@ -107,9 +113,7 @@
     if (document.getElementById("wmScreenshotDialog")) return;
     const dialog = document.createElement("dialog");
     dialog.id = "wmScreenshotDialog";
-    dialog.innerHTML = `
-      <div class="dialogHead"><b id="wmScreenshotTitle">窗口截图</b><button class="action" data-close>关闭</button></div>
-      <div class="dialogBody"><div id="wmScreenshotMeta" class="muted" style="margin-bottom:10px"></div><img id="wmScreenshotImage" alt="Worker window screenshot" style="display:block;max-width:100%;height:auto;margin:auto;border:1px solid var(--line);border-radius:10px"></div>`;
+    dialog.innerHTML = `<div class="dialogHead"><b id="wmScreenshotTitle">窗口截图</b><button class="action" data-close>关闭</button></div><div class="dialogBody"><div id="wmScreenshotMeta" class="muted" style="margin-bottom:10px"></div><img id="wmScreenshotImage" alt="Worker window screenshot" style="display:block;max-width:100%;height:auto;margin:auto;border:1px solid var(--line);border-radius:10px"></div>`;
     dialog.querySelector("[data-close]")?.addEventListener("click", () => dialog.close());
     document.body.appendChild(dialog);
   }
@@ -137,9 +141,12 @@
     const device = String(row.device_name || row.device_code_id || clientId || "-");
     const req = String(row.request_id || "-");
     const canCapture = !closed && row.worker_online !== false && row.live_verified !== false && clientId && Number.isInteger(windowId);
+    const leased = row.status === "leased" || row.status === "in_use";
     const title = [
       `window_id=${windowId}`,
       row.source ? `source=${row.source}` : "",
+      row.api_key_name ? `api_key=${row.api_key_name}` : "",
+      Number(row.lease_until_ms || 0) > 0 ? `lease_until=${formatTime(row.lease_until_ms)}` : "",
       row.live_verified === true ? "physical_truth=v89" : "",
       row.screenshot_error ? `截图错误=${row.screenshot_error}` : "",
     ].filter(Boolean).join(" · ");
@@ -148,25 +155,19 @@
       <td>${esc(device)}</td>
       <td><code>${esc(req)}</code></td>
       <td>${esc(formatTime(row.opened_at_ms))}</td>
-      <td><span class="pill ${row.status === "ready" ? "ok" : row.status === "in_use" ? "warn" : ""}">${esc(statusLabel(closed ? "closed" : row.status))}</span></td>
-      <td>${canCapture ? `<button class="action" data-capture>截图</button>` : "-"}</td>
+      <td><span class="pill ${row.status === "ready" ? "ok" : leased ? "warn" : ""}">${esc(statusLabel(row, closed))}</span></td>
+      <td>${canCapture ? '<button class="action" data-capture>截图</button>' : "-"}</td>
       <td>${hasShot ? `<button class="action" data-view-shot>查看${row.screenshot_at_ms ? ` · ${esc(formatTime(row.screenshot_at_ms))}` : ""}</button>` : `<span class="muted">${row.screenshot_error ? esc(row.screenshot_error) : "暂无截图"}</span>`}</td>
     </tr>`;
   }
 
   function bindRows(root, rows, closed) {
     if (!root) return;
-    root.innerHTML = rows.length ? rows.map(row => rowHtml(row, closed)).join("") : `<tr><td colspan="7" class="muted">暂无窗口</td></tr>`;
+    root.innerHTML = rows.length ? rows.map(row => rowHtml(row, closed)).join("") : '<tr><td colspan="7" class="muted">暂无窗口</td></tr>';
     root.querySelectorAll("tr[data-window]").forEach((tr, index) => {
       const row = rows[index];
-      tr.querySelector("[data-capture]")?.addEventListener("click", event => {
-        event.preventDefault();
-        capture(row, event.currentTarget);
-      });
-      tr.querySelector("[data-view-shot]")?.addEventListener("click", event => {
-        event.preventDefault();
-        viewScreenshot(row);
-      });
+      tr.querySelector("[data-capture]")?.addEventListener("click", event => { event.preventDefault(); capture(row, event.currentTarget); });
+      tr.querySelector("[data-view-shot]")?.addEventListener("click", event => { event.preventDefault(); viewScreenshot(row); });
     });
   }
 
@@ -177,32 +178,21 @@
     const online = Math.max(0, Number(truth.online_workers || 0));
     const verified = Math.max(0, Number(truth.verified_workers || 0));
     const unverified = Math.max(0, Number(truth.unverified_workers || 0));
-    const receptionReady = Math.max(0, Number(truth.reception_ready_workers || 0));
-    const loginBlocked = Math.max(0, Number(truth.login_blocked_workers || 0));
-    const loginSuppressed = Math.max(0, Number(truth.login_blocked_active_rows_suppressed || 0));
-    const suppressed = Math.max(0, Number(truth.cached_active_rows_suppressed || 0));
+    const standby = Math.max(0, Number(truth.standby_windows || 0));
+    const leased = Math.max(0, Number(truth.leased_route_windows || 0));
+    const inUse = Math.max(0, Number(truth.in_use_windows || 0));
     if (Number(state.truth_revision || 0) < 89) {
       box.className = "warnText";
-      box.textContent = "当前服务端尚未启用 v89 物理窗口核验；列表可能来自 Worker 历史遥测。";
+      box.textContent = "当前服务端尚未启用实时物理窗口核验。";
       return;
     }
     if (online <= 0) {
       box.className = "muted";
-      box.textContent = "实时物理核验：暂无在线 Worker。历史缓存不会计入“接待中窗口”。";
+      box.textContent = "实时物理核验：暂无在线 Worker。历史缓存不会计入备用窗口。";
       return;
     }
-    if (unverified > 0) {
-      const reasons = state.workers
-        .filter(row => row?.online && row?.live_verified !== true)
-        .map(row => `${row.device_name || row.client_id || "Worker"}：${row.truth_status === "upgrade-required" ? "需升级到 Worker 0.8.27+" : row.truth_status === "refresh-timeout" ? "核验超时" : "未核验"}`)
-        .join("；");
-      box.className = "warnText";
-      const loginNote = loginBlocked > 0 ? ` ChatGPT 未登录/未就绪 Worker ${loginBlocked} 个，已屏蔽其 ${loginSuppressed} 个物理窗口。` : "";
-      box.textContent = `实时物理核验：${verified}/${online} 个在线 Worker 已核验；${unverified} 个未核验。已抑制 ${suppressed} 条历史缓存窗口，不计入“接待中窗口”。${loginNote}${reasons ? ` ${reasons}` : ""}`;
-      return;
-    }
-    box.className = loginBlocked > 0 ? "warnText" : "muted";
-    box.textContent = `实时物理核验：${verified}/${online} 个在线 Worker 已核验；ChatGPT 可接待 Worker ${receptionReady} 个。${loginBlocked > 0 ? ` 未登录/未就绪 ${loginBlocked} 个，其 ${loginSuppressed} 个物理窗口已屏蔽，不计入“接待中窗口”，也不会参与 API 路由。` : " 当前“接待中窗口”只显示本次从 Chrome 实际窗口图重新确认存在且 ChatGPT 已登录的窗口。"}`;
+    box.className = unverified > 0 ? "warnText" : "muted";
+    box.textContent = `实时物理核验：${verified}/${online} 个在线 Worker 已核验；备用窗口 ${standby} 个；正在执行 ${inUse} 个；5分钟接待租约 ${leased} 个。${unverified > 0 ? `另有 ${unverified} 个 Worker 未完成核验。` : ""}`;
   }
 
   function render() {
@@ -219,9 +209,7 @@
     state.refreshController = controller;
     const task = (async () => {
       try {
-        const response = await fetch("/api/admin/window-manager", {
-          credentials: "same-origin", cache: "no-store", signal: controller.signal,
-        });
+        const response = await fetch("/api/admin/window-manager", {credentials:"same-origin", cache:"no-store", signal:controller.signal});
         if (!response.ok) {
           if (force) console.warn("window manager refresh failed", response.status);
           return null;
@@ -234,10 +222,9 @@
         const truth = payload.truth && typeof payload.truth === "object" ? payload.truth : null;
         const truthRevision = Number(payload.truth_revision || 0);
         const signature = JSON.stringify([
-          truthRevision,
-          truth,
-          workers.map(row => [row.client_id, row.live_verified, row.truth_status, row.snapshot_updated_at_ms, row.cached_active_count]),
-          active.map(row => [row.client_id, row.window_no, row.status, row.request_id, row.screenshot_at_ms]),
+          truthRevision, truth,
+          workers.map(row => [row.client_id, row.live_verified, row.truth_status, row.standby_window_count, row.leased_route_window_count]),
+          active.map(row => [row.client_id, row.window_no, row.status, row.request_id, row.route_key, row.api_key_name, row.lease_until_ms, row.screenshot_at_ms]),
           closed.map(row => [row.client_id, row.window_no, row.closed_at_ms, row.screenshot_at_ms]),
         ]);
         state.active = active;
@@ -267,9 +254,7 @@
     const original = button?.textContent || "截图";
     if (button) { button.disabled = true; button.textContent = "截图中…"; }
     try {
-      const response = await fetch(`/api/admin/window-manager/${encodeURIComponent(row.client_id)}/${encodeURIComponent(row.window_id)}/capture`, {
-        method: "POST", credentials: "same-origin", cache: "no-store",
-      });
+      const response = await fetch(`/api/admin/window-manager/${encodeURIComponent(row.client_id)}/${encodeURIComponent(row.window_id)}/capture`, {method:"POST", credentials:"same-origin", cache:"no-store"});
       if (!response.ok) {
         let detail = `HTTP ${response.status}`;
         try { detail = (await response.json()).detail || detail; } catch (_) {}
@@ -281,10 +266,7 @@
         if (!isActive()) break;
         await refresh(true);
         const updated = state.active.find(item => item.client_id === row.client_id && Number(item.window_id) === Number(row.window_id));
-        if (Number(updated?.screenshot_at_ms || 0) > before) {
-          viewScreenshot(updated);
-          break;
-        }
+        if (Number(updated?.screenshot_at_ms || 0) > before) { viewScreenshot(updated); break; }
       }
     } catch (error) {
       alert(`截图失败：${String(error?.message || error)}`);
@@ -301,7 +283,7 @@
     const meta = document.getElementById("wmScreenshotMeta");
     if (!dialog || !image || !String(row?.screenshot_data_url || "").startsWith("data:image/")) return;
     if (title) title.textContent = `窗口 #${row.window_no || "-"} · ${row.device_name || row.device_code_id || row.client_id || "Worker"}`;
-    if (meta) meta.textContent = `窗口 ID：${row.window_id} · 截图时间：${formatTime(row.screenshot_at_ms)} · 请求 ID：${row.request_id || "-"}`;
+    if (meta) meta.textContent = `窗口 ID：${row.window_id} · 截图时间：${formatTime(row.screenshot_at_ms)} · 状态：${statusLabel(row, false)}`;
     image.src = row.screenshot_data_url;
     dialog.showModal();
   }
@@ -324,16 +306,11 @@
   }
 
   function start() {
-    if (!installView()) {
-      setTimeout(start, 100);
-      return;
-    }
+    if (!installView()) { setTimeout(start, 100); return; }
     installNavigationLifecycle();
     if ((location.hash || "").slice(1) === "window-manager") showWindowManager();
   }
 
-  // v94: window-manager owns only #view-window-manager. It never observes,
-  // decorates, or schedules work against #rqBody.
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, { once: true });
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, {once:true});
   else start();
 })();
