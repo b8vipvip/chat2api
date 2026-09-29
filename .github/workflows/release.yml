@@ -67,32 +67,57 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Validate by immutable candidate SHA, not by trigger type. GPTAuto
-          # Reconcile may have to dispatch these gates explicitly after a merge
-          # performed with GITHUB_TOKEN, while a normal human merge may produce
-          # push-triggered runs. Both are valid evidence when head_sha == SHA.
+          # Validation evidence is bound to the immutable candidate SHA. There
+          # may be multiple generations for the same SHA (push CI plus a
+          # GPTAuto workflow_dispatch retry). A later duplicate generation must
+          # not erase an already-completed success for identical source bytes.
           runs="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${SHA}&per_page=100")"
-          ci="$(jq -r '[.workflow_runs[] | select(.name=="CI")] | sort_by(.run_started_at // .created_at, .id) | reverse | .[0] | if . == null then "missing" else (.status + ":" + (.conclusion // "")) end' <<<"$runs")"
-          smoke="$(jq -r '[.workflow_runs[] | select(.name=="Production image smoke")] | sort_by(.run_started_at // .created_at, .id) | reverse | .[0] | if . == null then "missing" else (.status + ":" + (.conclusion // "")) end' <<<"$runs")"
-          echo "validation snapshot: CI=${ci} | Production image smoke=${smoke}"
 
-          for result in "$ci" "$smoke"; do
-            case "$result" in
-              completed:success|missing|queued:|in_progress:|waiting:|pending:|requested:)
-                ;;
-              completed:*)
-                echo "required post-merge validation failed: ${result}" >&2
-                exit 1
-                ;;
-            esac
-          done
+          latest_state() {
+            local workflow="$1"
+            jq -r --arg workflow "$workflow" \
+              '[.workflow_runs[] | select(.name==$workflow)]
+               | sort_by(.run_started_at // .created_at, .id) | reverse | .[0]
+               | if . == null then "missing" else (.status + ":" + (.conclusion // "")) end' \
+              <<<"$runs"
+          }
 
-          if [[ "$ci" == "completed:success" && "$smoke" == "completed:success" ]]; then
+          success_id() {
+            local workflow="$1"
+            jq -r --arg workflow "$workflow" \
+              '[.workflow_runs[]
+                | select(.name==$workflow and .status=="completed" and .conclusion=="success")]
+               | sort_by(.run_started_at // .created_at, .id) | reverse | .[0].id // empty' \
+              <<<"$runs"
+          }
+
+          ci_latest="$(latest_state "CI")"
+          smoke_latest="$(latest_state "Production image smoke")"
+          ci_success_id="$(success_id "CI")"
+          smoke_success_id="$(success_id "Production image smoke")"
+
+          echo "validation snapshot: CI latest=${ci_latest} success_run=${ci_success_id:-none} | Production image smoke latest=${smoke_latest} success_run=${smoke_success_id:-none}"
+
+          # A completed success is durable evidence for this immutable SHA.
+          # Only surface a terminal validation failure when no success evidence
+          # exists for that workflow at all.
+          if [[ -z "$ci_success_id" && "$ci_latest" == completed:* && "$ci_latest" != "completed:success" ]]; then
+            echo "required post-merge validation CI failed without any success evidence: ${ci_latest}" >&2
+            exit 1
+          fi
+          if [[ -z "$smoke_success_id" && "$smoke_latest" == completed:* && "$smoke_latest" != "completed:success" ]]; then
+            echo "required post-merge validation Production image smoke failed without any success evidence: ${smoke_latest}" >&2
+            exit 1
+          fi
+
+          if [[ -n "$ci_success_id" && -n "$smoke_success_id" ]]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
-            echo "Both required validations passed for ${SHA}."
+            echo "ci-run-id=$ci_success_id" >> "$GITHUB_OUTPUT"
+            echo "smoke-run-id=$smoke_success_id" >> "$GITHUB_OUTPUT"
+            echo "Both required validations have exact-SHA success evidence for ${SHA}."
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "The peer validation is not complete yet; this event-driven run exits without waiting."
+            echo "The peer validation has no exact-SHA success evidence yet; this event-driven run exits without waiting."
           fi
 
       - name: Checkout validated source

@@ -14,13 +14,23 @@ def test_release_workflow_uses_event_driven_post_merge_gate() -> None:
     assert "branches: [main]" in workflow
     assert "Verify both post-merge validations" in workflow
     assert "head_sha=${SHA}" in workflow
-    assert 'select(.name==\"CI\")' in workflow
-    assert 'select(.name==\"Production image smoke\")' in workflow
-    assert "completed:success" in workflow
-    assert "required post-merge validation failed" in workflow
+
+    # Success evidence is durable for an immutable candidate SHA. A later
+    # duplicate generation may still be queued/running/failed without erasing
+    # a completed success for the exact same source bytes.
+    assert "success_id()" in workflow
+    assert '.status==\"completed\" and .conclusion==\"success\"' in workflow
+    assert 'ci_success_id="$(success_id "CI")"' in workflow
+    assert 'smoke_success_id="$(success_id "Production image smoke")"' in workflow
+    assert '[[ -n "$ci_success_id" && -n "$smoke_success_id" ]]' in workflow
+    assert "ci-run-id=$ci_success_id" in workflow
+    assert "smoke-run-id=$smoke_success_id" in workflow
+    assert "failed without any success evidence" in workflow
     assert "Peer validation still pending" in workflow
 
-    # v4 gate must not occupy a runner while the peer workflow is still running.
+    # The release gate remains event driven and must not occupy a runner while
+    # waiting for peer validation. Reconcile can dispatch Release again after
+    # canonical validation succeeds.
     assert "deadline=$((SECONDS + 900))" not in workflow
     assert "sleep 5" not in workflow
     assert "timed out waiting for CI and Production image smoke" not in workflow
