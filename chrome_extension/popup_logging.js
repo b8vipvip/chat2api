@@ -2,7 +2,7 @@
   const download = document.getElementById("downloadRuntimeLog");
   const clear = document.getElementById("clearRuntimeLog");
   const message = document.getElementById("message");
-  if (!download || !clear) return;
+  if (!download || !message) return;
 
   function beijingParts(value = Date.now()) {
     const d = value instanceof Date ? value : new Date(value);
@@ -59,6 +59,7 @@
     const response = await chrome.runtime.sendMessage({ type: "popup.logs.export" });
     if (!response?.ok) {
       message.textContent = response?.error || "运行日志导出失败";
+      message.className = "message error";
       return;
     }
     const data = normalizeBeijingTimes(response.data || {});
@@ -72,10 +73,14 @@
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
     message.textContent = `运行日志已导出，共 ${Array.isArray(data.entries) ? data.entries.length : 0} 条；时间统一为北京时间。`;
+    message.className = "message success";
   });
 
-  clear.addEventListener("click", async () => {
-    const response = await chrome.runtime.sendMessage({ type: "popup.logs.clear" });
-    message.textContent = response?.ok ? "运行日志已清空。" : (response?.error || "清空运行日志失败");
-  });
+  if (clear) {
+    clear.addEventListener("click", async () => {
+      const response = await chrome.runtime.sendMessage({ type: "popup.logs.clear" });
+      message.textContent = response?.ok ? "运行日志已清空。" : (response?.error || "清空运行日志失败");
+      message.className = response?.ok ? "message success" : "message error";
+    });
+  }
 })();
