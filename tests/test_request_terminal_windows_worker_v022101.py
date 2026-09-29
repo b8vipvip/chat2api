@@ -90,7 +90,7 @@ class _DisconnectingSocket:
 def test_registry_1006_detaches_the_exact_dead_socket(tmp_path: Path) -> None:
     async def run() -> None:
         registry = ClientRegistry(tmp_path)
-        client_id, _token = await registry.register("Windows Worker", "Chrome", "0.22.102", {})
+        client_id, _token = await registry.register("Windows Worker", "Chrome", "0.22.103", {})
         dead = _DisconnectingSocket(registry, client_id)
         registry.sockets[client_id] = dead  # type: ignore[assignment]
 
@@ -105,7 +105,7 @@ def test_registry_1006_detaches_the_exact_dead_socket(tmp_path: Path) -> None:
 def test_registry_1006_does_not_detach_a_newer_replacement_socket(tmp_path: Path) -> None:
     async def run() -> None:
         registry = ClientRegistry(tmp_path)
-        client_id, _token = await registry.register("Windows Worker", "Chrome", "0.22.102", {})
+        client_id, _token = await registry.register("Windows Worker", "Chrome", "0.22.103", {})
         replacement = _ReplacementSocket()
         dead = _DisconnectingSocket(registry, client_id, replacement)
         registry.sockets[client_id] = dead  # type: ignore[assignment]
