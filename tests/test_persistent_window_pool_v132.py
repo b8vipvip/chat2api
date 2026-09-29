@@ -26,26 +26,29 @@ def test_persistent_pool_is_active_routing_layer() -> None:
     assert 'const target = normalizeTarget(state.target)' in source
     assert 'row.runtime_ready === true' in source
     assert 'validateIdleRuntime' in source
-    assert 'while (rows.filter(row => row.routable && (busyWindowIds(value).has(row.window_id) || row.runtime_ready === true)).length < effectiveTarget)' in source
-    assert 'target + busyRoutableBefore' in source
-    assert 'standbyRows.length === target' in source
-    assert 'const standbyRows = runtimeReadyRows.filter(row => !busy.has(row.window_id));' in source
-    assert 'standby_semantics_revision: 146' in source
+    assert 'function standbyRows(rows, value)' in source
+    assert '!assigned.has(row.window_id)' in source
+    assert '!busy.has(row.window_id)' in source
+    assert 'standby.length === target' in source
+    assert 'standby_semantics_revision: STANDBY_SEMANTICS_REVISION' in source
+    assert 'const STANDBY_SEMANTICS_REVISION = 152' in source
     assert 'await createStandby(reason)' in source
-    assert 'window_owned = false' in source
-    assert 'route.close_after = null' in source
-    assert 'reassign-idle-persistent-route' in source
+    assert 'route.window_owned = true' in source
+    assert 'post-admission-standby-refill-v152' in source
     assert 'worker_persistent_window_pool_exhausted' in source
     assert 'if (!await loginReady().catch(() => false)) return null;' in source
 
+    # The pool is no longer allowed to cancel the route's 5-minute lease.
+    assert 'markPooledRoute' not in source
+    assert 'reassign-idle-persistent-route' not in source
 
-def test_persistent_pool_keeps_configured_standby_cardinality() -> None:
+
+def test_persistent_pool_keeps_configured_unassigned_standby_cardinality() -> None:
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     assert 'let rows = await physicalWindows();' in source
-    assert 'while (rows.filter(row => row.routable && (busyWindowIds(value).has(row.window_id) || row.runtime_ready === true)).length < effectiveTarget)' in source
-    assert 'target + busyRoutableBefore' in source
-    assert 'standbyRows.length === target' in source
-    assert 'Math.max(0, capacityRows.length - target)' in source
+    assert 'while (standbyRows(rows, value).length < target)' in source
+    assert 'const standbyTarget = isDisabled ? Math.min(1, target)' in source
+    assert 'Math.max(0, standby.length - effective)' in source
     assert 'routable_total: routableRows.length' in source
     assert 'unroutable_total: unroutableRows.length' in source
     assert 'runtime_ready_total: runtimeReadyRows.length' in source
@@ -53,15 +56,19 @@ def test_persistent_pool_keeps_configured_standby_cardinality() -> None:
     assert 'all_chatgpt_windows: rows.length' in source
     assert 'configured_target: target' in source
     assert 'effective_target: effective' in source
+    assert 'routed: routedRows.length' in source
+    assert 'leased,' in source
+    assert 'standby_excludes_routed_windows: true' in source
 
 
-def test_saved_conversation_is_validated_after_slot_reassignment() -> None:
+def test_saved_conversation_is_validated_after_slot_reassignment_without_losing_lease_ownership() -> None:
     source = text("chrome_extension/conversation_persistent_route_restore_v132.js")
     assert 'const expectedId = String(before?.conversation_id || "").trim()' in source
     assert 'await waitForConversationDecision(tab.id, expectedId)' in source
     assert 'persistent-pool-saved-conversation-unavailable' in source
     assert 'route.conversation_id = null' in source
-    assert 'route.window_owned = false' in source
+    assert 'route.window_owned = true' in source
+    assert 'standby_excludes_routed_windows: true' in source
     assert 'speculative_windows: false' in source
     assert 'prewarmed_windows: true' in source
 
@@ -78,16 +85,12 @@ def test_capacity_control_uses_persistent_pool_as_window_authority() -> None:
 
 
 def test_admin_copy_describes_persistent_windows_without_legacy_helper_copy() -> None:
-    # The Worker settings presenter owns this copy. Identity decoration must not
-    # regain write authority over the canonical Worker table.
-    source = text("app/admin_worker_limits_clipboard_v121.js")
+    behavior = text("app/admin_worker_limits_clipboard_v121.js")
+    canonical = text("app/admin_extension_columns.js")
     identity = text("app/admin_worker_identity_v131.js")
-    assert "持续维持的可接待空闲窗口数量" in source
-    assert "并发=同时执行的请求上限；备用=" in source
+    assert "持续维持的可接待空闲窗口数量" in behavior
+    assert "并发=同时执行请求上限；备用=持续维持的未分配可接待窗口数量" in canonical
     assert "extensionDeviceBody" not in identity
-    assert "空闲窗口常驻并预热" not in source
-    assert "常驻窗口池跟随并发" not in source
-    assert "常驻窗口池独立设置" not in source
 
 
 def test_worker_extension_bundle_advertises_pool_contract() -> None:
@@ -101,6 +104,7 @@ def test_new_pool_and_capacity_scripts_parse_in_node() -> None:
         "chrome_extension/conversation_persistent_pool_v132.js",
         "chrome_extension/conversation_persistent_route_restore_v132.js",
         "chrome_extension/background_capacity_control_v35.js",
+        "chrome_extension/background_window_observer_v90.js",
         "app/admin_worker_identity_v131.js",
     ):
         result = subprocess.run(

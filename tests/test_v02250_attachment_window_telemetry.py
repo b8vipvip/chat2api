@@ -18,8 +18,6 @@ def text(path: str) -> str:
 
 def test_unicode_attachment_headers_are_http_safe_and_keep_extension() -> None:
     headers = attachment_download_headers("视觉测试图片-中文.png")
-    # This is the production failure boundary: Starlette encodes raw header
-    # values as latin-1. Every emitted header must therefore be encodable.
     for value in headers.values():
         value.encode("latin-1")
     response = Response(b"png", media_type="image/png", headers=headers)
@@ -41,14 +39,16 @@ def test_extension_download_route_is_replaced_by_v82_boundary() -> None:
 
 
 def test_worker_window_denominator_never_falls_back_to_concurrency_limit() -> None:
-    source = text("app/admin_worker_presentation_v66.js")
-    assert "liveWindowTruth" in source
-    assert "truth.byClient.get(clientId)" in source
-    assert "physical > 0 ? physical : limit" not in source
-    assert 'data-chat2api-live-window-count="1"' in source
-    assert "#22c55e" in source
+    source = text("app/admin_extension_columns.js")
+    assert "function truthByClient(payload)" in source
+    assert "standby_window_count" in source
     assert "liveVerified" in source
-    assert "physicalKnown = physicalRaw !== undefined" in source  # legacy fallback only
+    assert 'data-chat2api-live-standby-count="1"' in source
+    occupancy = source.split("function occupancy(row, info = null)", 1)[1].split("function workerActions", 1)[0]
+    assert "limit_units" not in occupancy
+    assert "max_concurrency" not in occupancy
+    assert "standbyKnown" in occupancy
+    assert "#22c55e" in occupancy
 
 
 def test_runtime_identity_and_v82_features_are_current() -> None:

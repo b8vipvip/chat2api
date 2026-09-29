@@ -119,17 +119,17 @@ def test_runtime_contract_is_final_admin_version_owner():
     assert "MutationObserver" in script
 
     columns_script = client.get(ADMIN_EXTENSION_COLUMNS_ASSET).text
-    assert 'const VERSION = "0.22.41-worker-list-v60"' in columns_script
-    assert 'const COLUMN_SCHEMA_REVISION = 67' in columns_script
+    assert 'const VERSION = "0.22.102-worker-list-v152"' in columns_script
+    assert 'const COLUMN_SCHEMA_REVISION = 152' in columns_script
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v3"' in columns_script
     assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2"' in columns_script
     assert '{key: "bound_api_keys", label: "绑定 API Key 数"}' not in columns_script
-    assert '{key: "worker_settings", label: "并发设置"}' in columns_script
+    assert '{key: "worker_settings", label: "并发 / 备用设置"}' in columns_script
     assert '{key: "device_name", label: "设备名称"}' in columns_script
-    assert '{key: "occupancy", label: "当前占用"}' in columns_script
+    assert '{key: "occupancy", label: "请求 / 备用窗口"}' in columns_script
     assert 'button.id = "extensionColumnSettingsButton"' in columns_script
-    assert 'legacy_renderers_bypassed: true' in columns_script
-    assert 'removed_columns: ["concurrency", "reserve_windows", "platform", "bound_api_keys", "occupied_windows"]' in columns_script
+    assert 'document.documentElement.dataset.chat2apiWorkerListSingleRenderer = "1"' in columns_script
+    assert 'const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys", "occupied_windows"])' in columns_script
 
     overview_payload = client.get("/api/admin/overview").json()
     assert overview_payload["version"] == SERVER_RUNTIME_VERSION

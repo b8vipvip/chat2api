@@ -10,9 +10,6 @@
 
   const state = {
     revision: 90,
-    // Keep the v90 observer policy identifier stable for server/admin
-    // compatibility. Dynamic metadata below reports the actual v132 physical
-    // window authority without turning this observer into a mutation owner.
     policy: "observe-only-single-route-authority-v90",
     nextWindowNo: 1,
     active: new Map(),
@@ -53,6 +50,8 @@
       persistent_window_pool: Boolean(pool),
       persistent_window_pool_revision: pool ? 132 : null,
       persistent_window_target: pool ? (Number(pool.target || 0) || null) : null,
+      standby_semantics_revision: pool ? 152 : null,
+      standby_excludes_routed_windows: Boolean(pool),
       prewarmed_windows: Boolean(pool),
       speculative_windows: false,
     };
@@ -68,7 +67,8 @@
       status: String(record?.status || "ready"),
       request_id: record?.request_id || null,
       route_key: record?.route_key || null,
-      source: record?.source || "physical-observer-v90",
+      lease_until_ms: Number(record?.lease_until_ms || 0),
+      source: record?.source || "standby-observer-v152",
       ready_at_ms: Number(record?.ready_at_ms || 0),
       last_seen_at_ms: Number(record?.last_seen_at_ms || 0),
       closed_at_ms: Number(record?.closed_at_ms || 0),
@@ -117,7 +117,8 @@
         status: source.status || "ready",
         request_id: source.request_id || null,
         route_key: source.route_key || null,
-        source: source.source || "physical-observer-v90",
+        lease_until_ms: Number(source.lease_until_ms || 0),
+        source: source.source || "standby-observer-v152",
         ready_at_ms: Number(source.ready_at_ms || 0),
         last_seen_at_ms: Date.now(),
         screenshot_data_url: null,
@@ -131,7 +132,8 @@
     if (source.source) record.source = source.source;
     record.status = source.status || record.status;
     if (Object.prototype.hasOwnProperty.call(source, "request_id")) record.request_id = source.request_id;
-    record.route_key = source.route_key ?? record.route_key;
+    if (Object.prototype.hasOwnProperty.call(source, "route_key")) record.route_key = source.route_key;
+    if (Object.prototype.hasOwnProperty.call(source, "lease_until_ms")) record.lease_until_ms = Number(source.lease_until_ms || 0);
     record.last_seen_at_ms = Date.now();
     return record;
   }
@@ -158,10 +160,9 @@
       if (Number.isInteger(route?.window_id)) routeByWindow.set(route.window_id, {key, route});
     }
 
-    // Observe every physical ChatGPT window, including prewarmed v132 standby
-    // slots that have not yet been leased to a logical API route. This module is
-    // read-only: conversation_routing.js owns logical route history while the
-    // persistent v132 pool owns physical window creation, shrink and replacement.
+    // Every physical ChatGPT window is observed, but only windows with no route
+    // assignment are standby capacity. A completed route stays leased to its API
+    // key for five minutes and therefore never appears as "可接待" standby.
     const physical = await chrome.windows.getAll({ populate: true }).catch(() => []);
     const seen = new Set();
     for (const win of physical) {
@@ -172,11 +173,14 @@
       seen.add(windowId);
       const routed = routeByWindow.get(windowId);
       const route = routed?.route || null;
+      const inflight = String(route?.inflight_request_id || "");
+      const leaseUntil = Number(route?.close_after || 0);
       recordFor(windowId, tab.id, {
-        source: routed ? "route-observer-v90" : "physical-observer-v90",
+        source: routed ? "route-observer-v152" : "standby-observer-v152",
         route_key: routed?.key || null,
-        request_id: route?.inflight_request_id || null,
-        status: route?.inflight_request_id ? "in_use" : "ready",
+        request_id: inflight || null,
+        lease_until_ms: routed ? leaseUntil : 0,
+        status: routed ? (inflight ? "in_use" : "leased") : "ready",
         opened_at_ms: Number(route?.window_opened_at_ms || route?.last_active_at || state.active.get(windowId)?.opened_at_ms || Date.now()),
       });
     }
@@ -189,13 +193,17 @@
   }
 
   function snapshot() {
+    const active = [...state.active.values()].map(serializable).sort((a, b) => a.window_no - b.window_no);
     return {
       revision: 90,
       policy: state.policy,
       ...authorityMetadata(),
       fifo_claims: 0,
       new_window_fallbacks: 0,
-      active: [...state.active.values()].map(serializable).sort((a, b) => a.window_no - b.window_no),
+      standby_count: active.filter(row => row.source === "standby-observer-v152" && row.status === "ready" && !row.route_key).length,
+      leased_count: active.filter(row => row.status === "leased").length,
+      in_use_count: active.filter(row => row.status === "in_use").length,
+      active,
       closed: state.closed.slice(0, CLOSED_LIMIT).map(serializable),
       updated_at_ms: Date.now(),
     };
@@ -206,7 +214,10 @@
     state.reportInFlight = (async () => {
       await liveRoutes();
       const value = snapshot();
-      const signature = JSON.stringify(value.active.map(row => [row.window_no, row.window_id, row.tab_id, row.status, row.request_id, row.route_key, row.source]));
+      const signature = JSON.stringify(value.active.map(row => [
+        row.window_no, row.window_id, row.tab_id, row.status, row.request_id,
+        row.route_key, row.lease_until_ms, row.source,
+      ]));
       if (!force && signature === state.lastSignature) return value;
       state.lastSignature = signature;
       if (typeof trySendSocket === "function") {
@@ -222,6 +233,8 @@
             persistent_window_pool: value.persistent_window_pool,
             persistent_window_pool_revision: value.persistent_window_pool_revision,
             persistent_window_target: value.persistent_window_target,
+            standby_window_count: value.standby_count,
+            leased_route_window_count: value.leased_count,
             prewarmed_windows: value.prewarmed_windows,
             speculative_windows: false,
           },
@@ -268,6 +281,10 @@
   const baseHandleServerMessage = globalThis.handleServerMessage;
   if (typeof baseHandleServerMessage === "function") {
     globalThis.handleServerMessage = async function handleWindowObserverControl(message) {
+      if (message?.type === "window.manager.refresh") {
+        await report(true);
+        return undefined;
+      }
       if (message?.type !== "window.manager.capture") return baseHandleServerMessage(message);
       try {
         const data = await capture(Number(message.window_id));
@@ -284,22 +301,28 @@
     const event = message.event || {};
     const requestId = String(event.request_id || "");
     if (!requestId) return false;
+    const terminalSuccess = ["chat.completed", "image.completed"].includes(event.type);
+    const terminalFailure = ["chat.error", "chat.cancelled", "image.error", "image.cancelled"].includes(event.type);
     const routes = globalThis[ROUTER_KEY]?.routes || {};
     for (const [key, route] of Object.entries(routes)) {
       if (route?.inflight_request_id !== requestId && !state.assignments.has(requestId)) continue;
+      const terminal = terminalSuccess || terminalFailure;
       const record = recordFor(route.window_id, route.tab_id, {
-        source: "route-observer-v90",
+        source: "route-observer-v152",
         route_key: key,
-        request_id: ["chat.completed", "chat.error", "chat.cancelled", "image.completed", "image.error", "image.cancelled"].includes(event.type) ? null : requestId,
-        status: ["chat.completed", "image.completed"].includes(event.type) ? "ready" : ["chat.error", "chat.cancelled", "image.error", "image.cancelled"].includes(event.type) ? "ready" : "in_use",
+        request_id: terminal ? null : requestId,
+        lease_until_ms: terminalSuccess ? Date.now() + 5 * 60 * 1000 : Number(route?.close_after || 0),
+        status: terminalSuccess ? "leased" : terminalFailure ? "leased" : "in_use",
       });
       if (record) state.assignments.set(requestId, { window_id: record.window_id, tab_id: record.tab_id, route_key: key });
       break;
     }
-    if (["chat.completed", "chat.error", "chat.cancelled", "image.completed", "image.error", "image.cancelled"].includes(event.type)) {
+    if (terminalSuccess || terminalFailure) {
       setTimeout(() => state.assignments.delete(requestId), 5000);
+      setTimeout(() => scheduleReport(0, true), 420);
+    } else {
+      scheduleReport(0);
     }
-    scheduleReport(0);
     return false;
   });
 

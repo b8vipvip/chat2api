@@ -114,20 +114,24 @@ def test_reserve_pool_reuses_spares_and_normalizes_route_idle_close_to_two_minut
 
 def test_realtime_window_refresh_is_compacted_into_worker_settings_column():
     health = (ROOT / "app" / "admin_v21_6.js").read_text(encoding="utf-8")
-    worker = (ROOT / "app" / "admin_v21_5.js").read_text(encoding="utf-8")
+    canonical = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
+    behavior = (ROOT / "app" / "admin_worker_limits_clipboard_v121.js").read_text(encoding="utf-8")
+    retired = (ROOT / "app" / "admin_v21_5.js").read_text(encoding="utf-8")
 
     assert '["reserve_windows", "实时窗口"]' not in health
     assert 'data-live-window-refresh' not in health
     assert 'renderReserveWindowCell' not in health
-    assert 'th.dataset.chat2apiColumnKey = "worker_settings"' in worker
-    assert 'th.textContent = "并发设置"' in worker
-    assert 'data-chat2api-structural-owner="worker-settings-v59"' in worker
-    assert 'platformHeader.textContent = "Worker 窗口"' not in worker
-    assert 'data-worker-refresh' in worker
-    assert '/windows/refresh' in worker
-    assert '窗口已刷新：总数 ${Number(snap.total || 0)}' in worker
-    assert worker.index('data-worker-save') < worker.index('data-worker-refresh')
-    assert 'data-worker-reserve' in worker
+    assert '{key: "worker_settings", label: "并发 / 备用设置"}' in canonical
+    assert 'data-chat2api-structural-owner="worker-settings-v152"' in canonical
+    assert 'data-v121-limit-summary' in canonical
+    assert 'data-v121-concurrency' in canonical
+    assert 'data-v121-windows' in canonical
+    assert 'data-v121-save-limits' in canonical
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' in behavior
+    assert 'renderer: "canonical-worker-list-v152"' in behavior
+    assert 'data-worker-refresh' not in retired
+    assert 'data-worker-reserve' not in retired
+    assert 'data-worker-window-editor' not in retired
 
 
 def test_reserve_versions_match_manifest_and_runtime_contract():

@@ -32,43 +32,43 @@ def test_v21_5_is_installed_after_concurrency_and_before_runtime_contract():
 
 
 def test_extension_console_uses_canonical_worker_settings_column():
-    source = read(ROOT / "app" / "admin_v21_5.js")
-    assert 'th.textContent !== "并发设置"' in source
-    assert 'data-chat2api-column-key="worker_settings"' in source
-    assert 'data-chat2api-structural-owner="worker-settings-v59"' in source
-    assert 'globalThis.chat2apiRefreshWorkerWindowEditorsV59' in source
-    assert 'column: "worker_settings"' in source
-    assert 'legacy_columns_removed: ["concurrency", "reserve_windows", "platform"]' in source
-    assert "const POLL_MS = 2000" not in source
-    assert "setInterval(" not in source
-    assert "requestAnimationFrame" in source
-    assert 'structural_updates: "create-once-update-values"' in source
-    assert 'polling: false' in source
-    assert 'api("/api/admin/extensions")' in source
-    assert 'api("/api/admin/capacity-v57")' in source
-    assert "data-worker-window-editor" in source
-    assert "data-worker-max" in source
-    assert "data-worker-reserve" in source
-    assert "data-worker-save" in source
-    assert "data-worker-refresh" in source
-    assert source.index("data-worker-save") < source.index("data-worker-refresh")
-    assert "data-worker-live" not in source
-    assert "data-worker-platform" not in source
-    assert "platformText(" not in source
-    assert "active_api_calls" not in source
-    assert "capacity?.active_requests" not in source
-    assert "bound_api_keys" not in source
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57' in source
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in source
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/refresh' in source
-    assert 'method: "PUT"' in source
-    assert 'method: "POST"' in source
-    assert "showActionResult" in source
-    assert "target_reached" in source
-    assert 'columnCell(tr, "platform", 8)' not in source
-    assert 'patchColumnSettingsLabels' not in source
-    assert 'th.textContent = "最大并发"' in source
-    assert "data-key-max" in source
+    retired = read(ROOT / "app" / "admin_v21_5.js")
+    canonical = read(ROOT / "app" / "admin_extension_columns.js")
+    behavior = read(ROOT / "app" / "admin_worker_limits_clipboard_v121.js")
+
+    assert 'retired: true' in retired
+    assert 'structural_owner: false' in retired
+    assert 'delegated_to: "admin_extension_columns-v152"' in retired
+    assert 'renderer: "canonical-worker-list-v152"' in retired
+    assert "data-worker-window-editor" not in retired
+    assert "data-worker-max" not in retired
+    assert "data-worker-reserve" not in retired
+    assert "data-worker-save" not in retired
+    assert "data-worker-refresh" not in retired
+    assert 'api("/api/admin/extensions")' not in retired
+    assert 'api("/api/admin/capacity-v57")' in retired  # API-key editor only
+    assert "data-key-max" in retired
+    assert "data-key-save" in retired
+    assert "showActionResult" in retired
+    assert "setInterval(" not in retired
+
+    assert '{key: "worker_settings", label: "并发 / 备用设置"}' in canonical
+    assert '{key: "occupancy", label: "请求 / 备用窗口"}' in canonical
+    assert 'data-chat2api-structural-owner="worker-settings-v152"' in canonical
+    assert "data-v121-concurrency" in canonical
+    assert "data-v121-windows" in canonical
+    assert "data-v121-save-limits" in canonical
+    assert 'data-worker-live' not in canonical
+    assert 'data-worker-platform' not in canonical
+    assert '{key: "bound_api_keys"' not in canonical
+    assert 'data-chat2api-column-key="bound_api_keys"' not in canonical
+
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/concurrency' in behavior
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in behavior
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' in behavior
+    assert 'method:"PUT"' in behavior
+    assert 'method:"POST"' in behavior
+    assert 'renderer: "canonical-worker-list-v152"' in behavior
 
 
 def test_live_concurrency_summary_uses_runtime_limit_for_each_client():

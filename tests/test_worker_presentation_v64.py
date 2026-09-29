@@ -103,7 +103,7 @@ def test_pairing_code_name_can_be_changed_from_admin_api():
         assert app.state.registry.summaries()[0]["device_name"] == "ubuntu03-new"
 
 
-def test_worker_presentation_asset_is_bounded_and_replaces_v65_loop_owner():
+def test_worker_presentation_asset_is_retired_and_non_rendering_under_v152():
     app = build_app()
     with TestClient(app) as client:
         html = client.get("/admin").text
@@ -113,24 +113,14 @@ def test_worker_presentation_asset_is_bounded_and_replaces_v65_loop_owner():
         assert "chat2api-worker-presentation-v64.js" not in html
         script = client.get(ADMIN_ASSET).text
 
-    assert 'const VERSION = 66' in script
-    assert 'th.dataset.chat2apiColumnKey = "device_name"' in script
-    assert 'occupancyHeader.dataset.chat2apiColumnKey = "occupancy"' in script
-    assert "请求 / 实际窗口" in script
-    assert "capacity.used_units" in script
-    assert "capacity.limit_units" in script
-    assert 'callApi("/api/admin/window-manager")' in script
-    assert "button.dataset.v66PairingRename" in script
-    assert "设备名称已更新" in script
-
-    # Critical console-liveness contract: v66 has no autonomous DOM observer or
-    # repeating timer. It only runs at canonical show/reload boundaries and two
-    # bounded startup passes.
+    assert 'retired_renderer: true' in script
+    assert 'delegated_to: "admin_extension_columns-v152"' in script
+    assert 'callApi("/api/admin/extensions")' not in script
+    assert 'data-chat2api-column-key="occupancy"' not in script
+    assert 'data-chat2api-column-key="worker_settings"' not in script
     assert "MutationObserver" not in script
     assert "setInterval(" not in script
-    assert script.count("setTimeout(") == 2
-    assert "chat2apiReloadCanonicalWorkerListV59" in script
-    assert "globalThis.show" in script
+    assert "setTimeout(() => refresh(true)" not in script
 
 
 def test_worker_presentation_is_installed_after_disable_authority():

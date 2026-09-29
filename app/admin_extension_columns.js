@@ -1,6 +1,6 @@
 (() => {
-  const VERSION = "0.22.41-worker-list-v60";
-  const COLUMN_SCHEMA_REVISION = 67;
+  const VERSION = "0.22.102-worker-list-v152";
+  const COLUMN_SCHEMA_REVISION = 152;
   const STORAGE_KEY = "chat2api.extensionColumns.v3";
   const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2";
   const COLUMNS = [
@@ -9,19 +9,17 @@
     {key: "version", label: "版本"},
     {key: "account_type", label: "账户类型"},
     {key: "status", label: "状态"},
-    {key: "worker_settings", label: "并发设置"},
+    {key: "worker_settings", label: "并发 / 备用设置"},
     {key: "last_seen", label: "最后在线"},
     {key: "network", label: "网络"},
     {key: "chatgpt", label: "ChatGPT"},
     {key: "actions", label: "操作"},
     {key: "device_name", label: "设备名称"},
-    {key: "occupancy", label: "当前占用"},
+    {key: "occupancy", label: "请求 / 备用窗口"},
   ];
   const KNOWN_KEYS = new Set(COLUMNS.map(item => item.key));
   const DEFAULT_ORDER = COLUMNS.map(item => item.key);
-  const LEGACY_KEY_MAP = new Map([
-    ["platform", "worker_settings"],
-  ]);
+  const LEGACY_KEY_MAP = new Map([["platform", "worker_settings"]]);
   const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys", "occupied_windows"]);
 
   let prefs = null;
@@ -29,6 +27,7 @@
   let bodyOverflowBeforeModal = "";
   let renderInFlight = null;
   let extensionSnapshot = null;
+  let truthSnapshot = null;
   let canonicalizing = false;
   let repairQueued = false;
 
@@ -42,10 +41,7 @@
   }
 
   function defaultPrefs() {
-    return {
-      order: [...DEFAULT_ORDER],
-      visible: Object.fromEntries(DEFAULT_ORDER.map(key => [key, true])),
-    };
+    return {order:[...DEFAULT_ORDER], visible:Object.fromEntries(DEFAULT_ORDER.map(key => [key, true]))};
   }
 
   function normalizePrefs(raw) {
@@ -59,11 +55,8 @@
       seen.add(key);
       order.push(key);
     }
-    for (const key of DEFAULT_ORDER) {
-      if (!seen.has(key)) order.push(key);
-    }
+    for (const key of DEFAULT_ORDER) if (!seen.has(key)) order.push(key);
     result.order = order;
-
     if (raw?.visible && typeof raw.visible === "object") {
       for (const [original, value] of Object.entries(raw.visible)) {
         if (typeof value !== "boolean" || REMOVED_KEYS.has(original)) continue;
@@ -78,17 +71,13 @@
     if (prefs) return prefs;
     try {
       const current = localStorage.getItem(STORAGE_KEY);
-      if (current) {
-        prefs = normalizePrefs(JSON.parse(current));
-        return prefs;
-      }
+      if (current) return (prefs = normalizePrefs(JSON.parse(current)));
       const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
       prefs = legacy ? normalizePrefs(JSON.parse(legacy)) : defaultPrefs();
       localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
       return prefs;
     } catch (_) {
-      prefs = defaultPrefs();
-      return prefs;
+      return (prefs = defaultPrefs());
     }
   }
 
@@ -104,20 +93,8 @@
     return {body, table, headerRow};
   }
 
-  function ensureCompactWorkerSettingsStyle() {
-    let style = document.getElementById("chat2apiWorkerSettingsCompactV60");
-    if (style) return style;
-    style = document.createElement("style");
-    style.id = "chat2apiWorkerSettingsCompactV60";
-    style.textContent = '[data-worker-window-editor] [data-worker-live],[data-worker-window-editor] [data-worker-platform]{display:none!important}';
-    document.head.appendChild(style);
-    return style;
-  }
-
   function keyedChild(parent, key) {
-    return [...(parent?.children || [])].find(node =>
-      String(node.dataset?.chat2apiColumnKey || "") === key,
-    ) || null;
+    return [...(parent?.children || [])].find(node => String(node.dataset?.chat2apiColumnKey || "") === key) || null;
   }
 
   function reorder(parent, activePrefs) {
@@ -162,8 +139,10 @@
   function canonicalHeaderHtml() {
     return COLUMNS.map(({key, label}) => {
       const health = key === "network" || key === "chatgpt" ? ` data-chat2api-health-column="${key}"` : "";
-      const owner = key === "worker_settings" ? ' data-chat2api-structural-owner="worker-settings-v59"' : "";
-      const title = key === "occupancy" ? ' title="当前占用 / 配置并发上限"' : "";
+      const owner = key === "worker_settings" ? ' data-chat2api-structural-owner="worker-settings-v152"' : "";
+      const title = key === "worker_settings"
+        ? ' title="并发=同时执行请求上限；备用=持续维持的未分配可接待窗口数量"'
+        : key === "occupancy" ? ' title="正在执行请求 / 实时核验的未分配备用窗口"' : "";
       return `<th data-chat2api-column-key="${key}"${health}${owner}${title}>${label}</th>`;
     }).join("");
   }
@@ -192,37 +171,74 @@
 
   function networkLabel(row) {
     const meta = row?.metadata || {};
-    const state = String(meta.network_probe_status || "unknown");
+    const value = String(meta.network_probe_status || "unknown");
     const country = String(meta.network_country_code || "").trim();
-    if (state === "external") return {text: `外网${country ? ` · ${country}` : ""}`, cls: "ok"};
-    if (state === "china-mainland") return {text: `中国大陆${country ? ` · ${country}` : ""}`, cls: "warnText"};
-    if (state === "offline") return {text: "浏览器离线", cls: "bad"};
-    if (state === "error") return {text: "探测失败", cls: "warnText"};
-    return {text: "未知", cls: "warnText"};
+    if (value === "external") return {text:`外网${country ? ` · ${country}` : ""}`, cls:"ok"};
+    if (value === "china-mainland") return {text:`中国大陆${country ? ` · ${country}` : ""}`, cls:"warnText"};
+    if (value === "offline") return {text:"浏览器离线", cls:"bad"};
+    if (value === "error") return {text:"探测失败", cls:"warnText"};
+    return {text:"未知", cls:"warnText"};
   }
 
   function chatgptLabel(row) {
     const meta = row?.metadata || {};
-    const state = String(meta.chatgpt_login_state || "unknown");
-    if (state === "ready") return {text: "已登录", cls: meta.chatgpt_login_composer_ready === true ? "ok" : "warnText"};
-    if (state === "login_required") return {text: "未登录", cls: "bad"};
-    if (state === "checking") return {text: "检测中", cls: "warnText"};
-    return {text: "未知", cls: "warnText"};
+    const value = String(meta.chatgpt_login_state || "unknown");
+    if (value === "ready") return {text:"已登录", cls:meta.chatgpt_login_composer_ready === true ? "ok" : "warnText"};
+    if (value === "login_required") return {text:"未登录", cls:"bad"};
+    if (value === "checking") return {text:"检测中", cls:"warnText"};
+    return {text:"未知", cls:"warnText"};
   }
 
-  function occupancy(row) {
+  function limitEditor(row) {
+    const id = String(row?.client_id || "");
+    const concurrency = Math.max(1, Math.min(32, Number(row?.max_concurrency || row?.capacity?.limit_units || 1)));
+    const windows = Math.max(1, Math.min(32, Number(row?.max_windows || 1)));
+    return `<div data-v121-worker-limits="${esc(id)}" style="position:relative;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;min-width:78px">
+      <strong data-v121-limit-summary style="font-variant-numeric:tabular-nums">${concurrency}/${windows}</strong>
+      <button class="action" type="button" data-v121-edit-limits title="编辑并发 / 备用设置" aria-label="编辑并发 / 备用设置" style="padding:4px 7px;min-width:30px">✎</button>
+      <div data-v121-limit-popover hidden style="position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:250px;padding:12px;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 14px 34px rgba(0,0,0,.38);white-space:normal">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <label style="display:grid;gap:5px;font-size:12px">并发<input data-v121-concurrency type="number" min="1" max="32" value="${concurrency}" style="width:100%;padding:7px 8px"></label>
+          <label style="display:grid;gap:5px;font-size:12px">备用<input data-v121-windows type="number" min="1" max="32" value="${windows}" style="width:100%;padding:7px 8px"></label>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:flex-end;gap:7px;margin-top:10px">
+          <span class="muted" data-v121-limit-note style="font-size:11px;margin-right:auto"></span>
+          <button class="action" type="button" data-v121-cancel-limits>取消</button>
+          <button class="action good" type="button" data-v121-save-limits>保存</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  function truthByClient(payload) {
+    const result = new Map();
+    const authoritative = Number(payload?.truth_revision || 0) >= 89;
+    for (const worker of Array.isArray(payload?.workers) ? payload.workers : []) {
+      const id = String(worker?.client_id || "");
+      if (!id) continue;
+      const count = Number(worker?.standby_window_count);
+      result.set(id, {
+        authoritative,
+        liveVerified: authoritative && worker?.live_verified === true,
+        standby: Number.isFinite(count) ? Math.max(0, count) : null,
+        status: String(worker?.truth_status || "unverified"),
+      });
+    }
+    return result;
+  }
+
+  function occupancy(row, info = null) {
     const capacity = row?.capacity && typeof row.capacity === "object" ? row.capacity : {};
     const usedRaw = capacity.used_units ?? row?.active_api_calls ?? 0;
-    const limitRaw = capacity.limit_units ?? row?.max_concurrency ?? row?.configured_max_concurrency ?? 0;
     const queueRaw = capacity.queued_requests ?? 0;
-    const used = Number.isFinite(Number(usedRaw)) ? Number(usedRaw) : 0;
-    const limit = Number.isFinite(Number(limitRaw)) ? Number(limitRaw) : 0;
-    const queued = Number.isFinite(Number(queueRaw)) ? Number(queueRaw) : 0;
-    const cooling = capacity.rate_limit_cooldown_active === true;
-    const remaining = Number(capacity.rate_limit_cooldown_remaining_seconds || 0);
+    const used = Number.isFinite(Number(usedRaw)) ? Math.max(0, Number(usedRaw)) : 0;
+    const queued = Number.isFinite(Number(queueRaw)) ? Math.max(0, Number(queueRaw)) : 0;
+    const standbyKnown = info?.liveVerified === true && Number.isFinite(Number(info?.standby));
+    const standby = standbyKnown ? Math.max(0, Number(info.standby)) : null;
+    const standbyText = standbyKnown ? String(standby) : "?";
     return {
-      text: `${used} / ${limit || "-"}${queued > 0 ? ` · 排队 ${queued}` : ""}`,
-      title: `当前占用 ${used}${limit ? ` / ${limit}` : ""}${queued > 0 ? `；排队 ${queued}` : ""}${cooling ? `；额度冷却 ${Math.max(0, Math.ceil(remaining))} 秒` : ""}`,
+      html: `${used} / <span data-chat2api-live-standby-count="1" style="${standbyKnown ? "color:#22c55e" : "color:#f59e0b"};font-weight:700">${standbyText}</span>${queued > 0 ? ` · 排队 ${queued}` : ""}`,
+      title: `正在执行请求 ${used}；备用窗口 ${standbyText}${standbyKnown ? "（实时物理核验，已排除正在接待及5分钟租约窗口）" : "（尚未实时核验）"}${queued > 0 ? `；排队 ${queued}` : ""}`,
       cls: used > 0 ? "warnText" : "muted",
     };
   }
@@ -235,10 +251,10 @@
     return `<div class="rowactions">${connect}<button class="action danger" data-worker-list-action="delete" data-client-id="${id}" data-online="${row.online ? "1" : "0"}">删除</button></div>`;
   }
 
-  function rowHtml(row) {
+  function rowHtml(row, truthInfo = null) {
     const network = networkLabel(row);
     const login = chatgptLabel(row);
-    const occupied = occupancy(row);
+    const occupied = occupancy(row, truthInfo);
     const clientId = esc(row.client_id || "");
     const deviceName = String(row?.device_name || "").trim();
     const deviceNameHtml = deviceName
@@ -250,30 +266,32 @@
       <td data-chat2api-column-key="version">${esc(row.metadata?.extension_version || row.version || "-")}</td>
       <td data-chat2api-column-key="account_type">${accountPill(row)}</td>
       <td data-chat2api-column-key="status">${statusPill(row)}</td>
-      <td data-chat2api-column-key="worker_settings" data-chat2api-structural-owner="worker-settings-v59"><span class="muted">加载中…</span></td>
+      <td data-chat2api-column-key="worker_settings" data-chat2api-structural-owner="worker-settings-v152">${limitEditor(row)}</td>
       <td data-chat2api-column-key="last_seen">${typeof fmtTime === "function" ? fmtTime(row.last_seen_at) : esc(row.last_seen_at || "-")}</td>
       <td data-chat2api-column-key="network" data-chat2api-health-cell="network" class="${network.cls}">${esc(network.text)}</td>
       <td data-chat2api-column-key="chatgpt" data-chat2api-health-cell="chatgpt" class="${login.cls}">${esc(login.text)}</td>
       <td data-chat2api-column-key="actions">${workerActions(row)}</td>
       <td data-chat2api-column-key="device_name">${deviceNameHtml}</td>
-      <td data-chat2api-column-key="occupancy" class="${occupied.cls}" title="${esc(occupied.title)}">${esc(occupied.text)}</td>
+      <td data-chat2api-column-key="occupancy" class="${occupied.cls}" title="${esc(occupied.title)}">${occupied.html}</td>
     </tr>`;
   }
 
-  function renderWorkerRows(rows) {
+  function renderWorkerRows(rows, truthPayload = null) {
     const {body, headerRow, table} = tableParts();
     if (!body || !headerRow) return;
+    const truth = truthByClient(truthPayload);
     canonicalizing = true;
     try {
       const header = canonicalHeaderHtml();
       if (headerRow.innerHTML !== header) headerRow.innerHTML = header;
       body.innerHTML = rows.length
-        ? rows.map(rowHtml).join("")
+        ? rows.map(row => rowHtml(row, truth.get(String(row?.client_id || "")) || null)).join("")
         : `<tr><td colspan="${COLUMNS.length}" class="muted">暂无 Worker。</td></tr>`;
       applyLayout();
       document.documentElement.dataset.chat2apiWorkerListReady = "1";
       document.documentElement.dataset.chat2apiWorkerListVersion = VERSION;
       document.documentElement.dataset.chat2apiWorkerColumnSchemaRevision = String(COLUMN_SCHEMA_REVISION);
+      document.documentElement.dataset.chat2apiWorkerListSingleRenderer = "1";
       if (table) table.style.visibility = "";
     } finally {
       canonicalizing = false;
@@ -296,6 +314,7 @@
       <td>${pairingState(row)}</td>
       <td>${typeof fmtTime === "function" ? fmtTime(row.last_paired_at) : esc(row.last_paired_at || "-")}</td>
       <td><div class="rowactions">
+        <button class="action" data-pairing-list-action="rename" data-pairing-id="${esc(row.pairing_id)}" data-pairing-name="${esc(row.name || "")}">改名</button>
         <button class="action" data-pairing-list-action="copy" data-pairing-id="${esc(row.pairing_id)}">复制</button>
         <button class="action" data-pairing-list-action="toggle" data-pairing-id="${esc(row.pairing_id)}" data-enable="${row.enabled ? "0" : "1"}">${row.enabled ? "停用" : "启用"}</button>
         <button class="action danger" data-pairing-list-action="delete" data-pairing-id="${esc(row.pairing_id)}">删除</button>
@@ -307,11 +326,18 @@
     if (renderInFlight && !force) return renderInFlight;
     const task = (async () => {
       try {
-        const data = await api("/api/admin/extensions");
+        const [data, truth] = await Promise.all([
+          api("/api/admin/extensions"),
+          api("/api/admin/window-manager").catch(error => {
+            console.warn("canonical Worker standby truth refresh failed", error);
+            return null;
+          }),
+        ]);
         extensionSnapshot = Array.isArray(data.clients) ? data.clients : [];
+        truthSnapshot = truth;
         renderPairings(Array.isArray(data.pairing_codes) ? data.pairing_codes : []);
-        renderWorkerRows(extensionSnapshot);
-        if (typeof globalThis.status === "function") status(`v${document.documentElement.dataset.chat2apiRuntimeVersion || "0.22.40"}`, "muted");
+        renderWorkerRows(extensionSnapshot, truthSnapshot);
+        if (typeof globalThis.status === "function") status(`v${document.documentElement.dataset.chat2apiRuntimeVersion || "0.22.102"}`, "muted");
         return data;
       } catch (error) {
         const {table} = tableParts();
@@ -342,15 +368,15 @@
     repairQueued = true;
     queueMicrotask(() => {
       repairQueued = false;
-      if (!canonicalizing && !isCanonical() && extensionSnapshot) renderWorkerRows(extensionSnapshot);
+      if (!canonicalizing && !isCanonical() && extensionSnapshot) renderWorkerRows(extensionSnapshot, truthSnapshot);
     });
   }
 
   function observeLegacyRebuilds() {
     const {body, headerRow} = tableParts();
     if (typeof MutationObserver !== "function") return;
-    if (body) new MutationObserver(queueCanonicalRepair).observe(body, {childList: true});
-    if (headerRow) new MutationObserver(queueCanonicalRepair).observe(headerRow, {childList: true});
+    if (body) new MutationObserver(queueCanonicalRepair).observe(body, {childList:true});
+    if (headerRow) new MutationObserver(queueCanonicalRepair).observe(headerRow, {childList:true});
   }
 
   function activateExtensionView() {
@@ -364,7 +390,7 @@
 
   function installCanonicalShowOwner() {
     const baseShow = typeof globalThis.show === "function" ? globalThis.show : null;
-    if (!baseShow || baseShow.__chat2apiCanonicalWorkerListV59) return;
+    if (!baseShow || baseShow.__chat2apiCanonicalWorkerListV152) return;
     const wrapped = async viewName => {
       if (viewName !== "extensions") return baseShow(viewName);
       const gate = document.getElementById("adminLoginGate");
@@ -372,7 +398,7 @@
       activateExtensionView();
       return loadCanonicalExtensions(true);
     };
-    wrapped.__chat2apiCanonicalWorkerListV59 = true;
+    wrapped.__chat2apiCanonicalWorkerListV152 = true;
     globalThis.show = wrapped;
   }
 
@@ -381,8 +407,7 @@
     const panel = body?.closest(".panel");
     const heading = panel?.querySelector("h3");
     if (!heading) return null;
-    if (!/Worker列表|扩展列表|绑定设备/.test(String(heading.textContent || ""))) heading.textContent = "Worker列表";
-    else heading.textContent = "Worker列表";
+    heading.textContent = "Worker列表";
     let button = document.getElementById("extensionColumnSettingsButton");
     if (!button) {
       button = document.createElement("button");
@@ -474,6 +499,15 @@
     const action = button.dataset.pairingListAction || "";
     const id = button.dataset.pairingId || "";
     if (!id) return;
+    if (action === "rename") {
+      const next = prompt("设备名称", String(button.dataset.pairingName || ""));
+      if (next == null) return;
+      const name = next.trim();
+      if (!name) throw new Error("设备名称不能为空");
+      await api(`/api/admin/pairing-codes/${encodeURIComponent(id)}/name`, {method:"PATCH", body:{name}});
+      await loadCanonicalExtensions(true);
+      return;
+    }
     if (action === "copy") {
       const data = await api(`/api/admin/pairing-codes/${encodeURIComponent(id)}/secret`);
       await navigator.clipboard.writeText(data.code || "");
@@ -482,13 +516,13 @@
       return;
     }
     if (action === "toggle") {
-      await api(`/api/admin/pairing-codes/${encodeURIComponent(id)}`, {method: "PATCH", body: {enabled: button.dataset.enable === "1"}});
+      await api(`/api/admin/pairing-codes/${encodeURIComponent(id)}`, {method:"PATCH", body:{enabled:button.dataset.enable === "1"}});
       await loadCanonicalExtensions(true);
       return;
     }
     if (action === "delete") {
       if (!confirm("确定删除这个配对码？已绑定 Worker 不会因此立即断开，但以后重新绑定需要新配对码。")) return;
-      await api(`/api/admin/pairing-codes/${encodeURIComponent(id)}`, {method: "DELETE"});
+      await api(`/api/admin/pairing-codes/${encodeURIComponent(id)}`, {method:"DELETE"});
       await loadCanonicalExtensions(true);
     }
   }
@@ -499,16 +533,14 @@
     if (!id) return;
     if (action === "disconnect") {
       if (!confirm("断开该 Worker 并禁止它自动接入？之后可点击“连接”恢复。")) return;
-      await api(`/api/admin/extensions/${encodeURIComponent(id)}/disconnect`, {method: "POST"});
+      await api(`/api/admin/extensions/${encodeURIComponent(id)}/disconnect`, {method:"POST"});
     } else if (action === "enable") {
-      await api(`/api/admin/extensions/${encodeURIComponent(id)}/enable`, {method: "POST"});
+      await api(`/api/admin/extensions/${encodeURIComponent(id)}/enable`, {method:"POST"});
     } else if (action === "delete") {
       const online = button.dataset.online === "1";
-      const text = online
-        ? "该 Worker 当前在线。删除会立即断开并删除设备凭据与粘性路由，以后必须重新配对。确定继续？"
-        : "删除后将移除设备凭据与粘性路由，以后必须重新配对。确定继续？";
+      const text = online ? "该 Worker 当前在线。删除会立即断开并删除设备凭据与粘性路由，以后必须重新配对。确定继续？" : "删除后将移除设备凭据与粘性路由，以后必须重新配对。确定继续？";
       if (!confirm(text)) return;
-      await api(`/api/admin/extensions/${encodeURIComponent(id)}`, {method: "DELETE"});
+      await api(`/api/admin/extensions/${encodeURIComponent(id)}`, {method:"DELETE"});
     } else return;
     await loadCanonicalExtensions(true);
   }
@@ -516,12 +548,9 @@
   function installActions() {
     document.addEventListener("click", event => {
       const target = event.target;
-      const settings = target?.closest?.("#extensionColumnSettingsButton");
-      if (settings) { event.preventDefault(); openMenu(); return; }
-      const close = target?.closest?.("[data-close-columns]");
-      if (close) { event.preventDefault(); closeMenu(); return; }
-      const reset = target?.closest?.("[data-reset-columns]");
-      if (reset) { event.preventDefault(); savePrefs(defaultPrefs()); applyLayout(); renderMenu(); return; }
+      if (target?.closest?.("#extensionColumnSettingsButton")) { event.preventDefault(); openMenu(); return; }
+      if (target?.closest?.("[data-close-columns]")) { event.preventDefault(); closeMenu(); return; }
+      if (target?.closest?.("[data-reset-columns]")) { event.preventDefault(); savePrefs(defaultPrefs()); applyLayout(); renderMenu(); return; }
       const visible = target?.closest?.("[data-column-visible]");
       if (visible) { setVisible(visible.dataset.columnVisible, visible.checked); return; }
       const move = target?.closest?.("[data-column-move]");
@@ -531,14 +560,13 @@
       const worker = target?.closest?.("[data-worker-list-action]");
       if (worker) { event.preventDefault(); workerAction(worker).catch(error => status(String(error?.message || error), "bad")); }
     }, true);
-
     document.addEventListener("keydown", event => { if (event.key === "Escape" && menuOpen) closeMenu(); });
 
     const create = document.getElementById("createPairing");
     if (create) create.onclick = async () => {
       try {
         const name = document.getElementById("pairingName")?.value.trim() || "Chrome 扩展";
-        const data = await api("/api/admin/pairing-codes", {method: "POST", body: {name}});
+        const data = await api("/api/admin/pairing-codes", {method:"POST", body:{name}});
         const value = document.getElementById("pairingCodeValue");
         if (value) value.textContent = data.code || "";
         document.getElementById("pairingSecret")?.classList.remove("hidden");
@@ -552,7 +580,6 @@
   function boot() {
     const {table} = tableParts();
     if (table) table.style.visibility = "hidden";
-    ensureCompactWorkerSettingsStyle();
     loadPrefs();
     ensureSettingsButton();
     installCanonicalShowOwner();
@@ -562,19 +589,18 @@
     globalThis.__CHAT2API_CANONICAL_WORKER_LIST_V59__ = {
       version: VERSION,
       column_schema_revision: COLUMN_SCHEMA_REVISION,
-      columns: [...DEFAULT_ORDER],
-      removed_columns: ["concurrency", "reserve_windows", "platform", "bound_api_keys", "occupied_windows"],
-      structural_owner: "admin_extension_columns",
-      legacy_renderers_bypassed: true,
+      columns:[...DEFAULT_ORDER],
+      removed_columns:["concurrency", "reserve_windows", "platform", "bound_api_keys", "occupied_windows"],
+      structural_owner:"admin_extension_columns",
+      worker_settings_owner:"canonical-v152",
+      window_truth_owner:"canonical-v152",
+      legacy_renderers_bypassed:true,
+      single_renderer:true,
+      reload:loadCanonicalExtensions,
     };
-    if ((location.hash || "").slice(1) === "extensions") {
-      activateExtensionView();
-      loadCanonicalExtensions(true).catch(() => {});
-    } else if (table) {
-      table.style.visibility = "";
-    }
+    loadCanonicalExtensions(true).catch(() => {});
   }
 
-  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, {once: true});
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, {once:true});
   else boot();
 })();

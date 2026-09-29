@@ -58,9 +58,6 @@
         await sleep(120);
         continue;
       }
-      // ChatGPT can finish the document before its SPA updates /c/<id>. Give the
-      // client router a short grace period before treating a home-page redirect
-      // as an unavailable saved conversation.
       await sleep(160);
     }
     const url = last?.url || last?.pendingUrl || "";
@@ -98,7 +95,10 @@
     route.last_open_ms = ready.load_ms;
     route.last_rotation_reason = "persistent-pool-saved-conversation-unavailable";
     route.last_active_at = Date.now();
-    route.window_owned = false;
+    // A standby stops being pool capacity as soon as it is assigned to a key.
+    // Keep route ownership true so conversation_routing can re-arm the five-minute
+    // same-key lease after this request reaches a successful terminal state.
+    route.window_owned = true;
     route.close_after = null;
     route.persistent_pool_revision = 132;
     await persistRoutes();
@@ -106,13 +106,15 @@
     return ready.tab;
   }
 
-  // The physical pool is explicitly configured capacity, not speculative spare
-  // creation. Normalize its direct snapshot too (capacity_control_v35 already
-  // publishes this invariant on the control-plane telemetry path).
   const pool = globalThis[POOL_KEY];
   if (pool && typeof pool.snapshot === "function" && !pool.snapshot.__chat2apiPersistentSnapshotV132) {
     const baseSnapshot = pool.snapshot.bind(pool);
-    const wrappedSnapshot = async (...args) => ({ ...(await baseSnapshot(...args)), speculative_windows: false, prewarmed_windows: true });
+    const wrappedSnapshot = async (...args) => ({
+      ...(await baseSnapshot(...args)),
+      speculative_windows: false,
+      prewarmed_windows: true,
+      standby_excludes_routed_windows: true,
+    });
     wrappedSnapshot.__chat2apiPersistentSnapshotV132 = true;
     pool.snapshot = wrappedSnapshot;
   }
@@ -127,9 +129,6 @@
       if (!key || !expectedId || !Number.isInteger(tab?.id)) return tab;
 
       const route = routeFor(key);
-      // The inner conversation router may intentionally rotate an over-budget
-      // route while resolving the request. Only validate the saved conversation
-      // when the same expected id is still authoritative after that resolution.
       if (!route || String(route.conversation_id || "") !== expectedId) return tab;
       const decision = await waitForConversationDecision(tab.id, expectedId);
       if (decision.matched) return decision.tab || tab;

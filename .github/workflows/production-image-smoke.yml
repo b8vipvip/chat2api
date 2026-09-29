@@ -102,8 +102,18 @@ jobs:
           assert "server-cancel-control-v136" in recovery
           assert "await readiness.snapshot()" in persistent_pool
           assert "await readiness.readyForPrewarm()" not in persistent_pool
-          assert "standby_semantics_revision: 146" in persistent_pool
-          assert "const standbyRows = runtimeReadyRows.filter(row => !busy.has(row.window_id));" in persistent_pool
+          assert "const STANDBY_SEMANTICS_REVISION = 152" in persistent_pool
+          assert "standby_semantics_revision: STANDBY_SEMANTICS_REVISION" in persistent_pool
+          assert "function standbyRows(rows, value)" in persistent_pool
+          assert "!assigned.has(row.window_id)" in persistent_pool
+          assert "!busy.has(row.window_id)" in persistent_pool
+          assert "post-admission-standby-refill-v152" in persistent_pool
+          assert "markPooledRoute" not in persistent_pool
+          assert "reassign-idle-persistent-route" not in persistent_pool
+          assert "const IDLE_CLOSE_MS = 5 * 60 * 1000" in router
+          assert "route.last_active_at = Date.now()" in router
+          assert "route.close_after = route.last_active_at + IDLE_CLOSE_MS" in router
+          assert "chrome.alarms.create(`${ALARM_PREFIX}${route.window_id}`, { when: route.close_after })" in router
           assert "runtime_ready_standby: true" in persistent_pool
           assert "validateIdleRuntime" in persistent_pool
           assert "delegated-to-persistent-window-pool-v137" in pool_guard

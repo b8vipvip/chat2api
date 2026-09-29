@@ -16,6 +16,7 @@
   const NEW_CHAT_URL = "https://chatgpt.com/";
   const MIN_TARGET = 1;
   const MAX_TARGET = 32;
+  const STANDBY_SEMANTICS_REVISION = 152;
   const TERMINAL_TYPES = new Set([
     "chat.completed", "chat.error", "chat.cancelled",
     "image.completed", "image.error", "image.cancelled",
@@ -39,7 +40,6 @@
     lastResult: null,
     created: 0,
     reused: 0,
-    reassigned: 0,
     closed: 0,
   };
   globalThis[KEY] = state;
@@ -100,7 +100,7 @@
       last_rotation_reason: null,
       tab_id: null,
       window_id: null,
-      window_owned: false,
+      window_owned: true,
       inflight_request_id: null,
       last_active_at: 0,
       close_after: null,
@@ -133,6 +133,7 @@
         target: state.target,
         source: state.source,
         policy: state.policy,
+        semantics: "unassigned-standby-target-v152",
         updated_at: new Date().toISOString(),
       },
     }).catch(() => {});
@@ -163,18 +164,12 @@
   }
 
   async function loginReady() {
-    // The persistent pool is the sole physical window lifecycle authority.
-    // Consume the login detector's last authoritative state, but never call
-    // readyForPrewarm() here: that helper may create/retire a probe window and
-    // would give login readiness a second mutation path into pool cardinality.
     const readiness = globalThis[LOGIN_KEY];
     let snapshot = null;
     if (typeof readiness?.snapshot === "function") {
       try { snapshot = await readiness.snapshot(); } catch (_) {}
     }
-    if (snapshot?.state) {
-      return snapshot.state === "ready" && snapshot.composer_ready === true;
-    }
+    if (snapshot?.state) return snapshot.state === "ready" && snapshot.composer_ready === true;
     const stored = await chrome.storage.local.get({
       [LOGIN_STATE_KEY]: "unknown",
       [LOGIN_COMPOSER_KEY]: false,
@@ -245,20 +240,20 @@
     return ids;
   }
 
+  function standbyRows(rows, value) {
+    const assigned = routeByWindow(value);
+    const busy = busyWindowIds(value);
+    return rows.filter(row =>
+      row.routable &&
+      row.runtime_ready === true &&
+      !assigned.has(row.window_id) &&
+      !busy.has(row.window_id)
+    );
+  }
+
   async function clearRouteAlarm(windowId) {
     if (!Number.isInteger(Number(windowId))) return;
     try { await chrome.alarms.clear(`${ROUTE_ALARM_PREFIX}${Number(windowId)}`); } catch (_) {}
-  }
-
-  async function markPooledRoute(route) {
-    if (!route) return false;
-    const windowId = Number(route.window_id);
-    if (Number.isInteger(windowId)) await clearRouteAlarm(windowId);
-    const changed = route.window_owned !== false || route.close_after != null || Number(route.persistent_pool_revision || 0) !== 132;
-    route.window_owned = false;
-    route.close_after = null;
-    route.persistent_pool_revision = 132;
-    return changed;
   }
 
   async function captureRouteUrl(route, tabId) {
@@ -274,7 +269,7 @@
     } catch (_) {}
   }
 
-  async function detachRoute(route, reason = "persistent-pool-reassign") {
+  async function detachRoute(route, reason = "persistent-pool-detach") {
     if (!route) return;
     const windowId = Number(route.window_id);
     const tabId = Number(route.tab_id);
@@ -282,7 +277,7 @@
     if (Number.isInteger(windowId)) await clearRouteAlarm(windowId);
     route.window_id = null;
     route.tab_id = null;
-    route.window_owned = false;
+    route.window_owned = true;
     route.close_after = null;
     route.persistent_pool_revision = 132;
     route.last_pool_detach_reason = reason;
@@ -348,7 +343,14 @@
       throw error;
     }
     state.created += 1;
-    return { window_id: created.id, tab_id: tab.id, url: tab.url || NEW_CHAT_URL, routable: true, runtime_ready: true, status: tab.status || "complete" };
+    return {
+      window_id: created.id,
+      tab_id: tab.id,
+      url: tab.url || NEW_CHAT_URL,
+      routable: true,
+      runtime_ready: true,
+      status: tab.status || "complete",
+    };
   }
 
   async function closeWindow(windowId) {
@@ -374,29 +376,33 @@
     return ids;
   }
 
-  async function validateIdleRuntime(value, rows, reason = "runtime-ready-standby-v146") {
+  async function validateIdleRuntime(value, rows, reason = "runtime-ready-standby-v152") {
     const preflight = globalThis.__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__;
     if (!preflight || typeof ensureContent !== "function") {
-      return { rows, checked: 0, failed: 0, closed: 0, routesChanged: false, skipped: true };
+      return { rows, checked: 0, failed: 0, closed: 0, skipped: true };
     }
+    const assigned = routeByWindow(value);
     const busy = busyWindowIds(value);
-    const candidates = rows.filter(row => row.routable && !busy.has(row.window_id) && row.runtime_ready !== true);
-    if (!candidates.length) return { rows, checked: 0, failed: 0, closed: 0, routesChanged: false, skipped: false };
+    const candidates = rows.filter(row =>
+      row.routable &&
+      !assigned.has(row.window_id) &&
+      !busy.has(row.window_id) &&
+      row.runtime_ready !== true
+    );
+    if (!candidates.length) return { rows, checked: 0, failed: 0, closed: 0, skipped: false };
 
     const results = await Promise.all(candidates.map(async row => {
       try {
         await ensureRuntimeCurrent(row.tab_id);
-        return { row, ok: true, error: "" };
-      } catch (error) {
-        return { row, ok: false, error: String(error?.message || error) };
+        return { row, ok: true };
+      } catch (_) {
+        return { row, ok: false };
       }
     }));
 
     let current = rows.slice();
     let failed = 0;
     let closed = 0;
-    let routesChanged = false;
-    const assigned = routeByWindow(value);
     for (const result of results) {
       const row = result.row;
       if (result.ok) {
@@ -404,21 +410,13 @@
         continue;
       }
       failed += 1;
-      const entry = assigned.get(row.window_id);
-      if (entry?.route) {
-        await detachRoute(entry.route, `${reason}:runtime-preflight-failed`);
-        routesChanged = true;
-      }
       if (await closeWindow(row.window_id)) {
         current = current.filter(item => item.window_id !== row.window_id);
         state.runtimeReadyTabs.delete(row.tab_id);
         closed += 1;
-      } else {
-        current = current.map(item => item.window_id === row.window_id ? { ...item, runtime_ready: false } : item);
       }
     }
-    if (routesChanged) await persistRoutes(value);
-    return { rows: current, checked: candidates.length, failed, closed, routesChanged, skipped: false };
+    return { rows: current, checked: candidates.length, failed, closed, skipped: false, reason };
   }
 
   function snapshotFrom(rows, value, ready, isDisabled) {
@@ -429,11 +427,10 @@
     const unroutableRows = rows.filter(row => !row.routable);
     const runtimeReadyRows = routableRows.filter(row => row.runtime_ready === true);
     const routedRows = routableRows.filter(row => assigned.has(row.window_id));
-    const inUse = routableRows.filter(row => busy.has(row.window_id)).length;
-    const effective = target ? (isDisabled ? Math.min(1, target) : (ready ? target + inUse : Math.min(1, target))) : 0;
-    // v146 backup capacity requires both a routable ChatGPT surface and a
-    // verified current Worker runtime. URL-only tabs never satisfy standby.
-    const standbyRows = runtimeReadyRows.filter(row => !busy.has(row.window_id));
+    const standby = standbyRows(rows, value);
+    const inUse = routedRows.filter(row => busy.has(row.window_id)).length;
+    const leased = routedRows.filter(row => !busy.has(row.window_id)).length;
+    const effective = target ? (isDisabled ? Math.min(1, target) : target) : 0;
     return {
       version: 132,
       revision: 132,
@@ -441,33 +438,35 @@
       target,
       configured_target: target,
       effective_target: effective,
-      target_reached: Boolean(target && ready && !isDisabled && standbyRows.length === target) || Boolean(target && isDisabled && rows.length <= effective),
+      target_reached: Boolean(target && ready && !isDisabled && standby.length === target) || Boolean(target && isDisabled && standby.length <= effective),
       total: rows.length,
       routable_total: routableRows.length,
       unroutable_total: unroutableRows.length,
       runtime_ready_total: runtimeReadyRows.length,
       runtime_stale_total: routableRows.filter(row => row.runtime_ready !== true).length,
       active: inUse,
-      idle: standbyRows.length,
+      leased,
+      idle: standby.length,
       own: rows.length,
-      warm: standbyRows.length,
-      standby: standbyRows.length,
+      warm: standby.length,
+      standby: standby.length,
       routed: routedRows.length,
-      idle_routed: routedRows.filter(row => !busy.has(row.window_id)).length,
+      idle_routed: leased,
       all_chatgpt_windows: rows.length,
-      standby_semantics_revision: 146,
+      standby_semantics_revision: STANDBY_SEMANTICS_REVISION,
+      standby_excludes_routed_windows: true,
+      route_idle_lease_ms: 5 * 60 * 1000,
       runtime_ready_standby: true,
       runtime_preflight_checks: state.runtimeChecks,
       runtime_preflight_failures: state.runtimeFailures,
       login_ready: ready,
       worker_disabled: isDisabled,
-      warming: Boolean(target && ready && !isDisabled && standbyRows.length < target),
-      excess: Math.max(0, runtimeReadyRows.length - effective),
+      warming: Boolean(target && ready && !isDisabled && standby.length < target),
+      excess: Math.max(0, standby.length - effective),
       reserved: state.reservations.size,
       source: state.source,
       created_total: state.created,
       reused_total: state.reused,
-      reassigned_total: state.reassigned,
       closed_total: state.closed,
       persistent_window_pool: true,
       prewarmed_windows: true,
@@ -491,52 +490,24 @@
     return snapshotFrom(rows, value, ready, isDisabled);
   }
 
-  async function shrink(value, rows, target, reason) {
+  async function shrinkStandby(value, rows, target, reason) {
     let current = rows.slice();
-    const busy = busyWindowIds(value);
-    const assigned = routeByWindow(value);
     const protectedIds = await protectedWindowIds();
-    const capacityRows = current.filter(row => row.routable && (busy.has(row.window_id) || row.runtime_ready === true));
-    let excess = Math.max(0, capacityRows.length - target);
-    let routesChanged = false;
-    let closed = 0;
-    if (!excess) return { rows: current, closed, deferred: 0, routesChanged };
-
-    const standby = current
-      .filter(row => row.routable && row.runtime_ready === true && !assigned.has(row.window_id) && !busy.has(row.window_id))
+    let candidates = standbyRows(current, value)
       .sort((left, right) => Number(protectedIds.has(left.window_id)) - Number(protectedIds.has(right.window_id)));
-    for (const row of standby) {
+    let excess = Math.max(0, candidates.length - target);
+    let closed = 0;
+    for (const row of candidates) {
       if (excess <= 0) break;
+      if (protectedIds.has(row.window_id)) continue;
       if (await closeWindow(row.window_id)) {
         current = current.filter(item => item.window_id !== row.window_id);
+        state.runtimeReadyTabs.delete(row.tab_id);
         excess -= 1;
         closed += 1;
       }
     }
-
-    if (excess > 0) {
-      const latestAssigned = routeByWindow(value);
-      const idleRoutes = [...latestAssigned.values()]
-        .filter(entry => {
-          const windowId = Number(entry.route?.window_id);
-          return Number.isInteger(windowId) && !busy.has(windowId) && !entry.route?.inflight_request_id;
-        })
-        .sort((left, right) => Number(left.route?.last_active_at || 0) - Number(right.route?.last_active_at || 0));
-      for (const entry of idleRoutes) {
-        if (excess <= 0) break;
-        const windowId = Number(entry.route.window_id);
-        await detachRoute(entry.route, `${reason}:shrink`);
-        routesChanged = true;
-        if (await closeWindow(windowId)) {
-          current = current.filter(item => item.window_id !== windowId);
-          excess -= 1;
-          closed += 1;
-        }
-      }
-    }
-
-    if (routesChanged) await persistRoutes(value);
-    return { rows: current, closed, deferred: Math.max(0, excess), routesChanged };
+    return { rows: current, closed, deferred: Math.max(0, excess), reason };
   }
 
   async function reconcileNow(reason = "scheduled") {
@@ -546,16 +517,6 @@
     const isDisabled = await disabled();
     const ready = await loginReady().catch(() => false);
     let rows = await physicalWindows();
-    let routesChanged = false;
-
-    if (value) {
-      const liveIds = new Set(rows.map(row => row.window_id));
-      for (const [, route] of routeEntries(value)) {
-        if (!liveIds.has(Number(route?.window_id))) continue;
-        if (await markPooledRoute(route)) routesChanged = true;
-      }
-      if (routesChanged) await persistRoutes(value);
-    }
 
     let runtimeValidation = { checked: 0, failed: 0, closed: 0, skipped: true };
     if (ready && !isDisabled) {
@@ -568,22 +529,14 @@
       return snapshotFrom(rows, value, ready, isDisabled);
     }
 
-    const busyBefore = busyWindowIds(value);
-    const busyRoutableBefore = rows.filter(row => row.routable && busyBefore.has(row.window_id)).length;
-    const effectiveTarget = isDisabled ? Math.min(1, target) : (ready ? target + busyRoutableBefore : Math.min(1, target));
-    let closed = 0;
-    let deferred = 0;
-    if (isDisabled || ready) {
-      const reduced = await shrink(value, rows, effectiveTarget, reason);
-      rows = reduced.rows;
-      closed += reduced.closed;
-      deferred += reduced.deferred;
-    }
+    const standbyTarget = isDisabled ? Math.min(1, target) : (ready ? target : Math.min(1, target));
+    const reduced = await shrinkStandby(value, rows, standbyTarget, reason);
+    rows = reduced.rows;
 
     let opened = 0;
     let lastError = "";
     if (ready && !isDisabled) {
-      while (rows.filter(row => row.routable && (busyWindowIds(value).has(row.window_id) || row.runtime_ready === true)).length < effectiveTarget) {
+      while (standbyRows(rows, value).length < target) {
         try {
           const row = await createStandby(reason);
           rows.push(row);
@@ -595,21 +548,21 @@
       }
     }
 
+    const currentStandby = standbyRows(rows, value).length;
     state.lastResult = {
       ok: !lastError,
       reason,
       target,
-      effective_target: effectiveTarget,
-      before_or_after_total: rows.length,
-      routable_before_or_after_total: rows.filter(row => row.routable).length,
-      runtime_ready_before_or_after_total: rows.filter(row => row.routable && row.runtime_ready === true).length,
-      standby_before_or_after_total: rows.filter(row => row.routable && row.runtime_ready === true && !busyWindowIds(value).has(row.window_id)).length,
-      standby_semantics_revision: 146,
+      standby_target: standbyTarget,
+      standby_before_or_after_total: currentStandby,
+      total_windows: rows.length,
+      routed_windows: routeByWindow(value).size,
+      standby_semantics_revision: STANDBY_SEMANTICS_REVISION,
       runtime_validation: runtimeValidation,
       opened,
-      closed,
-      deferred,
-      pending_reason: isDisabled ? "worker_disabled" : (!ready ? "login_not_ready" : (deferred ? "busy_windows_protected" : (lastError ? "warm_failed" : ""))),
+      closed: reduced.closed,
+      deferred: reduced.deferred,
+      pending_reason: isDisabled ? "worker_disabled" : (!ready ? "login_not_ready" : (reduced.deferred ? "protected_standby" : (lastError ? "warm_failed" : ""))),
       error: lastError,
       at: Date.now(),
     };
@@ -635,7 +588,7 @@
 
   async function setTarget(requestedTarget, source = "explicit") {
     const target = normalizeTarget(requestedTarget);
-    if (!target) throw new Error("Persistent window target must be an integer between 1 and 32");
+    if (!target) throw new Error("Persistent standby target must be an integer between 1 and 32");
     await ensureLoaded();
     state.target = target;
     state.source = String(source || "explicit").slice(0, 40);
@@ -701,65 +654,50 @@
       if (existing) {
         try {
           if (existing.status && existing.status !== "complete") existing = await waitForReady(existing.id, 12000);
-          else { await ensureRuntimeCurrent(existing.id); existing = await chrome.tabs.get(existing.id); }
+          else {
+            await ensureRuntimeCurrent(existing.id);
+            existing = await chrome.tabs.get(existing.id);
+          }
         } catch (_) {
-          await detachRoute(route, "persistent-pool-existing-route-runtime-stale-v146");
-          await closeWindow(existing.windowId);
+          const staleWindowId = Number(route.window_id);
+          await detachRoute(route, "persistent-pool-existing-route-runtime-stale-v152");
+          if (Number.isInteger(staleWindowId)) await closeWindow(staleWindowId);
           state.runtimeReadyTabs.delete(existing.id);
           existing = null;
         }
       }
       if (existing) {
-        await markPooledRoute(route);
+        // Once a standby is assigned to an API key the conversation router owns
+        // the physical window. Its five-minute close alarm must never be cleared
+        // by the standby pool. The inner router will clear/re-arm that lease when
+        // the same key starts/completes another request.
+        route.window_owned = true;
         route.last_active_at = Date.now();
+        route.persistent_pool_revision = 132;
         state.reservations.set(key, existing.windowId);
         await persistRoutes(value);
         state.reused += 1;
-        return { key, window_id: existing.windowId, tab_id: existing.id, strategy: "reuse-runtime-ready-persistent-route-v146" };
+        return { key, window_id: existing.windowId, tab_id: existing.id, strategy: "reuse-leased-route-v152" };
       }
 
-      if (Number.isInteger(route.window_id)) await clearRouteAlarm(route.window_id);
       route.window_id = null;
       route.tab_id = null;
-      route.window_owned = false;
+      route.window_owned = true;
       route.close_after = null;
 
       let physical = await physicalWindows();
-      const runtimeValidation = await validateIdleRuntime(value, physical, "request-admission-v146");
-      let rows = runtimeValidation.rows.filter(row => row.routable && row.runtime_ready === true);
-      let assigned = routeByWindow(value);
-      const busy = busyWindowIds(value);
-      let slot = rows.find(row => !assigned.has(row.window_id) && !busy.has(row.window_id)) || null;
-      let strategy = "claim-standby";
+      const runtimeValidation = await validateIdleRuntime(value, physical, "request-admission-v152");
+      let rows = runtimeValidation.rows;
+      let slot = standbyRows(rows, value)[0] || null;
+      let strategy = "claim-standby-v152";
 
       if (!slot) {
-        const victims = [...assigned.values()]
-          .filter(entry => {
-            const windowId = Number(entry.route?.window_id);
-            return entry.key !== key && Number.isInteger(windowId) && !busy.has(windowId) && !entry.route?.inflight_request_id;
-          })
-          .sort((left, right) => Number(left.route?.last_active_at || 0) - Number(right.route?.last_active_at || 0));
-        const victim = victims[0];
-        if (victim) {
-          const windowId = Number(victim.route.window_id);
-          const tabId = Number(victim.route.tab_id);
-          slot = rows.find(row => row.window_id === windowId && row.tab_id === tabId) || null;
-          if (slot) {
-            await detachRoute(victim.route, "persistent-pool-lru-reassign");
-            strategy = "reassign-idle-persistent-route";
-            state.reassigned += 1;
-          }
-        }
-      }
-
-      if (!slot && rows.filter(row => !busy.has(row.window_id)).length < target) {
         slot = await createStandby("request-admission");
         rows.push(slot);
-        strategy = "warm-on-admission";
+        strategy = "warm-on-admission-v152";
       }
-
       if (!slot) {
-        const error = new Error(`Persistent Worker window pool exhausted (${rows.length}/${target})`);
+        const error = new Error(`Persistent standby window pool exhausted (target=${target})`);
         error.code = "worker_persistent_window_pool_exhausted";
         error.retry_after_ms = 350;
         throw error;
@@ -768,7 +706,7 @@
       const tab = await navigateSlot(slot, route);
       route.window_id = slot.window_id;
       route.tab_id = tab.id;
-      route.window_owned = false;
+      route.window_owned = true;
       route.close_after = null;
       route.last_active_at = Date.now();
       route.persistent_pool_revision = 132;
@@ -788,7 +726,10 @@
         return await baseResolver(message);
       } finally {
         if (assignment?.key) state.reservations.delete(assignment.key);
-        scheduleReconcile("post-admission", 250);
+        // Consuming a standby immediately makes standby cardinality N-1. Refill
+        // after the normal short admission delay; the leased route is excluded
+        // from standby and remains owned by conversation_routing for five minutes.
+        scheduleReconcile("post-admission-standby-refill-v152", 250);
       }
     };
     wrappedResolver.__chat2apiPersistentPoolV132 = true;
@@ -834,6 +775,7 @@
   state.snapshot = snapshot;
   state.claimSlotForRequest = claimSlotForRequest;
   state.scheduleReconcile = scheduleReconcile;
+  state.standbyRows = standbyRows;
 
   ensureLoaded().then(() => scheduleReconcile("startup", 500)).catch(() => {});
 })();

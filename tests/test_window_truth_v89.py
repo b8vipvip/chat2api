@@ -62,28 +62,29 @@ def test_server_never_promotes_cached_active_rows_without_fresh_proof() -> None:
     assert "LIVE_TRUTH_MIN_BUNDLE = (0, 8, 27)" in source
     assert '"type": "window.manager.refresh"' in source
     assert "_snapshot_updated_at(row) > before.get(client_id, 0)" in source
-    assert "if live_verified:" in source
+    assert "if live_verified and login_ready:" in source
     assert '"cached_active_rows_suppressed"' in source
     assert 'truth_status = "upgrade-required"' in source
-    # A persisted v88 snapshot is historical telemetry, not live truth. Active
-    # rows may only be appended inside the verified branch.
-    verified_index = source.index("if live_verified:", source.index("def window_rows"))
+    verified_index = source.index("if live_verified and login_ready:", source.index("def window_rows"))
     append_index = source.index("active.append(item)", verified_index)
     next_closed_loop = source.index('for raw in snapshot.get("closed")', verified_index)
     assert verified_index < append_index < next_closed_loop
 
 
-def test_admin_surfaces_unverified_and_suppressed_window_state() -> None:
+def test_admin_surfaces_verified_standby_and_suppressed_history_state() -> None:
     ui = text("app/admin_window_manager_v88.js")
-    worker_ui = text("app/admin_worker_presentation_v66.js")
+    worker_ui = text("app/admin_extension_columns.js")
+    retired = text("app/admin_worker_presentation_v66.js")
     assert "wmTruthStatus" in ui
     assert "实时物理核验" in ui
-    assert "历史缓存窗口" in ui
-    assert "cached_active_rows_suppressed" in ui
-    assert "请求 / 实际窗口" in worker_ui
-    assert 'callApi("/api/admin/window-manager")' in worker_ui
-    assert "liveWindowTruth" in worker_ui
-    assert "旧版遥测（未实时核验）" in worker_ui
+    assert "历史缓存" in ui
+    assert "备用窗口" in ui
+    assert "5分钟接待租约" in ui
+    assert '{key: "occupancy", label: "请求 / 备用窗口"}' in worker_ui
+    assert 'api("/api/admin/window-manager")' in worker_ui
+    assert "function truthByClient(payload)" in worker_ui
+    assert "standby_window_count" in worker_ui
+    assert 'retired_renderer: true' in retired
 
 
 def test_v89_javascript_syntax() -> None:
@@ -96,6 +97,7 @@ def test_v89_javascript_syntax() -> None:
         "chrome_extension/background_window_refresh_v129.js",
         "app/admin_window_manager_v88.js",
         "app/admin_worker_presentation_v66.js",
+        "app/admin_extension_columns.js",
         "app/admin_linux_device_authority_v124.js",
     ):
         completed = subprocess.run(

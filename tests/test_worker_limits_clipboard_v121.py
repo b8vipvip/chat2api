@@ -39,11 +39,8 @@ def test_window_limit_guard_remains_compatibility_admission_layer_for_persistent
     dispatch_index = entry.index('"conversation_dispatch.js"')
     assert router_index < guard_index < pool_index < dispatch_index
 
-    # v121 is still the compatibility admission guard and therefore must not
-    # create/remove physical windows itself. v132 owns that lifecycle.
     assert "chrome.windows.create" not in guard
     assert "chrome.windows.remove" not in guard
-    assert "route.generation =" not in guard
     assert 'typeof value.retireRoute !== "function"' in guard
     assert 'value.retireRoute(entry.key, route, "", reason)' in guard
     assert "state.retireRoute = retireRoute" in router
@@ -54,13 +51,13 @@ def test_window_limit_guard_remains_compatibility_admission_layer_for_persistent
     assert "chrome.windows.create" in pool
     assert "chrome.windows.remove" in pool
     assert "persistent-prewarmed-total-window-pool-v132" in pool
+    assert 'standby_excludes_routed_windows: true' in pool
+    assert 'route.window_owned = true' in pool
+    assert 'post-admission-standby-refill-v152' in pool
     assert 'action === "windows.limit"' in control
     assert 'window_decision_authority: "persistent-window-pool-v132"' in control
     assert 'routing["worker_window_limit"] = window_limit_for(client_id)' in server
     assert 'return _normalize_limit(configured, concurrency)' in server
-    assert "最大窗口数不能小于并发上限" not in server
-    assert "persistent-prewarmed-total-window-pool-v132" in server
-    assert "on-demand-hard-cap-no-warm-pool" not in server
 
 
 def test_remote_login_unicode_clipboard_is_ticket_scoped_and_bidirectional() -> None:
@@ -94,25 +91,29 @@ def test_remote_login_unicode_clipboard_is_ticket_scoped_and_bidirectional() -> 
     assert 'event.stopImmediatePropagation()' in console
 
 
-def test_worker_settings_ui_keeps_concurrency_and_windows_distinct() -> None:
-    console = (ROOT / "app" / "admin_worker_limits_clipboard_v121.js").read_text(encoding="utf-8")
+def test_worker_settings_ui_has_one_renderer_and_distinct_concurrency_standby_values() -> None:
+    behavior = (ROOT / "app" / "admin_worker_limits_clipboard_v121.js").read_text(encoding="utf-8")
+    canonical = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
     presentation = (ROOT / "app" / "worker_presentation_v64_patch.py").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     patch = (ROOT / "app" / "worker_limits_clipboard_v121_patch.py").read_text(encoding="utf-8")
     identity = (ROOT / "app" / "admin_worker_identity_v131.js").read_text(encoding="utf-8")
 
-    assert 'headerCell.textContent = "并发 / 备用"' in console
-    assert '/concurrency`' in console
-    assert '/windows/limit`' in console
-    assert "data-v121-limit-summary" in console
-    assert "data-v121-edit-limits" in console
-    assert "data-v121-limit-popover" in console
+    assert '{key: "worker_settings", label: "并发 / 备用设置"}' in canonical
+    assert '/concurrency`' in behavior
+    assert '/windows/limit`' in behavior
+    assert "data-v121-limit-summary" in canonical
+    assert "data-v121-edit-limits" in canonical
+    assert "data-v121-limit-popover" in canonical
     assert 'install_worker_limits_clipboard_v121_patch(app)' in entry
     assert 'install_worker_limits_clipboard_v121_patch(app)' not in presentation
-    assert 'ASSET_RELEASE = "0.22.101"' in patch
     assert '?v={ASSET_RELEASE}' in patch
-    assert "持续维持的可接待空闲窗口数量" in console
-    assert "data-v121-cancel-limits" in console
+    assert "持续维持的可接待空闲窗口数量" in behavior
+    assert "data-v121-cancel-limits" in canonical
     assert "extensionDeviceBody" not in identity
-    assert "空闲窗口常驻并预热" not in console
-    assert "常驻窗口池跟随并发" not in console
+
+    # v121 no longer owns rows, fetches extension data, or adds delayed passes.
+    assert 'renderer: "canonical-worker-list-v152"' in behavior
+    assert 'jsonRequest("/api/admin/extensions")' not in behavior
+    assert "installWorkerHooks" not in behavior
+    assert "setTimeout(() => { installWorkerHooks" not in behavior

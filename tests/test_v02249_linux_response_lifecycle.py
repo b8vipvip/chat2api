@@ -35,13 +35,13 @@ def test_playground_messages_have_time_and_copy_actions():
     assert "data-copy-index=" in source
     assert "formatMessageTime" in source
 
-def test_worker_occupancy_can_show_live_physical_window_count():
-    source = text("app/admin_worker_presentation_v66.js")
-    assert "reserve_window_total" in source  # legacy fallback only
-    assert "WINDOW_TRUTH_REVISION = 89" in source
-    assert 'callApi("/api/admin/window-manager")' in source
-    assert "请求 / 实际窗口" in source
-    assert "实际 ChatGPT 窗口" in source
+def test_worker_occupancy_can_show_live_standby_window_count():
+    source = text("app/admin_extension_columns.js")
+    assert "function truthByClient(payload)" in source
+    assert "standby_window_count" in source
+    assert "data-chat2api-live-standby-count" in source
+    assert '{key: "occupancy", label: "请求 / 备用窗口"}' in source
+    assert "已排除正在接待及5分钟租约窗口" in source
 
 def test_historical_v212_does_not_stamp_runtime_identity():
     assert 'payload["server_version"] = PATCH_VERSION' not in text("app/v21_2_patch.py")
