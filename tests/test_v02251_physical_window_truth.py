@@ -13,15 +13,18 @@ def text(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_worker_occupancy_prefers_fresh_verified_managed_windows() -> None:
-    source = text("app/admin_worker_presentation_v66.js")
-    expected = "[metadata.reserve_window_all_chatgpt_windows, metadata.reserve_window_total]"
-    assert expected in source  # explicit legacy fallback remains for old servers
-    assert "WINDOW_TRUTH_REVISION = 89" in source
+def test_worker_occupancy_prefers_fresh_verified_standby_windows() -> None:
+    source = text("app/admin_extension_columns.js")
+    server = text("app/window_manager_v88_patch.py")
+    retired = text("app/admin_worker_presentation_v66.js")
+    assert "function truthByClient(payload)" in source
+    assert "standby_window_count" in source
     assert "liveVerified" in source
-    assert "physical: authoritative && worker?.live_verified === true" in source
-    assert "旧版遥测（未实时核验）" in source
-    assert 'data-chat2api-live-window-count="1"' in source
+    assert 'data-chat2api-live-standby-count="1"' in source
+    assert "standby_window_count" in server
+    assert "live_verified" in server
+    assert "reserve_window_total" not in source
+    assert "retired_renderer: true" in retired
 
 
 def test_reserve_status_always_reports_all_chatgpt_window_count() -> None:
@@ -35,8 +38,6 @@ def test_legacy_v83_compaction_is_not_loaded_and_v90_observer_is_read_only() -> 
     observer = text("chrome_extension/background_window_observer_v90.js")
     entry = text("chrome_extension/background_entry.js")
 
-    # Keep the historical implementation inspectable, but do not let it own
-    # production window lifecycle after the v30 single-authority cutover.
     assert "chrome.tabs.move(initTabId" in legacy
     assert "liveChatGptWindowIds" in legacy
     assert "chat2apiInitializationCompactedAtV83" in legacy
