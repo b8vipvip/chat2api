@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
 import pytest
@@ -38,11 +39,12 @@ def test_network_terminal_evidence_keeps_request_v6_as_single_terminal_owner() -
 def test_submission_confirmation_never_treats_generating_control_as_sufficient() -> None:
     request = source("chrome_extension/content_request_v6.js")
 
-    assert "function composerCandidates(active)" in request
+    assert "function composerCandidates(active = null)" in request
     assert "function composerHoldingPrompt(active)" in request
     assert "function promptStillPresent(active)" in request
     assert "if (promptStillPresent(active)) return null;" in request
     assert "composerHoldingPrompt(active) || active.promptComposer || findComposer()" in request
+    assert "Stop/Generating UI is not submission proof" in request
     assert 'reason: "click-generating"' not in request
 
 
@@ -85,28 +87,32 @@ class _DisconnectingSocket:
         raise WebSocketDisconnect(code=1006)
 
 
-@pytest.mark.asyncio
-async def test_registry_1006_detaches_the_exact_dead_socket(tmp_path: Path) -> None:
-    registry = ClientRegistry(tmp_path)
-    client_id, _token = await registry.register("Windows Worker", "Chrome", "0.22.101", {})
-    dead = _DisconnectingSocket(registry, client_id)
-    registry.sockets[client_id] = dead  # type: ignore[assignment]
+def test_registry_1006_detaches_the_exact_dead_socket(tmp_path: Path) -> None:
+    async def run() -> None:
+        registry = ClientRegistry(tmp_path)
+        client_id, _token = await registry.register("Windows Worker", "Chrome", "0.22.101", {})
+        dead = _DisconnectingSocket(registry, client_id)
+        registry.sockets[client_id] = dead  # type: ignore[assignment]
 
-    with pytest.raises(RuntimeError, match="Chrome extension is offline"):
-        await registry.send(client_id, {"type": "heartbeat"})
+        with pytest.raises(RuntimeError, match="Chrome extension is offline"):
+            await registry.send(client_id, {"type": "heartbeat"})
 
-    assert client_id not in registry.sockets
+        assert client_id not in registry.sockets
+
+    asyncio.run(run())
 
 
-@pytest.mark.asyncio
-async def test_registry_1006_does_not_detach_a_newer_replacement_socket(tmp_path: Path) -> None:
-    registry = ClientRegistry(tmp_path)
-    client_id, _token = await registry.register("Windows Worker", "Chrome", "0.22.101", {})
-    replacement = _ReplacementSocket()
-    dead = _DisconnectingSocket(registry, client_id, replacement)
-    registry.sockets[client_id] = dead  # type: ignore[assignment]
+def test_registry_1006_does_not_detach_a_newer_replacement_socket(tmp_path: Path) -> None:
+    async def run() -> None:
+        registry = ClientRegistry(tmp_path)
+        client_id, _token = await registry.register("Windows Worker", "Chrome", "0.22.101", {})
+        replacement = _ReplacementSocket()
+        dead = _DisconnectingSocket(registry, client_id, replacement)
+        registry.sockets[client_id] = dead  # type: ignore[assignment]
 
-    with pytest.raises(RuntimeError, match="Chrome extension is offline"):
-        await registry.send(client_id, {"type": "heartbeat"})
+        with pytest.raises(RuntimeError, match="Chrome extension is offline"):
+            await registry.send(client_id, {"type": "heartbeat"})
 
-    assert registry.sockets.get(client_id) is replacement
+        assert registry.sockets.get(client_id) is replacement
+
+    asyncio.run(run())
