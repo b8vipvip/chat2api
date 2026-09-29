@@ -48,8 +48,9 @@ def test_standby_target_excludes_active_and_five_minute_route_leases() -> None:
     assert 'reassign-idle-persistent-route' not in pool
 
     assert 'const IDLE_CLOSE_MS = 5 * 60 * 1000' in router
-    assert 'route.close_after = Date.now() + IDLE_CLOSE_MS' in router
-    assert 'chrome.alarms.create(closeAlarmName(route.window_id)' in router
+    assert 'route.last_active_at = Date.now()' in router
+    assert 'route.close_after = route.last_active_at + IDLE_CLOSE_MS' in router
+    assert 'chrome.alarms.create(`${ALARM_PREFIX}${route.window_id}`, { when: route.close_after })' in router
 
 
 def test_live_window_truth_distinguishes_standby_in_use_and_leased() -> None:
