@@ -12,7 +12,9 @@ EXTENSION = ROOT / "chrome_extension"
 def test_v211_static_contracts() -> None:
     patch = (ROOT / "app" / "v21_1_patch.py").read_text(encoding="utf-8")
     admin = (ROOT / "app" / "admin_v21_1.js").read_text(encoding="utf-8")
-    admin_live = (ROOT / "app" / "admin_v21_5.js").read_text(encoding="utf-8")
+    retired = (ROOT / "app" / "admin_v21_5.js").read_text(encoding="utf-8")
+    canonical = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
+    behavior = (ROOT / "app" / "admin_worker_limits_clipboard_v121.js").read_text(encoding="utf-8")
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     workers = (EXTENSION / "conversation_workers_v24.js").read_text(encoding="utf-8")
     ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
@@ -33,8 +35,9 @@ def test_v211_static_contracts() -> None:
     assert '"live_voice_request_weight": 1' in patch
     assert "async def create_per_extension" in patch
 
-    # Historical v21.1 endpoints remain for compatibility, while v57 owns the
-    # active console editor and separates request concurrency from reserve windows.
+    # Historical v21.1 endpoints remain for compatibility. v0.22.102 retires
+    # the later v59 Worker-table editor too; the active Worker editor now lives
+    # only in the canonical v152 renderer plus the behavior-only v121 handler.
     assert 'data-concurrency-settings-v211' in admin
     assert 'querySelectorAll("[data-concurrency-settings-v211]").forEach(node => node.remove())' in admin
     assert "按扩展 ID 独立计数" in admin
@@ -42,18 +45,19 @@ def test_v211_static_contracts() -> None:
     assert 'fetch("/api/admin/concurrency"' not in admin
     assert "saveConcurrencyV211" not in admin
 
-    assert 'th.dataset.chat2apiColumnKey = "worker_settings"' in admin_live
-    assert 'th.textContent = "并发设置"' in admin_live
-    assert 'data-chat2api-structural-owner="worker-settings-v59"' in admin_live
-    assert 'platformHeader.textContent = "Worker 窗口"' not in admin_live
-    assert "data-worker-window-editor" in admin_live
-    assert "data-worker-max" in admin_live
-    assert "data-worker-reserve" in admin_live
-    assert "data-worker-save" in admin_live
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57' in admin_live
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in admin_live
-    assert 'method:"PUT"' in admin_live or 'method: "PUT"' in admin_live
-    assert "bound_api_keys" not in admin_live
+    assert 'retired: true' in retired
+    assert 'delegated_to: "admin_extension_columns-v152"' in retired
+    assert "data-worker-window-editor" not in retired
+    assert '{key: "worker_settings", label: "并发 / 备用设置"}' in canonical
+    assert 'data-chat2api-structural-owner="worker-settings-v152"' in canonical
+    assert "data-v121-concurrency" in canonical
+    assert "data-v121-windows" in canonical
+    assert "data-v121-save-limits" in canonical
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/concurrency' in behavior
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in behavior
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' in behavior
+    assert 'renderer: "canonical-worker-list-v152"' in behavior
+    assert "bound_api_keys" not in canonical
 
     assert "MAX_WORKERS_PER_KEY = 3" in workers
     assert "function workerLimit(message)" in workers
@@ -119,7 +123,6 @@ with tempfile.TemporaryDirectory() as tmp:
     assert initial.json()["client_limits"] == {}
     assert initial.json()["request_weight"] == 1
 
-    # The old global endpoint is retained only as the inherited default.
     changed = client.put("/api/admin/concurrency", json={"max_concurrency": 5})
     assert changed.status_code == 200, changed.text
     assert changed.json()["default_max_concurrency"] == 5
@@ -173,13 +176,11 @@ with tempfile.TemporaryDirectory() as tmp:
 
     asyncio.run(capacity_scenario())
 
-    # Reset A to inherited default without affecting B or the default itself.
     reset = client.delete(f"/api/admin/extensions/{ext_a}/concurrency")
     assert reset.status_code == 200, reset.text
     assert reset.json()["max_concurrency"] == 5
     assert reset.json()["source"] == "default"
 
-    # Re-apply an override and verify a new app instance recovers it.
     client.put(f"/api/admin/extensions/{ext_a}/concurrency", json={"max_concurrency": 4})
     app2 = build(data_dir)
     client2 = TestClient(app2)
