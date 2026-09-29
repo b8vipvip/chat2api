@@ -25,7 +25,6 @@ jobs:
           from pathlib import Path
 
           files = [
-              '.github/workflows/production-image-smoke.yml',
               'app/runtime_contract.py',
               'app/worker_limits_clipboard_v121_patch.py',
               'chrome_extension/background_runtime_preflight_v48.js',
@@ -147,9 +146,8 @@ jobs:
                   raise SystemExit(f'missing v0.22.101 runtime token: {token}')
           if '"version": "0.22.101"' not in manifest:
               raise SystemExit('manifest did not align to v0.22.101')
-          print(f'aligned {len(set(changed))} files to v0.22.101')
+          print(f'aligned {len(set(changed))} non-workflow files to v0.22.101')
           PY
-          git rm .github/workflows/release-v022101-align.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
