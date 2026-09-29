@@ -16,7 +16,7 @@
   const NEW_CHAT_URL = "https://chatgpt.com/";
   const MIN_TARGET = 1;
   const MAX_TARGET = 32;
-  const STANDBY_SEMANTICS_REVISION = 153;
+  const STANDBY_SEMANTICS_REVISION = 152;
   const TERMINAL_TYPES = new Set([
     "chat.completed", "chat.error", "chat.cancelled",
     "image.completed", "image.error", "image.cancelled",
@@ -133,7 +133,7 @@
         target: state.target,
         source: state.source,
         policy: state.policy,
-        semantics: "unassigned-standby-target-v153",
+        semantics: "unassigned-standby-target-v152",
         updated_at: new Date().toISOString(),
       },
     }).catch(() => {});
@@ -391,7 +391,7 @@
     return ids;
   }
 
-  async function validateIdleRuntime(value, rows, reason = "runtime-ready-standby-v153") {
+  async function validateIdleRuntime(value, rows, reason = "runtime-ready-standby-v152") {
     const preflight = globalThis.__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__;
     if (!preflight || typeof ensureContent !== "function") {
       return { rows, checked: 0, failed: 0, closed: 0, skipped: true };
@@ -713,7 +713,7 @@
           }
         } catch (_) {
           const staleWindowId = Number(route.window_id);
-          await detachRoute(route, "persistent-pool-existing-route-runtime-stale-v153");
+          await detachRoute(route, "persistent-pool-existing-route-runtime-stale-v152");
           if (Number.isInteger(staleWindowId)) await closeWindow(staleWindowId);
           state.runtimeReadyTabs.delete(existing.id);
           existing = null;
@@ -730,7 +730,7 @@
         state.reservations.set(key, existing.windowId);
         await persistRoutes(value);
         state.reused += 1;
-        return { key, window_id: existing.windowId, tab_id: existing.id, strategy: "reuse-leased-route-v153" };
+        return { key, window_id: existing.windowId, tab_id: existing.id, strategy: "reuse-leased-route-v152" };
       }
 
       route.window_id = null;
@@ -739,15 +739,15 @@
       route.close_after = null;
 
       let physical = await physicalWindows();
-      const runtimeValidation = await validateIdleRuntime(value, physical, "request-admission-v153");
+      const runtimeValidation = await validateIdleRuntime(value, physical, "request-admission-v152");
       let rows = runtimeValidation.rows;
       let slot = standbyRows(rows, value)[0] || null;
-      let strategy = "claim-standby-v153";
+      let strategy = "claim-standby-v152";
 
       if (!slot) {
         slot = await createStandby("request-admission");
         rows.push(slot);
-        strategy = "warm-on-admission-v153";
+        strategy = "warm-on-admission-v152";
       }
       if (!slot) {
         const error = new Error(`Persistent standby window pool exhausted (target=${target})`);
@@ -782,7 +782,7 @@
         // Consuming a standby immediately makes standby cardinality N-1. Refill
         // after the normal short admission delay; the leased route is excluded
         // from standby and remains owned by conversation_routing for five minutes.
-        scheduleReconcile("post-admission-standby-refill-v153", 250);
+        scheduleReconcile("post-admission-standby-refill-v152", 250);
       }
     };
     wrappedResolver.__chat2apiPersistentPoolV132 = true;
