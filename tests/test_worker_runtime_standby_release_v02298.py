@@ -14,11 +14,11 @@ def text(path: str) -> str:
 def test_v02298_unifies_server_worker_bundle_and_publishes_v145() -> None:
     runtime = text("app/runtime_contract.py")
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert 'RELEASE_VERSION = "0.22.99"' in runtime
-    assert 'SERVER_RUNTIME_VERSION = "0.22.99"' in runtime
-    assert 'CHROME_BRIDGE_VERSION = "0.22.99"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.99"' in runtime
-    assert manifest["version"] == "0.22.99"
+    assert 'RELEASE_VERSION = "0.22.100"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.100"' in runtime
+    assert 'CHROME_BRIDGE_VERSION = "0.22.100"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.100"' in runtime
+    assert manifest["version"] == "0.22.100"
     assert '"worker_runtime_preflight_repair_v145": True' in runtime
     assert '"routable_standby_semantics_v145": True' in runtime
     assert "worker-runtime-preflight-repair-v145-routable-standby-v145-release-v02298" in runtime
@@ -28,7 +28,7 @@ def test_v02298_preflight_repairs_persistent_tabs_with_v144_evidence() -> None:
     preflight = text("chrome_extension/background_runtime_preflight_v48.js")
     bootstrap = text("chrome_extension/content_bootstrap.js")
     contract = text("chrome_extension/content_runtime_contract_v71.js")
-    assert 'const REQUIRED_BUNDLE = "0.22.99"' in preflight
+    assert 'const REQUIRED_BUNDLE = "0.22.100"' in preflight
     assert "model_evidence_main_v144.js" in preflight
     assert "content_model_evidence_v144.js" in preflight
     assert "model_evidence_main_v144.js" in bootstrap
