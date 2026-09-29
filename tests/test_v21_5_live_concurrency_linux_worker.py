@@ -60,7 +60,8 @@ def test_extension_console_uses_canonical_worker_settings_column():
     assert "data-v121-save-limits" in canonical
     assert 'data-worker-live' not in canonical
     assert 'data-worker-platform' not in canonical
-    assert "bound_api_keys" not in canonical
+    assert '{key: "bound_api_keys"' not in canonical
+    assert 'data-chat2api-column-key="bound_api_keys"' not in canonical
 
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/concurrency' in behavior
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in behavior
