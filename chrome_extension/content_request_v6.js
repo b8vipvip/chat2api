@@ -34,19 +34,36 @@
       .find(form => visible(form) && form.querySelector("#prompt-textarea,textarea,[contenteditable='true']")) || null;
   }
 
+  const COMPOSER_SELECTORS = [
+    "#prompt-textarea",
+    "textarea[placeholder]",
+    "div[contenteditable='true'][data-lexical-editor='true']",
+    "div[contenteditable='true'].ProseMirror",
+    "[contenteditable='true']",
+  ];
+
   function findComposer() {
     const root = composerRoot() || document;
-    for (const selector of [
-      "#prompt-textarea",
-      "textarea[placeholder]",
-      "div[contenteditable='true'][data-lexical-editor='true']",
-      "div[contenteditable='true'].ProseMirror",
-      "[contenteditable='true']",
-    ]) {
+    for (const selector of COMPOSER_SELECTORS) {
       const found = [...root.querySelectorAll(selector)].find(visible);
       if (found) return found;
     }
     return null;
+  }
+
+  function composerCandidates(active = null) {
+    const result = [];
+    const seen = new Set();
+    const add = element => {
+      if (!element || seen.has(element) || element.isConnected === false || !visible(element)) return;
+      seen.add(element);
+      result.push(element);
+    };
+    add(active?.promptComposer || null);
+    for (const selector of COMPOSER_SELECTORS) {
+      for (const element of document.querySelectorAll(selector)) add(element);
+    }
+    return result;
   }
 
   function composerText(element = findComposer()) {
@@ -93,8 +110,8 @@
     return normalize(`${element?.dataset?.testid || ""} ${element?.getAttribute?.("aria-label") || ""} ${element?.title || ""} ${element?.innerText || element?.textContent || ""}`);
   }
 
-  function sendButton() {
-    const root = composerRoot() || document;
+  function sendButton(composer = null) {
+    const root = composer?.closest?.("form[data-type='unified-composer'], form") || composerRoot() || document;
     for (const selector of [
       "button[data-testid='send-button']",
       "button[aria-label='Send prompt']",
@@ -353,12 +370,14 @@
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       setComposerText(composer, prompt);
       const retained = await waitFor(() => {
-        const current = findComposer() || composer;
-        const text = composerText(current);
-        if (text === target || (target.length > 6 && text.includes(target))) return { composer: current, text };
+        for (const current of composerCandidates(active)) {
+          const text = composerText(current);
+          if (text === target || (target.length > 6 && text.includes(target))) return { composer: current, text };
+        }
         return null;
       }, 3500, 100);
       if (retained) {
+        active.promptComposer = retained.composer;
         await diagnostic(active, "prompt-ready", { prompt_write_attempts: attempt, composer_chars: retained.text.length });
         return retained;
       }
@@ -368,22 +387,34 @@
     throw new Error("Prompt insertion could not be confirmed in the current ChatGPT composer");
   }
 
+  function promptMatchesText(text, active) {
+    const target = String(active?.promptNormalized || "");
+    return Boolean(text && target && (text === target || (target.length > 6 && text.includes(target))));
+  }
+
+  function composerHoldingPrompt(active) {
+    return composerCandidates(active).find(element => promptMatchesText(composerText(element), active)) || null;
+  }
+
   function promptStillPresent(active) {
-    const text = composerText(findComposer());
-    const target = active.promptNormalized;
-    return Boolean(text && (text === target || (target.length > 6 && text.includes(target))));
+    return Boolean(composerHoldingPrompt(active));
   }
 
   function classifySubmissionState(active) {
     if (promptStillPresent(active)) return null;
     const current = currentAssistantState(active);
-    if (isGenerating()) return { reason: "generating", composerCleared: composerText(findComposer()).length === 0, generating: true, current };
-    if (current.isNew) return { reason: current.reason, composerCleared: composerText(findComposer()).length === 0, generating: false, current };
     const user = currentUserTurn(active);
-    if (user) return { reason: "current-user-turn-visible", composerCleared: composerText(findComposer()).length === 0, generating: false, current };
-    // A cleared composer is only weak evidence: ChatGPT may consume the draft
-    // while an attachment is still settling or while submission is rejected.
-    // Never promote that UI mutation to a successful API submission by itself.
+    if (user) return { reason: "current-user-turn-visible", composerCleared: true, generating: isGenerating(), current };
+    if (current.isNew) return { reason: current.reason, composerCleared: true, generating: isGenerating(), current };
+    const networkText = String(active.networkObservedText || "");
+    const networkAt = Number(active.networkObservedAt || 0);
+    if (networkText && networkAt >= Number(active.submitStartedAt || 0)) {
+      return { reason: "network-response-evidence", composerCleared: true, generating: isGenerating(), current };
+    }
+    // Stop/Generating UI is not submission proof. A stale generation control from
+    // another hydration epoch can coexist with this request's draft in a second
+    // composer. Only the current user turn, current response, or this request's
+    // network response can confirm that the prompt really left the draft state.
     return null;
   }
 
@@ -404,7 +435,7 @@
     const lateBudget = active.attachmentCount > 0 ? 45000 : 20000;
     const confirmed = await waitAfterSend(active, "late", lateBudget);
     if (confirmed) return confirmed;
-    throw new Error("ChatGPT cleared the composer but did not expose an accepted user turn, generation state, or response; duplicate send was suppressed");
+    throw new Error("ChatGPT cleared the composer but did not expose this request's accepted user turn or response evidence; duplicate send was suppressed");
   }
 
   async function submitAndConfirm(active) {
@@ -418,15 +449,17 @@
       attempts += 1;
       const readyStarted = performance.now();
       const ready = await waitFor(() => {
-        const current = findComposer();
+        const current = composerHoldingPrompt(active) || findComposer();
         const text = composerText(current);
-        const button = sendButton();
-        const hasPrompt = text === active.promptNormalized || (active.promptNormalized.length > 6 && text.includes(active.promptNormalized));
+        const button = sendButton(current);
+        const hasPrompt = promptMatchesText(text, active);
         return current && hasPrompt && buttonReady(button) ? { current, button } : null;
       }, attempts === 1 ? readinessBudget : 15000, 120);
       if (!ready) throw new Error("ChatGPT send button did not become ready while this request's prompt remained in the composer");
 
+      active.promptComposer = ready.current;
       refreshAssistantBaseline(active);
+      active.submitStartedAt = Date.now();
       ready.button.scrollIntoView?.({ block: "nearest", inline: "nearest" });
       ready.button.click();
       await diagnostic(active, "clicked", {
@@ -438,8 +471,9 @@
 
       let confirmed = await waitAfterSend(active, "click", 6000);
       if (!confirmed && promptStillPresent(active)) {
-        dispatchEnter(findComposer());
+        dispatchEnter(composerHoldingPrompt(active) || active.promptComposer || findComposer());
         enterFallbackUsed = true;
+        active.submitStartedAt = Date.now();
         await diagnostic(active, "enter-fallback", { send_attempts: attempts, enter_fallback_used: true });
         confirmed = await waitAfterSend(active, "enter", 6000);
       } else if (!confirmed && !promptStillPresent(active)) {
@@ -453,7 +487,7 @@
           submission_confirm_reason: confirmed.reason,
           enter_fallback_used: enterFallbackUsed,
           historical_hydration_ignored: true,
-          submission_liveness_revision: 79,
+          submission_liveness_revision: 80,
           submission_attachment_count: active.attachmentCount,
         });
         return;
@@ -476,6 +510,22 @@
     return text;
   }
 
+  function preferredResponseText(current, candidate) {
+    const before = String(current || "");
+    const next = String(candidate || "");
+    if (!next || next === before) return before;
+    if (!before || next.startsWith(before)) return next;
+    if (before.startsWith(next)) return before;
+    return next.length >= before.length ? next : before;
+  }
+
+  async function ensureResponseStarted(active, responseStarted, source) {
+    if (responseStarted) return true;
+    active.responseStarted = true;
+    await emit({ type: "chat.started", request_id: active.requestId, diagnostics: { response_epoch_revision: 69, response_start_source: source } });
+    return true;
+  }
+
   async function monitor(active) {
     const timeoutMs = Math.max(5000, Number(active.options.timeout_seconds || 300) * 1000);
     const startedAt = Date.now();
@@ -489,14 +539,17 @@
       if (error && responseStarted) throw new Error(`ChatGPT response UI error: ${error}`);
       const current = currentAssistantState(active);
       const generating = isGenerating();
-      if ((current.isNew || generating) && !responseStarted) {
-        responseStarted = true;
-        active.responseStarted = true;
-        await emit({ type: "chat.started", request_id: active.requestId, diagnostics: { response_epoch_revision: 69 } });
+      const networkText = String(active.networkObservedText || "");
+      const networkTerminalText = String(active.networkTerminalText || "");
+      const networkTerminalAt = Number(active.networkTerminalAt || 0);
+
+      if ((current.isNew || generating || networkText) && !responseStarted) {
+        responseStarted = await ensureResponseStarted(active, responseStarted, networkText ? "network-evidence-v57" : current.isNew ? "dom-assistant" : "generation-control");
       }
       if (current.isNew && current.text) {
+        const preferred = preferredResponseText(lastText, current.text);
         const previous = lastText;
-        lastText = await updateCapturedText(active, current.text, lastText);
+        lastText = await updateCapturedText(active, preferred, lastText);
         if (lastText !== previous || current.identity !== lastIdentity) {
           stableSince = Date.now();
           lastIdentity = current.identity;
@@ -504,6 +557,47 @@
           active.lastCandidateReason = current.reason;
         }
       }
+      if (networkText) {
+        const preferred = preferredResponseText(lastText, networkText);
+        const previous = lastText;
+        lastText = await updateCapturedText(active, preferred, lastText);
+        if (lastText !== previous) {
+          stableSince = Date.now();
+          active.lastCandidateReason = "network-assistant-evidence-v57";
+        }
+      }
+
+      // A correlated assistant-complete/done event is the strongest response
+      // terminal evidence available on redesigned pages. The network module does
+      // not complete requests itself; it writes this evidence onto the exact
+      // active request and request-v6 remains the one terminal authority.
+      if (networkTerminalAt && networkTerminalText && !promptStillPresent(active) && Date.now() - networkTerminalAt >= 750) {
+        responseStarted = await ensureResponseStarted(active, responseStarted, "network-terminal-v57");
+        const finalText = preferredResponseText(lastText, networkTerminalText) || networkTerminalText;
+        lastText = await updateCapturedText(active, finalText, lastText);
+        await emit({
+          type: "chat.completed",
+          request_id: active.requestId,
+          text: lastText || networkTerminalText,
+          diagnostics: {
+            response_epoch_revision: 69,
+            response_terminal_settle_revision: 82,
+            response_terminal_source: "network-sse-terminal-v57",
+            response_terminal_stable_ms: Date.now() - networkTerminalAt,
+            response_epoch_candidate_reason: active.lastCandidateReason || "network-assistant-evidence-v57",
+            network_stream_id: String(active.networkTerminalStreamId || ""),
+            network_stream_sequence: Number(active.networkTerminalSequence || 0),
+            network_stream_chunks: Number(active.networkTerminalChunks || 0),
+            network_stream_bytes: Number(active.networkTerminalBytes || 0),
+            response_format: "markdown",
+            response_image_inlined_count: 0,
+            response_image_inlined_bytes: 0,
+          },
+        });
+        active.completed = true;
+        return;
+      }
+
       if (responseStarted && lastText && !generating && stableSince && Date.now() - stableSince >= 1000) {
         let settleStableSince = Date.now();
         let settledText = lastText;
@@ -542,7 +636,8 @@
             text: finalText,
             diagnostics: {
               response_epoch_revision: 69,
-              response_terminal_settle_revision: 81,
+              response_terminal_settle_revision: 82,
+              response_terminal_source: "dom-stable-v6",
               response_terminal_stable_ms: Date.now() - settleStableSince,
               response_epoch_candidate_reason: settledState.reason,
               response_format: "markdown",
@@ -570,6 +665,8 @@
       requestId: String(message.requestId || ""),
       prompt,
       promptNormalized: normalize(prompt),
+      promptComposer: null,
+      submitStartedAt: 0,
       options: message.options || {},
       attachmentCount: Array.isArray(message.attachments) ? message.attachments.length : 0,
       cancelled: false,
@@ -584,6 +681,14 @@
       baselineLatestText: "",
       lastCaptureAt: 0,
       lastCapturedText: "",
+      networkObservedText: "",
+      networkObservedAt: 0,
+      networkTerminalText: "",
+      networkTerminalAt: 0,
+      networkTerminalStreamId: "",
+      networkTerminalSequence: 0,
+      networkTerminalChunks: 0,
+      networkTerminalBytes: 0,
     };
     state.active = active;
     if (v5) v5.active = active;
