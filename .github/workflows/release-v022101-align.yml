@@ -1,0 +1,172 @@
+name: Release v0.22.101 alignment
+
+on:
+  push:
+    branches:
+      - fix/v0.22.101-request-terminal-windows-ui
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/v0.22.101-request-terminal-windows-ui
+          fetch-depth: 0
+      - name: Align unified release version and CI coverage
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          files = [
+              '.github/workflows/production-image-smoke.yml',
+              'app/runtime_contract.py',
+              'app/worker_limits_clipboard_v121_patch.py',
+              'chrome_extension/background_runtime_preflight_v48.js',
+              'chrome_extension/content_bundle_marker_v48.js',
+              'chrome_extension/content_bundle_marker_v71.js',
+              'chrome_extension/content_runtime_contract_v48.js',
+              'chrome_extension/content_runtime_contract_v71.js',
+              'chrome_extension/manifest.json',
+              'tests/runtime_preflight_refresh_v71.mjs',
+              'tests/test_admin_ui_polish_v138_release_v02288.py',
+              'tests/test_bootstrap_container_packaging_v22_4.py',
+              'tests/test_capacity_queue_v57.py',
+              'tests/test_capacity_runtime_v22_24.py',
+              'tests/test_generation_backend_health_v54.py',
+              'tests/test_linux_worker_bootstrap_runtime_recovery_v22_7.py',
+              'tests/test_linux_worker_bridge_binding_v22_3.py',
+              'tests/test_linux_worker_bridge_central_sync_v36.py',
+              'tests/test_linux_worker_extension_autoload_v22_16.py',
+              'tests/test_linux_worker_install_lifecycle_v22_5.py',
+              'tests/test_linux_worker_isolated_manager_v126.py',
+              'tests/test_linux_worker_login_diagnostics_v22_22.py',
+              'tests/test_linux_worker_online_upgrade_v22_25.py',
+              'tests/test_linux_worker_pairing_ui_v22_18.py',
+              'tests/test_linux_worker_proxy_control_v22_1.py',
+              'tests/test_linux_worker_proxy_login_gate_v22_8.py',
+              'tests/test_linux_worker_remote_login_v22_2.py',
+              'tests/test_linux_worker_repair_command_v22_21.py',
+              'tests/test_linux_worker_ui_hygiene_v22_15.py',
+              'tests/test_login_readiness_v27.py',
+              'tests/test_login_ready_release_v02287.py',
+              'tests/test_model_evidence_v144.py',
+              'tests/test_multimodal_main_world_v78.py',
+              'tests/test_network_stream_progress_v54.py',
+              'tests/test_persistent_window_pool_release_v02285_v0836.py',
+              'tests/test_persistent_window_pool_v132.py',
+              'tests/test_qnbot_recovery_release_v02286_v0837.py',
+              'tests/test_rate_limit_window_guard_v52.py',
+              'tests/test_release_proxy_health_v22_38.py',
+              'tests/test_release_v02246_contract.py',
+              'tests/test_request_hygiene_worker_toggle_v46.py',
+              'tests/test_reserve_window_telemetry_v29.py',
+              'tests/test_response_capture_v41.py',
+              'tests/test_response_progress_v22_34.py',
+              'tests/test_response_stream_tool_isolation_v48.py',
+              'tests/test_responses_protocol_integrity_v110.py',
+              'tests/test_responses_tool_stream_window_cap_v111.py',
+              'tests/test_route_recovery_release_v02290_v0839.py',
+              'tests/test_runtime_contract.py',
+              'tests/test_runtime_lifecycle_multimodal_v79.py',
+              'tests/test_server_worker_sync_v22_36.py',
+              'tests/test_single_response_observer_v53.py',
+              'tests/test_single_window_authority_release_v02293_v0842.py',
+              'tests/test_user_console_v104.py',
+              'tests/test_v02249_linux_response_lifecycle.py',
+              'tests/test_v02250_attachment_window_telemetry.py',
+              'tests/test_v02251_physical_window_truth.py',
+              'tests/test_v02252_multimodal_upload_ready_gate.py',
+              'tests/test_v02253_vision_affinity_window_stagger.py',
+              'tests/test_v02254_worker_lifecycle_affinity_prompt_v86.py',
+              'tests/test_v02273_strict_api_fifo.py',
+              'tests/test_worker_lifecycle_retry_quarantine_v50.py',
+              'tests/test_worker_limits_clipboard_v121.py',
+              'tests/test_worker_runtime_refresh_v71.py',
+              'tests/test_worker_runtime_standby_release_v02298.py',
+          ]
+
+          changed = []
+          for name in files:
+              path = Path(name)
+              if not path.exists():
+                  raise SystemExit(f'missing release-alignment file: {name}')
+              text = path.read_text(encoding='utf-8')
+              new = text.replace('0.22.100', '0.22.101')
+              if name == 'app/runtime_contract.py':
+                  new = new.replace(
+                      'runtime-ready-standby-v146-release-v022101',
+                      'runtime-ready-standby-v146-release-v022100-request-terminal-network-evidence-v57-registry-transport-health-v149-windows-worker-popup-v1-release-v022101',
+                  )
+                  new = new.replace(
+                      'runtime-ready-standby-v146-release-v0846',
+                      'runtime-ready-standby-v146-release-v0846-request-terminal-network-evidence-v57-registry-transport-health-v149-windows-worker-popup-v1-release-v0847',
+                  )
+                  feature_anchor = '            "runtime_ready_standby_semantics_v146": True,\n'
+                  if feature_anchor in new and '"registry_transport_health_v149": True' not in new:
+                      new = new.replace(
+                          feature_anchor,
+                          feature_anchor
+                          + '            "network_terminal_evidence_v57": True,\n'
+                          + '            "registry_transport_health_v149": True,\n'
+                          + '            "windows_worker_manual_pairing_fresh_identity": True,\n'
+                          + '            "windows_worker_popup_simplified": True,\n',
+                      )
+              if new != text:
+                  path.write_text(new, encoding='utf-8')
+                  changed.append(name)
+
+          ci_path = Path('.github/workflows/ci.yml')
+          ci = ci_path.read_text(encoding='utf-8')
+          anchor = '          node --check chrome_extension/content_request_v5.js\n'
+          extra = (
+              '          node --check chrome_extension/content_request_v6.js\n'
+              '          node --check chrome_extension/content_network_stream_recovery_v55.js\n'
+          )
+          if 'node --check chrome_extension/content_request_v6.js' not in ci:
+              if anchor not in ci:
+                  raise SystemExit('CI JavaScript syntax insertion anchor is missing')
+              ci = ci.replace(anchor, anchor + extra)
+              ci_path.write_text(ci, encoding='utf-8')
+              changed.append(str(ci_path))
+
+          required = {
+              'app/runtime_contract.py',
+              'chrome_extension/background_runtime_preflight_v48.js',
+              'chrome_extension/content_bundle_marker_v48.js',
+              'chrome_extension/content_bundle_marker_v71.js',
+              'chrome_extension/content_runtime_contract_v48.js',
+              'chrome_extension/content_runtime_contract_v71.js',
+              'chrome_extension/manifest.json',
+          }
+          missing_changed = sorted(required - set(changed))
+          if missing_changed:
+              raise SystemExit(f'critical version surfaces were not changed: {missing_changed}')
+
+          runtime = Path('app/runtime_contract.py').read_text(encoding='utf-8')
+          manifest = Path('chrome_extension/manifest.json').read_text(encoding='utf-8')
+          for token in (
+              'SERVER_RUNTIME_VERSION = "0.22.101"',
+              'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.101"',
+              '"network_terminal_evidence_v57": True',
+              '"registry_transport_health_v149": True',
+          ):
+              if token not in runtime:
+                  raise SystemExit(f'missing v0.22.101 runtime token: {token}')
+          if '"version": "0.22.101"' not in manifest:
+              raise SystemExit('manifest did not align to v0.22.101')
+          print(f'aligned {len(set(changed))} files to v0.22.101')
+          PY
+          git rm .github/workflows/release-v022101-align.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --check
+          git commit -m "release: align Chat2API v0.22.101"
+          git push origin HEAD:fix/v0.22.101-request-terminal-windows-ui
