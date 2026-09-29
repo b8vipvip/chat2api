@@ -2,16 +2,15 @@
   const KEY = "__CHAT2API_WORKER_LIMITS_CLIPBOARD_V121__";
   if (globalThis[KEY]) return;
 
+  const SETTINGS_HELP = "并发=同时执行的请求上限；备用=登录正常时持续维持的可接待空闲窗口数量。点击编辑按钮修改。";
   const state = {
     version: 121,
-    renderTask: null,
+    renderer: "canonical-worker-list-v152",
     login: {workerId:"", ticket:"", sourceWidth:1920, sourceHeight:1080},
     dragging: false,
     lastMoveAt: 0,
   };
   globalThis[KEY] = state;
-
-  const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[char]);
 
   async function jsonRequest(path, options = {}) {
     const {headers = {}, body, ...rest} = options;
@@ -35,72 +34,12 @@
     node.style.color = tone === "bad" ? "#fca5a5" : tone === "ok" ? "#86efac" : "#94a3b8";
   }
 
-  function workerTable() {
-    const body = document.getElementById("extensionDeviceBody");
-    return {body, header: body?.closest("table")?.querySelector("thead tr") || null};
-  }
-
-  function cellByKey(parent, key) {
-    return [...(parent?.children || [])].find(node => String(node.dataset?.chat2apiColumnKey || "") === key) || null;
-  }
-
-  function rowClientId(tr) {
-    return String(tr?.dataset?.clientId || cellByKey(tr, "client_id")?.textContent || "").trim();
-  }
-
-  function limitEditor(row) {
-    const id = String(row?.client_id || "");
-    const concurrency = Math.max(1, Math.min(32, Number(row?.max_concurrency || row?.capacity?.limit_units || 1)));
-    const windows = Math.max(1, Math.min(32, Number(row?.max_windows || 1)));
-    return `<div data-v121-worker-limits="${esc(id)}" style="position:relative;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;min-width:78px">
-      <strong data-v121-limit-summary style="font-variant-numeric:tabular-nums">${concurrency}/${windows}</strong>
-      <button class="action" type="button" data-v121-edit-limits title="编辑并发 / 备用" aria-label="编辑并发 / 备用" style="padding:4px 7px;min-width:30px">✎</button>
-      <div data-v121-limit-popover hidden style="position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:250px;padding:12px;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 14px 34px rgba(0,0,0,.38);white-space:normal">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <label style="display:grid;gap:5px;font-size:12px">并发<input data-v121-concurrency type="number" min="1" max="32" value="${concurrency}" style="width:100%;padding:7px 8px"></label>
-          <label style="display:grid;gap:5px;font-size:12px">备用<input data-v121-windows type="number" min="1" max="32" value="${windows}" style="width:100%;padding:7px 8px"></label>
-        </div>
-        <div style="display:flex;align-items:center;justify-content:flex-end;gap:7px;margin-top:10px">
-          <span class="muted" data-v121-limit-note style="font-size:11px;margin-right:auto"></span>
-          <button class="action" type="button" data-v121-cancel-limits>取消</button>
-          <button class="action good" type="button" data-v121-save-limits>保存</button>
-        </div>
-      </div>
-    </div>`;
-  }
-
-  async function renderLimits(force = false) {
-    if (state.renderTask) return state.renderTask;
-    const task = (async () => {
-      const view = document.getElementById("view-extensions");
-      if (!force && view && !view.classList.contains("active")) return null;
-      const payload = await jsonRequest("/api/admin/extensions");
-      const rows = Array.isArray(payload?.clients) ? payload.clients : [];
-      const byId = new Map(rows.map(row => [String(row?.client_id || ""), row]));
-      const {body, header} = workerTable();
-      if (!body || !header) return payload;
-      const headerCell = cellByKey(header, "worker_settings");
-      if (headerCell) {
-        headerCell.textContent = "并发 / 备用";
-        headerCell.title = "并发=同时执行的请求上限；备用=登录正常时持续维持的可接待空闲窗口数量。点击编辑按钮修改。";
-      }
-      for (const tr of body.rows) {
-        if (tr.cells.length === 1 && tr.cells[0].hasAttribute("colspan")) continue;
-        const id = rowClientId(tr);
-        const row = byId.get(id);
-        const cell = cellByKey(tr, "worker_settings");
-        if (!row || !cell) continue;
-        const html = limitEditor(row);
-        if (cell.innerHTML !== html) cell.innerHTML = html;
-      }
-      document.documentElement.dataset.chat2apiWorkerLimitsRevision = "121";
-      return payload;
-    })().catch(error => {
-      console.warn("chat2api worker limits v121 render failed", error);
-      return null;
-    });
-    state.renderTask = task;
-    try { return await task; } finally { if (state.renderTask === task) state.renderTask = null; }
+  // Worker-list HTML is owned exclusively by admin_extension_columns.js. v121
+  // keeps only edit/save and remote-login clipboard behavior; it never fetches
+  // /api/admin/extensions and never rewrites Worker rows after first paint.
+  async function renderLimits() {
+    document.documentElement.dataset.chat2apiWorkerLimitsRevision = "121-behavior-only";
+    return null;
   }
 
   async function saveLimits(button) {
@@ -139,7 +78,6 @@
       if (note) note.textContent = concurrencyApplied && windowsApplied ? "已保存并生效" : "已保存 · Worker 在线后自动生效";
       const reload = globalThis.chat2apiReloadCanonicalWorkerListV59;
       if (typeof reload === "function") await reload();
-      await renderLimits(true);
     } catch (error) {
       if (note) note.textContent = String(error?.message || error);
     } finally {
@@ -161,29 +99,6 @@
     closeLimitPopovers(opening ? popover : null);
     popover.hidden = !opening;
     if (opening) editor.querySelector("[data-v121-concurrency]")?.focus();
-  }
-
-  function installWorkerHooks() {
-    const baseReload = globalThis.chat2apiReloadCanonicalWorkerListV59;
-    if (typeof baseReload === "function" && !baseReload.__chat2apiWorkerLimitsV121) {
-      const wrapped = async (...args) => {
-        const result = await baseReload(...args);
-        await renderLimits(true);
-        return result;
-      };
-      wrapped.__chat2apiWorkerLimitsV121 = true;
-      globalThis.chat2apiReloadCanonicalWorkerListV59 = wrapped;
-    }
-    const baseShow = globalThis.show;
-    if (typeof baseShow === "function" && !baseShow.__chat2apiWorkerLimitsV121) {
-      const wrappedShow = async (...args) => {
-        const result = await baseShow(...args);
-        if (args[0] === "extensions") await renderLimits(true);
-        return result;
-      };
-      wrappedShow.__chat2apiWorkerLimitsV121 = true;
-      globalThis.show = wrappedShow;
-    }
   }
 
   function loginEndpoint(workerId) {
@@ -291,6 +206,7 @@
 
     document.addEventListener("keydown", event => {
       const sink = document.getElementById("linuxLoginKeyboardSink");
+      if (event.key === "Escape") closeLimitPopovers();
       if (!state.login.ticket || event.target !== sink) return;
       const key = String(event.key || "").toLowerCase();
       const command = (event.ctrlKey || event.metaKey) && !event.altKey;
@@ -308,7 +224,6 @@
       state.dragging = true;
       sendMouse("down", event);
     }, true);
-
     document.addEventListener("mousemove", event => {
       if (!state.dragging || !state.login.ticket) return;
       const now = performance.now();
@@ -316,13 +231,11 @@
       state.lastMoveAt = now;
       sendMouse("move", event);
     }, true);
-
     document.addEventListener("mouseup", event => {
       if (!state.dragging || event.button !== 0) return;
       state.dragging = false;
       sendMouse("up", event);
     }, true);
-
     document.addEventListener("click", event => {
       if (event.target?.id === "linuxLoginFrame" && state.login.ticket) {
         event.preventDefault();
@@ -411,19 +324,16 @@
     }
     if (!event.target?.closest?.("[data-v121-worker-limits]")) closeLimitPopovers();
   });
-  document.addEventListener("keydown", event => {
-    if (event.key === "Escape") closeLimitPopovers();
-  });
 
   function start() {
     installFetchObserver();
     installLoginEvents();
-    installWorkerHooks();
-    setTimeout(() => { installWorkerHooks(); renderLimits(true); ensureClipboardToolbar(); }, 140);
-    setTimeout(() => { installWorkerHooks(); renderLimits(true); ensureClipboardToolbar(); }, 900);
+    renderLimits();
+    ensureClipboardToolbar();
   }
 
   state.renderLimits = renderLimits;
+  state.settingsHelp = SETTINGS_HELP;
   state.copyRemoteSelection = copyRemoteSelection;
   state.pasteRemote = pasteRemote;
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", start, {once:true});
