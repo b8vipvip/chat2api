@@ -56,16 +56,23 @@ def test_worker_identity_decorator_does_not_mutate_canonical_worker_list():
 
 def test_canonical_worker_list_declares_single_structural_owner():
     source = Path("app/admin_extension_columns.js").read_text(encoding="utf-8")
-    assert 'structural_owner: "admin_extension_columns"' in source
-    assert "legacy_renderers_bypassed: true" in source
+    legacy = Path("app/admin_v21_5.js").read_text(encoding="utf-8")
+    presentation = Path("app/admin_worker_presentation_v66.js").read_text(encoding="utf-8")
+    assert 'const COLUMN_SCHEMA_REVISION = 152' in source
+    assert 'data-chat2api-structural-owner="worker-settings-v152"' in source
+    assert 'document.documentElement.dataset.chat2apiWorkerListSingleRenderer = "1"' in source
+    assert 'delegated_to: "admin_extension_columns-v152"' in legacy
+    assert 'data-worker-window-editor' not in legacy
+    assert 'retired_renderer: true' in presentation
 
 
 def test_worker_presentation_has_no_autonomous_mutation_observer_loop():
     source = Path("app/admin_worker_presentation_v66.js").read_text(encoding="utf-8")
     assert "MutationObserver" not in source
     assert "setInterval(" not in source
-    assert "setTimeout(() => refresh(true), 120)" in source
-    assert "setTimeout(() => refresh(true), 900)" in source
+    assert "setTimeout(() => refresh(true)" not in source
+    assert 'retired_renderer: true' in source
+    assert 'callApi("/api/admin/extensions")' not in source
 
 
 def test_request_identity_uses_linux_worker_authority():
