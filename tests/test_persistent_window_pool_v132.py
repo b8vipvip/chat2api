@@ -31,10 +31,10 @@ def test_persistent_pool_is_active_routing_layer() -> None:
     assert '!busy.has(row.window_id)' in source
     assert 'standby.length === target' in source
     assert 'standby_semantics_revision: STANDBY_SEMANTICS_REVISION' in source
-    assert 'const STANDBY_SEMANTICS_REVISION = 152' in source
+    assert 'const STANDBY_SEMANTICS_REVISION = 153' in source
     assert 'await createStandby(reason)' in source
     assert 'route.window_owned = true' in source
-    assert 'post-admission-standby-refill-v152' in source
+    assert 'post-admission-standby-refill-v153' in source
     assert 'worker_persistent_window_pool_exhausted' in source
     assert 'if (!await loginReady().catch(() => false)) return null;' in source
 
@@ -47,7 +47,8 @@ def test_persistent_pool_keeps_configured_unassigned_standby_cardinality() -> No
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     assert 'let rows = await physicalWindows();' in source
     assert 'while (standbyRows(rows, value).length < target)' in source
-    assert 'const standbyTarget = isDisabled ? Math.min(1, target)' in source
+    assert 'const compactStandby = isDisabled || auth.explicit_logout === true;' in source
+    assert 'const standbyTarget = compactStandby ? Math.min(1, target) : target;' in source
     assert 'Math.max(0, standby.length - effective)' in source
     assert 'routable_total: routableRows.length' in source
     assert 'unroutable_total: unroutableRows.length' in source
@@ -59,6 +60,28 @@ def test_persistent_pool_keeps_configured_unassigned_standby_cardinality() -> No
     assert 'routed: routedRows.length' in source
     assert 'leased,' in source
     assert 'standby_excludes_routed_windows: true' in source
+
+
+def test_transient_login_readiness_never_compacts_configured_standby() -> None:
+    source = text("chrome_extension/conversation_persistent_pool_v132.js")
+
+    # `unknown`, `checking`, or a temporary composer probe miss are not logout
+    # evidence. They may pause warming/admission but must retain the configured
+    # standby target instead of destructively shrinking it to one window.
+    assert 'async function loginStatus()' in source
+    assert 'ready: stateValue === "ready" && composerReady' in source
+    assert 'explicit_logout: stateValue === "login_required"' in source
+    assert 'const compactStandby = isDisabled || auth.explicit_logout === true;' in source
+    assert 'const standbyTarget = compactStandby ? Math.min(1, target) : target;' in source
+    assert 'ready ? target : Math.min(1, target)' not in source
+    assert 'transient_login_state_preserves_standby_target: true' in source
+
+    # Diagnostics must make a future cardinality problem self-explaining.
+    assert 'login_state: auth.state' in source
+    assert 'login_composer_ready: auth.composer_ready' in source
+    assert 'login_explicit_logout: auth.explicit_logout' in source
+    assert '? "login_required"' in source
+    assert '? "login_not_ready"' in source
 
 
 def test_saved_conversation_is_validated_after_slot_reassignment_without_losing_lease_ownership() -> None:
