@@ -111,7 +111,9 @@ jobs:
           assert "markPooledRoute" not in persistent_pool
           assert "reassign-idle-persistent-route" not in persistent_pool
           assert "const IDLE_CLOSE_MS = 5 * 60 * 1000" in router
-          assert "route.close_after = Date.now() + IDLE_CLOSE_MS" in router
+          assert "route.last_active_at = Date.now()" in router
+          assert "route.close_after = route.last_active_at + IDLE_CLOSE_MS" in router
+          assert "chrome.alarms.create(`${ALARM_PREFIX}${route.window_id}`, { when: route.close_after })" in router
           assert "runtime_ready_standby: true" in persistent_pool
           assert "validateIdleRuntime" in persistent_pool
           assert "delegated-to-persistent-window-pool-v137" in pool_guard
