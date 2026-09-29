@@ -102,14 +102,12 @@ def test_chatgpt_column_shows_login_status_without_composer_jargon():
 
 def test_health_center_and_worker_settings_support_reordered_columns():
     health = read(ROOT / "app" / "admin_v21_6.js")
-    live = read(ROOT / "app" / "admin_v21_5.js")
+    legacy = read(ROOT / "app" / "admin_v21_5.js")
     columns = read(ROOT / "app" / "admin_extension_columns.js")
 
-    assert 'td[data-chat2api-column-key="worker_settings"]' in live
-    assert 'column: "worker_settings"' in live
-    assert 'data-chat2api-structural-owner="worker-settings-v59"' in live
-    assert 'columnCell(tr, "platform", 8)' not in live
-    assert 'patchColumnSettingsLabels' not in live
+    assert 'data-worker-window-editor' not in legacy
+    assert 'ensureWorkerSettingsStructure' not in legacy
+    assert 'delegated_to: "admin_extension_columns-v152"' in legacy
 
     assert 'columnCell(tr, "client_id", 0)' in health
     assert 'columnCell(tr, "version", 2)' in health
@@ -118,7 +116,8 @@ def test_health_center_and_worker_settings_support_reordered_columns():
     assert "insertCell" not in health
     assert "insertBefore(cell" not in health
 
-    assert '{key: "worker_settings", label: "并发设置"}' in columns
+    assert '{key: "worker_settings", label: "并发 / 备用设置"}' in columns
+    assert '{key: "occupancy", label: "请求 / 备用窗口"}' in columns
     assert '{key: "bound_api_keys", label: "绑定 API Key 数"}' not in columns
     assert 'data-chat2api-health-column="${key}"' in columns
     assert 'data-chat2api-health-cell="network"' in columns
