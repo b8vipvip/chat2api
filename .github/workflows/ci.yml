@@ -42,6 +42,8 @@ jobs:
           node --check chrome_extension/content_request_v3.js
           node --check chrome_extension/content_request_v4.js
           node --check chrome_extension/content_request_v5.js
+          node --check chrome_extension/content_request_v6.js
+          node --check chrome_extension/content_network_stream_recovery_v55.js
           node --check chrome_extension/content_request_stall_guard_v34.js
           node --check chrome_extension/content_request_perf_v21.js
           node --check chrome_extension/content_completion_v6.js
