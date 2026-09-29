@@ -17,7 +17,7 @@ jobs:
         with:
           ref: fix/v0.22.101-request-terminal-windows-ui
           fetch-depth: 0
-      - name: Align unified release version and CI coverage
+      - name: Align unified release version
         shell: bash
         run: |
           set -euo pipefail
@@ -121,20 +121,6 @@ jobs:
               if new != text:
                   path.write_text(new, encoding='utf-8')
                   changed.append(name)
-
-          ci_path = Path('.github/workflows/ci.yml')
-          ci = ci_path.read_text(encoding='utf-8')
-          anchor = '          node --check chrome_extension/content_request_v5.js\n'
-          extra = (
-              '          node --check chrome_extension/content_request_v6.js\n'
-              '          node --check chrome_extension/content_network_stream_recovery_v55.js\n'
-          )
-          if 'node --check chrome_extension/content_request_v6.js' not in ci:
-              if anchor not in ci:
-                  raise SystemExit('CI JavaScript syntax insertion anchor is missing')
-              ci = ci.replace(anchor, anchor + extra)
-              ci_path.write_text(ci, encoding='utf-8')
-              changed.append(str(ci_path))
 
           required = {
               'app/runtime_contract.py',
