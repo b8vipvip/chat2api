@@ -72,7 +72,7 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
 
     registry = app.state.registry
     sessions = app.state.admin_sessions
-    api_keys = app.state.api_keys
+    api_keys = getattr(app.state, "api_keys", None)
 
     def require_admin(request: Request) -> None:
         if not sessions.authenticate(request.cookies.get(SESSION_COOKIE)):
@@ -84,10 +84,12 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
             return None
         if key == "master":
             return "CHAT2API_API_KEY"
-        try:
-            row = api_keys.get_public(key)
-        except Exception:
-            row = None
+        row = None
+        if api_keys is not None and hasattr(api_keys, "get_public"):
+            try:
+                row = api_keys.get_public(key)
+            except Exception:
+                row = None
         name = str(row.get("name") or "").strip() if isinstance(row, dict) else ""
         return name or key
 
