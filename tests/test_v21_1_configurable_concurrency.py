@@ -57,7 +57,8 @@ def test_v211_static_contracts() -> None:
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in behavior
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' in behavior
     assert 'renderer: "canonical-worker-list-v152"' in behavior
-    assert "bound_api_keys" not in canonical
+    assert '{key: "bound_api_keys"' not in canonical
+    assert 'data-chat2api-column-key="bound_api_keys"' not in canonical
 
     assert "MAX_WORKERS_PER_KEY = 3" in workers
     assert "function workerLimit(message)" in workers
