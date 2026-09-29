@@ -25,7 +25,6 @@ jobs:
           from pathlib import Path
 
           files = [
-              '.github/workflows/production-image-smoke.yml',
               'app/runtime_contract.py',
               'app/worker_limits_clipboard_v121_patch.py',
               'chrome_extension/background_runtime_preflight_v48.js',
@@ -118,7 +117,6 @@ jobs:
               raise SystemExit(f'critical version surfaces were not changed: {missing_changed}')
           print(f'aligned {len(changed)} files to v0.22.100')
           PY
-          git rm .github/workflows/release-v022100-align.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
