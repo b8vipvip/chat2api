@@ -36,16 +36,19 @@ def test_worker_manager_is_wide_and_secondary_metadata_is_removed() -> None:
 
 
 def test_worker_limit_cell_uses_compact_summary_with_single_popover_editor() -> None:
-    source = read("app/admin_worker_limits_clipboard_v121.js")
-    assert "data-v121-limit-summary" in source
-    assert "data-v121-edit-limits" in source
-    assert "data-v121-limit-popover" in source
-    assert "data-v121-concurrency" in source
-    assert "data-v121-windows" in source
-    assert "data-v121-save-limits" in source
-    assert "data-v121-refresh-limits" not in source
-    assert "窗口跟随并发" not in source
-    assert "窗口独立设置" not in source
+    canonical = read("app/admin_extension_columns.js")
+    behavior = read("app/admin_worker_limits_clipboard_v121.js")
+    assert "data-v121-limit-summary" in canonical
+    assert "data-v121-edit-limits" in canonical
+    assert "data-v121-limit-popover" in canonical
+    assert "data-v121-concurrency" in canonical
+    assert "data-v121-windows" in canonical
+    assert "data-v121-save-limits" in canonical
+    assert "data-v121-refresh-limits" not in canonical
+    assert "窗口跟随并发" not in canonical
+    assert "窗口独立设置" not in canonical
+    assert 'renderer: "canonical-worker-list-v152"' in behavior
+    assert 'jsonRequest("/api/admin/extensions")' not in behavior
 
 
 def test_window_manager_uses_worker_tail_plus_local_window_number() -> None:
