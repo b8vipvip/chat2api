@@ -163,26 +163,41 @@
     return stored?.[DISABLED_KEY] === true;
   }
 
-  async function loginReady() {
+  async function loginSnapshot() {
     const readiness = globalThis[LOGIN_KEY];
-    let snapshot = null;
     if (typeof readiness?.snapshot === "function") {
-      try { snapshot = await readiness.snapshot(); } catch (_) {}
+      try {
+        const snapshot = await readiness.snapshot();
+        if (snapshot && typeof snapshot === "object" && snapshot.state) return snapshot;
+      } catch (_) {}
     }
-    if (snapshot?.state) return snapshot.state === "ready" && snapshot.composer_ready === true;
     const stored = await chrome.storage.local.get({
       [LOGIN_STATE_KEY]: "unknown",
       [LOGIN_COMPOSER_KEY]: false,
     }).catch(() => ({}));
-    return stored[LOGIN_STATE_KEY] === "ready" && stored[LOGIN_COMPOSER_KEY] === true;
+    return {
+      state: String(stored[LOGIN_STATE_KEY] || "unknown"),
+      composer_ready: stored[LOGIN_COMPOSER_KEY] === true,
+      window_id: null,
+      tab_id: null,
+    };
   }
 
-  async function loginSnapshot() {
-    const readiness = globalThis[LOGIN_KEY];
-    if (typeof readiness?.snapshot === "function") {
-      try { return await readiness.snapshot(); } catch (_) {}
-    }
-    return null;
+  async function loginStatus() {
+    const snapshot = await loginSnapshot();
+    const stateValue = String(snapshot?.state || "unknown");
+    const composerReady = snapshot?.composer_ready === true;
+    return {
+      state: stateValue,
+      composer_ready: composerReady,
+      ready: stateValue === "ready" && composerReady,
+      explicit_logout: stateValue === "login_required",
+      snapshot,
+    };
+  }
+
+  async function loginReady() {
+    return (await loginStatus()).ready;
   }
 
   async function physicalWindows() {
@@ -419,8 +434,10 @@
     return { rows: current, checked: candidates.length, failed, closed, skipped: false, reason };
   }
 
-  function snapshotFrom(rows, value, ready, isDisabled) {
+  function snapshotFrom(rows, value, auth, isDisabled) {
     const target = normalizeTarget(state.target) || 0;
+    const ready = auth?.ready === true;
+    const explicitLogout = auth?.explicit_logout === true;
     const assigned = routeByWindow(value);
     const busy = busyWindowIds(value);
     const routableRows = rows.filter(row => row.routable);
@@ -430,7 +447,8 @@
     const standby = standbyRows(rows, value);
     const inUse = routedRows.filter(row => busy.has(row.window_id)).length;
     const leased = routedRows.filter(row => !busy.has(row.window_id)).length;
-    const effective = target ? (isDisabled ? Math.min(1, target) : target) : 0;
+    const compactStandby = isDisabled || explicitLogout;
+    const effective = target ? (compactStandby ? Math.min(1, target) : target) : 0;
     return {
       version: 132,
       revision: 132,
@@ -438,7 +456,7 @@
       target,
       configured_target: target,
       effective_target: effective,
-      target_reached: Boolean(target && ready && !isDisabled && standby.length === target) || Boolean(target && isDisabled && standby.length <= effective),
+      target_reached: Boolean(target && !compactStandby && standby.length === target) || Boolean(target && compactStandby && standby.length <= effective),
       total: rows.length,
       routable_total: routableRows.length,
       unroutable_total: unroutableRows.length,
@@ -455,11 +473,15 @@
       all_chatgpt_windows: rows.length,
       standby_semantics_revision: STANDBY_SEMANTICS_REVISION,
       standby_excludes_routed_windows: true,
+      transient_login_state_preserves_standby_target: true,
       route_idle_lease_ms: 5 * 60 * 1000,
       runtime_ready_standby: true,
       runtime_preflight_checks: state.runtimeChecks,
       runtime_preflight_failures: state.runtimeFailures,
+      login_state: String(auth?.state || "unknown"),
+      login_composer_ready: auth?.composer_ready === true,
       login_ready: ready,
+      login_explicit_logout: explicitLogout,
       worker_disabled: isDisabled,
       warming: Boolean(target && ready && !isDisabled && standby.length < target),
       excess: Math.max(0, standby.length - effective),
@@ -482,12 +504,12 @@
   async function snapshot() {
     await ensureLoaded();
     const value = await routerReady();
-    const [rows, ready, isDisabled] = await Promise.all([
+    const [rows, auth, isDisabled] = await Promise.all([
       physicalWindows(),
-      loginReady().catch(() => false),
+      loginStatus().catch(() => ({ state: "unknown", composer_ready: false, ready: false, explicit_logout: false })),
       disabled(),
     ]);
-    return snapshotFrom(rows, value, ready, isDisabled);
+    return snapshotFrom(rows, value, auth, isDisabled);
   }
 
   async function shrinkStandby(value, rows, target, reason) {
@@ -515,7 +537,8 @@
     const value = await routerReady();
     const target = normalizeTarget(state.target);
     const isDisabled = await disabled();
-    const ready = await loginReady().catch(() => false);
+    const auth = await loginStatus().catch(() => ({ state: "unknown", composer_ready: false, ready: false, explicit_logout: false }));
+    const ready = auth.ready === true;
     let rows = await physicalWindows();
 
     let runtimeValidation = { checked: 0, failed: 0, closed: 0, skipped: true };
@@ -525,11 +548,25 @@
     }
 
     if (!target) {
-      state.lastResult = { ok: true, reason, target: null, action: "unconfigured", runtime_validation: runtimeValidation, at: Date.now() };
-      return snapshotFrom(rows, value, ready, isDisabled);
+      state.lastResult = {
+        ok: true,
+        reason,
+        target: null,
+        action: "unconfigured",
+        login_state: auth.state,
+        login_composer_ready: auth.composer_ready,
+        login_explicit_logout: auth.explicit_logout,
+        runtime_validation: runtimeValidation,
+        at: Date.now(),
+      };
+      return snapshotFrom(rows, value, auth, isDisabled);
     }
 
-    const standbyTarget = isDisabled ? Math.min(1, target) : (ready ? target : Math.min(1, target));
+    // Only an explicit login_required signal (or the worker master switch) may
+    // compact configured standby capacity. Transient checking/unknown/composer
+    // detection gaps pause warming but must never destroy already-warm capacity.
+    const compactStandby = isDisabled || auth.explicit_logout === true;
+    const standbyTarget = compactStandby ? Math.min(1, target) : target;
     const reduced = await shrinkStandby(value, rows, standbyTarget, reason);
     rows = reduced.rows;
 
@@ -549,6 +586,13 @@
     }
 
     const currentStandby = standbyRows(rows, value).length;
+    const pendingReason = isDisabled
+      ? "worker_disabled"
+      : (auth.explicit_logout
+          ? "login_required"
+          : (!ready
+              ? "login_not_ready"
+              : (reduced.deferred ? "protected_standby" : (lastError ? "warm_failed" : ""))));
     state.lastResult = {
       ok: !lastError,
       reason,
@@ -558,15 +602,20 @@
       total_windows: rows.length,
       routed_windows: routeByWindow(value).size,
       standby_semantics_revision: STANDBY_SEMANTICS_REVISION,
+      transient_login_state_preserves_standby_target: true,
+      login_state: auth.state,
+      login_composer_ready: auth.composer_ready,
+      login_ready: ready,
+      login_explicit_logout: auth.explicit_logout,
       runtime_validation: runtimeValidation,
       opened,
       closed: reduced.closed,
       deferred: reduced.deferred,
-      pending_reason: isDisabled ? "worker_disabled" : (!ready ? "login_not_ready" : (reduced.deferred ? "protected_standby" : (lastError ? "warm_failed" : ""))),
+      pending_reason: pendingReason,
       error: lastError,
       at: Date.now(),
     };
-    return snapshotFrom(rows, value, ready, isDisabled);
+    return snapshotFrom(rows, value, auth, isDisabled);
   }
 
   async function reconcile(reason = "scheduled") {
@@ -595,8 +644,12 @@
     await persistTarget();
     scheduleReconcile("target-updated", 0);
     const value = await routerReady();
-    const [rows, ready, isDisabled] = await Promise.all([physicalWindows(), loginReady().catch(() => false), disabled()]);
-    return { ok: true, target, source: state.source, snapshot: snapshotFrom(rows, value, ready, isDisabled) };
+    const [rows, auth, isDisabled] = await Promise.all([
+      physicalWindows(),
+      loginStatus().catch(() => ({ state: "unknown", composer_ready: false, ready: false, explicit_logout: false })),
+      disabled(),
+    ]);
+    return { ok: true, target, source: state.source, snapshot: snapshotFrom(rows, value, auth, isDisabled) };
   }
 
   function serial(task) {
@@ -776,6 +829,7 @@
   state.claimSlotForRequest = claimSlotForRequest;
   state.scheduleReconcile = scheduleReconcile;
   state.standbyRows = standbyRows;
+  state.loginStatus = loginStatus;
 
   ensureLoaded().then(() => scheduleReconcile("startup", 500)).catch(() => {});
 })();
