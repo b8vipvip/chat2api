@@ -15,28 +15,32 @@ def test_v146_standby_requires_current_worker_runtime() -> None:
     assert "async function ensureRuntimeCurrent(tabId)" in pool
     assert "async function validateIdleRuntime" in pool
     assert "row.runtime_ready === true" in pool
-    assert "const standbyRows = runtimeReadyRows.filter(row => !busy.has(row.window_id));" in pool
+    assert "function standbyRows(rows, value)" in pool
+    assert "!assigned.has(row.window_id)" in pool
+    assert "!busy.has(row.window_id)" in pool
     assert "runtime_ready_total: runtimeReadyRows.length" in pool
     assert "runtime_stale_total:" in pool
-    assert "standby_semantics_revision: 146" in pool
+    assert "const STANDBY_SEMANTICS_REVISION = 152" in pool
+    assert "standby_semantics_revision: STANDBY_SEMANTICS_REVISION" in pool
     assert "runtime_ready_standby: true" in pool
 
 
 def test_v146_reused_route_is_preflighted_before_dispatch() -> None:
     pool = text("chrome_extension/conversation_persistent_pool_v132.js")
-    existing = pool.split("let existing = await routeLiveTab(route);", 1)[1].split("if (Number.isInteger(route.window_id))", 1)[0]
+    existing = pool.split("let existing = await routeLiveTab(route);", 1)[1].split("route.window_id = null;", 1)[0]
     assert "await ensureRuntimeCurrent(existing.id)" in existing
-    assert "persistent-pool-existing-route-runtime-stale-v146" in existing
-    assert "reuse-runtime-ready-persistent-route-v146" in existing
-    assert "await closeWindow(existing.windowId)" in existing
+    assert "persistent-pool-existing-route-runtime-stale-v152" in existing
+    assert "reuse-leased-route-v152" in existing
+    assert "await closeWindow(staleWindowId)" in existing
 
 
 def test_v146_request_admission_filters_stale_standby() -> None:
     pool = text("chrome_extension/conversation_persistent_pool_v132.js")
     claim = pool.split("async function claimSlotForRequest(message)", 1)[1]
-    assert 'validateIdleRuntime(value, physical, "request-admission-v146")' in claim
-    assert "runtimeValidation.rows.filter(row => row.routable && row.runtime_ready === true)" in claim
-    assert "rows.filter(row => !busy.has(row.window_id)).length < target" in claim
+    assert 'validateIdleRuntime(value, physical, "request-admission-v152")' in claim
+    assert "let rows = runtimeValidation.rows" in claim
+    assert "let slot = standbyRows(rows, value)[0] || null" in claim
+    assert 'scheduleReconcile("post-admission-standby-refill-v152", 250)' in claim
 
 
 def test_v146_runtime_contract_and_capacity_telemetry_are_published() -> None:
