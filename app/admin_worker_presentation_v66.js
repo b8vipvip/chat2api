@@ -10,6 +10,7 @@
     version: 66,
     retired_renderer: true,
     structural_owner: "admin_extension_columns-v152",
+    delegated_to: "admin_extension_columns-v152",
   };
 
   function liveWindowTruth(payload) {
