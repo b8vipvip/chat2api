@@ -18,26 +18,18 @@ jobs:
         with:
           ref: release/v0.22.102
           fetch-depth: 0
-      - name: Align active release and Worker bundle contracts
+      - name: Align code and tests to v0.22.102
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
 
-          roots = [Path('app'), Path('chrome_extension'), Path('tests'), Path('.github/workflows')]
-          ignored = {
-              Path('.github/workflows/tmp-v022102-version-scan.yml'),
-              Path('.github/workflows/tmp-v022102-version-bump.yml'),
-          }
+          roots = [Path('app'), Path('chrome_extension'), Path('tests')]
           changed = []
           replacements = 0
           for root in roots:
-              if not root.exists():
-                  continue
               for path in sorted(p for p in root.rglob('*') if p.is_file()):
-                  if path in ignored:
-                      continue
                   try:
                       text = path.read_text(encoding='utf-8')
                   except UnicodeDecodeError:
@@ -46,8 +38,6 @@ jobs:
                   if not count:
                       continue
                   updated = text.replace('0.22.101', '0.22.102')
-                  # Preserve the historical note: unified release numbering was
-                  # introduced in v0.22.101, even though the current release is 102.
                   if path == Path('app/runtime_contract.py'):
                       updated = updated.replace('# v0.22.102+: one release version is the single source of truth for the', '# v0.22.101+: one release version is the single source of truth for the')
                   path.write_text(updated, encoding='utf-8')
@@ -56,15 +46,14 @@ jobs:
           print(f'REPLACEMENTS={replacements}')
           print('CHANGED_FILES=')
           print('\n'.join(changed))
-          if replacements < 100:
+          if replacements < 150:
               raise SystemExit(f'unexpectedly small release-version replacement set: {replacements}')
           PY
 
-          git rm -f .github/workflows/tmp-v022102-version-scan.yml .github/workflows/tmp-v022102-version-bump.yml
           git diff --check
           git status --short
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add app chrome_extension tests .github/workflows
+          git add app chrome_extension tests
           git commit -m 'release: align runtime contracts to v0.22.102'
           git push origin HEAD:release/v0.22.102
