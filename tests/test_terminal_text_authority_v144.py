@@ -53,7 +53,7 @@ def test_worker_manifest_has_one_terminal_completion_owner():
 
 def test_network_observer_is_evidence_only():
     source = (ROOT / "chrome_extension" / "content_network_stream_recovery_v55.js").read_text(encoding="utf-8")
-    assert 'network-stream-evidence-v56' in source
+    assert 'network-stream-evidence-v57' in source
     assert 'network_terminal_authority: "request-v6"' in source
     assert 'type: "chat.completed"' not in source
     assert 'active.cancelled = true' not in source

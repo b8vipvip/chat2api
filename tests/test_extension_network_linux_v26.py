@@ -74,10 +74,12 @@ def test_popup_exposes_linux_and_network_state():
         'linux: "Linux"',
         'status === "external"',
         'status === "china-mainland"',
-        "已允许主动预热",
-        "禁止主动预热",
+        "Windows Worker",
+        "窗口自动管理",
     ):
         assert token in popup
+    assert "已允许主动预热" not in popup
+    assert "禁止主动预热" not in popup
 
 
 def test_network_platform_vm_contract_is_required_by_ci():

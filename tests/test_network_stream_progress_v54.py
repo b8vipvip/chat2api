@@ -49,7 +49,7 @@ const snapshots=messages.filter(i=>i?.phase==="assistant-snapshot"),completed=me
 
 def test_isolated_v55_recovery_is_evidence_only() -> None:
     source=read("chrome_extension/content_network_stream_recovery_v55.js")
-    for token in ('network-stream-evidence-v56','network_terminal_authority: "request-v6"','type: "chat.snapshot"'):
+    for token in ('network-stream-evidence-v57','network_terminal_authority: "request-v6"','type: "chat.snapshot"'):
         assert token in source
     for forbidden in ('type: "chat.completed"','active.cancelled = true','sealResponseOwner('):
         assert forbidden not in source

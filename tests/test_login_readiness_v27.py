@@ -96,11 +96,11 @@ def test_popup_exposes_login_state_and_manual_login_action():
     assert 'id="refreshLogin"' in html
     assert "打开 ChatGPT 登录窗口" in html
     for token in (
-        "ChatGPT：已登录，可用",
-        "ChatGPT：需要登录",
+        "已登录 · Composer 可用",
+        "需要登录 · 请在可见 ChatGPT 窗口完成认证",
         'send({ type: "popup.login.open" })',
         'send({ type: "popup.login.refresh" })',
-        "Composer 已确认",
+        "Composer 已确认可用",
     ):
         assert token in popup
 

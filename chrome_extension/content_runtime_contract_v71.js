@@ -41,7 +41,7 @@
       tool_isolation_v48: Number(globalThis.__CHAT2API_TOOL_ISOLATION_V48__?.version || 0) === 48,
       draft_managed_recovery_v55: Number(globalThis.__CHAT2API_DRAFT_MANAGED_RECOVERY_V55__?.version || 0) === 55,
       // The v55 module identifier is a compatibility family. The current
-      // implementation reports version 56 (evidence-only terminal ownership),
+      // implementation reports version 57 (evidence-only terminal ownership),
       // so requiring exact 55 incorrectly marks every current tab as stale.
       network_stream_recovery_v55: Number(networkRecovery?.version || 0) >= 55,
       network_stream_main_v55: document.documentElement?.getAttribute?.("data-chat2api-network-stream-main-v55") === "55",
@@ -71,7 +71,7 @@
       conversation_quota_failover_revision: Number(conversationQuota?.revision || 0),
       ui_hygiene_revision: Number(uiHygiene?.state?.revision || 0),
       native_tool_stream_revision: Number(nativeTool?.revision || 0),
-      network_response_recovery: Number(networkRecovery?.version || 0) >= 55 ? "conversation-sse-evidence-v56-parser-v63" : null,
+      network_response_recovery: Number(networkRecovery?.version || 0) >= 55 ? "conversation-sse-evidence-v57-parser-v63" : null,
       network_response_parser_revision: Number(document.documentElement?.getAttribute?.("data-chat2api-network-stream-parser") || 0),
       semantic_helper_mode: semanticHelper?.mode || null,
       document_url: String(location.href || ""),

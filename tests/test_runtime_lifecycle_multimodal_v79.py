@@ -22,7 +22,7 @@ def test_composer_clear_is_not_submission_confirmation() -> None:
     request = read("chrome_extension/content_request_v6.js")
     assert 'reason: "composer-cleared"' not in request
     assert "active.attachmentCount > 0 ? 45000 : 20000" in request
-    assert "submission_liveness_revision: 79" in request
+    assert "submission_liveness_revision: 80" in request
     assert "did not expose an accepted user turn, generation state, or response" in request
 
 

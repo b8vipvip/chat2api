@@ -21,7 +21,7 @@ def test_conversation_affinity_is_five_minutes():
 
 def test_response_requires_terminal_rich_dom_settlement():
     source = text("chrome_extension/content_request_v6.js")
-    assert "response_terminal_settle_revision: 81" in source
+    assert "response_terminal_settle_revision: 82" in source
     assert "Date.now() - settleStableSince < 3000" in source
 
 def test_multimodal_waits_for_slow_upload_processing():

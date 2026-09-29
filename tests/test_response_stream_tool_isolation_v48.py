@@ -73,8 +73,8 @@ def test_background_preflight_requires_canonical_terminal_path_only():
 def test_network_stream_recovery_is_evidence_only():
     network = (ROOT / "chrome_extension" / "content_network_stream_recovery_v55.js").read_text(encoding="utf-8")
     network_main = (ROOT / "chrome_extension" / "network_stream_main_v55.js").read_text(encoding="utf-8")
-    assert 'owner: "network-stream-evidence-v56"' in network
-    assert 'network_response_recovery: "evidence-only-v56"' in network
+    assert 'owner: "network-stream-evidence-v57"' in network
+    assert 'network_response_recovery: "evidence-only-v57"' in network
     assert 'network_terminal_authority: "request-v6"' in network
     assert 'type: "chat.snapshot"' in network
     assert 'type: "chat.completed"' not in network
