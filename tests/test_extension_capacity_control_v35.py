@@ -33,9 +33,6 @@ class FakeRegistry:
         assert client_id == "ext_test"
         self.sent.append(dict(payload))
         action = payload["action"]
-        # This fake models a pre-v132 online Worker. Server compatibility tests
-        # still verify that concurrency control remains independent from physical
-        # window lifecycle while the real v132 bridge reports its persistent pool.
         snapshot = {
             "total": 2,
             "active": 1,
@@ -163,15 +160,25 @@ def test_runtime_config_retires_speculative_reserve_but_advertises_persistent_po
 
 
 def test_console_and_bridge_expose_server_capacity_and_persistent_window_controls() -> None:
-    concurrency = (ROOT / "app" / "admin_v21_5.js").read_text(encoding="utf-8")
+    canonical = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
+    behavior = (ROOT / "app" / "admin_worker_limits_clipboard_v121.js").read_text(encoding="utf-8")
+    legacy = (ROOT / "app" / "admin_v21_5.js").read_text(encoding="utf-8")
     entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
     control = (ROOT / "chrome_extension" / "background_capacity_control_v35.js").read_text(encoding="utf-8")
     pool = (ROOT / "chrome_extension" / "conversation_persistent_pool_v132.js").read_text(encoding="utf-8")
     dispatcher = (ROOT / "chrome_extension" / "background_capacity_control_v36.js").read_text(encoding="utf-8")
-    assert "data-worker-max" in concurrency
-    assert '/capacity-v57' in concurrency
-    assert '/capacity/apply' in concurrency
-    assert '/windows/refresh' in concurrency
+
+    assert "data-v121-concurrency" in canonical
+    assert "data-v121-windows" in canonical
+    assert "data-v121-save-limits" in canonical
+    assert '{key: "worker_settings", label: "并发 / 备用设置"}' in canonical
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/concurrency' in behavior
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in behavior
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' in behavior
+    assert 'renderer: "canonical-worker-list-v152"' in behavior
+    assert "data-worker-window-editor" not in legacy
+    assert 'delegated_to: "admin_extension_columns-v152"' in legacy
+
     assert '"background_capacity_control_v35.js"' in entry
     assert '"background_capacity_control_v36.js"' in entry
     assert '"background_window_observer_v90.js"' in entry
