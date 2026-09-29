@@ -16,7 +16,7 @@ from .admin_auth import SESSION_COOKIE
 
 
 PATCH_REVISION = 121
-ASSET_RELEASE = "0.22.99"
+ASSET_RELEASE = "0.22.100"
 ASSET_PATH = f"/assets/chat2api-worker-limits-clipboard-v121.js?v={ASSET_RELEASE}"
 ASSET_ROUTE = "/assets/chat2api-worker-limits-clipboard-v121.js"
 WINDOW_CONFIG_FILENAME = "worker_window_limits.json"
