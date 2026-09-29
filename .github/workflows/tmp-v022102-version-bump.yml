@@ -1,0 +1,70 @@
+name: Temporary v0.22.102 version bump
+
+on:
+  push:
+    branches:
+      - release/v0.22.102
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/v0.22.102
+          fetch-depth: 0
+      - name: Align active release and Worker bundle contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          roots = [Path('app'), Path('chrome_extension'), Path('tests'), Path('.github/workflows')]
+          ignored = {
+              Path('.github/workflows/tmp-v022102-version-scan.yml'),
+              Path('.github/workflows/tmp-v022102-version-bump.yml'),
+          }
+          changed = []
+          replacements = 0
+          for root in roots:
+              if not root.exists():
+                  continue
+              for path in sorted(p for p in root.rglob('*') if p.is_file()):
+                  if path in ignored:
+                      continue
+                  try:
+                      text = path.read_text(encoding='utf-8')
+                  except UnicodeDecodeError:
+                      continue
+                  count = text.count('0.22.101')
+                  if not count:
+                      continue
+                  updated = text.replace('0.22.101', '0.22.102')
+                  # Preserve the historical note: unified release numbering was
+                  # introduced in v0.22.101, even though the current release is 102.
+                  if path == Path('app/runtime_contract.py'):
+                      updated = updated.replace('# v0.22.102+: one release version is the single source of truth for the', '# v0.22.101+: one release version is the single source of truth for the')
+                  path.write_text(updated, encoding='utf-8')
+                  changed.append(str(path))
+                  replacements += count
+          print(f'REPLACEMENTS={replacements}')
+          print('CHANGED_FILES=')
+          print('\n'.join(changed))
+          if replacements < 100:
+              raise SystemExit(f'unexpectedly small release-version replacement set: {replacements}')
+          PY
+
+          git rm -f .github/workflows/tmp-v022102-version-scan.yml .github/workflows/tmp-v022102-version-bump.yml
+          git diff --check
+          git status --short
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app chrome_extension tests .github/workflows
+          git commit -m 'release: align runtime contracts to v0.22.102'
+          git push origin HEAD:release/v0.22.102
