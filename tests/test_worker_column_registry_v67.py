@@ -12,11 +12,12 @@ def read(relative: str) -> str:
 def test_effective_columns_are_registered_once_in_canonical_settings_schema():
     canonical = read("app/admin_extension_columns.js")
     assert canonical.count('{key: "device_name", label: "设备名称"}') == 1
-    assert canonical.count('{key: "occupancy", label: "当前占用"}') == 1
+    assert canonical.count('{key: "occupancy", label: "请求 / 备用窗口"}') == 1
+    assert canonical.count('{key: "worker_settings", label: "并发 / 备用设置"}') == 1
     assert '{key: "occupied_windows",' not in canonical
     assert 'data-chat2api-column-key="device_name"' in canonical
     assert 'data-chat2api-column-key="occupancy"' in canonical
-    assert 'column_schema_revision: COLUMN_SCHEMA_REVISION' in canonical
+    assert 'const COLUMN_SCHEMA_REVISION = 152' in canonical
 
 
 def test_legacy_plain_occupied_windows_column_is_retired_without_polling():
@@ -31,12 +32,14 @@ def test_legacy_plain_occupied_windows_column_is_retired_without_polling():
     assert 'setTimeout(' not in legacy
 
 
-def test_bounded_v66_enhancer_updates_existing_canonical_cells_before_fallback_creation():
+def test_v66_enhancer_is_retired_instead_of_mutating_canonical_cells():
     enhancer = read("app/admin_worker_presentation_v66.js")
-    assert 'let nameCell = keyedChild(tr, "device_name")' in enhancer
-    assert 'if (!nameCell)' in enhancer
-    assert 'let occupancyCell = keyedChild(tr, "occupancy")' in enhancer
-    assert 'if (!occupancyCell)' in enhancer
+    canonical = read("app/admin_extension_columns.js")
+    assert 'retired_renderer: true' in enhancer
+    assert 'callApi("/api/admin/extensions")' not in enhancer
+    assert 'setTimeout(() => refresh(true)' not in enhancer
+    assert 'data-chat2api-column-key="device_name"' in canonical
+    assert 'data-chat2api-column-key="occupancy"' in canonical
     assert 'MutationObserver' not in enhancer
     assert 'setInterval(' not in enhancer
 
