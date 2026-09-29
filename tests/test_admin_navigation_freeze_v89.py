@@ -43,7 +43,7 @@ def test_window_manager_polling_exists_only_while_its_view_is_active() -> None:
     assert 'function stopPolling()' in source
     assert 'function schedulePoll(' in source
     assert 'if (!isActive() || document.hidden) return;' in source
-    assert 'signal: controller.signal' in source
+    assert 'signal:controller.signal' in source.replace(" ", "")
     assert 'if (location.hash !== "#window-manager") location.hash = "window-manager";' in source
     assert 'view !== "window-manager") stopPolling()' in source
     assert 'document.addEventListener("visibilitychange"' in source
