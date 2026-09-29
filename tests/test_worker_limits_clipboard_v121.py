@@ -109,7 +109,7 @@ def test_worker_settings_ui_keeps_concurrency_and_windows_distinct() -> None:
     assert "data-v121-limit-popover" in console
     assert 'install_worker_limits_clipboard_v121_patch(app)' in entry
     assert 'install_worker_limits_clipboard_v121_patch(app)' not in presentation
-    assert 'ASSET_RELEASE = "0.22.98"' in patch
+    assert 'ASSET_RELEASE = "0.22.99"' in patch
     assert '?v={ASSET_RELEASE}' in patch
     assert "持续维持的可接待空闲窗口数量" in console
     assert "data-v121-cancel-limits" in console
