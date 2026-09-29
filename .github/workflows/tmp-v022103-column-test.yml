@@ -1,0 +1,36 @@
+name: Temporary v0.22.103 column test alignment
+
+on:
+  push:
+    branches:
+      - release/v0.22.103-standby-retention-hotfix
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/v0.22.103-standby-retention-hotfix
+          fetch-depth: 0
+      - name: Align Worker-list asset regression test
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('tests/test_extension_column_layout_v21_7.py')
+          data = path.read_text(encoding='utf-8')
+          old = '0.22.102-worker-list-v152'
+          new = '0.22.103-worker-list-v152'
+          if old not in data:
+              raise SystemExit('Expected old test version was not found')
+          path.write_text(data.replace(old, new), encoding='utf-8')
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add tests/test_extension_column_layout_v21_7.py
+          git commit -m "test: align v0.22.103 Worker-list asset contract"
+          git push origin HEAD:release/v0.22.103-standby-retention-hotfix
