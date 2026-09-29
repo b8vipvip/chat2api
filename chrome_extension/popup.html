@@ -3,36 +3,55 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>chat2api</title>
+  <title>chat2api Windows Worker</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <main>
-    <h1>chat2api</h1>
-    <div id="versionInfo" class="version-info">Worker · 读取版本中…</div>
-    <div id="status" class="status">读取状态中…</div>
-    <div id="loginStatus" class="model-list">ChatGPT：检测登录状态中…</div>
-    <button id="openLogin" class="secondary">打开 ChatGPT 登录窗口</button>
-    <button id="refreshLogin" class="secondary">重新检测 ChatGPT 登录状态</button>
-    <label>服务地址<input id="serverUrl" placeholder="https://chat2api.mv3.cn" autocomplete="off"></label>
-    <label>设备码<input id="pairingCode" type="password" placeholder="设备码" autocomplete="off"></label>
-    <label>Worker 名称<input id="extensionName" placeholder="My Worker" autocomplete="off"></label>
-    <button id="pair">使用设备码绑定并连接</button>
-    <button id="connect" class="secondary">重新连接</button>
-    <hr>
-    <div id="binding">尚未绑定 ChatGPT 标签页</div>
-    <button id="bind" class="secondary">绑定当前 ChatGPT 标签页</button>
-    <button id="discoverModels" class="secondary">刷新模型状态（不打开菜单）</button>
-    <div id="models" class="model-list">尚未读取模型状态</div>
-    <button id="unbind" class="secondary">取消绑定</button>
-    <hr>
-    <div>运行诊断</div>
-    <div class="model-list">页面 Smoke Test 只读取 Adapter、Driver、模型/推理控制器、Composer 和最终被动 Probe 状态，不会切换模型或推理强度。</div>
-    <button id="pageSmoke" class="secondary">运行页面 Smoke Test（只读）</button>
-    <div class="model-list">运行日志会静默自动保存在 Worker 的 chrome.storage.local；同 API Key 按调用 Run 聚合，120 秒空闲后封账。下面按钮只用于手动导出查看，不会触发自动下载。</div>
-    <button id="downloadRuntimeLog" class="secondary">下载运行日志汇总</button>
-    <button id="clearRuntimeLog" class="secondary">清空运行日志缓存</button>
-    <pre id="message"></pre>
+    <header class="hero">
+      <div>
+        <div class="eyebrow">CHAT2API</div>
+        <h1>Windows Worker</h1>
+        <div id="versionInfo" class="version-info">读取版本中…</div>
+      </div>
+      <div id="statusDot" class="status-dot" aria-hidden="true"></div>
+    </header>
+
+    <section class="card status-card">
+      <div class="section-title">Worker 状态</div>
+      <div id="status" class="status">读取连接状态中…</div>
+      <div class="hint">Windows 端与 Linux Worker 使用同一套请求、窗口和模型路由逻辑；这里只保留手动设备码绑定。</div>
+    </section>
+
+    <section class="card">
+      <div class="section-title">设备绑定</div>
+      <label>设备名称<input id="extensionName" placeholder="例如：办公室-Windows" autocomplete="off"></label>
+      <label>设备码<input id="pairingCode" type="password" placeholder="输入管理后台生成的设备码" autocomplete="off"></label>
+      <button id="pair">绑定 / 更换设备码</button>
+      <button id="connect" class="secondary">重新连接</button>
+      <details class="advanced">
+        <summary>高级设置</summary>
+        <label>服务地址<input id="serverUrl" placeholder="https://chat2api.mv3.cn" autocomplete="off"></label>
+      </details>
+    </section>
+
+    <section class="card">
+      <div class="section-title">ChatGPT</div>
+      <div id="loginStatus" class="info-row">正在检测登录状态…</div>
+      <div id="binding" class="info-row muted">窗口由 Worker 自动管理。</div>
+      <div id="models" class="info-row muted">正在被动读取模型状态…</div>
+      <button id="openLogin" class="secondary">打开 ChatGPT 登录窗口</button>
+      <button id="refreshLogin" class="secondary">重新检测登录状态</button>
+    </section>
+
+    <details class="card diagnostics">
+      <summary class="section-title">诊断工具</summary>
+      <div class="hint">仅用于排障，不参与正常请求路由，也不会切换模型或推理强度。</div>
+      <button id="pageSmoke" class="secondary">运行只读页面诊断</button>
+      <button id="downloadRuntimeLog" class="secondary">导出运行日志</button>
+    </details>
+
+    <pre id="message" aria-live="polite"></pre>
   </main>
   <script src="popup.js"></script>
   <script src="popup_page_smoke_v22.js"></script>
