@@ -1,0 +1,92 @@
+name: Temporary standby online integrity final
+
+on:
+  push:
+    branches:
+      - fix/v022104-standby-online-integrity
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/v022104-standby-online-integrity
+          fetch-depth: 0
+      - name: Apply patch and commit
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('chrome_extension/conversation_persistent_pool_v132.js')
+          s = p.read_text(encoding='utf-8')
+          reps = []
+          reps.append(('  const REPAIR_ALARM = "chat2api-persistent-window-pool-v132";\n  const NEW_CHAT_URL = "https://chatgpt.com/";', '  const REPAIR_ALARM = "chat2api-persistent-window-pool-v132";\n  // The 15-second online watchdog is a trigger only. Physical window lifecycle\n  // decisions remain exclusively serialized by reconcileNow().\n  const ONLINE_INTEGRITY_INTERVAL_MS = 15 * 1000;\n  const ONLINE_BINDING_KEYS = Object.freeze(["serverUrl", "clientId", "clientToken", "socketState"]);\n  const NEW_CHAT_URL = "https://chatgpt.com/";'))
+          reps.append(('    closed: 0,\n  };', '    closed: 0,\n    onlineIntegrityTimer: null,\n    onlineIntegrityChecks: 0,\n    onlineIntegrityEligible: false,\n    onlineIntegrityLastCheckAt: 0,\n    onlineIntegrityLastReason: "",\n  };'))
+          reps.append(('      transient_login_state_preserves_standby_target: true,\n      route_idle_lease_ms: 5 * 60 * 1000,', '      transient_login_state_preserves_standby_target: true,\n      online_integrity_interval_ms: ONLINE_INTEGRITY_INTERVAL_MS,\n      online_integrity_bound_online_only: true,\n      online_integrity_single_authority: true,\n      online_integrity_checks: state.onlineIntegrityChecks,\n      online_integrity_eligible: state.onlineIntegrityEligible,\n      online_integrity_last_check_at: state.onlineIntegrityLastCheckAt || null,\n      online_integrity_last_reason: state.onlineIntegrityLastReason || "",\n      route_idle_lease_ms: 5 * 60 * 1000,'))
+          funcs = '  async function workerOnlineEligibility() {\n    const stored = await chrome.storage.local.get({ serverUrl: "", clientId: "", clientToken: "", socketState: "disconnected" }).catch(() => ({}));\n    const bound = Boolean(String(stored?.serverUrl || "").trim() && String(stored?.clientId || "").trim() && String(stored?.clientToken || "").trim());\n    const online = String(stored?.socketState || "") === "connected";\n    return { bound, online, eligible: bound && online };\n  }\n\n  async function onlineIntegrityTick(reason = "online-integrity-15s") {\n    const eligibility = await workerOnlineEligibility();\n    state.onlineIntegrityChecks += 1;\n    state.onlineIntegrityEligible = eligibility.eligible;\n    state.onlineIntegrityLastCheckAt = Date.now();\n    state.onlineIntegrityLastReason = String(reason || "online-integrity-15s").slice(0, 80);\n    if (!eligibility.eligible) return { ok: true, skipped: true, ...eligibility };\n    const result = await reconcile(reason);\n    return { ok: true, skipped: false, ...eligibility, result };\n  }\n\n  function ensureOnlineIntegrityWatchdog() {\n    if (state.onlineIntegrityTimer) return;\n    state.onlineIntegrityTimer = setInterval(() => {\n      onlineIntegrityTick("online-integrity-15s").catch(() => {});\n    }, ONLINE_INTEGRITY_INTERVAL_MS);\n  }\n\n  async function setTarget(requestedTarget, source = "explicit") {'
+          reps.append(('  async function setTarget(requestedTarget, source = "explicit") {', funcs))
+          reps.append(('  chrome.storage.onChanged.addListener((changes, areaName) => {\n    if (areaName !== "local") return;\n    if (changes[DISABLED_KEY] || changes[LOGIN_STATE_KEY] || changes[LOGIN_COMPOSER_KEY] || changes[INIT_TAB_KEY]) {\n      scheduleReconcile("state-change", 200);\n    }', '  chrome.storage.onChanged.addListener((changes, areaName) => {\n    if (areaName !== "local") return;\n    if (changes[DISABLED_KEY] || changes[LOGIN_STATE_KEY] || changes[LOGIN_COMPOSER_KEY] || changes[INIT_TAB_KEY]) {\n      scheduleReconcile("state-change", 200);\n    }\n    if (ONLINE_BINDING_KEYS.some(key => Boolean(changes[key]))) {\n      const becameOnline = changes.socketState?.newValue === "connected";\n      onlineIntegrityTick(becameOnline ? "worker-online-immediate" : "worker-binding-state-change").catch(() => {});\n    }'))
+          reps.append(('  state.loginStatus = loginStatus;\n\n  ensureLoaded().then(() => scheduleReconcile("startup", 500)).catch(() => {});', '  state.loginStatus = loginStatus;\n  state.workerOnlineEligibility = workerOnlineEligibility;\n  state.onlineIntegrityTick = onlineIntegrityTick;\n\n  ensureOnlineIntegrityWatchdog();\n  ensureLoaded().then(() => onlineIntegrityTick("startup-immediate")).catch(() => {});'))
+          for old, new in reps:
+            if old not in s:
+              raise SystemExit('missing patch anchor: ' + old[:70])
+            s = s.replace(old, new, 1)
+          p.write_text(s, encoding='utf-8')
+
+          tp = Path('tests/test_persistent_window_pool_v132.py')
+          t = tp.read_text(encoding='utf-8')
+          marker = '\ndef test_saved_conversation_is_validated_after_slot_reassignment_without_losing_lease_ownership() -> None:\n'
+          lines = [
+            '', '',
+            'def test_bound_online_worker_checks_standby_integrity_every_15_seconds_and_immediately() -> None:',
+            '    source = text("chrome_extension/conversation_persistent_pool_v132.js")',
+            '    assert \'const ONLINE_INTEGRITY_INTERVAL_MS = 15 * 1000;\' in source',
+            '    assert \'["serverUrl", "clientId", "clientToken", "socketState"]\' in source',
+            '    assert \'String(stored?.socketState || "") === "connected"\' in source',
+            '    assert \'return { bound, online, eligible: bound && online };\' in source',
+            '    assert \'onlineIntegrityTick("online-integrity-15s")\' in source',
+            '    assert \'changes.socketState?.newValue === "connected"\' in source',
+            '    assert \'"worker-online-immediate"\' in source',
+            '    assert \'onlineIntegrityTick("startup-immediate")\' in source',
+            '    assert \'online_integrity_interval_ms: ONLINE_INTEGRITY_INTERVAL_MS\' in source',
+            '', '',
+            'def test_online_integrity_is_trigger_only_and_persistent_pool_remains_single_terminal_authority() -> None:',
+            '    source = text("chrome_extension/conversation_persistent_pool_v132.js")',
+            '    start = source.index("async function onlineIntegrityTick(")',
+            '    end = source.index("async function setTarget(", start)',
+            '    watchdog = source[start:end]',
+            '    assert "await reconcile(reason)" in watchdog',
+            '    assert "createStandby(" not in watchdog',
+            '    assert "closeWindow(" not in watchdog',
+            '    assert "chrome.windows.create" not in watchdog',
+            '    assert "chrome.windows.remove" not in watchdog',
+            '    assert \'window_decision_authority: "persistent-window-pool-v132"\' in source',
+            '    assert "online_integrity_single_authority: true" in source',
+            '    assert "if (state.reconcilePromise) return state.reconcilePromise;" in source',
+            '', '',
+            'def test_linux_and_windows_browser_workers_share_the_same_extension_window_authority() -> None:',
+            '    launcher = text("scripts/linux_worker_chrome_launcher.sh")',
+            '    pool = text("chrome_extension/conversation_persistent_pool_v132.js")',
+            '    agent = text("scripts/linux_worker_agent.py")',
+            '    assert \'EXTENSION_DIR="${CHAT2API_EXTENSION_DIR:-/opt/chat2api-worker/chrome_extension}"\' in launcher',
+            '    assert \'--disable-extensions-except="$EXTENSION_DIR"\' in launcher',
+            '    assert \'--load-extension="$EXTENSION_DIR"\' in launcher',
+            '    assert \'window_decision_authority: "persistent-window-pool-v132"\' in pool',
+            '    assert "chrome.windows.create" not in agent',
+            '    assert "chrome.windows.remove" not in agent',
+          ]
+          addition = '\n'.join(lines) + '\n'
+          if marker not in t:
+            raise SystemExit('missing test anchor')
+          tp.write_text(t.replace(marker, addition + marker, 1), encoding='utf-8')
+          PY
+          node --check chrome_extension/conversation_persistent_pool_v132.js
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add chrome_extension/conversation_persistent_pool_v132.js tests/test_persistent_window_pool_v132.py
+          git commit -m "fix(worker): enforce 15-second standby integrity with single authority"
+          git push origin HEAD:fix/v022104-standby-online-integrity
