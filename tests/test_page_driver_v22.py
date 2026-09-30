@@ -135,7 +135,8 @@ def test_model_router_propagates_v145_model_and_reasoning_diagnostics():
         "effective_model",
         'type: "chat.diagnostics"',
         'type: "chat.error"',
-        "diagnostics: errorDiagnostics",
+        "code: diagnostics.error_code",
+        'error_stage: error?.stage || "worker-model-library-routing"',
     ):
         assert token in source
     assert 'type: "chat2api.model.select.v145"' in source
