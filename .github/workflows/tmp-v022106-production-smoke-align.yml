@@ -1,0 +1,36 @@
+name: Temporary v0.22.106 production smoke alignment
+
+on:
+  push:
+    branches:
+      - release/v0.22.106-standby-target-sync
+
+permissions:
+  contents: write
+
+jobs:
+  align:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/v0.22.106-standby-target-sync
+          fetch-depth: 0
+      - name: Align production smoke version assertions
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/production-image-smoke.yml')
+          data = path.read_text(encoding='utf-8')
+          count = data.count('0.22.105')
+          if count < 1:
+              raise SystemExit('production smoke contains no v0.22.105 assertion')
+          path.write_text(data.replace('0.22.105', '0.22.106'), encoding='utf-8')
+          print(f'replaced {count} production smoke version assertions')
+          PY
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/production-image-smoke.yml
+          git commit -m "release: align production smoke to v0.22.106"
+          git push origin HEAD:release/v0.22.106-standby-target-sync
