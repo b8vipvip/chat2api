@@ -24,11 +24,10 @@ def test_warm_pool_has_bounded_claim_and_paid_model_readiness() -> None:
     assert '"composer-controller-ready"' in source
     assert "conversation_prewarm_bypassed" in source
     assert "conversation_prewarm_claim_wait_ms" in source
-    # Concurrent-request behavior remains intentional: claim A, refill its slot immediately.
     assert "scheduleWarm(350, warm.slot_key)" in source
 
 
-def test_fast_family_prefetch_is_best_effort_and_canonical_router_remains_owner() -> None:
+def test_fast_family_prefetch_is_best_effort_and_v145_router_remains_owner() -> None:
     content = read("content_model_fast_v21.js")
     background = read("model_prefetch_fast_v21.js")
     routing = read("model_routing_v2.js")
@@ -41,11 +40,13 @@ def test_fast_family_prefetch_is_best_effort_and_canonical_router_remains_owner(
     assert "baseHandleServerMessage(message)" in background
     assert "Optimization failure must never replace the canonical model-selection path" in background
     assert "model_prefetch_fast_v21" in background
-    assert "prepareRequestedState" in routing
-    assert "probeState" in routing
+    assert "validatedLibrary" in routing
+    assert "selectValidatedModel" in routing
+    assert "chat2api.model.select.v145" in routing
     assert entry.index('"model_routing_v2.js"') < entry.index('"model_prefetch_fast_v21.js"')
     assert entry.index('"model_prefetch_fast_v21.js"') < entry.index('"background_logging.js"')
     assert entry.index('"background_logging.js"') < entry.index('"conversation_dispatch.js"')
+    assert entry.index('"conversation_route_recovery_v136.js"') < entry.index('"background_model_library_v145.js"')
 
 
 def test_send_click_fast_enter_requires_strong_ignored_click_signal() -> None:
