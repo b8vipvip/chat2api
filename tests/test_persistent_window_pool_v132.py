@@ -84,6 +84,46 @@ def test_transient_login_readiness_never_compacts_configured_standby() -> None:
     assert '? "login_not_ready"' in source
 
 
+
+def test_bound_online_worker_checks_standby_integrity_every_15_seconds_and_immediately() -> None:
+    source = text("chrome_extension/conversation_persistent_pool_v132.js")
+    assert 'const ONLINE_INTEGRITY_INTERVAL_MS = 15 * 1000;' in source
+    assert '["serverUrl", "clientId", "clientToken", "socketState"]' in source
+    assert 'String(stored?.socketState || "") === "connected"' in source
+    assert 'return { bound, online, eligible: bound && online };' in source
+    assert 'onlineIntegrityTick("online-integrity-15s")' in source
+    assert 'changes.socketState?.newValue === "connected"' in source
+    assert '"worker-online-immediate"' in source
+    assert 'onlineIntegrityTick("startup-immediate")' in source
+    assert 'online_integrity_interval_ms: ONLINE_INTEGRITY_INTERVAL_MS' in source
+
+
+def test_online_integrity_is_trigger_only_and_persistent_pool_remains_single_terminal_authority() -> None:
+    source = text("chrome_extension/conversation_persistent_pool_v132.js")
+    start = source.index("async function onlineIntegrityTick(")
+    end = source.index("async function setTarget(", start)
+    watchdog = source[start:end]
+    assert "await reconcile(reason)" in watchdog
+    assert "createStandby(" not in watchdog
+    assert "closeWindow(" not in watchdog
+    assert "chrome.windows.create" not in watchdog
+    assert "chrome.windows.remove" not in watchdog
+    assert 'window_decision_authority: "persistent-window-pool-v132"' in source
+    assert "online_integrity_single_authority: true" in source
+    assert "if (state.reconcilePromise) return state.reconcilePromise;" in source
+
+
+def test_linux_and_windows_browser_workers_share_the_same_extension_window_authority() -> None:
+    launcher = text("scripts/linux_worker_chrome_launcher.sh")
+    pool = text("chrome_extension/conversation_persistent_pool_v132.js")
+    agent = text("scripts/linux_worker_agent.py")
+    assert 'EXTENSION_DIR="${CHAT2API_EXTENSION_DIR:-/opt/chat2api-worker/chrome_extension}"' in launcher
+    assert '--disable-extensions-except="$EXTENSION_DIR"' in launcher
+    assert '--load-extension="$EXTENSION_DIR"' in launcher
+    assert 'window_decision_authority: "persistent-window-pool-v132"' in pool
+    assert "chrome.windows.create" not in agent
+    assert "chrome.windows.remove" not in agent
+
 def test_saved_conversation_is_validated_after_slot_reassignment_without_losing_lease_ownership() -> None:
     source = text("chrome_extension/conversation_persistent_route_restore_v132.js")
     assert 'const expectedId = String(before?.conversation_id || "").trim()' in source
