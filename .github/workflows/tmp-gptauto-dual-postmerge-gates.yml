@@ -1,0 +1,175 @@
+name: Temporary GPTAuto dual post-merge gates patch
+
+on:
+  push:
+    branches:
+      - fix/gptauto-dual-postmerge-gates
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GPTAUTO_EXECUTOR_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/gptauto-dual-postmerge-gates
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Make Reconcile own both exact-SHA post-merge gates
+        run: |
+          set -euo pipefail
+          [[ -n "${GH_TOKEN:-}" ]] || { echo 'GPTAUTO_EXECUTOR_TOKEN is required' >&2; exit 1; }
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/gptauto-reconcile.yml')
+          data = path.read_text(encoding='utf-8')
+
+          start = data.index('          printf \'%s\\n\' "$primary" > /tmp/gptauto-required-workflows.txt\n')
+          end = data.index('          if [[ "$RELEASE_REQUIRED" == "true" ]]; then\n', start)
+          replacement = r'''          # Reconcile is the single post-merge validation scheduler. Both exact-SHA
+          # gates required by Release are registered here; no secondary workflow
+          # gets partial scheduling authority.
+          : > /tmp/gptauto-required-workflow-runs.tsv
+
+          register_validation() {
+            local workflow="$1"
+            local workflow_path="$2"
+            local runs_before existing_success baseline registration_deadline validation_run_id runs
+
+            runs_before="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&per_page=100")"
+            existing_success="$(jq -r --arg workflow "$workflow" '[.workflow_runs[] | select(.name == $workflow and .status == "completed" and .conclusion == "success")] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs_before")"
+            if [[ -n "$existing_success" ]]; then
+              validation_run_id="$existing_success"
+              echo "Reusing exact-SHA post-merge validation $workflow run $validation_run_id."
+            else
+              baseline="$(jq -r --arg workflow "$workflow" '[.workflow_runs[] | select(.name == $workflow) | .id] | max // 0' <<<"$runs_before")"
+              gh workflow view "$workflow_path" --repo "$REPOSITORY" --yaml > /tmp/gptauto-product-workflow.yml
+              grep -Eq '^[[:space:]]*workflow_dispatch:' /tmp/gptauto-product-workflow.yml || {
+                echo "::error::Required post-merge workflow $workflow_path has no workflow_dispatch trigger."
+                exit 1
+              }
+              gh workflow run "$workflow_path" --repo "$REPOSITORY" --ref "$DEFAULT_BRANCH"
+              echo "Dispatched exact-SHA post-merge validation $workflow for merge $MERGE_SHA."
+
+              registration_deadline=$((SECONDS + 90))
+              validation_run_id=""
+              while (( SECONDS < registration_deadline )); do
+                runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&per_page=100")"
+                validation_run_id="$(jq -r --arg workflow "$workflow" --argjson baseline "$baseline" '[.workflow_runs[] | select(.name == $workflow and .event == "workflow_dispatch" and .id > $baseline)] | sort_by(.created_at, .id) | reverse | .[0].id // empty' <<<"$runs")"
+                [[ -n "$validation_run_id" ]] && break
+                sleep 3
+              done
+              [[ -n "$validation_run_id" ]] || { echo "::error::Dispatched $workflow_path but no exact-SHA workflow_dispatch run registered for $MERGE_SHA"; exit 1; }
+              echo "Registered $workflow run $validation_run_id."
+            fi
+            printf '%s\t%s\n' "$workflow" "$validation_run_id" >> /tmp/gptauto-required-workflow-runs.tsv
+          }
+
+          register_validation "$primary" "$primary_path"
+
+          smoke="Production image smoke"
+          smoke_path="$(jq -r --arg wanted "$smoke" '[.[] | select(.name == $wanted and ((.state // "") | ascii_downcase | startswith("disabled") | not))][0].path // empty' <<<"$catalog")"
+          [[ -n "$smoke_path" ]] || { echo "::error::Required post-merge workflow '$smoke' is missing or disabled"; exit 1; }
+          register_validation "$smoke" "$smoke_path"
+
+          required_names="$(cut -f1 /tmp/gptauto-required-workflow-runs.tsv | paste -sd ',' -)"
+          primary_run_id="$(head -n1 /tmp/gptauto-required-workflow-runs.tsv | cut -f2)"
+          echo "required-workflows=$required_names" >> "$GITHUB_OUTPUT"
+          echo "workflow-path=$primary_path" >> "$GITHUB_OUTPUT"
+          echo "validation-run-id=$primary_run_id" >> "$GITHUB_OUTPUT"
+          echo "Required exact-SHA post-merge validations: $required_names"
+
+'''
+          data = data[:start] + replacement + data[end:]
+
+          old_wait = r'''          required_run_id="${{ steps.validation-plan.outputs.validation-run-id }}"
+          [[ -n "$required_run_id" ]] || { echo "::error::Canonical validation run id is missing"; exit 1; }
+          deadline=$((SECONDS + 1800))
+          while (( SECONDS < deadline )); do
+            runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&per_page=100")"
+            all_ready=true
+            while IFS= read -r workflow; do
+              [[ -n "$workflow" ]] || continue
+              row="$(jq -c --arg workflow "$workflow" --argjson required_run_id "$required_run_id" '[.workflow_runs[] | select(.name == $workflow and .id == $required_run_id)] | .[0] // {}' <<<"$runs")"
+              status="$(jq -r '.status // "missing"' <<<"$row")"
+              conclusion="$(jq -r '.conclusion // ""' <<<"$row")"
+              run_id="$(jq -r '.id // ""' <<<"$row")"
+              echo "task=$TASK_ID workflow=$workflow run=$run_id status=$status conclusion=$conclusion"
+              if [[ "$status" == "completed" && "$conclusion" != "success" ]]; then
+                echo "::error::Required post-merge workflow $workflow finished with $conclusion (run $run_id)"
+                exit 1
+              fi
+              if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
+                all_ready=false
+              fi
+            done < /tmp/gptauto-required-workflows.txt
+
+            if [[ "$all_ready" == "true" ]]; then
+              primary="$(head -n 1 /tmp/gptauto-required-workflows.txt)"
+              ci_run_id="$required_run_id"
+              [[ -n "$ci_run_id" ]] || { echo "::error::Required product validation success evidence is missing"; exit 1; }
+              echo "main-ci-run-id=$ci_run_id" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 10
+          done
+'''
+          new_wait = r'''          [[ -s /tmp/gptauto-required-workflow-runs.tsv ]] || { echo "::error::Required validation run map is missing"; exit 1; }
+          deadline=$((SECONDS + 1800))
+          while (( SECONDS < deadline )); do
+            runs="$(gh api "repos/$REPOSITORY/actions/runs?head_sha=$MERGE_SHA&per_page=100")"
+            all_ready=true
+            while IFS=$'\t' read -r workflow required_run_id; do
+              [[ -n "$workflow" && -n "$required_run_id" ]] || continue
+              row="$(jq -c --arg workflow "$workflow" --argjson required_run_id "$required_run_id" '[.workflow_runs[] | select(.name == $workflow and .id == $required_run_id)] | .[0] // {}' <<<"$runs")"
+              status="$(jq -r '.status // "missing"' <<<"$row")"
+              conclusion="$(jq -r '.conclusion // ""' <<<"$row")"
+              run_id="$(jq -r '.id // ""' <<<"$row")"
+              echo "task=$TASK_ID workflow=$workflow run=$run_id status=$status conclusion=$conclusion"
+              if [[ "$status" == "completed" && "$conclusion" != "success" ]]; then
+                echo "::error::Required post-merge workflow $workflow finished with $conclusion (run $run_id)"
+                exit 1
+              fi
+              if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
+                all_ready=false
+              fi
+            done < /tmp/gptauto-required-workflow-runs.tsv
+
+            if [[ "$all_ready" == "true" ]]; then
+              primary_row="$(head -n1 /tmp/gptauto-required-workflow-runs.tsv)"
+              primary="${primary_row%%$'\t'*}"
+              ci_run_id="${primary_row#*$'\t'}"
+              [[ -n "$ci_run_id" ]] || { echo "::error::Required product validation success evidence is missing"; exit 1; }
+              echo "main-ci-run-id=$ci_run_id" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 10
+          done
+'''
+          if old_wait not in data:
+              raise SystemExit('wait-loop anchor not found')
+          data = data.replace(old_wait, new_wait, 1)
+
+          if '/tmp/gptauto-required-workflows.txt' in data:
+              raise SystemExit('stale single-run validation map remains')
+          if 'register_validation "$smoke" "$smoke_path"' not in data:
+              raise SystemExit('smoke registration missing')
+          path.write_text(data, encoding='utf-8')
+          PY
+
+          grep -F 'register_validation "$primary" "$primary_path"' .github/workflows/gptauto-reconcile.yml
+          grep -F 'register_validation "$smoke" "$smoke_path"' .github/workflows/gptauto-reconcile.yml
+          grep -F '/tmp/gptauto-required-workflow-runs.tsv' .github/workflows/gptauto-reconcile.yml
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add .github/workflows/gptauto-reconcile.yml
+          git commit -m "fix(gptauto): make Reconcile own both post-merge gates"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin HEAD:fix/gptauto-dual-postmerge-gates
