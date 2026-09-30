@@ -1,0 +1,105 @@
+name: Temporary v0.22.106 target sync patch
+
+on:
+  push:
+    branches:
+      - fix/v022106-standby-target-sync
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/v022106-standby-target-sync
+          fetch-depth: 0
+      - name: Apply server-authoritative reconnect target sync
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          main = Path('app/main.py')
+          data = main.read_text(encoding='utf-8')
+          old = '''        await websocket.accept()\n        await registry.attach(client_id, websocket)\n        try:\n            await websocket.send_json({"type": "server.hello", "client_id": client_id, "version": APP_VERSION})\n'''
+          new = '''        await websocket.accept()\n        await registry.attach(client_id, websocket)\n        # Per-socket generation guard: Worker settings are server-authoritative and\n        # are pushed exactly once after this connection advertises control readiness.\n        # The browser persistent pool remains the sole physical-window authority.\n        window_target_synced = False\n        try:\n            await websocket.send_json({"type": "server.hello", "client_id": client_id, "version": APP_VERSION})\n'''
+          if old not in data:
+              raise SystemExit('main attach anchor not found')
+          data = data.replace(old, new, 1)
+
+          old = '''                await registry.touch(client_id, message.get("metadata") if isinstance(message.get("metadata"), dict) else None)\n                if message_type in {"heartbeat", "extension.hello", "extension.status"}:\n                    if message_type == "heartbeat":\n                        await websocket.send_json({"type": "heartbeat.ack", "ts": time.time()})\n                    continue\n'''
+          new = '''                await registry.touch(client_id, message.get("metadata") if isinstance(message.get("metadata"), dict) else None)\n                if message_type in {"heartbeat", "extension.hello", "extension.status"}:\n                    if message_type in {"extension.hello", "extension.status"} and not window_target_synced:\n                        window_runtime = getattr(app.state, "worker_window_limits", {})\n                        sync_online = window_runtime.get("sync_online") if isinstance(window_runtime, dict) else None\n                        if callable(sync_online):\n                            try:\n                                sync_result = await sync_online(client_id)\n                                window_target_synced = bool(sync_result.get("sent"))\n                            except Exception:\n                                logger.exception("Failed to sync Worker standby target on connect: %s", client_id)\n                    if message_type == "heartbeat":\n                        await websocket.send_json({"type": "heartbeat.ack", "ts": time.time()})\n                    continue\n'''
+          if old not in data:
+              raise SystemExit('main hello/status anchor not found')
+          data = data.replace(old, new, 1)
+          main.write_text(data, encoding='utf-8')
+
+          limits = Path('app/worker_limits_clipboard_v121_patch.py')
+          data = limits.read_text(encoding='utf-8')
+          marker = '''        return {"ok": False, "pending": True, "reason": "extension_control_timeout", "control_id": control_id}\n\n    # v121 decorates summaries/routed payloads with the configured physical\n'''
+          addition = '''        return {"ok": False, "pending": True, "reason": "extension_control_timeout", "control_id": control_id}\n\n    async def sync_online_window_target(client_id: str) -> dict[str, Any]:\n        \"\"\"Push the current server-owned standby target once per WebSocket generation.\n\n        This function only transports configuration. It never creates, closes, or\n        counts browser windows; persistent-window-pool-v132 remains the sole\n        physical lifecycle authority on both Windows and Linux Chrome Workers.\n        It is deliberately non-blocking with respect to control confirmation so\n        the WebSocket receive loop can immediately consume extension.control.result.\n        \"\"\"\n        client_id = str(client_id or \"\").strip()\n        item = registry.clients.get(client_id)\n        if not item or not getattr(item, \"connection_enabled\", True):\n            return {\"ok\": False, \"sent\": False, \"pending\": True, \"reason\": \"extension_disabled\"}\n        if client_id not in registry.sockets:\n            return {\"ok\": False, \"sent\": False, \"pending\": True, \"reason\": \"extension_offline\"}\n        metadata = item.metadata if isinstance(getattr(item, \"metadata\", None), dict) else {}\n        try:\n            control_version = int(metadata.get(\"extension_control_version\") or 0)\n        except (TypeError, ValueError):\n            control_version = 0\n        if control_version < 36 or metadata.get(\"extension_control_ready\") is not True:\n            return {\"ok\": False, \"sent\": False, \"pending\": True, \"reason\": \"extension_control_not_ready\"}\n\n        target = window_limit_for(client_id)\n        source = window_source_for(client_id)\n        control_id = \"ctl_sync_\" + uuid.uuid4().hex\n        try:\n            await registry.send(\n                client_id,\n                {\n                    \"type\": \"extension.control\",\n                    \"control_id\": control_id,\n                    \"action\": \"windows.limit\",\n                    \"payload\": {\"target\": int(target), \"source\": str(source)[:40]},\n                    \"sent_at\": time.time(),\n                    \"minimum_control_version\": 36,\n                    \"sync_reason\": \"websocket-online-v153\",\n                },\n            )\n        except Exception as exc:\n            return {\"ok\": False, \"sent\": False, \"pending\": True, \"reason\": \"extension_control_send_failed\", \"error\": str(exc)[:200]}\n        return {\n            \"ok\": True,\n            \"sent\": True,\n            \"pending\": False,\n            \"reason\": \"\",\n            \"control_id\": control_id,\n            \"target\": int(target),\n            \"source\": str(source),\n            \"authority\": WINDOW_DECISION_AUTHORITY,\n        }\n\n    # v121 decorates summaries/routed payloads with the configured physical\n'''
+          if marker not in data:
+              raise SystemExit('worker limit insertion anchor not found')
+          data = data.replace(marker, addition, 1)
+
+          old = '''        "payload_for": window_payload,\n        "config_path": str(config_path),\n    }\n'''
+          new = '''        "payload_for": window_payload,\n        "sync_online": sync_online_window_target,\n        "sync_trigger": "extension-hello-or-first-ready-status-v153",\n        "config_path": str(config_path),\n    }\n'''
+          if old not in data:
+              raise SystemExit('worker runtime export anchor not found')
+          data = data.replace(old, new, 1)
+          limits.write_text(data, encoding='utf-8')
+
+          test = Path('tests/test_worker_limits_clipboard_v121.py')
+          t = test.read_text(encoding='utf-8')
+          anchor = '''\ndef test_remote_login_unicode_clipboard_is_ticket_scoped_and_bidirectional() -> None:\n'''
+          addition_test = r'''
+
+def test_online_worker_receives_server_authoritative_standby_target_without_waiting_for_request() -> None:
+    server = (ROOT / "app" / "worker_limits_clipboard_v121_patch.py").read_text(encoding="utf-8")
+    main = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+    pool = (ROOT / "chrome_extension" / "conversation_persistent_pool_v132.js").read_text(encoding="utf-8")
+    linux_launcher = (ROOT / "scripts" / "linux_worker_chrome_launcher.sh").read_text(encoding="utf-8")
+
+    assert 'async def sync_online_window_target(client_id: str)' in server
+    assert '"action": "windows.limit"' in server
+    assert '"payload": {"target": int(target), "source": str(source)[:40]}' in server
+    assert '"sync_reason": "websocket-online-v153"' in server
+    assert '"sync_online": sync_online_window_target' in server
+    assert '"sync_trigger": "extension-hello-or-first-ready-status-v153"' in server
+
+    # One socket generation gets one successful authoritative push. A hello that
+    # arrives before control readiness may retry on the first ready status only.
+    assert 'window_target_synced = False' in main
+    assert 'message_type in {"extension.hello", "extension.status"} and not window_target_synced' in main
+    assert 'sync_online = window_runtime.get("sync_online")' in main
+    assert 'sync_result = await sync_online(client_id)' in main
+    assert 'window_target_synced = bool(sync_result.get("sent"))' in main
+
+    # The server transports only the configured target; all physical create/close
+    # decisions remain in the one browser authority shared by Windows and Linux.
+    sync_start = server.index('async def sync_online_window_target(client_id: str)')
+    sync_end = server.index('# v121 decorates summaries', sync_start)
+    sync_body = server[sync_start:sync_end]
+    assert 'chrome.windows.create' not in sync_body
+    assert 'chrome.windows.remove' not in sync_body
+    assert 'await asyncio.sleep' not in sync_body
+    assert 'window_decision_authority: "persistent-window-pool-v132"' in pool
+    assert '--load-extension="$EXTENSION_DIR"' in linux_launcher
+
+'''
+          if anchor not in t:
+              raise SystemExit('test anchor not found')
+          test.write_text(t.replace(anchor, addition_test + anchor, 1), encoding='utf-8')
+          PY
+
+          python -m py_compile app/main.py app/worker_limits_clipboard_v121_patch.py
+          python -m pytest -q tests/test_worker_limits_clipboard_v121.py tests/test_persistent_window_pool_v132.py
+
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add app/main.py app/worker_limits_clipboard_v121_patch.py tests/test_worker_limits_clipboard_v121.py
+          git commit -m "fix(worker): sync standby target immediately on reconnect"
+          git push origin HEAD:fix/v022106-standby-target-sync
