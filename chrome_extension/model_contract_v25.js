@@ -21,7 +21,7 @@
         if (!capabilities.includes(capability)) capabilities.push(capability);
       }
       item.capabilities = capabilities;
-      item.reasoning_efforts = [];
+      item.reasoning_efforts = Array.isArray(item.reasoning_efforts) ? item.reasoning_efforts : [];
     }
     return item;
   }
@@ -35,16 +35,8 @@
       seen.add(item.id);
       rows.push(item);
     }
-    if (!seen.has(MINI_MODEL)) {
-      rows.push({
-        id: MINI_MODEL,
-        label: "GPT-5.5 Mini",
-        family: MINI_MODEL,
-        reasoning: null,
-        reasoning_efforts: [],
-        capabilities: [...MINI_CAPABILITIES],
-      });
-    }
+    // v145 model-library authority forbids synthetic normal models. Mini is kept
+    // only when a Worker actually discovers and validates it.
     return rows;
   }
 
