@@ -18,8 +18,8 @@ jobs:
         run: |
           set -euo pipefail
           echo '=== extension/control/limit references ==='
-          rg -n --glob '!node_modules/**' --glob '!*.min.js' 'extension\.control|windows\.limit|worker_window_limit|window_limit|standby.*limit|standby.*target|backup.*window|备用' app chrome_extension scripts tests | head -n 500 || true
+          grep -RInE --exclude='*.min.js' --exclude-dir=node_modules 'extension\.control|windows\.limit|worker_window_limit|window_limit|standby.*limit|standby.*target|backup.*window|备用' app chrome_extension scripts tests | head -n 800 || true
           echo '=== extension hello/status websocket references ==='
-          rg -n --glob '!node_modules/**' 'extension\.hello|extension\.status|websocket|WebSocket|worker.*hello|clientId|client_id' app | head -n 500 || true
+          grep -RInE --exclude='*.min.js' --exclude-dir=node_modules 'extension\.hello|extension\.status|websocket|WebSocket|worker.*hello|clientId|client_id' app | head -n 800 || true
           echo '=== candidate python files ==='
           find app -maxdepth 1 -type f -name '*.py' | sort | grep -E 'worker|extension|bridge|websocket|capacity|limit|route|presentation|registry' || true
