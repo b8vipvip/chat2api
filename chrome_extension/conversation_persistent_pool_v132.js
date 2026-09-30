@@ -13,6 +13,10 @@
   const INIT_TAB_KEY = "chat2apiInitializationTabIdV32";
   const ROUTE_ALARM_PREFIX = "chat2api-route-close:";
   const REPAIR_ALARM = "chat2api-persistent-window-pool-v132";
+  // The 15-second online watchdog is a trigger only. Physical window lifecycle
+  // decisions remain exclusively serialized by reconcileNow().
+  const ONLINE_INTEGRITY_INTERVAL_MS = 15 * 1000;
+  const ONLINE_BINDING_KEYS = Object.freeze(["serverUrl", "clientId", "clientToken", "socketState"]);
   const NEW_CHAT_URL = "https://chatgpt.com/";
   const MIN_TARGET = 1;
   const MAX_TARGET = 32;
@@ -41,6 +45,11 @@
     created: 0,
     reused: 0,
     closed: 0,
+    onlineIntegrityTimer: null,
+    onlineIntegrityChecks: 0,
+    onlineIntegrityEligible: false,
+    onlineIntegrityLastCheckAt: 0,
+    onlineIntegrityLastReason: "",
   };
   globalThis[KEY] = state;
 
@@ -474,6 +483,13 @@
       standby_semantics_revision: STANDBY_SEMANTICS_REVISION,
       standby_excludes_routed_windows: true,
       transient_login_state_preserves_standby_target: true,
+      online_integrity_interval_ms: ONLINE_INTEGRITY_INTERVAL_MS,
+      online_integrity_bound_online_only: true,
+      online_integrity_single_authority: true,
+      online_integrity_checks: state.onlineIntegrityChecks,
+      online_integrity_eligible: state.onlineIntegrityEligible,
+      online_integrity_last_check_at: state.onlineIntegrityLastCheckAt || null,
+      online_integrity_last_reason: state.onlineIntegrityLastReason || "",
       route_idle_lease_ms: 5 * 60 * 1000,
       runtime_ready_standby: true,
       runtime_preflight_checks: state.runtimeChecks,
@@ -633,6 +649,31 @@
       state.reconcileTimer = null;
       reconcile(reason).catch(() => {});
     }, Math.max(0, Number(delay || 0)));
+  }
+
+  async function workerOnlineEligibility() {
+    const stored = await chrome.storage.local.get({ serverUrl: "", clientId: "", clientToken: "", socketState: "disconnected" }).catch(() => ({}));
+    const bound = Boolean(String(stored?.serverUrl || "").trim() && String(stored?.clientId || "").trim() && String(stored?.clientToken || "").trim());
+    const online = String(stored?.socketState || "") === "connected";
+    return { bound, online, eligible: bound && online };
+  }
+
+  async function onlineIntegrityTick(reason = "online-integrity-15s") {
+    const eligibility = await workerOnlineEligibility();
+    state.onlineIntegrityChecks += 1;
+    state.onlineIntegrityEligible = eligibility.eligible;
+    state.onlineIntegrityLastCheckAt = Date.now();
+    state.onlineIntegrityLastReason = String(reason || "online-integrity-15s").slice(0, 80);
+    if (!eligibility.eligible) return { ok: true, skipped: true, ...eligibility };
+    const result = await reconcile(reason);
+    return { ok: true, skipped: false, ...eligibility, result };
+  }
+
+  function ensureOnlineIntegrityWatchdog() {
+    if (state.onlineIntegrityTimer) return;
+    state.onlineIntegrityTimer = setInterval(() => {
+      onlineIntegrityTick("online-integrity-15s").catch(() => {});
+    }, ONLINE_INTEGRITY_INTERVAL_MS);
   }
 
   async function setTarget(requestedTarget, source = "explicit") {
@@ -809,6 +850,10 @@
     if (changes[DISABLED_KEY] || changes[LOGIN_STATE_KEY] || changes[LOGIN_COMPOSER_KEY] || changes[INIT_TAB_KEY]) {
       scheduleReconcile("state-change", 200);
     }
+    if (ONLINE_BINDING_KEYS.some(key => Boolean(changes[key]))) {
+      const becameOnline = changes.socketState?.newValue === "connected";
+      onlineIntegrityTick(becameOnline ? "worker-online-immediate" : "worker-binding-state-change").catch(() => {});
+    }
     const legacy = changes[LEGACY_LIMIT_STORAGE_KEY]?.newValue;
     const legacyTarget = normalizeTarget(legacy?.limit);
     if (legacyTarget && legacyTarget !== state.target) {
@@ -830,6 +875,9 @@
   state.scheduleReconcile = scheduleReconcile;
   state.standbyRows = standbyRows;
   state.loginStatus = loginStatus;
+  state.workerOnlineEligibility = workerOnlineEligibility;
+  state.onlineIntegrityTick = onlineIntegrityTick;
 
-  ensureLoaded().then(() => scheduleReconcile("startup", 500)).catch(() => {});
+  ensureOnlineIntegrityWatchdog();
+  ensureLoaded().then(() => onlineIntegrityTick("startup-immediate")).catch(() => {});
 })();
