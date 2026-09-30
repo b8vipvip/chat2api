@@ -11,6 +11,9 @@
   const ROUTES_STORAGE_KEY = "chat2apiConversationRoutesV1";
   const DISABLED_KEY = "chat2apiWorkerMasterDisabledV61";
   const INIT_TAB_KEY = "chat2apiInitializationTabIdV32";
+  const LOGIN_PROBE_TAB_KEY = "chatgptLoginProbeTabId";
+  const LOGIN_PROBE_WINDOW_KEY = "chatgptLoginProbeWindowId";
+  const LOGIN_PROBE_ADOPTABLE_KEY = "chatgptLoginProbeAdoptable";
   const ROUTE_ALARM_PREFIX = "chat2api-route-close:";
   const REPAIR_ALARM = "chat2api-persistent-window-pool-v132";
   // The 15-second online watchdog is a trigger only. Physical window lifecycle
@@ -342,6 +345,65 @@
     throw lastError || new Error("Timed out waiting for persistent ChatGPT window readiness");
   }
 
+  async function trackLoginProbe(row, adoptable = true) {
+    if (!Number.isInteger(row?.window_id) || !Number.isInteger(row?.tab_id)) return;
+    await chrome.storage.local.set({
+      [LOGIN_PROBE_TAB_KEY]: row.tab_id,
+      [LOGIN_PROBE_WINDOW_KEY]: row.window_id,
+      [LOGIN_PROBE_ADOPTABLE_KEY]: adoptable === true,
+    }).catch(() => {});
+  }
+
+  async function createBootstrapSurface(reason = "login-bootstrap", { focused = false, userVisible = false } = {}) {
+    const createWindow = typeof globalThis.chat2apiCreateWindowStaggered === "function"
+      ? globalThis.chat2apiCreateWindowStaggered
+      : chrome.windows.create.bind(chrome.windows);
+    const created = await createWindow(
+      { url: NEW_CHAT_URL, focused: Boolean(focused), type: "normal" },
+      { reason: `persistent-window-pool-v132:login-bootstrap:${reason}` },
+    );
+    if (!Number.isInteger(created?.id)) throw new Error("Chrome did not create the ChatGPT login bootstrap window");
+    let tab = Array.isArray(created.tabs) ? created.tabs.find(item => Number.isInteger(item?.id)) : null;
+    if (!tab) {
+      const tabs = await chrome.tabs.query({ windowId: created.id });
+      tab = tabs.find(item => Number.isInteger(item?.id)) || null;
+    }
+    if (!tab?.id) {
+      try { await chrome.windows.remove(created.id); } catch (_) {}
+      throw new Error("ChatGPT login bootstrap window contains no usable tab");
+    }
+    const url = tab.url || tab.pendingUrl || NEW_CHAT_URL;
+    const row = {
+      window_id: created.id,
+      tab_id: tab.id,
+      url,
+      status: String(tab.status || ""),
+      routable: isChatGpt(url) && !isAuthSurface(url),
+      runtime_ready: false,
+      focused: Boolean(focused),
+    };
+    await trackLoginProbe(row, !userVisible && !focused);
+    state.created += 1;
+    return row;
+  }
+
+  async function ensureLoginSurface({ focused = false, userVisible = false, reason = "login-surface" } = {}) {
+    await ensureLoaded();
+    const rows = await physicalWindows();
+    let row = rows[0] || null;
+    const existing = Boolean(row);
+    if (!row) {
+      row = await createBootstrapSurface(reason, { focused, userVisible });
+    } else {
+      await trackLoginProbe(row, !userVisible && !focused);
+      if (focused || userVisible) {
+        try { await chrome.windows.update(row.window_id, { focused: true }); } catch (_) {}
+        try { await chrome.tabs.update(row.tab_id, { active: true }); } catch (_) {}
+      }
+    }
+    return { ...row, existing };
+  }
+
   async function createStandby(reason = "persistent-pool-warm") {
     const createWindow = typeof globalThis.chat2apiCreateWindowStaggered === "function"
       ? globalThis.chat2apiCreateWindowStaggered
@@ -483,6 +545,8 @@
       standby_semantics_revision: STANDBY_SEMANTICS_REVISION,
       standby_excludes_routed_windows: true,
       transient_login_state_preserves_standby_target: true,
+      login_bootstrap_single_surface: true,
+      login_bootstrap_authority: "persistent-window-pool-v132",
       online_integrity_interval_ms: ONLINE_INTEGRITY_INTERVAL_MS,
       online_integrity_bound_online_only: true,
       online_integrity_single_authority: true,
@@ -588,7 +652,54 @@
 
     let opened = 0;
     let lastError = "";
-    if (ready && !isDisabled) {
+    let bootstrapOpened = false;
+
+    // Break the zero-window login deadlock with exactly one pool-owned ChatGPT
+    // surface. A later reconcile may warm the remaining target only after the
+    // login detector confirms ready+composer on this bootstrap surface.
+    if (!isDisabled && rows.length === 0) {
+      try {
+        const bootstrap = await ensureLoginSurface({
+          focused: false,
+          userVisible: false,
+          reason: `reconcile:${reason}`,
+        });
+        rows.push({ ...bootstrap });
+        opened += bootstrap.existing ? 0 : 1;
+        bootstrapOpened = true;
+      } catch (error) {
+        lastError = String(error?.message || error);
+      }
+    }
+
+    if (bootstrapOpened) {
+      state.lastResult = {
+        ok: true,
+        reason,
+        target,
+        standby_target: standbyTarget,
+        standby_before_or_after_total: standbyRows(rows, value).length,
+        total_windows: rows.length,
+        routed_windows: routeByWindow(value).size,
+        standby_semantics_revision: STANDBY_SEMANTICS_REVISION,
+        transient_login_state_preserves_standby_target: true,
+        login_state: auth.state,
+        login_composer_ready: auth.composer_ready,
+        login_ready: ready,
+        login_explicit_logout: auth.explicit_logout,
+        runtime_validation: runtimeValidation,
+        opened,
+        closed: reduced.closed,
+        deferred: reduced.deferred,
+        pending_reason: "login_bootstrap",
+        error: "",
+        at: Date.now(),
+      };
+      scheduleReconcile("login-bootstrap-follow-up", 1200);
+      return snapshotFrom(rows, value, auth, isDisabled);
+    }
+
+    if (ready && !isDisabled && !lastError) {
       while (standbyRows(rows, value).length < target) {
         try {
           const row = await createStandby(reason);
@@ -606,9 +717,11 @@
       ? "worker_disabled"
       : (auth.explicit_logout
           ? "login_required"
-          : (!ready
-              ? "login_not_ready"
-              : (reduced.deferred ? "protected_standby" : (lastError ? "warm_failed" : ""))));
+          : (lastError
+              ? "window_open_failed"
+              : (!ready
+                  ? "login_not_ready"
+                  : (reduced.deferred ? "protected_standby" : ""))));
     state.lastResult = {
       ok: !lastError,
       reason,
@@ -875,6 +988,7 @@
   state.scheduleReconcile = scheduleReconcile;
   state.standbyRows = standbyRows;
   state.loginStatus = loginStatus;
+  state.ensureLoginSurface = ensureLoginSurface;
   state.workerOnlineEligibility = workerOnlineEligibility;
   state.onlineIntegrityTick = onlineIntegrityTick;
 

@@ -158,7 +158,7 @@ def test_admin_copy_describes_persistent_windows_without_legacy_helper_copy() ->
 
 def test_worker_extension_bundle_advertises_pool_contract() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert manifest["version"] == "0.22.104"
+    assert manifest["version"] == "0.22.105"
     assert "persistent prewarmed" in manifest["description"]
 
 
@@ -179,3 +179,35 @@ def test_new_pool_and_capacity_scripts_parse_in_node() -> None:
             timeout=15,
         )
         assert result.returncode == 0, f"{path}: {result.stderr}"
+
+
+
+def test_zero_window_worker_bootstraps_one_pool_owned_login_surface() -> None:
+    source = text("chrome_extension/conversation_persistent_pool_v132.js")
+    assert 'const LOGIN_PROBE_TAB_KEY = "chatgptLoginProbeTabId"' in source
+    assert 'async function createBootstrapSurface(' in source
+    assert 'async function ensureLoginSurface(' in source
+    assert 'if (!isDisabled && rows.length === 0)' in source
+    assert 'pending_reason: "login_bootstrap"' in source
+    assert 'scheduleReconcile("login-bootstrap-follow-up", 1200)' in source
+    assert 'login_bootstrap_single_surface: true' in source
+    assert 'login_bootstrap_authority: "persistent-window-pool-v132"' in source
+    assert 'state.ensureLoginSurface = ensureLoginSurface;' in source
+
+
+def test_login_detector_delegates_bootstrap_window_lifecycle_to_persistent_pool() -> None:
+    login = text("chrome_extension/background_login_v27.js")
+    assert 'const PERSISTENT_POOL_KEY = "__CHAT2API_PERSISTENT_WINDOW_POOL_V132__"' in login
+    assert 'pool.ensureLoginSurface({' in login
+    assert 'persistent-pool-bootstrap-adopted' in login
+    assert 'chrome.windows.create' not in login
+    assert 'chrome.windows.remove' not in login
+
+
+def test_bootstrap_is_adopted_before_remaining_standby_windows_are_warmed() -> None:
+    source = text("chrome_extension/conversation_persistent_pool_v132.js")
+    bootstrap = source.index('if (!isDisabled && rows.length === 0)')
+    early_return = source.index('return snapshotFrom(rows, value, auth, isDisabled);', bootstrap)
+    warm = source.index('while (standbyRows(rows, value).length < target)', early_return)
+    assert bootstrap < early_return < warm
+    assert 'if (ready && !isDisabled && !lastError)' in source
