@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
+import inspect
+from typing import Any, Callable
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import Response
+from fastapi.routing import APIRoute
+from starlette.routing import request_response
 
 from . import admin as admin_module
 from . import model_capability_routing_patch as model_routing
@@ -54,15 +58,20 @@ def _model_id(raw: Any) -> str | None:
 def _validated_model_rows(registry: Any, client_id: str) -> list[dict[str, Any]]:
     client = getattr(registry, "clients", {}).get(str(client_id))
     metadata = getattr(client, "metadata", None) if client else None
-    values = (metadata or {}).get("models")
+    metadata = metadata if isinstance(metadata, dict) else {}
+    try:
+        validation_revision = int(metadata.get("model_validation_revision") or 0)
+    except (TypeError, ValueError):
+        validation_revision = 0
+    if metadata.get("model_validation_state") != "validated" or validation_revision < VALIDATION_REVISION:
+        return []
+    values = metadata.get("models")
     if not isinstance(values, list):
         return []
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for raw in values:
-        if not isinstance(raw, dict):
-            continue
-        if raw.get("validated") is not True:
+        if not isinstance(raw, dict) or raw.get("validated") is not True:
             continue
         try:
             revision = int(raw.get("validation_revision") or raw.get("validation_version") or 0)
@@ -91,19 +100,115 @@ def _mark_pending(registry: Any, client_id: str, trigger: str) -> None:
     if not isinstance(metadata, dict):
         metadata = {}
         client.metadata = metadata
-    # Never carry model authority across a bind/enable/connect/restart boundary.
-    # The Worker must republish a freshly validated list before it is eligible.
     metadata["models"] = []
     metadata["current_model"] = None
     metadata["model_validation_state"] = "pending"
     metadata["model_validation_trigger"] = trigger
     metadata["model_validation_revision"] = VALIDATION_REVISION
+    metadata["model_validation_error"] = None
 
 
 def _patch_console_terms() -> None:
     html = admin_module.ADMIN_HTML
     html = html.replace("模型广场", "模型库").replace("模型目录", "模型库")
     admin_module.ADMIN_HTML = html
+
+
+def _replace_route_endpoint(route: APIRoute, endpoint: Callable[..., Any]) -> None:
+    route.endpoint = endpoint
+    route.dependant.call = endpoint
+    route.app = request_response(route.get_route_handler())
+
+
+def _pricing_by_model(payload: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for raw in payload.get("data") or []:
+        if not isinstance(raw, dict):
+            continue
+        model_id = normalize_concrete_model_id(raw.get("model_id") or raw.get("id"))
+        if model_id:
+            result[model_id] = dict(raw)
+    return result
+
+
+def _public_user_library(registry: Any, pricing_payload: dict[str, Any]) -> list[dict[str, Any]]:
+    prices = _pricing_by_model(pricing_payload)
+    rows: list[dict[str, Any]] = []
+    for model in registry.model_catalog(online_only=True):
+        if not isinstance(model, dict):
+            continue
+        model_id = str(model.get("id") or "").strip().lower()
+        if not model_id:
+            continue
+        price = prices.get(model_id, {})
+        capabilities = list(model.get("capabilities") or [])
+        special = model_id in STATIC_SPECIAL_MODELS
+        rows.append({
+            "model_id": model_id,
+            "name": str(price.get("name") or model.get("label") or model_id),
+            "enabled": True,
+            "input_usd_per_million": float(price.get("input_usd_per_million") or 0),
+            "cached_input_usd_per_million": float(price.get("cached_input_usd_per_million") or 0),
+            "output_usd_per_million": float(price.get("output_usd_per_million") or 0),
+            "price_configured": bool(price),
+            "source": str(model.get("source") or ("special-static" if special else "worker-validated")),
+            "capabilities": capabilities,
+            "available_workers": len(model.get("clients") or []),
+            "validated": bool(model.get("validated")) if not special else None,
+            "validated_at": model.get("validated_at"),
+            "playground_eligible": bool(not special and "text" in capabilities),
+        })
+    return rows
+
+
+def _patch_user_console_routes(app: FastAPI, registry: Any) -> None:
+    for route in list(app.routes):
+        if not isinstance(route, APIRoute):
+            continue
+        methods = set(route.methods or set())
+        if route.path == "/api/user/models" and "GET" in methods:
+            base_endpoint = route.endpoint
+
+            async def user_models_from_worker_library(request: Request, _base=base_endpoint):
+                payload = _base(request)
+                if inspect.isawaitable(payload):
+                    payload = await payload
+                if not isinstance(payload, dict):
+                    return payload
+                result = dict(payload)
+                result["data"] = _public_user_library(registry, payload)
+                result["library_authority"] = PATCH_ID
+                result["library_revision"] = PATCH_REVISION
+                result["normal_model_source"] = "worker-discovery-and-validation"
+                return result
+
+            _replace_route_endpoint(route, user_models_from_worker_library)
+
+        if route.path == "/assets/chat2api-user-console-v104.js" and "GET" in methods:
+            base_endpoint = route.endpoint
+
+            async def user_console_js_model_library(_base=base_endpoint):
+                response = _base()
+                if inspect.isawaitable(response):
+                    response = await response
+                if not isinstance(response, Response):
+                    return response
+                text = bytes(getattr(response, "body", b"") or b"").decode("utf-8", errors="replace")
+                text = text.replace("模型广场", "模型库")
+                text = text.replace("可用模型与当前价格", "Worker 验证可用模型与当前价格")
+                old = '$("playModel").innerHTML = state.models.length ? state.models.map((row) =>'
+                new = 'const playModels = state.models.filter((row) => row.playground_eligible !== false);\n    $("playModel").innerHTML = playModels.length ? playModels.map((row) =>'
+                text = text.replace(old, new)
+                text = text.replace("每 1M Token · 管理员可调整", "每 1M Token · 模型可用性由 Worker 验证")
+                headers = {
+                    key: value
+                    for key, value in response.headers.items()
+                    if key.lower() not in {"content-length", "content-type"}
+                }
+                headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+                return Response(text, status_code=response.status_code, media_type="application/javascript", headers=headers)
+
+            _replace_route_endpoint(route, user_console_js_model_library)
 
 
 def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
@@ -145,21 +250,11 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
         return any(str(item.get("id") or "") == model for item in _validated_model_rows(registry, client_id))
 
     def model_library(online_only: bool = True) -> list[dict[str, Any]]:
-        # Voice and image generation are the only static exceptions. Every other
-        # model row is a union of fresh, validated Worker capability reports.
         catalog = {key: {**value, "clients": []} for key, value in STATIC_SPECIAL_MODELS.items()}
         if online_only:
-            client_ids = [
-                client_id
-                for client_id in registry.online_client_ids()
-                if registry.chatgpt_routing_ready(client_id)
-            ]
+            client_ids = [client_id for client_id in registry.online_client_ids() if registry.chatgpt_routing_ready(client_id)]
         else:
-            client_ids = [
-                client_id
-                for client_id, item in registry.clients.items()
-                if getattr(item, "connection_enabled", False)
-            ]
+            client_ids = [client_id for client_id, item in registry.clients.items() if getattr(item, "connection_enabled", False)]
         for client_id in client_ids:
             for special in catalog.values():
                 if client_id not in special["clients"]:
@@ -185,21 +280,14 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
                 )
                 if client_id not in entry["clients"]:
                     entry["clients"].append(client_id)
-                validated_at = model.get("validated_at")
-                if validated_at:
-                    entry["validated_at"] = validated_at
+                if model.get("validated_at"):
+                    entry["validated_at"] = model.get("validated_at")
                 if model.get("selected"):
                     entry["selected_on"] = client_id
         special_order = {"gpt-image": 0, "gpt-live": 1, "gpt-live-mini": 2}
-        return sorted(
-            catalog.values(),
-            key=lambda item: (special_order.get(str(item.get("id")), 10), str(item.get("id") or "")),
-        )
+        return sorted(catalog.values(), key=lambda item: (special_order.get(str(item.get("id")), 10), str(item.get("id") or "")))
 
     def is_library_text_model(model: str) -> bool:
-        # default/chatgpt-web are legacy aliases, not discovered models. Treat
-        # them as normal text requests so they fail closed unless a concrete
-        # validated model is requested. Only voice/image keep static bypasses.
         value = str(model or "").strip().lower()
         return bool(value) and value not in STATIC_SPECIAL_MODELS
 
@@ -222,52 +310,10 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
     registry.client_models = client_models_validated
     registry.supports_model = supports_model_strict
     registry.model_catalog = model_library
-
-    # model_capability_routing_patch resolves these module-globals at request
-    # time. Replacing both removes mini/account/empty-catalog fallbacks and makes
-    # the live model library the single normal-model dispatch authority.
     model_routing._is_dynamic_text_model = is_library_text_model
     model_routing._compatible = compatible_strict
-
-    # The user console historically listed every configured price row. Keep the
-    # price configuration as metadata, but expose only the current model library.
-    pricing = getattr(app.state, "user_pricing", None)
-    if pricing is not None and callable(getattr(pricing, "public", None)):
-        base_pricing_public = pricing.public
-
-        def public_pricing_from_model_library() -> dict[str, Any]:
-            payload = dict(base_pricing_public())
-            configured = {
-                str(row.get("model_id") or "").strip().lower(): dict(row)
-                for row in payload.get("models") or []
-                if isinstance(row, dict) and str(row.get("model_id") or "").strip()
-            }
-            rows: list[dict[str, Any]] = []
-            for item in model_library(online_only=True):
-                model_id = str(item.get("id") or "").strip()
-                if not model_id:
-                    continue
-                price = dict(configured.get(model_id.lower()) or {})
-                price.update({
-                    "model_id": model_id,
-                    "name": str(price.get("name") or item.get("label") or model_id),
-                    "enabled": True,
-                    "source": item.get("source"),
-                    "validated": bool(item.get("validated")),
-                    "worker_count": len(item.get("clients") or []),
-                })
-                price.setdefault("input_usd_per_million", 0.0)
-                price.setdefault("cached_input_usd_per_million", 0.0)
-                price.setdefault("output_usd_per_million", 0.0)
-                rows.append(price)
-            payload["models"] = rows
-            payload["model_library_revision"] = PATCH_REVISION
-            payload["model_library_authority"] = PATCH_ID
-            return payload
-
-        pricing.public = public_pricing_from_model_library
-
     _patch_console_terms()
+    _patch_user_console_routes(app, registry)
 
     app.state.worker_model_library_v145_installed = True
     app.state.worker_model_library_revision = PATCH_REVISION
