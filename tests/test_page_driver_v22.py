@@ -41,7 +41,6 @@ def test_page_driver_v22_phase7_adds_only_explicit_keyboard_write_primitive():
     assert "return true;" in source
     assert "    dispatchKey," in source
 
-    # The Driver still has no autonomous orchestration or higher-level writes.
     assert "new MutationObserver" not in source
     assert "setInterval(" not in source
     assert "setTimeout(" not in source
@@ -97,7 +96,6 @@ def test_reasoning_controller_prefers_driver_key_dispatch_but_keeps_exact_local_
     assert 'target.dispatchEvent(new KeyboardEvent("keyup", init));' in source
     assert source.index("pageDriver.dispatchKey(target, name, code, extra)") < source.index('target.dispatchEvent(new KeyboardEvent("keydown", init));')
 
-    # High-level reasoning behavior stays feature-owned and unchanged.
     for token in (
         'key(target, "M", "KeyM", { ctrlKey: true, shiftKey: true })',
         'key(pill, "Enter", "Enter")',
@@ -118,36 +116,31 @@ def test_reasoning_controller_attaches_driver_diagnostics_without_replacing_writ
     assert DRIVER_KEY in source
     assert "attachDriverVerification" in source
     assert "classifyDriverError" in source
-    # The established controller identity remains a compatibility contract.
     assert 'controller: "reasoning-v7.2"' in source
     assert "page_driver_version" in source
     assert "verification: classified.verification" in source
 
 
-def test_model_router_propagates_structured_reasoning_diagnostics_without_weakening_probe_gate():
+def test_model_router_propagates_v145_model_and_reasoning_diagnostics():
     source = read(EXT / "model_routing_v2.js")
     for token in (
-        "reasoningRoutingError",
-        "reasoning_selection_failed",
-        "reasoning_error_code",
-        "reasoning_controller_diagnostics",
-        "reasoning_verification",
-        "reasoning_page_driver_version",
-        "reasoning_verification_warning",
-        "lastModelDiagnostics: errorDiagnostics",
+        "prepareReasoning",
+        "reasoningDiagnostics",
+        "reasoning_selection",
+        "model_library_revision",
+        "model_library_authority",
+        "model_selection_validated",
+        "model_selection_current",
+        "logical_requested_model",
+        "effective_model",
         'type: "chat.diagnostics"',
         'type: "chat.error"',
-        "code: errorCode",
         "diagnostics: errorDiagnostics",
     ):
         assert token in source
-
-    # The final passive probe remains the authoritative request gate.
-    assert "const afterResponse = await probeState(tab.id, model, reasoning);" in source
-    assert "if (!after.family_match)" in source
-    assert "if (reasoning && !after.reasoning_match)" in source
-    assert 'code: "model_verification_failed"' in source
-    assert 'code: "reasoning_verification_failed"' in source
+    assert 'type: "chat2api.model.select.v145"' in source
+    assert "Requested model is not validated on this Worker" in source
+    assert "Worker model library is not validated yet" in source
 
 
 def test_page_driver_vm_contract_executes_and_is_required_by_ci():
