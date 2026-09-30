@@ -1,16 +1,6 @@
 (() => {
   const CACHE_KEY = "chatgptAccountProfileV20";
   const CACHE_MS = 45000;
-  const MINI_MODEL = {
-    id: "gpt-5.5-mini",
-    label: "GPT-5.5 Mini · Free 默认",
-    family: "gpt-5.5-mini",
-    reasoning: null,
-    capabilities: ["text"],
-    reasoning_efforts: [],
-    selected: true,
-    free_default: true,
-  };
 
   const normalizeType = value => ["free", "paid"].includes(String(value || "").toLowerCase())
     ? String(value).toLowerCase()
@@ -120,18 +110,12 @@
   }
 
   function adaptStatusMetadata(metadata, profile) {
-    const type = normalizeType(profile?.account_type);
     const base = { ...(metadata || {}), ...accountMetadata(profile) };
     const caps = Array.isArray(base.capabilities) ? [...base.capabilities] : [];
     if (!caps.includes("account-plan-detection")) caps.push("account-plan-detection");
-    if (type === "free") {
-      base.models = [{ ...MINI_MODEL }];
-      base.current_model = MINI_MODEL.id;
-      base.current_reasoning = null;
-      base.capabilities = caps.filter(item => !["model-selection", "reasoning-selection", "passive-model-state"].includes(item));
-      if (!base.capabilities.includes("free-account-default-model")) base.capabilities.push("free-account-default-model");
-      return base;
-    }
+    // Account detection is diagnostic/admission metadata only. It must never
+    // synthesize, replace, or prune the model list; v145 Worker validation owns
+    // normal-model availability for Free, Plus, Pro and future account types.
     base.capabilities = caps;
     return base;
   }
