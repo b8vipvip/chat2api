@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   bump:
-    if: github.actor != 'github-actions[bot]' || !contains(github.event.head_commit.message, 'release: align v0.22.107')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,6 +20,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if git log -1 --pretty=%s | grep -Fq 'release: align v0.22.107'; then
+            echo 'alignment commit already applied'
+            exit 0
+          fi
           git grep -Il -z '0.22.106' -- ':!*.png' ':!*.jpg' ':!*.jpeg' ':!*.gif' ':!*.zip' | xargs -0 -r sed -i 's/0\.22\.106/0.22.107/g'
           if git diff --quiet; then
             echo 'already aligned'
