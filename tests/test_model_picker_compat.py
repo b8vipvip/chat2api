@@ -18,6 +18,7 @@ def test_manifest_loads_canonical_model_and_multimodal_controllers() -> None:
     assert "content_request_v5.js" in scripts
     assert "content_model_v5.js" in scripts
     assert "content_model_v7.js" in scripts
+    assert "content_model_library_v145.js" in scripts
     assert "content_model_transition_v15.js" in scripts
     assert "content_reasoning_v7.js" in scripts
     assert "content_model_v6.js" not in scripts
@@ -34,39 +35,36 @@ def test_manifest_loads_canonical_model_and_multimodal_controllers() -> None:
     assert not any("dictation" in name for name in scripts)
 
 
-def test_request_router_preflights_then_uses_passive_state_before_fallback_selection() -> None:
+def test_request_router_preflights_then_selects_worker_validated_model() -> None:
     source = (EXTENSION / "model_routing_v2.js").read_text(encoding="utf-8")
     assert "chat2api.request.preflight" in source
     assert "content_request_v5.js" in source
-    assert "chat2api.model.probe.v7" in source
-    assert "chat2api.model.commit.v7" in source
-    assert "chat2api.model.prepare.v5" in source
+    assert "chat2api.model.select.v145" in source
     assert "chat2api.reasoning.prepare.v7" in source
-    assert 'TEXT_MODELS = ["gpt-5.6-sol", "gpt-5.5"]' in source
-    assert "passive-state-match-zero-op" in source
-    assert "passive-no-ui-v7" in source
+    assert "validatedLibrary" in source
+    assert "resolveRequestedModel" in source
     assert 'model: "chatgpt-web"' in source
     assert 'type: "chat.diagnostics"' in source
     assert "chat2api.attach.prepare.v4" in source
-    handler = source[source.index("handleServerMessage = async function handleCanonicalModelRouting"):]
+    assert "free-account-default-mini-no-ui-selection" not in source
+    assert "TEXT_MODELS" not in source
+    handler = source[source.index("handleServerMessage = async function handleDynamicModelRouting"):]
     preflight_at = handler.index("preflightRequest(tab.id, message)")
-    model_at = handler.index("prepareRequestedState(tab, effectiveModel, effectiveReasoning)")
+    model_at = handler.index("selectValidatedModel(tab.id, requestedModel)")
+    reasoning_at = handler.index("prepareReasoning(tab.id, requestedReasoning)")
     attachments_at = handler.index("prepareAttachments(tab.id, message.attachments || [])")
-    assert preflight_at < model_at < attachments_at
-    assert 'free_model_ui_bypassed: true' in handler
-    assert 'selection_strategy: "free-account-default-mini-no-ui-selection"' in handler
-    assert 'effectiveModel = "gpt-5.5"' in handler
-    assert 'effectiveReasoning = "instant"' in handler
+    assert preflight_at < model_at < reasoning_at < attachments_at
 
 
-def test_family_verification_false_negative_recovers_from_passive_composer_state() -> None:
-    router = (EXTENSION / "model_routing_v2.js").read_text(encoding="utf-8")
+def test_model_validation_selects_and_verifies_live_picker_choices() -> None:
+    validator = (EXTENSION / "content_model_library_v145.js").read_text(encoding="utf-8")
     state = (EXTENSION / "content_model_v7.js").read_text(encoding="utf-8")
     transition = (EXTENSION / "content_model_transition_v15.js").read_text(encoding="utf-8")
-    assert "waitForPassiveFamily" in router
-    assert "family_verification_recovered" in router
-    assert "family_original_error" in router
-    assert "passive-recovery" in router
+    assert "selectAndVerify" in validator
+    assert "modelChoices" in validator
+    assert "canonicalModelId" in validator
+    assert "validation_method: \"chatgpt-model-picker-select-and-verify\"" in validator
+    assert 'message?.type === "chat2api.model.select.v145"' in validator
     assert "combined composer pill" in state
     assert 'text.endsWith(` ${needle}`)' in state
     assert "family-transition-inference-v15" in transition
@@ -154,10 +152,12 @@ def test_v5_picker_remains_scoped_fallback_for_model_family_changes() -> None:
     assert "chooseFamily" in source
 
 
-def test_api_default_text_model_is_canonical_not_browser_alias() -> None:
+def test_api_default_text_model_is_canonical_and_dynamic_router_has_no_static_allowlist() -> None:
     source = (ROOT / "app" / "models.py").read_text(encoding="utf-8")
     assert 'model: str = "gpt-5.6-sol"' in source
     assert 'reasoning_effort: str | None' in source
     router = (EXTENSION / "model_routing_v2.js").read_text(encoding="utf-8")
     assert "default-no-ui" not in router
-    assert "Unsupported text model" in router
+    assert "Unsupported text model" not in router
+    assert "Requested model is not validated on this Worker" in router
+    assert "validatedLibrary" in router
