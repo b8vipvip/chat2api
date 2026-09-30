@@ -24,7 +24,7 @@ jobs:
             echo 'alignment commit already applied'
             exit 0
           fi
-          git grep -Il -z '0.22.106' -- ':!*.png' ':!*.jpg' ':!*.jpeg' ':!*.gif' ':!*.zip' | xargs -0 -r sed -i 's/0\.22\.106/0.22.107/g'
+          git grep -Il -z '0.22.106' -- ':!.github/workflows/**' ':!*.png' ':!*.jpg' ':!*.jpeg' ':!*.gif' ':!*.zip' | xargs -0 -r sed -i 's/0\.22\.106/0.22.107/g'
           if git diff --quiet; then
             echo 'already aligned'
             exit 0
