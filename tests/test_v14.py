@@ -150,25 +150,27 @@ def test_extension_runtime_log_uses_beijing_time_as_canonical() -> None:
     assert "Date.now() + RUN_IDLE_MS" in background
 
 
-def test_extension_recovers_family_transitions_and_uses_adaptive_reasoning() -> None:
+def test_extension_validates_dynamic_models_and_keeps_adaptive_reasoning() -> None:
     router = (EXTENSION / "model_routing_v2.js").read_text(encoding="utf-8")
-    detector = (EXTENSION / "content_model_v7.js").read_text(encoding="utf-8")
+    validator = (EXTENSION / "content_model_library_v145.js").read_text(encoding="utf-8")
     transition = (EXTENSION / "content_model_transition_v15.js").read_text(encoding="utf-8")
     reasoning = (EXTENSION / "content_reasoning_v7.js").read_text(encoding="utf-8")
     manifest = json.loads((EXTENSION / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
     bootstrap = (EXTENSION / "content_bootstrap.js").read_text(encoding="utf-8")
 
-    assert "waitForPassiveFamily" in router
-    assert "family_verification_recovered" in router
-    assert "postFamily" in router
-    assert "prepareReasoning(tab.id, reasoning)" in router
-    assert router.index("prepareRequestedState(tab, requestedModel, requestedReasoning)") < router.index("chrome.tabs.sendMessage(tab.id")
-    assert "combined composer pill" in detector
+    assert "validatedLibrary" in router
+    assert "selectValidatedModel" in router
+    assert "prepareReasoning(tab.id, requestedReasoning)" in router
+    assert router.index("selectValidatedModel(tab.id, requestedModel)") < router.index("chrome.tabs.sendMessage(tab.id")
+    assert "selectAndVerify" in validator
+    assert "canonicalModelId" in validator
+    assert 'message?.type === "chat2api.model.select.v145"' in validator
     assert "family-transition-inference-v15" in transition
     assert 'auto: ["智能", "自动", "auto", "automatic"]' in transition
     assert "智能/自动" in transition
     assert 'message?.type !== "chat2api.model.prepare.v5"' in transition
+    assert "content_model_library_v145.js" in scripts
     assert "content_model_transition_v15.js" in scripts
     assert '"content_model_transition_v15.js"' in bootstrap
 
