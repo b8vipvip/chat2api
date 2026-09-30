@@ -45,6 +45,15 @@ def test_v144_model_evidence_runtime_owners_are_in_manifest():
     assert "content_model_evidence_v144.js" in isolated_scripts
 
 
+def test_v145_worker_model_library_runtime_owners_are_registered():
+    manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
+    isolated_scripts = manifest["content_scripts"][1]["js"]
+    entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
+    assert "content_model_library_v145.js" in isolated_scripts
+    assert entry.index('"conversation_route_recovery_v136.js"') < entry.index('"background_model_library_v145.js"')
+    assert (ROOT / "app" / "worker_model_library_v145_patch.py").exists()
+
+
 def test_realtime_protocol_contract_matches_live_bridge():
     assert LIVE_PROTOCOL_VERSION == "chat2api-live-v1"
 

@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from . import admin as admin_module
 from . import model_capability_routing_patch as model_routing
 from .model_catalog import model_transport_id, normalize_model_id, normalize_reasoning_level
+from .worker_model_library_v145_patch import install_worker_model_library_v145_patch
 
 PATCH_ID = "final-model-authority-v144"
 PATCH_REVISION = 144
@@ -49,10 +50,12 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
     request_model = normalize_model_id(evidence.get("request_model"))
     served = normalize_model_id(evidence.get("served_model"))
     default_model = normalize_model_id(evidence.get("default_model"))
-    observed = served or default_model
+    # Profile/default metadata is diagnostic only. It must never prove which
+    # concrete model actually served this request.
+    observed = served
     conflict = bool(evidence.get("model_conflict"))
     authority_violation = bool(routed and request_model and routed != request_model)
-    verified = bool(routed and observed and routed == observed and not conflict and not authority_violation)
+    verified = bool(routed and served and routed == served and not conflict and not authority_violation)
     level = "served" if served else "profile-default" if default_model else "unverified"
     fallback_reason = str(evidence.get("fallback_reason") or "").strip() or None
     if authority_violation:
@@ -73,7 +76,7 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
         "model_conflict": conflict,
         "model_authority_violation": authority_violation,
         "model_verification_level": level,
-        "model_evidence_source": evidence.get("evidence_source") or ("network_response_metadata" if observed else None),
+        "model_evidence_source": evidence.get("evidence_source") or ("network_response_metadata" if served else None),
         "model_evidence_field": evidence.get("model_field") or evidence.get("default_model_field"),
         "model_fallback_reason": fallback_reason,
         "final_model_authority": PATCH_ID,
@@ -111,6 +114,10 @@ def _patch_admin_html() -> None:
 def install_model_observability_v144_patch(app: FastAPI) -> FastAPI:
     if getattr(app.state, "model_observability_v144_installed", False):
         return app
+
+    # The v145 library is the final catalog/routing authority: normal models
+    # exist only after a Worker has freshly discovered and validated them.
+    install_worker_model_library_v145_patch(app)
 
     registry = app.state.registry
     broker = app.state.broker

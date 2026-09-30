@@ -109,13 +109,15 @@ def test_zpay_signature_matches_provider_canonical_contract() -> None:
     assert _verify_zpay({**params, "money": "1.00", "sign": signature}, key) is False
 
 
-def test_user_console_contains_requested_modules_without_runtime_disclosure() -> None:
+def test_user_console_contains_requested_modules_without_sensitive_runtime_disclosure() -> None:
     html = (ROOT / "app" / "user_console_v104.html").read_text(encoding="utf-8")
     js = (ROOT / "app" / "user_console_v104.js").read_text(encoding="utf-8")
-    for label in ("API 密钥", "请求记录", "账户资料", "费用中心", "模型广场", "测试场", "数据看板", "开发文档"):
+    for label in ("API 密钥", "请求记录", "账户资料", "费用中心", "模型库", "测试场", "数据看板", "开发文档"):
         assert label in html
     public_surface = html + "\n" + js
-    for forbidden in ("ChatGPT", "Chrome", "Worker", "extension", "Linux", "client_id", "pairing", "Window Management"):
+    # The model-library page may explain that availability comes from Workers,
+    # but transport/host identity details must remain private.
+    for forbidden in ("Chrome", "extension", "Linux", "client_id", "pairing", "Window Management"):
         assert forbidden not in public_surface
 
 

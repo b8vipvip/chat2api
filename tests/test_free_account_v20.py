@@ -24,23 +24,26 @@ def test_free_account_detector_is_passive_and_loaded() -> None:
     assert ".click()" not in source
     assert 'url.includes("/api/extensions/register")' in background
     assert 'account_type: "free"' in source
-    assert 'id: "gpt-5.5-mini"' in background
-    assert "free-account-default-model" in background
+    # Account detection is diagnostic only: it must not synthesize a Free model.
+    assert 'id: "gpt-5.5-mini"' not in background
+    assert "free-account-default-model" not in background
+    assert "must never" in background and "model list" in background
     assert entry.index('"model_routing_v2.js"') < entry.index('"background_account_v20.js"')
+    assert entry.index('"background_account_v20.js"') < entry.index('"background_model_library_v145.js"')
 
 
-def test_browser_router_bypasses_free_model_ui_and_uses_paid_fallback() -> None:
+def test_browser_router_uses_fresh_worker_validated_model_library_for_all_accounts() -> None:
     source = (EXTENSION / "model_routing_v2.js").read_text(encoding="utf-8")
-    assert 'const TEXT_MODELS = ["gpt-5.6-sol", "gpt-5.5"]' in source
-    assert 'const MINI_MODEL = "gpt-5.5-mini"' in source
-    assert 'freeNativeMini = String(accountProfile?.account_type || "unknown")' in source
-    assert 'selection_strategy: "free-account-default-mini-no-ui-selection"' in source
-    assert 'effectiveModel = "gpt-5.5"' in source
-    assert 'effectiveReasoning = "instant"' in source
-    assert '"gpt-5.5-instant-fallback"' in source
-    free_branch = source[source.index("const prepared = freeNativeMini"):source.index("const attachmentDiagnostics")]
-    assert "prepareRequestedState" in free_branch
-    assert "free_model_ui_bypassed: true" in free_branch
+    assert "LIBRARY_REVISION = 145" in source
+    assert "validatedLibrary" in source
+    assert "resolveRequestedModel" in source
+    assert 'type: "chat2api.model.select.v145"' in source
+    assert "Worker model library is not validated yet" in source
+    assert "Requested model is not validated on this Worker" in source
+    assert 'const TEXT_MODELS = ["gpt-5.6-sol", "gpt-5.5"]' not in source
+    assert 'const MINI_MODEL = "gpt-5.5-mini"' not in source
+    assert "free-account-default-mini-no-ui-selection" not in source
+    assert "gpt-5.5-instant-fallback" not in source
 
 
 def test_server_v20_runtime_prefers_free_then_falls_back_without_poisoning_paid_routes() -> None:
