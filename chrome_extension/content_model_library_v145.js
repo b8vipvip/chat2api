@@ -163,7 +163,7 @@
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       try {
-        const value = predicate();
+        const value = await predicate();
         if (value) return value;
       } catch (_) {}
       await delay(interval);
