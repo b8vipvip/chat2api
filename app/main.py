@@ -921,6 +921,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             return
         await websocket.accept()
         await registry.attach(client_id, websocket)
+        # Per-socket generation guard: Worker settings are server-authoritative and
+        # are pushed exactly once after this connection advertises control readiness.
+        # The browser persistent pool remains the sole physical-window authority.
+        window_target_synced = False
         try:
             await websocket.send_json({"type": "server.hello", "client_id": client_id, "version": APP_VERSION})
             while True:
@@ -928,6 +932,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 message_type = message.get("type")
                 await registry.touch(client_id, message.get("metadata") if isinstance(message.get("metadata"), dict) else None)
                 if message_type in {"heartbeat", "extension.hello", "extension.status"}:
+                    if message_type in {"extension.hello", "extension.status"} and not window_target_synced:
+                        window_runtime = getattr(app.state, "worker_window_limits", {})
+                        sync_online = window_runtime.get("sync_online") if isinstance(window_runtime, dict) else None
+                        if callable(sync_online):
+                            try:
+                                sync_result = await sync_online(client_id)
+                                window_target_synced = bool(sync_result.get("sent"))
+                            except Exception:
+                                logger.exception("Failed to sync Worker standby target on connect: %s", client_id)
                     if message_type == "heartbeat":
                         await websocket.send_json({"type": "heartbeat.ack", "ts": time.time()})
                     continue

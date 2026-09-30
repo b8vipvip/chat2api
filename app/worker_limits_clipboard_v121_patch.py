@@ -216,6 +216,56 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
             await asyncio.sleep(0.1)
         return {"ok": False, "pending": True, "reason": "extension_control_timeout", "control_id": control_id}
 
+    async def sync_online_window_target(client_id: str) -> dict[str, Any]:
+        # Push the current server-owned standby target once per WebSocket generation.
+        # This function transports configuration only. It never creates, closes, or
+        # counts browser windows; persistent-window-pool-v132 remains the sole
+        # physical lifecycle authority on both Windows and Linux Chrome Workers.
+        # It deliberately does not wait for control confirmation because this helper
+        # is called from the WebSocket receive loop that must consume that result.
+        client_id = str(client_id or "").strip()
+        item = registry.clients.get(client_id)
+        if not item or not getattr(item, "connection_enabled", True):
+            return {"ok": False, "sent": False, "pending": True, "reason": "extension_disabled"}
+        if client_id not in registry.sockets:
+            return {"ok": False, "sent": False, "pending": True, "reason": "extension_offline"}
+        metadata = item.metadata if isinstance(getattr(item, "metadata", None), dict) else {}
+        try:
+            control_version = int(metadata.get("extension_control_version") or 0)
+        except (TypeError, ValueError):
+            control_version = 0
+        if control_version < 36 or metadata.get("extension_control_ready") is not True:
+            return {"ok": False, "sent": False, "pending": True, "reason": "extension_control_not_ready"}
+
+        target = window_limit_for(client_id)
+        source = window_source_for(client_id)
+        control_id = "ctl_sync_" + uuid.uuid4().hex
+        try:
+            await registry.send(
+                client_id,
+                {
+                    "type": "extension.control",
+                    "control_id": control_id,
+                    "action": "windows.limit",
+                    "payload": {"target": int(target), "source": str(source)[:40]},
+                    "sent_at": time.time(),
+                    "minimum_control_version": 36,
+                    "sync_reason": "websocket-online-v153",
+                },
+            )
+        except Exception as exc:
+            return {"ok": False, "sent": False, "pending": True, "reason": "extension_control_send_failed", "error": str(exc)[:200]}
+        return {
+            "ok": True,
+            "sent": True,
+            "pending": False,
+            "reason": "",
+            "control_id": control_id,
+            "target": int(target),
+            "source": str(source),
+            "authority": WINDOW_DECISION_AUTHORITY,
+        }
+
     # v121 decorates summaries/routed payloads with the configured physical
     # target. It does not choose a Worker or mutate Chrome windows; v132 owns the
     # persistent window lifecycle and consumes this target on the Worker.
@@ -264,6 +314,8 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
         "limit_for": window_limit_for,
         "source_for": window_source_for,
         "payload_for": window_payload,
+        "sync_online": sync_online_window_target,
+        "sync_trigger": "extension-hello-or-first-ready-status-v153",
         "config_path": str(config_path),
     }
 

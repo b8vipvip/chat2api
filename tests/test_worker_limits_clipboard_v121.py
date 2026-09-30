@@ -60,6 +60,41 @@ def test_window_limit_guard_remains_compatibility_admission_layer_for_persistent
     assert 'return _normalize_limit(configured, concurrency)' in server
 
 
+
+def test_online_worker_receives_server_authoritative_standby_target_without_waiting_for_request() -> None:
+    server = (ROOT / "app" / "worker_limits_clipboard_v121_patch.py").read_text(encoding="utf-8")
+    main = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+    pool = (ROOT / "chrome_extension" / "conversation_persistent_pool_v132.js").read_text(encoding="utf-8")
+    linux_launcher = (ROOT / "scripts" / "linux_worker_chrome_launcher.sh").read_text(encoding="utf-8")
+
+    assert 'async def sync_online_window_target(client_id: str)' in server
+    assert '"action": "windows.limit"' in server
+    assert '"payload": {"target": int(target), "source": str(source)[:40]}' in server
+    assert '"sync_reason": "websocket-online-v153"' in server
+    assert '"sync_online": sync_online_window_target' in server
+    assert '"sync_trigger": "extension-hello-or-first-ready-status-v153"' in server
+
+    # One socket generation gets one successful authoritative push. A hello that
+    # arrives before control readiness may retry on the first ready status only.
+    assert 'window_target_synced = False' in main
+    assert 'message_type in {"extension.hello", "extension.status"} and not window_target_synced' in main
+    assert 'sync_online = window_runtime.get("sync_online")' in main
+    assert 'sync_result = await sync_online(client_id)' in main
+    assert 'window_target_synced = bool(sync_result.get("sent"))' in main
+
+    # The server transports only the configured target; all physical create/close
+    # decisions remain in the one browser authority shared by Windows and Linux.
+    sync_start = server.index('async def sync_online_window_target(client_id: str)')
+    sync_end = server.index('# v121 decorates summaries', sync_start)
+    sync_body = server[sync_start:sync_end]
+    assert 'chrome.windows.create' not in sync_body
+    assert 'chrome.windows.remove' not in sync_body
+    assert 'await asyncio.sleep' not in sync_body
+    assert 'window_decision_authority: "persistent-window-pool-v132"' in pool
+    assert '--load-extension="$EXTENSION_DIR"' in linux_launcher
+
+
+
 def test_remote_login_unicode_clipboard_is_ticket_scoped_and_bidirectional() -> None:
     helper = (ROOT / "scripts/linux_worker_remote_clipboard_v45.py").read_text(encoding="utf-8")
     agent = (ROOT / "scripts/linux_worker_agent_v44.py").read_text(encoding="utf-8")
