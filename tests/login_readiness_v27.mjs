@@ -20,6 +20,7 @@ let nextTabId = 101;
 let nextWindowId = 201;
 let networkAllowed = true;
 let warmAffinityCalls = 0;
+let poolEnsureCalls = 0;
 
 function fireStorage(changes) {
   for (const listener of storageListeners) listener(changes, "local");
@@ -124,6 +125,24 @@ const sandbox = {
   __CHAT2API_CONVERSATION_WARM_POOL_V2__: {
     async onAffinityChanged() { warmAffinityCalls += 1; return true; },
   },
+  // Login readiness no longer owns physical windows. Model the real background
+  // entry contract by providing Persistent Window Pool v132 as the sole creator.
+  __CHAT2API_PERSISTENT_WINDOW_POOL_V132__: {
+    async ensureLoginSurface({ focused = false, userVisible = false } = {}) {
+      poolEnsureCalls += 1;
+      const created = await chrome.windows.create({
+        url: "https://chatgpt.com/",
+        focused: Boolean(focused || userVisible),
+        type: "normal",
+      });
+      const tab = created.tabs[0];
+      return {
+        window_id: created.id,
+        tab_id: tab.id,
+        existing: false,
+      };
+    },
+  },
 };
 sandbox.self = sandbox;
 vm.createContext(sandbox);
@@ -139,10 +158,12 @@ assert.equal(warmPool.login_readiness_gate_v27, true, "Affinity prewarm path mus
 
 networkAllowed = false;
 assert.equal(await networkGate.allowPrewarm(), false);
-assert.equal(createdWindows.length, 0, "No login probe should open when the network gate rejects proactive prewarm");
+assert.equal(createdWindows.length, 0, "No login bootstrap should open when the network gate rejects proactive prewarm");
+assert.equal(poolEnsureCalls, 0);
 
 networkAllowed = true;
-assert.equal(await networkGate.allowPrewarm(), false, "First external prewarm check should create a readiness probe, not declare ready");
+assert.equal(await networkGate.allowPrewarm(), false, "First external prewarm check should request one readiness bootstrap, not declare ready");
+assert.equal(poolEnsureCalls, 1, "Login readiness must delegate bootstrap creation to Persistent Window Pool v132");
 assert.equal(createdWindows.length, 1);
 assert.equal(createdWindows[0].options.url, "https://chatgpt.com/");
 assert.equal(createdWindows[0].options.focused, false, "Startup readiness window must remain unfocused");
@@ -165,8 +186,10 @@ for (const listener of tabUpdatedListeners) listener(probeTabId, { status: "comp
 await new Promise(resolve => setTimeout(resolve, 20));
 assert.equal(storage.chatgptLoginState, "ready");
 assert.equal(storage.chatgptLoginComposerReady, true);
-assert.equal(storage.chatgptLoginProbeTabId, null, "Automatic readiness probe must release its tracking after login is confirmed");
-assert.ok(removedWindows.includes(probeWindowId), "Automatic readiness probe window should be retired before dedicated warm windows take over");
+assert.equal(storage.chatgptLoginProbeTabId, probeTabId, "Confirmed bootstrap stays tracked while the persistent pool adopts it");
+assert.equal(storage.chatgptLoginProbeWindowId, probeWindowId);
+assert.equal(storage.chatgptLoginProbeAdoptable, false, "Ready bootstrap becomes pool-owned standby #1 and must not be auto-retired");
+assert.ok(!removedWindows.includes(probeWindowId), "Login readiness must not close a pool-owned bootstrap window after readiness is confirmed");
 assert.ok(warmAffinityCalls >= 1, "Login transition to ready must kick the gated warm pool");
 assert.equal(await networkGate.allowPrewarm(), true, "Fresh confirmed login state must allow proactive prewarm on an external network");
 
@@ -197,5 +220,6 @@ assert.equal(popupResponse?.data?.existing, true, "Manual login action must reus
 assert.ok(focusedWindows.includes(authWindowId));
 assert.equal(storage.chatgptLoginProbeAdoptable, false, "A user-visible login window must never be auto-retired as a background probe");
 assert.equal(createdWindows.length, 1, "Manual login action must not create a duplicate auth window when one already exists");
+assert.equal(poolEnsureCalls, 1, "Manual reuse of an existing auth window must not ask the pool for another surface");
 
 console.log("login_readiness_v27 VM contract passed");

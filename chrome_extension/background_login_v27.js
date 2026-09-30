@@ -4,10 +4,10 @@
 
   const NETWORK_GATE_KEY = "__CHAT2API_NETWORK_GATE_V26__";
   const WARM_POOL_KEY = "__CHAT2API_CONVERSATION_WARM_POOL_V2__";
+  const PERSISTENT_POOL_KEY = "__CHAT2API_PERSISTENT_WINDOW_POOL_V132__";
   const CACHE_KEY = "chatgptLoginReadinessV27";
   const INIT_TAB_KEY = "chat2apiInitializationTabIdV32";
   const CACHE_MS = 15000;
-  const PROBE_URL = "https://chatgpt.com/";
   const state = {
     inFlight: null,
     bootValidated: false,
@@ -164,17 +164,14 @@
     const probe = await trackedProbe();
     if (!probe?.adoptable || probe.tab_id !== snapshot.tab_id) return snapshot;
 
-    state.suppressedRemovedTabs.add(probe.tab_id);
-    await clearTrackedProbe();
-    const stable = await persist({
+    // Persistent Window Pool v132 owns this physical surface. Keep it alive so
+    // reconcile can validate and adopt it as standby #1 instead of reopening it.
+    await chrome.storage.local.set({ chatgptLoginProbeAdoptable: false }).catch(() => {});
+    return persist({
       ...snapshot,
-      strategy: `${snapshot.strategy}+startup-readiness-confirmed`,
-      tab_id: null,
-      window_id: null,
+      strategy: `${snapshot.strategy}+persistent-pool-bootstrap-adopted`,
       checked_at_ms: Date.now(),
     });
-    try { await chrome.windows.remove(probe.window_id); } catch (_) {}
-    return stable;
   }
 
   async function runDetection() {
@@ -271,18 +268,29 @@
       return { ...existing, existing: true };
     }
 
-    const created = await chrome.windows.create({ url: PROBE_URL, focused: Boolean(focused), type: "normal" });
-    if (!Number.isInteger(created?.id)) throw new Error("Chrome did not create the ChatGPT login window");
-    let tab = Array.isArray(created.tabs) ? created.tabs.find(item => Number.isInteger(item?.id)) : null;
-    if (!tab) {
-      const tabs = await chrome.tabs.query({ windowId: created.id });
-      tab = tabs.find(item => Number.isInteger(item?.id)) || null;
+    let pool = globalThis[PERSISTENT_POOL_KEY];
+    for (let attempt = 0; attempt < 40 && typeof pool?.ensureLoginSurface !== "function"; attempt += 1) {
+      await sleep(50);
+      pool = globalThis[PERSISTENT_POOL_KEY];
     }
+    if (typeof pool?.ensureLoginSurface !== "function") {
+      throw new Error("Persistent window pool authority is unavailable for ChatGPT login bootstrap");
+    }
+
+    const surface = await pool.ensureLoginSurface({
+      focused: Boolean(focused),
+      userVisible: Boolean(userVisible),
+      reason: userVisible ? "manual-login" : "startup-readiness",
+    });
+    if (!Number.isInteger(surface?.window_id) || !Number.isInteger(surface?.tab_id)) {
+      throw new Error("Persistent window pool returned no usable ChatGPT login surface");
+    }
+    const tab = await chrome.tabs.get(surface.tab_id).catch(() => null);
     if (!tab?.id) throw new Error("The ChatGPT login window contains no usable tab");
 
     await chrome.storage.local.set({
       chatgptLoginProbeTabId: tab.id,
-      chatgptLoginProbeWindowId: created.id,
+      chatgptLoginProbeWindowId: surface.window_id,
       chatgptLoginProbeAdoptable: !userVisible && !focused,
     }).catch(() => {});
     state.bootValidated = false;
@@ -294,9 +302,15 @@
       document_ready: false,
       checked_at_ms: Date.now(),
       tab_id: tab.id,
-      window_id: created.id,
+      window_id: surface.window_id,
     });
-    return { tab, tab_id: tab.id, window_id: created.id, adoptable: !userVisible && !focused, existing: false };
+    return {
+      tab,
+      tab_id: tab.id,
+      window_id: surface.window_id,
+      adoptable: !userVisible && !focused,
+      existing: surface.existing === true,
+    };
   }
 
   async function readyForPrewarm() {

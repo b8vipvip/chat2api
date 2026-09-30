@@ -19,8 +19,8 @@ def read(path: Path) -> str:
 
 def test_current_bridge_loads_login_detector_for_new_and_existing_tabs():
     manifest = json.loads(read(EXT / "manifest.json"))
-    assert CHROME_BRIDGE_VERSION == "0.22.104"
-    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.22.104"
+    assert CHROME_BRIDGE_VERSION == "0.22.105"
+    assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION == "0.22.105"
     scripts = manifest["content_scripts"][1]["js"]
     assert CONTENT in scripts
     assert scripts.index("content_page_adapter_v22.js") < scripts.index(CONTENT) < scripts.index("content_page_driver_v22.js")
@@ -63,27 +63,30 @@ def test_background_login_coordinator_loads_before_request_route_authority():
     assert entry.index('"content_bootstrap.js"') < entry.index(f'"{BACKGROUND}"') < entry.index('"conversation_routing.js"')
     assert '"conversation_warm_pool_v2.js"' not in entry
     # The legacy source may still recognize a warm-pool hook for compatibility,
-    # but the production 0.8.42 entry has no speculative warm-window owner.
+    # but the production entry has no speculative warm-window owner.
     assert 'NETWORK_GATE_KEY = "__CHAT2API_NETWORK_GATE_V26__"' in source
+    assert 'PERSISTENT_POOL_KEY = "__CHAT2API_PERSISTENT_WINDOW_POOL_V132__"' in source
     assert "async function readyForPrewarm()" in source
 
 
-def test_startup_probe_is_single_unfocused_and_manual_login_reuses_it():
+def test_startup_probe_delegates_physical_window_lifecycle_to_persistent_pool():
     source = read(EXT / BACKGROUND)
     for token in (
-        'PROBE_URL = "https://chatgpt.com/"',
         "trackedProbe()",
         "ensureProbeWindow({ focused: false, userVisible: false })",
-        "focused: Boolean(focused)",
+        "pool.ensureLoginSurface({",
         "chatgptLoginProbeAdoptable",
         "manual-login-window-created",
         "startup-readiness-window-created",
+        "persistent-pool-bootstrap-adopted",
         "retireAutomaticProbeIfReady",
         "chrome.windows.onFocusChanged.addListener",
         'message?.type === "popup.login.open"',
         'message?.type === "popup.login.refresh"',
     ):
         assert token in source
+    assert "chrome.windows.create" not in source
+    assert "chrome.windows.remove" not in source
     assert "password" not in source.lower()
     assert "captcha" not in source.lower()
 
@@ -113,9 +116,11 @@ def test_login_readiness_vm_contract_and_syntax_are_required_by_ci():
     assert "- name: Login readiness VM contract" in workflow
     assert f"run: node {VM_CONTRACT}" in workflow
     for token in (
-        "No login probe should open when the network gate rejects proactive prewarm",
+        "No login bootstrap should open when the network gate rejects proactive prewarm",
+        "Login readiness must delegate bootstrap creation to Persistent Window Pool v132",
         "Startup readiness window must remain unfocused",
-        "Automatic readiness probe window should be retired",
+        "Ready bootstrap becomes pool-owned standby #1 and must not be auto-retired",
+        "Login readiness must not close a pool-owned bootstrap window after readiness is confirmed",
         "Manual login action must reuse the existing auth window",
         'console.log("login_readiness_v27 VM contract passed")',
     ):
