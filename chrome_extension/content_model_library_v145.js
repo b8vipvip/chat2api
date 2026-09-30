@@ -3,8 +3,8 @@
   if (globalThis[KEY]) return;
 
   const REVISION = 145;
-  const OPEN_TIMEOUT_MS = 6000;
-  const VERIFY_TIMEOUT_MS = 4000;
+  const OPEN_TIMEOUT_MS = 7000;
+  const VERIFY_TIMEOUT_MS = 5000;
   const state = { running: null };
   globalThis[KEY] = state;
 
@@ -39,10 +39,8 @@
   }
 
   function canonicalModelId(value) {
-    let text = normalize(value);
-    if (!text) return "";
-    text = text.replace(/_/g, "-");
-    if (/gpt[-\s]?(?:image|live)\b/.test(text)) return "";
+    let text = normalize(value).replace(/_/g, "-");
+    if (!text || /gpt[-\s]?(?:image|live)\b/.test(text)) return "";
 
     let match = text.match(/\bgpt[-\s]?(\d+(?:\.\d+)?)(?:[-\s]+(astra|pro|sol|terra|luna|mini))?\b/i);
     if (match) return `gpt-${match[1]}${match[2] ? `-${match[2].toLowerCase()}` : ""}`;
@@ -56,8 +54,7 @@
 
   function modelIdOf(element) {
     if (!element) return "";
-    const attrs = ["data-model-id", "data-model", "data-value", "value", "aria-label", "title"];
-    for (const name of attrs) {
+    for (const name of ["data-model-id", "data-model", "data-value", "value", "aria-label", "title"]) {
       const model = canonicalModelId(element.getAttribute?.(name) || "");
       if (model) return model;
     }
@@ -72,17 +69,16 @@
   function modelPicker() {
     const root = [...document.querySelectorAll("form[data-type='unified-composer'], form")]
       .find(form => visible(form) && form.querySelector("#prompt-textarea,textarea,[contenteditable='true']")) || document;
-    const selectors = [
+    const candidates = [];
+    const seen = new Set();
+    for (const selector of [
       "button[data-testid*='model' i]",
       "button[aria-label*='model' i]",
       "button[aria-label*='模型']",
       "button[class*='composer-pill']",
       "button[aria-haspopup='menu']",
       "button[aria-haspopup='listbox']",
-    ];
-    const candidates = [];
-    const seen = new Set();
-    for (const selector of selectors) {
+    ]) {
       for (const element of root.querySelectorAll(selector)) {
         if (seen.has(element) || !visible(element) || element.disabled || rejectedControl(element)) continue;
         seen.add(element);
@@ -103,17 +99,12 @@
   }
 
   function menuRoots() {
-    const selectors = [
-      "[role='menu']",
-      "[role='listbox']",
-      "[data-radix-popper-content-wrapper]",
-      "[data-radix-menu-content]",
-      "[data-state='open']",
-      "[class*='popover' i]",
-    ];
     const rows = [];
     const seen = new Set();
-    for (const selector of selectors) {
+    for (const selector of [
+      "[role='menu']", "[role='listbox']", "[data-radix-popper-content-wrapper]",
+      "[data-radix-menu-content]", "[data-state='open']", "[class*='popover' i]",
+    ]) {
       for (const element of document.querySelectorAll(selector)) {
         if (seen.has(element) || !visible(element)) continue;
         const rect = element.getBoundingClientRect();
@@ -135,10 +126,9 @@
   }
 
   function modelChoices() {
-    const roots = menuRoots();
     const result = [];
     const seen = new Set();
-    for (const root of roots) {
+    for (const root of menuRoots()) {
       for (const raw of root.querySelectorAll("button,[role='menuitem'],[role='menuitemradio'],[role='option'],[data-radix-collection-item],[data-model],[data-model-id],[data-value],div,span")) {
         if (!visible(raw)) continue;
         const candidate = interactiveAncestor(raw, root);
@@ -157,6 +147,20 @@
       }
     }
     return result;
+  }
+
+  function expansionChoice() {
+    const pattern = /^(advanced|models?|more|legacy|高级|模型|更多|其他模型)(?:\s|$)/i;
+    for (const root of menuRoots()) {
+      for (const raw of root.querySelectorAll("button,[role='menuitem'],[role='option'],[data-radix-collection-item],div,span")) {
+        if (!visible(raw)) continue;
+        const label = labelOf(raw);
+        if (!label || !pattern.test(label)) continue;
+        const element = interactiveAncestor(raw, root);
+        if (visible(element) && !modelIdOf(element)) return element;
+      }
+    }
+    return null;
   }
 
   async function waitFor(predicate, timeout = OPEN_TIMEOUT_MS, interval = 100) {
@@ -182,11 +186,17 @@
     const picker = await waitFor(() => modelPicker(), OPEN_TIMEOUT_MS, 120);
     if (!picker) throw new Error("ChatGPT model picker was not found");
     picker.click();
-    const choices = await waitFor(() => {
-      const found = modelChoices();
-      return found.length ? found : null;
-    }, OPEN_TIMEOUT_MS, 100);
-    if (!choices) throw new Error("ChatGPT model menu did not expose model choices");
+    await waitFor(() => menuRoots().length ? true : null, OPEN_TIMEOUT_MS, 100);
+    let choices = modelChoices();
+    const expansion = expansionChoice();
+    if (expansion) {
+      expansion.click();
+      await delay(220);
+      const nested = modelChoices();
+      const byId = new Map([...choices, ...nested].map(item => [item.id, item]));
+      choices = [...byId.values()];
+    }
+    if (!choices.length) throw new Error("ChatGPT model menu did not expose concrete model choices");
     return choices;
   }
 
@@ -231,8 +241,22 @@
     return Boolean(verified);
   }
 
+  function requestActive() {
+    return Boolean(
+      globalThis.__CHAT2API_REQUEST_CONTENT_V6__?.active ||
+      globalThis.__CHAT2API_REQUEST_CONTENT_V5__?.active ||
+      globalThis.__CHAT2API_CONTENT__?.active ||
+      document.querySelector("button[data-testid='stop-button'],button[aria-label*='Stop generating'],button[aria-label*='停止生成']")
+    );
+  }
+
   async function validateModels() {
     if (state.running) return state.running;
+    if (requestActive()) {
+      const error = new Error("Worker model validation deferred while a ChatGPT request is active");
+      error.code = "model_validation_busy";
+      throw error;
+    }
     state.running = (async () => {
       const startedAt = new Date().toISOString();
       const original = await currentModel();
@@ -248,6 +272,11 @@
 
       const validated = [];
       for (const modelId of candidates) {
+        if (requestActive()) {
+          const error = new Error("Worker model validation interrupted by an active ChatGPT request");
+          error.code = "model_validation_busy";
+          throw error;
+        }
         let ok = false;
         try { ok = await selectAndVerify(modelId); }
         catch (error) { console.debug("chat2api model validation failed", modelId, error); }
@@ -286,11 +315,31 @@
     return state.running;
   }
 
+  async function selectModel(modelId) {
+    if (requestActive()) throw new Error("Cannot switch model while a ChatGPT request is active");
+    const model = canonicalModelId(modelId);
+    if (!model) throw new Error(`Invalid model id: ${modelId}`);
+    const ok = await selectAndVerify(model);
+    if (!ok) throw new Error(`Requested model is not available in this Worker: ${model}`);
+    return { model, current_model: await currentModel(), validated: true, validation_revision: REVISION };
+  }
+
+  state.validate = validateModels;
+  state.select = selectModel;
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message?.type !== "chat2api.models.validate.v145") return false;
-    validateModels()
-      .then(data => sendResponse({ ok: true, data }))
-      .catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
-    return true;
+    if (message?.type === "chat2api.models.validate.v145") {
+      validateModels()
+        .then(data => sendResponse({ ok: true, data }))
+        .catch(error => sendResponse({ ok: false, code: String(error?.code || ""), error: String(error?.message || error) }));
+      return true;
+    }
+    if (message?.type === "chat2api.model.select.v145") {
+      selectModel(message.model)
+        .then(data => sendResponse({ ok: true, data }))
+        .catch(error => sendResponse({ ok: false, code: String(error?.code || ""), error: String(error?.message || error) }));
+      return true;
+    }
+    return false;
   });
 })();
