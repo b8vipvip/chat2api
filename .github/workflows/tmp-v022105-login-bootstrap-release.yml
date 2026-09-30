@@ -29,6 +29,10 @@ jobs:
           if [[ -f scripts/check_workflow_allowlist.py ]]; then
             python scripts/check_workflow_allowlist.py
           fi
+          # The workflow token cannot update another workflow file. Keep the
+          # smoke workflow unchanged here; the connected GitHub author updates
+          # that one release-contract file in a separate commit.
+          git restore .github/workflows/production-image-smoke.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add . ':!.github/workflows/tmp-v022105-login-bootstrap-release.yml' ':!.github/tmp-v022105-patch.py'
