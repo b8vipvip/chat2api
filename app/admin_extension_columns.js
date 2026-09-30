@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.22.106-worker-list-v152";
+  const VERSION = "0.22.107-worker-list-v152";
   const COLUMN_SCHEMA_REVISION = 152;
   const STORAGE_KEY = "chat2api.extensionColumns.v3";
   const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2";
