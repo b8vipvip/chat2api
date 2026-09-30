@@ -70,8 +70,11 @@ importScripts(
   // physical truth owner; this module only forces a fresh report on demand.
   "background_window_refresh_v129.js",
   // Recover persisted per-API route ownership after a server timeout/cancel.
-  // Loaded last so it wraps the final resolver/control-handler chain.
   "conversation_route_recovery_v136.js",
+  // Final model-library authority. A service-worker restart/connect/bind/enable
+  // clears stale text-model capability and republishes only freshly validated
+  // ChatGPT model-picker entries.
+  "background_model_library_v145.js",
 );
 
 globalThis.__CHAT2API_WINDOW_OBSERVER_V90__?.report?.(true).catch?.(() => {});
