@@ -117,7 +117,6 @@ jobs:
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
-
       - uses: actions/setup-node@v4
         if: steps.lease.outputs.current == 'true' && steps.deterministic.outputs.changed != 'true'
         with:
@@ -140,11 +139,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           copilot \
+            --experimental \
             --sandbox \
             --prompt "$(cat /tmp/gptauto-repair/prompt.md)" \
             --silent \
             --no-ask-user \
-            --available-tools='edit,view,grep,glob' \
+            --available-tools='apply_patch,create,edit,view,grep,glob' \
             --allow-tool='write' \
             > /tmp/gptauto-repair/copilot-message.md \
             2> /tmp/gptauto-repair/copilot-stderr.log
