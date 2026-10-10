@@ -163,6 +163,11 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
             client_id = str(worker.get("extension_client_id") or "")
             if not client_id:
                 raise HTTPException(409, "Linux Worker 的 Chrome Bridge 尚未绑定；首次请先手工登录完成绑定")
+            # The current live binding, not a stale stored client ID, is the
+            # authority for which Worker may receive this account's credentials.
+            bound = linux.worker_for_extension(client_id)
+            if not bound or str(bound.get("worker_id") or "") != worker_id:
+                raise HTTPException(409, "Linux Worker 的 Chrome Bridge 绑定已变化，请重新绑定后重试")
             return client_id
         client = registry.clients.get(worker_id)
         if not client:
