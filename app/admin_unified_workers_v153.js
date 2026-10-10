@@ -24,7 +24,7 @@
     const panel=document.createElement("div");
     panel.className="panel";
     panel.id="windowsDeviceListPanelV155";
-    panel.innerHTML='<h3 style="margin:0 0 12px">设备列表</h3><div class="toolbar"><button type="button" class="action" id="refreshWindowsDevicesV155">刷新设备</button></div><div class="v153-muted" id="windowsDeviceSummaryV155"></div><div class="scroll"><table id="windowsDeviceTableV155"><thead><tr><th>设备名称</th><th>设备标识</th><th>状态</th><th>Worker数量</th><th>系统</th><th>网络</th><th>最后在线</th><th>操作</th></tr></thead><tbody id="windowsDeviceRowsV155"><tr><td colspan="8">正在获取设备信息…</td></tr></tbody></table></div>';
+    panel.innerHTML='<h3 style="margin:0 0 12px">设备列表</h3><div class="toolbar"><button type="button" class="action" id="refreshWindowsDevicesV155">刷新设备</button><button type="button" class="action good" id="newWindowsDeviceV155">新增设备码</button></div><div class="v153-muted" id="windowsDeviceSummaryV155"></div><div class="scroll"><table id="windowsDeviceTableV155"><thead><tr><th>设备名称</th><th>设备标识</th><th>状态</th><th>Worker数量</th><th>系统</th><th>网络</th><th>最后在线</th><th>操作</th></tr></thead><tbody id="windowsDeviceRowsV155"><tr><td colspan="8">正在获取设备信息…</td></tr></tbody></table></div>';
     return panel;
   }
   async function refreshWindowsDevices() {
@@ -209,6 +209,7 @@
     byId("workerGroup-linux").appendChild(linuxPanel);
     const linuxWorkers=byId("linuxWorkerListPanelV155");
     if(linuxWorkers)byId("workerGroup-linux").appendChild(linuxWorkers);
+    byId("newWindowsDeviceV155").addEventListener("click",()=>{document.getElementById("pairingName")?.focus();document.getElementById("pairingName")?.scrollIntoView({behavior:"smooth",block:"center"});});
     byId("refreshWindowsDevicesV155").addEventListener("click",()=>{
       refreshWindowsDevices().catch(error=>{
         const target=byId("windowsDeviceSummaryV155");
