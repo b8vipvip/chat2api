@@ -28,6 +28,8 @@ from .admin_auth import SESSION_COOKIE
 ASSET_PATH = "/assets/chat2api-unified-workers-v153.js"
 BASE32 = re.compile(r"^[A-Z2-7]+=*$")
 COOLDOWN_SECONDS = 300
+RECOVERY_TIMEOUT_SECONDS = 180
+OBSERVATION_MAX_AGE_MS = 45000
 
 
 def normalize_totp(value: str) -> str:
@@ -135,7 +137,7 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
     registry = app.state.registry
     linux = app.state.linux_workers
     attempts: dict[str, dict[str, Any]] = {}
-    observations: dict[str, int] = {}
+    observations: dict[str, tuple[int, int]] = {}
     lock = asyncio.Lock()
 
     def admin(request: Request) -> None:
@@ -168,9 +170,18 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
             return
         raise HTTPException(404, "Worker ID 不存在或已归属 Linux Worker")
 
+    def runtime(worker_id: str) -> dict[str, Any]:
+        attempt = attempts.get(worker_id)
+        if attempt and attempt.get("status") in {"starting", "opening", "manual_required"}:
+            if time.monotonic() - float(attempt.get("monotonic") or 0) > RECOVERY_TIMEOUT_SECONDS:
+                attempt["status"] = "timeout"
+        return attempt or {}
+
     def view(worker_id: str) -> dict[str, Any]:
-        return {**vault.public(worker_id), "runtime": attempts.get(worker_id, {}).get("status", "idle"),
-                "last_attempt_at": attempts.get(worker_id, {}).get("at")}
+        attempt = runtime(worker_id)
+        return {**vault.public(worker_id), "runtime": attempt.get("status", "idle"),
+                "last_attempt_at": attempt.get("at"),
+                "attempt_id": attempt.get("id")}
 
     async def dispatch(worker_id: str, *, forced: bool = False) -> dict[str, Any]:
         profile = vault.get(worker_id)
@@ -181,23 +192,29 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(409, "Worker Chrome Bridge 当前离线")
         async with lock:
             now = time.monotonic()
-            latest = attempts.get(worker_id, {})
-            if not forced and now - float(latest.get("monotonic") or 0) < COOLDOWN_SECONDS:
+            latest = runtime(worker_id)
+            age = now - float(latest.get("monotonic") or 0)
+            if latest.get("status") in {"starting", "opening", "manual_required"}:
+                return {"queued": False, "reason": "in_progress", "status": latest["status"]}
+            if not forced and age < COOLDOWN_SECONDS:
                 return {"queued": False, "reason": "cooldown", "status": latest.get("status", "cooldown")}
-            attempts[worker_id] = {"monotonic": now, "at": int(time.time()), "status": "starting"}
-            # We deliberately DO NOT forward third-party credentials or TOTP
-            # secrets over this channel. Recovery opens the login surface and
-            # requires the operator to complete authentication.
+            attempt_id = secrets.token_urlsafe(12)
+            attempts[worker_id] = {
+                "id": attempt_id, "monotonic": now, "at": int(time.time()),
+                "started_at_ms": int(time.time() * 1000), "status": "opening",
+            }
+            # This revision only requests the authenticated Worker to open its
+            # login surface; account credentials never leave the vault.
             try:
                 await registry.send(client_id, {
                     "type": "worker.login.open.v153",
                     "worker_id": worker_id,
+                    "attempt_id": attempt_id,
                 })
             except Exception:
                 attempts[worker_id]["status"] = "offline"
-                raise HTTPException(503, "自动登录指令发送失败，请检查 Worker 连接") from None
-            attempts[worker_id]["status"] = "manual_required"
-            return {"queued": True, "status": "manual_required"}
+                raise HTTPException(503, "登录窗口打开指令发送失败，请检查 Worker 连接") from None
+            return {"queued": True, "status": "opening", "attempt_id": attempt_id}
 
     @app.get("/api/admin/worker-login")
     async def list_worker_logins(request: Request) -> dict[str, Any]:
@@ -264,30 +281,49 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
             return
         worker = linux.worker_for_extension(client_id)
         worker_id = str(worker.get("worker_id") or "") if worker else client_id
+        attempt = runtime(worker_id)
+
+        # Acknowledgments are correlated with a single command and authenticated
+        # by the WebSocket's already-established client identity.
+        ack_id = str(metadata.get("worker_login_attempt_id") or "")
+        ack_state = str(metadata.get("worker_login_recovery_state") or "")
+        if ack_id and attempt.get("id") == ack_id and ack_state in {"opening", "manual_required", "failed"}:
+            if attempt.get("status") in {"opening", "starting", "manual_required"}:
+                attempt["status"] = ack_state
+
         state = str(metadata.get("chatgpt_login_state") or "").lower()
-        if state == "ready" and metadata.get("chatgpt_login_composer_ready") is True:
-            observations.pop(worker_id, None)
-            if worker_id in attempts:
-                attempts[worker_id]["status"] = "logged_in"
-            return
         try:
             checked_at = int(metadata.get("chatgpt_login_checked_at_ms") or 0)
         except (TypeError, ValueError):
             checked_at = 0
-        fresh = 0 <= time.time() * 1000 - checked_at <= 45000
+        now_ms = int(time.time() * 1000)
+        fresh = 0 <= now_ms - checked_at <= OBSERVATION_MAX_AGE_MS
+
+        if fresh and state == "ready" and metadata.get("chatgpt_login_composer_ready") is True:
+            observations.pop(worker_id, None)
+            # A stale cached ready must never mark a new login attempt complete.
+            if attempt and checked_at >= int(attempt.get("started_at_ms") or 0):
+                attempt["status"] = "logged_in"
+            return
+
         confidence = str(metadata.get("chatgpt_login_confidence") or "").lower()
         if not fresh or state != "login_required" or confidence not in {"high", "medium"}:
             observations.pop(worker_id, None)
             return
-        observations[worker_id] = observations.get(worker_id, 0) + 1
-        if observations[worker_id] < 2:
+
+        count, last_checked_at = observations.get(worker_id, (0, 0))
+        if checked_at <= last_checked_at:
+            return  # Duplicate status/heartbeat, not another login probe.
+        count += 1
+        observations[worker_id] = (count, checked_at)
+        if count < 2:
             return
         try:
             profile = vault.get(worker_id)
             if profile and profile.get("enabled"):
                 await dispatch(worker_id)
         except (HTTPException, RuntimeError, ValueError):
-            # Corrupt profiles and offline Workers must not take down heartbeats.
+            # Offline workers and corrupt profiles must not break telemetry.
             pass
 
     registry.touch = touch_with_relogin
