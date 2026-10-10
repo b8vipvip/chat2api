@@ -69,14 +69,51 @@ def test_unified_console_uses_single_platform_grouping() -> None:
     assert 'row.metadata?.linux_worker_id' in windows
 
 
-def test_login_recovery_never_sends_profile_credentials_to_extension() -> None:
+def test_login_recovery_requires_secure_bound_transport_and_never_sends_totp_seed() -> None:
     source = (ROOT / "app/worker_auto_login_v153_patch.py").read_text(encoding="utf-8")
-    script = (ROOT / "chrome_extension/background_login_recovery_v153.js").read_text(encoding="utf-8")
-    assert '"type": "worker.login.open.v153"' in source
-    assert '"username": profile[' not in source
-    assert '"password": profile[' not in source
+    opening = (ROOT / "chrome_extension/background_login_recovery_v153.js").read_text(encoding="utf-8")
+    autofill = (ROOT / "chrome_extension/background_login_autofill_v154.js").read_text(encoding="utf-8")
+    entry = (ROOT / "chrome_extension/background_entry.js").read_text(encoding="utf-8")
+    assert "secure_extension_socket(client_id)" in source
+    assert 'socket.url.scheme' in source
+    assert '["127.0.0.1", "::1", "localhost"]' not in source  # only literal loopback peers
+    assert '"worker.login.start.v154"' in source
+    assert '"worker.login.totp.v154"' in source
     assert '"totp_secret": profile.' not in source
-    assert "openLoginWindow" in script
+    assert "worker_for_extension(client_id)" in source
+    assert "openLoginWindow" in opening
+    assert 'worker_login_attempt_id' in opening
+    assert "background_login_autofill_v154.js" in entry
+    assert 'func: loginStep' in autofill
+    assert "trustedPage(url)" in autofill
+    assert "password" not in autofill.split("chrome.storage.local.set(")[-1] if "chrome.storage.local.set(" in autofill else True
+    assert "worker.login.totp.v154" in autofill
+
+
+def test_recovery_requires_unique_fresh_probes_and_correlates_acknowledgments() -> None:
+    source = (ROOT / "app/worker_auto_login_v153_patch.py").read_text(encoding="utf-8")
+    assert "if checked_at <= last_checked_at:" in source
+    assert "attempt.get(\"id\") == ack_id" in source
+    assert "checked_at >= int(attempt.get(\"started_at_ms\")" in source
+    assert "RECOVERY_TIMEOUT_SECONDS = 180" in source
+    assert "COOLDOWN_SECONDS = 300" in source
+
+
+def test_login_chrome_script_parses_when_node_is_available() -> None:
+    import shutil
+
+    if not shutil.which("node"):
+        pytest.skip("Node.js is unavailable")
+    for filename in (
+        "background_login_recovery_v153.js",
+        "background_login_autofill_v154.js",
+        "background_entry.js",
+    ):
+        result = subprocess.run(
+            ["node", "--check", str(ROOT / "chrome_extension" / filename)],
+            capture_output=True, text=True, timeout=20, check=False,
+        )
+        assert result.returncode == 0, filename + ": " + result.stderr
 
 
 def test_worker_login_routes_are_installed_in_production_entry() -> None:
