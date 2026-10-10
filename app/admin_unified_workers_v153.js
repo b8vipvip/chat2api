@@ -98,17 +98,30 @@
     });
   }
 
-  async function loadProfile() {
-    if (!selectedWorker) return;
-    const state = await api("/api/admin/worker-login/" + encodeURIComponent(selectedWorker));
-    byId("v153-worker-id").textContent = state.worker_id;
-    byId("v153-email").value = state.username || "";
-    byId("v153-enabled").checked = state.configured ? Boolean(state.enabled) : true;
+  const stateNames = {
+    idle: "未执行", opening: "正在打开登录窗口", automating: "正在自动登录",
+    waiting_otp: "正在获取 TOTP", manual_required: "需要人工登录",
+    logged_in: "已验证登录成功", timeout: "恢复超时", failed: "恢复失败",
+    offline: "Worker 离线", paused: "失败次数过多，已暂停自动恢复"
+  };
+  function updateProfileState(state) {
     byId("v153-credential-state").textContent =
       "配置：" + (state.configured ? "已保存" : "未设置") +
       " · 密码：" + (state.has_password ? "已保存" : "未设置") +
       " · TOTP：" + (state.has_totp ? "已保存" : "未设置") +
-      " · 状态：" + (state.runtime || "idle");
+      " · 状态：" + (stateNames[state.runtime] || state.runtime || "未知") +
+      " · 近30分钟失败：" + (state.recent_failures || 0) + "/3";
+  }
+
+  async function loadProfile() {
+    if (!selectedWorker) return;
+    const workerId = selectedWorker;
+    const state = await api("/api/admin/worker-login/" + encodeURIComponent(workerId));
+    if (selectedWorker !== workerId) return;
+    byId("v153-worker-id").textContent = state.worker_id;
+    byId("v153-email").value = state.username || "";
+    byId("v153-enabled").checked = state.configured ? Boolean(state.enabled) : true;
+    updateProfileState(state);
   }
 
   function boot() {
@@ -155,6 +168,15 @@
       if (view) setTimeout(() => setTab(selectedType), 0);
     }, true);
     makeDialog();
+    setInterval(async () => {
+      const dialog = byId("workerLoginSettingsV153");
+      const workerId = selectedWorker;
+      if (!dialog?.open || !workerId) return;
+      try {
+        const state = await api("/api/admin/worker-login/" + encodeURIComponent(workerId));
+        if (dialog.open && selectedWorker === workerId) updateProfileState(state);
+      } catch (_) { /* Remain on the last verified state until the next poll. */ }
+    }, 3000);
     const initial = location.hash === "#linux-workers" ? "linux" : "windows";
     if (location.hash === "#linux-workers") {
       const ext = document.querySelector('.nav button[data-view="extensions"]');
