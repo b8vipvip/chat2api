@@ -210,6 +210,18 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
         known_worker(worker_id)
         return view(worker_id)
 
+    @app.get("/api/admin/worker-login/{worker_id}/totp")
+    async def get_worker_totp(worker_id: str, request: Request) -> Response:
+        admin(request)
+        known_worker(worker_id)
+        profile = vault.get(worker_id)
+        if not profile or not profile.get("totp_secret"):
+            raise HTTPException(409, "请先保存此 Worker 的验证器密钥")
+        now = time.time()
+        payload = {"code": totp_code(profile["totp_secret"], now), "valid_for_seconds": 30 - int(now) % 30}
+        return Response(json.dumps(payload), media_type="application/json",
+                        headers={"Cache-Control": "no-store"})
+
     @app.put("/api/admin/worker-login/{worker_id}")
     async def save_worker_login(worker_id: str, request: Request) -> dict[str, Any]:
         admin(request)
