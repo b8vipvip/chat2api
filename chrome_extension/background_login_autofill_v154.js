@@ -2,7 +2,7 @@
   "use strict";
   const KEY = "__CHAT2API_WORKER_AUTO_LOGIN_V154__";
   if (globalThis[KEY]) return;
-  const state = { active: null, code: null, codeAt: 0, otpUnavailable: false };
+  const state = { active: null, code: null, codeAt: 0, otpUnavailable: false, cancelled: false };
   globalThis[KEY] = state;
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   const trustedPage = raw => {
@@ -110,6 +110,7 @@
       if (!Number.isInteger(surface?.tab_id)) throw Error("login_window_missing");
       const deadline = Date.now() + 150000;
       while (Date.now() < deadline) {
+        if (state.cancelled) return;
         const snapshot = await login.detect(true).catch(() => null);
         if (snapshot?.state === "ready" && snapshot.composer_ready === true &&
             Number(snapshot.checked_at_ms) >= Number(message.started_at_ms || 0)) {
@@ -136,6 +137,7 @@
           func: loginStep,
           args: [message.username, message.password, currentCode, lastAction, lastUrl],
         }).catch(() => []);
+        if (state.cancelled) return;
         const phase = injected?.[0]?.result?.phase || "awaiting_page";
         if (["challenge", "credentials_rejected", "blocked_origin"].includes(phase)) {
           await report(attemptId, "manual_required");
@@ -177,11 +179,16 @@
       state.code = null;
       state.codeAt = 0;
       state.otpUnavailable = false;
+      state.cancelled = false;
     }
   }
 
   const previous = handleServerMessage;
   handleServerMessage = async message => {
+    if (message?.type === "worker.login.cancel.v154") {
+      if (state.active === String(message.attempt_id || "")) state.cancelled = true;
+      return;
+    }
     if (message?.type === "worker.login.totp_unavailable.v154") {
       if (state.active === message.attempt_id) state.otpUnavailable = true;
       return;
@@ -196,6 +203,7 @@
     if (message?.type !== "worker.login.start.v154") return previous(message);
     if (state.active) return;
     state.active = String(message.attempt_id || "");
+    state.cancelled = false;
     void automate(message);
   };
 })();
