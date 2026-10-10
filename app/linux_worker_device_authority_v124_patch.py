@@ -220,6 +220,8 @@ def _device_rows(app: FastAPI) -> list[dict[str, Any]]:
         primary_id = str(device.get("worker_id") or "")
         worker_rows: list[dict[str, Any]] = []
         for source in workers:
+            if source.get("revoked_at"):
+                continue  # Revoked Workers are not active device slots.
             worker_id = str(source.get("worker_id") or "")
             worker_meta = source.get("metadata") if isinstance(source.get("metadata"), dict) else {}
             is_primary = bool(primary_id and worker_id == primary_id)

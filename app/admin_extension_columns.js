@@ -1,17 +1,15 @@
 (() => {
-  const VERSION = "0.22.109-worker-list-v152";
+  const VERSION = "0.22.110-worker-list-v156";
   const COLUMN_SCHEMA_REVISION = 152;
   const STORAGE_KEY = "chat2api.extensionColumns.v3";
   const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2";
   const COLUMNS = [
     {key: "client_id", label: "Worker ID"},
     {key: "device_id", label: "设备标识"},
-    {key: "version", label: "版本"},
     {key: "account_type", label: "账户类型"},
     {key: "status", label: "状态"},
     {key: "worker_settings", label: "并发 / 备用设置"},
     {key: "last_seen", label: "最后在线"},
-    {key: "network", label: "网络"},
     {key: "chatgpt", label: "ChatGPT"},
     {key: "actions", label: "操作"},
     {key: "device_name", label: "设备名称"},
@@ -20,7 +18,7 @@
   const KNOWN_KEYS = new Set(COLUMNS.map(item => item.key));
   const DEFAULT_ORDER = COLUMNS.map(item => item.key);
   const LEGACY_KEY_MAP = new Map([["platform", "worker_settings"]]);
-  const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys", "occupied_windows"]);
+  const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys", "occupied_windows", "version", "network"]);
 
   let prefs = null;
   let menuOpen = false;
@@ -246,13 +244,12 @@
   function workerActions(row) {
     const id = esc(row.client_id || "");
     const connect = row.connection_enabled === false
-      ? `<button class="action good" data-worker-list-action="enable" data-client-id="${id}">连接</button>`
-      : `<button class="action danger" data-worker-list-action="disconnect" data-client-id="${id}">断开</button>`;
-    return `<div class="rowactions">${connect}<button class="action" type="button" data-worker-login-edit="${id}">自动登录设置</button><button class="action danger" data-worker-list-action="delete" data-client-id="${id}" data-online="${row.online ? "1" : "0"}">删除</button></div>`;
+      ? `<button class="action good" data-worker-list-action="enable" data-client-id="${id}">启用</button>`
+      : `<button class="action danger" data-worker-list-action="disconnect" data-client-id="${id}">禁用</button>`;
+    return `<div class="rowactions">${connect}<button class="action" type="button" data-worker-login-edit="${id}">登录</button><button class="action" type="button" data-windows-worker-initialize="${id}">初始化</button><button class="action" type="button" data-windows-worker-remote="${id}">远程</button><button class="action danger" data-worker-list-action="delete" data-client-id="${id}" data-online="${row.online ? "1" : "0"}">删除</button></div>`;
   }
 
   function rowHtml(row, truthInfo = null) {
-    const network = networkLabel(row);
     const login = chatgptLabel(row);
     const occupied = occupancy(row, truthInfo);
     const clientId = esc(row.client_id || "");
@@ -263,13 +260,11 @@
     return `<tr data-chat2api-canonical-worker-row="1" data-client-id="${clientId}">
       <td data-chat2api-column-key="client_id"><code>${clientId}</code></td>
       <td data-chat2api-column-key="device_id"><code>${esc(row.device_id || row.metadata?.device_id || "-")}</code></td>
-      <td data-chat2api-column-key="version">${esc(row.metadata?.extension_version || row.version || "-")}</td>
-      <td data-chat2api-column-key="account_type">${accountPill(row)}</td>
+            <td data-chat2api-column-key="account_type">${accountPill(row)}</td>
       <td data-chat2api-column-key="status">${statusPill(row)}</td>
       <td data-chat2api-column-key="worker_settings" data-chat2api-structural-owner="worker-settings-v152">${limitEditor(row)}</td>
       <td data-chat2api-column-key="last_seen">${typeof fmtTime === "function" ? fmtTime(row.last_seen_at) : esc(row.last_seen_at || "-")}</td>
-      <td data-chat2api-column-key="network" data-chat2api-health-cell="network" class="${network.cls}">${esc(network.text)}</td>
-      <td data-chat2api-column-key="chatgpt" data-chat2api-health-cell="chatgpt" class="${login.cls}">${esc(login.text)}</td>
+            <td data-chat2api-column-key="chatgpt" data-chat2api-health-cell="chatgpt" class="${login.cls}">${esc(login.text)}</td>
       <td data-chat2api-column-key="actions">${workerActions(row)}</td>
       <td data-chat2api-column-key="device_name">${deviceNameHtml}</td>
       <td data-chat2api-column-key="occupancy" class="${occupied.cls}" title="${esc(occupied.title)}">${occupied.html}</td>
@@ -337,6 +332,8 @@
         truthSnapshot = truth;
         renderPairings(Array.isArray(data.pairing_codes) ? data.pairing_codes : []);
         renderWorkerRows(extensionSnapshot, truthSnapshot);
+        globalThis.__chat2apiWindowsSnapshotV156 = {at:Date.now(), data};
+        document.dispatchEvent(new Event("chat2api:extensions-loaded"));
         if (typeof globalThis.status === "function") status(`v${document.documentElement.dataset.chat2apiRuntimeVersion || "0.22.102"}`, "muted");
         return data;
       } catch (error) {
@@ -557,6 +554,11 @@
       if (move) { event.preventDefault(); moveColumn(move.dataset.columnMove, Number(move.dataset.delta || 0)); return; }
       const pairing = target?.closest?.("[data-pairing-list-action]");
       if (pairing) { event.preventDefault(); pairingAction(pairing).catch(error => status(String(error?.message || error), "bad")); return; }
+      const initialize=target?.closest?.("[data-windows-worker-initialize]");
+      if(initialize){event.preventDefault();const id=initialize.dataset.windowsWorkerInitialize;if(!confirm("重新启动此 Windows Worker 的 Chrome 扩展运行时？运行中的请求会暂时中断。"))return;
+        api("/api/admin/extensions/"+encodeURIComponent(id)+"/initialize",{method:"POST"}).then(()=>loadCanonicalExtensions(true)).catch(err=>alert(err.message));return;}
+      const remote=target?.closest?.("[data-windows-worker-remote]");
+      if(remote){event.preventDefault();alert("Windows Chrome 扩展目前没有远程桌面画面通道。本按钮不会打开登录页，也不会伪装为远程画面。请使用 Windows 远程桌面连接主机；Linux Worker 支持控制台实时远程。");return;}
       const worker = target?.closest?.("[data-worker-list-action]");
       if (worker) { event.preventDefault(); workerAction(worker).catch(error => status(String(error?.message || error), "bad")); }
     }, true);

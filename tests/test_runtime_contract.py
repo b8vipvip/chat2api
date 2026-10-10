@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.109"
+    assert RELEASE_VERSION == "0.22.110"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -128,7 +128,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     assert "MutationObserver" in script
 
     columns_script = client.get(ADMIN_EXTENSION_COLUMNS_ASSET).text
-    assert 'const VERSION = "0.22.109-worker-list-v152"' in columns_script
+    assert 'const VERSION = "0.22.110-worker-list-v156"' in columns_script
     assert 'const COLUMN_SCHEMA_REVISION = 152' in columns_script
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v3"' in columns_script
     assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2"' in columns_script
@@ -138,7 +138,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     assert '{key: "occupancy", label: "请求 / 备用窗口"}' in columns_script
     assert 'button.id = "extensionColumnSettingsButton"' in columns_script
     assert 'document.documentElement.dataset.chat2apiWorkerListSingleRenderer = "1"' in columns_script
-    assert 'const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys", "occupied_windows"])' in columns_script
+    assert 'const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys", "occupied_windows", "version", "network"])' in columns_script
 
     overview_payload = client.get("/api/admin/overview").json()
     assert overview_payload["version"] == SERVER_RUNTIME_VERSION

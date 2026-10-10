@@ -69,6 +69,8 @@ def test_unified_console_uses_single_platform_grouping() -> None:
     assert 'byId("workerGroup-linux").appendChild(linuxWorkers)' in unified
     assert "data-worker-login-edit" in linux
     assert "data-worker-login-edit" in windows
+    assert 'id="v153-close" type="button"' in unified
+    assert 'dialog.close()' in unified
     assert 'row.metadata?.linux_worker_id' in windows
 
 

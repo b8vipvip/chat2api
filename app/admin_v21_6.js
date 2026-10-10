@@ -125,6 +125,7 @@
   }
 
   function patchHeader() {
+    if (document.documentElement.dataset.chat2apiWorkerListSingleRenderer === "1") return;
     const table = document.querySelector("#view-extensions #extensionDeviceBody")?.closest("table");
     const row = table?.querySelector("thead tr");
     if (!row) return;
@@ -194,6 +195,10 @@
   }
 
   function renderRows(rows) {
+    if (document.documentElement.dataset.chat2apiWorkerListSingleRenderer === "1") {
+      renderSummary(rows);
+      return;  // Canonical v156 table owns every column; never re-add network.
+    }
     removeLegacyHealthColumn();
     const byClient = new Map(rows.map(row => [String(row.client_id || ""), row]));
     const domRows = document.querySelectorAll("#extensionDeviceBody tr");
@@ -224,7 +229,8 @@
     pollInFlight = true;
     try {
       patchHeader();
-      const data = await api("/api/admin/extensions");
+      const snapshot=globalThis.__chat2apiWindowsSnapshotV156;
+      const data=snapshot && Date.now()-snapshot.at<15000 ? snapshot.data : await api("/api/admin/extensions");
       renderRows(Array.isArray(data.clients) ? data.clients : []);
     } catch (_) {
       // Historical extension management owns visible transport/auth errors.

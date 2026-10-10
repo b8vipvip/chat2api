@@ -20,6 +20,21 @@
 
   const previous = handleServerMessage;
   handleServerMessage = async message => {
+    if (message?.type === "worker.lifecycle.initialize.v156") {
+      // A service-worker reload reconnects the authenticated Chrome Bridge;
+      // it does not clear device pairing, browser history or login cookies.
+      chrome.runtime.reload();
+      return;
+    }
+    if (message?.type === "worker.lifecycle.update_check.v156") {
+      try {
+        chrome.runtime.requestUpdateCheck(() => {
+          // Unpacked/developer extensions require a manual extension update.
+          void chrome.runtime.lastError;
+        });
+      } catch (_) { /* Unsupported deployment; leave the Worker running. */ }
+      return;
+    }
     if (message?.type !== "worker.login.open.v153") return previous(message);
     if (state.inFlight) return;
     const attemptId = String(message.attempt_id || "");

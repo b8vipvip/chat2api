@@ -1,6 +1,6 @@
 (() => {
   "use strict";
-  const VERSION = "v153";
+  const VERSION = "v156";
   let selectedWorker = "";
   let selectedType = "windows";
   const api = async (path, options = {}) => {
@@ -30,7 +30,9 @@
   async function refreshWindowsDevices() {
     const body=byId("windowsDeviceRowsV155");
     if(!body)return;
-    const data=await api("/api/admin/extensions");
+    const snapshot=globalThis.__chat2apiWindowsSnapshotV156;
+    if(!snapshot && document.documentElement.dataset.chat2apiWorkerListReady!=="1") return;
+    const data=snapshot && Date.now()-snapshot.at<15000 ? snapshot.data : await api("/api/admin/extensions");
     const clients=(Array.isArray(data.clients)?data.clients:[]).filter(c=>!c.metadata?.linux_worker_id && String(c.metadata?.platform||"").toLowerCase()!=="linux");
     const codes=Array.isArray(data.pairing_codes)?data.pairing_codes:[];
     const byClient=new Map(clients.map(c=>[String(c.client_id||""),c]));
@@ -63,7 +65,7 @@
         group.clients[0]?.metadata?.network_country_code || group.clients[0]?.metadata?.network_probe_status || "-";
       const last=group.clients.map(c=>c.last_seen_at||"").filter(Boolean).sort().at(-1)||group.lastSeen;
       const worker=group.clients[0]?.client_id||"";
-      return `<tr><td><b>${esc(group.name)}</b></td><td><code>${esc(group.id)}</code></td><td><span class="v124-pill ${live.length?"good":"warn"}">${live.length?"在线":"离线"}</span></td><td>${group.clients.length}</td><td>Windows</td><td>${esc(net)}</td><td>${esc(timeLabel(last))}</td><td><button class="action" data-windows-device-worker="${esc(worker)}">查看Worker</button></td></tr>`;
+      return `<tr><td><b>${esc(group.name)}</b></td><td><code>${esc(group.id)}</code></td><td><span class="v124-pill ${live.length?"good":"warn"}">${live.length?"在线":"离线"}</span></td><td>${group.clients.length}</td><td>Windows</td><td>${esc(net)}</td><td>${esc(timeLabel(last))}</td><td><button class="action" data-windows-device-worker="${esc(worker)}">查看Worker</button><button class="action" data-windows-device-update="${esc(worker)}">更新</button></td></tr>`;
     }).join("")||'<tr><td colspan="8" class="v153-muted">暂无已绑定的 Windows 设备，请先配对 Windows Worker。</td></tr>';
     byId("windowsDeviceSummaryV155").textContent=`Windows 设备：${groups.size} · 在线设备：${online} · Windows Worker：${clients.length}`;
   }
@@ -84,6 +86,7 @@
     const title = byId("pageTitle");
     if (title) title.textContent = "Worker管理 · " + (kind === "linux" ? "Linux Worker" : "Windows Worker");
     if (kind === "linux") byId("refreshLinuxDevicesV124")?.click();
+    if (kind === "windows") refreshWindowsDevices().catch(()=>{});
   }
 
   function makeDialog() {
@@ -92,7 +95,7 @@
     dialog.id = "workerLoginSettingsV153";
     dialog.style.cssText = "width:min(560px,calc(100vw - 24px));border:1px solid #334155;border-radius:14px;background:#0f172a;color:#e5e7eb;padding:0";
     dialog.innerHTML = '<form method="dialog" style="padding:20px;display:grid;gap:12px">' +
-      '<div style="display:flex;align-items:center;justify-content:space-between"><b style="font-size:18px">Worker 自动登录设置</b><button class="action" value="cancel" type="submit">关闭</button></div>' +
+      '<div style="display:flex;align-items:center;justify-content:space-between"><b style="font-size:18px">Worker 自动登录设置</b><button class="action" id="v153-close" type="button">关闭</button></div>' +
       '<div class="v153-muted">配置与 Worker ID 一一绑定；凭据在服务端加密保存，已启用自动登录时，可由已绑定 Worker 的扩展自动填写邮箱、密码与 TOTP；凭据仅通过受保护的连接发送，验证器密钥始终保留在服务端。若连接不安全或出现验证码挑战，将改为人工登录。首次绑定 Linux Chrome Bridge 仍需人工操作。</div>' +
       '<div><b>Worker ID</b><div id="v153-worker-id" style="overflow-wrap:anywhere"></div></div>' +
       '<label>ChatGPT 登录邮箱<input id="v153-email" type="email" autocomplete="off" placeholder="your@email.com" required></label>' +
@@ -105,6 +108,8 @@
       '<div class="v153-actions"><button id="v153-otp" type="button" class="action">生成验证码</button><button id="v153-delete" type="button" class="action danger">移除凭据</button><button id="v153-trigger" type="button" class="action">触发登录恢复</button><button id="v153-manual" type="button" class="action">人工接管</button><button id="v153-save" type="button" class="action good">保存</button></div>' +
       '</form>';
     document.body.appendChild(dialog);
+    byId("v153-close").addEventListener("click", () => dialog.close());
+    dialog.querySelector("form").addEventListener("submit", event => event.preventDefault());
     byId("v153-save").addEventListener("click", async () => {
       const output = byId("v153-result");
       try {
@@ -193,11 +198,11 @@
     const linuxPanel = linuxTable?.closest(".panel");
     const windowsPanel = windowsRows?.closest(".panel");
     if (!section || !linuxPanel || !windowsPanel) {
-      setTimeout(boot, 150);
+      setTimeout(boot, 350);
       return;
     }
     const style = document.createElement("style");
-    style.textContent = "#windowsDeviceListPanelV155{margin-bottom:14px}#windowsDeviceTableV155{width:100%;min-width:970px;border-collapse:separate;border-spacing:0}#windowsDeviceTableV155 th,#windowsDeviceTableV155 td{padding:10px 11px;text-align:left;border-bottom:1px solid rgba(71,85,105,.32)}#windowsDeviceTableV155 th{white-space:nowrap;color:#a9b7ca;font-size:12px}.v153-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 14px}.v153-tabs button{min-width:150px}.v153-muted{color:#94a3b8;font-size:12px;line-height:1.6}.v153-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}#workerLoginSettingsV153 label{display:grid;gap:5px}#workerLoginSettingsV153 input:not([type=checkbox]){width:100%}#workerLoginSettingsV153 input[type=checkbox]{width:auto;min-width:auto}#workerGroup-linux[hidden],#workerGroup-windows[hidden]{display:none!important}#linuxDeviceTableV124{min-width:1450px}#linuxDeviceTableV124 .v124-actions{min-width:0}";
+    style.textContent = "#windowsDeviceListPanelV155{margin-bottom:14px}#windowsDeviceTableV155{width:100%;min-width:970px;border-collapse:separate;border-spacing:0}#windowsDeviceTableV155 th,#windowsDeviceTableV155 td{padding:10px 11px;text-align:left;border-bottom:1px solid rgba(71,85,105,.32)}#windowsDeviceTableV155 th{white-space:nowrap;color:#a9b7ca;font-size:12px}.v153-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 14px}.v153-tabs button{min-width:150px}.v153-muted{color:#94a3b8;font-size:12px;line-height:1.6}.v153-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}#workerLoginSettingsV153 label{display:grid;gap:5px}#workerLoginSettingsV153 input:not([type=checkbox]){width:100%}#workerLoginSettingsV153 input[type=checkbox]{width:auto;min-width:auto}#workerGroup-linux[hidden],#workerGroup-windows[hidden]{display:none!important}#linuxDeviceTableV124{min-width:920px}#linuxDeviceTableV124 .v124-actions{min-width:0}";
     document.head.appendChild(style);
     const wrapper = document.createElement("div");
     wrapper.id = "unifiedWorkerTabsV153";
@@ -226,6 +231,8 @@
     byId("workerGroupButton-linux").addEventListener("click", () => setTab("linux"));
     byId("workerGroupButton-windows").addEventListener("click", () => setTab("windows"));
     document.addEventListener("click",event=>{
+      const update=event.target?.closest?.("[data-windows-device-update]");
+      if(update){if(!confirm("请求此设备上的 Chrome 扩展检查更新？开发者模式加载的扩展需要手动更新。"))return;api("/api/admin/extensions/"+encodeURIComponent(update.dataset.windowsDeviceUpdate)+"/update",{method:"POST"}).then(()=>alert("已请求扩展检查更新")).catch(e=>alert(e.message));return;}
       const link=event.target?.closest?.("[data-windows-device-worker]");
       if(!link)return;
       const id=link.dataset.windowsDeviceWorker||"";
@@ -257,22 +264,23 @@
         if (dialog.open && selectedWorker === workerId) updateProfileState(state);
       } catch (_) { /* Remain on the last verified state until the next poll. */ }
     }, 3000);
+    document.addEventListener("chat2api:extensions-loaded", () => { if(selectedType==="windows")refreshWindowsDevices().catch(()=>{}); });
     const initial = location.hash === "#linux-workers" ? "linux" : "windows";
     if (location.hash === "#linux-workers") {
       const ext = document.querySelector('.nav button[data-view="extensions"]');
       ext?.click();
     }
     setTab(initial);
-    refreshWindowsDevices().catch(()=>{});
+    // Windows device data is fetched lazily from the active tab.
     // Linux's original panel refresh was tied to its own navigation state.
     setInterval(() => {
-      if(selectedType === "windows" && section.classList.contains("active") && !document.querySelector("dialog[open]")){
+      if(!document.hidden && selectedType === "windows" && section.classList.contains("active") && !document.querySelector("dialog[open]")){
         refreshWindowsDevices().catch(()=>{});
       }
-      if (selectedType === "linux" && section.classList.contains("active") && !document.querySelector("dialog[open]") && !document.querySelector("#linuxWorkerListPanelV155 [data-v121-limit-popover]:not([hidden])")) {
+      if (!document.hidden && selectedType === "linux" && section.classList.contains("active") && !document.querySelector("dialog[open]") && !document.querySelector("#linuxWorkerListPanelV155 [data-v121-limit-popover]:not([hidden])")) {
         byId("refreshLinuxDevicesV124")?.click();
       }
-    }, 5000);
+    }, 15000);
     document.documentElement.dataset.chat2apiUnifiedWorkerConsole = VERSION;
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, {once:true});

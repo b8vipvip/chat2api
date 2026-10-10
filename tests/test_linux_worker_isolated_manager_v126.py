@@ -18,7 +18,9 @@ def test_linux_device_rows_are_physical_device_level_only() -> None:
     assert "state.devices.map(" in device
     assert "workers.forEach" not in device
     assert "data-linux-device-id" in device
-    assert "data-manage-device" in device
+    assert "data-device-upgrade" in device
+    assert "data-device-add-worker" in device
+    assert "data-manage-device" not in device
     assert 'data-worker-action="initialize"' not in device
     assert "data-login-worker" not in device
     assert "data-diagnostics" not in device
@@ -30,8 +32,8 @@ def test_linux_worker_list_owns_worker_actions_without_manager_modal_duplication
     manager = ui.split("function renderManager()", 1)[1].split("function renamePairingHeader", 1)[0]
     assert 'id="linuxWorkerTableV155"' in ui
     assert "data-linux-worker-id" in workers
-    for action in ('data-worker-action="initialize"', 'data-worker-action="upgrade"',
-                   'data-login-worker', 'data-diagnostics', 'data-worker-login-edit'):
+    for action in ('data-worker-action="initialize"', 'data-linux-worker-enable',
+                   'data-login-worker', 'data-diagnostics', 'data-worker-login-edit', 'data-linux-worker-delete'):
         assert action in workers
         assert action not in manager
     assert "远程</button>" in workers
@@ -61,13 +63,13 @@ def test_v127_release_contract() -> None:
     runtime = source("app/runtime_contract.py")
     manifest = source("chrome_extension/manifest.json")
     controller = source("scripts/linux_worker_device_controller.py")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.109"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.109"' in runtime
+    assert 'SERVER_RUNTIME_VERSION = "0.22.110"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.110"' in runtime
     assert '"linux_worker_isolated_management_v126": False' in runtime
     assert '"linux_worker_slot_isolated_ops_v126": False' in runtime
     assert '"linux_worker_device_controller_agent_v127": True' in runtime
     assert '"linux_worker_shared_device_pairing_v127": True' in runtime
     assert '"linux_worker_shared_device_proxy_v127": True' in runtime
     assert '"linux_worker_profile_only_isolation_v127": True' in runtime
-    assert '"version": "0.22.109"' in manifest
+    assert '"version": "0.22.110"' in manifest
     assert 'AGENT_VERSION = "0.3.10"' in controller
