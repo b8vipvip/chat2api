@@ -110,7 +110,7 @@ def install_linux_worker_login_freshness_patch(app: FastAPI) -> FastAPI:
         ticket, session = require_login_session(worker_id, request)
         worker = worker_exists(worker_id)
         observation = _bridge_login_observation(worker)
-        if session.observe_login(
+        if session.mode != "remote" and session.observe_login(
             checked_at_ms=observation["checked_at_ms"],
             state=observation["state"],
             composer_ready=observation["composer_ready"],
