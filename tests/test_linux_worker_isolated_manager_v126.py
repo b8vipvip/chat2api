@@ -7,34 +7,37 @@ def source(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_unified_linux_worker_rows_preserve_device_actions_and_worker_version() -> None:
+def test_linux_device_rows_are_physical_device_level_only() -> None:
     ui = source("app/admin_linux_device_authority_v124.js")
-    assert "管理设备 Worker" not in ui
-    assert "manageDeviceWorkersV124" not in ui
-    assert "<th>Worker版本</th>" in ui
-    assert "data-manage-device" in ui
-    render_device = ui.split("function renderDevices()", 1)[1].split("function renderManager()", 1)[0]
-    assert 'data-worker-action="upgrade"' in render_device
-    assert 'data-worker-action="initialize"' not in render_device
-    assert "data-login-worker" in render_device
-    assert "data-worker-login-edit" in render_device
-    assert "data-linux-worker-id" in render_device
-    assert "Worker ID</th>" in ui
-    assert "data-diagnostics" in render_device
-    assert "管理Worker" in render_device
+    device_header = ui.split('id="linuxDeviceTableV124"', 1)[1].split("</thead>", 1)[0]
+    assert "<th>设备名称</th>" in device_header
+    assert "<th>Worker数量</th>" in device_header
+    assert "<th>Worker ID</th>" not in device_header
+    assert "<th>ChatGPT</th>" not in device_header
+    device = ui.split("function renderDevices()", 1)[1].split("function renderWorkers()", 1)[0]
+    assert "state.devices.map(" in device
+    assert "workers.forEach" not in device
+    assert "data-linux-device-id" in device
+    assert "data-manage-device" in device
+    assert 'data-worker-action="initialize"' not in device
+    assert "data-login-worker" not in device
+    assert "data-diagnostics" not in device
 
 
-def test_worker_manager_is_pinned_to_clicked_device_and_routes_by_worker_id() -> None:
+def test_linux_worker_list_owns_worker_actions_without_manager_modal_duplication() -> None:
     ui = source("app/admin_linux_device_authority_v124.js")
-    assert "managerDeviceV124" not in ui
-    assert "state.selectedDevice=String(t.dataset.manageDevice" in ui
+    workers = ui.split("function renderWorkers()", 1)[1].split("function renderManager()", 1)[0]
     manager = ui.split("function renderManager()", 1)[1].split("function renamePairingHeader", 1)[0]
-    assert 'data-worker-action="initialize"' in manager
-    assert "data-login-worker" in manager
-    assert "data-diagnostics" in manager
-    assert 'data-worker="${esc(w.worker_id)}"' in manager
-    assert 'data-login-worker="${esc(w.worker_id)}"' in manager
-    assert 'data-diagnostics="${esc(w.worker_id)}"' in manager
+    assert 'id="linuxWorkerTableV155"' in ui
+    assert "data-linux-worker-id" in workers
+    for action in ('data-worker-action="initialize"', 'data-worker-action="upgrade"',
+                   'data-login-worker', 'data-diagnostics', 'data-worker-login-edit'):
+        assert action in workers
+        assert action not in manager
+    assert "远程</button>" in workers
+    assert 'body:{mode:"remote"}' in ui
+    assert "setTimeout(closeLogin,650)" not in ui
+    assert 'state.selectedDevice=String(t.dataset.manageDevice' in ui
 
 
 def test_slot_privileged_actions_are_fixed_to_the_worker_slot() -> None:
