@@ -229,7 +229,7 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
             if not forced and failure_count(worker_id) >= MAX_RECOVERY_FAILURES:
                 latest["status"] = "paused"
                 return {"queued": False, "reason": "max_failures", "status": "paused"}
-            if not forced and age < COOLDOWN_SECONDS:
+            if latest and not forced and age < COOLDOWN_SECONDS:
                 return {"queued": False, "reason": "cooldown", "status": latest.get("status", "cooldown")}
             attempt_id = secrets.token_urlsafe(12)
             attempts[worker_id] = {
