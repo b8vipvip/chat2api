@@ -48,7 +48,7 @@
       '<label style="display:flex;align-items:center;gap:8px"><input id="v153-enabled" type="checkbox" checked>自动检测登录失效并重新登录</label>' +
       '<div id="v153-credential-state" class="v153-muted"></div>' +
       '<div id="v153-result" aria-live="polite" class="v153-muted"></div>' +
-      '<div class="v153-actions"><button id="v153-otp" type="button" class="action">生成验证码</button><button id="v153-delete" type="button" class="action danger">移除凭据</button><button id="v153-trigger" type="button" class="action">触发登录恢复</button><button id="v153-save" type="button" class="action good">保存</button></div>' +
+      '<div class="v153-actions"><button id="v153-otp" type="button" class="action">生成验证码</button><button id="v153-delete" type="button" class="action danger">移除凭据</button><button id="v153-trigger" type="button" class="action">触发登录恢复</button><button id="v153-manual" type="button" class="action">人工接管</button><button id="v153-save" type="button" class="action good">保存</button></div>' +
       '</form>';
     document.body.appendChild(dialog);
     byId("v153-save").addEventListener("click", async () => {
@@ -88,6 +88,13 @@
       try {
         const data = await api("/api/admin/worker-login/" + encodeURIComponent(selectedWorker) + "/trigger", {method:"POST"});
         output.textContent = data.queued ? (data.status === "automating" ? "已发起自动登录，等待 Worker 验证结果。" : "连接不符合自动传输条件，已请求打开登录窗口供人工操作。") : (data.reason === "in_progress" ? "该 Worker 已有登录恢复任务进行中。" : "自动恢复处于冷却期。");
+      } catch (err) { output.textContent = err.message; }
+    });
+    byId("v153-manual").addEventListener("click", async () => {
+      const output = byId("v153-result");
+      try {
+        const data = await api("/api/admin/worker-login/" + encodeURIComponent(selectedWorker) + "/manual", {method:"POST"});
+        output.textContent = data.queued ? "已停止自动填写并将登录窗口交给人工操作。" : "无法打开人工登录窗口。";
       } catch (err) { output.textContent = err.message; }
     });
     dialog.addEventListener("close", () => {
