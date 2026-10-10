@@ -11,7 +11,7 @@ def source() -> str:
 
 def test_column_layout_supports_visibility_order_and_v2_to_v3_persistence():
     text = source()
-    assert 'const VERSION = "0.22.108-worker-list-v152"' in text
+    assert 'const VERSION = "0.22.109-worker-list-v152"' in text
     assert 'const COLUMN_SCHEMA_REVISION = 152' in text
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v3"' in text
     assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2"' in text
