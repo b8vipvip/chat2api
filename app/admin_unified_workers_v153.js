@@ -39,7 +39,7 @@
     dialog.style.cssText = "width:min(560px,calc(100vw - 24px));border:1px solid #334155;border-radius:14px;background:#0f172a;color:#e5e7eb;padding:0";
     dialog.innerHTML = '<form method="dialog" style="padding:20px;display:grid;gap:12px">' +
       '<div style="display:flex;align-items:center;justify-content:space-between"><b style="font-size:18px">Worker 自动登录设置</b><button class="action" value="cancel" type="submit">关闭</button></div>' +
-      '<div class="v153-muted">配置与 Worker ID 一一绑定；凭据在服务端加密保存，浏览器仅在触发登录时临时接收。验证码由程序使用 TOTP 密钥生成。首次绑定 Linux Chrome Bridge 仍可能需要人工登录。</div>' +
+      '<div class="v153-muted">配置与 Worker ID 一一绑定；凭据在服务端加密保存，目前自动恢复仅能打开登录页面，需要人工完成登录；保存的凭据不会被发送给 Chrome。TOTP 生成能力已准备，但自动填写尚未启用。首次绑定 Linux Chrome Bridge 需要人工登录。</div>' +
       '<div><b>Worker ID</b><div id="v153-worker-id" style="overflow-wrap:anywhere"></div></div>' +
       '<label>ChatGPT 登录邮箱<input id="v153-email" type="email" autocomplete="off" placeholder="your@email.com" required></label>' +
       '<label>密码（留空表示保留原密码）<input id="v153-password" type="password" autocomplete="new-password" placeholder="ChatGPT 密码"></label>' +
@@ -48,7 +48,7 @@
       '<label style="display:flex;align-items:center;gap:8px"><input id="v153-enabled" type="checkbox" checked>自动检测登录失效并重新登录</label>' +
       '<div id="v153-credential-state" class="v153-muted"></div>' +
       '<div id="v153-result" aria-live="polite" class="v153-muted"></div>' +
-      '<div class="v153-actions"><button id="v153-delete" type="button" class="action danger">移除凭据</button><button id="v153-trigger" type="button" class="action">立即登录</button><button id="v153-save" type="button" class="action good">保存</button></div>' +
+      '<div class="v153-actions"><button id="v153-delete" type="button" class="action danger">移除凭据</button><button id="v153-trigger" type="button" class="action">打开登录窗口</button><button id="v153-save" type="button" class="action good">保存</button></div>' +
       '</form>';
     document.body.appendChild(dialog);
     byId("v153-save").addEventListener("click", async () => {
@@ -81,7 +81,7 @@
       const output = byId("v153-result");
       try {
         const data = await api("/api/admin/worker-login/" + encodeURIComponent(selectedWorker) + "/trigger", {method:"POST"});
-        output.textContent = data.queued ? "已发送登录命令，请观察 Worker 登录状态。" : "自动登录处于冷却期。";
+        output.textContent = data.queued ? "已打开 Worker 登录窗口，请人工完成登录。"  : "自动登录处于冷却期。";
       } catch (err) { output.textContent = err.message; }
     });
     dialog.addEventListener("close", () => {
