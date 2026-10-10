@@ -319,6 +319,40 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
         admin(request)
         return await dispatch(worker_id, forced=True)
 
+    @app.post("/api/admin/worker-login/{worker_id}/manual")
+    async def manually_open_worker_login(worker_id: str, request: Request) -> dict[str, Any]:
+        admin(request)
+        client_id = extension_for(worker_id)
+        if client_id not in registry.online_client_ids():
+            raise HTTPException(409, "Worker Chrome Bridge 当前离线")
+        async with lock:
+            previous = runtime(worker_id)
+            active = previous.get("status") in {"opening", "automating", "waiting_otp", "manual_required"}
+            attempt_id = str(previous.get("id") or "") if active else secrets.token_urlsafe(12)
+            if active:
+                # Cancel all credential submission before surfacing the tab
+                # to a human; cancellation and open are ordered on the socket.
+                await registry.send(client_id, {
+                    "type": "worker.login.cancel.v154",
+                    "attempt_id": attempt_id,
+                })
+            else:
+                attempts[worker_id] = {
+                    "id": attempt_id, "monotonic": time.monotonic(),
+                    "at": int(time.time()), "started_at_ms": int(time.time() * 1000),
+                }
+            try:
+                await registry.send(client_id, {
+                    "type": "worker.login.open.v153",
+                    "worker_id": worker_id,
+                    "attempt_id": attempt_id,
+                })
+            except Exception:
+                attempts[worker_id]["status"] = "offline"
+                raise HTTPException(503, "人工登录窗口无法打开") from None
+            attempts[worker_id]["status"] = "manual_required"
+            return {"queued": True, "status": "manual_required", "attempt_id": attempt_id}
+
     previous_touch = registry.touch
 
     async def touch_with_relogin(client_id: str, metadata: dict[str, Any] | None = None) -> None:
