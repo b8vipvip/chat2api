@@ -202,3 +202,19 @@ def test_three_failed_logins_pause_automatic_retry_but_manual_trigger_is_allowed
     assert forced.status_code == 200
     assert forced.json()["queued"] is True
     assert len(registry.sent) == count + 1
+
+
+def test_missing_totp_uses_interactive_challenge_fallback(tmp_path: Path) -> None:
+    client, _app, registry, _linux = make_client(tmp_path)
+    configured(client, "windows-1", totp=False)
+    result = client.post("/api/admin/worker-login/windows-1/trigger")
+    assert result.status_code == 200
+    attempt = registry.sent[-1][1]["attempt_id"]
+    asyncio.run(registry.touch("windows-1", {
+        "worker_login_attempt_id": attempt,
+        "worker_login_recovery_state": "waiting_otp",
+        "worker_login_totp_request_attempt_id": attempt,
+    }))
+    client_id, message = registry.sent[-1]
+    assert client_id == "windows-1"
+    assert message == {"type": "worker.login.totp_unavailable.v154", "attempt_id": attempt}
