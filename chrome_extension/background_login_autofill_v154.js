@@ -93,10 +93,11 @@
     let lastAction = "";
     let lastActionAt = 0;
     let lastCodeRequest = 0;
+    let lastUrl = "";
     try {
-      if (!/^[A-Za-z0-9_-]{12,64}$/.test(attemptId) || typeof login?.openLoginWindow !== "function") throw Error("unavailable");
+      if (!/^[A-Za-z0-9_-]{12,64}$/.test(attemptId) || typeof login?.openAutomaticLoginWindow !== "function") throw Error("unavailable");
       await report(attemptId, "automating");
-      const surface = await login.openLoginWindow();
+      const surface = await login.openAutomaticLoginWindow();
       if (!Number.isInteger(surface?.tab_id)) throw Error("login_window_missing");
       const deadline = Date.now() + 150000;
       while (Date.now() < deadline) {
@@ -114,7 +115,9 @@
           continue;
         }
         const now = Date.now();
-        if (lastAction && now - lastActionAt < 4500) {
+        // Avoid re-submitting credentials to an unchanged form after an
+        // authentication error. A URL change or new field stage is allowed.
+        if (lastAction && lastUrl === url && now - lastActionAt < 4500) {
           await delay(1200);
           continue;
         }
@@ -149,6 +152,7 @@
           }
           lastAction = action;
           lastActionAt = now;
+          lastUrl = url;
         }
         await delay(1200);
       }
