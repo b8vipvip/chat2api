@@ -173,3 +173,32 @@ def test_recovery_ignores_duplicate_login_probes_and_stale_success(tmp_path: Pat
         "chatgpt_login_checked_at_ms": int(time.time() * 1000),
     }))
     assert client.get("/api/admin/worker-login/windows-1").json()["runtime"] == "logged_in"
+
+
+def test_three_failed_logins_pause_automatic_retry_but_manual_trigger_is_allowed(tmp_path: Path) -> None:
+    client, _app, registry, _linux = make_client(tmp_path)
+    configured(client, "windows-1")
+    for _ in range(3):
+        result = client.post("/api/admin/worker-login/windows-1/trigger")
+        assert result.status_code == 200, result.text
+        attempt_id = registry.sent[-1][1]["attempt_id"]
+        asyncio.run(registry.touch("windows-1", {
+            "worker_login_attempt_id": attempt_id,
+            "worker_login_recovery_state": "failed",
+        }))
+    assert client.get("/api/admin/worker-login/windows-1").json()["recent_failures"] == 3
+    count = len(registry.sent)
+    checked = int(time.time() * 1000) - 100
+    for i in range(2):
+        asyncio.run(registry.touch("windows-1", {
+            "chatgpt_login_state": "login_required",
+            "chatgpt_login_confidence": "high",
+            "chatgpt_login_checked_at_ms": checked + i,
+        }))
+    assert len(registry.sent) == count
+    assert client.get("/api/admin/worker-login/windows-1").json()["runtime"] == "paused"
+    # A deliberate administrator-triggered retry remains possible.
+    forced = client.post("/api/admin/worker-login/windows-1/trigger")
+    assert forced.status_code == 200
+    assert forced.json()["queued"] is True
+    assert len(registry.sent) == count + 1
