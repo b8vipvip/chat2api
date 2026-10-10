@@ -80,7 +80,7 @@ def test_remote_login_uses_cdp_first_and_binding_cannot_steal_focus():
     assert '"key", "--clearmodifiers", "ctrl+l",\n            "type"' not in navigation
     assert '"binding_deferred_login_session"' in helper
     assert 'def session_active() -> bool:' in helper
-    assert 'from linux_worker_remote_login import capture_frame, close_session, inject_worker_binding, open_session, send_input, session_active' in agent
+    assert 'from linux_worker_remote_login import capture_frame, close_session, inject_worker_binding, open_session, open_remote_session, send_input, session_active' in agent
     assert agent.count("if session_active():") >= 2
 
 
