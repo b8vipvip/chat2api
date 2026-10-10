@@ -280,8 +280,6 @@ install_worker_limits_clipboard_v121_patch(app)
 # v144 is the final model authority/observability boundary. It remains after all
 # historical routing patches; the trailing request-history call is the idempotent
 # final-owner sentinel required by the existing request-history contract tests.
+install_worker_auto_login_v153_patch(app)
 install_model_observability_v144_patch(app)
 install_request_history_v94_patch(app)
-
-# Per-worker encrypted login configuration and unified platform console.
-install_worker_auto_login_v153_patch(app)
