@@ -146,7 +146,7 @@ def test_linux_binding_is_authoritative_before_sending_secrets(tmp_path: Path) -
 def test_recovery_ignores_duplicate_login_probes_and_stale_success(tmp_path: Path) -> None:
     client, _app, registry, _linux = make_client(tmp_path)
     configured(client, "windows-1")
-    checked = int(time.time() * 1000)
+    checked = int(time.time() * 1000) - 100
     login_required = {
         "chatgpt_login_state": "login_required",
         "chatgpt_login_confidence": "high",
