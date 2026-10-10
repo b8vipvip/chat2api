@@ -140,6 +140,16 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
     observations: dict[str, tuple[int, int]] = {}
     lock = asyncio.Lock()
 
+    def secure_extension_socket(client_id: str) -> bool:
+        """Do not send login credentials over a plaintext remote WebSocket."""
+        socket = registry.sockets.get(client_id)
+        if socket is None:
+            return False
+        if str(socket.url.scheme).lower() == "wss":
+            return True
+        peer = getattr(getattr(socket, "client", None), "host", "")
+        return str(peer).lower() in {"127.0.0.1", "::1", "localhost"}
+
     def admin(request: Request) -> None:
         sessions = getattr(app.state, "admin_sessions", None)
         if not sessions or not sessions.authenticate(request.cookies.get(SESSION_COOKIE)):
@@ -172,7 +182,7 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
 
     def runtime(worker_id: str) -> dict[str, Any]:
         attempt = attempts.get(worker_id)
-        if attempt and attempt.get("status") in {"starting", "opening", "manual_required"}:
+        if attempt and attempt.get("status") in {"starting", "opening", "automating", "waiting_otp", "manual_required"}:
             if time.monotonic() - float(attempt.get("monotonic") or 0) > RECOVERY_TIMEOUT_SECONDS:
                 attempt["status"] = "timeout"
         return attempt or {}
@@ -194,7 +204,7 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
             now = time.monotonic()
             latest = runtime(worker_id)
             age = now - float(latest.get("monotonic") or 0)
-            if latest.get("status") in {"starting", "opening", "manual_required"}:
+            if latest.get("status") in {"starting", "opening", "automating", "waiting_otp", "manual_required"}:
                 return {"queued": False, "reason": "in_progress", "status": latest["status"]}
             if not forced and age < COOLDOWN_SECONDS:
                 return {"queued": False, "reason": "cooldown", "status": latest.get("status", "cooldown")}
@@ -203,18 +213,29 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
                 "id": attempt_id, "monotonic": now, "at": int(time.time()),
                 "started_at_ms": int(time.time() * 1000), "status": "opening",
             }
-            # This revision only requests the authenticated Worker to open its
-            # login surface; account credentials never leave the vault.
-            try:
-                await registry.send(client_id, {
-                    "type": "worker.login.open.v153",
-                    "worker_id": worker_id,
-                    "attempt_id": attempt_id,
+            # Password travels only on a locally-loopback or TLS-protected,
+            # previously authenticated extension socket. The TOTP seed never
+            # leaves the encrypted server-side vault; fresh codes are requested
+            # by the bound Worker for the exact in-flight attempt.
+            automated = secure_extension_socket(client_id)
+            command = {
+                "type": "worker.login.start.v154" if automated else "worker.login.open.v153",
+                "worker_id": worker_id,
+                "attempt_id": attempt_id,
+            }
+            if automated:
+                command.update({
+                    "username": profile["username"],
+                    "password": profile["password"],
+                    "started_at_ms": attempts[worker_id]["started_at_ms"],
                 })
+            try:
+                await registry.send(client_id, command)
             except Exception:
                 attempts[worker_id]["status"] = "offline"
-                raise HTTPException(503, "登录窗口打开指令发送失败，请检查 Worker 连接") from None
-            return {"queued": True, "status": "opening", "attempt_id": attempt_id}
+                raise HTTPException(503, "登录恢复指令发送失败，请检查 Worker 连接") from None
+            return {"queued": True, "status": "automating" if automated else "opening",
+                    "attempt_id": attempt_id, "transport_secure": automated}
 
     @app.get("/api/admin/worker-login")
     async def list_worker_logins(request: Request) -> dict[str, Any]:
@@ -287,9 +308,31 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
         # by the WebSocket's already-established client identity.
         ack_id = str(metadata.get("worker_login_attempt_id") or "")
         ack_state = str(metadata.get("worker_login_recovery_state") or "")
-        if ack_id and attempt.get("id") == ack_id and ack_state in {"opening", "manual_required", "failed"}:
-            if attempt.get("status") in {"opening", "starting", "manual_required"}:
+        if ack_id and attempt.get("id") == ack_id and ack_state in {
+            "opening", "automating", "waiting_otp", "manual_required", "failed",
+        }:
+            if attempt.get("status") in {"opening", "starting", "automating", "waiting_otp", "manual_required"}:
                 attempt["status"] = ack_state
+
+        # On-demand OTP: an authenticated, bound Worker may request only its own
+        # 6-digit current code while its matching recovery attempt is active.
+        # Never include the Base32 secret in the message or metadata.
+        otp_request = str(metadata.get("worker_login_totp_request_attempt_id") or "")
+        if (otp_request and otp_request == attempt.get("id")
+                and attempt.get("status") in {"automating", "waiting_otp"}):
+            now = time.monotonic()
+            if now - float(attempt.get("last_otp_request") or 0) >= 5:
+                attempt["last_otp_request"] = now
+                try:
+                    profile = vault.get(worker_id)
+                    if profile and profile.get("enabled") and profile.get("totp_secret"):
+                        await registry.send(client_id, {
+                            "type": "worker.login.totp.v154",
+                            "attempt_id": otp_request,
+                            "code": totp_code(profile["totp_secret"]),
+                        })
+                except (ValueError, RuntimeError, TypeError):
+                    attempt["status"] = "manual_required"
 
         state = str(metadata.get("chatgpt_login_state") or "").lower()
         try:
