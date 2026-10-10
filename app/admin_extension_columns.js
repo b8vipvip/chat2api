@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.22.107-worker-list-v152";
+  const VERSION = "0.22.108-worker-list-v152";
   const COLUMN_SCHEMA_REVISION = 152;
   const STORAGE_KEY = "chat2api.extensionColumns.v3";
   const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2";
@@ -248,7 +248,7 @@
     const connect = row.connection_enabled === false
       ? `<button class="action good" data-worker-list-action="enable" data-client-id="${id}">连接</button>`
       : `<button class="action danger" data-worker-list-action="disconnect" data-client-id="${id}">断开</button>`;
-    return `<div class="rowactions">${connect}<button class="action danger" data-worker-list-action="delete" data-client-id="${id}" data-online="${row.online ? "1" : "0"}">删除</button></div>`;
+    return `<div class="rowactions">${connect}<button class="action" type="button" data-worker-login-edit="${id}">自动登录设置</button><button class="action danger" data-worker-list-action="delete" data-client-id="${id}" data-online="${row.online ? "1" : "0"}">删除</button></div>`;
   }
 
   function rowHtml(row, truthInfo = null) {
@@ -333,7 +333,7 @@
             return null;
           }),
         ]);
-        extensionSnapshot = Array.isArray(data.clients) ? data.clients : [];
+        extensionSnapshot = (Array.isArray(data.clients) ? data.clients : []).filter(row => !row.metadata?.linux_worker_id && String(row.metadata?.platform || "").toLowerCase() !== "linux");
         truthSnapshot = truth;
         renderPairings(Array.isArray(data.pairing_codes) ? data.pairing_codes : []);
         renderWorkerRows(extensionSnapshot, truthSnapshot);

@@ -391,6 +391,12 @@
   state.detect = detect;
   state.readyForPrewarm = readyForPrewarm;
   state.openLoginWindow = openLoginWindow;
+  // Automatic recovery stays in the persistent pool's background login surface;
+  // it must not steal desktop focus or create a second window authority.
+  state.openAutomaticLoginWindow = async () => {
+    const probe = await ensureProbeWindow({ focused: false, userVisible: false });
+    return { tab_id: probe.tab_id, window_id: probe.window_id, existing: probe.existing };
+  };
   state.snapshot = cachedSnapshot;
 
   installNetworkLoginGate();

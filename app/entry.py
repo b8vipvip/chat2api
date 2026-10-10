@@ -84,6 +84,7 @@ from .responses_console_v110_patch import install_responses_console_v110_patch
 from .request_id_namespace_v136_patch import install_request_id_namespace_v136_patch
 from .worker_limits_clipboard_v121_patch import install_worker_limits_clipboard_v121_patch
 from .model_observability_v144_patch import install_model_observability_v144_patch
+from .worker_auto_login_v153_patch import install_worker_auto_login_v153_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -279,5 +280,6 @@ install_worker_limits_clipboard_v121_patch(app)
 # v144 is the final model authority/observability boundary. It remains after all
 # historical routing patches; the trailing request-history call is the idempotent
 # final-owner sentinel required by the existing request-history contract tests.
+install_worker_auto_login_v153_patch(app)
 install_model_observability_v144_patch(app)
 install_request_history_v94_patch(app)

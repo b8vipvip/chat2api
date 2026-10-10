@@ -42,7 +42,10 @@ def test_v127_device_and_worker_ui_contract():
     ui = (ROOT / "app" / "admin_linux_device_authority_v124.js").read_text(encoding="utf-8")
     header = ui.split('id="linuxDeviceTableV124"',1)[1].split('</thead>',1)[0]
     assert '<th>状态</th>' in header
-    assert '<th>ChatGPT</th>' not in header
+    # v153 flattens device + per-Profile Worker rows under Worker management.
+    assert '<th>Worker ID</th>' in header
+    assert '<th>ChatGPT</th>' in header
+    assert '<th>Extension</th>' in header
     assert 'deviceInstallStatus' in ui
     manager = ui.split('function renderManager()',1)[1].split('function renamePairingHeader',1)[0]
     assert '<th>代理</th>' not in manager

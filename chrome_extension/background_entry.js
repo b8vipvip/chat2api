@@ -6,6 +6,8 @@ importScripts(
   "background_network_v26.js",
   "content_bootstrap.js",
   "background_login_v27.js",
+  "background_login_recovery_v153.js",
+  "background_login_autofill_v154.js",
   "background_worker_binding_v30.js",
   "background_site_permissions_v31.js",
   "background_hardening.js",
