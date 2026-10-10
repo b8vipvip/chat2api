@@ -19,6 +19,7 @@ ALLOWED_COMMANDS = frozenset({
     "test_proxy",
     "apply_proxy_config",
     "open_login_session",
+    "open_remote_session",
     "close_login_session",
     "login_session_frame",
     "login_session_input",

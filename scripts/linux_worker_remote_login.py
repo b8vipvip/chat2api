@@ -115,6 +115,19 @@ def open_session() -> dict[str, Any]:
     }
 
 
+def open_remote_session() -> dict[str, Any]:
+    """Observe the existing Xvfb Chrome desktop without navigation or focus changes."""
+    with ACTION_LOCK:
+        SESSION.touch()
+    return {
+        "ok": True,
+        "mode": "remote",
+        "idle_timeout_seconds": SESSION_IDLE_SECONDS,
+        "source_width": SOURCE_WIDTH,
+        "source_height": SOURCE_HEIGHT,
+    }
+
+
 def close_session() -> dict[str, Any]:
     with ACTION_LOCK:
         SESSION.close()

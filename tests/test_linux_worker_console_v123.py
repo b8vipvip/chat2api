@@ -46,7 +46,8 @@ def test_v124_console_is_not_a_hidden_legacy_table_or_action_relay():
     assert 'data-proxy-worker' in source
     assert '⚙' in source
     assert 'relayLegacyAction' not in source
-    assert 'linuxWorkerRows' not in source
+    assert 'id="linuxWorkerRows"' not in source  # legacy table retired; v155 Worker list is intentional
+    assert 'id="linuxWorkerRowsV155"' in source
     assert 'legacyTable.style.display' not in source
 
 

@@ -287,6 +287,8 @@ def _execute(config: dict[str, Any], target: dict[str, Any], command: str, argum
             if not proxy.get("ok"):
                 return {"ok": False, "error": "proxy_required_for_login", "proxy": proxy}
         return clipboard.open_session()
+    if command == "open_remote_session":
+        return remote.open_remote_session()
     if command == "close_login_session":
         return clipboard.close_session()
     if command == "login_session_frame":

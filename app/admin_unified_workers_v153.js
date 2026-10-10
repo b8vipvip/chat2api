@@ -14,6 +14,60 @@
     return payload;
   };
   const byId = id => document.getElementById(id);
+  const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]));
+  const timeLabel = value => {
+    if(!value)return "-";
+    const date=new Date(value);
+    return Number.isFinite(date.getTime())?date.toLocaleString("zh-CN",{hour12:false}):"-";
+  };
+  function makeWindowsDevicePanel() {
+    const panel=document.createElement("div");
+    panel.className="panel";
+    panel.id="windowsDeviceListPanelV155";
+    panel.innerHTML='<h3 style="margin:0 0 12px">设备列表</h3><div class="toolbar"><button type="button" class="action" id="refreshWindowsDevicesV155">刷新设备</button><button type="button" class="action good" id="newWindowsDeviceV155">新增设备码</button></div><div class="v153-muted" id="windowsDeviceSummaryV155"></div><div class="scroll"><table id="windowsDeviceTableV155"><thead><tr><th>设备名称</th><th>设备标识</th><th>状态</th><th>Worker数量</th><th>系统</th><th>网络</th><th>最后在线</th><th>操作</th></tr></thead><tbody id="windowsDeviceRowsV155"><tr><td colspan="8">正在获取设备信息…</td></tr></tbody></table></div>';
+    return panel;
+  }
+  async function refreshWindowsDevices() {
+    const body=byId("windowsDeviceRowsV155");
+    if(!body)return;
+    const data=await api("/api/admin/extensions");
+    const clients=(Array.isArray(data.clients)?data.clients:[]).filter(c=>!c.metadata?.linux_worker_id && String(c.metadata?.platform||"").toLowerCase()!=="linux");
+    const codes=Array.isArray(data.pairing_codes)?data.pairing_codes:[];
+    const byClient=new Map(clients.map(c=>[String(c.client_id||""),c]));
+    const groups=new Map();
+    const pairedClientIds=new Set();
+    for(const code of codes){
+      const client=byClient.get(String(code.bound_client_id||""));
+      if(!client)continue;
+      const id=String(code.bound_device_id||client.device_id||client.metadata?.device_id||client.client_id||"");
+      if(!id)continue;
+      if(!groups.has(id))groups.set(id,{id,name:code.name||client.name||id,clients:[],lastSeen:code.last_paired_at||"",paired:true});
+      const group=groups.get(id);
+      group.name=code.name||group.name;
+      if(!group.clients.some(row=>row.client_id===client.client_id))group.clients.push(client);
+      pairedClientIds.add(String(client.client_id||""));
+    }
+    for(const client of clients){
+      if(pairedClientIds.has(String(client.client_id||"")))continue;
+      const id=String(client.device_id||client.metadata?.device_id||client.client_id||"");
+      if(!id)continue;
+      if(!groups.has(id))groups.set(id,{id,name:client.device_name||client.name||id,clients:[],lastSeen:"",paired:false});
+      const group=groups.get(id);
+      if(!group.clients.some(row=>row.client_id===client.client_id))group.clients.push(client);
+    }
+    let online=0;
+    body.innerHTML=[...groups.values()].map(group=>{
+      const live=group.clients.filter(c=>c.online);
+      if(live.length)online++;
+      const net=live[0]?.metadata?.network_country_code || live[0]?.metadata?.network_probe_status ||
+        group.clients[0]?.metadata?.network_country_code || group.clients[0]?.metadata?.network_probe_status || "-";
+      const last=group.clients.map(c=>c.last_seen_at||"").filter(Boolean).sort().at(-1)||group.lastSeen;
+      const worker=group.clients[0]?.client_id||"";
+      return `<tr><td><b>${esc(group.name)}</b></td><td><code>${esc(group.id)}</code></td><td><span class="v124-pill ${live.length?"good":"warn"}">${live.length?"在线":"离线"}</span></td><td>${group.clients.length}</td><td>Windows</td><td>${esc(net)}</td><td>${esc(timeLabel(last))}</td><td><button class="action" data-windows-device-worker="${esc(worker)}">查看Worker</button></td></tr>`;
+    }).join("")||'<tr><td colspan="8" class="v153-muted">暂无已绑定的 Windows 设备，请先配对 Windows Worker。</td></tr>';
+    byId("windowsDeviceSummaryV155").textContent=`Windows 设备：${groups.size} · 在线设备：${online} · Windows Worker：${clients.length}`;
+  }
+
 
   function setTab(kind) {
     selectedType = kind;
@@ -143,7 +197,7 @@
       return;
     }
     const style = document.createElement("style");
-    style.textContent = ".v153-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 14px}.v153-tabs button{min-width:150px}.v153-muted{color:#94a3b8;font-size:12px;line-height:1.6}.v153-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}#workerLoginSettingsV153 label{display:grid;gap:5px}#workerLoginSettingsV153 input:not([type=checkbox]){width:100%}#workerLoginSettingsV153 input[type=checkbox]{width:auto;min-width:auto}#workerGroup-linux[hidden],#workerGroup-windows[hidden]{display:none!important}#linuxDeviceTableV124{min-width:1450px}#linuxDeviceTableV124 .v124-actions{min-width:0}";
+    style.textContent = "#windowsDeviceListPanelV155{margin-bottom:14px}#windowsDeviceTableV155{width:100%;min-width:970px;border-collapse:separate;border-spacing:0}#windowsDeviceTableV155 th,#windowsDeviceTableV155 td{padding:10px 11px;text-align:left;border-bottom:1px solid rgba(71,85,105,.32)}#windowsDeviceTableV155 th{white-space:nowrap;color:#a9b7ca;font-size:12px}.v153-tabs{display:flex;gap:8px;flex-wrap:wrap;margin:4px 0 14px}.v153-tabs button{min-width:150px}.v153-muted{color:#94a3b8;font-size:12px;line-height:1.6}.v153-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap}#workerLoginSettingsV153 label{display:grid;gap:5px}#workerLoginSettingsV153 input:not([type=checkbox]){width:100%}#workerLoginSettingsV153 input[type=checkbox]{width:auto;min-width:auto}#workerGroup-linux[hidden],#workerGroup-windows[hidden]{display:none!important}#linuxDeviceTableV124{min-width:1450px}#linuxDeviceTableV124 .v124-actions{min-width:0}";
     document.head.appendChild(style);
     const wrapper = document.createElement("div");
     wrapper.id = "unifiedWorkerTabsV153";
@@ -152,14 +206,33 @@
       '<button class="action" role="tab" aria-selected="false" id="workerGroupButton-linux" type="button">Linux Worker</button>' +
       '</div><div id="workerGroup-windows" role="tabpanel"></div><div id="workerGroup-linux" role="tabpanel" hidden></div>';
     section.insertBefore(wrapper, windowsPanel);
+    const windowsDevicePanel=makeWindowsDevicePanel();
+    byId("workerGroup-windows").appendChild(windowsDevicePanel);
     byId("workerGroup-windows").appendChild(windowsPanel);
     byId("workerGroup-linux").appendChild(linuxPanel);
+    const linuxWorkers=byId("linuxWorkerListPanelV155");
+    if(linuxWorkers)byId("workerGroup-linux").appendChild(linuxWorkers);
+    byId("newWindowsDeviceV155").addEventListener("click",()=>{document.getElementById("pairingName")?.focus();document.getElementById("pairingName")?.scrollIntoView({behavior:"smooth",block:"center"});});
+    byId("refreshWindowsDevicesV155").addEventListener("click",()=>{
+      refreshWindowsDevices().catch(error=>{
+        const target=byId("windowsDeviceSummaryV155");
+        if(target)target.textContent="设备信息读取失败："+String(error.message||error);
+      });
+    });
     const linuxNav = [...document.querySelectorAll(".nav button")].find(node => node.dataset.view === "linux-workers");
     if (linuxNav) linuxNav.remove();
     const linuxSection = byId("view-linux-workers");
     if (linuxSection) linuxSection.classList.remove("active");
     byId("workerGroupButton-linux").addEventListener("click", () => setTab("linux"));
     byId("workerGroupButton-windows").addEventListener("click", () => setTab("windows"));
+    document.addEventListener("click",event=>{
+      const link=event.target?.closest?.("[data-windows-device-worker]");
+      if(!link)return;
+      const id=link.dataset.windowsDeviceWorker||"";
+      const row=[...document.querySelectorAll("#extensionDeviceBody tr[data-client-id]")].find(node=>node.dataset.clientId===id);
+      row?.scrollIntoView({behavior:"smooth",block:"center"});
+      if(row){row.style.outline="2px solid #38bdf8";setTimeout(()=>{row.style.outline="";},2000);}
+    });
     document.addEventListener("click", event => {
       const edit = event.target?.closest?.("[data-worker-login-edit]");
       if (edit) {
@@ -190,9 +263,13 @@
       ext?.click();
     }
     setTab(initial);
+    refreshWindowsDevices().catch(()=>{});
     // Linux's original panel refresh was tied to its own navigation state.
     setInterval(() => {
-      if (selectedType === "linux" && section.classList.contains("active") && !document.querySelector("dialog[open]")) {
+      if(selectedType === "windows" && section.classList.contains("active") && !document.querySelector("dialog[open]")){
+        refreshWindowsDevices().catch(()=>{});
+      }
+      if (selectedType === "linux" && section.classList.contains("active") && !document.querySelector("dialog[open]") && !document.querySelector("#linuxWorkerListPanelV155 [data-v121-limit-popover]:not([hidden])")) {
         byId("refreshLinuxDevicesV124")?.click();
       }
     }, 5000);

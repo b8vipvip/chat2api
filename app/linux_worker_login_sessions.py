@@ -21,6 +21,7 @@ class LoginSession:
     baseline_login_checked_at_ms: int = 0
     last_login_checked_at_ms: int = 0
     saw_login_required: bool = False
+    mode: str = "login"
 
     def observe_login(self, *, checked_at_ms: int, state: str, composer_ready: bool) -> bool:
         """Return true only for a fresh login-required -> ready transition.
