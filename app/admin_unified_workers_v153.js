@@ -31,6 +31,7 @@
     const body=byId("windowsDeviceRowsV155");
     if(!body)return;
     const snapshot=globalThis.__chat2apiWindowsSnapshotV156;
+    if(!snapshot && document.documentElement.dataset.chat2apiWorkerListReady!=="1") return;
     const data=snapshot && Date.now()-snapshot.at<15000 ? snapshot.data : await api("/api/admin/extensions");
     const clients=(Array.isArray(data.clients)?data.clients:[]).filter(c=>!c.metadata?.linux_worker_id && String(c.metadata?.platform||"").toLowerCase()!=="linux");
     const codes=Array.isArray(data.pairing_codes)?data.pairing_codes:[];
@@ -263,6 +264,7 @@
         if (dialog.open && selectedWorker === workerId) updateProfileState(state);
       } catch (_) { /* Remain on the last verified state until the next poll. */ }
     }, 3000);
+    document.addEventListener("chat2api:extensions-loaded", () => { if(selectedType==="windows")refreshWindowsDevices().catch(()=>{}); });
     const initial = location.hash === "#linux-workers" ? "linux" : "windows";
     if (location.hash === "#linux-workers") {
       const ext = document.querySelector('.nav button[data-view="extensions"]');
