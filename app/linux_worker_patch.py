@@ -225,6 +225,25 @@ def install_linux_worker_patch(app: FastAPI) -> FastAPI:
     async def open_worker_login_session(worker_id: str, request: Request) -> dict[str, Any]:
         admin(request)
         worker = worker_exists(worker_id)
+        # Remote viewing must neither navigate Chrome to /auth/login nor
+        # require a proxy test; the existing Xvfb screen is the target.
+        body = await request.json()
+        mode = str(body.get("mode") or "login") if isinstance(body, dict) else "login"
+        if mode not in {"login", "remote"}:
+            raise HTTPException(400, "Unsupported remote session mode")
+        if mode == "remote":
+            command = await send_worker_command(worker_id, "open_remote_session", {}, wait=True, timeout=15)
+            result = command["result"]
+            if not result.get("ok"):
+                raise HTTPException(422, f"Remote screen could not start: {str(result.get('error') or 'open_failed')[:120]}")
+            ticket = login_sessions.issue(worker_id)
+            login_sessions.require(worker_id, ticket, touch=False).mode = "remote"
+            return {
+                "opened": True, "mode": "remote", "ticket": ticket,
+                "idle_timeout_seconds": LOGIN_SESSION_IDLE_SECONDS,
+                "source_width": int(result.get("source_width") or 1920),
+                "source_height": int(result.get("source_height") or 1080),
+            }
         if not _worker_has_configured_proxy(worker):
             raise HTTPException(409, PROXY_LOGIN_REQUIRED)
 
