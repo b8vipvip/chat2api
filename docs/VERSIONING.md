@@ -5,9 +5,9 @@ chat2api 同时包含服务端 Python 包、分层运行时/控制台、Chrome B
 ## 当前版本面
 
 - Python package：`0.7.1`
-- Server runtime / console：`0.22.66`
-- Chrome Bridge wire protocol：`0.8.1`
-- Chrome Bundle / manifest：`0.8.28`
+- Server runtime / console：`0.22.108`
+- Chrome Bridge：`0.22.108`
+- Chrome Bundle / manifest：`0.22.108`
 - Realtime Voice protocol：`chat2api-live-v1`
 - 生产入口：`app.entry:app`
 
@@ -19,7 +19,7 @@ chat2api 同时包含服务端 Python 包、分层运行时/控制台、Chrome B
 
 - **Python package version**：Python 发布/安装层版本，必须与 `app.__version__` 和 `pyproject.toml` 一致。
 - **Server runtime / console version**：最终 `app.entry:app` 在全部兼容层安装完成后的运行时版本。
-- **Chrome Bridge wire protocol version**：服务端与浏览器扩展之间的兼容协议版本。
+- **Chrome Bridge version**：服务端与浏览器扩展之间的兼容协议版本。
 - **Chrome Bundle version**：`chrome_extension/manifest.json` 中实际交付的浏览器扩展包版本。
 - **Realtime Voice protocol version**：外部实时语音客户端所依赖的 wire protocol 版本；当前为 chat2api 自定义协议，不等同于 OpenAI Realtime API wire protocol。
 
@@ -39,14 +39,14 @@ GET /version
   "contract_version": 1,
   "server": {
     "package_version": "0.7.1",
-    "runtime_version": "0.22.66",
-    "expected_runtime_version": "0.22.66",
+    "runtime_version": "0.22.108",
+    "expected_runtime_version": "0.22.108",
     "entrypoint": "app.entry:app",
     "runtime_aligned": true
   },
   "chrome_bridge": {
     "version": "0.8.1",
-    "bundle_version": "0.8.28",
+    "bundle_version": "0.22.108",
     "multimodal_revision": 85
   },
   "protocols": {
