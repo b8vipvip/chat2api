@@ -182,7 +182,9 @@ jobs:
           assert "managerDeviceV124" not in device_ui
           device_header = device_ui.split("id=\"linuxDeviceTableV124\"", 1)[1].split("</thead>", 1)[0]
           assert "<th>状态</th>" in device_header
-          assert "<th>ChatGPT</th>" not in device_header
+          assert "<th>Worker ID</th>" in device_header
+          assert "<th>ChatGPT</th>" in device_header
+          assert "<th>Extension</th>" in device_header
           manager = device_ui.split("function renderManager()", 1)[1].split("function renamePairingHeader", 1)[0]
           assert "<th>代理</th>" not in manager
           assert "<th>ChatGPT</th>" in manager
@@ -271,7 +273,9 @@ jobs:
           assert v124.count('data-diagnostics=') >= 2
           assert v124.count('诊断日志') >= 2
           device_header = v124.split('id="linuxDeviceTableV124"', 1)[1].split('</thead>', 1)[0]
-          assert '<th>ChatGPT</th>' not in device_header
+          assert '<th>Worker ID</th>' in device_header
+          assert '<th>ChatGPT</th>' in device_header
+          assert '<th>Extension</th>' in device_header
           manager = v124.split('function renderManager()', 1)[1].split('function renamePairingHeader', 1)[0]
           assert '<th>代理</th>' not in manager
           assert '增加 Worker' in v124
