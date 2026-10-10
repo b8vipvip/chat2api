@@ -7,7 +7,7 @@ def source(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8")
 
 
-def test_device_table_owns_only_device_actions_and_worker_version() -> None:
+def test_unified_linux_worker_rows_preserve_device_actions_and_worker_version() -> None:
     ui = source("app/admin_linux_device_authority_v124.js")
     assert "管理设备 Worker" not in ui
     assert "manageDeviceWorkersV124" not in ui
@@ -16,7 +16,10 @@ def test_device_table_owns_only_device_actions_and_worker_version() -> None:
     render_device = ui.split("function renderDevices()", 1)[1].split("function renderManager()", 1)[0]
     assert 'data-worker-action="upgrade"' in render_device
     assert 'data-worker-action="initialize"' not in render_device
-    assert "data-login-worker" not in render_device
+    assert "data-login-worker" in render_device
+    assert "data-worker-login-edit" in render_device
+    assert "data-linux-worker-id" in render_device
+    assert "Worker ID</th>" in ui
     assert "data-diagnostics" in render_device
     assert "管理Worker" in render_device
 
