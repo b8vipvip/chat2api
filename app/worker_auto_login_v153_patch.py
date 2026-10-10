@@ -358,6 +358,11 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
                             "attempt_id": otp_request,
                             "code": totp_code(profile["totp_secret"]),
                         })
+                    else:
+                        await registry.send(client_id, {
+                            "type": "worker.login.totp_unavailable.v154",
+                            "attempt_id": otp_request,
+                        })
                 except (ValueError, RuntimeError, TypeError):
                     attempt["status"] = "manual_required"
 
