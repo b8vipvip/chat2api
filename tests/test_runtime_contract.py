@@ -138,7 +138,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     assert '{key: "occupancy", label: "请求 / 备用窗口"}' in columns_script
     assert 'button.id = "extensionColumnSettingsButton"' in columns_script
     assert 'document.documentElement.dataset.chat2apiWorkerListSingleRenderer = "1"' in columns_script
-    assert 'const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys", "occupied_windows"])' in columns_script
+    assert 'const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys", "occupied_windows", "version", "network"])' in columns_script
 
     overview_payload = client.get("/api/admin/overview").json()
     assert overview_payload["version"] == SERVER_RUNTIME_VERSION
