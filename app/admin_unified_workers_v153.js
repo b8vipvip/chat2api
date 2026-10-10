@@ -35,6 +35,7 @@
     const codes=Array.isArray(data.pairing_codes)?data.pairing_codes:[];
     const byClient=new Map(clients.map(c=>[String(c.client_id||""),c]));
     const groups=new Map();
+    const pairedClientIds=new Set();
     for(const code of codes){
       const client=byClient.get(String(code.bound_client_id||""));
       if(!client)continue;
@@ -43,9 +44,11 @@
       if(!groups.has(id))groups.set(id,{id,name:code.name||client.name||id,clients:[],lastSeen:code.last_paired_at||"",paired:true});
       const group=groups.get(id);
       group.name=code.name||group.name;
-      group.clients.push(client);
+      if(!group.clients.some(row=>row.client_id===client.client_id))group.clients.push(client);
+      pairedClientIds.add(String(client.client_id||""));
     }
     for(const client of clients){
+      if(pairedClientIds.has(String(client.client_id||"")))continue;
       const id=String(client.device_id||client.metadata?.device_id||client.client_id||"");
       if(!id)continue;
       if(!groups.has(id))groups.set(id,{id,name:client.device_name||client.name||id,clients:[],lastSeen:"",paired:false});
