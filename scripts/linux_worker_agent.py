@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 import websockets
 
 from linux_worker_proxy import ProxyConfigError, build_xray_config
-from linux_worker_remote_login import capture_frame, close_session, inject_worker_binding, open_session, send_input, session_active
+from linux_worker_remote_login import capture_frame, close_session, inject_worker_binding, open_session, open_remote_session, send_input, session_active
 
 
 AGENT_VERSION = "0.3.4"
@@ -47,6 +47,7 @@ ALLOWED_COMMANDS = {
     "test_proxy",
     "apply_proxy_config",
     "open_login_session",
+    "open_remote_session",
     "close_login_session",
     "login_session_frame",
     "login_session_input",
@@ -59,6 +60,7 @@ IMPLEMENTED_COMMANDS = {
     "test_proxy",
     "apply_proxy_config",
     "open_login_session",
+    "open_remote_session",
     "close_login_session",
     "login_session_frame",
     "login_session_input",
@@ -286,6 +288,8 @@ def run_allowed(command: str, arguments: dict[str, Any] | None = None) -> dict[s
         if not proxy.get("ok"):
             return {"ok": False, "error": "proxy_required_for_login", "proxy": proxy}
         return open_session()
+    if command == "open_remote_session":
+        return open_remote_session()
     if command == "close_login_session":
         return close_session()
     if command == "login_session_frame":
