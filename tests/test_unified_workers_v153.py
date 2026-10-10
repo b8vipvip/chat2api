@@ -63,7 +63,10 @@ def test_unified_console_uses_single_platform_grouping() -> None:
     assert "linuxNav.remove()" in unified
     assert "linuxPanel" in unified
     assert "data-linux-worker-id" in linux
-    assert "Worker ID</th><th>设备 / Slot" in linux
+    assert 'id="linuxDeviceTableV124"' in linux
+    assert 'id="linuxWorkerTableV155"' in linux
+    assert 'id="windowsDeviceTableV155"' in unified
+    assert 'byId("workerGroup-linux").appendChild(linuxWorkers)' in unified
     assert "data-worker-login-edit" in linux
     assert "data-worker-login-edit" in windows
     assert 'row.metadata?.linux_worker_id' in windows
