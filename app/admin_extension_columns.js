@@ -333,6 +333,7 @@
         renderPairings(Array.isArray(data.pairing_codes) ? data.pairing_codes : []);
         renderWorkerRows(extensionSnapshot, truthSnapshot);
         globalThis.__chat2apiWindowsSnapshotV156 = {at:Date.now(), data};
+        document.dispatchEvent(new Event("chat2api:extensions-loaded"));
         if (typeof globalThis.status === "function") status(`v${document.documentElement.dataset.chat2apiRuntimeVersion || "0.22.102"}`, "muted");
         return data;
       } catch (error) {
