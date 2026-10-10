@@ -61,7 +61,7 @@
 
   async function refreshAll(force=false){
     try{const [devices,legacy,extensions]=await Promise.all([api("/api/admin/linux-devices"),api("/api/admin/linux-legacy-records"),api("/api/admin/extensions").catch(()=>({clients:[]}))]);state.devices=Array.isArray(devices.data)?devices.data:[];state.extensions=Array.isArray(extensions.clients)?extensions.clients:[];renderDevices();renderWorkers();renderManager();const count=Number(legacy.worker_count||0)+Number(legacy.installation_count||0);const purge=document.getElementById("purgeLegacyLinuxV124");if(purge){purge.style.display=count?"":"none";purge.textContent=count?`清理旧 Linux 数据（${count}）`:"清理旧 Linux 数据";}}
-    catch(error){const body=document.getElementById("linuxDeviceRowsV124");if(body)body.innerHTML=`<tr><td colspan="8">${esc(error.message)}</td></tr>`;}
+    catch(error){const body=document.getElementById("linuxDeviceRowsV124");if(body)body.innerHTML=`<tr><td colspan="10">${esc(error.message)}</td></tr>`;}
   }
   function renderDevices(){
     const body=document.getElementById("linuxDeviceRowsV124");
@@ -100,8 +100,8 @@
         const account=String(ext.account_type||ext.metadata?.account_type||b.account_type||"unknown").toLowerCase();
         const accountLabel=account==="free"?"Free":account==="paid"?"付费":"未知";
         const capacity=ext.metadata?.capacity||{};
-        const running=ext.busy===true?"忙碌":Number.isFinite(Number(capacity.active_requests))?String(capacity.active_requests):"-";
-        const reserve=Number.isFinite(Number(capacity.ready_spares))?String(capacity.ready_spares):"-";
+        const running=ext.busy===true?"忙碌":capacity.active_requests!=null && Number.isFinite(Number(capacity.active_requests))?String(capacity.active_requests):"-";
+        const reserve=capacity.ready_spares!=null && Number.isFinite(Number(capacity.ready_spares))?String(capacity.ready_spares):"-";
         const version=String(w.agent_version||"-");
         const bundle=String(w.chrome_bridge_version||"-");
         const proxy=proxyView(w);
