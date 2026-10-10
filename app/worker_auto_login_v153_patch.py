@@ -329,19 +329,19 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
             previous = runtime(worker_id)
             active = previous.get("status") in {"opening", "automating", "waiting_otp", "manual_required"}
             attempt_id = str(previous.get("id") or "") if active else secrets.token_urlsafe(12)
-            if active:
-                # Cancel all credential submission before surfacing the tab
-                # to a human; cancellation and open are ordered on the socket.
-                await registry.send(client_id, {
-                    "type": "worker.login.cancel.v154",
-                    "attempt_id": attempt_id,
-                })
-            else:
+            if not active:
                 attempts[worker_id] = {
                     "id": attempt_id, "monotonic": time.monotonic(),
                     "at": int(time.time()), "started_at_ms": int(time.time() * 1000),
                 }
             try:
+                if active:
+                    # Cancel all credential submissions before foregrounding
+                    # the login window; commands remain socket ordered.
+                    await registry.send(client_id, {
+                        "type": "worker.login.cancel.v154",
+                        "attempt_id": attempt_id,
+                    })
                 await registry.send(client_id, {
                     "type": "worker.login.open.v153",
                     "worker_id": worker_id,
