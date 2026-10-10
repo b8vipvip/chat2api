@@ -131,6 +131,12 @@ def test_device_tables_and_worker_tables_have_separate_owners():
     header = linux.split('id="linuxDeviceTableV124"',1)[1].split('</thead>',1)[0]
     assert '<th>Worker ID</th>' not in header
     assert '<th>ChatGPT</th>' not in header
+    assert '<th>安装命令</th>' not in header
+    assert '<th>网络</th>' not in header
+    worker_header = linux.split('id="linuxWorkerTableV155"',1)[1].split('</thead>',1)[0]
+    assert '<th>版本</th>' not in worker_header
+    assert '<th>网络</th>' not in worker_header
+    assert 'data-device-upgrade' in linux
 
 
 def test_console_javascript_syntax():

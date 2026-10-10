@@ -11,7 +11,7 @@ def source() -> str:
 
 def test_column_layout_supports_visibility_order_and_v2_to_v3_persistence():
     text = source()
-    assert 'const VERSION = "0.22.109-worker-list-v152"' in text
+    assert 'const VERSION = "0.22.109-worker-list-v156"' in text
     assert 'const COLUMN_SCHEMA_REVISION = 152' in text
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v3"' in text
     assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2"' in text
@@ -34,12 +34,10 @@ def test_column_layout_uses_one_canonical_semantic_schema():
     expected = (
         ("client_id", "Worker ID"),
         ("device_id", "设备标识"),
-        ("version", "版本"),
         ("account_type", "账户类型"),
         ("status", "状态"),
         ("worker_settings", "并发 / 备用设置"),
         ("last_seen", "最后在线"),
-        ("network", "网络"),
         ("chatgpt", "ChatGPT"),
         ("actions", "操作"),
         ("device_name", "设备名称"),
@@ -62,7 +60,7 @@ def test_column_layout_migrates_only_still_supported_historical_cells():
     text = source()
     assert '["platform", "worker_settings"]' in text
     assert '["concurrency", "bound_api_keys"]' not in text
-    assert 'const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys", "occupied_windows"])' in text
+    assert 'const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys", "occupied_windows", "version", "network"])' in text
     assert 'const key = LEGACY_KEY_MAP.get(original) || original' in text
     assert 'if (REMOVED_KEYS.has(original)) continue' in text
     assert 'if (!KNOWN_KEYS.has(key) || seen.has(key)) continue' in text

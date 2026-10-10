@@ -18,7 +18,9 @@ def test_linux_device_rows_are_physical_device_level_only() -> None:
     assert "state.devices.map(" in device
     assert "workers.forEach" not in device
     assert "data-linux-device-id" in device
-    assert "data-manage-device" in device
+    assert "data-device-upgrade" in device
+    assert "data-device-add-worker" in device
+    assert "data-manage-device" not in device
     assert 'data-worker-action="initialize"' not in device
     assert "data-login-worker" not in device
     assert "data-diagnostics" not in device
@@ -30,8 +32,8 @@ def test_linux_worker_list_owns_worker_actions_without_manager_modal_duplication
     manager = ui.split("function renderManager()", 1)[1].split("function renamePairingHeader", 1)[0]
     assert 'id="linuxWorkerTableV155"' in ui
     assert "data-linux-worker-id" in workers
-    for action in ('data-worker-action="initialize"', 'data-worker-action="upgrade"',
-                   'data-login-worker', 'data-diagnostics', 'data-worker-login-edit'):
+    for action in ('data-worker-action="initialize"', 'data-linux-worker-enable',
+                   'data-login-worker', 'data-diagnostics', 'data-worker-login-edit', 'data-linux-worker-delete'):
         assert action in workers
         assert action not in manager
     assert "远程</button>" in workers
