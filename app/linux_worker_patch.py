@@ -227,7 +227,10 @@ def install_linux_worker_patch(app: FastAPI) -> FastAPI:
         worker = worker_exists(worker_id)
         # Remote viewing must neither navigate Chrome to /auth/login nor
         # require a proxy test; the existing Xvfb screen is the target.
-        body = await request.json()
+        try:
+            body = await request.json()
+        except ValueError:
+            body = {}
         mode = str(body.get("mode") or "login") if isinstance(body, dict) else "login"
         if mode not in {"login", "remote"}:
             raise HTTPException(400, "Unsupported remote session mode")
