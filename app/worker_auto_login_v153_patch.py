@@ -30,6 +30,8 @@ BASE32 = re.compile(r"^[A-Z2-7]+=*$")
 COOLDOWN_SECONDS = 300
 RECOVERY_TIMEOUT_SECONDS = 180
 OBSERVATION_MAX_AGE_MS = 45000
+MAX_RECOVERY_FAILURES = 3
+FAILURE_WINDOW_SECONDS = 1800
 
 
 def normalize_totp(value: str) -> str:
@@ -138,7 +140,18 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
     linux = app.state.linux_workers
     attempts: dict[str, dict[str, Any]] = {}
     observations: dict[str, tuple[int, int]] = {}
+    failures: dict[str, list[float]] = {}
     lock = asyncio.Lock()
+
+    def failure_count(worker_id: str) -> int:
+        now = time.monotonic()
+        rows = [stamp for stamp in failures.get(worker_id, []) if now - stamp < FAILURE_WINDOW_SECONDS]
+        failures[worker_id] = rows
+        return len(rows)
+
+    def record_failure(worker_id: str) -> None:
+        failure_count(worker_id)
+        failures.setdefault(worker_id, []).append(time.monotonic())
 
     def secure_extension_socket(client_id: str) -> bool:
         """Do not send login credentials over a plaintext remote WebSocket."""
@@ -190,13 +203,15 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
         if attempt and attempt.get("status") in {"starting", "opening", "automating", "waiting_otp", "manual_required"}:
             if time.monotonic() - float(attempt.get("monotonic") or 0) > RECOVERY_TIMEOUT_SECONDS:
                 attempt["status"] = "timeout"
+                record_failure(worker_id)
         return attempt or {}
 
     def view(worker_id: str) -> dict[str, Any]:
         attempt = runtime(worker_id)
         return {**vault.public(worker_id), "runtime": attempt.get("status", "idle"),
                 "last_attempt_at": attempt.get("at"),
-                "attempt_id": attempt.get("id")}
+                "attempt_id": attempt.get("id"),
+                "recent_failures": failure_count(worker_id)}
 
     async def dispatch(worker_id: str, *, forced: bool = False) -> dict[str, Any]:
         profile = vault.get(worker_id)
@@ -211,6 +226,9 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
             age = now - float(latest.get("monotonic") or 0)
             if latest.get("status") in {"starting", "opening", "automating", "waiting_otp", "manual_required"}:
                 return {"queued": False, "reason": "in_progress", "status": latest["status"]}
+            if not forced and failure_count(worker_id) >= MAX_RECOVERY_FAILURES:
+                latest["status"] = "paused"
+                return {"queued": False, "reason": "max_failures", "status": "paused"}
             if not forced and age < COOLDOWN_SECONDS:
                 return {"queued": False, "reason": "cooldown", "status": latest.get("status", "cooldown")}
             attempt_id = secrets.token_urlsafe(12)
@@ -285,6 +303,7 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
         vault.put(worker_id, {"username": username, "password": password,
                               "totp_secret": seed, "enabled": body.get("enabled") is not False})
         attempts.pop(worker_id, None)
+        failures.pop(worker_id, None)
         return view(worker_id)
 
     @app.delete("/api/admin/worker-login/{worker_id}")
@@ -292,6 +311,7 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
         admin(request)
         vault.remove(worker_id)
         attempts.pop(worker_id, None)
+        failures.pop(worker_id, None)
         return {"deleted": True}
 
     @app.post("/api/admin/worker-login/{worker_id}/trigger")
@@ -318,6 +338,8 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
         }:
             if attempt.get("status") in {"opening", "starting", "automating", "waiting_otp", "manual_required"}:
                 attempt["status"] = ack_state
+                if ack_state == "failed":
+                    record_failure(worker_id)
 
         # On-demand OTP: an authenticated, bound Worker may request only its own
         # 6-digit current code while its matching recovery attempt is active.
@@ -352,6 +374,7 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
             # A stale cached ready must never mark a new login attempt complete.
             if attempt and checked_at >= int(attempt.get("started_at_ms") or 0):
                 attempt["status"] = "logged_in"
+                failures.pop(worker_id, None)
             return
 
         confidence = str(metadata.get("chatgpt_login_confidence") or "").lower()
