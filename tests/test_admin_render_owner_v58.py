@@ -79,12 +79,10 @@ def test_canonical_worker_header_and_rows_use_same_keys() -> None:
     expected = [
         "client_id",
         "device_id",
-        "version",
         "account_type",
         "status",
         "worker_settings",
         "last_seen",
-        "network",
         "chatgpt",
         "actions",
         "device_name",
@@ -96,7 +94,7 @@ def test_canonical_worker_header_and_rows_use_same_keys() -> None:
     assert '{key: "bound_api_keys",' not in columns
     assert '{key: "occupied_windows",' not in columns
     assert 'data-chat2api-column-key="bound_api_keys"' not in columns
-    assert 'const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys", "occupied_windows"])' in columns
+    assert 'const REMOVED_KEYS = new Set(["concurrency", "reserve_windows", "bound_api_keys", "occupied_windows", "version", "network"])' in columns
     assert 'const LEGACY_KEY_MAP = new Map([["platform", "worker_settings"]])' in columns
     assert '旧并发列（已合并）' not in columns
     assert '旧备用窗口列（已合并）' not in columns

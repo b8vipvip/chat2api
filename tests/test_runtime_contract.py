@@ -128,7 +128,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     assert "MutationObserver" in script
 
     columns_script = client.get(ADMIN_EXTENSION_COLUMNS_ASSET).text
-    assert 'const VERSION = "0.22.110-worker-list-v152"' in columns_script
+    assert 'const VERSION = "0.22.110-worker-list-v156"' in columns_script
     assert 'const COLUMN_SCHEMA_REVISION = 152' in columns_script
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v3"' in columns_script
     assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2"' in columns_script

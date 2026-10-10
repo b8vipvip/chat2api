@@ -42,7 +42,8 @@ def test_v124_console_is_not_a_hidden_legacy_table_or_action_relay():
     assert '新增设备' in source
     assert '管理设备 Worker' not in source
     assert '<th>Worker版本</th>' in source
-    assert 'data-manage-device' in source
+    assert 'data-device-upgrade' in source
+    assert 'data-device-add-worker' in source
     assert 'data-proxy-worker' in source
     assert '⚙' in source
     assert 'relayLegacyAction' not in source
