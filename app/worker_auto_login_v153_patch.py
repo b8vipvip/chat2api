@@ -252,6 +252,7 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
                     "password": profile["password"],
                     "started_at_ms": attempts[worker_id]["started_at_ms"],
                 })
+            attempts[worker_id]["status"] = "automating" if automated else "opening"
             try:
                 await registry.send(client_id, command)
             except Exception:
