@@ -78,6 +78,10 @@ def test_console_startup_no_duplicate_three_second_linux_refresh():
     assert 'document.hidden' in unified
     assert '__chat2apiWindowsSnapshotV156' in unified
     assert '__chat2apiWindowsSnapshotV156' in windows
+    legacy_health = source("app/admin_v21_6.js")
+    assert 'dataset.chat2apiWorkerListSingleRenderer === "1"' in legacy_health
+    assert 'return;  // Canonical v156 table owns every column' in legacy_health
+    assert '__chat2apiWindowsSnapshotV156' in legacy_health
 
 
 def test_linux_revocation_does_not_look_like_active_worker():
