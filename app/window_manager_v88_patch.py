@@ -73,6 +73,8 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
     registry = app.state.registry
     sessions = app.state.admin_sessions
     api_keys = getattr(app.state, "api_keys", None)
+    refresh_lock = asyncio.Lock()
+    refresh_task: asyncio.Task[tuple[set[str], set[str]]] | None = None
 
     def require_admin(request: Request) -> None:
         if not sessions.authenticate(request.cookies.get(SESSION_COOKIE)):
@@ -135,6 +137,25 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
                 break
             await asyncio.sleep(0.04)
         return verified, attempted
+
+    async def shared_live_truth() -> tuple[set[str], set[str]]:
+        """Join overlapping admin probes instead of sending duplicate Chrome commands.
+
+        Each independent completed refresh still needs a newer snapshot. An
+        in-flight refresh can be shared only while that same proof is pending.
+        """
+        nonlocal refresh_task
+        async with refresh_lock:
+            if refresh_task is None or refresh_task.done():
+                refresh_task = asyncio.create_task(refresh_live_truth())
+            current = refresh_task
+        try:
+            return await asyncio.shield(current)
+        finally:
+            if current.done():
+                async with refresh_lock:
+                    if refresh_task is current:
+                        refresh_task = None
 
     def window_rows(verified: set[str], attempted: set[str]) -> dict[str, Any]:
         active: list[dict[str, Any]] = []
@@ -254,7 +275,7 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
     @app.get("/api/admin/window-manager")
     async def admin_window_manager(request: Request) -> dict[str, Any]:
         require_admin(request)
-        verified, attempted = await refresh_live_truth()
+        verified, attempted = await shared_live_truth()
         return window_rows(verified, attempted)
 
     @app.post("/api/admin/window-manager/{client_id}/{window_id}/capture")

@@ -26,6 +26,10 @@
   let renderInFlight = null;
   let extensionSnapshot = null;
   let truthSnapshot = null;
+  // Last *verified* physical standby observations, never configured max_windows.
+  // A timed-out probe must not erase valid truth, and cached truth is labeled stale.
+  const verifiedStandby = new Map();
+  const STANDBY_GRACE_MS = 45000;
   let canonicalizing = false;
   let repairQueued = false;
 
@@ -210,17 +214,49 @@
 
   function truthByClient(payload) {
     const result = new Map();
+    const now = Date.now();
     const authoritative = Number(payload?.truth_revision || 0) >= 89;
+    const reportedIds = new Set();
     for (const worker of Array.isArray(payload?.workers) ? payload.workers : []) {
       const id = String(worker?.client_id || "");
       if (!id) continue;
-      const count = Number(worker?.standby_window_count);
-      result.set(id, {
-        authoritative,
-        liveVerified: authoritative && worker?.live_verified === true,
-        standby: Number.isFinite(count) ? Math.max(0, count) : null,
-        status: String(worker?.truth_status || "unverified"),
-      });
+      reportedIds.add(id);
+      const status = String(worker?.truth_status || "unverified");
+      const countRaw = worker?.standby_window_count;
+      const liveVerified = authoritative && worker?.live_verified === true
+        && worker?.chatgpt_routing_ready === true
+        && countRaw !== null && countRaw !== undefined
+        && Number.isFinite(Number(countRaw)) && Number(countRaw) >= 0;
+      if (liveVerified) {
+        const standby = Math.max(0, Number(countRaw));
+        const previous = verifiedStandby.get(id);
+        const snapshotAt = Number(worker?.snapshot_updated_at_ms || 0);
+        // Ignore an out-of-order response with an older physical snapshot.
+        if (previous && snapshotAt > 0 && previous.snapshotAt > snapshotAt) {
+          result.set(id, {liveVerified:false, standby:previous.standby, status:"last-verified"});
+        } else {
+          verifiedStandby.set(id, {standby, at:now, snapshotAt});
+          result.set(id, {liveVerified:true, standby, status:"verified"});
+        }
+      } else if (status === "refresh-timeout" || status === "unverified") {
+        // A timeout does not establish zero (or any new count).
+        const previous = verifiedStandby.get(id);
+        if (previous && now - previous.at <= STANDBY_GRACE_MS)
+          result.set(id, {liveVerified:false, standby:previous.standby, status:"last-verified"});
+      } else {
+        // Offline, revoked, login-required or unsupported: never reuse cached truth.
+        verifiedStandby.delete(id);
+      }
+    }
+    if (!payload) {
+      // Transport/API error: the extension list still decides whether a Worker is online.
+      for (const [id, previous] of verifiedStandby) {
+        if (now - previous.at <= STANDBY_GRACE_MS)
+          result.set(id, {liveVerified:false, standby:previous.standby, status:"last-verified"});
+      }
+    }
+    for (const [id, previous] of verifiedStandby) {
+      if (now - previous.at > STANDBY_GRACE_MS) verifiedStandby.delete(id);
     }
     return result;
   }
@@ -231,12 +267,17 @@
     const queueRaw = capacity.queued_requests ?? 0;
     const used = Number.isFinite(Number(usedRaw)) ? Math.max(0, Number(usedRaw)) : 0;
     const queued = Number.isFinite(Number(queueRaw)) ? Math.max(0, Number(queueRaw)) : 0;
-    const standbyKnown = info?.liveVerified === true && Number.isFinite(Number(info?.standby));
-    const standby = standbyKnown ? Math.max(0, Number(info.standby)) : null;
-    const standbyText = standbyKnown ? String(standby) : "?";
+    const enabled = row?.connection_enabled !== false && row?.online === true;
+    const standbyKnown = enabled && info?.liveVerified === true
+      && info?.standby != null && Number.isFinite(Number(info.standby));
+    const lastVerified = enabled && !standbyKnown && info?.status === "last-verified"
+      && info?.standby != null && Number.isFinite(Number(info.standby));
+    const standbyText = standbyKnown || lastVerified ? String(Math.max(0, Number(info.standby))) : "?";
+    const color = standbyKnown ? "#22c55e" : "#f59e0b";
+    const label = lastVerified ? ' <small data-chat2api-standby-stale="1" style="font-size:11px">上次核验</small>' : "";
     return {
-      html: `${used} / <span data-chat2api-live-standby-count="1" style="${standbyKnown ? "color:#22c55e" : "color:#f59e0b"};font-weight:700">${standbyText}</span>${queued > 0 ? ` · 排队 ${queued}` : ""}`,
-      title: `正在执行请求 ${used}；备用窗口 ${standbyText}${standbyKnown ? "（实时物理核验，已排除正在接待及5分钟租约窗口）" : "（尚未实时核验）"}${queued > 0 ? `；排队 ${queued}` : ""}`,
+      html: `${used} / <span data-chat2api-live-standby-count="1" data-chat2api-standby-source="${standbyKnown ? "live" : lastVerified ? "cached" : "unknown"}" style="color:${color};font-weight:700">${standbyText}</span>${label}${queued > 0 ? ` · 排队 ${queued}` : ""}`,
+      title: `正在执行请求 ${used}；备用窗口 ${standbyText}${standbyKnown ? "（实时物理核验，已排除正在接待及5分钟租约窗口）" : lastVerified ? "（上次核验成功的数量，本次尚未获得实时数据；此值不可用于实时调度判断）" : "（尚未实时核验）"}${queued > 0 ? `；排队 ${queued}` : ""}`,
       cls: used > 0 ? "warnText" : "muted",
     };
   }
@@ -318,7 +359,8 @@
   }
 
   async function loadCanonicalExtensions(force = false) {
-    if (renderInFlight && !force) return renderInFlight;
+    // Coalesce explicit and automatic refreshes: older replies cannot overwrite newer truth.
+    if (renderInFlight) return renderInFlight;
     const task = (async () => {
       try {
         const [data, truth] = await Promise.all([
