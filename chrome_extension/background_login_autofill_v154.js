@@ -28,7 +28,8 @@
   // Runs in Chrome's isolated extension world. No credentials are saved to
   // local/session storage, logged, or passed to a website other than the
   // validated ChatGPT/OpenAI sign-in page.
-  function loginStep(username, password, otp) {
+  function loginStep(username, password, otp, previousAction, previousUrl) {
+    if (location.protocol !== "https:" || !["chatgpt.com", "www.chatgpt.com", "chat.openai.com", "auth.openai.com", "login.openai.com"].includes(location.hostname)) return { phase: "blocked_origin" };
     const visible = node => {
       if (!node || !(node instanceof HTMLElement)) return false;
       const rect = node.getBoundingClientRect();
@@ -36,6 +37,7 @@
       return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
     };
     const first = selectors => selectors.map(selector => [...document.querySelectorAll(selector)].find(visible)).find(Boolean);
+    const alreadySubmitted = phase => previousAction === phase + ":" + location.href && previousUrl === location.href;
     const setValue = (input, value) => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
       if (!setter) return false;
@@ -50,6 +52,9 @@
       if (button) button.click();
       else if (form) form.requestSubmit();
     };
+    const warnings = [...document.querySelectorAll("[role=alert],[aria-live=assertive]")]
+      .filter(visible).map(node => String(node.textContent || "").slice(0, 150)).join(" ");
+    if (/incorrect password|wrong password|invalid password|密码错误|账户或密码不正确/i.test(warnings)) return { phase: "credentials_rejected" };
     if (first(["iframe[src*='captcha']", "[data-sitekey]", ".cf-turnstile"])) {
       return { phase: "challenge" };
     }
@@ -59,12 +64,14 @@
     ]);
     if (codeInput) {
       if (!otp) return { phase: "need_totp" };
+      if (alreadySubmitted("totp_submitted")) return { phase: "awaiting_page" };
       setValue(codeInput, otp);
       submit(codeInput);
       return { phase: "totp_submitted" };
     }
     const passwordInput = first(["input[type='password'][autocomplete='current-password']", "input[type='password']"]);
     if (passwordInput) {
+      if (alreadySubmitted("password_submitted")) return { phase: "awaiting_page" };
       const email = first(["input[type='email']", "input[autocomplete='username']", "input[name='username']"]);
       if (email) setValue(email, username);
       setValue(passwordInput, password);
@@ -73,6 +80,7 @@
     }
     const emailInput = first(["input[type='email']", "input[autocomplete='username']", "input[name='username']"]);
     if (emailInput) {
+      if (alreadySubmitted("email_submitted")) return { phase: "awaiting_page" };
       setValue(emailInput, username);
       submit(emailInput);
       return { phase: "email_submitted" };
@@ -81,6 +89,7 @@
       visible(node) && /^(log in|sign in|登录)$/i.test(String(node.innerText || node.textContent || "").trim())
     );
     if (loginControl && /^(chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)$/.test(location.hostname)) {
+      if (alreadySubmitted("login_opened")) return { phase: "awaiting_page" };
       loginControl.click();
       return { phase: "login_opened" };
     }
@@ -125,10 +134,10 @@
         const injected = await chrome.scripting.executeScript({
           target: { tabId: surface.tab_id },
           func: loginStep,
-          args: [message.username, message.password, currentCode],
+          args: [message.username, message.password, currentCode, lastAction, lastUrl],
         }).catch(() => []);
         const phase = injected?.[0]?.result?.phase || "awaiting_page";
-        if (phase === "challenge") {
+        if (["challenge", "credentials_rejected", "blocked_origin"].includes(phase)) {
           await report(attemptId, "manual_required");
           return;
         }
