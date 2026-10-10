@@ -92,8 +92,8 @@ def test_v144_is_final_server_and_worker_boundary() -> None:
 
 
 def test_v144_formal_release_contract_is_v02297() -> None:
-    assert SERVER_RUNTIME_VERSION == "0.22.108"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.108"
+    assert SERVER_RUNTIME_VERSION == "0.22.109"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.109"
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["server"]["runtime_aligned"] is True
     assert "model-evidence-v144" in payload["server"]["feature_revision"]
