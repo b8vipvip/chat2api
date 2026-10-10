@@ -2,7 +2,7 @@
   "use strict";
   const KEY = "__CHAT2API_WORKER_AUTO_LOGIN_V154__";
   if (globalThis[KEY]) return;
-  const state = { active: null, code: null, codeAt: 0 };
+  const state = { active: null, code: null, codeAt: 0, otpUnavailable: false };
   globalThis[KEY] = state;
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   const trustedPage = raw => {
@@ -142,6 +142,10 @@
           return;
         }
         if (phase === "need_totp") {
+          if (state.otpUnavailable) {
+            await report(attemptId, "manual_required");
+            return;
+          }
           if (now - lastCodeRequest > 5000) {
             lastCodeRequest = now;
             await report(attemptId, "waiting_otp", { worker_login_totp_request_attempt_id: attemptId });
@@ -172,11 +176,16 @@
       state.active = null;
       state.code = null;
       state.codeAt = 0;
+      state.otpUnavailable = false;
     }
   }
 
   const previous = handleServerMessage;
   handleServerMessage = async message => {
+    if (message?.type === "worker.login.totp_unavailable.v154") {
+      if (state.active === message.attempt_id) state.otpUnavailable = true;
+      return;
+    }
     if (message?.type === "worker.login.totp.v154") {
       if (state.active === message.attempt_id && /^\d{6}$/.test(String(message.code || ""))) {
         state.code = String(message.code);
