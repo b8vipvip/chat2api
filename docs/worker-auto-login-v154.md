@@ -4,7 +4,7 @@
 
 ## 控制台
 
-在 **Worker管理** 中选择 **Windows Worker** 或 **Linux Worker**，找到对应 Worker ID 的 **自动登录设置**，输入登录邮箱、密码和可选的 Base32 TOTP 验证器密钥，启用自动检测并保存。可点击 **触发登录恢复** 主动尝试。
+在 **Worker管理** 中选择 **Windows Worker** 或 **Linux Worker**，找到对应 Worker ID 的 **自动登录设置**，输入登录邮箱、密码和可选的 Base32 TOTP 验证器密钥，启用自动检测并保存。可点击 **触发登录恢复** 主动尝试；自动流程遇到挑战时，可点击 **人工接管** 停止自动填写并聚焦已有登录窗口。
 
 服务器将密码及 TOTP 种子以 Fernet 加密存入数据目录，分别使用文件权限 `0600` 的数据文件和密钥文件；更推荐通过 `CHAT2API_WORKER_LOGIN_KEY` 在独立密钥管理服务中注入密钥。**同时泄露数据文件和本地密钥文件仍会暴露账号凭据。** 请妥善保护备份、数据卷及管理员会话。
 
@@ -13,7 +13,8 @@
 - `GET /api/admin/worker-login/{worker_id}`：查询非敏感配置标识和恢复状态；
 - `PUT /api/admin/worker-login/{worker_id}`：保存或更新账号配置；
 - `DELETE /api/admin/worker-login/{worker_id}`：删除账号配置；
-- `POST /api/admin/worker-login/{worker_id}/trigger`：手动触发恢复；
+- `POST /api/admin/worker-login/{worker_id}/trigger`：手动触发自动恢复；
+- `POST /api/admin/worker-login/{worker_id}/manual`：停止当前自动填写并打开人工登录窗口；
 - `GET /api/admin/worker-login/{worker_id}/totp`：管理员手动获取当前验证码（响应不缓存）。
 
 ## 自动恢复流程
