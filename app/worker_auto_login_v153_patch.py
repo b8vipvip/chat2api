@@ -270,7 +270,10 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
             if worker_id in attempts:
                 attempts[worker_id]["status"] = "logged_in"
             return
-        checked_at = int(metadata.get("chatgpt_login_checked_at_ms") or 0)
+        try:
+            checked_at = int(metadata.get("chatgpt_login_checked_at_ms") or 0)
+        except (TypeError, ValueError):
+            checked_at = 0
         fresh = 0 <= time.time() * 1000 - checked_at <= 45000
         confidence = str(metadata.get("chatgpt_login_confidence") or "").lower()
         if not fresh or state != "login_required" or confidence not in {"high", "medium"}:
@@ -279,11 +282,12 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
         observations[worker_id] = observations.get(worker_id, 0) + 1
         if observations[worker_id] < 2:
             return
-        if not vault.get(worker_id) or not vault.get(worker_id).get("enabled"):
-            return
         try:
-            await dispatch(worker_id)
-        except (HTTPException, RuntimeError):
+            profile = vault.get(worker_id)
+            if profile and profile.get("enabled"):
+                await dispatch(worker_id)
+        except (HTTPException, RuntimeError, ValueError):
+            # Corrupt profiles and offline Workers must not take down heartbeats.
             pass
 
     registry.touch = touch_with_relogin
