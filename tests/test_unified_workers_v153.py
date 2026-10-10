@@ -136,4 +136,5 @@ print(json.dumps(sorted({
     assert "/api/admin/worker-login" in paths
     assert "/api/admin/worker-login/{worker_id}" in paths
     assert "/api/admin/worker-login/{worker_id}/trigger" in paths
+    assert "/api/admin/worker-login/{worker_id}/manual" in paths
     assert "/api/admin/worker-login/{worker_id}/totp" in paths
