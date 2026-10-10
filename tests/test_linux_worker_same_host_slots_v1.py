@@ -40,19 +40,23 @@ def test_v127_worker_add_is_direct_and_shares_device_pairing_and_proxy():
 
 def test_v127_device_and_worker_ui_contract():
     ui = (ROOT / "app" / "admin_linux_device_authority_v124.js").read_text(encoding="utf-8")
-    header = ui.split('id="linuxDeviceTableV124"',1)[1].split('</thead>',1)[0]
-    assert '<th>状态</th>' in header
-    # v153 flattens device + per-Profile Worker rows under Worker management.
-    assert '<th>Worker ID</th>' in header
-    assert '<th>ChatGPT</th>' in header
-    assert '<th>Extension</th>' in header
+    device_header = ui.split('id="linuxDeviceTableV124"', 1)[1].split('</thead>', 1)[0]
+    worker_header = ui.split('id="linuxWorkerTableV155"', 1)[1].split('</thead>', 1)[0]
+    assert '<th>设备状态</th>' in device_header
+    assert '<th>Worker数量</th>' in device_header
+    assert '<th>Worker ID</th>' not in device_header
+    assert '<th>ChatGPT</th>' not in device_header
+    assert '<th>Worker ID</th>' in worker_header
+    assert '<th>ChatGPT</th>' in worker_header
     assert 'deviceInstallStatus' in ui
-    manager = ui.split('function renderManager()',1)[1].split('function renamePairingHeader',1)[0]
-    assert '<th>代理</th>' not in manager
-    assert '<th>ChatGPT</th>' in manager
-    assert 'data-worker-action="initialize"' in manager
-    assert 'data-login-worker=' in manager
-    assert 'data-diagnostics=' in manager
+    manager = ui.split('function renderManager()', 1)[1].split('function renamePairingHeader', 1)[0]
+    workers = ui.split('function renderWorkers()', 1)[1].split('function renderManager()', 1)[0]
+    assert 'data-worker-action="initialize"' not in manager
+    assert 'data-login-worker=' not in manager
+    assert 'data-diagnostics=' not in manager
+    assert 'data-worker-action="initialize"' in workers
+    assert 'data-login-worker=' in workers
+    assert 'data-diagnostics=' in workers
 
 
 def test_controller_and_root_helper_parse():
