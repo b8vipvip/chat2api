@@ -185,22 +185,19 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
             if not forced and now - float(latest.get("monotonic") or 0) < COOLDOWN_SECONDS:
                 return {"queued": False, "reason": "cooldown", "status": latest.get("status", "cooldown")}
             attempts[worker_id] = {"monotonic": now, "at": int(time.time()), "status": "starting"}
-            # Secrets are NOT returned to the admin page, logged, or persisted in
-            # registry metadata. Delivery is restricted to the authenticated
-            # extension socket already paired with this exact Worker.
+            # We deliberately DO NOT forward third-party credentials or TOTP
+            # secrets over this channel. Recovery opens the login surface and
+            # requires the operator to complete authentication.
             try:
                 await registry.send(client_id, {
-                    "type": "worker.auto_login.start.v153",
+                    "type": "worker.login.open.v153",
                     "worker_id": worker_id,
-                    "username": profile["username"],
-                    "password": profile["password"],
-                    "totp_secret": profile.get("totp_secret", ""),
                 })
             except Exception:
                 attempts[worker_id]["status"] = "offline"
                 raise HTTPException(503, "自动登录指令发送失败，请检查 Worker 连接") from None
-            attempts[worker_id]["status"] = "sent"
-            return {"queued": True, "status": "sent"}
+            attempts[worker_id]["status"] = "manual_required"
+            return {"queued": True, "status": "manual_required"}
 
     @app.get("/api/admin/worker-login")
     async def list_worker_logins(request: Request) -> dict[str, Any]:
