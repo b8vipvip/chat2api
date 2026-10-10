@@ -218,3 +218,22 @@ def test_missing_totp_uses_interactive_challenge_fallback(tmp_path: Path) -> Non
     client_id, message = registry.sent[-1]
     assert client_id == "windows-1"
     assert message == {"type": "worker.login.totp_unavailable.v154", "attempt_id": attempt}
+
+
+def test_manual_takeover_cancels_autofill_before_opening_interactive_window(tmp_path: Path) -> None:
+    client, _app, registry, _linux = make_client(tmp_path)
+    configured(client, "windows-1")
+    original = client.post("/api/admin/worker-login/windows-1/trigger")
+    assert original.status_code == 200
+    attempt = original.json()["attempt_id"]
+    manual = client.post("/api/admin/worker-login/windows-1/manual")
+    assert manual.status_code == 200, manual.text
+    assert manual.json()["attempt_id"] == attempt
+    cancel, opening = [row[1] for row in registry.sent[-2:]]
+    assert cancel == {"type": "worker.login.cancel.v154", "attempt_id": attempt}
+    assert opening == {
+        "type": "worker.login.open.v153",
+        "worker_id": "windows-1",
+        "attempt_id": attempt,
+    }
+    assert client.get("/api/admin/worker-login/windows-1").json()["runtime"] == "manual_required"
