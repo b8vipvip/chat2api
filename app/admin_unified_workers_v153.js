@@ -269,7 +269,7 @@
       if(selectedType === "windows" && section.classList.contains("active") && !document.querySelector("dialog[open]")){
         refreshWindowsDevices().catch(()=>{});
       }
-      if (selectedType === "linux" && section.classList.contains("active") && !document.querySelector("dialog[open]")) {
+      if (selectedType === "linux" && section.classList.contains("active") && !document.querySelector("dialog[open]") && !document.querySelector("#linuxWorkerListPanelV155 [data-v121-limit-popover]:not([hidden])")) {
         byId("refreshLinuxDevicesV124")?.click();
       }
     }, 5000);
