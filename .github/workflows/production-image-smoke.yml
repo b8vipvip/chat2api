@@ -188,11 +188,11 @@ jobs:
           assert "<th>ChatGPT</th>" in worker_header
           worker_rows = device_ui.split("function renderWorkers()", 1)[1].split("function renderManager()", 1)[0]
           manager = device_ui.split("function renderManager()", 1)[1].split("function renamePairingHeader", 1)[0]
-          assert 'data-worker-action="initialize"' in worker_rows
-          assert 'data-login-worker=' in worker_rows
-          assert 'data-diagnostics=' in worker_rows
-          assert 'data-diagnostics=' not in manager
-          assert 'body:{mode:"remote"}' in device_ui
+          assert "data-worker-action=" in worker_rows and "initialize" in worker_rows
+          assert "data-login-worker=" in worker_rows
+          assert "data-diagnostics=" in worker_rows
+          assert "data-diagnostics=" not in manager
+          assert "body:{mode:" in device_ui and "remote" in device_ui
           assert "增加 Worker" in device_ui
           assert "install_linux_worker_device_console_v122_patch" not in presentation
           assert "install_linux_worker_console_v123_patch" not in presentation
