@@ -5,9 +5,9 @@ chat2api 同时包含服务端 Python 包、分层运行时/控制台、Chrome B
 ## 当前版本面
 
 - Python package：`0.7.1`
-- Server runtime / console：`0.22.108`
-- Chrome Bridge：`0.22.108`
-- Chrome Bundle / manifest：`0.22.108`
+- Server runtime / console：`0.22.109`
+- Chrome Bridge：`0.22.109`
+- Chrome Bundle / manifest：`0.22.109`
 - Realtime Voice protocol：`chat2api-live-v1`
 - 生产入口：`app.entry:app`
 
@@ -39,14 +39,14 @@ GET /version
   "contract_version": 1,
   "server": {
     "package_version": "0.7.1",
-    "runtime_version": "0.22.108",
-    "expected_runtime_version": "0.22.108",
+    "runtime_version": "0.22.109",
+    "expected_runtime_version": "0.22.109",
     "entrypoint": "app.entry:app",
     "runtime_aligned": true
   },
   "chrome_bridge": {
     "version": "0.8.1",
-    "bundle_version": "0.22.108",
+    "bundle_version": "0.22.109",
     "multimodal_revision": 85
   },
   "protocols": {
