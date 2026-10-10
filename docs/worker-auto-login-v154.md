@@ -1,4 +1,4 @@
-# Worker 自动登录与会话恢复（v154，Draft）
+# Worker 自动登录与会话恢复（v0.22.108，实机试运行）
 
 本功能按 **Worker ID** 管理 ChatGPT 账号；适用于已经绑定 Chrome Bridge 的 Windows Worker 与 Linux Worker。Linux 首次创建独立 Chrome Profile、安装并完成 Bridge 绑定仍需人工操作。
 
@@ -36,4 +36,10 @@
 
 ## 未完成验证
 
-本次 PR 有 Python 单元/行为测试、Chrome JS 语法、现有登录探测 VM 测试与 Docker 冒烟测试，但**未对真实 Windows/Linux Chrome 及 ChatGPT 最新登录流程进行端到端操作验证**。实际邮箱/密码页面、TOTP UI、TOTP 时钟同步、扩展后台保活、反向代理 WSS 以及登录成功后恢复 API 请求均需实机确认。若认证页面变更或出现新挑战，只能转人工完成；不能保证所有登录方法都能无人值守。此 PR 在完成实机验证前保持 Draft。
+本次 PR 有 Python 单元/行为测试、Chrome JS 语法、现有登录探测 VM 测试与 Docker 冒烟测试，但**未对真实 Windows/Linux Chrome 及 ChatGPT 最新登录流程进行端到端操作验证**。实际邮箱/密码页面、TOTP UI、TOTP 时钟同步、扩展后台保活、反向代理 WSS 以及登录成功后恢复 API 请求均需实机确认。若认证页面变更或出现新挑战，只能转人工完成；不能保证所有登录方法都能无人值守。本功能随 v0.22.108 发布供实机验证，但未完成 Windows/Linux 全链路实测；在验证前请仅在可回滚环境中启用，优先使用测试账号，准备人工接管与回滚路径。
+
+## 生产服务器升级与回滚
+
+升级前备份服务端的 `.env` 与 `data`，并在 GitHub Release 确认 `v0.22.108` 发布后使用服务端内置更新功能，或在 Git 源码目录执行 `git fetch --tags && git checkout v0.22.108 && docker compose up -d --build`。不要在正在使用的目录直接运行会重置配置或删除持久化卷的安装/清理命令。升级后用 `GET /version` 检查运行时/Chrome Bundle 均为 `0.22.108`，并确认 Worker 重新连接。
+
+如出现兼容问题，停止触发新请求，回滚代码到上一稳定 tag（通常为 `v0.22.107`，以实际部署前记录的版本为准），使用备份和 `docker compose up -d --build` 恢复。数据卷可能发生版本间持久状态变更，回滚前应检查备份及迁移兼容性。不可将 `docker compose down -v` 用于回滚；这会删除持久数据。
