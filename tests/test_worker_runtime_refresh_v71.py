@@ -26,6 +26,17 @@ def test_worker_bundle_formally_seals_revisioned_content_epoch() -> None:
     assert scripts.index("content_network_stream_recovery_v55.js") < scripts.index("content_request_terminal_prompt_v88.js")
 
 
+def test_v71_epoch_marker_and_contract_use_manifest_release() -> None:
+    manifest = json.loads((EXT / "manifest.json").read_text(encoding="utf-8"))
+    version = manifest["version"]
+    marker = (EXT / "content_bundle_marker_v71.js").read_text(encoding="utf-8")
+    contract = (EXT / "content_runtime_contract_v71.js").read_text(encoding="utf-8")
+    preflight = (EXT / "background_runtime_preflight_v48.js").read_text(encoding="utf-8")
+    assert f'bundle: "{version}"' in marker
+    assert f'REQUIRED_BUNDLE = "{version}"' in contract
+    assert f'REQUIRED_BUNDLE = "{version}"' in preflight
+
+
 def test_programmatic_bootstrap_matches_current_text_request_chain() -> None:
     bootstrap = (EXT / "content_bootstrap.js").read_text(encoding="utf-8")
     for name in ("multimodal_main_v78.js", "content_bundle_marker_v71.js", "content_multimodal_v78.js",
