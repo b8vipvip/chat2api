@@ -320,6 +320,32 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
         admin(request)
         return await dispatch(worker_id, forced=True)
 
+    # Windows Chrome Bridge lifecycle management. Commands travel over the
+    # existing authenticated Worker socket; there is no shell execution path.
+    @app.post("/api/admin/extensions/{client_id}/initialize")
+    async def initialize_windows_extension(client_id: str, request: Request) -> dict[str, Any]:
+        admin(request)
+        if client_id not in registry.clients:
+            raise HTTPException(404, "Windows Worker not found")
+        if client_id not in registry.online_client_ids():
+            raise HTTPException(409, "Windows Worker is offline")
+        if linux.worker_for_extension(client_id):
+            raise HTTPException(409, "Linux Worker uses its own initialize endpoint")
+        await registry.send(client_id, {"type": "worker.lifecycle.initialize.v156"})
+        return {"queued": True, "message": "Worker extension restart requested"}
+
+    @app.post("/api/admin/extensions/{client_id}/update")
+    async def check_windows_extension_update(client_id: str, request: Request) -> dict[str, Any]:
+        admin(request)
+        if client_id not in registry.clients:
+            raise HTTPException(404, "Windows Worker not found")
+        if client_id not in registry.online_client_ids():
+            raise HTTPException(409, "Windows Worker is offline")
+        if linux.worker_for_extension(client_id):
+            raise HTTPException(409, "Linux devices update their controller agent")
+        await registry.send(client_id, {"type": "worker.lifecycle.update_check.v156"})
+        return {"queued": True, "message": "Chrome extension update check requested"}
+
     @app.post("/api/admin/worker-login/{worker_id}/manual")
     async def manually_open_worker_login(worker_id: str, request: Request) -> dict[str, Any]:
         admin(request)
