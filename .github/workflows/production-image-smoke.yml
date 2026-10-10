@@ -275,14 +275,17 @@ jobs:
           assert '管理设备 Worker' not in v124
           assert 'Worker版本' in v124
           assert 'data-manage-device' in v124
-          assert v124.count('data-diagnostics=') >= 2
-          assert v124.count('诊断日志') >= 2
           device_header = v124.split('id="linuxDeviceTableV124"', 1)[1].split('</thead>', 1)[0]
-          assert '<th>Worker ID</th>' in device_header
-          assert '<th>ChatGPT</th>' in device_header
-          assert '<th>Extension</th>' in device_header
+          worker_header = v124.split('id="linuxWorkerTableV155"', 1)[1].split('</thead>', 1)[0]
+          assert '<th>Worker ID</th>' not in device_header
+          assert '<th>ChatGPT</th>' not in device_header
+          assert '<th>Worker ID</th>' in worker_header
+          assert '<th>ChatGPT</th>' in worker_header
+          worker_rows = v124.split('function renderWorkers()', 1)[1].split('function renderManager()', 1)[0]
           manager = v124.split('function renderManager()', 1)[1].split('function renamePairingHeader', 1)[0]
-          assert '<th>代理</th>' not in manager
+          assert 'data-diagnostics=' in worker_rows
+          assert 'data-diagnostics=' not in manager
+          assert 'data-login-worker=' in worker_rows
           assert '增加 Worker' in v124
           print(json.dumps({'runtime': payload['server']['runtime_version'], 'worker_bundle': payload['chrome_bridge']['bundle_version'], 'qnbot_recovery_v136': True, 'qnbot_orphan_owner_recovery_v140': True, 'chatgpt_choice_policy_v143': True, 'model_evidence_v144': True, 'worker_runtime_preflight_repair_v145': True, 'routable_standby_semantics_v145': True, 'persistent_window_runtime_preflight_v146': True, 'runtime_ready_standby_semantics_v146': True, 'login_ready_admission_v137': True, 'linux_device_authority_v124': True, 'public_https_origin_v125': True, 'device_controller_v127': True, 'controller_provision_rw_v128': True, 'device_diagnostics_v128': True, 'admin_linux_assets': assets}))
           PY
