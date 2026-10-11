@@ -137,11 +137,14 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
                 fallback_pairing, fallback_name = by_client.get(client_id, ("", ""))
                 linux_worker_id = str(metadata.get("linux_worker_id") or metadata.get("worker_id") or "").strip()
                 resolved = linux_identity_by_client.get(client_id) if client_id not in ambiguous_linux_clients else None
-                if resolved and not linux_worker_id:
-                    # Enrich a copy of the summary; never rewrite live Worker
-                    # telemetry or forge a pairing before login readiness.
+                if resolved:
+                    # Exact Worker-store binding wins over possibly old metadata.
+                    # Enrich a copy; never rewrite live telemetry or forge pairing.
                     linux_worker_id = resolved[0]
                     metadata = {**metadata, "linux_worker_id": linux_worker_id}
+                    row["metadata"] = metadata
+                elif client_id in ambiguous_linux_clients:
+                    metadata = {**metadata, "linux_bridge_binding_conflict": True}
                     row["metadata"] = metadata
                 linux_name = (
                     linux_by_client.get(client_id)
