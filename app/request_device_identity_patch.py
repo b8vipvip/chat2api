@@ -157,6 +157,8 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
         if not isinstance(row, dict):
             return row
         result = dict(row)
+        historical_name = _canonical_label(result.get("device_name"))
+        historical_pairing = str(result.get("device_code_id") or "").strip()
         client_id = str(result.get("worker_client_id") or result.get("client_id") or "").strip()
         if not client_id:
             result.setdefault("device_name", None); result.setdefault("device_code_id", None); result.setdefault("worker_client_id", None)
@@ -201,8 +203,11 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
         if not device_name and linux_identity:
             device_name = _canonical_label(linux_identity.get("device_name"))
         result["worker_client_id"] = client_id
-        result["device_code_id"] = pairing_id or None
-        result["device_name"] = device_name or None
+        # Historical request records can outlive pairing/Worker deletion.
+        # Never erase a stored identity just because the current live registry
+        # no longer knows that Worker.
+        result["device_code_id"] = pairing_id or historical_pairing or None
+        result["device_name"] = device_name or historical_name or None
         if linux_identity:
             result["linux_worker_id"] = linux_identity.get("worker_id") or None
             result["worker_slot"] = linux_identity.get("worker_slot")
