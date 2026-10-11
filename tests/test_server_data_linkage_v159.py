@@ -139,3 +139,8 @@ def test_worker_data_association_source_guards():
     assert 'raw !== null && raw !== undefined' in facade
     assert 'Number(worker?.standby_window_count)' not in facade
     assert 'chatgpt(w,ext)' in linux
+    assert 'linux_bridge_binding_conflict===true' in linux
+    assert 'Bridge 绑定冲突' in linux
+    unified=(ROOT/"app/admin_unified_workers_v153.js").read_text()
+    assert '绑定冲突：' in unified
+    assert 'meta.linux_bridge_binding_conflict!==true' in unified
