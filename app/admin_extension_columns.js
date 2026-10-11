@@ -380,7 +380,7 @@
         renderWorkerRows(extensionSnapshot, truthSnapshot);
         globalThis.__chat2apiWindowsSnapshotV156 = {at:Date.now(), data};
         document.dispatchEvent(new Event("chat2api:extensions-loaded"));
-        if (typeof globalThis.status === "function") status(`v${document.documentElement.dataset.chat2apiRuntimeVersion || "0.22.102"}`, "muted");
+        if (typeof globalThis.status === "function") status(document.documentElement.dataset.chat2apiRuntimeVersion ? `v${document.documentElement.dataset.chat2apiRuntimeVersion}` : "运行时版本未知", "muted");
         return data;
       } catch (error) {
         const {table} = tableParts();
