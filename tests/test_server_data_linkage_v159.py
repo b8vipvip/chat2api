@@ -184,3 +184,13 @@ def test_worker_data_association_source_guards():
     unified=(ROOT/"app/admin_unified_workers_v153.js").read_text()
     assert '绑定冲突：' in unified
     assert 'meta.linux_bridge_binding_conflict!==true' in unified
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node unavailable")
+def test_unified_device_console_v160():
+    run = subprocess.run(
+        ["node", str(ROOT / "tests/unified_device_console_v160.mjs")],
+        capture_output=True, text=True, timeout=20, check=False,
+    )
+    assert run.returncode == 0, run.stderr
+
+

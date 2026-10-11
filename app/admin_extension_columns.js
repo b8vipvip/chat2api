@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.22.114-worker-list-v156";
+  const VERSION = "0.22.115-worker-list-v156";
   const COLUMN_SCHEMA_REVISION = 152;
   const STORAGE_KEY = "chat2api.extensionColumns.v3";
   const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2";
@@ -370,7 +370,7 @@
             return null;
           }),
         ]);
-        extensionSnapshot = (Array.isArray(data.clients) ? data.clients : []).filter(row => !row.metadata?.linux_worker_id && String(row.metadata?.platform || "").toLowerCase() !== "linux");
+        extensionSnapshot = (Array.isArray(data.clients) ? data.clients : []).filter(row => !row.metadata?.linux_worker_id && !row.metadata?.controller_worker_id && row.metadata?.linux_bridge_binding_conflict !== true);
         truthSnapshot = truth;
         renderPairings(Array.isArray(data.pairing_codes) ? data.pairing_codes : []);
         renderWorkerRows(extensionSnapshot, truthSnapshot);

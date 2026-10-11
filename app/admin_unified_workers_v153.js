@@ -28,6 +28,7 @@
     return panel;
   }
   async function refreshWindowsDevices() {
+    if(document.documentElement.dataset.chat2apiUnifiedDeviceConsole==="v160")return;
     const body=byId("windowsDeviceRowsV155");
     if(!body)return;
     const snapshot=globalThis.__chat2apiWindowsSnapshotV156;
@@ -294,5 +295,259 @@
     document.documentElement.dataset.chat2apiUnifiedWorkerConsole = VERSION;
   }
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", boot, {once:true});
+  else boot();
+})();
+
+
+/* Unified equipment and Worker presentation v160.
+ * Existing platform managers remain as hidden event/telemetry owners, not
+ * competing visible tables. All edits use the established authenticated APIs.
+ */
+(() => {
+  "use strict";
+  const KEY="__CHAT2API_UNIFIED_DEVICE_CONSOLE_V160__";
+  if(globalThis[KEY])return;
+  const el=id=>document.getElementById(id);
+  const esc=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const text=value=>String(value??"").trim();
+  const getLinux=()=>globalThis.__CHAT2API_LINUX_DEVICE_AUTHORITY_V124__?.devices||[];
+  let data={clients:[],pairing_codes:[]};
+  let refreshing=null;
+  function aggregate(devices,payload){
+    const groups=new Map(),byPair=new Map(),byClient=new Map(),used=new Set(),ownerByClient=new Map();
+    for(const c of payload?.clients||[])if(text(c.client_id))byClient.set(text(c.client_id),c);
+    const ensure=(key,defaults={})=>{
+      if(!groups.has(key))groups.set(key,{key,id:"",linux:null,codes:[],clients:[],...defaults});
+      return groups.get(key);
+    };
+    const attach=(group,clientId)=>{
+      const id=text(clientId),client=byClient.get(id);
+      if(!client || client.metadata?.linux_bridge_binding_conflict===true)return;
+      if(used.has(id))return;
+      group.clients.push(client);used.add(id);ownerByClient.set(id,group);
+    };
+    const workerById=new Map();
+    for(const d of devices||[]){
+      const id=text(d.device_id);if(!id)continue;
+      const group=ensure("linux:"+id,{id,linux:d});
+      const pairing=text(d.device_pairing_id);
+      if(pairing)byPair.set(pairing,group);
+      for(const w of d.workers||[]){
+        const workerId=text(w.worker_id);if(workerId)workerById.set(workerId,group);
+        attach(group,w.extension_client_id);
+      }
+    }
+    for(const code of payload?.pairing_codes||[]){
+      const pairing=text(code.pairing_id);
+      if(!pairing)continue;
+      const client=byClient.get(text(code.bound_client_id));
+      const physical=text(code.bound_device_id||client?.device_id||client?.metadata?.device_id);
+      const key=physical?"physical:"+physical:
+        (text(code.bound_client_id)?"client:"+text(code.bound_client_id):"pairing:"+pairing);
+      const group=byPair.get(pairing)||ownerByClient.get(text(code.bound_client_id))||ensure(key,{id:physical});
+      if(!group.codes.some(row=>text(row.pairing_id)===pairing))group.codes.push(code);
+      attach(group,code.bound_client_id);
+    }
+    for(const client of payload?.clients||[]){
+      const id=text(client.client_id);if(!id||used.has(id))continue;
+      const meta=client.metadata||{};
+      const workerGroup=meta.linux_bridge_binding_conflict===true?null:workerById.get(text(meta.linux_worker_id));
+      const physical=text(client.device_id||meta.device_id);
+      const group=workerGroup||
+        ensure(physical?"physical:"+physical:"client:"+id,{id:physical||id});
+      attach(group,id);
+      // A conflicting Bridge remains visible for diagnosis, never counted
+      // as a second Linux Worker or silently attached to another device.
+      if(meta.linux_bridge_binding_conflict===true && !group.clients.some(c=>c.client_id===id)){
+        group.clients.push(client);used.add(id);
+      }
+    }
+    return [...groups.values()];
+  }
+  function linuxOnline(worker){
+    if(worker?.revoked_at||worker?.enabled===false)return false;
+    const last=Date.parse(worker?.last_seen_at||"");
+    return Number.isFinite(last)&&Date.now()-last>=0&&Date.now()-last<45000
+      &&["ready","waiting_login","login_checking","waiting_proxy","proxy_checking"].includes(text(worker?.status).toLowerCase());
+  }
+  function systemOf(group){
+    if(group.linux)return "Linux";
+    for(const client of group.clients){
+      const m=client.metadata||{};
+      const p=text(m.platform||m.os||m.os_name||m.system||client.platform).toLowerCase();
+      if(p.includes("linux"))return "Linux";
+      if(p.includes("windows")||p==="win32")return "Windows";
+      if(p.includes("mac"))return "macOS";
+    }
+    return group.clients.length?"未识别":"待识别";
+  }
+  function renderDevice(group){
+    const codes=group.codes;
+    const clients=group.clients;
+    const workers=group.linux?.workers||[];
+    const live=clients.some(c=>c.online===true&&c.connection_enabled!==false) ||
+      workers.some(linuxOnline);
+    const paired=codes.some(c=>c.pairing_status==="paired"||c.paired===true||c.bound_client_id);
+    const disabled=codes.length>0&&codes.every(c=>c.enabled===false);
+    const name=codes[0]?.name||group.linux?.device_name||clients[0]?.device_name||
+      clients[0]?.name||group.id||"待命名设备";
+    const status=live?"在线":disabled?"设备码停用":
+      group.linux?({"pending":"待安装","installing":"安装中","enrolling":"注册中","failed":"安装失败"}[group.linux.install_state]||"离线"):
+      clients.length||paired?"离线":"待配对";
+    const tone=live?"good":disabled?"bad":status==="离线"?"bad":"warn";
+    const count=group.linux?workers.filter(w=>!w.revoked_at).length:clients.length;
+    const os=systemOf(group);
+    const primary=clients.find(c=>c.online===true&&c.connection_enabled!==false)||clients[0];
+    const bridge=workers.find(w=>!w.revoked_at)?.metadata?.bridge||{};
+    const net=primary?.metadata?.network_country_code||primary?.metadata?.network_probe_status||
+      bridge.network_country_code||bridge.network_probe_status||"-";
+    const last=[...clients.map(c=>c.last_seen_at),...workers.map(w=>w.last_seen_at)]
+      .filter(Boolean).sort().at(-1)||group.linux?.install_updated_at;
+    const lastDate=last&&Number.isFinite(Date.parse(last))?
+      new Date(last).toLocaleString("zh-CN",{hour12:false}):"-";
+    const codeActions=codes.map(c=>{
+      const id=esc(c.pairing_id),label=esc(c.prefix||"设备码");
+      return '<div class="v160-code-actions"><span class="v153-muted">'+label+'</span>'+
+        '<button type="button" class="action" data-pairing-list-action="rename" data-pairing-id="'+id+'" data-pairing-name="'+esc(c.name)+'">改名</button>'+
+        '<button type="button" class="action" data-pairing-list-action="copy" data-pairing-id="'+id+'">复制</button>'+
+        '<button type="button" class="action" data-pairing-list-action="toggle" data-pairing-id="'+id+'" data-enable="'+(c.enabled?"0":"1")+'">'+(c.enabled?"停用":"启用")+'</button>'+
+        '</div>';
+    }).join("");
+    let actions=codeActions;
+    if(group.linux){
+      const id=esc(group.linux.device_id);
+      actions+='<button type="button" class="action good" data-device-add-worker="'+id+'"'+
+        (workers.some(w=>!w.revoked_at)?"":' disabled title="请先完成 Linux 设备安装"')+'>增加 Worker</button>'+
+        '<button type="button" class="action" data-manage-device="'+id+'">管理</button>'+
+        '<button type="button" class="action" data-device-upgrade="'+id+'">更新</button>'+
+        '<button type="button" class="action danger" data-delete-device="'+id+'">删除设备</button>';
+    }else if(primary?.client_id){
+      actions+='<button type="button" class="action" data-windows-device-update="'+esc(primary.client_id)+'">更新</button>';
+    }
+    if(!group.linux&&!clients.length&&codes.length){
+      actions+='<button type="button" class="action" data-open-linux-create-v160="1">Linux 安装</button>';
+    }
+    if(codes.length&&!group.linux){
+      // Never delete a physical device implicitly when deleting a pairing code.
+      actions+=codes.map(c=>'<button type="button" class="action danger" data-pairing-list-action="delete" data-pairing-id="'+esc(c.pairing_id)+'">删除设备码</button>').join("");
+    }
+    return '<tr data-v160-device-key="'+esc(group.key)+'"><td><b>'+esc(name)+'</b><div class="v153-muted">'+esc(group.id||codes[0]?.prefix||"-")+'</div></td>'+
+      '<td><span class="v124-pill '+tone+'">'+esc(status)+'</span></td>'+
+      '<td>'+esc(os)+'</td><td>'+count+'</td>'+
+      '<td>'+esc(codes.length?codes.length+" 个 · "+(disabled?"已停用":paired?"已配对":"待配对"):"未关联")+'</td>'+
+      '<td>'+esc(net)+'</td><td>'+esc(lastDate)+'</td>'+
+      '<td><div class="v160-actions">'+(actions||'<span class="v153-muted">未关联操作</span>')+'</div></td></tr>';
+  }
+  function renderWorkers(){
+    const target=el("unifiedWorkerRowsV160");if(!target)return;
+    const rows=[];
+    const cell=(row,key)=>row.querySelector('td[data-chat2api-column-key="'+key+'"]')?.innerHTML||"-";
+    for(const row of document.querySelectorAll("#extensionDeviceBody tr[data-client-id]")){
+      const id=esc(row.dataset.clientId||"");
+      const client=(data.clients||[]).find(c=>text(c.client_id)===text(row.dataset.clientId));
+      const os=client?systemOf({linux:null,clients:[client]}):"未识别";
+      rows.push('<tr data-unified-worker-id="'+id+'"><td>'+cell(row,"client_id")+'</td><td>'+cell(row,"device_name")+
+        '</td><td>'+esc(os)+'</td><td>'+cell(row,"account_type")+'</td><td>'+cell(row,"status")+
+        '</td><td>'+cell(row,"occupancy")+'</td><td>'+cell(row,"worker_settings")+
+        '</td><td>'+cell(row,"chatgpt")+'</td><td>'+cell(row,"actions")+'</td></tr>');
+    }
+    for(const row of document.querySelectorAll("#linuxWorkerRowsV155 tr[data-linux-worker-id]")){
+      const t=row.cells;if(t.length<8)continue;
+      rows.push('<tr data-unified-worker-id="'+esc(row.dataset.linuxWorkerId)+'"><td>'+t[0].innerHTML+
+        '</td><td>'+t[5].innerHTML+'</td><td>Linux</td><td>'+t[1].innerHTML+
+        '</td><td>'+t[2].innerHTML+'</td><td>'+t[3].innerHTML+'</td><td>'+t[4].innerHTML+
+        '</td><td>'+t[6].innerHTML+'</td><td>'+t[7].innerHTML+'</td></tr>');
+    }
+    target.innerHTML=rows.join("")||'<tr><td colspan="9" class="v153-muted">暂无 Worker。设备安装或配对完成后会显示在这里。</td></tr>';
+    const status=el("unifiedWorkerSummaryV160");
+    if(status)status.textContent="Worker："+rows.length+"（包含 Windows 与 Linux）";
+  }
+  function render(){
+    const snap=globalThis.__chat2apiWindowsSnapshotV156;
+    if(snap?.data)data=snap.data;
+    const groups=aggregate(getLinux(),data);
+    const body=el("unifiedDeviceRowsV160");
+    if(body)body.innerHTML=groups.map(renderDevice).join("")||
+      '<tr><td colspan="8" class="v153-muted">暂无设备。点击新增设备生成配对码。</td></tr>';
+    const total=el("unifiedDeviceSummaryV160");
+    if(total)total.textContent="设备："+groups.length+" · Linux："+groups.filter(g=>g.linux).length+
+      " · 未配对："+groups.filter(g=>!g.clients.length&&!g.linux).length;
+    renderWorkers();
+  }
+  async function refresh(){
+    if(refreshing)return refreshing;
+    const task=(async()=>{
+      await Promise.allSettled([
+        Promise.resolve(globalThis.chat2apiReloadCanonicalWorkerListV59?.()),
+        Promise.resolve().then(()=>el("refreshLinuxDevicesV124")?.click()),
+      ]);
+      render();
+    })();
+    refreshing=task;
+    try{await task;}finally{if(refreshing===task)refreshing=null;}
+  }
+  function boot(){
+    const section=el("view-extensions"),legacy=el("unifiedWorkerTabsV153");
+    const create=el("pairingName")?.closest(".panel");
+    const pairing=el("pairingBody")?.closest(".panel");
+    if(!section||!legacy||!create||!pairing||!el("linuxWorkerRowsV155")){
+      setTimeout(boot,250);return;
+    }
+    if(el("unifiedDeviceConsoleV160"))return;
+    const style=document.createElement("style");
+    style.textContent="#unifiedDeviceConsoleV160 .v160-actions{display:flex;align-items:center;flex-wrap:wrap;gap:6px;min-width:390px}"+
+      "#unifiedDeviceConsoleV160 .v160-actions button{padding:6px 9px}"+
+      "#unifiedDeviceConsoleV160 .v160-code-actions{display:inline-flex;align-items:center;gap:5px;padding-right:8px;border-right:1px solid #334155}"+
+      "#unifiedDeviceConsoleV160 table{min-width:1060px}"+
+      "#unifiedDeviceConsoleV160 .panel{margin-bottom:14px}"+
+      "#unifiedDeviceConsoleV160 .v160-creation{margin-top:12px}"+
+      "#unifiedDeviceConsoleV160 [hidden]{display:none!important}";
+    document.head.appendChild(style);
+    const root=document.createElement("div");root.id="unifiedDeviceConsoleV160";
+    root.innerHTML='<div class="panel"><h3>设备列表</h3><div class="toolbar">'+
+      '<button type="button" class="action good" id="unifiedCreateDeviceV160">新增设备</button>'+
+      '<button type="button" class="action" id="unifiedRefreshV160">刷新</button>'+
+      '<button type="button" class="action" data-open-linux-create-v160="1">Linux 安装</button>'+
+      '<button type="button" class="action" id="unifiedProxyV160">代理管理</button></div>'+
+      '<div id="unifiedDeviceSummaryV160" class="v153-muted"></div>'+
+      '<div class="scroll"><table id="unifiedDeviceTableV160"><thead><tr><th>设备名称 / 标识</th><th>状态</th><th>系统</th><th>Worker 数量</th><th>设备码</th><th>网络</th><th>最后在线</th><th>操作</th></tr></thead>'+
+      '<tbody id="unifiedDeviceRowsV160"><tr><td colspan="8">正在加载…</td></tr></tbody></table></div>'+
+      '<div class="v160-creation" id="unifiedCreationHostV160" hidden></div></div>'+
+      '<div class="panel"><h3>Worker列表</h3><div class="v153-muted" id="unifiedWorkerSummaryV160"></div>'+
+      '<div class="scroll"><table id="unifiedWorkerTableV160"><thead><tr><th>Worker ID</th><th>设备名称</th><th>系统</th><th>账户类型</th><th>状态</th><th>请求 / 备用窗口</th><th>并发 / 备用设置</th><th>ChatGPT</th><th>操作</th></tr></thead>'+
+      '<tbody id="unifiedWorkerRowsV160"></tbody></table></div></div>';
+    section.insertBefore(root,legacy);
+    el("unifiedCreationHostV160").appendChild(create);
+    create.style.marginTop="0";
+    pairing.hidden=true;
+    legacy.hidden=true;
+    document.documentElement.dataset.chat2apiUnifiedDeviceConsole="v160";
+    const header=()=>{if(section.classList.contains("active")&&el("pageTitle"))el("pageTitle").textContent="Worker管理";};
+    el("unifiedCreateDeviceV160").addEventListener("click",()=>{
+      const host=el("unifiedCreationHostV160");host.hidden=!host.hidden;
+      if(!host.hidden)el("pairingName")?.focus();
+    });
+    el("unifiedRefreshV160").addEventListener("click",()=>refresh().catch(e=>{el("unifiedDeviceSummaryV160").textContent=e.message;}));
+    el("unifiedProxyV160").addEventListener("click",()=>el("proxyManagerV124")?.click());
+    root.addEventListener("click",event=>{
+      const install=event.target.closest("[data-open-linux-create-v160]");
+      if(install){event.preventDefault();el("createLinuxDeviceV124")?.click();}
+    });
+    document.addEventListener("chat2api:extensions-loaded",render);
+    document.addEventListener("chat2api:linux-devices-loaded",render);
+    document.addEventListener("click",event=>{
+      if(event.target.closest('.nav button[data-view="extensions"]'))setTimeout(()=>{header();render();},0);
+    });
+    render();header();
+    refresh().catch(e=>{el("unifiedDeviceSummaryV160").textContent=e.message;});
+    setInterval(()=>{
+      if(!document.hidden&&section.classList.contains("active")&&!document.querySelector("dialog[open]")&&
+        !document.querySelector("[data-v121-limit-popover]:not([hidden])")){
+        el("refreshLinuxDevicesV124")?.click();
+      }
+    },15000);
+  }
+  globalThis[KEY]=Object.freeze({aggregate,deviceMarkup:renderDevice,render,refresh,version:"v160"});
+  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",boot,{once:true});
   else boot();
 })();
