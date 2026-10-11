@@ -19,12 +19,18 @@
     for (const worker of Array.isArray(payload?.workers) ? payload.workers : []) {
       const clientId = String(worker?.client_id || "");
       if (!clientId) continue;
-      const standby = Number(worker?.standby_window_count);
+      const raw = worker?.standby_window_count;
+      const countKnown = raw !== null && raw !== undefined
+        && raw !== "" && Number.isFinite(Number(raw)) && Number(raw) >= 0;
+      const status = String(worker?.truth_status || (authoritative ? "unverified" : "legacy"));
+      const liveVerified = authoritative && worker?.live_verified === true
+        && worker?.chatgpt_routing_ready === true && worker?.online === true
+        && status === "verified" && countKnown;
       result.set(clientId, {
         authoritative,
-        liveVerified: authoritative && worker?.live_verified === true,
-        status: String(worker?.truth_status || (authoritative ? "unverified" : "legacy")),
-        standby: Number.isFinite(standby) ? Math.max(0, standby) : null,
+        liveVerified,
+        status,
+        standby: liveVerified ? Math.max(0, Number(raw)) : null,
       });
     }
     return {authoritative, byClient:result};
