@@ -351,7 +351,7 @@
     for(const client of payload?.clients||[]){
       const id=text(client.client_id);if(!id||used.has(id))continue;
       const meta=client.metadata||{};
-      const workerGroup=workerById.get(text(meta.linux_worker_id));
+      const workerGroup=meta.linux_bridge_binding_conflict===true?null:workerById.get(text(meta.linux_worker_id));
       const physical=text(client.device_id||meta.device_id);
       const group=workerGroup||
         ensure(physical?"physical:"+physical:"client:"+id,{id:physical||id});

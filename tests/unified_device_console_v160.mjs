@@ -32,7 +32,7 @@ const payload={pairing_codes:[
   {client_id:"ext_conflict",online:true,metadata:{linux_bridge_binding_conflict:true,linux_worker_id:"wrk_one"}}
 ]};
 const rows=model.aggregate(devices,payload);
-assert.equal(rows.length,5,"one Linux, one Windows, two pending codes, one standalone Linux");
+assert.equal(rows.length,6,"one Linux, one Windows, two pending codes, standalone Linux and separate conflict");
 const linux=rows.find(x=>x.linux?.device_id==="install_linux");
 assert.equal(linux.codes.length,1);
 assert.equal(linux.clients.length,2);
@@ -42,6 +42,7 @@ assert.equal(win.codes.length,2,"multiple codes must retain separate actions in 
 assert.equal(win.clients.length,2);
 assert.equal(rows.filter(x=>x.key.startsWith("pairing:")).length,2,"identical names must never merge pending codes");
 assert.equal(rows.find(x=>x.id==="standalone").clients[0].client_id,"ext_standalone_linux");
+assert.equal(rows.find(x=>x.key==="client:ext_conflict").clients.length,1);
 assert.ok(!linux.clients.some(x=>x.client_id==="ext_conflict"),
   "conflicting Bridge may not contaminate Linux Worker");
 assert.ok(src.includes('data-device-add-worker="'+id+'"'));
