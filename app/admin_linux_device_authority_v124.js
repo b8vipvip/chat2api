@@ -93,6 +93,7 @@
         state.extensions=Array.isArray(extensions.clients)?extensions.clients:[];
         updateLinuxStandbyTruth(truth);
         renderDevices();renderWorkers();renderManager();
+        document.dispatchEvent(new Event("chat2api:linux-devices-loaded"));
         const count=Number(legacy.worker_count||0)+Number(legacy.installation_count||0);
         const purge=document.getElementById("purgeLegacyLinuxV124");
         if(purge){purge.style.display=count?"":"none";purge.textContent=count?`清理旧 Linux 数据（${count}）`:"清理旧 Linux 数据";}

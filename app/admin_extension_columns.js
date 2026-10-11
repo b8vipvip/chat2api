@@ -370,7 +370,7 @@
             return null;
           }),
         ]);
-        extensionSnapshot = (Array.isArray(data.clients) ? data.clients : []).filter(row => !row.metadata?.linux_worker_id && String(row.metadata?.platform || "").toLowerCase() !== "linux");
+        extensionSnapshot = (Array.isArray(data.clients) ? data.clients : []).filter(row => !row.metadata?.linux_worker_id && !row.metadata?.controller_worker_id && row.metadata?.linux_bridge_binding_conflict !== true);
         truthSnapshot = truth;
         renderPairings(Array.isArray(data.pairing_codes) ? data.pairing_codes : []);
         renderWorkerRows(extensionSnapshot, truthSnapshot);

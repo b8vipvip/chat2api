@@ -1,0 +1,53 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import vm from "node:vm";
+const src=fs.readFileSync(new URL("../app/admin_unified_workers_v153.js",import.meta.url),"utf8");
+const pos=src.indexOf("/* Unified equipment and Worker presentation v160.");
+assert.ok(pos>0,"v160 unified console must be bundled after legacy event owners");
+const context={
+  document:{readyState:"loading",addEventListener(){}},
+  globalThis:null,
+};
+context.globalThis=context;
+vm.runInNewContext(src.slice(pos),context);
+const model=context.__CHAT2API_UNIFIED_DEVICE_CONSOLE_V160__;
+assert.equal(model.version,"v160");
+const devices=[{
+  device_id:"install_linux",device_name:"TX03",device_pairing_id:"pair_linux",
+  workers:[{worker_id:"wrk_one",extension_client_id:"ext_linux_a"},
+           {worker_id:"wrk_two",extension_client_id:"ext_linux_b"}]
+}];
+const payload={pairing_codes:[
+  {pairing_id:"pair_linux",name:"TX03 renamed",bound_client_id:"ext_linux_a",enabled:true,prefix:"L001"},
+  {pairing_id:"pair_win_a",name:"Windows 1",bound_client_id:"ext_win_a",bound_device_id:"physical_win",enabled:true,prefix:"W001"},
+  {pairing_id:"pair_win_b",name:"Windows 2",bound_client_id:"ext_win_b",bound_device_id:"physical_win",enabled:false,prefix:"W002"},
+  {pairing_id:"pair_pending_a",name:"New",enabled:true,prefix:"P001"},
+  {pairing_id:"pair_pending_b",name:"New",enabled:true,prefix:"P002"},
+],clients:[
+  {client_id:"ext_linux_a",online:true,metadata:{linux_worker_id:"wrk_one"}},
+  {client_id:"ext_linux_b",online:true,metadata:{linux_worker_id:"wrk_two"}},
+  {client_id:"ext_win_a",online:true,device_id:"physical_win",metadata:{platform:"windows"}},
+  {client_id:"ext_win_b",online:false,device_id:"physical_win",metadata:{platform:"windows"}},
+  {client_id:"ext_standalone_linux",online:true,device_id:"standalone",metadata:{platform:"linux"}},
+  {client_id:"ext_conflict",online:true,metadata:{linux_bridge_binding_conflict:true,linux_worker_id:"wrk_one"}}
+]};
+const rows=model.aggregate(devices,payload);
+assert.equal(rows.length,5,"one Linux, one Windows, two pending codes, one standalone Linux");
+const linux=rows.find(x=>x.linux?.device_id==="install_linux");
+assert.equal(linux.codes.length,1);
+assert.equal(linux.clients.length,2);
+assert.equal(linux.codes[0].name,"TX03 renamed");
+const win=rows.find(x=>x.id==="physical_win");
+assert.equal(win.codes.length,2,"multiple codes must retain separate actions in one physical row");
+assert.equal(win.clients.length,2);
+assert.equal(rows.filter(x=>x.key.startsWith("pairing:")).length,2,"identical names must never merge pending codes");
+assert.equal(rows.find(x=>x.id==="standalone").clients[0].client_id,"ext_standalone_linux");
+assert.ok(!linux.clients.some(x=>x.client_id==="ext_conflict"),
+  "conflicting Bridge may not contaminate Linux Worker");
+assert.ok(src.includes('data-device-add-worker="'+id+'"'));
+assert.ok(src.includes('data-pairing-list-action="rename"'));
+assert.ok(src.includes('data-pairing-list-action="copy"'));
+assert.ok(src.includes('data-pairing-list-action="toggle"'));
+assert.ok(src.includes('data-device-upgrade="'+id+'"'));
+assert.ok(src.includes('chat2api:linux-devices-loaded'));
+console.log("v160 unified device/Worker identity and action contracts passed");
