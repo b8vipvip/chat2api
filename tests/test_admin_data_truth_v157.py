@@ -142,6 +142,8 @@ def test_active_request_and_unknown_placeholder_data_contracts() -> None:
     window_ui = (ROOT / "app" / "admin_window_manager_v88.js").read_text(encoding="utf-8")
     assert "const usedRaw = capacity.used_units ?? row?.active_api_calls;" in extension_ui
     assert "row?.active_api_calls ?? 0" not in extension_ui
+    assert '|| "0.22.102"' not in extension_ui
+    assert '"运行时版本未知"' in extension_ui
     assert "def active_request_count(client_id: str) -> int | None:" in authority
     assert 'message_type == "window.manager.refresh.result"' in main
     assert "window_manager_refresh_ack" in window_patch
