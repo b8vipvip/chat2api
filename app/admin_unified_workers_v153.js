@@ -20,10 +20,12 @@
     const date=new Date(value);
     return Number.isFinite(date.getTime())?date.toLocaleString("zh-CN",{hour12:false}):"-";
   };
-  const clientSeenAt = client => {
-    const parsed=Date.parse(String(client?.last_seen_at||""));
+  const timestampMs = value => {
+    const parsed=Date.parse(String(value||""));
     return Number.isFinite(parsed)?parsed:0;
   };
+  const clientSeenAt = client => timestampMs(client?.last_seen_at);
+  const pairingTimestamp = code => timestampMs(code?.last_paired_at||code?.updated_at||code?.created_at||code?.paired_at);
   const clientsByFreshness = clients => [...(Array.isArray(clients)?clients:[])].sort((a,b)=>
     Number(b?.online===true)-Number(a?.online===true) || clientSeenAt(b)-clientSeenAt(a));
   const networkDetails = client => {
@@ -67,7 +69,7 @@
   const preferredClient = clients => clientsByFreshness(clients)[0]||null;
   if(globalThis.__CHAT2API_TEST_MODE__===true){
     globalThis.__CHAT2API_WORKER_DEVICE_DATA_V157__=Object.freeze({
-      clientSeenAt,clientsByFreshness,networkDetails,deviceNetworkLabel,latestSeen,preferredClient
+      timestampMs,clientSeenAt,pairingTimestamp,clientsByFreshness,networkDetails,deviceNetworkLabel,latestSeen,preferredClient
     });
   }
   function makeWindowsDevicePanel() {
@@ -84,7 +86,7 @@
     if(!snapshot && document.documentElement.dataset.chat2apiWorkerListReady!=="1") return;
     const data=snapshot && Date.now()-snapshot.at<15000 ? snapshot.data : await api("/api/admin/extensions");
     const clients=(Array.isArray(data.clients)?data.clients:[]).filter(c=>!c.metadata?.linux_worker_id && String(c.metadata?.platform||"").toLowerCase()!=="linux");
-    const codes=Array.isArray(data.pairing_codes)?data.pairing_codes:[];
+    const codes=(Array.isArray(data.pairing_codes)?[...data.pairing_codes]:[]).sort((a,b)=>pairingTimestamp(b)-pairingTimestamp(a));
     const byClient=new Map(clients.map(c=>[String(c.client_id||""),c]));
     const groups=new Map();
     const pairedClientIds=new Set();
@@ -93,9 +95,11 @@
       if(!client)continue;
       const id=String(code.bound_device_id||client.device_id||client.metadata?.device_id||client.client_id||"");
       if(!id)continue;
-      if(!groups.has(id))groups.set(id,{id,name:code.name||client.name||id,clients:[],paired:true});
+      const codeName=String(code.name||"").trim();
+      if(!groups.has(id))groups.set(id,{id,name:codeName,fallbackName:client.device_name||client.name||id,clients:[],paired:true});
       const group=groups.get(id);
-      group.name=code.name||group.name;
+      // Codes are newest-first: keep the newest non-empty configured device name.
+      if(!group.name&&codeName)group.name=codeName;
       if(!group.clients.some(row=>row.client_id===client.client_id))group.clients.push(client);
       pairedClientIds.add(String(client.client_id||""));
     }
@@ -107,6 +111,7 @@
       const group=groups.get(id);
       if(!group.clients.some(row=>row.client_id===client.client_id))group.clients.push(client);
     }
+    for(const group of groups.values())group.name=group.name||group.fallbackName||group.id;
     let online=0;
     body.innerHTML=[...groups.values()].map(group=>{
       const ordered=clientsByFreshness(group.clients);
