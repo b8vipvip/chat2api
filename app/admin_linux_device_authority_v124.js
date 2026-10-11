@@ -18,9 +18,45 @@
   const country = code => ({US:"美国",JP:"日本",SG:"新加坡",KR:"韩国",GB:"英国",DE:"德国",FR:"法国",CA:"加拿大",AU:"澳大利亚",HK:"中国香港",TW:"中国台湾",CN:"中国大陆"})[String(code||"").toUpperCase()] || String(code||"").toUpperCase();
   const networkText = worker => { const b=bridge(worker); const s=String(b.network_probe_status||worker?.network_status||"unknown").toLowerCase(); const c=country(b.network_country_code); if(s==="external")return c?`外网（${c}）`:"外网"; if(s==="china-mainland")return "中国大陆网络"; if(s==="offline")return "网络离线"; if(["ready","online","connected","reachable"].includes(s))return "已联网"; return "未检测"; };
   const deviceInstallStatus = device => { const map={pending:["待安装","warn"],installing:["安装中","warn"],enrolling:["注册中","warn"],installed:["安装完成","good"],failed:["安装失败","bad"],disabled:["已停用","bad"]}; return map[String(device?.install_state||"pending").toLowerCase()]||[String(device?.install_state||"未知"),"warn"]; };
-  const workerStatus = worker => { if(!worker)return ["待安装","warn"]; if(worker.revoked_at)return ["已禁用","bad"]; const seen=worker.last_seen_at?new Date(worker.last_seen_at).getTime():0; if(seen&&Date.now()-seen>45000)return ["离线","bad"]; const map={ready:["运行正常","good"],waiting_proxy:["待配置代理","warn"],proxy_checking:["检测代理","warn"],waiting_login:["待登录","warn"],login_checking:["检测登录","warn"],degraded:["运行异常","bad"],offline:["离线","bad"],error:["错误","bad"],enrolling:["注册中","warn"]}; return map[String(worker.status||"").toLowerCase()]||[String(worker.status||"未知"),"warn"]; };
-  const chatgpt = worker => { if(!worker)return "-"; const b=bridge(worker); return String(worker.chatgpt_status||"").toLowerCase()==="ready" || (String(b.login_state||"").toLowerCase()==="ready"&&b.composer_ready===true) ? "已登录":"未登录"; };
-  const proxyView = worker => { if(!worker)return {main:"-",sub:"等待设备安装",tone:"warn"}; const p=proxySummary(worker); const name=String(worker?.metadata?.proxy_catalog_name||p.name||p.server||p.protocol||"直连"); const health=state.health.get(String(worker.worker_id||"")); const net=networkText(worker); if(!health)return {main:`${name} · ${net}`,sub:"点击 ⚙ 可切换代理或测试当前代理",tone:"warn"}; const n=health.networkReady?"网络正常":"网络异常"; const g=health.chatReady?"GPT正常":"GPT异常"; const l=health.latencyMs?`${health.latencyMs} ms`:"--"; return {main:`${name} · ${net}`,sub:`${n} · ${g} · 延迟 ${l}`,tone:health.networkReady&&health.chatReady?"good":"bad"}; };
+  const workerStatus = worker => {
+    if(!worker)return ["待安装","warn"];
+    if(worker.revoked_at||worker.enabled===false)return ["已禁用","bad"];
+    const status=String(worker.status||"").toLowerCase();
+    const seenRaw=worker.last_seen_at?new Date(worker.last_seen_at).getTime():0;
+    const seen=Number.isFinite(seenRaw)?seenRaw:0;
+    if(seen>0&&Date.now()-seen>45000)return ["离线","bad"];
+    if(!seen&&status==="ready")return ["等待心跳","warn"];
+    if(!seen&&status==="degraded")return ["状态待核验","warn"];
+    const map={ready:["运行正常","good"],waiting_proxy:["待配置代理","warn"],proxy_checking:["检测代理","warn"],waiting_login:["待登录","warn"],login_checking:["检测登录","warn"],degraded:["运行异常","bad"],offline:["离线","bad"],error:["错误","bad"],enrolling:["注册中","warn"]};
+    return map[status]||[status||"未知","warn"];
+  };
+  const chatgpt = worker => {
+    if(!worker)return "未知";
+    const status=workerStatus(worker)[0];
+    if(["已禁用","离线","等待心跳","状态待核验"].includes(status))return "未知";
+    const runtime=String(worker.status||"").toLowerCase();
+    if(runtime==="waiting_login")return "未登录";
+    if(runtime==="login_checking")return "检测中";
+    const b=bridge(worker);
+    const login=String(worker.chatgpt_status||b.login_state||"").toLowerCase();
+    if(login==="ready"||(b.composer_ready===true&&["logged_in","authenticated"].includes(login)))return "已登录";
+    if(["waiting_login","login_required","logged_out","unauthenticated"].includes(login))return "未登录";
+    return "未知";
+  };
+  const proxyView = worker => {
+    if(!worker)return {main:"-",sub:"等待设备安装",tone:"warn"};
+    const p=proxySummary(worker);
+    const metadata=worker?.metadata&&typeof worker.metadata==="object"?worker.metadata:{};
+    const configured=String(metadata.proxy_catalog_name||p.name||p.server||p.protocol||"").trim();
+    const name=configured||(String(worker.proxy_status||"").toLowerCase()==="direct"?"直连":"未配置代理");
+    const health=state.health.get(String(worker.worker_id||""));
+    const net=networkText(worker);
+    if(!health)return {main:`${name} · ${net}`,sub:"点击 ⚙ 可切换代理或测试当前代理",tone:"warn"};
+    const n=health.networkReady?"网络正常":"网络异常";
+    const g=health.chatReady?"GPT正常":"GPT异常";
+    const l=health.latencyMs?`${health.latencyMs} ms`:"--";
+    return {main:`${name} · ${net}`,sub:`${n} · ${g} · 延迟 ${l}`,tone:health.networkReady&&health.chatReady?"good":"bad"};
+  };
   const primary = device => Array.isArray(device?.workers) ? device.workers.find(w=>Number(w.worker_slot||1)===1)||device.workers[0] : null;
   const workerVersionView = device => {
     const rows=Array.isArray(device?.workers)?device.workers:[];
@@ -131,7 +167,7 @@
     const id=String(worker?.extension_client_id||"");
     const known=state.standbyTruth.get(id);
     const current=workerStatus(worker);
-    const enabled=worker?.enabled!==false && !worker?.revoked_at && current[0]!=="离线"
+    const enabled=worker?.enabled!==false && !worker?.revoked_at && !["离线","等待心跳","状态待核验","已禁用"].includes(current[0])
       && extension?.online===true && extension?.connection_enabled!==false
       && (!extension?.metadata?.linux_worker_id || String(extension.metadata.linux_worker_id)===String(worker.worker_id));
     if(!enabled || !known)return '<span data-linux-standby-source="unknown" title="没有可用的实时物理窗口核验">?</span>';
