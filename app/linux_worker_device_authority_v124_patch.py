@@ -264,6 +264,137 @@ def _device_rows(app: FastAPI) -> list[dict[str, Any]]:
     result.sort(key=lambda row: str(row.get("install_created_at") or ""), reverse=True)
     return result
 
+
+def _unified_device_delete_plan(
+    key: str,
+    devices: list[dict[str, Any]],
+    clients: list[dict[str, Any]],
+    pairings: list[dict[str, Any]],
+    worker_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Resolve deletion against authoritative IDs; never group by visible names.
+
+    A device row may represent a Linux installation, physical Bridge device,
+    standalone Bridge client or an unused pairing credential. The plan is
+    calculated server-side from stored identities, not client-supplied lists.
+    """
+    kind, sep, identity = str(key).partition(":")
+    if not sep or not identity or kind not in {"linux", "physical", "client", "pairing"}:
+        raise ValueError("Invalid device identity")
+    devices_by_id = {str(d.get("device_id") or ""): d for d in devices}
+    clients_by_id = {str(c.get("client_id") or ""): c for c in clients}
+    codes_by_id = {str(p.get("pairing_id") or ""): p for p in pairings}
+    workers_by_id = {str(w.get("worker_id") or ""): w for w in worker_rows}
+    claims: dict[str, set[str]] = {}
+    worker_owners: dict[str, set[str]] = {}
+    for dev in devices:
+        owner = str(dev.get("device_id") or "")
+        for worker in dev.get("workers") or []:
+            wid = str(worker.get("worker_id") or "")
+            cid = str(worker.get("extension_client_id") or "")
+            if wid:
+                worker_owners.setdefault(wid, set()).add(owner)
+            if cid:
+                claims.setdefault(cid, set()).add(owner)
+
+    selected_clients: set[str] = set()
+    selected_workers: set[str] = set()
+    selected_codes: set[str] = set()
+    install_id = ""
+    if kind == "linux":
+        device = devices_by_id.get(identity)
+        if not device:
+            raise KeyError("Linux device not found")
+        install_id = str(device.get("install_id") or "")
+        for worker in device.get("workers") or []:
+            wid = str(worker.get("worker_id") or "")
+            cid = str(worker.get("extension_client_id") or "")
+            if wid:
+                selected_workers.add(wid)
+            if cid and cid in clients_by_id:
+                selected_clients.add(cid)
+        pairing_id = str(device.get("device_pairing_id") or "")
+        if pairing_id and pairing_id in codes_by_id:
+            selected_codes.add(pairing_id)
+        # Include a registered Bridge whose explicitly reported Worker ID
+        # belongs to this device, even if its extension_client_id has rotated.
+        for cid, client in clients_by_id.items():
+            meta = client.get("metadata") or {}
+            if str(meta.get("linux_worker_id") or "") in selected_workers:
+                selected_clients.add(cid)
+    elif kind == "physical":
+        selected_clients = {
+            cid for cid, c in clients_by_id.items()
+            if str(c.get("device_id") or (c.get("metadata") or {}).get("device_id") or "") == identity
+        }
+        selected_codes = {
+            pid for pid, p in codes_by_id.items()
+            if str(p.get("bound_device_id") or "") == identity
+        }
+        if not selected_clients and not selected_codes:
+            raise KeyError("Physical device not found")
+    elif kind == "client":
+        if identity not in clients_by_id:
+            raise KeyError("Client device not found")
+        selected_clients.add(identity)
+    elif kind == "pairing":
+        if identity not in codes_by_id:
+            raise KeyError("Unpaired device not found")
+        selected_codes.add(identity)
+        client_id = str(codes_by_id[identity].get("bound_client_id") or "")
+        if client_id in clients_by_id:
+            # A bound code represents its registered device. If it also has
+            # other codes, delete all those belonging to this exact client.
+            selected_clients.add(client_id)
+
+    # A physical/client row must not partially delete an installed Linux
+    # device. Use its actual Linux device row so every controller is retired.
+    if kind != "linux":
+        for cid in selected_clients:
+            if claims.get(cid) or str((clients_by_id[cid].get("metadata") or {}).get("linux_worker_id") or "") in worker_owners:
+                raise ValueError("Device belongs to a Linux installation; delete the Linux device row instead")
+
+    # An orphan Linux Worker may still own a standalone Bridge client.
+    # Retire it only when its exact extension ID matches and no install owns it.
+    if kind != "linux":
+        for cid in selected_clients:
+            client = clients_by_id[cid]
+            wid = str((client.get("metadata") or {}).get("linux_worker_id") or "")
+            worker = workers_by_id.get(wid)
+            if worker and str(worker.get("extension_client_id") or "") == cid and not worker_owners.get(wid):
+                selected_workers.add(wid)
+
+    for cid in selected_clients:
+        client = clients_by_id[cid]
+        pid = str(client.get("pairing_id") or "")
+        if pid in codes_by_id:
+            selected_codes.add(pid)
+        for pair_id, pair in codes_by_id.items():
+            if str(pair.get("bound_client_id") or "") == cid:
+                selected_codes.add(pair_id)
+    for pid in selected_codes:
+        bound = str(codes_by_id[pid].get("bound_client_id") or "")
+        if bound and bound in clients_by_id and bound not in selected_clients:
+            raise ValueError("Pairing credential belongs to another device")
+    if kind == "linux":
+        for cid in selected_clients:
+            owners = claims.get(cid, set())
+            if owners - {identity}:
+                raise ValueError("Bridge client is claimed by multiple Linux devices")
+            wid = str((clients_by_id[cid].get("metadata") or {}).get("linux_worker_id") or "")
+            if wid and worker_owners.get(wid, set()) - {identity}:
+                raise ValueError("Bridge worker identity conflicts with another device")
+    if not (install_id or selected_clients or selected_workers or selected_codes):
+        raise KeyError("Device has no deletable records")
+    return {
+        "device_key": key,
+        "install_id": install_id,
+        "client_ids": sorted(selected_clients),
+        "worker_ids": sorted(selected_workers),
+        "pairing_ids": sorted(selected_codes),
+    }
+
+
 def _create_controller_child(store: Any, *, device: dict[str, Any], primary: dict[str, Any], slot: int) -> dict[str, Any]:
     worker_id = "wrk_" + secrets.token_hex(12)
     now = iso(utcnow())
@@ -646,6 +777,75 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
             if install_id:
                 _delete_install_and_enrollment(app, install_id)
         return {"deleted": True, "device_id": device_id, "workers_deleted": worker_ids, "installations_deleted": install_ids}
+
+    # Unified device actions are not pairing-code operations. All visible
+    # equipment rows (including orphan and never-paired records) support one
+    # complete server-authoritative deletion flow.
+    unified_delete_lock = asyncio.Lock()
+
+    async def unified_delete_plan(device_key: str) -> dict[str, Any]:
+        await app.state.pairings.ensure_loaded()
+        return _unified_device_delete_plan(
+            device_key,
+            _device_rows(app),
+            [dict(vars(row)) for row in app.state.registry.clients.values()],
+            app.state.pairings.list_public(),
+            app.state.linux_workers.list_public(),
+        )
+
+    @app.get("/api/admin/unified-devices/delete-preview")
+    async def preview_unified_device_delete(request: Request, key: str) -> dict[str, Any]:
+        admin(request)
+        try:
+            plan = await unified_delete_plan(key)
+        except KeyError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"ok": True, "device_key": key, "clients": len(plan["client_ids"]),
+                "workers": len(plan["worker_ids"]), "pairing_codes": len(plan["pairing_ids"]),
+                "linux_installations": int(bool(plan["install_id"]))}
+
+    @app.delete("/api/admin/unified-devices")
+    async def delete_unified_device(request: Request) -> dict[str, Any]:
+        admin(request)
+        body = await request.json()
+        if not isinstance(body, dict) or body.get("confirm") != "DELETE_DEVICE":
+            raise HTTPException(400, "Explicit device deletion confirmation required")
+        key = str(body.get("device_key") or "")
+        async with unified_delete_lock:
+            try:
+                plan = await unified_delete_plan(key)
+            except KeyError as exc:
+                raise HTTPException(404, str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
+            # Close live sockets and revoke remote/login sessions before
+            # deleting persistent Worker identities and enrollments.
+            for worker_id in plan["worker_ids"]:
+                sessions = getattr(app.state, "worker_login_sessions", None)
+                if sessions:
+                    sessions.revoke(worker_id)
+                socket = app.state.worker_sockets.pop(worker_id, None)
+                if socket:
+                    try:
+                        await socket.close(code=4003, reason="Device deleted by administrator")
+                    except Exception:
+                        logger.exception("worker socket close during device deletion: %s", worker_id)
+                _delete_worker(workers, worker_id)
+            if plan["install_id"]:
+                _delete_install_and_enrollment(app, plan["install_id"])
+            for client_id in plan["client_ids"]:
+                try:
+                    await app.state.registry.delete_client(client_id)
+                except KeyError:
+                    pass
+            for pairing_id in plan["pairing_ids"]:
+                try:
+                    await app.state.pairings.delete(pairing_id)
+                except KeyError:
+                    pass
+            return {"deleted": True, **plan}
 
     @app.get("/api/admin/linux-legacy-records")
     async def list_legacy_linux_records(request: Request) -> dict[str, Any]:
