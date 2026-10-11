@@ -219,9 +219,13 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
         if isinstance(active_by_client, dict):
             active = active_by_client.get(client_id)
             if isinstance(active, dict):
-                return [str(request_id) for request_id in active.keys()]
-            if isinstance(active, (set, list, tuple)):
-                return [str(request_id) for request_id in active]
+                active_ids = [str(request_id) for request_id in active.keys()]
+                if active_ids:
+                    return active_ids
+            elif isinstance(active, (set, list, tuple)):
+                active_ids = [str(request_id) for request_id in active]
+                if active_ids:
+                    return active_ids
         request_map = getattr(broker, "client_requests", None)
         request_id = request_map.get(client_id) if isinstance(request_map, dict) else None
         if request_id and request_id in getattr(broker, "requests", {}):
