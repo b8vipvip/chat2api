@@ -251,3 +251,21 @@ def test_authority_ui_uses_enable_disable_terms_without_global_dom_observer() ->
     assert "Do not treat every registry setter call as administrator intent" in patch
     assert "install_worker_disable_authority_patch(app)" in entry
     assert entry.rindex("install_worker_disable_authority_patch(app)") > entry.rindex("install_server_worker_sync_patch(app)")
+
+def test_worker_summary_exposes_broker_active_request_count_without_fabricating_zero(monkeypatch) -> None:
+    app, _ = make_app(monkeypatch)
+    app.state.broker = SimpleNamespace(
+        client_active_requests={},
+        client_requests={"ext_windows": "req_windows"},
+        requests={"req_windows": object()},
+    )
+
+    rows = {row["client_id"]: row for row in app.state.registry.summaries()}
+    assert rows["ext_windows"]["active_api_calls"] == 1
+    assert rows["ext_windows"]["capacity"]["used_units"] == 1
+
+    # If the request source is unavailable, do not publish a fake zero.
+    app.state.broker = None
+    rows = {row["client_id"]: row for row in app.state.registry.summaries()}
+    assert "active_api_calls" not in rows["ext_windows"]
+    assert "used_units" not in rows["ext_windows"].get("capacity", {})
