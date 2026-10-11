@@ -140,7 +140,7 @@ def test_active_request_and_unknown_placeholder_data_contracts() -> None:
     observer = (ROOT / "chrome_extension" / "background_window_observer_v90.js").read_text(encoding="utf-8")
     refresh = (ROOT / "chrome_extension" / "background_window_refresh_v129.js").read_text(encoding="utf-8")
     window_ui = (ROOT / "app" / "admin_window_manager_v88.js").read_text(encoding="utf-8")
-    assert "const usedRaw = capacity.used_units ?? row?.active_api_calls;" in extension_ui
+    assert "const usedRaw = capacity.active_requests ?? row?.active_api_calls;" in extension_ui
     assert "row?.active_api_calls ?? 0" not in extension_ui
     assert '|| "0.22.102"' not in extension_ui
     assert '"运行时版本未知"' in extension_ui
