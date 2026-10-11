@@ -154,3 +154,73 @@ def test_entry_installs_transport_recovery_after_request_recovery_and_identity_b
     assert entry.index("install_request_recovery_patch(app)") < entry.index("install_worker_transport_recovery_patch(app)")
     assert entry.index("install_linux_worker_console_polling_patch(app)") < entry.index("install_request_device_identity_patch(app)")
     assert entry.index("install_request_device_identity_patch(app)") < entry.index("install_request_history_v94_patch(app)")
+
+
+def test_request_history_prefers_registry_current_pairing_id_over_duplicate_client_bindings(tmp_path):
+    async def scenario():
+        telemetry = TelemetryStore(tmp_path)
+        await telemetry.upsert({
+            "request_id": "req_current_pairing",
+            "client_id": "ext_multi",
+            "status": "completed",
+            "requested_model": "gpt-5.5-mini",
+        })
+
+        class Pairings:
+            path = tmp_path / "pairing_codes.json"
+
+            @staticmethod
+            def list_public():
+                return [
+                    {"pairing_id": "pair_old", "name": "Old device name", "bound_client_id": "ext_multi", "bound_device_id": "device_multi"},
+                    {"pairing_id": "pair_current", "name": "Current device name", "bound_client_id": "ext_multi", "bound_device_id": "device_multi"},
+                ]
+
+        app = FastAPI()
+        app.state.telemetry = telemetry
+        app.state.registry = SimpleNamespace(
+            clients={"ext_multi": SimpleNamespace(pairing_id="pair_current", device_id="device_multi")}
+        )
+        app.state.pairings = Pairings()
+        install_request_device_identity_patch(app)
+
+        row = telemetry.query(limit=10)["data"][0]
+        assert row["device_name"] == "Current device name"
+        assert row["device_code_id"] == "pair_current"
+
+    asyncio.run(scenario())
+
+
+def test_request_history_does_not_guess_when_client_and_device_pairings_are_ambiguous(tmp_path):
+    async def scenario():
+        telemetry = TelemetryStore(tmp_path)
+        await telemetry.upsert({
+            "request_id": "req_ambiguous_pairing",
+            "client_id": "ext_ambiguous",
+            "status": "completed",
+            "requested_model": "gpt-5.5-mini",
+        })
+
+        class Pairings:
+            path = tmp_path / "pairing_codes.json"
+
+            @staticmethod
+            def list_public():
+                return [
+                    {"pairing_id": "pair_one", "name": "Device One", "bound_client_id": "ext_ambiguous", "bound_device_id": "device_shared"},
+                    {"pairing_id": "pair_two", "name": "Device Two", "bound_client_id": "ext_ambiguous", "bound_device_id": "device_shared"},
+                ]
+
+        app = FastAPI()
+        app.state.telemetry = telemetry
+        app.state.registry = SimpleNamespace(
+            clients={"ext_ambiguous": SimpleNamespace(pairing_id="", device_id="device_shared")}
+        )
+        app.state.pairings = Pairings()
+        install_request_device_identity_patch(app)
+
+        row = telemetry.query(limit=10)["data"][0]
+        assert row["device_name"] is None
+        assert row["device_code_id"] is None
+
+    asyncio.run(scenario())
