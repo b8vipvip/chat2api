@@ -1,7 +1,7 @@
 (() => {
   const KEY = "__CHAT2API_LINUX_DEVICE_AUTHORITY_V124__";
   if (globalThis[KEY]) return;
-  const state = {revision:124, devices:[], extensions:[], pairings:[], proxies:[], health:new Map(), login:{workerId:"",ticket:"",sourceWidth:1920,sourceHeight:1080,timer:0,closing:false}, selectedProxyWorker:"", selectedDevice:""};
+  const state = {revision:124, devices:[], extensions:[], pairings:[], proxies:[], health:new Map(), login:{workerId:"",ticket:"",sourceWidth:1920,sourceHeight:1080,timer:0,closing:false}, selectedProxyWorker:"", selectedDevice:"", standbyTruth:new Map(), verifiedStandby:new Map()};
   globalThis[KEY] = state;
 
   const esc = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"})[c]);
@@ -59,9 +59,85 @@
   function availablePairings(name=""){return state.pairings.filter(p=>p.enabled&&!p.paired&&(!name||String(p.device_name||"")===name));}
   function fillSelect(node,items,valueKey,label){node.innerHTML=items.length?items.map(x=>`<option value="${esc(x[valueKey])}">${esc(label(x))}</option>`).join(""):'<option value="">暂无可选项</option>';}
 
-  async function refreshAll(force=false){
-    try{const [devices,legacy,extensions]=await Promise.all([api("/api/admin/linux-devices"),api("/api/admin/linux-legacy-records"),api("/api/admin/extensions").catch(()=>({clients:[]}))]);state.devices=Array.isArray(devices.data)?devices.data:[];state.extensions=Array.isArray(extensions.clients)?extensions.clients:[];renderDevices();renderWorkers();renderManager();const count=Number(legacy.worker_count||0)+Number(legacy.installation_count||0);const purge=document.getElementById("purgeLegacyLinuxV124");if(purge){purge.style.display=count?"":"none";purge.textContent=count?`清理旧 Linux 数据（${count}）`:"清理旧 Linux 数据";}}
-    catch(error){const body=document.getElementById("linuxDeviceRowsV124");if(body)body.innerHTML=`<tr><td colspan="8">${esc(error.message)}</td></tr>`;}
+  function refreshAll(force=false){
+    if(refreshInFlight)return refreshInFlight;
+    const task=(async()=>{
+      try{
+        const [devices,legacy,extensions,truth]=await Promise.all([
+          api("/api/admin/linux-devices"),
+          api("/api/admin/linux-legacy-records"),
+          api("/api/admin/extensions").catch(()=>({clients:[]})),
+          api("/api/admin/window-manager").catch(error=>{console.warn("Linux Worker physical standby truth unavailable",error);return null;})
+        ]);
+        state.devices=Array.isArray(devices.data)?devices.data:[];
+        state.extensions=Array.isArray(extensions.clients)?extensions.clients:[];
+        updateLinuxStandbyTruth(truth);
+        renderDevices();renderWorkers();renderManager();
+        const count=Number(legacy.worker_count||0)+Number(legacy.installation_count||0);
+        const purge=document.getElementById("purgeLegacyLinuxV124");
+        if(purge){purge.style.display=count?"":"none";purge.textContent=count?`清理旧 Linux 数据（${count}）`:"清理旧 Linux 数据";}
+      }catch(error){
+        const body=document.getElementById("linuxDeviceRowsV124");
+        if(body)body.innerHTML=`<tr><td colspan="8">${esc(error.message)}</td></tr>`;
+      }
+    })();
+    refreshInFlight=task;
+    void task.finally(()=>{if(refreshInFlight===task)refreshInFlight=null;});
+    return task;
+  }
+  // Real physical truth, keyed by each Linux Worker's bound Chrome Bridge ID.
+  // The configured max_windows value must never masquerade as verified windows.
+  const LINUX_STANDBY_GRACE_MS = 45000;
+  let refreshInFlight = null;
+  function updateLinuxStandbyTruth(payload) {
+    const now=Date.now(), latest=new Map();
+    const valid=payload && Number(payload.truth_revision||0)>=89 && Array.isArray(payload.workers);
+    if(valid) {
+      for(const worker of payload.workers){
+        const id=String(worker?.client_id||"");
+        if(!id)continue;
+        const status=String(worker.truth_status||"unverified");
+        const raw=worker.standby_window_count;
+        const fresh=worker.live_verified===true && worker.chatgpt_routing_ready===true
+          && worker.online===true && status==="verified"
+          && raw!==null && raw!==undefined && Number.isFinite(Number(raw)) && Number(raw)>=0;
+        const previous=state.verifiedStandby.get(id);
+        if(fresh){
+          const snapshotAt=Number(worker.snapshot_updated_at_ms||0), count=Math.max(0,Number(raw));
+          if(previous && snapshotAt>0 && previous.snapshotAt>snapshotAt){
+            if(now-previous.at<=LINUX_STANDBY_GRACE_MS)latest.set(id,{count:previous.count,live:false});
+          }else{
+            state.verifiedStandby.set(id,{count,at:now,snapshotAt});
+            latest.set(id,{count,live:true});
+          }
+        }else if(worker.online===true && worker.chatgpt_routing_ready===true
+          && (status==="refresh-timeout" || status==="unverified")){
+          if(previous && now-previous.at<=LINUX_STANDBY_GRACE_MS)latest.set(id,{count:previous.count,live:false});
+        }else{
+          state.verifiedStandby.delete(id);
+        }
+      }
+    }else if(payload===null){
+      for(const [id,previous] of state.verifiedStandby){
+        if(now-previous.at<=LINUX_STANDBY_GRACE_MS)latest.set(id,{count:previous.count,live:false});
+      }
+    }
+    for(const [id,previous] of state.verifiedStandby){
+      if(now-previous.at>LINUX_STANDBY_GRACE_MS)state.verifiedStandby.delete(id);
+    }
+    state.standbyTruth=latest;
+  }
+  function linuxStandbyCell(worker,extension){
+    const id=String(worker?.extension_client_id||"");
+    const known=state.standbyTruth.get(id);
+    const current=workerStatus(worker);
+    const enabled=worker?.enabled!==false && !worker?.revoked_at && current[0]!=="离线"
+      && extension?.online===true && extension?.connection_enabled!==false
+      && (!extension?.metadata?.linux_worker_id || String(extension.metadata.linux_worker_id)===String(worker.worker_id));
+    if(!enabled || !known)return '<span data-linux-standby-source="unknown" title="没有可用的实时物理窗口核验">?</span>';
+    const count=esc(known.count);
+    if(known.live)return `<span data-linux-standby-source="live" title="实时物理核验的未分配可接待窗口" style="color:#22c55e;font-weight:700">${count}</span>`;
+    return `<span data-linux-standby-source="cached" title="本次物理核验未成功；显示45秒内的上次核验值，不能视为实时容量" style="color:#f59e0b;font-weight:700">${count}</span><small class="v124-muted" style="color:#f59e0b;white-space:nowrap"> 上次核验</small>`;
   }
   function renderDevices(){
     const body=document.getElementById("linuxDeviceRowsV124");
@@ -100,11 +176,11 @@
         const capacity=ext.capacity||{};
         const usedRaw=capacity.used_units ?? ext.active_api_calls;
         const running=usedRaw!=null && Number.isFinite(Number(usedRaw))?String(Math.max(0,Number(usedRaw))):"-";
-        const reserve="?"; // Physical spare truth is not assumed from stale registry values.
+        const reserve=linuxStandbyCell(w,ext); // Verified physical standby per Bridge ID.
         const concurrency=Math.max(1,Math.min(32,Number(ext.max_concurrency||capacity.limit_units||1)));
         const windows=Math.max(1,Math.min(32,Number(ext.max_windows||1)));
         const limits=ext.client_id?`<div data-v121-worker-limits="${esc(ext.client_id)}" style="display:inline-flex;position:relative;gap:6px;align-items:center;white-space:nowrap"><strong>${concurrency}/${windows}</strong><button type="button" class="action" data-v121-edit-limits title="编辑并发 / 备用设置">✎</button><div data-v121-limit-popover hidden style="position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:250px;padding:12px;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 14px 34px rgba(0,0,0,.38);white-space:normal"><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><label>并发<input data-v121-concurrency type="number" min="1" max="32" value="${concurrency}" style="width:96px"></label><label>备用<input data-v121-windows type="number" min="1" max="32" value="${windows}" style="width:96px"></label></div><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><span class="v124-muted" data-v121-limit-note></span><button type="button" class="action" data-v121-cancel-limits>取消</button><button type="button" class="action good" data-v121-save-limits>保存</button></div></div></div>`:"-";
-                rows.push(`<tr data-linux-worker-id="${esc(id)}"><td><code>${esc(id)}</code><div class="v124-muted">Worker ${slot} · ${esc(w.extension_client_id||"未绑定 Bridge")}</div></td><td>${esc(accountLabel)}</td><td><span class="v124-pill v124-worker-status ${tone}">${esc(status)}</span></td><td>${esc(running)} / ${esc(reserve)}</td><td>${limits}</td><td>${esc(d.device_name)}<div class="v124-muted">Slot ${slot}</div></td><td>${esc(chatgpt(w))}</td><td><div class="v124-actions"><button class="action" data-worker-login-edit="${esc(id)}">登录</button><button class="action" data-worker-action="initialize" data-worker="${esc(id)}">初始化</button><button class="action" data-login-worker="${esc(id)}" data-name="${esc(d.device_name)} · Worker ${slot}">远程</button><button class="action" data-diagnostics="${esc(id)}">诊断日志</button><button class="action ${w.enabled===false?"good":"danger"}" data-linux-worker-enable="${esc(id)}" data-enabled="${w.enabled===false?"1":"0"}">${w.enabled===false?"启用":"禁用"}</button><button class="action danger" data-linux-worker-delete="${esc(id)}" data-worker-slot="${slot}">删除</button></div></td></tr>`);
+                rows.push(`<tr data-linux-worker-id="${esc(id)}"><td><code>${esc(id)}</code><div class="v124-muted">Worker ${slot} · ${esc(w.extension_client_id||"未绑定 Bridge")}</div></td><td>${esc(accountLabel)}</td><td><span class="v124-pill v124-worker-status ${tone}">${esc(status)}</span></td><td>${esc(running)} / ${reserve}</td><td>${limits}</td><td>${esc(d.device_name)}<div class="v124-muted">Slot ${slot}</div></td><td>${esc(chatgpt(w))}</td><td><div class="v124-actions"><button class="action" data-worker-login-edit="${esc(id)}">登录</button><button class="action" data-worker-action="initialize" data-worker="${esc(id)}">初始化</button><button class="action" data-login-worker="${esc(id)}" data-name="${esc(d.device_name)} · Worker ${slot}">远程</button><button class="action" data-diagnostics="${esc(id)}">诊断日志</button><button class="action ${w.enabled===false?"good":"danger"}" data-linux-worker-enable="${esc(id)}" data-enabled="${w.enabled===false?"1":"0"}">${w.enabled===false?"启用":"禁用"}</button><button class="action danger" data-linux-worker-delete="${esc(id)}" data-worker-slot="${slot}">删除</button></div></td></tr>`);
       }
     }
     body.innerHTML=rows.join("")||'<tr><td colspan="8" class="v124-muted">暂无 Linux Worker。请先在设备列表新增设备。</td></tr>';
