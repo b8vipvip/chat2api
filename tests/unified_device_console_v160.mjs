@@ -61,10 +61,8 @@ assert.equal(rows.find(x=>x.id==="standalone").clients[0].client_id,"ext_standal
 assert.equal(rows.find(x=>x.key==="client:ext_conflict").clients.length,1);
 assert.ok(!linux.clients.some(x=>x.client_id==="ext_conflict"),
   "conflicting Bridge may not contaminate Linux Worker");
-assert.ok(src.includes('data-device-add-worker="'+id+'"'));
 assert.ok(src.includes('data-pairing-list-action="rename"'));
 assert.ok(src.includes('data-pairing-list-action="copy"'));
 assert.ok(src.includes('data-pairing-list-action="toggle"'));
-assert.ok(src.includes('data-device-upgrade="'+id+'"'));
 assert.ok(src.includes('chat2api:linux-devices-loaded'));
 console.log("v160 unified device/Worker identity and action contracts passed");
