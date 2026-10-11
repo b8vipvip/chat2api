@@ -134,12 +134,15 @@
         if(!id)continue;
         const status=String(worker.truth_status||"unverified");
         const raw=worker.standby_window_count;
+        const snapshotRaw=worker.snapshot_updated_at_ms;
+        const snapshotAt=snapshotRaw==null||String(snapshotRaw).trim()===""?0:Number(snapshotRaw);
         const fresh=worker.live_verified===true && worker.chatgpt_routing_ready===true
           && worker.online===true && status==="verified"
+          && Number.isFinite(snapshotAt) && snapshotAt>0
           && raw!==null && raw!==undefined && Number.isFinite(Number(raw)) && Number(raw)>=0;
         const previous=state.verifiedStandby.get(id);
         if(fresh){
-          const snapshotAt=Number(worker.snapshot_updated_at_ms||0), count=Math.max(0,Number(raw));
+          const count=Math.max(0,Number(raw));
           if(previous && snapshotAt>0 && previous.snapshotAt>snapshotAt){
             if(now-previous.at<=LINUX_STANDBY_GRACE_MS)latest.set(id,{count:previous.count,live:false});
           }else{
@@ -147,7 +150,7 @@
             latest.set(id,{count,live:true});
           }
         }else if(worker.online===true && worker.chatgpt_routing_ready===true
-          && (status==="refresh-timeout" || status==="unverified")){
+          && (status==="refresh-timeout" || status==="unverified" || (status==="verified" && !(snapshotAt>0)))){
           if(previous && now-previous.at<=LINUX_STANDBY_GRACE_MS)latest.set(id,{count:previous.count,live:false});
         }else{
           state.verifiedStandby.delete(id);
