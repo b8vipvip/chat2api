@@ -142,15 +142,29 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
             if pairing_id:
                 by_id[pairing_id] = item
             if client_id:
-                by_client[client_id] = item
+                # Multiple active pairing codes can temporarily bind the
+                # same client after a migration. Without the client's actual
+                # pairing_id, do not choose whichever appears last.
+                if client_id not in by_client:
+                    by_client[client_id] = item
+                else:
+                    by_client[client_id] = None
             if device_id:
-                by_device[device_id] = item
+                # Many pairings may share one physical device. Exact bound
+                # client wins; never use "last pairing seen" for an ambiguous
+                # physical-device fallback in request history.
+                if device_id not in by_device:
+                    by_device[device_id] = item
+                else:
+                    by_device[device_id] = {}
         return by_client, by_id, by_device
 
     def decorate(row: dict[str, Any] | None, maps=None, linux_maps=None) -> dict[str, Any] | None:
         if not isinstance(row, dict):
             return row
         result = dict(row)
+        historical_name = _canonical_label(result.get("device_name"))
+        historical_pairing = str(result.get("device_code_id") or "").strip()
         client_id = str(result.get("worker_client_id") or result.get("client_id") or "").strip()
         if not client_id:
             result.setdefault("device_name", None); result.setdefault("device_code_id", None); result.setdefault("worker_client_id", None)
@@ -168,7 +182,7 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
             if linux_worker_id:
                 workers = getattr(app.state, "linux_workers", None)
                 worker = getattr(workers, "data", {}).get("workers", {}).get(linux_worker_id) if workers is not None else None
-                if isinstance(worker, dict):
+                if isinstance(worker, dict) and not worker.get("revoked_at"):
                     exact_client = str(worker.get("extension_client_id") or "").strip()
                     if not exact_client or exact_client == client_id:
                         worker_meta = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}
@@ -195,8 +209,11 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
         if not device_name and linux_identity:
             device_name = _canonical_label(linux_identity.get("device_name"))
         result["worker_client_id"] = client_id
-        result["device_code_id"] = pairing_id or None
-        result["device_name"] = device_name or None
+        # Historical request records can outlive pairing/Worker deletion.
+        # Never erase a stored identity just because the current live registry
+        # no longer knows that Worker.
+        result["device_code_id"] = pairing_id or historical_pairing or None
+        result["device_name"] = device_name or historical_name or None
         if linux_identity:
             result["linux_worker_id"] = linux_identity.get("worker_id") or None
             result["worker_slot"] = linux_identity.get("worker_slot")

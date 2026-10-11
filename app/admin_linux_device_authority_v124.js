@@ -18,8 +18,28 @@
   const country = code => ({US:"美国",JP:"日本",SG:"新加坡",KR:"韩国",GB:"英国",DE:"德国",FR:"法国",CA:"加拿大",AU:"澳大利亚",HK:"中国香港",TW:"中国台湾",CN:"中国大陆"})[String(code||"").toUpperCase()] || String(code||"").toUpperCase();
   const networkText = worker => { const b=bridge(worker); const s=String(b.network_probe_status||worker?.network_status||"unknown").toLowerCase(); const c=country(b.network_country_code); if(s==="external")return c?`外网（${c}）`:"外网"; if(s==="china-mainland")return "中国大陆网络"; if(s==="offline")return "网络离线"; if(["ready","online","connected","reachable"].includes(s))return "已联网"; return "未检测"; };
   const deviceInstallStatus = device => { const map={pending:["待安装","warn"],installing:["安装中","warn"],enrolling:["注册中","warn"],installed:["安装完成","good"],failed:["安装失败","bad"],disabled:["已停用","bad"]}; return map[String(device?.install_state||"pending").toLowerCase()]||[String(device?.install_state||"未知"),"warn"]; };
-  const workerStatus = worker => { if(!worker)return ["待安装","warn"]; if(worker.revoked_at)return ["已禁用","bad"]; const seen=worker.last_seen_at?new Date(worker.last_seen_at).getTime():0; if(seen&&Date.now()-seen>45000)return ["离线","bad"]; const map={ready:["运行正常","good"],waiting_proxy:["待配置代理","warn"],proxy_checking:["检测代理","warn"],waiting_login:["待登录","warn"],login_checking:["检测登录","warn"],degraded:["运行异常","bad"],offline:["离线","bad"],error:["错误","bad"],enrolling:["注册中","warn"]}; return map[String(worker.status||"").toLowerCase()]||[String(worker.status||"未知"),"warn"]; };
-  const chatgpt = worker => { if(!worker)return "-"; const b=bridge(worker); return String(worker.chatgpt_status||"").toLowerCase()==="ready" || (String(b.login_state||"").toLowerCase()==="ready"&&b.composer_ready===true) ? "已登录":"未登录"; };
+  const workerStatus = worker => { if(!worker)return ["待安装","warn"]; if(worker.revoked_at)return ["已吊销","bad"]; if(worker.enabled===false)return ["已禁用","warn"]; const seen=worker.last_seen_at?new Date(worker.last_seen_at).getTime():0; if(seen&&Date.now()-seen>45000)return ["离线","bad"]; const map={ready:["运行正常","good"],waiting_proxy:["待配置代理","warn"],proxy_checking:["检测代理","warn"],waiting_login:["待登录","warn"],login_checking:["检测登录","warn"],degraded:["运行异常","bad"],offline:["离线","bad"],error:["错误","bad"],enrolling:["注册中","warn"]}; return map[String(worker.status||"").toLowerCase()]||[String(worker.status||"未知"),"warn"]; };
+  function chatgpt(worker,extension){
+    if(!worker)return "未确认";
+    if(worker.revoked_at || worker.enabled===false)return "已禁用";
+    const b=bridge(worker), meta=extension?.metadata||{};
+    // The bound live Chrome Bridge owns current authentication state.
+    // A cached Worker status must not override a newer login_required probe.
+    const live=extension?.online===true && extension?.connection_enabled!==false
+      && (!meta.linux_worker_id || String(meta.linux_worker_id)===String(worker.worker_id));
+    if(live && meta.chatgpt_login_state){
+      const state=String(meta.chatgpt_login_state).toLowerCase();
+      if(state==="login_required")return "未登录";
+      if(state==="checking")return "检测中";
+      if(state==="ready")return meta.chatgpt_login_composer_ready===true?"已登录":"输入区未确认";
+      return "未确认";
+    }
+    const state=String(b.login_state||worker.chatgpt_status||"").toLowerCase();
+    if(state==="login_required"||state==="not_logged_in")return "未登录";
+    if(state==="checking")return "检测中";
+    if(state==="ready")return b.composer_ready===true?"已登录":"输入区未确认";
+    return "未确认";
+  }
   const proxyView = worker => { if(!worker)return {main:"-",sub:"等待设备安装",tone:"warn"}; const p=proxySummary(worker); const name=String(worker?.metadata?.proxy_catalog_name||p.name||p.server||p.protocol||"直连"); const health=state.health.get(String(worker.worker_id||"")); const net=networkText(worker); if(!health)return {main:`${name} · ${net}`,sub:"点击 ⚙ 可切换代理或测试当前代理",tone:"warn"}; const n=health.networkReady?"网络正常":"网络异常"; const g=health.chatReady?"GPT正常":"GPT异常"; const l=health.latencyMs?`${health.latencyMs} ms`:"--"; return {main:`${name} · ${net}`,sub:`${n} · ${g} · 延迟 ${l}`,tone:health.networkReady&&health.chatReady?"good":"bad"}; };
   const primary = device => Array.isArray(device?.workers) ? device.workers.find(w=>Number(w.worker_slot||1)===1)||device.workers[0] : null;
   const workerVersionView = device => {
@@ -169,7 +189,11 @@
         if(tone==="good")online++;
         const id=String(w.worker_id||"");
         const slot=Number(w.worker_slot||1);
-        const ext=clientById.get(String(w.extension_client_id||""))||{};
+        const linked=clientById.get(String(w.extension_client_id||""))||null;
+        const mismatch=linked && (linked.metadata?.linux_bridge_binding_conflict===true ||
+          (linked.metadata?.linux_worker_id &&
+            String(linked.metadata.linux_worker_id)!==id));
+        const ext=mismatch?{}:(linked||{});
         const b=bridge(w);
         const account=String(ext.account_type||ext.metadata?.account_type||b.account_type||"unknown").toLowerCase();
         const accountLabel=account==="free"?"Free":account==="paid"?"付费":"未知";
@@ -180,7 +204,7 @@
         const concurrency=Math.max(1,Math.min(32,Number(ext.max_concurrency||capacity.limit_units||1)));
         const windows=Math.max(1,Math.min(32,Number(ext.max_windows||1)));
         const limits=ext.client_id?`<div data-v121-worker-limits="${esc(ext.client_id)}" style="display:inline-flex;position:relative;gap:6px;align-items:center;white-space:nowrap"><strong>${concurrency}/${windows}</strong><button type="button" class="action" data-v121-edit-limits title="编辑并发 / 备用设置">✎</button><div data-v121-limit-popover hidden style="position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:250px;padding:12px;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 14px 34px rgba(0,0,0,.38);white-space:normal"><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><label>并发<input data-v121-concurrency type="number" min="1" max="32" value="${concurrency}" style="width:96px"></label><label>备用<input data-v121-windows type="number" min="1" max="32" value="${windows}" style="width:96px"></label></div><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><span class="v124-muted" data-v121-limit-note></span><button type="button" class="action" data-v121-cancel-limits>取消</button><button type="button" class="action good" data-v121-save-limits>保存</button></div></div></div>`:"-";
-                rows.push(`<tr data-linux-worker-id="${esc(id)}"><td><code>${esc(id)}</code><div class="v124-muted">Worker ${slot} · ${esc(w.extension_client_id||"未绑定 Bridge")}</div></td><td>${esc(accountLabel)}</td><td><span class="v124-pill v124-worker-status ${tone}">${esc(status)}</span></td><td>${esc(running)} / ${reserve}</td><td>${limits}</td><td>${esc(d.device_name)}<div class="v124-muted">Slot ${slot}</div></td><td>${esc(chatgpt(w))}</td><td><div class="v124-actions"><button class="action" data-worker-login-edit="${esc(id)}">登录</button><button class="action" data-worker-action="initialize" data-worker="${esc(id)}">初始化</button><button class="action" data-login-worker="${esc(id)}" data-name="${esc(d.device_name)} · Worker ${slot}">远程</button><button class="action" data-diagnostics="${esc(id)}">诊断日志</button><button class="action ${w.enabled===false?"good":"danger"}" data-linux-worker-enable="${esc(id)}" data-enabled="${w.enabled===false?"1":"0"}">${w.enabled===false?"启用":"禁用"}</button><button class="action danger" data-linux-worker-delete="${esc(id)}" data-worker-slot="${slot}">删除</button></div></td></tr>`);
+                rows.push(`<tr data-linux-worker-id="${esc(id)}"><td><code>${esc(id)}</code><div class="v124-muted">Worker ${slot} · ${esc(w.extension_client_id||"未绑定 Bridge")}</div></td><td>${esc(accountLabel)}</td><td><span class="v124-pill v124-worker-status ${mismatch?"bad":tone}">${esc(mismatch?"Bridge 绑定冲突":status)}</span></td><td>${esc(running)} / ${reserve}</td><td>${limits}</td><td>${esc(d.device_name)}<div class="v124-muted">Slot ${slot}</div></td><td>${esc(chatgpt(w,ext))}</td><td><div class="v124-actions"><button class="action" data-worker-login-edit="${esc(id)}">登录</button><button class="action" data-worker-action="initialize" data-worker="${esc(id)}">初始化</button><button class="action" data-login-worker="${esc(id)}" data-name="${esc(d.device_name)} · Worker ${slot}">远程</button><button class="action" data-diagnostics="${esc(id)}">诊断日志</button><button class="action ${w.enabled===false?"good":"danger"}" data-linux-worker-enable="${esc(id)}" data-enabled="${w.enabled===false?"1":"0"}">${w.enabled===false?"启用":"禁用"}</button><button class="action danger" data-linux-worker-delete="${esc(id)}" data-worker-slot="${slot}">删除</button></div></td></tr>`);
       }
     }
     body.innerHTML=rows.join("")||'<tr><td colspan="8" class="v124-muted">暂无 Linux Worker。请先在设备列表新增设备。</td></tr>';
