@@ -17,6 +17,14 @@
   const proxySummary = worker => worker?.metadata?.proxy_summary && typeof worker.metadata.proxy_summary==="object" ? worker.metadata.proxy_summary : {};
   const country = code => ({US:"美国",JP:"日本",SG:"新加坡",KR:"韩国",GB:"英国",DE:"德国",FR:"法国",CA:"加拿大",AU:"澳大利亚",HK:"中国香港",TW:"中国台湾",CN:"中国大陆"})[String(code||"").toUpperCase()] || String(code||"").toUpperCase();
   const networkText = worker => { const b=bridge(worker); const s=String(b.network_probe_status||worker?.network_status||"unknown").toLowerCase(); const c=country(b.network_country_code); if(s==="external")return c?`外网（${c}）`:"外网"; if(s==="china-mainland")return "中国大陆网络"; if(s==="offline")return "网络离线"; if(["ready","online","connected","reachable"].includes(s))return "已联网"; return "未检测"; };
+  const configuredLimit = (...values) => {
+    for(const raw of values){
+      if(raw==null||String(raw).trim()==="")continue;
+      const value=Number(raw);
+      if(Number.isInteger(value)&&value>=1&&value<=32)return value;
+    }
+    return null;
+  };
   const deviceInstallStatus = device => { const map={pending:["待安装","warn"],installing:["安装中","warn"],enrolling:["注册中","warn"],installed:["安装完成","good"],failed:["安装失败","bad"],disabled:["已停用","bad"]}; return map[String(device?.install_state||"pending").toLowerCase()]||[String(device?.install_state||"未知"),"warn"]; };
   const workerStatus = worker => {
     if(!worker)return ["待安装","warn"];
@@ -216,9 +224,11 @@
         const usedRaw=ext.active_api_calls ?? capacity.active_requests;
         const running=usedRaw!=null && Number.isFinite(Number(usedRaw))?String(Math.max(0,Number(usedRaw))):"-";
         const reserve=linuxStandbyCell(w,ext); // Verified physical standby per Bridge ID.
-        const concurrency=Math.max(1,Math.min(32,Number(ext.max_concurrency||capacity.limit_units||1)));
-        const windows=Math.max(1,Math.min(32,Number(ext.max_windows||1)));
-        const limits=ext.client_id?`<div data-v121-worker-limits="${esc(ext.client_id)}" style="display:inline-flex;position:relative;gap:6px;align-items:center;white-space:nowrap"><strong>${concurrency}/${windows}</strong><button type="button" class="action" data-v121-edit-limits title="编辑并发 / 备用设置">✎</button><div data-v121-limit-popover hidden style="position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:250px;padding:12px;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 14px 34px rgba(0,0,0,.38);white-space:normal"><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><label>并发<input data-v121-concurrency type="number" min="1" max="32" value="${concurrency}" style="width:96px"></label><label>备用<input data-v121-windows type="number" min="1" max="32" value="${windows}" style="width:96px"></label></div><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><span class="v124-muted" data-v121-limit-note></span><button type="button" class="action" data-v121-cancel-limits>取消</button><button type="button" class="action good" data-v121-save-limits>保存</button></div></div></div>`:"-";
+        const concurrency=configuredLimit(ext.max_concurrency,capacity.limit_units);
+        const windows=configuredLimit(ext.max_windows,capacity.window_limit);
+        const concurrencyText=concurrency===null?"?":String(concurrency);
+        const windowsText=windows===null?"?":String(windows);
+        const limits=ext.client_id?`<div data-v121-worker-limits="${esc(ext.client_id)}" style="display:inline-flex;position:relative;gap:6px;align-items:center;white-space:nowrap"><strong>${concurrencyText}/${windowsText}</strong><button type="button" class="action" data-v121-edit-limits title="编辑并发 / 备用设置">✎</button><div data-v121-limit-popover hidden style="position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:250px;padding:12px;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 14px 34px rgba(0,0,0,.38);white-space:normal"><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><label>并发<input data-v121-concurrency type="number" min="1" max="32" value="${concurrency===null?"":concurrency}" style="width:96px"></label><label>备用<input data-v121-windows type="number" min="1" max="32" value="${windows===null?"":windows}" style="width:96px"></label></div><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><span class="v124-muted" data-v121-limit-note></span><button type="button" class="action" data-v121-cancel-limits>取消</button><button type="button" class="action good" data-v121-save-limits>保存</button></div></div></div>`:"-";
                 rows.push(`<tr data-linux-worker-id="${esc(id)}"><td><code>${esc(id)}</code><div class="v124-muted">Worker ${slot} · ${esc(w.extension_client_id||"未绑定 Bridge")}</div></td><td>${esc(accountLabel)}</td><td><span class="v124-pill v124-worker-status ${tone}">${esc(status)}</span></td><td>${esc(running)} / ${reserve}</td><td>${limits}</td><td>${esc(d.device_name)}<div class="v124-muted">Slot ${slot}</div></td><td>${esc(chatgpt(w))}</td><td><div class="v124-actions"><button class="action" data-worker-login-edit="${esc(id)}">登录</button><button class="action" data-worker-action="initialize" data-worker="${esc(id)}">初始化</button><button class="action" data-login-worker="${esc(id)}" data-name="${esc(d.device_name)} · Worker ${slot}">远程</button><button class="action" data-diagnostics="${esc(id)}">诊断日志</button><button class="action ${w.enabled===false?"good":"danger"}" data-linux-worker-enable="${esc(id)}" data-enabled="${w.enabled===false?"1":"0"}">${w.enabled===false?"启用":"禁用"}</button><button class="action danger" data-linux-worker-delete="${esc(id)}" data-worker-slot="${slot}">删除</button></div></td></tr>`);
       }
     }
