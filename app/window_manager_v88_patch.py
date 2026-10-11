@@ -14,7 +14,7 @@ from .login_readiness import login_readiness
 
 PATCH_REVISION = 88
 LIVE_TRUTH_REVISION = 89
-LIVE_TRUTH_MIN_BUNDLE = (0, 8, 27)
+LIVE_TRUTH_MIN_BUNDLE = (0, 22, 112)
 LIVE_TRUTH_TIMEOUT_SECONDS = 1.2
 ADMIN_ASSET = "/assets/chat2api-window-manager-v88.js"
 
@@ -98,6 +98,7 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
     async def refresh_live_truth() -> tuple[set[str], set[str]]:
         summaries = registry.summaries()
         before: dict[str, int] = {}
+        control_ids: dict[str, str] = {}
         attempted: set[str] = set()
 
         for summary in summaries:
@@ -115,6 +116,7 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
                     "reason": "admin-window-manager-live-truth-v89",
                     "revision": LIVE_TRUTH_REVISION,
                 })
+                control_ids[client_id] = control_id
                 attempted.add(client_id)
             except RuntimeError:
                 continue
@@ -131,7 +133,21 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
                 row = current.get(client_id)
                 if not row or not bool(row.get("online")):
                     continue
-                if _snapshot_updated_at(row) > before.get(client_id, 0):
+                metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+                ack = metadata.get("window_manager_refresh_ack") if isinstance(metadata.get("window_manager_refresh_ack"), dict) else {}
+                try:
+                    ack_updated_at = max(0, int(ack.get("updated_at_ms") or 0))
+                except (TypeError, ValueError):
+                    ack_updated_at = 0
+                snapshot_updated_at = _snapshot_updated_at(row)
+                # A newer timestamp alone is not proof: require the acknowledgement
+                # for this exact control_id and a snapshot at least as new as that ack.
+                if (
+                    str(ack.get("control_id") or "") == control_ids.get(client_id)
+                    and ack.get("ok") is True
+                    and ack_updated_at > before.get(client_id, 0)
+                    and snapshot_updated_at >= ack_updated_at
+                ):
                     verified.add(client_id)
             if verified == attempted:
                 break
@@ -173,7 +189,7 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
             login = login_readiness(metadata)
             login_ready = bool(login.get("ready"))
             refresh_capable = _version_tuple(bundle_version) >= LIVE_TRUTH_MIN_BUNDLE
-            live_verified = client_id in verified
+            live_verified = client_id in verified and online and refresh_capable
             cached_active = [item for item in (snapshot.get("active") or []) if isinstance(item, dict)]
             standby_count = sum(
                 1 for item in cached_active
