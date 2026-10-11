@@ -40,3 +40,8 @@ assert.equal(helpers.deviceNetworkLabel(clients), "US");
 assert.equal(helpers.latestSeen(clients), "2026-10-11T10:05:00+08:00");
 assert.equal(helpers.deviceNetworkLabel([clients[0]]), "JP（上次报告）");
 assert.equal(helpers.latestSeen([{ last_seen_at: null }, {}]), "");
+assert.ok(helpers.pairingTimestamp({ last_paired_at: "2026-10-11T10:00:00+08:00" }) >
+  helpers.pairingTimestamp({ last_paired_at: "2026-10-10T10:00:00+08:00" }));
+const uiSource = source;
+assert.match(uiSource, /const codes=\(Array\.isArray\(data\.pairing_codes\)\?\[\.\.\.data\.pairing_codes\]:\[\]\)\.sort\(\(a,b\)=>pairingTimestamp\(b\)-pairingTimestamp\(a\)\)/);
+assert.doesNotMatch(uiSource, /group\.name=code\.name\|\|group\.name/);
