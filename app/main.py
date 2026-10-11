@@ -931,6 +931,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 message = await websocket.receive_json()
                 message_type = message.get("type")
                 await registry.touch(client_id, message.get("metadata") if isinstance(message.get("metadata"), dict) else None)
+                if message_type == "window.manager.refresh.result":
+                    # Preserve the extension's correlated physical-refresh acknowledgement.
+                    # The Window Manager must not infer a successful probe from an unrelated
+                    # heartbeat or a merely newer cached timestamp.
+                    control_id = str(message.get("control_id") or "").strip()
+                    data = message.get("data") if isinstance(message.get("data"), dict) else {}
+                    try:
+                        updated_at_ms = max(0, int(data.get("updated_at_ms") or 0))
+                    except (TypeError, ValueError):
+                        updated_at_ms = 0
+                    try:
+                        observer_revision = max(0, int(data.get("observer_revision") or 0))
+                    except (TypeError, ValueError):
+                        observer_revision = 0
+                    if control_id:
+                        await registry.touch(client_id, {
+                            "window_manager_refresh_ack": {
+                                "control_id": control_id,
+                                "ok": message.get("ok") is True and updated_at_ms > 0,
+                                "updated_at_ms": updated_at_ms,
+                                "observer_revision": observer_revision,
+                                "received_at_ms": int(time.time() * 1000),
+                            }
+                        })
+                    continue
                 if message_type in {"heartbeat", "extension.hello", "extension.status"}:
                     if message_type in {"extension.hello", "extension.status"} and not window_target_synced:
                         window_runtime = getattr(app.state, "worker_window_limits", {})
