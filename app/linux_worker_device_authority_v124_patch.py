@@ -313,6 +313,21 @@ def _unified_device_delete_plan(
                 selected_workers.add(wid)
             if cid and cid in clients_by_id:
                 selected_clients.add(cid)
+        # Retired/revoked controllers are not in the live device rows; include
+        # their stored identities in the deletion plan so a deleted Linux
+        # device cannot leave orphan credentials or stale Worker records.
+        primary_id = str(device.get("_primary_worker_id") or "")
+        if primary_id and primary_id in workers_by_id:
+            selected_workers.add(primary_id)
+        for wid, row in workers_by_id.items():
+            meta = row.get("metadata") or {}
+            if str(meta.get("device_id_v124") or "") == identity and (
+                not primary_id or str(meta.get("controller_worker_id") or "") == primary_id
+            ):
+                selected_workers.add(wid)
+        for cid, client in clients_by_id.items():
+            if str((client.get("metadata") or {}).get("linux_worker_id") or "") in selected_workers:
+                selected_clients.add(cid)
         pairing_id = str(device.get("device_pairing_id") or "")
         if pairing_id and pairing_id in codes_by_id:
             selected_codes.add(pairing_id)
@@ -785,9 +800,18 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
 
     async def unified_delete_plan(device_key: str) -> dict[str, Any]:
         await app.state.pairings.ensure_loaded()
+        live_devices = _device_rows(app)
+        installs_by_id = {
+            str(row.get("install_id") or ""): row
+            for row in app.state.linux_worker_installs.list_admin()
+        }
+        for dev in live_devices:
+            dev["_primary_worker_id"] = str(
+                installs_by_id.get(str(dev.get("install_id") or ""), {}).get("worker_id") or ""
+            )
         return _unified_device_delete_plan(
             device_key,
-            _device_rows(app),
+            live_devices,
             [dict(vars(row)) for row in app.state.registry.clients.values()],
             app.state.pairings.list_public(),
             app.state.linux_workers.list_public(),

@@ -9,7 +9,7 @@ const runtime={document:{readyState:"loading",addEventListener(){}},globalThis:n
 runtime.globalThis=runtime;
 vm.runInNewContext(src.slice(pos),runtime);
 const model=runtime.__CHAT2API_UNIFIED_DEVICE_CONSOLE_V160__;
-assert.equal(model.version,"v161");
+assert.equal(model.version,"v162");
 
 const devices=[{
   device_id:"install_linux",device_name:"TX03",device_pairing_id:"pair_linux",
@@ -38,15 +38,17 @@ const linux=rows.find(x=>x.linux?.device_id==="install_linux");
 assert.equal(linux.codes.length,1);
 assert.equal(linux.clients.length,2);
 const linuxHtml=model.deviceMarkup(linux);
-for(const action of ["rename","copy","toggle","delete"]){
+for(const action of ["rename","copy","toggle"]){
   assert.equal((linuxHtml.match(new RegExp('data-pairing-list-action="'+action+'"',"g"))||[]).length,1,
     action+" must be a single equipment-level control");
 }
 assert.match(linuxHtml,/data-device-add-worker="install_linux"/);
 assert.match(linuxHtml,/>增加 Worker<\/button>/);
 assert.match(linuxHtml,/data-device-upgrade="install_linux"/);
-assert.match(linuxHtml,/>删除设备码<\/button>/);
-assert.doesNotMatch(linuxHtml,/data-manage-device=|data-delete-device=|>管理<\/button>|>删除设备<\/button>/);
+assert.match(linuxHtml,/>删除设备<\/button>/);
+assert.match(linuxHtml,/data-unified-delete-device="linux:install_linux"/);
+assert.doesNotMatch(linuxHtml,/data-pairing-list-action="delete"/);
+assert.doesNotMatch(linuxHtml,/data-manage-device=|data-delete-device=|>管理<\/button>|>删除设备码<\/button>/);
 assert.doesNotMatch(linuxHtml,/>设备码(?: \d+)?<\/span>|class="v160-code-actions"/);
 assert.ok(!linuxHtml.includes(">L001</span>"));
 assert.ok(!linuxHtml.includes(">pair_linux</div>"));
@@ -55,24 +57,20 @@ const win=rows.find(x=>x.id==="physical_win");
 assert.equal(win.codes.length,2,"multiple codes stay associated with one physical device");
 assert.equal(win.clients.length,2);
 const winHtml=model.deviceMarkup(win);
-assert.equal((winHtml.match(/data-v161-device-code-action=/g)||[]).length,4,
+assert.equal((winHtml.match(/data-v161-device-code-action=/g)||[]).length,3,
   "One visible set of actions must service all credentials of a device");
 assert.equal((winHtml.match(/>改名<\/button>/g)||[]).length,1);
 assert.equal((winHtml.match(/>复制<\/button>/g)||[]).length,1);
 assert.equal((winHtml.match(/>启用\/停用<\/button>/g)||[]).length,1);
-assert.equal((winHtml.match(/>删除设备码<\/button>/g)||[]).length,1);
+assert.equal((winHtml.match(/>删除设备<\/button>/g)||[]).length,1);
+assert.match(winHtml,/data-unified-delete-device="physical:physical_win"/);
 assert.equal((winHtml.match(/>更新<\/button>/g)||[]).length,1);
 assert.doesNotMatch(winHtml,/>设备码 \d+<\/span>|class="v160-code-groups"|>W001<\/span>|>W002<\/span>/);
 
 const chooser=model.choiceMarkup(win,"delete");
-assert.equal((chooser.match(/data-pairing-list-action="delete"/g)||[]).length,2,
-  "When multiple credentials exist, destructive operations need explicit choice");
-assert.match(chooser,/data-pairing-id="pair_win_a"/);
-assert.match(chooser,/data-pairing-id="pair_win_b"/);
-assert.match(chooser,/>凭据 1 · 删除设备码<\/button>/);
-assert.match(chooser,/>凭据 2 · 删除设备码<\/button>/);
-assert.equal(model.choiceMarkup(linux,"delete"),"","single-code actions do not require a chooser");
-assert.equal(model.choiceMarkup(win,"unknown"),"","unrecognized actions are blocked");
+assert.equal(chooser,"","deletion is a physical-device action, never a per-credential action");
+assert.equal(model.choiceMarkup(linux,"delete"),"");
+assert.equal(model.choiceMarkup(win,"unknown"),"");
 const toggleChooser=model.choiceMarkup(win,"toggle");
 assert.match(toggleChooser,/>凭据 1 · 停用<\/button>/);
 assert.match(toggleChooser,/>凭据 2 · 启用<\/button>/);
@@ -84,10 +82,12 @@ assert.equal(rows.filter(x=>x.key.startsWith("pairing:")).length,2,
 const pending=rows.find(x=>x.key==="pairing:pair_pending_a");
 const pendingHtml=model.deviceMarkup(pending);
 assert.ok(!pendingHtml.includes("data-device-add-worker="));
-assert.equal((pendingHtml.match(/data-pairing-list-action=/g)||[]).length,4);
+assert.equal((pendingHtml.match(/data-pairing-list-action=/g)||[]).length,3);
+assert.match(pendingHtml,/data-unified-delete-device="pairing:pair_pending_a"/);
 assert.ok(!pendingHtml.includes(">P001</div>"),"Unpaired code prefix is hidden");
 assert.ok(!pendingHtml.includes(">pair_pending_a</div>"),"Unpaired pairing ID is hidden");
 assert.ok(rows.find(x=>x.id==="standalone"));
+assert.match(model.deviceMarkup(rows.find(x=>x.id==="standalone")),/data-unified-delete-device="physical:standalone"/);
 assert.equal(rows.find(x=>x.key==="client:ext_conflict").clients.length,1);
 assert.ok(!linux.clients.some(x=>x.client_id==="ext_conflict"));
 
@@ -97,6 +97,25 @@ assert.ok(src.includes("width:max-content;white-space:nowrap"),
   "Equipment actions remain on one horizontal row (table may scroll)");
 assert.ok(src.includes("chooser.showModal()"),"multiple credentials expose a chooser");
 assert.ok(src.includes('displayedGroups=new Map(groups.map('),"chooser targets latest entity mapping");
+assert.ok(!src.includes('cell(row,"status")'),"Do not copy stale hidden Windows Worker status");
+assert.ok(!src.includes("t[2].innerHTML"),"Do not copy stale hidden Linux Worker status");
+assert.ok(src.includes("/api/admin/unified-devices/delete-preview?key="));
+assert.ok(src.includes('confirm:"DELETE_DEVICE"'));
+assert.ok(src.includes('method:"DELETE"'));
+
+assert.match(model.windowsWorkerState({connection_enabled:false,online:true}),/>停用<\/span>/);
+assert.match(model.windowsWorkerState({connection_enabled:true,online:true,busy:false}),/>运行正常<\/span>/);
+assert.match(model.windowsWorkerState({connection_enabled:true,online:true,busy:true}),/>忙碌<\/span>/);
+assert.match(model.windowsWorkerState({connection_enabled:true,online:false}),/>离线<\/span>/);
+assert.match(model.windowsWorkerState(null),/>未确认<\/span>/);
+const fresh=new Date().toISOString();
+assert.match(model.linuxWorkerState({enabled:false,status:"ready",last_seen_at:fresh}),/>停用<\/span>/);
+assert.match(model.linuxWorkerState({enabled:true,status:"ready",last_seen_at:fresh},{}),/>运行正常<\/span>/);
+assert.match(model.linuxWorkerState({enabled:true,status:"ready",last_seen_at:fresh},{busy:true}),/>忙碌<\/span>/);
+assert.match(model.linuxWorkerState({enabled:true,status:"waiting_login",last_seen_at:fresh}),/>待登录<\/span>/);
+assert.match(model.linuxWorkerState({enabled:true,status:"ready",last_seen_at:"2025-01-01T00:00:00Z"}),/>离线<\/span>/);
+assert.doesNotMatch(model.linuxWorkerState({enabled:false}),/已启用|已禁用/);
+
 
 const canonical=fs.readFileSync(new URL("../app/admin_extension_columns.js",import.meta.url),"utf8");
 const winStatus=canonical.slice(canonical.indexOf("  function statusPill("),

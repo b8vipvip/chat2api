@@ -680,7 +680,7 @@
       }
     },15000);
   }
-  globalThis[KEY]=Object.freeze({aggregate,deviceMarkup:renderDevice,choiceMarkup,render,refresh,version:"v161"});
+  globalThis[KEY]=Object.freeze({aggregate,deviceMarkup:renderDevice,choiceMarkup,windowsWorkerState,linuxWorkerState,render,refresh,version:"v162"});
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",boot,{once:true});
   else boot();
 })();
