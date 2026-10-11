@@ -313,6 +313,7 @@
   const getLinux=()=>globalThis.__CHAT2API_LINUX_DEVICE_AUTHORITY_V124__?.devices||[];
   let data={clients:[],pairing_codes:[]};
   let refreshing=null;
+  let displayedGroups=new Map();
   function aggregate(devices,payload){
     const groups=new Map(),byPair=new Map(),byClient=new Map(),used=new Set(),ownerByClient=new Map();
     for(const c of payload?.clients||[])if(text(c.client_id))byClient.set(text(c.client_id),c);
@@ -391,7 +392,7 @@
     const disabled=codes.length>0&&codes.every(c=>c.enabled===false);
     const name=codes[0]?.name||group.linux?.device_name||clients[0]?.device_name||
       clients[0]?.name||group.id||"待命名设备";
-    const status=live?"在线":disabled?"设备码停用":
+    const status=live?"在线":disabled?"停用":
       group.linux?({"pending":"待安装","installing":"安装中","enrolling":"注册中","failed":"安装失败"}[group.linux.install_state]||"离线"):
       clients.length||paired?"离线":"待配对";
     const tone=live?"good":disabled?"bad":status==="离线"?"bad":"warn";
@@ -406,43 +407,66 @@
     const lastDate=last&&Number.isFinite(Date.parse(last))?
       new Date(last).toLocaleString("zh-CN",{hour12:false}):"-";
 
-    // Keep device-level operations separate from pairing-code operations.
-    // Pairing IDs/prefixes are internal identifiers, not UI labels.
-    // Codes belonging to the same physical device retain independent buttons.
-    const codeActions=codes.map((c,index)=>{
-      const id=esc(c.pairing_id);
-      const codeTitle=esc(c.prefix||c.pairing_id||"");
-      const deleteCode=!group.linux
-        ? '<button type="button" class="action danger" data-pairing-list-action="delete" data-pairing-id="'+id+'">删除设备码</button>'
-        : "";
-      return '<div class="v160-code-actions" data-v160-pairing="'+id+'">'+
-        '<span class="v160-code-index" title="'+codeTitle+'">设备码'+(codes.length>1?" "+(index+1):"")+'</span>'+
-        '<div class="v160-code-controls">'+
-        '<button type="button" class="action" data-pairing-list-action="rename" data-pairing-id="'+id+'" data-pairing-name="'+esc(c.name)+'">改名</button>'+
-        '<button type="button" class="action" data-pairing-list-action="copy" data-pairing-id="'+id+'">复制</button>'+
-        '<button type="button" class="action" data-pairing-list-action="toggle" data-pairing-id="'+id+'" data-enable="'+(c.enabled?"0":"1")+'">'+(c.enabled?"停用":"启用")+'</button>'+
-        deleteCode+'</div></div>';
-    }).join("");
-    let deviceActions="";
+    // The equipment row owns one set of controls regardless of the number
+    // of underlying registration credentials. A multi-code action requires an
+    // explicit choice; never silently mutate an arbitrary first credential.
+    const oneCode=codes.length===1?codes[0]:null;
+    const actionButton=(action,label,extraClass="")=>{
+      const c=oneCode;
+      const choice=c
+        ? 'data-pairing-list-action="'+action+'" data-pairing-id="'+esc(c.pairing_id)+'"'+
+          (action==="rename"?' data-pairing-name="'+esc(c.name||"")+'"':"")+
+          (action==="toggle"?' data-enable="'+(c.enabled?"0":"1")+'"':"")
+        : 'data-v161-device-code-action="'+action+'" data-v161-device-key="'+esc(group.key)+'"';
+      return '<button type="button" class="action '+extraClass+'" '+choice+'>'+label+'</button>';
+    };
+    let actions="";
+    if(codes.length){
+      const mixed=codes.some(c=>c.enabled!==false)&&codes.some(c=>c.enabled===false);
+      const toggleLabel=mixed?"启用/停用":codes.every(c=>c.enabled===false)?"启用":"停用";
+      actions+=actionButton("rename","改名");
+      actions+=actionButton("copy","复制");
+      actions+=actionButton("toggle",toggleLabel);
+      // Deleting a registration credential is not deleting the physical
+      // device. Existing Linux/Windows Workers remain separate identities.
+      actions+=actionButton("delete","删除设备码","danger");
+    }
     if(group.linux){
       const id=esc(group.linux.device_id);
-      deviceActions+='<button type="button" class="action good" data-device-add-worker="'+id+'"'+
+      actions+='<button type="button" class="action good" data-device-add-worker="'+id+'"'+
         (workers.some(w=>!w.revoked_at)?"":' disabled title="请先完成 Linux 设备安装"')+'>增加 Worker</button>'+
         '<button type="button" class="action" data-device-upgrade="'+id+'">更新</button>';
     }else if(primary?.client_id){
-      deviceActions+='<button type="button" class="action" data-windows-device-update="'+esc(primary.client_id)+'">更新</button>';
+      actions+='<button type="button" class="action" data-windows-device-update="'+esc(primary.client_id)+'">更新</button>';
     }
     if(!group.linux&&!clients.length&&codes.length){
-      deviceActions+='<button type="button" class="action" data-open-linux-create-v160="1">Linux 安装</button>';
+      actions+='<button type="button" class="action" data-open-linux-create-v160="1">Linux 安装</button>';
     }
-    const actions=(deviceActions?'<div class="v160-device-actions">'+deviceActions+'</div>':"")+
-      (codeActions?'<div class="v160-code-groups">'+codeActions+'</div>':"");
-    return '<tr data-v160-device-key="'+esc(group.key)+'"><td><b>'+esc(name)+'</b><div class="v153-muted">'+esc(group.id||codes[0]?.prefix||"-")+'</div></td>'+
+    const physicalId=group.linux?.device_id||group.id||"";
+    return '<tr data-v160-device-key="'+esc(group.key)+'"><td><b>'+esc(name)+'</b>'+
+      (physicalId?'<div class="v153-muted">'+esc(physicalId)+'</div>':"")+'</td>'+
       '<td><span class="v124-pill '+tone+'">'+esc(status)+'</span></td>'+
       '<td>'+esc(os)+'</td><td>'+count+'</td>'+
-      '<td>'+esc(codes.length?codes.length+" 个 · "+(disabled?"已停用":paired?"已配对":"待配对"):"未关联")+'</td>'+
+
       '<td>'+esc(net)+'</td><td>'+esc(lastDate)+'</td>'+
       '<td><div class="v160-actions">'+(actions||'<span class="v153-muted">未关联操作</span>')+'</div></td></tr>';
+  }
+
+  function choiceMarkup(group,action){
+    if(!group||!Array.isArray(group.codes)||group.codes.length<2)return "";
+    const labels={rename:"改名",copy:"复制",toggle:"启用/停用",delete:"删除设备码"};
+    if(!Object.prototype.hasOwnProperty.call(labels,action))return "";
+    return '<div class="dialogHead"><b>选择设备凭据 · '+labels[action]+'</b>'+
+      '<button type="button" class="action" data-v161-close-code-choice="1">关闭</button></div>'+
+      '<div class="dialogBody"><p class="muted">此设备关联多个凭据，请选择要操作的那一个。这里不会删除实体设备或 Worker。</p>'+
+      '<div class="v161-choice-list">'+group.codes.map((c,index)=>{
+        const id=esc(c.pairing_id);
+        const label=action==="toggle"?(c.enabled===false?"启用":"停用"):labels[action];
+        return '<button type="button" class="action" data-pairing-list-action="'+action+'" data-pairing-id="'+id+'"'+
+          (action==="rename"?' data-pairing-name="'+esc(c.name||"")+'"':"")+
+          (action==="toggle"?' data-enable="'+(c.enabled?"0":"1")+'"':"")+
+          ' title="'+esc(c.prefix||"")+'">凭据 '+(index+1)+' · '+label+'</button>';
+      }).join("")+'</div></div>';
   }
   function renderWorkers(){
     const target=el("unifiedWorkerRowsV160");if(!target)return;
@@ -472,9 +496,10 @@
     const snap=globalThis.__chat2apiWindowsSnapshotV156;
     if(snap?.data)data=snap.data;
     const groups=aggregate(getLinux(),data);
+    displayedGroups=new Map(groups.map(group=>[group.key,group]));
     const body=el("unifiedDeviceRowsV160");
     if(body)body.innerHTML=groups.map(renderDevice).join("")||
-      '<tr><td colspan="8" class="v153-muted">暂无设备。点击新增设备生成配对码。</td></tr>';
+      '<tr><td colspan="7" class="v153-muted">暂无设备。点击新增设备生成配对码。</td></tr>';
     const total=el("unifiedDeviceSummaryV160");
     if(total)total.textContent="设备："+groups.length+" · Linux："+groups.filter(g=>g.linux).length+
       " · 未配对："+groups.filter(g=>!g.clients.length&&!g.linux).length;
@@ -501,15 +526,11 @@
     }
     if(el("unifiedDeviceConsoleV160"))return;
     const style=document.createElement("style");
-    style.textContent="#unifiedDeviceConsoleV160 .v160-actions{display:flex;flex-direction:column;align-items:flex-start;gap:7px;min-width:310px;white-space:normal}"+
-      "#unifiedDeviceConsoleV160 .v160-device-actions{display:flex;align-items:center;flex-wrap:wrap;gap:6px}"+
-      "#unifiedDeviceConsoleV160 .v160-code-groups{display:grid;gap:7px;width:100%}"+
-      "#unifiedDeviceConsoleV160 .v160-code-actions{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:4px 0}"+
-      "#unifiedDeviceConsoleV160 .v160-code-actions+.v160-code-actions{border-top:1px solid rgba(71,85,105,.38)}"+
-      "#unifiedDeviceConsoleV160 .v160-code-index{min-width:57px;font-size:12px;color:#94a3b8;white-space:nowrap}"+
-      "#unifiedDeviceConsoleV160 .v160-code-controls{display:flex;align-items:center;flex-wrap:wrap;gap:6px}"+
-      "#unifiedDeviceConsoleV160 .v160-actions button{padding:5px 9px;white-space:nowrap}"+
-      "#unifiedDeviceConsoleV160 table{min-width:1060px}"+
+    style.textContent="#unifiedDeviceConsoleV160 .v160-actions{display:flex;align-items:center;gap:6px;width:max-content;white-space:nowrap}"+
+      "#unifiedDeviceConsoleV160 .v160-actions button{padding:5px 9px;white-space:nowrap;flex-shrink:0}"+
+      "#unifiedDeviceConsoleV160 td:last-child{white-space:nowrap}"+
+      "#unifiedDeviceConsoleV160 table{min-width:970px}"+
+      "#unifiedDeviceConsoleV160 .v161-choice-list{display:flex;flex-wrap:wrap;gap:8px}"+
       "#unifiedDeviceConsoleV160 .panel{margin-bottom:14px}"+
       "#unifiedDeviceConsoleV160 .v160-creation{margin-top:12px}"+
       "#unifiedDeviceConsoleV160 [hidden]{display:none!important}";
@@ -521,13 +542,17 @@
       '<button type="button" class="action" data-open-linux-create-v160="1">Linux 安装</button>'+
       '<button type="button" class="action" id="unifiedProxyV160">代理管理</button></div>'+
       '<div id="unifiedDeviceSummaryV160" class="v153-muted"></div>'+
-      '<div class="scroll"><table id="unifiedDeviceTableV160"><thead><tr><th>设备名称 / 标识</th><th>状态</th><th>系统</th><th>Worker 数量</th><th>设备码</th><th>网络</th><th>最后在线</th><th>操作</th></tr></thead>'+
-      '<tbody id="unifiedDeviceRowsV160"><tr><td colspan="8">正在加载…</td></tr></tbody></table></div>'+
+      '<div class="scroll"><table id="unifiedDeviceTableV160"><thead><tr><th>设备名称 / 标识</th><th>状态</th><th>系统</th><th>Worker 数量</th><th>网络</th><th>最后在线</th><th>操作</th></tr></thead>'+
+      '<tbody id="unifiedDeviceRowsV160"><tr><td colspan="7">正在加载…</td></tr></tbody></table></div>'+
       '<div class="v160-creation" id="unifiedCreationHostV160" hidden></div></div>'+
       '<div class="panel"><h3>Worker列表</h3><div class="v153-muted" id="unifiedWorkerSummaryV160"></div>'+
       '<div class="scroll"><table id="unifiedWorkerTableV160"><thead><tr><th>Worker ID</th><th>设备名称</th><th>系统</th><th>账户类型</th><th>状态</th><th>请求 / 备用窗口</th><th>并发 / 备用设置</th><th>ChatGPT</th><th>操作</th></tr></thead>'+
       '<tbody id="unifiedWorkerRowsV160"></tbody></table></div></div>';
     section.insertBefore(root,legacy);
+    const chooser=document.createElement("dialog");
+    chooser.id="v161DeviceCodeChooser";
+    chooser.setAttribute("aria-label","选择要操作的设备凭据");
+    root.appendChild(chooser);
     el("unifiedCreationHostV160").appendChild(create);
     create.style.marginTop="0";
     pairing.hidden=true;
@@ -541,6 +566,27 @@
     el("unifiedRefreshV160").addEventListener("click",()=>refresh().catch(e=>{el("unifiedDeviceSummaryV160").textContent=e.message;}));
     el("unifiedProxyV160").addEventListener("click",()=>el("proxyManagerV124")?.click());
     root.addEventListener("click",event=>{
+      const choice=event.target.closest("[data-v161-device-code-action]");
+      if(choice){
+        event.preventDefault();
+        const group=displayedGroups.get(choice.dataset.v161DeviceKey||"");
+        const markup=choiceMarkup(group,choice.dataset.v161DeviceCodeAction||"");
+        if(!markup)return;
+        chooser.innerHTML=markup;
+        chooser.showModal();
+        return;
+      }
+      if(event.target.closest("[data-v161-close-code-choice]")){
+        event.preventDefault();
+        if(chooser.open)chooser.close();
+        return;
+      }
+      // The existing document-capture pairing handler performs the original
+      // authenticated API action; this listener only closes the chooser.
+      if(event.target.closest("#v161DeviceCodeChooser [data-pairing-list-action]")){
+        if(chooser.open)chooser.close();
+        return;
+      }
       const install=event.target.closest("[data-open-linux-create-v160]");
       if(install){event.preventDefault();el("createLinuxDeviceV124")?.click();}
     });
@@ -558,7 +604,7 @@
       }
     },15000);
   }
-  globalThis[KEY]=Object.freeze({aggregate,deviceMarkup:renderDevice,render,refresh,version:"v160"});
+  globalThis[KEY]=Object.freeze({aggregate,deviceMarkup:renderDevice,choiceMarkup,render,refresh,version:"v161"});
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",boot,{once:true});
   else boot();
 })();

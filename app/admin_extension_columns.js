@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.22.118-worker-list-v156";
+  const VERSION = "0.22.119-worker-list-v156";
   const COLUMN_SCHEMA_REVISION = 152;
   const STORAGE_KEY = "chat2api.extensionColumns.v3";
   const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2";
@@ -165,9 +165,9 @@
   }
 
   function statusPill(row) {
-    if (row?.connection_enabled === false) return '<span class="pill">已禁用</span>';
+    if (row?.connection_enabled === false) return '<span class="pill warn">停用</span>';
     if (row?.online && row?.busy) return '<span class="pill warn">忙碌</span>';
-    if (row?.online) return '<span class="pill ok">在线</span>';
+    if (row?.online) return '<span class="pill ok">运行正常</span>';
     return '<span class="pill bad">离线</span>';
   }
 
