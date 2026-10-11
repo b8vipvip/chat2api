@@ -223,14 +223,16 @@
       reportedIds.add(id);
       const status = String(worker?.truth_status || "unverified");
       const countRaw = worker?.standby_window_count;
+      const snapshotRaw = worker?.snapshot_updated_at_ms;
+      const snapshotAt = snapshotRaw == null || String(snapshotRaw).trim() === "" ? 0 : Number(snapshotRaw);
       const liveVerified = authoritative && worker?.live_verified === true
         && worker?.chatgpt_routing_ready === true
+        && Number.isFinite(snapshotAt) && snapshotAt > 0
         && countRaw !== null && countRaw !== undefined
         && Number.isFinite(Number(countRaw)) && Number(countRaw) >= 0;
       if (liveVerified) {
         const standby = Math.max(0, Number(countRaw));
         const previous = verifiedStandby.get(id);
-        const snapshotAt = Number(worker?.snapshot_updated_at_ms || 0);
         // Ignore an out-of-order response with an older physical snapshot.
         if (previous && snapshotAt > 0 && previous.snapshotAt > snapshotAt) {
           result.set(id, {liveVerified:false, standby:previous.standby, status:"last-verified"});
@@ -238,7 +240,7 @@
           verifiedStandby.set(id, {standby, at:now, snapshotAt});
           result.set(id, {liveVerified:true, standby, status:"verified"});
         }
-      } else if (status === "refresh-timeout" || status === "unverified") {
+      } else if (status === "refresh-timeout" || status === "unverified" || (status === "verified" && !(snapshotAt > 0))) {
         // A timeout does not establish zero (or any new count).
         const previous = verifiedStandby.get(id);
         if (previous && now - previous.at <= STANDBY_GRACE_MS)
