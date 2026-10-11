@@ -263,7 +263,7 @@
 
   function occupancy(row, info = null) {
     const capacity = row?.capacity && typeof row.capacity === "object" ? row.capacity : {};
-    const usedRaw = capacity.used_units ?? row?.active_api_calls;
+    const usedRaw = capacity.active_requests ?? row?.active_api_calls;
     const usedNumber = usedRaw == null || String(usedRaw).trim() === "" ? NaN : Number(usedRaw);
     const usedKnown = Number.isFinite(usedNumber) && usedNumber >= 0;
     const used = usedKnown ? Math.max(0, usedNumber) : null;
