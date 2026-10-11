@@ -163,7 +163,7 @@
     // Every physical ChatGPT window is observed, but only windows with no route
     // assignment are standby capacity. A completed route stays leased to its API
     // key for five minutes and therefore never appears as "可接待" standby.
-    const physical = await chrome.windows.getAll({ populate: true }).catch(() => []);
+    const physical = await chrome.windows.getAll({ populate: true });
     const seen = new Set();
     for (const win of physical) {
       const windowId = Number(win?.id);
