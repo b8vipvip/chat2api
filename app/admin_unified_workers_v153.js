@@ -392,7 +392,7 @@
     const disabled=codes.length>0&&codes.every(c=>c.enabled===false);
     const name=codes[0]?.name||group.linux?.device_name||clients[0]?.device_name||
       clients[0]?.name||group.id||"待命名设备";
-    const status=live?"在线":disabled?"设备码停用":
+    const status=live?"在线":disabled?"停用":
       group.linux?({"pending":"待安装","installing":"安装中","enrolling":"注册中","failed":"安装失败"}[group.linux.install_state]||"离线"):
       clients.length||paired?"离线":"待配对";
     const tone=live?"good":disabled?"bad":status==="离线"?"bad":"warn";
@@ -442,7 +442,9 @@
     if(!group.linux&&!clients.length&&codes.length){
       actions+='<button type="button" class="action" data-open-linux-create-v160="1">Linux 安装</button>';
     }
-    return '<tr data-v160-device-key="'+esc(group.key)+'"><td><b>'+esc(name)+'</b><div class="v153-muted">'+esc(group.id||codes[0]?.prefix||"-")+'</div></td>'+
+    const physicalId=group.linux?.device_id||group.id||"";
+    return '<tr data-v160-device-key="'+esc(group.key)+'"><td><b>'+esc(name)+'</b>'+
+      (physicalId?'<div class="v153-muted">'+esc(physicalId)+'</div>':"")+'</td>'+
       '<td><span class="v124-pill '+tone+'">'+esc(status)+'</span></td>'+
       '<td>'+esc(os)+'</td><td>'+count+'</td>'+
 

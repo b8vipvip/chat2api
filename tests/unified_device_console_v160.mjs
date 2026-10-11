@@ -49,6 +49,7 @@ assert.match(linuxHtml,/>删除设备码<\/button>/);
 assert.doesNotMatch(linuxHtml,/data-manage-device=|data-delete-device=|>管理<\/button>|>删除设备<\/button>/);
 assert.doesNotMatch(linuxHtml,/>设备码(?: \d+)?<\/span>|class="v160-code-actions"/);
 assert.ok(!linuxHtml.includes(">L001</span>"));
+assert.ok(!linuxHtml.includes(">pair_linux</div>"));
 
 const win=rows.find(x=>x.id==="physical_win");
 assert.equal(win.codes.length,2,"multiple codes stay associated with one physical device");
@@ -84,6 +85,8 @@ const pending=rows.find(x=>x.key==="pairing:pair_pending_a");
 const pendingHtml=model.deviceMarkup(pending);
 assert.ok(!pendingHtml.includes("data-device-add-worker="));
 assert.equal((pendingHtml.match(/data-pairing-list-action=/g)||[]).length,4);
+assert.ok(!pendingHtml.includes(">P001</div>"),"Unpaired code prefix is hidden");
+assert.ok(!pendingHtml.includes(">pair_pending_a</div>"),"Unpaired pairing ID is hidden");
 assert.ok(rows.find(x=>x.id==="standalone"));
 assert.equal(rows.find(x=>x.key==="client:ext_conflict").clients.length,1);
 assert.ok(!linux.clients.some(x=>x.client_id==="ext_conflict"));
