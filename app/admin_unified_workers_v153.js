@@ -37,9 +37,9 @@
       const meta=c.metadata||{};
       // Worker-owned Linux Chrome profiles may not supply a legacy "platform"
       // field. Server-enriched linux_worker_id and real Chrome OS evidence win.
-      const platform=String(meta.platform_os||meta.platform||"").toLowerCase();
-      return !meta.linux_worker_id && !meta.controller_worker_id
-        && platform!=="linux" && platform!=="linux-gnu";
+      // A Linux OS alone is not evidence of a managed Linux Worker: an
+      // unpaired standalone Chrome Bridge must not disappear from both tabs.
+      return !meta.linux_worker_id && !meta.controller_worker_id;
     });
     const codes=Array.isArray(data.pairing_codes)?data.pairing_codes:[];
     const byClient=new Map(clients.map(c=>[String(c.client_id||""),c]));
