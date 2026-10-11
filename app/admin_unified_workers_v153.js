@@ -405,30 +405,38 @@
       .filter(Boolean).sort().at(-1)||group.linux?.install_updated_at;
     const lastDate=last&&Number.isFinite(Date.parse(last))?
       new Date(last).toLocaleString("zh-CN",{hour12:false}):"-";
-    const codeActions=codes.map(c=>{
-      const id=esc(c.pairing_id),label=esc(c.prefix||"设备码");
-      return '<div class="v160-code-actions"><span class="v153-muted">'+label+'</span>'+
+
+    // Keep device-level operations separate from pairing-code operations.
+    // Pairing IDs/prefixes are internal identifiers, not UI labels.
+    // Codes belonging to the same physical device retain independent buttons.
+    const codeActions=codes.map((c,index)=>{
+      const id=esc(c.pairing_id);
+      const codeTitle=esc(c.prefix||c.pairing_id||"");
+      const deleteCode=!group.linux
+        ? '<button type="button" class="action danger" data-pairing-list-action="delete" data-pairing-id="'+id+'">删除设备码</button>'
+        : "";
+      return '<div class="v160-code-actions" data-v160-pairing="'+id+'">'+
+        '<span class="v160-code-index" title="'+codeTitle+'">设备码'+(codes.length>1?" "+(index+1):"")+'</span>'+
+        '<div class="v160-code-controls">'+
         '<button type="button" class="action" data-pairing-list-action="rename" data-pairing-id="'+id+'" data-pairing-name="'+esc(c.name)+'">改名</button>'+
         '<button type="button" class="action" data-pairing-list-action="copy" data-pairing-id="'+id+'">复制</button>'+
         '<button type="button" class="action" data-pairing-list-action="toggle" data-pairing-id="'+id+'" data-enable="'+(c.enabled?"0":"1")+'">'+(c.enabled?"停用":"启用")+'</button>'+
-        '</div>';
+        deleteCode+'</div></div>';
     }).join("");
-    let actions=codeActions;
+    let deviceActions="";
     if(group.linux){
       const id=esc(group.linux.device_id);
-      actions+='<button type="button" class="action good" data-device-add-worker="'+id+'"'+
+      deviceActions+='<button type="button" class="action good" data-device-add-worker="'+id+'"'+
         (workers.some(w=>!w.revoked_at)?"":' disabled title="请先完成 Linux 设备安装"')+'>增加 Worker</button>'+
         '<button type="button" class="action" data-device-upgrade="'+id+'">更新</button>';
     }else if(primary?.client_id){
-      actions+='<button type="button" class="action" data-windows-device-update="'+esc(primary.client_id)+'">更新</button>';
+      deviceActions+='<button type="button" class="action" data-windows-device-update="'+esc(primary.client_id)+'">更新</button>';
     }
     if(!group.linux&&!clients.length&&codes.length){
-      actions+='<button type="button" class="action" data-open-linux-create-v160="1">Linux 安装</button>';
+      deviceActions+='<button type="button" class="action" data-open-linux-create-v160="1">Linux 安装</button>';
     }
-    if(codes.length&&!group.linux){
-      // Never delete a physical device implicitly when deleting a pairing code.
-      actions+=codes.map(c=>'<button type="button" class="action danger" data-pairing-list-action="delete" data-pairing-id="'+esc(c.pairing_id)+'">删除设备码</button>').join("");
-    }
+    const actions=(deviceActions?'<div class="v160-device-actions">'+deviceActions+'</div>':"")+
+      (codeActions?'<div class="v160-code-groups">'+codeActions+'</div>':"");
     return '<tr data-v160-device-key="'+esc(group.key)+'"><td><b>'+esc(name)+'</b><div class="v153-muted">'+esc(group.id||codes[0]?.prefix||"-")+'</div></td>'+
       '<td><span class="v124-pill '+tone+'">'+esc(status)+'</span></td>'+
       '<td>'+esc(os)+'</td><td>'+count+'</td>'+
@@ -493,9 +501,14 @@
     }
     if(el("unifiedDeviceConsoleV160"))return;
     const style=document.createElement("style");
-    style.textContent="#unifiedDeviceConsoleV160 .v160-actions{display:flex;align-items:center;flex-wrap:wrap;gap:6px;min-width:390px}"+
-      "#unifiedDeviceConsoleV160 .v160-actions button{padding:6px 9px}"+
-      "#unifiedDeviceConsoleV160 .v160-code-actions{display:inline-flex;align-items:center;gap:5px;padding-right:8px;border-right:1px solid #334155}"+
+    style.textContent="#unifiedDeviceConsoleV160 .v160-actions{display:flex;flex-direction:column;align-items:flex-start;gap:7px;min-width:310px;white-space:normal}"+
+      "#unifiedDeviceConsoleV160 .v160-device-actions{display:flex;align-items:center;flex-wrap:wrap;gap:6px}"+
+      "#unifiedDeviceConsoleV160 .v160-code-groups{display:grid;gap:7px;width:100%}"+
+      "#unifiedDeviceConsoleV160 .v160-code-actions{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:4px 0}"+
+      "#unifiedDeviceConsoleV160 .v160-code-actions+.v160-code-actions{border-top:1px solid rgba(71,85,105,.38)}"+
+      "#unifiedDeviceConsoleV160 .v160-code-index{min-width:57px;font-size:12px;color:#94a3b8;white-space:nowrap}"+
+      "#unifiedDeviceConsoleV160 .v160-code-controls{display:flex;align-items:center;flex-wrap:wrap;gap:6px}"+
+      "#unifiedDeviceConsoleV160 .v160-actions button{padding:5px 9px;white-space:nowrap}"+
       "#unifiedDeviceConsoleV160 table{min-width:1060px}"+
       "#unifiedDeviceConsoleV160 .panel{margin-bottom:14px}"+
       "#unifiedDeviceConsoleV160 .v160-creation{margin-top:12px}"+

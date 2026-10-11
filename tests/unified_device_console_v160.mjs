@@ -43,6 +43,13 @@ assert.match(linuxHtml,/data-pairing-list-action="rename"/);
 assert.match(linuxHtml,/data-pairing-list-action="copy"/);
 assert.match(linuxHtml,/data-pairing-list-action="toggle"/);
 assert.match(linuxHtml,/data-device-upgrade="install_linux"/);
+assert.match(linuxHtml,/class="v160-device-actions"/);
+assert.match(linuxHtml,/class="v160-code-groups"/);
+assert.match(linuxHtml,/class="v160-code-controls"/);
+assert.ok(linuxHtml.includes(">设备码</span>"));
+assert.ok(!linuxHtml.includes(">L001</span>"),
+  "Never display internal pairing-code prefixes as inline actions");
+
 assert.doesNotMatch(linuxHtml,/data-manage-device=|data-delete-device=|>管理<|>删除设备</,
   "Linux device actions must not expose Management or Delete device");
 assert.match(linuxHtml,/data-pairing-list-action="rename"/);
@@ -60,6 +67,17 @@ assert.equal(linux.codes[0].name,"TX03 renamed");
 const win=rows.find(x=>x.id==="physical_win");
 assert.equal(win.codes.length,2,"multiple codes must retain separate actions in one physical row");
 assert.equal(win.clients.length,2);
+const winHtml=model.deviceMarkup(win);
+assert.equal((winHtml.match(/class="v160-code-actions"/g)||[]).length,2,
+  "Render each pairing code as a separate controls row");
+assert.ok(winHtml.includes(">设备码 1</span>"));
+assert.ok(winHtml.includes(">设备码 2</span>"));
+assert.ok(!winHtml.includes(">W001</span>")&&!winHtml.includes(">W002</span>"),
+  "Never show raw code prefixes in the action column");
+assert.equal((winHtml.match(/data-pairing-list-action="delete"/g)||[]).length,2);
+assert.equal((winHtml.match(/data-pairing-list-action="rename"/g)||[]).length,2);
+assert.equal((winHtml.match(/data-pairing-list-action="copy"/g)||[]).length,2);
+
 assert.equal(rows.filter(x=>x.key.startsWith("pairing:")).length,2,"identical names must never merge pending codes");
 const pending=rows.find(x=>x.key==="pairing:pair_pending_a");
 assert.ok(!model.deviceMarkup(pending).includes('data-device-add-worker='),
