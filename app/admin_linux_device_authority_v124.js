@@ -210,7 +210,7 @@
         const account=String(ext.account_type||ext.metadata?.account_type||b.account_type||"unknown").toLowerCase();
         const accountLabel=account==="free"?"Free":account==="paid"?"付费":"未知";
         const capacity=ext.capacity||{};
-        const usedRaw=capacity.used_units ?? ext.active_api_calls;
+        const usedRaw=capacity.active_requests ?? ext.active_api_calls;
         const running=usedRaw!=null && Number.isFinite(Number(usedRaw))?String(Math.max(0,Number(usedRaw))):"-";
         const reserve=linuxStandbyCell(w,ext); // Verified physical standby per Bridge ID.
         const concurrency=Math.max(1,Math.min(32,Number(ext.max_concurrency||capacity.limit_units||1)));
