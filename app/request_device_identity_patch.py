@@ -120,10 +120,15 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
                 "pairing_id": pairing_id,
             }
             if client_id:
-                by_client[client_id] = identity
-            # A physical TX03 device can host multiple extension profiles. Keep
-            # device-id fallback only when it resolves unambiguously; exact
-            # extension_client_id always wins.
+                # A client id should resolve to one Linux Worker identity. If
+                # duplicate records claim it, mark it ambiguous instead of letting
+                # iteration order silently choose the last Worker.
+                if client_id not in by_client:
+                    by_client[client_id] = identity
+                else:
+                    by_client[client_id] = {}
+            # A physical device may host several isolated Chrome profiles.
+            # Device-id fallback is therefore valid only when unique.
             if device_id:
                 if device_id not in by_device:
                     by_device[device_id] = identity
@@ -142,9 +147,15 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
             if pairing_id:
                 by_id[pairing_id] = item
             if client_id:
-                by_client[client_id] = item
+                if client_id not in by_client:
+                    by_client[client_id] = item
+                else:
+                    by_client[client_id] = {}
             if device_id:
-                by_device[device_id] = item
+                if device_id not in by_device:
+                    by_device[device_id] = item
+                else:
+                    by_device[device_id] = {}
         return by_client, by_id, by_device
 
     def decorate(row: dict[str, Any] | None, maps=None, linux_maps=None) -> dict[str, Any] | None:
@@ -157,11 +168,19 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
             return result
         by_client, by_id, by_device = maps or device_maps()
         linux_by_client, linux_by_device = linux_maps or linux_identity_maps()
-        pairing = by_client.get(client_id)
         client = registry.clients.get(client_id)
         pairing_id = str(getattr(client, "pairing_id", "") or "").strip() if client else ""
         device_id = str(getattr(client, "device_id", "") or "").strip() if client else ""
-        linux_identity = linux_by_client.get(client_id)
+        # The registry's current pairing id is the strongest association. Only
+        # fall back to client/device maps if that exact id is unavailable or stale.
+        pairing = by_id.get(pairing_id) if pairing_id else None
+        if pairing is not None:
+            bound_client_id = str(pairing.get("bound_client_id") or "").strip()
+            if bound_client_id and bound_client_id != client_id:
+                pairing = None
+        if pairing is None:
+            pairing = by_client.get(client_id) or None
+        linux_identity = linux_by_client.get(client_id) or None
         if linux_identity is None and client:
             metadata = getattr(client, "metadata", None) or {}
             linux_worker_id = str(metadata.get("linux_worker_id") or metadata.get("worker_id") or "").strip()
@@ -182,10 +201,8 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
                         }
         if linux_identity is None and device_id:
             linux_identity = linux_by_device.get(device_id) or None
-        if pairing is None and pairing_id:
-            pairing = by_id.get(pairing_id)
         if pairing is None and device_id:
-            pairing = by_device.get(device_id)
+            pairing = by_device.get(device_id) or None
         if pairing is not None:
             pairing_id = str(pairing.get("pairing_id") or pairing_id).strip()
         if linux_identity:
