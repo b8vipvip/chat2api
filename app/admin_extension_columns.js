@@ -185,23 +185,35 @@
   function chatgptLabel(row) {
     const meta = row?.metadata || {};
     const value = String(meta.chatgpt_login_state || "unknown");
-    if (value === "ready") return {text:"已登录", cls:meta.chatgpt_login_composer_ready === true ? "ok" : "warnText"};
+    if (value === "ready" && meta.chatgpt_login_composer_ready === true) return {text:"已登录", cls:"ok"};
+    if (value === "ready") return {text:"登录未就绪", cls:"warnText"};
     if (value === "login_required") return {text:"未登录", cls:"bad"};
     if (value === "checking") return {text:"检测中", cls:"warnText"};
     return {text:"未知", cls:"warnText"};
   }
 
+  function validLimit(...values) {
+    for (const raw of values) {
+      if (raw === null || raw === undefined || String(raw).trim() === "") continue;
+      const value = Number(raw);
+      if (Number.isInteger(value) && value >= 1 && value <= 32) return value;
+    }
+    return null;
+  }
+
   function limitEditor(row) {
     const id = String(row?.client_id || "");
-    const concurrency = Math.max(1, Math.min(32, Number(row?.max_concurrency || row?.capacity?.limit_units || 1)));
-    const windows = Math.max(1, Math.min(32, Number(row?.max_windows || 1)));
+    const concurrency = validLimit(row?.max_concurrency, row?.capacity?.limit_units);
+    const windows = validLimit(row?.max_windows, row?.capacity?.window_limit);
+    const concurrencyText = concurrency === null ? "?" : String(concurrency);
+    const windowsText = windows === null ? "?" : String(windows);
     return `<div data-v121-worker-limits="${esc(id)}" style="position:relative;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;min-width:78px">
-      <strong data-v121-limit-summary style="font-variant-numeric:tabular-nums">${concurrency}/${windows}</strong>
+      <strong data-v121-limit-summary style="font-variant-numeric:tabular-nums">${concurrencyText}/${windowsText}</strong>
       <button class="action" type="button" data-v121-edit-limits title="编辑并发 / 备用设置" aria-label="编辑并发 / 备用设置" style="padding:4px 7px;min-width:30px">✎</button>
       <div data-v121-limit-popover hidden style="position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:250px;padding:12px;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 14px 34px rgba(0,0,0,.38);white-space:normal">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <label style="display:grid;gap:5px;font-size:12px">并发<input data-v121-concurrency type="number" min="1" max="32" value="${concurrency}" style="width:100%;padding:7px 8px"></label>
-          <label style="display:grid;gap:5px;font-size:12px">备用<input data-v121-windows type="number" min="1" max="32" value="${windows}" style="width:100%;padding:7px 8px"></label>
+          <label style="display:grid;gap:5px;font-size:12px">并发<input data-v121-concurrency type="number" min="1" max="32" value="${concurrency === null ? "" : concurrency}" style="width:100%;padding:7px 8px"></label>
+          <label style="display:grid;gap:5px;font-size:12px">备用<input data-v121-windows type="number" min="1" max="32" value="${windows === null ? "" : windows}" style="width:100%;padding:7px 8px"></label>
         </div>
         <div style="display:flex;align-items:center;justify-content:flex-end;gap:7px;margin-top:10px">
           <span class="muted" data-v121-limit-note style="font-size:11px;margin-right:auto"></span>
