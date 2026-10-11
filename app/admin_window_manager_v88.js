@@ -175,15 +175,22 @@
     const box = document.getElementById("wmTruthStatus");
     if (!box) return;
     const truth = state.truth && typeof state.truth === "object" ? state.truth : {};
-    const online = Math.max(0, Number(truth.online_workers || 0));
-    const verified = Math.max(0, Number(truth.verified_workers || 0));
-    const unverified = Math.max(0, Number(truth.unverified_workers || 0));
-    const standby = Math.max(0, Number(truth.standby_windows || 0));
-    const leased = Math.max(0, Number(truth.leased_route_windows || 0));
-    const inUse = Math.max(0, Number(truth.in_use_windows || 0));
+    const count = value => value === null || value === undefined || String(value).trim() === ""
+      ? null : Number.isFinite(Number(value)) && Number(value) >= 0 ? Number(value) : null;
+    const online = count(truth.online_workers);
+    const verified = count(truth.verified_workers);
+    const unverified = count(truth.unverified_workers);
+    const standby = count(truth.standby_windows);
+    const leased = count(truth.leased_route_windows);
+    const inUse = count(truth.in_use_windows);
     if (Number(state.truth_revision || 0) < 89) {
       box.className = "warnText";
       box.textContent = "当前服务端尚未启用实时物理窗口核验。";
+      return;
+    }
+    if (online === null || verified === null || unverified === null) {
+      box.className = "warnText";
+      box.textContent = "实时物理核验：服务端汇总字段不完整，暂不可显示统计结果。";
       return;
     }
     if (online <= 0) {
@@ -191,8 +198,11 @@
       box.textContent = "实时物理核验：暂无在线 Worker。历史缓存不会计入备用窗口。";
       return;
     }
-    box.className = unverified > 0 ? "warnText" : "muted";
-    box.textContent = `实时物理核验：${verified}/${online} 个在线 Worker 已核验；备用窗口 ${standby} 个；正在执行 ${inUse} 个；5分钟接待租约 ${leased} 个。${unverified > 0 ? `另有 ${unverified} 个 Worker 未完成核验。` : ""}`;
+    const standbyLabel = standby === null ? "备用窗口未知" : `${unverified > 0 ? "已核验备用窗口" : "备用窗口"} ${standby} 个`;
+    const inUseLabel = inUse === null ? "执行中窗口未知" : `已核验执行中 ${inUse} 个`;
+    const leasedLabel = leased === null ? "接待租约未知" : `已核验5分钟接待租约 ${leased} 个`;
+    box.className = unverified > 0 || standby === null || inUse === null || leased === null ? "warnText" : "muted";
+    box.textContent = `实时物理核验：${verified}/${online} 个在线 Worker 已核验；${standbyLabel}；${inUseLabel}；${leasedLabel}。${unverified > 0 ? `另有 ${unverified} 个 Worker 未完成核验。` : ""}`;
   }
 
   function render() {
