@@ -262,7 +262,7 @@ def test_worker_summary_exposes_broker_active_request_count_without_fabricating_
 
     rows = {row["client_id"]: row for row in app.state.registry.summaries()}
     assert rows["ext_windows"]["active_api_calls"] == 1
-    assert rows["ext_windows"]["capacity"]["used_units"] == 1
+    assert rows["ext_windows"]["capacity"]["active_requests"] == 1
 
     # If the request source is unavailable, do not publish a fake zero.
     app.state.broker = None
