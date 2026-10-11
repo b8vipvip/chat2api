@@ -1,6 +1,6 @@
 (() => {
   "use strict";
-  const VERSION = "v156";
+  const VERSION = "v157";
   let selectedWorker = "";
   let selectedType = "windows";
   const api = async (path, options = {}) => {
@@ -20,6 +20,56 @@
     const date=new Date(value);
     return Number.isFinite(date.getTime())?date.toLocaleString("zh-CN",{hour12:false}):"-";
   };
+  const clientSeenAt = client => {
+    const parsed=Date.parse(String(client?.last_seen_at||""));
+    return Number.isFinite(parsed)?parsed:0;
+  };
+  const clientsByFreshness = clients => [...(Array.isArray(clients)?clients:[])].sort((a,b)=>
+    Number(b?.online===true)-Number(a?.online===true) || clientSeenAt(b)-clientSeenAt(a));
+  const networkDetails = client => {
+    const meta=client?.metadata&&typeof client.metadata==="object"?client.metadata:{};
+    const bridge=meta.bridge&&typeof meta.bridge==="object"?meta.bridge:{};
+    const nested=meta.network&&typeof meta.network==="object"?meta.network:{};
+    return {
+      status:String(meta.network_probe_status||bridge.network_probe_status||nested.probe_status||nested.status||"").trim().toLowerCase(),
+      country:String(meta.network_country_code||bridge.network_country_code||nested.country_code||"").trim().toUpperCase(),
+    };
+  };
+  const hasNetworkDetails = client => {
+    const n=networkDetails(client);
+    return Boolean(n.country || (n.status && n.status!=="unknown"));
+  };
+  const networkLabelForClient = client => {
+    const n=networkDetails(client);
+    if(n.country)return n.country;
+    if(n.status==="external")return "外网";
+    if(n.status==="china-mainland")return "中国大陆";
+    if(n.status==="offline")return "浏览器离线";
+    if(n.status==="error")return "探测失败";
+    if(["ready","online","connected","reachable"].includes(n.status))return "已联网";
+    return "未知";
+  };
+  const deviceNetworkLabel = clients => {
+    const ordered=clientsByFreshness(clients);
+    const liveSource=ordered.find(client=>client.online===true&&hasNetworkDetails(client));
+    if(liveSource)return networkLabelForClient(liveSource);
+    const previousSource=ordered.find(hasNetworkDetails);
+    return previousSource?`${networkLabelForClient(previousSource)}（上次报告）`:"未知";
+  };
+  const latestSeen = clients => {
+    let latest="",latestAt=0;
+    for(const client of Array.isArray(clients)?clients:[]){
+      const at=clientSeenAt(client);
+      if(at>latestAt){latestAt=at;latest=String(client.last_seen_at||"");}
+    }
+    return latest;
+  };
+  const preferredClient = clients => clientsByFreshness(clients)[0]||null;
+  if(globalThis.__CHAT2API_TEST_MODE__===true){
+    globalThis.__CHAT2API_WORKER_DEVICE_DATA_V157__=Object.freeze({
+      clientSeenAt,clientsByFreshness,networkDetails,deviceNetworkLabel,latestSeen,preferredClient
+    });
+  }
   function makeWindowsDevicePanel() {
     const panel=document.createElement("div");
     panel.className="panel";
@@ -43,7 +93,7 @@
       if(!client)continue;
       const id=String(code.bound_device_id||client.device_id||client.metadata?.device_id||client.client_id||"");
       if(!id)continue;
-      if(!groups.has(id))groups.set(id,{id,name:code.name||client.name||id,clients:[],lastSeen:code.last_paired_at||"",paired:true});
+      if(!groups.has(id))groups.set(id,{id,name:code.name||client.name||id,clients:[],paired:true});
       const group=groups.get(id);
       group.name=code.name||group.name;
       if(!group.clients.some(row=>row.client_id===client.client_id))group.clients.push(client);
@@ -53,18 +103,20 @@
       if(pairedClientIds.has(String(client.client_id||"")))continue;
       const id=String(client.device_id||client.metadata?.device_id||client.client_id||"");
       if(!id)continue;
-      if(!groups.has(id))groups.set(id,{id,name:client.device_name||client.name||id,clients:[],lastSeen:"",paired:false});
+      if(!groups.has(id))groups.set(id,{id,name:client.device_name||client.name||id,clients:[],paired:false});
       const group=groups.get(id);
       if(!group.clients.some(row=>row.client_id===client.client_id))group.clients.push(client);
     }
     let online=0;
     body.innerHTML=[...groups.values()].map(group=>{
-      const live=group.clients.filter(c=>c.online);
+      const ordered=clientsByFreshness(group.clients);
+      const live=ordered.filter(c=>c.online===true);
       if(live.length)online++;
-      const net=live[0]?.metadata?.network_country_code || live[0]?.metadata?.network_probe_status ||
-        group.clients[0]?.metadata?.network_country_code || group.clients[0]?.metadata?.network_probe_status || "-";
-      const last=group.clients.map(c=>c.last_seen_at||"").filter(Boolean).sort().at(-1)||group.lastSeen;
-      const worker=group.clients[0]?.client_id||"";
+      // Never use pairing time as "last online", or an arbitrary first client as
+      // the device's network/action owner. Prefer the freshest live bound Worker.
+      const net=deviceNetworkLabel(group.clients);
+      const last=latestSeen(group.clients);
+      const worker=preferredClient(group.clients)?.client_id||"";
       return `<tr><td><b>${esc(group.name)}</b></td><td><code>${esc(group.id)}</code></td><td><span class="v124-pill ${live.length?"good":"warn"}">${live.length?"在线":"离线"}</span></td><td>${group.clients.length}</td><td>Windows</td><td>${esc(net)}</td><td>${esc(timeLabel(last))}</td><td><button class="action" data-windows-device-worker="${esc(worker)}">查看Worker</button><button class="action" data-windows-device-update="${esc(worker)}">更新</button></td></tr>`;
     }).join("")||'<tr><td colspan="8" class="v153-muted">暂无已绑定的 Windows 设备，请先配对 Windows Worker。</td></tr>';
     byId("windowsDeviceSummaryV155").textContent=`Windows 设备：${groups.size} · 在线设备：${online} · Windows Worker：${clients.length}`;
