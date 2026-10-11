@@ -61,6 +61,7 @@
       default_model: normalizeModel(detail.default_model || row.evidence.default_model),
       reasoning: detail.reasoning || row.evidence.reasoning || null,
       model_conflict: Boolean(detail.model_conflict || row.evidence.model_conflict),
+      default_model_conflict: Boolean(detail.default_model_conflict || row.evidence.default_model_conflict),
       reasoning_conflict: Boolean(detail.reasoning_conflict || row.evidence.reasoning_conflict),
       model_field: detail.model_field || row.evidence.model_field || null,
       default_model_field: detail.default_model_field || row.evidence.default_model_field || null,

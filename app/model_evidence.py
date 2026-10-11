@@ -45,6 +45,7 @@ class ModelEvidence:
     default_model: str | None = None
     reasoning: str | None = None
     model_conflict: bool = False
+    default_model_conflict: bool = False
     reasoning_conflict: bool = False
     model_field: str | None = None
     default_model_field: str | None = None
@@ -63,8 +64,7 @@ def _path_score(path: list[str], key: str, kind: str, mode: str) -> int:
             return 140 if key == "model" and not path else 0
         if key in SERVED_MODEL_KEYS:
             return 150
-        if key in DEFAULT_MODEL_KEYS:
-            return 110
+        # Profile defaults are diagnostics, not proof of the served model.
         return 0
     return 115 if metadata else 95 if len(path) <= 3 else 0
 
@@ -82,6 +82,10 @@ def _collect(value: Any, candidates: dict[str, list[tuple[str, int, str]]], path
     for raw_key, child in value.items():
         key = canonical_key(raw_key)
         next_path = [*path, str(raw_key)]
+        if key in DEFAULT_MODEL_KEYS and isinstance(child, str):
+            default = normalize_model_id(child)
+            if default and mode == "response":
+                candidates["default_model"].append((default, 110, ".".join(next_path)))
         if key in MODEL_KEYS and isinstance(child, str):
             model = normalize_model_id(child)
             score = _path_score(path, key, "model", mode)
@@ -108,19 +112,20 @@ def _select(candidates: list[tuple[str, int, str]]) -> SelectedCandidate:
 
 
 def inspect_objects(values: Iterable[Any], mode: str = "response") -> ModelEvidence:
-    candidates: dict[str, list[tuple[str, int, str]]] = {"model": [], "reasoning": []}
+    candidates: dict[str, list[tuple[str, int, str]]] = {"model": [], "default_model": [], "reasoning": []}
     for value in values:
         _collect(value, candidates, mode=mode)
     model = _select(candidates["model"])
     reasoning = _select(candidates["reasoning"])
-    defaults = [item for item in candidates["model"] if canonical_key(item[2].split(".")[-1]) in DEFAULT_MODEL_KEYS]
-    default = _select(defaults)
+    default = _select(candidates["default_model"])
+    # A profile-default disagreement cannot contaminate served-model authority.
     return ModelEvidence(
         request_model=model.value if mode == "request" else None,
         served_model=model.value if mode != "request" and model.field and canonical_key(model.field.split(".")[-1]) in SERVED_MODEL_KEYS else None,
         default_model=default.value,
         reasoning=reasoning.value,
         model_conflict=model.conflict,
+        default_model_conflict=default.conflict,
         reasoning_conflict=reasoning.conflict,
         model_field=model.field,
         default_model_field=default.field,
@@ -190,6 +195,7 @@ def extract_response_evidence(body: str = "", headers: dict[str, str] | None = N
         default_model=body_evidence.default_model,
         reasoning=None if reasoning_conflict else header_reasoning or body_evidence.reasoning,
         model_conflict=conflict,
+        default_model_conflict=body_evidence.default_model_conflict,
         reasoning_conflict=reasoning_conflict,
         model_field="response-header" if header_model and not conflict else body_evidence.model_field,
         default_model_field=body_evidence.default_model_field,

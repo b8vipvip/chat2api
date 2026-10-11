@@ -62,8 +62,6 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
         fallback_reason = fallback_reason or "worker_request_model_rewrite"
     elif routed and served and routed != served:
         fallback_reason = fallback_reason or "upstream_served_model_mismatch"
-    elif routed and default_model and routed != default_model:
-        fallback_reason = fallback_reason or "upstream_default_model_mismatch"
     return {
         "requested_model": requested,
         "routed_model": routed,
@@ -74,6 +72,8 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
         "default_model": default_model,
         "model_verified": verified,
         "model_conflict": conflict,
+        "model_default_profile_conflict": bool(evidence.get("default_model_conflict")),
+        "model_default_profile_mismatch": bool(routed and default_model and routed != default_model),
         "model_authority_violation": authority_violation,
         "model_verification_level": level,
         "model_evidence_source": evidence.get("evidence_source") or ("network_response_metadata" if served else None),
