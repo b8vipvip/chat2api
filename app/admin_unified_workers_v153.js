@@ -28,6 +28,7 @@
     return panel;
   }
   async function refreshWindowsDevices() {
+    if(document.documentElement.dataset.chat2apiUnifiedDeviceConsole==="v160")return;
     const body=byId("windowsDeviceRowsV155");
     if(!body)return;
     const snapshot=globalThis.__chat2apiWindowsSnapshotV156;
@@ -546,7 +547,7 @@
       }
     },15000);
   }
-  globalThis[KEY]=Object.freeze({aggregate,render,refresh,version:"v160"});
+  globalThis[KEY]=Object.freeze({aggregate,deviceMarkup:renderDevice,render,refresh,version:"v160"});
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",boot,{once:true});
   else boot();
 })();

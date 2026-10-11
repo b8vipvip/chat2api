@@ -36,6 +36,14 @@ assert.equal(rows.length,6,"one Linux, one Windows, two pending codes, standalon
 assert.equal(model.aggregate([{...devices[0],device_pairing_id:""}],payload).length,6,
   "exact Bridge Client ID must merge an installed Linux device and its code even without pairing metadata");
 const linux=rows.find(x=>x.linux?.device_id==="install_linux");
+const linuxHtml=model.deviceMarkup(linux);
+assert.match(linuxHtml,/data-device-add-worker="install_linux"/);
+assert.match(linuxHtml,/>增加 Worker<\/button>/);
+assert.match(linuxHtml,/data-pairing-list-action="rename"/);
+assert.match(linuxHtml,/data-pairing-list-action="copy"/);
+assert.match(linuxHtml,/data-pairing-list-action="toggle"/);
+assert.match(linuxHtml,/data-device-upgrade="install_linux"/);
+
 assert.equal(linux.codes.length,1);
 assert.equal(linux.clients.length,2);
 assert.equal(linux.codes[0].name,"TX03 renamed");
@@ -43,6 +51,12 @@ const win=rows.find(x=>x.id==="physical_win");
 assert.equal(win.codes.length,2,"multiple codes must retain separate actions in one physical row");
 assert.equal(win.clients.length,2);
 assert.equal(rows.filter(x=>x.key.startsWith("pairing:")).length,2,"identical names must never merge pending codes");
+const pending=rows.find(x=>x.key==="pairing:pair_pending_a");
+assert.ok(!model.deviceMarkup(pending).includes('data-device-add-worker='),
+  "uninstalled device codes cannot create Linux Workers without a controller");
+assert.equal((model.deviceMarkup(win).match(/data-pairing-list-action="toggle"/g)||[]).length,2,
+  "each pairing code retains independent enable/disable controls");
+
 assert.equal(rows.find(x=>x.id==="standalone").clients[0].client_id,"ext_standalone_linux");
 assert.equal(rows.find(x=>x.key==="client:ext_conflict").clients.length,1);
 assert.ok(!linux.clients.some(x=>x.client_id==="ext_conflict"),
