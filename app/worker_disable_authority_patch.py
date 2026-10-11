@@ -193,7 +193,9 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
                     row["active_api_calls"] = active_count
                     capacity = row.get("capacity") if isinstance(row.get("capacity"), dict) else {}
                     capacity = dict(capacity)
-                    capacity["used_units"] = active_count
+                    # Request count is distinct from weighted concurrency units.
+                    # Keep account_generation_admission's used_units unchanged.
+                    capacity["active_requests"] = active_count
                     row["capacity"] = capacity
                 worker = worker_for_client(client_id)
                 if not worker:
