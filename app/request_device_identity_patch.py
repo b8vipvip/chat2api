@@ -144,7 +144,13 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
             if client_id:
                 by_client[client_id] = item
             if device_id:
-                by_device[device_id] = item
+                # Many pairings may share one physical device. Exact bound
+                # client wins; never use "last pairing seen" for an ambiguous
+                # physical-device fallback in request history.
+                if device_id not in by_device:
+                    by_device[device_id] = item
+                else:
+                    by_device[device_id] = {}
         return by_client, by_id, by_device
 
     def decorate(row: dict[str, Any] | None, maps=None, linux_maps=None) -> dict[str, Any] | None:
@@ -168,7 +174,7 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
             if linux_worker_id:
                 workers = getattr(app.state, "linux_workers", None)
                 worker = getattr(workers, "data", {}).get("workers", {}).get(linux_worker_id) if workers is not None else None
-                if isinstance(worker, dict):
+                if isinstance(worker, dict) and not worker.get("revoked_at"):
                     exact_client = str(worker.get("extension_client_id") or "").strip()
                     if not exact_client or exact_client == client_id:
                         worker_meta = worker.get("metadata") if isinstance(worker.get("metadata"), dict) else {}
