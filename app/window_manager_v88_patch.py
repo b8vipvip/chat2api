@@ -15,6 +15,7 @@ from .login_readiness import login_readiness
 PATCH_REVISION = 88
 LIVE_TRUTH_REVISION = 89
 LIVE_TRUTH_MIN_BUNDLE = (0, 22, 112)
+LIVE_TRUTH_MIN_OBSERVER_REVISION = 90
 LIVE_TRUTH_TIMEOUT_SECONDS = 1.2
 ADMIN_ASSET = "/assets/chat2api-window-manager-v88.js"
 
@@ -139,12 +140,17 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
                     ack_updated_at = max(0, int(ack.get("updated_at_ms") or 0))
                 except (TypeError, ValueError):
                     ack_updated_at = 0
+                try:
+                    ack_revision = max(0, int(ack.get("observer_revision") or 0))
+                except (TypeError, ValueError):
+                    ack_revision = 0
                 snapshot_updated_at = _snapshot_updated_at(row)
                 # A newer timestamp alone is not proof: require the acknowledgement
                 # for this exact control_id and a snapshot at least as new as that ack.
                 if (
                     str(ack.get("control_id") or "") == control_ids.get(client_id)
                     and ack.get("ok") is True
+                    and ack_revision >= LIVE_TRUTH_MIN_OBSERVER_REVISION
                     and ack_updated_at > before.get(client_id, 0)
                     and snapshot_updated_at >= ack_updated_at
                 ):
