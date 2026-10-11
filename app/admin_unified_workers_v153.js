@@ -39,8 +39,11 @@
       // field. Server-enriched linux_worker_id and real Chrome OS evidence win.
       // A Linux OS alone is not evidence of a managed Linux Worker: an
       // unpaired standalone Chrome Bridge must not disappear from both tabs.
-      return !meta.linux_worker_id && !meta.controller_worker_id;
+      return !meta.linux_worker_id && !meta.controller_worker_id &&
+        meta.linux_bridge_binding_conflict!==true;
     });
+    const conflicts=(Array.isArray(data.clients)?data.clients:[])
+      .filter(c=>c.metadata?.linux_bridge_binding_conflict===true).length;
     const codes=Array.isArray(data.pairing_codes)?data.pairing_codes:[];
     const byClient=new Map(clients.map(c=>[String(c.client_id||""),c]));
     const groups=new Map();
@@ -74,7 +77,7 @@
       const worker=(live[0]||group.clients.find(c=>c.connection_enabled!==false)||group.clients[0])?.client_id||"";
       return `<tr><td><b>${esc(group.name)}</b></td><td><code>${esc(group.id)}</code></td><td><span class="v124-pill ${live.length?"good":"warn"}">${live.length?"在线":"离线"}</span></td><td>${group.clients.length}</td><td>Windows</td><td>${esc(net)}</td><td>${esc(timeLabel(last))}</td><td><button class="action" data-windows-device-worker="${esc(worker)}">查看Worker</button><button class="action" data-windows-device-update="${esc(worker)}">更新</button></td></tr>`;
     }).join("")||'<tr><td colspan="8" class="v153-muted">暂无已绑定的 Windows 设备，请先配对 Windows Worker。</td></tr>';
-    byId("windowsDeviceSummaryV155").textContent=`Windows 设备：${groups.size} · 在线设备：${online} · Windows Worker：${clients.length}`;
+    byId("windowsDeviceSummaryV155").textContent=`Windows 设备：${groups.size} · 在线设备：${online} · Windows Worker：${clients.length}${conflicts?` · 绑定冲突：${conflicts}（请检查 Worker 诊断）`:""}`;
   }
 
 
