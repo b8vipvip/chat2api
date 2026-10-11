@@ -43,6 +43,16 @@ assert.match(linuxHtml,/data-pairing-list-action="rename"/);
 assert.match(linuxHtml,/data-pairing-list-action="copy"/);
 assert.match(linuxHtml,/data-pairing-list-action="toggle"/);
 assert.match(linuxHtml,/data-device-upgrade="install_linux"/);
+assert.doesNotMatch(linuxHtml,/data-manage-device=|data-delete-device=|>管理<|>删除设备</,
+  "Linux device actions must not expose Management or Delete device");
+assert.match(linuxHtml,/data-pairing-list-action="rename"/);
+assert.match(linuxHtml,/data-pairing-list-action="copy"/);
+assert.match(linuxHtml,/data-pairing-list-action="toggle"/);
+const legacyLinux=fs.readFileSync(new URL("../app/admin_linux_device_authority_v124.js",import.meta.url),"utf8");
+const legacyActions=legacyLinux.slice(legacyLinux.indexOf("  function renderDevices(){"),
+  legacyLinux.indexOf("  function renderWorkers(){"));
+assert.doesNotMatch(legacyActions,/data-delete-device=|data-manage-device=/,
+  "Hidden historical device table cannot re-introduce removed actions");
 
 assert.equal(linux.codes.length,1);
 assert.equal(linux.clients.length,2);

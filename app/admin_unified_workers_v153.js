@@ -418,9 +418,7 @@
       const id=esc(group.linux.device_id);
       actions+='<button type="button" class="action good" data-device-add-worker="'+id+'"'+
         (workers.some(w=>!w.revoked_at)?"":' disabled title="请先完成 Linux 设备安装"')+'>增加 Worker</button>'+
-        '<button type="button" class="action" data-manage-device="'+id+'">管理</button>'+
-        '<button type="button" class="action" data-device-upgrade="'+id+'">更新</button>'+
-        '<button type="button" class="action danger" data-delete-device="'+id+'">删除设备</button>';
+        '<button type="button" class="action" data-device-upgrade="'+id+'">更新</button>';
     }else if(primary?.client_id){
       actions+='<button type="button" class="action" data-windows-device-update="'+esc(primary.client_id)+'">更新</button>';
     }
