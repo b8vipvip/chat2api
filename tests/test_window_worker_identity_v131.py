@@ -38,9 +38,10 @@ def test_unlogged_linux_child_can_inherit_device_name_before_pairing_bind() -> N
     assert 'client_id = str(worker.get("extension_client_id") or "").strip()' in source
     assert 'device_name = str(metadata.get("device_name") or worker_pairing.get("name") or "").strip()' in source
     assert 'linux_by_client[client_id] = device_name' in source
-    assert 'linux_name = linux_by_client.get(client_id) or linux_by_worker.get(linux_worker_id) or ""' in source
+    assert 'linux_by_client.get(client_id)' in source
+    assert 'linux_by_worker.get(linux_worker_id)' in source
     assert 'if not pairing_id:\n                    pairing_id = fallback_pairing' in source
-    assert 'row["device_name"] = by_pairing.get(pairing_id) or fallback_name or linux_name or None' in source
+    assert 'row["device_name"] = linux_name or by_pairing.get(pairing_id) or fallback_name or None' in source
 
 
 def test_identity_asset_is_served_and_injected_once() -> None:

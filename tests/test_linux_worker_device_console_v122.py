@@ -44,7 +44,7 @@ def test_worker_management_keeps_device_name_from_pairing_code():
     frontend = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
     retired = (ROOT / "app" / "admin_worker_presentation_v66.js").read_text(encoding="utf-8")
     authority_ui = (ROOT / "app" / "admin_linux_device_authority_v124.js").read_text(encoding="utf-8")
-    assert 'row["device_name"] = by_pairing.get(pairing_id) or fallback_name or linux_name or None' in backend
+    assert 'row["device_name"] = linux_name or by_pairing.get(pairing_id) or fallback_name or None' in backend
     assert 'if not pairing_id:\n                    pairing_id = fallback_pairing' in backend
     assert '{key: "device_name", label: "设备名称"}' in frontend
     assert 'row?.device_name' in frontend

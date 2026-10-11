@@ -122,7 +122,7 @@ def test_device_tables_and_worker_tables_have_separate_owners():
     linux = (ROOT / "app/admin_linux_device_authority_v124.js").read_text()
     assert 'id="windowsDeviceTableV155"' in windows
     assert 'const clients=(Array.isArray(data.clients)' in windows
-    assert 'c.metadata?.linux_worker_id' in windows
+    assert '!meta.linux_worker_id && !meta.controller_worker_id' in windows
     assert 'id="linuxWorkerTableV155"' in linux
     assert 'const clientById=new Map(state.extensions' in linux
     assert 'data-worker-action="initialize"' in linux.split('function renderWorkers()',1)[1]

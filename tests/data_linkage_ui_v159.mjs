@@ -40,7 +40,7 @@ assert.equal(chatgpt({...worker,enabled:false},extension),"已禁用");
 assert.equal(chatgpt({...worker,revoked_at:"2026-01-01"},extension),"已禁用");
 
 const unified=fs.readFileSync(new URL("../app/admin_unified_workers_v153.js",import.meta.url),"utf8");
-assert.match(unified,/!meta\\.linux_worker_id && !meta\\.controller_worker_id/);
+assert.match(unified,/!meta\.linux_worker_id && !meta\.controller_worker_id/);
 assert.doesNotMatch(unified,/platform!=="linux"/,
   "standalone Linux Chrome without an Agent binding must not disappear from both lists");
 assert.match(unified,/c\.connection_enabled!==false/);
