@@ -185,6 +185,16 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
             rows = base_summaries()
             for row in rows:
                 client_id = str(row.get("client_id") or "")
+                # The Worker list must expose an actual broker-backed request count.
+                # Missing telemetry stays absent so the UI can show unknown instead
+                # of silently rendering "0" when the source cannot be read.
+                active_count = active_request_count(client_id)
+                if active_count is not None:
+                    row["active_api_calls"] = active_count
+                    capacity = row.get("capacity") if isinstance(row.get("capacity"), dict) else {}
+                    capacity = dict(capacity)
+                    capacity["used_units"] = active_count
+                    row["capacity"] = capacity
                 worker = worker_for_client(client_id)
                 if not worker:
                     row["admin_enabled"] = row.get("connection_enabled") is not False
@@ -217,6 +227,16 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
         if request_id and request_id in getattr(broker, "requests", {}):
             return [str(request_id)]
         return []
+
+    def active_request_count(client_id: str) -> int | None:
+        broker = getattr(app.state, "broker", None)
+        if broker is None:
+            return None
+        active_by_client = getattr(broker, "client_active_requests", None)
+        request_map = getattr(broker, "client_requests", None)
+        if not isinstance(active_by_client, dict) and not isinstance(request_map, dict):
+            return None
+        return len(active_request_ids(client_id))
 
     def require_disable_lease(client_id: str) -> None:
         active = active_request_ids(client_id)
