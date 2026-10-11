@@ -427,9 +427,6 @@
       actions+=actionButton("rename","改名");
       actions+=actionButton("copy","复制");
       actions+=actionButton("toggle",toggleLabel);
-      // Deleting a registration credential is not deleting the physical
-      // device. Existing Linux/Windows Workers remain separate identities.
-      actions+=actionButton("delete","删除设备码","danger");
     }
     if(group.linux){
       const id=esc(group.linux.device_id);
@@ -442,6 +439,9 @@
     if(!group.linux&&!clients.length&&codes.length){
       actions+='<button type="button" class="action" data-open-linux-create-v160="1">Linux 安装</button>';
     }
+    // Physical-device deletion applies to all equipment rows, including
+    // unpaired and orphan Chrome Bridge records with no pairing credential.
+    actions+='<button type="button" class="action danger" data-unified-delete-device="'+esc(group.key)+'">删除设备</button>';
     const physicalId=group.linux?.device_id||group.id||"";
     return '<tr data-v160-device-key="'+esc(group.key)+'"><td><b>'+esc(name)+'</b>'+
       (physicalId?'<div class="v153-muted">'+esc(physicalId)+'</div>':"")+'</td>'+
@@ -454,7 +454,7 @@
 
   function choiceMarkup(group,action){
     if(!group||!Array.isArray(group.codes)||group.codes.length<2)return "";
-    const labels={rename:"改名",copy:"复制",toggle:"启用/停用",delete:"删除设备码"};
+    const labels={rename:"改名",copy:"复制",toggle:"启用/停用"};
     if(!Object.prototype.hasOwnProperty.call(labels,action))return "";
     return '<div class="dialogHead"><b>选择设备凭据 · '+labels[action]+'</b>'+
       '<button type="button" class="action" data-v161-close-code-choice="1">关闭</button></div>'+
@@ -468,24 +468,65 @@
           ' title="'+esc(c.prefix||"")+'">凭据 '+(index+1)+' · '+label+'</button>';
       }).join("")+'</div></div>';
   }
+
+  function workerState(textValue,tone){
+    return '<span class="v124-pill '+tone+'">'+esc(textValue)+'</span>';
+  }
+  // Never copy the hidden legacy status cell: multiple DOM owners may rewrite
+  // it after refresh and regress the Worker table to 已启用/已禁用.
+  function windowsWorkerState(client){
+    if(!client)return workerState("未确认","warn");
+    if(client.connection_enabled===false)return workerState("停用","warn");
+    if(client.online===true){
+      const used=Number(client.capacity?.used_units??client.active_api_calls??0);
+      return client.busy===true||(Number.isFinite(used)&&used>0)?
+        workerState("忙碌","warn"):workerState("运行正常","good");
+    }
+    return workerState("离线","bad");
+  }
+  function linuxWorkerState(worker,ext){
+    if(!worker)return workerState("未确认","warn");
+    if(worker.revoked_at)return workerState("已吊销","bad");
+    if(worker.enabled===false)return workerState("停用","warn");
+    const seen=Date.parse(worker.last_seen_at||"");
+    if(Number.isFinite(seen)&&Date.now()-seen>45000)return workerState("离线","bad");
+    const raw=text(worker.status).toLowerCase();
+    if(raw==="ready"){
+      if(!Number.isFinite(seen))return workerState("未确认","warn");
+      const used=Number(ext?.capacity?.used_units??ext?.active_api_calls??0);
+      return ext?.busy===true||(Number.isFinite(used)&&used>0)?
+        workerState("忙碌","warn"):workerState("运行正常","good");
+    }
+    const labels={
+      waiting_login:"待登录",login_checking:"检测登录",
+      waiting_proxy:"待配置代理",proxy_checking:"检测代理",
+      degraded:"运行异常",offline:"离线",error:"错误",enrolling:"注册中",
+    };
+    const label=labels[raw]||"未确认";
+    return workerState(label,["离线","错误","运行异常"].includes(label)?"bad":"warn");
+  }
   function renderWorkers(){
     const target=el("unifiedWorkerRowsV160");if(!target)return;
     const rows=[];
+    const workerById=new Map(getLinux().flatMap(d=>(d.workers||[]).map(w=>[text(w.worker_id),w])));
+    const clientsById=new Map((data.clients||[]).map(c=>[text(c.client_id),c]));
     const cell=(row,key)=>row.querySelector('td[data-chat2api-column-key="'+key+'"]')?.innerHTML||"-";
     for(const row of document.querySelectorAll("#extensionDeviceBody tr[data-client-id]")){
       const id=esc(row.dataset.clientId||"");
-      const client=(data.clients||[]).find(c=>text(c.client_id)===text(row.dataset.clientId));
+      const client=clientsById.get(text(row.dataset.clientId));
       const os=client?systemOf({linux:null,clients:[client]}):"未识别";
       rows.push('<tr data-unified-worker-id="'+id+'"><td>'+cell(row,"client_id")+'</td><td>'+cell(row,"device_name")+
-        '</td><td>'+esc(os)+'</td><td>'+cell(row,"account_type")+'</td><td>'+cell(row,"status")+
+        '</td><td>'+esc(os)+'</td><td>'+cell(row,"account_type")+'</td><td>'+windowsWorkerState(client)+
         '</td><td>'+cell(row,"occupancy")+'</td><td>'+cell(row,"worker_settings")+
         '</td><td>'+cell(row,"chatgpt")+'</td><td>'+cell(row,"actions")+'</td></tr>');
     }
     for(const row of document.querySelectorAll("#linuxWorkerRowsV155 tr[data-linux-worker-id]")){
       const t=row.cells;if(t.length<8)continue;
+      const worker=workerById.get(text(row.dataset.linuxWorkerId));
+      const ext=clientsById.get(text(worker?.extension_client_id));
       rows.push('<tr data-unified-worker-id="'+esc(row.dataset.linuxWorkerId)+'"><td>'+t[0].innerHTML+
         '</td><td>'+t[5].innerHTML+'</td><td>Linux</td><td>'+t[1].innerHTML+
-        '</td><td>'+t[2].innerHTML+'</td><td>'+t[3].innerHTML+'</td><td>'+t[4].innerHTML+
+        '</td><td>'+linuxWorkerState(worker,ext)+'</td><td>'+t[3].innerHTML+'</td><td>'+t[4].innerHTML+
         '</td><td>'+t[6].innerHTML+'</td><td>'+t[7].innerHTML+'</td></tr>');
     }
     target.innerHTML=rows.join("")||'<tr><td colspan="9" class="v153-muted">暂无 Worker。设备安装或配对完成后会显示在这里。</td></tr>';
@@ -516,6 +557,33 @@
     })();
     refreshing=task;
     try{await task;}finally{if(refreshing===task)refreshing=null;}
+  }
+
+  async function removeDevice(deviceKey){
+    const previewRes=await fetch("/api/admin/unified-devices/delete-preview?key="+encodeURIComponent(deviceKey),{
+      credentials:"same-origin",cache:"no-store",
+    });
+    const preview=await previewRes.json().catch(()=>({}));
+    if(!previewRes.ok)throw new Error(preview.detail||"设备删除预检失败");
+    const group=displayedGroups.get(deviceKey);
+    const title=group?.codes?.[0]?.name||group?.linux?.device_name||group?.clients?.[0]?.device_name||deviceKey;
+    const message="确定彻底删除设备「"+title+"」？\n"+
+      "将清理："+Number(preview.clients||0)+" 个 Chrome Bridge、"+
+      Number(preview.workers||0)+" 个 Linux Worker、"+
+      Number(preview.pairing_codes||0)+" 个配对凭据、"+
+      Number(preview.linux_installations||0)+" 条 Linux 安装记录。\n"+
+      "已有连接将被断开，设备需要重新注册才能使用；已删除记录不可恢复。\n"+
+      (group?.linux?"如 Linux 主机仍运行 Agent，请在主机上另外卸载。":"")+
+      "\n确认删除整个设备？";
+    if(!confirm(message))return;
+    const result=await fetch("/api/admin/unified-devices",{
+      method:"DELETE",credentials:"same-origin",cache:"no-store",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({device_key:deviceKey,confirm:"DELETE_DEVICE"}),
+    });
+    const response=await result.json().catch(()=>({}));
+    if(!result.ok)throw new Error(response.detail||"删除设备失败");
+    await refresh();
   }
   function boot(){
     const section=el("view-extensions"),legacy=el("unifiedWorkerTabsV153");
@@ -566,6 +634,14 @@
     el("unifiedRefreshV160").addEventListener("click",()=>refresh().catch(e=>{el("unifiedDeviceSummaryV160").textContent=e.message;}));
     el("unifiedProxyV160").addEventListener("click",()=>el("proxyManagerV124")?.click());
     root.addEventListener("click",event=>{
+      const deletion=event.target.closest("[data-unified-delete-device]");
+      if(deletion){
+        event.preventDefault();
+        const key=deletion.dataset.unifiedDeleteDevice;
+        deletion.disabled=true;
+        removeDevice(key).catch(e=>alert(e.message)).finally(()=>{deletion.disabled=false;});
+        return;
+      }
       const choice=event.target.closest("[data-v161-device-code-action]");
       if(choice){
         event.preventDefault();
@@ -604,7 +680,7 @@
       }
     },15000);
   }
-  globalThis[KEY]=Object.freeze({aggregate,deviceMarkup:renderDevice,choiceMarkup,render,refresh,version:"v161"});
+  globalThis[KEY]=Object.freeze({aggregate,deviceMarkup:renderDevice,choiceMarkup,windowsWorkerState,linuxWorkerState,render,refresh,version:"v162"});
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",boot,{once:true});
   else boot();
 })();

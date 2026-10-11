@@ -73,8 +73,13 @@ def test_legacy_cleanup_is_explicit_and_preserves_pairing_and_proxy_catalogs():
     assert '"PURGE_LEGACY_LINUX"' in source
     assert "_delete_worker" in source
     assert "_delete_install" in source
-    assert "pairings.delete" not in source
-    assert "linux_worker_proxy_catalog.delete" not in source
+    # Restrict the legacy-purge safety invariant to its own route. The
+    # separately authenticated unified-device DELETE deliberately removes
+    # device-owned pairings, but PURGE_LEGACY_LINUX must never touch them.
+    legacy = source.split('@app.delete("/api/admin/linux-legacy-records")', 1)[1]
+    legacy = legacy.split('@app.get(ASSET_PATH', 1)[0]
+    assert "pairings.delete" not in legacy
+    assert "linux_worker_proxy_catalog.delete" not in legacy
 
 
 def test_v124_javascript_and_python_parse():
