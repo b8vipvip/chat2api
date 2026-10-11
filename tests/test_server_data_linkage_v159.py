@@ -59,6 +59,36 @@ def test_request_identity_never_guesses_between_two_pairings_on_one_physical_dev
     asyncio.run(scenario())
 
 
+
+def test_duplicate_client_pairings_require_explicit_pairing_identity(tmp_path):
+    async def scenario():
+        store=TelemetryStore(tmp_path)
+        await store.upsert({"request_id":"req_specific","client_id":"ext_shared","status":"completed"})
+        await store.upsert({"request_id":"req_ambiguous","client_id":"ext_other","status":"completed"})
+        class Pairings:
+            def list_public(self):
+                return [
+                    {"pairing_id":"pair_a","name":"准确设备 A","bound_client_id":"ext_shared",
+                     "bound_device_id":"same_device"},
+                    {"pairing_id":"pair_b","name":"准确设备 B","bound_client_id":"ext_shared",
+                     "bound_device_id":"same_device"},
+                ]
+        app=FastAPI()
+        app.state.telemetry=store
+        app.state.pairings=Pairings()
+        app.state.registry=SimpleNamespace(clients={
+            "ext_shared":SimpleNamespace(pairing_id="pair_a",device_id="same_device"),
+            "ext_other":SimpleNamespace(pairing_id="",device_id="same_device"),
+        })
+        install_request_device_identity_patch(app)
+        rows={r["request_id"]:r for r in store.query(limit=20)["data"]}
+        assert rows["req_specific"]["device_name"]=="准确设备 A"
+        assert rows["req_specific"]["device_code_id"]=="pair_a"
+        assert rows["req_ambiguous"]["device_name"] is None
+        assert rows["req_ambiguous"]["device_code_id"] is None
+    asyncio.run(scenario())
+
+
 def test_registry_summaries_resolve_linux_bridge_by_exact_active_worker():
     app=FastAPI()
     rows=[
