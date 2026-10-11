@@ -149,6 +149,7 @@ def test_active_request_and_unknown_placeholder_data_contracts() -> None:
     assert "def active_request_count(client_id: str) -> int | None:" in authority
     assert 'message_type == "window.manager.refresh.result"' in main
     assert "window_manager_refresh_ack" in window_patch
+    assert "ack_revision >= LIVE_TRUTH_MIN_OBSERVER_REVISION" in window_patch
     assert "snapshot_updated_at >= ack_updated_at" in window_patch
     assert "live_verified = client_id in verified and online and refresh_capable" in window_patch
     assert "observer.report(true)" in refresh
