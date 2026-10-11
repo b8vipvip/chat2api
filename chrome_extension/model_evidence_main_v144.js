@@ -89,7 +89,9 @@
       served_model: served.value,
       default_model: fallback.value,
       reasoning: think.value,
-      model_conflict: served.conflict || fallback.conflict,
+      // Profile defaults have no authority to confirm or reject a served model.
+      model_conflict: served.conflict,
+      default_model_conflict: fallback.conflict,
       reasoning_conflict: think.conflict,
       model_field: served.field,
       default_model_field: fallback.field,

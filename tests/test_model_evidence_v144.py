@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import shutil
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -59,6 +61,57 @@ def test_redesigned_hidden_work_default_profile_remains_distinct_evidence() -> N
     assert evidence.default_model == "gpt-6-astra"
 
 
+
+def test_gptwork_profile_defaults_never_pollute_served_model_conflict() -> None:
+    # GPTWork response-evidence policy: only explicit served/resolved/used
+    # fields are authoritative; conflicting default profiles are diagnostic.
+    body = json.dumps({
+        "message": {"metadata": {"default_model_slug": "gpt-5.6-sol-wm"}},
+        "profile": {"default_model_slug": "gpt-6-astra-wm"},
+    })
+    evidence = extract_response_evidence(body)
+    assert evidence.served_model is None
+    assert evidence.model_conflict is False
+    assert evidence.default_model is None
+    assert evidence.default_model_conflict is True
+
+    with_served = json.dumps({
+        "served_model_slug": "gpt-6-astra-wm",
+        "message": {"metadata": {"default_model_slug": "gpt-5.6-sol-wm"}},
+        "profile": {"default_model_slug": "gpt-6-astra-wm"},
+    })
+    evidence = extract_response_evidence(with_served)
+    assert evidence.served_model == "gpt-6-astra"
+    assert evidence.model_conflict is False
+    assert evidence.default_model_conflict is True
+
+
+def test_gptwork_default_profile_mismatch_is_not_a_fake_fallback() -> None:
+    from app.model_observability_v144_patch import _trace
+
+    authority = {"requested_model": "gpt-6-astra", "routed_model": "gpt-6-astra"}
+    evidence = {
+        "served_model": "gpt-6-astra",
+        "default_model": "gpt-5.6-sol",
+        "default_model_conflict": False,
+        "evidence_source": "network_response_metadata",
+    }
+    trace = _trace(authority, evidence)
+    assert trace["model_verified"] is True
+    assert trace["model_default_profile_mismatch"] is True
+    assert trace["model_default_profile_conflict"] is False
+    assert trace["model_fallback_reason"] is None
+
+    # A profile default by itself can never prove an upstream model fallback.
+    trace = _trace(authority, {"default_model": "gpt-5.6-sol", "default_model_conflict": True})
+    assert trace["model_verified"] is False
+    assert trace["served_model"] is None
+    assert trace["model_verification_level"] == "profile-default"
+    assert trace["model_conflict"] is False
+    assert trace["model_default_profile_conflict"] is True
+    assert trace["model_fallback_reason"] is None
+
+
 def test_v144_is_final_server_and_worker_boundary() -> None:
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     v144 = entry.rindex("install_model_observability_v144_patch(app)")
@@ -102,3 +155,15 @@ def test_v144_formal_release_contract_is_v02297() -> None:
     assert payload["features"]["model_evidence_v144"] is True
     assert payload["features"]["final_model_authority_v144"] is True
     assert payload["features"]["worker_redesigned_chatgpt_model_evidence_v144"] is True
+
+def test_gptwork_response_evidence_bridge_matches_server_truth() -> None:
+    if shutil.which("node") is None:
+        return
+    run = subprocess.run(
+        ["node", str(ROOT / "tests" / "gptwork_response_evidence_bridge.mjs")],
+        capture_output=True,
+        text=True,
+        timeout=20,
+        check=False,
+    )
+    assert run.returncode == 0, run.stdout + run.stderr
