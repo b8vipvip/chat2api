@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.22.112-worker-list-v156";
+  const VERSION = "0.22.113-worker-list-v157";
   const COLUMN_SCHEMA_REVISION = 152;
   const STORAGE_KEY = "chat2api.extensionColumns.v3";
   const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2";
@@ -263,10 +263,14 @@
 
   function occupancy(row, info = null) {
     const capacity = row?.capacity && typeof row.capacity === "object" ? row.capacity : {};
-    const usedRaw = capacity.used_units ?? row?.active_api_calls ?? 0;
-    const queueRaw = capacity.queued_requests ?? 0;
-    const used = Number.isFinite(Number(usedRaw)) ? Math.max(0, Number(usedRaw)) : 0;
-    const queued = Number.isFinite(Number(queueRaw)) ? Math.max(0, Number(queueRaw)) : 0;
+    const usedRaw = capacity.used_units ?? row?.active_api_calls;
+    const usedNumber = usedRaw == null || String(usedRaw).trim() === "" ? NaN : Number(usedRaw);
+    const usedKnown = Number.isFinite(usedNumber) && usedNumber >= 0;
+    const used = usedKnown ? Math.max(0, usedNumber) : null;
+    const usedText = used === null ? "?" : String(used);
+    const queueRaw = capacity.queued_requests;
+    const queueNumber = queueRaw == null || String(queueRaw).trim() === "" ? NaN : Number(queueRaw);
+    const queued = Number.isFinite(queueNumber) && queueNumber >= 0 ? queueNumber : null;
     const enabled = row?.connection_enabled !== false && row?.online === true;
     const standbyKnown = enabled && info?.liveVerified === true
       && info?.standby != null && Number.isFinite(Number(info.standby));
@@ -276,9 +280,9 @@
     const color = standbyKnown ? "#22c55e" : "#f59e0b";
     const label = lastVerified ? ' <small data-chat2api-standby-stale="1" style="font-size:11px">上次核验</small>' : "";
     return {
-      html: `${used} / <span data-chat2api-live-standby-count="1" data-chat2api-standby-source="${standbyKnown ? "live" : lastVerified ? "cached" : "unknown"}" style="color:${color};font-weight:700">${standbyText}</span>${label}${queued > 0 ? ` · 排队 ${queued}` : ""}`,
-      title: `正在执行请求 ${used}；备用窗口 ${standbyText}${standbyKnown ? "（实时物理核验，已排除正在接待及5分钟租约窗口）" : lastVerified ? "（上次核验成功的数量，本次尚未获得实时数据；此值不可用于实时调度判断）" : "（尚未实时核验）"}${queued > 0 ? `；排队 ${queued}` : ""}`,
-      cls: used > 0 ? "warnText" : "muted",
+      html: `${usedText} / <span data-chat2api-live-standby-count="1" data-chat2api-standby-source="${standbyKnown ? "live" : lastVerified ? "cached" : "unknown"}" style="color:${color};font-weight:700">${standbyText}</span>${label}${queued != null && queued > 0 ? ` · 排队 ${queued}` : ""}`,
+      title: `正在执行请求 ${usedText}；备用窗口 ${standbyText}${standbyKnown ? "（实时物理核验，已排除正在接待及5分钟租约窗口）" : lastVerified ? "（上次核验成功的数量，本次尚未获得实时数据；此值不可用于实时调度判断）" : "（尚未实时核验）"}${queued != null && queued > 0 ? `；排队 ${queued}` : ""}`,
+      cls: usedKnown && used > 0 ? "warnText" : "muted",
     };
   }
 
