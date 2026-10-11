@@ -33,7 +33,14 @@
     const snapshot=globalThis.__chat2apiWindowsSnapshotV156;
     if(!snapshot && document.documentElement.dataset.chat2apiWorkerListReady!=="1") return;
     const data=snapshot && Date.now()-snapshot.at<15000 ? snapshot.data : await api("/api/admin/extensions");
-    const clients=(Array.isArray(data.clients)?data.clients:[]).filter(c=>!c.metadata?.linux_worker_id && String(c.metadata?.platform||"").toLowerCase()!=="linux");
+    const clients=(Array.isArray(data.clients)?data.clients:[]).filter(c=>{
+      const meta=c.metadata||{};
+      // Worker-owned Linux Chrome profiles may not supply a legacy "platform"
+      // field. Server-enriched linux_worker_id and real Chrome OS evidence win.
+      const platform=String(meta.platform_os||meta.platform||"").toLowerCase();
+      return !meta.linux_worker_id && !meta.controller_worker_id
+        && platform!=="linux" && platform!=="linux-gnu";
+    });
     const codes=Array.isArray(data.pairing_codes)?data.pairing_codes:[];
     const byClient=new Map(clients.map(c=>[String(c.client_id||""),c]));
     const groups=new Map();
@@ -59,12 +66,12 @@
     }
     let online=0;
     body.innerHTML=[...groups.values()].map(group=>{
-      const live=group.clients.filter(c=>c.online);
+      const live=group.clients.filter(c=>c.online===true && c.connection_enabled!==false);
       if(live.length)online++;
       const net=live[0]?.metadata?.network_country_code || live[0]?.metadata?.network_probe_status ||
         group.clients[0]?.metadata?.network_country_code || group.clients[0]?.metadata?.network_probe_status || "-";
       const last=group.clients.map(c=>c.last_seen_at||"").filter(Boolean).sort().at(-1)||group.lastSeen;
-      const worker=group.clients[0]?.client_id||"";
+      const worker=(live[0]||group.clients.find(c=>c.connection_enabled!==false)||group.clients[0])?.client_id||"";
       return `<tr><td><b>${esc(group.name)}</b></td><td><code>${esc(group.id)}</code></td><td><span class="v124-pill ${live.length?"good":"warn"}">${live.length?"在线":"离线"}</span></td><td>${group.clients.length}</td><td>Windows</td><td>${esc(net)}</td><td>${esc(timeLabel(last))}</td><td><button class="action" data-windows-device-worker="${esc(worker)}">查看Worker</button><button class="action" data-windows-device-update="${esc(worker)}">更新</button></td></tr>`;
     }).join("")||'<tr><td colspan="8" class="v153-muted">暂无已绑定的 Windows 设备，请先配对 Windows Worker。</td></tr>';
     byId("windowsDeviceSummaryV155").textContent=`Windows 设备：${groups.size} · 在线设备：${online} · Windows Worker：${clients.length}`;
