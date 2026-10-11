@@ -89,6 +89,46 @@ def test_duplicate_client_pairings_require_explicit_pairing_identity(tmp_path):
     asyncio.run(scenario())
 
 
+def test_duplicate_linux_bridge_ids_never_assign_arbitrary_request_devices(tmp_path):
+    async def scenario():
+        store = TelemetryStore(tmp_path)
+        for request_id, client_id, historical_name in (
+            ("req_conflict", "ext_shared", None),
+            ("req_historical", "ext_shared", "保留的历史设备"),
+            ("req_unique", "ext_unique", None),
+        ):
+            await store.upsert({
+                "request_id": request_id, "client_id": client_id,
+                "status": "completed", "device_name": historical_name,
+            })
+        app = FastAPI()
+        app.state.telemetry = store
+        app.state.pairings = SimpleNamespace(list_public=lambda: [])
+        app.state.registry = SimpleNamespace(clients={
+            "ext_shared": SimpleNamespace(device_id="physical_same", pairing_id="", metadata={}),
+            "ext_unique": SimpleNamespace(device_id="physical_unique", pairing_id="", metadata={}),
+        })
+        app.state.linux_workers = SimpleNamespace(list_public=lambda: [
+            {"worker_id": "wrk_a", "extension_client_id": "ext_shared",
+             "extension_device_id": "physical_same", "metadata": {"device_name": "错误设备 A"}},
+            {"worker_id": "wrk_b", "extension_client_id": "ext_shared",
+             "extension_device_id": "physical_same", "metadata": {"device_name": "错误设备 B"}},
+            {"worker_id": "wrk_unique", "extension_client_id": "ext_unique",
+             "extension_device_id": "physical_unique", "metadata": {"device_name": "准确设备"}},
+            {"worker_id": "wrk_revoked", "extension_client_id": "ext_unique",
+             "extension_device_id": "physical_unique", "revoked_at": "2026-01-01",
+             "metadata": {"device_name": "已吊销设备"}},
+        ])
+        install_request_device_identity_patch(app)
+        records = {r["request_id"]: r for r in store.query(limit=20)["data"]}
+        assert records["req_conflict"]["device_name"] is None
+        assert not records["req_conflict"].get("linux_worker_id")
+        assert records["req_historical"]["device_name"] == "保留的历史设备"
+        assert records["req_unique"]["device_name"] == "准确设备"
+        assert records["req_unique"]["linux_worker_id"] == "wrk_unique"
+    asyncio.run(scenario())
+
+
 def test_registry_summaries_resolve_linux_bridge_by_exact_active_worker():
     app=FastAPI()
     rows=[

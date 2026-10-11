@@ -120,7 +120,15 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
                 "pairing_id": pairing_id,
             }
             if client_id:
-                by_client[client_id] = identity
+                # One Bridge ID may appear in multiple Worker rows during a
+                # stale or failed re-pair. Do not use last-row-wins in request
+                # history when the live Worker registry reports a conflict.
+                # Empty dict is a conflict sentinel: it also blocks unsafe
+                # metadata/device-ID fallbacks later in decorate().
+                if client_id not in by_client:
+                    by_client[client_id] = identity
+                else:
+                    by_client[client_id] = {}
             # A physical TX03 device can host multiple extension profiles. Keep
             # device-id fallback only when it resolves unambiguously; exact
             # extension_client_id always wins.
