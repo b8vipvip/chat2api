@@ -81,6 +81,8 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
             by_client: dict[str, tuple[str, str]] = {}
             linux_by_client: dict[str, str] = {}
             linux_by_worker: dict[str, str] = {}
+            linux_identity_by_client: dict[str, tuple[str, str]] = {}
+            ambiguous_linux_clients: set[str] = set()
             for pairing in pairings.items.values():
                 name = str(pairing.name or "").strip()
                 pairing_id = str(pairing.pairing_id or "").strip()
@@ -111,12 +113,20 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
                     device_name = str(metadata.get("device_name") or worker_pairing.get("name") or "").strip()
                     client_id = str(worker.get("extension_client_id") or "").strip()
                     worker_id = str(worker.get("worker_id") or "").strip()
-                    if not device_name:
+                    if worker.get("revoked_at"):
                         continue
-                    if client_id:
-                        linux_by_client[client_id] = device_name
-                    if worker_id:
+                    if client_id and worker_id:
+                        if client_id in linux_identity_by_client:
+                            ambiguous_linux_clients.add(client_id)
+                        else:
+                            linux_identity_by_client[client_id] = (worker_id, device_name)
+                    if device_name and worker_id:
                         linux_by_worker[worker_id] = device_name
+                # Duplicate/stale Bridge bindings cannot assign one live
+                # extension's state to multiple Linux Worker IDs.
+                for client_id, (worker_id, device_name) in linux_identity_by_client.items():
+                    if client_id not in ambiguous_linux_clients and device_name:
+                        linux_by_client[client_id] = device_name
 
             decorated: list[dict[str, Any]] = []
             for raw in rows:
@@ -126,11 +136,22 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
                 client_id = str(row.get("client_id") or "").strip()
                 fallback_pairing, fallback_name = by_client.get(client_id, ("", ""))
                 linux_worker_id = str(metadata.get("linux_worker_id") or metadata.get("worker_id") or "").strip()
-                linux_name = linux_by_client.get(client_id) or linux_by_worker.get(linux_worker_id) or ""
+                resolved = linux_identity_by_client.get(client_id) if client_id not in ambiguous_linux_clients else None
+                if resolved and not linux_worker_id:
+                    # Enrich a copy of the summary; never rewrite live Worker
+                    # telemetry or forge a pairing before login readiness.
+                    linux_worker_id = resolved[0]
+                    metadata = {**metadata, "linux_worker_id": linux_worker_id}
+                    row["metadata"] = metadata
+                linux_name = (
+                    linux_by_client.get(client_id)
+                    or linux_by_worker.get(linux_worker_id)
+                    or ""
+                )
                 if not pairing_id:
                     pairing_id = fallback_pairing
                 row["device_code_id"] = pairing_id or None
-                row["device_name"] = by_pairing.get(pairing_id) or fallback_name or linux_name or None
+                row["device_name"] = linux_name or by_pairing.get(pairing_id) or fallback_name or None
                 decorated.append(row)
             return decorated
 
