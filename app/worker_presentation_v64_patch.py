@@ -90,7 +90,10 @@ def install_worker_presentation_v64_patch(app: FastAPI) -> FastAPI:
                     by_pairing[pairing_id] = name
                 client_id = str(pairing.bound_client_id or "").strip()
                 if client_id and name:
-                    by_client[client_id] = (pairing_id, name)
+                    if client_id not in by_client:
+                        by_client[client_id] = (pairing_id, name)
+                    else:
+                        by_client[client_id] = ("", "")  # ambiguous; exact pairing ID may still resolve
 
             # A v127 device child can have a live Extension before the user logs
             # ChatGPT in that Profile. PairingStore intentionally binds only after
