@@ -255,7 +255,7 @@ def test_authority_ui_uses_enable_disable_terms_without_global_dom_observer() ->
 def test_worker_summary_exposes_broker_active_request_count_without_fabricating_zero(monkeypatch) -> None:
     app, _ = make_app(monkeypatch)
     app.state.broker = SimpleNamespace(
-        client_active_requests={},
+        client_active_requests={"ext_windows": {}},
         client_requests={"ext_windows": "req_windows"},
         requests={"req_windows": object()},
     )
