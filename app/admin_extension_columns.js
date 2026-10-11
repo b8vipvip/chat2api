@@ -165,7 +165,7 @@
   }
 
   function statusPill(row) {
-    if (row?.connection_enabled === false) return '<span class="pill">停用</span>';
+    if (row?.connection_enabled === false) return '<span class="pill warn">停用</span>';
     if (row?.online && row?.busy) return '<span class="pill warn">忙碌</span>';
     if (row?.online) return '<span class="pill ok">运行正常</span>';
     return '<span class="pill bad">离线</span>';

@@ -449,6 +449,23 @@
       '<td>'+esc(net)+'</td><td>'+esc(lastDate)+'</td>'+
       '<td><div class="v160-actions">'+(actions||'<span class="v153-muted">未关联操作</span>')+'</div></td></tr>';
   }
+
+  function choiceMarkup(group,action){
+    if(!group||!Array.isArray(group.codes)||group.codes.length<2)return "";
+    const labels={rename:"改名",copy:"复制",toggle:"启用/停用",delete:"删除设备码"};
+    if(!Object.prototype.hasOwnProperty.call(labels,action))return "";
+    return '<div class="dialogHead"><b>选择设备凭据 · '+labels[action]+'</b>'+
+      '<button type="button" class="action" data-v161-close-code-choice="1">关闭</button></div>'+
+      '<div class="dialogBody"><p class="muted">此设备关联多个凭据，请选择要操作的那一个。这里不会删除实体设备或 Worker。</p>'+
+      '<div class="v161-choice-list">'+group.codes.map((c,index)=>{
+        const id=esc(c.pairing_id);
+        const label=action==="toggle"?(c.enabled===false?"启用":"停用"):labels[action];
+        return '<button type="button" class="action" data-pairing-list-action="'+action+'" data-pairing-id="'+id+'"'+
+          (action==="rename"?' data-pairing-name="'+esc(c.name||"")+'"':"")+
+          (action==="toggle"?' data-enable="'+(c.enabled?"0":"1")+'"':"")+
+          ' title="'+esc(c.prefix||"")+'">凭据 '+(index+1)+' · '+label+'</button>';
+      }).join("")+'</div></div>';
+  }
   function renderWorkers(){
     const target=el("unifiedWorkerRowsV160");if(!target)return;
     const rows=[];
@@ -511,6 +528,7 @@
       "#unifiedDeviceConsoleV160 .v160-actions button{padding:5px 9px;white-space:nowrap;flex-shrink:0}"+
       "#unifiedDeviceConsoleV160 td:last-child{white-space:nowrap}"+
       "#unifiedDeviceConsoleV160 table{min-width:970px}"+
+      "#unifiedDeviceConsoleV160 .v161-choice-list{display:flex;flex-wrap:wrap;gap:8px}"+
       "#unifiedDeviceConsoleV160 .panel{margin-bottom:14px}"+
       "#unifiedDeviceConsoleV160 .v160-creation{margin-top:12px}"+
       "#unifiedDeviceConsoleV160 [hidden]{display:none!important}";
@@ -529,6 +547,10 @@
       '<div class="scroll"><table id="unifiedWorkerTableV160"><thead><tr><th>Worker ID</th><th>设备名称</th><th>系统</th><th>账户类型</th><th>状态</th><th>请求 / 备用窗口</th><th>并发 / 备用设置</th><th>ChatGPT</th><th>操作</th></tr></thead>'+
       '<tbody id="unifiedWorkerRowsV160"></tbody></table></div></div>';
     section.insertBefore(root,legacy);
+    const chooser=document.createElement("dialog");
+    chooser.id="v161DeviceCodeChooser";
+    chooser.setAttribute("aria-label","选择要操作的设备凭据");
+    root.appendChild(chooser);
     el("unifiedCreationHostV160").appendChild(create);
     create.style.marginTop="0";
     pairing.hidden=true;
@@ -542,6 +564,27 @@
     el("unifiedRefreshV160").addEventListener("click",()=>refresh().catch(e=>{el("unifiedDeviceSummaryV160").textContent=e.message;}));
     el("unifiedProxyV160").addEventListener("click",()=>el("proxyManagerV124")?.click());
     root.addEventListener("click",event=>{
+      const choice=event.target.closest("[data-v161-device-code-action]");
+      if(choice){
+        event.preventDefault();
+        const group=displayedGroups.get(choice.dataset.v161DeviceKey||"");
+        const markup=choiceMarkup(group,choice.dataset.v161DeviceCodeAction||"");
+        if(!markup)return;
+        chooser.innerHTML=markup;
+        chooser.showModal();
+        return;
+      }
+      if(event.target.closest("[data-v161-close-code-choice]")){
+        event.preventDefault();
+        if(chooser.open)chooser.close();
+        return;
+      }
+      // The existing document-capture pairing handler performs the original
+      // authenticated API action; this listener only closes the chooser.
+      if(event.target.closest("#v161DeviceCodeChooser [data-pairing-list-action]")){
+        if(chooser.open)chooser.close();
+        return;
+      }
       const install=event.target.closest("[data-open-linux-create-v160]");
       if(install){event.preventDefault();el("createLinuxDeviceV124")?.click();}
     });
@@ -559,7 +602,7 @@
       }
     },15000);
   }
-  globalThis[KEY]=Object.freeze({aggregate,deviceMarkup:renderDevice,render,refresh,version:"v160"});
+  globalThis[KEY]=Object.freeze({aggregate,deviceMarkup:renderDevice,choiceMarkup,render,refresh,version:"v161"});
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",boot,{once:true});
   else boot();
 })();
