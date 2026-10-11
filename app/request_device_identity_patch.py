@@ -142,7 +142,13 @@ def install_request_device_identity_patch(app: FastAPI) -> FastAPI:
             if pairing_id:
                 by_id[pairing_id] = item
             if client_id:
-                by_client[client_id] = item
+                # Multiple active pairing codes can temporarily bind the
+                # same client after a migration. Without the client's actual
+                # pairing_id, do not choose whichever appears last.
+                if client_id not in by_client:
+                    by_client[client_id] = item
+                else:
+                    by_client[client_id] = None
             if device_id:
                 # Many pairings may share one physical device. Exact bound
                 # client wins; never use "last pairing seen" for an ambiguous
