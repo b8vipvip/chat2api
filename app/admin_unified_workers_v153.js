@@ -312,9 +312,8 @@
   const getLinux=()=>globalThis.__CHAT2API_LINUX_DEVICE_AUTHORITY_V124__?.devices||[];
   let data={clients:[],pairing_codes:[]};
   let refreshing=null;
-  const ownerByClient=new Map();
   function aggregate(devices,payload){
-    const groups=new Map(),byPair=new Map(),byClient=new Map(),used=new Set();
+    const groups=new Map(),byPair=new Map(),byClient=new Map(),used=new Set(),ownerByClient=new Map();
     for(const c of payload?.clients||[])if(text(c.client_id))byClient.set(text(c.client_id),c);
     const ensure=(key,defaults={})=>{
       if(!groups.has(key))groups.set(key,{key,id:"",linux:null,codes:[],clients:[],...defaults});
@@ -324,7 +323,7 @@
       const id=text(clientId),client=byClient.get(id);
       if(!client || client.metadata?.linux_bridge_binding_conflict===true)return;
       if(used.has(id))return;
-      group.clients.push(client);used.add(id);
+      group.clients.push(client);used.add(id);ownerByClient.set(id,group);
     };
     const workerById=new Map();
     for(const d of devices||[]){
@@ -344,7 +343,7 @@
       const physical=text(code.bound_device_id||client?.device_id||client?.metadata?.device_id);
       const key=physical?"physical:"+physical:
         (text(code.bound_client_id)?"client:"+text(code.bound_client_id):"pairing:"+pairing);
-      const group=byPair.get(pairing)||ensure(key,{id:physical});
+      const group=byPair.get(pairing)||ownerByClient.get(text(code.bound_client_id))||ensure(key,{id:physical});
       if(!group.codes.some(row=>text(row.pairing_id)===pairing))group.codes.push(code);
       attach(group,code.bound_client_id);
     }
@@ -444,8 +443,10 @@
     const cell=(row,key)=>row.querySelector('td[data-chat2api-column-key="'+key+'"]')?.innerHTML||"-";
     for(const row of document.querySelectorAll("#extensionDeviceBody tr[data-client-id]")){
       const id=esc(row.dataset.clientId||"");
+      const client=(data.clients||[]).find(c=>text(c.client_id)===text(row.dataset.clientId));
+      const os=client?systemOf({linux:null,clients:[client]}):"未识别";
       rows.push('<tr data-unified-worker-id="'+id+'"><td>'+cell(row,"client_id")+'</td><td>'+cell(row,"device_name")+
-        '</td><td>Windows / Chrome</td><td>'+cell(row,"account_type")+'</td><td>'+cell(row,"status")+
+        '</td><td>'+esc(os)+'</td><td>'+cell(row,"account_type")+'</td><td>'+cell(row,"status")+
         '</td><td>'+cell(row,"occupancy")+'</td><td>'+cell(row,"worker_settings")+
         '</td><td>'+cell(row,"chatgpt")+'</td><td>'+cell(row,"actions")+'</td></tr>');
     }

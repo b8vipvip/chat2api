@@ -33,6 +33,8 @@ const payload={pairing_codes:[
 ]};
 const rows=model.aggregate(devices,payload);
 assert.equal(rows.length,6,"one Linux, one Windows, two pending codes, standalone Linux and separate conflict");
+assert.equal(model.aggregate([{...devices[0],device_pairing_id:""}],payload).length,6,
+  "exact Bridge Client ID must merge an installed Linux device and its code even without pairing metadata");
 const linux=rows.find(x=>x.linux?.device_id==="install_linux");
 assert.equal(linux.codes.length,1);
 assert.equal(linux.clients.length,2);
