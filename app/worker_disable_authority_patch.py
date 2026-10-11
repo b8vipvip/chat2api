@@ -189,14 +189,22 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
                 # Missing telemetry stays absent so the UI can show unknown instead
                 # of silently rendering "0" when the source cannot be read.
                 active_count = active_request_count(client_id)
+                capacity = row.get("capacity") if isinstance(row.get("capacity"), dict) else {}
+                capacity = dict(capacity)
                 if active_count is not None:
                     row["active_api_calls"] = active_count
-                    capacity = row.get("capacity") if isinstance(row.get("capacity"), dict) else {}
-                    capacity = dict(capacity)
                     # Request count is distinct from weighted concurrency units.
                     # Keep account_generation_admission's used_units unchanged.
                     capacity["active_requests"] = active_count
+                else:
+                    row.pop("active_api_calls", None)
+                    # A lower-level fallback count is not trustworthy if the broker
+                    # request index itself is unavailable.
+                    capacity.pop("active_requests", None)
+                if capacity:
                     row["capacity"] = capacity
+                elif "capacity" in row:
+                    row.pop("capacity", None)
                 worker = worker_for_client(client_id)
                 if not worker:
                     row["admin_enabled"] = row.get("connection_enabled") is not False
