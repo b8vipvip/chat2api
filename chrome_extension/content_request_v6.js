@@ -402,7 +402,7 @@
     if (!observed || !target) return "none";
     if (observed === target) return "exact";
     if (target.length > 6 && observed.includes(target)) return "embedded-exact";
-    const stripLayout = value => value.replace(/\\s/g, "");
+    const stripLayout = value => value.replace(/\s/g, "");
     if (target.length >= 2048 && stripLayout(observed) === stripLayout(target)) {
       return "rich-editor-whitespace";
     }
