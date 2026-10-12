@@ -12,6 +12,7 @@
     stale_inflight_recoveries: 0,
     orphan_owner_recoveries: 0,
     server_authority_recoveries: 0,
+    server_authority_live_owner_supersessions: 0,
     explicit_cancel_retirements: 0,
     last_recovery: null,
     last_cancel: null,
@@ -60,17 +61,23 @@
     if (!staleRequestId || staleRequestId === requestId) return false;
     if (typeof router.failRequest !== "function") return false;
 
-    // The browser map is process-local while route ownership is persisted.
-    // A service-worker restart can therefore leave inflight_request_id behind
-    // after the server/Broker has already terminally released the request. A
-    // newly dispatched request for the same logical key must not be rejected by
-    // that orphaned persisted owner. Conversely, if the old request is still
-    // present in the current process' activeRequests map, it is genuinely live
-    // and the strict one-request-per-key invariant must continue to reject the
-    // replacement.
-    if (locallyLiveOwner(router, staleRequestId)) return false;
-
+    // Two independent representations survive an API terminal:
+    //  (1) persisted route.inflight_request_id and (2) process-local activeRequests.
+    // A failed request can already be released by server FIFO v58 while BOTH
+    // browser records still refer to it (for example when chat.error was sent
+    // directly to the socket, not through chrome.runtime.onMessage). Checking
+    // only activeRequests.has() permanently blocks subsequent admitted requests.
+    //
+    // A newly admitted v58 request is the canonical proof that the previous
+    // request has relinquished this logical key on the server. Recycle its
+    // window through the router's exact-owner failRequest before dispatch.
+    // Without that server admission, never supersede a locally live owner.
     const serverAuthoritative = authoritativeServerAdmission(message);
+    const locallyLive = locallyLiveOwner(router, staleRequestId);
+    if (locallyLive && !serverAuthoritative) return false;
+    const previous = router.activeRequests instanceof Map
+      ? router.activeRequests.get(staleRequestId) : null;
+    if (previous?.key && previous.key !== key) return false;
 
     // retireRoute keeps a short de-duplication set. A late terminal callback
     // can mark an old request retired before all persisted state is reconciled;
@@ -90,11 +97,13 @@
     state.stale_inflight_recoveries += 1;
     if (serverAuthoritative) state.server_authority_recoveries += 1;
     else state.orphan_owner_recoveries += 1;
+    if (serverAuthoritative && locallyLive) state.server_authority_live_owner_supersessions += 1;
     state.last_recovery = {
       api_key_id: key,
       stale_request_id: staleRequestId,
       replacement_request_id: requestId,
       server_authoritative: serverAuthoritative,
+      previous_owner_locally_live: locallyLive,
       at_ms: Date.now(),
     };
     return true;
