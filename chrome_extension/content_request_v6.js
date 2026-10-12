@@ -406,10 +406,17 @@
     const user = currentUserTurn(active);
     if (user) return { reason: "current-user-turn-visible", composerCleared: true, generating: isGenerating(), current };
     if (current.isNew) return { reason: current.reason, composerCleared: true, generating: isGenerating(), current };
+    const submitAt = Number(active.submitStartedAt || 0);
     const networkText = String(active.networkObservedText || "");
     const networkAt = Number(active.networkObservedAt || 0);
-    if (networkText && networkAt >= Number(active.submitStartedAt || 0)) {
+    const terminalText = String(active.networkTerminalText || "");
+    const terminalAt = Number(active.networkTerminalAt || 0);
+    // The first send timestamp remains the correlation epoch for the request.
+    if (submitAt > 0 && networkText && networkAt >= submitAt) {
       return { reason: "network-response-evidence", composerCleared: true, generating: isGenerating(), current };
+    }
+    if (submitAt > 0 && terminalText && terminalAt >= submitAt) {
+      return { reason: "network-terminal-evidence", composerCleared: true, generating: isGenerating(), current };
     }
     // Stop/Generating UI is not submission proof. A stale generation control from
     // another hydration epoch can coexist with this request's draft in a second
@@ -473,7 +480,7 @@
       if (!confirmed && promptStillPresent(active)) {
         dispatchEnter(composerHoldingPrompt(active) || active.promptComposer || findComposer());
         enterFallbackUsed = true;
-        active.submitStartedAt = Date.now();
+        // Do not invalidate response evidence that arrived after the first click.
         await diagnostic(active, "enter-fallback", { send_attempts: attempts, enter_fallback_used: true });
         confirmed = await waitAfterSend(active, "enter", 6000);
       } else if (!confirmed && !promptStillPresent(active)) {

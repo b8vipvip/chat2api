@@ -441,6 +441,9 @@
   }
 
   async function runRequest(message) {
+    // A listener captured by an older overlay can outlive removeListener().
+    // Only v6 may execute a new request after the new controller installs.
+    if (globalThis.__CHAT2API_REQUEST_CONTENT_V6__?.listener) return;
     if (state.active) throw new Error("This ChatGPT tab is already handling another request");
     const prompt = String(message.prompt || "").trim();
     if (!prompt) throw new Error("Prompt is empty");
@@ -473,6 +476,7 @@
 
   const listener = (message, sender, sendResponse) => {
     if (message.type === "chat2api.request") {
+      if (globalThis.__CHAT2API_REQUEST_CONTENT_V6__?.listener) return false;
       runRequest(message);
       sendResponse({ ok: true, controller: "request-v5" });
       return false;

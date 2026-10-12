@@ -4,6 +4,7 @@
 
   const SOURCE = "chat2api-network-stream-v55";
   const REQUEST_KEY = "__CHAT2API_REQUEST_CONTENT_V5__";
+  const REQUEST_V6_KEY = "__CHAT2API_REQUEST_CONTENT_V6__";
   const streams = new Map();
   const state = {
     version: 57,
@@ -16,7 +17,10 @@
   globalThis[KEY] = state;
 
   function activeRequest() {
-    return globalThis[REQUEST_KEY]?.active || null;
+    // v6 alone owns the current response. The legacy v5 active may carry
+    // the same requestId yet point to a different object after an overlap.
+    const v6 = globalThis[REQUEST_V6_KEY];
+    return v6 ? (v6.active || null) : (globalThis[REQUEST_KEY]?.active || null);
   }
 
   function requestIdentity() {
@@ -99,6 +103,8 @@
         network_stream_event_stream: row.eventStream,
         network_recovered_assistant_chars: String(row.lastText || "").length,
         network_terminal_authority: "request-v6",
+        network_evidence_active_owner: globalThis[REQUEST_V6_KEY] ? "request-v6" : "legacy-v5",
+        network_legacy_active_conflict: Boolean(globalThis[REQUEST_V6_KEY]?.active && globalThis[REQUEST_KEY]?.active && globalThis[REQUEST_V6_KEY].active !== globalThis[REQUEST_KEY].active),
         network_stream_error: String(detail.phase || "") === "error" ? String(detail.error || "stream-reader-failed").slice(0, 240) : null,
         network_stream_terminal_proof: detail.completion_hint === true,
         generation_progress: `${row.streamId}:${Number(detail.sequence || 0)}:${Number(detail.bytes ?? row.bytes ?? 0)}`,
