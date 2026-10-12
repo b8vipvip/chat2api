@@ -8,7 +8,7 @@
   const SERVER_FIFO_REVISION = 58;
   const CANCEL_TYPES = new Set(["chat.cancel", "image.cancel", "voice.cancel"]);
   const state = {
-    revision: 140,
+    revision: 141,
     stale_inflight_recoveries: 0,
     orphan_owner_recoveries: 0,
     server_authority_recoveries: 0,
@@ -110,18 +110,19 @@
   }
 
   const baseResolver = globalThis.resolveTargetTabForRequest;
-  if (typeof baseResolver === "function" && !baseResolver.__chat2apiRouteRecoveryV140) {
+  if (typeof baseResolver === "function" && !baseResolver.__chat2apiRouteRecoveryV141) {
     const wrappedResolver = async message => {
       await recoverStaleOwner(message);
       return baseResolver(message);
     };
     wrappedResolver.__chat2apiRouteRecoveryV136 = true;
     wrappedResolver.__chat2apiRouteRecoveryV140 = true;
+    wrappedResolver.__chat2apiRouteRecoveryV141 = true;
     globalThis.resolveTargetTabForRequest = wrappedResolver;
   }
 
   const baseHandleServerMessage = globalThis.handleServerMessage;
-  if (typeof baseHandleServerMessage === "function" && !baseHandleServerMessage.__chat2apiRouteRecoveryV140) {
+  if (typeof baseHandleServerMessage === "function" && !baseHandleServerMessage.__chat2apiRouteRecoveryV141) {
     const wrappedHandleServerMessage = async message => {
       if (!CANCEL_TYPES.has(String(message?.type || ""))) {
         return baseHandleServerMessage(message);
@@ -149,6 +150,7 @@
     };
     wrappedHandleServerMessage.__chat2apiRouteRecoveryV136 = true;
     wrappedHandleServerMessage.__chat2apiRouteRecoveryV140 = true;
+    wrappedHandleServerMessage.__chat2apiRouteRecoveryV141 = true;
     globalThis.handleServerMessage = wrappedHandleServerMessage;
   }
 
