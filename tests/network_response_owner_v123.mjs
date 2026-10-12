@@ -28,6 +28,10 @@ for(let i=0;i<4;i++)await tick();
 push({phase:"assistant-complete",stream_id:"s1",text:"真正回复",sequence:2,completion_hint:true,terminal_evidence_source:"sse-protocol-complete"});
 for(let i=0;i<8;i++)await tick();
 assert.equal(v6Active.networkObservedText,"真正回复","v6 receives correlated network snapshot");
+assert.ok(outbound.some(x=>x.event?.diagnostics?.network_evidence_active_owner==="request-v6"),
+  "diagnostic explicitly identifies canonical network response owner");
+assert.ok(outbound.some(x=>x.event?.diagnostics?.network_legacy_active_conflict===true),
+  "legacy/v6 object collisions remain visible for field diagnostics");
 assert.equal(v6Active.networkTerminalText,"真正回复","v6 receives network terminal");
 assert.equal(v5Active.networkObservedText,undefined,"stale v5 active never owns evidence");
 assert.equal(v5Active.networkTerminalText,undefined,"stale v5 active never owns terminal");
