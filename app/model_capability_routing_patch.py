@@ -115,9 +115,13 @@ def _idle_compatible(registry: Any, model: str) -> list[str]:
     if not online:
         raise ConnectionError("No Chrome extension is online. Open Chrome with a paired chat2api extension.")
     idle = [client_id for client_id in online if client_id not in registry.busy_clients]
-    if not idle:
-        raise LookupError("All online Chrome extensions are busy")
-    return [client_id for client_id in idle if _compatible(registry, client_id, model)]
+    eligible_idle = [client_id for client_id in idle if _compatible(registry, client_id, model)]
+    if eligible_idle:
+        return eligible_idle
+    # The canonical v58 server scheduler queues requests for busy Workers.
+    # Excluding busy but compatible Workers here returned an immediate 503
+    # instead of allowing that scheduler to enforce per-key FIFO.
+    return [client_id for client_id in online if _compatible(registry, client_id, model)]
 
 
 def _select_mini(registry: Any, *, needs_multimodal: bool) -> str:

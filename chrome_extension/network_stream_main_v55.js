@@ -409,20 +409,9 @@
       finish() {
         if (buffer.trim()) processEvent(buffer);
         if (!latestText && fallbackText) emitSnapshot(fallbackText, "assistant-fallback");
-        if (latestText && !terminalPosted) {
-          terminalPosted = true;
-          state.completions += 1;
-          post({
-            channel: CHANNEL,
-            phase: "assistant-complete",
-            stream_id: streamId,
-            sequence: ++sequence,
-            text: latestText,
-            chars: latestText.length,
-            completion_hint: sawDone,
-            terminal_evidence_source: "stream-eof",
-          });
-        }
+        // EOF alone is transport termination, not proof of a finished answer.
+        // The only assistant-complete frames are published when an explicit
+        // DONE/protocol-complete/end_turn proof was observed before EOF.
         return { latestText, sawDone, sequence, assistantRoleSeen };
       },
     };

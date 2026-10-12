@@ -87,8 +87,14 @@
     range.selectNodeContents(element);
     selection.removeAllRanges();
     selection.addRange(range);
-    if (text) document.execCommand("insertText", false, text);
-    else document.execCommand("delete", false);
+    const applied = text
+      ? document.execCommand("insertText", false, text)
+      : document.execCommand("delete", false);
+    // A long prompt may look populated after a DOM-only fallback while
+    // the framework still sees an empty draft. Never fake an accepted send.
+    if (text.length >= 2048 && !applied) {
+      throw new Error("ChatGPT native editor rejected long prompt insertion");
+    }
     if (text && !normalize(element.textContent || "")) {
       const p = document.createElement("p");
       p.textContent = text;
@@ -448,7 +454,7 @@
   async function submitAndConfirm(active) {
     const totalStarted = performance.now();
     const requestTimeoutMs = Math.max(15000, Number(active.options.timeout_seconds || 300) * 1000);
-    const readinessBudget = Math.max(15000, Math.min(90000, requestTimeoutMs - 5000));
+    const readinessBudget = Math.max(15000, Math.min(20000, requestTimeoutMs - 5000));
     let attempts = 0;
     let enterFallbackUsed = false;
 
@@ -462,7 +468,21 @@
         const hasPrompt = promptMatchesText(text, active);
         return current && hasPrompt && buttonReady(button) ? { current, button } : null;
       }, attempts === 1 ? readinessBudget : 15000, 120);
-      if (!ready) throw new Error("ChatGPT send button did not become ready while this request's prompt remained in the composer");
+      if (!ready) {
+        const current = composerHoldingPrompt(active) || findComposer();
+        const button = sendButton(current);
+        await diagnostic(active, "send-readiness-failed", {
+          send_button_found: Boolean(button),
+          send_button_disabled: Boolean(button?.disabled),
+          send_button_aria_disabled: button?.getAttribute?.("aria-disabled") === "true",
+          send_button_test_id: String(button?.dataset?.testid || "").slice(0, 64),
+          send_composer_chars: composerText(current).length,
+          send_generating_observed: isGenerating(),
+          prompt_native_editor_required: active.prompt.length >= 2048,
+          send_readiness_wait_ms: Math.round((performance.now() - readyStarted) * 10) / 10,
+        });
+        throw new Error("ChatGPT send button did not become ready for the current editor state");
+      }
 
       active.promptComposer = ready.current;
       refreshAssistantBaseline(active);
@@ -606,7 +626,19 @@
         return;
       }
 
-      if (responseStarted && lastText && !generating && stableSince && Date.now() - stableSince >= 1000) {
+      // A DOM pause or a missing Stop button cannot override an observed SSE
+      // response that has not reached a verified assistant terminal.
+      if (active.networkStreamEndedWithoutTerminalAt && !networkTerminalAt
+          && Date.now() - active.networkStreamEndedWithoutTerminalAt >= 3000) {
+        await emit({
+          type: "chat.error", request_id: active.requestId,
+          error: "ChatGPT network stream ended without a verified assistant completion",
+          diagnostics: { response_integrity_guard: "verified-network-terminal-v125", network_stream_unverified_end: true },
+        });
+        return;
+      }
+      if (responseStarted && lastText && !generating && !active.networkStreamSeen
+          && stableSince && Date.now() - stableSince >= 1000) {
         let settleStableSince = Date.now();
         let settledText = lastText;
         let settledState = current;
@@ -698,6 +730,8 @@
       networkTerminalChunks: 0,
       networkTerminalBytes: 0,
       networkTerminalEvidenceSource: "",
+      networkStreamSeen: false,
+      networkStreamEndedWithoutTerminalAt: 0,
     };
     state.active = active;
     if (v5) v5.active = active;

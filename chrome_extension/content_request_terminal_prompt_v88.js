@@ -41,7 +41,7 @@
           stage: "prompt-fast-insert",
           diagnostics: {
             prompt_fast_insert_revision: 90,
-            prompt_fast_insert_method: "direct-text-node+input-event",
+            prompt_fast_insert_method: "native-editor-transaction-v125",
             prompt_fast_insert_chars: chars,
             prompt_fast_insert_ms: Math.round(elapsedMs * 10) / 10,
             terminal_authority: "request-v6",
@@ -59,15 +59,12 @@
       if (cmd === "inserttext" && editable && text.length >= LONG_PROMPT_THRESHOLD) {
         const started = performance.now();
         try {
-          editable.replaceChildren(document.createTextNode(text));
-          const selection = globalThis.getSelection?.();
-          if (selection) {
-            const range = document.createRange();
-            range.selectNodeContents(editable);
-            range.collapse(false);
-            selection.removeAllRanges();
-            selection.addRange(range);
-          }
+          // Directly mutating Lexical/ProseMirror DOM bypasses the editor's
+          // transaction model: the prompt becomes visible while Send stays
+          // disabled. Use Chrome's native editing command, which dispatches
+          // trusted editing/input events through the editor framework.
+          const accepted = nativeExecCommand(command, showUi, value);
+          if (!accepted) return false;
           const elapsed = performance.now() - started;
           state.fast_insert_count += 1;
           state.fast_insert_chars += text.length;
