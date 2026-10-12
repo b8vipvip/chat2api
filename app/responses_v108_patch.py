@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import secrets
 import time
 import uuid
@@ -20,6 +21,30 @@ SUPPORTED_NATIVE_TOOLS = {"web_search", "web_search_preview"}
 
 
 def _error(message: str, *, status_code: int = 400, param: str | None = None, code: str | None = None) -> JSONResponse:
+    if status_code == 400:
+        # Older request-history instrumentation stored only "HTTP 400".
+        # Record a stable reason category, never a raw prompt or tool schema.
+        description = str(message or "").lower()
+        if "input must contain text" in description:
+            reason = "input-empty-or-unsupported-shape"
+        elif "valid json" in description:
+            reason = "invalid-json"
+        elif "json object" in description:
+            reason = "invalid-body-type"
+        elif "tools must be an array" in description:
+            reason = "invalid-tools-array"
+        elif "each tool must be an object" in description:
+            reason = "invalid-tool-object"
+        elif "tool.type is required" in description:
+            reason = "missing-tool-type"
+        elif "currently supports native chatgpt" in description:
+            reason = "unsupported-tool-type"
+        else:
+            reason = "other-input-validation"
+        logging.getLogger("chat2api.responses_validation").warning(
+            "Responses HTTP 400 reason=%s param=%s code=%s",
+            reason, str(param or "-")[:40], str(code or "-")[:64],
+        )
     return JSONResponse(
         {"error": {"message": message, "type": "invalid_request_error" if status_code < 500 else "server_error", "param": param, "code": code}},
         status_code=status_code,
