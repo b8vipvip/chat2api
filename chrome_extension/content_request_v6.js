@@ -393,13 +393,38 @@
     throw new Error("Prompt insertion could not be confirmed in the current ChatGPT composer");
   }
 
-  function promptMatchesText(text, active) {
+  // The ChatGPT rich editor can add layout whitespace after accepting a
+  // native insertion. Preserve exact non-whitespace content, rather than
+  // comparing only innerText string lengths or accepting an arbitrary edit.
+  function promptMatchEvidence(text, active) {
     const target = String(active?.promptNormalized || "");
-    return Boolean(text && target && (text === target || (target.length > 6 && text.includes(target))));
+    const observed = normalize(text);
+    if (!observed || !target) return "none";
+    if (observed === target) return "exact";
+    if (target.length > 6 && observed.includes(target)) return "embedded-exact";
+    const stripLayout = value => value.replace(/\s/g, "");
+    if (target.length >= 2048 && stripLayout(observed) === stripLayout(target)) {
+      return "rich-editor-whitespace";
+    }
+    return "none";
+  }
+
+  function promptMatchesText(text, active) {
+    return promptMatchEvidence(text, active) !== "none";
+  }
+
+  function promptMatchesComposer(element, active) {
+    if (!element) return false;
+    if (promptMatchesText(composerText(element), active)) return true;
+    // innerText and textContent differ when the editor hydrates block nodes.
+    if (!(element instanceof HTMLTextAreaElement || element instanceof HTMLInputElement)) {
+      return promptMatchesText(normalize(element.textContent || ""), active);
+    }
+    return false;
   }
 
   function composerHoldingPrompt(active) {
-    return composerCandidates(active).find(element => promptMatchesText(composerText(element), active)) || null;
+    return composerCandidates(active).find(element => promptMatchesComposer(element, active)) || null;
   }
 
   function promptStillPresent(active) {
@@ -457,17 +482,42 @@
     const readinessBudget = Math.max(15000, Math.min(20000, requestTimeoutMs - 5000));
     let attempts = 0;
     let enterFallbackUsed = false;
+    let promptRepairAttempts = 0;
 
     while (attempts < 3 && !active.cancelled) {
       attempts += 1;
       const readyStarted = performance.now();
-      const ready = await waitFor(() => {
-        const current = composerHoldingPrompt(active) || findComposer();
-        const text = composerText(current);
+      const probe = () => {
+        const current = composerHoldingPrompt(active) || active.promptComposer || findComposer();
         const button = sendButton(current);
-        const hasPrompt = promptMatchesText(text, active);
-        return current && hasPrompt && buttonReady(button) ? { current, button } : null;
-      }, attempts === 1 ? readinessBudget : 15000, 120);
+        return current && promptMatchesComposer(current, active) && buttonReady(button)
+          ? { current, button } : null;
+      };
+      let ready = await waitFor(probe, 2400, 120);
+
+      // writePrompt verified this *same editor* before submission. If its
+      // framework silently alters a few characters while hydrating, recover
+      // only that original draft, once, before any click or network evidence.
+      if (!ready && attempts === 1 && !promptRepairAttempts && !isGenerating()) {
+        const current = active.promptComposer;
+        const observed = composerText(current);
+        const intended = String(active.promptNormalized || "");
+        const delta = Math.abs(observed.length - intended.length);
+        const sameEditor = current?.isConnected !== false
+          && composerCandidates(active).includes(current);
+        if (sameEditor && observed && !promptMatchesComposer(current, active)
+            && delta <= Math.max(8, Math.ceil(intended.length * 0.002))) {
+          promptRepairAttempts += 1;
+          await diagnostic(active, "editor-draft-reconcile", {
+            prompt_repair_reason: "verified-draft-hydration-drift",
+            prompt_repair_delta_chars: observed.length - intended.length,
+            prompt_repair_same_editor: true,
+          });
+          setComposerText(current, active.prompt);
+          await delay(200);
+        }
+      }
+      if (!ready) ready = await waitFor(probe, attempts === 1 ? readinessBudget - 2400 : 12000, 120);
       if (!ready) {
         const current = composerHoldingPrompt(active) || findComposer();
         const button = sendButton(current);
@@ -477,6 +527,12 @@
           send_button_aria_disabled: button?.getAttribute?.("aria-disabled") === "true",
           send_button_test_id: String(button?.dataset?.testid || "").slice(0, 64),
           send_composer_chars: composerText(current).length,
+          send_expected_normalized_chars: String(active.promptNormalized || "").length,
+          send_prompt_match: promptMatchEvidence(composerText(current), active),
+          send_composer_original: current === active.promptComposer,
+          send_button_type: String(button?.type || ""),
+          send_button_aria_label: String(button?.getAttribute?.("aria-label") || "").slice(0, 72),
+          send_prompt_repair_attempts: promptRepairAttempts,
           send_generating_observed: isGenerating(),
           prompt_native_editor_required: active.prompt.length >= 2048,
           send_readiness_wait_ms: Math.round((performance.now() - readyStarted) * 10) / 10,
@@ -757,6 +813,8 @@
     currentAssistantState,
     currentUserTurn,
     refreshAssistantBaseline,
+    promptMatchesText,
+    promptMatchEvidence,
     turnFollows,
     plainNodeText,
     finalNodeText,
