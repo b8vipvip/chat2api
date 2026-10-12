@@ -8,8 +8,8 @@ import json
 import re
 
 
-STRICT_JSON_ARRAY = re.compile(r"严格\\s*JSON\\s*数组", re.IGNORECASE)
-EXACT_TEN_STRINGS = re.compile(r"恰好\\s*10\\s*个字符串")
+STRICT_JSON_ARRAY = re.compile(r"严格\s*JSON\s*数组", re.IGNORECASE)
+EXACT_TEN_STRINGS = re.compile(r"恰好\s*10\s*个字符串")
 
 
 def enforce_nonstream_contract(prompt: str, text: str) -> None:
