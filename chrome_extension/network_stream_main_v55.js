@@ -412,7 +412,9 @@
         // EOF alone is transport termination, not proof of a finished answer.
         // The only assistant-complete frames are published when an explicit
         // DONE/protocol-complete/end_turn proof was observed before EOF.
-        return { latestText, sawDone, sequence, assistantRoleSeen };
+        // A generic nested "completed" status is not necessarily the final assistant turn.
+        // Only an explicitly published terminal may authorize request completion.
+        return { latestText, sawDone: terminalPosted, sequence, assistantRoleSeen };
       },
     };
   }
