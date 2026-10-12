@@ -589,6 +589,7 @@
             network_stream_sequence: Number(active.networkTerminalSequence || 0),
             network_stream_chunks: Number(active.networkTerminalChunks || 0),
             network_stream_bytes: Number(active.networkTerminalBytes || 0),
+            network_terminal_evidence_source: String(active.networkTerminalEvidenceSource || "stream-eof"),
             response_format: "markdown",
             response_image_inlined_count: 0,
             response_image_inlined_bytes: 0,
@@ -689,6 +690,7 @@
       networkTerminalSequence: 0,
       networkTerminalChunks: 0,
       networkTerminalBytes: 0,
+      networkTerminalEvidenceSource: "",
     };
     state.active = active;
     if (v5) v5.active = active;

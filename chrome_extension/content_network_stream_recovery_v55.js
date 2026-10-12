@@ -75,6 +75,7 @@
     if (!text) return;
     active.networkTerminalText = text;
     active.networkTerminalAt = Date.now();
+    active.networkTerminalEvidenceSource = String(detail?.terminal_evidence_source || "stream-eof").slice(0, 80);
     active.networkTerminalStreamId = row.streamId;
     active.networkTerminalSequence = Number(detail?.sequence || 0);
     active.networkTerminalChunks = Number(detail?.chunks ?? row.chunks ?? 0);
@@ -98,6 +99,8 @@
         network_stream_event_stream: row.eventStream,
         network_recovered_assistant_chars: String(row.lastText || "").length,
         network_terminal_authority: "request-v6",
+        network_stream_error: String(detail.phase || "") === "error" ? String(detail.error || "stream-reader-failed").slice(0, 240) : null,
+        network_stream_terminal_proof: detail.completion_hint === true,
         generation_progress: `${row.streamId}:${Number(detail.sequence || 0)}:${Number(detail.bytes ?? row.bytes ?? 0)}`,
         generating_observed: true,
       },
