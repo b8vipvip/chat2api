@@ -152,6 +152,8 @@
     const row = binding(detail?.stream_id, phase === "response");
     if (!row) return;
     if (phase === "response") {
+      const active = activeRequest();
+      if (active?.requestId === row.requestId && detail.event_stream === true) active.networkStreamSeen = true;
       row.responseSeen = true;
       row.status = Number(detail.status || 0) || null;
       row.eventStream = detail.event_stream === true;
@@ -169,20 +171,25 @@
       return;
     }
     if (phase === "assistant-complete") {
-      await terminalHint(row, detail);
+      if (detail.completion_hint === true) await terminalHint(row, detail);
+      else await diagnostics(row, { ...detail, phase: "unverified-terminal-ignored" });
       return;
     }
     if (phase === "done") {
       row.chunks = Number(detail.chunks || row.chunks || 0);
       row.bytes = Number(detail.bytes || row.bytes || 0);
-      if (row.lastText) await terminalHint(row, { ...detail, text: row.lastText });
+      if (row.lastText && detail.completion_hint === true) await terminalHint(row, { ...detail, text: row.lastText });
       else {
-        await diagnostics(row, detail);
+        const active = activeRequest();
+        if (active?.requestId === row.requestId) active.networkStreamEndedWithoutTerminalAt = Date.now();
+        await diagnostics(row, { ...detail, phase: "done-without-assistant-terminal" });
         streams.delete(row.streamId);
       }
       return;
     }
     if (phase === "error") {
+      const active = activeRequest();
+      if (active?.requestId === row.requestId) active.networkStreamEndedWithoutTerminalAt = Date.now();
       await diagnostics(row, detail);
       streams.delete(row.streamId);
     }

@@ -32,6 +32,7 @@ from .models import (
     TestRunCreate,
 )
 from .prompting import build_prompt
+from .response_completion_integrity_v125 import enforce_nonstream_contract
 from .registry import ClientRegistry
 from .telemetry import TelemetryStore
 from .test_runs import TestRunStore
@@ -368,6 +369,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ConnectionError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
+    async def resolve_client_with_reconnect_grace(requested: str | None) -> str:
+        # Only automatic text dispatch gets a short retry when all eligible
+        # Workers are temporarily reconnecting. Explicit Worker selections and
+        # model-incompatibility errors still fail without rerouting.
+        deadline = time.monotonic() + 8.0
+        while True:
+            try:
+                return resolve_client_now(requested)
+            except HTTPException as exc:
+                reason = str(exc.detail or "")
+                temporary = (
+                    exc.status_code == 503 and not requested
+                    and (
+                        "No Chrome extension is online" in reason
+                        or "No ChatGPT-ready Chrome extension" in reason
+                        or "No compatible Chrome extension is available" in reason
+                    )
+                )
+                if not temporary or time.monotonic() >= deadline:
+                    raise
+                await asyncio.sleep(0.5)
+
     def completion_id() -> str:
         return "chatcmpl-" + uuid.uuid4().hex
 
@@ -698,7 +721,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request_type = "multimodal" if attachments else "text"
 
         try:
-            client_id = resolve_client_now(requested_client)
+            client_id = await resolve_client_with_reconnect_grace(requested_client)
         except HTTPException as error:
             await record_early_error(request_id=request_id, response_id=response_id, requested_model=body.model,
                                      prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
@@ -758,6 +781,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         try:
             text = await asyncio.wait_for(state.final_future, timeout=timeout_seconds)
+            # The transport's completed event is necessary, but client-facing
+            # structured-output constraints must also be satisfied before 200.
+            enforce_nonstream_contract(prompt, text)
             usage, token_meta = await record_request(
                 state, body.model, prompt, "completed", principal, stream=False, prompt_mode=body.prompt_mode,
                 response_id=response_id, final_text=text, request_type=request_type,

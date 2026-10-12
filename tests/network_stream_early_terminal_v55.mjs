@@ -63,4 +63,8 @@ const broken = await testCase({ readerFailure: true });
 assert.equal(broken.filter(frame => frame.phase === "assistant-complete").length, 0,
   "truncated streams without successful terminal evidence must not be treated as complete");
 assert.ok(broken.some(frame => frame.phase === "error" && /simulated-clone-reader-failure/.test(frame.error)));
+const noMarkerEof = await testCase();
+assert.equal(noMarkerEof.filter(frame => frame.phase === "assistant-complete").length, 0,
+  "SSE transport EOF without a model terminal signal is not successful");
+assert.ok(noMarkerEof.some(frame => frame.phase === "done" && frame.completion_hint === false));
 console.log("Early SSE proof survives clone reader error; a truncated stream is not completed");

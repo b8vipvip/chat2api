@@ -33,11 +33,12 @@ def test_terminal_prompt_overlay_does_not_arbitrate_terminal_events() -> None:
     assert "SUCCESS_LEASE_MS = 5 * 60 * 1000" in manager
 
 
-def test_long_prompt_avoids_unbounded_execcommand_inserttext() -> None:
+def test_long_prompt_preserves_editor_native_input_state() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
     scripts = next(item for item in manifest["content_scripts"] if item.get("world") != "MAIN")["js"]
     assert scripts.index("content_network_stream_recovery_v55.js") < scripts.index("content_request_terminal_prompt_v88.js")
     guard = text("chrome_extension/content_request_terminal_prompt_v88.js")
     assert "LONG_PROMPT_THRESHOLD = 2048" in guard
-    assert "editable.replaceChildren(document.createTextNode(text))" in guard
-    assert 'prompt_fast_insert_method: "direct-text-node+input-event"' in guard
+    assert "editable.replaceChildren(document.createTextNode(text))" not in guard
+    assert "nativeExecCommand(command, showUi, value)" in guard
+    assert 'prompt_fast_insert_method: "native-editor-transaction-v125"' in guard
