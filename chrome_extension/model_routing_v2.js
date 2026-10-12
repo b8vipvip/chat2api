@@ -1,6 +1,7 @@
 (() => {
   const baseHandleServerMessage = handleServerMessage;
   const LIBRARY_REVISION = 145;
+  const FREE_DEFAULT_MINI = "gpt-5.5-mini";
   const SPECIAL_MODELS = new Set(["gpt-image", "gpt-live", "gpt-live-mini"]);
 
   function canonicalModel(value) {
@@ -41,9 +42,24 @@
     return { settings, rows };
   }
 
+  async function freeDefaultMiniEligible() {
+    const stored = await chrome.storage.local.get({ accountType: "unknown", chatgptAccountProfileV20: null });
+    const profile = stored.chatgptAccountProfileV20;
+    return stored.accountType === "free" &&
+      profile?.account_type === "free" &&
+      profile?.model_control_present === false &&
+      ["medium", "high"].includes(String(profile?.confidence || "").toLowerCase());
+  }
+
   async function resolveRequestedModel(value) {
     const requested = canonicalModel(value);
     const { settings, rows } = await validatedLibrary();
+    if (requested === FREE_DEFAULT_MINI &&
+        !rows.some(item => item.id === requested) &&
+        await freeDefaultMiniEligible()) {
+      // Free default has no picker to validate. Compatibility is not served-model evidence.
+      return requested;
+    }
     if (!rows.length) throw new Error("Worker model library is not validated yet");
     if (!requested) {
       const current = canonicalModel(settings.currentModel);
@@ -119,7 +135,7 @@
       currentReasoning: reasoning || null,
       lastRequestedModel: model,
       lastRequestedReasoning: reasoning || null,
-      lastEffectiveModel: model,
+      lastEffectiveModel: diagnostics?.effective_model ?? null,
       lastEffectiveReasoning: reasoning || null,
       lastModelSelectionError: "",
       lastModelDiagnostics: diagnostics || {},
@@ -174,24 +190,31 @@
     let requestedReasoning = reasoningLevel(message.options || {});
     try {
       requestedModel = await resolveRequestedModel(message.options?.model || message.model || "");
+      const { rows: verifiedModels } = await validatedLibrary();
+      const freeDefaultCompat = requestedModel === FREE_DEFAULT_MINI &&
+        !verifiedModels.some(row => row.id === FREE_DEFAULT_MINI) &&
+        await freeDefaultMiniEligible();
       const tab = await resolveTargetTab();
       const tabReadyMs = Date.now() - routingStarted;
       await ensureContent(tab.id);
       const preflightDiagnostics = await preflightRequest(tab.id, message);
-      const selected = await selectValidatedModel(tab.id, requestedModel);
+      // A Free composer may have no model picker. Do not request an impossible
+      // picker selection, and do not record the default as a verified served model.
+      const selected = freeDefaultCompat ? { current_model: null } :
+        await selectValidatedModel(tab.id, requestedModel);
       const reasoningDiagnostics = await prepareReasoning(tab.id, requestedReasoning);
       const attachmentDiagnostics = await prepareAttachments(tab.id, message.attachments || []);
       const diagnostics = {
         ...preflightDiagnostics,
         ...attachmentDiagnostics,
         model_library_revision: LIBRARY_REVISION,
-        model_library_authority: "worker-validated",
+        model_library_authority: freeDefaultCompat ? "free-default-compatibility-unverified" : "worker-validated",
         logical_requested_model: requestedModel,
         logical_requested_reasoning: requestedReasoning || null,
-        effective_model: requestedModel,
+        effective_model: freeDefaultCompat ? null : requestedModel,
         effective_reasoning: requestedReasoning || null,
-        model_selection_validated: true,
-        model_selection_current: selected.current_model || selected.model || requestedModel,
+        model_selection_validated: !freeDefaultCompat,
+        model_selection_current: freeDefaultCompat ? null : (selected.current_model || selected.model || requestedModel),
         reasoning_selection: reasoningDiagnostics,
         tab_ready_ms: tabReadyMs,
         routing_ms: Date.now() - routingStarted,
@@ -212,11 +235,12 @@
           // server-authoritative transport model.
           model: "chatgpt-web",
           requested_model: requestedModel,
-          effective_model: requestedModel,
+          effective_model: freeDefaultCompat ? null : requestedModel,
           requested_reasoning: requestedReasoning || null,
           effective_reasoning: requestedReasoning || null,
           model_prepared: true,
-          model_selection_strategy: "worker-model-library-v145",
+          model_selection_strategy: freeDefaultCompat ?
+            "free-default-compatibility-unverified" : "worker-model-library-v145",
           chat2api_diagnostics: diagnostics,
         },
       });
