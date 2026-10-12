@@ -67,7 +67,7 @@ vm.createContext(context);
 vm.runInContext(source, context, { filename: "conversation_route_recovery_v136.js" });
 
 const recovery = context.__CHAT2API_CONVERSATION_ROUTE_RECOVERY_V136__;
-assert.equal(recovery.revision, 140);
+assert.equal(recovery.revision, 141);
 
 // v58-authoritative replacement retires an orphaned persisted owner.
 const authorized = {
