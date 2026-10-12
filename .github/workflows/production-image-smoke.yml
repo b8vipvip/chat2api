@@ -95,7 +95,7 @@ jobs:
           assert "content_model_evidence_v144.js" in isolated_scripts
           assert "\"conversation_routing.js\"" in entry
           assert "\"conversation_route_recovery_v136.js\"" in entry
-          assert "revision: 140" in recovery
+          assert "revision: 141" in recovery
           assert "orphaned-persisted-inflight-v140" in recovery
           assert "__chat2apiRouteRecoveryV140" in recovery
           assert "server-authority-stale-inflight-v136" in recovery
@@ -225,9 +225,10 @@ jobs:
           assert payload['chrome_bridge']['persistent_window_pool_revision'] == 132
           assert payload['chrome_bridge']['persistent_window_pool_contract_revision'] == 135
           assert payload['chrome_bridge']['persistent_window_pool_runtime_ready_revision'] == 146
-          assert payload['chrome_bridge']['route_recovery_revision'] == 140
+          assert payload['chrome_bridge']['route_recovery_revision'] == 141
           assert payload['features']['qnbot_stale_route_recovery_v136'] is True
           assert payload['features']['qnbot_orphan_owner_recovery_v140'] is True
+          assert payload['features']['qnbot_server_authority_owner_recovery_v141'] is True
           assert payload['features']['chatgpt_choice_policy_v143'] is True
           assert payload['features']['model_evidence_v144'] is True
           assert payload['features']['final_model_authority_v144'] is True
