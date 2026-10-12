@@ -6,6 +6,7 @@ from pathlib import Path
 from app.worker_model_library_v145_patch import (
     VALIDATION_REVISION,
     _mark_pending,
+    _free_default_mini_eligible,
     _validated_model_rows,
 )
 
@@ -97,3 +98,48 @@ def test_worker_validation_runs_on_required_lifecycle_boundaries():
         assert trigger in background
     assert "chat2api.models.validate.v145" in background
     assert "chat2api.model.select.v145" in (root / "content_model_library_v145.js").read_text(encoding="utf-8")
+
+
+
+def test_free_default_mini_route_requires_ready_composer_and_reliable_plan() -> None:
+    def r(meta, ready=True):
+        client = SimpleNamespace(metadata=meta, connection_enabled=True)
+        return SimpleNamespace(clients={"ext_test": client}, chatgpt_routing_ready=lambda _: ready)
+
+    details = {
+        "account_type": "free",
+        "account_detection_confidence": "high",
+        "account_model_control_present": False,
+        "chatgpt_login_state": "ready",
+        "chatgpt_login_composer_ready": True,
+        "model_validation_state": "failed",
+        "model_validation_revision": VALIDATION_REVISION,
+        "models": [],
+    }
+    assert _free_default_mini_eligible(r(details), "ext_test")
+    assert not _free_default_mini_eligible(r(details, False), "ext_test")
+    assert not _free_default_mini_eligible(r({**details, "account_type": "paid"}), "ext_test")
+    assert not _free_default_mini_eligible(r({**details, "account_detection_confidence": "low"}), "ext_test")
+    assert not _free_default_mini_eligible(r({**details, "account_model_control_present": True}), "ext_test")
+    assert _validated_model_rows(r(details), "ext_test") == []
+
+
+def test_browser_free_compatibility_does_not_fake_validated_model_evidence() -> None:
+    root = Path(__file__).resolve().parents[1] / "chrome_extension"
+    source = (root / "model_routing_v2.js").read_text(encoding="utf-8")
+    assert 'FREE_DEFAULT_MINI = "gpt-5.5-mini"' in source
+    assert 'await freeDefaultMiniEligible()' in source
+    assert 'model_selection_validated: !freeDefaultCompat' in source
+    assert 'effective_model: freeDefaultCompat ? null : requestedModel' in source
+    assert '"free-default-compatibility-unverified"' in source
+    assert "await selectValidatedModel(tab.id, requestedModel)" in source
+
+
+def test_free_default_mini_browser_integration() -> None:
+    import shutil
+    import subprocess
+    if shutil.which("node") is None:
+        return
+    path = Path(__file__).resolve().parents[1] / "tests" / "free_mini_without_picker_v145.mjs"
+    run = subprocess.run(["node", str(path)], capture_output=True, text=True, check=False, timeout=30)
+    assert run.returncode == 0, run.stdout + run.stderr

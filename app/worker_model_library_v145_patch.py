@@ -49,6 +49,35 @@ STATIC_SPECIAL_MODELS: dict[str, dict[str, Any]] = {
 }
 
 
+
+FREE_DEFAULT_MINI = "gpt-5.5-mini"
+
+
+def _free_default_mini_eligible(registry: Any, client_id: str) -> bool:
+    """Free default route is a compatibility capability, NOT model verification.
+
+    Free ChatGPT accounts may expose a ready composer without a model picker.
+    The v145 verified-library contract remains mandatory for every other model.
+    """
+    item = getattr(registry, "clients", {}).get(str(client_id))
+    metadata = getattr(item, "metadata", None) if item else None
+    if not isinstance(metadata, dict):
+        return False
+    if str(metadata.get("account_type") or "").lower() != "free":
+        return False
+    if str(metadata.get("account_detection_confidence") or "").lower() not in {"medium", "high"}:
+        return False
+    if metadata.get("account_model_control_present") is not False:
+        return False
+    checker = getattr(registry, "chatgpt_routing_ready", None)
+    if not callable(checker):
+        return False
+    try:
+        return bool(checker(client_id))
+    except Exception:
+        return False
+
+
 def _model_id(raw: Any) -> str | None:
     if isinstance(raw, dict):
         raw = raw.get("id") or raw.get("model") or raw.get("family")
@@ -247,6 +276,8 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
             return False
         if model in STATIC_SPECIAL_MODELS:
             return True
+        if model == FREE_DEFAULT_MINI and _free_default_mini_eligible(registry, client_id):
+            return True
         return any(str(item.get("id") or "") == model for item in _validated_model_rows(registry, client_id))
 
     def model_library(online_only: bool = True) -> list[dict[str, Any]]:
@@ -259,6 +290,20 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
             for special in catalog.values():
                 if client_id not in special["clients"]:
                     special["clients"].append(client_id)
+            if _free_default_mini_eligible(registry, client_id):
+                entry = catalog.setdefault(FREE_DEFAULT_MINI, {
+                    "id": FREE_DEFAULT_MINI,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "chat2api",
+                    "label": "GPT-5.5 Mini · Free 默认（待响应验证）",
+                    "capabilities": ["text", "vision", "file-understanding"],
+                    "clients": [],
+                    "source": "free-default-compatibility-unverified",
+                    "validated": False,
+                })
+                if client_id not in entry["clients"]:
+                    entry["clients"].append(client_id)
             for model in _validated_model_rows(registry, client_id):
                 model_id = str(model["id"])
                 entry = catalog.setdefault(
@@ -326,6 +371,8 @@ __all__ = [
     "PATCH_REVISION",
     "VALIDATION_REVISION",
     "STATIC_SPECIAL_MODELS",
+    "FREE_DEFAULT_MINI",
+    "_free_default_mini_eligible",
     "_validated_model_rows",
     "_mark_pending",
     "install_worker_model_library_v145_patch",
