@@ -19,7 +19,8 @@ const ctx={
 ctx.globalThis=ctx;
 vm.createContext(ctx);
 vm.runInContext(src,ctx);
-function push(detail){handlers[0]({source:ctx,data:{source:"chat2api-network-stream-v55",...detail}});}
+const page=vm.runInContext("globalThis",ctx);
+function push(detail){handlers[0]({source:page,data:{source:"chat2api-network-stream-v55",...detail}});}
 const tick=()=>new Promise(r=>setTimeout(r,0));
 push({phase:"response",stream_id:"s1",status:200,event_stream:true});
 for(let i=0;i<4;i++)await tick();
