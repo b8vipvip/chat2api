@@ -27,6 +27,7 @@ def test_json_nonstream_contract_rejects_partial_and_accepts_exact_ten_strings()
 def test_busy_compatible_worker_is_queued_instead_of_returning_503():
     class Registry:
         busy_clients = {"ext_busy"}
+        clients = {}
         def online_client_ids(self):
             return ["ext_busy"]
         def chatgpt_routing_ready(self, client_id):
@@ -39,6 +40,7 @@ def test_busy_compatible_worker_is_queued_instead_of_returning_503():
 def test_no_compatible_worker_is_never_falsely_admitted():
     class Registry:
         busy_clients = {"ext_busy"}
+        clients = {}
         def online_client_ids(self):
             return ["ext_busy"]
         def chatgpt_routing_ready(self, client_id):
