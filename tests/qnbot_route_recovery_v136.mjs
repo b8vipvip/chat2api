@@ -115,7 +115,44 @@ await assert.rejects(
   /Server scheduler invariant violated/,
 );
 assert.equal(routes.key_bot2.inflight_request_id, "req_live_owner_12345678");
-router.activeRequests.delete("req_live_owner_12345678");
+
+// This reproduces the production failure on bot2: the old API request has
+// reached chat.error and the broker released it, but the Chrome router did
+// not receive its terminal event. Both persisted inflight and the process-local
+// activeRequests map still claim that old request. A new request explicitly
+// admitted by canonical server FIFO v58 must retire the old window/owner.
+const replacementAfterTerminal = {
+  ...authorized,
+  request_id: "req_after_server_terminal_12345678",
+};
+tab = await context.resolveTargetTabForRequest(replacementAfterTerminal);
+assert.equal(tab.id, 7);
+assert.equal(routes.key_bot2.inflight_request_id, null);
+assert.equal(router.activeRequests.has("req_live_owner_12345678"), false);
+assert.ok(events.some(row => row[0] === "fail" &&
+  row[1] === "req_live_owner_12345678" &&
+  row[2] === "server-authority-stale-inflight-v136"));
+assert.equal(recovery.server_authority_live_owner_supersessions, 1);
+assert.equal(recovery.last_recovery?.previous_owner_locally_live, true);
+
+// Even if an old completion arrives after the superseding request starts,
+// it cannot destroy its replacement's route ownership.
+routes.key_bot2.inflight_request_id = "req_after_server_terminal_12345678";
+await router.failRequest("req_live_owner_12345678", "late-terminal");
+assert.equal(routes.key_bot2.inflight_request_id, "req_after_server_terminal_12345678");
+routes.key_bot2.inflight_request_id = null;
+
+// A locally-live owner for a different key must not be recycled when the
+// claimed persisted route is corrupted or points across logical keys.
+routes.key_bot2.inflight_request_id = "req_other_key_owner_12345678";
+router.activeRequests.set("req_other_key_owner_12345678", { key: "key_unrelated" });
+await assert.rejects(
+  context.resolveTargetTabForRequest({ ...authorized, request_id: "req_cross_key_12345678" }),
+  /Server scheduler invariant violated/,
+);
+assert.equal(routes.key_bot2.inflight_request_id, "req_other_key_owner_12345678");
+router.activeRequests.delete("req_other_key_owner_12345678");
+routes.key_bot2.inflight_request_id = null;
 
 // A stale de-dup marker from a late terminal callback must not make the owner
 // immortal. Recovery removes only the exact orphan marker before retrying.
