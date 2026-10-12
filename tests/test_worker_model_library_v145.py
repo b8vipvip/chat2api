@@ -116,11 +116,11 @@ def test_free_default_mini_route_requires_ready_composer_and_reliable_plan() -> 
         "model_validation_revision": VALIDATION_REVISION,
         "models": [],
     }
-    assert _free_default_mini_eligible(r(details))
-    assert not _free_default_mini_eligible(r(details, False))
-    assert not _free_default_mini_eligible(r({**details, "account_type": "paid"}))
-    assert not _free_default_mini_eligible(r({**details, "account_detection_confidence": "low"}))
-    assert not _free_default_mini_eligible(r({**details, "account_model_control_present": True}))
+    assert _free_default_mini_eligible(r(details), "ext_test")
+    assert not _free_default_mini_eligible(r(details, False), "ext_test")
+    assert not _free_default_mini_eligible(r({**details, "account_type": "paid"}), "ext_test")
+    assert not _free_default_mini_eligible(r({**details, "account_detection_confidence": "low"}), "ext_test")
+    assert not _free_default_mini_eligible(r({**details, "account_model_control_present": True}), "ext_test")
     assert _validated_model_rows(r(details), "ext_test") == []
 
 
