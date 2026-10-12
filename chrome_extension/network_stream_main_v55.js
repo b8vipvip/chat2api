@@ -260,6 +260,42 @@
     let sawDone = false;
     let assistantRoleSeen = false;
     let fallbackText = "";
+    let terminalPosted = false;
+
+    // A verified SSE completion must not wait for response.clone() EOF.
+    // Chrome can reject the clone reader after delivering the final SSE frame.
+    // request-v6 remains the only owner of the outward terminal response.
+    function publishExplicitTerminal(source) {
+      if (terminalPosted || !assistantRoleSeen || !latestText) return;
+      terminalPosted = true;
+      state.completions += 1;
+      post({
+        channel: CHANNEL,
+        phase: "assistant-complete",
+        stream_id: streamId,
+        sequence: ++sequence,
+        text: latestText,
+        chars: latestText.length,
+        completion_hint: true,
+        terminal_evidence_source: source,
+      });
+    }
+
+    function assistantMessageFinished(root) {
+      const message = root?.message || root?.value?.message || root;
+      return messageRole(message) === "assistant"
+        && String(message.status || "").toLowerCase() === "finished_successfully"
+        && message.end_turn === true;
+    }
+
+    function explicitStreamEnd(payload) {
+      const type = eventType(payload);
+      return [
+        "message_stream_complete", "message_stream_completed",
+        "assistant_message_complete", "response.completed",
+        "conversation.item.done", "done",
+      ].includes(type);
+    }
 
     function snapshotAdvances(current, candidate, source) {
       if (!candidate || candidate === current) return false;
@@ -333,6 +369,10 @@
       }
 
       if (completionHint(payload)) sawDone = true;
+      if (explicitStreamEnd(payload)) publishExplicitTerminal("sse-protocol-complete");
+      else if (patched && assistantMessageFinished(patchRoot.value)) {
+        publishExplicitTerminal("assistant-end-turn-patch");
+      }
     }
 
     function processEvent(raw) {
@@ -345,6 +385,7 @@
       if (!data) return;
       if (data === "[DONE]") {
         sawDone = true;
+        publishExplicitTerminal("sse-done-marker");
         return;
       }
       try {
@@ -368,7 +409,8 @@
       finish() {
         if (buffer.trim()) processEvent(buffer);
         if (!latestText && fallbackText) emitSnapshot(fallbackText, "assistant-fallback");
-        if (latestText) {
+        if (latestText && !terminalPosted) {
+          terminalPosted = true;
           state.completions += 1;
           post({
             channel: CHANNEL,
@@ -378,6 +420,7 @@
             text: latestText,
             chars: latestText.length,
             completion_hint: sawDone,
+            terminal_evidence_source: "stream-eof",
           });
         }
         return { latestText, sawDone, sequence, assistantRoleSeen };
