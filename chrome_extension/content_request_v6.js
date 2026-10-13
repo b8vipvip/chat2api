@@ -604,7 +604,7 @@
 
   function requiresStrictJsonTen(prompt) {
     const source = String(prompt || "");
-    return /严格\\s*JSON\\s*数组/i.test(source) && /恰好\\s*10\\s*个字符串/.test(source);
+    return /严格\s*JSON\s*数组/i.test(source) && /恰好\s*10\s*个字符串/.test(source);
   }
 
   function validJsonTen(text) {
