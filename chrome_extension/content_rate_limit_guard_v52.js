@@ -50,7 +50,7 @@
     timer: null,
     observer: null,
     lastFingerprint: "",
-    terminalRequestId: "",
+    signaledRequestId: "",
   };
   globalThis[KEY] = state;
 
@@ -127,41 +127,29 @@
     return latestAssistantLimitText();
   }
 
-  async function terminateActiveRequest(snapshot) {
+  async function signalActiveRequest(snapshot) {
     const active = activeRequest();
     const requestId = String(active?.requestId || "");
-    if (!requestId || state.terminalRequestId === requestId) return false;
-    state.terminalRequestId = requestId;
+    if (!requestId || state.signaledRequestId === requestId) return false;
+    state.signaledRequestId = requestId;
     const seconds = Math.max(1, Math.ceil(Math.max(0, Number(snapshot?.until_ms || 0) - Date.now()) / 1000));
-    const error = `ChatGPT is temporarily rate limited; request dispatch paused for ${seconds}s after a visible ChatGPT account-limit response`;
-
-    // Send the terminal browser error before cancelling the local monitor so
-    // the server receives the rate-limit reason first and can enter its shared
-    // Worker cooldown instead of recording a generic UI error/300s timeout.
+    // Pure evidence collection. v6 owns the only chat.error/complete/cancelled
+    // decision; the rate-limit detector must not cancel or terminalize it.
+    active.rateLimitTerminalError =
+      `ChatGPT is temporarily rate limited; request dispatch paused for ${seconds}s after a visible ChatGPT account-limit response`;
+    active.rateLimitEvidence = {
+      chatgpt_rate_limit_detected: true,
+      chatgpt_rate_limit_detection_revision: 63,
+      chatgpt_rate_limit_source: String(snapshot?.source || "visible-chatgpt-rate-limit-surface-v63"),
+      chatgpt_rate_limit_retry_after_seconds: seconds,
+      chatgpt_rate_limit_text: String(snapshot?.text || "").slice(0, 240),
+    };
     try {
       await chrome.runtime.sendMessage({
         type: "chat2api.event",
-        event: {
-          type: "chat.error",
-          request_id: requestId,
-          error,
-          diagnostics: {
-            chatgpt_rate_limit_detected: true,
-            chatgpt_rate_limit_detection_revision: 63,
-            chatgpt_rate_limit_source: String(snapshot?.source || "visible-chatgpt-rate-limit-surface-v63"),
-            chatgpt_rate_limit_retry_after_seconds: seconds,
-            chatgpt_rate_limit_text: String(snapshot?.text || "").slice(0, 240),
-          },
-        },
+        event: {type: "chat.diagnostics", request_id: requestId, diagnostics: active.rateLimitEvidence},
       });
-    } catch (_) {
-      // Even if the Bridge socket is momentarily unavailable, stop the local
-      // request monitor; transport recovery will surface the disconnect rather
-      // than leaving this request stuck until its absolute timeout.
-    } finally {
-      active.rateLimitTerminalError = error;
-      active.cancelled = true;
-    }
+    } catch (_) {}
     return true;
   }
 
@@ -198,7 +186,7 @@
         });
       } catch (_) {}
     }
-    await terminateActiveRequest(next);
+    await signalActiveRequest(next);
     return next;
   }
 
@@ -223,7 +211,7 @@
   state.matchesConversationLocal = matchesConversationLocalText;
   state.pageHasConversationLocalQuota = pageHasConversationLocalQuota;
   state.latestAssistantLimitText = latestAssistantLimitText;
-  state.terminateActiveRequest = terminateActiveRequest;
+  state.signalActiveRequest = signalActiveRequest;
 
   state.observer = new MutationObserver(() => schedule(60));
   state.observer.observe(document.documentElement, {
