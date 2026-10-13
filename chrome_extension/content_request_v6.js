@@ -854,6 +854,15 @@
 
   const listener = (message, sender, sendResponse) => {
     if (message.type === "chat2api.request") {
+      const quota = globalThis.__CHAT2API_CONVERSATION_QUOTA_FAILOVER_V95__;
+      const blocked = quota?.preDispatchBlockText?.() || "";
+      if (blocked) {
+        quota.requestFailover(String(message.requestId || ""), blocked,
+          "pre-dispatch-disabled-conversation").catch(() => {});
+        sendResponse({ ok: true, controller: "request-v6", revision: 69,
+          reroute_pending: true, request_id: String(message.requestId || "") });
+        return false;
+      }
       runRequest(message);
       sendResponse({ ok: true, controller: "request-v6", revision: 69 });
       return false;
