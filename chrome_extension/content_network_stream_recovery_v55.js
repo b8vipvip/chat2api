@@ -63,6 +63,8 @@
     const value = String(text || "");
     if (!value) return false;
     const nextSequence = Number(sequence || 0);
+    if (nextSequence && nextSequence <= Number(row.lastTextSequence || 0)
+        && value !== row.lastText) return false;
     // The JSON Patch assembler can replace already rendered content, including
     // shortening it. The old prefix-only filter permanently lost such edits.
     // Accept a rewrite ONLY from a newer authoritative snapshot of this exact
