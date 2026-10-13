@@ -22,6 +22,8 @@
     /暂时限制.*访问对话记录/i,
     /请稍等几分钟后再重试/i,
     /你(?:已|已经)?达到.{0,30}(?:使用|消息|请求)?(?:限制|上限)/i,
+    // Current Chinese ChatGPT banners use 限额, not 限制 or 上限.
+    /(?:你|您)(?:已|已经)?达(?:到)?(?:了)?(?:当前)?(?:使用|消息|请求)?限额/i,
     /too many requests/i,
     /requests? (?:are )?too frequent/i,
     /temporarily limited.*conversation history/i,
@@ -41,6 +43,7 @@
     /^you(?:'|’)?ve reached.{0,40}(?:usage|message|request)?\s*limit(?:[.!,:;\s]|$)/i,
     /^you have reached.{0,40}(?:usage|message|request)?\s*limit(?:[.!,:;\s]|$)/i,
     /^你(?:已|已经)?达到.{0,30}(?:使用|消息|请求)?(?:限制|上限)/i,
+    /^(?:你|您)(?:已|已经)?达(?:到)?(?:了)?(?:当前)?(?:使用|消息|请求)?限额/i,
   ];
 
   const state = {
@@ -113,11 +116,20 @@
       "[data-sonner-toast]",
       "[data-toast]",
       "[class*='toast']",
+      // ChatGPT can render the Chinese quota notice as a red inline error
+      // above the composer without assigning role=alert.
+      "[data-testid*='error']",
+      "[class*='border-red']",
+      "[class*='text-red']",
+      "[class*='border-destructive']",
+      "[class*='text-destructive']",
     ];
     const nodes = [...document.querySelectorAll(selectors.join(","))].filter(visible).slice(-12);
     for (const node of nodes.reverse()) {
       const text = normalize(node.innerText || node.textContent || "");
-      if (!matchesRateLimitText(text)) continue;
+      // Reject container-wide text or historical transcript matches: only
+      // small, visible error surfaces may assert an account-rate-limit fact.
+      if (text.length > 500 || !matchesRateLimitText(text)) continue;
       // A nested alert can contain only the generic "limit reached" sentence
       // while the surrounding composer card says "start a new text chat". In
       // that case v95 owns recovery and v52 must not arm an account-wide block.
