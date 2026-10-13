@@ -618,6 +618,11 @@
     let stableSince = 0;
 
     while (!active.cancelled && Date.now() - startedAt < timeoutMs) {
+      if (active.rateLimitTerminalError) {
+        const failure = new Error(active.rateLimitTerminalError);
+        failure.diagnostics = active.rateLimitEvidence || {};
+        throw failure;
+      }
       const error = pageError();
       if (error && responseStarted) throw new Error(`ChatGPT response UI error: ${error}`);
       const current = currentAssistantState(active);
@@ -827,7 +832,7 @@
         type: "chat.error",
         request_id: active.requestId,
         error: String(error?.message || error),
-        diagnostics: { request_controller: "request-v6", response_epoch_revision: 69 },
+        diagnostics: { request_controller: "request-v6", response_epoch_revision: 69, ...(error?.diagnostics || {}) },
       });
     } finally {
       if (state.active === active) state.active = null;
