@@ -20,7 +20,7 @@ def test_multiple_chatgpt_tabs_are_adopted_instead_of_creating_n_plus_one_window
 
 def test_visible_chatgpt_rate_limit_modal_arms_five_minute_circuit_breaker() -> None:
     source = (EXT / "content_rate_limit_guard_v52.js").read_text(encoding="utf-8")
-    for token in ('COOLDOWN_MS = 5 * 60 * 1000','/请求过于频繁/i','/暂时限制.*访问对话记录/i','/请稍等几分钟后再重试/i','/too many requests/i','chatgptRateLimitGuardV52','chatgpt-rate-limit-detected','terminateActiveRequest','type: "chat.error"','ChatGPT is temporarily rate limited'):
+    for token in ('COOLDOWN_MS = 5 * 60 * 1000','/请求过于频繁/i','/暂时限制.*访问对话记录/i','/请稍等几分钟后再重试/i','/too many requests/i','chatgptRateLimitGuardV52','chatgpt-rate-limit-detected','signalActiveRequest','type: "chat.diagnostics"','active.rateLimitTerminalError','ChatGPT is temporarily rate limited'):
         assert token in source
 
 
