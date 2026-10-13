@@ -21,7 +21,12 @@ context.__CHAT2API_REQUEST_CONTENT_V6__ = {active};
 vm.createContext(context);
 vm.runInContext(networkSource, context);
 const fire = async d => {
-  listeners[0]({source:context,data:{source:"chat2api-network-stream-v55",stream_id:"test-stream",...d}});
+  // The message bridge verifies event.source === the page's own globalThis.
+  // In a Node VM, the host context object is not the same identity as the
+  // contextified global proxy; create the event inside the VM.
+  context.__eventDetail = {source:"chat2api-network-stream-v55",stream_id:"test-stream",...d};
+  context.__eventListeners = listeners;
+  vm.runInContext("__eventListeners[0]({source:globalThis,data:__eventDetail})", context);
   for(let i=0;i<6;i++) await tick();
 };
 await fire({phase:"response",status:200,event_stream:true});
