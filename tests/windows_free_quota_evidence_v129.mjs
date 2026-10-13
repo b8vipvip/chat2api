@@ -41,6 +41,10 @@ vm.createContext(ctx);
 vm.runInContext(code,ctx);
 const sensor = ctx.__CHAT2API_RATE_LIMIT_CONTENT_V52__;
 assert.equal(sensor.matches(limitBanner), true, "Chinese 限额 banner must match");
+// The screenshot's red inline error may not have an aria role. The same
+// sensor must recognize the notice without any extra terminal watcher.
+ctx.document.querySelectorAll = selector => selector.includes("border-red") ? [quotaCard] : [];
+assert.match(sensor.text(), /已达到限额/);
 assert.equal(sensor.matchesHard(limitBanner), true, "assistant shell should recognize a Chinese account-limit error");
 assert.equal(sensor.matches("聊天已暂停，额度将在稍后重置。"), false, "local conversation quota must not claim global cooldown");
 assert.equal(sensor.matches("这个话术里提到商品限额，但不限制客户咨询"), false, "ordinary text is not a rate-limit signal");
