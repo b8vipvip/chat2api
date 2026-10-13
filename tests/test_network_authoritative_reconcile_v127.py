@@ -13,11 +13,13 @@ def test_authoritative_sse_rewrite_and_strict_json():
     assert run.returncode == 0, run.stdout + run.stderr
 
 
-def test_completion_wait_is_scoped_to_strict_json():
+def test_canonical_completion_has_no_prompt_specific_format_arbiter():
     request = (ROOT / "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
     network = (ROOT / "chrome_extension/content_network_stream_recovery_v55.js").read_text(encoding="utf-8")
-    assert "await waitFor(chooseValid, 6000, 160)" in request
-    assert 'response_terminal_strict_json_valid:' in request
-    assert "response_terminal_reconciled_source:" in request
-    assert "detail.completion_hint === true" in network
+    server = (ROOT / "app/main.py").read_text(encoding="utf-8")
+    assert "reconcileStrictTerminal" not in request
+    assert "requiresStrictJsonTen" not in request
+    assert "enforce_nonstream_contract(" not in server
+    assert 'text: lastText || networkTerminalText' in request
+    assert 'type: "chat.completed"' not in network
     assert 'String(detail.parser_source || "") === "json-patch"' in network
