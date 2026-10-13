@@ -690,7 +690,12 @@
       // terminal evidence available on redesigned pages. The network module does
       // not complete requests itself; it writes this evidence onto the exact
       // active request and request-v6 remains the one terminal authority.
-      if (networkTerminalAt && networkTerminalText && !promptStillPresent(active) && Date.now() - networkTerminalAt >= 750) {
+      // Allow late, authoritative snapshots from the same SSE stream to settle
+      // after an early end-turn proof. A short terminal fragment is not
+      // automatically a final text payload.
+      const evidenceSettledAt = Math.max(networkTerminalAt, Number(active.networkObservedAt || 0));
+      if (networkTerminalAt && networkTerminalText && !promptStillPresent(active)
+          && Date.now() - evidenceSettledAt >= 1250) {
         responseStarted = await ensureResponseStarted(active, responseStarted, "network-terminal-v57");
         const final = await reconcileStrictTerminal(active, lastText, networkTerminalText);
         lastText = await updateCapturedText(active, final.text, lastText);
