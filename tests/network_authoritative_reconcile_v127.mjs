@@ -39,6 +39,16 @@ await fire({phase:"assistant-complete",sequence:4,completion_hint:true,terminal_
 assert.equal(active.networkTerminalText,corrected);
 assert.equal(active.networkTerminalSequence,4);
 assert.equal(active.networkTerminalEvidenceSource,"assistant-end-turn-patch");
+// A later, verified patch after an early assistant-end-turn must be kept,
+// and the newest text must replace (not append to) the terminal payload.
+const lateComplete = JSON.stringify(Array.from({length:10}, (_,i)=>"最终版本"+i));
+await fire({phase:"assistant-snapshot",sequence:5,parser_source:"json-patch",text:lateComplete});
+assert.equal(active.networkObservedText,lateComplete);
+assert.equal(active.networkTerminalText,lateComplete);
+assert.equal(active.networkTerminalSequence,5);
+await fire({phase:"done",sequence:6,chunks:9,bytes:7000,completion_hint:true});
+assert.equal(active.networkTerminalText,lateComplete);
+assert.ok(sent.some(row=>row.event?.diagnostics?.network_stream_phase === "done-after-terminal"));
 
 context.__CHAT2API_REQUEST_CONTENT_V6__ = undefined;
 // request-v6 registers its contract only once and does not touch the DOM until dispatch.
