@@ -17,6 +17,7 @@ class RequestState:
     browser_started_mono: float | None = None
     first_token_mono: float | None = None
     completed_mono: float | None = None
+    terminal_event_type: str | None = None
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def timings(self) -> dict[str, float | None]:
@@ -50,21 +51,15 @@ def _monotonic_text(current: str, candidate: str) -> tuple[str, str]:
 
 
 def _terminal_text(accumulated: str, terminal: str) -> tuple[str, str]:
-    """Choose one terminal value without allowing unrelated sources to replace it.
+    """Only the controller's terminal event owns the final assistant body.
 
-    Stream snapshots and the canonical request controller observe the same assistant
-    turn through different surfaces. The only safe reconciliation is a monotonic
-    prefix extension; otherwise the controller's terminal value remains authoritative.
+    Interim snapshots from DOM/SSE observers are progress evidence, not a second
+    authority capable of overruling a shorter or rewritten completed response.
     """
-    current = str(accumulated or "")
     final = str(terminal or "")
-    if not final:
-        return current, "accumulated"
-    if not current or current == final:
+    if final:
         return final, "terminal"
-    if current.startswith(final) and len(current) > len(final):
-        return current, "accumulated-prefix-extension"
-    return final, "terminal"
+    return str(accumulated or ""), "accumulated"
 
 
 class RequestBroker:
@@ -118,6 +113,11 @@ class RequestBroker:
         if not state:
             return False
         event_type = event.get("type")
+        if state.terminal_event_type is not None:
+            # Ignore EVERY event after the first terminal. In particular a late
+            # error must not overturn completion, and a second completion must
+            # not enter the stream queue after the first final frame.
+            return False
         now = time.perf_counter()
         if event_type in {"chat.diagnostics", "image.diagnostics"}:
             diagnostics = event.get("diagnostics")
@@ -138,6 +138,7 @@ class RequestBroker:
             state.diagnostics["snapshot_text_source"] = snapshot_source
             state.diagnostics["snapshot_text_chars"] = len(state.text)
         elif event_type == "chat.completed":
+            state.terminal_event_type = str(event_type)
             state.completed_mono = now
             final, source = _terminal_text(state.text, str(event.get("text") or ""))
             state.text = final
@@ -147,8 +148,10 @@ class RequestBroker:
             if state.final_future and not state.final_future.done():
                 state.final_future.set_result(final)
         elif event_type == "image.completed":
+            state.terminal_event_type = str(event_type)
             state.completed_mono = now
         elif event_type in {"chat.error", "chat.cancelled", "image.error", "image.cancelled"}:
+            state.terminal_event_type = str(event_type)
             state.completed_mono = now
             message = str(event.get("error") or event.get("reason") or "Request failed")
             if state.final_future and not state.final_future.done():
