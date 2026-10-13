@@ -165,6 +165,9 @@ def test_request_terminal_migration_owns_one_loaded_controller():
     assert "content_request_interruption_bridge_v72.js" not in scripts
     assert "content_response_stream_recovery_v69.js" not in scripts
     assert "content_guard.js" not in scripts
+    bootstrap = (ROOT / "chrome_extension/content_bootstrap.js").read_text(encoding="utf-8")
+    assert '"content_request_stall_guard_v34.js"' not in bootstrap
+    assert '"content_guard.js"' not in bootstrap
     assert "content_rate_limit_guard_v52.js" in scripts
     quota = (ROOT / "chrome_extension/content_conversation_quota_failover_v95.js").read_text(encoding="utf-8")
     detector = (ROOT / "chrome_extension/content_rate_limit_guard_v52.js").read_text(encoding="utf-8")
