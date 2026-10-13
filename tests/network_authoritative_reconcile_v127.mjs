@@ -59,10 +59,7 @@ context.__CHAT2API_REQUEST_CONTENT_V6__ = undefined;
 // request-v6 registers its contract only once and does not touch the DOM until dispatch.
 vm.runInContext(requestSource, context);
 const contract = context.__CHAT2API_REQUEST_CONTENT_V6__?.contract;
-const tenPrompt = "输出严格JSON数组，恰好10个字符串；占位符不能改动。";
-assert.equal(contract.requiresStrictJsonTen(tenPrompt),true);
-assert.equal(contract.validJsonTen(corrected),true);
-assert.equal(contract.validJsonTen("[\n确认是否支持使用。\"\n]"),false);
-assert.equal(contract.validJsonTen(JSON.stringify(["only one"])),false);
-assert.equal(contract.requiresStrictJsonTen("普通聊天"),false);
-console.log("Authoritative SSE rewrite, stale snapshot protection, and strict ten-string validation passed");
+assert.ok(contract.currentAssistantState);
+assert.equal(contract.requiresStrictJsonTen,undefined);
+assert.equal(contract.validJsonTen,undefined);
+console.log("Authoritative SSE rewrite and single-owner, prompt-agnostic completion passed");
