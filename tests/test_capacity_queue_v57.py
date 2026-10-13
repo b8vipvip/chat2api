@@ -134,8 +134,9 @@ def test_v57_rate_limit_behavior_remains_available_to_v58() -> None:
         assert '"too many requests"' in source
         assert "RATE_LIMIT_DEFAULT_SECONDS = 300" in source
         assert "rate_limit_cooldown_active" in source
-    assert "terminateActiveRequest" in content
-    assert 'type: "chat.error"' in content
+    assert "signalActiveRequest" in content
+    assert 'type: "chat.error"' not in content
+    assert "active.rateLimitTerminalError" in content
 
 
 def test_release_contract_is_v02275_and_worker_bundle_0831() -> None:
