@@ -106,7 +106,6 @@
         "content_reasoning_transport_v20.js",
         "content_format_v20.js",
         "content_account_v20.js",
-        "content_guard.js",
         "content_image.js",
         "content_image_v3.js",
         "content_voice.js",
