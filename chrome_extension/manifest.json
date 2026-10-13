@@ -4,19 +4,53 @@
   "version": "0.22.127",
   "description": "Turns logged-in ChatGPT browser windows into a remotely callable chat2api Worker with server-side per-API FIFO admission, a persistent prewarmed per-Worker window pool, stable logical-conversation routing, Responses tools, multimodal, image-generation and realtime Voice support.",
   "minimum_chrome_version": "116",
-  "permissions": ["storage", "unlimitedStorage", "tabs", "scripting", "alarms", "downloads", "contentSettings"],
-  "host_permissions": ["<all_urls>", "http://*/*", "https://*/*", "https://chatgpt.com/*", "https://www.chatgpt.com/*", "https://chat.openai.com/*"],
-  "background": {"service_worker": "background_entry.js"},
-  "action": {"default_title": "chat2api Worker", "default_popup": "popup.html"},
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "tabs",
+    "scripting",
+    "alarms",
+    "downloads",
+    "contentSettings"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://*/*",
+    "https://*/*",
+    "https://chatgpt.com/*",
+    "https://www.chatgpt.com/*",
+    "https://chat.openai.com/*"
+  ],
+  "background": {
+    "service_worker": "background_entry.js"
+  },
+  "action": {
+    "default_title": "chat2api Worker",
+    "default_popup": "popup.html"
+  },
   "content_scripts": [
     {
-      "matches": ["https://chatgpt.com/*", "https://www.chatgpt.com/*", "https://chat.openai.com/*"],
-      "js": ["voice_main.js", "network_stream_main_v55.js", "model_evidence_main_v144.js", "native_tool_stream_main_v63.js", "multimodal_main_v78.js"],
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://www.chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
+      "js": [
+        "voice_main.js",
+        "network_stream_main_v55.js",
+        "model_evidence_main_v144.js",
+        "native_tool_stream_main_v63.js",
+        "multimodal_main_v78.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["https://chatgpt.com/*", "https://www.chatgpt.com/*", "https://chat.openai.com/*"],
+      "matches": [
+        "https://chatgpt.com/*",
+        "https://www.chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ],
       "js": [
         "content.js",
         "content_bundle_marker_v48.js",
@@ -54,7 +88,6 @@
         "content_request_v6.js",
         "content_chatgpt_choice_policy_v143.js",
         "content_interruption_guard_v72.js",
-        "content_request_interruption_bridge_v72.js",
         "content_request_lifecycle_v50.js",
         "content_conversation_quota_failover_v95.js",
         "content_request_hygiene_v42.js",
@@ -66,7 +99,6 @@
         "content_request_terminal_prompt_v88.js",
         "content_response_semantic_recovery_v51.js",
         "content_transient_retry_v50.js",
-        "content_request_stall_guard_v34.js",
         "content_generation_liveness_v49.js",
         "content_request_perf_v21.js",
         "content_completion_v6.js",
