@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.127"
+    assert RELEASE_VERSION == "0.22.128"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -128,7 +128,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     assert "MutationObserver" in script
 
     columns_script = client.get(ADMIN_EXTENSION_COLUMNS_ASSET).text
-    assert 'const VERSION = "0.22.127-worker-list-v156"' in columns_script
+    assert 'const VERSION = "0.22.128-worker-list-v156"' in columns_script
     assert 'const COLUMN_SCHEMA_REVISION = 152' in columns_script
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v3"' in columns_script
     assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2"' in columns_script
@@ -156,3 +156,25 @@ def test_readme_describes_version_contract_and_voice_status():
     assert "GET /version" in readme
     assert "完整版本规则见 `docs/VERSIONING.md`" in readme
     assert "语音生成、语音对话尚未实现" not in readme
+
+def test_request_terminal_migration_owns_one_loaded_controller():
+    manifest = json.loads((ROOT / "chrome_extension/manifest.json").read_text(encoding="utf-8"))
+    scripts = manifest["content_scripts"][1]["js"]
+    assert scripts.count("content_request_v6.js") == 1
+    assert "content_request_stall_guard_v34.js" not in scripts
+    assert "content_request_interruption_bridge_v72.js" not in scripts
+    assert "content_response_stream_recovery_v69.js" not in scripts
+    assert "content_guard.js" not in scripts
+    bootstrap = (ROOT / "chrome_extension/content_bootstrap.js").read_text(encoding="utf-8")
+    assert '"content_request_stall_guard_v34.js"' not in bootstrap
+    assert '"content_guard.js"' not in bootstrap
+    assert "content_rate_limit_guard_v52.js" in scripts
+    quota = (ROOT / "chrome_extension/content_conversation_quota_failover_v95.js").read_text(encoding="utf-8")
+    detector = (ROOT / "chrome_extension/content_rate_limit_guard_v52.js").read_text(encoding="utf-8")
+    assert "base.listener = listener" not in quota
+    assert 'type: "chat.error"' not in detector
+    request = (ROOT / "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
+    assert "resolveBlockingInterruption({force:true,phase:\"before-request\"})" in request
+    assert 'type: "chat.completed"' in request
+    assert "reconcileStrictTerminal" not in request
+

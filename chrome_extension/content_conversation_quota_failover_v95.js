@@ -167,39 +167,9 @@
     }, Math.max(0, delay));
   }
 
-  // Wrap the final request listener after request-lifecycle-v50. If a prior
-  // conversation is already blocked before the next API turn starts, do not
-  // write the prompt into that poisoned conversation at all; ask the background
-  // failover owner to close it and replay the same request on a fresh window.
-  const base = globalThis[REQUEST_V5_KEY];
-  const priorListener = base?.listener;
-  if (typeof priorListener === "function") {
-    try { chrome.runtime.onMessage.removeListener(priorListener); } catch (_) {}
-    const listener = (message, sender, sendResponse) => {
-      if (message?.type === "chat2api.request") {
-        const requestId = String(message?.requestId || message?.request_id || "");
-        const text = !sendReady() ? quotaText() : "";
-        if (requestId && text) {
-          requestFailover(requestId, text, "pre-dispatch-disabled-conversation").catch(() => {});
-          sendResponse({
-            ok: true,
-            controller: "conversation-quota-failover-v95",
-            reroute_pending: true,
-            request_id: requestId,
-          });
-          return false;
-        }
-      }
-      try {
-        return priorListener(message, sender, sendResponse);
-      } catch (error) {
-        throw error;
-      }
-    };
-    state.listener = listener;
-    base.listener = listener;
-    chrome.runtime.onMessage.addListener(listener);
-  }
+  // Evidence and reroute adapter only. The request-v6 listener makes the
+  // pre-dispatch decision and owns the acknowledgement/terminal boundary.
+  state.preDispatchBlockText = () => !sendReady() ? quotaText() : "";
 
   state.matchesConversationQuota = matchesConversationQuota;
   state.quotaText = quotaText;

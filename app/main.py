@@ -32,7 +32,6 @@ from .models import (
     TestRunCreate,
 )
 from .prompting import build_prompt
-from .response_completion_integrity_v125 import enforce_nonstream_contract
 from .registry import ClientRegistry
 from .telemetry import TelemetryStore
 from .test_runs import TestRunStore
@@ -781,9 +780,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         try:
             text = await asyncio.wait_for(state.final_future, timeout=timeout_seconds)
-            # The transport's completed event is necessary, but client-facing
-            # structured-output constraints must also be satisfied before 200.
-            enforce_nonstream_contract(prompt, text)
+            # The transport returns the assistant's completed text unchanged.
+            # Prompt-language formatting requirements are not HTTP transport
+            # failures; explicit structured-output contracts belong to the API
+            # request schema (and may be validated by an opt-in consumer).
             usage, token_meta = await record_request(
                 state, body.model, prompt, "completed", principal, stream=False, prompt_mode=body.prompt_mode,
                 response_id=response_id, final_text=text, request_type=request_type,

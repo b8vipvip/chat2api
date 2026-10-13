@@ -93,9 +93,9 @@ def test_manifest_loads_interruption_guard_after_v6_before_lifecycle() -> None:
     scripts = manifest["content_scripts"][1]["js"]
     v6 = scripts.index("content_request_v6.js")
     guard = scripts.index("content_interruption_guard_v72.js")
-    bridge = scripts.index("content_request_interruption_bridge_v72.js")
     lifecycle = scripts.index("content_request_lifecycle_v50.js")
-    assert v6 < guard < bridge < lifecycle
+    assert v6 < guard < lifecycle
+    assert "content_request_interruption_bridge_v72.js" not in scripts
 
 
 def test_interruption_guard_is_safe_negative_and_first_preference_only() -> None:
@@ -111,12 +111,11 @@ def test_interruption_guard_is_safe_negative_and_first_preference_only() -> None
     assert "clickSafe(preference.choice)" in source
 
 
-def test_request_bridge_delays_request_until_guard_resolution() -> None:
-    source = (ROOT / "chrome_extension" / "content_request_interruption_bridge_v72.js").read_text(encoding="utf-8")
-    assert 'message?.type === "chat2api.request"' in source
-    assert 'resolveBlockingInterruption({ force: true, phase: "before-request" })' in source
-    assert ".finally(() => baseListener(message, sender, () => {}))" in source
-    assert "v5.listener = listener" in source
+def test_request_v6_owns_interruption_readiness_without_extra_listener() -> None:
+    source = (ROOT / "chrome_extension" / "content_request_v6.js").read_text(encoding="utf-8")
+    assert 'resolveBlockingInterruption({force:true,phase:"before-request"})' in source
+    assert "await writePrompt(active, prompt)" in source
+    assert source.index("resolveBlockingInterruption({force:true") < source.index("await writePrompt(active, prompt)")
 
 
 def test_worker_tool_isolation_respects_server_managed_prompt_and_falls_back_for_old_server() -> None:

@@ -16,14 +16,16 @@ def test_free_conversation_quota_is_rotated_instead_of_honoring_five_minute_affi
     content = read("chrome_extension/content_conversation_quota_failover_v95.js")
     background = read("chrome_extension/background_conversation_quota_failover_v95.js")
 
+    assert 'reroute_pending: true' in read("chrome_extension/content_request_v6.js")
+    assert '"pre-dispatch-disabled-conversation"' in read("chrome_extension/content_request_v6.js")
     for token in (
         'const KEY = "__CHAT2API_CONVERSATION_QUOTA_FAILOVER_V95__"',
         'const MESSAGE_TYPE = "chat2api.conversation-quota-blocked.v95"',
         "聊天已暂停",
         "纯文本聊天",
         "activePromptStillPresent(active)",
-        '"pre-dispatch-disabled-conversation"',
-        'controller: "conversation-quota-failover-v95"',
+        'state.preDispatchBlockText = () => !sendReady() ? quotaText() : ""',
+        "state.requestFailover = requestFailover",
     ):
         assert token in content
 

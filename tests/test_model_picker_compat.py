@@ -24,7 +24,8 @@ def test_manifest_loads_canonical_model_and_multimodal_controllers() -> None:
     assert "content_model_v6.js" not in scripts
     assert "content_multimodal.js" in scripts
     assert "content_multimodal_v4.js" in scripts
-    assert "content_guard.js" in scripts
+    assert "content_guard.js" not in scripts
+    assert "content_request_v6.js" in scripts
     assert "content_image.js" in scripts
     assert "content_image_v3.js" in scripts
     assert "content_voice.js" in scripts
