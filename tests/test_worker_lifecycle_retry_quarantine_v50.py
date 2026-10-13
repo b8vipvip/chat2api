@@ -31,10 +31,13 @@ def test_manifest_loads_lifecycle_and_retry_overlays_in_order() -> None:
 
 def test_busy_tab_is_rejected_explicitly_instead_of_silent_promise_failure() -> None:
     source = (EXT / "content_request_lifecycle_v50.js").read_text(encoding="utf-8")
-    assert "Target ChatGPT tab is still finalizing the previous request" in source
-    assert "request_lifecycle_busy_rejected" in source
+    controller = (EXT / "content_request_v6.js").read_text(encoding="utf-8")
+    assert "read-only-lifecycle-status" in source
     assert "chat2api.lifecycle-status.v50" in source
     assert "removeListener(oldListener)" in source
+    assert 'type: "chat.error"' not in source
+    assert "This ChatGPT tab is already handling another request" in controller
+    assert 'reason:"busy"' in controller
 
 
 def test_transient_retry_is_bounded_and_excludes_non_retryable_states() -> None:
