@@ -456,11 +456,24 @@
     return null;
   }
 
+  function upstreamRateLimitFailure(active) {
+    if (!active.rateLimitTerminalError) return null;
+    const error = new Error(active.rateLimitTerminalError);
+    error.diagnostics = active.rateLimitEvidence || {};
+    return error;
+  }
+
   async function waitAfterSend(active, reasonPrefix, timeout = 6000) {
-    return waitFor(() => {
-      const result = classifySubmissionState(active);
-      return result ? { ...result, reason: `${reasonPrefix}-${result.reason}` } : null;
+    const result = await waitFor(() => {
+      // A visible upstream quota rejection is decisive even when the editor
+      // clears and no accepted user turn is ever created. The controller, not
+      // the quota observer, owns the single chat.error terminal.
+      if (active.rateLimitTerminalError) return { upstreamRateLimited: true };
+      const confirmed = classifySubmissionState(active);
+      return confirmed ? { ...confirmed, reason: `${reasonPrefix}-${confirmed.reason}` } : null;
     }, timeout, 100);
+    if (result?.upstreamRateLimited) throw upstreamRateLimitFailure(active);
+    return result;
   }
 
   async function settleAfterPromptLeftComposer(active, attempts) {
@@ -618,11 +631,8 @@
     let stableSince = 0;
 
     while (!active.cancelled && Date.now() - startedAt < timeoutMs) {
-      if (active.rateLimitTerminalError) {
-        const failure = new Error(active.rateLimitTerminalError);
-        failure.diagnostics = active.rateLimitEvidence || {};
-        throw failure;
-      }
+      const upstreamLimit = upstreamRateLimitFailure(active);
+      if (upstreamLimit) throw upstreamLimit;
       const error = pageError();
       if (error && responseStarted) throw new Error(`ChatGPT response UI error: ${error}`);
       const current = currentAssistantState(active);
