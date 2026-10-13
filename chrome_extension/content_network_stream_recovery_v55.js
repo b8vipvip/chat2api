@@ -45,7 +45,7 @@
     if (!row && create) {
       const requestId = requestIdentity();
       if (!requestId) return null;
-      row = { requestId, streamId: key, lastText: "", responseSeen: false, eventStream: false, status: null, chunks: 0, bytes: 0 };
+      row = { requestId, streamId: key, lastText: "", lastTextSequence: 0, responseSeen: false, eventStream: false, status: null, chunks: 0, bytes: 0 };
       streams.set(key, row);
     }
     return row;
@@ -59,17 +59,27 @@
     return next.startsWith(before) || before.startsWith(next) ? next.length > before.length : false;
   }
 
-  function recordEvidence(row, text) {
+  function recordEvidence(row, text, { authoritative = false, sequence = 0 } = {}) {
     const value = String(text || "");
-    if (!value) return;
-    if (!row.lastText || compatibleAdvance(row.lastText, value)) row.lastText = value;
+    if (!value) return false;
+    const nextSequence = Number(sequence || 0);
+    if (nextSequence && nextSequence <= Number(row.lastTextSequence || 0)
+        && value !== row.lastText) return false;
+    // The JSON Patch assembler can replace already rendered content, including
+    // shortening it. The old prefix-only filter permanently lost such edits.
+    // Accept a rewrite ONLY from a newer authoritative snapshot of this exact
+    // stream, never from stale/metadata/unrelated assistant candidates.
+    const replacement = authoritative && nextSequence > Number(row.lastTextSequence || 0);
+    if (row.lastText && !compatibleAdvance(row.lastText, value) && !replacement) return false;
+    if (value === row.lastText) return false;
+    row.lastText = value;
+    row.lastTextSequence = Math.max(Number(row.lastTextSequence || 0), nextSequence);
     const active = activeRequest();
-    if (String(active?.requestId || "") !== row.requestId) return;
-    const current = String(active.networkObservedText || "");
-    if (!current || compatibleAdvance(current, value)) {
+    if (String(active?.requestId || "") === row.requestId) {
       active.networkObservedText = value;
       active.networkObservedAt = Date.now();
     }
+    return true;
   }
 
   function recordTerminalEvidence(row, detail) {
@@ -116,9 +126,20 @@
   async function snapshot(row, detail) {
     const text = String(detail.text || "");
     if (!text) return;
-    const previous = row.lastText;
-    recordEvidence(row, text);
-    if (row.lastText === previous) return;
+    const accepted = recordEvidence(row, text, {
+      authoritative: String(detail.parser_source || "") === "json-patch",
+      sequence: Number(detail.sequence || 0),
+    });
+    if (!accepted) return;
+    if (row.terminalSeen) {
+      // A verified end-turn can precede a final rich-text replacement.
+      // Keep the stream bound through EOF so later revisions update this
+      // request's terminal payload instead of becoming orphan snapshots.
+      recordTerminalEvidence(row, {
+        sequence: Number(detail.sequence || 0),
+        terminal_evidence_source: row.terminalEvidenceSource || "assistant-end-turn-patch",
+      });
+    }
     state.snapshots += 1;
     await emit({
       type: "chat.snapshot",
@@ -137,14 +158,22 @@
 
   async function terminalHint(row, detail) {
     const text = String(detail.text || row.lastText || "");
-    if (text) recordEvidence(row, text);
+    if (text) {
+      // The terminal frame is verified by the upstream parser; it is newer
+      // than snapshots previously observed for this same stream.
+      recordEvidence(row, text, {
+        authoritative: detail.completion_hint === true,
+        sequence: Number(detail.sequence || 0),
+      });
+    }
+    row.terminalSeen = true;
+    row.terminalEvidenceSource = String(detail.terminal_evidence_source || "assistant-end-turn-patch");
     recordTerminalEvidence(row, detail);
     state.terminal_hints += 1;
     await diagnostics(row, { ...detail, phase: "terminal-hint" });
-    // The network observer never emits chat.completed. It only records terminal
-    // evidence on the exact active request. request-v6 remains the single
-    // terminal authority and reconciles this evidence with live page state.
-    streams.delete(row.streamId);
+    // Do not delete the stream yet: authoritative body patches may follow an
+    // early end-turn proof. Only a final done/error frame detaches the stream.
+    // The network observer never emits chat.completed; request-v6 owns it.
   }
 
   async function onNetwork(detail) {
@@ -178,13 +207,16 @@
     if (phase === "done") {
       row.chunks = Number(detail.chunks || row.chunks || 0);
       row.bytes = Number(detail.bytes || row.bytes || 0);
-      if (row.lastText && detail.completion_hint === true) await terminalHint(row, { ...detail, text: row.lastText });
-      else {
+      if (row.terminalSeen) {
+        await diagnostics(row, { ...detail, phase: "done-after-terminal" });
+      } else if (row.lastText && detail.completion_hint === true) {
+        await terminalHint(row, { ...detail, text: row.lastText });
+      } else {
         const active = activeRequest();
         if (active?.requestId === row.requestId) active.networkStreamEndedWithoutTerminalAt = Date.now();
         await diagnostics(row, { ...detail, phase: "done-without-assistant-terminal" });
-        streams.delete(row.streamId);
       }
+      streams.delete(row.streamId);
       return;
     }
     if (phase === "error") {

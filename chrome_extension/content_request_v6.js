@@ -602,6 +602,42 @@
     return next.length >= before.length ? next : before;
   }
 
+  function requiresStrictJsonTen(prompt) {
+    const source = String(prompt || "");
+    return /严格\s*JSON\s*数组/i.test(source) && /恰好\s*10\s*个字符串/.test(source);
+  }
+
+  function validJsonTen(text) {
+    try {
+      const value = JSON.parse(String(text || ""));
+      return Array.isArray(value) && value.length === 10 && value.every(item => typeof item === "string");
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function reconcileStrictTerminal(active, lastText, networkText) {
+    const strict = requiresStrictJsonTen(active.prompt);
+    if (!strict) return { text: preferredResponseText(lastText, networkText) || networkText, source: "normal" };
+
+    const chooseValid = () => {
+      const current = currentAssistantState(active);
+      const dom = current.isNew ? current.text : "";
+      const network = String(active.networkTerminalText || active.networkObservedText || "");
+      // A newer verified network snapshot or fully rendered DOM answer takes
+      // precedence over a stale, longer, unfinished prefix of the same reply.
+      for (const [text, source] of [[dom, "dom"], [network, "network"], [lastText, "captured"]]) {
+        if (validJsonTen(text)) return { text, source };
+      }
+      return null;
+    };
+    const valid = chooseValid() || await waitFor(chooseValid, 6000, 160);
+    if (valid) return valid;
+    // Never silently return a malformed JSON answer as success. The existing
+    // server-side strict output validator will reject it with diagnostics.
+    return { text: preferredResponseText(lastText, networkText) || networkText, source: "unverified-incomplete" };
+  }
+
   async function ensureResponseStarted(active, responseStarted, source) {
     if (responseStarted) return true;
     active.responseStarted = true;
@@ -654,10 +690,15 @@
       // terminal evidence available on redesigned pages. The network module does
       // not complete requests itself; it writes this evidence onto the exact
       // active request and request-v6 remains the one terminal authority.
-      if (networkTerminalAt && networkTerminalText && !promptStillPresent(active) && Date.now() - networkTerminalAt >= 750) {
+      // Allow late, authoritative snapshots from the same SSE stream to settle
+      // after an early end-turn proof. A short terminal fragment is not
+      // automatically a final text payload.
+      const evidenceSettledAt = Math.max(networkTerminalAt, Number(active.networkObservedAt || 0));
+      if (networkTerminalAt && networkTerminalText && !promptStillPresent(active)
+          && Date.now() - evidenceSettledAt >= 1250) {
         responseStarted = await ensureResponseStarted(active, responseStarted, "network-terminal-v57");
-        const finalText = preferredResponseText(lastText, networkTerminalText) || networkTerminalText;
-        lastText = await updateCapturedText(active, finalText, lastText);
+        const final = await reconcileStrictTerminal(active, lastText, networkTerminalText);
+        lastText = await updateCapturedText(active, final.text, lastText);
         await emit({
           type: "chat.completed",
           request_id: active.requestId,
@@ -673,6 +714,11 @@
             network_stream_chunks: Number(active.networkTerminalChunks || 0),
             network_stream_bytes: Number(active.networkTerminalBytes || 0),
             network_terminal_evidence_source: String(active.networkTerminalEvidenceSource || "stream-eof"),
+            response_terminal_strict_json_required: requiresStrictJsonTen(active.prompt),
+            response_terminal_strict_json_valid: validJsonTen(lastText),
+            response_terminal_reconciled_source: final.source,
+            response_terminal_network_chars: networkTerminalText.length,
+            response_terminal_reconciled_chars: lastText.length,
             response_format: "markdown",
             response_image_inlined_count: 0,
             response_image_inlined_bytes: 0,
@@ -815,6 +861,8 @@
     refreshAssistantBaseline,
     promptMatchesText,
     promptMatchEvidence,
+    requiresStrictJsonTen,
+    validJsonTen,
     turnFollows,
     plainNodeText,
     finalNodeText,
