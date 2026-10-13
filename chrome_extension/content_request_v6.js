@@ -602,42 +602,6 @@
     return next.length >= before.length ? next : before;
   }
 
-  function requiresStrictJsonTen(prompt) {
-    const source = String(prompt || "");
-    return /严格\s*JSON\s*数组/i.test(source) && /恰好\s*10\s*个字符串/.test(source);
-  }
-
-  function validJsonTen(text) {
-    try {
-      const value = JSON.parse(String(text || ""));
-      return Array.isArray(value) && value.length === 10 && value.every(item => typeof item === "string");
-    } catch (_) {
-      return false;
-    }
-  }
-
-  async function reconcileStrictTerminal(active, lastText, networkText) {
-    const strict = requiresStrictJsonTen(active.prompt);
-    if (!strict) return { text: preferredResponseText(lastText, networkText) || networkText, source: "normal" };
-
-    const chooseValid = () => {
-      const current = currentAssistantState(active);
-      const dom = current.isNew ? current.text : "";
-      const network = String(active.networkTerminalText || active.networkObservedText || "");
-      // A newer verified network snapshot or fully rendered DOM answer takes
-      // precedence over a stale, longer, unfinished prefix of the same reply.
-      for (const [text, source] of [[dom, "dom"], [network, "network"], [lastText, "captured"]]) {
-        if (validJsonTen(text)) return { text, source };
-      }
-      return null;
-    };
-    const valid = chooseValid() || await waitFor(chooseValid, 6000, 160);
-    if (valid) return valid;
-    // Never silently return a malformed JSON answer as success. The existing
-    // server-side strict output validator will reject it with diagnostics.
-    return { text: preferredResponseText(lastText, networkText) || networkText, source: "unverified-incomplete" };
-  }
-
   async function ensureResponseStarted(active, responseStarted, source) {
     if (responseStarted) return true;
     active.responseStarted = true;
@@ -697,8 +661,10 @@
       if (networkTerminalAt && networkTerminalText && !promptStillPresent(active)
           && Date.now() - evidenceSettledAt >= 1250) {
         responseStarted = await ensureResponseStarted(active, responseStarted, "network-terminal-v57");
-        const final = await reconcileStrictTerminal(active, lastText, networkTerminalText);
-        lastText = await updateCapturedText(active, final.text, lastText);
+        // Only this controller can commit the terminal body. Use the verified
+        // SSE final for this request; DOM and intermediary observers provide
+        // progress, not competing final answers.
+        lastText = await updateCapturedText(active, networkTerminalText, lastText);
         await emit({
           type: "chat.completed",
           request_id: active.requestId,
@@ -714,11 +680,8 @@
             network_stream_chunks: Number(active.networkTerminalChunks || 0),
             network_stream_bytes: Number(active.networkTerminalBytes || 0),
             network_terminal_evidence_source: String(active.networkTerminalEvidenceSource || "stream-eof"),
-            response_terminal_strict_json_required: requiresStrictJsonTen(active.prompt),
-            response_terminal_strict_json_valid: validJsonTen(lastText),
-            response_terminal_reconciled_source: final.source,
             response_terminal_network_chars: networkTerminalText.length,
-            response_terminal_reconciled_chars: lastText.length,
+            response_terminal_final_chars: lastText.length,
             response_format: "markdown",
             response_image_inlined_count: 0,
             response_image_inlined_bytes: 0,
@@ -800,9 +763,20 @@
   }
 
   async function runRequest(message) {
-    if (state.active) throw new Error("This ChatGPT tab is already handling another request");
+    // v6 is the only authority for request admission and request terminal
+    // delivery in this tab. No outer listener may emit a competing chat.error.
+    if (state.active) {
+      await emit({type:"chat.error",request_id:String(message.requestId||""),
+        error:"This ChatGPT tab is already handling another request",
+        diagnostics:{request_controller:"request-v6",reason:"busy"}});
+      return;
+    }
     const prompt = String(message.prompt || "").trim();
-    if (!prompt) throw new Error("Prompt is empty");
+    if (!prompt) {
+      await emit({type:"chat.error",request_id:String(message.requestId||""),
+        error:"Prompt is empty",diagnostics:{request_controller:"request-v6",reason:"empty-prompt"}});
+      return;
+    }
     const active = {
       requestId: String(message.requestId || ""),
       prompt,
@@ -839,6 +813,12 @@
     if (v5) v5.active = active;
 
     try {
+      // UI interruption resolution is readiness work owned by the request
+      // controller, not a separate message listener with its own ACK/terminal.
+      const interruption = globalThis.__CHAT2API_INTERRUPTION_GUARD_V72__;
+      if (typeof interruption?.resolveBlockingInterruption === "function") {
+        await interruption.resolveBlockingInterruption({force:true,phase:"before-request"});
+      }
       await writePrompt(active, prompt);
       await submitAndConfirm(active);
       await monitor(active);
@@ -861,8 +841,6 @@
     refreshAssistantBaseline,
     promptMatchesText,
     promptMatchEvidence,
-    requiresStrictJsonTen,
-    validJsonTen,
     turnFollows,
     plainNodeText,
     finalNodeText,
