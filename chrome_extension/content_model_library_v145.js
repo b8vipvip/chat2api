@@ -78,8 +78,12 @@
       "button[class*='composer-pill']",
       "button[aria-haspopup='menu']",
       "button[aria-haspopup='listbox']",
+      // Current ChatGPT header model picker is often outside the composer form.
+      "header button", "[data-testid*='model-switcher' i]",
+      "[data-testid*='model-picker' i]",
     ]) {
-      for (const element of root.querySelectorAll(selector)) {
+      const roots = root === document ? [document] : [root, document];
+      for (const scope of roots) for (const element of scope.querySelectorAll(selector)) {
         if (seen.has(element) || !visible(element) || element.disabled || rejectedControl(element)) continue;
         seen.add(element);
         const model = modelIdOf(element);
