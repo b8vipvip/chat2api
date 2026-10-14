@@ -57,7 +57,12 @@
       settings.modelValidationState === "validated" &&
       Number(settings.modelValidationRevision || 0) >= REVISION &&
       settings.modelValidationRuntimeNonce === runtimeNonce &&
-      settings.modelValidationBoundTabId === settings.boundTabId &&
+      // Linux/Windows Worker automation often has no manually bound tab.
+      // The validator selects a real ChatGPT tab and saves its ID.  Comparing
+      // that ID to null invalidated every otherwise successful discovery.
+      (settings.boundTabId == null ||
+        settings.modelValidationBoundTabId === settings.boundTabId) &&
+      Number.isInteger(settings.modelValidationBoundTabId) &&
       String(settings.modelValidationSocketUpdatedAt || "") === String(settings.socketUpdatedAt || "") &&
       String(settings.modelValidationClientId || "") === String(settings.clientId || "") &&
       Array.isArray(settings.models) &&
