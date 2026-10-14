@@ -14,6 +14,12 @@
 
   async function maybeFastPrefetch(message) {
     if (message?.type !== "chat.request") return null;
+    // v148: the manually discovered picker authority must be the sole writer.
+    // The legacy fast preselector opens a second menu before preflight and
+    // can mutate/close the exact picker that v145 then needs to verify.
+    if (globalThis.__CHAT2API_BACKGROUND_MODEL_LIBRARY_V145__) {
+      return {skipped:true,reason:"canonical-picker-single-owner-v148"};
+    }
     const model = requestedModel(message);
     if (!SUPPORTED.has(model)) return null;
 
