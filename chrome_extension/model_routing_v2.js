@@ -36,7 +36,7 @@
     // cannot select the requested concrete model; it never fakes proof.
     for (const raw of Array.isArray(settings.modelObservedChoices) ? settings.modelObservedChoices : []) {
       const id = canonicalModel(raw?.id);
-      if (!id || SPECIAL_MODELS.has(id) || seen.has(id)) continue;
+      if (!id || SPECIAL_MODELS.has(id) || seen.has(id) || raw.selectable === false) continue;
       seen.add(id);
       rows.push({...raw,id,validated:false,source:"worker-picker-observed-unverified"});
     }

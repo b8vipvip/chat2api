@@ -91,7 +91,7 @@
     const workers = Array.isArray(catalog.workers)?catalog.workers:[];
     const online = new Set(workers.filter(w=>w.online&&w.routing_ready).map(w=>w.client_id));
     const rows=(Array.isArray(catalog.data)?catalog.data:[]).map(row=>({
-      ...row,callable_by:(row.enabled?(row.observed_by||[]).filter(id=>online.has(id)):[]),
+      ...row,callable_by:(row.enabled?(row.observed_by||[]).filter(id=>online.has(id) && row.source_details?.[id]?.selectable !== false):[]),
     }));
     syncSelect("testModel",rows);
     syncSelect("pgChatModel",rows);

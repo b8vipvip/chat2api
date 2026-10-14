@@ -52,6 +52,7 @@ def _model_rows(values: Any, *, verified_only: bool = False) -> list[dict[str, A
             "label": str(value.get("label") or model)[:140],
             "validated": bool(value.get("validated")) if verified_only else False,
             "method": str(value.get("validation_method") or value.get("source") or "")[:90],
+            "selectable": value.get("selectable") is not False,
             "at": str(value.get("validated_at") or value.get("observed_at") or "")[:48],
         })
     return rows
