@@ -301,13 +301,14 @@
     if (sending) return;
     const input = $chat("pgChatInput"), text = input.value.trim();
     if (!text) return;
+    if (!$chat("pgChatModel")?.value) return status("没有已验证且可路由的在线 Worker 文本模型，请在模型管理查看发现错误", "bad");
     if (typeof api !== "function" || typeof fileToBase64 !== "function") return status("测试场脚本尚未初始化，请刷新页面后重试", "bad");
     sending = true; $chat("pgChatSend").disabled = true; $chat("pgChatSend").textContent = "生成中"; input.disabled = true;
     let uploaded = [], credential = null, assistantText = "", firstTokenMs = null, diagnostics = null;
     const userFiles = [...$chat("pgChatFiles").files].slice(0, 4), userIndex = messages.length;
     messages.push({role:"user",content:text,attachment_names:userFiles.map(file=>file.name),include_in_context:true,created_at:new Date().toISOString()}); input.value=""; renderMessages(); addPendingAssistant();
     const requestId = "req_" + (globalThis.crypto?.randomUUID ? crypto.randomUUID().replaceAll("-", "") : `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`);
-    const model = $chat("pgChatModel").value || "gpt-5.6-sol", started = performance.now();
+    const model = $chat("pgChatModel").value, started = performance.now();
     try {
       credential = await resolveCredential();
       uploaded = await uploadFiles(userFiles, credential.token);

@@ -44,6 +44,7 @@ async function loadOverview(){if(!key()){status('请输入管理员主密钥');r
 // Test only concrete models discovered AND validated on an online Worker.
 // Preserve the operator selection across live catalog refreshes.
 function fillModels(rows=overview?.models||[]){
+  if(globalThis.__CHAT2API_TEXT_MODEL_MANAGEMENT_V146__)return;
   const picker=$('testModel');if(!picker)return;
   const previous=picker.value;
   const choices=(Array.isArray(rows)?rows:[]).filter(row=>
@@ -67,6 +68,7 @@ function fillModels(rows=overview?.models||[]){
 }
 let testModelRefreshBusy=false;
 async function refreshTestModels(){
+  if(globalThis.__CHAT2API_TEXT_MODEL_MANAGEMENT_V146__)return;
   if(!key()||testModelRefreshBusy)return;
   testModelRefreshBusy=true;
   try{const catalog=await api('/v1/models');fillModels(catalog.data||[])}

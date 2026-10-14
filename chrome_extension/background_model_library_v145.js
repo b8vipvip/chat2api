@@ -49,6 +49,7 @@
       modelValidationCandidateCount: 0,
       modelValidationValidatedCount: 0,
       modelValidationUpdatedAt: "",
+      modelObservedChoices: [],
     });
   }
 
@@ -87,6 +88,7 @@
       modelValidationCandidateCount: 0,
       modelValidationValidatedCount: 0,
       modelValidationUpdatedAt: new Date().toISOString(),
+      modelObservedChoices: [],
     });
   }
 
@@ -97,7 +99,15 @@
     } catch (_) {}
     await chrome.scripting.executeScript({ target: { tabId }, files: ["content_model_library_v145.js"] });
     await delay(120);
-    return chrome.tabs.sendMessage(tabId, { type: "chat2api.models.validate.v145" });
+    try { return await chrome.tabs.sendMessage(tabId, { type: "chat2api.models.validate.v145" }); }
+    catch (error) {
+      // ChatGPT may reload its content scripts while the picker is inspected.
+      // Re-query the current tab and retry once after the new document settles.
+      await delay(900);
+      const live = await targetTab();
+      await chrome.scripting.executeScript({ target: { tabId: live.id }, files: ["content_model_library_v145.js"] }).catch(() => {});
+      return chrome.tabs.sendMessage(live.id, { type: "chat2api.models.validate.v145" });
+    }
   }
 
   async function publishStatus(forceValidation = false) {
@@ -134,6 +144,7 @@
         model_validation_candidate_count: Number(settings.modelValidationCandidateCount || 0),
         model_validation_validated_count: fresh ? models.length : 0,
         model_validation_updated_at: settings.modelValidationUpdatedAt || null,
+        model_observed_choices: Array.isArray(settings.modelObservedChoices) ? settings.modelObservedChoices : [],
         model_library_fresh: fresh,
         capabilities,
         ...(typeof nativeCapacityControlMetadata === "function" ? nativeCapacityControlMetadata() : {}),
@@ -163,10 +174,17 @@
         const models = (Array.isArray(data.models) ? data.models : []).filter(item =>
           item && typeof item === "object" && item.validated === true && Number(item.validation_revision || 0) >= REVISION,
         );
-        if (!models.length) throw new Error("Worker model validation found no usable normal models");
+        const observed = (Array.isArray(data.observed_models) ? data.observed_models : [])
+          .filter(item => item && typeof item.id === "string")
+          .map(item => ({ id: item.id, label: String(item.label || item.id), source: "chatgpt-model-picker", validated: false, observed_at: item.observed_at || null }));
+        await chrome.storage.local.set({ modelObservedChoices: observed });
+        if (!models.length) throw new Error(observed.length
+          ? "ChatGPT picker choices observed, but no concrete model is selected and verified"
+          : "Worker model validation found no usable normal models");
         const snapshot = await settingsSnapshot();
         await chrome.storage.local.set({
           models,
+          modelObservedChoices: observed,
           currentModel: data.current_model || null,
           modelsUpdatedAt: Date.now(),
           modelValidationState: "validated",
@@ -203,6 +221,9 @@
           schedule("active-request-retry", 2500);
           return { ok: false, deferred: true, error: message };
         }
+        // Reattempt after page navigation or a transient Chrome message-port
+        // closure instead of leaving the Worker catalog failed indefinitely.
+        schedule("model-validation-retry", 60000);
         throw error;
       }
     })().finally(() => { state.running = null; });
