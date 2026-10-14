@@ -34,3 +34,28 @@ def test_unclickable_observed_model_cannot_be_offered_for_routing():
     assert 'raw.selectable === false' in browser
     assert 'model_selection_evidence:' in browser
     assert 'model_selection_after:' in browser
+
+
+def test_navigation_aware_model_selection_is_shared_by_admin_and_api():
+    import subprocess
+    if not shutil.which("node"):
+        pytest.skip("Node.js is unavailable")
+    result = subprocess.run(
+        ["node", str(ROOT / "tests" / "model_switch_navigation_v149.mjs")],
+        cwd=ROOT, capture_output=True, text=True, timeout=35, check=False,
+    )
+    assert result.returncode == 0, result.stdout + "\n" + result.stderr
+
+    entry = (ROOT / "chrome_extension" / "background_entry.js").read_text("utf-8")
+    background = (ROOT / "chrome_extension" / "background_model_library_v145.js").read_text("utf-8")
+    routing = (ROOT / "chrome_extension" / "model_routing_v2.js").read_text("utf-8")
+    content = (ROOT / "chrome_extension" / "content_model_library_v145.js").read_text("utf-8")
+    assert '"background_model_switch_v149.js"' in entry
+    assert "__CHAT2API_MODEL_SWITCH_V149__" in background
+    assert "__CHAT2API_MODEL_SWITCH_V149__" in routing
+    assert '"chat2api.model.prepare.v149"' in content
+    assert '"chat2api.model.commit.v149"' in content
+    assert '"chat2api.model.inspect.v149"' in content
+    assert "sendResponse({ ok: true, model: pending.model, click_acknowledged: true });" in content
+    assert "queueMicrotask(() => {" in content
+    assert 'const response = await authority.safeSelect(tab.id, requested);' in background
