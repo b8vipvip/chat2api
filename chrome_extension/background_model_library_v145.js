@@ -218,12 +218,12 @@
         });
         await publishStatus(false).catch(() => {});
         if (busy) {
-          schedule("active-request-retry", 2500);
+          // Manual tasks never retry without a new administrator action.
           return { ok: false, deferred: true, error: message };
         }
         // Reattempt after page navigation or a transient Chrome message-port
         // closure instead of leaving the Worker catalog failed indefinitely.
-        schedule("model-validation-retry", 60000);
+        // Manual tasks never retry without a new administrator action.
         throw error;
       }
     })().finally(() => { state.running = null; });
@@ -241,7 +241,7 @@
   // Final compatibility boundary: legacy callers may ask to "discover" models,
   // but discovery now means a fresh Worker validation, never a static fallback.
   discoverModels = async function discoverValidatedModelsV145(_tab, force = false) {
-    if (force) await validateNow("legacy-discover");
+    // Explicit discovery tasks use model.task.v147; status reads are side-effect free.
     const settings = await settingsSnapshot();
     return {
       models: validationFresh(settings) ? settings.models : [],
@@ -251,7 +251,7 @@
     };
   };
   sendExtensionStatus = async function sendValidatedExtensionStatusV145(forceModelDiscovery = false) {
-    return publishStatus(Boolean(forceModelDiscovery));
+    return publishStatus(false);
   };
 
   state.validateNow = validateNow;
