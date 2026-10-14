@@ -329,11 +329,9 @@
         const requested = String(message.model||"").trim().toLowerCase();
         if(!/^[a-z0-9._:-]{1,128}$/.test(requested))throw new Error("Invalid model identifier");
         log("Requested explicit model validation: "+requested);
-        const response = await chrome.tabs.sendMessage(tab.id,{type:"chat2api.model.select.v145",model:requested})
-          .catch(async()=>{
-            await chrome.scripting.executeScript({target:{tabId:tab.id},files:["content_model_library_v145.js"]});
-            return chrome.tabs.sendMessage(tab.id,{type:"chat2api.model.select.v145",model:requested});
-          });
+        const authority = globalThis.__CHAT2API_MODEL_SWITCH_V149__;
+        if (!authority?.safeSelect) throw new Error("Model switch authority v149 was not initialized");
+        const response = await authority.safeSelect(tab.id, requested);
         if(!response?.ok || response?.data?.validated!==true) {
           log("Picker selection failure code="+String(response?.code||"unknown")+
               " stage="+String(response?.stage||"unknown"));
@@ -363,7 +361,8 @@
           modelValidationClientId:settings.clientId||"",
           modelValidationUpdatedAt:new Date().toISOString(),
         });
-        log("Explicit model picker selection confirmed: "+requested+" by "+String(response.data?.validation_method||"picker-dom"));
+        log("Explicit model picker selection confirmed: "+requested+" by "+String(response.data?.validation_method||"picker-dom")+
+          " attempts="+String(response.data?.inspection_attempts||0)+" initial="+String(response.data?.original_model||"unknown"));
         await publishStatus(false);
         await report("completed",100,"",[requested]);
       }
