@@ -294,7 +294,7 @@
       const stale = String(route.inflight_request_id);
       if (message?.routing?.scheduler_authority !== "server-single-authority-scheduler-v58"
           || message?.routing?.strict_api_fifo !== true) {
-        throw new Error(`Logical API ${key} route is in use by request ${stale}`);
+        throw new Error(`Server scheduler invariant violated: logical API ${key} already owns request ${stale}`);
       }
       // The canonical server admitted a *new* same-key request. A stale local
       // route (missed terminal, Worker reload, or cancelled browser operation)
