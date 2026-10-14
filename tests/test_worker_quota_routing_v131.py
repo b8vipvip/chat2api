@@ -106,3 +106,14 @@ def test_rate_limit_rejections_escalate_and_success_resets(tmp_path):
         assert "win-free" not in circuit["rate_limit_strikes"]
 
     asyncio.run(simulate())
+
+def test_worker_model_catalog_autosync_vm() -> None:
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    if not shutil.which("node"):
+        pytest.skip("node is unavailable")
+    path = Path(__file__).resolve().parents[1] / "tests" / "worker_model_autosync_v131.mjs"
+    process = subprocess.run(["node", str(path)], capture_output=True, text=True, check=False, timeout=30)
+    assert process.returncode == 0, process.stdout + process.stderr
