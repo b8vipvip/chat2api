@@ -160,7 +160,7 @@
         if (!visible(raw)) continue;
         const candidate = interactiveAncestor(raw, root);
         if (!candidate || !visible(candidate) || candidate === root) continue;
-        const visibleLabel = String(candidate.innerText || candidate.textContent || "").replace(/\\s+/g," ").trim();
+        const visibleLabel = String(candidate.innerText || candidate.textContent || "").replace(/\s+/g," ").trim();
         const label = distinctModelIds(visibleLabel).length ? visibleLabel : labelOf(candidate);
         // Never promote a menu/popup wrapper containing all picker models.
         // At least one precise ID or one isolated visible model label is needed.
