@@ -91,14 +91,20 @@ def test_worker_scripts_have_no_static_normal_model_catalog_fallback():
     assert "sendValidatedExtensionStatusV145" in background
 
 
-def test_worker_validation_runs_on_required_lifecycle_boundaries():
+def test_worker_model_discovery_requires_explicit_administrator_task():
     root = Path(__file__).resolve().parents[1] / "chrome_extension"
     background = (root / "background_model_library_v145.js").read_text(encoding="utf-8")
-    for trigger in ("worker-restart", "worker-connect", "worker-bind", "worker-enable"):
-        assert trigger in background
+    for automatic_trigger in (
+        'schedule("worker-restart"',
+        'schedule("worker-connect"',
+        'schedule("worker-bind"',
+        'schedule("worker-enable"',
+        'schedule("model-validation-retry"',
+    ):
+        assert automatic_trigger not in background
+    assert 'message?.type !== "model.task.v147"' in background
     assert "chat2api.models.validate.v145" in background
     assert "chat2api.model.select.v145" in (root / "content_model_library_v145.js").read_text(encoding="utf-8")
-
 
 
 def test_free_default_mini_route_requires_ready_composer_and_reliable_plan() -> None:

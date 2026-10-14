@@ -26,20 +26,33 @@
 
   async function validatedLibrary() {
     const settings = await chrome.storage.local.get({
-      models: [], currentModel: null, modelValidationState: "pending", modelValidationRevision: 0,
+      models: [], modelObservedChoices: [], currentModel: null,
+      modelValidationState: "pending", modelValidationRevision: 0,
     });
     const rows = [];
     const seen = new Set();
-    if (settings.modelValidationState === "validated" && Number(settings.modelValidationRevision || 0) >= LIBRARY_REVISION) {
+    // The administrator may call an observed, unverified model. The
+    // per-request ChatGPT picker selection still fails explicitly if it
+    // cannot select the requested concrete model; it never fakes proof.
+    for (const raw of Array.isArray(settings.modelObservedChoices) ? settings.modelObservedChoices : []) {
+      const id = canonicalModel(raw?.id);
+      if (!id || SPECIAL_MODELS.has(id) || seen.has(id)) continue;
+      seen.add(id);
+      rows.push({...raw,id,validated:false,source:"worker-picker-observed-unverified"});
+    }
+    if (settings.modelValidationState === "validated" &&
+        Number(settings.modelValidationRevision || 0) >= LIBRARY_REVISION) {
       for (const raw of Array.isArray(settings.models) ? settings.models : []) {
         if (!raw || raw.validated !== true || Number(raw.validation_revision || 0) < LIBRARY_REVISION) continue;
         const id = canonicalModel(raw.id || raw.model || raw.family);
-        if (!id || SPECIAL_MODELS.has(id) || seen.has(id)) continue;
+        if (!id || SPECIAL_MODELS.has(id)) continue;
+        const previous = rows.findIndex(row=>row.id===id);
+        if (previous>=0) rows.splice(previous,1);
         seen.add(id);
-        rows.push({ ...raw, id });
+        rows.push({...raw,id});
       }
     }
-    return { settings, rows };
+    return {settings,rows};
   }
 
   async function freeDefaultMiniEligible() {
@@ -60,7 +73,7 @@
       // Free default has no picker to validate. Compatibility is not served-model evidence.
       return requested;
     }
-    if (!rows.length) throw new Error("Worker model library is not validated yet");
+    if (!rows.length) throw new Error("Worker has no manually discovered text models");
     if (!requested) {
       const current = canonicalModel(settings.currentModel);
       if (current && rows.some(item => item.id === current)) return current;
@@ -68,7 +81,7 @@
       return selected || rows[0].id;
     }
     if (!rows.some(item => item.id === requested)) {
-      throw new Error(`Requested model is not validated on this Worker: ${requested}`);
+      throw new Error(`Requested model was not discovered on this Worker: ${requested}`);
     }
     return requested;
   }
@@ -146,7 +159,7 @@
 
   discoverModels = async function discoverValidatedModels(_tab, force = false) {
     const authority = globalThis.__CHAT2API_BACKGROUND_MODEL_LIBRARY_V145__;
-    if (force && typeof authority?.validateNow === "function") await authority.validateNow("routing-discover");
+    // No discovery or validation is allowed as a side effect of routing/refresh.
     const { settings, rows } = await validatedLibrary();
     return {
       models: rows,
@@ -160,7 +173,7 @@
 
   sendExtensionStatus = async function sendDynamicModelStatus(forceModelDiscovery = false) {
     const authority = globalThis.__CHAT2API_BACKGROUND_MODEL_LIBRARY_V145__;
-    if (typeof authority?.publishStatus === "function") return authority.publishStatus(Boolean(forceModelDiscovery));
+    if (typeof authority?.publishStatus === "function") return authority.publishStatus(false);
     const settings = await config();
     const tabs = await chatTabs();
     let bound = null;

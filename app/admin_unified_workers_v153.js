@@ -524,7 +524,7 @@
       const t=row.cells;if(t.length<8)continue;
       const worker=workerById.get(text(row.dataset.linuxWorkerId));
       const ext=clientsById.get(text(worker?.extension_client_id));
-      rows.push('<tr data-unified-worker-id="'+esc(row.dataset.linuxWorkerId)+'"><td>'+t[0].innerHTML+
+      rows.push('<tr data-unified-worker-id="'+esc(row.dataset.linuxWorkerId)+'"><td><code title="'+esc('扩展连接 ID：'+text(worker?.extension_client_id||''))+'">'+esc(row.dataset.linuxWorkerId)+'</code>'+
         '</td><td>'+t[5].innerHTML+'</td><td>Linux</td><td>'+t[1].innerHTML+
         '</td><td>'+linuxWorkerState(worker,ext)+'</td><td>'+t[3].innerHTML+'</td><td>'+t[4].innerHTML+
         '</td><td>'+t[6].innerHTML+'</td><td>'+t[7].innerHTML+'</td></tr>');

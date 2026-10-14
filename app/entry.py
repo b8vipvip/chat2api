@@ -87,6 +87,7 @@ from .model_observability_v144_patch import install_model_observability_v144_pat
 from .worker_auto_login_v153_patch import install_worker_auto_login_v153_patch
 from .worker_model_library_v145_patch import install_worker_model_library_v145_patch
 from .worker_text_model_management_v146_patch import install_worker_text_model_management_v146_patch
+from .worker_model_tasks_v147_patch import install_manual_worker_text_model_tasks_v147_patch
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -290,4 +291,5 @@ install_model_observability_v144_patch(app)
 # are advertised and so reconnects invalidate stale catalogs.
 install_worker_model_library_v145_patch(app)
 install_worker_text_model_management_v146_patch(app)
+install_manual_worker_text_model_tasks_v147_patch(app)
 install_request_history_v94_patch(app)

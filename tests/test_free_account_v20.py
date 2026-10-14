@@ -38,8 +38,8 @@ def test_browser_router_uses_fresh_worker_validated_model_library_for_all_accoun
     assert "validatedLibrary" in source
     assert "resolveRequestedModel" in source
     assert 'type: "chat2api.model.select.v145"' in source
-    assert "Worker model library is not validated yet" in source
-    assert "Requested model is not validated on this Worker" in source
+    assert "Worker has no manually discovered text models" in source
+    assert "Requested model was not discovered on this Worker" in source
     assert 'const TEXT_MODELS = ["gpt-5.6-sol", "gpt-5.5"]' not in source
     assert 'const MINI_MODEL = "gpt-5.5-mini"' not in source
     assert "free-account-default-mini-no-ui-selection" not in source

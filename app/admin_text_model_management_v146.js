@@ -69,42 +69,36 @@
     refresh(true);
   }
   function syncSelect(id, catalogRows) {
-    const el = byId(id);
-    if (!el) return;
+    const el = byId(id); if (!el) return;
     const previous = el.value;
-    const verified = catalogRows.filter(row =>
-      row.enabled && Array.isArray(row.routable_by) && row.routable_by.length);
-    const rows = [
-      ...(verified.length ? [] : [{id:"", label:"无已验证、可路由的在线 Worker 模型", disabled:false}]),
-      ...catalogRows.filter(row => row.enabled).sort((a,b) => a.id.localeCompare(b.id)).map(row=>({
-        id:row.id,
-        label:row.id + (row.routable_by?.length ? " · " + row.routable_by.length + " Worker" : " · 已发现，待验证"),
-        disabled:!row.routable_by?.length,
-      })),
+    const options = [
+      ...(!catalogRows.some(row=>row.callable_by?.length) ?
+        [{id:"",label:"没有在线、已发现该模型且登录就绪的 Worker"}] : []),
+      ...catalogRows.filter(row=>row.enabled).sort((a,b)=>a.id.localeCompare(b.id))
+        .map(row=>({id:row.id,
+          label:row.id+(row.callable_by?.length?" · 可尝试调用 ("+row.callable_by.length+" Worker)":" · Worker 未就绪"),
+          disabled:!row.callable_by?.length})),
     ];
-    const signature = JSON.stringify(rows);
-    const currentSignature = JSON.stringify([...el.options].map(opt=>({
-      id:opt.value,label:opt.textContent,disabled:opt.disabled,
-    })));
-    if (currentSignature !== signature) {
-      el.innerHTML = rows.map(row => `<option value="${esc(row.id)}"${row.disabled?" disabled":""}>${esc(row.label)}</option>`).join("");
-      el.dataset.workerModelSignatureV146 = signature;
-    }
-    if (verified.some(row => row.id === previous)) el.value = previous;
-    else el.value = verified[0]?.id || "";
-    // Keep the picker openable so operators can see discovered-but-unverified
-    // models, without letting those models be submitted.
-    el.disabled = false;
+    const sig = JSON.stringify(options);
+    const current = JSON.stringify([...el.options].map(o=>({id:o.value,label:o.textContent,disabled:o.disabled})));
+    if (sig!==current) el.innerHTML = options.map(o=>
+      `<option value="${esc(o.id)}"${o.disabled?" disabled":""}>${esc(o.label)}</option>`).join("");
+    if (options.some(o=>o.id===previous&&!o.disabled)) el.value=previous;
+    else el.value=options.find(o=>o.id&&!o.disabled)?.id||"";
+    el.disabled=false;
   }
   function syncPlayground(catalog) {
-    const rows = Array.isArray(catalog.data) ? catalog.data : [];
-    const usable = rows.filter(item => item.enabled && item.routable_by?.length);
-    syncSelect("testModel", rows);
-    syncSelect("pgChatModel", rows);
-    const chatSend = byId("pgChatSend");
-    if (chatSend && chatSend.textContent === "发送") {
-      chatSend.disabled = usable.length === 0;
-      chatSend.title = usable.length ? "" : "请先在模型管理解决 Worker 模型验证和登录问题";
+    const workers = Array.isArray(catalog.workers)?catalog.workers:[];
+    const online = new Set(workers.filter(w=>w.online&&w.routing_ready).map(w=>w.client_id));
+    const rows=(Array.isArray(catalog.data)?catalog.data:[]).map(row=>({
+      ...row,callable_by:(row.enabled?(row.observed_by||[]).filter(id=>online.has(id)):[]),
+    }));
+    syncSelect("testModel",rows);
+    syncSelect("pgChatModel",rows);
+    const button=byId("pgChatSend");
+    if(button&&button.textContent==="发送"){
+      button.disabled=!rows.some(row=>row.callable_by.length);
+      button.title=button.disabled?"没有登录就绪且报告过该模型的在线 Worker":"";
     }
   }
   function render(catalog) {

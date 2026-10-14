@@ -140,8 +140,8 @@ def test_model_router_propagates_v145_model_and_reasoning_diagnostics():
     ):
         assert token in source
     assert 'type: "chat2api.model.select.v145"' in source
-    assert "Requested model is not validated on this Worker" in source
-    assert "Worker model library is not validated yet" in source
+    assert "Requested model was not discovered on this Worker" in source
+    assert "Worker has no manually discovered text models" in source
 
 
 def test_page_driver_vm_contract_executes_and_is_required_by_ci():
