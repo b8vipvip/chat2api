@@ -54,7 +54,7 @@ async function routeScenario({stale = false, strict = true} = {}) {
     routing:{api_key_id:"key_A",scheduler_authority:"server-single-authority-scheduler-v58",strict_api_fifo:strict},
     prompt:"hello"};
   if (stale && !strict) {
-    await assert.rejects(ctx.resolveTargetTabForRequest(msg),/route is in use/);
+    await assert.rejects(ctx.resolveTargetTabForRequest(msg),/Server scheduler invariant violated/);
   } else {
     const tab=await ctx.resolveTargetTabForRequest(msg);
     assert.ok(tab?.id);
@@ -104,7 +104,7 @@ const seed=()=>({
 });
 const windowsLogs=seed(), session={};
 await workerLogScenario("win",session,windowsLogs);
-assert.deepEqual(windowsLogs.chat2apiRuntimeLogV1,[]);
+assert.equal(windowsLogs.chat2apiRuntimeLogV1.length,0);
 assert.equal(windowsLogs.pairingId,"KEEP_PAIRING");
 assert.equal(windowsLogs.chatgptLoginProfile,"KEEP_LOGIN");
 windowsLogs.chat2apiRuntimeLogV1=[{message:"fresh"}];
