@@ -80,7 +80,8 @@
       ? usable.map(row => ({id:row.id,label:row.id + " · " + row.routable_by.length + " Worker"}))
       : [{id:"",label:"暂无已验证、可路由的在线 Worker 文本模型"}];
     const signature = JSON.stringify(rows);
-    if (el.dataset.workerModelSignatureV146 !== signature) {
+    if (el.dataset.workerModelSignatureV146 !== signature ||
+        JSON.stringify([...el.options].map(opt => ({id:opt.value,label:opt.textContent}))) !== signature) {
       el.innerHTML = rows.map(row => `<option value="${esc(row.id)}">${esc(row.label)}</option>`).join("");
       el.dataset.workerModelSignatureV146 = signature;
       if (rows.some(row => row.id === old)) el.value = old;
