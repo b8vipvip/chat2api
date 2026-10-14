@@ -114,14 +114,28 @@ def _idle_compatible(registry: Any, model: str) -> list[str]:
     online = list(registry.online_client_ids())
     if not online:
         raise ConnectionError("No Chrome extension is online. Open Chrome with a paired chat2api extension.")
-    idle = [client_id for client_id in online if client_id not in registry.busy_clients]
-    eligible_idle = [client_id for client_id in idle if _compatible(registry, client_id, model)]
-    if eligible_idle:
-        return eligible_idle
+    compatible = [client_id for client_id in online if _compatible(registry, client_id, model)]
+    remaining = getattr(registry, "rate_limit_remaining_seconds", None)
+    if callable(remaining) and compatible:
+        # A Free Worker can look logged-in and model-compatible while ChatGPT
+        # rejects every generation. Exclude it BEFORE selecting a sticky route.
+        # Never choose the same cooling Worker merely because its timer expired
+        # on the previous failed request.
+        cooling = {client_id: max(0.0, float(remaining(client_id))) for client_id in compatible}
+        eligible = [client_id for client_id in compatible if cooling[client_id] <= 0]
+        if not eligible:
+            retry_seconds = max(1, int(min(cooling.values()) + 0.999))
+            raise ConnectionError(
+                f"All compatible ChatGPT Workers for {model} are rate limited; "
+                f"retry after {retry_seconds}s or use a healthy compatible Worker"
+            )
+        compatible = eligible
+    idle = [client_id for client_id in compatible if client_id not in registry.busy_clients]
+    if idle:
+        return idle
     # The canonical v58 server scheduler queues requests for busy Workers.
-    # Excluding busy but compatible Workers here returned an immediate 503
-    # instead of allowing that scheduler to enforce per-key FIFO.
-    return [client_id for client_id in online if _compatible(registry, client_id, model)]
+    # It must never queue behind a Worker already known to be quota limited.
+    return compatible
 
 
 def _select_mini(registry: Any, *, needs_multimodal: bool) -> str:
