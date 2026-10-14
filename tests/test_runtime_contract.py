@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.130"
+    assert RELEASE_VERSION == "0.22.131"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -52,6 +52,13 @@ def test_v145_worker_model_library_runtime_owners_are_registered():
     assert "content_model_library_v145.js" in isolated_scripts
     assert entry.index('"conversation_route_recovery_v136.js"') < entry.index('"background_model_library_v145.js"')
     assert (ROOT / "app" / "worker_model_library_v145_patch.py").exists()
+    server_entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
+    assert "install_worker_model_library_v145_patch(app)" in server_entry
+    assert server_entry.index("install_model_observability_v144_patch(app)") < server_entry.index(
+        "install_worker_model_library_v145_patch(app)"
+    )
+    # A package containing the validator is not enough: production must
+    # actually activate the Worker catalog and reset it on reconnect.
 
 
 def test_realtime_protocol_contract_matches_live_bridge():

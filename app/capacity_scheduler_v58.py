@@ -20,6 +20,8 @@ DEFAULT_WORKER_CONCURRENCY = 3
 MIN_LIMIT = 1
 MAX_LIMIT = 32
 RATE_LIMIT_DEFAULT_SECONDS = 300
+RATE_LIMIT_MAX_SECONDS = 3600
+RATE_LIMIT_MAX_STRIKES = 8
 RATE_LIMIT_PATTERNS = (
     "chatgpt is temporarily rate limited",
     "too many requests",
@@ -129,6 +131,7 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
     key_active: dict[str, int] = defaultdict(int)
     request_keys: dict[str, str] = {}
     cooldown_until: dict[str, float] = {}
+    rate_limit_strikes: dict[str, int] = {}
 
     base_release = broker.release
     base_publish = broker.publish
@@ -186,6 +189,7 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
             "scheduler_authority": PATCH_ID,
             "rate_limit_cooldown_active": remaining > 0,
             "rate_limit_cooldown_remaining_seconds": round(remaining, 1),
+            "rate_limit_circuit_strikes": int(rate_limit_strikes.get(str(client_id), 0)),
         }
 
     async def create(request_id: str, client_id: str):
@@ -308,18 +312,38 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         return RATE_LIMIT_DEFAULT_SECONDS
 
     async def publish(request_id: str, event: dict[str, Any]) -> bool:
-        if str(event.get("type") or "") in {"chat.error", "chat.cancelled"}:
+        event_type = str(event.get("type") or "")
+        state = broker.requests.get(str(request_id))
+        if state and event_type in {"chat.error", "chat.cancelled"}:
             message = str(event.get("error") or event.get("reason") or "")
             lowered = message.lower()
             if any(token in lowered for token in RATE_LIMIT_PATTERNS):
-                state = broker.requests.get(str(request_id))
-                if state:
-                    cooldown_until[state.client_id] = max(
-                        float(cooldown_until.get(state.client_id, 0.0)),
-                        time.time() + rate_limit_seconds(message),
+                # A terminal can be observed more than once. Count only the
+                # first quota rejection of this request, never repeated events.
+                if not state.diagnostics.get("rate_limit_circuit_recorded"):
+                    client_id = str(state.client_id)
+                    strikes = min(RATE_LIMIT_MAX_STRIKES, rate_limit_strikes.get(client_id, 0) + 1)
+                    rate_limit_strikes[client_id] = strikes
+                    pause = min(
+                        RATE_LIMIT_MAX_SECONDS,
+                        max(RATE_LIMIT_DEFAULT_SECONDS, rate_limit_seconds(message)) * (2 ** (strikes - 1)),
                     )
+                    until = max(float(cooldown_until.get(client_id, 0.0)), time.time() + pause)
+                    cooldown_until[client_id] = until
+                    state.diagnostics.update({
+                        "rate_limit_circuit_recorded": True,
+                        "rate_limit_circuit_strikes": strikes,
+                        "rate_limit_circuit_pause_seconds": pause,
+                        "rate_limit_circuit_until_epoch": round(until, 3),
+                    })
                     async with condition:
                         condition.notify_all()
+        elif state and event_type == "chat.completed":
+            # Only a real successful model completion proves this Worker is
+            # usable again. Time expiry is a probe opportunity, not proof.
+            client_id = str(state.client_id)
+            rate_limit_strikes.pop(client_id, None)
+            cooldown_until.pop(client_id, None)
         return await base_publish(request_id, event)
 
     async def send(client_id: str, message: dict[str, Any]) -> None:
@@ -419,6 +443,7 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
             "reason": "single logical API FIFO is authoritative in v58",
         }
 
+    registry.rate_limit_remaining_seconds = rate_limit_remaining
     broker.client_used_units = used_units
     broker.can_accept = lambda client_id, weight=1: used_units(client_id) + max(1, int(weight or 1)) <= worker_limit(client_id)
     broker.capacity_snapshot = capacity_snapshot
@@ -443,5 +468,6 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         "key_active": key_active,
         "request_keys": request_keys,
         "cooldown_until": cooldown_until,
+        "rate_limit_strikes": rate_limit_strikes,
     }
     return app

@@ -289,6 +289,16 @@ class ClientRegistry:
 
     def resolve_client(self, requested: str | None) -> str:
         key_id = self.routing_key_context.get()
+        remaining = getattr(self, "rate_limit_remaining_seconds", None)
+
+        def cooling_seconds(client_id: str) -> float:
+            if not callable(remaining):
+                return 0.0
+            try:
+                return max(0.0, float(remaining(client_id)))
+            except (TypeError, ValueError):
+                return 0.0
+
         if requested:
             if requested not in self.clients:
                 raise KeyError("Unknown client_id")
@@ -301,16 +311,27 @@ class ClientRegistry:
                 raise ConnectionError(
                     "Requested Chrome extension is online but ChatGPT is not logged in or the composer is not ready"
                 )
+            seconds = cooling_seconds(requested)
+            if seconds > 0:
+                raise ConnectionError(
+                    f"Requested ChatGPT Worker is rate limited; retry after {int(seconds + 0.999)}s"
+                )
             self._remember_route(key_id, requested)
             return requested
 
         transport_online = self.online_client_ids()
         if not transport_online:
             raise ConnectionError("No Chrome extension is online. Open Chrome with a paired chat2api extension.")
-        online = [client_id for client_id in transport_online if self.chatgpt_routing_ready(client_id)]
-        if not online:
+        ready = [client_id for client_id in transport_online if self.chatgpt_routing_ready(client_id)]
+        if not ready:
             raise ConnectionError(
                 "No ChatGPT-ready Chrome extension is available. Log in to ChatGPT on an enabled Worker first."
+            )
+        online = [client_id for client_id in ready if cooling_seconds(client_id) <= 0]
+        if not online:
+            retry_seconds = max(1, int(min(cooling_seconds(client_id) for client_id in ready) + 0.999))
+            raise ConnectionError(
+                f"All ChatGPT-ready Workers are rate limited; retry after {retry_seconds}s"
             )
 
         if key_id:
