@@ -195,7 +195,14 @@
     const workerId = selectedWorker;
     const state = await api("/api/admin/worker-login/" + encodeURIComponent(workerId));
     if (selectedWorker !== workerId) return;
-    byId("v153-worker-id").textContent = state.worker_id;
+    // Display the canonical extension transport ID; keep the Linux wrk_
+    // management key private to API calls so credentials stay bound correctly.
+    const linuxBind = (globalThis.__CHAT2API_LINUX_DEVICE_AUTHORITY_V124__?.devices || [])
+      .flatMap(device => device.workers || [])
+      .find(worker => String(worker.worker_id || "") === String(state.worker_id || ""));
+    byId("v153-worker-id").textContent = linuxBind ?
+      (linuxBind.extension_client_id || "—（扩展未绑定）") :
+      (String(state.worker_id || "").startsWith("ext_") ? state.worker_id : "—（扩展未绑定）");
     byId("v153-email").value = state.username || "";
     byId("v153-enabled").checked = state.configured ? Boolean(state.enabled) : true;
     updateProfileState(state);
