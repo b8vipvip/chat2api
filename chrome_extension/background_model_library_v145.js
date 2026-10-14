@@ -258,28 +258,10 @@
   state.publishStatus = publishStatus;
   state.validationFresh = validationFresh;
 
-  chrome.runtime.onStartup?.addListener?.(() => schedule("browser-startup", 1000));
-  chrome.runtime.onInstalled?.addListener?.(() => schedule("worker-install-or-update", 1200));
-  chrome.storage.onChanged.addListener((changes, area) => {
-    if (area !== "local") return;
-    if (changes.boundTabId && changes.boundTabId.newValue !== changes.boundTabId.oldValue) {
-      markPending("worker-bind").then(() => publishStatus(false)).catch(() => {});
-      schedule("worker-bind", 500);
-      return;
-    }
-    if (changes.socketState?.newValue === "connected" && changes.socketState?.oldValue !== "connected") {
-      markPending("worker-connect").then(() => publishStatus(false)).catch(() => {});
-      schedule("worker-connect", 650);
-      return;
-    }
-    for (const key of ["workerEnabled", "workerMasterEnabled", "connectionEnabled"]) {
-      if (changes[key]?.newValue === true && changes[key]?.oldValue !== true) {
-        markPending("worker-enable").then(() => publishStatus(false)).catch(() => {});
-        schedule("worker-enable", 650);
-        return;
-      }
-    }
-  });
+  // v147: only administrators/popup can initiate discovery or verification.
+  // Bind/connect/startup only republishes existing evidence, no scheduled probes.
+  chrome.runtime.onStartup?.addListener?.(() => publishStatus(false).catch(() => {}));
+  chrome.runtime.onInstalled?.addListener?.(() => publishStatus(false).catch(() => {}));
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type !== "chat2api.models.validate.background.v145") return false;
@@ -289,11 +271,109 @@
     return true;
   });
 
-  // Service-worker creation is itself a fresh validation boundary. A runtime
-  // nonce also prevents an old persisted catalog from becoming authoritative in
-  // the tiny interval before this reset reaches chrome.storage.
-  markPending("worker-restart")
-    .then(() => publishStatus(false))
-    .then(() => schedule("worker-restart", 1000))
-    .catch(error => console.warn("chat2api model authority reset", error));
+  // Never auto-discover or auto-validate after an extension restart.
+  // Old proof is not fresh until explicitly revalidated; observed models
+  // remain available for manual testing, accurately labeled unverified.
+  const previousServerMessage = handleServerMessage;
+  let activeTask = null;
+  handleServerMessage = async function modelTaskCommandV147(message) {
+    if (message?.type !== "model.task.v147") return previousServerMessage(message);
+    const taskId = String(message.task_id || "");
+    if (!/^mtask_[0-9a-f]{32}$/.test(taskId)) return;
+    if (activeTask) {
+      await trySendSocket({type:"extension.status",metadata:{model_task_report_v147:{
+        task_id:taskId,state:"failed",progress:100,error:"Worker model task is already running",
+        logs:["Rejected concurrent model task"],models:[],
+      }}});
+      return;
+    }
+    activeTask = taskId;
+    const logs = [];
+    const kind = message.action === "validate" ? "validate" : "discover";
+    const log = detail => {
+      const line = new Date().toISOString()+" "+String(detail).slice(0,300);
+      logs.push(line);
+      if(logs.length > 65) logs.shift();
+    };
+    const report = async (stateName, progress, error = "", models = []) => {
+      await trySendSocket({type:"extension.status",metadata:{model_task_report_v147:{
+        task_id:taskId,action:kind,state:stateName,progress,error:String(error).slice(0,600),
+        models,logs:[...logs],
+      }}});
+    };
+    try {
+      log("Worker accepted server-authorized task "+kind);
+      await report("running", 10);
+      const tab = await targetTab();
+      log("Resolved ChatGPT tab "+tab.id+" url="+(tab.url||"").split("?")[0].slice(0,120));
+      await report("running", 30);
+      if (kind === "discover") {
+        const result = await ensureValidator(tab.id);
+        if (!result?.ok) throw new Error(result?.error || "ChatGPT picker discovery failed");
+        const observed = (Array.isArray(result.data?.observed_models) ? result.data.observed_models : [])
+          .filter(row=>row && typeof row.id==="string")
+          .map(row=>({id:row.id,label:String(row.label||row.id),source:"chatgpt-picker-manual-v147",validated:false,observed_at:new Date().toISOString()}));
+        log("Picker discovery completed: observed="+observed.length);
+        await chrome.storage.local.set({
+          modelObservedChoices:observed,models:[],currentModel:null,
+          modelValidationState:"discovered",modelValidationRevision:REVISION,
+          modelValidationError:"",modelValidationTrigger:"admin-manual-discovery",
+          modelValidationCandidateCount:observed.length,
+          modelValidationValidatedCount:0,modelValidationUpdatedAt:new Date().toISOString(),
+          modelValidationRuntimeNonce:runtimeNonce,modelValidationBoundTabId:tab.id,
+        });
+        await publishStatus(false);
+        await report("completed",100,"",observed.map(row=>row.id));
+      } else {
+        const requested = String(message.model||"").trim().toLowerCase();
+        if(!/^[a-z0-9._:-]{1,128}$/.test(requested))throw new Error("Invalid model identifier");
+        log("Requested explicit model validation: "+requested);
+        const response = await chrome.tabs.sendMessage(tab.id,{type:"chat2api.model.select.v145",model:requested})
+          .catch(async()=>{
+            await chrome.scripting.executeScript({target:{tabId:tab.id},files:["content_model_library_v145.js"]});
+            return chrome.tabs.sendMessage(tab.id,{type:"chat2api.model.select.v145",model:requested});
+          });
+        if(!response?.ok || response?.data?.validated!==true)
+          throw new Error(response?.error||"Worker could not confirm requested model in ChatGPT picker");
+        const settings=await settingsSnapshot();
+        const observed=Array.isArray(settings.modelObservedChoices)?settings.modelObservedChoices:[];
+        const old=Array.isArray(settings.models)?settings.models:[];
+        const verified=[
+          ...old.filter(row=>row?.validated===true&&Number(row.validation_revision||0)>=REVISION&&row.id!==requested),
+          {id:requested,label:observed.find(row=>row.id===requested)?.label||requested,selected:true,
+           validated:true,validation_revision:REVISION,validated_at:new Date().toISOString(),
+           validation_method:"admin-explicit-picker-selection-v147",capabilities:["text"]},
+        ];
+        await chrome.storage.local.set({
+          models:verified,currentModel:requested,modelValidationState:"validated",
+          modelValidationRevision:REVISION,modelValidationError:"",
+          modelValidationTrigger:"admin-manual-verify",
+          modelValidationCandidateCount:observed.length,modelValidationValidatedCount:verified.length,
+          modelValidationRuntimeNonce:runtimeNonce,modelValidationBoundTabId:tab.id,
+          modelValidationSocketUpdatedAt:settings.socketUpdatedAt||"",
+          modelValidationClientId:settings.clientId||"",
+          modelValidationUpdatedAt:new Date().toISOString(),
+        });
+        log("Explicit model picker selection confirmed: "+requested);
+        await publishStatus(false);
+        await report("completed",100,"",[requested]);
+      }
+    } catch (error) {
+      const failure = String(error?.message||error);
+      log("FAILED: "+failure);
+      await chrome.storage.local.set({
+        modelValidationState:kind==="discover"?"failed":(await settingsSnapshot()).modelValidationState,
+        modelValidationError:failure,
+        modelValidationTrigger:"admin-manual-"+kind,
+        modelValidationUpdatedAt:new Date().toISOString(),
+        ...(kind==="discover"?{modelObservedChoices:[],models:[],currentModel:null,
+          modelValidationCandidateCount:0,modelValidationValidatedCount:0}:{}),
+      });
+      await publishStatus(false).catch(()=>{});
+      await report("failed",100,failure);
+    } finally {
+      activeTask = null;
+    }
+  };
+  publishStatus(false).catch(error=>console.warn("Worker model status",error));
 })();
