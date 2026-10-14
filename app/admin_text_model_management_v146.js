@@ -68,30 +68,39 @@
     document.querySelectorAll(".nav button").forEach(x => x.classList.toggle("active", x.id === "modelManagementNavV146"));
     refresh(true);
   }
-  function modelOptions(rows) {
-    return rows.filter(item => item.enabled && Array.isArray(item.routable_by) && item.routable_by.length)
-      .sort((a,b) => a.id.localeCompare(b.id));
-  }
-  function syncSelect(id, usable) {
+  function syncSelect(id, catalogRows) {
     const el = byId(id);
     if (!el) return;
-    const old = el.value;
-    const rows = usable.length
-      ? usable.map(row => ({id:row.id,label:row.id + " · " + row.routable_by.length + " Worker"}))
-      : [{id:"",label:"暂无已验证、可路由的在线 Worker 文本模型"}];
+    const previous = el.value;
+    const verified = catalogRows.filter(row =>
+      row.enabled && Array.isArray(row.routable_by) && row.routable_by.length);
+    const rows = [
+      ...(verified.length ? [] : [{id:"", label:"无已验证、可路由的在线 Worker 模型", disabled:false}]),
+      ...catalogRows.filter(row => row.enabled).sort((a,b) => a.id.localeCompare(b.id)).map(row=>({
+        id:row.id,
+        label:row.id + (row.routable_by?.length ? " · " + row.routable_by.length + " Worker" : " · 已发现，待验证"),
+        disabled:!row.routable_by?.length,
+      })),
+    ];
     const signature = JSON.stringify(rows);
-    if (el.dataset.workerModelSignatureV146 !== signature ||
-        JSON.stringify([...el.options].map(opt => ({id:opt.value,label:opt.textContent}))) !== signature) {
-      el.innerHTML = rows.map(row => `<option value="${esc(row.id)}">${esc(row.label)}</option>`).join("");
+    const currentSignature = JSON.stringify([...el.options].map(opt=>({
+      id:opt.value,label:opt.textContent,disabled:opt.disabled,
+    })));
+    if (currentSignature !== signature) {
+      el.innerHTML = rows.map(row => `<option value="${esc(row.id)}"${row.disabled?" disabled":""}>${esc(row.label)}</option>`).join("");
       el.dataset.workerModelSignatureV146 = signature;
-      if (rows.some(row => row.id === old)) el.value = old;
     }
-    el.disabled = !usable.length;
+    if (verified.some(row => row.id === previous)) el.value = previous;
+    else el.value = verified[0]?.id || "";
+    // Keep the picker openable so operators can see discovered-but-unverified
+    // models, without letting those models be submitted.
+    el.disabled = false;
   }
   function syncPlayground(catalog) {
-    const usable = modelOptions(catalog.data || []);
-    syncSelect("testModel", usable);
-    syncSelect("pgChatModel", usable);
+    const rows = Array.isArray(catalog.data) ? catalog.data : [];
+    const usable = rows.filter(item => item.enabled && item.routable_by?.length);
+    syncSelect("testModel", rows);
+    syncSelect("pgChatModel", rows);
     const chatSend = byId("pgChatSend");
     if (chatSend && chatSend.textContent === "发送") {
       chatSend.disabled = usable.length === 0;
