@@ -40,7 +40,8 @@ def test_request_router_preflights_then_selects_worker_validated_model() -> None
     source = (EXTENSION / "model_routing_v2.js").read_text(encoding="utf-8")
     assert "chat2api.request.preflight" in source
     assert "content_request_v5.js" in source
-    assert "chat2api.model.select.v145" in source
+    assert "__CHAT2API_MODEL_SWITCH_V149__" in source
+    assert "authority.safeSelect(tabId, model)" in source
     assert "chat2api.reasoning.prepare.v7" in source
     assert "validatedLibrary" in source
     assert "resolveRequestedModel" in source

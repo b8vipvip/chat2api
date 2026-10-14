@@ -98,11 +98,9 @@
 
   async function selectValidatedModel(tabId, model) {
     await ensureContent(tabId);
-    const response = await sendWithScript(
-      tabId,
-      { type: "chat2api.model.select.v145", model },
-      ["content_model_library_v145.js"],
-    );
+    const authority = globalThis.__CHAT2API_MODEL_SWITCH_V149__;
+    if (!authority?.safeSelect) throw new Error("Model switch authority v149 was not initialized");
+    const response = await authority.safeSelect(tabId, model);
     if (!response?.ok || response?.data?.validated !== true) {
       const failure = new Error(response?.error || `Worker failed to select and verify model: ${model}`);
       failure.code = String(response?.code || "model_selection_unconfirmed");

@@ -37,7 +37,8 @@ def test_browser_router_uses_fresh_worker_validated_model_library_for_all_accoun
     assert "LIBRARY_REVISION = 145" in source
     assert "validatedLibrary" in source
     assert "resolveRequestedModel" in source
-    assert 'type: "chat2api.model.select.v145"' in source
+    assert "__CHAT2API_MODEL_SWITCH_V149__" in source
+    assert "authority.safeSelect(tabId, model)" in source
     assert "Worker has no manually discovered text models" in source
     assert "Requested model was not discovered on this Worker" in source
     assert 'const TEXT_MODELS = ["gpt-5.6-sol", "gpt-5.5"]' not in source

@@ -139,7 +139,8 @@ def test_model_router_propagates_v145_model_and_reasoning_diagnostics():
         'error_stage: error?.stage || "worker-model-library-routing"',
     ):
         assert token in source
-    assert 'type: "chat2api.model.select.v145"' in source
+    assert "__CHAT2API_MODEL_SWITCH_V149__" in source
+    assert "authority.safeSelect(tabId, model)" in source
     assert "Requested model was not discovered on this Worker" in source
     assert "Worker has no manually discovered text models" in source
 

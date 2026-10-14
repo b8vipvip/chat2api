@@ -389,10 +389,131 @@
       validation_method: proof.verification, observed_choices: proof.evidence };
   }
 
+
+  // v149: split model switching into prepare -> acknowledged commit -> fresh
+  // document inspection. A model click can navigate ChatGPT and destroy this
+  // content script's pending asynchronous sendResponse promise.
+  function pickerFailure(message, code, stage, evidence = []) {
+    const error = new Error(message);
+    error.code = code;
+    error.stage = stage;
+    error.evidence = evidence;
+    return error;
+  }
+
+  function pickerEvidence(choices) {
+    return choices.map(item => ({
+      id: item.id, label: String(item.label || item.id).slice(0, 110),
+      enabled: item.enabled === true, selected: item.selected === true,
+      sunset_notice: Boolean(item.sunset_notice),
+    }));
+  }
+
+  async function prepareModelSelectionV149(modelId) {
+    if (requestActive()) throw pickerFailure(
+      "Cannot change ChatGPT model while a request is active",
+      "model_selection_busy", "prepare-model-selection",
+    );
+    const model = canonicalModelId(modelId);
+    if (!model) throw pickerFailure("Invalid requested model: " + String(modelId),
+      "invalid_model", "prepare-model-selection");
+    const choices = await openModelMenu();
+    const evidence = pickerEvidence(choices);
+    const target = choices.find(item => item.id === model);
+    if (!target) {
+      closeMenus();
+      throw pickerFailure("Requested model option not present: " + model,
+        "model_option_missing", "prepare-model-selection", evidence);
+    }
+    if (!target.enabled) {
+      closeMenus();
+      throw pickerFailure("Requested model option disabled: " + model,
+        "model_option_disabled", "prepare-model-selection", evidence);
+    }
+    const before = choices.find(item => item.selected)?.id || "";
+    const alreadySelected = before === model;
+    const ticket = "v149-" + (++state.selectionSequence);
+    state.pendingSelection = alreadySelected ? null : {
+      ticket, model, element: target.element, preparedAt: Date.now(),
+    };
+    if (alreadySelected) closeMenus();
+    return {
+      ticket, model, before, already_selected: alreadySelected,
+      evidence, prepared_at: new Date().toISOString(),
+    };
+  }
+
+  // IMPORTANT: send the acknowledgement BEFORE clicking. For a navigation,
+  // Chrome destroys this frame immediately after click and drops async replies.
+  function commitModelSelectionV149(ticket, sendResponse) {
+    const pending = state.pendingSelection;
+    if (!pending || pending.ticket !== ticket || Date.now() - pending.preparedAt > 15000) {
+      sendResponse({ ok: false, code: "model_selection_ticket_expired",
+        stage: "commit-model-selection", error: "Prepared model selection has expired" });
+      return;
+    }
+    state.pendingSelection = null;
+    sendResponse({ ok: true, model: pending.model, click_acknowledged: true });
+    queueMicrotask(() => {
+      try {
+        pending.element.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+        pending.element.click();
+      } catch (error) {
+        console.warn("Model click failed after commit acknowledgement", String(error?.message || error));
+      }
+    });
+  }
+
+  async function inspectModelSelectionV149() {
+    let choices;
+    try {
+      choices = await openModelMenu();
+    } catch (error) {
+      throw pickerFailure("Unable to inspect ChatGPT model picker: " + String(error?.message || error),
+        "model_inspection_unavailable", "inspect-model-selection");
+    }
+    const selectedInMenu = choices.find(item => item.selected)?.id || "";
+    const pickerModel = modelIdOf(modelPicker());
+    const models = pickerEvidence(choices);
+    closeMenus();
+    // Selected row is authoritative. Header fallback only applies to an exact,
+    // visible model label when the menu exposes no selected row at all.
+    const selected = selectedInMenu || (models.some(row => row.id === pickerModel) ? pickerModel : "");
+    return {
+      selected_model: selected || null,
+      selected_in_menu: selectedInMenu || null,
+      picker_model: pickerModel || null,
+      models, inspected_at: new Date().toISOString(),
+    };
+  }
+
+  state.selectionSequence = 0;
+  state.pendingSelection = null;
+
   state.validate = validateModels;
   state.select = selectModel;
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "chat2api.model.prepare.v149") {
+      prepareModelSelectionV149(message.model)
+        .then(data => sendResponse({ok:true,data}))
+        .catch(error => sendResponse({ok:false, code:String(error?.code || "model_prepare_failed"),
+          stage:String(error?.stage || "prepare-model-selection"),
+          evidence:error?.evidence || [], error:String(error?.message || error)}));
+      return true;
+    }
+    if (message?.type === "chat2api.model.commit.v149") {
+      commitModelSelectionV149(message.ticket, sendResponse);
+      return false;
+    }
+    if (message?.type === "chat2api.model.inspect.v149") {
+      inspectModelSelectionV149()
+        .then(data => sendResponse({ok:true,data}))
+        .catch(error => sendResponse({ok:false,code:String(error?.code || "model_inspect_failed"),
+          stage:String(error?.stage || "inspect-model-selection"),
+          error:String(error?.message || error)}));
+      return true;
+    }
     if (message?.type === "chat2api.models.validate.v145") {
       validateModels()
         .then(data => sendResponse({ ok: true, data }))

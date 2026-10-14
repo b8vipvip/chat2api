@@ -16,6 +16,7 @@ importScripts(
   "background_window_open_stagger_v85.js",
   "background_worker_disabled_window_guard_v86.js",
   "background_rate_limit_guard_v52.js",
+  "background_model_switch_v149.js",
   "model_routing_v2.js",
   "background_page_smoke_v22.js",
   "background_multimodal_quota_v36.js",
