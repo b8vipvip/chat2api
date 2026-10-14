@@ -402,7 +402,7 @@
     if (message?.type === "chat2api.model.select.v145") {
       selectModel(message.model)
         .then(data => sendResponse({ ok: true, data }))
-        .catch(error => sendResponse({ ok: false, code: String(error?.code || ""), error: String(error?.message || error) }));
+        .catch(error => sendResponse({ ok: false, code: String(error?.code || ""), stage: String(error?.stage || ""), evidence: error?.evidence || [], after: error?.after || [], error: String(error?.message || error) }));
       return true;
     }
     return false;
