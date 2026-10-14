@@ -220,7 +220,7 @@ jobs:
           assert payload['server']['runtime_aligned'] is True
           assert payload['server']['entrypoint'] == 'app.entry:app'
           assert payload['server']['runtime_version'] == payload['chrome_bridge']['bundle_version']
-          assert re.fullmatch(r"0\\.22\\.[0-9]+", payload['server']['runtime_version'])
+          assert re.fullmatch(r"0[.]22[.][0-9]+", payload['server']['runtime_version'])
           assert payload['chrome_bridge']['route_window_authority_revision'] == 30
           assert payload['chrome_bridge']['window_observer_revision'] == 90
           assert payload['chrome_bridge']['persistent_window_pool_revision'] == 132
