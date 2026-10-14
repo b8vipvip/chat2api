@@ -274,7 +274,7 @@
   // Never auto-discover or auto-validate after an extension restart.
   // Old proof is not fresh until explicitly revalidated; observed models
   // remain available for manual testing, accurately labeled unverified.
-  const previousServerMessage = handleServerMessage;
+  const previousServerMessage = typeof handleServerMessage === "function" ? handleServerMessage : async () => {};
   let activeTask = null;
   handleServerMessage = async function modelTaskCommandV147(message) {
     if (message?.type !== "model.task.v147") return previousServerMessage(message);

@@ -176,10 +176,15 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
     registry.client_models = client_models
     registry.model_catalog = model_catalog
 
+    base_compatible = routing._compatible
+
     # The historical scheduler's closure was bound to strict validation.
     # Use the same single canonical registry capability check instead.
     def compatible(registry_obj: Any, client_id: str, model: str) -> bool:
-        return bool(registry_obj.chatgpt_routing_ready(client_id) and registry_obj.supports_model(client_id, model))
+        supports = getattr(registry_obj, 'supports_model', None)
+        if not callable(supports):
+            return bool(base_compatible(registry_obj, client_id, model))
+        return bool(registry_obj.chatgpt_routing_ready(client_id) and supports(client_id, model))
     routing._compatible = compatible
 
     overview = next((route for route in app.routes if isinstance(route, APIRoute) and
