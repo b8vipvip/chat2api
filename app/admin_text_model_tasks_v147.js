@@ -95,10 +95,11 @@
       const sources=(row.observed_by||[]).map(id=>{
         const w=workerById.get(id);
         const verified=(row.verified_by||[]).includes(id);
-        return `<div title="${esc(id)} · ${esc(w?.updated_at||"")}">${esc(w?.name||id)}
-          <small class="muted">(${esc(id)}) · ${verified?"已验证":"已发现"}</small></div>`;
+        const selectable=row.source_details?.[id]?.selectable!==false;
+        return `<div title="${esc(id)} · ${esc(w?.updated_at||"")}"><code>${esc(id)}</code>
+          <small class="muted"> · ${esc(w?.name||"")} · ${verified?"已验证":selectable?"已发现":"页面选项不可操作"}</small></div>`;
       }).join("")||"—";
-      const callable=row.enabled?(row.observed_by||[]).filter(id=>live.has(id)):[];
+      const callable=row.enabled?(row.observed_by||[]).filter(id=>live.has(id) && row.source_details?.[id]?.selectable!==false):[];
       const label=!row.enabled?"已停用":row.verified_by?.length?"存在已验证来源":"已发现 · 未验证";
       return `<tr><td><code>${esc(row.id)}</code></td><td>${label}</td>
         <td>${sources}</td><td title="${esc(callable.join(", "))}">${callable.length} 个</td>
@@ -113,7 +114,7 @@
     if(prog)prog.innerHTML=current?Object.entries(current.workers||{}).map(([id,w])=>{
       const info=workerById.get(id);
       return `<tr><td><code>${esc(current.id)}</code><div>${esc(current.kind)} · ${esc(current.model||"全部模型")}</div></td>
-        <td>${esc(info?.name||id)}<div class="muted"><code>${esc(id)}</code></div></td>
+        <td><code>${esc(id)}</code><div class="muted">${esc(info?.name||"")}</div></td>
         <td>${esc(w.state)} · ${Number(w.progress||0)}%<div><progress max="100" value="${Number(w.progress||0)}"></progress></div></td>
         <td>${esc((w.models||[]).join(", ")||"—")}<div style="color:var(--bad)">${esc(w.error||"")}</div></td>
         <td>${button("导出此 Worker 日志","data-task-log",current.id,'data-log-worker="'+esc(id)+'"')}</td></tr>`;

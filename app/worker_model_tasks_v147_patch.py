@@ -140,14 +140,14 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
         if model in SPECIAL:
             return False
         client = registry.clients.get(str(client_id))
-        return model in {item["id"] for item in _observed(getattr(client, "metadata", {}))}
+        return model in {item["id"] for item in _observed(getattr(client, "metadata", {})) if item["selectable"]}
 
     def client_models(client_id: str):
         rows = list(base_client_models(client_id))
         ids = {item.get("id") for item in rows}
         client = registry.clients.get(str(client_id))
         for item in _observed(getattr(client, "metadata", {})):
-            if item["id"] not in ids:
+            if item["selectable"] and item["id"] not in ids:
                 rows.append({"id": item["id"], "label": item["label"], "validated": False,
                              "source": "worker-picker-observed-unverified", "capabilities": ["text"]})
         return rows
@@ -161,7 +161,7 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
                 continue
             for row in _observed(client.metadata):
                 model = row["id"]
-                if model in disabled:
+                if model in disabled or not row["selectable"]:
                     continue
                 entry = catalog.setdefault(model, {
                     "id": model, "object": "model", "created": 0, "owned_by": "chat2api",

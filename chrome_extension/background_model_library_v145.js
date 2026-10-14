@@ -312,8 +312,9 @@
         if (!result?.ok) throw new Error(result?.error || "ChatGPT picker discovery failed");
         const observed = (Array.isArray(result.data?.observed_models) ? result.data.observed_models : [])
           .filter(row=>row && typeof row.id==="string")
-          .map(row=>({id:row.id,label:String(row.label||row.id),source:"chatgpt-picker-manual-v147",validated:false,observed_at:new Date().toISOString()}));
-        log("Picker discovery completed: observed="+observed.length);
+          .map(row=>({id:row.id,label:String(row.label||row.id).slice(0,130),source:"chatgpt-picker-manual-v148",validated:false,selectable:row.enabled!==false,observed_at:new Date().toISOString()}));
+        log("Picker discovery completed: observed="+observed.length+"; selectable="+observed.filter(row=>row.selectable).length);
+        for(const choice of observed)log("Picker choice id="+choice.id+" selectable="+choice.selectable+" label="+choice.label);
         await chrome.storage.local.set({
           modelObservedChoices:observed,models:[],currentModel:null,
           modelValidationState:"discovered",modelValidationRevision:REVISION,
@@ -333,8 +334,16 @@
             await chrome.scripting.executeScript({target:{tabId:tab.id},files:["content_model_library_v145.js"]});
             return chrome.tabs.sendMessage(tab.id,{type:"chat2api.model.select.v145",model:requested});
           });
-        if(!response?.ok || response?.data?.validated!==true)
+        if(!response?.ok || response?.data?.validated!==true) {
+          log("Picker selection failure code="+String(response?.code||"unknown")+
+              " stage="+String(response?.stage||"unknown"));
+          for(const choice of (response?.evidence||[]).slice(0,12))
+            log("Picker before id="+choice.id+" enabled="+choice.enabled+" selected="+choice.selected+
+              " notice="+Boolean(choice.sunset_notice));
+          for(const choice of (response?.after||[]).slice(0,12))
+            log("Picker after id="+choice.id+" enabled="+choice.enabled+" selected="+choice.selected);
           throw new Error(response?.error||"Worker could not confirm requested model in ChatGPT picker");
+        }
         const settings=await settingsSnapshot();
         const observed=Array.isArray(settings.modelObservedChoices)?settings.modelObservedChoices:[];
         const old=Array.isArray(settings.models)?settings.models:[];
@@ -354,7 +363,7 @@
           modelValidationClientId:settings.clientId||"",
           modelValidationUpdatedAt:new Date().toISOString(),
         });
-        log("Explicit model picker selection confirmed: "+requested);
+        log("Explicit model picker selection confirmed: "+requested+" by "+String(response.data?.validation_method||"picker-dom"));
         await publishStatus(false);
         await report("completed",100,"",[requested]);
       }

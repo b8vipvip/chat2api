@@ -120,7 +120,7 @@ def test_manual_only_no_automatic_model_discovery_and_unified_id_column():
     assert "modelObservedChoices" in router
     assert "发现模型" in ui
     assert "任务记录" in ui
-    assert "扩展连接 ID：" in unified
+    assert "Linux Worker 管理绑定：" in unified
 
     import shutil
     import subprocess

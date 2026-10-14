@@ -52,6 +52,7 @@ def _model_rows(values: Any, *, verified_only: bool = False) -> list[dict[str, A
             "label": str(value.get("label") or model)[:140],
             "validated": bool(value.get("validated")) if verified_only else False,
             "method": str(value.get("validation_method") or value.get("source") or "")[:90],
+            "selectable": value.get("selectable") is not False,
             "at": str(value.get("validated_at") or value.get("observed_at") or "")[:48],
         })
     return rows
@@ -184,10 +185,16 @@ def install_worker_text_model_management_v146_patch(app: FastAPI) -> FastAPI:
                     model_id = item["id"]
                     entry = models.setdefault(model_id, {
                         "id": model_id, "label": item["label"], "enabled": model_id not in disabled,
-                        "observed_by": [], "verified_by": [], "routable_by": [],
+                        "observed_by": [], "verified_by": [], "routable_by": [], "source_details": {},
                     })
                     if client_id not in entry["observed_by"]:
                         entry["observed_by"].append(client_id)
+                    entry["source_details"][client_id] = {
+                        "selectable": bool(item.get("selectable", True)),
+                        "label": item.get("label") or model_id,
+                        "method": item.get("method") or "",
+                        "at": item.get("at") or state.get("updated_at") or "",
+                    }
                     if kind == "validated":
                         entry["verified_by"].append(client_id)
                         if ready and model_id not in disabled:

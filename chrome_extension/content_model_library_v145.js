@@ -58,7 +58,8 @@
       const model = canonicalModelId(element.getAttribute?.(name) || "");
       if (model) return model;
     }
-    return canonicalModelId(labelOf(element));
+    return canonicalModelId(labelOf(element)) ||
+      canonicalModelId(element.innerText || element.textContent || "");
   }
 
   function rejectedControl(element) {
@@ -125,34 +126,63 @@
   function interactiveAncestor(element, boundary) {
     let current = element;
     for (let i = 0; current && i < 7; i += 1, current = current.parentElement) {
-      if (current.matches?.("button,[role='menuitem'],[role='menuitemradio'],[role='option'],[data-radix-collection-item],[tabindex]")) return current;
+      if (current.matches?.("button,[role='menuitem'],[role='menuitemradio'],[role='option'],[data-radix-collection-item]")) {
+        return current;
+      }
       if (current === boundary) break;
     }
-    return element;
+    return null;
+  }
+
+  // A model menu may contain an entire nested menu AND a power slider.
+  // Treating its wrapper as "GPT-6" because the wrapper contains text for
+  // several models caused v0.22.133 to advertise unclickable phantom choices.
+  function distinctModelIds(label) {
+    const text = normalize(label);
+    const matches = text.match(/\bgpt[-\s]?\d+(?:\.\d+)?(?:[-\s]+(?:astra|pro|sol|terra|luna|mini))?\b/g) || [];
+    return [...new Set(matches.map(value => canonicalModelId(value)).filter(Boolean))];
+  }
+
+  function isDisabledModel(element) {
+    return Boolean(element?.disabled ||
+      element?.getAttribute?.("aria-disabled") === "true" ||
+      element?.hasAttribute?.("disabled") ||
+      element?.hasAttribute?.("data-disabled") ||
+      element?.closest?.("[aria-disabled='true'],[data-disabled]"));
   }
 
   function modelChoices() {
-    const result = [];
-    const seen = new Set();
+    const byId = new Map();
     for (const root of menuRoots()) {
-      for (const raw of root.querySelectorAll("button,[role='menuitem'],[role='menuitemradio'],[role='option'],[data-radix-collection-item],[data-model],[data-model-id],[data-value],div,span")) {
+      for (const raw of root.querySelectorAll(
+        "button,[role='menuitem'],[role='menuitemradio'],[role='option'],[data-radix-collection-item],[data-model-id],[data-model],div,span"
+      )) {
         if (!visible(raw)) continue;
         const candidate = interactiveAncestor(raw, root);
-        if (!candidate || seen.has(candidate) || !visible(candidate)) continue;
-        const model = modelIdOf(candidate) || modelIdOf(raw);
+        if (!candidate || !visible(candidate) || candidate === root) continue;
+        const visibleLabel = String(candidate.innerText || candidate.textContent || "").replace(/\s+/g," ").trim();
+        const label = distinctModelIds(visibleLabel).length ? visibleLabel : labelOf(candidate);
+        // Never promote a menu/popup wrapper containing all picker models.
+        // At least one precise ID or one isolated visible model label is needed.
+        const ids = distinctModelIds(label);
+        const explicit = canonicalModelId(candidate.getAttribute?.("data-model-id") ||
+          candidate.getAttribute?.("data-model") || "");
+        if (ids.length > 1 || (!explicit && ids.length !== 1)) continue;
+        const model = explicit || ids[0];
         if (!model) continue;
-        seen.add(candidate);
-        result.push({
-          element: candidate,
-          id: model,
-          label: labelOf(candidate) || labelOf(raw) || model,
-          selected: candidate.getAttribute("aria-checked") === "true" ||
-            candidate.getAttribute("aria-selected") === "true" ||
-            /selected|checked/i.test(candidate.getAttribute("data-state") || ""),
-        });
+        const enabled = !isDisabledModel(candidate);
+        const selected = candidate.getAttribute("aria-checked") === "true" ||
+          candidate.getAttribute("aria-selected") === "true" ||
+          /selected|checked/i.test(candidate.getAttribute("data-state") || "");
+        const found = {element: candidate,id:model,
+          label:label.slice(0,130) || model,selected,enabled,
+          sunset_notice:/\bleaving on\b|\bretiring\b|即将下线|即将移除/i.test(label)};
+        const prior = byId.get(model);
+        if (!prior || (Number(found.enabled)*8+Number(found.selected)*2+Number(label.length < prior.label.length)) >
+          (Number(prior.enabled)*8+Number(prior.selected)*2)) byId.set(model,found);
       }
     }
-    return result;
+    return [...byId.values()];
   }
 
   function expansionChoice() {
@@ -221,30 +251,67 @@
   }
 
   async function selectAndVerify(modelId) {
-    const choices = await openModelMenu();
-    const choice = choices.find(item => item.id === modelId);
+    let choices;
+    try {
+      choices = await openModelMenu();
+    } catch (error) {
+      const failure = new Error("Model picker unavailable: "+String(error?.message||error));
+      failure.code = "model_picker_unavailable";
+      failure.stage = "open-picker";
+      throw failure;
+    }
+    const compact = choices.map(item => ({
+      id:item.id,enabled:item.enabled,selected:item.selected,sunset_notice:item.sunset_notice,
+      label:item.label.slice(0,100),
+    }));
+    const choice = choices.find(item=>item.id===modelId);
     if (!choice) {
       closeMenus();
-      return false;
+      const failure = new Error("Requested model option is not present in live ChatGPT picker: "+
+        modelId+"; observed="+compact.map(x=>x.id).join(","));
+      failure.code = "model_option_missing";
+      failure.stage = "read-model-picker";
+      failure.evidence = compact;
+      throw failure;
     }
-    choice.element.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    if (!choice.enabled) {
+      closeMenus();
+      const failure = new Error("Requested model option is disabled in ChatGPT picker: "+modelId+
+        (choice.sunset_notice?" (retirement notice shown)":""));
+      failure.code = "model_option_disabled";
+      failure.stage = "read-model-picker";
+      failure.evidence = compact;
+      throw failure;
+    }
+    choice.element.scrollIntoView?.({block:"nearest",inline:"nearest"});
     choice.element.click();
-    await delay(450);
-    const verified = await waitFor(async () => {
-      const direct = modelIdOf(modelPicker());
-      if (direct === modelId) return true;
-      try {
-        const reopened = await openModelMenu();
-        const selected = reopened.find(item => item.id === modelId && item.selected);
-        closeMenus();
-        return Boolean(selected);
-      } catch (_) {
-        closeMenus();
-        return false;
-      }
-    }, VERIFY_TIMEOUT_MS, 180);
+    await delay(350);
+    // React may rebuild the control on selection. Reopen it at most once:
+    // reopening/closing the menu during each polling iteration can undo a
+    // pending selection and previously hid the actual failing phase.
+    const direct = await waitFor(()=>modelIdOf(modelPicker())===modelId,1600,120);
+    if(direct) {
+      closeMenus();
+      return {model:modelId,verification:"selected-picker-label",evidence:compact};
+    }
+    let reopened = [];
+    try {
+      reopened = await openModelMenu();
+    } catch (_) { /* report original observed picker evidence below */ }
+    const confirmed = reopened.some(item=>item.id===modelId&&item.selected);
     closeMenus();
-    return Boolean(verified);
+    if(confirmed) return {model:modelId,verification:"selected-menu-state",evidence:compact};
+    const failure = new Error("ChatGPT picker did not confirm model after click: "+modelId+
+      "; previously observed="+compact.map(x=>x.id+(x.enabled?"":"[disabled]")).join(",")+
+      "; after click="+reopened.map(x=>x.id+(x.selected?"[selected]":"")).join(",")+
+      (choice.sunset_notice?"; retirement notice shown":""));
+    failure.code = "model_selection_unconfirmed";
+    failure.stage = "confirm-model-selection";
+    failure.evidence = compact;
+    failure.after = reopened.map(item=>({
+      id:item.id,selected:item.selected,enabled:item.enabled,
+    }));
+    throw failure;
   }
 
   function requestActive() {
@@ -272,18 +339,19 @@
       // not routable, until a later explicit selection is confirmed.
       const initialChoices = await openModelMenu();
       const labels = new Map();
+      const enabledMap = new Map();
       const selectedInMenu = initialChoices.find(item => item.selected)?.id || "";
       for (const choice of initialChoices) {
-        if (choice.id && !labels.has(choice.id)) labels.set(choice.id, choice.label || choice.id);
+        if (choice.id && !labels.has(choice.id)) { labels.set(choice.id, choice.label || choice.id); enabledMap.set(choice.id, choice.enabled); }
       }
       const pickerSelected = modelIdOf(modelPicker());
       const selected = [selectedInMenu, pickerSelected].find(id => labels.has(id)) || "";
       closeMenus();
       const observed = [...labels].map(([id, label]) => ({
-        id, label, source: "chatgpt-model-picker", validated: false,
+        id, label, source: "chatgpt-model-picker", validated: false, enabled: enabledMap.get(id) === true,
         observed_at: new Date().toISOString(),
       }));
-      const validated = selected ? [{
+      const validated = selected && enabledMap.get(selected) ? [{
         id: selected,
         label: labels.get(selected) || selected,
         family: selected,
@@ -315,9 +383,10 @@
     if (requestActive()) throw new Error("Cannot switch model while a ChatGPT request is active");
     const model = canonicalModelId(modelId);
     if (!model) throw new Error(`Invalid model id: ${modelId}`);
-    const ok = await selectAndVerify(model);
-    if (!ok) throw new Error(`Requested model is not available in this Worker: ${model}`);
-    return { model, current_model: await currentModel(), validated: true, validation_revision: REVISION };
+    const proof = await selectAndVerify(model);
+    // Do not conflate an available menu option with a confirmed selection.
+    return { model, current_model: model, validated: true, validation_revision: REVISION,
+      validation_method: proof.verification, observed_choices: proof.evidence };
   }
 
   state.validate = validateModels;
@@ -327,13 +396,13 @@
     if (message?.type === "chat2api.models.validate.v145") {
       validateModels()
         .then(data => sendResponse({ ok: true, data }))
-        .catch(error => sendResponse({ ok: false, code: String(error?.code || ""), error: String(error?.message || error) }));
+        .catch(error => sendResponse({ ok: false, code: String(error?.code || ""), stage: String(error?.stage || ""), evidence: error?.evidence || [], after: error?.after || [], error: String(error?.message || error) }));
       return true;
     }
     if (message?.type === "chat2api.model.select.v145") {
       selectModel(message.model)
         .then(data => sendResponse({ ok: true, data }))
-        .catch(error => sendResponse({ ok: false, code: String(error?.code || ""), error: String(error?.message || error) }));
+        .catch(error => sendResponse({ ok: false, code: String(error?.code || ""), stage: String(error?.stage || ""), evidence: error?.evidence || [], after: error?.after || [], error: String(error?.message || error) }));
       return true;
     }
     return false;
