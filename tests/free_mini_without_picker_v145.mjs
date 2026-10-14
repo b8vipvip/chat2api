@@ -27,7 +27,7 @@ async function runCase({account="free", confidence="high", picker=false, request
         get: async defaults=>({...defaults,...storage}),
         set: async fields=>{Object.assign(storage,fields);},
       }},
-      runtime:{getManifest:()=>({version:"0.22.129"})},
+      runtime:{getManifest:()=>({version:"0.22.130"})},
       tabs:{
         sendMessage: async(_tab, msg)=>{
           if(msg.type==="chat2api.request.preflight")return {ok:true,data:{ready:true}};
