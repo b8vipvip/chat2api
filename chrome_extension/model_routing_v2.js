@@ -104,7 +104,12 @@
       ["content_model_library_v145.js"],
     );
     if (!response?.ok || response?.data?.validated !== true) {
-      throw new Error(response?.error || `Worker failed to select validated model: ${model}`);
+      const failure = new Error(response?.error || `Worker failed to select and verify model: ${model}`);
+      failure.code = String(response?.code || "model_selection_unconfirmed");
+      failure.stage = String(response?.stage || "worker-model-picker-selection");
+      failure.model_evidence = response?.evidence || [];
+      failure.model_after = response?.after || [];
+      throw failure;
     }
     return response.data || {};
   }
@@ -264,6 +269,8 @@
         error_code: String(error?.code || "chat_routing_failed"),
         error_message: text,
         error_stage: error?.stage || "worker-model-library-routing",
+        model_selection_evidence: Array.isArray(error?.model_evidence) ? error.model_evidence.slice(0,15) : [],
+        model_selection_after: Array.isArray(error?.model_after) ? error.model_after.slice(0,15) : [],
         logical_requested_model: requestedModel,
         logical_requested_reasoning: requestedReasoning || null,
         effective_model: requestedModel,
