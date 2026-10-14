@@ -42,7 +42,8 @@ def test_fast_family_prefetch_is_best_effort_and_v145_router_remains_owner() -> 
     assert "model_prefetch_fast_v21" in background
     assert "validatedLibrary" in routing
     assert "selectValidatedModel" in routing
-    assert "chat2api.model.select.v145" in routing
+    assert "__CHAT2API_MODEL_SWITCH_V149__" in routing
+    assert "authority.safeSelect(tabId, model)" in routing
     assert entry.index('"model_routing_v2.js"') < entry.index('"model_prefetch_fast_v21.js"')
     assert entry.index('"model_prefetch_fast_v21.js"') < entry.index('"background_logging.js"')
     assert entry.index('"background_logging.js"') < entry.index('"conversation_dispatch.js"')
