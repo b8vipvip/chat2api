@@ -138,7 +138,7 @@
   // several models caused v0.22.133 to advertise unclickable phantom choices.
   function distinctModelIds(label) {
     const text = normalize(label);
-    const matches = text.match(/\\bgpt[-\\s]?\\d+(?:\\.\\d+)?(?:[-\\s]+(?:astra|pro|sol|terra|luna|mini))?\\b/g) || [];
+    const matches = text.match(/\bgpt[-\s]?\d+(?:\.\d+)?(?:[-\s]+(?:astra|pro|sol|terra|luna|mini))?\b/g) || [];
     return [...new Set(matches.map(value => canonicalModelId(value)).filter(Boolean))];
   }
 
@@ -174,7 +174,7 @@
           /selected|checked/i.test(candidate.getAttribute("data-state") || "");
         const found = {element: candidate,id:model,
           label:label.slice(0,130) || model,selected,enabled,
-          sunset_notice:/\\bleaving on\\b|\\bretiring\\b|即将下线|即将移除/i.test(label)};
+          sunset_notice:/\bleaving on\b|\bretiring\b|即将下线|即将移除/i.test(label)};
         const prior = byId.get(model);
         if (!prior || (Number(found.enabled)*8+Number(found.selected)*2+Number(label.length < prior.label.length)) >
           (Number(prior.enabled)*8+Number(prior.selected)*2)) byId.set(model,found);
