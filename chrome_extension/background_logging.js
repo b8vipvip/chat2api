@@ -3,6 +3,7 @@
   if (globalThis[KEY]) return;
 
   const HISTORY_KEY = "chat2apiRuntimeLogV1";
+  const WINDOWS_SESSION_KEY = "chat2apiWindowsRuntimeLogSessionV130";
   const ACTIVE_RUNS_KEY = "chat2apiRuntimeActiveRunsV4";
   const RUN_INDEX_KEY = "chat2apiRuntimeRunIndexV4";
   const RUN_PART_PREFIX = "chat2apiRuntimeRunPartV4:";
@@ -29,6 +30,7 @@
     storageError: "",
   };
   globalThis[KEY] = state;
+  let logSessionReady = Promise.resolve();
 
   function clean(value, depth = 0) {
     if (depth > 5) return "[depth-limit]";
@@ -311,6 +313,7 @@
   }
 
   async function startRequest(message) {
+    await logSessionReady;
     await ensureLoaded();
     const requestId = String(message?.request_id || "");
     if (!requestId) return null;
@@ -339,6 +342,7 @@
   }
 
   async function finishRequest(requestId, status, detail = {}) {
+    await logSessionReady;
     await ensureLoaded();
     const id = String(requestId || "");
     const run = runForRequest(id);
@@ -389,6 +393,7 @@
   }
 
   async function appendForRequest(requestId, component, action, data = {}, level = "info") {
+    await logSessionReady;
     await ensureLoaded();
     const run = runForRequest(requestId);
     if (!run) return null;
@@ -538,6 +543,41 @@
     };
   }
 
+  async function clearStoredRuntimeLogs() {
+    await ensureLoaded();
+    const keys = [];
+    for (const meta of state.runIndex) for (let part = 1; part <= meta.part_count; part += 1) keys.push(runPartKey(meta.run_id, part));
+    for (const run of state.activeRuns.values()) {
+      for (let part = 1; part <= run.archived_parts; part += 1) keys.push(runPartKey(run.run_id, part));
+      try { await chrome.alarms.clear(alarmName(run.run_id)); } catch (_) {}
+    }
+    const legacy = await chrome.storage.local.get(LEGACY_CHUNK_INDEX_KEY);
+    for (const item of Array.isArray(legacy?.[LEGACY_CHUNK_INDEX_KEY]) ? legacy[LEGACY_CHUNK_INDEX_KEY] : []) {
+      keys.push(`${LEGACY_CHUNK_PREFIX}${item.day}:${String(item.part || 1).padStart(6, "0")}`);
+    }
+    if (keys.length) await chrome.storage.local.remove([...new Set(keys)]);
+    state.entries = [];
+    state.activeRuns.clear();
+    state.requestToRun.clear();
+    state.runIndex = [];
+    state.storageError = "";
+    await chrome.storage.local.set({ [HISTORY_KEY]: [], [ACTIVE_RUNS_KEY]: [], [RUN_INDEX_KEY]: [] });
+    await chrome.storage.local.remove([LEGACY_CHUNK_KEY, LEGACY_CURRENT_CHUNK_KEY, LEGACY_CHUNK_INDEX_KEY]);
+  }
+
+  async function resetWindowsLogsOnRuntimeReload() {
+    // chrome.storage.session survives MV3 background suspension but is reset
+    // by an extension reload, update, or browser restart. Never clear ordinary
+    // logs on each service-worker wake or touch login/pairing settings.
+    const platform = await chrome.runtime.getPlatformInfo();
+    if (platform?.os !== "win" || !chrome.storage?.session) return;
+    const current = String(chrome.runtime.getManifest()?.version || "unknown");
+    const marker = await chrome.storage.session.get(WINDOWS_SESSION_KEY);
+    if (marker?.[WINDOWS_SESSION_KEY] === current) return;
+    await clearStoredRuntimeLogs();
+    await chrome.storage.session.set({ [WINDOWS_SESSION_KEY]: current });
+  }
+
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === "chat2api.log.append") {
       const requestId = message.entry?.request_id || message.entry?.data?.request_id || null;
@@ -623,28 +663,11 @@
     }
 
     if (message?.type === "popup.logs.clear") {
-      state.queue.then(async () => {
-        await ensureLoaded();
-        const keys = [];
-        for (const meta of state.runIndex) for (let part = 1; part <= meta.part_count; part += 1) keys.push(runPartKey(meta.run_id, part));
-        for (const run of state.activeRuns.values()) {
-          for (let part = 1; part <= run.archived_parts; part += 1) keys.push(runPartKey(run.run_id, part));
-          try { await chrome.alarms.clear(alarmName(run.run_id)); } catch (_) {}
-        }
-        const legacy = await chrome.storage.local.get(LEGACY_CHUNK_INDEX_KEY);
-        for (const item of Array.isArray(legacy?.[LEGACY_CHUNK_INDEX_KEY]) ? legacy[LEGACY_CHUNK_INDEX_KEY] : []) {
-          keys.push(`${LEGACY_CHUNK_PREFIX}${item.day}:${String(item.part || 1).padStart(6, "0")}`);
-        }
-        if (keys.length) await chrome.storage.local.remove([...new Set(keys)]);
-        state.entries = [];
-        state.activeRuns.clear();
-        state.requestToRun.clear();
-        state.runIndex = [];
-        state.storageError = "";
-        await chrome.storage.local.set({ [HISTORY_KEY]: [], [ACTIVE_RUNS_KEY]: [], [RUN_INDEX_KEY]: [] });
-        await chrome.storage.local.remove([LEGACY_CHUNK_KEY, LEGACY_CURRENT_CHUNK_KEY, LEGACY_CHUNK_INDEX_KEY]);
-        sendResponse({ ok: true, note: "Sessionized runtime logs stored by the extension were cleared. Manually exported files are not deleted." });
-      }).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
+      state.queue = state.queue.then(() => clearStoredRuntimeLogs());
+      state.queue.then(() => sendResponse({
+        ok: true,
+        note: "Sessionized extension runtime logs were cleared; exported files and Worker configuration were preserved.",
+      })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));
       return true;
     }
     return false;
@@ -656,5 +679,9 @@
     state.queue = state.queue.then(() => finalizeRun(runId, "idle-120s")).catch(() => {});
   });
 
-  ensureLoaded().then(() => persistNow()).catch(() => {});
+  logSessionReady = resetWindowsLogsOnRuntimeReload()
+    .then(() => ensureLoaded())
+    .then(() => persistNow())
+    .catch(error => { state.storageError = String(error?.message || error); });
+  state.queue = logSessionReady;
 })();

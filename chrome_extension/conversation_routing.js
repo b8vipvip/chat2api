@@ -21,6 +21,9 @@
     openings: new Map(),
     activeRequests: new Map(),
     retiredRequests: new Set(),
+    // A server terminal can release its key before the asynchronous background
+    // route cleanup completes. Serialize only the same key, never all Workers.
+    terminalSettlements: new Map(),
   };
   globalThis[KEY] = state;
 
@@ -281,9 +284,23 @@
     const key = routingKey(message);
     if (!key) return resolveTargetTab();
     const requestId = String(message?.request_id || "");
+    // Wait for a preceding chat.completed/chat.error route settlement before
+    // inspecting inflight_request_id. The broker may have released its FIFO key
+    // while this extension was still persisting / retiring the old route.
+    const settlement = state.terminalSettlements.get(key);
+    if (settlement) await settlement.catch(() => {});
     const route = await routeFor(key);
     if (route.inflight_request_id && route.inflight_request_id !== requestId) {
-      throw new Error(`Server scheduler invariant violated: logical API ${key} already owns request ${route.inflight_request_id}`);
+      const stale = String(route.inflight_request_id);
+      if (message?.routing?.scheduler_authority !== "server-single-authority-scheduler-v58"
+          || message?.routing?.strict_api_fifo !== true) {
+        throw new Error(`Server scheduler invariant violated: logical API ${key} already owns request ${stale}`);
+      }
+      // The canonical server admitted a *new* same-key request. A stale local
+      // route (missed terminal, Worker reload, or cancelled browser operation)
+      // must not poison all future requests. Retire its old window rather than
+      // mixing the old conversation with the freshly admitted request.
+      await retireRoute(key, route, stale, "authoritative-server-admission-stale-route-v130");
     }
     const hadLiveTab = Boolean(await liveTab(route));
     await clearCloseAlarm(route);
@@ -393,6 +410,30 @@
     await scheduleClose(route);
   }
 
+  function enqueueTerminalSettlement(event, sender) {
+    const requestId = String(event?.request_id || "");
+    if (!requestId) return;
+    const knownKey = state.activeRequests.get(requestId)?.key
+      || Object.entries(state.routes).find(([, route]) => route?.inflight_request_id === requestId)?.[0];
+    // Record the pending cleanup synchronously, before the server sees the
+    // terminal and admits the next same-key request.
+    const perform = () => SUCCESS_TYPES.has(event.type)
+      ? completeRequest(event, sender)
+      : failRequest(requestId, `${event.type}-router-retire-v130`);
+    if (!knownKey) {
+      perform().catch(() => {});
+      return;
+    }
+    const previous = state.terminalSettlements.get(knownKey);
+    const pending = Promise.resolve(previous).catch(() => {}).then(perform);
+    state.terminalSettlements.set(knownKey, pending);
+    pending.finally(() => {
+      if (state.terminalSettlements.get(knownKey) === pending) {
+        state.terminalSettlements.delete(knownKey);
+      }
+    }).catch(() => {});
+  }
+
   chrome.runtime.onMessage.addListener((message, sender) => {
     if (message?.type !== "chat2api.event") return false;
     const event = message.event || {};
@@ -406,10 +447,8 @@
       }).catch(() => {});
       return false;
     }
-    if (SUCCESS_TYPES.has(event.type)) {
-      completeRequest(event, sender).catch(() => {});
-    } else if (FAILURE_TYPES.has(event.type)) {
-      failRequest(requestId, `${event.type}-router-retire-v30`).catch(() => {});
+    if (SUCCESS_TYPES.has(event.type) || FAILURE_TYPES.has(event.type)) {
+      enqueueTerminalSettlement(event, sender);
     }
     return false;
   });
