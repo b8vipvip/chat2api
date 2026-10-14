@@ -149,6 +149,7 @@
         });
       }
       const model = document.getElementById("testModel").value;
+      if (!model) throw new Error("没有在线 Worker 已验证的模型，等待模型列表自动同步后重试");
       const body = {
         test_type: document.getElementById("testType").value,
         model,
