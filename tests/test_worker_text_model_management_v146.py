@@ -108,8 +108,8 @@ def test_console_live_worker_dropdowns_have_no_static_fallback():
     assert "chatgpt-picker-current-selected-state" in browser
     assert "model_observed_choices" in (root / "chrome_extension" / "background_model_library_v145.js").read_text(encoding="utf-8")
     assert "api/admin/text-models" in asset
-    assert 'syncSelect("testModel", usable)' in asset
-    assert 'syncSelect("pgChatModel", usable)' in asset
+    assert 'syncSelect("testModel", rows)' in asset
+    assert 'syncSelect("pgChatModel", rows)' in asset
     assert '|| "gpt-5.6-sol"' not in chat
     assert "__CHAT2API_TEXT_MODEL_MANAGEMENT_V146__" in admin
 
