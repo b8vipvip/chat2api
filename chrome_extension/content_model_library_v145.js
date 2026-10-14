@@ -95,6 +95,8 @@
         if (/model/i.test(testId) || /model|模型/i.test(aria)) score += 180;
         if (/composer-pill/i.test(cls)) score += 120;
         if (element.getAttribute("aria-haspopup")) score += 40;
+        if (/chatgpt|gpt|模型|model|instant|thinking/i.test(labelOf(element)) &&
+            element.closest("header,nav,[data-testid*=header i]")) score += 110;
         if (score) candidates.push({ element, score });
       }
     }
@@ -263,56 +265,46 @@
     }
     state.running = (async () => {
       const startedAt = new Date().toISOString();
-      const original = await currentModel();
+      // Model-switch actions can navigate/reload ChatGPT, which destroys the
+      // content-script's asynchronous reply channel. Observe the entire picker
+      // without switching pages; only the *currently selected* concrete item
+      // qualifies as a verified picker selection. Other choices remain observed,
+      // not routable, until a later explicit selection is confirmed.
       const initialChoices = await openModelMenu();
-      const candidates = [];
       const labels = new Map();
+      const selectedInMenu = initialChoices.find(item => item.selected)?.id || "";
       for (const choice of initialChoices) {
-        if (!choice.id || labels.has(choice.id)) continue;
-        labels.set(choice.id, choice.label || choice.id);
-        candidates.push(choice.id);
+        if (choice.id && !labels.has(choice.id)) labels.set(choice.id, choice.label || choice.id);
       }
+      const pickerSelected = modelIdOf(modelPicker());
+      const selected = [selectedInMenu, pickerSelected].find(id => labels.has(id)) || "";
       closeMenus();
-
-      const validated = [];
-      for (const modelId of candidates) {
-        if (requestActive()) {
-          const error = new Error("Worker model validation interrupted by an active ChatGPT request");
-          error.code = "model_validation_busy";
-          throw error;
-        }
-        let ok = false;
-        try { ok = await selectAndVerify(modelId); }
-        catch (error) { console.debug("chat2api model validation failed", modelId, error); }
-        if (!ok) continue;
-        validated.push({
-          id: modelId,
-          label: labels.get(modelId) || modelId,
-          family: modelId,
-          reasoning: null,
-          selected: false,
-          capabilities: ["text", "vision", "file-understanding"],
-          reasoning_efforts: ["low", "medium", "high"],
-          validated: true,
-          validation_revision: REVISION,
-          validated_at: new Date().toISOString(),
-          validation_method: "chatgpt-model-picker-select-and-verify",
-        });
-      }
-
-      if (original && validated.some(item => item.id === original)) {
-        try { await selectAndVerify(original); } catch (_) {}
-      }
-      const selected = await currentModel();
-      for (const item of validated) item.selected = item.id === selected;
+      const observed = [...labels].map(([id, label]) => ({
+        id, label, source: "chatgpt-model-picker", validated: false,
+        observed_at: new Date().toISOString(),
+      }));
+      const validated = selected ? [{
+        id: selected,
+        label: labels.get(selected) || selected,
+        family: selected,
+        reasoning: null,
+        selected: true,
+        capabilities: ["text", "vision", "file-understanding"],
+        reasoning_efforts: ["low", "medium", "high"],
+        validated: true,
+        validation_revision: REVISION,
+        validated_at: new Date().toISOString(),
+        validation_method: "chatgpt-picker-current-selected-state",
+      }] : [];
       return {
         models: validated,
-        current_model: selected || original || null,
-        validation_state: "validated",
+        observed_models: observed,
+        current_model: selected || null,
+        validation_state: validated.length ? "validated" : "observed-unverified",
         validation_revision: REVISION,
         validation_started_at: startedAt,
         validated_at: new Date().toISOString(),
-        candidate_count: candidates.length,
+        candidate_count: observed.length,
         validated_count: validated.length,
       };
     })().finally(() => { state.running = null; });
