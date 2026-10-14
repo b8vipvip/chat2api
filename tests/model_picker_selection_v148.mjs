@@ -26,7 +26,7 @@ async function scenario({withFive=true,enabled=true,canSwitch=true}={}){
     scrollIntoView(){}
     click(){this.onClick?.()}
   }
-  const picker=new Element(activeModel,{"data-testid":"model-switcher","tag":"button"},()=>{opened=true});
+  const picker=new Element(activeModel,{"data-testid":"model-switcher","aria-label":"Choose model","tag":"button"},()=>{opened=true});
   const bigWrapper=new Element(
     "High High, 3 of 3. Locked, opens access options GPT-6 GPT-5.6 Sol GPT-5.5 Leaving on October 14",
     {role:"menuitem"},()=>{throw Error("Container must never be clicked")}
