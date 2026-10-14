@@ -62,9 +62,11 @@ def test_model_validation_selects_and_verifies_live_picker_choices() -> None:
     state = (EXTENSION / "content_model_v7.js").read_text(encoding="utf-8")
     transition = (EXTENSION / "content_model_transition_v15.js").read_text(encoding="utf-8")
     assert "selectAndVerify" in validator
+    assert "observed_models: observed" in validator
+    assert "const selectedInMenu" in validator
     assert "modelChoices" in validator
     assert "canonicalModelId" in validator
-    assert "validation_method: \"chatgpt-model-picker-select-and-verify\"" in validator
+    assert "validation_method: \"chatgpt-picker-current-selected-state\"" in validator
     assert 'message?.type === "chat2api.model.select.v145"' in validator
     assert "combined composer pill" in state
     assert 'text.endsWith(` ${needle}`)' in state
