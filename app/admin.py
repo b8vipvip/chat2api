@@ -41,7 +41,40 @@ const titles={overview:'概览',keys:'API Key',requests:'请求记录',docs:'开
 function show(v){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));$('view-'+v)?.classList.add('active');$('pageTitle').textContent=titles[v]||v;location.hash=v;if(v==='overview')loadOverview();if(v==='keys')loadKeys();if(v==='requests')loadRequests();if(v==='docs')renderDocs();if(v==='playground'){loadOverview().then(loadTests)}}
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>show(b.dataset.view));
 async function loadOverview(){if(!key()){status('请输入管理员主密钥');return}try{overview=await api('/api/admin/overview');status(`已连接 · v${overview.version}`,'ok');const s=overview.telemetry||{};$('sExt').textContent=overview.health?.online_extensions??0;$('sReq').textContent=s.retained_requests??0;$('sSuccess').textContent=(s.success_rate??100)+'%';$('sFirst').textContent=fmtMs(s.avg_first_token_ms);$('sToken').textContent=s.estimated_total_tokens??0;$('extBody').innerHTML=(overview.clients||[]).map(c=>`<tr><td><code>${esc(c.client_id)}</code></td><td>${esc(c.name)}</td><td>${pill(c.online?(c.busy?'busy':'online'):'offline')}</td><td>${esc(c.version)}</td><td>${esc((c.metadata?.capabilities||[]).join(', '))}</td></tr>`).join('')||'<tr><td colspan="5">暂无扩展</td></tr>';$('modelBody').innerHTML=(overview.models||[]).map(m=>`<tr><td><code>${esc(m.id)}</code></td><td>${esc((m.capabilities||[]).join(', '))}</td></tr>`).join('');$('recentBody').innerHTML=(overview.recent_requests||[]).map(r=>`<tr><td>${fmtTime(r.recorded_at)}</td><td>${esc(r.request_type||'text')}</td><td>${pill(r.status)}</td><td>${esc(r.api_key_name||'-')}</td><td><code>${esc(r.requested_model||'-')}</code></td><td>${fmtMs(r.timings?.first_token_ms)}</td><td>${fmtMs(r.timings?.total_ms)}</td><td>${esc(r.usage?.total_tokens??0)}</td></tr>`).join('');fillModels();return overview}catch(e){status('连接失败：'+e.message,'bad')}}
-function fillModels(){if(!overview)return;const ids=[...new Set(['default',...(overview.models||[]).filter(m=>m.id!=='gpt-image').map(m=>m.id)])];$('testModel').innerHTML=ids.map(id=>`<option value="${esc(id)}">${esc(id)}</option>`).join('')}
+// Test only concrete models discovered AND validated on an online Worker.
+// Preserve the operator selection across live catalog refreshes.
+function fillModels(rows=overview?.models||[]){
+  const picker=$('testModel');if(!picker)return;
+  const previous=picker.value;
+  const choices=(Array.isArray(rows)?rows:[]).filter(row=>
+    row&&row.validated===true&&Array.isArray(row.clients)&&row.clients.length>0&&
+    (row.capabilities||[]).includes('text')&&
+    /^gpt-[a-z0-9.]+(?:-[a-z0-9.]+)*$|^o[0-9]+(?:-[a-z0-9]+)*$/i.test(String(row.id||''))
+  );
+  const byId=new Map(choices.map(row=>[String(row.id),row]));
+  if(!byId.size){
+    picker.innerHTML='<option value="">没有已验证的在线 Worker 模型（等待自动识别）</option>';
+    picker.disabled=true;
+    return;
+  }
+  picker.disabled=false;
+  picker.innerHTML=[...byId.values()].map(row=>
+    `<option value="${esc(row.id)}">${esc(row.id)} · ${esc((row.clients||[]).length)} Worker</option>`
+  ).join('');
+  // Prefer the requested Sol model only when a Worker actually exposes it.
+  const preferred=byId.has(previous)?previous:byId.has('gpt-5.6-sol')?'gpt-5.6-sol':[...byId.keys()][0];
+  picker.value=preferred;
+}
+let testModelRefreshBusy=false;
+async function refreshTestModels(){
+  if(!key()||testModelRefreshBusy)return;
+  testModelRefreshBusy=true;
+  try{const catalog=await api('/v1/models');fillModels(catalog.data||[])}
+  catch(error){console.warn('Worker model catalog refresh failed',error)}
+  finally{testModelRefreshBusy=false}
+}
+$('testModel')?.addEventListener('focus',()=>refreshTestModels());
+setInterval(()=>{if(document.getElementById('view-playground')?.classList.contains('active'))refreshTestModels()},15000);
 async function loadKeys(){if(!key())return;try{const d=await api('/api/admin/keys');$('keysBody').innerHTML=(d.data||[]).map(k=>{let actions=k.managed&&!k.revoked_at?`<div class="rowactions">${k.secret_recoverable?`<button class="action" onclick="copyKey('${esc(k.key_id)}')">复制 Key</button>`:''}<button class="action" onclick="toggleKey('${esc(k.key_id)}',${!k.enabled})">${k.enabled?'停用':'启用'}</button><button class="action danger" onclick="revokeKey('${esc(k.key_id)}')">撤销</button></div>`:'<span class="muted">.env 管理</span>';return`<tr><td>${esc(k.name)}</td><td><code>${esc(k.prefix)}</code></td><td>${pill(k.revoked_at?'revoked':k.expired?'expired':k.enabled?'online':'disabled')}</td><td>${esc((k.scopes||[]).join(', '))}</td><td>${fmtTime(k.last_used_at)}</td><td>${k.request_count??0} / ${k.estimated_tokens??0}</td><td>${actions}</td></tr>`}).join('')}catch(e){status(e.message,'bad')}}
 $('createKey').onclick=async()=>{try{const name=$('keyName').value.trim();if(!name)throw new Error('请输入名称');const days=Number($('keyDays').value||0);const d=await api('/api/admin/keys',{method:'POST',body:{name,expires_in_days:days||null}});$('newToken').textContent=d.token;$('newSecret').classList.remove('hidden');await loadKeys()}catch(e){status(e.message,'bad')}};
 $('copyNew').onclick=()=>navigator.clipboard.writeText($('newToken').textContent||'');
