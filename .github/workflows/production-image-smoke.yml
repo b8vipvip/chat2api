@@ -88,7 +88,8 @@ jobs:
               pairer = archive.extractfile("scripts/linux_worker_extension_pair.py").read().decode("utf-8")
               controller = archive.extractfile("scripts/linux_worker_device_controller.py").read().decode("utf-8")
               controller_helper = archive.extractfile("scripts/linux_worker_device_controller_helper.sh").read().decode("utf-8")
-          assert manifest["version"] == "0.22.130"
+          expected_bundle = next(line.split(chr(34))[1] for line in Path("/app/app/runtime_contract.py").read_text().splitlines() if line.startswith("CHROME_BRIDGE_BUNDLE_VERSION = "))
+          assert manifest["version"] == expected_bundle
           main_scripts = manifest["content_scripts"][0]["js"]
           isolated_scripts = manifest["content_scripts"][1]["js"]
           assert "model_evidence_main_v144.js" in main_scripts
