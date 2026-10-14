@@ -58,7 +58,8 @@
       const model = canonicalModelId(element.getAttribute?.(name) || "");
       if (model) return model;
     }
-    return canonicalModelId(labelOf(element));
+    return canonicalModelId(labelOf(element)) ||
+      canonicalModelId(element.innerText || element.textContent || "");
   }
 
   function rejectedControl(element) {
@@ -159,7 +160,8 @@
         if (!visible(raw)) continue;
         const candidate = interactiveAncestor(raw, root);
         if (!candidate || !visible(candidate) || candidate === root) continue;
-        const label = labelOf(candidate);
+        const visibleLabel = String(candidate.innerText || candidate.textContent || "").replace(/\\s+/g," ").trim();
+        const label = distinctModelIds(visibleLabel).length ? visibleLabel : labelOf(candidate);
         // Never promote a menu/popup wrapper containing all picker models.
         // At least one precise ID or one isolated visible model label is needed.
         const ids = distinctModelIds(label);
