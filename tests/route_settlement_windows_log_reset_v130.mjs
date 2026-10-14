@@ -38,7 +38,8 @@ async function routeScenario({stale = false, strict = true} = {}) {
     },
     runtime:{onMessage:{addListener(fn){callbacks.message=fn}}},
   };
-  const ctx={chrome,URL,setTimeout,clearTimeout,Date,Math,Number,Promise,console,
+  const boundedTimer = (callback,delay) => delay > 1000 ? 0 : setTimeout(callback,delay);
+  const ctx={chrome,URL,setTimeout:boundedTimer,clearTimeout,Date,Math,Number,Promise,console,
     ensureContent:async()=>true,trySendSocket:async event=>{diagnostics.push(event)},
     sendExtensionStatus:async()=>true,resolveTargetTab:async()=>({id:101,windowId:100,url:"https://chatgpt.com/"})};
   ctx.globalThis=ctx;
