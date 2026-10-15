@@ -43,11 +43,14 @@ async function runCase({account="free", confidence="high", picker=false, request
   };
   ctx.globalThis=ctx;
   vm.runInNewContext(source,ctx);
-  await ctx.handleServerMessage({
-    type:"chat.request",request_id:"req_test",
-    prompt:"ping",options:{model:requested},
-  });
-  return{frames,outgoing,storage};
+  let failure=null;
+  try {
+    await ctx.handleServerMessage({
+      type:"chat.request",request_id:"req_test",
+      prompt:"ping",options:{model:requested},
+    });
+  } catch(error) { failure=error; }
+  return{frames,outgoing,storage,failure};
 }
 
 const free=await runCase();
@@ -62,7 +65,8 @@ assert.equal(free.outgoing[0].options.chat2api_diagnostics.model_library_authori
 assert.ok(!free.frames.some(x=>x.type==="chat.error"));
 const paid=await runCase({account:"paid"});
 assert.equal(paid.outgoing.length,0);
-assert.ok(paid.frames.some(x=>x.type==="chat.error"));
+assert.ok(paid.failure,"invalid paid mini route throws to the sole dispatch terminal owner");
+assert.ok(!paid.frames.some(x=>x.type==="chat.error"));
 const noProof=await runCase({confidence:"low"});
 assert.equal(noProof.outgoing.length,0);
 const withPicker=await runCase({picker:true});
