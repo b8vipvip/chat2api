@@ -46,9 +46,9 @@ def test_extension_console_uses_canonical_worker_settings_column():
     assert "data-worker-save" not in retired
     assert "data-worker-refresh" not in retired
     assert 'api("/api/admin/extensions")' not in retired
-    assert 'api("/api/admin/capacity-v57")' in retired  # API-key editor only
-    assert "data-key-max" in retired
-    assert "data-key-save" in retired
+    assert 'api("/api/admin/capacity-v57")' not in retired
+    assert "data-key-max" not in retired
+    assert "data-key-save" not in retired
     assert "showActionResult" in retired
     assert "setInterval(" not in retired
 

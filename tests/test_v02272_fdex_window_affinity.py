@@ -54,7 +54,8 @@ def test_v30_single_route_authority_replaces_v25_v27_allocator_chain_in_producti
     assert entry.index('"conversation_routing.js"') < entry.index('"conversation_dispatch.js"')
     assert 'revision: 30' in router
     assert 'authority: "single-route-window-authority-v30"' in router
-    assert "Server scheduler invariant violated" in router
+    assert "state.activeRequests.has(String(item.inflight_request_id))" in router
+    assert "::parallel::" in router
     assert "browser_side_same_api_queue: false" in router
 
 

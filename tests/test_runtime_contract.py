@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.146"
+    assert RELEASE_VERSION == "0.22.147"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -63,6 +63,14 @@ def test_v145_worker_model_library_runtime_owners_are_registered():
 
 def test_realtime_protocol_contract_matches_live_bridge():
     assert LIVE_PROTOCOL_VERSION == "chat2api-live-v1"
+
+
+def test_v147_key_quota_replaces_per_key_concurrency_contract():
+    payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
+    assert payload["features"]["api_key_token_quota"] is True
+    assert payload["features"]["api_key_concurrency_controls"] is False
+    assert payload["features"]["server_side_same_api_fifo_v58"] is False
+    assert payload["features"]["same_api_parallel_requests"] is True
 
 
 def test_runtime_contract_payload_names_each_version_surface():

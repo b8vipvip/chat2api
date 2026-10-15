@@ -30,11 +30,13 @@ class ExtensionRegistrationResult(BaseModel):
 class ApiKeyCreate(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     expires_in_days: int | None = Field(default=None, ge=1, le=3650)
+    token_quota: int | None = Field(default=None, ge=0)
 
 
 class ApiKeyUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     enabled: bool | None = None
+    token_quota: int | None = Field(default=None, ge=0)
 
 
 class FileUploadRequest(BaseModel):

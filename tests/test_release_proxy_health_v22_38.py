@@ -46,14 +46,14 @@ def test_release_versions_are_explicit_and_consistent() -> None:
     contract71 = read("chrome_extension/content_runtime_contract_v71.js")
     package = read("app/__init__.py")
     project = read("pyproject.toml")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.146"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.146"' in runtime
-    assert manifest["version"] == "0.22.146"
-    assert 'bundle: "0.22.146"' in marker
-    assert 'bundle: "0.22.146"' in marker71
-    assert 'REQUIRED_BUNDLE = "0.22.146"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.22.146"' in contract
-    assert 'REQUIRED_BUNDLE = "0.22.146"' in contract71
+    assert 'SERVER_RUNTIME_VERSION = "0.22.147"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.147"' in runtime
+    assert manifest["version"] == "0.22.147"
+    assert 'bundle: "0.22.147"' in marker
+    assert 'bundle: "0.22.147"' in marker71
+    assert 'REQUIRED_BUNDLE = "0.22.147"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.22.147"' in contract
+    assert 'REQUIRED_BUNDLE = "0.22.147"' in contract71
     assert '__version__ = "0.7.1"' in package
     assert 'version = "0.7.1"' in project
 
@@ -82,7 +82,8 @@ def test_release_versions_are_explicit_and_consistent() -> None:
         '"request_prompt_viewer_repair_v86": True',
         '"runtime_preflight_budget_v87": True',
         '"capacity_scheduler_v58": True',
-        '"server_side_same_api_fifo_v58": True',
+        '"server_side_same_api_fifo_v58": False',
+        '"same_api_parallel_requests": True',
         '"worker_single_route_authority_v30": True',
         '"window_observer_v90": True',
         '"browser_side_same_api_queue": False',

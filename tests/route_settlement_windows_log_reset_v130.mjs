@@ -53,15 +53,12 @@ async function routeScenario({stale = false, strict = true} = {}) {
   const msg={type:"chat.request",request_id:"req_new",
     routing:{api_key_id:"key_A",scheduler_authority:"server-single-authority-scheduler-v58",strict_api_fifo:strict},
     prompt:"hello"};
-  if (stale && !strict) {
-    await assert.rejects(ctx.resolveTargetTabForRequest(msg),/Server scheduler invariant violated/);
-  } else {
-    const tab=await ctx.resolveTargetTabForRequest(msg);
-    assert.ok(tab?.id);
-    assert.equal(data.chat2apiConversationRoutesV1.key_A.inflight_request_id,"req_new");
-    if (stale) assert.equal(removedWindows,1,"stale route's old window should be retired");
-    else assert.equal(removedWindows,0,"completed request should reuse its existing route");
-  }
+  // Both legacy strict flags must permit a new server-admitted request.
+  const tab=await ctx.resolveTargetTabForRequest(msg);
+  assert.ok(tab?.id);
+  assert.equal(data.chat2apiConversationRoutesV1.key_A.inflight_request_id,"req_new");
+  if (stale) assert.equal(removedWindows,1,"stale route's old window should be retired");
+  else assert.equal(removedWindows,0,"completed request should reuse its existing route");
 }
 await routeScenario();
 await routeScenario({stale:true});

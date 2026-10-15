@@ -73,9 +73,8 @@ def _load_worker_limits(path: Path) -> dict[str, Any]:
 def _save_worker_limits(path: Path, config: dict[str, Any]) -> None:
     """Persist only the surviving server scheduling knob.
 
-    The historical file also held reserve-window and per-key concurrency values.
-    They are intentionally retired: per-key concurrency is fixed at one and
-    speculative reserve windows are disabled by the single-authority runtime.
+    Historical per-API-key limits are retired. Physical Worker capacity remains
+    controlled by its actual window/generation capacity.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -84,7 +83,6 @@ def _save_worker_limits(path: Path, config: dict[str, Any]) -> None:
         "scheduler_authority": PATCH_ID,
         "default_worker_concurrency": int(config["default_worker_concurrency"]),
         "default_reserve_windows": 0,
-        "default_key_concurrency": 1,
         "workers": {
             str(client_id): {
                 "max_concurrency": int(row["max_concurrency"]),
@@ -103,10 +101,9 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
 
     The invariant is deliberately simple:
 
-    * one logical API key has exactly one active request;
-    * excess requests for that key wait in FIFO order on the server;
-    * different API keys may run concurrently up to the Worker's configured
-      total concurrency;
+    * API keys have no per-key concurrency limit;
+    * the Worker's real generation/window capacity bounds execution;
+    * requests wait in a single Worker FIFO without a second key admission;
     * Chrome receives only already-admitted requests and therefore does not own
       a second FIFO or speculative per-key worker allocator.
     """
@@ -126,10 +123,6 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         broker._chat2api_v21_condition = condition
 
     worker_queues: dict[str, deque[str]] = defaultdict(deque)
-    key_queues: dict[str, deque[str]] = defaultdict(deque)
-    queued_keys: dict[str, str] = {}
-    key_active: dict[str, int] = defaultdict(int)
-    request_keys: dict[str, str] = {}
     cooldown_until: dict[str, float] = {}
     rate_limit_strikes: dict[str, int] = {}
 
@@ -156,16 +149,8 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         return max(0.0, float(cooldown_until.get(str(client_id), 0.0)) - time.time())
 
     def first_eligible(client_id: str) -> str | None:
-        """Oldest queued request whose key has no active predecessor."""
-        for request_id in worker_queues.get(str(client_id), ()):
-            key_id = queued_keys.get(request_id, "master")
-            key_queue = key_queues.get(key_id)
-            if not key_queue or key_queue[0] != request_id:
-                continue
-            if int(key_active.get(key_id, 0)) != 0:
-                continue
-            return request_id
-        return None
+        queue = worker_queues.get(str(client_id))
+        return queue[0] if queue else None
 
     def capacity_snapshot(client_id: str) -> dict[str, Any]:
         limit = worker_limit(client_id)
@@ -179,13 +164,12 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
             "active_requests": used,
             "request_weights": dict(broker.client_active_requests.get(str(client_id), {}) or {}),
             "queued_requests": queue_depth(client_id),
-            "limit_source": "server-distinct-api-capacity-v58",
+            "limit_source": "worker-window-capacity-v147",
             "account_generation_limit": limit,
             "account_generation_queue": True,
             "account_generation_queue_wait_seconds": None,
             "reserve_window_target": 0,
             "speculative_window_pool": False,
-            "per_api_key_limit": 1,
             "scheduler_authority": PATCH_ID,
             "rate_limit_cooldown_active": remaining > 0,
             "rate_limit_cooldown_remaining_seconds": round(remaining, 1),
@@ -198,10 +182,7 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         key_id = logical_key()
         started = time.perf_counter()
         worker_queue = worker_queues[client_id]
-        key_queue = key_queues[key_id]
         worker_queue.append(request_id)
-        key_queue.append(request_id)
-        queued_keys[request_id] = key_id
 
         try:
             async with condition:
@@ -215,11 +196,7 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                         used_units(client_id) < worker_limit(client_id)
                         and first_eligible(client_id) == request_id
                     )
-                    key_ready = (
-                        bool(key_queue and key_queue[0] == request_id)
-                        and int(key_active.get(key_id, 0)) == 0
-                    )
-                    if worker_ready and key_ready and remaining <= 0:
+                    if worker_ready and remaining <= 0:
                         break
                     if remaining > 0:
                         try:
@@ -235,14 +212,6 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                     worker_queue.remove(request_id)
                 except ValueError:
                     pass
-                if key_queue and key_queue[0] == request_id:
-                    key_queue.popleft()
-                else:
-                    try:
-                        key_queue.remove(request_id)
-                    except ValueError:
-                        pass
-                queued_keys.pop(request_id, None)
 
                 loop = asyncio.get_running_loop()
                 state = RequestState(request_id=request_id, client_id=client_id, final_future=loop.create_future())
@@ -250,13 +219,11 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                 broker.requests[request_id] = state
                 broker.client_active_requests.setdefault(client_id, {})[request_id] = 1
                 broker.client_requests.setdefault(client_id, request_id)
-                key_active[key_id] = 1
-                request_keys[request_id] = key_id
                 state.diagnostics.update({
                     "scheduler_authority": PATCH_ID,
                     "server_api_fifo_revision": 58,
-                    "capacity_queue_mode": "server-per-api-fifo-v58",
-                    "capacity_queue_scheduler": "oldest-eligible-distinct-key-v58",
+                    "capacity_queue_mode": "server-worker-fifo-v147",
+                    "capacity_queue_scheduler": "oldest-request-worker-capacity-v147",
                     "extension_capacity_limit_units": worker_limit(client_id),
                     "extension_capacity_configured_units": worker_limit(client_id),
                     "extension_capacity_weight": 1,
@@ -264,9 +231,8 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                     "extension_capacity_used_after": before + 1,
                     "extension_capacity_wait_ms": round((time.perf_counter() - started) * 1000, 1),
                     "api_key_capacity_id": key_id,
-                    "api_key_capacity_limit": 1,
-                    "api_key_capacity_used_after": 1,
-                    "same_api_parallel_requests": False,
+                    "api_key_capacity_limit": None,
+                    "same_api_parallel_requests": True,
                     "browser_side_api_fifo": False,
                     "reserve_window_target": 0,
                     "speculative_window_pool": False,
@@ -277,11 +243,6 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                 worker_queue.remove(request_id)
             except ValueError:
                 pass
-            try:
-                key_queue.remove(request_id)
-            except ValueError:
-                pass
-            queued_keys.pop(request_id, None)
             async with condition:
                 condition.notify_all()
             raise
@@ -298,11 +259,8 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         return state
 
     async def release(request_id: str) -> None:
-        key_id = request_keys.pop(str(request_id), None)
         await base_release(request_id)
         async with condition:
-            if key_id:
-                key_active[key_id] = 0
             condition.notify_all()
 
     def rate_limit_seconds(message: str) -> int:
@@ -359,10 +317,10 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                 "scheduler_authority": PATCH_ID,
                 "server_api_fifo_revision": 58,
                 "worker_index": 1,
-                "worker_limit": 1,
-                "max_concurrency": 1,
+                "worker_limit": worker_limit(client_id),
+                "max_concurrency": worker_limit(client_id),
                 "reserve_window_target": 0,
-                "strict_api_fifo": True,
+                "strict_api_fifo": False,
                 "browser_side_api_fifo": False,
             })
             message["routing"] = routing
@@ -393,7 +351,6 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
             "defaults": {
                 "worker_max_concurrency": int(config["default_worker_concurrency"]),
                 "reserve_windows": 0,
-                "api_key_max_concurrency": 1,
             },
             "workers": {
                 str(client_id): {
@@ -406,8 +363,6 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                 }
                 for client_id in registry.clients
             },
-            "keys": {key_id: 1 for key_id in set(key_queues) | set(key_active)},
-            "key_active": dict(key_active),
             "speculative_window_pool": False,
         }
 
@@ -427,20 +382,6 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
             "max_concurrency": maximum,
             "reserve_windows": 0,
             "scheduler_authority": PATCH_ID,
-        }
-
-    @app.put("/api/admin/keys/{key_id}/concurrency-v57")
-    async def update_key_capacity(key_id: str, _body: dict[str, Any]) -> dict[str, Any]:
-        key_id = str(key_id or "").strip()
-        if not key_id:
-            raise HTTPException(status_code=400, detail="key_id is required")
-        return {
-            "ok": True,
-            "key_id": key_id,
-            "max_concurrency": 1,
-            "active": int(key_active.get(key_id, 0)),
-            "locked": True,
-            "reason": "single logical API FIFO is authoritative in v58",
         }
 
     registry.rate_limit_remaining_seconds = rate_limit_remaining
@@ -464,9 +405,6 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
     app.state.capacity_scheduler_v58_id = PATCH_ID
     app.state.capacity_scheduler_v58_runtime = {
         "worker_queues": worker_queues,
-        "key_queues": key_queues,
-        "key_active": key_active,
-        "request_keys": request_keys,
         "cooldown_until": cooldown_until,
         "rate_limit_strikes": rate_limit_strikes,
     }

@@ -6,6 +6,9 @@ import hashlib
 import json
 import secrets
 from dataclasses import asdict, dataclass
+
+# A missing quota means unlimited; 0 means exhausted immediately.
+UNSET = object()
 from pathlib import Path
 from typing import Any
 
@@ -82,9 +85,15 @@ class ManagedApiKey:
     revoked_at: str | None = None
     scopes: list[str] | None = None
     token_ciphertext: str | None = None
+    token_quota: int | None = None
+    tokens_used: int = 0
+    quota_exhausted: bool = False
+    # Durable per-request ledger prevents a telemetry replay from double charging.
+    charged_requests: dict[str, int] | None = None
 
     def public(self) -> dict[str, Any]:
         scopes = self.scopes or ["chat", "models", "files", "images", "audio"]
+        exhausted = self.token_quota is not None and self.tokens_used >= self.token_quota
         return {
             "key_id": self.key_id,
             "name": self.name,
@@ -92,7 +101,11 @@ class ManagedApiKey:
             "created_at": to_beijing_iso(self.created_at) or self.created_at,
             "expires_at": to_beijing_iso(self.expires_at) if self.expires_at else None,
             "last_used_at": to_beijing_iso(self.last_used_at) if self.last_used_at else None,
-            "enabled": bool(self.enabled and not self.revoked_at and not _expired(self.expires_at)),
+            "enabled": bool(self.enabled and not exhausted and not self.revoked_at and not _expired(self.expires_at)),
+            "token_quota": self.token_quota,
+            "tokens_used": self.tokens_used,
+            "tokens_remaining": max(0, self.token_quota - self.tokens_used) if self.token_quota is not None else None,
+            "quota_exhausted": exhausted,
             "configured_enabled": self.enabled,
             "expired": _expired(self.expires_at),
             "revoked_at": to_beijing_iso(self.revoked_at) if self.revoked_at else None,
@@ -195,7 +208,7 @@ class ApiKeyStore:
             if secrets.compare_digest(item.token_hash, digest):
                 matched = item
                 break
-        if not matched or not matched.enabled or matched.revoked_at or _expired(matched.expires_at):
+        if not matched or not matched.enabled or matched.revoked_at or _expired(matched.expires_at) or (matched.token_quota is not None and matched.tokens_used >= matched.token_quota):
             return None
         matched.last_used_at = utc_now()
         async with self.lock:
@@ -227,7 +240,8 @@ class ApiKeyStore:
         except (InvalidToken, ValueError) as error:
             raise ValueError("Stored API key secret cannot be decrypted with the current data key") from error
 
-    async def update(self, key_id: str, *, name: str | None = None, enabled: bool | None = None) -> dict[str, Any]:
+    async def update(self, key_id: str, *, name: str | None = None, enabled: bool | None = None,
+                     token_quota: int | None | object = UNSET) -> dict[str, Any]:
         async with self.lock:
             item = self.keys.get(key_id)
             if not item:
@@ -239,10 +253,55 @@ class ApiKeyStore:
                 if not clean_name:
                     raise ValueError("API key name must not be empty")
                 item.name = clean_name[:120]
+            if token_quota is not UNSET:
+                if token_quota is not None and (type(token_quota) is not int or token_quota < 0):
+                    raise ValueError("Token quota must be a non-negative integer or unlimited")
+                was_auto_disabled = item.quota_exhausted
+                item.token_quota = token_quota
+                item.quota_exhausted = token_quota is not None and item.tokens_used >= token_quota
+                if item.quota_exhausted:
+                    item.enabled = False
+                elif was_auto_disabled and enabled is None:
+                    item.enabled = True
             if enabled is not None:
+                if enabled and item.token_quota is not None and item.tokens_used >= item.token_quota:
+                    raise ValueError("Token quota exhausted; increase quota before enabling")
                 item.enabled = bool(enabled)
             await self.save()
             return item.public()
+
+    async def account_completed_usage(self, record: dict[str, Any]) -> None:
+        """Single accounting authority: count each completed request at most once.
+
+        Rewritten terminal telemetry records may increase an estimate but cannot
+        count the same request twice. Failed/unsubmitted requests are not charged.
+        """
+        if record.get("status") != "completed":
+            return
+        key_id = str(record.get("api_key_id") or "")
+        request_id = str(record.get("request_id") or "")
+        usage = record.get("usage") or {}
+        try:
+            amount = max(0, int(usage.get("total_tokens") or 0))
+        except (TypeError, ValueError, AttributeError):
+            return
+        if not key_id or not request_id or not amount:
+            return
+        async with self.lock:
+            item = self.keys.get(key_id)
+            if not item:
+                return
+            ledger = item.charged_requests if isinstance(item.charged_requests, dict) else {}
+            prior = max(0, int(ledger.get(request_id, 0) or 0))
+            if amount <= prior:
+                return
+            ledger[request_id] = amount
+            item.charged_requests = ledger
+            item.tokens_used += amount - prior
+            if item.token_quota is not None and item.tokens_used >= item.token_quota:
+                item.enabled = False
+                item.quota_exhausted = True
+            await self.save()
 
     async def revoke(self, key_id: str) -> dict[str, Any]:
         async with self.lock:

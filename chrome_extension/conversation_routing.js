@@ -24,6 +24,8 @@
     // A server terminal can release its key before the asynchronous background
     // route cleanup completes. Serialize only the same key, never all Workers.
     terminalSettlements: new Map(),
+    // The router alone assigns isolated route-window leases to parallel requests.
+    routeAllocations: new Map(),
   };
   globalThis[KEY] = state;
 
@@ -105,7 +107,6 @@
     if (Number(route.slow_load_strikes || 0) >= 2) return "slow_load_strikes>=2";
     return null;
   }
-
   function resetClosedRoute(route, reason = "closed-window-new-chat") {
     if (!route) return false;
     const hadSession = Boolean(
@@ -280,59 +281,75 @@
     await trySendSocket(payload).catch(() => false);
   }
 
-  async function resolveForRequest(message) {
-    const key = routingKey(message);
-    if (!key) return resolveTargetTab();
+  async function resolveForRequestOwned(message, baseKey) {
     const requestId = String(message?.request_id || "");
-    // Wait for a preceding chat.completed/chat.error route settlement before
-    // inspecting inflight_request_id. The broker may have released its FIFO key
-    // while this extension was still persisting / retiring the old route.
-    const settlement = state.terminalSettlements.get(key);
-    if (settlement) await settlement.catch(() => {});
-    const route = await routeFor(key);
-    if (route.inflight_request_id && route.inflight_request_id !== requestId) {
-      const stale = String(route.inflight_request_id);
-      const routing = message?.routing || {};
-      const serverAdmitted = routing.scheduler_authority === "server-single-authority-scheduler-v58" &&
-        (routing.strict_api_fifo === true || Number(routing.server_api_fifo_revision || 0) >= 58);
-      // An extension restart can restore the persisted route lease but not
-      // its in-memory activeRequests entry. That is stale local state, not an
-      // active second request. For a genuinely active old request, require a
-      // fresh authoritative server admission before replacing its lease.
-      const oldRequestIsActive = state.activeRequests.has(stale);
-      // Never let an untrusted/manual dispatch force-retire an old window.
-      // Even after a background restart, only a newly admitted v58 server
-      // request may override the persisted key lease.
-      if (!serverAdmitted) {
-        throw new Error(`Server scheduler invariant violated: logical API ${key} already owns request ${stale}; admission=${String(routing.scheduler_authority || "missing")}; revision=${Number(routing.server_api_fifo_revision || 0)}; local_active=${oldRequestIsActive}`);
+    if (!requestId) throw new Error("Routed request requires a request ID");
+    await ensureLoaded();
+
+    // Keep one reusable primary conversation per API key. If already leased,
+    // reuse an idle sibling, or open one request-scoped sibling. No active
+    // request may ever force-retire another request's window.
+    const siblingKeys = Object.keys(state.routes).filter(candidate =>
+      candidate !== baseKey && state.routes[candidate]?.api_key_id === baseKey);
+    let key = null;
+    let route = null;
+    for (const candidate of [baseKey, ...siblingKeys]) {
+      const settlement = state.terminalSettlements.get(candidate);
+      if (settlement) await settlement.catch(() => {});
+      const item = await routeFor(candidate);
+      if (item.inflight_request_id && item.inflight_request_id !== requestId &&
+          !state.activeRequests.has(String(item.inflight_request_id))) {
+        await retireRoute(candidate, item, item.inflight_request_id,
+          "restore-stale-router-lease-v147");
       }
-      // The canonical server admitted a *new* same-key request. A stale local
-      // route (missed terminal, Worker reload, or cancelled browser operation)
-      // must not poison all future requests. Retire its old window rather than
-      // mixing the old conversation with the freshly admitted request.
-      await retireRoute(key, route, stale, "authoritative-server-admission-stale-route-v130");
+      if (item.inflight_request_id && item.inflight_request_id !== requestId) continue;
+      key = candidate;
+      route = item;
+      break;
     }
+    if (!route) {
+      key = `${baseKey}::parallel::${requestId}`;
+      route = await routeFor(key);
+      route.api_key_id = baseKey;
+    }
+
     const hadLiveTab = Boolean(await liveTab(route));
     await clearCloseAlarm(route);
     const tab = await ensureWindow(key, route);
     route.tab_id = tab.id;
     route.window_id = tab.windowId;
     route.last_active_at = Date.now();
-    route.inflight_request_id = requestId || null;
-    if (requestId) {
-      state.activeRequests.set(requestId, {
-        key,
-        kind: requestKind(message),
-        prompt_chars: String(message.prompt || "").length,
-        attachments: Array.isArray(message.attachments) ? message.attachments.length : (message.audio ? 1 : 0),
-        tab_id: tab.id,
-        window_id: tab.windowId,
-        started_at: Date.now(),
-      });
-    }
+    route.inflight_request_id = requestId;
+    state.activeRequests.set(requestId, {
+      key,
+      kind: requestKind(message),
+      prompt_chars: String(message.prompt || "").length,
+      attachments: Array.isArray(message.attachments) ? message.attachments.length : (message.audio ? 1 : 0),
+      tab_id: tab.id,
+      window_id: tab.windowId,
+      started_at: Date.now(),
+    });
     await persist();
     await emitDiagnostics(message, route, tab, hadLiveTab ? "reuse-live-window" : "new-chat-window");
     return tab;
+  }
+
+  async function resolveForRequest(message) {
+    const baseKey = routingKey(message);
+    if (!baseKey) return resolveTargetTab();
+    // Serialize only short window allocation for the same logical key; model
+    // generation proceeds concurrently once each request owns its own window.
+    const previous = state.routeAllocations.get(baseKey);
+    const pending = Promise.resolve(previous).catch(() => {})
+      .then(() => resolveForRequestOwned(message, baseKey));
+    state.routeAllocations.set(baseKey, pending);
+    try {
+      return await pending;
+    } finally {
+      if (state.routeAllocations.get(baseKey) === pending) {
+        state.routeAllocations.delete(baseKey);
+      }
+    }
   }
 
   globalThis.resolveTargetTabForRequest = resolveForRequest;
@@ -419,7 +436,6 @@
     await persist();
     await scheduleClose(route);
   }
-
   function enqueueTerminalSettlement(event, sender) {
     const requestId = String(event?.request_id || "");
     if (!requestId) return;

@@ -52,7 +52,7 @@
 
   function statusPill(row) {
     const usable = row?.enabled === true;
-    return `<span class="pill ${usable ? "ok" : "bad"}">${usable ? "可用" : "停用"}</span>`;
+    return `<span class="pill ${usable ? "ok" : "bad"}">${usable ? "可用" : row?.quota_exhausted ? "额度耗尽" : "停用"}</span>`;
   }
 
   function actions(row) {
@@ -77,6 +77,7 @@
       <td><div style="display:flex;align-items:center;gap:2px;white-space:normal;min-width:170px">${permissions}</div></td>
       <td>${fmtTime(row?.last_used_at)}</td>
       <td>${Number(row?.request_count || 0)} / ${Number(row?.estimated_tokens || 0)}</td>
+      <td><span>${row?.token_quota == null ? "不限" : `${Number(row.tokens_used || 0)} / ${Number(row.token_quota)}`}</span>${editable ? iconButton("quota", row.key_id, "设置 Token 额度") : ""}</td>
       <td>${actions(row)}</td>
     </tr>`;
   }
@@ -90,7 +91,7 @@
       state.rows = Array.isArray(data?.data) ? data.data : [];
       body.innerHTML = state.rows.length
         ? state.rows.map(rowHtml).join("")
-        : '<tr><td colspan="7" class="muted">暂无 API Key</td></tr>';
+        : '<tr><td colspan="8" class="muted">暂无 API Key</td></tr>';
       document.documentElement.dataset.chat2apiApiKeyEditorRevision = String(VERSION);
     } catch (error) {
       notify(String(error?.message || error), "bad");
@@ -148,6 +149,23 @@
     });
   }
 
+  function openQuotaEditor(button, row) {
+    const popup = popupShell(button, 380);
+    popup.innerHTML = `<div style="font-weight:700;margin-bottom:9px">设置 Token 额度</div>
+      <div class="muted" style="margin-bottom:8px">累计消耗 ${Number(row.tokens_used || 0)} Token。留空表示不限额；达到额度自动停用。</div>
+      <input type="number" min="0" step="1" data-key-quota-input placeholder="留空为不限额" style="width:100%" value="${row.token_quota == null ? "" : Number(row.token_quota)}">
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:11px"><button class="action" data-key-popup-cancel>取消</button><button class="action good" data-key-quota-save>保存</button></div>`;
+    popup.querySelector("[data-key-popup-cancel]")?.addEventListener("click", closePopup);
+    popup.querySelector("[data-key-quota-save]")?.addEventListener("click", async () => {
+      const value = String(popup.querySelector("[data-key-quota-input]")?.value ?? "").trim();
+      if (value !== "" && (!/^\\d+$/.test(value) || !Number.isSafeInteger(Number(value)))) return notify("额度必须是非负整数", "bad");
+      try {
+        await apiCall(`/api/admin/keys/${encodeURIComponent(row.key_id)}`, {method:"PATCH",body:{token_quota:value === "" ? null : Number(value)}});
+        closePopup(); await loadKeysV68(); notify("Token 额度已更新", "ok");
+      } catch (error) { notify(String(error?.message || error), "bad"); }
+    });
+  }
+
   function openScopeEditor(button, row) {
     const selected = new Set(Array.isArray(row.scopes) ? row.scopes : []);
     const popup = popupShell(button, 390);
@@ -200,6 +218,7 @@
         if (!row) return;
         if (edit.dataset.apiKeyEdit === "name") openNameEditor(edit, row);
         else if (edit.dataset.apiKeyEdit === "scopes") openScopeEditor(edit, row);
+        else if (edit.dataset.apiKeyEdit === "quota") openQuotaEditor(edit, row);
         return;
       }
       const actionButton = target?.closest?.("[data-api-key-action]");

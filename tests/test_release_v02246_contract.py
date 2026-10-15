@@ -23,9 +23,9 @@ def test_formal_release_v02275_versions_and_worker_entry_are_aligned() -> None:
     manifest = json.loads(read("chrome_extension/manifest.json"))
     entry = read("chrome_extension/background_entry.js")
 
-    assert SERVER_RUNTIME_VERSION == "0.22.146"
-    assert CHROME_BRIDGE_VERSION == "0.22.146"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.146"
+    assert SERVER_RUNTIME_VERSION == "0.22.147"
+    assert CHROME_BRIDGE_VERSION == "0.22.147"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.147"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     assert '"background_route_close_terminal_v91.js"' in entry
     assert '"conversation_routing.js"' in entry
@@ -56,12 +56,12 @@ def test_v02275_runtime_contract_advertises_only_active_authorities() -> None:
     features = payload["features"]
     bridge = payload["chrome_bridge"]
 
-    assert bridge["bundle_version"] == "0.22.146"
+    assert bridge["bundle_version"] == "0.22.147"
     assert bridge["route_window_authority_revision"] == 30
     assert bridge["window_observer_revision"] == 90
     assert bridge["route_close_terminal_revision"] == 91
     assert features["capacity_scheduler_v58"] is True
-    assert features["server_side_same_api_fifo_v58"] is True
+    assert features["server_side_same_api_fifo_v58"] is False
     assert features["worker_single_route_authority_v30"] is True
     assert features["unexpected_route_close_terminal_v91"] is True
     assert features["window_observer_v90"] is True
@@ -69,7 +69,7 @@ def test_v02275_runtime_contract_advertises_only_active_authorities() -> None:
     assert features["linux_worker_console_v123"] is False
     assert features["linux_worker_device_authority_v124"] is True
     assert features["linux_worker_extension_autopair_v124"] is True
-    assert features["same_api_parallel_requests"] is False
+    assert features["same_api_parallel_requests"] is True
     assert features["browser_side_same_api_queue"] is False
     assert features["speculative_worker_windows"] is False
 
@@ -104,7 +104,7 @@ def test_v02275_bundle_markers_contracts_and_preflight_match_manifest() -> None:
         "chrome_extension/content_runtime_contract_v71.js",
         "chrome_extension/background_runtime_preflight_v48.js",
     ):
-        assert "0.22.146" in read(path), path
+        assert "0.22.147" in read(path), path
         assert "0.8.29" not in read(path), path
 
 

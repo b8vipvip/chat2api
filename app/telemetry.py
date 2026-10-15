@@ -28,6 +28,7 @@ class TelemetryStore:
         self.path = data_dir / "request_history.jsonl"
         self.items: deque[dict[str, Any]] = deque(maxlen=max_items)
         self.lock = asyncio.Lock()
+        self.usage_accounting = None  # Installed by create_app; one owner of quota deduction.
 
     def _remember(self, record: dict[str, Any]) -> None:
         request_id = str(record.get("request_id") or "")
@@ -85,6 +86,8 @@ class TelemetryStore:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self.path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
+        if self.usage_accounting is not None:
+            await self.usage_accounting(record)
         return dict(record)
 
     async def update(self, request_id: str, changes: dict[str, Any]) -> dict[str, Any]:

@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from .admin import admin_response
-from .api_keys import ApiKeyStore, ApiPrincipal
+from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
 from .config import Settings, get_settings
 from .file_store import FileStore
@@ -50,6 +50,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     registry.request_broker = broker
     telemetry = TelemetryStore(config.data_dir)
     api_keys = ApiKeyStore(config.data_dir, config.api_key)
+    telemetry.usage_accounting = api_keys.account_completed_usage
     file_store = FileStore(config.data_dir)
     test_runs = TestRunStore(config.data_dir)
 
@@ -219,6 +220,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if body.expires_in_days:
             expires_at = (datetime.now(timezone.utc) + timedelta(days=body.expires_in_days)).isoformat()
         item, token = await api_keys.create(body.name, expires_at)
+        if body.token_quota is not None:
+            item = await api_keys.update(item["key_id"], token_quota=body.token_quota)
         return {"key": {**item, "kind": "managed", "managed": True}, "token": token}
 
     @app.get("/api/admin/keys/{key_id}/secret", dependencies=[Depends(require_admin_key)])
@@ -237,7 +240,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if key_id == "master":
             raise HTTPException(status_code=400, detail="The master key is managed through CHAT2API_API_KEY in .env")
         try:
-            item = await api_keys.update(key_id, name=body.name, enabled=body.enabled)
+            item = await api_keys.update(key_id, name=body.name, enabled=body.enabled,
+                                         token_quota=body.token_quota if "token_quota" in body.model_fields_set else UNSET)
             return {"key": {**item, "kind": "managed", "managed": True}}
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error

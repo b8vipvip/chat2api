@@ -68,37 +68,26 @@
     document.querySelectorAll(".nav button").forEach(x => x.classList.toggle("active", x.id === "modelManagementNavV146"));
     refresh(true);
   }
-  function syncSelect(id, catalogRows) {
-    const el = byId(id); if (!el) return;
-    const previous = el.value;
-    const options = [
-      ...(!catalogRows.some(row=>row.callable_by?.length) ?
-        [{id:"",label:"没有在线、已发现该模型且登录就绪的 Worker"}] : []),
-      ...catalogRows.filter(row=>row.enabled).sort((a,b)=>a.id.localeCompare(b.id))
-        .map(row=>({id:row.id,
-          label:row.id+(row.callable_by?.length?" · 可尝试调用 ("+row.callable_by.length+" Worker)":" · Worker 未就绪"),
-          disabled:!row.callable_by?.length})),
-    ];
-    const sig = JSON.stringify(options);
-    const current = JSON.stringify([...el.options].map(o=>({id:o.value,label:o.textContent,disabled:o.disabled})));
-    if (sig!==current) el.innerHTML = options.map(o=>
-      `<option value="${esc(o.id)}"${o.disabled?" disabled":""}>${esc(o.label)}</option>`).join("");
-    if (options.some(o=>o.id===previous&&!o.disabled)) el.value=previous;
-    else el.value=options.find(o=>o.id&&!o.disabled)?.id||"";
-    el.disabled=false;
+  // The enabled Text Model Management catalog is the single picker source.
+  function syncSelect(id, rows) {
+    const element = byId(id);
+    if (!element) return;
+    const previous = element.value;
+    const models = rows.filter(row => row.enabled).sort((a,b) => a.id.localeCompare(b.id));
+    const options = models.map(row => ({id:row.id,label:row.id}));
+    if (JSON.stringify(options) !== JSON.stringify([...element.options].map(o => ({id:o.value,label:o.textContent})))) {
+      element.innerHTML = options.map(row => `<option value="${esc(row.id)}">${esc(row.label)}</option>`).join("");
+    }
+    element.value = models.some(row => row.id === previous) ? previous : models[0]?.id || "";
   }
   function syncPlayground(catalog) {
-    const workers = Array.isArray(catalog.workers)?catalog.workers:[];
-    const online = new Set(workers.filter(w=>w.online&&w.routing_ready).map(w=>w.client_id));
-    const rows=(Array.isArray(catalog.data)?catalog.data:[]).map(row=>({
-      ...row,callable_by:(row.enabled?(row.observed_by||[]).filter(id=>online.has(id) && row.source_details?.[id]?.selectable !== false):[]),
-    }));
-    syncSelect("testModel",rows);
-    syncSelect("pgChatModel",rows);
-    const button=byId("pgChatSend");
-    if(button&&button.textContent==="发送"){
-      button.disabled=!rows.some(row=>row.callable_by.length);
-      button.title=button.disabled?"没有登录就绪且报告过该模型的在线 Worker":"";
+    const rows = Array.isArray(catalog.data) ? catalog.data : [];
+    syncSelect("testModel", rows);
+    syncSelect("pgChatModel", rows);
+    const button = byId("pgChatSend");
+    if (button && button.textContent === "发送") {
+      button.disabled = !rows.some(row => row.enabled);
+      button.title = button.disabled ? "文本模型管理中没有启用的模型" : "";
     }
   }
   function render(catalog) {
