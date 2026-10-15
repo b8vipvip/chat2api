@@ -28,14 +28,15 @@
     return chrome.tabs.sendMessage(tabId, payload);
   }
 
-  // The content model library is the only DOM model-state parser. Read its
-  // passive picker snapshot with scripting.executeScript: a reloaded ChatGPT
-  // page can strand an asynchronous tabs.sendMessage inspection for 5+ seconds.
-  // Never re-open the menu or replay a click during confirmation.
+  // The content model library alone parses the live ChatGPT picker. The
+  // header can be generic and need not show a model name: confirm the checked
+  // menu row in the actual document, through executeScript rather than an
+  // async sendMessage channel destroyed by ChatGPT navigation. This inspector
+  // can open/close the picker but NEVER selects a model or replays a commit.
   async function inspectFreshSelection(tabId) {
     const read = async () => {
       const values = await chrome.scripting.executeScript({target:{tabId},
-        func: () => globalThis.__CHAT2API_MODEL_LIBRARY_V145__?.inspectPassiveSelection?.() || null});
+        func: async () => await globalThis.__CHAT2API_MODEL_LIBRARY_V145__?.inspectSelectedModel?.() || null});
       return Array.isArray(values) ? values[0]?.result || null : null;
     };
     let result = await read();
@@ -98,7 +99,7 @@
           await delay(240);
           continue;
         }
-        // One read-only inspection authority shared by validation/API routing.
+        // One live-picker authority shared by discovery, validation and routing.
         const probe = {ok:true,data:await inspectFreshSelection(tabId)};
         if (probe?.ok) {
           lastInspection = probe.data || {};
@@ -107,8 +108,8 @@
             : String(lastInspection.evidence_source || "selected-model-not-visible");
           if (lastInspection.selected_model === model) {
             matched += 1;
-            // Two independent post-commit observations guard against optimistic
-            // menu state that has not survived React/navigation settling.
+            // Two live menu observations verify the requested selection
+            // after navigation without accepting the pre-click option as proof.
             if (matched >= 2) return {
               model, current_model: model, validated: true, validation_revision: 145,
               validation_method: "fresh-tab-picker-state-v149",
