@@ -22,7 +22,7 @@ def test_model_confirmation_uses_single_passive_live_document_reader():
     assert 'type: "chat2api.model.inspect.v149"' not in background
     assert "state.inspectPassiveSelection" in content
     assert "selected_model: id || null" in content
-    assert "cache" not in content.split("state.inspectPassiveSelection = () => {",1)[1].split("};",1)[0]
+    assert "sessionStorage" not in content.split("state.inspectPassiveSelection = () => {",1)[1].split("};",1)[0]
 
 def test_reasoning_controller_preserves_live_evidence_until_page_driver_checks():
     source = (ROOT/"chrome_extension"/"content_reasoning_v7.js").read_text(encoding="utf-8")
