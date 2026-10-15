@@ -56,7 +56,9 @@ def test_page_driver_merges_dom_evidence_with_trusted_model_cache():
     assert "reasoningEvidence" in source
     assert "dirty_family" in source
     assert "dirty_reasoning" in source
-    assert '"session-cache-unverified"' in source\n    assert "const reasoningTrusted = Boolean(reasoningEvidence.reasoning);" in source\n    assert "const familyTrusted = Boolean(familyEvidence.family);" in source
+    assert '"session-cache-unverified"' in source
+    assert "const reasoningTrusted = Boolean(reasoningEvidence.reasoning);" in source
+    assert "const familyTrusted = Boolean(familyEvidence.family);" in source
     assert "family_trusted" in source
     assert "reasoning_trusted" in source
 
