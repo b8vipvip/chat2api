@@ -256,7 +256,8 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
             now = time.perf_counter()
             state._chat2api_last_browser_event_mono = now
             state._chat2api_last_browser_event_type = event_type
-            if not getattr(state, "_chat2api_extension_dispatch_ack", False):
+            if event_type in {"chat.diagnostics", "image.diagnostics", "chat.started", "image.started",
+                              "chat.delta", "chat.snapshot", "chat.completed", "image.completed"} and not getattr(state, "_chat2api_extension_dispatch_ack", False):
                 state._chat2api_extension_dispatch_ack = True
                 state.diagnostics.setdefault(
                     "extension_dispatch_ack_ms",
