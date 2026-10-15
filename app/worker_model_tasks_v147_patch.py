@@ -31,7 +31,17 @@ class ModelTaskError(Exception):
 
 
 def _observed(metadata: Any) -> list[dict[str, Any]]:
-    return _model_rows((metadata or {}).get("model_observed_choices"))
+    # A reconnect invalidates the old picker observations. The v145 discovery
+    # state is the single freshness authority; v147 must not revive stale
+    # candidates through its compatibility catalog or supports_model wrapper.
+    meta = metadata if isinstance(metadata, dict) else {}
+    try:
+        revision = int(meta.get("model_validation_revision") or 0)
+    except (TypeError, ValueError):
+        return []
+    if revision < 145 or meta.get("model_validation_state") not in {"discovered", "validated"}:
+        return []
+    return _model_rows(meta.get("model_observed_choices"))
 
 
 def _log_text(task: dict[str, Any], worker_id: str | None = None) -> str:
