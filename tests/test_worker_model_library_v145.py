@@ -8,6 +8,7 @@ from app.worker_model_library_v145_patch import (
     _mark_pending,
     _free_default_mini_eligible,
     _validated_model_rows,
+    _selectable_observed_model_ids,
 )
 
 
@@ -149,3 +150,20 @@ def test_free_default_mini_browser_integration() -> None:
     path = Path(__file__).resolve().parents[1] / "tests" / "free_mini_without_picker_v145.mjs"
     run = subprocess.run(["node", str(path)], capture_output=True, text=True, check=False, timeout=30)
     assert run.returncode == 0, run.stdout + run.stderr
+
+
+def test_picker_observations_are_candidates_not_served_model_proof():
+    registry = _registry({
+        "model_validation_state": "discovered",
+        "model_validation_revision": VALIDATION_REVISION,
+        "models": [],
+        "model_observed_choices": [
+            {"id": "gpt-6", "selectable": True, "validated": False},
+            {"id": "gpt-5.6-sol", "selectable": True, "validated": False},
+            {"id": "gpt-5.5", "selectable": False, "validated": False},
+        ],
+    })
+    assert _selectable_observed_model_ids(registry, "ext_test") == {"gpt-6", "gpt-5.6-sol"}
+    assert _validated_model_rows(registry, "ext_test") == []
+    _mark_pending(registry, "ext_test", "reconnect")
+    assert _selectable_observed_model_ids(registry, "ext_test") == set()
