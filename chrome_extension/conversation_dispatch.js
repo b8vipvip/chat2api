@@ -64,8 +64,10 @@
       request_id: requestId,
       error: text,
       diagnostics: {
+        ...(error?.routingDiagnostics || {}),
         routed_dispatch_terminal_v58: true,
         route_failure_code: String(error?.code || "route_dispatch_failed"),
+        route_failure_stage: String(error?.stage || "dispatch"),
         route_retired_by_authority_v30: routeRetired,
         rate_limit_terminal: rateLimited,
         retry_after_ms: retryAfterMs,
