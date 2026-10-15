@@ -30,4 +30,6 @@ def test_reasoning_controller_preserves_live_evidence_until_page_driver_checks()
     source = (ROOT/"chrome_extension"/"content_reasoning_v7.js").read_text(encoding="utf-8")
     assert "const checked = attachDriverVerification(data, requested);" in source
     assert 'key(document, "Escape", "Escape");' in source
-    assert "if (result && !verified()) await openNoClick();" in source
+    assert "if (await inspectAppliedReasoning(requested))" in source
+    assert "if (result) {" in source
+    assert "The Page Driver remains the single" in source
