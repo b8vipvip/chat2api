@@ -374,19 +374,19 @@
     const verified = () => driver()?.verifyReasoning?.(level)?.ok === true;
     if (verified()) return true;
     if (!openSurfaces().length && !visibleSlider()) {
-      const pill = currentPill();
+      // ChatGPT may temporarily unmount the picker after applying an effort.
+      // Wait for the existing control to reappear; do not trust cached state.
+      const pill = await waitFor(() => currentPill(), 4500, 120);
       if (!pill) return false;
-      // Synthetic keyboard shortcuts are not reliable in Chrome's React UI.
-      // A DOM click here ONLY opens the menu; it does not select a level.
       pill.click();
-      await waitFor(() => openSurfaces()[0] || visibleSlider(), 900, 80);
+      await waitFor(() => openSurfaces()[0] || visibleSlider(), 2800, 100);
     }
     if (verified()) return true;
-    const row = reasoningRow();
+    const row = await waitFor(() => reasoningRow() || choiceFor(level), 1600, 100);
     if (row && !visibleSlider() && !choiceFor(level)) {
       // Expand the reasoning sub-menu, without clicking its level choice.
       row.click();
-      await waitFor(() => visibleSlider() || choiceFor(level), 900, 80);
+      await waitFor(() => visibleSlider() || choiceFor(level), 2000, 100);
     }
     return verified();
   }
