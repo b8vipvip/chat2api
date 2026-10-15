@@ -184,7 +184,10 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
         supports = getattr(registry_obj, 'supports_model', None)
         if not callable(supports):
             return bool(base_compatible(registry_obj, client_id, model))
-        return bool(registry_obj.chatgpt_routing_ready(client_id) and supports(client_id, model))
+        health = getattr(registry_obj, "generation_backend_routable", None)
+        return bool(registry_obj.chatgpt_routing_ready(client_id)
+                    and supports(client_id, model)
+                    and (not callable(health) or health(client_id)))
     routing._compatible = compatible
 
     overview = next((route for route in app.routes if isinstance(route, APIRoute) and
