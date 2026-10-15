@@ -4,10 +4,10 @@ import vm from "node:vm";
 
 const source=readFileSync("chrome_extension/content_model_library_v145.js","utf8");
 
-async function scenario({withFive=true,enabled=true,canSwitch=true,hydrationReads=0}={}){
+async function scenario({withFive=true,enabled=true,canSwitch=true,hydrationReads=0,genericHeader=false}={}){
   let opened=false;
   let remainingHydrationReads=0;
-  let activeModel="gpt-6";
+  let activeModel=genericHeader?"gpt-5.6-sol":"gpt-6";
   let listener;
   class Element {
     constructor(label, attrs={}, onClick=null){
@@ -27,12 +27,12 @@ async function scenario({withFive=true,enabled=true,canSwitch=true,hydrationRead
     scrollIntoView(){}
     click(){this.onClick?.()}
   }
-  const picker=new Element(activeModel,{"data-testid":"model-switcher","aria-label":"Choose model","tag":"button"},()=>{opened=true;remainingHydrationReads=hydrationReads});
+  const picker=new Element(genericHeader?"ChatGPT":activeModel,{"data-testid":"model-switcher","aria-label":"Choose model","tag":"button"},()=>{opened=true;remainingHydrationReads=hydrationReads});
   const bigWrapper=new Element(
     "High High, 3 of 3. Locked, opens access options GPT-6 GPT-5.6 Sol GPT-5.5 Leaving on October 14",
     {role:"menuitem"},()=>{throw Error("Container must never be clicked")}
   );
-  const sol=new Element("GPT-5.6 Sol",{role:"menuitem"},()=>{if(canSwitch){activeModel="gpt-5.6-sol";picker.label="GPT-5.6 Sol";opened=false}});
+  const sol=new Element("GPT-5.6 Sol",{role:"menuitem",...(genericHeader?{"aria-checked":"true"}:{})},()=>{if(canSwitch){activeModel="gpt-5.6-sol";picker.label="GPT-5.6 Sol";opened=false}});
   const five=new Element("GPT-5.5 Leaving on October 14",{
     role:"menuitem",...(enabled?{}:{"aria-disabled":"true"})
   },()=>{if(canSwitch){activeModel="gpt-5.5";picker.label="GPT-5.5";opened=false}});
@@ -61,6 +61,7 @@ async function scenario({withFive=true,enabled=true,canSwitch=true,hydrationRead
     const used=listener(message,null,resolve);
     assert.equal(used,true);
   });
+  const inspected=genericHeader?await context.__CHAT2API_MODEL_LIBRARY_V145__.inspectSelectedModel():null;
   const discovered=await issue({type:"chat2api.models.validate.v145"});
   assert.equal(discovered.ok,true);
   const models=discovered.data.observed_models;
@@ -69,9 +70,13 @@ async function scenario({withFive=true,enabled=true,canSwitch=true,hydrationRead
   assert.equal(models.some(m=>m.id==="gpt-5.6-sol"),true);
   if(withFive)assert.equal(models.find(m=>m.id==="gpt-5.5")?.enabled,enabled);
   const result=await issue({type:"chat2api.model.select.v145",model:"gpt-5.5"});
-  return {result,discovered};
+  return {result,discovered,inspected};
 }
 
+const checked=await scenario({genericHeader:true});
+assert.equal(checked.inspected.selected_model,"gpt-5.6-sol",
+  "generic header must use checked row in live menu");
+assert.equal(checked.inspected.evidence_source,"live-menu-selected-row");
 const hydrated=await scenario({hydrationReads:3});
 assert.equal(hydrated.discovered.ok,true,"model-menu shell must hydrate before extracting choices");
 assert.equal(hydrated.result.ok,true);

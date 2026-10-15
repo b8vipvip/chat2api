@@ -107,16 +107,11 @@
 
   // Reuse this picker identity in the reasoning controller.
   state.pickerControl = modelPicker;
-  state.inspectPassiveSelection = () => {
-    // Pure DOM read: never click or open the picker while a model switch is
-    // settling. A cached model or a previously observed menu option is NOT
-    // evidence that the new page has actually selected this model.
-    const picker = modelPicker();
-    const id = visible(picker) ? modelIdOf(picker) : "";
-    return {selected_model: id || null,
-      evidence_source: id ? "live-visible-picker" : "no-visible-selected-picker",
-      inspected_at: new Date().toISOString()};
-  };
+  // A ChatGPT header may only say "ChatGPT" even while the model menu
+  // has a concrete checked row. One DOM parser owns both manual validation
+  // and post-navigation confirmation; neither may infer from old menu state.
+  // This inspect action only opens/closes the picker, never selects a model.
+  state.inspectSelectedModel = () => inspectModelSelectionV149();
 
   function menuRoots() {
     const rows = [];
@@ -504,6 +499,8 @@
       selected_model: selected || null,
       selected_in_menu: selectedInMenu || null,
       picker_model: pickerModel || null,
+      evidence_source: selectedInMenu ? "live-menu-selected-row" :
+        selected ? "live-picker-header-and-menu" : "no-checked-model-in-live-menu",
       models, inspected_at: new Date().toISOString(),
     };
   }
