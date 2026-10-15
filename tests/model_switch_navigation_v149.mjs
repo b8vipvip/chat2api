@@ -13,7 +13,12 @@ async function runScenario({navigates=false,clickSucceeds=true,missing=false,dis
     {id:desired,selected:current===desired,enabled:!disabled},
   ];
   const chrome={
-    scripting:{executeScript:async()=>{loaded++}},
+    scripting:{executeScript:async detail=>{
+      if(detail.files){loaded++;return []}
+      if(detail.func){inspected++;return [{result:{selected_model:current,
+        inspected_at:"2026-10-14T12:40:00Z",evidence_source:"live-visible-picker"}}]}
+      throw Error("Unexpected script execution");
+    }},
     tabs:{
       get:async id=>{
         assert.equal(id,22);
@@ -35,11 +40,7 @@ async function runScenario({navigates=false,clickSucceeds=true,missing=false,dis
           if(clickSucceeds)current=desired;
           return {ok:true,model:desired,click_acknowledged:true};
         }
-        if(message.type==="chat2api.model.inspect.v149") {
-          inspected++;
-          return {ok:true,data:{selected_model:current,
-            selected_in_menu:current,models:modelRows(),inspected_at:"2026-10-14T12:40:00Z"}};
-        }
+        if(message.type==="chat2api.model.inspect.v149") throw Error("Confirmation must not re-open model picker via messaging");
         throw Error("Unexpected message "+message.type);
       }
     }

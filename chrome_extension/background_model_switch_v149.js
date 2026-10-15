@@ -4,7 +4,7 @@
   if (globalThis[KEY]) return;
 
   const SCRIPT = "content_model_library_v145.js";
-  const MAX_CONFIRM_MS = 22000;
+  const MAX_CONFIRM_MS = 16000;
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   function failure(code, stage, message, evidence = [], after = []) {
@@ -26,6 +26,25 @@
     await chrome.scripting.executeScript({target: {tabId}, files: [SCRIPT]});
     await delay(100);
     return chrome.tabs.sendMessage(tabId, payload);
+  }
+
+  // The content model library is the only DOM model-state parser. Read its
+  // passive picker snapshot with scripting.executeScript: a reloaded ChatGPT
+  // page can strand an asynchronous tabs.sendMessage inspection for 5+ seconds.
+  // Never re-open the menu or replay a click during confirmation.
+  async function inspectFreshSelection(tabId) {
+    const read = async () => {
+      const values = await chrome.scripting.executeScript({target:{tabId},
+        func: () => globalThis.__CHAT2API_MODEL_LIBRARY_V145__?.inspectPassiveSelection?.() || null});
+      return Array.isArray(values) ? values[0]?.result || null : null;
+    };
+    let result = await read();
+    if (!result) {
+      await chrome.scripting.executeScript({target:{tabId},files:[SCRIPT]});
+      result = await read();
+    }
+    if (!result) throw new Error("Live model inspector not ready in ChatGPT document");
+    return result;
   }
 
   // Used by BOTH the admin model task and API routing. Never trust a click
@@ -79,19 +98,13 @@
           await delay(240);
           continue;
         }
-        // Inspection is read-only. Bound each response wait so a stranded
-        // document cannot consume the entire confirmation budget in one call.
-        // Never replay the model commit/click itself.
-        const inspectBudget = Math.min(5000, Math.max(1, deadline - Date.now()));
-        const probe = await Promise.race([
-          send(tabId, {type: "chat2api.model.inspect.v149"}),
-          delay(inspectBudget).then(() => ({
-            ok:false, error:"model_inspection_reply_timeout", code:"model_inspection_reply_timeout"
-          })),
-        ]);
+        // One read-only inspection authority shared by validation/API routing.
+        const probe = {ok:true,data:await inspectFreshSelection(tabId)};
         if (probe?.ok) {
           lastInspection = probe.data || {};
-          lastError = "";
+          lastError = lastInspection.selected_model
+            ? "visible-selected-model=" + lastInspection.selected_model
+            : String(lastInspection.evidence_source || "selected-model-not-visible");
           if (lastInspection.selected_model === model) {
             matched += 1;
             // Two independent post-commit observations guard against optimistic

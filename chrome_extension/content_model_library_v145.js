@@ -107,6 +107,16 @@
 
   // Reuse this picker identity in the reasoning controller.
   state.pickerControl = modelPicker;
+  state.inspectPassiveSelection = () => {
+    // Pure DOM read: never click or open the picker while a model switch is
+    // settling. A cached model or a previously observed menu option is NOT
+    // evidence that the new page has actually selected this model.
+    const picker = modelPicker();
+    const id = visible(picker) ? modelIdOf(picker) : "";
+    return {selected_model: id || null,
+      evidence_source: id ? "live-visible-picker" : "no-visible-selected-picker",
+      inspected_at: new Date().toISOString()};
+  };
 
   function menuRoots() {
     const rows = [];

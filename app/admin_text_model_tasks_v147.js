@@ -36,10 +36,19 @@
     el("modelDiscoverAllV147").onclick=async()=>act("/api/admin/text-model-tasks/discover");
     el("modelReloadV147").onclick=()=>refresh(true);
     view.addEventListener("click",async event=>{
-      const b=event.target.closest("button[data-model-verify],button[data-model-toggle],button[data-task-log]");
+      const b=event.target.closest("button[data-model-default],button[data-model-verify],button[data-model-toggle],button[data-task-log]");
       if(!b)return;
       if(b.dataset.taskLog){
         await logs(b.dataset.taskLog,b.dataset.logWorker||"");return;
+      }
+      if(b.dataset.modelDefault){
+        b.disabled=true;
+        try{
+          await api("/api/admin/text-model-minimum",{method:"PATCH",body:{model_id:b.dataset.modelDefault}});
+          await refresh(true);
+        }catch(error){alert("设置默认模型失败："+String(error.message||error))}
+        finally{b.disabled=false}
+        return;
       }
       if(b.dataset.modelVerify){
         await act("/api/admin/text-models/"+encodeURIComponent(b.dataset.modelVerify)+"/validate");
@@ -90,6 +99,7 @@
     const workerById=new Map(workers.map(w=>[w.client_id,w]));
     const live=new Set(workers.filter(w=>w.online&&w.routing_ready).map(w=>w.client_id));
     const rows=models.data||[];
+    const defaultModel=models.legacy_minimum_model||"";
     const modelBox=el("modelTableV147");
     if(modelBox)modelBox.innerHTML=rows.map(row=>{
       const sources=(row.observed_by||[]).map(id=>{
@@ -101,10 +111,12 @@
       }).join("")||"—";
       const callable=row.enabled?(row.observed_by||[]).filter(id=>live.has(id) && row.source_details?.[id]?.selectable!==false):[];
       const label=!row.enabled?"已停用":row.verified_by?.length?"存在已验证来源":"已发现 · 未验证";
-      return `<tr><td><code>${esc(row.id)}</code></td><td>${label}</td>
+      const isDefault=row.id===defaultModel;
+      return `<tr><td><code>${esc(row.id)}</code>${isDefault?' <span class="muted" style="font-weight:700">（默认）</span>':''}</td><td>${label}</td>
         <td>${sources}</td><td title="${esc(callable.join(", "))}">${callable.length} 个</td>
         <td><div class="rowactions" style="display:flex;gap:6px">
           ${button("验证","data-model-verify",row.id)}
+          ${isDefault?'<span class="muted" style="align-self:center">当前默认</span>':row.enabled?button("设为默认","data-model-default",row.id):''}
           ${button(row.enabled?"停用":"启用","data-model-toggle",row.id,
             'data-model-enable="'+(!row.enabled)+'"')}</div></td></tr>`;
     }).join("")||'<tr><td colspan="5">暂无来自 Worker 的模型发现记录。点击「发现模型」执行任务。</td></tr>';
