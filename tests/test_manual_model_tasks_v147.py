@@ -14,6 +14,8 @@ class Registry:
     def __init__(self):
         self.clients = {
             "ext_paid": SimpleNamespace(name="TX03", metadata={
+                "model_validation_state": "discovered",
+                "model_validation_revision": 145,
                 "model_observed_choices": [{"id": "gpt-5.6-sol", "label": "Sol"}],
             }),
             "ext_free": SimpleNamespace(name="Free", metadata={}),
@@ -97,6 +99,10 @@ def test_observed_model_is_callable_before_explicit_validation(tmp_path):
     assert len(rows) == 1
     assert rows[0]["validated"] is False
     assert rows[0]["source"] == "worker-picker-observed-unverified"
+    registry.clients["ext_paid"].metadata["model_validation_state"] = "pending"
+    assert not registry.supports_model("ext_paid", "gpt-5.6-sol")
+    assert not registry.model_catalog()
+    registry.clients["ext_paid"].metadata["model_validation_state"] = "discovered"
 
     auth = {"Authorization": "Bearer admin-token"}
     task = client.post("/api/admin/text-models/gpt-5.6-sol/validate", headers=auth)
