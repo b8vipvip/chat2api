@@ -41,7 +41,7 @@ def test_standby_target_excludes_active_and_five_minute_route_leases() -> None:
     assert 'function standbyRows(rows, value)' in pool
     assert '!assigned.has(row.window_id)' in pool
     assert '!busy.has(row.window_id)' in pool
-    assert 'while (standbyRows(rows, value).length < target)' in pool
+    assert 'while (unassignedWindowRows(rows, value).length < target)' in pool
     assert 'post-admission-standby-refill-v152' in pool
     assert 'route.window_owned = true' in pool
     assert 'markPooledRoute' not in pool

@@ -33,6 +33,10 @@ def test_persistent_pool_is_active_routing_layer() -> None:
     assert 'standby_semantics_revision: STANDBY_SEMANTICS_REVISION' in source
     assert 'const STANDBY_SEMANTICS_REVISION = 152' in source
     assert 'await createStandby(reason)' in source
+    assert 'while (unassignedWindowRows(rows, value).length < target)' in source
+    assert 'const DOCUMENT_SETTLE_MS = 4000' in source
+    assert 'const RUNTIME_RETRY_COOLDOWN_MS = 15000' in source
+    assert 'runtime_loading_total:' in source
     assert 'route.window_owned = true' in source
     assert 'post-admission-standby-refill-v152' in source
     assert 'worker_persistent_window_pool_exhausted' in source
@@ -46,7 +50,7 @@ def test_persistent_pool_is_active_routing_layer() -> None:
 def test_persistent_pool_keeps_configured_unassigned_standby_cardinality() -> None:
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     assert 'let rows = await physicalWindows();' in source
-    assert 'while (standbyRows(rows, value).length < target)' in source
+    assert 'while (unassignedWindowRows(rows, value).length < target)' in source
     assert 'const compactStandby = isDisabled || auth.explicit_logout === true;' in source
     assert 'const standbyTarget = compactStandby ? Math.min(1, target) : target;' in source
     assert 'Math.max(0, standby.length - effective)' in source
@@ -158,7 +162,7 @@ def test_admin_copy_describes_persistent_windows_without_legacy_helper_copy() ->
 
 def test_worker_extension_bundle_advertises_pool_contract() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert manifest["version"] == "0.22.150"
+    assert manifest["version"] == "0.22.151"
     assert "persistent prewarmed" in manifest["description"]
 
 
@@ -208,6 +212,6 @@ def test_bootstrap_is_adopted_before_remaining_standby_windows_are_warmed() -> N
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     bootstrap = source.index('if (!isDisabled && rows.length === 0)')
     early_return = source.index('return snapshotFrom(rows, value, auth, isDisabled);', bootstrap)
-    warm = source.index('while (standbyRows(rows, value).length < target)', early_return)
+    warm = source.index('while (unassignedWindowRows(rows, value).length < target)', early_return)
     assert bootstrap < early_return < warm
     assert 'if (ready && !isDisabled && !lastError)' in source

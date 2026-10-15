@@ -39,7 +39,7 @@ def test_worker_window_setting_is_a_persistent_prewarmed_pool_target() -> None:
     assert "function standbyRows(rows, value)" in pool
     assert "!assigned.has(row.window_id)" in pool
     assert "!busy.has(row.window_id)" in pool
-    assert "while (standbyRows(rows, value).length < target)" in pool
+    assert "while (unassignedWindowRows(rows, value).length < target)" in pool
     assert "const STANDBY_SEMANTICS_REVISION = 152" in pool
     assert "standby_semantics_revision: STANDBY_SEMANTICS_REVISION" in pool
     assert "runtime_ready_standby: true" in pool
