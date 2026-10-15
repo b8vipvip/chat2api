@@ -19,6 +19,8 @@
   // The 15-second online watchdog is a trigger only. Physical window lifecycle
   // decisions remain exclusively serialized by reconcileNow().
   const ONLINE_INTEGRITY_INTERVAL_MS = 15 * 1000;
+  const DOCUMENT_SETTLE_MS = 4000;
+  const RUNTIME_RETRY_COOLDOWN_MS = 15000;
   const ONLINE_BINDING_KEYS = Object.freeze(["serverUrl", "clientId", "clientToken", "socketState"]);
   const NEW_CHAT_URL = "https://chatgpt.com/";
   const MIN_TARGET = 1;
@@ -40,6 +42,9 @@
     gate: Promise.resolve(),
     reservations: new Map(),
     runtimeReadyTabs: new Map(),
+    runtimePageCompleteAt: new Map(),
+    runtimeRetryAfter: new Map(),
+    runtimeDeferredChecks: 0,
     runtimeChecks: 0,
     runtimeFailures: 0,
     reconcilePromise: null,
@@ -267,15 +272,17 @@
     return ids;
   }
 
-  function standbyRows(rows, value) {
+  function unassignedWindowRows(rows, value) {
     const assigned = routeByWindow(value);
     const busy = busyWindowIds(value);
-    return rows.filter(row =>
-      row.routable &&
-      row.runtime_ready === true &&
-      !assigned.has(row.window_id) &&
-      !busy.has(row.window_id)
-    );
+    // Physical occupancy includes loading/unverified ChatGPT surfaces. Only
+    // verified runtime-ready rows count as *available* standby. Both decisions
+    // belong to this pool, never to a second tab/window cleanup module.
+    return rows.filter(row => !assigned.has(row.window_id) && !busy.has(row.window_id));
+  }
+
+  function standbyRows(rows, value) {
+    return unassignedWindowRows(rows, value).filter(row => row.routable && row.runtime_ready === true);
   }
 
   async function clearRouteAlarm(windowId) {
@@ -318,6 +325,7 @@
     try {
       if (typeof ensureContent === "function") await ensureContent(id);
       state.runtimeReadyTabs.set(id, true);
+      state.runtimeRetryAfter.delete(id);
       return true;
     } catch (error) {
       state.runtimeReadyTabs.set(id, false);
@@ -422,20 +430,18 @@
       try { await chrome.windows.remove(created.id); } catch (_) {}
       throw new Error("Persistent ChatGPT window contains no usable tab");
     }
-    try {
-      tab = await waitForReady(tab.id);
-    } catch (error) {
-      try { await chrome.windows.remove(created.id); } catch (_) {}
-      throw error;
-    }
+    // Creating a window is not evidence that its page and content scripts are
+    // ready. Do not block the pool gate for 30s or delete a slow-loading page.
+    // Reconcile will promote this physical slot only after runtime verification.
     state.created += 1;
+    if (tab.status === "complete") state.runtimePageCompleteAt.set(tab.id, Date.now());
     return {
       window_id: created.id,
       tab_id: tab.id,
-      url: tab.url || NEW_CHAT_URL,
+      url: tab.url || tab.pendingUrl || NEW_CHAT_URL,
       routable: true,
-      runtime_ready: true,
-      status: tab.status || "complete",
+      runtime_ready: false,
+      status: String(tab.status || "loading"),
     };
   }
 
@@ -465,30 +471,35 @@
   async function validateIdleRuntime(value, rows, reason = "runtime-ready-standby-v152") {
     const preflight = globalThis.__CHAT2API_BACKGROUND_RUNTIME_PREFLIGHT_V71__;
     if (!preflight || typeof ensureContent !== "function") {
-      return { rows, checked: 0, failed: 0, closed: 0, skipped: true };
+      return { rows, checked: 0, failed: 0, closed: 0, deferred: 0, skipped: true };
     }
-    const assigned = routeByWindow(value);
-    const busy = busyWindowIds(value);
-    const candidates = rows.filter(row =>
-      row.routable &&
-      !assigned.has(row.window_id) &&
-      !busy.has(row.window_id) &&
-      row.runtime_ready !== true
+    const now = Date.now();
+    const pending = unassignedWindowRows(rows, value).filter(row =>
+      row.routable && row.runtime_ready !== true
     );
-    if (!candidates.length) return { rows, checked: 0, failed: 0, closed: 0, skipped: false };
+    // Chrome's 'loading' state and the first seconds after 'complete' are
+    // normal navigation, not runtime corruption. The v71 preflight may reload
+    // a tab, so it must never run during this transient page-load interval.
+    const candidates = pending.filter(row => row.status === "complete" &&
+      now - Number(state.runtimePageCompleteAt.get(row.tab_id) || 0) >= DOCUMENT_SETTLE_MS &&
+      now >= Number(state.runtimeRetryAfter.get(row.tab_id) || 0));
+    const deferred = pending.length - candidates.length;
+    state.runtimeDeferredChecks += deferred;
+    if (!candidates.length) {
+      return { rows, checked: 0, failed: 0, closed: 0, deferred, skipped: false };
+    }
 
     const results = await Promise.all(candidates.map(async row => {
       try {
         await ensureRuntimeCurrent(row.tab_id);
         return { row, ok: true };
-      } catch (_) {
-        return { row, ok: false };
+      } catch (error) {
+        return { row, ok: false, error: String(error?.message || error || "runtime-unavailable") };
       }
     }));
 
     let current = rows.slice();
     let failed = 0;
-    let closed = 0;
     for (const result of results) {
       const row = result.row;
       if (result.ok) {
@@ -496,13 +507,14 @@
         continue;
       }
       failed += 1;
-      if (await closeWindow(row.window_id)) {
-        current = current.filter(item => item.window_id !== row.window_id);
-        state.runtimeReadyTabs.delete(row.tab_id);
-        closed += 1;
-      }
+      state.runtimeRetryAfter.set(row.tab_id, Date.now() + RUNTIME_RETRY_COOLDOWN_MS);
+      // Runtime failure is not a physical-window retirement signal. Preserve
+      // the existing page, mark it unready and retry after cooldown; otherwise
+      // a slow Windows browser loops through close/create before it can load.
+      current = current.map(item => item.tab_id === row.tab_id ? { ...item, runtime_ready: false } : item);
     }
-    return { rows: current, checked: candidates.length, failed, closed, skipped: false, reason };
+    return { rows: current, checked: candidates.length, failed, closed: 0,
+      deferred, skipped: false, reason };
   }
 
   function snapshotFrom(rows, value, auth, isDisabled) {
@@ -533,6 +545,9 @@
       unroutable_total: unroutableRows.length,
       runtime_ready_total: runtimeReadyRows.length,
       runtime_stale_total: routableRows.filter(row => row.runtime_ready !== true).length,
+      runtime_loading_total: rows.filter(row => row.status !== "complete").length,
+      runtime_deferred_checks: state.runtimeDeferredChecks,
+      runtime_retry_pending_total: rows.filter(row => Number(state.runtimeRetryAfter.get(row.tab_id) || 0) > Date.now()).length,
       active: inUse,
       leased,
       idle: standby.length,
@@ -700,7 +715,7 @@
     }
 
     if (ready && !isDisabled && !lastError) {
-      while (standbyRows(rows, value).length < target) {
+      while (unassignedWindowRows(rows, value).length < target) {
         try {
           const row = await createStandby(reason);
           rows.push(row);
@@ -710,6 +725,7 @@
           break;
         }
       }
+      if (opened) scheduleReconcile("new-window-loading", DOCUMENT_SETTLE_MS + 250);
     }
 
     const currentStandby = standbyRows(rows, value).length;
@@ -825,11 +841,13 @@
     const desired = route?.conversation_url && isChatGpt(route.conversation_url) ? route.conversation_url : NEW_CHAT_URL;
     let tab = await chrome.tabs.get(row.tab_id);
     const current = tab?.url || tab?.pendingUrl || "";
-    if (current !== desired || tab.status !== "complete") {
+    if (current !== desired) {
       tab = await chrome.tabs.update(row.tab_id, { url: desired, active: true });
-    } else {
+    } else if (tab.status === "complete") {
       try { tab = await chrome.tabs.update(row.tab_id, { active: true }); } catch (_) {}
     }
+    // Do not re-navigate the same URL while status=loading: that resets the
+    // page load and can prevent Windows Chrome from ever reaching 'complete'.
     return waitForReady(row.tab_id);
   }
 
@@ -865,12 +883,17 @@
             await ensureRuntimeCurrent(existing.id);
             existing = await chrome.tabs.get(existing.id);
           }
-        } catch (_) {
-          const staleWindowId = Number(route.window_id);
-          await detachRoute(route, "persistent-pool-existing-route-runtime-stale-v152");
-          if (Number.isInteger(staleWindowId)) await closeWindow(staleWindowId);
-          state.runtimeReadyTabs.delete(existing.id);
-          existing = null;
+        } catch (error) {
+          // A leased route remains owned by its API key even when the browser
+          // is slow or its runtime preflight temporarily fails. A failed probe
+          // cannot close the tab and destroy an in-progress ChatGPT navigation.
+          state.runtimeReadyTabs.set(existing.id, false);
+          state.runtimeRetryAfter.set(existing.id, Date.now() + RUNTIME_RETRY_COOLDOWN_MS);
+          const unavailable = new Error("Leased ChatGPT page is still loading or its Worker runtime is not ready");
+          unavailable.code = "worker_window_runtime_pending";
+          unavailable.retry_after_ms = RUNTIME_RETRY_COOLDOWN_MS;
+          unavailable.cause = error;
+          throw unavailable;
         }
       }
       if (existing) {
@@ -898,6 +921,14 @@
       let slot = standbyRows(rows, value)[0] || null;
       let strategy = "claim-standby-v152";
 
+      if (!slot && unassignedWindowRows(rows, value).length) {
+        // An existing loading window occupies the physical slot. Never open
+        // another one just because the first has not finished loading.
+        const pending = new Error("ChatGPT standby window is still loading");
+        pending.code = "worker_window_runtime_pending";
+        pending.retry_after_ms = 1500;
+        throw pending;
+      }
       if (!slot) {
         slot = await createStandby("request-admission");
         rows.push(slot);
@@ -953,10 +984,26 @@
   chrome.windows.onCreated.addListener(() => scheduleReconcile("window-created", 500));
   chrome.windows.onRemoved.addListener(() => scheduleReconcile("window-removed", 250));
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-    if (changeInfo.url || changeInfo.status) state.runtimeReadyTabs.delete(Number(tabId));
-    if (changeInfo.url || changeInfo.status === "complete") scheduleReconcile("tab-updated", 700);
+    const id = Number(tabId);
+    if (changeInfo.url || changeInfo.status === "loading") {
+      state.runtimeReadyTabs.delete(id);
+      state.runtimePageCompleteAt.delete(id);
+      state.runtimeRetryAfter.delete(id);
+    }
+    if (changeInfo.status === "complete") {
+      state.runtimeReadyTabs.delete(id);
+      state.runtimePageCompleteAt.set(id, Date.now());
+      state.runtimeRetryAfter.delete(id);
+      scheduleReconcile("tab-document-settled", DOCUMENT_SETTLE_MS + 100);
+    } else if (changeInfo.url) {
+      scheduleReconcile("tab-navigation", DOCUMENT_SETTLE_MS + 100);
+    }
   });
-  chrome.tabs.onRemoved.addListener(tabId => state.runtimeReadyTabs.delete(Number(tabId)));
+  chrome.tabs.onRemoved.addListener(tabId => {
+    state.runtimeReadyTabs.delete(Number(tabId));
+    state.runtimePageCompleteAt.delete(Number(tabId));
+    state.runtimeRetryAfter.delete(Number(tabId));
+  });
 
   chrome.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
