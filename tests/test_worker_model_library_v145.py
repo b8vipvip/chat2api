@@ -205,6 +205,9 @@ def test_model_catalog_never_leaks_dynamic_model_eligibility_across_workers():
         async def save(self):
             pass
 
+    from app import model_capability_routing_patch as routing
+    original_compatible = routing._compatible
+    original_dynamic = routing._is_dynamic_text_model
     registry = Registry()
     app = FastAPI()
     app.state.registry = registry
@@ -224,6 +227,9 @@ def test_model_catalog_never_leaks_dynamic_model_eligibility_across_workers():
     assert rows["gpt-6"]["validated"] is True
     assert registry.is_free_default_route("ext_free", "gpt-6")
     assert not registry.is_free_default_route("ext_paid", "gpt-6")
+    # Restore global hooks after this isolated installer test.
+    routing._compatible = original_compatible
+    routing._is_dynamic_text_model = original_dynamic
 
 
 
