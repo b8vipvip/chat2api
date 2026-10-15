@@ -30,6 +30,10 @@ class ModelSwitch(BaseModel):
     enabled: bool
 
 
+class MinimumModelSelection(BaseModel):
+    model_id: str | None = None
+
+
 def _model_rows(values: Any, *, verified_only: bool = False) -> list[dict[str, Any]]:
     if not isinstance(values, list):
         return []
@@ -83,7 +87,7 @@ def _load(path: Path) -> dict[str, Any]:
             return payload
     except (OSError, ValueError, TypeError):
         pass
-    return {"disabled": [], "history": []}
+    return {"disabled": [], "history": [], "legacy_minimum_model": None}
 
 
 def _persist(path: Path, data: dict[str, Any]) -> None:
@@ -116,6 +120,8 @@ def install_worker_text_model_management_v146_patch(app: FastAPI) -> FastAPI:
     lock = asyncio.Lock()
     disabled = {x for x in data.get("disabled", []) if normalize_concrete_model_id(x) == x}
     history = list(data.get("history") or [])[-800:]
+    minimum_model = normalize_concrete_model_id(data.get("legacy_minimum_model")) if data.get("legacy_minimum_model") else None
+    registry.legacy_minimum_model = lambda: minimum_model
     base_touch = registry.touch
     base_supports = registry.supports_model
     base_catalog = registry.model_catalog
@@ -127,7 +133,8 @@ def install_worker_text_model_management_v146_patch(app: FastAPI) -> FastAPI:
                 **event,
             })
             del history[:-800]
-            _persist(path, {"disabled": sorted(disabled), "history": history})
+            _persist(path, {"disabled": sorted(disabled), "history": history,
+                            "legacy_minimum_model": minimum_model})
 
     async def touch_with_history(client_id: str, metadata: dict[str, Any] | None = None):
         before = _worker_snapshot(getattr(registry.clients.get(client_id), "metadata", {}))
@@ -213,6 +220,7 @@ def install_worker_text_model_management_v146_patch(app: FastAPI) -> FastAPI:
             "workers": workers,
             "history": list(reversed(history[-200:])),
             "disabled": sorted(disabled),
+            "legacy_minimum_model": minimum_model,
         }
 
     # Reuse the exact administrator dependency (including future auth updates).
@@ -239,6 +247,21 @@ def install_worker_text_model_management_v146_patch(app: FastAPI) -> FastAPI:
             disabled.add(model)
         await record({"event": "admin-model-toggle", "model_id": model, "enabled": body.enabled})
         return {"model_id": model, "enabled": body.enabled, "authority": PATCH_ID}
+
+    @app.patch("/api/admin/text-model-minimum", dependencies=guard)
+    async def admin_configure_minimum_model(body: MinimumModelSelection):
+        nonlocal minimum_model
+        model = normalize_concrete_model_id(body.model_id) if body.model_id else None
+        if body.model_id and (not model or model in TEXT_SPECIAL_IDS):
+            raise HTTPException(400, "Select a valid concrete text model")
+        # The administrator selects only real observed/verified models, not a
+        # guessed model; the request router subsequently requires it to be
+        # enabled and available on a ready Worker.
+        if model and (model in disabled or model not in {row["id"] for row in snapshot()["data"]}):
+            raise HTTPException(400, "Model must be enabled and discovered before it can be configured")
+        minimum_model = model
+        await record({"event": "admin-set-legacy-minimum", "model_id": model})
+        return {"legacy_minimum_model": model, "authority": PATCH_ID}
 
     @app.get(ASSET_PATH, include_in_schema=False)
     async def admin_models_asset():

@@ -194,10 +194,12 @@
 
   function familyFromText(value) {
     const text = normalizedLabelLower(value);
-    for (const [family, aliases] of Object.entries(FAMILY_ALIASES)) {
-      if (aliases.some(alias => text === normalizedLabelLower(alias) || text.includes(normalizedLabelLower(alias)))) return family;
-    }
-    return "";
+    // A single concrete model mention is usable evidence; popup wrappers
+    // listing several models are not selected-model evidence.
+    const pattern = /\\bgpt[-\\s]?(\\d+(?:\\.\\d+)?)(?:[-\\s]+(astra|pro|sol|terra|luna|mini))?\\b/g;
+    const ids = [...new Set([...text.matchAll(pattern)].map(match =>
+      "gpt-" + match[1] + (match[2] ? "-" + match[2] : "")))];
+    return ids.length === 1 ? ids[0] : "";
   }
 
   function reasoningFromText(value) {
@@ -251,19 +253,41 @@
   }
 
   function reasoningEvidence() {
+    // Only an explicitly selected UI state proves reasoning effort. A list of
+    // options, a hover label, or the requested value does not prove selection.
+    const surfaces = openSurfaces();
+    const selected = [];
+    for (const surface of surfaces) {
+      for (const node of surface.querySelectorAll(
+        "[aria-checked='true'],[aria-selected='true'],[data-state='checked'],[data-state='selected']")) {
+        if (!visible(node)) continue;
+        const label = labelOf(node);
+        const level = reasoningFromText(label);
+        if (["instant", "medium", "high"].includes(level))
+          selected.push({reasoning:level, source:"selected-reasoning-option", label});
+      }
+    }
+    const unique = [...new Set(selected.map(row=>row.reasoning))];
+    if (unique.length === 1) return selected.find(row=>row.reasoning===unique[0]);
+    if (unique.length > 1) return {reasoning:"", source:"ambiguous-reasoning-selection"};
+
+    const slider = reasoningSlider();
+    if (slider && visible(slider)) {
+      const label = slider.getAttribute?.("aria-valuetext") || slider.getAttribute?.("data-value") || "";
+      const level = reasoningFromText(label);
+      if (["instant", "medium", "high"].includes(level))
+        return {reasoning:level, source:"reasoning-slider-value", label};
+    }
     const candidates = modelReasoningControls().filter(item => ["instant", "medium", "high"].includes(item.reasoning));
-    if (!candidates.length) return { reasoning: "", source: "none" };
-    const exact = candidates.find(item => {
-      const firstAlias = (REASONING_ALIASES[item.reasoning] || [])[0] || "";
-      return normalizedLabelLower(item.label) === normalizedLabelLower(firstAlias);
-    });
-    const combined = candidates.find(item => item.family);
-    const item = exact || combined || candidates[0];
-    return { reasoning: item.reasoning, source: "composer-dom", label: item.label };
+    const levels = [...new Set(candidates.map(item=>item.reasoning))];
+    if (levels.length !== 1) return {reasoning:"", source:levels.length ? "ambiguous-dom" : "none"};
+    const item = candidates.find(row=>row.reasoning===levels[0]);
+    return {reasoning:item.reasoning, source:"composer-dom", label:item.label};
   }
 
   function modelFamilyEvidence() {
     const root = composerRoot() || document;
+    const headerRoots = [...document.querySelectorAll("header")];
     const attributeNames = ["data-model", "data-model-id", "data-value", "aria-label", "title"];
     const selectedSelectors = [
       "[aria-checked='true']",
@@ -277,8 +301,8 @@
     const seen = new Set();
     const rows = [];
     for (const selector of selectedSelectors) {
-      for (const element of root.querySelectorAll(selector)) {
-        if (seen.has(element)) continue;
+      for (const element of [root, ...headerRoots].flatMap(scope => [...scope.querySelectorAll(selector)])) {
+        if (seen.has(element) || !visible(element)) continue;
         seen.add(element);
         const values = [labelOf(element), ...attributeNames.map(name => element.getAttribute?.(name) || "")];
         const family = values.map(familyFromText).find(Boolean) || "";

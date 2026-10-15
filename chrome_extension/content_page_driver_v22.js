@@ -4,14 +4,14 @@
 
   const VERSION = "22.3.0";
   const CACHE_KEY = "chat2api:model-state:v2";
-  const TEXT_MODELS = new Set(["gpt-5.6-sol", "gpt-5.5"]);
+  const TEXT_MODEL_ID = /^gpt-[a-z0-9][a-z0-9.:-]{0,110}$/;
   const REASONING_LEVELS = new Set(["instant", "medium", "high"]);
 
   const page = () => globalThis.__CHAT2API_PAGE_ADAPTER_V22__ || null;
 
   function normalizeModel(value) {
     const normalized = String(value || "").trim().toLowerCase().replace(/\s+/g, "-");
-    return TEXT_MODELS.has(normalized) ? normalized : "";
+    return TEXT_MODEL_ID.test(normalized) && !["gpt-image","gpt-live","gpt-live-mini"].includes(normalized) ? normalized : "";
   }
 
   function normalizeReasoning(value) {
@@ -44,16 +44,17 @@
 
     const family = familyEvidence.family || (!cache.dirty_family ? String(cache.family || "") : "");
     const reasoning = reasoningEvidence.reasoning || (!cache.dirty_reasoning ? String(cache.reasoning || "") : "");
-    const familyTrusted = Boolean(familyEvidence.family || (family && !cache.dirty_family));
-    const reasoningTrusted = Boolean(reasoningEvidence.reasoning || (reasoning && !cache.dirty_reasoning));
+    // Cache is diagnostic only: historic labels cannot certify a fresh UI state.
+    const familyTrusted = Boolean(familyEvidence.family);
+    const reasoningTrusted = Boolean(reasoningEvidence.reasoning);
 
     return {
       family,
       reasoning,
       family_trusted: familyTrusted,
       reasoning_trusted: reasoningTrusted,
-      family_source: familyEvidence.family ? familyEvidence.source : (familyTrusted ? "session-cache" : familyEvidence.source),
-      reasoning_source: reasoningEvidence.reasoning ? reasoningEvidence.source : (reasoningTrusted ? "session-cache" : reasoningEvidence.source),
+      family_source: familyEvidence.family ? familyEvidence.source : (family ? "session-cache-unverified" : familyEvidence.source),
+      reasoning_source: reasoningEvidence.reasoning ? reasoningEvidence.source : (reasoning ? "session-cache-unverified" : reasoningEvidence.source),
       family_label: familyEvidence.label || "",
       reasoning_label: reasoningEvidence.label || "",
       cache_dirty_family: Boolean(cache.dirty_family),
