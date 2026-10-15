@@ -65,6 +65,20 @@ def test_realtime_protocol_contract_matches_live_bridge():
     assert LIVE_PROTOCOL_VERSION == "chat2api-live-v1"
 
 
+def test_v148_release_contract_keeps_broker_terminal_authority():
+    from pathlib import Path
+    from app.runtime_contract import RELEASE_VERSION, CHROME_BRIDGE_BUNDLE_VERSION
+    assert RELEASE_VERSION == "0.22.148"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == RELEASE_VERSION
+    root = Path(__file__).resolve().parents[1]
+    watchdog = (root / "app/request_stall_patch.py").read_text(encoding="utf-8")
+    reaper = (root / "app/request_recovery_patch.py").read_text(encoding="utf-8")
+    assert 'accepted = await broker.publish(' in watchdog
+    assert 'await broker.release(state.request_id)' in watchdog
+    assert 'await broker.release(str(state.request_id))' in reaper
+    assert 'await broker.release(str(request_id))' in reaper
+
+
 def test_v147_key_quota_replaces_per_key_concurrency_contract():
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["features"]["api_key_token_quota"] is True
