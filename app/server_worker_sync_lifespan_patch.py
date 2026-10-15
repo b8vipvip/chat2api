@@ -35,9 +35,8 @@ def install_server_worker_sync_patch(app: FastAPI) -> FastAPI:
     """Install Worker sync plus same-host coalescing and v58 admission.
 
     Historical account/free/v57 admission layers are not reinstalled here. The
-    final broker.create/release owner is v58: one active request per logical API
-    key, FIFO waiting on the server, and independent concurrency only across
-    distinct API keys. Multiple isolated Worker slots on one physical host share
+    final broker.create/release owner is v58: one FIFO per Worker limited by
+    physical Worker capacity, with no logical API Key concurrency restriction. Multiple isolated Worker slots on one physical host share
     one Worker runtime install, so their server-driven update is coalesced into
     one host-level update before final capacity is installed.
     """
