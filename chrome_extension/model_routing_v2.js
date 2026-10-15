@@ -1,6 +1,6 @@
 (() => {
   const baseHandleServerMessage = handleServerMessage;
-  const LIBRARY_REVISION = 145;
+  const LIBRARY_REVISION = 145; // model catalog schema
   const FREE_DEFAULT_MINI = "gpt-5.5-mini";
   const SPECIAL_MODELS = new Set(["gpt-image", "gpt-live", "gpt-live-mini"]);
 
