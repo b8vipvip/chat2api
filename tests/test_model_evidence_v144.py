@@ -112,6 +112,24 @@ def test_gptwork_default_profile_mismatch_is_not_a_fake_fallback() -> None:
     assert trace["model_fallback_reason"] is None
 
 
+def test_free_default_network_request_is_not_misrepresented_as_concrete_model():
+    from app.model_observability_v144_patch import _trace
+    authority = {"requested_model": "gpt-5.6-sol", "routed_model": "gpt-5.6-sol",
+                 "default_page_route": True, "strict": False, "transport_model": None}
+    trace = _trace(authority, {"request_model": "auto", "default_model": "gpt-5.6-sol"})
+    assert trace["default_page_route"] is True
+    assert trace["model_authority_violation"] is False
+    assert trace["model_verified"] is False
+    assert trace["transport_model"] is None
+    assert trace["model_verification_level"] == "page-default-unverified"
+    served = _trace(authority, {"served_model": "gpt-5.6-sol"})
+    assert served["model_verified"] is True
+
+    source = (ROOT / "chrome_extension" / "model_evidence_main_v144.js").read_text(encoding="utf-8")
+    assert "authority?.default_page_route === true" in source
+    assert "request_rewritten:false" in source
+
+
 def test_v144_is_final_server_and_worker_boundary() -> None:
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     v144 = entry.rindex("install_model_observability_v144_patch(app)")
