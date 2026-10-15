@@ -50,15 +50,14 @@ STATIC_SPECIAL_MODELS: dict[str, dict[str, Any]] = {
 
 
 
-FREE_DEFAULT_MINI = "gpt-5.5-mini"
+def _configured_default_model(registry: Any) -> str | None:
+    """The admin's single persisted minimum-model setting, not a hardcoded Mini."""
+    getter = getattr(registry, "legacy_minimum_model", None)
+    return normalize_concrete_model_id(getter()) if callable(getter) else None
 
 
-def _free_default_mini_eligible(registry: Any, client_id: str) -> bool:
-    """Free default route is a compatibility capability, NOT model verification.
-
-    Free ChatGPT accounts may expose a ready composer without a model picker.
-    The v145 verified-library contract remains mandatory for every other model.
-    """
+def _free_default_composer_eligible(registry: Any, client_id: str) -> bool:
+    """A ready Free composer with no picker; this is NOT served-model proof."""
     item = getattr(registry, "clients", {}).get(str(client_id))
     metadata = getattr(item, "metadata", None) if item else None
     if not isinstance(metadata, dict):
@@ -76,6 +75,12 @@ def _free_default_mini_eligible(registry: Any, client_id: str) -> bool:
         return bool(checker(client_id))
     except Exception:
         return False
+
+def _free_default_route(registry: Any, client_id: str, model: str) -> bool:
+    """One authority for Free default capability, catalog and dispatch intent."""
+    configured = _configured_default_model(registry)
+    return bool(configured and normalize_concrete_model_id(model) == configured
+                and _free_default_composer_eligible(registry, client_id))
 
 
 def _model_id(raw: Any) -> str | None:
@@ -307,7 +312,7 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
             return False
         if model in STATIC_SPECIAL_MODELS:
             return True
-        if model == FREE_DEFAULT_MINI and _free_default_mini_eligible(registry, client_id):
+        if _free_default_route(registry, client_id, model):
             return True
         return (
             any(str(item.get("id") or "") == model for item in _validated_model_rows(registry, client_id))
@@ -320,24 +325,27 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
             client_ids = [client_id for client_id in registry.online_client_ids() if registry.chatgpt_routing_ready(client_id)]
         else:
             client_ids = [client_id for client_id, item in registry.clients.items() if getattr(item, "connection_enabled", False)]
+        default_model = _configured_default_model(registry)
         for client_id in client_ids:
             for special in catalog.values():
                 if client_id not in special["clients"]:
                     special["clients"].append(client_id)
-            if _free_default_mini_eligible(registry, client_id):
-                entry = catalog.setdefault(FREE_DEFAULT_MINI, {
-                    "id": FREE_DEFAULT_MINI,
+            if default_model and _free_default_route(registry, client_id, default_model):
+                entry = catalog.setdefault(default_model, {
+                    "id": default_model,
                     "object": "model",
                     "created": 0,
                     "owned_by": "chat2api",
-                    "label": "GPT-5.5 Mini · Free 默认（待响应验证）",
+                    "label": default_model + " · Free 页面默认（未经响应验证）",
                     "capabilities": ["text", "vision", "file-understanding"],
                     "clients": [],
+                    "compatibility_clients": [],
                     "source": "free-default-compatibility-unverified",
                     "validated": False,
                 })
                 if client_id not in entry["clients"]:
                     entry["clients"].append(client_id)
+                entry.setdefault("compatibility_clients", []).append(client_id)
             for model in _validated_model_rows(registry, client_id):
                 model_id = str(model["id"])
                 entry = catalog.setdefault(
@@ -357,6 +365,9 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
                         "validated": True,
                     },
                 )
+                if entry.get("source") == "free-default-compatibility-unverified":
+                    entry.update(source="worker-validated", validated=True,
+                                 label=model.get("label") or model_id)
                 if client_id not in entry["clients"]:
                     entry["clients"].append(client_id)
                 if model.get("validated_at"):
@@ -388,6 +399,7 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
     registry.set_connection_enabled = set_connection_enabled_with_validation_reset
     registry.client_models = client_models_validated
     registry.supports_model = supports_model_strict
+    registry.is_free_default_route = lambda client_id, model: _free_default_route(registry, client_id, model)
     registry.model_catalog = model_library
     model_routing._is_dynamic_text_model = is_library_text_model
     model_routing._compatible = compatible_strict
@@ -405,8 +417,9 @@ __all__ = [
     "PATCH_REVISION",
     "VALIDATION_REVISION",
     "STATIC_SPECIAL_MODELS",
-    "FREE_DEFAULT_MINI",
-    "_free_default_mini_eligible",
+    "_configured_default_model",
+    "_free_default_composer_eligible",
+    "_free_default_route",
     "_validated_model_rows",
     "_mark_pending",
     "install_worker_model_library_v145_patch",
