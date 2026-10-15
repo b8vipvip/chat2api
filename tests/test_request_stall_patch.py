@@ -324,3 +324,58 @@ def test_stale_replaced_socket_cannot_fail_new_connection_request(monkeypatch):
         await broker.release(state.request_id)
 
     asyncio.run(scenario())
+
+
+def test_preflight_error_is_terminal_but_never_a_submission_ack(monkeypatch):
+    async def scenario() -> None:
+        monkeypatch.setattr(request_stall_patch, "DISPATCH_ACK_TIMEOUT_SECONDS", 10.0)
+        monkeypatch.setattr(request_stall_patch, "SUBMIT_ACK_TIMEOUT_SECONDS", 10.0)
+        _app, broker, _registry = make_app()
+        state = await broker.create("req_preflight_failed", "ext_preflight")
+        accepted = await broker.publish(
+            state.request_id,
+            {"type": "chat.error", "request_id": state.request_id,
+             "error": "reasoning_state_untrusted"},
+        )
+        assert accepted is True
+        assert state.terminal_event_type == "chat.error"
+        assert state.completed_mono is not None
+        assert getattr(state, "_chat2api_submit_ack", False) is False
+        assert "extension_submit_ack_ms" not in state.diagnostics
+        with pytest.raises(RuntimeError, match="reasoning_state_untrusted"):
+            await state.final_future
+        await broker.release(state.request_id)
+
+    asyncio.run(scenario())
+
+
+def test_watchdog_terminal_uses_final_broker_publisher_and_release(monkeypatch):
+    async def scenario() -> None:
+        monkeypatch.setattr(request_stall_patch, "DISPATCH_ACK_TIMEOUT_SECONDS", 0.02)
+        monkeypatch.setattr(request_stall_patch, "SUBMIT_ACK_TIMEOUT_SECONDS", 10.0)
+        monkeypatch.setattr(request_stall_patch, "ORPHAN_RELEASE_GRACE_SECONDS", 0.02)
+        _app, broker, _registry = make_app()
+        original_publish, original_release = broker.publish, broker.release
+        accepted, released = [], []
+
+        async def outer_publish(request_id, event):
+            result = await original_publish(request_id, event)
+            if result and event.get("type") == "chat.error":
+                accepted.append(request_id)
+            return result
+
+        async def outer_release(request_id):
+            released.append(request_id)
+            await original_release(request_id)
+
+        broker.publish = outer_publish
+        broker.release = outer_release
+        state = await broker.create("req_watchdog_owner", "ext_watchdog")
+        with pytest.raises(RuntimeError, match="did not acknowledge browser dispatch"):
+            await asyncio.wait_for(state.final_future, timeout=0.25)
+        await asyncio.sleep(0.06)
+        assert accepted == [state.request_id]
+        assert released.count(state.request_id) == 1
+        assert state.request_id not in broker.requests
+
+    asyncio.run(scenario())
