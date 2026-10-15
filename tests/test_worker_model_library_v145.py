@@ -165,6 +165,68 @@ def test_free_default_mini_browser_integration() -> None:
     assert run.returncode == 0, run.stdout + run.stderr
 
 
+def test_model_catalog_never_leaks_dynamic_model_eligibility_across_workers():
+    from fastapi import FastAPI
+    from app.worker_model_library_v145_patch import install_worker_model_library_v145_patch
+
+    class Registry:
+        def __init__(self):
+            self.minimum = "gpt-5.6-sol"
+            self.clients = {
+                "ext_free": SimpleNamespace(connection_enabled=True, metadata={
+                    "account_type": "free", "account_detection_confidence": "high",
+                    "account_model_control_present": False, "models": [],
+                }),
+                "ext_paid": SimpleNamespace(connection_enabled=True, metadata={
+                    "account_type": "plus", "model_validation_state": "validated",
+                    "model_validation_revision": VALIDATION_REVISION,
+                    "models": [{"id": "gpt-6", "validated": True,
+                                "validation_revision": VALIDATION_REVISION}],
+                }),
+            }
+        def online_client_ids(self):
+            return list(self.clients)
+        def chatgpt_routing_ready(self, client_id):
+            return True
+        def legacy_minimum_model(self):
+            return self.minimum
+        def client_models(self, client_id):
+            return []
+        def supports_model(self, client_id, model):
+            return False
+        def model_catalog(self, online_only=True):
+            return []
+        async def attach(self, *args, **kwargs):
+            pass
+        async def register(self, *args, **kwargs):
+            return ("ext_free", "token")
+        async def set_connection_enabled(self, *args, **kwargs):
+            return None
+        async def save(self):
+            pass
+
+    registry = Registry()
+    app = FastAPI()
+    app.state.registry = registry
+    install_worker_model_library_v145_patch(app)
+    rows = {row["id"]: row for row in registry.model_catalog()}
+    assert rows["gpt-5.6-sol"]["clients"] == ["ext_free"]
+    assert rows["gpt-5.6-sol"]["validated"] is False
+    assert rows["gpt-6"]["clients"] == ["ext_paid"]
+    assert registry.supports_model("ext_free", "gpt-5.6-sol")
+    assert not registry.supports_model("ext_free", "gpt-6")
+
+    registry.minimum = "gpt-6"
+    rows = {row["id"]: row for row in registry.model_catalog()}
+    assert "gpt-5.6-sol" not in rows
+    assert rows["gpt-6"]["clients"] == ["ext_free", "ext_paid"]
+    assert rows["gpt-6"]["compatibility_clients"] == ["ext_free"]
+    assert rows["gpt-6"]["validated"] is True
+    assert registry.is_free_default_route("ext_free", "gpt-6")
+    assert not registry.is_free_default_route("ext_paid", "gpt-6")
+
+
+
 def test_picker_observations_are_candidates_not_served_model_proof():
     registry = _registry({
         "model_validation_state": "discovered",
