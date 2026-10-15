@@ -128,6 +128,17 @@
         rows.push(element);
       }
     }
+    // ChatGPT sometimes portals model rows without a role=menu/listbox or a
+    // radix wrapper. Only semantic *interactive* rows are eligible here, and
+    // modelChoices still rejects wrappers containing multiple model IDs.
+    if (!rows.length) {
+      const detached = [...document.querySelectorAll(
+        "[role='menuitem'],[role='menuitemradio'],[role='option']"
+      )].filter(item => visible(item) && distinctModelIds(labelOf(item)).length === 1);
+      if (detached.length) rows.push({
+        querySelectorAll: () => detached,
+      });
+    }
     return rows;
   }
 
@@ -229,14 +240,27 @@
     closeMenus();
     const picker = await waitFor(() => modelPicker(), OPEN_TIMEOUT_MS, 120);
     if (!picker) throw new Error("ChatGPT model picker was not found");
-    picker.click();
-    // A popup shell is not a hydrated model menu. React can mount the shell
-    // before selectable rows, especially immediately after a model navigation.
-    // Wait for concrete selectable evidence under the single picker owner.
-    let choices = await waitFor(() => {
-      const rows = modelChoices();
-      return rows.length ? rows : null;
-    }, OPEN_TIMEOUT_MS, 100);
+    // A header may render before the conversation composer has hydrated.
+    // A picker click on that transitional page can be ignored entirely.
+    await waitFor(() => document.querySelector(
+      "#prompt-textarea,textarea,[contenteditable='true']"
+    ), OPEN_TIMEOUT_MS, 120);
+    let choices = null;
+    // One bounded re-open after a missing/unfinished popup, not a tab-close
+    // loop and never a second model-selection authority.
+    for (let attempt = 0; attempt < 2 && !choices; attempt += 1) {
+      if (attempt) {
+        closeMenus();
+        await delay(250);
+      }
+      const currentPicker = modelPicker();
+      if (!currentPicker) break;
+      currentPicker.click();
+      choices = await waitFor(() => {
+        const rows = modelChoices();
+        return rows.length ? rows : null;
+      }, OPEN_TIMEOUT_MS, 100);
+    }
     if (!choices) throw new Error("ChatGPT model menu did not expose concrete model choices");
     const expansion = expansionChoice();
     if (expansion) {
