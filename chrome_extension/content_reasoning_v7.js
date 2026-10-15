@@ -408,20 +408,14 @@
       return finish({ reasoning: requested, zero_op: true, reasoning_switched: false, selection_strategy: "reasoning-driver-zero-op", used_click: false });
     }
 
-    let result = await chooseNoClick(requested);
-    // One attempt may already have changed the page even if the submenu
-    // auto-closed. Never run a second selection algorithm on that same
-    // candidate; inspect only, and fail closed if no selected state exists.
-    if (result) {
-      if (await inspectAppliedReasoning(requested))
-        return finish({ reasoning: requested, zero_op: false,
-          reasoning_switched: true, selection_strategy: result.strategy, used_click: false });
-    } else {
-      result = await chooseClickFallback(requested);
-      if (await inspectAppliedReasoning(requested))
-        return finish({ reasoning: requested, zero_op: false,
-          reasoning_switched: true, selection_strategy: result.strategy, used_click: true });
-    }
+    // A synthetic Enter event can be ignored by the React page yet the
+    // old no-click routine returned a successful-looking candidate. Use
+    // exactly one explicit UI selection action, then verify the selected
+    // state by opening the menu for inspection without selecting again.
+    const result = await chooseClickFallback(requested);
+    if (await inspectAppliedReasoning(requested))
+      return finish({ reasoning: requested, zero_op: false,
+        reasoning_switched: true, selection_strategy: result.strategy, used_click: true });
     const evidence = driver()?.verifyReasoning?.(requested) || null;
     key(document, "Escape", "Escape");
     const error = new Error(`ChatGPT reasoning level could not be verified after selection: ${requested}`);

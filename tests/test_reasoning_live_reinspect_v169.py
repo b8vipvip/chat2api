@@ -12,7 +12,7 @@ def test_reasoning_one_write_live_inspection_regression():
 
 def test_reasoning_controller_does_not_run_two_selectors_after_first_candidate():
     source = (ROOT / "chrome_extension" / "content_reasoning_v7.js").read_text()
-    assert "if (result) {" in source
+    assert "const result = await chooseClickFallback(requested);" in source
     assert "inspectAppliedReasoning(requested)" in source
     assert "result = await chooseClickFallback(requested);" in source
     assert "The Page Driver remains the single" in source

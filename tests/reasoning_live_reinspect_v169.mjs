@@ -7,14 +7,14 @@ const src = fs.readFileSync("chrome_extension/content_reasoning_v7.js","utf8");
 async function scenario(applySelection) {
   let onMessage, menuOpen=false, selected=false, inspectClicks=0, choiceClicks=0;
   const pill={kind:"pill",innerText:"GPT-5.6 Sol",focus(){},click(){inspectClicks++;menuOpen=true;}};
-  const choice={kind:"choice",innerText:"Medium",focus(){},click(){choiceClicks++;selected=true;menuOpen=false;}};
+  const choice={kind:"choice",innerText:"Medium",focus(){},click(){choiceClicks++;if(applySelection)selected=true;menuOpen=false;}};
   const menu={kind:"menu",querySelectorAll:()=>[choice]};
   const document={kind:"document"};
   const driver={
     version:"22.4.0",
     dispatchKey(target,name,_code,extra={}){
       if(target===document && name==="M" && extra.ctrlKey && extra.shiftKey) menuOpen=true;
-      if(target===choice && name==="Enter"){if(applySelection)selected=true;menuOpen=false;}
+      if(target===choice && name==="Enter"){throw Error("Synthetic Enter must not be used as selection proof");}
       return true;
     },
     verifyReasoning(level){return {ok:level==="medium"&&selected&&menuOpen,code:"reasoning_state_untrusted",requested_reasoning:level,actual_reasoning:selected&&menuOpen?"medium":null};},
@@ -46,10 +46,10 @@ async function scenario(applySelection) {
 
 const success=await scenario(true);
 assert.equal(success.response.ok,true,"live selected-state proof should allow request preflight");
-assert.equal(success.inspectClicks,1,"one read-only picker reopening");
-assert.equal(success.choiceClicks,0,"never replay model/reasoning selection via click fallback");
+assert.equal(success.inspectClicks,2,"open picker once for choice, once for read-only verification");
+assert.equal(success.choiceClicks,1,"one concrete choice click, no second selection");
 const fail=await scenario(false);
 assert.equal(fail.response.ok,false,"no selected-state proof must fail closed");
-assert.equal(fail.choiceClicks,0,"no-click attempt must not lead to a second selection authority");
+assert.equal(fail.choiceClicks,1,"failed selection must not be retried by another algorithm");
 assert.equal(fail.response.code,"reasoning_state_untrusted");
 console.log("Reasoning one-write/live-inspection regression passed");
