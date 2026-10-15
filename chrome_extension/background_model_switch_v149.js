@@ -79,7 +79,16 @@
           await delay(240);
           continue;
         }
-        const probe = await send(tabId, {type: "chat2api.model.inspect.v149"});
+        // Inspection is read-only. Bound each response wait so a stranded
+        // document cannot consume the entire confirmation budget in one call.
+        // Never replay the model commit/click itself.
+        const inspectBudget = Math.min(5000, Math.max(1, deadline - Date.now()));
+        const probe = await Promise.race([
+          send(tabId, {type: "chat2api.model.inspect.v149"}),
+          delay(inspectBudget).then(() => ({
+            ok:false, error:"model_inspection_reply_timeout", code:"model_inspection_reply_timeout"
+          })),
+        ]);
         if (probe?.ok) {
           lastInspection = probe.data || {};
           lastError = "";

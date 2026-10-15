@@ -225,13 +225,21 @@
     const picker = await waitFor(() => modelPicker(), OPEN_TIMEOUT_MS, 120);
     if (!picker) throw new Error("ChatGPT model picker was not found");
     picker.click();
-    await waitFor(() => menuRoots().length ? true : null, OPEN_TIMEOUT_MS, 100);
-    let choices = modelChoices();
+    // A popup shell is not a hydrated model menu. React can mount the shell
+    // before selectable rows, especially immediately after a model navigation.
+    // Wait for concrete selectable evidence under the single picker owner.
+    let choices = await waitFor(() => {
+      const rows = modelChoices();
+      return rows.length ? rows : null;
+    }, OPEN_TIMEOUT_MS, 100);
+    if (!choices) throw new Error("ChatGPT model menu did not expose concrete model choices");
     const expansion = expansionChoice();
     if (expansion) {
       expansion.click();
-      await delay(220);
-      const nested = modelChoices();
+      const nested = await waitFor(() => {
+        const rows = modelChoices();
+        return rows.length > choices.length ? rows : null;
+      }, 900, 100) || modelChoices();
       const byId = new Map([...choices, ...nested].map(item => [item.id, item]));
       choices = [...byId.values()];
     }

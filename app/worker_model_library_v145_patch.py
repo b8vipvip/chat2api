@@ -121,6 +121,37 @@ def _validated_model_rows(registry: Any, client_id: str) -> list[dict[str, Any]]
     return result
 
 
+
+
+def _selectable_observed_model_ids(registry: Any, client_id: str) -> set[str]:
+    """Routing candidates, never a validated served-model catalog.
+
+    Browser-side model switching must still verify the concrete selection.
+    Pending/reconnected Workers must not reuse old observations.
+    """
+    client = getattr(registry, "clients", {}).get(str(client_id))
+    metadata = getattr(client, "metadata", None) if client else None
+    if not isinstance(metadata, dict):
+        return set()
+    try:
+        revision = int(metadata.get("model_validation_revision") or 0)
+    except (TypeError, ValueError):
+        return set()
+    if revision < VALIDATION_REVISION or metadata.get("model_validation_state") not in {"discovered", "validated"}:
+        return set()
+    observed = metadata.get("model_observed_choices")
+    if not isinstance(observed, list):
+        return set()
+    return {
+        model_id
+        for item in observed
+        if isinstance(item, dict)
+        and item.get("selectable") is True
+        and (model_id := _model_id(item))
+        and model_id not in STATIC_SPECIAL_MODELS
+    }
+
+
 def _mark_pending(registry: Any, client_id: str, trigger: str) -> None:
     client = getattr(registry, "clients", {}).get(str(client_id))
     if not client:
@@ -278,7 +309,10 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
             return True
         if model == FREE_DEFAULT_MINI and _free_default_mini_eligible(registry, client_id):
             return True
-        return any(str(item.get("id") or "") == model for item in _validated_model_rows(registry, client_id))
+        return (
+            any(str(item.get("id") or "") == model for item in _validated_model_rows(registry, client_id))
+            or model in _selectable_observed_model_ids(registry, client_id)
+        )
 
     def model_library(online_only: bool = True) -> list[dict[str, Any]]:
         catalog = {key: {**value, "clients": []} for key, value in STATIC_SPECIAL_MODELS.items()}

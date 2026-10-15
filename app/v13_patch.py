@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .api_keys import ApiPrincipal
 from .models import ChatCompletionRequest, ChatMessage
+from .model_catalog import normalize_concrete_model_id
 
 
 PATCH_VERSION = "0.13.0"
@@ -49,12 +50,14 @@ def _openai_error(message: str, *, param: str | None = None, code: str = "invali
 
 
 def _normalize_model(value: Any) -> str:
+    # Parse an ID; capability admission is owned by the installed Worker
+    # model-library resolver. This layer must not preempt it with v13's
+    # historical hardcoded model list.
     raw = str(value or DEFAULT_TEXT_MODEL).strip().lower()
-    if raw in {"default", "chatgpt-web"}:
-        raise ValueError("model IDs 'default' and 'chatgpt-web' were removed; use 'gpt-5.6-sol' or 'gpt-5.5'")
-    if raw not in TEXT_MODELS:
-        raise ValueError(f"Unsupported text model: {raw}. Supported models: {', '.join(TEXT_MODELS)}")
-    return raw
+    model = normalize_concrete_model_id(raw)
+    if model is None or model in SPECIAL_MODELS:
+        raise ValueError(f"Invalid concrete text model ID: {raw}")
+    return model
 
 
 def _normalize_reasoning(value: Any) -> tuple[str, str] | tuple[None, None]:
@@ -555,7 +558,11 @@ def install_v13_patch(app: FastAPI) -> FastAPI:
                     if isinstance(capabilities, dict):
                         capabilities["openai_responses_api"] = True
                         capabilities["openai_legacy_completions"] = True
-                        capabilities["canonical_text_models"] = list(TEXT_MODELS)
+                        capabilities["canonical_text_models"] = [
+                            str(row["id"]) for row in registry.model_catalog(online_only=True)
+                            if isinstance(row, dict)
+                            and row.get("id") not in SPECIAL_MODELS
+                        ]
                         capabilities["reasoning_efforts"] = ["low", "medium", "high"]
             headers = {k: v for k, v in response.headers.items() if k.lower() not in {"content-length", "content-type"}}
             headers["Cache-Control"] = "no-store"
