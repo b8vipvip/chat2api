@@ -62,21 +62,34 @@
     state.keys = payload.data || [];
     $("keysBody").innerHTML = state.keys.length ? state.keys.map((row) => {
       const active = row.enabled && !row.revoked_at && !row.expired;
-      return `<tr><td>${esc(row.name)}</td><td><code>${esc(row.prefix)}</code></td><td><span class="pill">${active ? "可用" : "已停用"}</span></td><td>${esc(time(row.created_at))}</td><td>${esc(time(row.last_used_at))}</td><td><button class="action" data-reveal="${esc(row.key_id)}">查看</button> <button class="action danger" data-revoke="${esc(row.key_id)}">撤销</button></td></tr>`;
-    }).join("") : `<tr><td colspan="6" class="muted">还没有 API Key。</td></tr>`;
+      return `<tr><td>${esc(row.name)}</td><td><code>${esc(row.prefix)}</code></td><td><span class="pill">${active ? "可用" : row.quota_exhausted ? "额度耗尽" : "已停用"}</span></td><td>${row.token_quota == null ? "不限" : `${num(row.tokens_used)} / ${num(row.token_quota)}`} <input type="number" min="0" step="1" data-quota-input="${esc(row.key_id)}" placeholder="不限" value="${row.token_quota == null ? "" : row.token_quota}" style="width:115px"> <button class="action" data-quota-save="${esc(row.key_id)}">保存</button></td><td>${esc(time(row.created_at))}</td><td>${esc(time(row.last_used_at))}</td><td><button class="action" data-reveal="${esc(row.key_id)}">查看</button> <button class="action danger" data-revoke="${esc(row.key_id)}">撤销</button></td></tr>`;
+    }).join("") : `<tr><td colspan="7" class="muted">还没有 API Key。</td></tr>`;
     document.querySelectorAll("[data-reveal]").forEach((button) => button.onclick = () => revealKey(button.dataset.reveal));
     document.querySelectorAll("[data-revoke]").forEach((button) => button.onclick = () => revokeKey(button.dataset.revoke));
+    document.querySelectorAll("[data-quota-save]").forEach((button) => button.onclick = async () => {
+      const id = button.dataset.quotaSave;
+      const input = [...document.querySelectorAll("[data-quota-input]")].find(item => item.dataset.quotaInput === id);
+      const value = String(input?.value ?? "").trim();
+      if (value && (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(Number(value)))) return alert("Token 额度必须是非负整数");
+      try {
+        await api(`/api/user/keys/${encodeURIComponent(id)}/quota`, {method:"PATCH",body:JSON.stringify({token_quota:value === "" ? null : Number(value)})});
+        await loadKeys();
+      } catch (error) { alert(error?.message || String(error)); }
+    });
     syncPlayOptions();
   }
 
   async function createKey() {
     const name = $("keyName").value.trim() || "API Key";
     const days = Number($("keyDays").value || 0);
-    const payload = await api("/api/user/keys", {method:"POST", body:JSON.stringify({name, expires_in_days: days || null})});
+    const quota = $("keyQuota").value.trim();
+    if (quota && (!/^[0-9]+$/.test(quota) || !Number.isSafeInteger(Number(quota)))) throw new Error("Token 额度必须是非负整数");
+    const payload = await api("/api/user/keys", {method:"POST", body:JSON.stringify({name, expires_in_days: days || null, token_quota:quota === "" ? null : Number(quota)})});
     $("newToken").textContent = payload.token || "";
     $("newSecret").classList.remove("hidden");
     $("keyName").value = "";
     $("keyDays").value = "";
+    $("keyQuota").value = "";
     await loadKeys();
   }
   async function revealKey(keyId) {
