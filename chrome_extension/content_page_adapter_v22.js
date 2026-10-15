@@ -196,7 +196,7 @@
     const text = normalizedLabelLower(value);
     // A single concrete model mention is usable evidence; popup wrappers
     // listing several models are not selected-model evidence.
-    const pattern = /\\bgpt[-\\s]?(\\d+(?:\\.\\d+)?)(?:[-\\s]+(astra|pro|sol|terra|luna|mini))?\\b/g;
+    const pattern = /\bgpt[-\s]?(\d+(?:\.\d+)?)(?:[-\s]+(astra|pro|sol|terra|luna|mini))?\b/g;
     const ids = [...new Set([...text.matchAll(pattern)].map(match =>
       "gpt-" + match[1] + (match[2] ? "-" + match[2] : "")))];
     return ids.length === 1 ? ids[0] : "";
