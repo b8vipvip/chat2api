@@ -355,7 +355,16 @@
 
   function classifyDriverError(error, requested) {
     const pageDriver = driver();
-    if (pageDriver?.classifyReasoningError) return pageDriver.classifyReasoningError(error, requested);
+    if (pageDriver?.classifyReasoningError) {
+      const classification = pageDriver.classifyReasoningError(error, requested);
+      // Preserve the single Driver's concrete mismatch/untrusted code when
+      // a lower-level keyboard/menu operation failed without its own code.
+      if (classification?.verification?.ok === false &&
+          classification.code === "reasoning_selection_failed") {
+        return {...classification, code: String(classification.verification.code || classification.code)};
+      }
+      return classification;
+    }
     return {
       code: "reasoning_selection_failed",
       message: String(error?.message || error),
