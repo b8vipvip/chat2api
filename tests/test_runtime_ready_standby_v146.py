@@ -29,9 +29,9 @@ def test_v146_reused_route_is_preflighted_before_dispatch() -> None:
     pool = text("chrome_extension/conversation_persistent_pool_v132.js")
     existing = pool.split("let existing = await routeLiveTab(route);", 1)[1].split("route.window_id = null;", 1)[0]
     assert "await ensureRuntimeCurrent(existing.id)" in existing
-    assert "persistent-pool-existing-route-runtime-stale-v152" in existing
+    assert "worker_window_runtime_pending" in existing
     assert "reuse-leased-route-v152" in existing
-    assert "await closeWindow(staleWindowId)" in existing
+    assert "await closeWindow(staleWindowId)" not in existing
 
 
 def test_v146_request_admission_filters_stale_standby() -> None:
