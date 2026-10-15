@@ -114,7 +114,8 @@ def test_api_key_editor_asset_is_injected_and_uses_chinese_permissions(tmp_path:
     assert 'iconButton("scopes", row.key_id, "编辑权限")' in script
     assert "修改令牌名称" in script
     assert "编辑权限" in script
-    assert 'usable ? "可用" : "停用"' in script
+    assert 'usable ? "可用" : row?.quota_exhausted ? "额度耗尽" : "停用"' in script
+    assert 'iconButton("quota", row.key_id, "设置 Token 额度")' in script
     assert "至少保留一个权限" in script
     assert "MutationObserver" not in script
     assert "setInterval(" not in script

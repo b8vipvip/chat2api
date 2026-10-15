@@ -16,9 +16,11 @@ def test_v130_single_terminal_and_server_fifo_authority():
     logs=(ROOT/"chrome_extension/background_logging.js").read_text(encoding="utf-8")
     assert "terminalSettlements: new Map()" in route
     assert "await settlement.catch" in route
-    assert "authoritative-server-admission-stale-route-v130" in route
-    assert 'routing.strict_api_fifo === true || Number(routing.server_api_fifo_revision || 0) >= 58' in route
-    assert 'if (!serverAdmitted)' in route
+    assert "restore-stale-router-lease-v147" in route
+    assert "state.activeRequests.has(String(item.inflight_request_id))" in route
+    assert "routeAllocations.get(baseKey)" in route
+    assert "::parallel::" in route
+    assert "Server scheduler invariant violated" not in route
     assert 'if (SUCCESS_TYPES.has(event.type) || FAILURE_TYPES.has(event.type))' in route
     assert "resetWindowsLogsOnRuntimeReload" in logs
     assert 'platform?.os !== "win"' in logs

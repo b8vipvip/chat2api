@@ -103,9 +103,9 @@ def test_background_terminal_retires_route_before_error_publication():
 
 def test_stale_persisted_api_route_can_be_retired_on_fresh_server_admission():
     router = (ROOT / "chrome_extension/conversation_routing.js").read_text(encoding="utf-8")
-    assert "state.activeRequests.has(stale)" in router
-    assert "server_api_fifo_revision" in router
-    assert "await retireRoute(key, route, stale," in router
+    assert "state.activeRequests.has(String(item.inflight_request_id))" in router
+    assert "restore-stale-router-lease-v147" in router
+    assert "await retireRoute(candidate, item, item.inflight_request_id," in router
 
 
 def test_worker_table_displays_live_extension_version_for_both_platforms():
