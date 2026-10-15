@@ -46,7 +46,14 @@ async function runScenario({navigates=false,clickSucceeds=true,missing=false,dis
   };
   const context={
     chrome,Date:class extends Date{static now(){return now}},
-    setTimeout:(fn,ms)=>{queueMicrotask(()=>{now+=ms;fn()});return 1},
+    // Advance the fake clock for short UI ticks, not multi-second
+    // transport watchdogs. Immediate mock responses must win the race
+    // against an inspection timeout that has not actually elapsed.
+    setTimeout:(fn,ms)=>{
+      if(ms>=1000)return 1;
+      queueMicrotask(()=>{now+=ms;fn()});
+      return 1;
+    },
     console,
   };
   context.globalThis=context;
