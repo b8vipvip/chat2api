@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import app.linux_worker_enable_patch as enable_patch
 import app.worker_disable_authority_patch as authority_patch
 from app.admin_auth import SESSION_COOKIE
 from app.linux_worker_enable_patch import install_linux_worker_enable_patch
@@ -101,7 +100,6 @@ def make_app(monkeypatch) -> FastAPI:
     async def should_not_control(*args, **kwargs):
         raise AssertionError("offline Worker must not require extension control")
 
-    monkeypatch.setattr(enable_patch, "_request_extension_control", should_not_control)
     monkeypatch.setattr(authority_patch, "_request_extension_control", should_not_control)
     install_linux_worker_enable_patch(app)
     install_worker_disable_authority_patch(app)
@@ -163,5 +161,29 @@ def test_linux_worker_enable_patch_is_aligned_to_v02242() -> None:
     root = Path(__file__).resolve().parents[1]
     source = (root / "app" / "linux_worker_enable_patch.py").read_text(encoding="utf-8")
     assert 'PATCH_VERSION = "0.22.42"' in source
-    assert 'control = skipped_control("offline-no-control")' in source
-    assert "persist_switch(worker_id, True)" in source
+    assert 'authority["disable_client"](extension_id, source=source)' in source
+    assert 'authority["enable_client"](extension_id, source=source)' in source
+    assert "def persist_switch(" not in source
+
+
+def test_linux_admin_route_uses_one_authoritative_worker_control(monkeypatch) -> None:
+    app = make_app(monkeypatch)
+    calls = []
+
+    async def confirmed_control(runtime, client_id, action, payload, *, timeout_seconds):
+        calls.append((client_id, action, payload))
+        return {"ok": True, "data": {
+            "keep_windows": 1, "managed_windows_before": 3,
+            "managed_windows_after": 1,
+        }}
+
+    monkeypatch.setattr(authority_patch, "_request_extension_control", confirmed_control)
+    app.state.registry.sockets["ext_linux"] = object()
+    client = TestClient(app)
+    client.cookies.set(SESSION_COOKIE, "admin-ok")
+    result = client.put("/api/admin/linux-workers/wrk_linux/enabled", json={"enabled": False})
+    assert result.status_code == 200, result.text
+    assert calls == [("ext_linux", "worker.disable", {"keep_windows": 1})]
+    assert app.state.registry.clients["ext_linux"].connection_enabled is False
+    assert app.state.linux_workers.data["workers"]["wrk_linux"]["metadata"]["admin_master_switch"]["source"] == "linux-worker-enabled-api-v46"
+    assert app.state.registry.api_key_routes == {}
