@@ -300,8 +300,11 @@
       // active second request. For a genuinely active old request, require a
       // fresh authoritative server admission before replacing its lease.
       const oldRequestIsActive = state.activeRequests.has(stale);
-      if (oldRequestIsActive && !serverAdmitted) {
-        throw new Error(`Server scheduler invariant violated: logical API ${key} already owns request ${stale}; admission=${String(routing.scheduler_authority || "missing")}; revision=${Number(routing.server_api_fifo_revision || 0)}`);
+      // Never let an untrusted/manual dispatch force-retire an old window.
+      // Even after a background restart, only a newly admitted v58 server
+      // request may override the persisted key lease.
+      if (!serverAdmitted) {
+        throw new Error(`Server scheduler invariant violated: logical API ${key} already owns request ${stale}; admission=${String(routing.scheduler_authority || "missing")}; revision=${Number(routing.server_api_fifo_revision || 0)}; local_active=${oldRequestIsActive}`);
       }
       // The canonical server admitted a *new* same-key request. A stale local
       // route (missed terminal, Worker reload, or cancelled browser operation)
