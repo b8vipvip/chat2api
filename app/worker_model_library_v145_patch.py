@@ -390,6 +390,11 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
                     return False
             except Exception:
                 return False
+        # Generation transport is a physical health gate, not a competing
+        # model capability authority. Keep it when replacing the old resolver.
+        health = getattr(registry_obj, "generation_backend_routable", None)
+        if callable(health) and not health(client_id):
+            return False
         value = str(model or "").strip().lower()
         if value in STATIC_SPECIAL_MODELS:
             return True
