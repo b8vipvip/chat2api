@@ -33,6 +33,10 @@ def test_persistent_pool_is_active_routing_layer() -> None:
     assert 'standby_semantics_revision: STANDBY_SEMANTICS_REVISION' in source
     assert 'const STANDBY_SEMANTICS_REVISION = 152' in source
     assert 'await createStandby(reason)' in source
+    assert 'while (unassignedWindowRows(rows, value).length < target)' in source
+    assert 'const DOCUMENT_SETTLE_MS = 4000' in source
+    assert 'const RUNTIME_RETRY_COOLDOWN_MS = 15000' in source
+    assert 'runtime_loading_total:' in source
     assert 'route.window_owned = true' in source
     assert 'post-admission-standby-refill-v152' in source
     assert 'worker_persistent_window_pool_exhausted' in source
