@@ -292,9 +292,16 @@
     const route = await routeFor(key);
     if (route.inflight_request_id && route.inflight_request_id !== requestId) {
       const stale = String(route.inflight_request_id);
-      if (message?.routing?.scheduler_authority !== "server-single-authority-scheduler-v58"
-          || message?.routing?.strict_api_fifo !== true) {
-        throw new Error(`Server scheduler invariant violated: logical API ${key} already owns request ${stale}`);
+      const routing = message?.routing || {};
+      const serverAdmitted = routing.scheduler_authority === "server-single-authority-scheduler-v58" &&
+        (routing.strict_api_fifo === true || Number(routing.server_api_fifo_revision || 0) >= 58);
+      // An extension restart can restore the persisted route lease but not
+      // its in-memory activeRequests entry. That is stale local state, not an
+      // active second request. For a genuinely active old request, require a
+      // fresh authoritative server admission before replacing its lease.
+      const oldRequestIsActive = state.activeRequests.has(stale);
+      if (oldRequestIsActive && !serverAdmitted) {
+        throw new Error(`Server scheduler invariant violated: logical API ${key} already owns request ${stale}; admission=${String(routing.scheduler_authority || "missing")}; revision=${Number(routing.server_api_fifo_revision || 0)}`);
       }
       // The canonical server admitted a *new* same-key request. A stale local
       // route (missed terminal, Worker reload, or cancelled browser operation)
