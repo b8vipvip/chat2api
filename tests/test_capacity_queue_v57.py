@@ -73,57 +73,47 @@ def test_v57_remains_historical_but_v58_is_final_entry_owner() -> None:
     assert 'PATCH_ID = "server-single-authority-scheduler-v58"' in new
     assert 'broker.create = create' in new
     assert 'broker.release = release' in new
-    assert '"api_key_capacity_limit": 1' in new
+    assert '"api_key_capacity_limit": None' in new
     assert '"browser_side_api_fifo": False' in new
-    assert '"reserve_window_target": 0' in new
-
-
-def test_v58_same_api_is_fifo_one_active_while_distinct_keys_can_share_worker_capacity() -> None:
+    assert '"reserve_window_target": 0' in newdef test_v58_same_api_can_run_concurrently_until_worker_capacity() -> None:
     async def scenario() -> None:
         with tempfile.TemporaryDirectory() as tmp:
             _app, registry, broker = build_v58(tmp)
-
             token = registry.routing_key_context.set("key_a")
             first = await broker.create("req_a1", "ext_test")
+            second = await asyncio.wait_for(broker.create("req_a2", "ext_test"), timeout=0.5)
             registry.routing_key_context.reset(token)
-
-            token = registry.routing_key_context.set("key_a")
-            second_same = asyncio.create_task(broker.create("req_a2", "ext_test"))
-            registry.routing_key_context.reset(token)
-            await asyncio.sleep(0.02)
-            assert not second_same.done()
+            assert first.diagnostics["api_key_capacity_limit"] is None
+            assert second.diagnostics["same_api_parallel_requests"] is True
 
             token = registry.routing_key_context.set("key_b")
-            other = await asyncio.wait_for(broker.create("req_b1", "ext_test"), timeout=0.5)
+            third = await asyncio.wait_for(broker.create("req_b1", "ext_test"), timeout=0.5)
             registry.routing_key_context.reset(token)
-            assert other.diagnostics["api_key_capacity_id"] == "key_b"
-            assert broker.capacity_snapshot("ext_test")["active_requests"] == 2
-            assert not second_same.done()
+            assert broker.capacity_snapshot("ext_test")["active_requests"] == 3
 
+            fourth = asyncio.create_task(broker.create("req_a3", "ext_test"))
+            await asyncio.sleep(0.02)
+            assert not fourth.done()
             await broker.release(first.request_id)
-            admitted = await asyncio.wait_for(second_same, timeout=0.5)
-            assert admitted.diagnostics["api_key_capacity_id"] == "key_a"
-            assert admitted.diagnostics["api_key_capacity_limit"] == 1
-            assert admitted.diagnostics["browser_side_api_fifo"] is False
-
-            await broker.release(other.request_id)
-            await broker.release(admitted.request_id)
+            admitted = await asyncio.wait_for(fourth, timeout=0.5)
+            assert admitted.diagnostics["api_key_capacity_limit"] is None
+            for state in (second, third, admitted):
+                await broker.release(state.request_id)
 
     asyncio.run(scenario())
 
 
-def test_v58_persists_no_speculative_windows_and_fixed_per_api_limit() -> None:
+def test_v58_retains_worker_window_limits_without_per_key_limit() -> None:
     source = read("app/capacity_scheduler_v58.py")
-    for token in (
-        '"default_reserve_windows": 0',
-        '"default_key_concurrency": 1',
-        '"speculative_window_pool": False',
-        '"per_api_key_limit": 1',
-        '"server_api_fifo_revision": 58',
-        '"strict_api_fifo": True',
-        '"browser_side_api_fifo": False',
-    ):
-        assert token in source
+    assert '"default_reserve_windows": 0' in source
+    assert '"speculative_window_pool": False' in source
+    assert '"api_key_capacity_limit": None' in source
+    assert '"strict_api_fifo": False' in source
+    assert '"browser_side_api_fifo": False' in source
+    assert '"default_key_concurrency": 1' not in source
+    assert '"per_api_key_limit": 1' not in source
+
+e
 
 
 def test_v57_rate_limit_behavior_remains_available_to_v58() -> None:
