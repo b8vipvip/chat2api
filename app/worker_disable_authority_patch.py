@@ -263,11 +263,12 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(409, "Worker confirmed disable but more than one managed ChatGPT window remains")
         return control
 
-    async def disable_client(client_id: str) -> dict[str, Any]:
+    async def disable_client(client_id: str, *, source: str = "worker-management-disable-v62") -> dict[str, Any]:
         client_id = str(client_id or "")
         if client_id not in registry.clients:
             raise HTTPException(404, "Unknown extension ID")
         require_disable_lease(client_id)
+        logger.info("Worker admin switch requested source=%s client=%s target=disabled", source, client_id)
         control = await collapse_managed_windows(client_id)
         worker_id = worker_id_for_client(client_id)
         worker_public = None
@@ -275,7 +276,7 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
             worker_public = persist_worker_switch(
                 worker_id,
                 False,
-                source="worker-management-disable-v62",
+                source=source,
                 control=control,
             )
         await clear_sticky_routes(client_id)
@@ -291,17 +292,18 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
             "version": PATCH_VERSION,
         }
 
-    async def enable_client(client_id: str) -> dict[str, Any]:
+    async def enable_client(client_id: str, *, source: str = "worker-management-enable-v62") -> dict[str, Any]:
         client_id = str(client_id or "")
         if client_id not in registry.clients:
             raise HTTPException(404, "Unknown extension ID")
+        logger.info("Worker admin switch requested source=%s client=%s target=enabled", source, client_id)
         worker_id = worker_id_for_client(client_id)
         worker_public = None
         if worker_id:
             worker_public = persist_worker_switch(
                 worker_id,
                 True,
-                source="worker-management-enable-v62",
+                source=source,
             )
         item = await registry.set_connection_enabled(client_id, True)
         return {
@@ -323,6 +325,7 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
         "persist_worker_switch": persist_worker_switch,
         "active_request_ids": active_request_ids,
         "require_disable_lease": require_disable_lease,
+        "clear_sticky_routes": clear_sticky_routes,
     }
 
     @app.get(ASSET_PATH, include_in_schema=False)
@@ -357,6 +360,7 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
             if not admin_ok(request):
                 return JSONResponse({"detail": "Administrator login required"}, status_code=401)
             client_id, action = match.groups()
+            logger.info("Worker switch HTTP action=%s client=%s path=%s peer=%s", action, client_id, path, getattr(request.client, "host", "-"))
             try:
                 result = await (enable_client(client_id) if action == "enable" else disable_client(client_id))
             except HTTPException as error:
