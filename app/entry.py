@@ -292,4 +292,8 @@ install_model_observability_v144_patch(app)
 install_worker_model_library_v145_patch(app)
 install_worker_text_model_management_v146_patch(app)
 install_manual_worker_text_model_tasks_v147_patch(app)
+# Legacy API clients must resolve their old 5.5-mini ID against the live
+# Worker catalog AFTER v145 installs its strict verified-model authority.
+from .legacy_mini_default_alias_v163_patch import install_legacy_mini_default_alias
+install_legacy_mini_default_alias(app)
 install_request_history_v94_patch(app)

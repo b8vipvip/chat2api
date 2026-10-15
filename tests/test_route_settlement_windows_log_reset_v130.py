@@ -17,7 +17,8 @@ def test_v130_single_terminal_and_server_fifo_authority():
     assert "terminalSettlements: new Map()" in route
     assert "await settlement.catch" in route
     assert "authoritative-server-admission-stale-route-v130" in route
-    assert 'routing?.strict_api_fifo !== true' in route
+    assert 'routing.strict_api_fifo === true || Number(routing.server_api_fifo_revision || 0) >= 58' in route
+    assert 'if (!serverAdmitted)' in route
     assert 'if (SUCCESS_TYPES.has(event.type) || FAILURE_TYPES.has(event.type))' in route
     assert "resetWindowsLogsOnRuntimeReload" in logs
     assert 'platform?.os !== "win"' in logs
