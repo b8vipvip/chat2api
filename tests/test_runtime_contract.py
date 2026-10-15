@@ -65,6 +65,14 @@ def test_realtime_protocol_contract_matches_live_bridge():
     assert LIVE_PROTOCOL_VERSION == "chat2api-live-v1"
 
 
+def test_v147_key_quota_replaces_per_key_concurrency_contract():
+    payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
+    assert payload["features"]["api_key_token_quota"] is True
+    assert payload["features"]["api_key_concurrency_controls"] is False
+    assert payload["features"]["server_side_same_api_fifo_v58"] is False
+    assert payload["features"]["same_api_parallel_requests"] is True
+
+
 def test_runtime_contract_payload_names_each_version_surface():
     runtime = FastAPI(version=SERVER_RUNTIME_VERSION)
     payload = version_contract_payload(runtime)
