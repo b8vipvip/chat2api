@@ -17,7 +17,8 @@ def test_v147_documents_v146_window_close_trigger_for_regression_visibility() ->
     # v151 removes the destructive v146 behavior. Runtime preflight failure
     # must retain the physical tab; only the v132 pool can retire a window
     # for an explicit lifecycle reason, never because the page is loading.
-    assert "if (await closeWindow(row.window_id))" not in pool
+    validation = pool.split("async function validateIdleRuntime(", 1)[1].split("function snapshotFrom(", 1)[0]
+    assert "closeWindow(" not in validation
     assert "state.runtimeRetryAfter.set(row.tab_id" in pool
     assert 'row.status === "complete"' in pool
     assert "version: 57" in recovery
