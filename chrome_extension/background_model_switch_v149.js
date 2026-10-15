@@ -102,7 +102,9 @@
         const probe = {ok:true,data:await inspectFreshSelection(tabId)};
         if (probe?.ok) {
           lastInspection = probe.data || {};
-          lastError = "";
+          lastError = lastInspection.selected_model
+            ? "visible-selected-model=" + lastInspection.selected_model
+            : String(lastInspection.evidence_source || "selected-model-not-visible");
           if (lastInspection.selected_model === model) {
             matched += 1;
             // Two independent post-commit observations guard against optimistic
