@@ -303,6 +303,20 @@
       selected_reasoning_levels: [...new Set(selected.map(row => row.reasoning))],
       slider_present: Boolean(reasoningSlider()),
       reasoning_control_present: Boolean(reasoningControl().element),
+      // Diagnostic-only structural evidence. No page text, prompts, account
+      // labels or selectors are promoted to verification authority.
+      composer_present: Boolean(composer()),
+      document_ready_state: String(document.readyState || "unknown"),
+      model_picker_present: Boolean(globalThis.__CHAT2API_MODEL_LIBRARY_V145__?.pickerControl?.()),
+      visible_popup_trigger_count: [...document.querySelectorAll(
+        "button[aria-haspopup='menu'],button[aria-haspopup='listbox'],[role='button'][aria-haspopup]"
+      )].filter(visible).length,
+      visible_reasoning_option_count: surfaces.reduce((sum, surface) =>
+        sum + [...surface.querySelectorAll(
+          "button,[role='menuitem'],[role='menuitemradio'],[role='option']"
+        )].filter(row => visible(row) && ["instant","medium","high"].includes(
+          reasoningFromText(labelOf(row))
+        )).length, 0),
     };
   }
 
