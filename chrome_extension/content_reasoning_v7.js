@@ -258,8 +258,7 @@
     let slider = visibleSlider();
     if (slider) {
       const matched = await setSliderNoClick(slider, level);
-      key(document, "Escape", "Escape");
-      await delay(120);
+      // Leave the menu open until the sole Driver inspects its selected state.
       if (matched || matches(labelOf(currentPill()), level)) {
         return { strategy: `${opened.strategy}+slider-keyboard-adaptive`, used_click: false };
       }
@@ -279,8 +278,7 @@
         slider = visibleSlider();
         if (slider) {
           const matched = await setSliderNoClick(slider, level);
-          key(document, "Escape", "Escape");
-          await delay(120);
+          // Keep current selected-option/slider evidence visible to the Driver.
           if (matched || matches(labelOf(currentPill()), level)) {
             return { strategy: `${opened.strategy}+reasoning-row-enter+slider-keyboard-adaptive`, used_click: false };
           }
@@ -307,8 +305,6 @@
     if (slider) {
       const matched = await setSliderNoClick(slider, level);
       if (matched || matches(labelOf(currentPill()), level)) {
-        key(document, "Escape", "Escape");
-        await delay(180);
         return { strategy: slider instanceof HTMLInputElement ? "click-open+native-range" : "click-open+slider-keyboard-adaptive", used_click: true };
       }
     }
@@ -322,8 +318,6 @@
         if (slider) {
           const matched = await setSliderNoClick(slider, level);
           if (matched || matches(labelOf(currentPill()), level)) {
-            key(document, "Escape", "Escape");
-            await delay(180);
             return { strategy: "click-open+reasoning-row+slider-keyboard-adaptive", used_click: true };
           }
         }
@@ -374,24 +368,39 @@
 
   async function prepare(level) {
     const requested = normalize(level);
+    // Driver alone decides if a current, visible UI control proves the requested
+    // level. Preserve that proof before closing ephemeral picker popovers.
+    const finish = data => {
+      const checked = attachDriverVerification(data, requested);
+      key(document, "Escape", "Escape");
+      return checked;
+    };
     // The Page Driver is the sole success verifier. The controller only
     // performs UI actions and reports their candidate evidence.
     const verified = () => driver()?.verifyReasoning?.(requested)?.ok === true;
     if (!["instant", "medium", "high"].includes(requested)) throw new Error(`Unsupported reasoning level: ${level}`);
     if (verified()) {
-      return attachDriverVerification({ reasoning: requested, zero_op: true, reasoning_switched: false, selection_strategy: "reasoning-driver-zero-op", used_click: false }, requested);
+      return finish({ reasoning: requested, zero_op: true, reasoning_switched: false, selection_strategy: "reasoning-driver-zero-op", used_click: false });
     }
 
     let result = await chooseNoClick(requested);
     if (verified()) {
-      return attachDriverVerification({ reasoning: requested, zero_op: false, reasoning_switched: true, selection_strategy: result?.strategy || "no-click", used_click: false }, requested);
+      return finish({ reasoning: requested, zero_op: false, reasoning_switched: true, selection_strategy: result?.strategy || "no-click", used_click: false });
     }
 
+    // A selection can close its own popover. Re-open for passive inspection
+    // before any further click is attempted; no cached evidence is used.
+    if (result && !verified()) await openNoClick();
+    if (verified()) return finish({ reasoning: requested, zero_op: false,
+      reasoning_switched: true, selection_strategy: result?.strategy || "menu-reinspect",
+      used_click: false });
     result = await chooseClickFallback(requested);
+    if (!verified()) await openNoClick();
     if (!verified()) {
+      key(document, "Escape", "Escape");
       throw new Error(`ChatGPT reasoning level could not be verified after selection: ${requested}`);
     }
-    return attachDriverVerification({ reasoning: requested, zero_op: false, reasoning_switched: true, selection_strategy: result.strategy, used_click: true }, requested);
+    return finish({ reasoning: requested, zero_op: false, reasoning_switched: true, selection_strategy: result.strategy, used_click: true });
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
