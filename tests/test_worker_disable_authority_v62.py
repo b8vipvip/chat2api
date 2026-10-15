@@ -234,6 +234,38 @@ def test_disabled_worker_cannot_issue_new_extension_binding_ticket(monkeypatch) 
     assert response.json()["state"] == "disabled"
 
 
+def test_single_worker_master_gate_blocks_stale_linux_connection_without_blocking_windows(tmp_path):
+    from app.registry import ClientRegistry, PersistedClient, token_hash
+
+    registry = ClientRegistry(tmp_path)
+    for client_id in ("ext_linux", "ext_windows"):
+        registry.clients[client_id] = PersistedClient(
+            client_id=client_id, name=client_id, browser_name="Chrome",
+            version="test", token_hash=token_hash("secret"), created_at="2026-10-15",
+            connection_enabled=True, metadata={"chatgpt_login_state": "ready"},
+        )
+        registry.sockets[client_id] = object()
+    registry.worker_master_enabled = lambda client_id: client_id != "ext_linux"
+    assert registry.online_client_ids() == ["ext_windows"]
+    assert asyncio.run(registry.authenticate("ext_linux", "secret")) is False
+    assert asyncio.run(registry.authenticate("ext_windows", "secret")) is True
+    try:
+        registry.resolve_client("ext_linux")
+    except ConnectionError as exc:
+        assert "disabled" in str(exc)
+    else:
+        raise AssertionError("stale Linux transport bypassed the single master gate")
+    registry.worker_master_enabled = lambda client_id: True
+    assert "ext_linux" in registry.online_client_ids()
+
+
+def test_legacy_linux_switch_no_longer_wraps_worker_allocation():
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] / "app" / "linux_worker_enable_patch.py").read_text(encoding="utf-8")
+    assert "registry.online_client_ids = online_client_ids_without_disabled_workers" not in source
+    assert "registry.resolve_client = resolve_client_without_disabled_workers" not in source
+
+
 def test_authority_ui_uses_enable_disable_terms_without_global_dom_observer() -> None:
     from pathlib import Path
 
