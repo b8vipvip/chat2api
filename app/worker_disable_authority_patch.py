@@ -59,6 +59,16 @@ def install_worker_disable_authority_patch(app: FastAPI) -> FastAPI:
                     return worker
         return None
 
+    # The Worker management list is the sole source for the Linux master
+    # enabled state. Windows Workers use their existing registry switch.
+    # All transport, model routing and direct-client paths consult the same
+    # ClientRegistry.worker_admin_enabled projection.
+    def master_enabled(client_id: str) -> bool:
+        worker = worker_for_client(client_id)
+        return worker is None or (worker.get("enabled") is not False and not worker.get("revoked_at"))
+
+    registry.worker_master_enabled = master_enabled
+
     def worker_id_for_client(client_id: str) -> str:
         worker = worker_for_client(client_id)
         return str(worker.get("worker_id") or "") if worker else ""
