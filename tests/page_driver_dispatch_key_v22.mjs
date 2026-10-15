@@ -51,7 +51,7 @@ assert.equal(runtimeListeners.length, 1, "Driver should install exactly one veri
 
 const driver = sandbox.__CHAT2API_PAGE_DRIVER_V22__;
 assert.ok(driver, "Page Driver global API must be installed");
-assert.equal(driver.version, "22.3.0");
+assert.equal(driver.version, "22.5.0");
 assert.equal(typeof driver.dispatchKey, "function");
 
 // Duplicate bootstrap injection must stay idempotent and side-effect free.
