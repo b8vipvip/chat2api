@@ -344,7 +344,9 @@
       try {
         const tab = await chrome.tabs.get(tabId);
         const url = tab?.url || tab?.pendingUrl || "";
-        if (!isChatGpt(url) || isAuthSurface(url) || (tab.status && tab.status !== "complete")) {
+        const completedAt = Number(state.runtimePageCompleteAt.get(tabId) || 0);
+        if (!isChatGpt(url) || isAuthSurface(url) || (tab.status && tab.status !== "complete") ||
+            (completedAt && Date.now() - completedAt < DOCUMENT_SETTLE_MS)) {
           await sleep(180);
           continue;
         }
@@ -885,7 +887,11 @@
       let existing = await routeLiveTab(route);
       if (existing) {
         try {
-          if (existing.status && existing.status !== "complete") existing = await waitForReady(existing.id, 12000);
+          const completedAt = Number(state.runtimePageCompleteAt.get(existing.id) || 0);
+          if ((existing.status && existing.status !== "complete") ||
+              (completedAt && Date.now() - completedAt < DOCUMENT_SETTLE_MS)) {
+            existing = await waitForReady(existing.id, 12000);
+          }
           else {
             await ensureRuntimeCurrent(existing.id);
             existing = await chrome.tabs.get(existing.id);
