@@ -58,6 +58,8 @@
       const current = adapter.reasoningControl();
       if (current?.element && current.reasoning) return current.element;
     }
+    const modelPicker = globalThis.__CHAT2API_MODEL_LIBRARY_V145__?.pickerControl?.();
+    if (modelPicker && visible(modelPicker)) return modelPicker;
     const root = composerRoot();
     if (!root) return null;
     const candidates = [...root.querySelectorAll("button,[role='button']")].filter(visible);
