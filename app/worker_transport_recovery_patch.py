@@ -32,9 +32,9 @@ def install_worker_transport_recovery_patch(app: FastAPI) -> FastAPI:
     close as terminal loses the already-submitted request and its eventual page
     result.
 
-    This wrapper delays only that synthetic disconnect.  If a newer socket is
-    attached during the grace window, the disconnect is ignored and the existing
-    Broker request keeps its original timeout/watchdogs.  A companion browser
+    This wrapper delays only that synthetic disconnect. A new WebSocket alone
+    cannot prove the old browser request survived. Only the same ephemeral
+    background runtime epoch can preserve the request after reconnect.  A companion browser
     outbox replays a terminal ``chat.completed`` event if completion happened
     while the transport was down.  Real browser errors are untouched.
     """
@@ -52,7 +52,8 @@ def install_worker_transport_recovery_patch(app: FastAPI) -> FastAPI:
             return await base_publish(request_id, event)
 
         client_id = str(getattr(state, "client_id", "") or "")
-        socket_before = registry.sockets.get(client_id)
+        closed_socket = event.get("_closed_socket")
+        previous_epoch = str(event.get("transport_runtime_epoch") or "").strip()
         started = time.perf_counter()
         state.diagnostics["worker_transport_recovery"] = PATCH_ID
         state.diagnostics["worker_disconnect_grace_ms"] = int(WORKER_RECONNECT_GRACE_SECONDS * 1000)
@@ -80,7 +81,13 @@ def install_worker_transport_recovery_patch(app: FastAPI) -> FastAPI:
             return True
 
         socket_after = registry.sockets.get(client_id)
-        if socket_after is not None and socket_after is not socket_before:
+        client = getattr(registry, "clients", {}).get(client_id)
+        current_epoch = str(getattr(client, "metadata", {}).get("transport_runtime_epoch") or "").strip()
+        same_runtime = bool(previous_epoch and current_epoch == previous_epoch)
+        # The replacement may already be active when the old handler detects
+        # closure. Compare to the socket that actually closed.
+        replacement = socket_after is not None and socket_after is not closed_socket
+        if replacement and same_runtime:
             elapsed_ms = round((time.perf_counter() - started) * 1000, 1)
             state.diagnostics["worker_transport_reconnected"] = True
             state.diagnostics["worker_transport_reconnect_ms"] = elapsed_ms
@@ -95,8 +102,13 @@ def install_worker_transport_recovery_patch(app: FastAPI) -> FastAPI:
 
         state.diagnostics["worker_transport_reconnected"] = False
         state.diagnostics["worker_disconnect_grace_expired"] = True
-        terminal = dict(event or {})
-        terminal["error"] = "Worker disconnected"
+        state.diagnostics["worker_runtime_continuity_verified"] = same_runtime
+        state.diagnostics["worker_runtime_restarted"] = bool(previous_epoch and current_epoch and not same_runtime)
+        terminal = {key: value for key, value in dict(event or {}).items() if not key.startswith("_")}
+        terminal.pop("transport_runtime_epoch", None)
+        terminal["error"] = ("Worker runtime restarted during request"
+                             if state.diagnostics["worker_runtime_restarted"] else "Worker disconnected")
+        logger.warning("Worker request terminated without runtime continuity request_id=%s client=%s same_epoch=%s replacement=%s", request_id, client_id, same_runtime, replacement, extra={"request_id": str(request_id), "client_id": client_id})
         return await base_publish(request_id, terminal)
 
     broker.publish = publish_with_worker_reconnect

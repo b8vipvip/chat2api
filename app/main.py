@@ -951,12 +951,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # are pushed exactly once after this connection advertises control readiness.
         # The browser persistent pool remains the sole physical-window authority.
         window_target_synced = False
+        socket_runtime_epoch = ""  # bound to this socket, not shared metadata
         try:
             await websocket.send_json({"type": "server.hello", "client_id": client_id, "version": APP_VERSION})
             while True:
                 message = await websocket.receive_json()
                 message_type = message.get("type")
-                await registry.touch(client_id, message.get("metadata") if isinstance(message.get("metadata"), dict) else None)
+                metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else None
+                if message_type == "extension.hello" and metadata:
+                    socket_runtime_epoch = str(metadata.get("transport_runtime_epoch") or "")
+                await registry.touch(client_id, metadata)
                 if message_type in {"heartbeat", "extension.hello", "extension.status"}:
                     if message_type in {"extension.hello", "extension.status"} and not window_target_synced:
                         window_runtime = getattr(app.state, "worker_window_limits", {})
@@ -985,7 +989,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             active_request = broker.client_requests.get(client_id)
             if active_request:
                 await broker.publish(active_request, {"type": "chat.error", "request_id": active_request,
-                                                      "error": "Chrome extension disconnected"})
+                                                      "error": "Chrome extension disconnected",
+                                                      "_closed_socket": websocket,
+                                                      "transport_runtime_epoch": socket_runtime_epoch})
             await registry.detach(client_id, websocket)
 
     return app
