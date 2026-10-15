@@ -223,6 +223,11 @@ def install_v13_patch(app: FastAPI) -> FastAPI:
             if target and payload.get("type") == "chat.request":
                 options = dict(payload.get("options") or {})
                 options["model"] = target["model"]
+                # This route intent comes from the same model-library capability
+                # authority used by the server scheduler; the browser must not
+                # infer it from a retired hardcoded Mini model ID.
+                free_route = getattr(registry, "is_free_default_route", None)
+                options["free_default_route"] = bool(free_route(client_id, target["model"])) if callable(free_route) else False
                 if target.get("reasoning_level"):
                     options["reasoning_level"] = target["reasoning_level"]
                     options["reasoning_effort"] = target["reasoning_effort"]
