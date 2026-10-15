@@ -75,7 +75,10 @@ def test_v57_remains_historical_but_v58_is_final_entry_owner() -> None:
     assert 'broker.release = release' in new
     assert '"api_key_capacity_limit": None' in new
     assert '"browser_side_api_fifo": False' in new
-    assert '"reserve_window_target": 0' in newdef test_v58_same_api_can_run_concurrently_until_worker_capacity() -> None:
+    assert '"reserve_window_target": 0' in new
+
+
+def test_v58_same_api_can_run_concurrently_until_worker_capacity() -> None:
     async def scenario() -> None:
         with tempfile.TemporaryDirectory() as tmp:
             _app, registry, broker = build_v58(tmp)
