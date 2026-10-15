@@ -45,6 +45,8 @@
     runtimePageCompleteAt: new Map(),
     runtimeRetryAfter: new Map(),
     runtimeDeferredChecks: 0,
+    runtimeLastFailure: null,
+    runtimeLastPromotionAt: null,
     runtimeChecks: 0,
     runtimeFailures: 0,
     reconcilePromise: null,
@@ -325,6 +327,7 @@
     try {
       if (typeof ensureContent === "function") await ensureContent(id);
       state.runtimeReadyTabs.set(id, true);
+      state.runtimeLastPromotionAt = Date.now();
       state.runtimeRetryAfter.delete(id);
       return true;
     } catch (error) {
@@ -507,6 +510,8 @@
         continue;
       }
       failed += 1;
+      state.runtimeLastFailure = {tab_id: row.tab_id, window_id: row.window_id,
+        reason: String(result.error || "runtime-unavailable").slice(0, 400), at_ms: Date.now()};
       state.runtimeRetryAfter.set(row.tab_id, Date.now() + RUNTIME_RETRY_COOLDOWN_MS);
       // Runtime failure is not a physical-window retirement signal. Preserve
       // the existing page, mark it unready and retry after cooldown; otherwise
@@ -547,6 +552,8 @@
       runtime_stale_total: routableRows.filter(row => row.runtime_ready !== true).length,
       runtime_loading_total: rows.filter(row => row.status !== "complete").length,
       runtime_deferred_checks: state.runtimeDeferredChecks,
+      runtime_last_failure: state.runtimeLastFailure,
+      runtime_last_promotion_at_ms: state.runtimeLastPromotionAt,
       runtime_retry_pending_total: rows.filter(row => Number(state.runtimeRetryAfter.get(row.tab_id) || 0) > Date.now()).length,
       active: inUse,
       leased,
@@ -637,7 +644,7 @@
     let rows = await physicalWindows();
 
     let runtimeValidation = { checked: 0, failed: 0, closed: 0, skipped: true };
-    if (ready && !isDisabled) {
+    if (target && ready && !isDisabled) {
       runtimeValidation = await validateIdleRuntime(value, rows, reason);
       rows = runtimeValidation.rows;
     }
