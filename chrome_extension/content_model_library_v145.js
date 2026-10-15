@@ -105,7 +105,7 @@
     return candidates[0]?.element || null;
   }
 
-  function menuRoots() {
+  // The existing model picker owns this DOM identity. The reasoning driver\n  // reuses it rather than locating a competing second model control.\n  state.pickerControl = modelPicker;\n\n  function menuRoots() {
     const rows = [];
     const seen = new Set();
     for (const selector of [
