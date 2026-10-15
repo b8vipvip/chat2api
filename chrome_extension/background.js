@@ -16,6 +16,8 @@ const CHATGPT_URLS = ["https://chatgpt.com/*", "https://www.chatgpt.com/*", "htt
 const NATIVE_CAPACITY_CONTROL_VERSION = 36;
 globalThis.__CHAT2API_NATIVE_CAPACITY_CONTROL_VERSION__ = NATIVE_CAPACITY_CONTROL_VERSION;
 globalThis.__CHAT2API_NATIVE_CAPACITY_DISPATCH_V37__ = true;
+// The per-background-instance identity changes after a Chrome restart.
+const WORKER_RUNTIME_EPOCH = crypto.randomUUID();
 let socket = null;
 let reconnectTimer = null;
 let reconnectAttempt = 0;
@@ -266,6 +268,7 @@ async function connectSocket() {
       metadata: {
         extension_version: chrome.runtime.getManifest().version,
         runtime_id: chrome.runtime.id,
+        transport_runtime_epoch: WORKER_RUNTIME_EPOCH,
         ...nativeCapacityControlMetadata(),
       },
     });
