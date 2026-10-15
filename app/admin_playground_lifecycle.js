@@ -153,7 +153,7 @@
       const body = {
         test_type: document.getElementById("testType").value,
         model,
-        reasoning_effort: model === "gpt-5.5-mini" ? null : (document.getElementById("testReasoning")?.value || "medium"),
+        reasoning_effort: model === "gpt-5.5-mini" ? null : (document.getElementById("testReasoning")?.value || null),
         files,
       };
       if (credential.source === "managed" && credential.key_id) {
