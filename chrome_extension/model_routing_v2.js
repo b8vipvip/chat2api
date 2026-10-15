@@ -1,7 +1,6 @@
 (() => {
   const baseHandleServerMessage = handleServerMessage;
   const LIBRARY_REVISION = 145; // model catalog schema
-  const FREE_DEFAULT_MINI = "gpt-5.5-mini";
   const SPECIAL_MODELS = new Set(["gpt-image", "gpt-live", "gpt-live-mini"]);
 
   function canonicalModel(value) {
@@ -55,7 +54,7 @@
     return {settings,rows};
   }
 
-  async function freeDefaultMiniEligible() {
+  async function freeDefaultComposerEligible() {
     const stored = await chrome.storage.local.get({ accountType: "unknown", chatgptAccountProfileV20: null });
     const profile = stored.chatgptAccountProfileV20;
     return stored.accountType === "free" &&
@@ -64,15 +63,18 @@
       ["medium", "high"].includes(String(profile?.confidence || "").toLowerCase());
   }
 
-  async function resolveRequestedModel(value) {
+  async function resolveRequestedModel(value, serverFreeDefaultRoute = false) {
     const requested = canonicalModel(value);
-    const { settings, rows } = await validatedLibrary();
-    if (requested === FREE_DEFAULT_MINI &&
-        !rows.some(item => item.id === requested) &&
-        await freeDefaultMiniEligible()) {
-      // Free default has no picker to validate. Compatibility is not served-model evidence.
+    // The server model-library authority owns Free default eligibility and
+    // supplies its decision on this request. Browser evidence checks that the
+    // page is truly a Free no-picker composer; it never picks a model by ID.
+    if (serverFreeDefaultRoute) {
+      if (!requested || !await freeDefaultComposerEligible()) {
+        throw new Error("Server Free-default route lacks live Free no-picker evidence");
+      }
       return requested;
     }
+    const { settings, rows } = await validatedLibrary();
     if (!rows.length) throw new Error("Worker has no manually discovered text models");
     if (!requested) {
       const current = canonicalModel(settings.currentModel);
@@ -112,8 +114,13 @@
     return response.data || {};
   }
 
+  const UNRECOGNIZED_REASONING_CONTROL = new Set([
+    "reasoning_control_not_found", "reasoning_menu_open_failed", "reasoning_state_untrusted",
+  ]);
+
   async function prepareReasoning(tabId, reasoning) {
-    if (!reasoning) return { ok: true, skipped: true };
+    if (!reasoning) return { ok: true, skipped: true, fallback_to_page_default: true,
+      reason: "not-requested", effective_reasoning: null };
     // A requested level must never be silently served as another level.
     // Extra-high needs its own page control and proof before it can be admitted.
     if (reasoning === "extra-high") {
@@ -128,6 +135,16 @@
       ["content_reasoning_v7.js"],
     );
     if (!response?.ok) {
+      const code = String(response?.code || "reasoning_selection_failed");
+      const verification = response?.diagnostics?.verification || null;
+      if (UNRECOGNIZED_REASONING_CONTROL.has(code) ||
+          UNRECOGNIZED_REASONING_CONTROL.has(String(verification?.code || ""))) {
+        // The page, not the old DOM selector, owns its default effort. Do not
+        // claim the explicitly requested effort was applied or verified.
+        return { ok: true, skipped: true, fallback_to_page_default: true,
+          reason: "reasoning-control-unrecognized", requested_reasoning: reasoning,
+          effective_reasoning: null, error_code: code, verification };
+      }
       const failure = new Error(response?.error || "Unable to select requested reasoning level: " + reasoning);
       failure.code = String(response?.code || "reasoning_selection_failed");
       failure.stage = "worker-reasoning-control";
@@ -218,11 +235,8 @@
     let requestedModel = null;
     let requestedReasoning = reasoningLevel(message.options || {});
     try {
-      requestedModel = await resolveRequestedModel(message.options?.model || message.model || "");
-      const { rows: verifiedModels } = await validatedLibrary();
-      const freeDefaultCompat = requestedModel === FREE_DEFAULT_MINI &&
-        !verifiedModels.some(row => row.id === FREE_DEFAULT_MINI) &&
-        await freeDefaultMiniEligible();
+      const freeDefaultCompat = message.options?.free_default_route === true;
+      requestedModel = await resolveRequestedModel(message.options?.model || message.model || "", freeDefaultCompat);
       const tab = await resolveTargetTab();
       const tabReadyMs = Date.now() - routingStarted;
       await ensureContent(tab.id);
@@ -232,6 +246,7 @@
       const selected = freeDefaultCompat ? { current_model: null } :
         await selectValidatedModel(tab.id, requestedModel);
       const reasoningDiagnostics = await prepareReasoning(tab.id, requestedReasoning);
+      const effectiveReasoning = reasoningDiagnostics.fallback_to_page_default ? null : requestedReasoning;
       const attachmentDiagnostics = await prepareAttachments(tab.id, message.attachments || []);
       const diagnostics = {
         ...preflightDiagnostics,
@@ -241,7 +256,8 @@
         logical_requested_model: requestedModel,
         logical_requested_reasoning: requestedReasoning || null,
         effective_model: freeDefaultCompat ? null : requestedModel,
-        effective_reasoning: requestedReasoning || null,
+        effective_reasoning: effectiveReasoning || null,
+        reasoning_default_unverified: Boolean(reasoningDiagnostics.fallback_to_page_default),
         model_selection_validated: !freeDefaultCompat,
         model_selection_current: freeDefaultCompat ? null : (selected.current_model || selected.model || requestedModel),
         reasoning_selection: reasoningDiagnostics,
@@ -249,15 +265,21 @@
         routing_ms: Date.now() - routingStarted,
         tab_id: tab.id,
       };
-      await persistPrepared(requestedModel, requestedReasoning, diagnostics);
+      await persistPrepared(requestedModel, effectiveReasoning, diagnostics);
       await trySendSocket({ type: "chat.diagnostics", request_id: message.request_id, diagnostics });
+      const dispatchOptions = { ...(message.options || {}) };
+      if (reasoningDiagnostics.fallback_to_page_default) {
+        delete dispatchOptions.reasoning_level;
+        delete dispatchOptions.reasoning_effort;
+        delete dispatchOptions.reasoning;
+      }
       const response = await chrome.tabs.sendMessage(tab.id, {
         type: "chat2api.request",
         requestId: message.request_id,
         prompt: message.prompt,
         attachments: message.attachments || [],
         options: {
-          ...(message.options || {}),
+          ...dispatchOptions,
           // The browser UI has already been switched and verified above. Keep
           // legacy content handlers from running their old static model picker;
           // v144 MAIN-world authority still rewrites the outgoing request to the
@@ -265,8 +287,8 @@
           model: "chatgpt-web",
           requested_model: requestedModel,
           effective_model: freeDefaultCompat ? null : requestedModel,
-          requested_reasoning: requestedReasoning || null,
-          effective_reasoning: requestedReasoning || null,
+          requested_reasoning: effectiveReasoning || null,
+          effective_reasoning: effectiveReasoning || null,
           model_prepared: true,
           model_selection_strategy: freeDefaultCompat ?
             "free-default-compatibility-unverified" : "worker-model-library-v145",

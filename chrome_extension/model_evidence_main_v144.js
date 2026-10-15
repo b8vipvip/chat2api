@@ -117,6 +117,14 @@
     let payload = null;
     try { payload = raw ? JSON.parse(raw) : null; } catch (_) {}
     const before = requestModel(payload);
+    if (authority?.default_page_route === true) {
+      // Free default has no concrete picker. Keep ChatGPT's native network
+      // model untouched; the logical API alias is NOT a served-model claim.
+      post({phase:"request",stream_id:streamId,request_model:before,
+        original_request_model:before,authority,request_rewritten:false,
+        authority_violation:false});
+      return {input,init,requestModel:before,authorityViolation:false,rewritten:false};
+    }
     const target = normalizeModel(authority?.routed_model);
     const transport = String(authority?.transport_model || "").trim() || target;
     let rewritten = false;

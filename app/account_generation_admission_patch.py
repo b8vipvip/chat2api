@@ -185,8 +185,8 @@ def install_account_generation_admission_patch(app: FastAPI) -> FastAPI:
                 continue
             if not model_routing._compatible(registry, client_id, model):
                 continue
-            if model == model_routing.MINI_MODEL and needs_multimodal:
-                if _account_type(registry, client_id) == "free" and not mini_quota._multimodal_available(registry, client_id):
+            if needs_multimodal and _account_type(registry, client_id) == "free":
+                if not mini_quota._multimodal_available(registry, client_id):
                     continue
             candidates.append(client_id)
         if not candidates:
@@ -198,12 +198,8 @@ def install_account_generation_admission_patch(app: FastAPI) -> FastAPI:
             if sticky in candidates:
                 return sticky
 
-        # Keep gpt-5.5-mini on Free when possible, matching the existing native
-        # Free routing policy. Otherwise choose the least-loaded compatible client.
-        if model == model_routing.MINI_MODEL:
-            free = [client_id for client_id in candidates if _account_type(registry, client_id) == "free"]
-            if free:
-                candidates = free
+        # No retired Mini-only priority: the same capability check and
+        # least-loaded Worker selection applies to every concrete text model.
         minimum = min(used_units(client_id) for client_id in candidates)
         least_loaded = [client_id for client_id in candidates if used_units(client_id) == minimum]
         selected = secrets.choice(least_loaded)
@@ -218,7 +214,7 @@ def install_account_generation_admission_patch(app: FastAPI) -> FastAPI:
                 raise
             target = model_routing._MODEL_CONTEXT.get() or v13_patch._target_context.get() or {}
             model = str(target.get("model") or "").strip().lower()
-            if model not in model_routing.PAID_TEXT_MODELS | {model_routing.MINI_MODEL}:
+            if not model_routing._is_dynamic_text_model(model):
                 raise
             selected = busy_compatible_fallback(model, bool(target.get("needs_multimodal")))
             if not selected:

@@ -6,7 +6,9 @@ from pathlib import Path
 from app.worker_model_library_v145_patch import (
     VALIDATION_REVISION,
     _mark_pending,
-    _free_default_mini_eligible,
+    _free_default_composer_eligible,
+    _configured_default_model,
+    _free_default_route,
     _validated_model_rows,
     _selectable_observed_model_ids,
 )
@@ -123,19 +125,30 @@ def test_free_default_mini_route_requires_ready_composer_and_reliable_plan() -> 
         "model_validation_revision": VALIDATION_REVISION,
         "models": [],
     }
-    assert _free_default_mini_eligible(r(details), "ext_test")
-    assert not _free_default_mini_eligible(r(details, False), "ext_test")
-    assert not _free_default_mini_eligible(r({**details, "account_type": "paid"}), "ext_test")
-    assert not _free_default_mini_eligible(r({**details, "account_detection_confidence": "low"}), "ext_test")
-    assert not _free_default_mini_eligible(r({**details, "account_model_control_present": True}), "ext_test")
+    assert _free_default_composer_eligible(r(details), "ext_test")
+    assert not _free_default_composer_eligible(r(details, False), "ext_test")
+    assert not _free_default_composer_eligible(r({**details, "account_type": "paid"}), "ext_test")
+    assert not _free_default_composer_eligible(r({**details, "account_detection_confidence": "low"}), "ext_test")
+    assert not _free_default_composer_eligible(r({**details, "account_model_control_present": True}), "ext_test")
     assert _validated_model_rows(r(details), "ext_test") == []
+
+    configured = r(details)
+    configured.legacy_minimum_model = lambda: "gpt-5.6-sol"
+    assert _configured_default_model(configured) == "gpt-5.6-sol"
+    assert _free_default_route(configured, "ext_test", "gpt-5.6-sol")
+    assert not _free_default_route(configured, "ext_test", "gpt-5.5-mini")
+    configured.legacy_minimum_model = lambda: "gpt-6"
+    assert _free_default_route(configured, "ext_test", "gpt-6")
+    configured.legacy_minimum_model = lambda: None
+    assert not _free_default_route(configured, "ext_test", "gpt-6")
 
 
 def test_browser_free_compatibility_does_not_fake_validated_model_evidence() -> None:
     root = Path(__file__).resolve().parents[1] / "chrome_extension"
     source = (root / "model_routing_v2.js").read_text(encoding="utf-8")
-    assert 'FREE_DEFAULT_MINI = "gpt-5.5-mini"' in source
-    assert 'await freeDefaultMiniEligible()' in source
+    assert 'FREE_DEFAULT_MINI' not in source
+    assert 'serverFreeDefaultRoute' in source
+    assert 'await freeDefaultComposerEligible()' in source
     assert 'model_selection_validated: !freeDefaultCompat' in source
     assert 'effective_model: freeDefaultCompat ? null : requestedModel' in source
     assert '"free-default-compatibility-unverified"' in source
@@ -150,6 +163,74 @@ def test_free_default_mini_browser_integration() -> None:
     path = Path(__file__).resolve().parents[1] / "tests" / "free_mini_without_picker_v145.mjs"
     run = subprocess.run(["node", str(path)], capture_output=True, text=True, check=False, timeout=30)
     assert run.returncode == 0, run.stdout + run.stderr
+
+
+def test_model_catalog_never_leaks_dynamic_model_eligibility_across_workers():
+    from fastapi import FastAPI
+    from app.worker_model_library_v145_patch import install_worker_model_library_v145_patch
+
+    class Registry:
+        def __init__(self):
+            self.minimum = "gpt-5.6-sol"
+            self.clients = {
+                "ext_free": SimpleNamespace(connection_enabled=True, metadata={
+                    "account_type": "free", "account_detection_confidence": "high",
+                    "account_model_control_present": False, "models": [],
+                }),
+                "ext_paid": SimpleNamespace(connection_enabled=True, metadata={
+                    "account_type": "plus", "model_validation_state": "validated",
+                    "model_validation_revision": VALIDATION_REVISION,
+                    "models": [{"id": "gpt-6", "validated": True,
+                                "validation_revision": VALIDATION_REVISION}],
+                }),
+            }
+        def online_client_ids(self):
+            return list(self.clients)
+        def chatgpt_routing_ready(self, client_id):
+            return True
+        def legacy_minimum_model(self):
+            return self.minimum
+        def client_models(self, client_id):
+            return []
+        def supports_model(self, client_id, model):
+            return False
+        def model_catalog(self, online_only=True):
+            return []
+        async def attach(self, *args, **kwargs):
+            pass
+        async def register(self, *args, **kwargs):
+            return ("ext_free", "token")
+        async def set_connection_enabled(self, *args, **kwargs):
+            return None
+        async def save(self):
+            pass
+
+    from app import model_capability_routing_patch as routing
+    original_compatible = routing._compatible
+    original_dynamic = routing._is_dynamic_text_model
+    registry = Registry()
+    app = FastAPI()
+    app.state.registry = registry
+    install_worker_model_library_v145_patch(app)
+    rows = {row["id"]: row for row in registry.model_catalog()}
+    assert rows["gpt-5.6-sol"]["clients"] == ["ext_free"]
+    assert rows["gpt-5.6-sol"]["validated"] is False
+    assert rows["gpt-6"]["clients"] == ["ext_paid"]
+    assert registry.supports_model("ext_free", "gpt-5.6-sol")
+    assert not registry.supports_model("ext_free", "gpt-6")
+
+    registry.minimum = "gpt-6"
+    rows = {row["id"]: row for row in registry.model_catalog()}
+    assert "gpt-5.6-sol" not in rows
+    assert rows["gpt-6"]["clients"] == ["ext_free", "ext_paid"]
+    assert rows["gpt-6"]["compatibility_clients"] == ["ext_free"]
+    assert rows["gpt-6"]["validated"] is True
+    assert registry.is_free_default_route("ext_free", "gpt-6")
+    assert not registry.is_free_default_route("ext_paid", "gpt-6")
+    # Restore global hooks after this isolated installer test.
+    routing._compatible = original_compatible
+    routing._is_dynamic_text_model = original_dynamic
+
 
 
 def test_picker_observations_are_candidates_not_served_model_proof():

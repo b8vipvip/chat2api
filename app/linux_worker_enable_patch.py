@@ -44,16 +44,6 @@ def install_linux_worker_enable_patch(app: FastAPI) -> FastAPI:
     def enabled(worker: dict[str, Any] | None) -> bool:
         return bool(worker) and worker.get("enabled") is not False and not worker.get("revoked_at")
 
-    def disabled_client_ids() -> set[str]:
-        with workers._lock:
-            return {
-                str(worker.get("extension_client_id") or "")
-                for worker in workers.data.get("workers", {}).values()
-                if worker.get("enabled") is False
-                and not worker.get("revoked_at")
-                and str(worker.get("extension_client_id") or "")
-            }
-
     base_public = workers.public
 
     def public_with_enabled(worker: dict[str, Any]) -> dict[str, Any]:
@@ -75,23 +65,8 @@ def install_linux_worker_enable_patch(app: FastAPI) -> FastAPI:
 
     workers.public = public_with_enabled
 
-    # Keep a final routing guard in addition to ClientRegistry.connection_enabled.
-    # This makes a persisted disabled Worker ineligible even during startup races.
-    base_online_client_ids = registry.online_client_ids
-    base_resolve_client = registry.resolve_client
-
-    def online_client_ids_without_disabled_workers() -> list[str]:
-        blocked = disabled_client_ids()
-        return [client_id for client_id in base_online_client_ids() if client_id not in blocked]
-
-    def resolve_client_without_disabled_workers(requested: str | None) -> str:
-        requested_id = str(requested or "")
-        if requested_id and requested_id in disabled_client_ids():
-            raise ConnectionError("Requested Chrome extension belongs to a disconnected Linux Worker")
-        return base_resolve_client(requested)
-
-    registry.online_client_ids = online_client_ids_without_disabled_workers
-    registry.resolve_client = resolve_client_without_disabled_workers
+    # Routing and authentication read the v62 Worker master switch through
+    # ClientRegistry.worker_admin_enabled; no v46 registry wrappers remain.
 
     def read_worker(worker_id: str) -> tuple[dict[str, Any], str, bool]:
         with workers._lock:

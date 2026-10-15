@@ -112,6 +112,24 @@ def test_gptwork_default_profile_mismatch_is_not_a_fake_fallback() -> None:
     assert trace["model_fallback_reason"] is None
 
 
+def test_free_default_network_request_is_not_misrepresented_as_concrete_model():
+    from app.model_observability_v144_patch import _trace
+    authority = {"requested_model": "gpt-5.6-sol", "routed_model": "gpt-5.6-sol",
+                 "default_page_route": True, "strict": False, "transport_model": None}
+    trace = _trace(authority, {"request_model": "auto", "default_model": "gpt-5.6-sol"})
+    assert trace["default_page_route"] is True
+    assert trace["model_authority_violation"] is False
+    assert trace["model_verified"] is False
+    assert trace["transport_model"] is None
+    assert trace["model_verification_level"] == "page-default-unverified"
+    served = _trace(authority, {"served_model": "gpt-5.6-sol"})
+    assert served["model_verified"] is True
+
+    source = (ROOT / "chrome_extension" / "model_evidence_main_v144.js").read_text(encoding="utf-8")
+    assert "authority?.default_page_route === true" in source
+    assert "request_rewritten:false" in source
+
+
 def test_v144_is_final_server_and_worker_boundary() -> None:
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     v144 = entry.rindex("install_model_observability_v144_patch(app)")
@@ -145,8 +163,8 @@ def test_v144_is_final_server_and_worker_boundary() -> None:
 
 
 def test_v144_formal_release_contract_is_v02297() -> None:
-    assert SERVER_RUNTIME_VERSION == "0.22.149"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.149"
+    assert SERVER_RUNTIME_VERSION == "0.22.150"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.150"
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
     assert payload["server"]["runtime_aligned"] is True
     assert "model-evidence-v144" in payload["server"]["feature_revision"]
