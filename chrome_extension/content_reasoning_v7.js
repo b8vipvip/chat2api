@@ -366,6 +366,31 @@
     };
   }
 
+  async function inspectAppliedReasoning(level) {
+    // Read-only UI inspection after a selection closes its popup. This
+    // function can expose the model/reasoning menus but MUST NOT choose a
+    // reasoning option or set a slider. The Page Driver remains the single
+    // success verifier.
+    const verified = () => driver()?.verifyReasoning?.(level)?.ok === true;
+    if (verified()) return true;
+    if (!openSurfaces().length && !visibleSlider()) {
+      const pill = currentPill();
+      if (!pill) return false;
+      // Synthetic keyboard shortcuts are not reliable in Chrome's React UI.
+      // A DOM click here ONLY opens the menu; it does not select a level.
+      pill.click();
+      await waitFor(() => openSurfaces()[0] || visibleSlider(), 900, 80);
+    }
+    if (verified()) return true;
+    const row = reasoningRow();
+    if (row && !visibleSlider() && !choiceFor(level)) {
+      // Expand the reasoning sub-menu, without clicking its level choice.
+      row.click();
+      await waitFor(() => visibleSlider() || choiceFor(level), 900, 80);
+    }
+    return verified();
+  }
+
   async function prepare(level) {
     const requested = normalize(level);
     // Driver alone decides if a current, visible UI control proves the requested
@@ -384,23 +409,25 @@
     }
 
     let result = await chooseNoClick(requested);
-    if (verified()) {
-      return finish({ reasoning: requested, zero_op: false, reasoning_switched: true, selection_strategy: result?.strategy || "no-click", used_click: false });
+    // One attempt may already have changed the page even if the submenu
+    // auto-closed. Never run a second selection algorithm on that same
+    // candidate; inspect only, and fail closed if no selected state exists.
+    if (result) {
+      if (await inspectAppliedReasoning(requested))
+        return finish({ reasoning: requested, zero_op: false,
+          reasoning_switched: true, selection_strategy: result.strategy, used_click: false });
+    } else {
+      result = await chooseClickFallback(requested);
+      if (await inspectAppliedReasoning(requested))
+        return finish({ reasoning: requested, zero_op: false,
+          reasoning_switched: true, selection_strategy: result.strategy, used_click: true });
     }
-
-    // A selection can close its own popover. Re-open for passive inspection
-    // before any further click is attempted; no cached evidence is used.
-    if (result && !verified()) await openNoClick();
-    if (verified()) return finish({ reasoning: requested, zero_op: false,
-      reasoning_switched: true, selection_strategy: result?.strategy || "menu-reinspect",
-      used_click: false });
-    result = await chooseClickFallback(requested);
-    if (!verified()) await openNoClick();
-    if (!verified()) {
-      key(document, "Escape", "Escape");
-      throw new Error(`ChatGPT reasoning level could not be verified after selection: ${requested}`);
-    }
-    return finish({ reasoning: requested, zero_op: false, reasoning_switched: true, selection_strategy: result.strategy, used_click: true });
+    const evidence = driver()?.verifyReasoning?.(requested) || null;
+    key(document, "Escape", "Escape");
+    const error = new Error(`ChatGPT reasoning level could not be verified after selection: ${requested}`);
+    error.code = String(evidence?.code || "reasoning_state_untrusted");
+    error.verification = evidence;
+    throw error;
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
