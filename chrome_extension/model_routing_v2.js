@@ -54,7 +54,7 @@
     return {settings,rows};
   }
 
-  async function freeDefaultMiniEligible() {
+  async function freeDefaultComposerEligible() {
     const stored = await chrome.storage.local.get({ accountType: "unknown", chatgptAccountProfileV20: null });
     const profile = stored.chatgptAccountProfileV20;
     return stored.accountType === "free" &&
@@ -69,7 +69,7 @@
     // supplies its decision on this request. Browser evidence checks that the
     // page is truly a Free no-picker composer; it never picks a model by ID.
     if (serverFreeDefaultRoute) {
-      if (!requested || !await freeDefaultMiniEligible()) {
+      if (!requested || !await freeDefaultComposerEligible()) {
         throw new Error("Server Free-default route lacks live Free no-picker evidence");
       }
       return requested;
