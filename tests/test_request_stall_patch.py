@@ -340,6 +340,7 @@ def test_preflight_error_is_terminal_but_never_a_submission_ack(monkeypatch):
         assert accepted is True
         assert state.terminal_event_type == "chat.error"
         assert state.completed_mono is not None
+        assert getattr(state, "_chat2api_extension_dispatch_ack", False) is False
         assert getattr(state, "_chat2api_submit_ack", False) is False
         assert "extension_submit_ack_ms" not in state.diagnostics
         with pytest.raises(RuntimeError, match="reasoning_state_untrusted"):
