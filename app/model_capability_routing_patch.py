@@ -110,11 +110,20 @@ def _description(registry: Any, client_id: str) -> str:
     return f"{client_id}[account={account}, models={','.join(models) or 'unknown'}]"
 
 
-def _idle_compatible(registry: Any, model: str) -> list[str]:
+def _idle_compatible(registry: Any, model: str, *, needs_multimodal: bool = False) -> list[str]:
     online = list(registry.online_client_ids())
     if not online:
         raise ConnectionError("No Chrome extension is online. Open Chrome with a paired chat2api extension.")
     compatible = [client_id for client_id in online if _compatible(registry, client_id, model)]
+    if needs_multimodal:
+        # Free file/vision quota belongs to the account, not to the retired
+        # gpt-5.5-mini model name. Apply it to the configured default too.
+        available = [client_id for client_id in compatible
+                     if _account_type(registry, client_id) != "free"
+                     or mini_quota._multimodal_available(registry, client_id)]
+        if compatible and not available:
+            raise ConnectionError(f"All compatible Free Workers for {model} have file/vision quota cooling down")
+        compatible = available
     remaining = getattr(registry, "rate_limit_remaining_seconds", None)
     if callable(remaining) and compatible:
         # A Free Worker can look logged-in and model-compatible while ChatGPT
@@ -244,7 +253,7 @@ def install_model_capability_routing_patch(app: FastAPI) -> FastAPI:
             return selected
         if model == MINI_MODEL:
             return _select_mini(registry, needs_multimodal=bool(target.get("needs_multimodal")))
-        eligible = _idle_compatible(registry, model)
+        eligible = _idle_compatible(registry, model, needs_multimodal=bool(target.get("needs_multimodal")))
         if not eligible:
             online_idle = [client_id for client_id in registry.online_client_ids() if client_id not in registry.busy_clients]
             available = "; ".join(_description(registry, client_id) for client_id in online_idle)
