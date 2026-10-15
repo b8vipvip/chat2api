@@ -64,4 +64,17 @@ assert.equal(terminals[0].diagnostics.error_code,"reasoning_control_not_found");
 assert.equal(terminals[0].diagnostics.error_stage,"worker-reasoning-control");
 assert.equal(terminals[0].diagnostics.route_retired_by_authority_v30,true);
 assert.equal(eventLog.filter(event=>event.type==="chat.diagnostics").length,1);
+const beforeExtraHigh = eventLog.length;
+await ctx.handleServerMessage({
+  type:"chat.request", request_id:"req_extra_high_must_not_downgrade",
+  prompt:"hi", options:{model:"gpt-5.6-sol", reasoning_level:"extra-high"},
+  routing:{api_key_id:"key_demo",strict_api_fifo:true},
+});
+const extraHighEvents = eventLog.slice(beforeExtraHigh);
+const extraHighTerminal = extraHighEvents.filter(item => item.type === "chat.error");
+assert.equal(extraHighTerminal.length, 1, "unsupported extra-high has one terminal");
+assert.equal(extraHighTerminal[0].diagnostics.error_code, "reasoning_level_unsupported");
+assert.equal(extraHighTerminal[0].diagnostics.error_stage, "worker-reasoning-control");
+assert.equal(retireCount, 2, "second request route retired exactly once");
+
 console.log("Model preparation delegates exactly one typed terminal to dispatch");

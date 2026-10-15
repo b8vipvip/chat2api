@@ -114,10 +114,17 @@
 
   async function prepareReasoning(tabId, reasoning) {
     if (!reasoning) return { ok: true, skipped: true };
-    const legacyLevel = reasoning === "extra-high" ? "high" : reasoning;
+    // A requested level must never be silently served as another level.
+    // Extra-high needs its own page control and proof before it can be admitted.
+    if (reasoning === "extra-high") {
+      const failure = new Error("ChatGPT extra-high reasoning is not supported by this Worker controller");
+      failure.code = "reasoning_level_unsupported";
+      failure.stage = "worker-reasoning-control";
+      throw failure;
+    }
     const response = await sendWithScript(
       tabId,
-      { type: "chat2api.reasoning.prepare.v7", reasoning_level: legacyLevel },
+      { type: "chat2api.reasoning.prepare.v7", reasoning_level: reasoning },
       ["content_reasoning_v7.js"],
     );
     if (!response?.ok) {
@@ -273,6 +280,7 @@
         error_code: String(error?.code || "chat_routing_failed"),
         error_message: text,
         error_stage: error?.stage || "worker-model-library-routing",
+        reasoning_verification: error?.verification || null,
         model_selection_evidence: Array.isArray(error?.model_evidence) ? error.model_evidence.slice(0,15) : [],
         model_selection_after: Array.isArray(error?.model_after) ? error.model_after.slice(0,15) : [],
         logical_requested_model: requestedModel,
