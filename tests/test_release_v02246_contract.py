@@ -61,7 +61,7 @@ def test_v02275_runtime_contract_advertises_only_active_authorities() -> None:
     assert bridge["window_observer_revision"] == 90
     assert bridge["route_close_terminal_revision"] == 91
     assert features["capacity_scheduler_v58"] is True
-    assert features["server_side_same_api_fifo_v58"] is True
+    assert features["server_side_same_api_fifo_v58"] is False
     assert features["worker_single_route_authority_v30"] is True
     assert features["unexpected_route_close_terminal_v91"] is True
     assert features["window_observer_v90"] is True
@@ -69,7 +69,7 @@ def test_v02275_runtime_contract_advertises_only_active_authorities() -> None:
     assert features["linux_worker_console_v123"] is False
     assert features["linux_worker_device_authority_v124"] is True
     assert features["linux_worker_extension_autopair_v124"] is True
-    assert features["same_api_parallel_requests"] is False
+    assert features["same_api_parallel_requests"] is True
     assert features["browser_side_same_api_queue"] is False
     assert features["speculative_worker_windows"] is False
 
