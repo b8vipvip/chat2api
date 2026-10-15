@@ -14,9 +14,11 @@ def test_v147_documents_v146_window_close_trigger_for_regression_visibility() ->
     contract = text("chrome_extension/content_runtime_contract_v71.js")
     recovery = text("chrome_extension/content_network_stream_recovery_v55.js")
 
-    # v146 retires an idle window whenever runtime preflight throws. The v147
-    # compatibility fix must therefore guarantee the shipped v57 network module
-    # is not falsely classified as stale by the v55 compatibility-family key.
-    assert "if (await closeWindow(row.window_id))" in pool
+    # v151 removes the destructive v146 behavior. Runtime preflight failure
+    # must retain the physical tab; only the v132 pool can retire a window
+    # for an explicit lifecycle reason, never because the page is loading.
+    assert "if (await closeWindow(row.window_id))" not in pool
+    assert "state.runtimeRetryAfter.set(row.tab_id" in pool
+    assert 'row.status === "complete"' in pool
     assert "version: 57" in recovery
     assert "network_stream_recovery_v55: Number(networkRecovery?.version || 0) >= 55" in contract
