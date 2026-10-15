@@ -6,7 +6,9 @@ from pathlib import Path
 from app.worker_model_library_v145_patch import (
     VALIDATION_REVISION,
     _mark_pending,
-    _free_default_mini_eligible,
+    _free_default_composer_eligible,
+    _configured_default_model,
+    _free_default_route,
     _validated_model_rows,
     _selectable_observed_model_ids,
 )
@@ -123,19 +125,30 @@ def test_free_default_mini_route_requires_ready_composer_and_reliable_plan() -> 
         "model_validation_revision": VALIDATION_REVISION,
         "models": [],
     }
-    assert _free_default_mini_eligible(r(details), "ext_test")
-    assert not _free_default_mini_eligible(r(details, False), "ext_test")
-    assert not _free_default_mini_eligible(r({**details, "account_type": "paid"}), "ext_test")
-    assert not _free_default_mini_eligible(r({**details, "account_detection_confidence": "low"}), "ext_test")
-    assert not _free_default_mini_eligible(r({**details, "account_model_control_present": True}), "ext_test")
+    assert _free_default_composer_eligible(r(details), "ext_test")
+    assert not _free_default_composer_eligible(r(details, False), "ext_test")
+    assert not _free_default_composer_eligible(r({**details, "account_type": "paid"}), "ext_test")
+    assert not _free_default_composer_eligible(r({**details, "account_detection_confidence": "low"}), "ext_test")
+    assert not _free_default_composer_eligible(r({**details, "account_model_control_present": True}), "ext_test")
     assert _validated_model_rows(r(details), "ext_test") == []
+
+    configured = r(details)
+    configured.legacy_minimum_model = lambda: "gpt-5.6-sol"
+    assert _configured_default_model(configured) == "gpt-5.6-sol"
+    assert _free_default_route(configured, "ext_test", "gpt-5.6-sol")
+    assert not _free_default_route(configured, "ext_test", "gpt-5.5-mini")
+    configured.legacy_minimum_model = lambda: "gpt-6"
+    assert _free_default_route(configured, "ext_test", "gpt-6")
+    configured.legacy_minimum_model = lambda: None
+    assert not _free_default_route(configured, "ext_test", "gpt-6")
 
 
 def test_browser_free_compatibility_does_not_fake_validated_model_evidence() -> None:
     root = Path(__file__).resolve().parents[1] / "chrome_extension"
     source = (root / "model_routing_v2.js").read_text(encoding="utf-8")
-    assert 'FREE_DEFAULT_MINI = "gpt-5.5-mini"' in source
-    assert 'await freeDefaultMiniEligible()' in source
+    assert 'FREE_DEFAULT_MINI' not in source
+    assert 'serverFreeDefaultRoute' in source
+    assert 'await freeDefaultComposerEligible()' in source
     assert 'model_selection_validated: !freeDefaultCompat' in source
     assert 'effective_model: freeDefaultCompat ? null : requestedModel' in source
     assert '"free-default-compatibility-unverified"' in source
