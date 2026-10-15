@@ -134,8 +134,8 @@ def test_model_router_propagates_v145_model_and_reasoning_diagnostics():
         "logical_requested_model",
         "effective_model",
         'type: "chat.diagnostics"',
-        'type: "chat.error"',
-        "code: diagnostics.error_code",
+        "failure.routingDiagnostics = diagnostics;",
+        "failure.code = diagnostics.error_code",
         'error_stage: error?.stage || "worker-model-library-routing"',
     ):
         assert token in source

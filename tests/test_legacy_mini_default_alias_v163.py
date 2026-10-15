@@ -96,11 +96,9 @@ def test_no_real_default_fails_explicitly_instead_of_pretending_success():
 
 def test_background_terminal_retires_route_before_error_publication():
     router = (ROOT / "chrome_extension/model_routing_v2.js").read_text(encoding="utf-8")
-    assert 'routeAuthority.failRequest(message.request_id,' in router
-    assert router.index("routeAuthority.failRequest(message.request_id,") < router.index(
-        'await trySendSocket({ type: "chat.error", request_id: message.request_id'
-    )
-    assert "route_retired_by_authority_v30" in router
+    assert "failure.routingDiagnostics = diagnostics;" in router
+    assert 'type: "chat.error"' not in router
+    assert "route_retired_by_authority_v30" in (ROOT / "chrome_extension/conversation_dispatch.js").read_text(encoding="utf-8")
 
 
 def test_stale_persisted_api_route_can_be_retired_on_fresh_server_admission():

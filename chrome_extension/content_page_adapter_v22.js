@@ -213,8 +213,13 @@
 
   function modelReasoningControls() {
     const root = composerRoot();
-    if (!root) return [];
-    return [...root.querySelectorAll("button,[role='button'],[aria-label],[data-value]")]
+    // The current ChatGPT model and reasoning affordances can live in the
+    // header, not inside the composer form. Read both surfaces here so
+    // the model/effort controllers share one DOM evidence boundary.
+    const roots = [root, ...document.querySelectorAll("header")].filter(Boolean);
+    const controls = [...new Set(roots.flatMap(scope =>
+      [...scope.querySelectorAll("button,[role='button'],[aria-label],[data-value]")]))];
+    return controls
       .filter(visible)
       .map(element => {
         const label = labelOf(element);

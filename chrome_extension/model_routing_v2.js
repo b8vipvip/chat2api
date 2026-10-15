@@ -1,6 +1,6 @@
 (() => {
   const baseHandleServerMessage = handleServerMessage;
-  const LIBRARY_REVISION = 145;
+  const LIBRARY_REVISION = 145; // model catalog schema
   const FREE_DEFAULT_MINI = "gpt-5.5-mini";
   const SPECIAL_MODELS = new Set(["gpt-image", "gpt-live", "gpt-live-mini"]);
 
@@ -120,7 +120,13 @@
       { type: "chat2api.reasoning.prepare.v7", reasoning_level: legacyLevel },
       ["content_reasoning_v7.js"],
     );
-    if (!response?.ok) throw new Error(response?.error || `Unable to select requested reasoning level: ${reasoning}`);
+    if (!response?.ok) {
+      const failure = new Error(response?.error || "Unable to select requested reasoning level: " + reasoning);
+      failure.code = String(response?.code || "reasoning_selection_failed");
+      failure.stage = "worker-reasoning-control";
+      failure.verification = response?.diagnostics?.verification || null;
+      throw failure;
+    }
     return response.data || {};
   }
 
@@ -285,17 +291,11 @@
         lastModelDiagnostics: diagnostics,
       });
       await trySendSocket({ type: "chat.diagnostics", request_id: message.request_id, diagnostics });
-      // The model preflight error is emitted by the BACKGROUND router, not
-      // by a content-script chat2api.event. Without this explicit handoff the
-      // physical routed window stays leased to an already terminal request,
-      // and the next same-key request hits a false scheduler invariant.
-      const routeAuthority = globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
-      const routeRetired = typeof routeAuthority?.failRequest === "function"
-        ? await routeAuthority.failRequest(message.request_id,
-          "model-routing-terminal:" + diagnostics.error_code).catch(() => false)
-        : false;
-      diagnostics.route_retired_by_authority_v30 = routeRetired;
-      await trySendSocket({ type: "chat.error", request_id: message.request_id, error: text, code: diagnostics.error_code, diagnostics });
+      const failure = error instanceof Error ? error : new Error(text);
+      failure.code = diagnostics.error_code;
+      failure.stage = diagnostics.error_stage;
+      failure.routingDiagnostics = diagnostics;
+      throw failure;
     }
   };
 })();

@@ -105,6 +105,9 @@
     return candidates[0]?.element || null;
   }
 
+  // Reuse this picker identity in the reasoning controller.
+  state.pickerControl = modelPicker;
+
   function menuRoots() {
     const rows = [];
     const seen = new Set();
