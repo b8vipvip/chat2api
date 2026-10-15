@@ -114,12 +114,14 @@ def install_generation_backend_routing_patch(app: FastAPI) -> FastAPI:
         except (ConnectionError, LookupError) as original:
             target = model_routing._MODEL_CONTEXT.get() or v13_patch._target_context.get() or {}
             model = str(target.get("model") or "").strip().lower()
-            if model not in model_routing.PAID_TEXT_MODELS | {model_routing.MINI_MODEL}:
+            if not model_routing._is_dynamic_text_model(model):
                 raise
             unhealthy: list[str] = []
             for client_id in registry.online_client_ids():
                 try:
-                    model_ok = bool(base_compatible(registry, client_id, model))
+                    # The final model library is the only capability owner.
+                    supports = getattr(registry, "supports_model", None)
+                    model_ok = bool(supports(client_id, model)) if callable(supports) else bool(base_compatible(registry, client_id, model))
                 except Exception:
                     model_ok = False
                 if model_ok and not generation_backend_routable(client_id):
