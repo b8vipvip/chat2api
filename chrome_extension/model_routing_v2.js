@@ -285,6 +285,16 @@
         lastModelDiagnostics: diagnostics,
       });
       await trySendSocket({ type: "chat.diagnostics", request_id: message.request_id, diagnostics });
+      // The model preflight error is emitted by the BACKGROUND router, not
+      // by a content-script chat2api.event. Without this explicit handoff the
+      // physical routed window stays leased to an already terminal request,
+      // and the next same-key request hits a false scheduler invariant.
+      const routeAuthority = globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
+      const routeRetired = typeof routeAuthority?.failRequest === "function"
+        ? await routeAuthority.failRequest(message.request_id,
+          "model-routing-terminal:" + diagnostics.error_code).catch(() => false)
+        : false;
+      diagnostics.route_retired_by_authority_v30 = routeRetired;
       await trySendSocket({ type: "chat.error", request_id: message.request_id, error: text, code: diagnostics.error_code, diagnostics });
     }
   };
