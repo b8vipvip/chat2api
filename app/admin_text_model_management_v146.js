@@ -33,6 +33,12 @@
           <button class="action" id="textModelRefreshV146">刷新服务端状态</button>
         </div>
         <div id="textModelSummaryV146" class="muted" style="margin-top:10px">正在读取模型状态…</div>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:14px 0">
+          <label for="textModelMinimumV146">旧版 gpt-5.5-mini 对应的最低文本模型</label>
+          <select id="textModelMinimumV146" style="min-width:220px"></select>
+          <button class="action" id="textModelMinimumSaveV146">保存最低模型</button>
+          <span id="textModelMinimumHintV146" class="muted">仅管理员指定；不再自动选择 GPT-6 或其它型号</span>
+        </div>
         <div class="scroll"><table style="width:100%"><thead><tr><th>模型</th><th>状态</th><th>已发现 Worker</th><th>已验证 Worker</th><th>可路由 Worker</th><th>管理</th></tr></thead><tbody id="textModelRowsV146"></tbody></table></div>
       </div>
       <div class="panel" style="margin-bottom:14px"><h3>Worker 模型来源</h3><div class="muted">保留页面选择器证据、检测时间、账号类型、验证错误及 Worker 身份。</div><div class="scroll"><table style="width:100%"><thead><tr><th>Worker</th><th>在线/登录</th><th>发现状态</th><th>观察到的文本模型</th><th>已验证模型</th><th>更新时间/错误</th></tr></thead><tbody id="textModelWorkersV146"></tbody></table></div></div>
@@ -40,6 +46,19 @@
       `;
       content.appendChild(panel);
       byId("textModelRefreshV146").onclick = () => refresh(true);
+      byId("textModelMinimumSaveV146").onclick = async () => {
+        const button = byId("textModelMinimumSaveV146");
+        button.disabled = true;
+        try {
+          await apiFetch("/api/admin/text-model-minimum", {
+            method:"PATCH",
+            body:{model_id:byId("textModelMinimumV146").value || null}
+          });
+          await refresh(true);
+        } catch (error) {
+          alert("保存最低模型失败：" + String(error?.message || error));
+        } finally { button.disabled = false; }
+      };
       panel.addEventListener("click", async event => {
         const button = event.target.closest("button[data-manage-model]");
         if (!button) return;
@@ -103,6 +122,17 @@
   }
   function render(catalog) {
     const models = catalog.data || [];
+    const minimum = byId("textModelMinimumV146");
+    if (minimum) {
+      const candidates = models.filter(row=>row.enabled);
+      minimum.innerHTML = '<option value="">未配置（旧版请求返回明确错误）</option>' +
+        candidates.map(row=>'<option value="'+esc(row.id)+'">'+esc(row.id)+'</option>').join("");
+      minimum.value = catalog.legacy_minimum_model || "";
+      const hint = byId("textModelMinimumHintV146");
+      if (hint) hint.textContent = catalog.legacy_minimum_model ?
+        "当前固定映射：" + catalog.legacy_minimum_model :
+        "尚未配置；不会擅自选择 GPT-6 或其它模型";
+    }
     const workers = catalog.workers || [];
     const history = catalog.history || [];
     const summary = byId("textModelSummaryV146");

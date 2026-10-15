@@ -355,7 +355,16 @@
 
   function classifyDriverError(error, requested) {
     const pageDriver = driver();
-    if (pageDriver?.classifyReasoningError) return pageDriver.classifyReasoningError(error, requested);
+    if (pageDriver?.classifyReasoningError) {
+      const classification = pageDriver.classifyReasoningError(error, requested);
+      // Preserve the single Driver's concrete mismatch/untrusted code when
+      // a lower-level keyboard/menu operation failed without its own code.
+      if (classification?.verification?.ok === false &&
+          classification.code === "reasoning_selection_failed") {
+        return {...classification, code: String(classification.verification.code || classification.code)};
+      }
+      return classification;
+    }
     return {
       code: "reasoning_selection_failed",
       message: String(error?.message || error),
@@ -365,18 +374,21 @@
 
   async function prepare(level) {
     const requested = normalize(level);
+    // The Page Driver is the sole success verifier. The controller only
+    // performs UI actions and reports their candidate evidence.
+    const verified = () => driver()?.verifyReasoning?.(requested)?.ok === true;
     if (!["instant", "medium", "high"].includes(requested)) throw new Error(`Unsupported reasoning level: ${level}`);
-    if (matches(labelOf(currentPill()), requested)) {
-      return attachDriverVerification({ reasoning: requested, zero_op: true, reasoning_switched: false, selection_strategy: "reasoning-dom-zero-op", used_click: false }, requested);
+    if (verified()) {
+      return attachDriverVerification({ reasoning: requested, zero_op: true, reasoning_switched: false, selection_strategy: "reasoning-driver-zero-op", used_click: false }, requested);
     }
 
     let result = await chooseNoClick(requested);
-    if (matches(labelOf(currentPill()), requested)) {
+    if (verified()) {
       return attachDriverVerification({ reasoning: requested, zero_op: false, reasoning_switched: true, selection_strategy: result?.strategy || "no-click", used_click: false }, requested);
     }
 
     result = await chooseClickFallback(requested);
-    if (!matches(labelOf(currentPill()), requested)) {
+    if (!verified()) {
       throw new Error(`ChatGPT reasoning level could not be verified after selection: ${requested}`);
     }
     return attachDriverVerification({ reasoning: requested, zero_op: false, reasoning_switched: true, selection_strategy: result.strategy, used_click: true }, requested);

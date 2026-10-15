@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from typing import Any
 
 from fastapi import FastAPI
@@ -19,49 +18,26 @@ logger = logging.getLogger("chat2api.legacy_model_alias")
 
 
 def current_default_model(registry: Any) -> str | None:
-    """Select only a READY Worker's explicitly reported concrete picker option.
+    """Only the administrator's explicit minimum model can resolve the legacy ID.
 
-    Prefer an instant/non-reasoning entry to a dedicated Sol/Pro model. This
-    selection is dynamic: no unavailable historical model is hardcoded as a
-    replacement. The Free no-picker default is last resort.
+    Model availability is read from the existing managed Worker catalog. No
+    model ranking, plan guessing, or alternative fallback is permitted here.
     """
+    getter = getattr(registry, "legacy_minimum_model", None)
+    selected = getter() if callable(getter) else None
+    if not selected:
+        return None
     try:
         catalog = registry.model_catalog(online_only=True)
     except Exception:
-        catalog = []
-    candidates: list[str] = []
-    free_fallback = False
-    seen = set()
-    for row in catalog or []:
-        if not isinstance(row, dict):
-            continue
-        model_id = str(row.get("id") or "").strip().lower()
-        if model_id == LEGACY_ID:
-            free_fallback = bool(row.get("clients"))
-            continue
-        if (not row.get("clients") or row.get("source") == "special-static"
-            or not re.fullmatch(r"gpt-[a-z0-9][a-z0-9.-]{0,80}", model_id)
-            or model_id in seen):
-            continue
-        seen.add(model_id)
-        candidates.append(model_id)
-
-    def order(model: str):
-        # GPT-6 is the current instant picker entry in the supplied TX03
-        # evidence. Discover replacements from live catalog, not a static
-        # pretend capability for old 5.5-mini.
-        if model == "gpt-6":
-            return (0, model)
-        if not any(part in model for part in ("-sol", "-pro", "-astra", "-high", "-thinking")):
-            return (1, model)
-        return (2, model)
-
-    if candidates:
-        return min(candidates, key=order)
-    # Free no-picker Workers already route their actual current default via
-    # existing free-default-compatibility-unverified handler.
-    return LEGACY_ID if free_fallback else None
-
+        return None
+    return selected if any(
+        isinstance(row, dict)
+        and row.get("id") == selected
+        and row.get("clients")
+        and row.get("source") != "special-static"
+        for row in catalog or []
+    ) else None
 
 class LegacyMiniDefaultAliasMiddleware:
     def __init__(self, app, registry):
@@ -100,9 +76,9 @@ class LegacyMiniDefaultAliasMiddleware:
             elif not target:
                 data = json.dumps({
                     "error": {
-                        "message": "No online ChatGPT-ready Worker reports a current default text model; run Worker model discovery",
+                        "message": "No administrator-configured minimum text model is currently available on a ready Worker; configure it under Text Model Management",
                         "type": "service_unavailable",
-                        "code": "current_default_model_unavailable",
+                        "code": "configured_minimum_model_unavailable",
                     }
                 }).encode("utf-8")
                 await send({"type": "http.response.start", "status": 503,

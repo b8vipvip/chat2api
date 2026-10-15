@@ -10,8 +10,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeRegistry:
-    def __init__(self, models):
+    def __init__(self, models, minimum=None):
         self.models = models
+        self.minimum = minimum
+
+    def legacy_minimum_model(self):
+        return self.minimum
 
     def model_catalog(self, online_only=True):
         assert online_only is True
@@ -29,21 +33,17 @@ def models():
     ]
 
 
-def test_legacy_minimum_maps_to_live_instant_picker_not_retired_hardcoded_model():
-    assert current_default_model(FakeRegistry(models())) == "gpt-6"
-    assert current_default_model(FakeRegistry([
-        {"id": "gpt-5.6-sol", "validated": True, "clients": ["ext"], "source": "worker-validated"},
-        {"id": "gpt-6.1", "validated": True, "clients": ["ext"], "source": "worker-validated"},
-    ])) == "gpt-6.1"
-    assert current_default_model(FakeRegistry([
-        {"id": "gpt-6", "validated": True, "clients": [], "source": "worker-validated"}
-    ])) is None
-    assert current_default_model(FakeRegistry([
-        {"id": LEGACY_ID, "validated": False, "clients": ["free"], "source": "free-default-compatibility-unverified"}
-    ])) == LEGACY_ID
+def test_legacy_minimum_uses_only_explicit_admin_configuration():
+    assert current_default_model(FakeRegistry(models())) is None
+    assert current_default_model(FakeRegistry(models(), "gpt-5.6-sol")) == "gpt-5.6-sol"
+    assert current_default_model(FakeRegistry(models(), "gpt-6")) == "gpt-6"
+    assert current_default_model(FakeRegistry([], "gpt-6")) is None
+    assert current_default_model(FakeRegistry([{
+        "id": "gpt-6", "clients": [], "source": "worker-validated"
+    }], "gpt-6")) is None
 
 
-def run_request(path, model, rows, stream=False):
+def run_request(path, model, rows, stream=False, minimum=None):
     received, sent = [], []
     body = json.dumps({"model": model, "messages": [{"role": "user", "content": "hello"}],
                        "stream": stream}).encode("utf8")
@@ -63,21 +63,21 @@ def run_request(path, model, rows, stream=False):
     async def writer(message):
         sent.append(message)
 
-    asyncio.run(LegacyMiniDefaultAliasMiddleware(app_inner, FakeRegistry(rows))(
+    asyncio.run(LegacyMiniDefaultAliasMiddleware(app_inner, FakeRegistry(rows, minimum))(
         scope, reader, writer))
     return received, sent
 
 
 def test_all_text_api_endpoints_map_legacy_id_and_update_content_length():
     for path in ("/v1/chat/completions", "/v1/completions", "/v1/responses"):
-        received, sent = run_request(path, LEGACY_ID, models(), stream=True)
+        received, sent = run_request(path, LEGACY_ID, models(), stream=True, minimum="gpt-5.6-sol")
         assert sent[0]["status"] == 200
         scope, message = received[0]
         obj = json.loads(message["body"])
-        assert obj["model"] == "gpt-6"
+        assert obj["model"] == "gpt-5.6-sol"
         assert obj["stream"] is True
         assert scope["chat2api_legacy_requested_model"] == LEGACY_ID
-        assert scope["chat2api_effective_model"] == "gpt-6"
+        assert scope["chat2api_effective_model"] == "gpt-5.6-sol"
         assert int(dict(scope["headers"])[b"content-length"]) == len(message["body"])
 
 
@@ -91,7 +91,7 @@ def test_no_real_default_fails_explicitly_instead_of_pretending_success():
     received, sent = run_request("/v1/chat/completions", LEGACY_ID, [])
     assert received == []
     assert sent[0]["status"] == 503
-    assert json.loads(sent[1]["body"])["error"]["code"] == "current_default_model_unavailable"
+    assert json.loads(sent[1]["body"])["error"]["code"] == "configured_minimum_model_unavailable"
 
 
 def test_background_terminal_retires_route_before_error_publication():
