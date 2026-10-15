@@ -45,6 +45,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     config = settings or get_settings()
     registry = ClientRegistry(config.data_dir)
     broker = RequestBroker()
+    # The request origin is the actual dispatch socket; disconnection of an
+    # old socket must not terminate requests already sent on its replacement.
+    registry.request_broker = broker
     telemetry = TelemetryStore(config.data_dir)
     api_keys = ApiKeyStore(config.data_dir, config.api_key)
     file_store = FileStore(config.data_dir)
@@ -986,13 +989,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except Exception:
             logger.exception("Extension WebSocket failed: %s", client_id)
         finally:
-            active_request = broker.client_requests.get(client_id)
-            if active_request:
-                await broker.publish(active_request, {"type": "chat.error", "request_id": active_request,
-                                                      "error": "Chrome extension disconnected",
-                                                      "_closed_socket": websocket,
-                                                      "transport_runtime_epoch": socket_runtime_epoch})
             await registry.detach(client_id, websocket)
+            # Capacity can dispatch multiple distinct API keys on one Worker.
+            # Only this socket's requests lost transport; never borrow the
+            # single-slot legacy client_requests pointer (or affect new work).
+            lost_requests = [
+                state.request_id for state in list(broker.requests.values())
+                if state.client_id == client_id and getattr(state, "dispatch_socket", None) is websocket
+            ]
+            if lost_requests:
+                await asyncio.gather(*(broker.publish(request_id, {
+                    "type": "chat.error", "request_id": request_id,
+                    "error": "Chrome extension disconnected",
+                    "_closed_socket": websocket,
+                    "transport_runtime_epoch": socket_runtime_epoch,
+                }) for request_id in lost_requests))
 
     return app
 
