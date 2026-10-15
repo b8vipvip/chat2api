@@ -4,8 +4,9 @@ import vm from "node:vm";
 
 const source=readFileSync("chrome_extension/content_model_library_v145.js","utf8");
 
-async function scenario({withFive=true,enabled=true,canSwitch=true}={}){
+async function scenario({withFive=true,enabled=true,canSwitch=true,hydrationReads=0}={}){
   let opened=false;
+  let remainingHydrationReads=0;
   let activeModel="gpt-6";
   let listener;
   class Element {
@@ -26,7 +27,7 @@ async function scenario({withFive=true,enabled=true,canSwitch=true}={}){
     scrollIntoView(){}
     click(){this.onClick?.()}
   }
-  const picker=new Element(activeModel,{"data-testid":"model-switcher","aria-label":"Choose model","tag":"button"},()=>{opened=true});
+  const picker=new Element(activeModel,{"data-testid":"model-switcher","aria-label":"Choose model","tag":"button"},()=>{opened=true;remainingHydrationReads=hydrationReads});
   const bigWrapper=new Element(
     "High High, 3 of 3. Locked, opens access options GPT-6 GPT-5.6 Sol GPT-5.5 Leaving on October 14",
     {role:"menuitem"},()=>{throw Error("Container must never be clicked")}
@@ -37,7 +38,7 @@ async function scenario({withFive=true,enabled=true,canSwitch=true}={}){
   },()=>{if(canSwitch){activeModel="gpt-5.5";picker.label="GPT-5.5";opened=false}});
   const group=new Element("",{role:"menu"});
   for(const item of [bigWrapper,sol,five])item.parentElement=group;
-  group.querySelectorAll=()=>[bigWrapper,sol,...(withFive?[five]:[])];
+  group.querySelectorAll=()=>remainingHydrationReads-->0?[]:[bigWrapper,sol,...(withFive?[five]:[])];
   const document={
     querySelectorAll(selector){
       if(selector.includes("form"))return [];
@@ -70,6 +71,10 @@ async function scenario({withFive=true,enabled=true,canSwitch=true}={}){
   const result=await issue({type:"chat2api.model.select.v145",model:"gpt-5.5"});
   return {result,discovered};
 }
+
+const hydrated=await scenario({hydrationReads:3});
+assert.equal(hydrated.discovered.ok,true,"model-menu shell must hydrate before extracting choices");
+assert.equal(hydrated.result.ok,true);
 
 const success=await scenario();
 assert.equal(success.result.ok,true);

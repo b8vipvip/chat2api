@@ -92,7 +92,7 @@ def test_v13_version_catalog_and_console(tmp_path: Path) -> None:
 
 def test_removed_browser_aliases_are_rejected_before_routing(tmp_path: Path) -> None:
     with TestClient(app_v13(tmp_path)) as client:
-        for model in ("default", "chatgpt-web", "o3"):
+        for model in ("default", "chatgpt-web", "gpt-image"):
             response = client.post(
                 "/v1/chat/completions",
                 headers=headers(),
@@ -230,3 +230,10 @@ def test_v13_source_contains_responses_stream_events_and_entry_order() -> None:
     entry = (ROOT / "app" / "entry.py").read_text(encoding="utf-8")
     assert "from .v13_patch import install_v13_patch" in entry
     assert entry.index("install_v12_patch(app)") < entry.index("install_v13_patch(app)")
+
+def test_v13_dynamic_model_id_parser_does_not_use_historical_static_allowlist() -> None:
+    from app.v13_patch import _target_from_payload
+    assert _target_from_payload({"model": "gpt-6"})["model"] == "gpt-6"
+    assert _target_from_payload({"model": "gpt-5.6-sol"})["model"] == "gpt-5.6-sol"
+    assert _target_from_payload({"model": "gpt-5.5-mini"})["model"] == "gpt-5.5-mini"
+    assert _target_from_payload({"model": "o3"})["model"] == "o3"
