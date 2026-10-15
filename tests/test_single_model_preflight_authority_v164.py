@@ -37,3 +37,13 @@ def test_model_and_reasoning_use_same_ui_picker_and_adapter_evidence():
     # Missing/unknown effort controls must not be silently treated as applied.
     assert 'throw new Error("ChatGPT reasoning control was not found")' in reasoning
     assert "could not be verified after selection" in reasoning
+
+
+def test_model_preflight_terminal_live_vm():
+    import shutil
+    import subprocess
+    if not shutil.which("node"):
+        return
+    run = subprocess.run(["node", str(ROOT / "tests" / "single_model_preflight_terminal_v164.mjs")],
+                         cwd=ROOT, capture_output=True, text=True, timeout=30)
+    assert run.returncode == 0, run.stdout + "\\n" + run.stderr
