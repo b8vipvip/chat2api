@@ -175,19 +175,27 @@ class ClientRegistry:
             await self.save()
             return client_id, token
 
+    def worker_admin_enabled(self, client_id: str) -> bool:
+        """Single routing/authentication projection of the Worker-list switch."""
+        client = self.clients.get(str(client_id))
+        if not client or not client.connection_enabled:
+            return False
+        authority = getattr(self, "worker_master_enabled", None)
+        return bool(authority(client_id)) if callable(authority) else True
+
     async def authenticate(self, client_id: str, token: str) -> bool:
         client = self.clients.get(client_id)
         return bool(
             client
-            and client.connection_enabled
+            and self.worker_admin_enabled(client_id)
             and secrets.compare_digest(client.token_hash, token_hash(token))
         )
 
     async def attach(self, client_id: str, websocket: WebSocket) -> None:
         async with self.lock:
             client = self.clients[client_id]
-            if not client.connection_enabled:
-                raise PermissionError("Extension connection is disabled by administrator")
+            if not self.worker_admin_enabled(client_id):
+                raise PermissionError("Worker is disabled by administrator")
             old = self.sockets.get(client_id)
             self.sockets[client_id] = websocket
             self.socket_locks.setdefault(client_id, asyncio.Lock())
@@ -261,7 +269,7 @@ class ClientRegistry:
 
     async def send(self, client_id: str, payload: dict[str, Any]) -> None:
         client = self.clients.get(client_id)
-        if not client or not client.connection_enabled:
+        if not self.worker_admin_enabled(client_id):
             raise RuntimeError("Chrome extension connection is disabled")
         request_type = str(payload.get("type") or "") if isinstance(payload, dict) else ""
         if request_type in {
@@ -286,7 +294,7 @@ class ClientRegistry:
     def online_client_ids(self) -> list[str]:
         return sorted(
             client_id for client_id in self.sockets
-            if self.clients.get(client_id) and self.clients[client_id].connection_enabled
+            if self.worker_admin_enabled(client_id)
         )
 
     def chatgpt_routing_ready(self, client_id: str) -> bool:
@@ -309,7 +317,7 @@ class ClientRegistry:
             if requested not in self.clients:
                 raise KeyError("Unknown client_id")
             client = self.clients[requested]
-            if not client.connection_enabled:
+            if not self.worker_admin_enabled(requested):
                 raise ConnectionError("Requested Chrome extension is disabled by administrator")
             if requested not in self.sockets:
                 raise ConnectionError("Requested Chrome extension is offline")
