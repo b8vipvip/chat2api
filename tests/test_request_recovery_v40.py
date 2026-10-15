@@ -124,3 +124,31 @@ def test_recovery_patch_is_installed_after_stall_guard():
     entry = (Path(__file__).resolve().parents[1] / "app" / "entry.py").read_text(encoding="utf-8")
     assert "install_request_recovery_patch(app)" in entry
     assert entry.index("install_request_stall_patch(app)") < entry.index("install_request_recovery_patch(app)")
+
+
+def test_reaper_release_passes_through_latest_capacity_owner(monkeypatch):
+    async def scenario() -> None:
+        monkeypatch.setattr(request_stall_patch, "DISPATCH_ACK_TIMEOUT_SECONDS", 10.0)
+        monkeypatch.setattr(request_stall_patch, "SUBMIT_ACK_TIMEOUT_SECONDS", 10.0)
+        monkeypatch.setattr(request_recovery_patch, "TERMINAL_REAPER_STALE_SECONDS", 0.0)
+        monkeypatch.setattr(request_recovery_patch, "TERMINAL_RELEASE_GRACE_SECONDS", 60.0)
+        _app, broker, _registry = make_app()
+        original_release = broker.release
+        final_owner_releases = []
+
+        async def final_capacity_release(request_id):
+            final_owner_releases.append(request_id)
+            await original_release(request_id)
+
+        broker.release = final_capacity_release
+        state = await broker.create("req_reaper_final_owner", "ext_reaper")
+        await broker.publish(state.request_id, {
+            "type": "chat.error", "request_id": state.request_id, "error": "preflight failed"
+        })
+        with pytest.raises(RuntimeError, match="preflight failed"):
+            await state.final_future
+        assert await broker.request_recovery_reap_once() == 1
+        assert final_owner_releases == [state.request_id]
+        assert broker.capacity_snapshot(state.client_id)["used_units"] == 0
+
+    asyncio.run(scenario())
