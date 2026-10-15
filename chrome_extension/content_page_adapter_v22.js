@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_PAGE_ADAPTER_V22__";
   if (globalThis[KEY]) return;
 
-  const VERSION = "22.1.0";
+  const VERSION = "22.2.0";
   const FAMILY_ALIASES = {
     "gpt-5.6-sol": ["gpt-5.6 sol", "gpt 5.6 sol", "5.6 sol"],
     "gpt-5.5": ["gpt-5.5", "gpt 5.5", "5.5"],
@@ -48,6 +48,8 @@
       "[data-radix-popper-content-wrapper]",
       "[data-radix-menu-content]",
       "[data-state='open']",
+      "[role='dialog']",
+      "[class*='popover' i]",
     ],
     reasoningSlider: ["input[type='range']", "[role='slider']"],
   });
@@ -252,21 +254,58 @@
       { element: null, label: "", family: "", reasoning: "" };
   }
 
-  function reasoningEvidence() {
-    // Only an explicitly selected UI state proves reasoning effort. A list of
-    // options, a hover label, or the requested value does not prove selection.
-    const surfaces = openSurfaces();
+  function selectedReasoningRows(surfaces = openSurfaces()) {
+    // ChatGPT can put aria-checked/data-state on a small icon or a
+    // menuitemradio's nested child. The selected *option row*, not that
+    // icon's empty aria-label, owns the visible effort label. Read the
+    // nearest interactive ancestor; never promote a whole popover wrapper.
+    const selectedSelector = [
+      "[aria-checked='true']", "[aria-selected='true']",
+      "[data-state='checked']", "[data-state='selected']",
+      "[data-selected='true']",
+    ].join(",");
+    const optionSelector = "button,[role='menuitem'],[role='menuitemradio'],[role='option'],[data-radix-collection-item]";
+    const byElement = new Set();
     const selected = [];
     for (const surface of surfaces) {
-      for (const node of surface.querySelectorAll(
-        "[aria-checked='true'],[aria-selected='true'],[data-state='checked'],[data-state='selected']")) {
-        if (!visible(node)) continue;
-        const label = labelOf(node);
-        const level = reasoningFromText(label);
-        if (["instant", "medium", "high"].includes(level))
-          selected.push({reasoning:level, source:"selected-reasoning-option", label});
+      for (const marker of surface.querySelectorAll(selectedSelector)) {
+        if (!visible(marker)) continue;
+        const row = marker.closest?.(optionSelector) || (marker.matches?.(optionSelector) ? marker : null);
+        if (!row || !visible(row) || byElement.has(row)) continue;
+        byElement.add(row);
+        // Prefer the visible row text over a generic aria-label like
+        // "selected option". Do not treat a sibling's option text as proof.
+        const labels = [row.innerText, row.textContent, labelOf(row)].filter(Boolean);
+        const levels = [...new Set(labels.map(reasoningFromText).filter(level =>
+          ["instant", "medium", "high"].includes(level)))];
+        if (levels.length !== 1) continue;
+        selected.push({reasoning:levels[0], source:"selected-reasoning-option", label:normalize(labels[0] || "")});
       }
     }
+    return selected;
+  }
+
+  function reasoningInspection() {
+    // Only structural metadata and normalized effort levels; never persist
+    // page text, account names, or the request prompt in diagnostics.
+    const surfaces = openSurfaces();
+    const selected = selectedReasoningRows(surfaces);
+    const markerSelector = "[aria-checked='true'],[aria-selected='true'],[data-state='checked'],[data-state='selected'],[data-selected='true']";
+    return {
+      adapter_version: VERSION,
+      open_surface_count: surfaces.length,
+      selected_marker_count: surfaces.reduce((sum, surface) => sum + surface.querySelectorAll(markerSelector).length, 0),
+      selected_reasoning_levels: [...new Set(selected.map(row => row.reasoning))],
+      slider_present: Boolean(reasoningSlider()),
+      reasoning_control_present: Boolean(reasoningControl().element),
+    };
+  }
+
+  function reasoningEvidence() {
+    // Only selected, visible UI evidence may certify effort. Never infer
+    // success from a requested value, an unchecked option, or stale cache.
+    const surfaces = openSurfaces();
+    const selected = selectedReasoningRows(surfaces);
     const unique = [...new Set(selected.map(row=>row.reasoning))];
     if (unique.length === 1) return selected.find(row=>row.reasoning===unique[0]);
     if (unique.length > 1) return {reasoning:"", source:"ambiguous-reasoning-selection"};
@@ -374,6 +413,7 @@
     modelControl,
     reasoningControl,
     reasoningEvidence,
+    reasoningInspection,
     modelFamilyEvidence,
     openSurfaces,
     reasoningSlider,
