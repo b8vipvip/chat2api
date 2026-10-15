@@ -48,6 +48,11 @@ class ProfileBody(BaseModel):
 class UserKeyBody(BaseModel):
     name: str = Field(default="API Key", max_length=120)
     expires_in_days: int | None = Field(default=None, ge=1, le=3650)
+    token_quota: int | None = Field(default=None, ge=0)
+
+
+class UserKeyQuotaBody(BaseModel):
+    token_quota: int | None = Field(default=None, ge=0)
 
 
 class PricingBody(BaseModel):
@@ -178,6 +183,7 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             for key in (
                 "key_id", "name", "prefix", "created_at", "expires_at", "last_used_at",
                 "enabled", "configured_enabled", "expired", "revoked_at", "scopes", "secret_recoverable",
+                "token_quota", "tokens_used", "tokens_remaining", "quota_exhausted",
             )
         }
 
@@ -321,6 +327,8 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         if body.expires_in_days:
             expires_at = (datetime.now(timezone.utc) + timedelta(days=body.expires_in_days)).isoformat()
         item, raw = await api_keys.create(body.name, expires_at)
+        if body.token_quota is not None:
+            item = await api_keys.update(item["key_id"], token_quota=body.token_quota)
         accounts.attach_key(str(user["user_id"]), str(item["key_id"]))
         return {"key": public_key(item), "token": raw}
 
@@ -333,6 +341,17 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             return {"key_id": key_id, "token": api_keys.reveal(key_id)}
         except (KeyError, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
+
+    @app.patch("/api/user/keys/{key_id}/quota")
+    async def user_update_key_quota(key_id: str, body: UserKeyQuotaBody, request: Request) -> dict[str, Any]:
+        user = current_user(request)
+        if not accounts.owns_key(str(user["user_id"]), key_id):
+            raise HTTPException(status_code=404, detail="API Key 不存在")
+        try:
+            item = await api_keys.update(key_id, token_quota=body.token_quota)
+        except (KeyError, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        return {"key": public_key(item)}
 
     @app.delete("/api/user/keys/{key_id}")
     async def user_revoke_key(key_id: str, request: Request) -> dict[str, Any]:
