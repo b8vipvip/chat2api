@@ -338,7 +338,19 @@
 
   function attachDriverVerification(data, requested) {
     const pageDriver = driver();
-    return pageDriver?.attachVerification ? pageDriver.attachVerification(data, requested) : data;
+    const verified = pageDriver?.attachVerification ? pageDriver.attachVerification(data, requested) : data;
+    // The page Driver is the sole verification authority. A local button
+    // match is only a candidate, never proof of applied reasoning effort.
+    if (verified?.verification && verified.verification.ok !== true) {
+      const evidence = verified.verification;
+      const failure = new Error(
+        `ChatGPT reasoning level could not be verified after selection: ${requested}; ${String(evidence.code || "reasoning_state_untrusted")}`
+      );
+      failure.code = String(evidence.code || "reasoning_state_untrusted");
+      failure.verification = evidence;
+      throw failure;
+    }
+    return verified;
   }
 
   function classifyDriverError(error, requested) {
