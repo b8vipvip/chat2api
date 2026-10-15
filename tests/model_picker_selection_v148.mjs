@@ -4,8 +4,9 @@ import vm from "node:vm";
 
 const source=readFileSync("chrome_extension/content_model_library_v145.js","utf8");
 
-async function scenario({withFive=true,enabled=true,canSwitch=true,hydrationReads=0,genericHeader=false}={}){
+async function scenario({withFive=true,enabled=true,canSwitch=true,hydrationReads=0,genericHeader=false,detachedMenu=false,ignoredFirstClick=false}={}){
   let opened=false;
+  let clicks=0;
   let remainingHydrationReads=0;
   let activeModel=genericHeader?"gpt-5.6-sol":"gpt-6";
   let listener;
@@ -27,7 +28,7 @@ async function scenario({withFive=true,enabled=true,canSwitch=true,hydrationRead
     scrollIntoView(){}
     click(){this.onClick?.()}
   }
-  const picker=new Element(genericHeader?"ChatGPT":activeModel,{"data-testid":"model-switcher","aria-label":"Choose model","tag":"button"},()=>{opened=true;remainingHydrationReads=hydrationReads});
+  const picker=new Element(genericHeader?"ChatGPT":activeModel,{"data-testid":"model-switcher","aria-label":"Choose model","tag":"button"},()=>{clicks++;if(ignoredFirstClick&&clicks===1)return;opened=true;remainingHydrationReads=hydrationReads});
   const bigWrapper=new Element(
     "High High, 3 of 3. Locked, opens access options GPT-6 GPT-5.6 Sol GPT-5.5 Leaving on October 14",
     {role:"menuitem"},()=>{throw Error("Container must never be clicked")}
@@ -43,10 +44,11 @@ async function scenario({withFive=true,enabled=true,canSwitch=true,hydrationRead
     querySelectorAll(selector){
       if(selector.includes("form"))return [];
       if(selector.includes("data-testid*='model'"))return [picker];
-      if(selector.includes("[role='menu']"))return opened?[group]:[];
+      if(selector.includes("[role='menu']"))return opened&&!detachedMenu?[group]:[];
+      if(selector.includes("[role='menuitem']"))return opened?[bigWrapper,sol,...(withFive?[five]:[])]:[];
       return [];
     },
-    querySelector:()=>null,
+    querySelector:(selector)=>selector.includes("#prompt-textarea")?{ready:true}:null,
     dispatchEvent(event){if(event?.key==="Escape")opened=false},
   };
   const context={
@@ -77,6 +79,10 @@ const checked=await scenario({genericHeader:true});
 assert.equal(checked.inspected.selected_model,"gpt-5.6-sol",
   "generic header must use checked row in live menu");
 assert.equal(checked.inspected.evidence_source,"live-menu-selected-row");
+const detached=await scenario({detachedMenu:true});
+assert.equal(detached.result.ok,true,"portal model rows without a menu wrapper must still be selectable");
+const retried=await scenario({ignoredFirstClick:true});
+assert.equal(retried.result.ok,true,"a picker click ignored during hydration must be retried once");
 const hydrated=await scenario({hydrationReads:3});
 assert.equal(hydrated.discovered.ok,true,"model-menu shell must hydrate before extracting choices");
 assert.equal(hydrated.result.ok,true);

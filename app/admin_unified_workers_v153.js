@@ -321,6 +321,10 @@
   let data={clients:[],pairing_codes:[]};
   let refreshing=null;
   let displayedGroups=new Map();
+  // Initial hydration is not a transport disconnect. Both source endpoints
+  // must report their first successful snapshot before statuses are shown.
+  let extensionsLoaded=Boolean(globalThis.__chat2apiWindowsSnapshotV156?.data);
+  let linuxLoaded=false;
   function aggregate(devices,payload){
     const groups=new Map(),byPair=new Map(),byClient=new Map(),used=new Set(),ownerByClient=new Map();
     for(const c of payload?.clients||[])if(text(c.client_id))byClient.set(text(c.client_id),c);
@@ -495,6 +499,13 @@
     if(!worker)return workerState("未确认","warn");
     if(worker.revoked_at)return workerState("已吊销","bad");
     if(worker.enabled===false)return workerState("停用","warn");
+    // The extension connection is the transport used for API dispatch.
+    // Linux Agent heartbeats can lag even when that Bridge is connected.
+    if(ext?.online===true && ext.connection_enabled!==false){
+      const used=Number(ext.capacity?.used_units??ext.active_api_calls??0);
+      return ext.busy===true||(Number.isFinite(used)&&used>0)?
+        workerState("忙碌","warn"):workerState("运行正常","good");
+    }
     const seen=Date.parse(worker.last_seen_at||"");
     if(Number.isFinite(seen)&&Date.now()-seen>45000)return workerState("离线","bad");
     const raw=text(worker.status).toLowerCase();
@@ -526,6 +537,12 @@
   }
   function renderWorkers(){
     const target=el("unifiedWorkerRowsV160");if(!target)return;
+    if(!extensionsLoaded||!linuxLoaded){
+      target.innerHTML='<tr><td colspan="10" class="v153-muted">正在同步 Worker 状态…</td></tr>';
+      const summary=el("unifiedWorkerSummaryV160");
+      if(summary)summary.textContent="正在获取 Worker 状态…";
+      return;
+    }
     const rows=[];
     const workerById=new Map(getLinux().flatMap(d=>(d.workers||[]).map(w=>[text(w.worker_id),w])));
     const clientsById=new Map((data.clients||[]).map(c=>[text(c.client_id),c]));
@@ -568,7 +585,7 @@
   async function refresh(){
     if(refreshing)return refreshing;
     const task=(async()=>{
-      await Promise.allSettled([
+      await Promise.all([
         Promise.resolve(globalThis.chat2apiReloadCanonicalWorkerListV59?.()),
         Promise.resolve().then(()=>el("refreshLinuxDevicesV124")?.click()),
       ]);
@@ -685,8 +702,8 @@
       const install=event.target.closest("[data-open-linux-create-v160]");
       if(install){event.preventDefault();el("createLinuxDeviceV124")?.click();}
     });
-    document.addEventListener("chat2api:extensions-loaded",render);
-    document.addEventListener("chat2api:linux-devices-loaded",render);
+    document.addEventListener("chat2api:extensions-loaded",()=>{extensionsLoaded=true;render();});
+    document.addEventListener("chat2api:linux-devices-loaded",()=>{linuxLoaded=true;render();});
     document.addEventListener("click",event=>{
       if(event.target.closest('.nav button[data-view="extensions"]'))setTimeout(()=>{header();render();},0);
     });
