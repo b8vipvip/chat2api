@@ -327,7 +327,8 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
             client_ids = [client_id for client_id, item in registry.clients.items() if getattr(item, "connection_enabled", False)]
         default_model = _configured_default_model(registry)
         for client_id in client_ids:
-            for special in catalog.values():
+            for special_id in STATIC_SPECIAL_MODELS:
+                special = catalog[special_id]
                 if client_id not in special["clients"]:
                     special["clients"].append(client_id)
             if default_model and _free_default_route(registry, client_id, default_model):
