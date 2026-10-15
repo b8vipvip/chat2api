@@ -19,7 +19,7 @@ logger = logging.getLogger("chat2api.legacy_model_alias")
 
 
 def current_default_model(registry: Any) -> str | None:
-    """Select only a READY Worker's reported concrete model.
+    """Select only a READY Worker's explicitly reported concrete picker option.
 
     Prefer an instant/non-reasoning entry to a dedicated Sol/Pro model. This
     selection is dynamic: no unavailable historical model is hardcoded as a
@@ -29,7 +29,7 @@ def current_default_model(registry: Any) -> str | None:
         catalog = registry.model_catalog(online_only=True)
     except Exception:
         catalog = []
-    verified: list[str] = []
+    candidates: list[str] = []
     free_fallback = False
     seen = set()
     for row in catalog or []:
@@ -39,12 +39,12 @@ def current_default_model(registry: Any) -> str | None:
         if model_id == LEGACY_ID:
             free_fallback = bool(row.get("clients"))
             continue
-        if (not row.get("clients") or row.get("validated") is not True
+        if (not row.get("clients") or row.get("source") == "special-static"
             or not re.fullmatch(r"gpt-[a-z0-9][a-z0-9.-]{0,80}", model_id)
             or model_id in seen):
             continue
         seen.add(model_id)
-        verified.append(model_id)
+        candidates.append(model_id)
 
     def order(model: str):
         # GPT-6 is the current instant picker entry in the supplied TX03
@@ -56,8 +56,8 @@ def current_default_model(registry: Any) -> str | None:
             return (1, model)
         return (2, model)
 
-    if verified:
-        return min(verified, key=order)
+    if candidates:
+        return min(candidates, key=order)
     # Free no-picker Workers already route their actual current default via
     # existing free-default-compatibility-unverified handler.
     return LEGACY_ID if free_fallback else None
