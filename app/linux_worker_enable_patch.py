@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -8,11 +9,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 
 from .admin_auth import SESSION_COOKIE
-from .extension_capacity_control_patch import _request_extension_control
-from .timezone_utils import beijing_now_iso
 
 
 PATCH_VERSION = "0.22.42"
+logger = logging.getLogger("chat2api.worker-switch")
 ASSET_PATH = "/assets/chat2api-linux-worker-enable-v46.js"
 RUNTIME_ASSET_PATH = "/assets/chat2api-worker-runtime-v61.js"
 
@@ -102,158 +102,65 @@ def install_linux_worker_enable_patch(app: FastAPI) -> FastAPI:
                 raise HTTPException(409, "Worker is revoked and cannot be re-enabled")
             return worker, str(worker.get("extension_client_id") or ""), enabled(worker)
 
-    async def clear_sticky_routes(extension_id: str) -> None:
-        if not extension_id:
-            return
-        async with registry.lock:
-            next_routes = {
-                key_id: client_id
-                for key_id, client_id in registry.api_key_routes.items()
-                if client_id != extension_id
-            }
-            if next_routes == registry.api_key_routes:
-                return
-            registry.api_key_routes = next_routes
-            await registry.save()
-
-    def persist_switch(worker_id: str, target: bool, *, control: dict[str, Any] | None = None) -> dict[str, Any]:
-        with workers._lock:
-            worker = workers.data.get("workers", {}).get(worker_id)
-            if not worker:
-                raise HTTPException(404, "Worker not found")
-            worker["enabled"] = target
-            worker["enabled_updated_at"] = beijing_now_iso()
-            metadata = dict(worker.get("metadata") or {})
-            switch = dict(metadata.get("admin_master_switch") or {})
-            switch.update({
-                "enabled": target,
-                "state": "enabled" if target else "disabled",
-                "routing_state": "connected" if target else "disconnected",
-                "updated_at": worker["enabled_updated_at"],
-                "transport_preserved": False,
-                "window_policy": "configured-reserve" if target else "keep-one-managed-window",
-            })
-            if isinstance(control, dict):
-                switch["control"] = control
-            metadata["admin_master_switch"] = switch
-            bridge = dict(metadata.get("bridge") or {})
-            bridge["master_connection_enabled"] = target
-            bridge["routing_enabled"] = target
-            if not target:
-                bridge["logical_online"] = False
-                bridge["connection_enabled"] = False
-                bridge["online"] = False
-            metadata["bridge"] = bridge
-            worker["metadata"] = metadata
-            workers._save()
-            return workers.public(worker)
-
-    def skipped_control(reason: str) -> dict[str, Any]:
-        return {
-            "ok": True,
-            "skipped": True,
-            "reason": reason,
-            "data": {"keep_windows": 1},
-        }
-
     @app.put("/api/admin/linux-workers/{worker_id}/enabled")
     async def set_worker_enabled(worker_id: str, request: Request) -> dict[str, Any]:
         admin(request)
         body = await request.json()
         if not isinstance(body, dict) or not isinstance(body.get("enabled"), bool):
             raise HTTPException(400, "enabled must be a boolean")
-
         target = bool(body["enabled"])
-        worker, extension_id, currently_enabled = read_worker(worker_id)
+        _worker, extension_id, _previous_enabled = read_worker(worker_id)
+        # The v62 master switch is the sole durable writer for both admin APIs.
+        # No local persistence, control transport, or capacity decision remains
+        # in this compatibility endpoint.
+        authority = getattr(app.state, "worker_disable_authority", None)
+        if not isinstance(authority, dict):
+            raise HTTPException(503, "Worker master switch authority is unavailable")
+        logger.info(
+            "Worker switch HTTP source=linux-worker-enabled-api-v46 worker=%s client=%s target=%s peer=%s",
+            worker_id, extension_id or "-", target, getattr(request.client, "host", "-"),
+        )
         item = registry.clients.get(extension_id) if extension_id else None
-
+        source = "linux-worker-enabled-api-v46"
         if target:
             if extension_id and item is None:
                 raise HTTPException(409, "Bound Chrome extension no longer exists")
-            # The v62 authority guard only permits transport=True after the
-            # durable Worker master flag is already enabled. Persist admin intent
-            # first, then reopen extension authentication.
-            public = persist_switch(worker_id, True)
-            if extension_id and item is not None:
-                try:
-                    item = await registry.set_connection_enabled(extension_id, True)
-                except KeyError as error:
-                    raise HTTPException(409, "Bound Chrome extension no longer exists") from error
-            return {
-                "ok": True,
-                "enabled": True,
-                "routing_state": "connected",
-                "transport_preserved": False,
-                "connection_enabled": bool(item.connection_enabled) if item is not None else False,
-                "reconnect_pending": bool(extension_id and extension_id not in registry.sockets),
-                "worker": public,
-                "version": PATCH_VERSION,
-            }
-
-        if not currently_enabled:
-            control = skipped_control("already-disabled")
-            public = persist_switch(worker_id, False, control=control)
-            await clear_sticky_routes(extension_id)
             if item is not None:
-                await registry.set_connection_enabled(extension_id, False)
+                result = await authority["enable_client"](extension_id, source=source)
+                public = result.get("worker")
+                connection_enabled = bool(result.get("connection_enabled"))
+                reconnect_pending = bool(result.get("reconnect_pending"))
+            else:
+                public = authority["persist_worker_switch"](worker_id, True, source=source)
+                connection_enabled = False
+                reconnect_pending = False
             return {
-                "ok": True,
-                "enabled": False,
-                "routing_state": "disconnected",
+                "ok": True, "enabled": True, "routing_state": "connected",
                 "transport_preserved": False,
-                "connection_enabled": False,
-                "already_disconnected": True,
-                "control": control,
-                "worker": public,
-                "version": PATCH_VERSION,
+                "connection_enabled": connection_enabled,
+                "reconnect_pending": reconnect_pending,
+                "worker": public, "version": PATCH_VERSION,
             }
 
-        # Window cleanup is required only when a live, authenticated extension
-        # transport exists. Offline/no-binding states have nothing the server can
-        # control, but the Worker must still be persistently disable-able.
-        if not extension_id:
-            control = skipped_control("no-bound-extension")
-        elif item is None:
-            control = skipped_control("bound-extension-missing")
-        elif extension_id not in registry.sockets or getattr(item, "connection_enabled", True) is False:
-            control = skipped_control("offline-no-control")
-        else:
-            control = await _request_extension_control(
-                app,
-                extension_id,
-                "worker.disable",
-                {"keep_windows": 1},
-                timeout_seconds=15.0,
-            )
-            if control.get("ok") is not True:
-                detail = str(control.get("error") or "Worker did not confirm managed-window cleanup")
-                code = str(control.get("error_code") or "worker_disable_control_failed")
-                raise HTTPException(409, f"{detail} [{code}]")
-
-            data = control.get("data") if isinstance(control.get("data"), dict) else {}
-            if int(data.get("managed_windows_after") or 0) > 1:
-                raise HTTPException(409, "Worker control returned success but more than one managed ChatGPT window remains")
-
-        # For online Workers this runs after confirmed cleanup. For offline
-        # Workers it establishes the durable authority barrier immediately.
-        public = persist_switch(worker_id, False, control=control)
-        await clear_sticky_routes(extension_id)
         if item is not None:
-            await registry.set_connection_enabled(extension_id, False)
-
+            result = await authority["disable_client"](extension_id, source=source)
+            public = result.get("worker")
+            control = result.get("control") or {}
+        else:
+            reason = "bound-extension-missing" if extension_id else "no-bound-extension"
+            control = {"ok": True, "skipped": True, "reason": reason, "data": {"keep_windows": 1}}
+            public = authority["persist_worker_switch"](
+                worker_id, False, source=source, control=control,
+            )
+            await authority["clear_sticky_routes"](extension_id)
         data = control.get("data") if isinstance(control.get("data"), dict) else {}
         return {
-            "ok": True,
-            "enabled": False,
-            "routing_state": "disconnected",
-            "transport_preserved": False,
-            "connection_enabled": False,
+            "ok": True, "enabled": False, "routing_state": "disconnected",
+            "transport_preserved": False, "connection_enabled": False,
             "keep_windows": int(data.get("keep_windows") or 1),
             "closed_window_ids": data.get("closed_window_ids") if isinstance(data.get("closed_window_ids"), list) else [],
             "window_snapshot": data.get("window_snapshot") if isinstance(data.get("window_snapshot"), dict) else {},
-            "control": control,
-            "worker": public,
-            "version": PATCH_VERSION,
+            "control": control, "worker": public, "version": PATCH_VERSION,
         }
 
     @app.get(ASSET_PATH, include_in_schema=False)
