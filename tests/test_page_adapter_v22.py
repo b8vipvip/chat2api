@@ -26,7 +26,7 @@ def test_page_adapter_loads_before_historical_content_overlays():
 
 def test_page_adapter_is_passive_when_loaded():
     source = read(EXT / ADAPTER_NAME)
-    assert 'const VERSION = "22.1.0"' in source
+    assert 'const VERSION = "22.2.0"' in source
     assert "new MutationObserver" not in source
     assert "setInterval(" not in source
     assert "setTimeout(" not in source

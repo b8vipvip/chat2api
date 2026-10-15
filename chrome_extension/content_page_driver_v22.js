@@ -54,7 +54,9 @@
       family_trusted: familyTrusted,
       reasoning_trusted: reasoningTrusted,
       family_source: familyEvidence.family ? familyEvidence.source : (family ? "session-cache-unverified" : familyEvidence.source),
-      reasoning_source: reasoningEvidence.reasoning ? reasoningEvidence.source : (reasoning ? "session-cache-unverified" : reasoningEvidence.source),
+      reasoning_source: reasoningEvidence.reasoning ? reasoningEvidence.source :
+        (String(reasoningEvidence.source || "").startsWith("ambiguous-") ? reasoningEvidence.source :
+          (reasoning ? "session-cache-unverified" : reasoningEvidence.source)),
       family_label: familyEvidence.label || "",
       reasoning_label: reasoningEvidence.label || "",
       cache_dirty_family: Boolean(cache.dirty_family),

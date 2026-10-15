@@ -270,7 +270,12 @@
     for (const surface of surfaces) {
       for (const marker of surface.querySelectorAll(selectedSelector)) {
         if (!visible(marker)) continue;
-        const row = marker.closest?.(optionSelector) || (marker.matches?.(optionSelector) ? marker : null);
+        const ownLabel = normalize(marker.innerText || marker.textContent || "");
+        const isolatedSelectedLabel = ownLabel.length <= 30 && ["instant", "medium", "high"].includes(reasoningFromText(ownLabel));
+        // Some variants mark the effort text node itself, without a
+        // menuitem role. This is valid only for its own short isolated label.
+        const row = marker.closest?.(optionSelector) ||
+          (marker.matches?.(optionSelector) || isolatedSelectedLabel ? marker : null);
         if (!row || !visible(row) || byElement.has(row)) continue;
         byElement.add(row);
         // Prefer the visible row text over a generic aria-label like
