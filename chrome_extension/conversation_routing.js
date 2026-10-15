@@ -107,7 +107,6 @@
     if (Number(route.slow_load_strikes || 0) >= 2) return "slow_load_strikes>=2";
     return null;
   }
-
   function resetClosedRoute(route, reason = "closed-window-new-chat") {
     if (!route) return false;
     const hadSession = Boolean(
@@ -278,7 +277,11 @@
     };
     const payload = message.type === "chat.request"
       ? { type: "chat.diagnostics", request_id: message.request_id, diagnostics }
-      : { type: "image.diagnostics", kind: message.type === "voice.request" ? "voice"   async function resolveForRequestOwned(message, baseKey) {
+      : { type: "image.diagnostics", kind: message.type === "voice.request" ? "voice" : "image", request_id: message.request_id, diagnostics };
+    await trySendSocket(payload).catch(() => false);
+  }
+
+  async function resolveForRequestOwned(message, baseKey) {
     const requestId = String(message?.request_id || "");
     if (!requestId) throw new Error("Routed request requires a request ID");
     await ensureLoaded();
@@ -347,10 +350,6 @@
         state.routeAllocations.delete(baseKey);
       }
     }
-  }
-
-it emitDiagnostics(message, route, tab, hadLiveTab ? "reuse-live-window" : "new-chat-window");
-    return tab;
   }
 
   globalThis.resolveTargetTabForRequest = resolveForRequest;
@@ -437,7 +436,6 @@ it emitDiagnostics(message, route, tab, hadLiveTab ? "reuse-live-window" : "new-
     await persist();
     await scheduleClose(route);
   }
-
   function enqueueTerminalSettlement(event, sender) {
     const requestId = String(event?.request_id || "");
     if (!requestId) return;
