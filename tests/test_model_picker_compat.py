@@ -131,7 +131,7 @@ def test_v7_state_detector_is_passive_and_tracks_only_canonical_models() -> None
     assert ".click()" not in source
 
 
-def test_v7_reasoning_prefers_shortcut_nested_keyboard_and_range_before_click_fallback() -> None:
+def test_v7_reasoning_executes_one_click_and_read_only_verification() -> None:
     source = (EXTENSION / "content_reasoning_v7.js").read_text(encoding="utf-8")
     assert 'openByShortcut' in source
     assert 'ctrlKey: true, shiftKey: true' in source
@@ -144,7 +144,9 @@ def test_v7_reasoning_prefers_shortcut_nested_keyboard_and_range_before_click_fa
     assert "chooseClickFallback" in source
     assert "MAX_SLIDER_STEPS = 32" in source
     assert "slider-keyboard-adaptive" in source
-    assert source.index("chooseNoClick(requested)") < source.index("chooseClickFallback(requested)")
+    assert "const result = await chooseClickFallback(requested);" in source
+    assert "await inspectAppliedReasoning(requested)" in source
+    assert "chooseNoClick(requested)" not in source
 
 
 def test_v5_picker_remains_scoped_fallback_for_model_family_changes() -> None:
