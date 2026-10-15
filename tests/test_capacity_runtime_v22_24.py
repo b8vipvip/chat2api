@@ -48,12 +48,12 @@ def test_runtime_contract_publishes_single_authority_v02275():
     assert payload["chrome_bridge"]["window_observer_revision"] == 90
     assert payload["chrome_bridge"]["route_close_terminal_revision"] == 91
     assert payload["features"]["capacity_scheduler_v58"] is True
-    assert payload["features"]["server_side_same_api_fifo_v58"] is True
+    assert payload["features"]["server_side_same_api_fifo_v58"] is False
     assert payload["features"]["worker_single_route_authority_v30"] is True
     assert payload["features"]["unexpected_route_close_terminal_v91"] is True
     assert payload["features"]["window_observer_v90"] is True
     assert payload["features"]["linux_worker_device_console_v122"] is False
-    assert payload["features"]["same_api_parallel_requests"] is False
+    assert payload["features"]["same_api_parallel_requests"] is True
     assert payload["features"]["browser_side_same_api_queue"] is False
     assert payload["features"]["speculative_worker_windows"] is False
     assert payload["features"]["worker_key_capacity_fifo_queue"] is False
