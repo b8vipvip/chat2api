@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_PAGE_DRIVER_V22__";
   if (globalThis[KEY]) return;
 
-  const VERSION = "22.3.0";
+  const VERSION = "22.5.0";
   const CACHE_KEY = "chat2api:model-state:v2";
   const TEXT_MODEL_ID = /^gpt-[a-z0-9][a-z0-9.:-]{0,110}$/;
   const REASONING_LEVELS = new Set(["instant", "medium", "high"]);
@@ -54,7 +54,9 @@
       family_trusted: familyTrusted,
       reasoning_trusted: reasoningTrusted,
       family_source: familyEvidence.family ? familyEvidence.source : (family ? "session-cache-unverified" : familyEvidence.source),
-      reasoning_source: reasoningEvidence.reasoning ? reasoningEvidence.source : (reasoning ? "session-cache-unverified" : reasoningEvidence.source),
+      reasoning_source: reasoningEvidence.reasoning ? reasoningEvidence.source :
+        (String(reasoningEvidence.source || "").startsWith("ambiguous-") ? reasoningEvidence.source :
+          (reasoning ? "session-cache-unverified" : reasoningEvidence.source)),
       family_label: familyEvidence.label || "",
       reasoning_label: reasoningEvidence.label || "",
       cache_dirty_family: Boolean(cache.dirty_family),
@@ -89,6 +91,7 @@
       reasoning_label: current.reasoning_label,
       cache_dirty_family: current.cache_dirty_family,
       cache_dirty_reasoning: current.cache_dirty_reasoning,
+      reasoning_inspection: requestedReasoning ? (page()?.reasoningInspection?.() || null) : null,
     };
   }
 

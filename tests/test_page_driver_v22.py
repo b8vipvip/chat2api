@@ -33,7 +33,7 @@ def test_page_driver_bootstrap_recovers_existing_tabs_in_same_order():
 
 def test_page_driver_v22_phase7_adds_only_explicit_keyboard_write_primitive():
     source = read(EXT / DRIVER)
-    assert 'const VERSION = "22.3.0"' in source
+    assert 'const VERSION = "22.5.0"' in source
     assert DRIVER_KEY in source
     assert "function dispatchKey(target, name, code = name, extra = {})" in source
     assert 'new KeyboardEvent("keydown", init)' in source
