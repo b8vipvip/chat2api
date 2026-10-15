@@ -116,8 +116,6 @@ def test_v58_retains_worker_window_limits_without_per_key_limit() -> None:
     assert '"default_key_concurrency": 1' not in source
     assert '"per_api_key_limit": 1' not in source
 
-e
-
 
 def test_v57_rate_limit_behavior_remains_available_to_v58() -> None:
     old = read("app/capacity_queue_v57_patch.py")
