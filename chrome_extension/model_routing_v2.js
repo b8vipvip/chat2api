@@ -120,7 +120,13 @@
       { type: "chat2api.reasoning.prepare.v7", reasoning_level: legacyLevel },
       ["content_reasoning_v7.js"],
     );
-    if (!response?.ok) throw new Error(response?.error || `Unable to select requested reasoning level: ${reasoning}`);
+    if (!response?.ok) {
+      const failure = new Error(response?.error || "Unable to select requested reasoning level: " + reasoning);
+      failure.code = String(response?.code || "reasoning_selection_failed");
+      failure.stage = "worker-reasoning-control";
+      failure.verification = response?.diagnostics?.verification || null;
+      throw failure;
+    }
     return response.data || {};
   }
 
