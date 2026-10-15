@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.147"
+    assert RELEASE_VERSION == "0.22.148"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -63,6 +63,20 @@ def test_v145_worker_model_library_runtime_owners_are_registered():
 
 def test_realtime_protocol_contract_matches_live_bridge():
     assert LIVE_PROTOCOL_VERSION == "chat2api-live-v1"
+
+
+def test_v148_release_contract_keeps_broker_terminal_authority():
+    from pathlib import Path
+    from app.runtime_contract import RELEASE_VERSION, CHROME_BRIDGE_BUNDLE_VERSION
+    assert RELEASE_VERSION == "0.22.148"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == RELEASE_VERSION
+    root = Path(__file__).resolve().parents[1]
+    watchdog = (root / "app/request_stall_patch.py").read_text(encoding="utf-8")
+    reaper = (root / "app/request_recovery_patch.py").read_text(encoding="utf-8")
+    assert 'accepted = await broker.publish(' in watchdog
+    assert 'await broker.release(state.request_id)' in watchdog
+    assert 'await broker.release(str(state.request_id))' in reaper
+    assert 'await broker.release(str(request_id))' in reaper
 
 
 def test_v147_key_quota_replaces_per_key_concurrency_contract():

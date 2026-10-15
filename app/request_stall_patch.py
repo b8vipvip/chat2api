@@ -143,7 +143,9 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
                     tasks.append(task)
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
-            await base_release(state.request_id)
+            # Re-enter the installed Broker release authority (v58 capacity,
+            # recovery, watchdog cleanup), not the pre-patch base release.
+            await broker.release(state.request_id)
             logger.warning(
                 "Broker orphan request force-released request_id=%s client=%s reason=%s age_ms=%.1f",
                 state.request_id,
@@ -181,7 +183,7 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
         future = getattr(state, "final_future", None)
         if future is not None and future.done():
             return
-        state.completed_mono = state.completed_mono or time.perf_counter()
+        # Only RequestBroker.publish may set terminal_event_type/completed_mono.
         state.diagnostics.update({"request_stall_guard": PATCH_ID, code: True, **diagnostics})
         logger.warning(
             "Request lifecycle watchdog fired request_id=%s client=%s code=%s stage=%s age_ms=%.1f",
@@ -197,11 +199,15 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
                 "stage": _stage(state),
             },
         )
-        await _best_effort_cancel(state)
-        await base_publish(
+        # Publish through the final installed Broker chain. A concurrent browser
+        # completion wins if it committed first; watchdogs never override it.
+        accepted = await broker.publish(
             state.request_id,
             {"type": "chat.error", "request_id": state.request_id, "error": message},
         )
+        if not accepted:
+            return
+        await _best_effort_cancel(state)
         if telemetry is not None and callable(getattr(telemetry, "get", None)) and telemetry.get(state.request_id):
             try:
                 await telemetry.upsert(
@@ -250,7 +256,8 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
             now = time.perf_counter()
             state._chat2api_last_browser_event_mono = now
             state._chat2api_last_browser_event_type = event_type
-            if not getattr(state, "_chat2api_extension_dispatch_ack", False):
+            if event_type in {"chat.diagnostics", "image.diagnostics", "chat.started", "image.started",
+                              "chat.delta", "chat.snapshot", "chat.completed", "image.completed"} and not getattr(state, "_chat2api_extension_dispatch_ack", False):
                 state._chat2api_extension_dispatch_ack = True
                 state.diagnostics.setdefault(
                     "extension_dispatch_ack_ms",
@@ -266,11 +273,14 @@ def install_request_stall_patch(app: FastAPI) -> FastAPI:
                 )
 
             diagnostics = (event or {}).get("diagnostics")
+            # A terminal failure is not evidence of prompt submission.
+            # Only generation or explicit browser submit acknowledgement proves
+            # the transition; the Broker alone owns terminal success/failure.
             submitted = bool(
                 event_type in {"chat.started", "chat.delta", "chat.snapshot", "chat.completed"}
-                or _terminal_event(event_type)
                 or (
-                    isinstance(diagnostics, dict)
+                    event_type == "chat.diagnostics"
+                    and isinstance(diagnostics, dict)
                     and (
                         diagnostics.get("submission_confirmed") is True
                         or str(diagnostics.get("submit_stage") or "") == "confirmed"

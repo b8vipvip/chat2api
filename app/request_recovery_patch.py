@@ -31,7 +31,7 @@ def install_request_recovery_patch(app: FastAPI) -> FastAPI:
     ``chat.error`` and still remained in ``client_active_requests`` for many hours.
     A completed future is therefore not proof that capacity was returned.
 
-    This layer gives terminal browser events an independent release lease. It also
+    Terminal events schedule cleanup only; the installed Broker release chain\n    remains the sole owner of capacity reclamation. It also
     reaps already-terminal entries before each new admission, so stale capacity is
     recovered without depending on framework startup/lifespan hooks. Normal request
     handlers still own the fast path; these fallbacks only act when the same state
@@ -55,7 +55,7 @@ def install_request_recovery_patch(app: FastAPI) -> FastAPI:
                 return
             state.diagnostics["request_recovery_patch"] = PATCH_ID
             state.diagnostics["terminal_force_release_reason"] = reason
-            await base_release(str(state.request_id))
+            await broker.release(str(state.request_id))
             logger.warning(
                 "Terminal Broker request force-released request_id=%s client=%s reason=%s age_ms=%.1f",
                 state.request_id,
@@ -119,7 +119,7 @@ def install_request_recovery_patch(app: FastAPI) -> FastAPI:
             state.diagnostics["request_recovery_patch"] = PATCH_ID
             state.diagnostics["terminal_reaper_fired"] = True
             state.diagnostics["terminal_reaper_age_ms"] = round(terminal_age * 1000, 1)
-            await base_release(str(request_id))
+            await broker.release(str(request_id))
             reclaimed += 1
             logger.warning(
                 "Terminal Broker reaper reclaimed request_id=%s client=%s terminal_age_ms=%.1f",
