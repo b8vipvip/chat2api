@@ -9,7 +9,7 @@ assert.ok(start >= 0 && end > start);
 const context = {esc: String, text: x => String(x ?? "").trim(), Date, Number, globalThis:{}};
 vm.runInNewContext(source.slice(start,end) +
   "\nglobalThis.probe = {windowsWorkerState,linuxWorkerState};", context);
-const {windowsWorkerState:win,linuxWorkerState:linux} = context.probe;
+const {windowsWorkerState:win,linuxWorkerState:linux} = context.globalThis.probe;
 const ext = {online:true,connection_enabled:true,capacity:{used_units:0}};
 const staleAgent = {enabled:true,status:"offline",last_seen_at:"2020-01-01T00:00:00Z"};
 assert.match(linux(staleAgent,ext),/运行正常/,"online dispatch bridge must override stale Agent heartbeat");
