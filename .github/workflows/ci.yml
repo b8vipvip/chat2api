@@ -175,5 +175,9 @@ jobs:
         run: node tests/external_warm_bootstrap_v28.mjs
       - name: Mini multimodal quota VM contract
         run: node tests/mini_multimodal_quota_v36.mjs
+      - name: Model picker hydration recovery VM contract
+        run: node tests/model_picker_selection_v148.mjs
+      - name: Worker status hydration VM contract
+        run: node tests/worker_status_hydration_v173.mjs
       - name: Tests
         run: pytest -q --timeout=120
