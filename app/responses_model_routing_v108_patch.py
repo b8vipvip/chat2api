@@ -171,6 +171,23 @@ async def _record_telemetry(
         error_text = str(error_value.get("message") or error_value.get("code") or "")
     elif error_value:
         error_text = str(error_value)
+    # Errors returned before a Worker is selected must remain diagnosable.
+    # Preserve safe machine-readable response metadata rather than the old
+    # opaque "HTTP 400"; never duplicate raw inputs or error message text in
+    # diagnostic fields, since upstream errors may echo user content.
+    error_code = ""
+    error_param = ""
+    error_type = ""
+    if isinstance(error_value, dict):
+        error_code = str(error_value.get("code") or "")[:80]
+        error_param = str(error_value.get("param") or "")[:80]
+        error_type = str(error_value.get("type") or "")[:80]
+    error_reason = error_code or (
+        "invalid-request" if http_status == 400 and error_type == "invalid_request_error"
+        else "response-body-unavailable" if http_status >= 400 and not response
+        else "http-error-unclassified" if http_status >= 400
+        else ""
+    )
     if response_id:
         owners = _owners(server_app)
         owners[response_id] = principal.key_id
@@ -211,8 +228,14 @@ async def _record_telemetry(
                 "responses_patch_revision": PATCH_REVISION,
                 "responses_tool_stream_revision": int(getattr(server_app.state, "responses_tool_stream_revision", 0) or 0),
                 "tool_types": tool_types,
+                "response_http_status": http_status,
+                "response_error_code": error_code or None,
+                "response_error_param": error_param or None,
+                "response_error_type": error_type or None,
+                "response_error_reason": error_reason or None,
+                "response_dispatched_to_worker": bool(response_id),
             },
-            "error": error_text or (f"HTTP {http_status}" if http_status >= 400 else None),
+            "error": error_text or (f"HTTP {http_status} ({error_reason})" if http_status >= 400 else None),
         }
     )
 
