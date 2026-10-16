@@ -485,11 +485,13 @@ async def _collect_validated_tool_bridge(
             # Mark the internal attempt by *protocol* validity, not by
             # browser chat.completed alone. Never charge it as a second API
             # request. Missing outer fields are initialized at dispatch.
-            await app.state.telemetry.upsert({
-                "request_id": retry_id,
-                "status": "completed" if retry_valid else "error",
-                "error": None if retry_valid else (retry_error_text or "protocol correction interrupted"),
-            })
+            attempt_history = getattr(app.state, "telemetry", None)
+            if attempt_history is not None:
+                await attempt_history.upsert({
+                    "request_id": retry_id,
+                    "status": "completed" if retry_valid else "error",
+                    "error": None if retry_valid else (retry_error_text or "protocol correction interrupted"),
+                })
             app.state.registry.busy_clients.discard(retry_client)
             await app.state.broker.release(retry_id)
 
