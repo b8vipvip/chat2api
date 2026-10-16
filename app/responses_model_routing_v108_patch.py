@@ -205,11 +205,21 @@ async def _record_telemetry(
         status = "error"
     tools = _request_tools(payload)
     tool_types = [str(item.get("type") or "") for item in tools if isinstance(item, dict) and item.get("type")]
+    # Request-v6/Broker records the browser's first token and selected Worker.
+    # Responses' outer HTTP middleware owns the public terminal status, but
+    # must merge these existing measurements instead of overwriting them with
+    # a total-only timing dict or a null client_id.
+    observed = server_app.state.telemetry.get(request_id) or {}
+    observed_timings = observed.get("timings")
+    if not isinstance(observed_timings, dict):
+        observed_timings = {}
+    timings = {**observed_timings, "total_ms": round((time.perf_counter() - started_mono) * 1000, 1)}
+    routed_client = observed.get("worker_client_id") or observed.get("client_id")
     await server_app.state.telemetry.upsert(
         {
             "request_id": request_id,
             "response_id": response_id or None,
-            "client_id": None,
+            "client_id": routed_client,
             "api_key_id": principal.key_id,
             "api_key_name": principal.name,
             "auth_kind": principal.kind,
@@ -222,7 +232,7 @@ async def _record_telemetry(
             "completion_chars": len(output_text),
             "status": status,
             "usage": _usage(prompt, output_text, response),
-            "timings": {"total_ms": round((time.perf_counter() - started_mono) * 1000, 1)},
+            "timings": timings,
             "diagnostics": {
                 "response_protocol": "responses-v108",
                 "responses_patch_revision": PATCH_REVISION,
