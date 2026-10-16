@@ -109,7 +109,7 @@ def test_responses_validation_400_keeps_safe_error_reason_in_request_diagnostic(
     assert row["diagnostics"]["response_error_code"] == "unsupported_input_kind"
     assert row["diagnostics"]["response_error_param"] == "input"
     assert row["diagnostics"]["response_error_type"] == "invalid_request_error"
-    assert row["diagnostics"]["response_dispatched_to_worker"] is False
+    assert row["diagnostics"]["response_object_created"] is False
     assert "private buyer message" not in str(row["diagnostics"])
     assert "do not echo" not in str(row["diagnostics"])
 
