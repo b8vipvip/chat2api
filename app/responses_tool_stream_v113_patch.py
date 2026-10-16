@@ -228,6 +228,7 @@ async def _emulated_stream_v113(
     *,
     response_id: str,
     body: dict[str, Any],
+    principal: Any,
     prompt: str,
     catalog: list[dict[str, Any]],
     request_id: str,
@@ -240,8 +241,11 @@ async def _emulated_stream_v113(
     created["usage"] = None
     yield _sse("response.created", seq, response=created)
     try:
-        bridge_text, _ = await _collect(state, timeout, False)
-        output_text, tool_items = v109._interpret(bridge_text, catalog, body)
+        bridge_text, output_text, tool_items, bridge_retry_count = await v109._collect_validated_tool_bridge(
+            app, request, body, principal, state,
+            request_id=request_id, client_id=client_id, timeout=timeout,
+            catalog=catalog,
+        )
         tool_items = _restore_tool_namespaces(tool_items, catalog)
         if tool_items:
             for index, item in enumerate(tool_items):
@@ -339,6 +343,7 @@ async def _emulated_stream_v113(
         _mark_tool_follow_up(completed, tool_items)
         if not tool_items:
             completed.setdefault("metadata", {})["chat2api_tool_stream"] = "responses-v113-codex-0149"
+        completed.setdefault("metadata", {})["chat2api_bridge_regeneration_count"] = bridge_retry_count
         v109._store(app, completed)
         seq += 1
         yield _sse("response.completed", seq, response=completed)
