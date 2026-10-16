@@ -261,6 +261,11 @@
 
   function busyWindowIds(value) {
     const ids = new Set([...state.reservations.values()].filter(Number.isInteger));
+    // The router owns failure retirement. Treat a window as occupied until
+    // its pending Chrome removal finishes, even after route identity is reset.
+    for (const id of value?.retiringWindows || []) {
+      if (Number.isInteger(id)) ids.add(id);
+    }
     for (const route of Object.values(value?.routes || {})) {
       const windowId = Number(route?.window_id);
       if (route?.inflight_request_id && Number.isInteger(windowId)) ids.add(windowId);
@@ -452,6 +457,11 @@
 
   async function closeWindow(windowId) {
     if (!Number.isInteger(Number(windowId))) return false;
+    const router = globalThis[ROUTER_KEY];
+    // Recheck the *current* owner, not just the snapshot used for selection.
+    // A standby can become a routed tab while a prior reconcile awaits Chrome.
+    if (busyWindowIds(router).has(Number(windowId)) ||
+        routeByWindow(router).has(Number(windowId))) return false;
     try {
       await chrome.windows.remove(Number(windowId));
       state.closed += 1;

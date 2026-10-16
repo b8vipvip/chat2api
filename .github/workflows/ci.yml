@@ -179,5 +179,9 @@ jobs:
         run: node tests/model_picker_selection_v148.mjs
       - name: Worker status hydration VM contract
         run: node tests/worker_status_hydration_v173.mjs
+      - name: Request draft hydration VM contract
+        run: node tests/request_submit_hydration_v153.mjs
+      - name: Route tab close race VM contract
+        run: node tests/route_tab_close_race_v153.mjs
       - name: Tests
         run: pytest -q --timeout=120

@@ -9,8 +9,13 @@
 
   resolveTargetTab = async function resolveCurrentConversationTarget() {
     if (state.currentTab?.id) {
-      try { return await chrome.tabs.get(state.currentTab.id); }
-      catch (_) { state.currentTab = null; }
+      const routedId = state.currentTab.id;
+      try { return await chrome.tabs.get(routedId); }
+      catch (_) {
+        // Routed requests must never fall back to an unrelated browser tab.
+        // The dispatcher will ask the single router to reallocate pre-ACK.
+        throw new Error(`No tab with id: ${routedId}`);
+      }
     }
     return baseResolveTargetTab();
   };
@@ -23,13 +28,31 @@
 
   async function resolveRoutedTab(message) {
     const resolver = globalThis.resolveTargetTabForRequest;
-    const tab = typeof resolver === "function" ? await resolver(message) : await baseResolveTargetTab();
-    if (!tab?.id) throw new Error("Per-key conversation router returned no usable ChatGPT tab");
-    if (message?.request_id) {
-      state.requestTabs.set(String(message.request_id), { tabId: tab.id, windowId: tab.windowId });
+    const requestId = String(message?.request_id || "");
+    // The single conversation router remains the sole allocation owner.
+    // Repair a tab that disappears BEFORE content dispatch exactly once;
+    // never replay a request that could already have reached the composer.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const tab = typeof resolver === "function"
+        ? await resolver(message) : await baseResolveTargetTab();
+      if (!tab?.id) throw new Error("Per-key conversation router returned no usable ChatGPT tab");
+      const live = await chrome.tabs.get(tab.id).catch(() => null);
+      if (live?.id && live.windowId === tab.windowId) {
+        if (requestId) state.requestTabs.set(requestId, { tabId: live.id, windowId: live.windowId });
+        await chrome.storage.local.set({ boundTabId: live.id, autoBind: false, modelsUpdatedAt: 0 });
+        return live;
+      }
+      if (attempt === 0 && requestId) {
+        const router = globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
+        await router?.failRequest?.(requestId, "tab-closed-before-dispatch-v153");
+        continue;
+      }
+      const error = new Error("Routed ChatGPT tab disappeared before request dispatch");
+      error.code = "routed_tab_closed_before_dispatch";
+      error.stage = "route-readiness";
+      throw error;
     }
-    await chrome.storage.local.set({ boundTabId: tab.id, autoBind: false, modelsUpdatedAt: 0 });
-    return tab;
+    throw new Error("Routed ChatGPT tab was not available");
   }
 
   function enqueueDispatch(taskFactory) {
@@ -86,7 +109,29 @@
 
   async function routedDispatch(message) {
     const tab = await resolveRoutedTab(message);
-    return withCurrentTab(tab, () => baseHandleServerMessage(message));
+    try {
+      return await withCurrentTab(tab, () => baseHandleServerMessage(message));
+    } catch (error) {
+      if (error?.code !== "routed_tab_disappeared_before_ack") throw error;
+      const requestId = String(message?.request_id || "");
+      const router = globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
+      if (!requestId || typeof router?.failRequest !== "function") throw error;
+      // An explicit Chrome "No tab" means no content-script ACK and no
+      // generation started. Reallocate once through the SAME router only.
+      await router.failRequest(requestId, "lost-tab-before-content-ack-v153");
+      const replacement = await resolveRoutedTab(message);
+      await trySendSocket({
+        type: "chat.diagnostics",
+        request_id: requestId,
+        diagnostics: {
+          routed_tab_missing_before_ack: true,
+          routed_tab_reallocated_once: true,
+          routed_tab_id: replacement.id,
+          routed_window_id: replacement.windowId,
+        },
+      }).catch(() => false);
+      return withCurrentTab(replacement, () => baseHandleServerMessage(message));
+    }
   }
 
   async function dispatchKnownRequest(message) {
