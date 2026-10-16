@@ -192,7 +192,20 @@
         const enabled = !isDisabledModel(candidate);
         const selected = candidate.getAttribute("aria-checked") === "true" ||
           candidate.getAttribute("aria-selected") === "true" ||
-          /selected|checked/i.test(candidate.getAttribute("data-state") || "");
+          candidate.getAttribute("data-selected") === "true" ||
+          /selected|checked/i.test(candidate.getAttribute("data-state") || "") ||
+          // ChatGPT's accessible menu occasionally has no checked row ARIA
+          // attribute: the currently selected item contains a visible check
+          // glyph/icon instead. Only evidence scoped to this exact concrete
+          // model option counts; sibling/multi-model wrappers remain rejected.
+          /^[\\s]*[✓✔√]|[✓✔√][\\s]*$/.test(
+            String(candidate.innerText || candidate.textContent || "")
+          ) ||
+          Boolean(candidate.querySelector?.(
+            "[data-state='checked'],[data-selected='true'],[aria-checked='true']," +
+            "svg[data-testid*='check' i],[data-testid='check-icon']," +
+            "[data-testid='selected-icon'],[data-lucide='check']"
+          ));
         const found = {element: candidate,id:model,
           label:label.slice(0,130) || model,selected,enabled,
           sunset_notice:/\bleaving on\b|\bretiring\b|即将下线|即将移除/i.test(label)};
