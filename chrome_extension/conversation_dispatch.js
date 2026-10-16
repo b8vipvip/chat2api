@@ -9,8 +9,13 @@
 
   resolveTargetTab = async function resolveCurrentConversationTarget() {
     if (state.currentTab?.id) {
-      try { return await chrome.tabs.get(state.currentTab.id); }
-      catch (_) { state.currentTab = null; }
+      const routedId = state.currentTab.id;
+      try { return await chrome.tabs.get(routedId); }
+      catch (_) {
+        // Routed requests must never fall back to an unrelated browser tab.
+        // The dispatcher will ask the single router to reallocate pre-ACK.
+        throw new Error(`No tab with id: ${routedId}`);
+      }
     }
     return baseResolveTargetTab();
   };
