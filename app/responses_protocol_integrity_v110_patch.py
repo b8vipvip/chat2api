@@ -102,8 +102,8 @@ def _required_exact_literals(body: dict[str, Any]) -> list[str]:
             if candidates:
                 # Pick the nearest explicit literal following the instruction.
                 # A later path/URL is not the required final marker.
-                token = candidates[0]
-                if token not in found:
+                token = candidates[0].rstrip(".,;:!?")
+                if token and token not in found:
                     found.append(token)
             offset = index + len(phrase)
     return found[:4]
