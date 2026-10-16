@@ -216,6 +216,9 @@ async def _record_telemetry(
         observed_timings = {}
     timings = {**observed_timings, "total_ms": round((time.perf_counter() - started_mono) * 1000, 1)}
     routed_client = observed.get("worker_client_id") or observed.get("client_id")
+    observed_diagnostics = observed.get("diagnostics")
+    if not isinstance(observed_diagnostics, dict):
+        observed_diagnostics = {}
     await server_app.state.telemetry.upsert(
         {
             "request_id": request_id,
@@ -235,6 +238,7 @@ async def _record_telemetry(
             "usage": _usage(prompt, output_text, response),
             "timings": timings,
             "diagnostics": {
+                **observed_diagnostics,
                 "response_protocol": "responses-v108",
                 "responses_patch_revision": PATCH_REVISION,
                 "responses_tool_stream_revision": int(getattr(server_app.state, "responses_tool_stream_revision", 0) or 0),
