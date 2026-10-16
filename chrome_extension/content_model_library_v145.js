@@ -198,7 +198,7 @@
           // attribute: the currently selected item contains a visible check
           // glyph/icon instead. Only evidence scoped to this exact concrete
           // model option counts; sibling/multi-model wrappers remain rejected.
-          /^[\\s]*[✓✔√]|[✓✔√][\\s]*$/.test(
+          /^[ \t]*[✓✔√]|[✓✔√][ \t]*$/.test(
             String(candidate.innerText || candidate.textContent || "")
           ) ||
           Boolean(candidate.querySelector?.(
