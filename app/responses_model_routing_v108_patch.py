@@ -233,7 +233,7 @@ async def _record_telemetry(
                 "response_error_param": error_param or None,
                 "response_error_type": error_type or None,
                 "response_error_reason": error_reason or None,
-                "response_dispatched_to_worker": bool(response_id),
+                "response_object_created": bool(response_id),
             },
             "error": error_text or (f"HTTP {http_status} ({error_reason})" if http_status >= 400 else None),
         }
