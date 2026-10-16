@@ -458,12 +458,15 @@ async def _collect_validated_tool_bridge(
         app.state.registry.busy_clients.discard(client_id)
         retry_body = dict(body)
         retry_body["client_id"] = client_id
+        retry_body["_chat2api_parent_request_id"] = request_id
         retry_body["timeout"] = max(5, min(90, int(remaining)))
         retry_state, retry_id, retry_client, retry_timeout = await _dispatch(
             app, request, retry_body, principal,
             _bridge_correction_prompt(body), [],
             request_id_override="resp_repair_" + uuid.uuid4().hex,
         )
+        retry_valid = False
+        retry_error_text = ""
         try:
             repaired_text, _ = await _collect(retry_state, retry_timeout, False)
             try:
@@ -473,8 +476,20 @@ async def _collect_validated_tool_bridge(
                     "ChatGPT Responses tool bridge still invalid after one "
                     "protocol correction: " + str(retry_error)
                 ) from first_error
+            retry_valid = True
             return repaired_text, output_text, tool_items, 1
+        except Exception as retry_error:
+            retry_error_text = str(retry_error)
+            raise
         finally:
+            # Mark the internal attempt by *protocol* validity, not by
+            # browser chat.completed alone. Never charge it as a second API
+            # request. Missing outer fields are initialized at dispatch.
+            await app.state.telemetry.upsert({
+                "request_id": retry_id,
+                "status": "completed" if retry_valid else "error",
+                "error": None if retry_valid else (retry_error_text or "protocol correction interrupted"),
+            })
             app.state.registry.busy_clients.discard(retry_client)
             await app.state.broker.release(retry_id)
 
