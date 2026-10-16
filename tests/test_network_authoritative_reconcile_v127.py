@@ -20,6 +20,7 @@ def test_canonical_completion_has_no_prompt_specific_format_arbiter():
     assert "reconcileStrictTerminal" not in request
     assert "requiresStrictJsonTen" not in request
     assert "enforce_nonstream_contract(" not in server
-    assert 'text: lastText || networkTerminalText' in request
+    assert 'text: networkTerminalText' in request
+    assert 'text: lastText || networkTerminalText' not in request
     assert 'type: "chat.completed"' not in network
     assert 'String(detail.parser_source || "") === "json-patch"' in network
