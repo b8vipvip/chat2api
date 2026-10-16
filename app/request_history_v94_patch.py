@@ -162,12 +162,17 @@ async function loadRequests(){
     for(const r of rows){
       const tr=document.createElement('tr');
       const requestId=requestHistoryText(r?.request_id,'');
+      const historicalRepair=requestId.startsWith('resp_repair_');
       requestHistoryCell(tr,fmtTime(r?.recorded_at||r?.created_at));
       const shortRequestId=requestId?requestId.slice(-4):'-';
-      const idCell=requestHistoryCell(tr,shortRequestId);idCell.title=requestId;
-      requestHistoryCell(tr,r?.request_type||r?.type);
-      requestHistoryStatusCell(tr,r?.status);
-      requestHistoryCell(tr,r?.api_key_name||r?.key_name);
+      const idCell=requestHistoryCell(tr,shortRequestId);
+      idCell.title=requestId+(r?.parent_request_id?(' · 来源请求 '+r.parent_request_id):'');
+      // v0.22.154 internal repair rows did not persist type/key/status.
+      // Label legacy absence explicitly; do not fabricate an API Key or
+      // claim a browser completion meant a protocol-valid success.
+      requestHistoryCell(tr,r?.request_type||r?.type||(historicalRepair?'responses-repair':'-'));
+      requestHistoryStatusCell(tr,r?.status||(historicalRepair?'历史未记录':'-'));
+      requestHistoryCell(tr,r?.api_key_name||r?.key_name||(historicalRepair?'历史未记录':'-'));
       const clientId=requestHistoryText(r?.worker_client_id||r?.client_id,'');
       requestHistoryCell(tr,r?.device_name||(clientId?`未绑定 · ${clientId}`:'-'));
       requestHistoryCell(tr,r?.requested_model||r?.model);
