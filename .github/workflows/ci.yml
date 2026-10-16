@@ -183,5 +183,7 @@ jobs:
         run: node tests/request_submit_hydration_v153.mjs
       - name: Route tab close race VM contract
         run: node tests/route_tab_close_race_v153.mjs
+      - name: Responses bridge generation regression
+        run: pytest -q tests/test_responses_bridge_regeneration_v154.py --timeout=120
       - name: Tests
         run: pytest -q --timeout=120
