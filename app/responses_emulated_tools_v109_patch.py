@@ -382,6 +382,103 @@ def _interpret(text: str, catalog: list[dict[str, Any]], body: dict[str, Any]) -
     return str(text or "").strip(), []
 
 
+
+def _bridge_correction_prompt(body: dict[str, Any]) -> str:
+    """Retry generation in the same API-key conversation, never tool execution.
+
+    Keep the correction compact: the previous turn already contains the
+    original task and its allowlisted tool catalog. Repeating large tool
+    descriptions made FDEX's tool prompts considerably longer.
+    """
+    from .responses_protocol_integrity_v110_patch import _required_exact_literals
+
+    literals = _required_exact_literals(body)
+    literal_note = (
+        "\nRequired exact literals: "
+        + json.dumps(literals, ensure_ascii=False, separators=(",", ":"))
+        if literals else ""
+    )
+    return f"""The reply to your IMMEDIATELY PRECEDING task could not be delivered.
+It was incomplete or invalid under the Responses transport format.
+No caller-owned tool from that reply has been executed.
+
+Regenerate the answer to the same task using the preceding conversation
+and only its explicitly declared tool catalog. Never invent tool results.
+Emit exactly ONE complete JSON envelope, either:
+
+{BRIDGE_START}
+{{"kind":"final","text":"exact final answer"}}
+{BRIDGE_END}
+
+Or, when tools are required:
+{BRIDGE_START}
+{{"kind":"tool_calls","calls":[{{"namespace":null,"name":"actual_declared_tool","arguments":{{}}}}]}}
+{BRIDGE_END}
+
+Use the *actual* declared namespace and tool payload format for each call
+(in particular raw input for custom tools). The example is not permission
+to use an undeclared tool. Include both complete markers; no commentary,
+Markdown, partial markers, extra text or invented tool execution.
+Copy any explicitly requested literal byte-for-byte.{literal_note}"""
+
+
+async def _collect_validated_tool_bridge(
+    app: FastAPI,
+    request: Request,
+    body: dict[str, Any],
+    principal: Any,
+    state: Any,
+    *,
+    request_id: str,
+    client_id: str,
+    timeout: int,
+    catalog: list[dict[str, Any]],
+) -> tuple[str, str, list[dict[str, Any]], int]:
+    """One regeneration only after a completed malformed bridge response.
+
+    The tool bridge is the sole authority for protocol validation and
+    regeneration. No caller-owned tool or final answer has been emitted
+    before this point, so no external tool execution can be duplicated.
+    """
+    from .responses_protocol_integrity_v110_patch import ResponsesToolBridgeProtocolError
+
+    started = asyncio.get_running_loop().time()
+    bridge_text, _ = await _collect(state, timeout, False)
+    try:
+        output_text, tool_items = _interpret(bridge_text, catalog, body)
+        return bridge_text, output_text, tool_items, 0
+    except ResponsesToolBridgeProtocolError as first_error:
+        remaining = timeout - (asyncio.get_running_loop().time() - started)
+        if remaining < 12 or await request.is_disconnected():
+            raise
+        # Retire the original broker lease before the second dispatch. Give
+        # it a distinct ID so a late first-attempt terminal cannot complete
+        # the regeneration request.
+        await app.state.broker.release(request_id)
+        app.state.registry.busy_clients.discard(client_id)
+        retry_body = dict(body)
+        retry_body["client_id"] = client_id
+        retry_body["timeout"] = max(5, min(90, int(remaining)))
+        retry_state, retry_id, retry_client, retry_timeout = await _dispatch(
+            app, request, retry_body, principal,
+            _bridge_correction_prompt(body), [],
+            request_id_override="resp_repair_" + uuid.uuid4().hex,
+        )
+        try:
+            repaired_text, _ = await _collect(retry_state, retry_timeout, False)
+            try:
+                output_text, tool_items = _interpret(repaired_text, catalog, body)
+            except ResponsesToolBridgeProtocolError as retry_error:
+                raise ResponsesToolBridgeProtocolError(
+                    "ChatGPT Responses tool bridge still invalid after one "
+                    "protocol correction: " + str(retry_error)
+                ) from first_error
+            return repaired_text, output_text, tool_items, 1
+        finally:
+            app.state.registry.busy_clients.discard(retry_client)
+            await app.state.broker.release(retry_id)
+
+
 def _store(app: FastAPI, response: dict[str, Any], catalog: list[dict[str, Any]] | None = None) -> None:
     store = getattr(app.state, "responses_v109_context_store", None)
     if not isinstance(store, OrderedDict):
@@ -433,6 +530,7 @@ async def _emulated_stream(
     *,
     response_id: str,
     body: dict[str, Any],
+    principal: Any,
     prompt: str,
     catalog: list[dict[str, Any]],
     request_id: str,
@@ -445,8 +543,10 @@ async def _emulated_stream(
     created["usage"] = None
     yield _sse("response.created", seq, response=created)
     try:
-        bridge_text, _ = await _collect(state, timeout, False)
-        output_text, tool_items = _interpret(bridge_text, catalog, body)
+        bridge_text, output_text, tool_items, bridge_retry_count = await _collect_validated_tool_bridge(
+            app, request, body, principal, state,
+            request_id=request_id, client_id=client_id, timeout=timeout, catalog=catalog,
+        )
         if tool_items:
             for index, item in enumerate(tool_items):
                 seq += 1
@@ -471,6 +571,7 @@ async def _emulated_stream(
             seq += 1
             yield _sse("response.output_item.done", seq, output_index=0, item=_message_item(message_id, output_text))
         completed = _completed_response(response_id, body, prompt, bridge_text, output_text, tool_items, created_at)
+        completed.setdefault("metadata", {})["chat2api_bridge_regeneration_count"] = bridge_retry_count
         _store(app, completed, catalog)
         seq += 1
         yield _sse("response.completed", seq, response=completed)
@@ -511,6 +612,7 @@ async def _handle(app: FastAPI, request: Request, body: dict[str, Any]):
                 state,
                 response_id=response_id,
                 body=body,
+                principal=principal,
                 prompt=prompt,
                 catalog=catalog,
                 request_id=request_id,
@@ -522,9 +624,12 @@ async def _handle(app: FastAPI, request: Request, body: dict[str, Any]):
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Chat2API-Tool-Bridge": "emulated-v109"},
         )
     try:
-        bridge_text, _ = await _collect(state, timeout, False)
-        output_text, tool_items = _interpret(bridge_text, catalog, body)
+        bridge_text, output_text, tool_items, bridge_retry_count = await _collect_validated_tool_bridge(
+            app, request, body, principal, state,
+            request_id=request_id, client_id=client_id, timeout=timeout, catalog=catalog,
+        )
         response = _completed_response(response_id, body, prompt, bridge_text, output_text, tool_items, created_at)
+        response.setdefault("metadata", {})["chat2api_bridge_regeneration_count"] = bridge_retry_count
         _store(app, response, catalog)
         return JSONResponse(response, headers={"X-Chat2API-Tool-Bridge": "emulated-v109"})
     except asyncio.TimeoutError:
