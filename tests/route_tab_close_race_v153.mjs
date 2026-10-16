@@ -59,6 +59,8 @@ assert.equal(await context.globalThis.dispatch({request_id:"request1"}),"ok");
 assert.equal(allocated,2);
 assert.equal(retires,1);
 assert.equal(delivered,2);
+assert.match(dispatchSource,/throw new Error\(\`No tab with id: \$\{routedId\}\`\)/,
+  "routed missing tab must not fall back to a different tab");
 assert.match(bridgeSource,/error\.code = "routed_tab_disappeared_before_ack"/);
 assert.match(bridgeSource,/No tab with id:/);
 console.log("canonical route owner close race and pre-ACK bounded redispatch checks passed");
