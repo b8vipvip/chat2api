@@ -257,6 +257,31 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     timeout = max(5, min(int(body.get("timeout") or app.state.settings.request_timeout_seconds), 3600))
+    # A bounded tool-bridge correction is an internal browser attempt, not a
+    # second billable Responses HTTP request. Initialize its own complete
+    # diagnostic row so request history never shows anonymous '-' placeholders.
+    # The outer Responses telemetry owner continues to own billing and the
+    # caller-visible request terminal state.
+    if request_id_override and request_id.startswith("resp_repair_"):
+        await app.state.telemetry.upsert({
+            "request_id": request_id,
+            "parent_request_id": str(body.get("_chat2api_parent_request_id") or ""),
+            "client_id": client_id,
+            "worker_client_id": client_id,
+            "api_key_name": principal.name,
+            "auth_kind": principal.kind,
+            "requested_model": str(body.get("model") or "gpt-5.6-sol"),
+            "request_type": "responses-repair",
+            "prompt_mode": "responses-tool-protocol-correction",
+            "final_prompt": prompt,
+            "final_prompt_chars": len(prompt),
+            "prompt_chars": len(prompt),
+            "attachments_count": 0,
+            "stream": False,
+            "status": "running",
+            "diagnostics": {"internal_protocol_attempt": True,
+                            "parent_request_id": str(body.get("_chat2api_parent_request_id") or "")},
+        })
     registry.busy_clients.add(client_id)
     try:
         await registry.send(client_id, {

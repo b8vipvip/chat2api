@@ -140,7 +140,7 @@ function requestHistoryEnsureControls(){
   }
   if(section&&!section.querySelector('[data-request-history-diagnostic-hint]')){
     const hint=document.createElement('div');hint.dataset.requestHistoryDiagnosticHint='1';hint.className='footer';
-    hint.textContent='排障建议：单条失败点“下载日志”；多个外部调用一起失败时点“下载诊断日志包”。日志会自动隐藏 API Key、Authorization、设备码、提示词正文和 base64 文件内容。';
+    hint.textContent='排障建议：单条失败点“下载日志”；多个外部调用一起失败时点“下载诊断日志包”。导出的请求诊断可能包含已保存的完整提示词与回复；向外分享前请核对并脱敏。API Key 凭据、Authorization 等敏感字段应由导出器单独保护。';
     section.appendChild(hint);
   }
 }
@@ -162,12 +162,17 @@ async function loadRequests(){
     for(const r of rows){
       const tr=document.createElement('tr');
       const requestId=requestHistoryText(r?.request_id,'');
+      const historicalRepair=requestId.startsWith('resp_repair_');
       requestHistoryCell(tr,fmtTime(r?.recorded_at||r?.created_at));
       const shortRequestId=requestId?requestId.slice(-4):'-';
-      const idCell=requestHistoryCell(tr,shortRequestId);idCell.title=requestId;
-      requestHistoryCell(tr,r?.request_type||r?.type);
-      requestHistoryStatusCell(tr,r?.status);
-      requestHistoryCell(tr,r?.api_key_name||r?.key_name);
+      const idCell=requestHistoryCell(tr,shortRequestId);
+      idCell.title=requestId+(r?.parent_request_id?(' · 来源请求 '+r.parent_request_id):'');
+      // v0.22.154 internal repair rows did not persist type/key/status.
+      // Label legacy absence explicitly; do not fabricate an API Key or
+      // claim a browser completion meant a protocol-valid success.
+      requestHistoryCell(tr,r?.request_type||r?.type||(historicalRepair?'responses-repair':'-'));
+      requestHistoryStatusCell(tr,r?.status||(historicalRepair?'历史未记录':'-'));
+      requestHistoryCell(tr,r?.api_key_name||r?.key_name||(historicalRepair?'历史未记录':'-'));
       const clientId=requestHistoryText(r?.worker_client_id||r?.client_id,'');
       requestHistoryCell(tr,r?.device_name||(clientId?`未绑定 · ${clientId}`:'-'));
       requestHistoryCell(tr,r?.requested_model||r?.model);
@@ -312,13 +317,20 @@ def _install_conversation_capture(app: FastAPI) -> None:
         if event_type in {"chat.completed", "chat.error", "chat.cancelled"}:
             state = broker.requests.get(request_id)
             response_text = str(event.get("text") or (state.text if state is not None else ""))
-            await telemetry.upsert(
-                {
-                    "request_id": request_id,
-                    "response_text": response_text,
-                    "response_text_available": bool(response_text),
-                }
-            )
+            record = {
+                "request_id": request_id,
+                "response_text": response_text,
+                "response_text_available": bool(response_text),
+            }
+            # Responses HTTP middleware owns the public protocol outcome;
+            # capture only correlated browser timings here. The request-v6
+            # terminal handler is the sole owner of first-token timing, so
+            # no UI placeholder or estimated "首包" is necessary.
+            if request_id.startswith(("resp_req_", "resp_repair_")) and state is not None:
+                record["client_id"] = state.client_id
+                record["worker_client_id"] = state.client_id
+                record["timings"] = state.timings()
+            await telemetry.upsert(record)
         return published
 
     broker.publish = publish_with_conversation_capture
@@ -333,7 +345,13 @@ def _install_conversation_capture(app: FastAPI) -> None:
                 if not isinstance(row, dict):
                     continue
                 row["response_text_available"] = bool(row.get("response_text"))
+                row["final_prompt_available"] = bool(row.get("final_prompt"))
+                # List rows need only the availability flags; complete prompt
+                # and response are loaded via authenticated request-detail API.
+                # Long FDEX catalogs can be ~50 KB per row and otherwise slow
+                # down the admin request list for no useful column content.
                 row.pop("response_text", None)
+                row.pop("final_prompt", None)
         return result
 
     telemetry.query = query_without_full_response

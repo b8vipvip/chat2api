@@ -51,26 +51,61 @@ def _input_texts(body: dict[str, Any]) -> list[str]:
 
 
 def _required_exact_literals(body: dict[str, Any]) -> list[str]:
-    """Extract only literals the caller explicitly labels exact in input messages."""
+    """Extract exact literals from the *current* user turn only.
+
+    FDEX/Codex often forwards a serialized conversation with older USER
+    MESSAGE sections inside one input item. Scanning all turns made a later
+    shell/tool stage demand the preceding WIRE marker instead of the current
+    TOOLS marker. Do not let historic examples become new constraints.
+    """
+    input_value = body.get("input")
+    texts: list[str] = []
+    if isinstance(input_value, str):
+        texts = [input_value]
+    elif isinstance(input_value, list):
+        for item in input_value:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type") or "message") not in {
+                "message", "input_message", "easy_input_message"
+            } or str(item.get("role") or "user").lower() != "user":
+                continue
+            content = item.get("content")
+            if isinstance(content, str):
+                texts.append(content)
+            elif isinstance(content, list):
+                texts.append("".join(
+                    part if isinstance(part, str) else str(part.get("text") or "")
+                    for part in content if isinstance(part, (str, dict))
+                ))
+    if not texts:
+        return []
+    current = texts[-1]
+    # Some tool clients serialize every message into one user input string.
+    # The final USER MESSAGE is the active one, not earlier smoke steps.
+    current = re.split(r"(?m)^\s*USER MESSAGE:\s*$", current)[-1]
+    current = re.split(r"(?m)^\s*(?:ASSISTANT|DEVELOPER|SYSTEM) MESSAGE:\s*$", current)[0]
+    lowered = current.lower()
     found: list[str] = []
-    for text in _input_texts(body):
-        lowered = text.lower()
-        for phrase in ("exact marker", "exact string"):
-            offset = 0
-            while True:
-                index = lowered.find(phrase, offset)
-                if index < 0:
-                    break
-                window = text[index : index + 240]
-                candidates = _LITERAL_TOKEN.findall(window)
-                # Ignore prose-like words; exact smoke/request literals normally
-                # contain an underscore and/or a digit. Prefer the longest token.
-                candidates = [token for token in candidates if "_" in token or any(ch.isdigit() for ch in token)]
-                if candidates:
-                    token = max(candidates, key=len)
-                    if token not in found:
-                        found.append(token)
-                offset = index + len(phrase)
+    for phrase in ("exact marker", "exact string", "exactly this text", "reply with"):
+        offset = 0
+        while True:
+            index = lowered.find(phrase, offset)
+            if index < 0:
+                break
+            window = current[index + len(phrase) : index + len(phrase) + 190]
+            candidates = [
+                token for token in _LITERAL_TOKEN.findall(window)
+                if "_" in token or (any(ch.isdigit() for ch in token)
+                                    and not token.startswith("http"))
+            ]
+            if candidates:
+                # Pick the nearest explicit literal following the instruction.
+                # A later path/URL is not the required final marker.
+                token = candidates[0].rstrip(".,;:!?")
+                if token and token not in found:
+                    found.append(token)
+            offset = index + len(phrase)
     return found[:4]
 
 

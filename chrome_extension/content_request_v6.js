@@ -704,7 +704,11 @@
         await emit({
           type: "chat.completed",
           request_id: active.requestId,
-          text: lastText || networkTerminalText,
+          // Do not prefer a longer DOM/intermediary snapshot over the exact
+          // assistant body verified by this response's network terminal.
+          // A malformed bridge must remain diagnosable, not be spliced with
+          // stale or speculative text from another capture path.
+          text: networkTerminalText,
           diagnostics: {
             response_epoch_revision: 69,
             response_terminal_settle_revision: 82,
