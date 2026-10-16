@@ -312,13 +312,20 @@ def _install_conversation_capture(app: FastAPI) -> None:
         if event_type in {"chat.completed", "chat.error", "chat.cancelled"}:
             state = broker.requests.get(request_id)
             response_text = str(event.get("text") or (state.text if state is not None else ""))
-            await telemetry.upsert(
-                {
-                    "request_id": request_id,
-                    "response_text": response_text,
-                    "response_text_available": bool(response_text),
-                }
-            )
+            record = {
+                "request_id": request_id,
+                "response_text": response_text,
+                "response_text_available": bool(response_text),
+            }
+            # Responses HTTP middleware owns the public protocol outcome;
+            # capture only correlated browser timings here. The request-v6
+            # terminal handler is the sole owner of first-token timing, so
+            # no UI placeholder or estimated "首包" is necessary.
+            if request_id.startswith(("resp_req_", "resp_repair_")) and state is not None:
+                record["client_id"] = state.client_id
+                record["worker_client_id"] = state.client_id
+                record["timings"] = state.timings()
+            await telemetry.upsert(record)
         return published
 
     broker.publish = publish_with_conversation_capture
