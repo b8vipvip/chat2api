@@ -340,7 +340,13 @@ def _install_conversation_capture(app: FastAPI) -> None:
                 if not isinstance(row, dict):
                     continue
                 row["response_text_available"] = bool(row.get("response_text"))
+                row["final_prompt_available"] = bool(row.get("final_prompt"))
+                # List rows need only the availability flags; complete prompt
+                # and response are loaded via authenticated request-detail API.
+                # Long FDEX catalogs can be ~50 KB per row and otherwise slow
+                # down the admin request list for no useful column content.
                 row.pop("response_text", None)
+                row.pop("final_prompt", None)
         return result
 
     telemetry.query = query_without_full_response
