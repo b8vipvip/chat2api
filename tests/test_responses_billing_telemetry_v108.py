@@ -77,3 +77,59 @@ def test_responses_metering_cannot_bypass_user_commerce_charge_wrapper() -> None
     assert "billing.record_charge(owner, row, pricing)" in commerce
     assert "telemetry.upsert = metered_upsert" in commerce
     assert entry.index("install_user_console_v104_patch(app)") < entry.index("install_responses_model_routing_v108_patch(app)")
+
+
+def test_responses_validation_400_keeps_safe_error_reason_in_request_diagnostic() -> None:
+    class Telemetry:
+        def __init__(self) -> None:
+            self.rows = []
+
+        async def upsert(self, row):
+            self.rows.append(dict(row))
+
+    telemetry = Telemetry()
+    server = SimpleNamespace(state=SimpleNamespace(telemetry=telemetry))
+    principal = ApiPrincipal(key_id="key_user", name="user-key", kind="managed", scopes=("chat",))
+    response = {
+        "error": {
+            "type": "invalid_request_error",
+            "code": "unsupported_input_kind",
+            "param": "input",
+            "message": "Unsupported kind (do not echo into diagnostics)",
+        }
+    }
+    asyncio.run(_record_telemetry(
+        server, request_id="resp_req_400", principal=principal,
+        payload={"model": "gpt-5.6-sol", "stream": False}, prompt="private buyer message",
+        response=response, http_status=400, started_mono=0.0,
+    ))
+    row = telemetry.rows[-1]
+    assert row["client_id"] is None
+    assert row["diagnostics"]["response_http_status"] == 400
+    assert row["diagnostics"]["response_error_code"] == "unsupported_input_kind"
+    assert row["diagnostics"]["response_error_param"] == "input"
+    assert row["diagnostics"]["response_error_type"] == "invalid_request_error"
+    assert row["diagnostics"]["response_dispatched_to_worker"] is False
+    assert "private buyer message" not in str(row["diagnostics"])
+    assert "do not echo" not in str(row["diagnostics"])
+
+
+def test_responses_empty_error_body_is_not_misreported_as_worker_failure() -> None:
+    class Telemetry:
+        def __init__(self) -> None:
+            self.rows = []
+
+        async def upsert(self, row):
+            self.rows.append(dict(row))
+
+    telemetry = Telemetry()
+    principal = ApiPrincipal(key_id="key_user", name="user-key", kind="managed", scopes=("chat",))
+    asyncio.run(_record_telemetry(
+        SimpleNamespace(state=SimpleNamespace(telemetry=telemetry)),
+        request_id="resp_req_missing_body", principal=principal,
+        payload={"model": "gpt-5.6-sol"}, prompt="foo",
+        response=None, http_status=400, started_mono=0.0,
+    ))
+    row = telemetry.rows[-1]
+    assert row["diagnostics"]["response_error_reason"] == "response-body-unavailable"
+    assert row["error"] == "HTTP 400 (response-body-unavailable)"
