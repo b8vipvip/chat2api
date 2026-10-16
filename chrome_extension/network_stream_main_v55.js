@@ -261,6 +261,7 @@
     let assistantRoleSeen = false;
     let fallbackText = "";
     let terminalPosted = false;
+    let authoritativePatchSeen = false;
 
     // A verified SSE completion must not wait for response.clone() EOF.
     // Chrome can reject the clone reader after delivering the final SSE frame.
@@ -299,6 +300,10 @@
 
     function snapshotAdvances(current, candidate, source) {
       if (!candidate || candidate === current) return false;
+      // The reconstructed JSON Patch message is the canonical assistant
+      // body. A genuine upstream replace may shorten even a prefix-compatible
+      // previous value; rejecting it retained corrupted bridge fragments.
+      if (source === "json-patch") return true;
       if (!current) return true;
       // Streaming text is monotonic in the normal path. A later direct/message
       // candidate may be a citation/source card, and must not shrink a longer
@@ -311,8 +316,13 @@
 
     function emitSnapshot(text, source) {
       const normalized = String(text || "");
+      // Once a correlated assistant JSON Patch has been reconstructed,
+      // fallback text/deltas and nested message cards are observational only.
+      // None may overwrite the authoritative message body.
+      if (authoritativePatchSeen && source !== "json-patch") return;
       if (!snapshotAdvances(latestText, normalized, source)) return;
       latestText = normalized;
+      if (source === "json-patch") authoritativePatchSeen = true;
       state.snapshots += 1;
       post({
         channel: CHANNEL,
@@ -333,7 +343,8 @@
       if (!text) return;
       if (op === "append") fallbackText += text;
       else fallbackText = text;
-      emitSnapshot(fallbackText, "assistant-content-patch");
+      // Wait until every operation in this payload updates patchRoot; an
+      // individual patch fragment is not a complete assistant snapshot.
     }
 
     function inspectPayload(payload) {
@@ -360,6 +371,7 @@
         if (containsAssistantRole(patchRoot.value)) assistantRoleSeen = true;
         const recovered = collectAssistantTexts(patchRoot.value, []);
         if (recovered.length) emitSnapshot(recovered[recovered.length - 1], "json-patch");
+        else if (fallbackText && !authoritativePatchSeen) emitSnapshot(fallbackText, "assistant-content-patch");
       }
 
       const delta = assistantDeltaText(payload, assistantRoleSeen);
