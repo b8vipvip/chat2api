@@ -195,7 +195,7 @@ async function handleServerMessage(message) {
       if (!response?.ok) throw new Error(response?.error || "ChatGPT tab rejected the request");
     } catch (error) {
       const detail = String(error?.message || error);
-      if (message?.routing?.api_key_id && /No tab with id:\\s*\\d+/i.test(detail)) {
+      if (message?.routing?.api_key_id && /No tab with id:\s*\d+/i.test(detail)) {
         // Only the conversation dispatcher may reallocate a routed tab.
         // No chat2api.request ACK was received, so a single pre-dispatch
         // retry is safe and must not emit a competing terminal here.
