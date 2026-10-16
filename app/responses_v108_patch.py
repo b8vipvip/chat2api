@@ -241,7 +241,7 @@ def _sse(event_type: str, sequence: int, **payload: Any) -> str:
     return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], principal: ApiPrincipal, prompt: str, native_tools: list[str]):
+async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], principal: ApiPrincipal, prompt: str, native_tools: list[str], *, request_id_override: str | None = None):
     registry = app.state.registry
     broker = app.state.broker
     requested = str(body.get("client_id") or request.headers.get("x-chat2api-client") or "").strip() or None
@@ -250,7 +250,7 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
         client_id = registry.resolve_client(requested)
     except (KeyError, ConnectionError) as error:
         raise HTTPException(status_code=503, detail=str(error)) from error
-    raw_id = str(request.headers.get("x-chat2api-request-id") or "").strip()
+    raw_id = str(request_id_override or request.headers.get("x-chat2api-request-id") or "").strip()
     request_id = raw_id if raw_id and len(raw_id) <= 128 else "resp_req_" + uuid.uuid4().hex
     try:
         state = await broker.create(request_id, client_id)
