@@ -21,6 +21,9 @@
     openings: new Map(),
     activeRequests: new Map(),
     retiredRequests: new Set(),
+    // A failed route's window cannot re-enter the persistent standby pool
+    // between clearing its route identity and Chrome actually removing it.
+    retiringWindows: new Set(),
     // A server terminal can release its key before the asynchronous background
     // route cleanup completes. Serialize only the same key, never all Workers.
     terminalSettlements: new Map(),
@@ -389,16 +392,31 @@
   async function retireRoute(key, route, requestId, reason) {
     requestId = String(requestId || "");
     if (requestId && state.retiredRequests.has(requestId)) return false;
-    if (requestId) state.retiredRequests.add(requestId);
-    const windowId = Number.isInteger(route?.window_id) ? route.window_id : null;
+    // Revalidate after each asynchronous boundary. A previous request's
+    // terminal cleanup may lag the next server-authorized dispatch; it must
+    // never clear the replacement request's lease or close its window.
     if (route?.inflight_request_id && requestId && route.inflight_request_id !== requestId) return false;
+    const windowId = Number.isInteger(route?.window_id) ? route.window_id : null;
     await clearCloseAlarm(route);
-    if (requestId) state.activeRequests.delete(requestId);
-    resetClosedRoute(route, reason || "terminal-failure");
-    route.last_active_at = Date.now();
-    await persist();
-    if (Number.isInteger(windowId)) {
-      try { await chrome.windows.remove(windowId); } catch (_) {}
+    if (route?.inflight_request_id && requestId && route.inflight_request_id !== requestId) return false;
+    if (requestId) state.retiredRequests.add(requestId);
+    if (Number.isInteger(windowId)) state.retiringWindows.add(windowId);
+    try {
+      if (requestId) state.activeRequests.delete(requestId);
+      resetClosedRoute(route, reason || "terminal-failure");
+      route.last_active_at = Date.now();
+      await persist();
+      if (Number.isInteger(windowId)) {
+        // If a newer request already took this physical window, only the
+        // original router owner may decide to retire it later.
+        const taken = [...state.activeRequests.values()].some(item => item?.window_id === windowId)
+          || Object.values(state.routes).some(item => item?.window_id === windowId && item?.inflight_request_id);
+        if (!taken) {
+          try { await chrome.windows.remove(windowId); } catch (_) {}
+        }
+      }
+    } finally {
+      if (Number.isInteger(windowId)) state.retiringWindows.delete(windowId);
     }
     setTimeout(() => state.retiredRequests.delete(requestId), 60000);
     await sendExtensionStatus(false).catch(() => {});
