@@ -4,7 +4,7 @@ import vm from "node:vm";
 
 const source=readFileSync("chrome_extension/content_model_library_v145.js","utf8");
 
-async function scenario({withFive=true,enabled=true,canSwitch=true,hydrationReads=0,genericHeader=false,detachedMenu=false,ignoredFirstClick=false}={}){
+async function scenario({withFive=true,enabled=true,canSwitch=true,hydrationReads=0,genericHeader=false,detachedMenu=false,ignoredFirstClick=false,dataSelectedOnly=false}={}){
   let opened=false;
   let clicks=0;
   let remainingHydrationReads=0;
@@ -33,7 +33,7 @@ async function scenario({withFive=true,enabled=true,canSwitch=true,hydrationRead
     "High High, 3 of 3. Locked, opens access options GPT-6 GPT-5.6 Sol GPT-5.5 Leaving on October 14",
     {role:"menuitem"},()=>{throw Error("Container must never be clicked")}
   );
-  const sol=new Element("GPT-5.6 Sol",{role:"menuitem",...(genericHeader?{"aria-checked":"true"}:{})},()=>{if(canSwitch){activeModel="gpt-5.6-sol";picker.label="GPT-5.6 Sol";opened=false}});
+  const sol=new Element("GPT-5.6 Sol",{role:"menuitem",...(genericHeader?(dataSelectedOnly?{"data-selected":"true"}:{"aria-checked":"true"}):{})},()=>{if(canSwitch){activeModel="gpt-5.6-sol";picker.label="GPT-5.6 Sol";opened=false}});
   const five=new Element("GPT-5.5 Leaving on October 14",{
     role:"menuitem",...(enabled?{}:{"aria-disabled":"true"})
   },()=>{if(canSwitch){activeModel="gpt-5.5";picker.label="GPT-5.5";opened=false}});
@@ -75,6 +75,9 @@ async function scenario({withFive=true,enabled=true,canSwitch=true,hydrationRead
   return {result,discovered,inspected};
 }
 
+const dataChecked=await scenario({genericHeader:true,dataSelectedOnly:true});
+assert.equal(dataChecked.inspected.selected_model,"gpt-5.6-sol",
+  "live picker must recognize scoped data-selected checkmark when aria-checked is absent");
 const checked=await scenario({genericHeader:true});
 assert.equal(checked.inspected.selected_model,"gpt-5.6-sol",
   "generic header must use checked row in live menu");
