@@ -104,7 +104,29 @@
 
   async function routedDispatch(message) {
     const tab = await resolveRoutedTab(message);
-    return withCurrentTab(tab, () => baseHandleServerMessage(message));
+    try {
+      return await withCurrentTab(tab, () => baseHandleServerMessage(message));
+    } catch (error) {
+      if (error?.code !== "routed_tab_disappeared_before_ack") throw error;
+      const requestId = String(message?.request_id || "");
+      const router = globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
+      if (!requestId || typeof router?.failRequest !== "function") throw error;
+      // An explicit Chrome "No tab" means no content-script ACK and no
+      // generation started. Reallocate once through the SAME router only.
+      await router.failRequest(requestId, "lost-tab-before-content-ack-v153");
+      const replacement = await resolveRoutedTab(message);
+      await trySendSocket({
+        type: "chat.diagnostics",
+        request_id: requestId,
+        diagnostics: {
+          routed_tab_missing_before_ack: true,
+          routed_tab_reallocated_once: true,
+          routed_tab_id: replacement.id,
+          routed_window_id: replacement.windowId,
+        },
+      }).catch(() => false);
+      return withCurrentTab(replacement, () => baseHandleServerMessage(message));
+    }
   }
 
   async function dispatchKnownRequest(message) {
