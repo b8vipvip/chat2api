@@ -16,7 +16,8 @@
   const normalize = value => String(value || "")
     .replace(/[\u200B-\u200D\uFEFF]/g, "")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim()
+    .normalize("NFC");
 
   function visible(element) {
     if (!element) return false;
@@ -409,6 +410,9 @@
     return "none";
   }
 
+  // A rich editor can normalize combining Unicode characters during
+  // hydration. NFC is semantically identical and safe to compare; an actual
+  // changed/missing character is never silently accepted as a valid draft.
   function promptMatchesText(text, active) {
     return promptMatchEvidence(text, active) !== "none";
   }
@@ -489,6 +493,18 @@
     throw new Error("ChatGPT cleared the composer but did not expose this request's accepted user turn or response evidence; duplicate send was suppressed");
   }
 
+  async function rewriteDriftedDraft(active, editor) {
+    if (!editor || editor.isConnected === false || !composerCandidates(active).includes(editor)) return false;
+    // Inserting over a Lexical selection again can reproduce the same stale
+    // native-editor state. Clear through the editor input path first, then type
+    // exactly once into the original editor and require fresh DOM verification.
+    setComposerText(editor, "");
+    const cleared = await waitFor(() => composerText(editor) === "" && editor.isConnected !== false, 1200, 100);
+    if (!cleared) return false;
+    setComposerText(editor, active.prompt);
+    return Boolean(await waitFor(() => promptMatchesComposer(editor, active), 2400, 100));
+  }
+
   async function submitAndConfirm(active) {
     const totalStarted = performance.now();
     const requestTimeoutMs = Math.max(15000, Number(active.options.timeout_seconds || 300) * 1000);
@@ -526,8 +542,12 @@
             prompt_repair_delta_chars: observed.length - intended.length,
             prompt_repair_same_editor: true,
           });
-          setComposerText(current, active.prompt);
-          await delay(200);
+          const verified = await rewriteDriftedDraft(active, current);
+          await diagnostic(active, "editor-native-rewrite", {
+            native_rewrite_verified: verified,
+            prompt_repair_same_editor: true,
+          });
+          if (verified) ready = probe();
         }
       }
       if (!ready) ready = await waitFor(probe, attempts === 1 ? readinessBudget - 2400 : 12000, 120);
@@ -542,6 +562,7 @@
           send_composer_chars: composerText(current).length,
           send_expected_normalized_chars: String(active.promptNormalized || "").length,
           send_prompt_match: promptMatchEvidence(composerText(current), active),
+          send_composer_unicode_nfc_matches: normalize(composerText(current)) === active.promptNormalized,
           send_composer_original: current === active.promptComposer,
           send_button_type: String(button?.type || ""),
           send_button_aria_label: String(button?.getAttribute?.("aria-label") || "").slice(0, 72),
