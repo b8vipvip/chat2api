@@ -194,7 +194,16 @@ async function handleServerMessage(message) {
       });
       if (!response?.ok) throw new Error(response?.error || "ChatGPT tab rejected the request");
     } catch (error) {
-      await trySendSocket({ type: "chat.error", request_id: message.request_id, error: String(error?.message || error) });
+      const detail = String(error?.message || error);
+      if (message?.routing?.api_key_id && /No tab with id:\\s*\\d+/i.test(detail)) {
+        // Only the conversation dispatcher may reallocate a routed tab.
+        // No chat2api.request ACK was received, so a single pre-dispatch
+        // retry is safe and must not emit a competing terminal here.
+        error.code = "routed_tab_disappeared_before_ack";
+        error.stage = "tab-dispatch";
+        throw error;
+      }
+      await trySendSocket({ type: "chat.error", request_id: message.request_id, error: detail });
     }
     return;
   }
