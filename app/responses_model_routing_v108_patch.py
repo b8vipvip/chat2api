@@ -209,7 +209,8 @@ async def _record_telemetry(
     # Responses' outer HTTP middleware owns the public terminal status, but
     # must merge these existing measurements instead of overwriting them with
     # a total-only timing dict or a null client_id.
-    observed = server_app.state.telemetry.get(request_id) or {}
+    getter = getattr(server_app.state.telemetry, "get", None)
+    observed = (getter(request_id) if callable(getter) else None) or {}
     observed_timings = observed.get("timings")
     if not isinstance(observed_timings, dict):
         observed_timings = {}
