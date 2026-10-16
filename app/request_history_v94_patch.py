@@ -140,7 +140,7 @@ function requestHistoryEnsureControls(){
   }
   if(section&&!section.querySelector('[data-request-history-diagnostic-hint]')){
     const hint=document.createElement('div');hint.dataset.requestHistoryDiagnosticHint='1';hint.className='footer';
-    hint.textContent='排障建议：单条失败点“下载日志”；多个外部调用一起失败时点“下载诊断日志包”。日志会自动隐藏 API Key、Authorization、设备码、提示词正文和 base64 文件内容。';
+    hint.textContent='排障建议：单条失败点“下载日志”；多个外部调用一起失败时点“下载诊断日志包”。导出的请求诊断可能包含已保存的完整提示词与回复；向外分享前请核对并脱敏。API Key 凭据、Authorization 等敏感字段应由导出器单独保护。';
     section.appendChild(hint);
   }
 }
