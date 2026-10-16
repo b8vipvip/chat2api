@@ -183,6 +183,12 @@ jobs:
         run: node tests/request_submit_hydration_v153.mjs
       - name: Route tab close race VM contract
         run: node tests/route_tab_close_race_v153.mjs
+      - name: FDEX SSE patch authority regression
+        run: node tests/network_stream_patch_authority_v155.mjs
+
+      - name: FDEX request history regression
+        run: pytest -q tests/test_fdex_request_integrity_v155.py --timeout=120
+
       - name: Responses bridge generation regression
         run: pytest -q tests/test_responses_bridge_regeneration_v154.py --timeout=120
       - name: Tests
