@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import secrets
 import time
@@ -126,6 +127,90 @@ def _response_payload(raw: bytes, stream: bool) -> dict[str, Any] | None:
     return terminal or created
 
 
+class _SSEStreamObserver:
+    """Observe delivered SSE frames without buffering the full stream."""
+
+    MAX_FRAME_BYTES = 1024 * 1024
+
+    def __init__(self) -> None:
+        self.buffer = b""
+        self.last_event: str | None = None
+        self.terminal_event: str | None = None
+        self.terminal_response: dict[str, Any] | None = None
+        self.created_response: dict[str, Any] | None = None
+        self.event_count = 0
+        self.bytes_sent = 0
+        self.frame_overflow = False
+
+    def feed(self, chunk: bytes) -> None:
+        self.bytes_sent += len(chunk)
+        self.buffer += chunk.replace(b"\r\n", b"\n")
+        while b"\n\n" in self.buffer:
+            frame, self.buffer = self.buffer.split(b"\n\n", 1)
+            if len(frame) > self.MAX_FRAME_BYTES:
+                self.frame_overflow = True
+                continue
+            event_name = ""
+            data_lines: list[bytes] = []
+            for line in frame.split(b"\n"):
+                if line.startswith(b"event:"):
+                    event_name = line[6:].strip().decode("utf-8", errors="replace")[:80]
+                elif line.startswith(b"data:"):
+                    data_lines.append(line[5:].strip())
+            data = b"\n".join(data_lines)
+            if not event_name and data:
+                try:
+                    event_name = str(json.loads(data).get("type") or "")[:80]
+                except (ValueError, TypeError, AttributeError):
+                    pass
+            if event_name:
+                self.last_event = event_name
+                self.event_count += 1
+            if event_name not in {"response.created", "response.completed", "response.failed", "response.incomplete"}:
+                continue
+            try:
+                event = json.loads(data)
+            except (ValueError, TypeError):
+                continue
+            response = event.get("response") if isinstance(event, dict) else None
+            if not isinstance(response, dict):
+                continue
+            if event_name == "response.created":
+                self.created_response = {"id": response.get("id"), "status": response.get("status")}
+            else:
+                self.terminal_event = event_name
+                self.terminal_response = response
+        if len(self.buffer) > self.MAX_FRAME_BYTES:
+            self.buffer = b""
+            self.frame_overflow = True
+
+
+def _responses_terminal_status(
+    *, http_status: int, response_status: str, error_code: str,
+    stream: bool, trace: dict[str, Any],
+) -> tuple[str, str]:
+    """The only decision point for caller-visible Responses request terminal state."""
+    if http_status >= 400:
+        return "error", "http_error"
+    if response_status == "completed":
+        return "completed", "response_completed"
+    if response_status in {"failed", "incomplete"}:
+        return "error", "timeout" if error_code == "timeout" else "response_" + response_status
+    if stream:
+        if trace.get("client_disconnected"):
+            return "cancelled", "client_disconnect"
+        if trace.get("send_failed"):
+            return "cancelled", "downstream_send_failed"
+        if trace.get("server_task_cancelled"):
+            return "cancelled", "server_task_cancelled"
+        if trace.get("transport_exception") == "TimeoutError":
+            return "error", "timeout"
+        if trace.get("transport_exception"):
+            return "error", "stream_transport_exception"
+        return "error", "missing_terminal_event"
+    return "error", "missing_response_terminal"
+
+
 def _usage(prompt: str, output_text: str, response: dict[str, Any] | None) -> dict[str, int | bool]:
     supplied = response.get("usage") if isinstance(response, dict) and isinstance(response.get("usage"), dict) else {}
     input_tokens = int(supplied.get("input_tokens") or 0)
@@ -157,6 +242,7 @@ async def _record_telemetry(
     response: dict[str, Any] | None,
     http_status: int,
     started_mono: float,
+    stream_trace: dict[str, Any] | None = None,
 ) -> None:
     if principal is None:
         return
@@ -193,16 +279,11 @@ async def _record_telemetry(
         owners[response_id] = principal.key_id
         while len(owners) > 512:
             owners.popitem(last=False)
-    if http_status >= 400:
-        status = "error"
-    elif response_status == "completed":
-        status = "completed"
-    elif response_status in {"failed", "incomplete"}:
-        status = "error"
-    elif stream:
-        status = "cancelled"
-    else:
-        status = "error"
+    trace = stream_trace or {}
+    status, terminal_reason = _responses_terminal_status(
+        http_status=http_status, response_status=response_status,
+        error_code=error_code, stream=stream, trace=trace,
+    )
     tools = _request_tools(payload)
     tool_types = [str(item.get("type") or "") for item in tools if isinstance(item, dict) and item.get("type")]
     # Request-v6/Broker records the browser's first token and selected Worker.
@@ -215,7 +296,7 @@ async def _record_telemetry(
     if not isinstance(observed_timings, dict):
         observed_timings = {}
     timings = {**observed_timings, "total_ms": round((time.perf_counter() - started_mono) * 1000, 1)}
-    routed_client = observed.get("worker_client_id") or observed.get("client_id")
+    routed_client = observed.get("worker_client_id") or observed.get("client_id") or trace.get("worker_client_id")
     observed_diagnostics = observed.get("diagnostics")
     if not isinstance(observed_diagnostics, dict):
         observed_diagnostics = {}
@@ -224,6 +305,9 @@ async def _record_telemetry(
             "request_id": request_id,
             "response_id": response_id or None,
             "client_id": routed_client,
+            "worker_client_id": routed_client,
+            "worker_request_id": trace.get("worker_request_id") or observed.get("worker_request_id"),
+            "worker_attempt_ids": trace.get("worker_attempt_ids") or observed.get("worker_attempt_ids") or [],
             "api_key_id": principal.key_id,
             "api_key_name": principal.name,
             "auth_kind": principal.kind,
@@ -249,8 +333,27 @@ async def _record_telemetry(
                 "response_error_type": error_type or None,
                 "response_error_reason": error_reason or None,
                 "response_object_created": bool(response_id),
+                "response_stream_terminal_revision": 156,
+                "response_stream_termination_reason": terminal_reason,
+                "response_stream_last_sse_event": trace.get("last_sse_event"),
+                "response_stream_terminal_event": trace.get("terminal_event"),
+                "response_stream_event_count": trace.get("event_count", 0),
+                "response_stream_bytes_sent": trace.get("bytes_sent", 0),
+                "response_stream_body_complete": bool(trace.get("body_complete")),
+                "response_stream_client_disconnect": bool(trace.get("client_disconnected")),
+                "response_stream_server_task_cancelled": bool(trace.get("server_task_cancelled")),
+                "response_stream_send_failed": bool(trace.get("send_failed")),
+                "response_stream_transport_exception": trace.get("transport_exception"),
+                "response_stream_disconnect_after_ms": trace.get("disconnect_after_ms"),
+                "response_stream_frame_overflow": bool(trace.get("frame_overflow")),
+                "worker_request_id": trace.get("worker_request_id") or observed.get("worker_request_id"),
+                "worker_attempt_ids": trace.get("worker_attempt_ids") or observed.get("worker_attempt_ids") or [],
             },
-            "error": error_text or (f"HTTP {http_status} ({error_reason})" if http_status >= 400 else None),
+            "error": error_text or (
+                f"HTTP {http_status} ({error_reason})" if http_status >= 400
+                else f"Responses stream ended: {terminal_reason}" if status != "completed" and stream
+                else None
+            ),
         }
     )
 
@@ -295,7 +398,15 @@ class _ResponsesModelContextMiddleware:
             if not sent_body:
                 sent_body = True
                 return {"type": "http.request", "body": raw, "more_body": False}
-            return await receive()
+            message = await receive()
+            if message.get("type") == "http.disconnect":
+                trace = scope.get("chat2api.responses_trace")
+                if isinstance(trace, dict):
+                    trace["client_disconnected"] = True
+                    trace["disconnect_after_ms"] = round(
+                        (time.perf_counter() - trace["started_mono"]) * 1000, 1
+                    )
+            return message
 
         payload: dict[str, Any] = {}
         target: dict[str, Any] | None = None
@@ -317,24 +428,54 @@ class _ResponsesModelContextMiddleware:
         started_mono = time.perf_counter()
         status_code = 500
         response_chunks: list[bytes] = []
+        observer = _SSEStreamObserver() if bool(payload.get("stream", False)) else None
+        trace: dict[str, Any] = {"worker_attempt_ids": [], "started_mono": started_mono}
+        scope["chat2api.responses_trace"] = trace
 
         async def observed_send(message):
             nonlocal status_code
+            try:
+                await send(message)
+            except OSError:
+                trace["send_failed"] = True
+                raise
             if message.get("type") == "http.response.start":
                 status_code = int(message.get("status") or 500)
             elif message.get("type") == "http.response.body":
-                response_chunks.append(bytes(message.get("body") or b""))
-            await send(message)
+                chunk = bytes(message.get("body") or b"")
+                if observer is not None:
+                    observer.feed(chunk)
+                else:
+                    response_chunks.append(chunk)
+                if not message.get("more_body", False):
+                    trace["body_complete"] = True
 
         local_token = model_routing._MODEL_CONTEXT.set(target)
         historical_token = v13_patch._target_context.set(target)
         try:
             await self.app(scope, replay_receive, observed_send)
+        except BaseException as error:
+            trace["transport_exception"] = type(error).__name__
+            if isinstance(error, asyncio.CancelledError):
+                trace["server_task_cancelled"] = not bool(trace.get("client_disconnected"))
+            raise
         finally:
             v13_patch._target_context.reset(historical_token)
             model_routing._MODEL_CONTEXT.reset(local_token)
             try:
-                response = _response_payload(b"".join(response_chunks), bool(payload.get("stream", False)))
+                response = (
+                    observer.terminal_response or observer.created_response
+                    if observer is not None
+                    else _response_payload(b"".join(response_chunks), False)
+                )
+                if observer is not None:
+                    trace.update({
+                        "last_sse_event": observer.last_event,
+                        "terminal_event": observer.terminal_event,
+                        "event_count": observer.event_count,
+                        "bytes_sent": observer.bytes_sent,
+                        "frame_overflow": observer.frame_overflow,
+                    })
                 await _record_telemetry(
                     self.server_app,
                     request_id=request_id,
@@ -344,6 +485,7 @@ class _ResponsesModelContextMiddleware:
                     response=response,
                     http_status=status_code,
                     started_mono=started_mono,
+                    stream_trace=trace,
                 )
             except Exception:
                 # Telemetry must never break the API response path. The canonical
