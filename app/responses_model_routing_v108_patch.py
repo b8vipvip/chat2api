@@ -398,7 +398,15 @@ class _ResponsesModelContextMiddleware:
             if not sent_body:
                 sent_body = True
                 return {"type": "http.request", "body": raw, "more_body": False}
-            return await receive()
+            message = await receive()
+            if message.get("type") == "http.disconnect":
+                trace = scope.get("chat2api.responses_trace")
+                if isinstance(trace, dict):
+                    trace["client_disconnected"] = True
+                    trace["disconnect_after_ms"] = round(
+                        (time.perf_counter() - trace["started_mono"]) * 1000, 1
+                    )
+            return message
 
         payload: dict[str, Any] = {}
         target: dict[str, Any] | None = None
@@ -420,24 +428,54 @@ class _ResponsesModelContextMiddleware:
         started_mono = time.perf_counter()
         status_code = 500
         response_chunks: list[bytes] = []
+        observer = _SSEStreamObserver() if bool(payload.get("stream", False)) else None
+        trace: dict[str, Any] = {"worker_attempt_ids": [], "started_mono": started_mono}
+        scope["chat2api.responses_trace"] = trace
 
         async def observed_send(message):
             nonlocal status_code
+            try:
+                await send(message)
+            except OSError:
+                trace["send_failed"] = True
+                raise
             if message.get("type") == "http.response.start":
                 status_code = int(message.get("status") or 500)
             elif message.get("type") == "http.response.body":
-                response_chunks.append(bytes(message.get("body") or b""))
-            await send(message)
+                chunk = bytes(message.get("body") or b"")
+                if observer is not None:
+                    observer.feed(chunk)
+                else:
+                    response_chunks.append(chunk)
+                if not message.get("more_body", False):
+                    trace["body_complete"] = True
 
         local_token = model_routing._MODEL_CONTEXT.set(target)
         historical_token = v13_patch._target_context.set(target)
         try:
             await self.app(scope, replay_receive, observed_send)
+        except BaseException as error:
+            trace["transport_exception"] = type(error).__name__
+            if isinstance(error, asyncio.CancelledError):
+                trace["server_task_cancelled"] = not bool(trace.get("client_disconnected"))
+            raise
         finally:
             v13_patch._target_context.reset(historical_token)
             model_routing._MODEL_CONTEXT.reset(local_token)
             try:
-                response = _response_payload(b"".join(response_chunks), bool(payload.get("stream", False)))
+                response = (
+                    observer.terminal_response or observer.created_response
+                    if observer is not None
+                    else _response_payload(b"".join(response_chunks), False)
+                )
+                if observer is not None:
+                    trace.update({
+                        "last_sse_event": observer.last_event,
+                        "terminal_event": observer.terminal_event,
+                        "event_count": observer.event_count,
+                        "bytes_sent": observer.bytes_sent,
+                        "frame_overflow": observer.frame_overflow,
+                    })
                 await _record_telemetry(
                     self.server_app,
                     request_id=request_id,
@@ -447,6 +485,7 @@ class _ResponsesModelContextMiddleware:
                     response=response,
                     http_status=status_code,
                     started_mono=started_mono,
+                    stream_trace=trace,
                 )
             except Exception:
                 # Telemetry must never break the API response path. The canonical
