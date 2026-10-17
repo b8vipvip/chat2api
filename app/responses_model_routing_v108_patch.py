@@ -242,6 +242,7 @@ async def _record_telemetry(
     response: dict[str, Any] | None,
     http_status: int,
     started_mono: float,
+    stream_trace: dict[str, Any] | None = None,
 ) -> None:
     if principal is None:
         return
@@ -278,16 +279,11 @@ async def _record_telemetry(
         owners[response_id] = principal.key_id
         while len(owners) > 512:
             owners.popitem(last=False)
-    if http_status >= 400:
-        status = "error"
-    elif response_status == "completed":
-        status = "completed"
-    elif response_status in {"failed", "incomplete"}:
-        status = "error"
-    elif stream:
-        status = "cancelled"
-    else:
-        status = "error"
+    trace = stream_trace or {}
+    status, terminal_reason = _responses_terminal_status(
+        http_status=http_status, response_status=response_status,
+        error_code=error_code, stream=stream, trace=trace,
+    )
     tools = _request_tools(payload)
     tool_types = [str(item.get("type") or "") for item in tools if isinstance(item, dict) and item.get("type")]
     # Request-v6/Broker records the browser's first token and selected Worker.
@@ -300,7 +296,7 @@ async def _record_telemetry(
     if not isinstance(observed_timings, dict):
         observed_timings = {}
     timings = {**observed_timings, "total_ms": round((time.perf_counter() - started_mono) * 1000, 1)}
-    routed_client = observed.get("worker_client_id") or observed.get("client_id")
+    routed_client = observed.get("worker_client_id") or observed.get("client_id") or trace.get("worker_client_id")
     observed_diagnostics = observed.get("diagnostics")
     if not isinstance(observed_diagnostics, dict):
         observed_diagnostics = {}
@@ -309,6 +305,9 @@ async def _record_telemetry(
             "request_id": request_id,
             "response_id": response_id or None,
             "client_id": routed_client,
+            "worker_client_id": routed_client,
+            "worker_request_id": trace.get("worker_request_id") or observed.get("worker_request_id"),
+            "worker_attempt_ids": trace.get("worker_attempt_ids") or observed.get("worker_attempt_ids") or [],
             "api_key_id": principal.key_id,
             "api_key_name": principal.name,
             "auth_kind": principal.kind,
@@ -334,8 +333,27 @@ async def _record_telemetry(
                 "response_error_type": error_type or None,
                 "response_error_reason": error_reason or None,
                 "response_object_created": bool(response_id),
+                "response_stream_terminal_revision": 156,
+                "response_stream_termination_reason": terminal_reason,
+                "response_stream_last_sse_event": trace.get("last_sse_event"),
+                "response_stream_terminal_event": trace.get("terminal_event"),
+                "response_stream_event_count": trace.get("event_count", 0),
+                "response_stream_bytes_sent": trace.get("bytes_sent", 0),
+                "response_stream_body_complete": bool(trace.get("body_complete")),
+                "response_stream_client_disconnect": bool(trace.get("client_disconnected")),
+                "response_stream_server_task_cancelled": bool(trace.get("server_task_cancelled")),
+                "response_stream_send_failed": bool(trace.get("send_failed")),
+                "response_stream_transport_exception": trace.get("transport_exception"),
+                "response_stream_disconnect_after_ms": trace.get("disconnect_after_ms"),
+                "response_stream_frame_overflow": bool(trace.get("frame_overflow")),
+                "worker_request_id": trace.get("worker_request_id") or observed.get("worker_request_id"),
+                "worker_attempt_ids": trace.get("worker_attempt_ids") or observed.get("worker_attempt_ids") or [],
             },
-            "error": error_text or (f"HTTP {http_status} ({error_reason})" if http_status >= 400 else None),
+            "error": error_text or (
+                f"HTTP {http_status} ({error_reason})" if http_status >= 400
+                else f"Responses stream ended: {terminal_reason}" if status != "completed" and stream
+                else None
+            ),
         }
     )
 
