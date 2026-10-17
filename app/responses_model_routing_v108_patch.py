@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import secrets
 import time
@@ -124,6 +125,90 @@ def _response_payload(raw: bytes, stream: bool) -> dict[str, Any] | None:
         if kind in {"response.completed", "response.failed", "response.incomplete"} and isinstance(response, dict):
             terminal = response
     return terminal or created
+
+
+class _SSEStreamObserver:
+    """Observe delivered SSE frames without buffering the full stream."""
+
+    MAX_FRAME_BYTES = 1024 * 1024
+
+    def __init__(self) -> None:
+        self.buffer = b""
+        self.last_event: str | None = None
+        self.terminal_event: str | None = None
+        self.terminal_response: dict[str, Any] | None = None
+        self.created_response: dict[str, Any] | None = None
+        self.event_count = 0
+        self.bytes_sent = 0
+        self.frame_overflow = False
+
+    def feed(self, chunk: bytes) -> None:
+        self.bytes_sent += len(chunk)
+        self.buffer += chunk.replace(b"\r\n", b"\n")
+        while b"\n\n" in self.buffer:
+            frame, self.buffer = self.buffer.split(b"\n\n", 1)
+            if len(frame) > self.MAX_FRAME_BYTES:
+                self.frame_overflow = True
+                continue
+            event_name = ""
+            data_lines: list[bytes] = []
+            for line in frame.split(b"\n"):
+                if line.startswith(b"event:"):
+                    event_name = line[6:].strip().decode("utf-8", errors="replace")[:80]
+                elif line.startswith(b"data:"):
+                    data_lines.append(line[5:].strip())
+            data = b"\n".join(data_lines)
+            if not event_name and data:
+                try:
+                    event_name = str(json.loads(data).get("type") or "")[:80]
+                except (ValueError, TypeError, AttributeError):
+                    pass
+            if event_name:
+                self.last_event = event_name
+                self.event_count += 1
+            if event_name not in {"response.created", "response.completed", "response.failed", "response.incomplete"}:
+                continue
+            try:
+                event = json.loads(data)
+            except (ValueError, TypeError):
+                continue
+            response = event.get("response") if isinstance(event, dict) else None
+            if not isinstance(response, dict):
+                continue
+            if event_name == "response.created":
+                self.created_response = {"id": response.get("id"), "status": response.get("status")}
+            else:
+                self.terminal_event = event_name
+                self.terminal_response = response
+        if len(self.buffer) > self.MAX_FRAME_BYTES:
+            self.buffer = b""
+            self.frame_overflow = True
+
+
+def _responses_terminal_status(
+    *, http_status: int, response_status: str, error_code: str,
+    stream: bool, trace: dict[str, Any],
+) -> tuple[str, str]:
+    """The only decision point for caller-visible Responses request terminal state."""
+    if http_status >= 400:
+        return "error", "http_error"
+    if response_status == "completed":
+        return "completed", "response_completed"
+    if response_status in {"failed", "incomplete"}:
+        return "error", "timeout" if error_code == "timeout" else "response_" + response_status
+    if stream:
+        if trace.get("client_disconnected"):
+            return "cancelled", "client_disconnect"
+        if trace.get("send_failed"):
+            return "cancelled", "downstream_send_failed"
+        if trace.get("server_task_cancelled"):
+            return "cancelled", "server_task_cancelled"
+        if trace.get("transport_exception") == "TimeoutError":
+            return "error", "timeout"
+        if trace.get("transport_exception"):
+            return "error", "stream_transport_exception"
+        return "error", "missing_terminal_event"
+    return "error", "missing_response_terminal"
 
 
 def _usage(prompt: str, output_text: str, response: dict[str, Any] | None) -> dict[str, int | bool]:
