@@ -256,6 +256,15 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
         state = await broker.create(request_id, client_id)
     except RuntimeError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    trace_scope = getattr(request, "scope", None)
+    trace = trace_scope.get("chat2api.responses_trace") if isinstance(trace_scope, dict) else None
+    if isinstance(trace, dict):
+        if not request_id_override:
+            trace["worker_request_id"] = request_id
+        attempts = trace.setdefault("worker_attempt_ids", [])
+        if request_id not in attempts:
+            attempts.append(request_id)
+        trace["worker_client_id"] = client_id
     timeout = max(5, min(int(body.get("timeout") or app.state.settings.request_timeout_seconds), 3600))
     # A bounded tool-bridge correction is an internal browser attempt, not a
     # second billable Responses HTTP request. Initialize its own complete
