@@ -157,9 +157,19 @@ def _explicit_declared_tool_requirement(
             continue
         for tool in catalog:
             name = str(tool.get("name") or "")
-            if not name or token != re.sub(r"[^a-z0-9]", "", name.lower()):
-                continue
             namespace = str(tool.get("namespace") or "").strip() or None
+            exact_name = bool(name and token == re.sub(r"[^a-z0-9]", "", name.lower()))
+            # The official collaboration API exposes wait_agent while user
+            # instructions often call it the "wait tool". This is an alias
+            # only for an explicitly named, declared tool, never a synthetic
+            # collaboration event or a separate terminal authority.
+            official_wait = bool(
+                namespace == "collaboration" and name == "wait_agent"
+                and token == "wait"
+                and re.match(r"(?i)wait\s+tool\b", current[match.start():])
+            )
+            if not (exact_name or official_wait):
+                continue
             if not _tool_has_returned_since_user(body, namespace, name):
                 return tool
     return None
