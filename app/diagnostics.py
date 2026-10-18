@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode
 
+from .jsonl_tail import iter_recent_jsonl
+
 
 current_trace_id: ContextVar[str | None] = ContextVar("chat2api_trace_id", default=None)
 
@@ -151,11 +153,10 @@ class DiagnosticStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
             try:
-                for line in self.path.read_text(encoding="utf-8").splitlines()[-max_items:]:
-                    if line.strip():
-                        item = json.loads(line)
-                        if isinstance(item, dict):
-                            self.items.append(item)
+                for item in iter_recent_jsonl(self.path):
+                    self.items.appendleft(item)
+                    if len(self.items) >= max_items:
+                        break
             except Exception:
                 self.items.clear()
 
