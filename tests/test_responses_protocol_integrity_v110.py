@@ -94,6 +94,37 @@ def test_network_completed_json_with_clipped_render_escape_tag_is_validated(rend
     assert calls == []
 
 
+@pytest.mark.parametrize("clipped_prefix", [
+    'api-responses-tool-v159",',
+    '-tool-v159",',
+    '159",',
+])
+def test_v159_real_sse_clipped_fixed_prefix_preserves_tool_calls(clipped_prefix: str) -> None:
+    payload = json_bridge({
+        "kind": "tool_calls",
+        "calls": [{"namespace": None, "name": "noop", "arguments": {"cmd": "printf FDEX_TEST"}}],
+    })
+    fixed = '{"bridge":"' + bridge.JSON_BRIDGE_PROTOCOL + '",'
+    assert payload.startswith(fixed)
+    raw = clipped_prefix + payload[len(fixed):] + "</escape>"
+    output, calls = bridge._interpret(raw, bridge._catalog(body()), body())
+    assert output == ""
+    assert len(calls) == 1
+    assert calls[0]["type"] == "function_call"
+    assert calls[0]["name"] == "noop"
+    assert json.loads(calls[0]["arguments"]) == {"cmd": "printf FDEX_TEST"}
+
+
+def test_clipped_fixed_prefix_still_requires_exact_final_literal() -> None:
+    payload = json_bridge({"kind": "final", "text": MARKER[:-5]})
+    fixed = '{"bridge":"' + bridge.JSON_BRIDGE_PROTOCOL + '",'
+    with pytest.raises(integrity.ResponsesToolBridgeProtocolError, match="exact literal"):
+        bridge._interpret(
+            '159",' + payload[len(fixed):] + "</escape>",
+            bridge._catalog(body()), body(),
+        )
+
+
 def test_wrapped_tool_calls_still_require_declared_tool_and_preserve_arguments() -> None:
     valid = json_bridge({
         "kind": "tool_calls",
@@ -115,7 +146,7 @@ def test_wrapped_tool_calls_still_require_declared_tool_and_preserve_arguments()
     "prefix >" + json_bridge({"kind": "final", "text": MARKER}) + "</escape>",
     "escape>" + json_bridge({"kind": "final", "text": MARKER}) + "</escape> suffix",
     "escape>" + json_bridge({"kind": "final", "text": MARKER}) + " extra</escape>",
-    "2api-responses-tool-v159\",\"kind\":\"final\",\"text\":\"" + MARKER + "\"}</escape>",
+    "x2api-responses-tool-v159\",\"kind\":\"final\",\"text\":\"" + MARKER + "\"}</escape>",
     "escape>" + json_bridge({"kind": "final", "text": MARKER}).replace(MARKER, MARKER[:-4]) + "</escape>",
     "escape>" + json_bridge({"kind": "final", "text": MARKER}).replace(
         bridge.JSON_BRIDGE_PROTOCOL, "not-the-bridge"
@@ -235,7 +266,7 @@ def test_html_safe_tool_call_requires_declared_catalog_tool() -> None:
 def test_worker_uses_request_v6_terminal_owner_without_v89_wrapper() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.22.159"
+    assert manifest["version"] == "0.22.160"
     assert "content_request_v6.js" in scripts
     assert "content_response_semantic_recovery_v51.js" in scripts
     assert "content_terminal_integrity_v89.js" not in scripts
