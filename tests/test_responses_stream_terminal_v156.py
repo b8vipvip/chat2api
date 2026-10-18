@@ -24,6 +24,34 @@ def _event(kind: str, response: dict) -> bytes:
     ).encode()
 
 
+def test_sse_observer_records_tool_lifecycle_without_arguments() -> None:
+    observer = _SSEStreamObserver()
+    tool_item = {
+        "id": "fc_123", "type": "function_call", "status": "completed",
+        "namespace": "collaboration", "name": "spawn_agent",
+        "call_id": "call_123", "arguments": "{\\"secret\\":\\"do not persist\\"}",
+    }
+    raw = (
+        "event: response.output_item.added\\ndata: "
+        + json.dumps({"type": "response.output_item.added", "output_index": 0, "item": tool_item})
+        + "\\n\\n"
+        + "event: response.output_item.done\\ndata: "
+        + json.dumps({"type": "response.output_item.done", "output_index": 0, "item": tool_item})
+        + "\\n\\n"
+    ).encode().replace(b"\\\\n", b"\\n")
+    for chunk in [raw[:17], raw[17:105], raw[105:]]:
+        observer.feed(chunk)
+    assert observer.tool_event_count == 2
+    assert [item["event"] for item in observer.tool_events] == [
+        "response.output_item.added", "response.output_item.done",
+    ]
+    assert observer.tool_events[1]["namespace"] == "collaboration"
+    assert observer.tool_events[1]["name"] == "spawn_agent"
+    assert observer.tool_events[1]["call_id"] == "call_123"
+    assert "do not persist" not in str(observer.tool_events)
+    assert "arguments" not in str(observer.tool_events)
+
+
 def test_sse_observer_recovers_split_frames_and_last_delivered_event() -> None:
     observer = _SSEStreamObserver()
     raw = (
@@ -90,6 +118,12 @@ def test_telemetry_preserves_worker_request_id_and_disconnect_evidence() -> None
         "event_count": 1,
         "client_disconnected": True,
         "disconnect_after_ms": 119950.0,
+        "tool_event_count": 1,
+        "tool_events": [{
+            "event": "response.output_item.done", "type": "function_call",
+            "namespace": "collaboration", "name": "spawn_agent",
+            "call_id": "call_123",
+        }],
     }
     asyncio.run(_record_telemetry(
         SimpleNamespace(state=SimpleNamespace(telemetry=telemetry)),
@@ -107,6 +141,9 @@ def test_telemetry_preserves_worker_request_id_and_disconnect_evidence() -> None
     assert row["diagnostics"]["response_stream_termination_reason"] == "client_disconnect"
     assert row["diagnostics"]["response_stream_last_sse_event"] == "response.created"
     assert row["diagnostics"]["response_stream_disconnect_after_ms"] == 119950.0
+    assert row["diagnostics"]["response_stream_tool_event_count"] == 1
+    assert row["diagnostics"]["response_stream_tool_events"][0]["call_id"] == "call_123"
+    assert row["diagnostics"]["response_stream_tool_events"][0]["name"] == "spawn_agent"
 
 
 @pytest.mark.parametrize(
