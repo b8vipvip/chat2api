@@ -509,6 +509,7 @@ async def _collect_validated_tool_bridge(
     """
     from .responses_protocol_integrity_v110_patch import (
         ResponsesToolBridgeProtocolError, _bridge_kind_hint,
+        _explicit_declared_tool_requirement,
     )
 
     started = asyncio.get_running_loop().time()
