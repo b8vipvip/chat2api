@@ -141,6 +141,8 @@ class _SSEStreamObserver:
         self.event_count = 0
         self.bytes_sent = 0
         self.frame_overflow = False
+        self.tool_events: list[dict[str, Any]] = []
+        self.tool_event_count = 0
 
     def feed(self, chunk: bytes) -> None:
         self.bytes_sent += len(chunk)
@@ -166,6 +168,29 @@ class _SSEStreamObserver:
             if event_name:
                 self.last_event = event_name
                 self.event_count += 1
+            if event_name in {"response.output_item.added", "response.output_item.done"}:
+                try:
+                    tool_event = json.loads(data)
+                except (ValueError, TypeError):
+                    tool_event = None
+                item = tool_event.get("item") if isinstance(tool_event, dict) else None
+                if isinstance(item, dict) and str(item.get("type") or "") in {
+                    "function_call", "custom_tool_call", "tool_search_call",
+                }:
+                    self.tool_event_count += 1
+                    if len(self.tool_events) < 32:
+                        self.tool_events.append({
+                            "event": event_name,
+                            "output_index": tool_event.get("output_index") if isinstance(
+                                tool_event.get("output_index"), int
+                            ) else None,
+                            "type": str(item.get("type") or "")[:64],
+                            "namespace": str(item.get("namespace") or "")[:120],
+                            "name": str(item.get("name") or "")[:120],
+                            "call_id": str(item.get("call_id") or "")[:128],
+                            "item_id": str(item.get("id") or "")[:128],
+                            "status": str(item.get("status") or "")[:64],
+                        })
             if event_name not in {"response.created", "response.completed", "response.failed", "response.incomplete"}:
                 continue
             try:
@@ -327,7 +352,22 @@ async def _record_telemetry(
                 "responses_patch_revision": PATCH_REVISION,
                 "responses_tool_stream_revision": int(getattr(server_app.state, "responses_tool_stream_revision", 0) or 0),
                 "tool_types": tool_types,
+                "response_declared_tools": [
+                    {
+                        "type": str(item.get("type") or "")[:64],
+                        "namespace": str(item.get("namespace") or "")[:120],
+                        "name": str(item.get("name") or "")[:120],
+                    }
+                    for item in tools[:32] if isinstance(item, dict)
+                ],
                 "response_http_status": http_status,
+                "response_request_timeout_seconds": payload.get("timeout") if isinstance(
+                    payload.get("timeout"), (int, float)
+                ) else None,
+                "response_server_default_timeout_seconds": getattr(
+                    server_app.state.settings, "request_timeout_seconds", None
+                ),
+
                 "response_error_code": error_code or None,
                 "response_error_param": error_param or None,
                 "response_error_type": error_type or None,
@@ -346,6 +386,8 @@ async def _record_telemetry(
                 "response_stream_transport_exception": trace.get("transport_exception"),
                 "response_stream_disconnect_after_ms": trace.get("disconnect_after_ms"),
                 "response_stream_frame_overflow": bool(trace.get("frame_overflow")),
+                "response_stream_tool_event_count": trace.get("tool_event_count", 0),
+                "response_stream_tool_events": trace.get("tool_events", []),
                 "worker_request_id": trace.get("worker_request_id") or observed.get("worker_request_id"),
                 "worker_attempt_ids": trace.get("worker_attempt_ids") or observed.get("worker_attempt_ids") or [],
             },
@@ -475,6 +517,8 @@ class _ResponsesModelContextMiddleware:
                         "event_count": observer.event_count,
                         "bytes_sent": observer.bytes_sent,
                         "frame_overflow": observer.frame_overflow,
+                        "tool_event_count": observer.tool_event_count,
+                        "tool_events": observer.tool_events,
                     })
                 await _record_telemetry(
                     self.server_app,
