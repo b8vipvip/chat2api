@@ -129,7 +129,11 @@ def test_telemetry_preserves_worker_request_id_and_disconnect_evidence() -> None
         SimpleNamespace(state=SimpleNamespace(telemetry=telemetry)),
         request_id="resp_req_browser_1", principal=principal,
         payload={"model": "gpt-6", "stream": True}, prompt="",
-        response={"id": "resp_1", "status": "in_progress"},
+        response={"id": "resp_1", "status": "in_progress", "output": [{
+            "type": "function_call", "namespace": "collaboration",
+            "name": "spawn_agent", "call_id": "call_123",
+            "arguments": "{\\\"secret\\\":\\\"private\\\"}",
+        }]},
         http_status=200, started_mono=0.0, stream_trace=trace,
     ))
     row = telemetry.rows[-1]
@@ -144,6 +148,8 @@ def test_telemetry_preserves_worker_request_id_and_disconnect_evidence() -> None
     assert row["diagnostics"]["response_stream_tool_event_count"] == 1
     assert row["diagnostics"]["response_stream_tool_events"][0]["call_id"] == "call_123"
     assert row["diagnostics"]["response_stream_tool_events"][0]["name"] == "spawn_agent"
+    assert row["diagnostics"]["response_terminal_tool_items"][0]["call_id"] == "call_123"
+    assert "private" not in str(row["diagnostics"]["response_terminal_tool_items"])
 
 
 @pytest.mark.parametrize(
