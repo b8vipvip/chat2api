@@ -6,6 +6,7 @@ from collections import deque
 from pathlib import Path
 from typing import Any
 
+from .jsonl_tail import iter_recent_jsonl
 from .timezone_utils import beijing_now_iso, to_beijing_iso
 
 
@@ -47,14 +48,7 @@ class TestRunStore:
         try:
             latest: dict[tuple[str, str], dict[str, Any]] = {}
             order: list[tuple[str, str]] = []
-            lines = self.path.read_text(encoding="utf-8").splitlines()
-            for line_number in range(len(lines) - 1, -1, -1):
-                line = lines[line_number]
-                if not line.strip():
-                    continue
-                row = json.loads(line)
-                if not isinstance(row, dict):
-                    continue
+            for line_number, row in enumerate(iter_recent_jsonl(self.path)):
                 run_id = str(row.get("run_id") or "")
                 record_key = ("run", run_id) if run_id else ("legacy-line", str(line_number))
                 if record_key in latest:
