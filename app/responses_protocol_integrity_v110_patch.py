@@ -127,12 +127,35 @@ def _render_escape_json(text: str) -> str:
     for index in range(len(_RENDER_ESCAPE_START)):
         prefix = _RENDER_ESCAPE_START[index:]
         if before_end.startswith(prefix):
-            candidate = before_end[len(prefix):].strip()
-            return candidate if candidate.startswith("{") else text
-    # The opening tag may have been entirely lost, but its closing tag is
-    # unambiguous only when the remainder is itself a complete JSON document.
-    candidate = before_end.strip()
-    return candidate if candidate.startswith("{") else text
+            return before_end[len(prefix):].strip()
+    # The strict parser below rejects any text that is not one complete
+    # protocol object. A missing opening tag does not make arbitrary text valid.
+    return before_end.strip()
+
+
+def _recover_protocol_prefix(raw: str) -> str:
+    """Recover only missing bytes of the fixed bridge identity, never payload data.
+
+    Real TX03 SSE captures sometimes start inside the known transport prefix
+    (e.g. 'api-responses-tool-v159","kind":"tool_calls"...'). Reconstructing
+    that immutable prefix is safe only if the *whole* resulting document still
+    passes strict JSON, schema, literal, and tool allowlist validation.
+    """
+    fixed = '{"bridge":' + json.dumps(bridge.JSON_BRIDGE_PROTOCOL)
+    if raw.startswith("{") or not raw.endswith("}"):
+        return raw
+    for offset in range(1, len(fixed) - 3):
+        if raw.startswith(fixed[offset:]):
+            return fixed[:offset] + raw
+    return raw
+
+
+def _bridge_kind_hint(text: str) -> str | None:
+    """An anchored correction hint; never itself authorizes a tool call."""
+    raw = _recover_protocol_prefix(_render_escape_json(str(text or "").strip()))
+    fixed = re.escape('{"bridge":' + json.dumps(bridge.JSON_BRIDGE_PROTOCOL))
+    match = re.match(fixed + r'\s*,\s*"kind"\s*:\s*"(tool_calls|final)"', raw)
+    return match.group(1) if match else None
 
 
 def _unique_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -145,7 +168,7 @@ def _unique_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def _strict_envelope(text: str) -> dict[str, Any]:
-    raw = _render_escape_json(str(text or "").strip())
+    raw = _recover_protocol_prefix(_render_escape_json(str(text or "").strip()))
     if raw.startswith("{"):
         # New protocol: one whole JSON document with an explicit in-band
         # identity. This avoids ChatGPT truncating separately generated
