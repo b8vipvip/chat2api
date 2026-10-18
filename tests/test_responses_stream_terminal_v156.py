@@ -29,16 +29,16 @@ def test_sse_observer_records_tool_lifecycle_without_arguments() -> None:
     tool_item = {
         "id": "fc_123", "type": "function_call", "status": "completed",
         "namespace": "collaboration", "name": "spawn_agent",
-        "call_id": "call_123", "arguments": "{\\"secret\\":\\"do not persist\\"}",
+        "call_id": "call_123", "arguments": json.dumps({"secret": "do not persist"}),
     }
     raw = (
-        "event: response.output_item.added\\ndata: "
+        "event: response.output_item.added\ndata: "
         + json.dumps({"type": "response.output_item.added", "output_index": 0, "item": tool_item})
-        + "\\n\\n"
-        + "event: response.output_item.done\\ndata: "
+        + "\n\n"
+        + "event: response.output_item.done\ndata: "
         + json.dumps({"type": "response.output_item.done", "output_index": 0, "item": tool_item})
-        + "\\n\\n"
-    ).encode().replace(b"\\\\n", b"\\n")
+        + "\n\n"
+    ).encode()
     for chunk in [raw[:17], raw[17:105], raw[105:]]:
         observer.feed(chunk)
     assert observer.tool_event_count == 2
