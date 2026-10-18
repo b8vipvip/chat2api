@@ -311,6 +311,23 @@ async def _record_telemetry(
     )
     tools = _request_tools(payload)
     tool_types = [str(item.get("type") or "") for item in tools if isinstance(item, dict) and item.get("type")]
+    terminal_items = (response or {}).get("output")
+    if not isinstance(terminal_items, list):
+        terminal_items = []
+    terminal_tools = [
+        {
+            "type": str(item.get("type") or "")[:64],
+            "namespace": str(item.get("namespace") or "")[:120],
+            "name": str(item.get("name") or "")[:120],
+            "call_id": str(item.get("call_id") or "")[:128],
+            "item_id": str(item.get("id") or "")[:128],
+            "status": str(item.get("status") or "")[:64],
+        }
+        for item in terminal_items[:32]
+        if isinstance(item, dict) and str(item.get("type") or "") in {
+            "function_call", "custom_tool_call", "tool_search_call",
+        }
+    ]
     # Request-v6/Broker records the browser's first token and selected Worker.
     # Responses' outer HTTP middleware owns the public terminal status, but
     # must merge these existing measurements instead of overwriting them with
@@ -388,6 +405,7 @@ async def _record_telemetry(
                 "response_stream_frame_overflow": bool(trace.get("frame_overflow")),
                 "response_stream_tool_event_count": trace.get("tool_event_count", 0),
                 "response_stream_tool_events": trace.get("tool_events", []),
+                "response_terminal_tool_items": terminal_tools,
                 "worker_request_id": trace.get("worker_request_id") or observed.get("worker_request_id"),
                 "worker_attempt_ids": trace.get("worker_attempt_ids") or observed.get("worker_attempt_ids") or [],
             },
