@@ -365,7 +365,7 @@ async def _record_telemetry(
                     payload.get("timeout"), (int, float)
                 ) else None,
                 "response_server_default_timeout_seconds": getattr(
-                    server_app.state.settings, "request_timeout_seconds", None
+                    getattr(server_app.state, "settings", None), "request_timeout_seconds", None
                 ),
 
                 "response_error_code": error_code or None,
