@@ -83,6 +83,52 @@ def test_json_only_final_preserves_exact_marker() -> None:
     assert items == []
 
 
+@pytest.mark.parametrize("render_prefix", [
+    "<escape>", "escape>", "scape>", "cape>", "ape>", "pe>", "e>", ">", "",
+])
+def test_network_completed_json_with_clipped_render_escape_tag_is_validated(render_prefix: str) -> None:
+    payload = json_bridge({"kind": "final", "text": MARKER})
+    raw = render_prefix + payload + "</escape>"
+    text, calls = bridge._interpret(raw, bridge._catalog(body()), body())
+    assert text == MARKER
+    assert calls == []
+
+
+def test_wrapped_tool_calls_still_require_declared_tool_and_preserve_arguments() -> None:
+    valid = json_bridge({
+        "kind": "tool_calls",
+        "calls": [{"name": "noop", "arguments": {"key": "literal </escape> text"}}],
+    })
+    _, calls = bridge._interpret(">" + valid + "</escape>", bridge._catalog(body()), body())
+    assert len(calls) == 1
+    assert calls[0]["name"] == "noop"
+    assert json.loads(calls[0]["arguments"]) == {"key": "literal </escape> text"}
+    invalid = json_bridge({
+        "kind": "tool_calls",
+        "calls": [{"name": "not_declared", "arguments": {}}],
+    })
+    with pytest.raises(ValueError, match="undeclared tool"):
+        bridge._interpret("escape>" + invalid + "</escape>", bridge._catalog(body()), body())
+
+
+@pytest.mark.parametrize("malformed", [
+    "prefix >" + json_bridge({"kind": "final", "text": MARKER}) + "</escape>",
+    "escape>" + json_bridge({"kind": "final", "text": MARKER}) + "</escape> suffix",
+    "escape>" + json_bridge({"kind": "final", "text": MARKER}) + " extra</escape>",
+    "2api-responses-tool-v159\",\"kind\":\"final\",\"text\":\"" + MARKER + "\"}</escape>",
+    "escape>" + json_bridge({"kind": "final", "text": MARKER}).replace(MARKER, MARKER[:-4]) + "</escape>",
+    "escape>" + json_bridge({"kind": "final", "text": MARKER}).replace(
+        bridge.JSON_BRIDGE_PROTOCOL, "not-the-bridge"
+    ) + "</escape>",
+    "escape>" + json_bridge({"kind": "tool_calls", "calls": ["not-a-call"]}) + "</escape>",
+    "escape>" + '{"bridge":"' + bridge.JSON_BRIDGE_PROTOCOL
+        + '","kind":"final","kind":"tool_calls","text":"' + MARKER + '"}' + "</escape>",
+])
+def test_render_escape_unwrap_never_guesses_missing_json_or_accepts_unknown_text(malformed: str) -> None:
+    with pytest.raises(integrity.ResponsesToolBridgeProtocolError):
+        bridge._interpret(malformed, bridge._catalog(body()), body())
+
+
 def test_json_only_tool_call_uses_same_allowlist() -> None:
     catalog = bridge._catalog(body())
     text, items = bridge._interpret(
