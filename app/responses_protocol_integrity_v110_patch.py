@@ -111,19 +111,28 @@ def _required_exact_literals(body: dict[str, Any]) -> list[str]:
 
 def _strict_envelope(text: str) -> dict[str, Any]:
     raw = str(text or "").strip()
-    start = raw.find(bridge.BRIDGE_START)
-    end = raw.find(bridge.BRIDGE_END, start + len(bridge.BRIDGE_START)) if start >= 0 else -1
-    if start < 0 or end < 0:
+    # A single strict parser accepts the new HTML-safe transport and complete
+    # legacy envelopes from in-flight requests during a rolling upgrade.
+    delimiters = (
+        (bridge.BRIDGE_START, bridge.BRIDGE_END),
+        (bridge.LEGACY_BRIDGE_START, bridge.LEGACY_BRIDGE_END),
+    )
+    for start_marker, end_marker in delimiters:
+        start = raw.find(start_marker)
+        end = raw.find(end_marker, start + len(start_marker)) if start >= 0 else -1
+        if start >= 0 and end >= 0:
+            break
+    else:
         raise ResponsesToolBridgeProtocolError(
             "ChatGPT completed without the required Responses tool-bridge envelope"
         )
     before = raw[:start].strip()
-    after = raw[end + len(bridge.BRIDGE_END) :].strip()
+    after = raw[end + len(end_marker) :].strip()
     if before or after:
         raise ResponsesToolBridgeProtocolError(
             "ChatGPT returned text outside the required Responses tool-bridge envelope"
         )
-    payload_text = raw[start + len(bridge.BRIDGE_START) : end].strip()
+    payload_text = raw[start + len(start_marker) : end].strip()
     try:
         value = json.loads(payload_text)
     except (TypeError, ValueError) as error:
