@@ -111,38 +111,64 @@ def _required_exact_literals(body: dict[str, Any]) -> list[str]:
 
 def _strict_envelope(text: str) -> dict[str, Any]:
     raw = str(text or "").strip()
-    # A single strict parser accepts the new HTML-safe transport and complete
-    # legacy envelopes from in-flight requests during a rolling upgrade.
-    delimiters = (
-        (bridge.BRIDGE_START, bridge.BRIDGE_END),
-        (bridge.LEGACY_BRIDGE_START, bridge.LEGACY_BRIDGE_END),
-    )
-    for start_marker, end_marker in delimiters:
-        start = raw.find(start_marker)
-        end = raw.find(end_marker, start + len(start_marker)) if start >= 0 else -1
-        if start >= 0 and end >= 0:
-            break
+    if raw.startswith("{"):
+        # New protocol: one whole JSON document with an explicit in-band
+        # identity. This avoids ChatGPT truncating separately generated
+        # start/end sentinel lines while preserving strict fail-closed parsing.
+        try:
+            value = json.loads(raw)
+        except (TypeError, ValueError) as error:
+            raise ResponsesToolBridgeProtocolError(
+                "ChatGPT returned an incomplete or invalid Responses tool-bridge JSON object"
+            ) from error
+        if not isinstance(value, dict) or value.get("bridge") != bridge.JSON_BRIDGE_PROTOCOL:
+            raise ResponsesToolBridgeProtocolError(
+                "Responses tool-bridge JSON object has an invalid protocol identifier"
+            )
+        kind = value.get("kind")
+        required_keys = (
+            {"bridge", "kind", "text"} if kind == "final"
+            else {"bridge", "kind", "calls"} if kind == "tool_calls"
+            else None
+        )
+        if required_keys is None or set(value) != required_keys:
+            raise ResponsesToolBridgeProtocolError(
+                "Responses tool-bridge JSON object has an invalid field set"
+            )
     else:
-        raise ResponsesToolBridgeProtocolError(
-            "ChatGPT completed without the required Responses tool-bridge envelope"
+        # One strict parser also supports complete legacy envelopes during a
+        # rolling upgrade. A clipped/mixed pair never authorizes a response.
+        delimiters = (
+            (bridge.BRIDGE_START, bridge.BRIDGE_END),
+            (bridge.LEGACY_BRIDGE_START, bridge.LEGACY_BRIDGE_END),
         )
-    before = raw[:start].strip()
-    after = raw[end + len(end_marker) :].strip()
-    if before or after:
-        raise ResponsesToolBridgeProtocolError(
-            "ChatGPT returned text outside the required Responses tool-bridge envelope"
-        )
-    payload_text = raw[start + len(start_marker) : end].strip()
-    try:
-        value = json.loads(payload_text)
-    except (TypeError, ValueError) as error:
-        raise ResponsesToolBridgeProtocolError(
-            "ChatGPT returned an incomplete or invalid Responses tool-bridge JSON envelope"
-        ) from error
-    if not isinstance(value, dict):
-        raise ResponsesToolBridgeProtocolError(
-            "Responses tool-bridge envelope must contain one JSON object"
-        )
+        for start_marker, end_marker in delimiters:
+            start = raw.find(start_marker)
+            end = raw.find(end_marker, start + len(start_marker)) if start >= 0 else -1
+            if start >= 0 and end >= 0:
+                break
+        else:
+            raise ResponsesToolBridgeProtocolError(
+                "ChatGPT completed without the required Responses tool-bridge envelope"
+            )
+        before = raw[:start].strip()
+        after = raw[end + len(end_marker) :].strip()
+        if before or after:
+            raise ResponsesToolBridgeProtocolError(
+                "ChatGPT returned text outside the required Responses tool-bridge envelope"
+            )
+        payload_text = raw[start + len(start_marker) : end].strip()
+        try:
+            value = json.loads(payload_text)
+        except (TypeError, ValueError) as error:
+            raise ResponsesToolBridgeProtocolError(
+                "ChatGPT returned an incomplete or invalid Responses tool-bridge JSON envelope"
+            ) from error
+        if not isinstance(value, dict):
+            raise ResponsesToolBridgeProtocolError(
+                "Responses tool-bridge envelope must contain one JSON object"
+            )
+
     kind = str(value.get("kind") or "").strip()
     if kind == "final":
         if not isinstance(value.get("text"), str):
@@ -160,7 +186,6 @@ def _strict_envelope(text: str) -> dict[str, Any]:
     raise ResponsesToolBridgeProtocolError(
         "Responses tool-bridge envelope has an unsupported kind"
     )
-
 
 def _interpret(
     text: str,
@@ -194,12 +219,14 @@ def _bridge_prompt(app: Any, body: dict[str, Any]) -> tuple[str, list[dict[str, 
     # original contract can be tens of thousands of characters away from the
     # model's generation boundary, which makes exact literals easier to shorten
     # or answer directly. This trailer is deliberately short and generic.
-    trailer = f"""FINAL TRANSPORT INTEGRITY CHECK (v110):
-Your entire response MUST start with {bridge.BRIDGE_START} and MUST end with {bridge.BRIDGE_END}.
-Return exactly one JSON object inside those sentinel lines and no text outside them.
+    trailer = f"""FINAL TRANSPORT INTEGRITY CHECK (v159):
+Return ONE complete JSON object only, beginning with {{ and ending with }}.
+Do not emit sentinel markers, Markdown fences, HTML tags, or text outside JSON.
+Include the exact protocol property \"bridge\":\"{bridge.JSON_BRIDGE_PROTOCOL}\".
+The only allowed top-level keys are bridge, kind, and text (final) OR bridge, kind, and calls (tool_calls).
 When kind=final, copy the final text literally. Preserve identifiers, request IDs, hashes, markers, underscores, suffixes, capitalization, and punctuation byte-for-byte; never abbreviate, normalize, summarize, or truncate them.
 If the conversation asks for an exact marker/string, put that complete exact string in the JSON field \"text\".
-A partial marker or a plain-text answer is a transport failure, not a valid final response.{literal_note}"""
+A partial JSON object or plain-text answer is a transport failure, not a valid final response.{literal_note}"""
     return prompt + "\n\n" + trailer, catalog
 
 
