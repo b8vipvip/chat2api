@@ -29,7 +29,7 @@ def envelope(value: dict) -> str:
 
 
 def fixture(monkeypatch: pytest.MonkeyPatch, first: str, second: str | None = None, *, disconnected: bool = False):
-    calls = {"collect": 0, "dispatch": [], "release": [], "discard": []}
+    calls = {"collect": 0, "dispatch": [], "release": [], "discard": [], "retry_prompts": []}
     replies = [first, second]
     initial = SimpleNamespace(key="initial")
     retry_state = SimpleNamespace(key="retry")
@@ -47,8 +47,12 @@ def fixture(monkeypatch: pytest.MonkeyPatch, first: str, second: str | None = No
         assert principal == "owner"
         assert payload["client_id"] == "ext_worker"
         assert request_id_override.startswith("resp_repair_")
-        assert len(prompt) < 2000
+        assert "ORIGINAL TASK AND TRANSPORT CONTRACT" in prompt
+        assert "This is a new" in prompt
+        assert "ORIGINAL USER INPUT: Copy exact marker FDEX_TEST_123456789_WIRE" in prompt
+        assert "ORIGINAL TOOL CATALOG: functions.exec (custom)" in prompt
         assert "FDEX_TEST_123456789_WIRE" in prompt
+        calls["retry_prompts"].append(prompt)
         assert bridge.BRIDGE_START in prompt
         assert bridge.BRIDGE_END in prompt
         calls["dispatch"].append(request_id_override)
@@ -75,6 +79,10 @@ def fixture(monkeypatch: pytest.MonkeyPatch, first: str, second: str | None = No
             app, request, body(), "owner", initial,
             request_id="resp_req_original", client_id="ext_worker",
             timeout=120, catalog=bridge._catalog(body()),
+            original_prompt=(
+                "ORIGINAL USER INPUT: Copy exact marker FDEX_TEST_123456789_WIRE\\n"
+                "ORIGINAL TOOL CATALOG: functions.exec (custom)"
+            ),
         )
 
     return calls, run
@@ -105,13 +113,21 @@ def test_broken_finals_regenerate_once_via_the_same_worker(monkeypatch: pytest.M
     assert calls["collect"] == 2
     assert len(calls["dispatch"]) == 1
     assert calls["release"] == ["resp_req_original", calls["dispatch"][0]]
+    assert len(calls["retry_prompts"]) == 1
+    assert calls["retry_prompts"][0].count("ORIGINAL USER INPUT") == 1
 
 
 def test_repeated_invalid_envelope_still_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     calls, run = fixture(monkeypatch, "<<<CHAT2API_RESPONSES_TOOL_V109>>",
                           "<<<CHAT2API_RESPONSES_TOOL_V109>>")
-    with pytest.raises(ResponsesToolBridgeProtocolError, match="after one protocol correction"):
+    with pytest.raises(ResponsesToolBridgeProtocolError, match="after one protocol correction") as exc:
         asyncio.run(run())
+    assert "first=chars=" in str(exc.value)
+    assert "repair=chars=" in str(exc.value)
+    assert "worker_request_id=resp_req_original" in str(exc.value)
+    assert "repair_request_id=resp_repair_" in str(exc.value)
+    assert "start_marker=0" in str(exc.value)
+    assert "end_marker=0" in str(exc.value)
     assert calls["collect"] == 2
     assert len(calls["dispatch"]) == 1
     assert len(calls["release"]) == 2
