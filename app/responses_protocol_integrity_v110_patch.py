@@ -74,10 +74,10 @@ def _current_user_request(body: dict[str, Any]) -> str:
                 ))
     if not texts:
         return ""
-    current = re.split(r"(?m)^\\s*USER MESSAGE:\\s*$", texts[-1])[-1]
+    current = re.split(r"(?m)^\s*USER MESSAGE:\s*$", texts[-1])[-1]
     current = re.split(
-        r"(?m)^\\s*(?:ASSISTANT|DEVELOPER|SYSTEM) MESSAGE:\\s*$"
-        r"|^\\s*(?:PRIOR TOOL CALL|TOOL RESULT)\\b",
+        r"(?m)^\s*(?:ASSISTANT|DEVELOPER|SYSTEM) MESSAGE:\s*$"
+        r"|^\s*(?:PRIOR TOOL CALL|TOOL RESULT)\b",
         current,
     )[0]
     return current.strip()
@@ -113,17 +113,17 @@ def _tool_has_returned_since_user(body: dict[str, Any], namespace: str | None, n
         ):
             return True
         # Codex can serialize its history into one input message instead.
-        value = "\\n".join(str(item.get("content") or "") for item in segment if isinstance(item, dict))
+        value = "\n".join(str(item.get("content") or "") for item in value if isinstance(item, dict) and isinstance(item.get("content"), str))
     if isinstance(value, str):
-        after_user = re.split(r"(?m)^\\s*USER MESSAGE:\\s*$", value)[-1]
+        after_user = re.split(r"(?m)^\s*USER MESSAGE:\s*$", value)[-1]
         if "PRIOR TOOL CALL:" in after_user and "TOOL RESULT (" in after_user:
             for part in after_user.split("PRIOR TOOL CALL:")[1:]:
                 if "TOOL RESULT (" not in part:
                     continue
                 header = part.split("TOOL RESULT (", 1)[0]
-                if (re.search(r'"name"\\s*:\\s*"' + re.escape(name) + r'"', header)
+                if (re.search(r'"name"\s*:\s*"' + re.escape(name) + r'"', header)
                     and (namespace is None or re.search(
-                        r'"namespace"\\s*:\\s*"' + re.escape(namespace) + r'"', header
+                        r'"namespace"\s*:\s*"' + re.escape(namespace) + r'"', header
                     ))):
                     return True
     return False
@@ -146,9 +146,9 @@ def _explicit_declared_tool_requirement(
     for match in re.finditer(r"(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_]*(?![A-Za-z0-9_])", current):
         token = re.sub(r"[^a-z0-9]", "", match.group(0).lower())
         before = current[max(0, match.start() - 90):match.start()]
-        if not re.search(r"\\b(?:use|call|invoke|execute|run|trigger)\\b|调用|使用|执行", before, re.I):
+        if not re.search(r"\b(?:use|call|invoke|execute|run|trigger)\b|调用|使用|执行", before, re.I):
             continue
-        if re.search(r"\\b(?:do not|don't|never|avoid)\\s+(?:use|call|invoke|execute|run)\\b.{0,55}$", before, re.I):
+        if re.search(r"\b(?:do not|don't|never|avoid)\s+(?:use|call|invoke|execute|run)\b.{0,55}$", before, re.I):
             continue
         for tool in catalog:
             name = str(tool.get("name") or "")
@@ -378,7 +378,7 @@ def _bridge_prompt(app: Any, body: dict[str, Any]) -> tuple[str, list[dict[str, 
             if required_tool.get("namespace") else ""
         ) + str(required_tool["name"])
         tool_note = (
-            "\\nCURRENT TURN DECLARED TOOL REQUIREMENT: The user explicitly "
+            "\nCURRENT TURN DECLARED TOOL REQUIREMENT: The user explicitly "
             "requested " + qualified + ". It has NOT been executed. "
             "Your next response MUST be kind=tool_calls with that exact "
             "namespace and name and valid arguments from TOOL CATALOG. "
