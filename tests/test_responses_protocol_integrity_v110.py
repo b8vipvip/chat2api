@@ -97,8 +97,8 @@ def test_old_complete_envelope_is_accepted_during_rolling_upgrade() -> None:
     catalog = bridge._catalog(body())
     old = (
         bridge.LEGACY_BRIDGE_START
-        + "\\n" + json.dumps({"kind": "final", "text": MARKER})
-        + "\\n" + bridge.LEGACY_BRIDGE_END
+        + "\n" + json.dumps({"kind": "final", "text": MARKER})
+        + "\n" + bridge.LEGACY_BRIDGE_END
     )
     final, items = bridge._interpret(old, catalog, body())
     assert final == MARKER
@@ -109,7 +109,7 @@ def test_escaped_missing_legacy_start_is_rejected_without_tool_execution() -> No
     catalog = bridge._catalog(body())
     malformed = (
         '<escape>{"kind":"final","text":"' + MARKER + '"}</escape>'
-        + "\\n" + bridge.LEGACY_BRIDGE_END
+        + "\n" + bridge.LEGACY_BRIDGE_END
     )
     with pytest.raises(integrity.ResponsesToolBridgeProtocolError, match="required Responses tool-bridge envelope"):
         bridge._interpret(malformed, catalog, body())
@@ -118,9 +118,9 @@ def test_escaped_missing_legacy_start_is_rejected_without_tool_execution() -> No
 def test_mixed_legacy_and_html_safe_delimiters_fail_closed() -> None:
     catalog = bridge._catalog(body())
     mixed = (
-        bridge.LEGACY_BRIDGE_START + "\\n"
+        bridge.LEGACY_BRIDGE_START + "\n"
         + json.dumps({"kind": "final", "text": MARKER})
-        + "\\n" + bridge.BRIDGE_END
+        + "\n" + bridge.BRIDGE_END
     )
     with pytest.raises(integrity.ResponsesToolBridgeProtocolError, match="required Responses tool-bridge envelope"):
         bridge._interpret(mixed, catalog, body())
