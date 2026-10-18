@@ -324,6 +324,18 @@ def test_collaboration_call_result_allows_normal_followup() -> None:
         {"type": "function_call_output", "call_id": "call_spawn", "output": "child started"},
     ])
     catalog = bridge._catalog(payload)
+    next_tool = integrity._explicit_declared_tool_requirement(payload, catalog)
+    assert next_tool is not None and next_tool["name"] == "wait_agent"
+    with pytest.raises(integrity.ResponsesToolBridgeProtocolError, match="wait_agent"):
+        bridge._interpret(
+            json_bridge({"kind": "final", "text": "FDEX_TEST_123456789_SUBAGENT"}),
+            catalog, payload,
+        )
+    payload["input"].extend([
+        {"type": "function_call", "namespace": "collaboration",
+         "name": "wait_agent", "call_id": "call_wait", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_wait", "output": "child completed"},
+    ])
     assert integrity._explicit_declared_tool_requirement(payload, catalog) is None
     result, calls = bridge._interpret(
         json_bridge({"kind": "final", "text": "FDEX_TEST_123456789_SUBAGENT"}),
@@ -341,6 +353,14 @@ def test_serialized_collaboration_tool_result_is_not_reexecuted() -> None:
         + json.dumps({"type": "function_call", "namespace": "collaboration",
                       "name": "spawn_agent", "call_id": "call_spawn"})
         + "\nTOOL RESULT (call_spawn):\nChild started"
+    )
+    next_tool = integrity._explicit_declared_tool_requirement(payload, bridge._catalog(payload))
+    assert next_tool is not None and next_tool["name"] == "wait_agent"
+    payload["input"][0]["content"] += (
+        "\nPRIOR TOOL CALL:\n"
+        + json.dumps({"type": "function_call", "namespace": "collaboration",
+                      "name": "wait_agent", "call_id": "call_wait"})
+        + "\nTOOL RESULT (call_wait):\nChild completed"
     )
     assert integrity._explicit_declared_tool_requirement(payload, bridge._catalog(payload)) is None
 
