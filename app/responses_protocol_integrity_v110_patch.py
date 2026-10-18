@@ -141,12 +141,17 @@ def _explicit_declared_tool_requirement(
     create new obligations.
     """
     current = _current_user_request(body)
-    if not current:
+    choice = body.get("tool_choice", "auto")
+    if not current or choice == "none" or (
+        isinstance(choice, dict) and choice.get("type") == "none"
+    ):
         return None
     for match in re.finditer(r"(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_]*(?![A-Za-z0-9_])", current):
         token = re.sub(r"[^a-z0-9]", "", match.group(0).lower())
         before = current[max(0, match.start() - 90):match.start()]
         if not re.search(r"\b(?:use|call|invoke|execute|run|trigger)\b|调用|使用|执行", before, re.I):
+            continue
+        if re.search(r"\b(?:explain|describe|define|compare|what is|how to|how does)\b|解释|介绍|如何", before, re.I):
             continue
         if re.search(r"\b(?:do not|don't|never|avoid)\s+(?:use|call|invoke|execute|run)\b.{0,55}$", before, re.I):
             continue
