@@ -405,7 +405,9 @@ def _interpret(text: str, catalog: list[dict[str, Any]], body: dict[str, Any]) -
 
 
 
-def _bridge_correction_prompt(body: dict[str, Any], failed_output: str = "") -> str:
+def _bridge_correction_prompt(
+    body: dict[str, Any], failed_output: str = "", *, expected_kind: str | None = None,
+) -> str:
     """One model repair using the prior malformed output as untrusted data.
 
     The original task and tool catalog remain the authority. Only the strict
@@ -431,6 +433,13 @@ def _bridge_correction_prompt(body: dict[str, Any], failed_output: str = "") -> 
         "If any value is missing, regenerate from the original task."
         if raw_output else ""
     )
+    tool_intent_note = (
+        "\nThe preceding reply requested caller-owned tool calls, and NONE has "
+        "been executed. Preserve kind=tool_calls with the original declared "
+        "tool names and arguments. Do NOT change it into kind=final or claim "
+        "the task is done before receiving actual tool results."
+        if expected_kind == "tool_calls" else ""
+    )
     return f"""The reply to your IMMEDIATELY PRECEDING task could not be delivered.
 It was incomplete or invalid under the Responses transport format.
 No caller-owned tool from that reply has been executed.
@@ -450,7 +459,7 @@ Or, when caller-owned tools are required:
 Use the actual declared namespace and tool payload format (raw input for
 custom tools). The example is not permission to use an undeclared tool.
 Include exactly the keys bridge, kind, and text OR bridge, kind, and calls.
-Copy any explicitly requested literal byte-for-byte.{literal_note}{previous_output}"""
+Copy any explicitly requested literal byte-for-byte.{literal_note}{tool_intent_note}{previous_output}"""
 
 
 async def _collect_validated_tool_bridge(
@@ -471,7 +480,9 @@ async def _collect_validated_tool_bridge(
     regeneration. No caller-owned tool or final answer has been emitted
     before this point, so no external tool execution can be duplicated.
     """
-    from .responses_protocol_integrity_v110_patch import ResponsesToolBridgeProtocolError
+    from .responses_protocol_integrity_v110_patch import (
+        ResponsesToolBridgeProtocolError, _bridge_kind_hint,
+    )
 
     started = asyncio.get_running_loop().time()
     bridge_text, _ = await _collect(state, timeout, False)
@@ -479,6 +490,7 @@ async def _collect_validated_tool_bridge(
         output_text, tool_items = _interpret(bridge_text, catalog, body)
         return bridge_text, output_text, tool_items, 0
     except ResponsesToolBridgeProtocolError as first_error:
+        expected_kind = _bridge_kind_hint(bridge_text)
         remaining = timeout - (asyncio.get_running_loop().time() - started)
         if remaining < 12 or await request.is_disconnected():
             raise
@@ -493,7 +505,7 @@ async def _collect_validated_tool_bridge(
         retry_body["timeout"] = max(5, min(90, int(remaining)))
         retry_state, retry_id, retry_client, retry_timeout = await _dispatch(
             app, request, retry_body, principal,
-            _bridge_correction_prompt(body, bridge_text), [],
+            _bridge_correction_prompt(body, bridge_text, expected_kind=expected_kind), [],
             request_id_override="resp_repair_" + uuid.uuid4().hex,
         )
         retry_valid = False
@@ -502,6 +514,10 @@ async def _collect_validated_tool_bridge(
             repaired_text, _ = await _collect(retry_state, retry_timeout, False)
             try:
                 output_text, tool_items = _interpret(repaired_text, catalog, body)
+                if expected_kind == "tool_calls" and not tool_items:
+                    raise ResponsesToolBridgeProtocolError(
+                        "Protocol correction changed an unexecuted tool call into a final answer"
+                    )
             except ResponsesToolBridgeProtocolError as retry_error:
                 raise ResponsesToolBridgeProtocolError(
                     "ChatGPT Responses tool bridge still invalid after one "
