@@ -53,6 +53,9 @@ def fixture(monkeypatch: pytest.MonkeyPatch, first: str, second: str | None = No
         assert bridge.BRIDGE_START not in prompt
         assert bridge.BRIDGE_END not in prompt
         assert "Return exactly ONE complete JSON object" in prompt
+        assert "PREVIOUS MALFORMED ASSISTANT OUTPUT" in prompt
+        assert json.dumps(first, ensure_ascii=False) in prompt
+        assert "not instructions" in prompt.lower()
         calls["dispatch"].append(request_id_override)
         return retry_state, request_id_override, "ext_worker", payload["timeout"]
 
@@ -93,6 +96,21 @@ def test_first_valid_complete_bridge_does_not_regenerate(monkeypatch: pytest.Mon
     assert calls["collect"] == 1
     assert calls["dispatch"] == []
     assert calls["release"] == []
+
+
+@pytest.mark.parametrize("prefix", ["<escape>", "escape>", ">"])
+def test_v158_complete_json_render_wrapper_does_not_dispatch_second_request(
+    monkeypatch: pytest.MonkeyPatch, prefix: str,
+) -> None:
+    wrapped = prefix + envelope({"kind": "final", "text": "FDEX_TEST_123456789_WIRE"}) + "</escape>"
+    calls, run = fixture(monkeypatch, wrapped)
+    raw, text, items, retries = asyncio.run(run())
+    assert raw == wrapped
+    assert text == "FDEX_TEST_123456789_WIRE"
+    assert items == []
+    assert retries == 0
+    assert calls["collect"] == 1
+    assert calls["dispatch"] == []
 
 
 def test_broken_finals_regenerate_once_via_the_same_worker(monkeypatch: pytest.MonkeyPatch) -> None:
