@@ -189,7 +189,7 @@ def test_html_safe_tool_call_requires_declared_catalog_tool() -> None:
 def test_worker_uses_request_v6_terminal_owner_without_v89_wrapper() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.22.158"
+    assert manifest["version"] == "0.22.159"
     assert "content_request_v6.js" in scripts
     assert "content_response_semantic_recovery_v51.js" in scripts
     assert "content_terminal_integrity_v89.js" not in scripts
