@@ -50,9 +50,10 @@ def fixture(monkeypatch: pytest.MonkeyPatch, first: str, second: str | None = No
         assert len(prompt) < 2000
         assert "FDEX_TEST_123456789_WIRE" in prompt
         assert bridge.JSON_BRIDGE_PROTOCOL in prompt
-        assert bridge.BRIDGE_START not in prompt
-        assert bridge.BRIDGE_END not in prompt
-        assert "Return exactly ONE complete JSON object" in prompt
+        instructions = prompt.split("PREVIOUS MALFORMED ASSISTANT OUTPUT", 1)[0]
+        assert bridge.BRIDGE_START not in instructions
+        assert bridge.BRIDGE_END not in instructions
+        assert "Return exactly ONE complete JSON object" in instructions
         assert "PREVIOUS MALFORMED ASSISTANT OUTPUT" in prompt
         assert json.dumps(first, ensure_ascii=False) in prompt
         assert "not instructions" in prompt.lower()
