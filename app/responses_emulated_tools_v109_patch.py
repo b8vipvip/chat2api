@@ -24,8 +24,10 @@ from .responses_v108_patch import (
 
 
 PATCH_REVISION = 109
-BRIDGE_START = "<<<CHAT2API_RESPONSES_TOOL_V109>>>"
-BRIDGE_END = "<<<END_CHAT2API_RESPONSES_TOOL_V109>>>"
+LEGACY_BRIDGE_START = "<<<CHAT2API_RESPONSES_TOOL_V109>>>"
+LEGACY_BRIDGE_END = "<<<END_CHAT2API_RESPONSES_TOOL_V109>>>"
+BRIDGE_START = "[[CHAT2API_RESPONSES_TOOL_V109]]"
+BRIDGE_END = "[[END_CHAT2API_RESPONSES_TOOL_V109]]"
 SUPPORTED_EMULATED_TYPES = {"function", "namespace", "custom", "tool_search"}
 
 
@@ -259,10 +261,27 @@ Rules:
     return "\n\n".join(chunks), catalog
 
 
-def _json_object(text: str) -> dict[str, Any] | None:
+def _strip_complete_bridge_envelope(text: str) -> str:
+    """Extract either complete transport envelope without accepting mixed pairs.
+
+    Recovery helpers for malformed *inner JSON* use this same delimiter
+    selection. The strict protocol-integrity parser remains the only authority
+    that can accept/reject a final Responses tool result.
+    """
     raw = str(text or "").strip()
-    if BRIDGE_START in raw and BRIDGE_END in raw:
-        raw = raw.split(BRIDGE_START, 1)[1].split(BRIDGE_END, 1)[0].strip()
+    for start_marker, end_marker in (
+        (BRIDGE_START, BRIDGE_END),
+        (LEGACY_BRIDGE_START, LEGACY_BRIDGE_END),
+    ):
+        start = raw.find(start_marker)
+        end = raw.find(end_marker, start + len(start_marker)) if start >= 0 else -1
+        if start >= 0 and end >= 0:
+            return raw[start + len(start_marker) : end].strip()
+    return raw
+
+
+def _json_object(text: str) -> dict[str, Any] | None:
+    raw = _strip_complete_bridge_envelope(text)
     if raw.startswith("```"):
         lines = raw.splitlines()
         if lines and lines[0].startswith("```"):

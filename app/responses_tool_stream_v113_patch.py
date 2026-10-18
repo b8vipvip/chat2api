@@ -83,8 +83,7 @@ def _recover_single_custom_tool_envelope(text: str) -> dict[str, Any] | None:
     envelope fail-closed.
     """
     raw = str(text or "").strip()
-    if v109.BRIDGE_START in raw and v109.BRIDGE_END in raw:
-        raw = raw.split(v109.BRIDGE_START, 1)[1].split(v109.BRIDGE_END, 1)[0].strip()
+    raw = v109._strip_complete_bridge_envelope(raw)
 
     outer = re.fullmatch(
         r'\s*\{\s*"kind"\s*:\s*"tool_calls"\s*,\s*"calls"\s*:\s*\[\s*\{(?P<body>.*)\}\s*\]\s*\}\s*',

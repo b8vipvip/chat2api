@@ -78,10 +78,76 @@ def test_bridge_prompt_repeats_literal_integrity_contract_at_generation_boundary
     assert bridge.BRIDGE_END in tail
 
 
+def test_bridge_uses_html_safe_delimiters_at_both_prompt_boundaries() -> None:
+    assert "<" not in bridge.BRIDGE_START + bridge.BRIDGE_END
+    assert ">" not in bridge.BRIDGE_START + bridge.BRIDGE_END
+    app = SimpleNamespace(state=SimpleNamespace())
+    prompt, _ = bridge._bridge_prompt(app, body())
+    assert bridge.BRIDGE_START in prompt
+    assert bridge.BRIDGE_END in prompt
+    assert bridge.LEGACY_BRIDGE_START not in prompt
+    assert bridge.LEGACY_BRIDGE_END not in prompt
+    repair = bridge._bridge_correction_prompt(body())
+    assert bridge.BRIDGE_START in repair
+    assert bridge.BRIDGE_END in repair
+    assert bridge.LEGACY_BRIDGE_START not in repair
+
+
+def test_old_complete_envelope_is_accepted_during_rolling_upgrade() -> None:
+    catalog = bridge._catalog(body())
+    old = (
+        bridge.LEGACY_BRIDGE_START
+        + "\n" + json.dumps({"kind": "final", "text": MARKER})
+        + "\n" + bridge.LEGACY_BRIDGE_END
+    )
+    final, items = bridge._interpret(old, catalog, body())
+    assert final == MARKER
+    assert items == []
+
+
+def test_escaped_missing_legacy_start_is_rejected_without_tool_execution() -> None:
+    catalog = bridge._catalog(body())
+    malformed = (
+        '<escape>{"kind":"final","text":"' + MARKER + '"}</escape>'
+        + "\n" + bridge.LEGACY_BRIDGE_END
+    )
+    with pytest.raises(integrity.ResponsesToolBridgeProtocolError, match="required Responses tool-bridge envelope"):
+        bridge._interpret(malformed, catalog, body())
+
+
+def test_mixed_legacy_and_html_safe_delimiters_fail_closed() -> None:
+    catalog = bridge._catalog(body())
+    mixed = (
+        bridge.LEGACY_BRIDGE_START + "\n"
+        + json.dumps({"kind": "final", "text": MARKER})
+        + "\n" + bridge.BRIDGE_END
+    )
+    with pytest.raises(integrity.ResponsesToolBridgeProtocolError, match="required Responses tool-bridge envelope"):
+        bridge._interpret(mixed, catalog, body())
+
+
+def test_html_safe_tool_call_requires_declared_catalog_tool() -> None:
+    catalog = bridge._catalog(body())
+    valid = envelope({"kind": "tool_calls", "calls": [
+        {"name": "noop", "arguments": {}},
+    ]})
+    text, calls = bridge._interpret(valid, catalog, body())
+    assert text == ""
+    assert len(calls) == 1
+    assert calls[0]["name"] == "noop"
+    with pytest.raises(ValueError, match="undeclared tool"):
+        bridge._interpret(
+            envelope({"kind": "tool_calls", "calls": [
+                {"name": "undeclared", "arguments": {}},
+            ]}),
+            catalog, body(),
+        )
+
+
 def test_worker_uses_request_v6_terminal_owner_without_v89_wrapper() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.22.156"
+    assert manifest["version"] == "0.22.157"
     assert "content_request_v6.js" in scripts
     assert "content_response_semantic_recovery_v51.js" in scripts
     assert "content_terminal_integrity_v89.js" not in scripts
@@ -90,3 +156,17 @@ def test_worker_uses_request_v6_terminal_owner_without_v89_wrapper() -> None:
     assert 'type: "chat.completed"' in request
     assert 'type: "chat.completed"' not in network
     assert 'network_terminal_authority: "request-v6"' in network
+
+
+
+def test_shared_recovery_delimiter_extractor_supports_both_complete_formats() -> None:
+    inner = '{"kind":"final","text":"safe"}'
+    for start, end in (
+        (bridge.BRIDGE_START, bridge.BRIDGE_END),
+        (bridge.LEGACY_BRIDGE_START, bridge.LEGACY_BRIDGE_END),
+    ):
+        assert bridge._strip_complete_bridge_envelope(
+            f"{start}\n{inner}\n{end}"
+        ) == inner
+    mixed = f"{bridge.LEGACY_BRIDGE_START}\n{inner}\n{bridge.BRIDGE_END}"
+    assert bridge._strip_complete_bridge_envelope(mixed) == mixed
