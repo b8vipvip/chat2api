@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .diagnostics import current_trace_id
+from .jsonl_tail import iter_recent_jsonl
 from .timezone_utils import beijing_now_iso, to_beijing_iso
 
 
@@ -44,14 +45,7 @@ class TelemetryStore:
         try:
             latest: dict[tuple[str, str], dict[str, Any]] = {}
             order: list[tuple[str, str]] = []
-            lines = self.path.read_text(encoding="utf-8").splitlines()
-            for line_number in range(len(lines) - 1, -1, -1):
-                line = lines[line_number]
-                if not line.strip():
-                    continue
-                item = json.loads(line)
-                if not isinstance(item, dict):
-                    continue
+            for line_number, item in enumerate(iter_recent_jsonl(self.path)):
                 request_id = str(item.get("request_id") or "")
                 record_key = ("request", request_id) if request_id else ("legacy-line", str(line_number))
                 if record_key in latest:
