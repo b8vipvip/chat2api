@@ -383,12 +383,14 @@ def _interpret(text: str, catalog: list[dict[str, Any]], body: dict[str, Any]) -
 
 
 
-def _bridge_correction_prompt(body: dict[str, Any]) -> str:
-    """Retry generation in the same API-key conversation, never tool execution.
+def _bridge_correction_prompt(body: dict[str, Any], original_prompt: str) -> str:
+    """Build a self-contained single regeneration request.
 
-    Keep the correction compact: the previous turn already contains the
-    original task and its allowlisted tool catalog. Repeating large tool
-    descriptions made FDEX's tool prompts considerably longer.
+    Worker routing guarantees the same logical Worker ID, but not the same
+    ChatGPT browser tab or conversation. A bare "regenerate the preceding
+    answer" prompt therefore has no reliable original task/tool context.
+    Reuse the exact first-attempt prompt, including its allowlisted catalog,
+    and append one compact correction. Never infer or execute a tool result.
     """
     from .responses_protocol_integrity_v110_patch import _required_exact_literals
 
@@ -398,28 +400,43 @@ def _bridge_correction_prompt(body: dict[str, Any]) -> str:
         + json.dumps(literals, ensure_ascii=False, separators=(",", ":"))
         if literals else ""
     )
-    return f"""The reply to your IMMEDIATELY PRECEDING task could not be delivered.
-It was incomplete or invalid under the Responses transport format.
-No caller-owned tool from that reply has been executed.
+    return f"""The immediately preceding Responses transport attempt was invalid.
+No caller-owned tool from that attempt has been executed. This is a new
+browser request: do NOT assume earlier browser messages are available.
+The full original task and declared tool catalog are reproduced below.
 
-Regenerate the answer to the same task using the preceding conversation
-and only its explicitly declared tool catalog. Never invent tool results.
+ORIGINAL TASK AND TRANSPORT CONTRACT:
+{original_prompt}
+
+REGENERATION TRANSPORT REQUIREMENTS:
+Regenerate the answer to the ORIGINAL task above using only its explicitly
+declared tool catalog. Never invent tool results or use undeclared tools.
 Emit exactly ONE complete JSON envelope, either:
 
 {BRIDGE_START}
 {{"kind":"final","text":"exact final answer"}}
 {BRIDGE_END}
 
-Or, when tools are required:
+Or, when a caller-owned tool is required:
+
 {BRIDGE_START}
 {{"kind":"tool_calls","calls":[{{"namespace":null,"name":"actual_declared_tool","arguments":{{}}}}]}}
 {BRIDGE_END}
 
-Use the *actual* declared namespace and tool payload format for each call
-(in particular raw input for custom tools). The example is not permission
-to use an undeclared tool. Include both complete markers; no commentary,
-Markdown, partial markers, extra text or invented tool execution.
-Copy any explicitly requested literal byte-for-byte.{literal_note}"""
+Use the actual declared namespace and payload format (raw input for custom
+tools). The example is not permission to use an undeclared tool. Include
+both complete markers; no commentary, Markdown, partial markers, extra text,
+or invented tool execution. Copy exact literals byte-for-byte.{literal_note}"""
+
+
+def _bridge_output_shape(text: str) -> str:
+    """Safe diagnostics without leaking the model's raw response content."""
+    raw = str(text or "")
+    return (
+        f"chars={len(raw)},"
+        f"start_marker={int(BRIDGE_START in raw)},"
+        f"end_marker={int(BRIDGE_END in raw)}"
+    )
 
 
 async def _collect_validated_tool_bridge(
@@ -433,6 +450,7 @@ async def _collect_validated_tool_bridge(
     client_id: str,
     timeout: int,
     catalog: list[dict[str, Any]],
+    original_prompt: str,
 ) -> tuple[str, str, list[dict[str, Any]], int]:
     """One regeneration only after a completed malformed bridge response.
 
@@ -462,7 +480,7 @@ async def _collect_validated_tool_bridge(
         retry_body["timeout"] = max(5, min(90, int(remaining)))
         retry_state, retry_id, retry_client, retry_timeout = await _dispatch(
             app, request, retry_body, principal,
-            _bridge_correction_prompt(body), [],
+            _bridge_correction_prompt(body, original_prompt), [],
             request_id_override="resp_repair_" + uuid.uuid4().hex,
         )
         retry_valid = False
@@ -475,6 +493,9 @@ async def _collect_validated_tool_bridge(
                 raise ResponsesToolBridgeProtocolError(
                     "ChatGPT Responses tool bridge still invalid after one "
                     "protocol correction: " + str(retry_error)
+                    + f" [first={_bridge_output_shape(bridge_text)};"
+                    + f" repair={_bridge_output_shape(repaired_text)};"
+                    + f" worker_request_id={request_id}; repair_request_id={retry_id}]"
                 ) from first_error
             retry_valid = True
             return repaired_text, output_text, tool_items, 1
@@ -563,6 +584,7 @@ async def _emulated_stream(
         bridge_text, output_text, tool_items, bridge_retry_count = await _collect_validated_tool_bridge(
             app, request, body, principal, state,
             request_id=request_id, client_id=client_id, timeout=timeout, catalog=catalog,
+            original_prompt=prompt,
         )
         if tool_items:
             for index, item in enumerate(tool_items):
@@ -644,6 +666,7 @@ async def _handle(app: FastAPI, request: Request, body: dict[str, Any]):
         bridge_text, output_text, tool_items, bridge_retry_count = await _collect_validated_tool_bridge(
             app, request, body, principal, state,
             request_id=request_id, client_id=client_id, timeout=timeout, catalog=catalog,
+            original_prompt=prompt,
         )
         response = _completed_response(response_id, body, prompt, bridge_text, output_text, tool_items, created_at)
         response.setdefault("metadata", {})["chat2api_bridge_regeneration_count"] = bridge_retry_count
