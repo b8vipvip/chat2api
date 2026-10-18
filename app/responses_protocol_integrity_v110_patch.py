@@ -109,14 +109,49 @@ def _required_exact_literals(body: dict[str, Any]) -> list[str]:
     return found[:4]
 
 
+_RENDER_ESCAPE_START = "<escape>"
+_RENDER_ESCAPE_END = "</escape>"
+
+
+def _render_escape_json(text: str) -> str:
+    """Remove only the known ChatGPT render wrapper around a whole JSON body.
+
+    Real network-completed responses sometimes contain a clipped opening
+    <escape> tag (e.g. 'escape>' or '>') while retaining its closing tag.
+    This is not a generic JSON-substring extractor: unknown prefixes, extra
+    suffixes, and incomplete JSON must still fail protocol validation.
+    """
+    if not text.endswith(_RENDER_ESCAPE_END):
+        return text
+    before_end = text[:-len(_RENDER_ESCAPE_END)]
+    for index in range(len(_RENDER_ESCAPE_START)):
+        prefix = _RENDER_ESCAPE_START[index:]
+        if before_end.startswith(prefix):
+            candidate = before_end[len(prefix):].strip()
+            return candidate if candidate.startswith("{") else text
+    # The opening tag may have been entirely lost, but its closing tag is
+    # unambiguous only when the remainder is itself a complete JSON document.
+    candidate = before_end.strip()
+    return candidate if candidate.startswith("{") else text
+
+
+def _unique_json_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ResponsesToolBridgeProtocolError("Responses tool-bridge JSON has duplicate keys")
+        result[key] = value
+    return result
+
+
 def _strict_envelope(text: str) -> dict[str, Any]:
-    raw = str(text or "").strip()
+    raw = _render_escape_json(str(text or "").strip())
     if raw.startswith("{"):
         # New protocol: one whole JSON document with an explicit in-band
         # identity. This avoids ChatGPT truncating separately generated
         # start/end sentinel lines while preserving strict fail-closed parsing.
         try:
-            value = json.loads(raw)
+            value = json.loads(raw, object_pairs_hook=_unique_json_keys)
         except (TypeError, ValueError) as error:
             raise ResponsesToolBridgeProtocolError(
                 "ChatGPT returned an incomplete or invalid Responses tool-bridge JSON object"
@@ -159,7 +194,7 @@ def _strict_envelope(text: str) -> dict[str, Any]:
             )
         payload_text = raw[start + len(start_marker) : end].strip()
         try:
-            value = json.loads(payload_text)
+            value = json.loads(payload_text, object_pairs_hook=_unique_json_keys)
         except (TypeError, ValueError) as error:
             raise ResponsesToolBridgeProtocolError(
                 "ChatGPT returned an incomplete or invalid Responses tool-bridge JSON envelope"
@@ -178,9 +213,9 @@ def _strict_envelope(text: str) -> dict[str, Any]:
         return value
     if kind == "tool_calls":
         calls = value.get("calls")
-        if not isinstance(calls, list) or not calls:
+        if not isinstance(calls, list) or not calls or not all(isinstance(call, dict) for call in calls):
             raise ResponsesToolBridgeProtocolError(
-                "Responses tool-bridge tool_calls envelope contains no calls"
+                "Responses tool-bridge tool_calls envelope contains missing or invalid calls"
             )
         return value
     raise ResponsesToolBridgeProtocolError(
@@ -204,7 +239,11 @@ def _interpret(
             raise ResponsesToolBridgeProtocolError(
                 "ChatGPT truncated or changed an explicitly required exact literal"
             )
-    return _ORIGINAL_INTERPRET(text, catalog, body)
+    # Interpret the *same verified object*, not a second permissive substring
+    # scan of the raw page text. Tool allowlisting remains in the v109 adapter.
+    return _ORIGINAL_INTERPRET(
+        json.dumps(value, ensure_ascii=False, separators=(",", ":")), catalog, body,
+    )
 
 
 def _bridge_prompt(app: Any, body: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
