@@ -263,10 +263,123 @@ def test_html_safe_tool_call_requires_declared_catalog_tool() -> None:
         )
 
 
+def collaboration_body() -> dict:
+    return {
+        "model": "gpt-6",
+        "tools": [{
+            "type": "namespace", "name": "collaboration",
+            "tools": [
+                {"type": "function", "name": "spawn_agent",
+                 "parameters": {"type": "object", "properties": {
+                     "task_name": {"type": "string"}, "message": {"type": "string"},
+                 }, "required": ["task_name", "message"]}},
+                {"type": "function", "name": "wait_agent",
+                 "parameters": {"type": "object", "properties": {
+                     "timeout_ms": {"type": "number"},
+                 }}},
+            ],
+        }],
+        "input": [{"type": "message", "role": "user", "content": (
+            "DEVELOPER MESSAGE:\nOlder unrelated instructions.\n"
+            "USER MESSAGE:\nUse the official collaboration spawnAgent tool "
+            "to delegate a read-only reasoning subtask. Tell the child to return "
+            "exactly FDEX_TEST_123456789_SUBAGENT. Then call the official wait tool "
+            "before finalizing. Do not use shell or MCP."
+        )}],
+    }
+
+
+def test_explicit_collaboration_tool_requires_real_caller_owned_call() -> None:
+    payload = collaboration_body()
+    catalog = bridge._catalog(payload)
+    required = integrity._explicit_declared_tool_requirement(payload, catalog)
+    assert required is not None
+    assert (required["namespace"], required["name"]) == ("collaboration", "spawn_agent")
+    prompt, _ = bridge._bridge_prompt(SimpleNamespace(state=SimpleNamespace()), payload)
+    assert "CURRENT TURN DECLARED TOOL REQUIREMENT" in prompt
+    assert "collaboration.spawn_agent" in prompt
+    with pytest.raises(integrity.ResponsesToolBridgeProtocolError, match="has not been called"):
+        bridge._interpret(json_bridge({"kind": "final", "text": "FDEX_TEST_123456789_SUBAGENT"}), catalog, payload)
+    with pytest.raises(integrity.ResponsesToolBridgeProtocolError, match="omitted"):
+        bridge._interpret(json_bridge({"kind": "tool_calls", "calls": [
+            {"namespace": "collaboration", "name": "wait_agent", "arguments": {}},
+        ]}), catalog, payload)
+    text, calls = bridge._interpret(json_bridge({"kind": "tool_calls", "calls": [
+        {"namespace": "collaboration", "name": "spawn_agent", "arguments": {
+            "task_name": "fdex_reasoning", "message": "Return FDEX_TEST_123456789_SUBAGENT",
+        }},
+    ]}), catalog, payload)
+    assert text == ""
+    assert calls[0]["type"] == "function_call"
+    assert calls[0]["namespace"] == "collaboration"
+    assert calls[0]["name"] == "spawn_agent"
+    assert json.loads(calls[0]["arguments"])["task_name"] == "fdex_reasoning"
+
+
+def test_collaboration_call_result_allows_normal_followup() -> None:
+    payload = collaboration_body()
+    payload["input"].extend([
+        {"type": "function_call", "namespace": "collaboration",
+         "name": "spawn_agent", "call_id": "call_spawn", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_spawn", "output": "child started"},
+    ])
+    catalog = bridge._catalog(payload)
+    next_tool = integrity._explicit_declared_tool_requirement(payload, catalog)
+    assert next_tool is not None and next_tool["name"] == "wait_agent"
+    with pytest.raises(integrity.ResponsesToolBridgeProtocolError, match="wait_agent"):
+        bridge._interpret(
+            json_bridge({"kind": "final", "text": "FDEX_TEST_123456789_SUBAGENT"}),
+            catalog, payload,
+        )
+    payload["input"].extend([
+        {"type": "function_call", "namespace": "collaboration",
+         "name": "wait_agent", "call_id": "call_wait", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_wait", "output": "child completed"},
+    ])
+    assert integrity._explicit_declared_tool_requirement(payload, catalog) is None
+    result, calls = bridge._interpret(
+        json_bridge({"kind": "final", "text": "FDEX_TEST_123456789_SUBAGENT"}),
+        catalog, payload,
+    )
+    assert result == "FDEX_TEST_123456789_SUBAGENT"
+    assert calls == []
+
+
+def test_serialized_collaboration_tool_result_is_not_reexecuted() -> None:
+    payload = collaboration_body()
+    original = payload["input"][0]["content"]
+    payload["input"][0]["content"] = (
+        original + "\nPRIOR TOOL CALL:\n"
+        + json.dumps({"type": "function_call", "namespace": "collaboration",
+                      "name": "spawn_agent", "call_id": "call_spawn"})
+        + "\nTOOL RESULT (call_spawn):\nChild started"
+    )
+    next_tool = integrity._explicit_declared_tool_requirement(payload, bridge._catalog(payload))
+    assert next_tool is not None and next_tool["name"] == "wait_agent"
+    payload["input"][0]["content"] += (
+        "\nPRIOR TOOL CALL:\n"
+        + json.dumps({"type": "function_call", "namespace": "collaboration",
+                      "name": "wait_agent", "call_id": "call_wait"})
+        + "\nTOOL RESULT (call_wait):\nChild completed"
+    )
+    assert integrity._explicit_declared_tool_requirement(payload, bridge._catalog(payload)) is None
+
+
+@pytest.mark.parametrize("instruction", [
+    "What is the collaboration spawnAgent tool?",
+    "Explain how to use spawnAgent safely.",
+    "Do not use spawnAgent for this task.",
+])
+def test_tool_explanations_and_negations_do_not_require_execution(instruction: str) -> None:
+    payload = collaboration_body()
+    payload["input"] = [{"role": "user", "content": instruction}]
+    assert integrity._explicit_declared_tool_requirement(payload, bridge._catalog(payload)) is None
+
+
 def test_worker_uses_request_v6_terminal_owner_without_v89_wrapper() -> None:
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     scripts = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.22.160"
+    assert manifest["version"] == "0.22.161"
     assert "content_request_v6.js" in scripts
     assert "content_response_semantic_recovery_v51.js" in scripts
     assert "content_terminal_integrity_v89.js" not in scripts

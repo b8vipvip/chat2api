@@ -406,14 +406,41 @@ def _interpret(text: str, catalog: list[dict[str, Any]], body: dict[str, Any]) -
 
 
 def _bridge_correction_prompt(
-    body: dict[str, Any], failed_output: str = "", *, expected_kind: str | None = None,
+    body: dict[str, Any], failed_output: str = "", *,
+    expected_kind: str | None = None,
+    catalog: list[dict[str, Any]] | None = None,
 ) -> str:
     """One model repair using the prior malformed output as untrusted data.
 
     The original task and tool catalog remain the authority. Only the strict
     server validator may accept the corrected JSON and authorize tool calls.
     """
-    from .responses_protocol_integrity_v110_patch import _required_exact_literals
+    from .responses_protocol_integrity_v110_patch import (
+        _current_user_request, _explicit_declared_tool_requirement,
+        _required_exact_literals,
+    )
+
+    current_task = _current_user_request(body)
+    task_note = (
+        "\nCURRENT USER TASK (the active task, not older conversation turns):\n"
+        + current_task[:1600] + "\n"
+        if current_task else ""
+    )
+    required_tool = _explicit_declared_tool_requirement(
+        body, catalog if catalog is not None else _catalog(body)
+    )
+    required_tool_note = ""
+    if required_tool:
+        required_tool_note = (
+            "\nREQUIRED DECLARED TOOL (NOT YET EXECUTED):\n"
+            + json.dumps({
+                "namespace": required_tool.get("namespace"),
+                "name": required_tool.get("name"),
+                "parameters": required_tool.get("parameters"),
+            }, ensure_ascii=False, separators=(",", ":"))
+            + "\nReturn kind=tool_calls with this exact namespace/name and "
+            "valid arguments. Do not substitute kind=final or invent a result."
+        )
 
     literals = _required_exact_literals(body)
     literal_note = (
@@ -459,7 +486,7 @@ Or, when caller-owned tools are required:
 Use the actual declared namespace and tool payload format (raw input for
 custom tools). The example is not permission to use an undeclared tool.
 Include exactly the keys bridge, kind, and text OR bridge, kind, and calls.
-Copy any explicitly requested literal byte-for-byte.{literal_note}{tool_intent_note}{previous_output}"""
+Copy any explicitly requested literal byte-for-byte.{literal_note}{task_note}{required_tool_note}{tool_intent_note}{previous_output}"""
 
 
 async def _collect_validated_tool_bridge(
@@ -482,6 +509,7 @@ async def _collect_validated_tool_bridge(
     """
     from .responses_protocol_integrity_v110_patch import (
         ResponsesToolBridgeProtocolError, _bridge_kind_hint,
+        _explicit_declared_tool_requirement,
     )
 
     started = asyncio.get_running_loop().time()
@@ -490,7 +518,8 @@ async def _collect_validated_tool_bridge(
         output_text, tool_items = _interpret(bridge_text, catalog, body)
         return bridge_text, output_text, tool_items, 0
     except ResponsesToolBridgeProtocolError as first_error:
-        expected_kind = _bridge_kind_hint(bridge_text)
+        required_tool = _explicit_declared_tool_requirement(body, catalog)
+        expected_kind = "tool_calls" if required_tool else _bridge_kind_hint(bridge_text)
         remaining = timeout - (asyncio.get_running_loop().time() - started)
         if remaining < 12 or await request.is_disconnected():
             raise
@@ -505,7 +534,9 @@ async def _collect_validated_tool_bridge(
         retry_body["timeout"] = max(5, min(90, int(remaining)))
         retry_state, retry_id, retry_client, retry_timeout = await _dispatch(
             app, request, retry_body, principal,
-            _bridge_correction_prompt(body, bridge_text, expected_kind=expected_kind), [],
+            _bridge_correction_prompt(
+                body, bridge_text, expected_kind=expected_kind, catalog=catalog
+            ), [],
             request_id_override="resp_repair_" + uuid.uuid4().hex,
         )
         retry_valid = False

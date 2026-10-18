@@ -50,20 +50,14 @@ def _input_texts(body: dict[str, Any]) -> list[str]:
     return texts
 
 
-def _required_exact_literals(body: dict[str, Any]) -> list[str]:
-    """Extract exact literals from the *current* user turn only.
-
-    FDEX/Codex often forwards a serialized conversation with older USER
-    MESSAGE sections inside one input item. Scanning all turns made a later
-    shell/tool stage demand the preceding WIRE marker instead of the current
-    TOOLS marker. Do not let historic examples become new constraints.
-    """
-    input_value = body.get("input")
+def _current_user_request(body: dict[str, Any]) -> str:
+    """Return only the active user task, not older serialized Codex turns."""
+    value = body.get("input")
     texts: list[str] = []
-    if isinstance(input_value, str):
-        texts = [input_value]
-    elif isinstance(input_value, list):
-        for item in input_value:
+    if isinstance(value, str):
+        texts = [value]
+    elif isinstance(value, list):
+        for item in value:
             if not isinstance(item, dict):
                 continue
             if str(item.get("type") or "message") not in {
@@ -79,12 +73,113 @@ def _required_exact_literals(body: dict[str, Any]) -> list[str]:
                     for part in content if isinstance(part, (str, dict))
                 ))
     if not texts:
+        return ""
+    current = re.split(r"(?m)^\s*USER MESSAGE:\s*$", texts[-1])[-1]
+    current = re.split(
+        r"(?m)^\s*(?:ASSISTANT|DEVELOPER|SYSTEM) MESSAGE:\s*$"
+        r"|^\s*(?:PRIOR TOOL CALL|TOOL RESULT)\b",
+        current,
+    )[0]
+    return current.strip()
+
+
+def _tool_has_returned_since_user(body: dict[str, Any], namespace: str | None, name: str) -> bool:
+    """Observe actual caller-owned tool results; never infer execution from text claims."""
+    value = body.get("input")
+    if isinstance(value, list):
+        last_user = max(
+            (i for i, item in enumerate(value)
+             if isinstance(item, dict)
+             and str(item.get("role") or "").lower() == "user"
+             and str(item.get("type") or "message") in {
+                 "message", "input_message", "easy_input_message"
+             }),
+            default=-1,
+        )
+        segment = value[last_user + 1:]
+        ids = {
+            str(item.get("call_id") or "")
+            for item in segment
+            if isinstance(item, dict)
+            and str(item.get("type") or "") in {"function_call", "custom_tool_call"}
+            and str(item.get("name") or "") == name
+            and (str(item.get("namespace") or "") or None) == namespace
+        }
+        if ids and any(
+            isinstance(item, dict)
+            and str(item.get("type") or "") in {"function_call_output", "custom_tool_call_output"}
+            and str(item.get("call_id") or "") in ids
+            for item in segment
+        ):
+            return True
+        # Codex can serialize its history into one input message instead.
+        value = "\n".join(str(item.get("content") or "") for item in value if isinstance(item, dict) and isinstance(item.get("content"), str))
+    if isinstance(value, str):
+        after_user = re.split(r"(?m)^\s*USER MESSAGE:\s*$", value)[-1]
+        if "PRIOR TOOL CALL:" in after_user and "TOOL RESULT (" in after_user:
+            for part in after_user.split("PRIOR TOOL CALL:")[1:]:
+                if "TOOL RESULT (" not in part:
+                    continue
+                header = part.split("TOOL RESULT (", 1)[0]
+                if (re.search(r'"name"\s*:\s*"' + re.escape(name) + r'"', header)
+                    and (namespace is None or re.search(
+                        r'"namespace"\s*:\s*"' + re.escape(namespace) + r'"', header
+                    ))):
+                    return True
+    return False
+
+
+def _explicit_declared_tool_requirement(
+    body: dict[str, Any], catalog: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Honor an explicitly named, imperative caller-owned tool request.
+
+    A tool is required only when its *declared* name appears in the current
+    user task with a nearby imperative. This never manufactures a tool call:
+    the model must still supply exact allowlisted arguments. Historical tool
+    names, explanatory questions and already returned tool results do not
+    create new obligations.
+    """
+    current = _current_user_request(body)
+    choice = body.get("tool_choice", "auto")
+    if not current or choice == "none" or (
+        isinstance(choice, dict) and choice.get("type") == "none"
+    ):
+        return None
+    for match in re.finditer(r"(?<![A-Za-z0-9_])[A-Za-z][A-Za-z0-9_]*(?![A-Za-z0-9_])", current):
+        token = re.sub(r"[^a-z0-9]", "", match.group(0).lower())
+        before = current[max(0, match.start() - 90):match.start()]
+        if not re.search(r"\b(?:use|call|invoke|execute|run|trigger)\b|调用|使用|执行", before, re.I):
+            continue
+        if re.search(r"\b(?:explain|describe|define|compare|what is|how to|how does)\b|解释|介绍|如何", before, re.I):
+            continue
+        if re.search(r"\b(?:do not|don't|never|avoid)\s+(?:use|call|invoke|execute|run)\b.{0,55}$", before, re.I):
+            continue
+        for tool in catalog:
+            name = str(tool.get("name") or "")
+            namespace = str(tool.get("namespace") or "").strip() or None
+            exact_name = bool(name and token == re.sub(r"[^a-z0-9]", "", name.lower()))
+            # The official collaboration API exposes wait_agent while user
+            # instructions often call it the "wait tool". This is an alias
+            # only for an explicitly named, declared tool, never a synthetic
+            # collaboration event or a separate terminal authority.
+            official_wait = bool(
+                namespace == "collaboration" and name == "wait_agent"
+                and token == "wait"
+                and re.match(r"(?i)wait\s+tool\b", current[match.start():])
+            )
+            if not (exact_name or official_wait):
+                continue
+            if not _tool_has_returned_since_user(body, namespace, name):
+                return tool
+    return None
+
+
+def _required_exact_literals(body: dict[str, Any]) -> list[str]:
+    """Extract exact literals only from the active user turn."""
+    current = _current_user_request(body)
+    if not current:
         return []
-    current = texts[-1]
-    # Some tool clients serialize every message into one user input string.
-    # The final USER MESSAGE is the active one, not earlier smoke steps.
-    current = re.split(r"(?m)^\s*USER MESSAGE:\s*$", current)[-1]
-    current = re.split(r"(?m)^\s*(?:ASSISTANT|DEVELOPER|SYSTEM) MESSAGE:\s*$", current)[0]
     lowered = current.lower()
     found: list[str] = []
     for phrase in ("exact marker", "exact string", "exactly this text", "reply with"):
@@ -255,6 +350,24 @@ def _interpret(
     # be reported as response.completed. v110 requires the contract first, then
     # delegates canonical tool-item validation to v109.
     value = _strict_envelope(text)
+    required_tool = _explicit_declared_tool_requirement(body, catalog)
+    if required_tool:
+        required_name = str(required_tool["name"])
+        required_namespace = str(required_tool.get("namespace") or "") or None
+        if value["kind"] == "final":
+            raise ResponsesToolBridgeProtocolError(
+                "Explicitly requested declared tool has not been called: "
+                + (required_namespace + "." if required_namespace else "") + required_name
+            )
+        if not any(
+            str(call.get("name") or "") == required_name
+            and (str(call.get("namespace") or "") or None) == required_namespace
+            for call in value["calls"]
+        ):
+            raise ResponsesToolBridgeProtocolError(
+                "Tool response omitted the explicitly requested declared tool: "
+                + (required_namespace + "." if required_namespace else "") + required_name
+            )
     if str(value.get("kind") or "") == "final":
         final_text = str(value.get("text") or "")
         missing = [literal for literal in _required_exact_literals(body) if literal not in final_text]
@@ -272,6 +385,21 @@ def _interpret(
 def _bridge_prompt(app: Any, body: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
     prompt, catalog = _ORIGINAL_BRIDGE_PROMPT(app, body)
     literals = _required_exact_literals(body)
+    required_tool = _explicit_declared_tool_requirement(body, catalog)
+    tool_note = ""
+    if required_tool:
+        qualified = (
+            str(required_tool.get("namespace") or "") + "."
+            if required_tool.get("namespace") else ""
+        ) + str(required_tool["name"])
+        tool_note = (
+            "\nCURRENT TURN DECLARED TOOL REQUIREMENT: The user explicitly "
+            "requested " + qualified + ". It has NOT been executed. "
+            "Your next response MUST be kind=tool_calls with that exact "
+            "namespace and name and valid arguments from TOOL CATALOG. "
+            "Do not claim the tool was executed or return kind=final until "
+            "the caller supplies the actual tool result."
+        )
     literal_note = ""
     if literals:
         literal_note = "\nExplicit exact literals from caller input (copy whole if required): " + json.dumps(
@@ -288,7 +416,7 @@ Include the exact protocol property \"bridge\":\"{bridge.JSON_BRIDGE_PROTOCOL}\"
 The only allowed top-level keys are bridge, kind, and text (final) OR bridge, kind, and calls (tool_calls).
 When kind=final, copy the final text literally. Preserve identifiers, request IDs, hashes, markers, underscores, suffixes, capitalization, and punctuation byte-for-byte; never abbreviate, normalize, summarize, or truncate them.
 If the conversation asks for an exact marker/string, put that complete exact string in the JSON field \"text\".
-A partial JSON object or plain-text answer is a transport failure, not a valid final response.{literal_note}"""
+A partial JSON object or plain-text answer is a transport failure, not a valid final response.{literal_note}{tool_note}"""
     return prompt + "\n\n" + trailer, catalog
 
 
