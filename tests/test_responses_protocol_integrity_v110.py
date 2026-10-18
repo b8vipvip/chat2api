@@ -365,14 +365,14 @@ def test_serialized_collaboration_tool_result_is_not_reexecuted() -> None:
     assert integrity._explicit_declared_tool_requirement(payload, bridge._catalog(payload)) is None
 
 
-@pytest.mark.parametrize("request", [
+@pytest.mark.parametrize("instruction", [
     "What is the collaboration spawnAgent tool?",
     "Explain how to use spawnAgent safely.",
     "Do not use spawnAgent for this task.",
 ])
-def test_tool_explanations_and_negations_do_not_require_execution(request: str) -> None:
+def test_tool_explanations_and_negations_do_not_require_execution(instruction: str) -> None:
     payload = collaboration_body()
-    payload["input"] = [{"role": "user", "content": request}]
+    payload["input"] = [{"role": "user", "content": instruction}]
     assert integrity._explicit_declared_tool_requirement(payload, bridge._catalog(payload)) is None
 
 
