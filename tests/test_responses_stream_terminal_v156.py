@@ -132,7 +132,7 @@ def test_telemetry_preserves_worker_request_id_and_disconnect_evidence() -> None
         response={"id": "resp_1", "status": "in_progress", "output": [{
             "type": "function_call", "namespace": "collaboration",
             "name": "spawn_agent", "call_id": "call_123",
-            "arguments": "{\\\"secret\\\":\\\"private\\\"}",
+            "arguments": json.dumps({"secret": "private"}),
         }]},
         http_status=200, started_mono=0.0, stream_trace=trace,
     ))
