@@ -156,3 +156,17 @@ def test_worker_uses_request_v6_terminal_owner_without_v89_wrapper() -> None:
     assert 'type: "chat.completed"' in request
     assert 'type: "chat.completed"' not in network
     assert 'network_terminal_authority: "request-v6"' in network
+
+
+
+def test_shared_recovery_delimiter_extractor_supports_both_complete_formats() -> None:
+    inner = '{"kind":"final","text":"safe"}'
+    for start, end in (
+        (bridge.BRIDGE_START, bridge.BRIDGE_END),
+        (bridge.LEGACY_BRIDGE_START, bridge.LEGACY_BRIDGE_END),
+    ):
+        assert bridge._strip_complete_bridge_envelope(
+            f"{start}\n{inner}\n{end}"
+        ) == inner
+    mixed = f"{bridge.LEGACY_BRIDGE_START}\n{inner}\n{bridge.BRIDGE_END}"
+    assert bridge._strip_complete_bridge_envelope(mixed) == mixed
