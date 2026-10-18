@@ -28,6 +28,7 @@ LEGACY_BRIDGE_START = "<<<CHAT2API_RESPONSES_TOOL_V109>>>"
 LEGACY_BRIDGE_END = "<<<END_CHAT2API_RESPONSES_TOOL_V109>>>"
 BRIDGE_START = "[[CHAT2API_RESPONSES_TOOL_V109]]"
 BRIDGE_END = "[[END_CHAT2API_RESPONSES_TOOL_V109]]"
+JSON_BRIDGE_PROTOCOL = "chat2api-responses-tool-v159"
 SUPPORTED_EMULATED_TYPES = {"function", "namespace", "custom", "tool_search"}
 
 
@@ -225,7 +226,7 @@ def _bridge_prompt(app: FastAPI, body: dict[str, Any]) -> tuple[str, list[dict[s
     previous = _stored_context(app, body)
     choice = body.get("tool_choice", "auto")
     policy = {
-        "bridge": "chat2api-responses-tool-v109",
+        "bridge": JSON_BRIDGE_PROTOCOL,
         "tool_choice": choice,
         "parallel_tool_calls": bool(body.get("parallel_tool_calls", True)),
         "tools": catalog,
@@ -234,22 +235,24 @@ def _bridge_prompt(app: FastAPI, body: dict[str, Any]) -> tuple[str, list[dict[s
 Do not pretend that you executed any listed tool. The caller, not you, executes tools.
 Choose tools only from the supplied catalog and preserve namespace/name exactly.
 
-Return exactly one JSON object between these two sentinel lines:
-{BRIDGE_START}
-{{"kind":"tool_calls","calls":[{{"namespace":null,"name":"tool_name","arguments":{{}}}}]}}
-{BRIDGE_END}
+Return exactly ONE complete JSON object and NOTHING else. There are no
+sentinel lines, Markdown fences, HTML tags, prefixes, or suffixes.
+The first output character MUST be {{ and the last MUST be }}.
+The \"bridge\" property is a mandatory transport protocol identifier.
 
-Or, only when no further tool execution is needed:
-{BRIDGE_START}
-{{"kind":"final","text":"final answer"}}
-{BRIDGE_END}
+When caller-owned tools are required, return:
+{{\"bridge\":\"{JSON_BRIDGE_PROTOCOL}\",\"kind\":\"tool_calls\",\"calls\":[{{\"namespace\":null,\"name\":\"actual_declared_tool\",\"arguments\":{{}}}}]}}
+
+Only when no further tool execution is needed, return:
+{{\"bridge\":\"{JSON_BRIDGE_PROTOCOL}\",\"kind\":\"final\",\"text\":\"exact final answer\"}}
 
 Rules:
+- Include exactly the keys bridge, kind, and calls OR bridge, kind, and text.
 - For function tools, arguments must be a JSON object matching the declared parameters.
-- For custom tools, use {{"name":"...","input":"raw custom tool input"}}.
+- For custom tools, use {{\"name\":\"...\",\"input\":\"raw custom tool input\"}}.
 - For namespace tools, include the exact namespace.
-- For tool_search, use {{"name":"...","arguments":{{...}}}}.
-- Never put tool output, explanations, Markdown fences, or any text outside the sentinel block.
+- For tool_search, use {{\"name\":\"...\",\"arguments\":{{...}}}}.
+- Never put tool output, explanations, Markdown fences, or any text outside the JSON object.
 - If tool_choice requires a tool, you must return kind=tool_calls.
 - After TOOL RESULT items appear in the conversation context, use them as observations and either request the next tool or return kind=final.
 """
@@ -423,21 +426,19 @@ No caller-owned tool from that reply has been executed.
 
 Regenerate the answer to the same task using the preceding conversation
 and only its explicitly declared tool catalog. Never invent tool results.
-Emit exactly ONE complete JSON envelope, either:
+Return exactly ONE complete JSON object and NOTHING else (no Markdown,
+sentinel markers, HTML tags, or other surrounding text). The first
+character MUST be {{ and the last MUST be }}. Choose exactly one:
 
-{BRIDGE_START}
-{{"kind":"final","text":"exact final answer"}}
-{BRIDGE_END}
+{{\"bridge\":\"{JSON_BRIDGE_PROTOCOL}\",\"kind\":\"final\",\"text\":\"exact final answer\"}}
 
-Or, when tools are required:
-{BRIDGE_START}
-{{"kind":"tool_calls","calls":[{{"namespace":null,"name":"actual_declared_tool","arguments":{{}}}}]}}
-{BRIDGE_END}
+Or, when caller-owned tools are required:
 
-Use the *actual* declared namespace and tool payload format for each call
-(in particular raw input for custom tools). The example is not permission
-to use an undeclared tool. Include both complete markers; no commentary,
-Markdown, partial markers, extra text or invented tool execution.
+{{\"bridge\":\"{JSON_BRIDGE_PROTOCOL}\",\"kind\":\"tool_calls\",\"calls\":[{{\"namespace\":null,\"name\":\"actual_declared_tool\",\"arguments\":{{}}}}]}}
+
+Use the actual declared namespace and tool payload format (raw input for
+custom tools). The example is not permission to use an undeclared tool.
+Include exactly the keys bridge, kind, and text OR bridge, kind, and calls.
 Copy any explicitly requested literal byte-for-byte.{literal_note}"""
 
 

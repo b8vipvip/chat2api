@@ -67,30 +67,72 @@ def test_bridge_rejects_text_outside_sentinel() -> None:
         bridge._interpret(wrapped, catalog, body())
 
 
-def test_bridge_prompt_repeats_literal_integrity_contract_at_generation_boundary() -> None:
+def json_bridge(value: dict) -> str:
+    return json.dumps(
+        {"bridge": bridge.JSON_BRIDGE_PROTOCOL, **value},
+        separators=(",", ":"),
+    )
+
+
+def test_json_only_final_preserves_exact_marker() -> None:
+    catalog = bridge._catalog(body())
+    result, items = bridge._interpret(
+        json_bridge({"kind": "final", "text": MARKER}), catalog, body(),
+    )
+    assert result == MARKER
+    assert items == []
+
+
+def test_json_only_tool_call_uses_same_allowlist() -> None:
+    catalog = bridge._catalog(body())
+    text, items = bridge._interpret(
+        json_bridge({"kind": "tool_calls", "calls": [{"name": "noop", "arguments": {}}]}),
+        catalog, body(),
+    )
+    assert text == ""
+    assert len(items) == 1
+    assert items[0]["name"] == "noop"
+    with pytest.raises(ValueError, match="undeclared tool"):
+        bridge._interpret(
+            json_bridge({"kind": "tool_calls", "calls": [{"name": "unknown", "arguments": {}}]}),
+            catalog, body(),
+        )
+
+
+@pytest.mark.parametrize("invalid", [
+    '{"kind":"final","text":"' + MARKER + '"}',
+    '{"bridge":"wrong","kind":"final","text":"' + MARKER + '"}',
+    '{"bridge":"' + bridge.JSON_BRIDGE_PROTOCOL + '","kind":"final","text":"' + MARKER + '"',
+    '{"bridge":"' + bridge.JSON_BRIDGE_PROTOCOL + '","kind":"final","text":"' + MARKER + '"} trailing',
+    '{"bridge":"' + bridge.JSON_BRIDGE_PROTOCOL + '","kind":"final","text":"' + MARKER + '","extra":1}',
+    '{"bridge":"' + bridge.JSON_BRIDGE_PROTOCOL + '","kind":"tool_calls","calls":[]}',
+    '[[CHAT2API_RESPONSES_TOOL_V109]]\n{"kind":"final","text":"' + MARKER + '"}',
+    '_RESPONSES_TOOL_V109]]\n{"kind":"final","text":"' + MARKER + '"}\n[[END_CHAT2API_RESPONSES_TOOL_V109]]',
+    '>{"kind":"final","text":"' + MARKER + '"}</escape>\n[[END_CHAT2API_RESPONSES_TOOL_V109]]',
+])
+def test_json_only_bridge_rejects_incomplete_or_unverified_payloads(invalid: str) -> None:
+    with pytest.raises(integrity.ResponsesToolBridgeProtocolError):
+        bridge._interpret(invalid, bridge._catalog(body()), body())
+
+
+def test_bridge_prompt_requires_json_only_at_both_boundaries() -> None:
     app = SimpleNamespace(state=SimpleNamespace())
     prompt, _ = bridge._bridge_prompt(app, body())
-    tail = prompt.rsplit("FINAL TRANSPORT INTEGRITY CHECK (v110):", 1)[1]
+    tail = prompt.rsplit("FINAL TRANSPORT INTEGRITY CHECK (v159):", 1)[1]
     assert "byte-for-byte" in tail
-    assert "partial marker" in tail.lower()
+    assert "partial JSON object" in tail
     assert MARKER in tail
-    assert bridge.BRIDGE_START in tail
-    assert bridge.BRIDGE_END in tail
-
-
-def test_bridge_uses_html_safe_delimiters_at_both_prompt_boundaries() -> None:
-    assert "<" not in bridge.BRIDGE_START + bridge.BRIDGE_END
-    assert ">" not in bridge.BRIDGE_START + bridge.BRIDGE_END
-    app = SimpleNamespace(state=SimpleNamespace())
-    prompt, _ = bridge._bridge_prompt(app, body())
-    assert bridge.BRIDGE_START in prompt
-    assert bridge.BRIDGE_END in prompt
+    assert bridge.JSON_BRIDGE_PROTOCOL in prompt
+    assert bridge.JSON_BRIDGE_PROTOCOL in tail
+    assert bridge.BRIDGE_START not in prompt
+    assert bridge.BRIDGE_END not in prompt
     assert bridge.LEGACY_BRIDGE_START not in prompt
-    assert bridge.LEGACY_BRIDGE_END not in prompt
     repair = bridge._bridge_correction_prompt(body())
-    assert bridge.BRIDGE_START in repair
-    assert bridge.BRIDGE_END in repair
-    assert bridge.LEGACY_BRIDGE_START not in repair
+    assert bridge.JSON_BRIDGE_PROTOCOL in repair
+    assert bridge.BRIDGE_START not in repair
+    assert bridge.BRIDGE_END not in repair
+    assert "FDEX_CODEX_SMOKE_" in repair
+
 
 
 def test_old_complete_envelope_is_accepted_during_rolling_upgrade() -> None:

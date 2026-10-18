@@ -25,7 +25,7 @@ def body() -> dict:
 
 
 def envelope(value: dict) -> str:
-    return bridge.BRIDGE_START + "\n" + json.dumps(value) + "\n" + bridge.BRIDGE_END
+    return json.dumps({"bridge": bridge.JSON_BRIDGE_PROTOCOL, **value}, separators=(",", ":"))
 
 
 def fixture(monkeypatch: pytest.MonkeyPatch, first: str, second: str | None = None, *, disconnected: bool = False):
@@ -49,8 +49,10 @@ def fixture(monkeypatch: pytest.MonkeyPatch, first: str, second: str | None = No
         assert request_id_override.startswith("resp_repair_")
         assert len(prompt) < 2000
         assert "FDEX_TEST_123456789_WIRE" in prompt
-        assert bridge.BRIDGE_START in prompt
-        assert bridge.BRIDGE_END in prompt
+        assert bridge.JSON_BRIDGE_PROTOCOL in prompt
+        assert bridge.BRIDGE_START not in prompt
+        assert bridge.BRIDGE_END not in prompt
+        assert "Return exactly ONE complete JSON object" in prompt
         calls["dispatch"].append(request_id_override)
         return retry_state, request_id_override, "ext_worker", payload["timeout"]
 
@@ -94,7 +96,7 @@ def test_first_valid_complete_bridge_does_not_regenerate(monkeypatch: pytest.Mon
 
 
 def test_broken_finals_regenerate_once_via_the_same_worker(monkeypatch: pytest.MonkeyPatch) -> None:
-    first = "<<<CHAT2API_RESPONSES_TOOL_V109>>_TOOL_V109>>>"
+    first = '_RESPONSES_TOOL_V109]]\\n{"kind":"final","text":"FDEX_TEST_123456789_WIRE"}\\n[[END_CHAT2API_RESPONSES_TOOL_V109]]'
     fixed = envelope({"kind": "final", "text": "FDEX_TEST_123456789_WIRE"})
     calls, run = fixture(monkeypatch, first, fixed)
     raw, text, items, retries = asyncio.run(run())
