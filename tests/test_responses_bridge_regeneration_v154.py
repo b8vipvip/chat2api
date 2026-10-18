@@ -114,6 +114,58 @@ def test_v158_complete_json_render_wrapper_does_not_dispatch_second_request(
     assert calls["dispatch"] == []
 
 
+def test_clipped_v159_tool_call_returns_function_item_without_regeneration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = envelope({
+        "kind": "tool_calls",
+        "calls": [{"namespace": "functions", "name": "exec", "input": "echo FDEX"}],
+    })
+    prefix = '{"bridge":"' + bridge.JSON_BRIDGE_PROTOCOL + '",'
+    assert first.startswith(prefix)
+    raw = 'api-responses-tool-v159",' + first[len(prefix):] + "</escape>"
+    calls, run = fixture(monkeypatch, raw)
+    received, text, items, retries = asyncio.run(run())
+    assert received == raw
+    assert text == ""
+    assert len(items) == 1
+    assert items[0]["type"] == "custom_tool_call"
+    assert items[0]["name"] == "exec"
+    assert retries == 0
+    assert calls["dispatch"] == []
+
+
+def test_protocol_correction_must_not_replace_unexecuted_tool_with_final(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    incomplete = '{"bridge":"' + bridge.JSON_BRIDGE_PROTOCOL + '","kind":"tool_calls","calls":['
+    false_final = envelope({"kind": "final", "text": "FDEX_TEST_123456789_WIRE"})
+    calls, run = fixture(monkeypatch, incomplete, false_final)
+    with pytest.raises(ResponsesToolBridgeProtocolError, match="unexecuted tool call"):
+        asyncio.run(run())
+    assert calls["collect"] == 2
+    assert len(calls["dispatch"]) == 1
+    assert len(calls["release"]) == 2
+
+
+def test_protocol_correction_can_regenerate_the_original_tool_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    incomplete = '{"bridge":"' + bridge.JSON_BRIDGE_PROTOCOL + '","kind":"tool_calls","calls":['
+    corrected = envelope({
+        "kind": "tool_calls",
+        "calls": [{"namespace": "functions", "name": "exec", "input": "echo FDEX"}],
+    })
+    calls, run = fixture(monkeypatch, incomplete, corrected)
+    raw, text, items, retries = asyncio.run(run())
+    assert raw == corrected
+    assert text == ""
+    assert len(items) == 1
+    assert items[0]["type"] == "custom_tool_call"
+    assert retries == 1
+    assert len(calls["dispatch"]) == 1
+
+
 def test_broken_finals_regenerate_once_via_the_same_worker(monkeypatch: pytest.MonkeyPatch) -> None:
     first = '_RESPONSES_TOOL_V109]]\\n{"kind":"final","text":"FDEX_TEST_123456789_WIRE"}\\n[[END_CHAT2API_RESPONSES_TOOL_V109]]'
     fixed = envelope({"kind": "final", "text": "FDEX_TEST_123456789_WIRE"})
