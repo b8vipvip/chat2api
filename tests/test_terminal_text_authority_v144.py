@@ -42,6 +42,33 @@ def test_late_partial_or_divergent_snapshot_cannot_destroy_full_evidence():
     asyncio.run(scenario())
 
 
+
+def test_broker_keeps_only_safe_terminal_provenance() -> None:
+    async def scenario() -> None:
+        broker = RequestBroker()
+        state = await broker.create("req-safe", "worker-safe")
+        await broker.publish("req-safe", {
+            "type": "chat.completed",
+            "text": "incomplete tool JSON",
+            "diagnostics": {
+                "response_terminal_source": "validated-same-turn-dom-v163",
+                "response_terminal_dom_reconciled": True,
+                "response_terminal_network_chars": 85,
+                "response_terminal_final_chars": 217,
+                "network_terminal_evidence_source": "assistant-end-turn-patch",
+                "untrusted_prompt": "must never persist",
+            },
+        })
+        assert state.diagnostics["response_terminal_source"] == "validated-same-turn-dom-v163"
+        assert state.diagnostics["response_terminal_dom_reconciled"] is True
+        assert state.diagnostics["response_terminal_network_chars"] == 85
+        assert state.diagnostics["response_terminal_final_chars"] == 217
+        assert "untrusted_prompt" not in state.diagnostics
+        await broker.release("req-safe")
+
+    asyncio.run(scenario())
+
+
 def test_worker_manifest_has_one_terminal_completion_owner():
     manifest = (ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8")
     assert '"content_request_v6.js"' in manifest
