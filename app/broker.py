@@ -62,6 +62,37 @@ def _terminal_text(accumulated: str, terminal: str) -> tuple[str, str]:
     return str(accumulated or ""), "accumulated"
 
 
+_TERMINAL_PROVENANCE_NUMBERS = {
+    "response_terminal_network_chars", "response_terminal_final_chars",
+    "response_terminal_stable_ms", "network_stream_chunks", "network_stream_bytes",
+    "network_stream_sequence", "terminal_integrity_initial_chars",
+    "terminal_integrity_final_chars",
+}
+_TERMINAL_PROVENANCE_STRINGS = {
+    "response_terminal_source", "network_terminal_evidence_source",
+    "terminal_integrity_source",
+}
+
+
+def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
+    raw = event.get("diagnostics")
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for key in _TERMINAL_PROVENANCE_NUMBERS:
+        value = raw.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            result[key] = value
+    for key in _TERMINAL_PROVENANCE_STRINGS:
+        value = raw.get(key)
+        if isinstance(value, str):
+            result[key] = value[:100]
+    for key in ("response_terminal_dom_reconciled", "terminal_integrity_upgraded"):
+        if isinstance(raw.get(key), bool):
+            result[key] = raw[key]
+    return result
+
+
 class RequestBroker:
     def __init__(self) -> None:
         self.requests: dict[str, RequestState] = {}
@@ -140,6 +171,7 @@ class RequestBroker:
         elif event_type == "chat.completed":
             state.terminal_event_type = str(event_type)
             state.completed_mono = now
+            state.diagnostics.update(_terminal_provenance(event))
             final, source = _terminal_text(state.text, str(event.get("text") or ""))
             state.text = final
             state.diagnostics["terminal_text_authority"] = "request-controller"
