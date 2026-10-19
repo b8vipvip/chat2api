@@ -31,8 +31,17 @@ def envelope(value: dict) -> str:
 def fixture(monkeypatch: pytest.MonkeyPatch, first: str, second: str | None = None, *, disconnected: bool = False, payload: dict | None = None):
     calls = {"collect": 0, "dispatch": [], "release": [], "discard": []}
     replies = [first, second]
-    initial = SimpleNamespace(key="initial")
-    retry_state = SimpleNamespace(key="retry")
+    initial = SimpleNamespace(key="initial", diagnostics={
+        "response_terminal_source": "network-sse-terminal-v57",
+        "response_terminal_network_chars": len(first),
+        "terminal_text_chars": len(first),
+    })
+    retry_state = SimpleNamespace(key="retry", diagnostics={
+        "response_terminal_source": "validated-same-turn-dom-v163",
+        "response_terminal_network_chars": len(second or ""),
+        "response_terminal_dom_reconciled": True,
+        "terminal_text_chars": len(second or ""),
+    })
 
     async def collect(state, timeout, include_sources):
         assert include_sources is False
@@ -74,7 +83,11 @@ def fixture(monkeypatch: pytest.MonkeyPatch, first: str, second: str | None = No
         registry=registry,
         broker=SimpleNamespace(release=release),
     ))
-    request = SimpleNamespace(is_disconnected=is_disconnected)
+    calls["trace"] = {}
+    request = SimpleNamespace(
+        is_disconnected=is_disconnected,
+        scope={"chat2api.responses_trace": calls["trace"]},
+    )
 
     async def run():
         return await bridge._collect_validated_tool_bridge(
@@ -247,6 +260,31 @@ def test_repeated_invalid_envelope_still_fails_closed(monkeypatch: pytest.Monkey
     assert calls["collect"] == 2
     assert len(calls["dispatch"]) == 1
     assert len(calls["release"]) == 2
+
+
+
+def test_redacted_bridge_trace_keeps_both_attempts_without_tool_arguments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fragment = '"calls":[{"namespace":"functions","name":"exec","input":"secret value"}]'
+    corrected = envelope({
+        "kind": "tool_calls",
+        "calls": [{"namespace": "functions", "name": "exec", "input": "secret value"}],
+    })
+    calls, run = fixture(monkeypatch, fragment, corrected)
+    _, _, items, retries = asyncio.run(run())
+    assert len(items) == 1
+    assert retries == 1
+    evidence = calls["trace"]["bridge_attempts"]
+    assert [item["phase"] for item in evidence] == ["initial", "correction"]
+    assert [item["validation"] for item in evidence] == ["protocol-rejected", "accepted"]
+    assert evidence[0]["captured_chars"] == len(fragment)
+    assert evidence[0]["tool_calls_fragment"] is True
+    assert evidence[0]["worker_terminal_source"] == "network-sse-terminal-v57"
+    assert evidence[1]["dom_reconciled"] is True
+    assert "secret value" not in json.dumps(evidence)
+    assert "input" not in json.dumps(evidence)
+
 
 
 def test_dropped_http_stream_never_dispatches_retry(monkeypatch: pytest.MonkeyPatch) -> None:
