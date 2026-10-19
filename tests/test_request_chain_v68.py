@@ -59,6 +59,19 @@ def test_routed_dispatch_failure_delegates_lifecycle_to_v30_router_authority():
     assert "chrome.windows.remove" not in source
 
 
+
+def test_responses_terminal_reconciliation_remains_inside_request_v6_authority():
+    request = read("chrome_extension/content_request_v6.js")
+    network = read("chrome_extension/content_network_stream_recovery_v55.js")
+    assert "async function reconcileResponsesTerminal(active, networkText)" in request
+    assert "candidateState.isNew && candidateState.latest" in request
+    assert "completeResponsesBridgeDocument(candidate)" in request
+    assert 'source: "validated-same-turn-dom-v163"' in request
+    assert 'type: "chat.completed"' in request
+    assert 'type: "chat.completed"' not in network
+
+
+
 def build_api_key_app(tmp_path: Path) -> tuple[FastAPI, ApiKeyStore]:
     app = FastAPI()
     store = ApiKeyStore(tmp_path, "test-data-secret")
