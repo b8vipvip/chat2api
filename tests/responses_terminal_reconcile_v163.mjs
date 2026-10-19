@@ -59,9 +59,10 @@ for (const options of [
   { candidateText: full.slice(0, -1) },
   { candidateText: full, sameTurn: false },
   { candidateText: full, captureThrows: true },
+  { networkText: '"calls":', candidateText: full },
 ]) {
   const actual = await reconcile(options);
-  assert.equal(actual.result.text, fragment, "never promote unverified DOM evidence");
+  assert.equal(actual.result.text, options.networkText || fragment, "never promote unverified DOM evidence");
   assert.equal(actual.result.source, "network-sse-terminal-v57");
 }
 
