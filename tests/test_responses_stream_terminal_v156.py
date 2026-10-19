@@ -119,6 +119,10 @@ def test_telemetry_preserves_worker_request_id_and_disconnect_evidence() -> None
         "client_disconnected": True,
         "disconnect_after_ms": 119950.0,
         "tool_event_count": 1,
+        "bridge_attempts": [{
+            "phase": "initial", "captured_chars": 85,
+            "validation": "protocol-rejected",
+        }],
         "tool_events": [{
             "event": "response.output_item.done", "type": "function_call",
             "namespace": "collaboration", "name": "spawn_agent",
@@ -145,6 +149,7 @@ def test_telemetry_preserves_worker_request_id_and_disconnect_evidence() -> None
     assert row["diagnostics"]["response_stream_termination_reason"] == "client_disconnect"
     assert row["diagnostics"]["response_stream_last_sse_event"] == "response.created"
     assert row["diagnostics"]["response_stream_disconnect_after_ms"] == 119950.0
+    assert row["diagnostics"]["response_bridge_attempts"][0]["captured_chars"] == 85
     assert row["diagnostics"]["response_stream_tool_event_count"] == 1
     assert row["diagnostics"]["response_stream_tool_events"][0]["call_id"] == "call_123"
     assert row["diagnostics"]["response_stream_tool_events"][0]["name"] == "spawn_agent"
