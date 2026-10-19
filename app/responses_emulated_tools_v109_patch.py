@@ -489,6 +489,34 @@ Include exactly the keys bridge, kind, and text OR bridge, kind, and calls.
 Copy any explicitly requested literal byte-for-byte.{literal_note}{task_note}{required_tool_note}{tool_intent_note}{previous_output}"""
 
 
+def _bridge_attempt_evidence(request: Request, state: Any, phase: str, raw: str) -> dict[str, Any] | None:
+    scope = getattr(request, "scope", None)
+    trace = scope.get("chat2api.responses_trace") if isinstance(scope, dict) else None
+    if not isinstance(trace, dict):
+        return None
+    captured = str(raw or "").strip()
+    diagnostics = getattr(state, "diagnostics", None)
+    if not isinstance(diagnostics, dict):
+        diagnostics = {}
+    evidence: dict[str, Any] = {
+        "phase": phase,
+        "captured_chars": len(captured),
+        "starts_with_object": captured.startswith("{"),
+        "ends_with_object": captured.endswith("}"),
+        "protocol_identity_at_start": captured.startswith('{"bridge":' + json.dumps(JSON_BRIDGE_PROTOCOL)),
+        "tool_calls_fragment": captured.startswith(('"calls":', 'calls":')),
+        "worker_terminal_source": str(diagnostics.get("response_terminal_source") or "")[:100] or None,
+        "worker_terminal_chars": diagnostics.get("terminal_text_chars"),
+        "network_terminal_chars": diagnostics.get("response_terminal_network_chars"),
+        "dom_reconciled": bool(diagnostics.get("response_terminal_dom_reconciled")),
+        "validation": "pending",
+    }
+    attempts = trace.setdefault("bridge_attempts", [])
+    if isinstance(attempts, list) and len(attempts) < 2:
+        attempts.append(evidence)
+    return evidence
+
+
 async def _collect_validated_tool_bridge(
     app: FastAPI,
     request: Request,
@@ -514,10 +542,15 @@ async def _collect_validated_tool_bridge(
 
     started = asyncio.get_running_loop().time()
     bridge_text, _ = await _collect(state, timeout, False)
+    first_evidence = _bridge_attempt_evidence(request, state, "initial", bridge_text)
     try:
         output_text, tool_items = _interpret(bridge_text, catalog, body)
+        if first_evidence is not None:
+            first_evidence["validation"] = "accepted"
         return bridge_text, output_text, tool_items, 0
     except ResponsesToolBridgeProtocolError as first_error:
+        if first_evidence is not None:
+            first_evidence["validation"] = "protocol-rejected"
         required_tool = _explicit_declared_tool_requirement(body, catalog)
         expected_kind = "tool_calls" if required_tool else _bridge_kind_hint(bridge_text)
         remaining = timeout - (asyncio.get_running_loop().time() - started)
@@ -543,6 +576,7 @@ async def _collect_validated_tool_bridge(
         retry_error_text = ""
         try:
             repaired_text, _ = await _collect(retry_state, retry_timeout, False)
+            retry_evidence = _bridge_attempt_evidence(request, retry_state, "correction", repaired_text)
             try:
                 output_text, tool_items = _interpret(repaired_text, catalog, body)
                 if expected_kind == "tool_calls" and not tool_items:
@@ -550,10 +584,14 @@ async def _collect_validated_tool_bridge(
                         "Protocol correction changed an unexecuted tool call into a final answer"
                     )
             except ResponsesToolBridgeProtocolError as retry_error:
+                if retry_evidence is not None:
+                    retry_evidence["validation"] = "protocol-rejected"
                 raise ResponsesToolBridgeProtocolError(
                     "ChatGPT Responses tool bridge still invalid after one "
                     "protocol correction: " + str(retry_error)
                 ) from first_error
+            if retry_evidence is not None:
+                retry_evidence["validation"] = "accepted"
             retry_valid = True
             return repaired_text, output_text, tool_items, 1
         except Exception as retry_error:
