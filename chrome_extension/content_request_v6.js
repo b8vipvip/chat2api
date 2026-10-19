@@ -679,7 +679,7 @@
         try {
           const captured = await finalNodeText(candidateState.latest);
           const candidate = String(captured?.text || "").trim();
-          if (candidate.length > raw.length && raw.trim()
+          if (candidate.length > raw.length && raw.trim().length >= 32
               && candidate.includes(raw.trim()) && completeResponsesBridgeDocument(candidate)) {
             return { text: candidate, source: "validated-same-turn-dom-v163" };
           }
