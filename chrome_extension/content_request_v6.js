@@ -750,6 +750,8 @@
         // SSE final for this request; DOM and intermediary observers provide
         // progress, not competing final answers.
         const reconciled = await reconcileResponsesTerminal(active, networkTerminalText);
+        if (active.cancelled) break;
+        if (String(active.networkTerminalText || "") !== networkTerminalText) continue;
         lastText = await updateCapturedText(active, reconciled.text, lastText);
         await emit({
           type: "chat.completed",
