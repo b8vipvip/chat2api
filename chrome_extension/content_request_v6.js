@@ -676,11 +676,15 @@
     while (!active.cancelled && Date.now() < deadline) {
       const candidateState = currentAssistantState(active);
       if (candidateState.isNew && candidateState.latest) {
-        const captured = await finalNodeText(candidateState.latest);
-        const candidate = String(captured?.text || "").trim();
-        if (candidate.length > raw.length && raw.trim()
-            && candidate.includes(raw.trim()) && completeResponsesBridgeDocument(candidate)) {
-          return { text: candidate, source: "validated-same-turn-dom-v163" };
+        try {
+          const captured = await finalNodeText(candidateState.latest);
+          const candidate = String(captured?.text || "").trim();
+          if (candidate.length > raw.length && raw.trim()
+              && candidate.includes(raw.trim()) && completeResponsesBridgeDocument(candidate)) {
+            return { text: candidate, source: "validated-same-turn-dom-v163" };
+          }
+        } catch (_) {
+          // An unavailable DOM capture must never discard the verified SSE fragment.
         }
       }
       await delay(180);
