@@ -643,6 +643,55 @@
     return true;
   }
 
+  function completeResponsesBridgeDocument(text) {
+    const raw = String(text || "").trim();
+    if (!raw.startsWith("{") || !raw.endsWith("}")) return false;
+    try {
+      const value = JSON.parse(raw);
+      if (!value || Array.isArray(value) || typeof value !== "object"
+          || value.bridge !== "chat2api-responses-tool-v159") return false;
+      const keys = Object.keys(value).sort().join(",");
+      if (value.kind === "final") {
+        return keys === "bridge,kind,text" && typeof value.text === "string";
+      }
+      if (value.kind === "tool_calls") {
+        return keys === "bridge,calls,kind" && Array.isArray(value.calls)
+          && value.calls.length > 0 && value.calls.every(call =>
+            call && typeof call === "object" && !Array.isArray(call));
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  async function reconcileResponsesTerminal(active, networkText) {
+    const raw = String(networkText || "");
+    if (String(active.options?.response_protocol || "") !== "responses-v108"
+        || completeResponsesBridgeDocument(raw)) {
+      return { text: raw, source: "network-sse-terminal-v57" };
+    }
+    // The request-v6 controller remains the only terminal authority. Accept
+    // a same-turn DOM candidate only when it is a complete bridge document
+    // containing the captured network fragment, never by length alone.
+    const deadline = Date.now() + 2400;
+    while (!active.cancelled && Date.now() < deadline) {
+      const candidateState = currentAssistantState(active);
+      if (candidateState.isNew && candidateState.latest) {
+        try {
+          const captured = await finalNodeText(candidateState.latest);
+          const candidate = String(captured?.text || "").trim();
+          if (candidate.length > raw.length && raw.trim().length >= 32
+              && candidate.includes(raw.trim()) && completeResponsesBridgeDocument(candidate)) {
+            return { text: candidate, source: "validated-same-turn-dom-v163" };
+          }
+        } catch (_) {
+          // An unavailable DOM capture must never discard the verified SSE fragment.
+        }
+      }
+      await delay(180);
+    }
+    return { text: raw, source: "network-sse-terminal-v57" };
+  }
+
   async function monitor(active) {
     const timeoutMs = Math.max(5000, Number(active.options.timeout_seconds || 300) * 1000);
     const startedAt = Date.now();
@@ -700,19 +749,19 @@
         // Only this controller can commit the terminal body. Use the verified
         // SSE final for this request; DOM and intermediary observers provide
         // progress, not competing final answers.
-        lastText = await updateCapturedText(active, networkTerminalText, lastText);
+        const reconciled = await reconcileResponsesTerminal(active, networkTerminalText);
+        if (active.cancelled) break;
+        if (String(active.networkTerminalText || "") !== networkTerminalText) continue;
+        lastText = await updateCapturedText(active, reconciled.text, lastText);
         await emit({
           type: "chat.completed",
           request_id: active.requestId,
-          // Do not prefer a longer DOM/intermediary snapshot over the exact
-          // assistant body verified by this response's network terminal.
-          // A malformed bridge must remain diagnosable, not be spliced with
-          // stale or speculative text from another capture path.
-          text: networkTerminalText,
+          text: reconciled.text,
           diagnostics: {
             response_epoch_revision: 69,
             response_terminal_settle_revision: 82,
-            response_terminal_source: "network-sse-terminal-v57",
+            response_terminal_source: reconciled.source,
+            response_terminal_dom_reconciled: reconciled.source === "validated-same-turn-dom-v163",
             response_terminal_stable_ms: Date.now() - networkTerminalAt,
             response_epoch_candidate_reason: active.lastCandidateReason || "network-assistant-evidence-v57",
             network_stream_id: String(active.networkTerminalStreamId || ""),
@@ -721,7 +770,7 @@
             network_stream_bytes: Number(active.networkTerminalBytes || 0),
             network_terminal_evidence_source: String(active.networkTerminalEvidenceSource || "stream-eof"),
             response_terminal_network_chars: networkTerminalText.length,
-            response_terminal_final_chars: lastText.length,
+            response_terminal_final_chars: reconciled.text.length,
             response_format: "markdown",
             response_image_inlined_count: 0,
             response_image_inlined_bytes: 0,

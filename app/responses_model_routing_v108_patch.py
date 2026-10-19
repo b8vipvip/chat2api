@@ -406,6 +406,7 @@ async def _record_telemetry(
                 "response_stream_tool_event_count": trace.get("tool_event_count", 0),
                 "response_stream_tool_events": trace.get("tool_events", []),
                 "response_terminal_tool_items": terminal_tools,
+                "response_bridge_attempts": trace.get("bridge_attempts", []),
                 "worker_request_id": trace.get("worker_request_id") or observed.get("worker_request_id"),
                 "worker_attempt_ids": trace.get("worker_attempt_ids") or observed.get("worker_attempt_ids") or [],
             },

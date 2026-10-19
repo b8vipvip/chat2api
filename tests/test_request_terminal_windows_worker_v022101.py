@@ -31,7 +31,9 @@ def test_network_terminal_evidence_keeps_request_v6_as_single_terminal_owner() -
 
     assert "if (v5) v5.active = active;" in request
     assert '"network-terminal-v57"' in request
-    assert 'response_terminal_source: "network-sse-terminal-v57"' in request
+    assert 'response_terminal_source: reconciled.source' in request
+    assert 'source: "network-sse-terminal-v57"' in request
+    assert 'source: "validated-same-turn-dom-v163"' in request
     assert 'type: "chat.completed"' in request
     assert "networkTerminalAt && networkTerminalText && !promptStillPresent(active)" in request
 
