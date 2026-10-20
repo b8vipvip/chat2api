@@ -383,11 +383,20 @@
     if (!clone?.querySelectorAll) return { inlined: 0, bytes: 0 };
     let inlined = 0;
     let total = 0;
+    const stats = { candidate_count: 0, direct_attempts: 0, direct_succeeded: 0,
+      direct_failed: 0, relay_attempts: 0, relay_succeeded: 0,
+      rejected_source: 0, rejected_size: 0, rejected_mime: 0,
+      relay_last_error: "" };
     for (const img of [...clone.querySelectorAll("img")].slice(0, MAX_INLINE_IMAGES)) {
       const src = String(img.getAttribute("src") || "").trim();
       // Same-origin authenticated images and CORS-readable CDN images must
       // travel with the API response; a transient browser URL is not durable.
-      if (!trustedMediaSource(src) || (!src.startsWith("blob:") && !/^https:\/\//i.test(src))) continue;
+      stats.candidate_count += 1;
+      if (!trustedMediaSource(src) || (!src.startsWith("blob:") && !/^https:\/\//i.test(src))) {
+        stats.rejected_source += 1;
+        continue;
+      }
+      stats.direct_attempts += 1;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 4500);
       try {
@@ -399,22 +408,37 @@
         });
         if (!response.ok) throw new Error("media-fetch-unavailable");
         const declaredSize = Number(response.headers.get("content-length") || 0);
-        if (declaredSize > MAX_INLINE_IMAGE_BYTES || declaredSize + total > MAX_INLINE_IMAGE_TOTAL_BYTES) continue;
+        if (declaredSize > MAX_INLINE_IMAGE_BYTES || declaredSize + total > MAX_INLINE_IMAGE_TOTAL_BYTES) {
+          stats.rejected_size += 1;
+          continue;
+        }
         const type = String(response.headers.get("content-type") || "").toLowerCase();
-        if (type && !RASTER_IMAGE.test(type.split(";")[0].trim())) continue;
+        if (type && !RASTER_IMAGE.test(type.split(";")[0].trim())) {
+          stats.rejected_mime += 1;
+          continue;
+        }
         const blob = await response.blob();
-        if (!RASTER_IMAGE.test(blob.type)) continue;
-        if (!blob.size || blob.size > MAX_INLINE_IMAGE_BYTES || total + blob.size > MAX_INLINE_IMAGE_TOTAL_BYTES) continue;
+        if (!RASTER_IMAGE.test(blob.type)) {
+          stats.rejected_mime += 1;
+          continue;
+        }
+        if (!blob.size || blob.size > MAX_INLINE_IMAGE_BYTES || total + blob.size > MAX_INLINE_IMAGE_TOTAL_BYTES) {
+          stats.rejected_size += 1;
+          continue;
+        }
         const dataUrl = await blobToDataUrl(blob);
         if (!dataUrl.startsWith("data:image/")) continue;
         img.setAttribute("src", dataUrl);
         total += blob.size;
         inlined += 1;
+        stats.direct_succeeded += 1;
       } catch (_) {
+        stats.direct_failed += 1;
         // Content scripts cannot always fetch signed CDN images due to page
         // CORS. The read-only background relay only accepts approved OpenAI
         // media hosts and never receives arbitrary page URLs.
         if (/^https:\/\//i.test(src)) {
+          stats.relay_attempts += 1;
           try {
             const result = await chrome.runtime.sendMessage({
               type: "chat2api.media.fetch-v175", url: src,
@@ -427,14 +451,22 @@
               img.setAttribute("src", data);
               total += bytes;
               inlined += 1;
+              stats.relay_succeeded += 1;
+            } else {
+              const reason = String(result?.error || "invalid-image-payload");
+              stats.relay_last_error = [
+                "untrusted-image-source", "unusable-image-response",
+                "image-size-or-format", "image-download-unavailable",
+                "invalid-image-payload",
+              ].includes(reason) ? reason : "invalid-image-payload";
             }
-          } catch (_) {}
+          } catch (_) { stats.relay_last_error = "transport-error"; }
         }
       } finally {
         clearTimeout(timer);
       }
     }
-    return { inlined, bytes: total };
+    return { inlined, bytes: total, stats };
   }
 
   async function captureFinalMarkdown(node) {
@@ -458,6 +490,7 @@
       image_inlined_count: imageStats.inlined,
       image_embedded_count: embedded,
       image_inlined_bytes: imageStats.bytes,
+      image_transfer_stats: imageStats.stats,
     };
   }
 
