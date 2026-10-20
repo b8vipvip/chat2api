@@ -123,7 +123,7 @@
     // An accepted new image URL is the fallback evidence when ChatGPT does
     // not expose an assistant role/turn node. It must be new since pre-send,
     // inside the same tab's main conversation, and not a user upload.
-    const selected = afterUser.length ? afterUser : fresh;
+    const selected = userAnchor instanceof Element ? afterUser : fresh;
     return {
       images: selected.slice(-MAX_INLINE_IMAGES),
       candidate_count_document: images.length,
