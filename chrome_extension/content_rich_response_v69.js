@@ -60,7 +60,19 @@
       const rightText = String(right.innerText || right.textContent || "").length;
       return rightText - leftText;
     });
-    return candidates[0];
+    const selected = candidates[0];
+    // Generated images may be rendered as siblings of the Markdown node.
+    // Keep the same assistant turn, not a global page image or old response.
+    if (node instanceof Element && node !== selected) {
+      const mediaOutsideMarkdown = [...node.querySelectorAll("img")].some(img => {
+        const box = img.getBoundingClientRect();
+        const src = String(img.getAttribute("src") || "");
+        return visible(img) && box.width >= 64 && box.height >= 64
+          && /^(blob:|data:image\/|https:\/\/)/i.test(src) && !selected.contains(img);
+      });
+      if (mediaOutsideMarkdown) return node;
+    }
+    return selected;
   }
 
   function cleanClone(node) {
@@ -234,11 +246,18 @@
     let total = 0;
     for (const img of [...clone.querySelectorAll("img")].slice(0, MAX_INLINE_IMAGES)) {
       const src = String(img.getAttribute("src") || "").trim();
-      if (!src.startsWith("blob:")) continue;
+      // Same-origin authenticated images and CORS-readable CDN images must
+      // travel with the API response; a transient browser URL is not durable.
+      if (!src.startsWith("blob:") && !/^https:\/\//i.test(src)) continue;
       try {
         const response = await fetch(src);
         if (!response.ok) continue;
+        const declaredSize = Number(response.headers.get("content-length") || 0);
+        if (declaredSize > MAX_INLINE_IMAGE_BYTES || declaredSize + total > MAX_INLINE_IMAGE_TOTAL_BYTES) continue;
+        const type = String(response.headers.get("content-type") || "").toLowerCase();
+        if (type && !type.startsWith("image/")) continue;
         const blob = await response.blob();
+        if (!blob.type.startsWith("image/")) continue;
         if (!blob.size || blob.size > MAX_INLINE_IMAGE_BYTES || total + blob.size > MAX_INLINE_IMAGE_TOTAL_BYTES) continue;
         const dataUrl = await blobToDataUrl(blob);
         if (!dataUrl.startsWith("data:image/")) continue;
