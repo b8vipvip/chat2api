@@ -13,7 +13,13 @@ def test_chat_playground_defaults_to_page_native_effort_not_medium() -> None:
     for filename in ("admin_playground_chat.js", "admin_playground_chat_v69.js"):
         source = (ROOT / "app" / filename).read_text(encoding="utf-8")
         assert '<option value="" selected>自动（页面默认）</option>' in source
-        assert 'if (model !== "gpt-5.5-mini" && $chat("pgChatReasoning").value) body.reasoning_effort = $chat("pgChatReasoning").value;' in source
+        expected = ('if (!imageMode && model !== "gpt-5.5-mini" && $chat("pgChatReasoning").value)'
+                    if filename == "admin_playground_chat_v69.js"
+                    else 'if (model !== "gpt-5.5-mini" && $chat("pgChatReasoning").value)')
+        assert expected in source
+        if filename == "admin_playground_chat_v69.js":
+            assert 'body.reasoning_effort = $chat("pgChatReasoning").value;' in source
+            assert 'const imageMode = $chat("pgChatMode").value === "image"' in source
         assert '$chat("pgChatReasoning").value || "medium"' not in source
         result = subprocess.run(["node", "--check", str(ROOT / "app" / filename)],
                                 capture_output=True, text=True, check=False)
