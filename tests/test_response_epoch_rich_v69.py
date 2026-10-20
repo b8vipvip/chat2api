@@ -52,11 +52,12 @@ def test_generated_media_handoff_keeps_single_request_terminal_authority():
     rich = read("chrome_extension/content_rich_response_v69.js")
     assert 'function isInternalMediaHandoff(value)' in source
     assert 'function hasTransferableImage(value)' in source
-    assert 'imageHandoff && current.isNew && current.latest && !generating' in source
-    assert 'response_terminal_source: "verified-same-turn-media-dom-v174"' in source
-    assert 'networkTerminalText && !imageHandoff && !promptStillPresent(active)' in source
+    assert 'captureMedia && sameTurnRoot && !generating' in source
+    assert 'active.baselineUserTurns = new Set' in source
+    assert 'response_terminal_source: "verified-same-turn-media-dom-v175"' in source
+    assert 'networkTerminalText && !captureMedia && !promptStillPresent(active)' in source
     assert 'networkText && !isInternalMediaHandoff(networkText)' in source
-    assert '!networkTerminalAt && !imageHandoff' in source
+    assert '!networkTerminalAt && !captureMedia' in source
     assert 'internal_tool_handoff_without_media: true' in source
     assert 'if (mediaOutsideMarkdown) return node;' in rich
     assert 'image_inlined_count: imageStats.inlined' in rich
