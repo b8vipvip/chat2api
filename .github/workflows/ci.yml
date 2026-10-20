@@ -192,6 +192,9 @@ jobs:
       - name: Trusted image CDN relay regression
         run: node tests/media_background_relay_v175.mjs
 
+      - name: Current-request generated image anchor regression
+        run: node tests/media_request_anchor_v176.mjs
+
       - name: FDEX request history regression
         run: pytest -q tests/test_fdex_request_integrity_v155.py --timeout=120
 
