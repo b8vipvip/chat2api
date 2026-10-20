@@ -56,6 +56,102 @@
       && [...node.querySelectorAll("img")].some(candidateImage));
   }
 
+  // The redesigned ChatGPT image generator can render a finished preview
+  // outside [data-message-author-role='assistant']. Restrict discovery to the
+  // active chat's main content, never the sidebar, modals, uploads or menus.
+  const CHAT_MEDIA_SELECTOR = [
+    "main img", "[role='main'] img", "#thread img",
+    "[data-testid^='conversation-turn'] img",
+  ].join(",");
+
+  function candidateSource(img) {
+    return String(img?.currentSrc || img?.getAttribute?.("src") || "").trim();
+  }
+
+  function trustedMediaSource(src) {
+    const source = String(src || "").trim();
+    if (RASTER_DATA_URI.test(source)) return true;
+    if (source.startsWith("blob:")) {
+      try {
+        const origin = new URL(source.slice(5)).hostname.toLowerCase();
+        return ["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(origin);
+      } catch (_) { return false; }
+    }
+    try {
+      const url = new URL(source);
+      const host = url.hostname.toLowerCase();
+      return url.protocol === "https:" && !url.username && !url.password
+        && (["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(host)
+          || [".oaiusercontent.com", ".oaistatic.com", ".openai.com", ".chatgpt.com"]
+            .some(suffix => host.endsWith(suffix)));
+    } catch (_) { return false; }
+  }
+
+  function candidateMediaKey(img) {
+    const src = candidateSource(img);
+    // Do not include signed media URLs in telemetry.
+    return trustedMediaSource(src) ? src : "";
+  }
+
+  function pageMediaCandidates() {
+    return [...document.querySelectorAll(CHAT_MEDIA_SELECTOR)]
+      .filter(img => {
+        if (!candidateImage(img)) return false;
+        if (img.closest("aside,nav,header,footer,form,[role='dialog'],[role='menu'],[data-message-author-role='user']")) return false;
+        const turn = img.closest("article[data-testid^='conversation-turn'],[data-testid^='conversation-turn'],article[data-message-id]");
+        if (turn && (turn.getAttribute("data-message-author-role") === "user"
+            || turn.querySelector("[data-message-author-role='user']"))) return false;
+        return Boolean(candidateMediaKey(img));
+      });
+  }
+
+  function snapshotPageMedia() {
+    const images = pageMediaCandidates();
+    return { keys: new Set(images.map(candidateMediaKey)), nodes: new Set(images), count: images.length };
+  }
+
+  function locateNewPageMedia(baseline, userAnchor = null) {
+    const images = pageMediaCandidates();
+    const oldKeys = baseline?.keys || new Set();
+    const fresh = images.filter(img => !oldKeys.has(candidateMediaKey(img)));
+    const afterUser = userAnchor instanceof Element
+      ? fresh.filter(img => {
+          if (!userAnchor.isConnected || !img.isConnected || userAnchor === img) return false;
+          return Boolean(userAnchor.compareDocumentPosition(img) & Node.DOCUMENT_POSITION_FOLLOWING);
+        })
+      : [];
+    // An accepted new image URL is the fallback evidence when ChatGPT does
+    // not expose an assistant role/turn node. It must be new since pre-send,
+    // inside the same tab's main conversation, and not a user upload.
+    const selected = userAnchor instanceof Element ? afterUser : fresh;
+    return {
+      images: selected.slice(-MAX_INLINE_IMAGES),
+      candidate_count_document: images.length,
+      new_image_candidate_count: fresh.length,
+      after_user_count: afterUser.length,
+      anchor: afterUser.length ? "after-current-user" : fresh.length ? "fresh-page-media" : "none",
+      baseline_image_count: Number(baseline?.count || 0),
+    };
+  }
+
+  async function capturePageImages(images) {
+    if (!Array.isArray(images) || !images.length) return {
+      text: "", image_inlined_count: 0, image_embedded_count: 0,
+      image_inlined_bytes: 0,
+    };
+    const wrapper = document.createElement("div");
+    for (const image of images.slice(-MAX_INLINE_IMAGES)) {
+      if (!candidateImage(image)) continue;
+      const src = candidateSource(image);
+      if (!src) continue;
+      const copy = image.cloneNode(false);
+      copy.setAttribute("src", src);
+      copy.removeAttribute("srcset");
+      wrapper.appendChild(copy);
+    }
+    return captureFinalMarkdown(wrapper);
+  }
+
   function contentRoot(node) {
     if (!node) return null;
     const candidates = [];
@@ -287,33 +383,62 @@
     if (!clone?.querySelectorAll) return { inlined: 0, bytes: 0 };
     let inlined = 0;
     let total = 0;
+    const stats = { candidate_count: 0, direct_attempts: 0, direct_succeeded: 0,
+      direct_failed: 0, relay_attempts: 0, relay_succeeded: 0,
+      rejected_source: 0, rejected_size: 0, rejected_mime: 0,
+      relay_last_error: "" };
     for (const img of [...clone.querySelectorAll("img")].slice(0, MAX_INLINE_IMAGES)) {
       const src = String(img.getAttribute("src") || "").trim();
       // Same-origin authenticated images and CORS-readable CDN images must
       // travel with the API response; a transient browser URL is not durable.
-      if (!src.startsWith("blob:") && !/^https:\/\//i.test(src)) continue;
+      stats.candidate_count += 1;
+      if (!trustedMediaSource(src) || (!src.startsWith("blob:") && !/^https:\/\//i.test(src))) {
+        stats.rejected_source += 1;
+        continue;
+      }
+      stats.direct_attempts += 1;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 4500);
       try {
-        const response = await fetch(src, { credentials: "include", signal: controller.signal });
+        const mediaUrl = src.startsWith("blob:") ? null : new URL(src);
+        const sameOrigin = mediaUrl?.origin === location.origin;
+        const response = await fetch(src, {
+          credentials: sameOrigin ? "include" : "omit",
+          signal: controller.signal,
+        });
         if (!response.ok) throw new Error("media-fetch-unavailable");
         const declaredSize = Number(response.headers.get("content-length") || 0);
-        if (declaredSize > MAX_INLINE_IMAGE_BYTES || declaredSize + total > MAX_INLINE_IMAGE_TOTAL_BYTES) continue;
+        if (declaredSize > MAX_INLINE_IMAGE_BYTES || declaredSize + total > MAX_INLINE_IMAGE_TOTAL_BYTES) {
+          stats.rejected_size += 1;
+          continue;
+        }
         const type = String(response.headers.get("content-type") || "").toLowerCase();
-        if (type && !RASTER_IMAGE.test(type.split(";")[0].trim())) continue;
+        if (type && !RASTER_IMAGE.test(type.split(";")[0].trim())) {
+          stats.rejected_mime += 1;
+          continue;
+        }
         const blob = await response.blob();
-        if (!RASTER_IMAGE.test(blob.type)) continue;
-        if (!blob.size || blob.size > MAX_INLINE_IMAGE_BYTES || total + blob.size > MAX_INLINE_IMAGE_TOTAL_BYTES) continue;
+        if (!RASTER_IMAGE.test(blob.type)) {
+          stats.rejected_mime += 1;
+          continue;
+        }
+        if (!blob.size || blob.size > MAX_INLINE_IMAGE_BYTES || total + blob.size > MAX_INLINE_IMAGE_TOTAL_BYTES) {
+          stats.rejected_size += 1;
+          continue;
+        }
         const dataUrl = await blobToDataUrl(blob);
         if (!dataUrl.startsWith("data:image/")) continue;
         img.setAttribute("src", dataUrl);
         total += blob.size;
         inlined += 1;
+        stats.direct_succeeded += 1;
       } catch (_) {
+        stats.direct_failed += 1;
         // Content scripts cannot always fetch signed CDN images due to page
         // CORS. The read-only background relay only accepts approved OpenAI
         // media hosts and never receives arbitrary page URLs.
         if (/^https:\/\//i.test(src)) {
+          stats.relay_attempts += 1;
           try {
             const result = await chrome.runtime.sendMessage({
               type: "chat2api.media.fetch-v175", url: src,
@@ -326,14 +451,22 @@
               img.setAttribute("src", data);
               total += bytes;
               inlined += 1;
+              stats.relay_succeeded += 1;
+            } else {
+              const reason = String(result?.error || "invalid-image-payload");
+              stats.relay_last_error = [
+                "untrusted-image-source", "unusable-image-response",
+                "image-size-or-format", "image-download-unavailable",
+                "invalid-image-payload",
+              ].includes(reason) ? reason : "invalid-image-payload";
             }
-          } catch (_) {}
+          } catch (_) { stats.relay_last_error = "transport-error"; }
         }
       } finally {
         clearTimeout(timer);
       }
     }
-    return { inlined, bytes: total };
+    return { inlined, bytes: total, stats };
   }
 
   async function captureFinalMarkdown(node) {
@@ -357,6 +490,7 @@
       image_inlined_count: imageStats.inlined,
       image_embedded_count: embedded,
       image_inlined_bytes: imageStats.bytes,
+      image_transfer_stats: imageStats.stats,
     };
   }
 
@@ -365,6 +499,9 @@
     format: "markdown",
     contentRoot,
     hasCandidateImage,
+    snapshotPageMedia,
+    locateNewPageMedia,
+    capturePageImages,
     extractMarkdown,
     captureFinalMarkdown,
   });

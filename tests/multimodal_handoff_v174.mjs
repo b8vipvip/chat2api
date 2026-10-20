@@ -34,7 +34,7 @@ assert.match(controller, /if \(networkText && !isInternalMediaHandoff\(networkTe
 assert.match(controller, /networkTerminalText && !captureMedia && !promptStillPresent/);
 assert.match(controller, /!networkTerminalAt && !captureMedia/);
 assert.match(controller, /!generating && !captureMedia && !active\.networkStreamSeen/);
-assert.match(controller, /response_terminal_source: "verified-same-turn-media-dom-v175"/);
+assert.match(controller, /response_terminal_source: "verified-request-media-dom-v176"/);
 assert.match(controller, /imageHandoffObserved[\s\S]*internal_tool_handoff_without_media: true/);
 assert.match(rich, /mediaOutsideMarkdown/);
 assert.match(controller, /active\.baselineUserTurns = new Set/);

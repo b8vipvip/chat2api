@@ -36,7 +36,7 @@ def test_network_terminal_evidence_keeps_request_v6_as_single_terminal_owner() -
     assert 'source: "validated-same-turn-dom-v163"' in request
     assert 'type: "chat.completed"' in request
     assert "networkTerminalAt && networkTerminalText && !captureMedia && !promptStillPresent(active)" in request
-    assert "captureMedia && sameTurnRoot && !generating" in request
+    assert "captureMedia && (sameTurnRoot || sourceMedia.length) && sourceStable && !generating" in request
 
 
 def test_submission_confirmation_never_treats_generating_control_as_sufficient() -> None:
