@@ -26,7 +26,7 @@ def test_full_prompt_omits_internal_assistant_media_handoff_but_keeps_user_text(
         ChatMessage(role="assistant", content='{"skipped_mainline":true}{"skipped_mainline":true}'),
         ChatMessage(role="user", content="Make a cat"),
     ]
-    assert build_prompt(messages, "full") == "[User]\\nMake a dog\\n\\n[User]\\nMake a cat"
+    assert build_prompt(messages, "full") == "[User]\nMake a dog\n\n[User]\nMake a cat"
     # Deliberate user strings must not be silently rewritten.
     messages = [ChatMessage(role="user", content='{"skipped_mainline":true}')]
-    assert build_prompt(messages, "full") == '[User]\\n{"skipped_mainline":true}'
+    assert build_prompt(messages, "full") == '[User]\n{"skipped_mainline":true}'
