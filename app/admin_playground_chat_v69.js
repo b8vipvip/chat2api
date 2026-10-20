@@ -359,9 +359,18 @@
     try {
       credential = await resolveCredential();
       uploaded = await uploadFiles(userFiles, credential.token);
+      // A generated-image file can serve as the reference for the next image
+      // edit turn, but only when the managed API Key is unchanged. Never
+      // persist a pasted secret or silently send the previous image to a new Key.
+      const previousImage = imageMode && credential.key_id && messages.slice(0,-1).reverse()
+        .find(item => item.role === "assistant" && item.meta?.generated_file_id
+          && item.meta?.generated_key_id === credential.key_id);
+      const referenceFiles = uploaded.map(item => ({file_id:item.file_id}));
+      if (imageMode && previousImage && referenceFiles.length < 4)
+        referenceFiles.push({file_id: previousImage.meta.generated_file_id});
       const body = imageMode
-        ? {model:"gpt-image",prompt:text,attachments:uploaded.map(item=>({file_id:item.file_id})),response_format:"b64_json",n:1,timeout:600}
-        : {model,messages:normalizedHistory(),prompt_mode:"full",attachments:uploaded.map(item=>({file_id:item.file_id})),stream:false,timeout:300};
+        ? {model:"gpt-image",prompt:text,attachments:referenceFiles,response_format:"b64_json",n:1,timeout:600}
+        : {model,messages:normalizedHistory(),prompt_mode:"full",attachments:referenceFiles,stream:false,timeout:300};
       if (!imageMode && model !== "gpt-5.5-mini" && $chat("pgChatReasoning").value) body.reasoning_effort = $chat("pgChatReasoning").value;
       const response = await fetch(imageMode ? "/v1/images/generations" : "/v1/chat/completions", {
         method:"POST",headers:{...headers(credential.token),"Content-Type":"application/json",
@@ -382,8 +391,12 @@
       document.getElementById("pgChatPending")?.remove();
       const responseType = isActualImageReply(assistantText) ? (imageMode ? "image" : "mixed") : "text";
       const actualRequestId = String(diagnostics?.request_id || (imageMode ? requestId.replace(/^req_/, "imgreq_") : requestId));
+      const generatedFile = imageMode && credential.key_id
+        ? (Array.isArray(diagnostics?.media_files) ? diagnostics.media_files[0]?.file_id : null) : null;
       messages.push({role:"assistant",content:assistantText,include_in_context:!imageMode,
-        created_at:new Date().toISOString(),meta:{request_id:actualRequestId,model,total_ms:totalMs,first_token_ms:firstTokenMs,response_format:responseType}});
+        created_at:new Date().toISOString(),meta:{request_id:actualRequestId,model,total_ms:totalMs,
+          first_token_ms:firstTokenMs,response_format:responseType,
+          generated_file_id:generatedFile||null,generated_key_id:generatedFile?credential.key_id:null}});
       lastRequest = {request_id:actualRequestId,model,total_ms:totalMs,first_token_ms:firstTokenMs,diagnostics}; saveHistory(); renderMessages();
       $chat("pgChatLast").innerHTML = `<span class="pgChatBadge">${escHtml(actualRequestId)}</span> <span class="pgChatBadge">${Math.round(totalMs)} ms</span>`; status(`聊天请求完成：${requestId}`, "ok"); $chat("pgChatFiles").value="";
       await recordChatTurn({requestId:actualRequestId,model,credential,text,statusValue:"passed",totalMs,firstTokenMs,responseChars:assistantText.length,attachmentsCount:userFiles.length,error:null});
