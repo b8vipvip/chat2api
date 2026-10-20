@@ -6,6 +6,8 @@
   const MAX_INLINE_IMAGE_BYTES = 4 * 1024 * 1024;
   const MAX_INLINE_IMAGE_TOTAL_BYTES = 6 * 1024 * 1024;
   const MAX_INLINE_IMAGES = 4;
+  const RASTER_IMAGE = /^image\/(?:png|jpeg|webp|gif)$/i;
+  const RASTER_DATA_URI = /^data:image\/(?:png|jpeg|webp|gif);base64,[a-z0-9+/=]+$/i;
   const ACTION_SELECTOR = [
     "button",
     "nav",
@@ -39,6 +41,21 @@
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
+  function candidateImage(img) {
+    if (!(img instanceof Element) || !visible(img)) return false;
+    const box = img.getBoundingClientRect();
+    const src = String(img.currentSrc || img.getAttribute("src") || "").trim();
+    // A large preview inside the assistant's own turn is evidence of a media
+    // result. Exclude profile avatars, thumbnails and unrelated page images.
+    return box.width >= 96 && box.height >= 96
+      && /^(blob:|data:image\/|https:\/\/)/i.test(src);
+  }
+
+  function hasCandidateImage(node) {
+    return Boolean(node instanceof Element
+      && [...node.querySelectorAll("img")].some(candidateImage));
+  }
+
   function contentRoot(node) {
     if (!node) return null;
     const candidates = [];
@@ -64,12 +81,8 @@
     // Generated images may be rendered as siblings of the Markdown node.
     // Keep the same assistant turn, not a global page image or old response.
     if (node instanceof Element && node !== selected) {
-      const mediaOutsideMarkdown = [...node.querySelectorAll("img")].some(img => {
-        const box = img.getBoundingClientRect();
-        const src = String(img.getAttribute("src") || "");
-        return visible(img) && box.width >= 64 && box.height >= 64
-          && /^(blob:|data:image\/|https:\/\/)/i.test(src) && !selected.contains(img);
-      });
+      const mediaOutsideMarkdown = [...node.querySelectorAll("img")].some(img =>
+        candidateImage(img) && !selected.contains(img));
       if (mediaOutsideMarkdown) return node;
     }
     return selected;
@@ -81,23 +94,37 @@
     let clone = null;
     try { clone = root.cloneNode(true); } catch (_) { return null; }
     if (!clone?.querySelectorAll) return clone;
+    // Browsers commonly expose <picture>/<img> as a srcset/currentSrc without
+    // an ordinary src. Copy the resolved image source into the cloned turn
+    // before removing preview action wrappers.
+    const realImages = [...root.querySelectorAll("img")];
+    const cloneImages = [...clone.querySelectorAll("img")];
+    realImages.forEach((img, index) => {
+      const resolved = String(img.currentSrc || "").trim();
+      if (cloneImages[index] && candidateImage(img)
+          && /^(blob:|data:image\/|https:\/\/)/i.test(resolved)) {
+        cloneImages[index].setAttribute("src", resolved);
+      }
+    });
     // Generated pictures can live *inside* a clickable preview button. Remove
     // the button's action chrome without discarding the actual user-requested
     // image. Only preserve images that were visibly large in this same turn.
     const visibleMediaSources = new Set([...root.querySelectorAll("img")]
-      .filter(img => {
-        const src = String(img.getAttribute("src") || "").trim();
-        if (!/^(blob:|data:image\/|https:\/\/)/i.test(src) || !visible(img)) return false;
-        const bounds = img.getBoundingClientRect();
-        return bounds.width >= 64 && bounds.height >= 64;
-      }).map(img => String(img.getAttribute("src") || "").trim()));
+      .filter(candidateImage)
+      .map(img => String(img.currentSrc || img.getAttribute("src") || "").trim()));
     for (const button of [...clone.querySelectorAll("button")]) {
       const pictureNodes = [...button.querySelectorAll("img")]
         .filter(img => visibleMediaSources.has(String(img.getAttribute("src") || "").trim()));
       if (pictureNodes.length) button.replaceWith(...pictureNodes.map(img => img.cloneNode(true)));
       else button.remove();
     }
-    clone.querySelectorAll(ACTION_SELECTOR).forEach(item => item.remove());
+    for (const item of [...clone.querySelectorAll(ACTION_SELECTOR)]) {
+      if (!clone.contains(item)) continue;
+      const pictures = [...item.querySelectorAll("img")].filter(img =>
+        visibleMediaSources.has(String(img.getAttribute("src") || "").trim()));
+      if (pictures.length) item.replaceWith(...pictures.map(img => img.cloneNode(true)));
+      else item.remove();
+    }
     for (const svg of clone.querySelectorAll("svg")) {
       const label = normalizeInline(svg.getAttribute("aria-label") || svg.querySelector("title")?.textContent || "").trim();
       if (label && svg.parentNode) svg.replaceWith(document.createTextNode(label));
@@ -265,22 +292,46 @@
       // Same-origin authenticated images and CORS-readable CDN images must
       // travel with the API response; a transient browser URL is not durable.
       if (!src.startsWith("blob:") && !/^https:\/\//i.test(src)) continue;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 4500);
       try {
-        const response = await fetch(src);
-        if (!response.ok) continue;
+        const response = await fetch(src, { credentials: "include", signal: controller.signal });
+        if (!response.ok) throw new Error("media-fetch-unavailable");
         const declaredSize = Number(response.headers.get("content-length") || 0);
         if (declaredSize > MAX_INLINE_IMAGE_BYTES || declaredSize + total > MAX_INLINE_IMAGE_TOTAL_BYTES) continue;
         const type = String(response.headers.get("content-type") || "").toLowerCase();
-        if (type && !type.startsWith("image/")) continue;
+        if (type && !RASTER_IMAGE.test(type.split(";")[0].trim())) continue;
         const blob = await response.blob();
-        if (!blob.type.startsWith("image/")) continue;
+        if (!RASTER_IMAGE.test(blob.type)) continue;
         if (!blob.size || blob.size > MAX_INLINE_IMAGE_BYTES || total + blob.size > MAX_INLINE_IMAGE_TOTAL_BYTES) continue;
         const dataUrl = await blobToDataUrl(blob);
         if (!dataUrl.startsWith("data:image/")) continue;
         img.setAttribute("src", dataUrl);
         total += blob.size;
         inlined += 1;
-      } catch (_) {}
+      } catch (_) {
+        // Content scripts cannot always fetch signed CDN images due to page
+        // CORS. The read-only background relay only accepts approved OpenAI
+        // media hosts and never receives arbitrary page URLs.
+        if (/^https:\/\//i.test(src)) {
+          try {
+            const result = await chrome.runtime.sendMessage({
+              type: "chat2api.media.fetch-v175", url: src,
+            });
+            const data = String(result?.data_url || "");
+            const bytes = Number(result?.bytes || 0);
+            if (result?.ok && RASTER_DATA_URI.test(data)
+                && bytes > 0 && bytes <= MAX_INLINE_IMAGE_BYTES
+                && total + bytes <= MAX_INLINE_IMAGE_TOTAL_BYTES) {
+              img.setAttribute("src", data);
+              total += bytes;
+              inlined += 1;
+            }
+          } catch (_) {}
+        }
+      } finally {
+        clearTimeout(timer);
+      }
     }
     return { inlined, bytes: total };
   }
@@ -288,10 +339,23 @@
   async function captureFinalMarkdown(node) {
     const clone = cleanClone(node);
     if (!clone) return { text: "", image_inlined_count: 0, image_inlined_bytes: 0 };
+    let embedded = 0;
+    for (const image of [...clone.querySelectorAll("img")]) {
+      const src = String(image.getAttribute("src") || "");
+      if (!src.startsWith("data:")) continue;
+      const base64 = src.slice(src.indexOf(",") + 1);
+      const bounded = RASTER_DATA_URI.test(src)
+        && base64.length > 0
+        && base64.length % 4 === 0
+        && base64.length <= 4 * Math.ceil(MAX_INLINE_IMAGE_BYTES / 3);
+      if (bounded) embedded += 1;
+      else image.removeAttribute("src");
+    }
     const imageStats = await inlineBlobImages(clone);
     return {
       text: normalizeOutput(blockMarkdown(clone)),
       image_inlined_count: imageStats.inlined,
+      image_embedded_count: embedded,
       image_inlined_bytes: imageStats.bytes,
     };
   }
@@ -300,6 +364,7 @@
     version: VERSION,
     format: "markdown",
     contentRoot,
+    hasCandidateImage,
     extractMarkdown,
     captureFinalMarkdown,
   });

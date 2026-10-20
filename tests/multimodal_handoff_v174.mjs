@@ -16,6 +16,9 @@ runInNewContext(
 );
 const { isInternalMediaHandoff, hasTransferableImage } = sandbox.classify;
 assert.equal(isInternalMediaHandoff('{"skipped_mainline":true}'), true);
+assert.equal(isInternalMediaHandoff('{"skipped_mainline":true}{"skipped_mainline":true}'), true);
+assert.equal(isInternalMediaHandoff(' { "skipped_mainline": true } { "skipped_mainline":true } '), true);
+assert.equal(isInternalMediaHandoff('{"skipped_mainline":true}text'), false);
 assert.equal(isInternalMediaHandoff(' { "skipped_mainline" : true } '), true);
 assert.equal(isInternalMediaHandoff('{"skipped_mainline":false}'), false);
 assert.equal(isInternalMediaHandoff('{"skipped_mainline":true,"response":"ok"}'), false);
@@ -28,11 +31,22 @@ assert.equal(hasTransferableImage('{"skipped_mainline":true}'), false);
 // Only the existing request controller may settle the request. A handoff is
 // excluded from both network-text completion and the early no-terminal error.
 assert.match(controller, /if \(networkText && !isInternalMediaHandoff\(networkText\)\)/);
-assert.match(controller, /networkTerminalText && !imageHandoff && !promptStillPresent/);
-assert.match(controller, /!networkTerminalAt && !imageHandoff/);
-assert.match(controller, /!generating && !imageHandoff && !active\.networkStreamSeen/);
-assert.match(controller, /response_terminal_source: "verified-same-turn-media-dom-v174"/);
+assert.match(controller, /networkTerminalText && !captureMedia && !promptStillPresent/);
+assert.match(controller, /!networkTerminalAt && !captureMedia/);
+assert.match(controller, /!generating && !captureMedia && !active\.networkStreamSeen/);
+assert.match(controller, /response_terminal_source: "verified-same-turn-media-dom-v175"/);
 assert.match(controller, /imageHandoffObserved[\s\S]*internal_tool_handoff_without_media: true/);
 assert.match(rich, /mediaOutsideMarkdown/);
+assert.match(controller, /active\.baselineUserTurns = new Set/);
+assert.match(controller, /sameTurnRoot = current\.isNew/);
+assert.match(controller, /rich\?\.hasCandidateImage/);
+assert.match(controller, /delivered > 0/);
+assert.match(rich, /image_embedded_count: embedded/);
+assert.match(rich, /chat2api\.media\.fetch-v175/);
+const background = readFileSync("chrome_extension/background_media_fetch_v175.js", "utf8");
+assert.match(background, /trustedUrl\(message\.url\)/);
+assert.match(background, /SOURCE_HOSTS\.has\(senderHost\)/);
+assert.match(background, /redirect: "error"/);
+
 assert.match(rich, /response\.headers\.get\("content-type"\)/);
 console.log("Same-turn image handoff regression checks passed");
