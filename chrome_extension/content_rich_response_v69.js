@@ -290,7 +290,7 @@
       const timer = setTimeout(() => controller.abort(), 4500);
       try {
         const response = await fetch(src, { credentials: "include", signal: controller.signal });
-        if (!response.ok) continue;
+        if (!response.ok) throw new Error("media-fetch-unavailable");
         const declaredSize = Number(response.headers.get("content-length") || 0);
         if (declaredSize > MAX_INLINE_IMAGE_BYTES || declaredSize + total > MAX_INLINE_IMAGE_TOTAL_BYTES) continue;
         const type = String(response.headers.get("content-type") || "").toLowerCase();
@@ -304,8 +304,25 @@
         total += blob.size;
         inlined += 1;
       } catch (_) {
-        // If the image cannot be copied, leave the request unresolved rather
-        // than claim a browser-session-only URL was delivered.
+        // Content scripts cannot always fetch signed CDN images due to page
+        // CORS. The read-only background relay only accepts approved OpenAI
+        // media hosts and never receives arbitrary page URLs.
+        if (/^https:\/\//i.test(src)) {
+          try {
+            const result = await chrome.runtime.sendMessage({
+              type: "chat2api.media.fetch-v175", url: src,
+            });
+            const data = String(result?.data_url || "");
+            const bytes = Number(result?.bytes || 0);
+            if (result?.ok && RASTER_DATA_URI.test(data)
+                && bytes > 0 && bytes <= MAX_INLINE_IMAGE_BYTES
+                && total + bytes <= MAX_INLINE_IMAGE_TOTAL_BYTES) {
+              img.setAttribute("src", data);
+              total += bytes;
+              inlined += 1;
+            }
+          } catch (_) {}
+        }
       } finally {
         clearTimeout(timer);
       }
