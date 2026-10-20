@@ -186,6 +186,9 @@ jobs:
       - name: FDEX SSE patch authority regression
         run: node tests/network_stream_patch_authority_v155.mjs
 
+      - name: Multimodal handoff and image capture regression
+        run: node tests/multimodal_handoff_v174.mjs
+
       - name: FDEX request history regression
         run: pytest -q tests/test_fdex_request_integrity_v155.py --timeout=120
 
