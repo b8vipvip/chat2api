@@ -89,6 +89,12 @@ async function requestHistoryDownload(path,fallbackName){
   anchor.href=url;anchor.download=matched?.[1]||fallbackName;document.body.appendChild(anchor);anchor.click();anchor.remove();
   setTimeout(()=>URL.revokeObjectURL(url),3000);
 }
+let requestHistoryMediaUrls=[];
+let requestHistoryMediaSequence=0;
+function requestHistoryRevokeMedia(){
+  for(const url of requestHistoryMediaUrls)URL.revokeObjectURL(url);
+  requestHistoryMediaUrls=[];
+}
 function requestHistoryEnsureConversationModal(){
   if(document.getElementById('requestConversationModal'))return;
   const wrap=document.createElement('div');
@@ -100,12 +106,12 @@ function requestHistoryEnsureConversationModal(){
       <div id="requestConversationMeta" class="muted"></div>
       <div style="overflow:auto;display:grid;gap:12px;padding-right:2px">
         <div><div style="font-weight:700;margin-bottom:6px">提示词</div><pre id="requestConversationPrompt" style="margin:0;white-space:pre-wrap;word-break:break-word;max-height:34vh;overflow:auto;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)"></pre></div>
-        <div><div style="font-weight:700;margin-bottom:6px">生成回复</div><pre id="requestConversationReply" style="margin:0;white-space:pre-wrap;word-break:break-word;max-height:34vh;overflow:auto;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)"></pre></div>
+        <div><div style="font-weight:700;margin-bottom:6px">生成回复（文字与图片）</div><div id="requestConversationReply" style="white-space:pre-wrap;word-break:break-word;max-height:40vh;overflow:auto;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)"></div><div id="requestConversationMedia" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:10px"></div></div>
       </div>
     </div>`;
   document.body.appendChild(wrap);
-  document.getElementById('requestConversationClose').onclick=()=>{wrap.style.display='none';};
-  wrap.addEventListener('click',event=>{if(event.target===wrap)wrap.style.display='none';});
+  document.getElementById('requestConversationClose').onclick=()=>{requestHistoryMediaSequence++;requestHistoryRevokeMedia();wrap.style.display='none';};
+  wrap.addEventListener('click',event=>{if(event.target===wrap){requestHistoryMediaSequence++;requestHistoryRevokeMedia();wrap.style.display='none';}});
 }
 async function requestHistoryShowConversation(requestId){
   requestHistoryEnsureConversationModal();
@@ -113,6 +119,10 @@ async function requestHistoryShowConversation(requestId){
   const meta=document.getElementById('requestConversationMeta');
   const prompt=document.getElementById('requestConversationPrompt');
   const reply=document.getElementById('requestConversationReply');
+  const media=document.getElementById('requestConversationMedia');
+  const sequence=++requestHistoryMediaSequence;
+  requestHistoryRevokeMedia();
+  media.replaceChildren();
   const shortId=requestId?requestId.slice(-4):'-';
   meta.textContent=`请求 …${shortId} · 正在加载…`;
   prompt.textContent='';reply.textContent='';modal.style.display='flex';
@@ -121,8 +131,38 @@ async function requestHistoryShowConversation(requestId){
     const promptText=requestHistoryText(row?.final_prompt,'');
     const replyText=requestHistoryText(row?.response_text,'');
     prompt.textContent=promptText||'该请求没有保存提示词。旧请求或关闭“保存最终提示词”的请求不会包含此内容。';
-    reply.textContent=replyText||'该请求没有保存生成回复。旧请求或在本功能启用前完成的请求不会包含此内容。';
-    meta.textContent=`请求 …${shortId} · 提示词 ${Number(row?.final_prompt_chars??promptText.length)} 字符 · 回复 ${Number(row?.completion_chars??replyText.length)} 字符`;
+    const actualReply=replyText||'该请求没有保存文字回复。若是图片生成请求，请查看下方生成图片。';
+    const rich=globalThis.__CHAT2API_PLAYGROUND_CHAT_V69__;
+    if(typeof rich?.renderMarkdown==='function')reply.innerHTML=rich.renderMarkdown(actualReply);
+    else reply.textContent=actualReply;
+    const refs=Array.isArray(row?.response_media)?row.response_media.slice(0,4):[];
+    meta.textContent=`请求 …${shortId} · 提示词 ${Number(row?.final_prompt_chars??promptText.length)} 字符 · 回复 ${Number(row?.completion_chars??replyText.length)} 字符 · 已归档图片 ${refs.length} 张`;
+    for(const item of refs){
+      const fileId=String(item?.file_id||'');
+      if(!/^file_[A-Za-z0-9]{8,60}$/.test(fileId))continue;
+      try{
+        const res=await fetch(`/api/admin/requests/${encodeURIComponent(requestId)}/media/${encodeURIComponent(fileId)}`,{
+          headers:{Authorization:`Bearer ${key()}`},cache:'no-store'
+        });
+        if(!res.ok)throw new Error(`HTTP ${res.status}`);
+        const blob=await res.blob();
+        if(!['image/png','image/jpeg','image/webp','image/gif'].includes(blob.type)||blob.size>20*1024*1024)
+          throw new Error('不支持的图片格式或大小');
+        if(sequence!==requestHistoryMediaSequence)return;
+        const url=URL.createObjectURL(blob);
+        requestHistoryMediaUrls.push(url);
+        const link=document.createElement('a');
+        link.href=url;link.download=`chat2api-${requestId}.png`;
+        const img=document.createElement('img');
+        img.src=url;img.alt='请求生成的图片';img.loading='lazy';
+        img.style.cssText='display:block;max-width:min(100%,420px);max-height:420px;object-fit:contain;border:1px solid var(--line);border-radius:10px';
+        link.appendChild(img);media.appendChild(link);
+      }catch(error){
+        if(sequence!==requestHistoryMediaSequence)return;
+        const warning=document.createElement('span');warning.className='muted';
+        warning.textContent=`图片归档读取失败：${String(error?.message||error)}`;media.appendChild(warning);
+      }
+    }
   }catch(error){
     prompt.textContent=`加载失败：${String(error?.message||error)}`;
     reply.textContent='';meta.textContent=`请求 …${shortId}`;
