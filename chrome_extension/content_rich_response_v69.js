@@ -68,10 +68,29 @@
     return String(img?.currentSrc || img?.getAttribute?.("src") || "").trim();
   }
 
+  function trustedMediaSource(src) {
+    const source = String(src || "").trim();
+    if (RASTER_DATA_URI.test(source)) return true;
+    if (source.startsWith("blob:")) {
+      try {
+        const origin = new URL(source.slice(5)).hostname.toLowerCase();
+        return ["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(origin);
+      } catch (_) { return false; }
+    }
+    try {
+      const url = new URL(source);
+      const host = url.hostname.toLowerCase();
+      return url.protocol === "https:" && !url.username && !url.password
+        && (["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(host)
+          || [".oaiusercontent.com", ".oaistatic.com", ".openai.com", ".chatgpt.com"]
+            .some(suffix => host.endsWith(suffix)));
+    } catch (_) { return false; }
+  }
+
   function candidateMediaKey(img) {
     const src = candidateSource(img);
-    // Do not include the URL in diagnostics; these can contain signed tokens.
-    return src && /^(blob:|data:image\\/|https:\\/\\/)/i.test(src) ? src : "";
+    // Do not include signed media URLs in telemetry.
+    return trustedMediaSource(src) ? src : "";
   }
 
   function pageMediaCandidates() {
@@ -368,11 +387,16 @@
       const src = String(img.getAttribute("src") || "").trim();
       // Same-origin authenticated images and CORS-readable CDN images must
       // travel with the API response; a transient browser URL is not durable.
-      if (!src.startsWith("blob:") && !/^https:\/\//i.test(src)) continue;
+      if (!trustedMediaSource(src) || (!src.startsWith("blob:") && !/^https:\/\//i.test(src))) continue;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 4500);
       try {
-        const response = await fetch(src, { credentials: "include", signal: controller.signal });
+        const mediaUrl = src.startsWith("blob:") ? null : new URL(src);
+        const sameOrigin = mediaUrl?.origin === location.origin;
+        const response = await fetch(src, {
+          credentials: sameOrigin ? "include" : "omit",
+          signal: controller.signal,
+        });
         if (!response.ok) throw new Error("media-fetch-unavailable");
         const declaredSize = Number(response.headers.get("content-length") || 0);
         if (declaredSize > MAX_INLINE_IMAGE_BYTES || declaredSize + total > MAX_INLINE_IMAGE_TOTAL_BYTES) continue;
