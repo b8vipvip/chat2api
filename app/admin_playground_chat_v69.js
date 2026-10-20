@@ -10,10 +10,53 @@
   let lastRequest = null;
 
   const escHtml = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));
+  const RASTER_DATA_URL = /^data:image\/(?:png|jpeg|webp|gif);base64,[a-z0-9+/]+={0,2}$/i;
+  const MAX_IMAGE_BASE64 = 4 * Math.ceil(4 * 1024 * 1024 / 3);
+  const safeImageUrl = value => {
+    const text = String(value || "").trim();
+    if (RASTER_DATA_URL.test(text) && text.slice(text.indexOf(",") + 1).length <= MAX_IMAGE_BASE64) return text;
+    try {
+      const url = new URL(text, location.href);
+      const host = url.hostname.toLowerCase();
+      return url.protocol === "https:" && !url.username && !url.password
+        && (["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(host)
+          || [".oaiusercontent.com", ".oaistatic.com", ".openai.com", ".chatgpt.com"]
+            .some(suffix => host.endsWith(suffix))) ? url.href : "";
+    } catch (_) { return ""; }
+  };
   const safeUrl = value => {
     const text = String(value || "").trim();
-    return /^(https?:|mailto:|data:image\/)/i.test(text) ? text : "";
+    return /^(https:\/\/|mailto:)/i.test(text) ? text : "";
   };
+  function normalizeAssistantContent(content) {
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return "";
+    return content.map(part => {
+      if (!part || typeof part !== "object") return "";
+      if (part.type === "text" || part.type === "output_text") return String(part.text || "");
+      if (part.type === "image_url" || part.type === "output_image") {
+        const value = typeof part.image_url === "object" ? part.image_url.url : part.image_url || part.url;
+        const url = safeImageUrl(value);
+        return url ? `![生成图片](${url})` : "";
+      }
+      return "";
+    }).filter(Boolean).join("\n\n");
+  }
+  function imageResultMarkdown(payload) {
+    const results = Array.isArray(payload?.data) ? payload.data : [];
+    return results.slice(0, 4).map((item, index) => {
+      const encoded = String(item?.b64_json || "");
+      const mime = String(item?.mime_type || "image/png").toLowerCase();
+      const source = encoded && ["image/png", "image/jpeg", "image/webp", "image/gif"].includes(mime)
+        ? `data:${mime};base64,${encoded}` : item?.url;
+      const safe = safeImageUrl(source);
+      if (!safe) return "";
+      return `![生成图片 ${index + 1}](${safe})`;
+    }).filter(Boolean).join("\n\n");
+  }
+  function isActualImageReply(markdown) {
+    return /!\[[^\]]*\]\((?:data:image\/(?:png|jpeg|webp|gif);base64,|https:\/\/)/i.test(String(markdown || ""));
+  }
 
   function inlineMarkdown(value) {
     let source = String(value || "");
@@ -25,7 +68,7 @@
     };
     source = source.replace(/`([^`\n]+)`/g, (_all, code) => stash(`<code>${escHtml(code)}</code>`));
     source = source.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_all, alt, url) => {
-      const src = safeUrl(url);
+      const src = safeImageUrl(url);
       if (!src) return stash(`<span class="pgChatImageMissing">图片 · ${escHtml(alt || "未命名")}</span>`);
       return stash(`<img class="pgChatImage" src="${escHtml(src)}" alt="${escHtml(alt || "图片")}" loading="lazy">`);
     });
@@ -151,7 +194,7 @@
     .pgChatRow{display:flex;flex-direction:column;max-width:min(86%,920px);gap:5px}.pgChatRow.user{align-self:flex-end;align-items:flex-end}.pgChatRow.assistant{align-self:flex-start;align-items:flex-start}.pgChatRole{font-size:11px;color:var(--muted)}
     .pgChatBubble{border:1px solid var(--line);border-radius:14px;padding:11px 13px;white-space:pre-wrap;word-break:break-word;line-height:1.65;background:#111d31;min-width:52px}.pgChatRow.user .pgChatBubble{background:#17375e;border-color:#28517f}.pgChatBubble.pending{color:var(--muted)}.pgChatBubble.error{border-color:#70323c;background:#351b22;color:#ffd5d9}
     .pgChatBubble.rich{white-space:normal;min-width:min(300px,100%)}.pgChatBubble.rich p{margin:.35em 0 .75em}.pgChatBubble.rich p:first-child{margin-top:0}.pgChatBubble.rich p:last-child{margin-bottom:0}.pgChatBubble.rich h1,.pgChatBubble.rich h2,.pgChatBubble.rich h3,.pgChatBubble.rich h4,.pgChatBubble.rich h5,.pgChatBubble.rich h6{margin:.8em 0 .4em;line-height:1.3}.pgChatBubble.rich ul,.pgChatBubble.rich ol{padding-left:24px;margin:.45em 0}.pgChatBubble.rich li{margin:.18em 0}.pgChatBubble.rich blockquote{margin:.6em 0;padding:.4em .8em;border-left:3px solid #56749d;background:#0b1728;color:#cbd8ea}.pgChatBubble.rich hr{border:0;border-top:1px solid var(--line);margin:12px 0}.pgChatBubble.rich a{color:#8bb8ff}.pgChatBubble.rich code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:#07101e;border:1px solid #24344d;border-radius:5px;padding:1px 4px}.pgChatCode{margin:.65em 0;border:1px solid #263a57;border-radius:10px;overflow:hidden;background:#050b14}.pgChatCodeHead{padding:6px 10px;border-bottom:1px solid #263a57;color:#9eb1ce;font-size:11px}.pgChatCode pre{margin:0;padding:12px;overflow:auto;white-space:pre}.pgChatCode pre code{border:0;background:transparent;padding:0}.pgChatTableWrap{overflow:auto;margin:.65em 0}.pgChatTableWrap table{border-collapse:collapse;min-width:360px}.pgChatTableWrap th,.pgChatTableWrap td{border:1px solid #2b3c58;padding:7px 9px;position:static;background:transparent}.pgChatImage{display:block;max-width:min(100%,720px);max-height:520px;object-fit:contain;border-radius:10px;margin:8px 0;border:1px solid #293d59}.pgChatImageMissing{display:inline-block;padding:3px 7px;border-radius:8px;background:#13233a;color:#adc7eb}
-    .pgChatMeta{font-size:11px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap}.pgChatActions{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:8px}.pgChatCopy{border:0;background:transparent;color:var(--muted);padding:2px 5px;border-radius:6px;cursor:pointer;line-height:1}.pgChatCopy:hover{background:#17263d;color:var(--text)}.pgChatAttachment{font-size:11px;color:#adc7eb;border:1px solid #294363;background:#0d1b2e;border-radius:999px;padding:2px 8px}.pgChatComposer{display:grid;grid-template-columns:1fr auto;gap:9px;margin-top:10px;align-items:end}.pgChatComposer textarea{width:100%;min-height:76px;max-height:220px;resize:vertical;line-height:1.55}.pgChatComposer button{height:42px;min-width:94px}.pgChatAttachHint{font-size:11px;color:var(--muted);margin-top:6px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}.pgChatBadge{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:2px 8px;background:#0d1728}
+    .pgChatMode{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:10px}.pgChatMode label{font-size:12px;color:var(--muted)}.pgChatMode select{max-width:100%;min-width:min(100%,420px)}.pgChatMode span{font-size:11px;color:var(--muted)}.pgChatMeta{font-size:11px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap}.pgChatActions{font-size:11px;color:var(--muted);display:flex;align-items:center;gap:8px}.pgChatCopy{border:0;background:transparent;color:var(--muted);padding:2px 5px;border-radius:6px;cursor:pointer;line-height:1}.pgChatCopy:hover{background:#17263d;color:var(--text)}.pgChatAttachment{font-size:11px;color:#adc7eb;border:1px solid #294363;background:#0d1b2e;border-radius:999px;padding:2px 8px}.pgChatComposer{display:grid;grid-template-columns:1fr auto;gap:9px;margin-top:10px;align-items:end}.pgChatComposer textarea{width:100%;min-height:76px;max-height:220px;resize:vertical;line-height:1.55}.pgChatComposer button{height:42px;min-width:94px}.pgChatAttachHint{font-size:11px;color:var(--muted);margin-top:6px;display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}.pgChatBadge{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:999px;padding:2px 8px;background:#0d1728}
     @media(max-width:1180px){.pgChatToolbar{grid-template-columns:1fr 1fr}.pgChatMessages{height:480px}}@media(max-width:760px){.pgChatToolbar{grid-template-columns:1fr}.pgChatMessages{height:420px;min-height:300px;padding:12px}.pgChatRow{max-width:94%}.pgChatComposer{grid-template-columns:1fr}.pgChatComposer button{width:100%}}
   `;
   document.head.appendChild(style);
@@ -167,6 +210,7 @@
       <div><label>业务 API Key</label><div class="pgChatKeyBox"><select id="pgChatKey"><option value="">正在读取可用业务 Key…</option></select><input id="pgChatKeyInput" type="password" autocomplete="off" placeholder="粘贴业务 API Key（可选，优先使用）"></div></div>
       <div><label>本轮附件（最多 4 个）</label><input id="pgChatFiles" type="file" multiple></div>
     </div>
+    <div class="pgChatMode"><label for="pgChatMode">执行方式</label><select id="pgChatMode"><option value="chat">对话（选择的文本模型，允许模型自主调用图片工具）</option><option value="image">图片生成（使用 gpt-image 专用接口，保证返回图片数据）</option></select><span id="pgChatModeHint">对话模式只展示上游实际返回的内容；PIL 代码和 /mnt/data 路径不是生成图片。</span></div>
     <div class="pgChatMessages" id="pgChatMessages"><div class="pgChatEmpty">输入消息即可开始。支持连续追问；后续请求会携带本窗口中的文本对话历史。</div></div>
     <div class="pgChatComposer"><textarea id="pgChatInput" placeholder="输入测试消息。Enter 发送，Shift+Enter 换行。"></textarea><button class="action good" id="pgChatSend">发送</button></div>
     <div class="pgChatAttachHint"><span>附件只绑定当前一轮请求；完整 Markdown 语义会写入后续文本上下文。ChatGPT 网页自身的复制/点赞等操作图标不会当作模型回答传输。</span><span id="pgChatLast">尚未发送</span></div>`;
@@ -262,8 +306,9 @@
   }
   function updateReasoningState() {
     const mini = $chat("pgChatModel").value === "gpt-5.5-mini";
-    $chat("pgChatReasoning").disabled = mini;
-    $chat("pgChatReasoning").title = mini ? "gpt-5.5-mini 使用自动推理强度" : "";
+    const imageMode = $chat("pgChatMode")?.value === "image";
+    $chat("pgChatReasoning").disabled = mini || imageMode;
+    $chat("pgChatReasoning").title = imageMode ? "图片生成使用 gpt-image 专用接口" : mini ? "gpt-5.5-mini 使用自动推理强度" : "";
   }
   async function resolveCredential() {
     const pasted = $chat("pgChatKeyInput").value.trim();
@@ -301,33 +346,47 @@
     if (sending) return;
     const input = $chat("pgChatInput"), text = input.value.trim();
     if (!text) return;
-    if (!$chat("pgChatModel")?.value) return status("没有已验证且可路由的在线 Worker 文本模型，请在模型管理查看发现错误", "bad");
+    if (!$chat("pgChatModel")?.value && $chat("pgChatMode").value !== "image") return status("没有已验证且可路由的在线 Worker 文本模型，请在模型管理查看发现错误", "bad");
     if (typeof api !== "function" || typeof fileToBase64 !== "function") return status("测试场脚本尚未初始化，请刷新页面后重试", "bad");
     sending = true; $chat("pgChatSend").disabled = true; $chat("pgChatSend").textContent = "生成中"; input.disabled = true;
     let uploaded = [], credential = null, assistantText = "", firstTokenMs = null, diagnostics = null;
     const userFiles = [...$chat("pgChatFiles").files].slice(0, 4), userIndex = messages.length;
     messages.push({role:"user",content:text,attachment_names:userFiles.map(file=>file.name),include_in_context:true,created_at:new Date().toISOString()}); input.value=""; renderMessages(); addPendingAssistant();
     const requestId = "req_" + (globalThis.crypto?.randomUUID ? crypto.randomUUID().replaceAll("-", "") : `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`);
-    const model = $chat("pgChatModel").value, started = performance.now();
+    const imageMode = $chat("pgChatMode").value === "image";
+    const model = imageMode ? "gpt-image" : $chat("pgChatModel").value;
+    const started = performance.now();
     try {
       credential = await resolveCredential();
       uploaded = await uploadFiles(userFiles, credential.token);
-      const body = {model,messages:normalizedHistory(),prompt_mode:"full",attachments:uploaded.map(item=>({file_id:item.file_id})),stream:false,timeout:300};
-      if (model !== "gpt-5.5-mini" && $chat("pgChatReasoning").value) body.reasoning_effort = $chat("pgChatReasoning").value;
-      const response = await fetch("/v1/chat/completions", {method:"POST",headers:{...headers(credential.token),"Content-Type":"application/json","X-Chat2API-Request-ID":requestId},body:JSON.stringify(body)});
+      const body = imageMode
+        ? {model:"gpt-image",prompt:text,attachments:uploaded.map(item=>({file_id:item.file_id})),response_format:"b64_json",n:1,timeout:600}
+        : {model,messages:normalizedHistory(),prompt_mode:"full",attachments:uploaded.map(item=>({file_id:item.file_id})),stream:false,timeout:300};
+      if (!imageMode && model !== "gpt-5.5-mini" && $chat("pgChatReasoning").value) body.reasoning_effort = $chat("pgChatReasoning").value;
+      const response = await fetch(imageMode ? "/v1/images/generations" : "/v1/chat/completions", {
+        method:"POST",headers:{...headers(credential.token),"Content-Type":"application/json",
+          "X-Chat2API-Request-ID": imageMode ? requestId.replace(/^req_/, "imgreq_") : requestId},
+        body:JSON.stringify(body),
+      });
       if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
       const payload = await response.json();
-      assistantText = String(payload.choices?.[0]?.message?.content || "");
+      assistantText = imageMode ? imageResultMarkdown(payload)
+        : normalizeAssistantContent(payload.choices?.[0]?.message?.content);
       diagnostics = payload.chat2api || null;
+      if (imageMode && !isActualImageReply(assistantText))
+        throw new Error("图片接口未返回可展示的真实图片字节或可信图片链接，不能把文本代码标为成功");
       firstTokenMs = Number(diagnostics?.timings?.first_token_ms ?? NaN);
       if (!Number.isFinite(firstTokenMs)) firstTokenMs = null;
-      if (!assistantText.trim()) throw new Error("请求完成，但没有捕获到模型文本输出");
+      if (!assistantText.trim()) throw new Error("请求完成，但没有捕获到可交付的模型回复");
       const totalMs = performance.now() - started;
       document.getElementById("pgChatPending")?.remove();
-      messages.push({role:"assistant",content:assistantText,include_in_context:true,created_at:new Date().toISOString(),meta:{request_id:requestId,model,total_ms:totalMs,first_token_ms:firstTokenMs,response_format:String(diagnostics?.diagnostics?.response_format||"markdown")}});
-      lastRequest = {request_id:requestId,model,total_ms:totalMs,first_token_ms:firstTokenMs,diagnostics}; saveHistory(); renderMessages();
-      $chat("pgChatLast").innerHTML = `<span class="pgChatBadge">${escHtml(requestId)}</span> <span class="pgChatBadge">${Math.round(totalMs)} ms</span>`; status(`聊天请求完成：${requestId}`, "ok"); $chat("pgChatFiles").value="";
-      await recordChatTurn({requestId,model,credential,text,statusValue:"passed",totalMs,firstTokenMs,responseChars:assistantText.length,attachmentsCount:userFiles.length,error:null});
+      const responseType = isActualImageReply(assistantText) ? (imageMode ? "image" : "mixed") : "text";
+      const actualRequestId = String(diagnostics?.request_id || (imageMode ? requestId.replace(/^req_/, "imgreq_") : requestId));
+      messages.push({role:"assistant",content:assistantText,include_in_context:!imageMode,
+        created_at:new Date().toISOString(),meta:{request_id:actualRequestId,model,total_ms:totalMs,first_token_ms:firstTokenMs,response_format:responseType}});
+      lastRequest = {request_id:actualRequestId,model,total_ms:totalMs,first_token_ms:firstTokenMs,diagnostics}; saveHistory(); renderMessages();
+      $chat("pgChatLast").innerHTML = `<span class="pgChatBadge">${escHtml(actualRequestId)}</span> <span class="pgChatBadge">${Math.round(totalMs)} ms</span>`; status(`聊天请求完成：${requestId}`, "ok"); $chat("pgChatFiles").value="";
+      await recordChatTurn({requestId:actualRequestId,model,credential,text,statusValue:"passed",totalMs,firstTokenMs,responseChars:assistantText.length,attachmentsCount:userFiles.length,error:null});
     } catch (error) {
       const totalMs = performance.now() - started, errorText = String(error?.message || error), failedStatus = /(stalled|watchdog|timed out|timeout|no observable|no response progress)/i.test(errorText) ? "stalled" : "failed";
       document.getElementById("pgChatPending")?.remove(); if (messages[userIndex]) messages[userIndex].include_in_context=false;
@@ -346,7 +405,10 @@
 
   $chat("pgChatSend").addEventListener("click", sendMessage); $chat("pgChatNew").addEventListener("click", newConversation); $chat("pgChatMessages").addEventListener("click", event => { const button = event.target.closest?.("[data-copy-index]"); if (!button) return; copyMessage(Number(button.dataset.copyIndex), button); });
   $chat("pgChatInput").addEventListener("keydown", event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendMessage(); } });
+  $chat("pgChatMode").addEventListener("change", updateReasoningState);
   $chat("pgChatModel").addEventListener("change", updateReasoningState); $chat("pgChatModel").addEventListener("focus", syncModels); $chat("pgChatKey").addEventListener("focus", syncKeys);
   loadHistory(); renderMessages(); updateReasoningState(); setTimeout(syncModels,100); setTimeout(syncKeys,180); setTimeout(syncModels,900);
-  globalThis.__CHAT2API_PLAYGROUND_CHAT_V69__ = Object.freeze({version:69, renderMarkdown});
+  globalThis.__CHAT2API_PLAYGROUND_CHAT_V69__ = Object.freeze({
+    version:177, renderMarkdown, imageResultMarkdown, normalizeAssistantContent, safeImageUrl,
+  });
 })();
