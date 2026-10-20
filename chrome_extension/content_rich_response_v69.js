@@ -119,7 +119,7 @@
       else button.remove();
     }
     for (const item of [...clone.querySelectorAll(ACTION_SELECTOR)]) {
-      if (!item.isConnected) continue;
+      if (!clone.contains(item)) continue;
       const pictures = [...item.querySelectorAll("img")].filter(img =>
         visibleMediaSources.has(String(img.getAttribute("src") || "").trim()));
       if (pictures.length) item.replaceWith(...pictures.map(img => img.cloneNode(true)));
