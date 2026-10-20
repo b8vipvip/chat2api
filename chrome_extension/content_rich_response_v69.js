@@ -118,7 +118,13 @@
       if (pictureNodes.length) button.replaceWith(...pictureNodes.map(img => img.cloneNode(true)));
       else button.remove();
     }
-    clone.querySelectorAll(ACTION_SELECTOR).forEach(item => item.remove());
+    for (const item of [...clone.querySelectorAll(ACTION_SELECTOR)]) {
+      if (!item.isConnected) continue;
+      const pictures = [...item.querySelectorAll("img")].filter(img =>
+        visibleMediaSources.has(String(img.getAttribute("src") || "").trim()));
+      if (pictures.length) item.replaceWith(...pictures.map(img => img.cloneNode(true)));
+      else item.remove();
+    }
     for (const svg of clone.querySelectorAll("svg")) {
       const label = normalizeInline(svg.getAttribute("aria-label") || svg.querySelector("title")?.textContent || "").trim();
       if (label && svg.parentNode) svg.replaceWith(document.createTextNode(label));
