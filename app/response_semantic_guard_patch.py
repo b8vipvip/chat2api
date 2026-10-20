@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Awaitable, Callable
 
@@ -40,6 +41,15 @@ def sanitize_assistant_text(value: object) -> tuple[str, bool]:
     return raw, False
 
 
+def is_internal_tool_handoff(value: object) -> bool:
+    """An internal ChatGPT tool handoff is not an assistant answer or media."""
+    try:
+        parsed = json.loads(str(value or "").strip())
+    except (TypeError, ValueError):
+        return False
+    return isinstance(parsed, dict) and parsed == {"skipped_mainline": True}
+
+
 def install_response_semantic_guard_patch(app: FastAPI) -> FastAPI:
     if getattr(app.state, "response_semantic_guard_patch_installed", False):
         return app
@@ -56,6 +66,23 @@ def install_response_semantic_guard_patch(app: FastAPI) -> FastAPI:
         state = broker.requests.get(request_id)
         field = "delta" if event_type == "chat.delta" else "text"
         original = str(event.get(field) or "")
+        if is_internal_tool_handoff(original):
+            if state is not None:
+                state.diagnostics.update({
+                    "response_semantic_guard": PATCH_ID,
+                    "non_deliverable_tool_handoff": True,
+                    "non_deliverable_tool_handoff_event": event_type,
+                })
+            if event_type == "chat.completed":
+                # Do not mark a successful API response when no image/file/text
+                # was actually delivered. The newer Worker captures the media
+                # before submitting its single authoritative terminal event.
+                return await previous_publish(request_id, {
+                    "type": "chat.error",
+                    "request_id": request_id,
+                    "error": "ChatGPT tool or media generation returned no transferable result; update the Worker and retry.",
+                })
+            return True
         cleaned = original
         filtered = False
 

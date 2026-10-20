@@ -35,7 +35,8 @@ def test_network_terminal_evidence_keeps_request_v6_as_single_terminal_owner() -
     assert 'source: "network-sse-terminal-v57"' in request
     assert 'source: "validated-same-turn-dom-v163"' in request
     assert 'type: "chat.completed"' in request
-    assert "networkTerminalAt && networkTerminalText && !promptStillPresent(active)" in request
+    assert "networkTerminalAt && networkTerminalText && !imageHandoff && !promptStillPresent(active)" in request
+    assert "imageHandoff && current.isNew && current.latest && !generating" in request
 
 
 def test_submission_confirmation_never_treats_generating_control_as_sufficient() -> None:

@@ -663,6 +663,20 @@
     return false;
   }
 
+  function isInternalMediaHandoff(value) {
+    try {
+      const parsed = JSON.parse(String(value || "").trim());
+      return parsed && !Array.isArray(parsed) && parsed.skipped_mainline === true
+        && Object.keys(parsed).length === 1;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function hasTransferableImage(value) {
+    return /!\[[^\]]{0,400}\]\((?:data:image\/[^)]+|https:\/\/[^)]+)\)/i.test(String(value || ""));
+  }
+
   async function reconcileResponsesTerminal(active, networkText) {
     const raw = String(networkText || "");
     if (String(active.options?.response_protocol || "") !== "responses-v108"
@@ -699,6 +713,10 @@
     let lastText = "";
     let lastIdentity = "";
     let stableSince = 0;
+    let imageCandidate = "";
+    let imageCandidateSince = 0;
+    let imageCaptureAt = 0;
+    let imageHandoffObserved = false;
 
     while (!active.cancelled && Date.now() - startedAt < timeoutMs) {
       const upstreamLimit = upstreamRateLimitFailure(active);
@@ -710,6 +728,45 @@
       const networkText = String(active.networkObservedText || "");
       const networkTerminalText = String(active.networkTerminalText || "");
       const networkTerminalAt = Number(active.networkTerminalAt || 0);
+      const imageHandoff = isInternalMediaHandoff(networkText)
+        || isInternalMediaHandoff(networkTerminalText);
+      if (imageHandoff) imageHandoffObserved = true;
+
+      // ChatGPT's image-generation tool can end the main text stream with
+      // {"skipped_mainline":true} while the actual image is rendered later.
+      // Only request-v6 can complete this request; harvest same-turn media,
+      // never send the internal marker as the user-visible answer.
+      if (imageHandoff && current.isNew && current.latest && !generating
+          && Date.now() - imageCaptureAt >= 700) {
+        imageCaptureAt = Date.now();
+        const finalMedia = await finalNodeText(current.latest);
+        const captured = String(finalMedia?.text || "");
+        if (hasTransferableImage(captured)) {
+          if (captured !== imageCandidate) {
+            imageCandidate = captured;
+            imageCandidateSince = Date.now();
+          } else if (Date.now() - imageCandidateSince >= 2400) {
+            responseStarted = await ensureResponseStarted(active, responseStarted, "verified-media-dom-v174");
+            await emit({
+              type: "chat.completed",
+              request_id: active.requestId,
+              text: captured,
+              diagnostics: {
+                response_terminal_source: "verified-same-turn-media-dom-v174",
+                response_format: "markdown",
+                response_image_inlined_count: Number(finalMedia?.image_inlined_count || 0),
+                response_image_inlined_bytes: Number(finalMedia?.image_inlined_bytes || 0),
+                internal_tool_handoff_filtered: true,
+              },
+            });
+            active.completed = true;
+            return;
+          }
+        } else {
+          imageCandidate = "";
+          imageCandidateSince = 0;
+        }
+      }
 
       if ((current.isNew || generating || networkText) && !responseStarted) {
         responseStarted = await ensureResponseStarted(active, responseStarted, networkText ? "network-evidence-v57" : current.isNew ? "dom-assistant" : "generation-control");
@@ -725,7 +782,7 @@
           active.lastCandidateReason = current.reason;
         }
       }
-      if (networkText) {
+      if (networkText && !isInternalMediaHandoff(networkText)) {
         const preferred = preferredResponseText(lastText, networkText);
         const previous = lastText;
         lastText = await updateCapturedText(active, preferred, lastText);
@@ -743,7 +800,7 @@
       // after an early end-turn proof. A short terminal fragment is not
       // automatically a final text payload.
       const evidenceSettledAt = Math.max(networkTerminalAt, Number(active.networkObservedAt || 0));
-      if (networkTerminalAt && networkTerminalText && !promptStillPresent(active)
+      if (networkTerminalAt && networkTerminalText && !imageHandoff && !promptStillPresent(active)
           && Date.now() - evidenceSettledAt >= 1250) {
         responseStarted = await ensureResponseStarted(active, responseStarted, "network-terminal-v57");
         // Only this controller can commit the terminal body. Use the verified
@@ -782,7 +839,7 @@
 
       // A DOM pause or a missing Stop button cannot override an observed SSE
       // response that has not reached a verified assistant terminal.
-      if (active.networkStreamEndedWithoutTerminalAt && !networkTerminalAt
+      if (active.networkStreamEndedWithoutTerminalAt && !networkTerminalAt && !imageHandoff
           && Date.now() - active.networkStreamEndedWithoutTerminalAt >= 3000) {
         await emit({
           type: "chat.error", request_id: active.requestId,
@@ -791,7 +848,7 @@
         });
         return;
       }
-      if (responseStarted && lastText && !generating && !active.networkStreamSeen
+      if (responseStarted && lastText && !generating && !imageHandoff && !active.networkStreamSeen
           && stableSince && Date.now() - stableSince >= 1000) {
         let settleStableSince = Date.now();
         let settledText = lastText;
@@ -848,7 +905,12 @@
     }
 
     if (active.cancelled) await emit({ type: "chat.cancelled", request_id: active.requestId, reason: "Cancelled by API client" });
-    else await emit({ type: "chat.error", request_id: active.requestId, error: "Timed out waiting for ChatGPT response", diagnostics: { response_epoch_revision: 69 } });
+    else await emit({ type: "chat.error", request_id: active.requestId, error: imageHandoffObserved
+      ? "ChatGPT generated media but no transferable image was captured before the request timeout"
+      : "Timed out waiting for ChatGPT response", diagnostics: {
+        response_epoch_revision: 69,
+        ...(imageHandoffObserved && { internal_tool_handoff_without_media: true }),
+      } });
   }
 
   async function runRequest(message) {

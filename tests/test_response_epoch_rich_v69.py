@@ -45,3 +45,19 @@ def test_v69_javascript_syntax():
     for path in ("chrome_extension/content_rich_response_v69.js","chrome_extension/content_request_v6.js","chrome_extension/content_chatgpt_choice_policy_v143.js","app/admin_playground_chat_v69.js"):
         result=subprocess.run(["node","--check",str(ROOT/path)],capture_output=True,text=True)
         assert result.returncode == 0, f"{path}: {result.stderr}"
+
+
+def test_generated_media_handoff_keeps_single_request_terminal_authority():
+    source = read("chrome_extension/content_request_v6.js")
+    rich = read("chrome_extension/content_rich_response_v69.js")
+    assert 'function isInternalMediaHandoff(value)' in source
+    assert 'function hasTransferableImage(value)' in source
+    assert 'imageHandoff && current.isNew && current.latest && !generating' in source
+    assert 'response_terminal_source: "verified-same-turn-media-dom-v174"' in source
+    assert 'networkTerminalText && !imageHandoff && !promptStillPresent(active)' in source
+    assert 'networkText && !isInternalMediaHandoff(networkText)' in source
+    assert '!networkTerminalAt && !imageHandoff' in source
+    assert 'internal_tool_handoff_without_media: true' in source
+    assert 'if (mediaOutsideMarkdown) return node;' in rich
+    assert 'image_inlined_count: imageStats.inlined' in rich
+    assert source.count('type: "chat.completed"') >= 2
