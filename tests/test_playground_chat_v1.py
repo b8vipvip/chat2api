@@ -46,7 +46,10 @@ def test_playground_chat_patch_injects_console_assets() -> None:
         assert 'stream:false' in source.replace(" ", "")
         assert 'payload.choices?.[0]?.message?.content' in source
         assert 'messages:normalizedHistory()' in source.replace(" ", "")
-        assert 'attachments:uploaded.map' in source.replace(" ", "")
+        assert 'attachments:referenceFiles' in source.replace(" ", "")
+        assert 'uploaded.map(item=>({file_id:item.file_id}))' in source.replace(" ", "")
+        assert 'imageMode' in source
+        assert '/v1/images/generations' in source
         assert 'sessionStorage.setItem' in source
         assert 'Shift+Enter' in source
         assert 'X-Chat2API-Request-ID' in source
