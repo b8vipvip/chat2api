@@ -5,6 +5,7 @@ import re
 from typing import Any, Awaitable, Callable
 
 from fastapi import FastAPI
+from .media_handoff import is_internal_tool_handoff
 
 
 PATCH_ID = "response-semantic-guard-v1"
@@ -39,15 +40,6 @@ def sanitize_assistant_text(value: object) -> tuple[str, bool]:
     if cleaned != raw:
         return cleaned, True
     return raw, False
-
-
-def is_internal_tool_handoff(value: object) -> bool:
-    """An internal ChatGPT tool handoff is not an assistant answer or media."""
-    try:
-        parsed = json.loads(str(value or "").strip())
-    except (TypeError, ValueError):
-        return False
-    return isinstance(parsed, dict) and parsed == {"skipped_mainline": True}
 
 
 def install_response_semantic_guard_patch(app: FastAPI) -> FastAPI:
