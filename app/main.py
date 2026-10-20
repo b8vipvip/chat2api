@@ -893,10 +893,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     elif image.get("b64_json"):
                         mime = image.get("mime_type") or "image/png"
                         output.append({"url": f"data:{mime};base64,{image['b64_json']}"})
+            # Store actual generated image bytes separately from the JSONL
+            # request history. Never persist a base64 image or guessed /mnt/data
+            # path in response_text; a protected admin endpoint serves previews.
+            archived_media: list[dict[str, object]] = []
+            for image in images[:1]:
+                encoded = image.get("b64_json")
+                mime = str(image.get("mime_type") or "image/png").lower()
+                if not isinstance(encoded, str) or mime not in {"image/png", "image/jpeg", "image/webp", "image/gif"}:
+                    continue
+                try:
+                    media_item = await file_store.create(
+                        filename=f"generated-{request_id}.png" if mime == "image/png" else f"generated-{request_id}.{mime.split('/')[-1]}",
+                        data_base64=encoded, mime_type=mime,
+                        owner_key_id=principal.key_id, purpose="generated-output",
+                    )
+                    archived_media.append({"file_id": media_item.file_id, "mime_type": mime, "bytes": media_item.size})
+                except (ValueError, OSError) as error:
+                    logger.warning("Could not archive generated media request=%s reason=%s", request_id, type(error).__name__)
             state.completed_mono = state.completed_mono or time.perf_counter()
             usage, token_meta = standard_usage(body.prompt, "")
             await telemetry.upsert(
                 {
+                    "response_media": archived_media,
+                    "response_media_count": len(output),
+                    "response_text": "已生成图片（在查看对话中预览）" if archived_media else "图片接口返回结果，但没有可归档的图片字节",
+                    "response_text_available": bool(archived_media),
                     "request_id": request_id, "response_id": response_id, "client_id": client_id,
                     "api_key_id": principal.key_id, "api_key_name": principal.name, "auth_kind": principal.kind,
                     "requested_model": "gpt-image", "request_type": "image_generation",
@@ -946,6 +968,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         finally:
             registry.busy_clients.discard(client_id)
             await broker.release(request_id)
+
+    @app.get("/api/admin/requests/{request_id}/media/{file_id}", dependencies=[Depends(require_admin_key)])
+    async def admin_request_media(request_id: str, file_id: str) -> Response:
+        """Serve an archived image only when it belongs to the requested row."""
+        row = telemetry.get(request_id)
+        media = (row or {}).get("response_media")
+        if not isinstance(media, list) or not any(
+            isinstance(item, dict) and item.get("file_id") == file_id for item in media
+        ):
+            raise HTTPException(status_code=404, detail="No archived image for this request")
+        try:
+            item, payload = file_store.read(file_id)
+        except (KeyError, FileNotFoundError) as error:
+            raise HTTPException(status_code=404, detail="Archived image is no longer available") from error
+        if item.purpose != "generated-output" or item.mime_type not in {
+            "image/png", "image/jpeg", "image/webp", "image/gif"
+        }:
+            raise HTTPException(status_code=404, detail="Invalid request media")
+        return Response(
+            content=payload, media_type=item.mime_type,
+            headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+        )
 
     @app.websocket("/ws/extensions/{client_id}")
     async def extension_socket(websocket: WebSocket, client_id: str, token: str = Query(default="")) -> None:
