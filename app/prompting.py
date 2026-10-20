@@ -12,7 +12,7 @@ def build_prompt(messages: list[ChatMessage], mode: str = "last_user") -> str:
             "tool": "Tool",
         }
         blocks = [
-            f"[{labels[item.role]}]\\n{item.text()}"
+            f"[{labels[item.role]}]\n{item.text()}"
             for item in messages
             if item.text() and not (
                 item.role == "assistant" and is_internal_tool_handoff(item.text())
