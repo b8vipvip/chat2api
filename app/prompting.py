@@ -1,4 +1,5 @@
 from .models import ChatMessage
+from .media_handoff import is_internal_tool_handoff
 
 
 def build_prompt(messages: list[ChatMessage], mode: str = "last_user") -> str:
@@ -10,7 +11,13 @@ def build_prompt(messages: list[ChatMessage], mode: str = "last_user") -> str:
             "assistant": "Assistant",
             "tool": "Tool",
         }
-        blocks = [f"[{labels[item.role]}]\n{item.text()}" for item in messages if item.text()]
+        blocks = [
+            f"[{labels[item.role]}]\\n{item.text()}"
+            for item in messages
+            if item.text() and not (
+                item.role == "assistant" and is_internal_tool_handoff(item.text())
+            )
+        ]
         return "\n\n".join(blocks).strip()
 
     instructions = [item.text() for item in messages if item.role in {"system", "developer"} and item.text()]
