@@ -757,6 +757,10 @@
         imageCaptureAt = Date.now();
         const finalMedia = await finalNodeText(sameTurnRoot);
         const captured = String(finalMedia?.text || "");
+        active.mediaCaptureAttempts = Number(active.mediaCaptureAttempts || 0) + 1;
+        active.mediaCaptureLastChars = captured.length;
+        active.mediaCaptureLastInlined = Number(finalMedia?.image_inlined_count || 0);
+        active.mediaCaptureLastEmbedded = Number(finalMedia?.image_embedded_count || 0);
         // Never commit a browser-only blob URL or an inaccessible CDN preview.
         // The rich serializer must actually transport an image to the API.
         const delivered = Number(finalMedia?.image_inlined_count || 0)
@@ -787,6 +791,17 @@
         } else {
           imageCandidate = "";
           imageCandidateSince = 0;
+          if (!active.mediaCaptureLastReportAt || Date.now() - active.mediaCaptureLastReportAt >= 8000) {
+            active.mediaCaptureLastReportAt = Date.now();
+            await diagnostic(active, "media-not-transferable", {
+              media_capture_attempts: active.mediaCaptureAttempts,
+              media_capture_candidate_chars: active.mediaCaptureLastChars,
+              media_capture_inline_count: active.mediaCaptureLastInlined,
+              media_capture_embedded_count: active.mediaCaptureLastEmbedded,
+              media_turn_scope: current.reason,
+              media_response_epoch_revision: 175,
+            });
+          }
         }
       }
 
@@ -931,7 +946,13 @@
       ? "ChatGPT generated media but no transferable image was captured before the request timeout"
       : "Timed out waiting for ChatGPT response", diagnostics: {
         response_epoch_revision: 69,
-        ...(imageHandoffObserved && { internal_tool_handoff_without_media: true }),
+        ...(imageHandoffObserved && {
+          internal_tool_handoff_without_media: true,
+          media_capture_attempts: Number(active.mediaCaptureAttempts || 0),
+          media_capture_candidate_chars: Number(active.mediaCaptureLastChars || 0),
+          media_capture_inline_count: Number(active.mediaCaptureLastInlined || 0),
+          media_capture_embedded_count: Number(active.mediaCaptureLastEmbedded || 0),
+        }),
       } });
   }
 
