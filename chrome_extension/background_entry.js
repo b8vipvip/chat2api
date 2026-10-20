@@ -1,5 +1,6 @@
 importScripts(
   "background.js",
+  "background_media_fetch_v175.js",
   "background_device_v17.js",
   "background_time_v14.js",
   "background_platform_v26.js",
