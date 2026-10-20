@@ -793,7 +793,7 @@
       if ((current.isNew || generating || networkText || visibleTurnMedia) && !responseStarted) {
         responseStarted = await ensureResponseStarted(active, responseStarted, networkText ? "network-evidence-v57" : current.isNew ? "dom-assistant" : "generation-control");
       }
-      if (current.isNew && current.text && !isInternalMediaHandoff(current.text)) {
+      if (current.isNew && current.text && !captureMedia && !isInternalMediaHandoff(current.text)) {
         const preferred = preferredResponseText(lastText, current.text);
         const previous = lastText;
         lastText = await updateCapturedText(active, preferred, lastText);
