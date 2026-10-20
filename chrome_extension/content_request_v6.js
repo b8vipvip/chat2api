@@ -820,6 +820,7 @@
         active.mediaCaptureLastChars = captured.length;
         active.mediaCaptureLastInlined = Number(finalMedia?.image_inlined_count || 0);
         active.mediaCaptureLastEmbedded = Number(finalMedia?.image_embedded_count || 0);
+        active.mediaCaptureTransferStats = finalMedia?.image_transfer_stats || null;
         active.mediaCaptureOrigin = sourceMedia.length ? captureOrigin : "assistant-turn";
         // Never commit a browser-only blob URL or an inaccessible CDN preview.
         // The rich serializer must actually transport an image to the API.
@@ -860,6 +861,7 @@
               media_capture_candidate_chars: active.mediaCaptureLastChars,
               media_capture_inline_count: active.mediaCaptureLastInlined,
               media_capture_embedded_count: active.mediaCaptureLastEmbedded,
+              media_transfer_stats: active.mediaCaptureTransferStats,
               media_turn_scope: current.reason,
               media_capture_origin: active.mediaCaptureOrigin,
               media_document_candidates: discovered.candidate_count_document,
@@ -1017,6 +1019,7 @@
           media_capture_candidate_chars: Number(active.mediaCaptureLastChars || 0),
           media_capture_inline_count: Number(active.mediaCaptureLastInlined || 0),
           media_capture_embedded_count: Number(active.mediaCaptureLastEmbedded || 0),
+          media_transfer_stats: active.mediaCaptureTransferStats,
           media_capture_origin: active.mediaCaptureOrigin || "none",
           media_last_scan_candidates: Number(active.mediaLastScanCandidates || 0),
           media_last_scan_new_candidates: Number(active.mediaLastScanNewCandidates || 0),
