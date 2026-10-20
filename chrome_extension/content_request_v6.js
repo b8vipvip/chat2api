@@ -740,8 +740,11 @@
       // Image-only assistant turns can lack a data-message-author-role node.
       // Compare visible chat-main images against the snapshot taken before
       // submitting this exact request; never use arbitrary document images.
+      const userAnchor = currentUserTurn(active);
+      const freshUserAnchor = userAnchor && !active.baselineUserTurns?.has(userAnchor)
+        ? userAnchor : null;
       const discovered = rich?.locateNewPageMedia?.(
-        active.baselinePageMedia, currentUserTurn(active),
+        active.baselinePageMedia, freshUserAnchor,
       ) || { images: [], candidate_count_document: 0, new_image_candidate_count: 0,
         after_user_count: 0, baseline_image_count: 0, anchor: "none" };
       const pageMediaFound = discovered.images.length > 0;
