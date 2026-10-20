@@ -939,6 +939,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "timings": state.timings(),
                     "diagnostics": state.diagnostics,
                     "token_usage": token_meta,
+                    "media_files": archived_media,
                 },
             }
         except asyncio.TimeoutError as error:
