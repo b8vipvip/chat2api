@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
 
+const assertFromVm = (actual, expected) => assert.deepEqual(JSON.parse(JSON.stringify(actual)), expected);
+
 const source = readFileSync("chrome_extension/background_media_fetch_v175.js", "utf8");
 let listener;
 let calls = 0;
@@ -43,15 +45,15 @@ function send(message, sender = { url: "https://chatgpt.com/c/abc", tab: { id: 2
     if (!keepAlive) return;
   });
 }
-assert.deepEqual(
+assertFromVm(
   await send({ type: "chat2api.media.fetch-v175", url: "http://127.0.0.1/secrets" }),
   { ok: false, error: "untrusted-image-source" },
 );
-assert.deepEqual(
+assertFromVm(
   await send({ type: "chat2api.media.fetch-v175", url: "https://example.com/img.png" }),
   { ok: false, error: "untrusted-image-source" },
 );
-assert.deepEqual(
+assertFromVm(
   await send({ type: "chat2api.media.fetch-v175", url: "https://cdn.openai.com/img.png" },
     { url: "https://other.example/", tab: { id: 2 } }),
   { ok: false, error: "untrusted-image-source" },
