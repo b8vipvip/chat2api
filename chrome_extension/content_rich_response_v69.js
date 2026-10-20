@@ -56,6 +56,83 @@
       && [...node.querySelectorAll("img")].some(candidateImage));
   }
 
+  // The redesigned ChatGPT image generator can render a finished preview
+  // outside [data-message-author-role='assistant']. Restrict discovery to the
+  // active chat's main content, never the sidebar, modals, uploads or menus.
+  const CHAT_MEDIA_SELECTOR = [
+    "main img", "[role='main'] img", "#thread img",
+    "[data-testid^='conversation-turn'] img",
+  ].join(",");
+
+  function candidateSource(img) {
+    return String(img?.currentSrc || img?.getAttribute?.("src") || "").trim();
+  }
+
+  function candidateMediaKey(img) {
+    const src = candidateSource(img);
+    // Do not include the URL in diagnostics; these can contain signed tokens.
+    return src && /^(blob:|data:image\\/|https:\\/\\/)/i.test(src) ? src : "";
+  }
+
+  function pageMediaCandidates() {
+    return [...document.querySelectorAll(CHAT_MEDIA_SELECTOR)]
+      .filter(img => {
+        if (!candidateImage(img)) return false;
+        if (img.closest("aside,nav,header,footer,form,[role='dialog'],[role='menu'],[data-message-author-role='user']")) return false;
+        const turn = img.closest("article[data-testid^='conversation-turn'],[data-testid^='conversation-turn'],article[data-message-id]");
+        if (turn && (turn.getAttribute("data-message-author-role") === "user"
+            || turn.querySelector("[data-message-author-role='user']"))) return false;
+        return Boolean(candidateMediaKey(img));
+      });
+  }
+
+  function snapshotPageMedia() {
+    const images = pageMediaCandidates();
+    return { keys: new Set(images.map(candidateMediaKey)), nodes: new Set(images), count: images.length };
+  }
+
+  function locateNewPageMedia(baseline, userAnchor = null) {
+    const images = pageMediaCandidates();
+    const oldKeys = baseline?.keys || new Set();
+    const fresh = images.filter(img => !oldKeys.has(candidateMediaKey(img)));
+    const afterUser = userAnchor instanceof Element
+      ? fresh.filter(img => {
+          if (!userAnchor.isConnected || !img.isConnected || userAnchor === img) return false;
+          return Boolean(userAnchor.compareDocumentPosition(img) & Node.DOCUMENT_POSITION_FOLLOWING);
+        })
+      : [];
+    // An accepted new image URL is the fallback evidence when ChatGPT does
+    // not expose an assistant role/turn node. It must be new since pre-send,
+    // inside the same tab's main conversation, and not a user upload.
+    const selected = afterUser.length ? afterUser : fresh;
+    return {
+      images: selected.slice(-MAX_INLINE_IMAGES),
+      candidate_count_document: images.length,
+      new_image_candidate_count: fresh.length,
+      after_user_count: afterUser.length,
+      anchor: afterUser.length ? "after-current-user" : fresh.length ? "fresh-page-media" : "none",
+      baseline_image_count: Number(baseline?.count || 0),
+    };
+  }
+
+  async function capturePageImages(images) {
+    if (!Array.isArray(images) || !images.length) return {
+      text: "", image_inlined_count: 0, image_embedded_count: 0,
+      image_inlined_bytes: 0,
+    };
+    const wrapper = document.createElement("div");
+    for (const image of images.slice(-MAX_INLINE_IMAGES)) {
+      if (!candidateImage(image)) continue;
+      const src = candidateSource(image);
+      if (!src) continue;
+      const copy = image.cloneNode(false);
+      copy.setAttribute("src", src);
+      copy.removeAttribute("srcset");
+      wrapper.appendChild(copy);
+    }
+    return captureFinalMarkdown(wrapper);
+  }
+
   function contentRoot(node) {
     if (!node) return null;
     const candidates = [];
@@ -365,6 +442,9 @@
     format: "markdown",
     contentRoot,
     hasCandidateImage,
+    snapshotPageMedia,
+    locateNewPageMedia,
+    capturePageImages,
     extractMarkdown,
     captureFinalMarkdown,
   });
