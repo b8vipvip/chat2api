@@ -81,6 +81,22 @@
     let clone = null;
     try { clone = root.cloneNode(true); } catch (_) { return null; }
     if (!clone?.querySelectorAll) return clone;
+    // Generated pictures can live *inside* a clickable preview button. Remove
+    // the button's action chrome without discarding the actual user-requested
+    // image. Only preserve images that were visibly large in this same turn.
+    const visibleMediaSources = new Set([...root.querySelectorAll("img")]
+      .filter(img => {
+        const src = String(img.getAttribute("src") || "").trim();
+        if (!/^(blob:|data:image\\/|https:\\/\\/)/i.test(src) || !visible(img)) return false;
+        const bounds = img.getBoundingClientRect();
+        return bounds.width >= 64 && bounds.height >= 64;
+      }).map(img => String(img.getAttribute("src") || "").trim()));
+    for (const button of [...clone.querySelectorAll("button")]) {
+      const pictureNodes = [...button.querySelectorAll("img")]
+        .filter(img => visibleMediaSources.has(String(img.getAttribute("src") || "").trim()));
+      if (pictureNodes.length) button.replaceWith(...pictureNodes.map(img => img.cloneNode(true)));
+      else button.remove();
+    }
     clone.querySelectorAll(ACTION_SELECTOR).forEach(item => item.remove());
     for (const svg of clone.querySelectorAll("svg")) {
       const label = normalizeInline(svg.getAttribute("aria-label") || svg.querySelector("title")?.textContent || "").trim();
