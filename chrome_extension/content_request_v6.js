@@ -327,6 +327,7 @@
     // The visible user prompt may be collapsed behind a "Show more" control,
     // so its text cannot always match the full prompt sent to the composer.
     active.baselineUserTurns = new Set(conversationTurns().filter(userTurn));
+    active.baselinePageMedia = rich?.snapshotPageMedia?.() || null;
     active.baselineCapturedAt = Date.now();
   }
 
@@ -736,15 +737,66 @@
         || isInternalMediaHandoff(networkTerminalText);
       const sameTurnRoot = current.isNew && current.latest ? (current.turn || turnOf(current.latest)) : null;
       const visibleTurnMedia = Boolean(sameTurnRoot && rich?.hasCandidateImage?.(sameTurnRoot));
-      const captureMedia = imageHandoff || visibleTurnMedia;
+      // Image-only assistant turns can lack a data-message-author-role node.
+      // Compare visible chat-main images against the snapshot taken before
+      // submitting this exact request; never use arbitrary document images.
+      const discovered = rich?.locateNewPageMedia?.(
+        active.baselinePageMedia, currentUserTurn(active),
+      ) || { images: [], candidate_count_document: 0, new_image_candidate_count: 0,
+        after_user_count: 0, baseline_image_count: 0, anchor: "none" };
+      const pageMediaFound = discovered.images.length > 0;
+      const captureMedia = imageHandoff || visibleTurnMedia || pageMediaFound;
+      const captureOrigin = pageMediaFound && !visibleTurnMedia ? "new-page-media" : "assistant-turn";
+      const sourceMedia = pageMediaFound && !visibleTurnMedia ? discovered.images : [];
+      const sourceFingerprint = sourceMedia.map(img =>
+        String(img.currentSrc || img.getAttribute("src") || "")).join("|");
+      if (sourceFingerprint !== active.mediaSourceFingerprint) {
+        active.mediaSourceFingerprint = sourceFingerprint;
+        active.mediaSourceStableAt = Date.now();
+        imageCandidate = "";
+        imageCandidateSince = 0;
+      }
+      const sourceStable = !sourceMedia.length || (
+        active.mediaSourceStableAt && Date.now() - active.mediaSourceStableAt >= 1600
+      );
       if (captureMedia) imageHandoffObserved = true;
+      active.mediaLastScanCandidates = discovered.candidate_count_document;
+      active.mediaLastScanNewCandidates = discovered.new_image_candidate_count;
+      if (imageHandoff && !sameTurnRoot && !pageMediaFound
+          && (!active.mediaScanReportedAt || Date.now() - active.mediaScanReportedAt >= 12000)) {
+        active.mediaScanReportedAt = Date.now();
+        await diagnostic(active, "media-awaiting-image-anchor", {
+          media_assistant_nodes_found: current.nodes.length,
+          media_assistant_current_found: current.isNew,
+          media_assistant_reason: current.reason,
+          media_baseline_images: discovered.baseline_image_count,
+          media_document_candidates: discovered.candidate_count_document,
+          media_new_candidates: discovered.new_image_candidate_count,
+          media_after_user_candidates: discovered.after_user_count,
+          media_source_diagnostics_version: 176,
+        });
+      }
+      if (pageMediaFound && !active.mediaPageCandidateDiagnosed) {
+        active.mediaPageCandidateDiagnosed = true;
+        await diagnostic(active, "media-new-image-card-found", {
+          media_capture_origin: captureOrigin,
+          media_assistant_reason: current.reason,
+          media_new_candidates: discovered.new_image_candidate_count,
+          media_after_user_candidates: discovered.after_user_count,
+          media_baseline_images: discovered.baseline_image_count,
+          media_source_diagnostics_version: 176,
+        });
+      }
       if (captureMedia && !active.mediaHandoffDiagnosed) {
         active.mediaHandoffDiagnosed = true;
         await diagnostic(active, "media-handoff-detected", {
           media_handoff_marker: imageHandoff,
           media_turn_visible_image: visibleTurnMedia,
           media_same_turn_anchor: current.reason,
-          media_response_epoch_revision: 175,
+          media_capture_origin: captureOrigin,
+          media_document_candidates: discovered.candidate_count_document,
+          media_new_candidates: discovered.new_image_candidate_count,
+          media_response_epoch_revision: 176,
         });
       }
 
@@ -752,15 +804,20 @@
       // {"skipped_mainline":true} while the actual image is rendered later.
       // Only request-v6 can complete this request; harvest same-turn media,
       // never send the internal marker as the user-visible answer.
-      if (captureMedia && sameTurnRoot && !generating
-          && Date.now() - imageCaptureAt >= 700) {
+      if (captureMedia && (sameTurnRoot || sourceMedia.length) && sourceStable && !generating
+          && Date.now() - imageCaptureAt >= 1000) {
         imageCaptureAt = Date.now();
-        const finalMedia = await finalNodeText(sameTurnRoot);
+        // Prefer the validated current assistant turn, but permit a strictly
+        // post-baseline new-image card when the page supplies no assistant role.
+        const finalMedia = sourceMedia.length
+          ? await rich.capturePageImages(sourceMedia)
+          : await finalNodeText(sameTurnRoot);
         const captured = String(finalMedia?.text || "");
         active.mediaCaptureAttempts = Number(active.mediaCaptureAttempts || 0) + 1;
         active.mediaCaptureLastChars = captured.length;
         active.mediaCaptureLastInlined = Number(finalMedia?.image_inlined_count || 0);
         active.mediaCaptureLastEmbedded = Number(finalMedia?.image_embedded_count || 0);
+        active.mediaCaptureOrigin = sourceMedia.length ? captureOrigin : "assistant-turn";
         // Never commit a browser-only blob URL or an inaccessible CDN preview.
         // The rich serializer must actually transport an image to the API.
         const delivered = Number(finalMedia?.image_inlined_count || 0)
@@ -770,14 +827,16 @@
             imageCandidate = captured;
             imageCandidateSince = Date.now();
           } else if (Date.now() - imageCandidateSince >= 2400) {
-            responseStarted = await ensureResponseStarted(active, responseStarted, "verified-media-dom-v175");
+            responseStarted = await ensureResponseStarted(active, responseStarted, "verified-media-dom-v176");
             await emit({
               type: "chat.completed",
               request_id: active.requestId,
               text: captured,
               diagnostics: {
-                response_terminal_source: "verified-same-turn-media-dom-v175",
-                response_media_turn_scope: "current-assistant-turn",
+                response_terminal_source: "verified-request-media-dom-v176",
+                response_media_turn_scope: sourceMedia.length ? "new-since-submit" : "current-assistant-turn",
+                response_media_fallback_anchor: sourceMedia.length ? discovered.anchor : "assistant-turn",
+                media_new_candidates: discovered.new_image_candidate_count,
                 response_media_embedded_count: Number(finalMedia?.image_embedded_count || 0),
                 response_format: "markdown",
                 response_image_inlined_count: Number(finalMedia?.image_inlined_count || 0),
@@ -799,13 +858,16 @@
               media_capture_inline_count: active.mediaCaptureLastInlined,
               media_capture_embedded_count: active.mediaCaptureLastEmbedded,
               media_turn_scope: current.reason,
-              media_response_epoch_revision: 175,
+              media_capture_origin: active.mediaCaptureOrigin,
+              media_document_candidates: discovered.candidate_count_document,
+              media_new_candidates: discovered.new_image_candidate_count,
+              media_response_epoch_revision: 176,
             });
           }
         }
       }
 
-      if ((current.isNew || generating || networkText || visibleTurnMedia) && !responseStarted) {
+      if ((current.isNew || generating || networkText || visibleTurnMedia || pageMediaFound) && !responseStarted) {
         responseStarted = await ensureResponseStarted(active, responseStarted, networkText ? "network-evidence-v57" : current.isNew ? "dom-assistant" : "generation-control");
       }
       if (current.isNew && current.text && !captureMedia && !isInternalMediaHandoff(current.text)) {
@@ -952,6 +1014,9 @@
           media_capture_candidate_chars: Number(active.mediaCaptureLastChars || 0),
           media_capture_inline_count: Number(active.mediaCaptureLastInlined || 0),
           media_capture_embedded_count: Number(active.mediaCaptureLastEmbedded || 0),
+          media_capture_origin: active.mediaCaptureOrigin || "none",
+          media_last_scan_candidates: Number(active.mediaLastScanCandidates || 0),
+          media_last_scan_new_candidates: Number(active.mediaLastScanNewCandidates || 0),
         }),
       } });
   }
@@ -987,6 +1052,9 @@
       baselineIds: new Set(),
       baselineNodes: new Set(),
       baselineUserTurns: new Set(),
+      baselinePageMedia: null,
+      mediaSourceFingerprint: "",
+      mediaSourceStableAt: 0,
       baselineLatestNode: null,
       baselineLatestTurn: null,
       baselineLatestText: "",
