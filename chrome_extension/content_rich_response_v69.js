@@ -339,9 +339,19 @@
   async function captureFinalMarkdown(node) {
     const clone = cleanClone(node);
     if (!clone) return { text: "", image_inlined_count: 0, image_inlined_bytes: 0 };
+    let embedded = 0;
+    for (const image of [...clone.querySelectorAll("img")]) {
+      const src = String(image.getAttribute("src") || "");
+      if (!src.startsWith("data:")) continue;
+      const base64 = src.slice(src.indexOf(",") + 1);
+      const bounded = RASTER_DATA_URI.test(src)
+        && base64.length > 0
+        && base64.length % 4 === 0
+        && base64.length <= 4 * Math.ceil(MAX_INLINE_IMAGE_BYTES / 3);
+      if (bounded) embedded += 1;
+      else image.removeAttribute("src");
+    }
     const imageStats = await inlineBlobImages(clone);
-    const embedded = [...clone.querySelectorAll("img")].filter(img =>
-      RASTER_DATA_URI.test(String(img.getAttribute("src") || ""))).length;
     return {
       text: normalizeOutput(blockMarkdown(clone)),
       image_inlined_count: imageStats.inlined,
