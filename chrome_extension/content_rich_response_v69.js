@@ -87,7 +87,7 @@
     const visibleMediaSources = new Set([...root.querySelectorAll("img")]
       .filter(img => {
         const src = String(img.getAttribute("src") || "").trim();
-        if (!/^(blob:|data:image\\/|https:\\/\\/)/i.test(src) || !visible(img)) return false;
+        if (!/^(blob:|data:image\/|https:\/\/)/i.test(src) || !visible(img)) return false;
         const bounds = img.getBoundingClientRect();
         return bounds.width >= 64 && bounds.height >= 64;
       }).map(img => String(img.getAttribute("src") || "").trim()));
