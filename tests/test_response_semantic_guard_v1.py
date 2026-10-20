@@ -48,6 +48,8 @@ def test_broker_does_not_complete_on_role_shell_and_accepts_real_body() -> None:
 
 def test_internal_tool_handoff_is_not_a_deliverable_assistant_response() -> None:
     assert is_internal_tool_handoff('{"skipped_mainline":true}')
+    assert is_internal_tool_handoff('{"skipped_mainline":true}{"skipped_mainline":true}')
+    assert is_internal_tool_handoff(' { "skipped_mainline" : true } { "skipped_mainline":true } ')
     assert is_internal_tool_handoff(' { "skipped_mainline" : true } ')
     assert not is_internal_tool_handoff('{"skipped_mainline":false}')
     assert not is_internal_tool_handoff('{"skipped_mainline":true,"text":"hello"}')
