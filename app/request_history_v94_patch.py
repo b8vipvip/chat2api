@@ -152,7 +152,8 @@ async function requestHistoryShowConversation(requestId){
         const url=URL.createObjectURL(blob);
         requestHistoryMediaUrls.push(url);
         const link=document.createElement('a');
-        link.href=url;link.download=`chat2api-${requestId}.png`;
+        const ext={'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif'}[blob.type]||'png';
+        link.href=url;link.download=`chat2api-${requestId}.${ext}`;
         const img=document.createElement('img');
         img.src=url;img.alt='请求生成的图片';img.loading='lazy';
         img.style.cssText='display:block;max-width:min(100%,420px);max-height:420px;object-fit:contain;border:1px solid var(--line);border-radius:10px';
