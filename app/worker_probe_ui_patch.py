@@ -64,6 +64,33 @@ def install_worker_probe_ui_v1(app: FastAPI) -> FastAPI:
     html = html.replace("</div></aside>",
         '<button data-view="worker-tools">Worker 工具</button></div></aside>', 1)
     html = html.replace("</div></main>", PANEL + "</div></main>", 1)
+    # Keep the canonical request conversation as the only conversation owner;
+    # append a bounded probe count asynchronously without a second table loader.
+    probe_anchor = "    const refs=Array.isArray(row?.response_media)?row.response_media.slice(0,4):[];"
+    if probe_anchor in html:
+        html = html.replace(probe_anchor, probe_anchor + """
+    fetch('/api/admin/requests/' + encodeURIComponent(requestId) + '/probes', {
+      headers: {Authorization: 'Bearer ' + key()}, cache: 'no-store',
+    }).then(response => response.ok ? response.json() : null)
+      .then(report => {
+        if(report && requestHistoryMediaSequence === sequence){
+          const count = Number(report.summary?.event_count || 0);
+          meta.textContent += ' · 探针证据 ' + count + ' 条';
+          const jump = document.createElement('button');
+          jump.className = 'action';
+          jump.textContent = '查看探针';
+          jump.onclick = () => {
+            document.getElementById('requestConversationClose')?.click();
+            document.querySelector('.nav button[data-view="worker-tools"]')?.click();
+            const input = document.getElementById('workerToolsRequestId');
+            if(input)input.value=requestId;
+            document.getElementById('workerToolsInspect')?.click();
+          };
+          meta.appendChild(jump);
+        }
+      }).catch(() => {});
+""", 1)
+
     html, n = re.subn(r"const titles=\{([^;]+)\};", 
                       lambda match: "const titles={" + match.group(1) + ",'worker-tools':'Worker 工具'};",
                       html, count=1)
