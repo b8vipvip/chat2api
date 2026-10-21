@@ -126,6 +126,11 @@
     const images = pageMediaCandidates(allowIntrinsic);
     const oldKeys = baseline?.keys || new Set();
     const fresh = images.filter(img => !oldKeys.has(candidateMediaKey(img)));
+    // Evidence-only census: describe why the controller could not correlate
+    // a bitmap without collecting its URL, pixels, HTML, or prompt.
+    const scoped = [...document.querySelectorAll(CHAT_MEDIA_SELECTOR)];
+    const trustedScoped = scoped.filter(img => Boolean(candidateMediaKey(img)));
+    const freshTrusted = trustedScoped.filter(img => !oldKeys.has(candidateMediaKey(img)));
     const afterUser = userAnchor instanceof Element
       ? fresh.filter(img => {
           if (!userAnchor.isConnected || !img.isConnected || userAnchor === img) return false;
@@ -143,6 +148,13 @@
       after_user_count: afterUser.length,
       anchor: afterUser.length ? "after-current-user" : fresh.length ? "fresh-page-media" : "none",
       baseline_image_count: Number(baseline?.count || 0),
+      baseline_key_count: oldKeys.size,
+      scoped_image_nodes: scoped.length,
+      trusted_scoped_images: trustedScoped.length,
+      trusted_fresh_sources: freshTrusted.length,
+      excluded_by_media_gate: Math.max(0, freshTrusted.length - fresh.length),
+      excluded_by_baseline: Math.max(0, trustedScoped.length - freshTrusted.length),
+      intrinsic_candidate_gate: Boolean(allowIntrinsic),
     };
   }
 
