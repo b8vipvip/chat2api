@@ -5,9 +5,9 @@ chat2api 同时包含服务端 Python 包、分层运行时/控制台、Chrome B
 ## 当前版本面
 
 - Python package：`0.7.1`
-- Server runtime / console：`0.22.171`
-- Chrome Bridge：`0.22.171`
-- Chrome Bundle / manifest：`0.22.171`
+- Server runtime / console：`0.22.172`
+- Chrome Bridge：`0.22.172`
+- Chrome Bundle / manifest：`0.22.172`
 - Realtime Voice protocol：`chat2api-live-v1`
 - 生产入口：`app.entry:app`
 
@@ -39,14 +39,14 @@ GET /version
   "contract_version": 1,
   "server": {
     "package_version": "0.7.1",
-    "runtime_version": "0.22.171",
-    "expected_runtime_version": "0.22.171",
+    "runtime_version": "0.22.172",
+    "expected_runtime_version": "0.22.172",
     "entrypoint": "app.entry:app",
     "runtime_aligned": true
   },
   "chrome_bridge": {
     "version": "0.8.1",
-    "bundle_version": "0.22.171",
+    "bundle_version": "0.22.172",
     "multimodal_revision": 85
   },
   "protocols": {
@@ -107,3 +107,11 @@ GET /version
 - 继续排除侧边栏、用户上传、历史媒体及不可信来源；仅在图片实际传输并通过媒体验证后，由 request-v6 唯一请求控制器提交完成终态。
 - 测试场普通对话模式取消硬编码的 timeout:300：普通文本默认 300 秒、可信图片生成交接使用原服务端 600 秒上限；图片专用接口保持显式 600 秒。
 - 自动化回归、完整 CI、契约检查和生产镜像冒烟是合并与发布门槛；TX03 实机仍需验证实际图片字节交付与测试场预览。
+
+## v0.22.172：TX03 图片处理命令误终态与媒体来源诊断修复
+
+- 集成 PR #440：普通聊天请求明确要求生成图片时，如果网络终态内容是完整的本地 PIL 图片处理命令（例如 `bash -lc python ... /mnt/data/...png`），该命令不是图片实体，也不能作为 HTTP 200 成功图片回复。
+- 唯一请求终态控制器 `request-v6` 在限定图像创建请求和确切 PIL 命令条件下继续验证本轮新增图片；成功必须有可传输的 PNG/JPEG/WebP/GIF 字节或合格来源。历史图片、用户上传及未校验的图像节点不予交付。
+- 无法取得真实图片时以明确的错误终态结束，避免把构图代码误报为已生成图片。不会新增调度器，不会改变默认超时和独占终态决策权。
+- 诊断补充图片主区域候选、提交前基线命中数、候选门槛排除数和传输失败统计，不记录完整 URL、网页 HTML 或图片原始数据。
+- CI 增加 TX03 实例命令回归、原 Windows Worker 终态契约迁移；实机依旧需要验证 blob 图片字节真实传输、服务端状态以及测试场预览一致性。
