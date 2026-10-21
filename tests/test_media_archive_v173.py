@@ -101,3 +101,41 @@ def test_real_storage_healthcheck_for_local_and_fake_s3(tmp_path: Path, monkeypa
     store.configure({"backend": "local"})
     payload, _ = store.load(row["id"], row["token"])
     assert payload.startswith(b"\x89PNG"), "existing remote items remain readable after default changes"
+
+
+def test_chatgpt_cdn_image_is_copied_and_untrusted_remote_image_not_fetched(tmp_path: Path, monkeypatch):
+    store = MediaArchive(tmp_path, "master")
+    payload = example_image()
+    requests_seen = []
+    class Response:
+        headers = {"content-type": "image/png", "content-length": str(len(payload))}
+        def raise_for_status(self):
+            return None
+        def iter_bytes(self):
+            yield payload[:100]
+            yield payload[100:]
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+    class Client:
+        def __init__(self, **kwargs):
+            assert kwargs["follow_redirects"] is False
+            assert kwargs["trust_env"] is False
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def stream(self, method, url, headers):
+            assert method == "GET"
+            requests_seen.append(url)
+            return Response()
+    monkeypatch.setattr("app.media_archive_v173.httpx.Client", Client)
+    url = "https://files.oaiusercontent.com/generated/photo.png"
+    fixed, media = store.rewrite_markdown(
+        f"![Generated image]({url})", "client", "req", "https://chat2api.example")
+    assert "files.oaiusercontent.com" not in fixed
+    assert "chat2api.example/api/media/" in fixed
+    assert len(media) == 1 and requests_seen == [url]
+    dangerous = "https://files.oaiusercontent.com.evil.test/private"
+    fixed, media = store.rewrite_markdown(
+        f"![Some image]({dangerous})", "client", "req", "https://chat2api.example")
+    assert fixed == f"![Some image]({dangerous})"
+    assert media == []
+    assert requests_seen == [url], "never fetch arbitrary URL targets"
