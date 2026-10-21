@@ -204,6 +204,9 @@ jobs:
       - name: Worker probe observer regression
         run: node tests/worker_probe_supervisor_v1.mjs
 
+      - name: Worker P1 evidence regression
+        run: node tests/worker_probe_p1_evidence.mjs
+
       - name: FDEX request history regression
         run: pytest -q tests/test_fdex_request_integrity_v155.py --timeout=120
 
