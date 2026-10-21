@@ -33,7 +33,7 @@ const fakeDocument = {
 };
 const context = {
   document: fakeDocument,
-  performance: {now: () => 5},
+  performance: {now: () => 5}, setTimeout,
   chrome: {runtime: {sendMessage: async message => { sent.push(message); return true; }}},
   getComputedStyle: () => ({display: "block", visibility: "visible"}),
 };
@@ -72,6 +72,13 @@ assert.equal(sent.length, 4);
 probes.observe(active, {handoff: true, generating: true});
 await Promise.resolve();
 assert.equal(sent.length, 4, "handoff should be sampled only once");
+const beforeTerminal = await probes.capture(active, "before_terminal", {completed: true, captured: 1});
+assert.ok(beforeTerminal);
+assert.equal(sent.length, 6);
+assert.equal(sent[4].event.stage, "before_terminal");
+assert.equal(sent[4].event.classification, "completed_observed");
+await probes.capture(active, "before_terminal", {completed: false});
+assert.equal(sent.length, 6, "exactly one terminal evidence snapshot per request");
 assert.ok(sent.every(x => x.event.type === "probe.event"));
 assert.ok(!script.includes('type: "chat.completed"'));
 assert.ok(!script.includes('type: "chat.error"'));

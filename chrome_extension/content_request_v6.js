@@ -256,6 +256,19 @@
   }
 
   async function emit(event) {
+    // Flush read-only evidence before a real request terminal event is sent.
+    // This never changes the sole terminal decision of request-v6.
+    if (["chat.completed", "chat.error", "chat.cancelled"].includes(event?.type)
+        && state.active?.requestId === event.request_id) {
+      try {
+        await globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.capture?.(
+          state.active, "before_terminal", {
+            completed: event.type === "chat.completed",
+            captured: Number(state.active.mediaCaptureLastInlined || 0)
+              + Number(state.active.mediaCaptureLastEmbedded || 0),
+          });
+      } catch (_) {}
+    }
     try { await chrome.runtime.sendMessage({ type: "chat2api.event", event }); } catch (_) {}
   }
 
@@ -1012,9 +1025,6 @@
       await delay(120);
     }
 
-    try { globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.capture?.(active, "before_terminal", {
-      completed: false, handoff: imageHandoffObserved, captured: Number(active.mediaCaptureLastInlined || 0),
-    }); } catch (_) {}
     if (active.cancelled) await emit({ type: "chat.cancelled", request_id: active.requestId, reason: "Cancelled by API client" });
     else await emit({ type: "chat.error", request_id: active.requestId, error: imageHandoffObserved
       ? "ChatGPT generated media but no transferable image was captured before the request timeout"
@@ -1108,9 +1118,6 @@
         diagnostics: { request_controller: "request-v6", response_epoch_revision: 69, ...(error?.diagnostics || {}) },
       });
     } finally {
-      try { globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.capture?.(active, "before_terminal", {
-        completed: Boolean(active.completed),
-      }); } catch (_) {}
       if (state.active === active) state.active = null;
       if (v5?.active === active) v5.active = null;
     }

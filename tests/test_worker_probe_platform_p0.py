@@ -152,3 +152,32 @@ def test_request_probe_ui_source_is_single_owner_and_no_arbitrary_js() -> None:
     assert "Unexpected probe policy fields" in store
     assert '"media_delivery_v1"' in store
     assert "chat.completed" not in store and "chat.error" not in store
+
+def test_dispatch_snapshot_survives_live_policy_toggle(tmp_path: Path) -> None:
+    store = WorkerProbeStore(tmp_path)
+    worker_id = "wrk_test001"
+    request_id = "imgreq_1234567890abc"
+    async def run():
+        await store.put_policy("global", expected_revision=0,
+                               tools={"media_delivery_v1": {"enabled": True}})
+        at_dispatch = store.effective(worker_id)
+        await store.put_policy("global", expected_revision=1,
+                               tools={"media_delivery_v1": {"enabled": False}})
+        assert store.effective(worker_id)["tools"]["media_delivery_v1"]["enabled"] is False
+        accepted = await store.ingest(
+            request_id=request_id, worker_id=worker_id, client_id="ext_1234567890",
+            effective_policy=at_dispatch,
+            message={"tool_id": "media_delivery_v1", "stage": "before_terminal",
+                     "sequence": 1, "classification": "completed_observed",
+                     "facts": {"candidate_image_count": 1}},
+        )
+        assert accepted["accepted"]
+        with pytest.raises(PermissionError):
+            await store.ingest(
+                request_id=request_id, worker_id="wrk_other01", client_id="ext_1234567890",
+                effective_policy=at_dispatch,
+                message={"tool_id": "media_delivery_v1", "stage": "before_terminal",
+                         "sequence": 2, "classification": "completed_observed", "facts": {}},
+            )
+        assert store.summary(request_id)["event_count"] == 1
+    asyncio.run(run())

@@ -821,6 +821,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=409, detail=str(error)) from error
 
         registry.busy_clients.add(client_id)
+        state.probe_policy = probe_policy(client_id)
         timeout_seconds = body.timeout or config.request_timeout_seconds
         try:
             await record_request_running(
@@ -842,7 +843,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "prompt": prompt,
                     "attachments": attachments,
                     "options": {"auto_switch_text": True, "timeout_seconds": timeout_seconds, "model": body.model,
-                                "probe_policy": probe_policy(client_id)},
+                                "probe_policy": state.probe_policy},
                 },
             )
         except Exception as error:
@@ -916,6 +917,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         registry.busy_clients.add(client_id)
+        state.probe_policy = probe_policy(client_id)
         timeout_seconds = body.timeout or max(config.request_timeout_seconds, 300)
         try:
             await telemetry.upsert(
@@ -936,7 +938,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "prompt": body.prompt,
                     "attachments": attachments,
                     "options": {"model": "gpt-image", "size": body.size, "timeout_seconds": timeout_seconds,
-                                "probe_policy": probe_policy(client_id)},
+                                "probe_policy": state.probe_policy},
                 },
             )
             deadline = asyncio.get_running_loop().time() + timeout_seconds
@@ -1115,6 +1117,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             result = await worker_probes.ingest(
                                 request_id=request_id, worker_id=probe_worker_id(client_id),
                                 client_id=client_id, message=message,
+                                effective_policy=getattr(state, "probe_policy", None),
                                 tab_id=state.diagnostics.get("tab_id"),
                                 window_id=state.diagnostics.get("window_id"))
                             if result.get("accepted"):

@@ -80,3 +80,23 @@ def test_worker_probe_is_read_only_extension_observer_not_second_terminal_owner(
     assert "request_pre_submit" in probe
     assert "unresolved_after_threshold" in probe
     assert owner.count('type: "chat.completed"') >= 2
+
+def test_image_v3_and_chat_v6_flush_probe_before_terminal():
+    image = read("chrome_extension/content_image_v3.js")
+    chat = read("chrome_extension/content_request_v6.js")
+    probe = read("chrome_extension/content_probe_supervisor_v1.js")
+    manifest = json.loads(read("chrome_extension/manifest.json"))
+    scripts = manifest["content_scripts"][1]["js"]
+    assert scripts.index("content_probe_supervisor_v1.js") < scripts.index("content_image_v3.js")
+    assert 'options: message.options || {}' in image
+    assert '__CHAT2API_PROBE_SUPERVISOR_V1__?.begin?.(active)' in image
+    assert '__CHAT2API_PROBE_SUPERVISOR_V1__?.observe?.(active' in image
+    assert 'await globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.capture?.(' in image
+    assert 'await globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.capture?.(' in chat
+    assert 'event.type === "image.completed"' in image
+    assert 'event.type === "chat.completed"' in chat
+    assert '"before_terminal"' in probe
+    assert "session.terminalReported = true" in probe
+    # No new secondary terminal authority or request routing in the observer.
+    for action in ("image.completed", "image.error", "chat.completed", "chat.error"):
+        assert 'type: "' + action + '"' not in probe
