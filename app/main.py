@@ -763,6 +763,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         started_at = asyncio.get_running_loop().time()
         recorded = False
         request_type = "multimodal" if attachments_count else "text"
+        # Preserve ordinary text streaming but withhold incomplete markdown
+        # images before their base64 becomes visible to downstream clients.
+        raw_seen = ""
+        media_pending = ""
+        media_holding = False
+
+        def accept_part(fragment: str) -> str:
+            nonlocal media_pending, media_holding
+            if media_holding:
+                return ""
+            media_pending += fragment
+            start = media_pending.find("![")
+            if start >= 0:
+                prefix, candidate = media_pending[:start], media_pending[start:]
+                if len(candidate) < 500 and ")" not in candidate:
+                    media_pending = candidate
+                    return prefix
+                if "data:image/" in candidate[:500]:
+                    media_holding = True
+                    media_pending = candidate
+                    return prefix
+                media_pending = ""
+                return prefix + candidate
+            retain = 1 if media_pending.endswith("!") else 0
+            safe = media_pending[:-retain] if retain else media_pending
+            media_pending = media_pending[-retain:] if retain else ""
+            return safe
+
         try:
             while True:
                 if await request.is_disconnected():
@@ -791,20 +819,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 event_type = event.get("type")
                 if event_type in {"chat.diagnostics", "chat.started"}:
                     continue
-                if event_type == "chat.delta":
-                    delta = str(event.get("delta") or "")
-                    if delta:
-                        sent_text += delta
-                        yield "data: " + json.dumps(chunk_payload(response_id, model, {"content": delta}), ensure_ascii=False) + "\n\n"
-                elif event_type == "chat.snapshot":
-                    snapshot = str(event.get("text") or "")
-                    if snapshot.startswith(sent_text):
-                        delta = snapshot[len(sent_text):]
+                if event_type in {"chat.delta", "chat.snapshot"}:
+                    if event_type == "chat.delta":
+                        delta = str(event.get("delta") or "")
+                        raw_seen += delta
+                    else:
+                        snapshot = str(event.get("text") or "")
+                        delta = snapshot[len(raw_seen):] if snapshot.startswith(raw_seen) else ""
                         if delta:
-                            sent_text = snapshot
-                            yield "data: " + json.dumps(chunk_payload(response_id, model, {"content": delta}), ensure_ascii=False) + "\n\n"
+                            raw_seen = snapshot
+                    if delta:
+                        safe_delta = accept_part(delta)
+                        if safe_delta:
+                            sent_text += safe_delta
+                            yield "data: " + json.dumps(chunk_payload(response_id, model, {"content": safe_delta}), ensure_ascii=False) + "\n\n"
                 elif event_type == "chat.completed":
-                    final_text = str(event.get("text") or state.text)
+                    raw_final = str(event.get("text") or state.text)
+                    try:
+                        final_text, archived_media = await asyncio.to_thread(
+                            media_archive.rewrite_markdown, raw_final, principal.key_id,
+                            state.request_id, str(request.base_url).rstrip("/"),
+                        )
+                        if "data:image/" in final_text:
+                            raise ValueError("Incomplete generated image payload")
+                    except ValueError as error:
+                        await record_request(
+                            state, model, prompt, "error", principal, stream=True, prompt_mode=prompt_mode,
+                            response_id=response_id, final_text=sent_text, error=str(error),
+                            request_type=request_type, attachments_count=attachments_count,
+                        )
+                        recorded = True
+                        yield "data: " + json.dumps({"error": {"type": "media_storage_error", "message": str(error)}}) + "\n\n"
+                        yield "data: [DONE]\n\n"
+                        break
                     if final_text.startswith(sent_text):
                         delta = final_text[len(sent_text):]
                         if delta:
@@ -813,7 +860,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     usage, token_meta = await record_request(
                         state, model, prompt, "completed", principal, stream=True, prompt_mode=prompt_mode,
                         response_id=response_id, final_text=final_text, request_type=request_type,
-                        attachments_count=attachments_count,
+                        attachments_count=attachments_count, media_items=archived_media,
                     )
                     recorded = True
                     yield "data: " + json.dumps(
