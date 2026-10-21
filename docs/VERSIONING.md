@@ -5,9 +5,9 @@ chat2api 同时包含服务端 Python 包、分层运行时/控制台、Chrome B
 ## 当前版本面
 
 - Python package：`0.7.1`
-- Server runtime / console：`0.22.169`
-- Chrome Bridge：`0.22.169`
-- Chrome Bundle / manifest：`0.22.169`
+- Server runtime / console：`0.22.170`
+- Chrome Bridge：`0.22.170`
+- Chrome Bundle / manifest：`0.22.170`
 - Realtime Voice protocol：`chat2api-live-v1`
 - 生产入口：`app.entry:app`
 
@@ -39,14 +39,14 @@ GET /version
   "contract_version": 1,
   "server": {
     "package_version": "0.7.1",
-    "runtime_version": "0.22.169",
-    "expected_runtime_version": "0.22.169",
+    "runtime_version": "0.22.170",
+    "expected_runtime_version": "0.22.170",
     "entrypoint": "app.entry:app",
     "runtime_aligned": true
   },
   "chrome_bridge": {
     "version": "0.8.1",
-    "bundle_version": "0.22.169",
+    "bundle_version": "0.22.170",
     "multimodal_revision": 85
   },
   "protocols": {
@@ -91,3 +91,12 @@ GET /version
 - P1 三类探针沿用 P0 的管理员身份认证、请求归属、按 Worker 策略、最大事件数、证据 ZIP 和唯一请求终态控制权。
 - 默认不启用；仅采集数值/布尔值，不保存 SSE 原文、登录信息、图片 URL 或整页 HTML。
 - 详细范围、剩余 P2 工作和实机复测建议见 `docs/worker-tools-probe-implementation-status.md`。
+
+## v0.22.170：图片生成结果交付、测试场恢复与可信媒体超时扩展
+
+- 集成 #434、#435 和 #436：图片专用请求对不存在的 SSE 字段保留空值；后台测试场从服务端请求记录核对终态，浏览器连接中断后通过管理员权限恢复已归档图片。
+- 生成图片归档于独立 FileStore；后台请求轮询只返回紧凑媒体标识，通过有权限的媒体接口加载，不再在状态查询中返回多 MB base64。
+- 普通 Chat Completions 的同一 Worker 请求出现可信图片生成交接证据、且用户没有明确设置 timeout 时，原默认 300 秒超时可延长至 600 秒；普通文本及显式客户端超时不变。
+- Worker request-v6 与服务端 RequestBroker 分别保持唯一终态决策权；图片交接标记、canvas 与探针事件不能直接产生 completed。
+- 探针支持 60/120/240/480 秒检查点。TX03 实机仍需验证真实媒体、HTTP 完成、请求历史状态和客户端预览的一致性。
+
