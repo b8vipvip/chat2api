@@ -36,7 +36,7 @@ from .registry import ClientRegistry
 from .telemetry import TelemetryStore
 from .worker_probe_store import WorkerProbeStore
 from .test_runs import TestRunStore
-from .playground_truth_v170 import reconcile_playground_runs, compact_playground_outcome
+from .playground_truth_v170 import reconcile_playground_runs, compact_playground_outcome, present_playground_run
 from .token_usage import usage_for
 
 logger = logging.getLogger("chat2api")
@@ -355,7 +355,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/admin/tests", dependencies=[Depends(require_admin_key)])
     async def admin_tests(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, object]:
         await reconcile_playground_runs(test_runs, telemetry, limit=min(200, limit))
-        return {"data": test_runs.recent(limit)}
+        return {"data": [present_playground_run(row) for row in test_runs.recent(limit)]}
 
     @app.get("/api/admin/tests/{run_id}", dependencies=[Depends(require_admin_key)])
     async def admin_test_detail(run_id: str) -> dict[str, object]:
@@ -363,7 +363,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         row = test_runs.get(run_id)
         if not row:
             raise HTTPException(status_code=404, detail="Test report not found")
-        return row
+        return present_playground_run(row)
 
     @app.get("/api/admin/playground/requests/{request_id}/outcome", dependencies=[Depends(require_admin_key)])
     async def admin_playground_request_outcome(request_id: str) -> dict[str, object]:
