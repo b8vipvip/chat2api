@@ -55,7 +55,9 @@ def test_generated_media_handoff_keeps_single_request_terminal_authority():
     assert 'captureMedia && (sameTurnRoot || sourceMedia.length) && sourceStable && !generating' in source
     assert 'active.baselineUserTurns = new Set' in source
     assert 'response_terminal_source: "verified-request-media-dom-v176"' in source
-    assert 'networkTerminalText && !captureMedia && !promptStillPresent(active)' in source
+    assert 'networkTerminalText && !captureMedia' in source
+    assert '!promptStillPresent(active)' in source
+    assert 'isLocalImageBuildCommand(networkTerminalText)' in source
     assert 'networkText && !isInternalMediaHandoff(networkText)' in source
     assert '!networkTerminalAt && !captureMedia' in source
     assert 'internal_tool_handoff_without_media: true' in source
