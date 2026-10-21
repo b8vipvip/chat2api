@@ -18,6 +18,18 @@
   const labelOf = el => normalize(`${el?.dataset?.testid || ""} ${el?.getAttribute?.("aria-label") || ""} ${el?.title || ""} ${textOf(el)}`);
 
   async function emit(event) {
+    // Image-v3 remains the only image terminal authority. The probe merely
+    // provides evidence before this event can release its broker request.
+    if (["image.completed", "image.error", "image.cancelled"].includes(event?.type)
+        && state.active?.requestId === event.request_id) {
+      try {
+        await globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.capture?.(
+          state.active, "before_terminal", {
+            completed: event.type === "image.completed",
+            captured: Array.isArray(event.images) ? event.images.length : 0,
+          });
+      } catch (_) {}
+    }
     try { await chrome.runtime.sendMessage({ type: "chat2api.event", event }); }
     catch (_) {}
   }
@@ -291,8 +303,10 @@
     if (state.active) throw new Error("ChatGPT Images is already processing another request");
     const prompt = String(message.prompt || "").trim();
     if (!prompt) throw new Error("Image prompt is empty");
-    const active = { requestId: message.requestId, cancelled: false };
+    const active = { requestId: message.requestId, cancelled: false,
+      options: message.options || {} };
     state.active = active;
+    try { globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.begin?.(active); } catch (_) {}
     const started = performance.now();
 
     try {
@@ -324,6 +338,11 @@
         const indicator = generationIndicator();
         if (indicator) generationSeen = true;
         const candidates = changedImageCandidates(baseline);
+        try { globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.observe?.(active, {
+          handoff: Boolean(indicator || generationSeen),
+          generating: Boolean(indicator),
+          newCandidates: candidates.length,
+        }); } catch (_) {}
         const complete = candidates.find(img => img.complete && (img.naturalWidth || 0) >= 256 && (img.naturalHeight || 0) >= 256);
         if (complete && (generationSeen || performance.now() - started > 4500)) {
           const captured = await imageToBase64(complete);
