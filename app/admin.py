@@ -40,7 +40,7 @@ ADMIN_HTML = r'''<!doctype html>
     <div class="toolbar" style="margin-top:14px"><button class="action good" id="mediaSaveSettings">保存转存策略</button><button class="action" id="mediaReloadSettings">重新读取</button><button class="action" id="mediaTestSettings">测试存储连接</button><span class="muted" id="mediaStorageStatus">尚未连接</span></div>
   </div>
   <div class="panel" style="margin-top:14px"><h3>已转存媒体</h3><p id="mediaSummary" class="muted"></p>
-    <div class="scroll"><table><thead><tr><th>时间</th><th>请求 ID</th><th>媒体类型</th><th>尺寸</th><th>大小</th><th>位置</th></tr></thead><tbody id="mediaStoredRows"></tbody></table></div></div>
+    <div class="scroll"><table><thead><tr><th>时间</th><th>请求 ID</th><th>媒体类型</th><th>尺寸</th><th>大小</th><th>位置</th><th>操作</th></tr></thead><tbody id="mediaStoredRows"></tbody></table></div></div>
 </section>
 <section class="view doc" id="view-docs"><div class="panel"><h1>开发文档</h1><p>Base URL：<code id="baseUrl"></code>。业务 Key 支持文本、视觉/文件理解和图片生成；Chrome 必须打开且扩展在线，当前版本不再依赖 Windows 桌面客户端。</p><h2>文本 / 视觉 / 文件理解</h2><div class="codebox" id="docChat"></div><p>先通过 <code>POST /v1/files</code> 上传 base64 文件，再把返回的 <code>file_id</code> 放入 <code>attachments</code>。图片也支持 OpenAI 风格 <code>image_url</code> 的 base64 data URL。</p><h2>上传文件</h2><div class="codebox" id="docFile"></div><h2>图片生成</h2><div class="codebox" id="docImage"></div><p><code>gpt-image</code> 会路由到 <code>https://chatgpt.com/images/</code>。参考图使用同一个 <code>attachments</code> 字段。当前 <code>n</code> 固定为 1，推荐 <code>response_format=b64_json</code>。</p><h2>状态码</h2><ul><li>401：Key 无效/过期/停用。</li><li>409：扩展忙或多个扩展未指定 client_id。</li><li>503：Chrome 扩展离线。当前不会再尝试唤醒桌面客户端。</li><li>504：等待 ChatGPT/Images 超时。</li></ul><p><a href="/docs" target="_blank" style="color:var(--accent)">打开 FastAPI OpenAPI</a></p></div></section>
 <section class="view" id="view-playground"><div class="panel"><h2>自动测试场</h2><div class="muted">执行标准化用例并生成质量报告。测试 Key 支持选择现有业务 Key 或手动粘贴；手动粘贴优先，未指定时默认使用管理员 CHAT2API_API_KEY。</div><div class="labConfig" style="margin-top:14px"><div><label>测试类型</label><select id="testType"><option value="text">文本</option><option value="vision">视觉理解</option><option value="file">文件理解</option><option value="image_generation">图片生成</option><option value="voice_generation">语音生成</option><option value="voice_conversation">语音对话</option><option value="all">全部测试</option></select></div><div><label>文本/理解模型</label><select id="testModel"><option value="default">default</option></select></div><div><label>测试 API Key</label><div class="testKeyBox"><select id="testKeySelect"><option value="master">管理员 CHAT2API_API_KEY（默认）</option></select><input id="testKeyInput" type="password" autocomplete="off" placeholder="粘贴 API Key（可选，优先使用）"><div class="testKeyHint">留空时使用左侧选择项；默认选择管理员主 Key。完整 Key 不写入测试报告。</div></div></div><div><label>测试附件（可多选：图片 / PDF / 文档等）</label><input id="testFiles" type="file" multiple></div><button class="action good" id="startTest">开始测试</button></div><div class="testStatus"><div class="card"><div class="muted">当前状态</div><div class="n" id="testState">待命</div></div><div class="card"><div class="muted">通过</div><div class="n" id="testPass">0</div></div><div class="card"><div class="muted">警告</div><div class="n" id="testWarn">0</div></div><div class="card"><div class="muted">失败</div><div class="n" id="testFail">0</div></div></div><div class="panel"><h3>实时监测</h3><div class="timeline" id="timeline"><div class="muted">尚未开始测试。</div></div></div></div><div class="panel" style="margin-top:14px"><h3>测试记录</h3><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>状态</th><th>模型</th><th>测试 Key</th><th>耗时</th><th>摘要</th><th>操作</th></tr></thead><tbody id="testHistory"></tbody></table></div></div></section>
@@ -150,8 +150,16 @@ async function loadMediaStorage(){
     const files=await api('/api/admin/media-storage/files');
     $('mediaStoredRows').innerHTML=(files.data||[]).map(f=>
       '<tr><td>'+esc(fmtTime(f.created_at))+'</td><td>'+esc(f.request_id)+'</td><td>'+esc(f.mime)+
-      '</td><td>'+esc(f.width)+'×'+esc(f.height)+'</td><td>'+Math.round(f.size/1024)+' KiB</td><td>'+esc(f.backend)+'</td></tr>').join('')
-      ||'<tr><td colspan="6" class="muted">暂无归档记录</td></tr>';
+      '</td><td>'+esc(f.width)+'×'+esc(f.height)+'</td><td>'+Math.round(f.size/1024)+' KiB</td><td>'+esc(f.backend)+'</td><td><button class="action danger" data-media-delete="'+esc(f.id)+'">删除</button></td></tr>').join('')
+      ||'<tr><td colspan="7" class="muted">暂无归档记录</td></tr>';
+    document.querySelectorAll('[data-media-delete]').forEach(btn=>{
+      btn.onclick=async()=>{
+        const id=btn.dataset.mediaDelete;
+        if(!/^med_[a-zA-Z0-9_]{12,90}$/.test(id||'')||!confirm('删除转存文件与缩略图？删除后访问链接立即失效。'))return;
+        try{await api('/api/admin/media-storage/files/'+encodeURIComponent(id),{method:'DELETE'});await loadMediaStorage()}
+        catch(e){$('mediaStorageStatus').textContent='删除失败：'+e.message;}
+      };
+    });
   }catch(e){$('mediaStorageStatus').textContent='加载失败：'+e.message;}
 }
 $('mediaReloadSettings').onclick=loadMediaStorage;
