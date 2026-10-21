@@ -62,6 +62,17 @@ assert.ok(facts.network_stream_last_age_ms >= 1000);
 await probes.capture(active, "before_terminal", {completed: false});
 assert.equal(sent.length, 10, "final evidence sent to all enabled tools");
 assert.ok(sent.slice(5).every(x => x.classification === "request_error_observed"));
+const imageActive = {
+  requestId: "imgreq_testp1abcdef",
+  options: active.options,
+};
+probes.begin(imageActive);
+await Promise.resolve();
+await Promise.resolve();
+const imageNetwork = sent.filter(x => x.request_id === imageActive.requestId)[0].facts;
+assert.equal(imageNetwork.network_stream_seen, null);
+assert.equal(imageNetwork.network_stream_terminal_seen, null);
+assert.equal(imageNetwork.network_stream_unverified_end, null);
 assert.ok(sent.every(x => x.type === "probe.event"));
 assert.ok(!JSON.stringify(sent).includes("raw_event_data"));
 assert.ok(!JSON.stringify(sent).includes("Authorization"));
