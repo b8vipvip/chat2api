@@ -142,6 +142,8 @@ jobs:
           node --check app/admin_playground_chat.js
           node --check app/admin_playground_chat_records_v3.js
           node --check app/admin_playground_chat_v69.js
+          node --check app/admin_worker_tools_v1.js
+          node --check chrome_extension/content_probe_supervisor_v1.js
           node --check app/admin_extension_columns.js
           node --check app/admin_linux_workers.js
           python - <<'PY'
@@ -198,6 +200,9 @@ jobs:
 
       - name: Playground image result rendering regression
         run: node tests/playground_images_v177.mjs
+
+      - name: Worker probe observer regression
+        run: node tests/worker_probe_supervisor_v1.mjs
 
       - name: FDEX request history regression
         run: pytest -q tests/test_fdex_request_integrity_v155.py --timeout=120
