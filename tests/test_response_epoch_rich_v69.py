@@ -125,3 +125,22 @@ def test_verified_media_handoff_intrinsic_card_still_uses_one_request_owner():
     probe = read("chrome_extension/content_probe_supervisor_v1.js")
     assert 'type: "chat.completed"' not in probe
     assert 'type: "chat.error"' not in probe
+
+
+def test_tx03_image_recipe_is_not_a_successful_image_terminal():
+    owner = read("chrome_extension/content_request_v6.js")
+    rich = read("chrome_extension/content_rich_response_v69.js")
+    assert "function isLocalImageBuildCommand(value)" in owner
+    assert "function isImageCreationRequest(prompt)" in owner
+    assert "const imageBuildArtifact = imageCreationRequested" in owner
+    assert "const intrinsicHandoff = Boolean(imageHandoff) || imageBuildArtifact" in owner
+    assert "imageHandoff || imageBuildArtifact || visibleTurnMedia || pageMediaFound" in owner
+    assert "media_last_baseline_excluded" in owner
+    assert "ChatGPT returned an image-building command, but no verified transferable image was captured" in owner
+    assert "media_excluded_by_gate" in owner
+    assert "excluded_by_media_gate" in rich
+    assert "excluded_by_baseline" in rich
+    # A read-only probe must not become another completion/error owner.
+    probe = read("chrome_extension/content_probe_supervisor_v1.js")
+    assert 'type: "chat.completed"' not in probe
+    assert 'type: "chat.error"' not in probe
