@@ -1,4 +1,4 @@
-"""P0 Worker probe policies and privacy-preserving request evidence.
+"""P0/P1 Worker probe policies and privacy-preserving request evidence.
 
 Probes are *observers*. They cannot publish chat terminal events, change
 scheduler routing, or carry page HTML, credentials or signed media URLs.
