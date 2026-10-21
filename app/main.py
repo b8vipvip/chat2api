@@ -21,6 +21,7 @@ from .broker import RequestBroker, RequestState
 from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout
 from .config import Settings, get_settings
 from .file_store import FileStore
+from .media_archive_v173 import MediaArchive
 from .models import (
     ApiKeyCreate,
     ApiKeyUpdate,
@@ -56,6 +57,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api_keys = ApiKeyStore(config.data_dir, config.api_key)
     telemetry.usage_accounting = api_keys.account_completed_usage
     file_store = FileStore(config.data_dir)
+    media_archive = MediaArchive(config.data_dir, config.api_key)
     test_runs = TestRunStore(config.data_dir)
 
     @asynccontextmanager
@@ -87,6 +89,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.worker_probes = worker_probes
     app.state.api_keys = api_keys
     app.state.file_store = file_store
+    app.state.media_archive = media_archive
     app.state.test_runs = test_runs
     app.add_middleware(
         CORSMiddleware,
@@ -148,6 +151,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def require_scope(principal: ApiPrincipal, scope: str) -> None:
         if principal.kind != "master" and scope not in principal.scopes:
             raise HTTPException(status_code=403, detail=f"API key does not have {scope!r} permission")
+
+    @app.get("/api/admin/media-storage", dependencies=[Depends(require_admin_key)])
+    async def media_storage_settings() -> dict[str, object]:
+        return media_archive.public_config()
+
+    @app.put("/api/admin/media-storage", dependencies=[Depends(require_admin_key)])
+    async def configure_media_storage(payload: dict[str, Any]) -> dict[str, object]:
+        try:
+            return media_archive.configure(payload)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.get("/api/admin/media-storage/files", dependencies=[Depends(require_admin_key)])
+    async def media_storage_files(limit: int = Query(default=80, ge=1, le=200)) -> dict[str, object]:
+        return {"data": media_archive.list_items(limit)}
+
+    @app.get("/api/media/{media_id}/{access_token}")
+    @app.get("/api/media/{media_id}/{access_token}/{variant}")
+    async def media_download(media_id: str, access_token: str, variant: str = "") -> Response:
+        if variant not in {"", "thumbnail"}:
+            raise HTTPException(status_code=404, detail="Unknown variant")
+        try:
+            payload, mime = await asyncio.to_thread(media_archive.load, media_id, access_token, variant == "thumbnail")
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(status_code=404, detail="Unknown media") from None
+        return Response(payload, media_type=mime, headers={
+            "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+            "Content-Disposition": "inline" if mime.startswith("image/") else "attachment",
+            "Cache-Control": "private, max-age=86400",
+        })
 
     @app.get("/api/admin/worker-tools/catalog", dependencies=[Depends(require_admin_key)])
     async def worker_probe_catalog() -> dict[str, Any]:
@@ -573,6 +606,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         error: str | None = None,
         request_type: str = "text",
         attachments_count: int = 0,
+        media_items: list[dict[str, object]] | None = None,
     ) -> tuple[dict[str, int], dict[str, object]]:
         usage, token_meta = standard_usage(prompt, final_text)
         await telemetry.upsert(
@@ -590,6 +624,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "prompt_mode": prompt_mode,
                 "prompt_chars": len(prompt),
                 "completion_chars": len(final_text),
+                "response_media": media_items or [],
+                "response_media_count": len(media_items or []),
                 "status": status_value,
                 "probe_summary": worker_probes.summary(state.request_id),
                 "probe_capture_status": worker_probes.summary(state.request_id)["capture_status"],
