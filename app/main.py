@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import re
@@ -1045,6 +1046,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.post("/v1/images/generations")
     async def image_generations(
         body: ImageGenerationRequest,
+        request: Request,
         x_chat2api_client: str | None = Header(default=None),
         x_chat2api_request_id: str | None = Header(default=None),
         principal: ApiPrincipal = Depends(require_api_key),
@@ -1134,11 +1136,42 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     archived_media.append({"file_id": media_item.file_id, "mime_type": mime, "bytes": media_item.size})
                 except (ValueError, OSError) as error:
                     logger.warning("Could not archive generated media request=%s reason=%s", request_id, type(error).__name__)
+            # Keep the legacy admin FileStore previews while routing client
+            # downloads through the newly configurable archive provider.
+            owned_media = []
+            for image in images[:1]:
+                encoded = image.get("b64_json")
+                mime = str(image.get("mime_type") or "image/png").lower()
+                if not isinstance(encoded, str):
+                    if body.response_format != "b64_json":
+                        raise RuntimeError("Image result has no bytes for chat2api-owned URL")
+                    continue
+                try:
+                    raster = base64.b64decode(encoded, validate=True)
+                    row = await asyncio.to_thread(media_archive.store_image, raster, mime, principal.key_id, request_id)
+                except (ValueError, OSError) as error:
+                    if body.response_format == "b64_json":
+                        # Preserve the explicit OpenAI Base64 response contract,
+                        # even if an auxiliary archive does not accept the asset.
+                        # URL mode must never fall back to an upstream address.
+                        logger.warning("Optional gpt-image archive skipped request=%s: %s", request_id, type(error).__name__)
+                        continue
+                    raise RuntimeError("Unable to archive generated image") from error
+                origin = media_archive._config().get("public_base_url") or str(request.base_url).rstrip("/")
+                owned_url = f"{origin}/api/media/{row['id']}/{row['token']}"
+                owned_media.append({"id": row["id"], "url": owned_url,
+                                    "thumbnail_url": owned_url + "/thumbnail",
+                                    "bytes": row["bytes"], "mime_type": mime,
+                                    "backend": row["backend"]})
+            if body.response_format == "url":
+                output = [{"url": item["url"]} for item in owned_media]
             state.completed_mono = state.completed_mono or time.perf_counter()
             usage, token_meta = standard_usage(body.prompt, "")
             await telemetry.upsert(
                 {
-                    "response_media": archived_media,
+                    "response_media": [dict(legacy, **{"owned_url": owned_media[i]["url"],
+                        "owned_thumbnail_url": owned_media[i]["thumbnail_url"]})
+                        for i, legacy in enumerate(archived_media) if i < len(owned_media)],
                     "response_media_count": len(output),
                     "response_text": "已生成图片（在查看对话中预览）" if archived_media else "图片接口返回结果，但没有可归档的图片字节",
                     "response_text_available": bool(archived_media),
@@ -1163,6 +1196,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "diagnostics": state.diagnostics,
                     "token_usage": token_meta,
                     "media_files": archived_media,
+                    "owned_media": owned_media,
                 },
             }
         except asyncio.TimeoutError as error:
