@@ -61,7 +61,7 @@
 
   function hasCandidateImage(node) {
     return Boolean(node instanceof Element
-      && [...node.querySelectorAll("img")].some(candidateImage));
+      && [...node.querySelectorAll("img")].some(img => candidateImage(img)));
   }
 
   // The redesigned ChatGPT image generator can render a finished preview
@@ -218,7 +218,7 @@
     // the button's action chrome without discarding the actual user-requested
     // image. Only preserve images that were visibly large in this same turn.
     const visibleMediaSources = new Set([...root.querySelectorAll("img")]
-      .filter(candidateImage)
+      .filter(img => candidateImage(img))
       .map(img => String(img.currentSrc || img.getAttribute("src") || "").trim()));
     for (const button of [...clone.querySelectorAll("button")]) {
       const pictureNodes = [...button.querySelectorAll("img")]
