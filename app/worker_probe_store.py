@@ -33,7 +33,7 @@ TOOL_CATALOG = (
 )
 ACTIVE_TOOLS = frozenset(item["id"] for item in TOOL_CATALOG if item["phase"] in {"P0", "P1"})
 STAGES = frozenset(["request_pre_submit", "request_submitted", "media_handoff",
-                    "unresolved_after_threshold", "before_terminal", "manual_capture"])
+                    "unresolved_after_threshold", "progress_checkpoint", "before_terminal", "manual_capture"])
 ID_RE = re.compile(r"^(?:req|imgreq|resp|probe)[_-][a-zA-Z0-9_-]{6,100}$")
 WORKER_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{2,105}$")
 ALLOWED_FACTS = frozenset([
