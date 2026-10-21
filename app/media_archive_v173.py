@@ -272,6 +272,27 @@ class MediaArchive:
         payload = self._read(self._config(), row["backend"], key)
         return payload, "image/webp" if thumbnail else row["mime"]
 
+    def delete(self, media_id: str) -> bool:
+        """Delete one immutable object and its thumbnail; old access URLs expire."""
+        with self._db() as conn:
+            row = conn.execute("SELECT * FROM media WHERE id = ?", (media_id,)).fetchone()
+            if row is None:
+                return False
+            keys = [row["object_key"], row["thumb_key"]]
+            cfg = self._config()
+            if row["backend"] == "local":
+                for key in keys:
+                    target = (self.root / key).resolve()
+                    if not target.is_relative_to(self.root.resolve()):
+                        raise ValueError("Invalid media storage path")
+                    target.unlink(missing_ok=True)
+            else:
+                client = self._s3(cfg)
+                for key in keys:
+                    client.delete_object(Bucket=cfg["s3"]["bucket"], Key=key)
+            conn.execute("DELETE FROM media WHERE id = ?", (media_id,))
+        return True
+
     def list_items(self, limit: int = 80):
         with self._db() as conn:
             items = conn.execute("""SELECT id,owner,request_id,mime,size,width,height,backend,created_at
