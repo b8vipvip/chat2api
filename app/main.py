@@ -580,6 +580,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "prompt_chars": len(prompt),
                 "completion_chars": len(final_text),
                 "status": status_value,
+                "probe_summary": worker_probes.summary(state.request_id),
+                "probe_capture_status": worker_probes.summary(state.request_id)["capture_status"],
                 "usage": {**usage, **token_meta},
                 "timings": state.timings(),
                 "diagnostics": dict(state.diagnostics),
