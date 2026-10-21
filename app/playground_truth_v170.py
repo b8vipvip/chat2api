@@ -104,6 +104,28 @@ async def reconcile_playground_runs(test_runs: Any, telemetry: Any, limit: int =
     return count
 
 
+def present_playground_run(run: dict[str, Any]) -> dict[str, Any]:
+    """Present elapsed time without writing a new JSONL snapshot on every poll."""
+    displayed = dict(run)
+    if not _is_authoritative_test(run) or str(run.get("status")) != "running":
+        return displayed
+    try:
+        start = datetime.fromisoformat(str(run.get("started_at") or ""))
+        if start.tzinfo is None:
+            return displayed
+        seconds = max(0, int((datetime.now(timezone.utc) - start).total_seconds()))
+    except (ValueError, TypeError):
+        return displayed
+    timeout = 600 if str(run.get("test_type")) == "image_generation" else 300
+    displayed["elapsed_seconds"] = seconds
+    displayed["request_timeout_seconds"] = timeout
+    displayed["duration_ms"] = seconds * 1000
+    displayed["summary"] = f"请求执行中 · 已等待 {seconds} 秒 / 图片最长 600 秒" if timeout == 600 else (
+        f"请求执行中 · 已等待 {seconds} 秒 / 最长 300 秒"
+    )
+    return displayed
+
+
 async def compact_playground_outcome(row: dict[str, Any], telemetry: Any, file_store: Any) -> dict[str, Any]:
     """Return a small, admin-authenticated reply preview without image base64."""
     rid = str(row.get("request_id") or "")
