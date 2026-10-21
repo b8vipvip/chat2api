@@ -695,6 +695,32 @@
     return /!\[[^\]]{0,400}\]\((?:data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+|https:\/\/[^)]+)\)/i.test(String(value || ""));
   }
 
+
+  function isImageCreationRequest(prompt) {
+    // Check the user turn rather than an injected policy. This is a media
+    // *search hint*, never evidence sufficient to complete an image request.
+    const raw = String(prompt || "");
+    const text = (raw.includes("[User]") ? raw.slice(raw.lastIndexOf("[User]") + 6) : raw).slice(0, 800);
+    const action = "(?:生成|绘制|画|制作|设计|create|generate|draw|design)";
+    const subject = "(?:图片|图像|头像|插画|插图|照片|海报|图标|image|avatar|icon|illustration|picture)";
+    // Image-generation wording in an analysis question (e.g. 图片生成函数)
+    // is not a request to produce an image. Require a creation verb *before*
+    // the output type, or an explicit reverse-order directive.
+    return new RegExp(action + "[^\\n]{0,100}" + subject, "i").test(text)
+      || new RegExp(subject + "[^\\n]{0,50}(?:请|帮我|给我|为我)" + action, "i").test(text);
+  }
+
+  function isLocalImageBuildCommand(value) {
+    // Raw PIL shell instructions are a recipe, not downloadable image bytes.
+    // Fenced examples and explanatory text are not image generation results.
+    const raw = String(value || "").trim();
+    return raw.length > 0 && raw.length <= 6000
+      && /^(?:bash\s+-lc\s+)?python(?:3)?\s+-\s+<<['"]?PY['"]?/i.test(raw)
+      && /\bfrom\s+PIL\s+import\s+Image\b/.test(raw)
+      && /\/mnt\/data\/[^\s"'()]+\.(?:png|jpe?g|webp|gif)\b/i.test(raw)
+      && /\.(?:save|resize)\s*\(/.test(raw);
+  }
+
   async function reconcileResponsesTerminal(active, networkText) {
     const raw = String(networkText || "");
     if (String(active.options?.response_protocol || "") !== "responses-v108"
@@ -735,6 +761,8 @@
     let imageCandidateSince = 0;
     let imageCaptureAt = 0;
     let imageHandoffObserved = false;
+    let imageBuildArtifactObserved = false;
+    const imageCreationRequested = isImageCreationRequest(active.prompt);
 
     while (!active.cancelled && Date.now() - startedAt < timeoutMs) {
       const upstreamLimit = upstreamRateLimitFailure(active);
@@ -748,6 +776,12 @@
       const networkTerminalAt = Number(active.networkTerminalAt || 0);
       const imageHandoff = isInternalMediaHandoff(networkText)
         || isInternalMediaHandoff(networkTerminalText);
+      // Only request-v6 decides terminal state. A generated-image request
+      // that received a raw local PIL command must try same-request media
+      // capture before completing; such instructions are not an image.
+      const imageBuildArtifact = imageCreationRequested
+        && (isLocalImageBuildCommand(networkTerminalText)
+          || isLocalImageBuildCommand(networkText));
       const sameTurnRoot = current.isNew && current.latest ? (current.turn || turnOf(current.latest)) : null;
       const visibleTurnMedia = Boolean(sameTurnRoot && rich?.hasCandidateImage?.(sameTurnRoot));
       // Image-only assistant turns can lack a data-message-author-role node.
@@ -758,13 +792,13 @@
         ? userAnchor : null;
       // Only this request's authenticated media-tool handoff enables
       // intrinsic-size-only image cards; generic page images stay excluded.
-      const intrinsicHandoff = Boolean(imageHandoff);
+      const intrinsicHandoff = Boolean(imageHandoff) || imageBuildArtifact;
       const discovered = rich?.locateNewPageMedia?.(
         active.baselinePageMedia, freshUserAnchor, intrinsicHandoff,
       ) || { images: [], candidate_count_document: 0, new_image_candidate_count: 0,
         after_user_count: 0, baseline_image_count: 0, anchor: "none" };
       const pageMediaFound = discovered.images.length > 0;
-      const captureMedia = imageHandoff || visibleTurnMedia || pageMediaFound;
+      const captureMedia = imageHandoff || imageBuildArtifact || visibleTurnMedia || pageMediaFound;
       const captureOrigin = pageMediaFound && !visibleTurnMedia ? "new-page-media" : "assistant-turn";
       const sourceMedia = pageMediaFound && !visibleTurnMedia ? discovered.images : [];
       const sourceFingerprint = sourceMedia.map(img =>
@@ -778,22 +812,35 @@
       const sourceStable = !sourceMedia.length || (
         active.mediaSourceStableAt && Date.now() - active.mediaSourceStableAt >= 1600
       );
-      if (captureMedia) imageHandoffObserved = true;
+      if (imageHandoff || visibleTurnMedia || pageMediaFound) imageHandoffObserved = true;
+      if (imageBuildArtifact) imageBuildArtifactObserved = true;
       try { globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.observe?.(active, {
         handoff: imageHandoff, generating, newCandidates: discovered.new_image_candidate_count,
         captured: Number(active.mediaCaptureLastInlined || 0) + Number(active.mediaCaptureLastEmbedded || 0),
       }); } catch (_) {}
       active.mediaLastScanCandidates = discovered.candidate_count_document;
       active.mediaLastScanNewCandidates = discovered.new_image_candidate_count;
-      if (imageHandoff && !sameTurnRoot && !pageMediaFound
+      active.mediaLastTrustedNewSources = Number(discovered.trusted_fresh_sources || 0);
+      active.mediaLastBaselineExcluded = Number(discovered.excluded_by_baseline || 0);
+      active.mediaLastEligibilityExcluded = Number(discovered.excluded_by_media_gate || 0);
+      if ((imageHandoff || imageBuildArtifact) && !sameTurnRoot && !pageMediaFound
           && (!active.mediaScanReportedAt || Date.now() - active.mediaScanReportedAt >= 12000)) {
         active.mediaScanReportedAt = Date.now();
         await diagnostic(active, "media-awaiting-image-anchor", {
+          media_local_build_command_observed: imageBuildArtifact,
+          media_image_creation_requested: imageCreationRequested,
+          media_baseline_key_count: Number(active.baselinePageMedia?.keys?.size || 0),
           media_assistant_nodes_found: current.nodes.length,
           media_assistant_current_found: current.isNew,
           media_assistant_reason: current.reason,
           media_baseline_images: discovered.baseline_image_count,
           media_document_candidates: discovered.candidate_count_document,
+          media_scoped_image_nodes: discovered.scoped_image_nodes,
+          media_trusted_scoped_images: discovered.trusted_scoped_images,
+          media_trusted_fresh_sources: discovered.trusted_fresh_sources,
+          media_excluded_by_baseline: discovered.excluded_by_baseline,
+          media_excluded_by_gate: discovered.excluded_by_media_gate,
+          media_intrinsic_candidate_gate: discovered.intrinsic_candidate_gate,
           media_new_candidates: discovered.new_image_candidate_count,
           media_after_user_candidates: discovered.after_user_count,
           media_source_diagnostics_version: 176,
@@ -814,6 +861,7 @@
         active.mediaHandoffDiagnosed = true;
         await diagnostic(active, "media-handoff-detected", {
           media_handoff_marker: imageHandoff,
+          media_local_build_command_observed: imageBuildArtifact,
           media_turn_visible_image: visibleTurnMedia,
           media_same_turn_anchor: current.reason,
           media_capture_origin: captureOrigin,
@@ -895,7 +943,8 @@
       if ((current.isNew || generating || networkText || visibleTurnMedia || pageMediaFound) && !responseStarted) {
         responseStarted = await ensureResponseStarted(active, responseStarted, networkText ? "network-evidence-v57" : current.isNew ? "dom-assistant" : "generation-control");
       }
-      if (current.isNew && current.text && !captureMedia && !isInternalMediaHandoff(current.text)) {
+      if (current.isNew && current.text && !captureMedia && !isInternalMediaHandoff(current.text)
+          && !(imageCreationRequested && isLocalImageBuildCommand(current.text))) {
         const preferred = preferredResponseText(lastText, current.text);
         const previous = lastText;
         lastText = await updateCapturedText(active, preferred, lastText);
@@ -906,7 +955,7 @@
           active.lastCandidateReason = current.reason;
         }
       }
-      if (networkText && !isInternalMediaHandoff(networkText)) {
+      if (networkText && !isInternalMediaHandoff(networkText) && !imageBuildArtifact) {
         const preferred = preferredResponseText(lastText, networkText);
         const previous = lastText;
         lastText = await updateCapturedText(active, preferred, lastText);
@@ -924,7 +973,9 @@
       // after an early end-turn proof. A short terminal fragment is not
       // automatically a final text payload.
       const evidenceSettledAt = Math.max(networkTerminalAt, Number(active.networkObservedAt || 0));
-      if (networkTerminalAt && networkTerminalText && !captureMedia && !promptStillPresent(active)
+      if (networkTerminalAt && networkTerminalText && !captureMedia
+          && !(imageCreationRequested && isLocalImageBuildCommand(networkTerminalText))
+          && !promptStillPresent(active)
           && Date.now() - evidenceSettledAt >= 1250) {
         responseStarted = await ensureResponseStarted(active, responseStarted, "network-terminal-v57");
         // Only this controller can commit the terminal body. Use the verified
@@ -1029,10 +1080,21 @@
     }
 
     if (active.cancelled) await emit({ type: "chat.cancelled", request_id: active.requestId, reason: "Cancelled by API client" });
-    else await emit({ type: "chat.error", request_id: active.requestId, error: imageHandoffObserved
-      ? "ChatGPT generated media but no transferable image was captured before the request timeout"
+    else await emit({ type: "chat.error", request_id: active.requestId, error: imageBuildArtifactObserved
+      ? "ChatGPT returned an image-building command, but no verified transferable image was captured"
+      : imageHandoffObserved ? "ChatGPT generated media but no transferable image was captured before the request timeout"
       : "Timed out waiting for ChatGPT response", diagnostics: {
         response_epoch_revision: 69,
+        media_local_build_command_observed: imageBuildArtifactObserved,
+        media_image_creation_requested: imageCreationRequested,
+        media_baseline_key_count: Number(active.baselinePageMedia?.keys?.size || 0),
+        media_capture_attempts: Number(active.mediaCaptureAttempts || 0),
+        media_transfer_stats: active.mediaCaptureTransferStats || null,
+        media_last_scan_candidates: Number(active.mediaLastScanCandidates || 0),
+        media_last_scan_new_candidates: Number(active.mediaLastScanNewCandidates || 0),
+        media_last_trusted_fresh_sources: Number(active.mediaLastTrustedNewSources || 0),
+        media_last_baseline_excluded: Number(active.mediaLastBaselineExcluded || 0),
+        media_last_eligibility_excluded: Number(active.mediaLastEligibilityExcluded || 0),
         ...(imageHandoffObserved && {
           internal_tool_handoff_without_media: true,
           media_capture_attempts: Number(active.mediaCaptureAttempts || 0),
@@ -1136,6 +1198,8 @@
     plainNodeText,
     finalNodeText,
     isGenerating,
+    isImageCreationRequest,
+    isLocalImageBuildCommand,
   });
 
   const listener = (message, sender, sendResponse) => {

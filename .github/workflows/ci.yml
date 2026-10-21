@@ -198,6 +198,8 @@ jobs:
       - name: Current-request generated image anchor regression
         run: node tests/media_request_anchor_v176.mjs
 
+      - name: TX03 image recipe and media delivery regression
+        run: node tests/media_tool_artifact_terminal_v172.mjs
       - name: Playground image result rendering regression
         run: node tests/playground_images_v177.mjs
 

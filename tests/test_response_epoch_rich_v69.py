@@ -55,7 +55,9 @@ def test_generated_media_handoff_keeps_single_request_terminal_authority():
     assert 'captureMedia && (sameTurnRoot || sourceMedia.length) && sourceStable && !generating' in source
     assert 'active.baselineUserTurns = new Set' in source
     assert 'response_terminal_source: "verified-request-media-dom-v176"' in source
-    assert 'networkTerminalText && !captureMedia && !promptStillPresent(active)' in source
+    assert 'networkTerminalText && !captureMedia' in source
+    assert '!promptStillPresent(active)' in source
+    assert 'isLocalImageBuildCommand(networkTerminalText)' in source
     assert 'networkText && !isInternalMediaHandoff(networkText)' in source
     assert '!networkTerminalAt && !captureMedia' in source
     assert 'internal_tool_handoff_without_media: true' in source
@@ -122,6 +124,25 @@ def test_verified_media_handoff_intrinsic_card_still_uses_one_request_owner():
     assert "stream:false,timeout:300" not in playground
     assert 'response_format:"b64_json",n:1,timeout:600' in playground
     # No separate terminal controller was created for probe-discovered bitmaps.
+    probe = read("chrome_extension/content_probe_supervisor_v1.js")
+    assert 'type: "chat.completed"' not in probe
+    assert 'type: "chat.error"' not in probe
+
+
+def test_tx03_image_recipe_is_not_a_successful_image_terminal():
+    owner = read("chrome_extension/content_request_v6.js")
+    rich = read("chrome_extension/content_rich_response_v69.js")
+    assert "function isLocalImageBuildCommand(value)" in owner
+    assert "function isImageCreationRequest(prompt)" in owner
+    assert "const imageBuildArtifact = imageCreationRequested" in owner
+    assert "const intrinsicHandoff = Boolean(imageHandoff) || imageBuildArtifact" in owner
+    assert "imageHandoff || imageBuildArtifact || visibleTurnMedia || pageMediaFound" in owner
+    assert "media_last_baseline_excluded" in owner
+    assert "ChatGPT returned an image-building command, but no verified transferable image was captured" in owner
+    assert "media_excluded_by_gate" in owner
+    assert "excluded_by_media_gate" in rich
+    assert "excluded_by_baseline" in rich
+    # A read-only probe must not become another completion/error owner.
     probe = read("chrome_extension/content_probe_supervisor_v1.js")
     assert 'type: "chat.completed"' not in probe
     assert 'type: "chat.error"' not in probe
