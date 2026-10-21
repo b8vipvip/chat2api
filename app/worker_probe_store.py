@@ -67,7 +67,7 @@ ALLOWED_CLASSIFICATIONS = frozenset([
 ])
 MAX_EVENTS_PER_REQUEST = 32
 MAX_JSON_BYTES = 12_000
-MAX_FACTS = 42
+MAX_FACTS = 80
 
 
 def _safe_id(value: Any) -> str:
