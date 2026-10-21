@@ -66,3 +66,86 @@ def test_reject_non_image_and_corrupt_inline_data_without_external_network(tmp_p
         store.rewrite_markdown("![file](data:image/png;base64,SGVsbG8=)",
                                "key", "req", "https://chat2api.example")
     assert store.public_config()["count"] == 0
+
+
+def test_real_storage_healthcheck_for_local_and_fake_s3(tmp_path: Path, monkeypatch):
+    store = MediaArchive(tmp_path, "master")
+    assert store.test_backend() == {"ok": True, "backend": "local", "verified": "write-read"}
+    store.configure({"backend": "s3", "s3": {"bucket": "bucket-1", "region": "us-east-1",
+                    "access_key_id": "AK", "secret_access_key": "SK"}})
+
+    class Body:
+        def __init__(self, content):
+            self.content = content
+        def read(self):
+            return self.content
+
+    class FakeS3:
+        def __init__(self):
+            self.items = {}
+        def put_object(self, **kw):
+            assert kw["ServerSideEncryption"] == "AES256"
+            self.items[kw["Key"]] = kw["Body"]
+        def get_object(self, **kw):
+            return {"Body": Body(self.items[kw["Key"]])}
+        def delete_object(self, **kw):
+            self.items.pop(kw["Key"], None)
+
+    remote = FakeS3()
+    monkeypatch.setattr(store, "_s3", lambda config: remote)
+    assert store.test_backend() == {"ok": True, "backend": "s3", "verified": "write-read"}
+    assert remote.items == {}, "temporary healthcheck object must be removed"
+    row = store.store_image(example_image(), "image/png", "key-1", "req-2")
+    payload, mime = store.load(row["id"], row["token"])
+    assert payload.startswith(b"\x89PNG") and mime == "image/png"
+    store.configure({"backend": "local"})
+    payload, _ = store.load(row["id"], row["token"])
+    assert payload.startswith(b"\x89PNG"), "existing remote items remain readable after default changes"
+
+
+def test_chatgpt_cdn_image_is_copied_and_untrusted_remote_image_not_fetched(tmp_path: Path, monkeypatch):
+    store = MediaArchive(tmp_path, "master")
+    payload = example_image()
+    requests_seen = []
+    class Response:
+        headers = {"content-type": "image/png", "content-length": str(len(payload))}
+        def raise_for_status(self):
+            return None
+        def iter_bytes(self):
+            yield payload[:100]
+            yield payload[100:]
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+    class Client:
+        def __init__(self, **kwargs):
+            assert kwargs["follow_redirects"] is False
+            assert kwargs["trust_env"] is False
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def stream(self, method, url, headers):
+            assert method == "GET"
+            requests_seen.append(url)
+            return Response()
+    monkeypatch.setattr("app.media_archive_v173.httpx.Client", Client)
+    url = "https://files.oaiusercontent.com/generated/photo.png"
+    fixed, media = store.rewrite_markdown(
+        f"![Generated image]({url})", "client", "req", "https://chat2api.example")
+    assert "files.oaiusercontent.com" not in fixed
+    assert "chat2api.example/api/media/" in fixed
+    assert len(media) == 1 and requests_seen == [url]
+    dangerous = "https://files.oaiusercontent.com.evil.test/private"
+    fixed, media = store.rewrite_markdown(
+        f"![Some image]({dangerous})", "client", "req", "https://chat2api.example")
+    assert fixed == f"![Some image]({dangerous})"
+    assert media == []
+    assert requests_seen == [url], "never fetch arbitrary URL targets"
+
+
+def test_admin_delete_expires_download_token_and_removes_both_variants(tmp_path: Path):
+    store = MediaArchive(tmp_path, "master")
+    row = store.store_image(example_image(), "image/png", "admin", "req")
+    assert store.delete(row["id"]) is True
+    assert store.delete(row["id"]) is False
+    assert store.list_items() == []
+    with pytest.raises(KeyError):
+        store.load(row["id"], row["token"])

@@ -164,9 +164,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
+    @app.post("/api/admin/media-storage/test", dependencies=[Depends(require_admin_key)])
+    async def media_storage_test() -> dict[str, object]:
+        try:
+            return await asyncio.to_thread(media_archive.test_backend)
+        except RuntimeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from error
+
     @app.get("/api/admin/media-storage/files", dependencies=[Depends(require_admin_key)])
     async def media_storage_files(limit: int = Query(default=80, ge=1, le=200)) -> dict[str, object]:
         return {"data": media_archive.list_items(limit)}
+
+    @app.delete("/api/admin/media-storage/files/{media_id}", dependencies=[Depends(require_admin_key)])
+    async def delete_archived_media(media_id: str) -> dict[str, bool]:
+        try:
+            deleted = await asyncio.to_thread(media_archive.delete, media_id)
+        except (ValueError, OSError) as error:
+            raise HTTPException(status_code=503, detail="Cannot remove media from the storage provider") from error
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Unknown media")
+        return {"deleted": True}
 
     @app.get("/api/media/{media_id}/{access_token}")
     @app.get("/api/media/{media_id}/{access_token}/{variant}")
