@@ -145,8 +145,8 @@ class MediaArchive:
     def _read(self, cfg, backend: str, key: str):
         if backend == "local":
             return (self.root / key).read_bytes()
-        if cfg["backend"] != "s3":
-            raise FileNotFoundError("S3 provider is not currently configured")
+        if not all(cfg.get("s3", {}).get(k) for k in ("bucket", "access_key_id", "secret_access_key")):
+            raise FileNotFoundError("S3 provider credentials are not configured")
         return self._s3(cfg).get_object(Bucket=cfg["s3"]["bucket"], Key=key)["Body"].read()
 
     def store_image(self, raw: bytes, mime: str, owner: str, request_id: str):
