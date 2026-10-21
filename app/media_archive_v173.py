@@ -15,13 +15,14 @@ import secrets
 import sqlite3
 from pathlib import Path
 from urllib.parse import urlsplit
+import httpx
 from datetime import datetime, timezone
 
 from cryptography.fernet import Fernet, InvalidToken
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-IMAGE_PATTERN = re.compile(
-    r"!\[([^\]\n]{0,200})\]\(data:image/(png|jpeg|webp|gif);base64,([A-Za-z0-9+/=]+)\)", re.I,
+MEDIA_PATTERN = re.compile(
+    r"!\[([^\]\n]{0,200})\]\((data:image/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+|https://[^)\s]{1,2048})\)", re.I,
 )
 ALLOWED = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/gif": "gif"}
 MAX_BYTES = 20 * 1024 * 1024
@@ -183,8 +184,10 @@ class MediaArchive:
                 image.load()
                 if image.width * image.height > 36_000_000:
                     raise ValueError("Image pixel count exceeds the limit")
-                if image.format not in {"PNG", "JPEG", "WEBP", "GIF"}:
-                    raise ValueError("Image bytes do not match an allowed raster format")
+                expected_format = {"image/png": "PNG", "image/jpeg": "JPEG",
+                                   "image/webp": "WEBP", "image/gif": "GIF"}[mime]
+                if image.format != expected_format:
+                    raise ValueError("Image bytes do not match the declared MIME type")
                 width, height = image.size
                 thumb = ImageOps.exif_transpose(image)
                 thumb.thumbnail((384, 384), Image.Resampling.LANCZOS)
@@ -216,12 +219,39 @@ class MediaArchive:
         output = []
         last = 0
         rows = []
-        for match in IMAGE_PATTERN.finditer(source):
-            encoded = match.group(3)
+        for match in MEDIA_PATTERN.finditer(source):
+            image_url = match.group(2)
             try:
-                raw = base64.b64decode(encoded, validate=True)
-                record = self.store_image(raw, "image/" + match.group(2).lower(), owner, request_id)
-            except (ValueError, OSError) as exc:
+                if image_url.startswith("data:image/"):
+                    header, encoded = image_url.split(",", 1)
+                    mime = header[5:].split(";", 1)[0].lower()
+                    raw = base64.b64decode(encoded, validate=True)
+                else:
+                    remote = urlsplit(image_url)
+                    host = (remote.hostname or "").lower()
+                    trusted = host in {"chatgpt.com", "chat.openai.com"} or any(
+                        host.endswith(suffix) for suffix in (
+                            ".chatgpt.com", ".openai.com", ".oaiusercontent.com", ".oaistatic.com"))
+                    if not trusted or remote.scheme != "https" or remote.username or remote.password:
+                        continue  # No arbitrary URL fetching or local SSRF.
+                    with httpx.Client(timeout=httpx.Timeout(18, connect=5), follow_redirects=False,
+                                      trust_env=False) as client:
+                        with client.stream("GET", image_url, headers={"Accept": "image/*"}) as response:
+                            response.raise_for_status()
+                            mime = response.headers.get("content-type", "").split(";", 1)[0].lower()
+                            if mime not in ALLOWED:
+                                raise ValueError("Remote image has unsupported MIME")
+                            if int(response.headers.get("content-length", "0") or "0") > MAX_BYTES:
+                                raise ValueError("Remote image is too large")
+                            parts, size = [], 0
+                            for chunk in response.iter_bytes():
+                                size += len(chunk)
+                                if size > MAX_BYTES:
+                                    raise ValueError("Remote image exceeds archive limit")
+                                parts.append(chunk)
+                            raw = b"".join(parts)
+                record = self.store_image(raw, mime, owner, request_id)
+            except (ValueError, OSError, httpx.HTTPError) as exc:
                 raise ValueError("Generated image could not be transferred to configured storage") from exc
             prefix = (self._config().get("public_base_url") or base_url.rstrip("/"))
             asset = f"{prefix}/api/media/{record['id']}/{record['token']}"
