@@ -139,3 +139,13 @@ def test_chatgpt_cdn_image_is_copied_and_untrusted_remote_image_not_fetched(tmp_
     assert fixed == f"![Some image]({dangerous})"
     assert media == []
     assert requests_seen == [url], "never fetch arbitrary URL targets"
+
+
+def test_admin_delete_expires_download_token_and_removes_both_variants(tmp_path: Path):
+    store = MediaArchive(tmp_path, "master")
+    row = store.store_image(example_image(), "image/png", "admin", "req")
+    assert store.delete(row["id"]) is True
+    assert store.delete(row["id"]) is False
+    assert store.list_items() == []
+    with pytest.raises(KeyError):
+        store.load(row["id"], row["token"])
