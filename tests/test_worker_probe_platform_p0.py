@@ -181,3 +181,60 @@ def test_dispatch_snapshot_survives_live_policy_toggle(tmp_path: Path) -> None:
             )
         assert store.summary(request_id)["event_count"] == 1
     asyncio.run(run())
+
+def test_p1_network_model_and_selector_probe_exports_are_sanitized(tmp_path: Path) -> None:
+    store = WorkerProbeStore(tmp_path)
+    request_id = "req_p1network0123456"
+    async def run():
+        await store.put_policy("global", expected_revision=0, tools={
+            "network_evidence_v1": {"enabled": True},
+            "model_tool_state_v1": {"enabled": True},
+            "selector_compat_v1": {"enabled": True},
+        })
+        for sequence, tool_id in enumerate((
+            "network_evidence_v1", "model_tool_state_v1", "selector_compat_v1",
+        ), start=1):
+            outcome = await store.ingest(
+                request_id=request_id,
+                worker_id="wrk_P1active01", client_id="ext_1234567890",
+                message={
+                    "tool_id": tool_id, "stage": "unresolved_after_threshold",
+                    "sequence": sequence, "classification": "waiting_for_result",
+                    "facts": {
+                        "network_stream_seen": True, "network_stream_chunks": 13,
+                        "network_stream_bytes": 4010, "network_stream_terminal_seen": False,
+                        "model_picker_count": 2, "reasoning_selector_count": 1,
+                        "selector_send_button_count": 1,
+                        "secret_cookie": "session_token_DO_NOT_ARCHIVE",
+                        "raw_html": "<html>PRIVATE</html>",
+                        "signed_image_url": "https://example.test/image?token=PRIVATE",
+                    },
+                },
+            )
+            assert outcome["accepted"] is True
+        assert store.summary(request_id)["event_count"] == 3
+    asyncio.run(run())
+    blob = store.archive(request_id)
+    with zipfile.ZipFile(io.BytesIO(blob)) as output:
+        for label in ("network-evidence", "model-tool-state", "selector-compat"):
+            data = json.loads(output.read(f"probes/{label}.json"))
+            assert data["capture_status"] == "ok"
+            assert len(data["events"]) == 1
+        lines = output.read("events/probe-timeline.jsonl").decode()
+        for forbidden in ("session_token_DO_NOT_ARCHIVE", "PRIVATE", "raw_html",
+                          "signed_image_url", "secret_cookie"):
+            assert forbidden not in lines
+        assert '"network_stream_chunks": 13' in lines
+
+
+def test_p1_fact_schema_and_event_bound_are_documented(tmp_path: Path) -> None:
+    store = WorkerProbeStore(tmp_path)
+    assert len(store.catalog()) == 5
+    assert all(item["available"] for item in store.catalog())
+    source = (Path(__file__).resolve().parents[1] /
+              "chrome_extension/content_probe_supervisor_v1.js").read_text(encoding="utf-8")
+    assert "Math.floor(32 / enabled.length)" in source
+    assert "network_stream_seen" in source and "network_stream_bytes" in source
+    assert "model_picker_count" in source and "selector_composer_count" in source
+    assert "getAttribute" in source
+    assert "innerHTML" not in source
