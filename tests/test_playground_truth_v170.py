@@ -45,13 +45,13 @@ def test_browser_failed_fetch_does_not_overwrite_authoritative_success(tmp_path:
         assert run["status"] == "passed"
         assert run["results"][0]["authoritative_request_status"] == "completed"
         assert run["results"][0]["response_chars"] == 2498104
-        # Simulate a late browser record marking Failed to fetch after HTTP success.
-        response = client.post("/api/admin/playground/chat-records", json={
-            "request_id": rid, "model": "gpt-6",
-            "status": "failed", "prompt": "图片",
-            "error": "Failed to fetch", "duration_ms": 89991,
-        })
-        assert response.status_code == 200
+        # create_app is the core router: the optional browser-recording patch
+        # is mounted by app.entry, not here. Simulate that browser's late write
+        # directly in the same TestRunStore to test reconciliation itself.
+        asyncio.run(app.state.test_runs.update(_chat_run_id(rid), {
+            "status": "failed", "error": "Failed to fetch",
+            "quality": {"source": "manual-playground-chat"},
+        }))
         latest = client.get("/api/admin/tests/" + _chat_run_id(rid), headers=auth).json()
         assert latest["status"] == "passed", "The backend terminal is the single status authority"
 
