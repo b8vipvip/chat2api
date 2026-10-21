@@ -1150,6 +1150,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     raster = base64.b64decode(encoded, validate=True)
                     row = await asyncio.to_thread(media_archive.store_image, raster, mime, principal.key_id, request_id)
                 except (ValueError, OSError) as error:
+                    if body.response_format == "b64_json":
+                        # Preserve the explicit OpenAI Base64 response contract,
+                        # even if an auxiliary archive does not accept the asset.
+                        # URL mode must never fall back to an upstream address.
+                        logger.warning("Optional gpt-image archive skipped request=%s: %s", request_id, type(error).__name__)
+                        continue
                     raise RuntimeError("Unable to archive generated image") from error
                 origin = media_archive._config().get("public_base_url") or str(request.base_url).rstrip("/")
                 owned_url = f"{origin}/api/media/{row['id']}/{row['token']}"
