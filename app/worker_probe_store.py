@@ -210,15 +210,20 @@ class WorkerProbeStore:
 
     async def ingest(self, *, request_id: str, worker_id: str,
                      client_id: str, message: dict[str, Any],
-                     tab_id: int | None = None, window_id: int | None = None) -> dict[str, Any]:
+                     tab_id: int | None = None, window_id: int | None = None,
+                     effective_policy: dict[str, Any] | None = None) -> dict[str, Any]:
         request_id = _safe_id(request_id)
         if len(json.dumps(message, ensure_ascii=False)) > MAX_JSON_BYTES:
             raise ValueError("Probe message too large")
         tool_id = str(message.get("tool_id") or "")
         if tool_id not in ACTIVE_TOOLS:
             raise ValueError("Unsupported tool")
-        policy = self.effective(worker_id)
-        if not policy["tools"][tool_id]["enabled"]:
+        # The authenticated server's dispatch-time policy is authoritative.
+        # Mid-request edits must not discard evidence from an already enabled run.
+        policy = effective_policy if effective_policy is not None else self.effective(worker_id)
+        if policy.get("worker_id") != worker_id or policy.get("schema_version") != 1:
+            raise PermissionError("Probe policy Worker mismatch")
+        if not policy.get("tools", {}).get(tool_id, {}).get("enabled"):
             raise PermissionError("Probe disabled for this Worker")
         stage = str(message.get("stage") or "")
         if stage not in STAGES:
