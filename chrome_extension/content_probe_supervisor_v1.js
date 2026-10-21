@@ -100,8 +100,9 @@
         ? Math.min(1000000, Math.max(0, active.networkStreamChunks)) : null,
       network_stream_bytes: Number.isFinite(active?.networkStreamBytes)
         ? Math.min(999999999, Math.max(0, active.networkStreamBytes)) : null,
-      network_stream_terminal_seen: active ? Boolean(active.networkTerminalAt) : null,
-      network_stream_unverified_end: active
+      network_stream_terminal_seen: typeof active?.networkTerminalAt === "number"
+        ? Boolean(active.networkTerminalAt) : null,
+      network_stream_unverified_end: typeof active?.networkStreamEndedWithoutTerminalAt === "number"
         ? Boolean(active.networkStreamEndedWithoutTerminalAt) : null,
       network_stream_last_age_ms: Number.isFinite(active?.networkObservedAt) && active.networkObservedAt > 0
         ? Math.min(999999999, Math.max(0, Date.now() - active.networkObservedAt)) : null,
