@@ -1112,7 +1112,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         try:
                             result = await worker_probes.ingest(
                                 request_id=request_id, worker_id=probe_worker_id(client_id),
-                                client_id=client_id, message=message)
+                                client_id=client_id, message=message,
+                                tab_id=state.diagnostics.get("tab_id"),
+                                window_id=state.diagnostics.get("window_id"))
                             if result.get("accepted"):
                                 state.diagnostics["probe_event_count"] = (
                                     int(state.diagnostics.get("probe_event_count") or 0)
