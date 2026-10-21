@@ -21,6 +21,7 @@ from .broker import RequestBroker, RequestState
 from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout
 from .config import Settings, get_settings
 from .file_store import FileStore
+from .media_archive_v173 import MediaArchive
 from .models import (
     ApiKeyCreate,
     ApiKeyUpdate,
@@ -56,6 +57,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     api_keys = ApiKeyStore(config.data_dir, config.api_key)
     telemetry.usage_accounting = api_keys.account_completed_usage
     file_store = FileStore(config.data_dir)
+    media_archive = MediaArchive(config.data_dir, config.api_key)
     test_runs = TestRunStore(config.data_dir)
 
     @asynccontextmanager
@@ -87,6 +89,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.worker_probes = worker_probes
     app.state.api_keys = api_keys
     app.state.file_store = file_store
+    app.state.media_archive = media_archive
     app.state.test_runs = test_runs
     app.add_middleware(
         CORSMiddleware,
@@ -148,6 +151,36 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     def require_scope(principal: ApiPrincipal, scope: str) -> None:
         if principal.kind != "master" and scope not in principal.scopes:
             raise HTTPException(status_code=403, detail=f"API key does not have {scope!r} permission")
+
+    @app.get("/api/admin/media-storage", dependencies=[Depends(require_admin_key)])
+    async def media_storage_settings() -> dict[str, object]:
+        return media_archive.public_config()
+
+    @app.put("/api/admin/media-storage", dependencies=[Depends(require_admin_key)])
+    async def configure_media_storage(payload: dict[str, Any]) -> dict[str, object]:
+        try:
+            return media_archive.configure(payload)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.get("/api/admin/media-storage/files", dependencies=[Depends(require_admin_key)])
+    async def media_storage_files(limit: int = Query(default=80, ge=1, le=200)) -> dict[str, object]:
+        return {"data": media_archive.list_items(limit)}
+
+    @app.get("/api/media/{media_id}/{access_token}")
+    @app.get("/api/media/{media_id}/{access_token}/{variant}")
+    async def media_download(media_id: str, access_token: str, variant: str = "") -> Response:
+        if variant not in {"", "thumbnail"}:
+            raise HTTPException(status_code=404, detail="Unknown variant")
+        try:
+            payload, mime = await asyncio.to_thread(media_archive.load, media_id, access_token, variant == "thumbnail")
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(status_code=404, detail="Unknown media") from None
+        return Response(payload, media_type=mime, headers={
+            "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
+            "Content-Disposition": "inline" if mime.startswith("image/") else "attachment",
+            "Cache-Control": "private, max-age=86400",
+        })
 
     @app.get("/api/admin/worker-tools/catalog", dependencies=[Depends(require_admin_key)])
     async def worker_probe_catalog() -> dict[str, Any]:
@@ -573,6 +606,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         error: str | None = None,
         request_type: str = "text",
         attachments_count: int = 0,
+        media_items: list[dict[str, object]] | None = None,
     ) -> tuple[dict[str, int], dict[str, object]]:
         usage, token_meta = standard_usage(prompt, final_text)
         await telemetry.upsert(
@@ -590,6 +624,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "prompt_mode": prompt_mode,
                 "prompt_chars": len(prompt),
                 "completion_chars": len(final_text),
+                "response_media": media_items or [],
+                "response_media_count": len(media_items or []),
                 "status": status_value,
                 "probe_summary": worker_probes.summary(state.request_id),
                 "probe_capture_status": worker_probes.summary(state.request_id)["capture_status"],
@@ -727,6 +763,34 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         started_at = asyncio.get_running_loop().time()
         recorded = False
         request_type = "multimodal" if attachments_count else "text"
+        # Preserve ordinary text streaming but withhold incomplete markdown
+        # images before their base64 becomes visible to downstream clients.
+        raw_seen = ""
+        media_pending = ""
+        media_holding = False
+
+        def accept_part(fragment: str) -> str:
+            nonlocal media_pending, media_holding
+            if media_holding:
+                return ""
+            media_pending += fragment
+            start = media_pending.find("![")
+            if start >= 0:
+                prefix, candidate = media_pending[:start], media_pending[start:]
+                if len(candidate) < 500 and ")" not in candidate:
+                    media_pending = candidate
+                    return prefix
+                if "data:image/" in candidate[:500]:
+                    media_holding = True
+                    media_pending = candidate
+                    return prefix
+                media_pending = ""
+                return prefix + candidate
+            retain = 1 if media_pending.endswith("!") else 0
+            safe = media_pending[:-retain] if retain else media_pending
+            media_pending = media_pending[-retain:] if retain else ""
+            return safe
+
         try:
             while True:
                 if await request.is_disconnected():
@@ -755,20 +819,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 event_type = event.get("type")
                 if event_type in {"chat.diagnostics", "chat.started"}:
                     continue
-                if event_type == "chat.delta":
-                    delta = str(event.get("delta") or "")
-                    if delta:
-                        sent_text += delta
-                        yield "data: " + json.dumps(chunk_payload(response_id, model, {"content": delta}), ensure_ascii=False) + "\n\n"
-                elif event_type == "chat.snapshot":
-                    snapshot = str(event.get("text") or "")
-                    if snapshot.startswith(sent_text):
-                        delta = snapshot[len(sent_text):]
+                if event_type in {"chat.delta", "chat.snapshot"}:
+                    if event_type == "chat.delta":
+                        delta = str(event.get("delta") or "")
+                        raw_seen += delta
+                    else:
+                        snapshot = str(event.get("text") or "")
+                        delta = snapshot[len(raw_seen):] if snapshot.startswith(raw_seen) else ""
                         if delta:
-                            sent_text = snapshot
-                            yield "data: " + json.dumps(chunk_payload(response_id, model, {"content": delta}), ensure_ascii=False) + "\n\n"
+                            raw_seen = snapshot
+                    if delta:
+                        safe_delta = accept_part(delta)
+                        if safe_delta:
+                            sent_text += safe_delta
+                            yield "data: " + json.dumps(chunk_payload(response_id, model, {"content": safe_delta}), ensure_ascii=False) + "\n\n"
                 elif event_type == "chat.completed":
-                    final_text = str(event.get("text") or state.text)
+                    raw_final = str(event.get("text") or state.text)
+                    try:
+                        final_text, archived_media = await asyncio.to_thread(
+                            media_archive.rewrite_markdown, raw_final, principal.key_id,
+                            state.request_id, str(request.base_url).rstrip("/"),
+                        )
+                        if "data:image/" in final_text:
+                            raise ValueError("Incomplete generated image payload")
+                    except ValueError as error:
+                        await record_request(
+                            state, model, prompt, "error", principal, stream=True, prompt_mode=prompt_mode,
+                            response_id=response_id, final_text=sent_text, error=str(error),
+                            request_type=request_type, attachments_count=attachments_count,
+                        )
+                        recorded = True
+                        yield "data: " + json.dumps({"error": {"type": "media_storage_error", "message": str(error)}}) + "\n\n"
+                        yield "data: [DONE]\n\n"
+                        break
                     if final_text.startswith(sent_text):
                         delta = final_text[len(sent_text):]
                         if delta:
@@ -777,7 +860,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     usage, token_meta = await record_request(
                         state, model, prompt, "completed", principal, stream=True, prompt_mode=prompt_mode,
                         response_id=response_id, final_text=final_text, request_type=request_type,
-                        attachments_count=attachments_count,
+                        attachments_count=attachments_count, media_items=archived_media,
                     )
                     recorded = True
                     yield "data: " + json.dumps(
@@ -912,6 +995,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     break
                 except asyncio.TimeoutError:
                     continue
+            # The real image bytes must be on chat2api storage before the API
+            # exposes any image URI; the historical data URI is never logged.
+            try:
+                text, archived_media = await asyncio.to_thread(
+                    media_archive.rewrite_markdown, text, principal.key_id,
+                    request_id, str(request.base_url).rstrip("/"),
+                )
+                if "data:image/" in text:
+                    raise ValueError("Incomplete generated image payload")
+            except ValueError as error:
+                raise RuntimeError(str(error)) from error
             # The transport returns the assistant's completed text unchanged.
             # Prompt-language formatting requirements are not HTTP transport
             # failures; explicit structured-output contracts belong to the API
@@ -919,9 +1013,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             usage, token_meta = await record_request(
                 state, body.model, prompt, "completed", principal, stream=False, prompt_mode=body.prompt_mode,
                 response_id=response_id, final_text=text, request_type=request_type,
-                attachments_count=len(attachments),
+                attachments_count=len(attachments), media_items=archived_media,
             )
             meta = chat2api_meta(state, token_meta, principal)
+            if archived_media:
+                meta['media_files'] = archived_media
         except asyncio.TimeoutError as error:
             await registry.send(client_id, {"type": "chat.cancel", "request_id": request_id})
             state.completed_mono = time.perf_counter()

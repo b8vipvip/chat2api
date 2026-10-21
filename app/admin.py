@@ -11,11 +11,37 @@ ADMIN_HTML = r'''<!doctype html>
 @media(max-width:1250px){.labConfig{grid-template-columns:1fr 1fr}.labConfig>button{align-self:end}.testKeyBox{grid-template-columns:1fr}}
 @media(max-width:1050px){.shell{grid-template-columns:1fr}.side{border-right:0;border-bottom:1px solid var(--line)}.nav{display:flex;overflow:auto}.nav button{width:auto;white-space:nowrap}.top{position:static}.grid{grid-template-columns:repeat(2,1fr)}.panels,.split{grid-template-columns:1fr}.wide{grid-column:auto}.labConfig{grid-template-columns:1fr}.timelineRow{grid-template-columns:1fr 1fr}.auth{min-width:0}.testKeyBox{grid-template-columns:1fr}}
 </style></head><body><div class="shell">
-<aside class="side"><div class="brand">chat2api<small>Server Console · v0.5</small></div><div class="nav"><button data-view="overview">概览</button><button data-view="keys">API Key</button><button data-view="requests">请求记录</button><button data-view="docs">开发文档</button><button data-view="playground">测试场</button></div></aside>
+<aside class="side"><div class="brand">chat2api<small>Server Console · v0.5</small></div><div class="nav"><button data-view="overview">概览</button><button data-view="keys">API Key</button><button data-view="requests">请求记录</button><button data-view="media-storage">转存管理</button><button data-view="docs">开发文档</button><button data-view="playground">测试场</button></div></aside>
 <main class="main"><header class="top"><div><b id="pageTitle">概览</b><div id="status" class="muted">输入管理员主密钥后连接</div></div><div class="auth"><input id="adminKey" type="password" placeholder="CHAT2API_API_KEY 管理员主密钥"><button class="action" id="connect">连接</button><button class="action" id="refresh">刷新</button></div></header><div class="content">
 <section class="view" id="view-overview"><div class="grid"><div class="card"><div class="muted">在线扩展</div><div class="n" id="sExt">-</div></div><div class="card"><div class="muted">请求记录</div><div class="n" id="sReq">-</div></div><div class="card"><div class="muted">成功率</div><div class="n" id="sSuccess">-</div></div><div class="card"><div class="muted">平均首 Token</div><div class="n" id="sFirst">-</div></div><div class="card"><div class="muted">估算 Token</div><div class="n" id="sToken">-</div></div></div><div class="panels"><div class="panel"><h3>Chrome 扩展</h3><table><thead><tr><th>ID</th><th>名称</th><th>状态</th><th>版本</th><th>能力</th></tr></thead><tbody id="extBody"></tbody></table></div><div class="panel"><h3>模型目录</h3><table><thead><tr><th>ID</th><th>能力</th></tr></thead><tbody id="modelBody"></tbody></table></div><div class="panel wide"><h3>最近请求</h3><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>状态</th><th>Key</th><th>模型</th><th>首包</th><th>总耗时</th><th>Token</th></tr></thead><tbody id="recentBody"></tbody></table></div></div></div></section>
 <section class="view" id="view-keys"><div class="panel"><h3>创建业务 API Key</h3><div class="toolbar"><input id="keyName" placeholder="名称"><input id="keyDays" type="number" min="1" max="3650" placeholder="有效天数"><input id="keyQuota" type="number" min="0" placeholder="Token 额度（留空不限）"><button class="action good" id="createKey">创建</button></div><div class="secret hidden" id="newSecret"><span id="newToken"></span> <button class="action" id="copyNew">复制</button></div></div><div class="panel" style="margin-top:14px"><h3>令牌列表</h3><div class="scroll"><table><thead><tr><th>名称</th><th>前缀</th><th>状态</th><th>权限</th><th>最后使用</th><th>请求/Token</th><th>Token 额度</th><th>操作</th></tr></thead><tbody id="keysBody"></tbody></table></div></div><div class="footer">新版本业务 Key 的可复制副本使用管理员主密钥派生密钥加密保存；鉴权仍只比较哈希。旧版 0.4 Key 没有密文副本，因此无法恢复。</div></section>
 <section class="view" id="view-requests"><div class="split"><div class="panel"><h3>请求记录</h3><div class="toolbar"><input id="rqSearch" placeholder="request / error / client"><select id="rqStatus"><option value="">全部状态</option><option>completed</option><option>error</option></select><input id="rqModel" placeholder="模型"><button class="action" id="rqGo">筛选</button></div><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>状态</th><th>Key</th><th>模型</th><th>附件</th><th>首包</th><th>总耗时</th><th>Token</th></tr></thead><tbody id="rqBody"></tbody></table></div></div><div class="panel detail"><h3>请求详情</h3><div id="rqDetail" class="muted">点击记录查看诊断。</div></div></div></section>
+<section class="view" id="view-media-storage">
+  <div class="panel">
+    <h2>转存管理</h2>
+    <p class="muted">生成的图片按默认转存策略写入 chat2api 存储空间，并生成独立缩略图；用户收到的是 chat2api 域名，不再是 ChatGPT 地址或 Base64 数据。</p>
+    <div class="toolbar">
+      <label><input id="mediaAutoArchive" type="checkbox" checked> 自动转存新生成图片</label>
+      <label>默认存储位置 <select id="mediaBackend"><option value="local">服务器本地磁盘</option><option value="s3">S3 兼容对象存储</option></select></label>
+    </div>
+    <div class="toolbar"><label style="flex:1">公开访问域名（HTTPS，留空使用 API 当前域名）<input id="mediaPublicBase" class="field" style="width:100%" placeholder="https://chat2api.mv3.cn"></label></div>
+    <fieldset style="border:1px solid var(--line);border-radius:10px;padding:12px"><legend>S3 / Cloudflare R2 / MinIO 兼容配置</legend>
+      <div class="toolbar">
+        <input id="mediaS3Bucket" placeholder="Bucket 名称" autocomplete="off">
+        <input id="mediaS3Region" placeholder="区域，如 us-east-1" autocomplete="off">
+        <input id="mediaS3Endpoint" placeholder="HTTPS Endpoint，可留空使用 AWS S3" style="min-width:300px" autocomplete="off">
+      </div>
+      <div class="toolbar">
+        <input id="mediaS3Key" placeholder="Access Key ID（留空保留）" autocomplete="off">
+        <input id="mediaS3Secret" type="password" placeholder="Secret Key（留空保留）" autocomplete="new-password">
+      </div>
+      <p class="muted">凭据在服务端加密保存，不会回传至浏览器。S3 目标必须具备写入、读取权限。云数据库保存媒体元数据或其它非 S3 平台尚未提供可用驱动，暂不显示为已支持。</p>
+    </fieldset>
+    <div class="toolbar" style="margin-top:14px"><button class="action good" id="mediaSaveSettings">保存转存策略</button><button class="action" id="mediaReloadSettings">重新读取</button><span class="muted" id="mediaStorageStatus">尚未连接</span></div>
+  </div>
+  <div class="panel" style="margin-top:14px"><h3>已转存媒体</h3><p id="mediaSummary" class="muted"></p>
+    <div class="scroll"><table><thead><tr><th>时间</th><th>请求 ID</th><th>媒体类型</th><th>尺寸</th><th>大小</th><th>位置</th></tr></thead><tbody id="mediaStoredRows"></tbody></table></div></div>
+</section>
 <section class="view doc" id="view-docs"><div class="panel"><h1>开发文档</h1><p>Base URL：<code id="baseUrl"></code>。业务 Key 支持文本、视觉/文件理解和图片生成；Chrome 必须打开且扩展在线，当前版本不再依赖 Windows 桌面客户端。</p><h2>文本 / 视觉 / 文件理解</h2><div class="codebox" id="docChat"></div><p>先通过 <code>POST /v1/files</code> 上传 base64 文件，再把返回的 <code>file_id</code> 放入 <code>attachments</code>。图片也支持 OpenAI 风格 <code>image_url</code> 的 base64 data URL。</p><h2>上传文件</h2><div class="codebox" id="docFile"></div><h2>图片生成</h2><div class="codebox" id="docImage"></div><p><code>gpt-image</code> 会路由到 <code>https://chatgpt.com/images/</code>。参考图使用同一个 <code>attachments</code> 字段。当前 <code>n</code> 固定为 1，推荐 <code>response_format=b64_json</code>。</p><h2>状态码</h2><ul><li>401：Key 无效/过期/停用。</li><li>409：扩展忙或多个扩展未指定 client_id。</li><li>503：Chrome 扩展离线。当前不会再尝试唤醒桌面客户端。</li><li>504：等待 ChatGPT/Images 超时。</li></ul><p><a href="/docs" target="_blank" style="color:var(--accent)">打开 FastAPI OpenAPI</a></p></div></section>
 <section class="view" id="view-playground"><div class="panel"><h2>自动测试场</h2><div class="muted">执行标准化用例并生成质量报告。测试 Key 支持选择现有业务 Key 或手动粘贴；手动粘贴优先，未指定时默认使用管理员 CHAT2API_API_KEY。</div><div class="labConfig" style="margin-top:14px"><div><label>测试类型</label><select id="testType"><option value="text">文本</option><option value="vision">视觉理解</option><option value="file">文件理解</option><option value="image_generation">图片生成</option><option value="voice_generation">语音生成</option><option value="voice_conversation">语音对话</option><option value="all">全部测试</option></select></div><div><label>文本/理解模型</label><select id="testModel"><option value="default">default</option></select></div><div><label>测试 API Key</label><div class="testKeyBox"><select id="testKeySelect"><option value="master">管理员 CHAT2API_API_KEY（默认）</option></select><input id="testKeyInput" type="password" autocomplete="off" placeholder="粘贴 API Key（可选，优先使用）"><div class="testKeyHint">留空时使用左侧选择项；默认选择管理员主 Key。完整 Key 不写入测试报告。</div></div></div><div><label>测试附件（可多选：图片 / PDF / 文档等）</label><input id="testFiles" type="file" multiple></div><button class="action good" id="startTest">开始测试</button></div><div class="testStatus"><div class="card"><div class="muted">当前状态</div><div class="n" id="testState">待命</div></div><div class="card"><div class="muted">通过</div><div class="n" id="testPass">0</div></div><div class="card"><div class="muted">警告</div><div class="n" id="testWarn">0</div></div><div class="card"><div class="muted">失败</div><div class="n" id="testFail">0</div></div></div><div class="panel"><h3>实时监测</h3><div class="timeline" id="timeline"><div class="muted">尚未开始测试。</div></div></div></div><div class="panel" style="margin-top:14px"><h3>测试记录</h3><div class="scroll"><table><thead><tr><th>时间</th><th>类型</th><th>状态</th><th>模型</th><th>测试 Key</th><th>耗时</th><th>摘要</th><th>操作</th></tr></thead><tbody id="testHistory"></tbody></table></div></div></section>
 <div class="footer">Token 为 chat2api 本地估算，不是 ChatGPT 官方 usage。语音能力在本版测试场中会标记为未实现/跳过，不伪装为通过。</div></div></main></div>
@@ -37,8 +63,8 @@ function status(t,c='muted'){$('status').className=c;$('status').textContent=t}
 $('adminKey').value=key();
 $('connect').onclick=()=>{sessionStorage.setItem('chat2api_admin_key',$('adminKey').value.trim());loadOverview()};
 $('refresh').onclick=()=>show((location.hash||'#overview').slice(1));
-const titles={overview:'概览',keys:'API Key',requests:'请求记录',docs:'开发文档',playground:'测试场'};
-function show(v){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));$('view-'+v)?.classList.add('active');$('pageTitle').textContent=titles[v]||v;location.hash=v;if(v==='overview')loadOverview();if(v==='keys')loadKeys();if(v==='requests')loadRequests();if(v==='docs')renderDocs();if(v==='playground'){loadOverview().then(loadTests)}}
+const titles={overview:'概览',keys:'API Key',requests:'请求记录','media-storage':'转存管理',docs:'开发文档',playground:'测试场'};
+function show(v){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.querySelectorAll('.nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===v));$('view-'+v)?.classList.add('active');$('pageTitle').textContent=titles[v]||v;location.hash=v;if(v==='overview')loadOverview();if(v==='keys')loadKeys();if(v==='requests')loadRequests();if(v==='media-storage')loadMediaStorage();if(v==='docs')renderDocs();if(v==='playground'){loadOverview().then(loadTests)}}
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>show(b.dataset.view));
 async function loadOverview(){if(!key()){status('请输入管理员主密钥');return}try{overview=await api('/api/admin/overview');status(`已连接 · v${overview.version}`,'ok');const s=overview.telemetry||{};$('sExt').textContent=overview.health?.online_extensions??0;$('sReq').textContent=s.retained_requests??0;$('sSuccess').textContent=(s.success_rate??100)+'%';$('sFirst').textContent=fmtMs(s.avg_first_token_ms);$('sToken').textContent=s.estimated_total_tokens??0;$('extBody').innerHTML=(overview.clients||[]).map(c=>`<tr><td><code>${esc(c.client_id)}</code></td><td>${esc(c.name)}</td><td>${pill(c.online?(c.busy?'busy':'online'):'offline')}</td><td>${esc(c.version)}</td><td>${esc((c.metadata?.capabilities||[]).join(', '))}</td></tr>`).join('')||'<tr><td colspan="5">暂无扩展</td></tr>';$('modelBody').innerHTML=(overview.models||[]).map(m=>`<tr><td><code>${esc(m.id)}</code></td><td>${esc((m.capabilities||[]).join(', '))}</td></tr>`).join('');$('recentBody').innerHTML=(overview.recent_requests||[]).map(r=>`<tr><td>${fmtTime(r.recorded_at)}</td><td>${esc(r.request_type||'text')}</td><td>${pill(r.status)}</td><td>${esc(r.api_key_name||'-')}</td><td><code>${esc(r.requested_model||'-')}</code></td><td>${fmtMs(r.timings?.first_token_ms)}</td><td>${fmtMs(r.timings?.total_ms)}</td><td>${esc(r.usage?.total_tokens??0)}</td></tr>`).join('');fillModels();return overview}catch(e){status('连接失败：'+e.message,'bad')}}
 // Test only concrete models discovered AND validated on an online Worker.
@@ -109,10 +135,41 @@ $('closeReport').onclick=()=>$('reportDialog').close();
 $('closeReportBottom').onclick=()=>$('reportDialog').close();
 $('downloadCurrentReport').onclick=()=>{if(activeTestReport)downloadReportObject(activeTestReport)};
 window.showTest=showTest;window.downloadTest=downloadTest;
+async function loadMediaStorage(){
+  try{
+    const d=await api('/api/admin/media-storage');
+    $('mediaBackend').value=d.backend||'local';
+    $('mediaAutoArchive').checked=d.auto_archive!==false;
+    $('mediaPublicBase').value=d.public_base_url||'';
+    $('mediaS3Bucket').value=d.s3?.bucket||'';
+    $('mediaS3Region').value=d.s3?.region||'us-east-1';
+    $('mediaS3Endpoint').value=d.s3?.endpoint||'';
+    $('mediaS3Key').value='';$('mediaS3Secret').value='';
+    $('mediaStorageStatus').textContent=d.backend==='s3'?'S3 已配置（上传权限需实机验证）':'本地转存已就绪';
+    $('mediaSummary').textContent='归档 '+(d.count||0)+' 项，原图 '+(Number(d.original_bytes||0)/1048576).toFixed(2)+' MiB';
+    const files=await api('/api/admin/media-storage/files');
+    $('mediaStoredRows').innerHTML=(files.data||[]).map(f=>
+      '<tr><td>'+esc(fmtTime(f.created_at))+'</td><td>'+esc(f.request_id)+'</td><td>'+esc(f.mime)+
+      '</td><td>'+esc(f.width)+'×'+esc(f.height)+'</td><td>'+Math.round(f.size/1024)+' KiB</td><td>'+esc(f.backend)+'</td></tr>').join('')
+      ||'<tr><td colspan="6" class="muted">暂无归档记录</td></tr>';
+  }catch(e){$('mediaStorageStatus').textContent='加载失败：'+e.message;}
+}
+$('mediaReloadSettings').onclick=loadMediaStorage;
+$('mediaSaveSettings').onclick=async()=>{
+  try{
+    const body={backend:$('mediaBackend').value,auto_archive:$('mediaAutoArchive').checked,
+      public_base_url:$('mediaPublicBase').value.trim(),s3:{
+        bucket:$('mediaS3Bucket').value.trim(),region:$('mediaS3Region').value.trim(),
+        endpoint:$('mediaS3Endpoint').value.trim(),access_key_id:$('mediaS3Key').value.trim(),
+        secret_access_key:$('mediaS3Secret').value.trim()}};
+    await api('/api/admin/media-storage',{method:'PUT',body});
+    $('mediaStorageStatus').textContent='已保存配置';await loadMediaStorage();
+  }catch(e){$('mediaStorageStatus').textContent='保存失败：'+e.message;}
+};
 const start=(location.hash||'#'+INITIAL_VIEW).slice(1);show(titles[start]?start:'overview');
 </script></body></html>'''
 
 
 def admin_response(initial_view: str = "overview") -> HTMLResponse:
-    view = initial_view if initial_view in {"overview", "keys", "requests", "docs", "playground"} else "overview"
+    view = initial_view if initial_view in {"overview", "keys", "requests", "media-storage", "docs", "playground"} else "overview"
     return HTMLResponse(ADMIN_HTML.replace("__INITIAL_VIEW__", view), headers={"Cache-Control": "no-store"})
