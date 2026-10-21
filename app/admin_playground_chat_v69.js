@@ -10,10 +10,12 @@
   let lastRequest = null;
 
   const escHtml = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[ch]));
+  const trustedRecoveryBlobs = new Set();
   const RASTER_DATA_URL = /^data:image\/(?:png|jpeg|webp|gif);base64,[a-z0-9+/]+={0,2}$/i;
   const MAX_IMAGE_BASE64 = 4 * Math.ceil(4 * 1024 * 1024 / 3);
   const safeImageUrl = value => {
     const text = String(value || "").trim();
+    if (text.startsWith("blob:") && trustedRecoveryBlobs.has(text)) return text;
     if (RASTER_DATA_URL.test(text) && text.slice(text.indexOf(",") + 1).length <= MAX_IMAGE_BASE64) return text;
     try {
       const url = new URL(text, location.href);
@@ -219,7 +221,18 @@
   const $chat = id => document.getElementById(id);
 
   function saveHistory() {
-    try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-MAX_HISTORY_MESSAGES))); } catch (_) {}
+    // Never put a multi-megabyte image base64 or transient blob URL in sessionStorage.
+    try {
+      const safe = messages.slice(-MAX_HISTORY_MESSAGES).map(message => ({
+        ...message,
+        content: String(message.content || "").replace(
+          /!\[[^\]\r\n]*\]\(data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+\)/ig,
+          "【生成图片已归档，请到请求记录查看】"
+        ).replace(/!\[[^\]\r\n]*\]\(blob:[^)]+\)/ig,
+          "【生成图片已归档，请到请求记录查看】").slice(0, 50000),
+      }));
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(safe));
+    } catch (_) {}
   }
   function loadHistory() {
     try {
@@ -335,6 +348,43 @@
   function normalizedHistory() {
     return messages.filter(item => item.include_in_context !== false).slice(-MAX_HISTORY_MESSAGES).map(item => ({role:item.role, content:item.content}));
   }
+  async function recoverAuthoritativeResult(requestId) {
+    if (!/^((imgreq|req)_[a-z0-9-]{12,110})$/i.test(requestId)) return null;
+    let outcome = null;
+    // The API request may have completed even when a proxy drops the large
+    // browser fetch. Retry only the small admin status endpoint.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      try {
+        outcome = await api("/api/admin/playground/requests/" +
+          encodeURIComponent(requestId) + "/outcome");
+        if (outcome.status && outcome.status !== "running") break;
+      } catch (_) { /* one last reconciliation attempt below */ }
+      await new Promise(resolve => setTimeout(resolve, 400));
+    }
+    if (outcome?.status !== "completed") return null;
+    let markdown = String(outcome.response_text_preview || "生成请求已完成");
+    let downloaded = 0;
+    for (const media of (outcome.response_media || []).slice(0, 4)) {
+      const fileId = String(media?.file_id || "");
+      if (!/^file_[a-z0-9_-]{8,90}$/i.test(fileId)) continue;
+      try {
+        const response = await fetch("/api/admin/requests/" +
+          encodeURIComponent(requestId) + "/media/" + encodeURIComponent(fileId), {
+          headers: {Authorization: "Bearer " + key()}, cache: "no-store",
+        });
+        if (!response.ok) continue;
+        const blob = await response.blob();
+        if (!["image/png","image/jpeg","image/webp","image/gif"].includes(blob.type)
+            || blob.size > 4 * 1024 * 1024) continue;
+        const url = URL.createObjectURL(blob);
+        trustedRecoveryBlobs.add(url);
+        markdown += "\n\n![生成图片](" + url + ")";
+        downloaded++;
+      } catch (_) { /* preserve completion status even without preview */ }
+    }
+    return {content:markdown, imageCount:downloaded, requestId:outcome.request_id};
+  }
+
   async function recordChatTurn({requestId, model, credential, text, statusValue, totalMs, firstTokenMs, responseChars, attachmentsCount, error}) {
     try {
       await api("/api/admin/playground/chat-records", {method:"POST", body:{request_id:requestId,model,api_key_id:credential?.key_id||null,api_key_name:credential?.label||($chat("pgChatKey").selectedOptions?.[0]?.dataset?.keyName||"未解析"),status:statusValue,duration_ms:totalMs,first_token_ms:firstTokenMs,prompt:text,response_chars:responseChars,attachments_count:attachmentsCount,error:error||null}});
@@ -387,6 +437,13 @@
       firstTokenMs = Number(diagnostics?.timings?.first_token_ms ?? NaN);
       if (!Number.isFinite(firstTokenMs)) firstTokenMs = null;
       if (!assistantText.trim()) throw new Error("请求完成，但没有捕获到可交付的模型回复");
+      // Keep the completed response visually accessible without serializing a
+      // multi-MB data URI into the session or forcing the browser to render it.
+      if (assistantText.length > 500000 && assistantText.includes("data:image/")) {
+        const compact = await recoverAuthoritativeResult(
+          imageMode ? requestId.replace(/^req_/, "imgreq_") : requestId);
+        if (compact) assistantText = compact.content;
+      }
       const totalMs = performance.now() - started;
       document.getElementById("pgChatPending")?.remove();
       const responseType = isActualImageReply(assistantText) ? (imageMode ? "image" : "mixed") : "text";
@@ -401,10 +458,25 @@
       $chat("pgChatLast").innerHTML = `<span class="pgChatBadge">${escHtml(actualRequestId)}</span> <span class="pgChatBadge">${Math.round(totalMs)} ms</span>`; status(`聊天请求完成：${requestId}`, "ok"); $chat("pgChatFiles").value="";
       await recordChatTurn({requestId:actualRequestId,model,credential,text,statusValue:"passed",totalMs,firstTokenMs,responseChars:assistantText.length,attachmentsCount:userFiles.length,error:null});
     } catch (error) {
+      const recoveryId = imageMode ? requestId.replace(/^req_/, "imgreq_") : requestId;
+      const recovered = await recoverAuthoritativeResult(recoveryId).catch(() => null);
+      if (recovered) {
+        const totalMs = performance.now() - started;
+        document.getElementById("pgChatPending")?.remove();
+        messages.push({role:"assistant",content:recovered.content,include_in_context:false,
+          created_at:new Date().toISOString(),meta:{request_id:recoveryId,model,total_ms:totalMs,
+          recovered_from:"server-request-terminal-v170",response_format:recovered.imageCount?"image":"text"}});
+        lastRequest={request_id:recoveryId,model,total_ms:totalMs,recovered:true};
+        saveHistory(); renderMessages();
+        status("请求已由服务端确认为完成；浏览器连接中断后已恢复结果", "ok");
+        await recordChatTurn({requestId:recoveryId,model,credential,text,statusValue:"passed",
+          totalMs,firstTokenMs,responseChars:recovered.content.length,attachmentsCount:userFiles.length,error:null});
+      } else {
       const totalMs = performance.now() - started, errorText = String(error?.message || error), failedStatus = /(stalled|watchdog|timed out|timeout|no observable|no response progress)/i.test(errorText) ? "stalled" : "failed";
       document.getElementById("pgChatPending")?.remove(); if (messages[userIndex]) messages[userIndex].include_in_context=false;
       messages.push({role:"assistant",content:`请求失败：${errorText}`,include_in_context:false,error:true,created_at:new Date().toISOString(),meta:{request_id:requestId,model,total_ms:totalMs}}); lastRequest={request_id:requestId,model,total_ms:totalMs,error:errorText,diagnostics}; saveHistory(); renderMessages(); status(`聊天请求失败：${errorText}`,"bad");
-      await recordChatTurn({requestId,model,credential,text,statusValue:failedStatus,totalMs,firstTokenMs,responseChars:assistantText.length,attachmentsCount:userFiles.length,error:errorText});
+      await recordChatTurn({requestId:recoveryId,model,credential,text,statusValue:failedStatus,totalMs,firstTokenMs,responseChars:assistantText.length,attachmentsCount:userFiles.length,error:errorText});
+      }
     } finally {
       if (credential && uploaded.length) await cleanupFiles(uploaded, credential.token);
       sending=false; $chat("pgChatSend").disabled=false; $chat("pgChatSend").textContent="发送"; input.disabled=false; input.focus();
