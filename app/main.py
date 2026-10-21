@@ -995,6 +995,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     break
                 except asyncio.TimeoutError:
                     continue
+            # The real image bytes must be on chat2api storage before the API
+            # exposes any image URI; the historical data URI is never logged.
+            try:
+                text, archived_media = await asyncio.to_thread(
+                    media_archive.rewrite_markdown, text, principal.key_id,
+                    request_id, str(request.base_url).rstrip("/"),
+                )
+                if "data:image/" in text:
+                    raise ValueError("Incomplete generated image payload")
+            except ValueError as error:
+                raise RuntimeError(str(error)) from error
             # The transport returns the assistant's completed text unchanged.
             # Prompt-language formatting requirements are not HTTP transport
             # failures; explicit structured-output contracts belong to the API
@@ -1002,9 +1013,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             usage, token_meta = await record_request(
                 state, body.model, prompt, "completed", principal, stream=False, prompt_mode=body.prompt_mode,
                 response_id=response_id, final_text=text, request_type=request_type,
-                attachments_count=len(attachments),
+                attachments_count=len(attachments), media_items=archived_media,
             )
             meta = chat2api_meta(state, token_meta, principal)
+            if archived_media:
+                meta['media_files'] = archived_media
         except asyncio.TimeoutError as error:
             await registry.send(client_id, {"type": "chat.cancel", "request_id": request_id})
             state.completed_mono = time.perf_counter()
