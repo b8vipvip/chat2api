@@ -15,7 +15,7 @@ PANEL = r'''
 <section class="view" id="view-worker-tools">
   <div class="panel">
     <h2>Worker 工具</h2>
-    <p class="muted">集中管理只读诊断探针。P0 可执行图片交付与聊天 DOM 采集；P1 工具仅展示规划状态，不会误报执行成功。</p>
+    <p class="muted">集中管理只读诊断探针。P0 支持图片交付与聊天 DOM；P1 支持网络摘要、模型与工具控件状态、页面选择器兼容性采样。所有工具只提交证据，不参与请求终态决策。</p>
     <div class="toolbar">
       <label for="workerToolsScope">策略范围</label>
       <select id="workerToolsScope"><option value="global">全局默认</option></select>

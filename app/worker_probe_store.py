@@ -1,4 +1,4 @@
-"""P0 Worker probe policies and privacy-preserving request evidence.
+"""P0/P1 Worker probe policies and privacy-preserving request evidence.
 
 Probes are *observers*. They cannot publish chat terminal events, change
 scheduler routing, or carry page HTML, credentials or signed media URLs.
@@ -24,14 +24,14 @@ TOOL_CATALOG = (
      "phase": "P0", "platforms": ["linux", "win"], "triggers": ["request_pre_submit", "media_handoff", "unresolved_after_threshold", "before_terminal"]},
     {"id": "conversation_dom_v1", "name": "聊天回合与 DOM 探针", "version": "1.0.0",
      "phase": "P0", "platforms": ["linux", "win"], "triggers": ["request_pre_submit", "media_handoff", "before_terminal"]},
-    {"id": "network_evidence_v1", "name": "网络事件摘要探针", "version": "planned",
-     "phase": "P1", "platforms": ["linux", "win"], "triggers": []},
-    {"id": "model_tool_state_v1", "name": "模型与工具状态探针", "version": "planned",
-     "phase": "P1", "platforms": ["linux", "win"], "triggers": []},
-    {"id": "selector_compat_v1", "name": "页面改版兼容探针", "version": "planned",
-     "phase": "P1", "platforms": ["linux", "win"], "triggers": []},
+    {"id": "network_evidence_v1", "name": "网络事件摘要探针", "version": "1.0.0",
+     "phase": "P1", "platforms": ["linux", "win"], "triggers": ["request_pre_submit", "media_handoff", "unresolved_after_threshold", "before_terminal"]},
+    {"id": "model_tool_state_v1", "name": "模型与工具状态探针", "version": "1.0.0",
+     "phase": "P1", "platforms": ["linux", "win"], "triggers": ["request_pre_submit", "unresolved_after_threshold", "before_terminal"]},
+    {"id": "selector_compat_v1", "name": "页面改版兼容探针", "version": "1.0.0",
+     "phase": "P1", "platforms": ["linux", "win"], "triggers": ["request_pre_submit", "unresolved_after_threshold", "before_terminal"]},
 )
-ACTIVE_TOOLS = frozenset(item["id"] for item in TOOL_CATALOG if item["phase"] == "P0")
+ACTIVE_TOOLS = frozenset(item["id"] for item in TOOL_CATALOG if item["phase"] in {"P0", "P1"})
 STAGES = frozenset(["request_pre_submit", "request_submitted", "media_handoff",
                     "unresolved_after_threshold", "before_terminal", "manual_capture"])
 ID_RE = re.compile(r"^(?:req|imgreq|resp|probe)[_-][a-zA-Z0-9_-]{6,100}$")
@@ -51,6 +51,13 @@ ALLOWED_FACTS = frozenset([
     "media_handoff_observed", "network_terminal_proof", "capture_cost_ms",
     "selector_main_count", "selector_assistant_count", "selector_image_count",
     "selector_chat_thread_count", "request_elapsed_ms", "pending_media",
+    "network_stream_seen", "network_stream_chunks", "network_stream_bytes",
+    "network_stream_terminal_seen", "network_stream_unverified_end",
+    "network_stream_last_age_ms", "network_terminal_chunks",
+    "model_picker_count", "reasoning_selector_count",
+    "tool_selector_count", "file_upload_selector_count",
+    "image_editor_count", "selector_composer_count",
+    "selector_send_button_count", "selector_stop_button_count",
 ])
 ALLOWED_CLASSIFICATIONS = frozenset([
     "baseline", "no_assistant_turn", "handoff_without_visible_media",
@@ -60,7 +67,7 @@ ALLOWED_CLASSIFICATIONS = frozenset([
 ])
 MAX_EVENTS_PER_REQUEST = 32
 MAX_JSON_BYTES = 12_000
-MAX_FACTS = 42
+MAX_FACTS = 80
 
 
 def _safe_id(value: Any) -> str:
@@ -303,19 +310,18 @@ class WorkerProbeStore:
                 {key: request_summary.get(key) for key in allowed},
                 ensure_ascii=False, indent=2,
             ).encode()
-        for tool in ACTIVE_TOOLS:
-            name = "media-delivery" if tool == "media_delivery_v1" else "conversation-dom"
+        tool_files = {
+            "media_delivery_v1": "media-delivery",
+            "conversation_dom_v1": "conversation-dom",
+            "network_evidence_v1": "network-evidence",
+            "model_tool_state_v1": "model-tool-state",
+            "selector_compat_v1": "selector-compat",
+        }
+        for tool, name in tool_files.items():
             items = [event for event in events if event["tool_id"] == tool]
             artifacts[f"probes/{name}.json"] = json.dumps(
                 {"tool_id": tool, "capture_status": "ok" if items else "not_collected",
                  "events": items}, ensure_ascii=False, indent=2,
-            ).encode()
-        for tool, name in (("network_evidence_v1", "network-evidence"),
-                           ("model_tool_state_v1", "model-tool-state"),
-                           ("selector_compat_v1", "selector-compat")):
-            artifacts[f"probes/{name}.json"] = json.dumps(
-                {"tool_id": tool, "capture_status": "not_implemented",
-                 "artifact_omitted_reason": "P1"}, ensure_ascii=False,
             ).encode()
         checksums = {name: hashlib.sha256(blob).hexdigest() for name, blob in artifacts.items()}
         artifacts["manifest.json"] = json.dumps({

@@ -6,7 +6,8 @@
   "use strict";
   if (globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__) return;
 
-  const tools = ["media_delivery_v1", "conversation_dom_v1"];
+  const tools = ["media_delivery_v1", "conversation_dom_v1",
+    "network_evidence_v1", "model_tool_state_v1", "selector_compat_v1"];
   const limits = {maxSnapshots: 8, thresholdMs: 20000};
   const delayByStage = {
     request_pre_submit: 0,
@@ -17,7 +18,7 @@
   };
   const allowedRoots = ["main", "[role='main']", "#thread", "[data-testid='conversation-turns']"];
 
-  function observerFacts() {
+  function observerFacts(active = null) {
     const at = performance.now();
     const root = allowedRoots.map(selector => document.querySelector(selector)).find(Boolean);
     const scope = root || document;
@@ -91,6 +92,45 @@
       selector_assistant_count: document.querySelectorAll("[data-message-author-role='assistant']").length,
       selector_image_count: document.querySelectorAll("main img,[role='main'] img,#thread img").length,
       selector_chat_thread_count: document.querySelectorAll("#thread,[data-testid='conversation-turns']").length,
+      // Metadata only: no SSE body, raw network payload, URL, HTML or model
+      // labels are sent to the evidence store.
+      network_stream_seen: typeof active?.networkStreamSeen === "boolean"
+        ? active.networkStreamSeen : null,
+      network_stream_chunks: Number.isFinite(active?.networkStreamChunks)
+        ? Math.min(1000000, Math.max(0, active.networkStreamChunks)) : null,
+      network_stream_bytes: Number.isFinite(active?.networkStreamBytes)
+        ? Math.min(999999999, Math.max(0, active.networkStreamBytes)) : null,
+      network_stream_terminal_seen: active ? Boolean(active.networkTerminalAt) : null,
+      network_stream_unverified_end: active
+        ? Boolean(active.networkStreamEndedWithoutTerminalAt) : null,
+      network_stream_last_age_ms: Number.isFinite(active?.networkObservedAt) && active.networkObservedAt > 0
+        ? Math.min(999999999, Math.max(0, Date.now() - active.networkObservedAt)) : null,
+      network_terminal_chunks: Number.isFinite(active?.networkTerminalChunks)
+        ? Math.min(1000000, Math.max(0, active.networkTerminalChunks)) : null,
+      model_picker_count: document.querySelectorAll(
+        "button[data-testid*='model-selector'],[aria-label*='Model'],[aria-label*='模型']"
+      ).length,
+      reasoning_selector_count: document.querySelectorAll(
+        "button[data-testid*='reasoning'],[aria-label*='Thinking'],[aria-label*='推理']"
+      ).length,
+      tool_selector_count: document.querySelectorAll(
+        "button[data-testid*='tool'],button[aria-label*='Tools'],button[aria-label*='工具']"
+      ).length,
+      file_upload_selector_count: document.querySelectorAll(
+        "input[type='file'],button[aria-label*='Attach'],button[aria-label*='附件']"
+      ).length,
+      image_editor_count: document.querySelectorAll(
+        "button[data-testid*='edit'],button[aria-label*='Edit image']"
+      ).length,
+      selector_composer_count: document.querySelectorAll(
+        "#prompt-textarea,[contenteditable='true'],textarea"
+      ).length,
+      selector_send_button_count: document.querySelectorAll(
+        "button[data-testid='send-button'],button[aria-label='Send prompt']"
+      ).length,
+      selector_stop_button_count: document.querySelectorAll(
+        "button[data-testid='stop-button'],button[aria-label='Stop generating']"
+      ).length,
       capture_cost_ms: Math.round((performance.now() - at) * 10) / 10,
     };
   }
@@ -106,7 +146,10 @@
       enabled: new Set(enabled),
       threshold: Math.max(5000, Math.min(120000,
         Number(policy.tools.media_delivery_v1?.unresolved_after_ms) || limits.thresholdMs)),
-      cap: Math.max(1, Math.min(8, Number(policy.tools.media_delivery_v1?.max_snapshots) || limits.maxSnapshots)),
+      // 32 server-side events max; every enabled tool gets an equal share,
+      // while reserving its last snapshot for pre-terminal evidence.
+      cap: Math.max(1, Math.min(8, Math.floor(32 / enabled.length),
+        Number(policy.tools.media_delivery_v1?.max_snapshots) || limits.maxSnapshots)),
       handoffReported: false, thresholdReported: false, lastSentAt: 0,
     };
     active.probeSession = session;
@@ -127,7 +170,7 @@
     if (stage === "unresolved_after_threshold") session.thresholdReported = true;
     session.count += 1;
     let facts;
-    try { facts = observerFacts(); }
+    try { facts = observerFacts(active); }
     catch (_) {
       facts = {main_found: false, candidate_image_count: null};
     }
@@ -144,8 +187,10 @@
       classification = "handoff_without_visible_media";
     else if (!facts.assistant_turn_nodes)
       classification = "no_assistant_turn";
-    else if (facts.visible_large_images)
+    else if (Number(extra.newCandidates || 0) > 0)
       classification = "media_candidate_detected";
+    else if (facts.visible_large_images)
+      classification = "visible_media_unattributed";
     else if (stage === "unresolved_after_threshold")
       classification = "waiting_for_result";
     const sends = [];
