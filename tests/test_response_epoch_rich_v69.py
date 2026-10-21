@@ -62,3 +62,21 @@ def test_generated_media_handoff_keeps_single_request_terminal_authority():
     assert 'if (mediaOutsideMarkdown) return node;' in rich
     assert 'image_inlined_count: imageStats.inlined' in rich
     assert source.count('type: "chat.completed"') >= 2
+
+
+def test_worker_probe_is_read_only_extension_observer_not_second_terminal_owner():
+    manifest = json.loads(read("chrome_extension/manifest.json"))
+    scripts = manifest["content_scripts"][1]["js"]
+    assert scripts.index("content_rich_response_v69.js") < scripts.index(
+        "content_probe_supervisor_v1.js"
+    ) < scripts.index("content_request_v6.js")
+    owner = read("chrome_extension/content_request_v6.js")
+    probe = read("chrome_extension/content_probe_supervisor_v1.js")
+    assert "probeSupervisor?.begin?.(active)" in owner
+    assert '__CHAT2API_PROBE_SUPERVISOR_V1__?.observe?.(active' in owner
+    assert 'type: "probe.event"' in probe
+    assert "chat.completed" not in probe
+    assert "chat.error" not in probe
+    assert "request_pre_submit" in probe
+    assert "unresolved_after_threshold" in probe
+    assert owner.count('type: "chat.completed"') >= 2
