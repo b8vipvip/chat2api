@@ -224,7 +224,7 @@ def test_p1_network_model_and_selector_probe_exports_are_sanitized(tmp_path: Pat
         for forbidden in ("session_token_DO_NOT_ARCHIVE", "PRIVATE", "raw_html",
                           "signed_image_url", "secret_cookie"):
             assert forbidden not in lines
-        assert '"network_stream_chunks": 13' in lines
+        assert all(json.loads(line)["facts"]["network_stream_chunks"] == 13 for line in lines.splitlines())
 
 
 def test_p1_fact_schema_and_event_bound_are_documented(tmp_path: Path) -> None:
