@@ -5,9 +5,9 @@ chat2api 同时包含服务端 Python 包、分层运行时/控制台、Chrome B
 ## 当前版本面
 
 - Python package：`0.7.1`
-- Server runtime / console：`0.22.170`
-- Chrome Bridge：`0.22.170`
-- Chrome Bundle / manifest：`0.22.170`
+- Server runtime / console：`0.22.171`
+- Chrome Bridge：`0.22.171`
+- Chrome Bundle / manifest：`0.22.171`
 - Realtime Voice protocol：`chat2api-live-v1`
 - 生产入口：`app.entry:app`
 
@@ -39,14 +39,14 @@ GET /version
   "contract_version": 1,
   "server": {
     "package_version": "0.7.1",
-    "runtime_version": "0.22.170",
-    "expected_runtime_version": "0.22.170",
+    "runtime_version": "0.22.171",
+    "expected_runtime_version": "0.22.171",
     "entrypoint": "app.entry:app",
     "runtime_aligned": true
   },
   "chrome_bridge": {
     "version": "0.8.1",
-    "bundle_version": "0.22.170",
+    "bundle_version": "0.22.171",
     "multimodal_revision": 85
   },
   "protocols": {
@@ -100,3 +100,10 @@ GET /version
 - Worker request-v6 与服务端 RequestBroker 分别保持唯一终态决策权；图片交接标记、canvas 与探针事件不能直接产生 completed。
 - 探针支持 60/120/240/480 秒检查点。TX03 实机仍需验证真实媒体、HTTP 完成、请求历史状态和客户端预览的一致性。
 
+
+## v0.22.171：TX03 图片归属、天然尺寸捕获及自适应媒体超时修复
+
+- 集成 PR #438：图片探针确认 1254×1254 blob 图片完成加载，但 DOM 显示尺寸不足 96px，旧提取器未能将其识别为本轮图片。仅在当前请求的可信图片工具交接后，允许天然宽高均不小于 256px 的新增主聊天区图片参与验证捕获。
+- 继续排除侧边栏、用户上传、历史媒体及不可信来源；仅在图片实际传输并通过媒体验证后，由 request-v6 唯一请求控制器提交完成终态。
+- 测试场普通对话模式取消硬编码的 timeout:300：普通文本默认 300 秒、可信图片生成交接使用原服务端 600 秒上限；图片专用接口保持显式 600 秒。
+- 自动化回归、完整 CI、契约检查和生产镜像冒烟是合并与发布门槛；TX03 实机仍需验证实际图片字节交付与测试场预览。
