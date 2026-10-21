@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from .admin import admin_response
 from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
+from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout
 from .config import Settings, get_settings
 from .file_store import FileStore
 from .models import (
@@ -701,13 +702,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             payload["chat2api"] = meta
         return payload
 
+    def chat_deadline_remaining(
+        state: RequestState, started_at: float, timeout_seconds: int, automatic_media_extension: bool,
+    ) -> float:
+        # The broker retains sole terminal authority; the Worker may only
+        # supply request-correlated media handoff evidence to adjust its deadline.
+        effective = chat_timeout_window(
+            timeout_seconds, automatic_extension=automatic_media_extension,
+            media_handoff_proven=state.diagnostics.get("media_handoff_marker") is True,
+        )
+        if effective > timeout_seconds:
+            state.diagnostics["media_timeout_extended_seconds"] = effective
+            state.diagnostics["media_timeout_extension_authority"] = "server-chat-deadline-v171"
+            state.diagnostics["request_timeout_seconds"] = effective
+        return started_at + effective - asyncio.get_running_loop().time()
+
     async def stream_request(
         request: Request, state: RequestState, response_id: str, model: str, timeout_seconds: int,
         prompt: str, principal: ApiPrincipal, prompt_mode: str, attachments_count: int,
+        automatic_media_extension: bool = False,
     ) -> AsyncIterator[str]:
         yield "data: " + json.dumps(chunk_payload(response_id, model, {"role": "assistant"}), ensure_ascii=False) + "\n\n"
         sent_text = ""
-        deadline = asyncio.get_running_loop().time() + timeout_seconds
+        started_at = asyncio.get_running_loop().time()
         recorded = False
         request_type = "multimodal" if attachments_count else "text"
         try:
@@ -720,7 +737,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                          request_type=request_type, attachments_count=attachments_count)
                     recorded = True
                     break
-                remaining = deadline - asyncio.get_running_loop().time()
+                remaining = chat_deadline_remaining(state, started_at, timeout_seconds, automatic_media_extension)
                 if remaining <= 0:
                     await registry.send(state.client_id, {"type": "chat.cancel", "request_id": state.request_id})
                     state.completed_mono = state.completed_mono or time.perf_counter()
@@ -833,6 +850,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         registry.busy_clients.add(client_id)
         state.probe_policy = probe_policy(client_id)
         timeout_seconds = body.timeout or config.request_timeout_seconds
+        automatic_media_extension = body.timeout is None
+        browser_timeout_seconds = worker_chat_timeout(
+            timeout_seconds, automatic_extension=automatic_media_extension,
+        )
         try:
             await record_request_running(
                 state,
@@ -852,7 +873,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "request_id": request_id,
                     "prompt": prompt,
                     "attachments": attachments,
-                    "options": {"auto_switch_text": True, "timeout_seconds": timeout_seconds, "model": body.model,
+                    "options": {"auto_switch_text": True, "timeout_seconds": browser_timeout_seconds, "model": body.model,
                                 "probe_policy": state.probe_policy},
                 },
             )
@@ -868,13 +889,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if body.stream:
             return StreamingResponse(
                 stream_request(request, state, response_id, body.model, timeout_seconds, prompt, principal,
-                               body.prompt_mode, len(attachments)),
+                               body.prompt_mode, len(attachments), automatic_media_extension),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
         try:
-            text = await asyncio.wait_for(state.final_future, timeout=timeout_seconds)
+            # Shield the same broker Future rather than cancelling it at 300s.
+            # Only request-v6 emits a terminal; correlated media handoff may
+            # extend a default deadline but cannot override an explicit timeout.
+            started_at = asyncio.get_running_loop().time()
+            while True:
+                remaining = chat_deadline_remaining(
+                    state, started_at, timeout_seconds, automatic_media_extension,
+                )
+                if remaining <= 0:
+                    raise asyncio.TimeoutError
+                try:
+                    text = await asyncio.wait_for(
+                        asyncio.shield(state.final_future), timeout=min(1.0, remaining),
+                    )
+                    break
+                except asyncio.TimeoutError:
+                    continue
             # The transport returns the assistant's completed text unchanged.
             # Prompt-language formatting requirements are not HTTP transport
             # failures; explicit structured-output contracts belong to the API
