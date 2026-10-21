@@ -33,7 +33,7 @@ def test_admin_policy_and_authentication(tmp_path: Path) -> None:
         assert catalog.status_code == 200
         tools = {tool["id"]: tool for tool in catalog.json()["tools"]}
         assert tools["media_delivery_v1"]["available"] is True
-        assert tools["selector_compat_v1"]["available"] is False
+        assert tools["selector_compat_v1"]["available"] is True
 
         initial = client.get("/api/admin/worker-tools/policies?scope_id=global", headers=headers)
         assert initial.status_code == 200
@@ -47,7 +47,7 @@ def test_admin_policy_and_authentication(tmp_path: Path) -> None:
         assert changed.json()["revision"] == 1
         assert client.put("/api/admin/worker-tools/policies/global", headers=headers, json=body).status_code == 409
         assert client.put("/api/admin/worker-tools/policies/global", headers=headers, json={
-            "expected_revision": 1, "tools": {"network_evidence_v1": {"enabled": True}}
+            "expected_revision": 1, "tools": {"future_probe_v2": {"enabled": True}}
         }).status_code == 422
         assert client.put("/api/admin/worker-tools/policies/global", headers=headers, json={
             "expected_revision": 1, "tools": {"media_delivery_v1": {"enabled": "yes"}}
