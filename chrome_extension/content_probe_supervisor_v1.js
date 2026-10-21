@@ -116,9 +116,13 @@
 
   function capture(active, stage, extra = {}) {
     const session = active?.probeSession;
-    if (!session || !delayByStage.hasOwnProperty(stage) || session.count >= session.cap) return;
-    if (stage === "media_handoff" && session.handoffReported) return;
-    if (stage === "unresolved_after_threshold" && session.thresholdReported) return;
+    if (!session || !Object.prototype.hasOwnProperty.call(delayByStage, stage)) return Promise.resolve();
+    if (stage === "before_terminal" && session.terminalReported) return Promise.resolve();
+    // Always reserve one snapshot for the final evidence, even if periodic probes run.
+    if (session.count >= (stage === "before_terminal" ? session.cap : Math.max(0, session.cap - 1))) return Promise.resolve();
+    if (stage === "media_handoff" && session.handoffReported) return Promise.resolve();
+    if (stage === "unresolved_after_threshold" && session.thresholdReported) return Promise.resolve();
+    if (stage === "before_terminal") session.terminalReported = true;
     if (stage === "media_handoff") session.handoffReported = true;
     if (stage === "unresolved_after_threshold") session.thresholdReported = true;
     session.count += 1;
@@ -144,19 +148,22 @@
       classification = "media_candidate_detected";
     else if (stage === "unresolved_after_threshold")
       classification = "waiting_for_result";
+    const sends = [];
     for (const tool_id of session.enabled) {
       if (session.sequence >= 32) break;
       session.sequence += 1;
-      // Never block the active browser request when the socket is slow.
-      Promise.resolve().then(() => chrome.runtime.sendMessage({
+      sends.push(Promise.resolve().then(() => chrome.runtime.sendMessage({
         type: "chat2api.event",
         event: {
           type: "probe.event", request_id: session.request_id,
           tool_id, stage, sequence: session.sequence,
           classification, facts,
         },
-      })).catch(() => {});
+      })).catch(() => {}));
     }
+    // The terminal controller awaits at most 900ms for these events to reach
+    // the authenticated Worker transport, without allowing probes to own status.
+    return Promise.race([Promise.allSettled(sends), new Promise(resolve => setTimeout(resolve, 900))]);
   }
 
   function observe(active, {handoff = false, generating = false,
