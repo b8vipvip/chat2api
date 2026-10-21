@@ -817,6 +817,9 @@
       }); } catch (_) {}
       active.mediaLastScanCandidates = discovered.candidate_count_document;
       active.mediaLastScanNewCandidates = discovered.new_image_candidate_count;
+      active.mediaLastTrustedNewSources = Number(discovered.trusted_fresh_sources || 0);
+      active.mediaLastBaselineExcluded = Number(discovered.excluded_by_baseline || 0);
+      active.mediaLastEligibilityExcluded = Number(discovered.excluded_by_media_gate || 0);
       if ((imageHandoff || imageBuildArtifact) && !sameTurnRoot && !pageMediaFound
           && (!active.mediaScanReportedAt || Date.now() - active.mediaScanReportedAt >= 12000)) {
         active.mediaScanReportedAt = Date.now();
@@ -829,6 +832,12 @@
           media_assistant_reason: current.reason,
           media_baseline_images: discovered.baseline_image_count,
           media_document_candidates: discovered.candidate_count_document,
+          media_scoped_image_nodes: discovered.scoped_image_nodes,
+          media_trusted_scoped_images: discovered.trusted_scoped_images,
+          media_trusted_fresh_sources: discovered.trusted_fresh_sources,
+          media_excluded_by_baseline: discovered.excluded_by_baseline,
+          media_excluded_by_gate: discovered.excluded_by_media_gate,
+          media_intrinsic_candidate_gate: discovered.intrinsic_candidate_gate,
           media_new_candidates: discovered.new_image_candidate_count,
           media_after_user_candidates: discovered.after_user_count,
           media_source_diagnostics_version: 176,
@@ -1080,6 +1089,9 @@
         media_transfer_stats: active.mediaCaptureTransferStats || null,
         media_last_scan_candidates: Number(active.mediaLastScanCandidates || 0),
         media_last_scan_new_candidates: Number(active.mediaLastScanNewCandidates || 0),
+        media_last_trusted_fresh_sources: Number(active.mediaLastTrustedNewSources || 0),
+        media_last_baseline_excluded: Number(active.mediaLastBaselineExcluded || 0),
+        media_last_eligibility_excluded: Number(active.mediaLastEligibilityExcluded || 0),
         ...(imageHandoffObserved && {
           internal_tool_handoff_without_media: true,
           media_capture_attempts: Number(active.mediaCaptureAttempts || 0),
