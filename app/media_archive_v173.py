@@ -149,6 +149,32 @@ class MediaArchive:
             raise FileNotFoundError("S3 provider credentials are not configured")
         return self._s3(cfg).get_object(Bucket=cfg["s3"]["bucket"], Key=key)["Body"].read()
 
+    def test_backend(self) -> dict:
+        """Exercise actual provider write/read/delete, not merely credential syntax."""
+        cfg = self._config()
+        token = secrets.token_urlsafe(14).replace("-", "").replace("_", "")
+        key = "checks/connection-" + token + ".txt"
+        payload = b"chat2api-storage-connection-v173"
+        uploaded = False
+        try:
+            self._write(cfg, key, payload, "text/plain")
+            uploaded = True
+            result = self._read(cfg, cfg["backend"], key)
+            if result != payload:
+                raise RuntimeError("Storage readback mismatch")
+            return {"ok": True, "backend": cfg["backend"], "verified": "write-read"}
+        except Exception as exc:
+            raise RuntimeError("Storage connection check failed: " + type(exc).__name__) from exc
+        finally:
+            if uploaded:
+                try:
+                    if cfg["backend"] == "local":
+                        (self.root / key).unlink(missing_ok=True)
+                    else:
+                        self._s3(cfg).delete_object(Bucket=cfg["s3"]["bucket"], Key=key)
+                except Exception:
+                    pass
+
     def store_image(self, raw: bytes, mime: str, owner: str, request_id: str):
         if mime not in ALLOWED or not raw or len(raw) > MAX_BYTES:
             raise ValueError("Unsupported image format or image too large")
