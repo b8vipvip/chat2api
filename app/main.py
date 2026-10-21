@@ -34,6 +34,7 @@ from .models import (
 from .prompting import build_prompt
 from .registry import ClientRegistry
 from .telemetry import TelemetryStore
+from .worker_probe_store import WorkerProbeStore
 from .test_runs import TestRunStore
 from .token_usage import usage_for
 
@@ -49,6 +50,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # old socket must not terminate requests already sent on its replacement.
     registry.request_broker = broker
     telemetry = TelemetryStore(config.data_dir)
+    worker_probes = WorkerProbeStore(config.data_dir)
     api_keys = ApiKeyStore(config.data_dir, config.api_key)
     telemetry.usage_accounting = api_keys.account_completed_usage
     file_store = FileStore(config.data_dir)
@@ -80,6 +82,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.registry = registry
     app.state.broker = broker
     app.state.telemetry = telemetry
+    app.state.worker_probes = worker_probes
     app.state.api_keys = api_keys
     app.state.file_store = file_store
     app.state.test_runs = test_runs
@@ -132,9 +135,80 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=403, detail="Managed API keys cannot access administrator endpoints")
         raise HTTPException(status_code=401, detail="Invalid administrator API key")
 
+    def probe_worker_id(client_id: str) -> str:
+        client = registry.clients.get(client_id)
+        metadata = (client.metadata if client and isinstance(client.metadata, dict) else {})
+        return str(metadata.get("linux_worker_id") or metadata.get("worker_id") or client_id)
+
+    def probe_policy(client_id: str) -> dict[str, Any]:
+        return worker_probes.effective(probe_worker_id(client_id))
+
     def require_scope(principal: ApiPrincipal, scope: str) -> None:
         if principal.kind != "master" and scope not in principal.scopes:
             raise HTTPException(status_code=403, detail=f"API key does not have {scope!r} permission")
+
+    @app.get("/api/admin/worker-tools/catalog", dependencies=[Depends(require_admin_key)])
+    async def worker_probe_catalog() -> dict[str, Any]:
+        return {"tools": worker_probes.catalog(), "schema_version": 1}
+
+    @app.get("/api/admin/worker-tools/policies", dependencies=[Depends(require_admin_key)])
+    async def worker_probe_policies(scope_id: str = "global") -> dict[str, Any]:
+        try:
+            policy = worker_probes.policy(scope_id)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        workers = [
+            {"client_id": item.client_id,
+             "worker_id": probe_worker_id(item.client_id),
+             "name": item.name,
+             "online": item.client_id in registry.online_client_ids(),
+             "extension_version": (item.metadata or {}).get("extension_version")}
+            for item in registry.clients.values()
+        ]
+        return {"policy": policy,
+                "effective_policy": worker_probes.effective(scope_id[7:]) if scope_id.startswith("worker:") else None,
+                "workers": workers}
+
+    @app.put("/api/admin/worker-tools/policies/{scope_id}", dependencies=[Depends(require_admin_key)])
+    async def worker_probe_update_policy(scope_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        try:
+            revision = body.get("expected_revision")
+            if type(revision) is not int:
+                raise ValueError("expected_revision must be an integer")
+            return await worker_probes.put_policy(scope_id, expected_revision=revision, tools=body.get("tools"))
+        except RuntimeError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from error
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.get("/api/admin/worker-tools/runs", dependencies=[Depends(require_admin_key)])
+    async def worker_probe_runs(limit: int = 40) -> dict[str, Any]:
+        return {"data": worker_probes.runs(limit)}
+
+    @app.get("/api/admin/requests/{request_id}/probes", dependencies=[Depends(require_admin_key)])
+    async def request_probe_events(request_id: str) -> dict[str, Any]:
+        if not telemetry.get(request_id):
+            raise HTTPException(status_code=404, detail="Unknown request")
+        try:
+            return {"summary": worker_probes.summary(request_id),
+                    "events": worker_probes.events(request_id)}
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+
+    @app.get("/api/admin/requests/{request_id}/probes/download", dependencies=[Depends(require_admin_key)])
+    async def request_probe_download(request_id: str) -> Response:
+        row = telemetry.get(request_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Unknown request")
+        try:
+            archive = worker_probes.archive(request_id, row)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return Response(content=archive, media_type="application/zip", headers={
+            "Content-Disposition": f'attachment; filename="request-probes-{request_id}.zip"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        })
 
     @app.get("/")
     async def root() -> dict[str, str]:
@@ -506,6 +580,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "prompt_chars": len(prompt),
                 "completion_chars": len(final_text),
                 "status": status_value,
+                "probe_summary": worker_probes.summary(state.request_id),
+                "probe_capture_status": worker_probes.summary(state.request_id)["capture_status"],
                 "usage": {**usage, **token_meta},
                 "timings": state.timings(),
                 "diagnostics": dict(state.diagnostics),
@@ -765,7 +841,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "request_id": request_id,
                     "prompt": prompt,
                     "attachments": attachments,
-                    "options": {"auto_switch_text": True, "timeout_seconds": timeout_seconds, "model": body.model},
+                    "options": {"auto_switch_text": True, "timeout_seconds": timeout_seconds, "model": body.model,
+                                "probe_policy": probe_policy(client_id)},
                 },
             )
         except Exception as error:
@@ -858,7 +935,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "request_id": request_id,
                     "prompt": body.prompt,
                     "attachments": attachments,
-                    "options": {"model": "gpt-image", "size": body.size, "timeout_seconds": timeout_seconds},
+                    "options": {"model": "gpt-image", "size": body.size, "timeout_seconds": timeout_seconds,
+                                "probe_policy": probe_policy(client_id)},
                 },
             )
             deadline = asyncio.get_running_loop().time() + timeout_seconds
@@ -1027,6 +1105,28 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         await websocket.send_json({"type": "heartbeat.ack", "ts": time.time()})
                     continue
                 request_id = str(message.get("request_id") or "")
+                if message_type == "probe.event" and request_id:
+                    # Existing authenticated socket and broker are the sole
+                    # request-to-Worker authority; probe events never reach the
+                    # request terminal queue.
+                    state = broker.requests.get(request_id)
+                    if state and state.client_id == client_id and registry.sockets.get(client_id) is websocket:
+                        try:
+                            result = await worker_probes.ingest(
+                                request_id=request_id, worker_id=probe_worker_id(client_id),
+                                client_id=client_id, message=message,
+                                tab_id=state.diagnostics.get("tab_id"),
+                                window_id=state.diagnostics.get("window_id"))
+                            if result.get("accepted"):
+                                state.diagnostics["probe_event_count"] = (
+                                    int(state.diagnostics.get("probe_event_count") or 0)
+                                    + (0 if result.get("deduplicated") else 1)
+                                )
+                                state.diagnostics["probe_capture_status"] = "ok"
+                        except (ValueError, PermissionError) as error:
+                            logger.info("Rejected Worker probe evidence request=%s reason=%s",
+                                        request_id, type(error).__name__)
+                    continue
                 if request_id and message_type in {
                     "chat.diagnostics", "chat.started", "chat.delta", "chat.snapshot", "chat.completed",
                     "chat.error", "chat.cancelled", "image.diagnostics", "image.started", "image.progress",

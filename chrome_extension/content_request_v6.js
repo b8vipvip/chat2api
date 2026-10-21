@@ -763,6 +763,10 @@
         active.mediaSourceStableAt && Date.now() - active.mediaSourceStableAt >= 1600
       );
       if (captureMedia) imageHandoffObserved = true;
+      try { globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.observe?.(active, {
+        handoff: imageHandoff, generating, newCandidates: discovered.new_image_candidate_count,
+        captured: Number(active.mediaCaptureLastInlined || 0) + Number(active.mediaCaptureLastEmbedded || 0),
+      }); } catch (_) {}
       active.mediaLastScanCandidates = discovered.candidate_count_document;
       active.mediaLastScanNewCandidates = discovered.new_image_candidate_count;
       if (imageHandoff && !sameTurnRoot && !pageMediaFound
@@ -1008,6 +1012,9 @@
       await delay(120);
     }
 
+    try { globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.capture?.(active, "before_terminal", {
+      completed: false, handoff: imageHandoffObserved, captured: Number(active.mediaCaptureLastInlined || 0),
+    }); } catch (_) {}
     if (active.cancelled) await emit({ type: "chat.cancelled", request_id: active.requestId, reason: "Cancelled by API client" });
     else await emit({ type: "chat.error", request_id: active.requestId, error: imageHandoffObserved
       ? "ChatGPT generated media but no transferable image was captured before the request timeout"
@@ -1080,6 +1087,8 @@
     };
     state.active = active;
     if (v5) v5.active = active;
+    const probeSupervisor = globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__;
+    try { probeSupervisor?.begin?.(active); } catch (_) {}
 
     try {
       // UI interruption resolution is readiness work owned by the request
@@ -1099,6 +1108,9 @@
         diagnostics: { request_controller: "request-v6", response_epoch_revision: 69, ...(error?.diagnostics || {}) },
       });
     } finally {
+      try { globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.capture?.(active, "before_terminal", {
+        completed: Boolean(active.completed),
+      }); } catch (_) {}
       if (state.active === active) state.active = null;
       if (v5?.active === active) v5.active = null;
     }

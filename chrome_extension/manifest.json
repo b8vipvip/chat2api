@@ -85,6 +85,7 @@
         "content_request_v4.js",
         "content_request_v5.js",
         "content_rich_response_v69.js",
+        "content_probe_supervisor_v1.js",
         "content_request_v6.js",
         "content_chatgpt_choice_policy_v143.js",
         "content_interruption_guard_v72.js",

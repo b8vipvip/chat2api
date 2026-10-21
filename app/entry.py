@@ -88,6 +88,7 @@ from .worker_auto_login_v153_patch import install_worker_auto_login_v153_patch
 from .worker_model_library_v145_patch import install_worker_model_library_v145_patch
 from .worker_text_model_management_v146_patch import install_worker_text_model_management_v146_patch
 from .worker_model_tasks_v147_patch import install_manual_worker_text_model_tasks_v147_patch
+from .worker_probe_ui_patch import install_worker_probe_ui_v1
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -296,4 +297,7 @@ install_manual_worker_text_model_tasks_v147_patch(app)
 # Worker catalog AFTER v145 installs its strict verified-model authority.
 from .legacy_mini_default_alias_v163_patch import install_legacy_mini_default_alias
 install_legacy_mini_default_alias(app)
+# P0 Worker tools mount only their own UI after canonical normalization.
+# Preserve the existing final request-history owner as the final call.
+install_worker_probe_ui_v1(app)
 install_request_history_v94_patch(app)
