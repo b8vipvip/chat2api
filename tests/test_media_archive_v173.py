@@ -66,3 +66,38 @@ def test_reject_non_image_and_corrupt_inline_data_without_external_network(tmp_p
         store.rewrite_markdown("![file](data:image/png;base64,SGVsbG8=)",
                                "key", "req", "https://chat2api.example")
     assert store.public_config()["count"] == 0
+
+
+def test_real_storage_healthcheck_for_local_and_fake_s3(tmp_path: Path, monkeypatch):
+    store = MediaArchive(tmp_path, "master")
+    assert store.test_backend() == {"ok": True, "backend": "local", "verified": "write-read"}
+    store.configure({"backend": "s3", "s3": {"bucket": "bucket-1", "region": "us-east-1",
+                    "access_key_id": "AK", "secret_access_key": "SK"}})
+
+    class Body:
+        def __init__(self, content):
+            self.content = content
+        def read(self):
+            return self.content
+
+    class FakeS3:
+        def __init__(self):
+            self.items = {}
+        def put_object(self, **kw):
+            assert kw["ServerSideEncryption"] == "AES256"
+            self.items[kw["Key"]] = kw["Body"]
+        def get_object(self, **kw):
+            return {"Body": Body(self.items[kw["Key"]])}
+        def delete_object(self, **kw):
+            self.items.pop(kw["Key"], None)
+
+    remote = FakeS3()
+    monkeypatch.setattr(store, "_s3", lambda config: remote)
+    assert store.test_backend() == {"ok": True, "backend": "s3", "verified": "write-read"}
+    assert remote.items == {}, "temporary healthcheck object must be removed"
+    row = store.store_image(example_image(), "image/png", "key-1", "req-2")
+    payload, mime = store.load(row["id"], row["token"])
+    assert payload.startswith(b"\x89PNG") and mime == "image/png"
+    store.configure({"backend": "local"})
+    payload, _ = store.load(row["id"], row["token"])
+    assert payload.startswith(b"\x89PNG"), "existing remote items remain readable after default changes"
