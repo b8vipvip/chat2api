@@ -162,11 +162,11 @@ assert.equal(intrinsicCapture.images.length, 1);
 const embeddedHidden = await rich.capturePageImages(intrinsicCapture.images, {allowIntrinsic:true});
 assert.equal(embeddedHidden.image_embedded_count, 1,
   "same-request image capture must not drop intrinsic-only candidates");
-assert.match(embeddedHidden.text, /^!\\[图片\\]\\(data:image\\/png;base64,YWJj\\)$/);
+assert.match(embeddedHidden.text, /^!\[图片\]\(data:image\/png;base64,YWJj\)$/);
 
-assert.match(controllerSource, /const intrinsicHandoff = Boolean\\(imageHandoff\\)/);
+assert.match(controllerSource, /const intrinsicHandoff = Boolean\(imageHandoff\)/);
 assert.doesNotMatch(playgroundSource, /stream:false,timeout:300/,
   "Playground chat must not disable broker-owned adaptive image deadline");
-assert.match(playgroundSource, /stream:false\\};/,
+assert.match(playgroundSource, /stream:false\};/,
   "text requests use default deadline and media-handoff allowance");
 console.log("TX03 intrinsic image fallback, historical exclusion, protected capture and adaptive Playground deadline passed");
