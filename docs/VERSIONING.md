@@ -5,9 +5,9 @@ chat2api 同时包含服务端 Python 包、分层运行时/控制台、Chrome B
 ## 当前版本面
 
 - Python package：`0.7.1`
-- Server runtime / console：`0.22.172`
-- Chrome Bridge：`0.22.172`
-- Chrome Bundle / manifest：`0.22.172`
+- Server runtime / console：`0.22.173`
+- Chrome Bridge：`0.22.173`
+- Chrome Bundle / manifest：`0.22.173`
 - Realtime Voice protocol：`chat2api-live-v1`
 - 生产入口：`app.entry:app`
 
@@ -39,14 +39,14 @@ GET /version
   "contract_version": 1,
   "server": {
     "package_version": "0.7.1",
-    "runtime_version": "0.22.172",
-    "expected_runtime_version": "0.22.172",
+    "runtime_version": "0.22.173",
+    "expected_runtime_version": "0.22.173",
     "entrypoint": "app.entry:app",
     "runtime_aligned": true
   },
   "chrome_bridge": {
     "version": "0.8.1",
-    "bundle_version": "0.22.172",
+    "bundle_version": "0.22.173",
     "multimodal_revision": 85
   },
   "protocols": {
@@ -115,3 +115,12 @@ GET /version
 - 无法取得真实图片时以明确的错误终态结束，避免把构图代码误报为已生成图片。不会新增调度器，不会改变默认超时和独占终态决策权。
 - 诊断补充图片主区域候选、提交前基线命中数、候选门槛排除数和传输失败统计，不记录完整 URL、网页 HTML 或图片原始数据。
 - CI 增加 TX03 实例命令回归、原 Windows Worker 终态契约迁移；实机依旧需要验证 blob 图片字节真实传输、服务端状态以及测试场预览一致性。
+
+## v0.22.173：生成图片同域转存与云对象存储配置
+
+- 统一聊天流式与非流式图片交付：将 Markdown 的 Base64 raster 数据解析验证、归档到服务端，并以 chat2api 自身域名下的缩略图 URL 交付。任何尚未完成的内嵌图片数据不可逐字发送给下游客户端。
+- 由 SQLite 管理转存媒体索引；将原图、384px WebP 缩略图分开保存。媒体下载需要不可猜测的随机令牌；服务端加密保存 S3 兼容云存储凭据，HTTP API 不回显密钥。
+- 控制台新增“转存管理”：选择本地/S3 兼容对象存储、默认转存开关、归档统计及真实写入/读取测试。AWS S3、Cloudflare R2、MinIO 可通过 S3 兼容协议配置；其他云数据库和非 S3 后端尚未实现，未标为可用。
+- 专用 /v1/images/generations 的 URL 返回使用自己归档的资源，而显式 response_format=b64_json 仍遵循兼容 API 语义。
+- 注意：旧 FileStore 文件上传流程仍保留独立本地存储；已生成图片的旧版历史媒体不会自动追溯迁移。新云端存储需要管理员配置凭据并点击“测试存储连接”验证。
+- 配套 mv3c Markdown 图片预览修复在 mv3c PR #17，缩略图点击时打开原图。两边应升级后实机交叉验证。
