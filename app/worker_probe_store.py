@@ -104,6 +104,21 @@ class WorkerProbeStore:
         self.lock = asyncio.Lock()
         self.policies: dict[str, dict[str, Any]] = {}
         self.load()
+        self.prune_expired()
+
+    def prune_expired(self, retention_days: int = 30) -> int:
+        """Bound evidence retention without touching business request history."""
+        from time import time
+        cutoff = time() - max(1, retention_days) * 86400
+        removed = 0
+        for path in self.events_root.glob("*.jsonl"):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                continue
+        return removed
 
     def load(self) -> None:
         if not self.policy_path.exists():
@@ -194,7 +209,8 @@ class WorkerProbeStore:
         return self.events_root / f"{_safe_id(request_id)}.jsonl"
 
     async def ingest(self, *, request_id: str, worker_id: str,
-                     client_id: str, message: dict[str, Any]) -> dict[str, Any]:
+                     client_id: str, message: dict[str, Any],
+                     tab_id: int | None = None, window_id: int | None = None) -> dict[str, Any]:
         request_id = _safe_id(request_id)
         if len(json.dumps(message, ensure_ascii=False)) > MAX_JSON_BYTES:
             raise ValueError("Probe message too large")
@@ -213,7 +229,14 @@ class WorkerProbeStore:
         classification = str(message.get("classification") or "capture_unavailable")
         if classification not in ALLOWED_CLASSIFICATIONS:
             raise ValueError("Invalid classification")
+        run_id = "probe_run_" + hashlib.sha256(
+            f"{request_id}:{client_id}".encode("utf-8")
+        ).hexdigest()[:20]
         event = {
+            "event_id": f"probe_evt_{seq:04d}_{tool_id}",
+            "probe_run_id": run_id,
+            "tab_id": tab_id if type(tab_id) is int else None,
+            "window_id": window_id if type(window_id) is int else None,
             "schema_version": 1, "request_id": request_id,
             "worker_id": worker_id, "client_id": client_id,
             "tool_id": tool_id, "tool_version": "1.0.0",
