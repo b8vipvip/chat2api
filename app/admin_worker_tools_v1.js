@@ -193,4 +193,8 @@
   $("workerToolsInspect").addEventListener("click", () => inspectRequest());
   $("workerToolsDownload").addEventListener("click", () => downloadRequest());
   window.loadWorkerTools = load;
+  const navigation = document.querySelector('.nav button[data-view="worker-tools"]');
+  navigation?.addEventListener("click", () => { load().catch(error => status(error.message, true)); });
+  if (root.classList.contains("active") || location.hash === "#worker-tools")
+    load().catch(error => status(error.message, true));
 })();
