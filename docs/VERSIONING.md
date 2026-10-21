@@ -5,9 +5,9 @@ chat2api 同时包含服务端 Python 包、分层运行时/控制台、Chrome B
 ## 当前版本面
 
 - Python package：`0.7.1`
-- Server runtime / console：`0.22.167`
-- Chrome Bridge：`0.22.167`
-- Chrome Bundle / manifest：`0.22.167`
+- Server runtime / console：`0.22.168`
+- Chrome Bridge：`0.22.168`
+- Chrome Bundle / manifest：`0.22.168`
 - Realtime Voice protocol：`chat2api-live-v1`
 - 生产入口：`app.entry:app`
 
@@ -39,14 +39,14 @@ GET /version
   "contract_version": 1,
   "server": {
     "package_version": "0.7.1",
-    "runtime_version": "0.22.167",
-    "expected_runtime_version": "0.22.167",
+    "runtime_version": "0.22.168",
+    "expected_runtime_version": "0.22.168",
     "entrypoint": "app.entry:app",
     "runtime_aligned": true
   },
   "chrome_bridge": {
     "version": "0.8.1",
-    "bundle_version": "0.22.167",
+    "bundle_version": "0.22.168",
     "multimodal_revision": 85
   },
   "protocols": {
@@ -70,3 +70,14 @@ GET /version
 7. `tests/test_runtime_contract.py` 必须保持通过，用来阻止 package、manifest、protocol 和文档再次漂移。
 8. Worker 内容运行时升级时，bundle marker、content runtime contract、programmatic bootstrap 和 background runtime preflight 必须在同一次发布中对齐；如果采用兼容热修复并保持 manifest 版本不变，服务端 Worker 自动同步必须依据 `chrome_extension/` 路径变化强制刷新 Worker payload。涉及页面 MAIN-world 能力时还必须把 MAIN-world marker 纳入 runtime contract。
 9. 自动处理 ChatGPT 页面弹窗只能执行无副作用的关闭/跳过动作；涉及授权、连接健康数据、付款、登录、验证、删除账号等动作必须保持人工确认，且 runtime preflight 必须把当前 UI hygiene revision 纳入完整性检查。
+
+## v0.22.168：Worker 工具中心和图片证据探针
+
+- 服务端及 Chrome Worker bundle 统一升级为 `0.22.168`，Python package 版本保持 `0.7.1`。
+- 新增 `Worker 工具` 管理页，可分别配置全局和单个 Worker 的 P0 图片、DOM 证据探针。
+- 该诊断工具默认关闭。使用时先打开图片交付探针和聊天 DOM 探针，再发起新的图片相关请求。
+- 文本聊天请求由 `request-v6`、专用图片请求由 `image-v3` 在真正的请求终态之前发送只读证据；成功与失败决策仍由原有控制器独占。
+- `请求记录 → 查看对话 → 查看探针` 可跳转到证据时间线，`Worker 工具` 页面可通过请求 ID 下载诊断 ZIP。
+- 证据不上传提示词正文、网页完整 HTML、图片字节或带签名的图片地址。单次运行事件和存储周期设有上限。
+- 保留设计文档 `docs/worker-tools-probe-platform-design-v1.0.md`。网络、模型状态及选择器专项探针仍属于 P1，不能视为已实施。
+- 新版首次启用需确认服务端版本和对应 Worker 版本均为 `0.22.168`，并在 TX03 实机复测。
