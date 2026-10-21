@@ -15,6 +15,7 @@
     media_handoff: 0,
     unresolved_after_threshold: 0,
     before_terminal: 0,
+    progress_checkpoint: 0,
   };
   const allowedRoots = ["main", "[role='main']", "#thread", "[data-testid='conversation-turns']"];
 
@@ -152,6 +153,7 @@
       cap: Math.max(1, Math.min(8, Math.floor(32 / enabled.length),
         Number(policy.tools.media_delivery_v1?.max_snapshots) || limits.maxSnapshots)),
       handoffReported: false, thresholdReported: false, lastSentAt: 0,
+      checkpointsReported: 0,
     };
     active.probeSession = session;
     capture(active, "request_pre_submit", {});
@@ -221,6 +223,16 @@
     if (!session.thresholdReported && Date.now() - session.started_at >= session.threshold)
       capture(active, "unresolved_after_threshold",
         {handoff, generating, newCandidates, captured});
+    // The image controller can legitimately run for 600 seconds. Capture
+    // bounded checkpoints after 60, 120, 240 and 480 seconds; otherwise
+    // the last evidence would be a misleading 20-second canvas snapshot.
+    const milestones = [60000, 120000, 240000, 480000];
+    while (session.checkpointsReported < milestones.length &&
+      Date.now() - session.started_at >= milestones[session.checkpointsReported]) {
+      session.checkpointsReported++;
+      capture(active, "progress_checkpoint",
+        {handoff, generating, newCandidates, captured});
+    }
   }
 
   globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__ = Object.freeze({
