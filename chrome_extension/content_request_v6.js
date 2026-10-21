@@ -756,8 +756,11 @@
       const userAnchor = currentUserTurn(active);
       const freshUserAnchor = userAnchor && !active.baselineUserTurns?.has(userAnchor)
         ? userAnchor : null;
+      // Only this request's authenticated media-tool handoff enables
+      // intrinsic-size-only image cards; generic page images stay excluded.
+      const intrinsicHandoff = Boolean(imageHandoff);
       const discovered = rich?.locateNewPageMedia?.(
-        active.baselinePageMedia, freshUserAnchor,
+        active.baselinePageMedia, freshUserAnchor, intrinsicHandoff,
       ) || { images: [], candidate_count_document: 0, new_image_candidate_count: 0,
         after_user_count: 0, baseline_image_count: 0, anchor: "none" };
       const pageMediaFound = discovered.images.length > 0;
@@ -830,7 +833,7 @@
         // Prefer the validated current assistant turn, but permit a strictly
         // post-baseline new-image card when the page supplies no assistant role.
         const finalMedia = sourceMedia.length
-          ? await rich.capturePageImages(sourceMedia)
+          ? await rich.capturePageImages(sourceMedia, {allowIntrinsic: intrinsicHandoff})
           : await finalNodeText(sameTurnRoot);
         const captured = String(finalMedia?.text || "");
         active.mediaCaptureAttempts = Number(active.mediaCaptureAttempts || 0) + 1;

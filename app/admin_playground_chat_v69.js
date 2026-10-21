@@ -420,7 +420,9 @@
         referenceFiles.push({file_id: previousImage.meta.generated_file_id});
       const body = imageMode
         ? {model:"gpt-image",prompt:text,attachments:referenceFiles,response_format:"b64_json",n:1,timeout:600}
-        : {model,messages:normalizedHistory(),prompt_mode:"full",attachments:referenceFiles,stream:false,timeout:300};
+        // Omit an explicit chat timeout, preserving broker-owned adaptive
+        // 300s text / 600s verified media handoff without a second clock.
+        : {model,messages:normalizedHistory(),prompt_mode:"full",attachments:referenceFiles,stream:false};
       if (!imageMode && model !== "gpt-5.5-mini" && $chat("pgChatReasoning").value) body.reasoning_effort = $chat("pgChatReasoning").value;
       const response = await fetch(imageMode ? "/v1/images/generations" : "/v1/chat/completions", {
         method:"POST",headers:{...headers(credential.token),"Content-Type":"application/json",

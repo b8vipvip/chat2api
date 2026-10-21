@@ -100,3 +100,28 @@ def test_image_v3_and_chat_v6_flush_probe_before_terminal():
     # No new secondary terminal authority or request routing in the observer.
     for action in ("image.completed", "image.error", "chat.completed", "chat.error"):
         assert 'type: "' + action + '"' not in probe
+
+
+def test_verified_media_handoff_intrinsic_card_still_uses_one_request_owner():
+    """TX03 can expose a loaded 1254px blob preview with a sub-96px DOM box."""
+    owner = read("chrome_extension/content_request_v6.js")
+    rich = read("chrome_extension/content_rich_response_v69.js")
+    playground = read("app/admin_playground_chat_v69.js")
+    assert "const intrinsicHandoff = Boolean(imageHandoff)" in owner
+    assert "active.baselinePageMedia, freshUserAnchor, intrinsicHandoff" in owner
+    assert "capturePageImages(sourceMedia, {allowIntrinsic: intrinsicHandoff})" in owner
+    assert "allowIntrinsic && img.complete === true" in rich
+    assert "Number(img.naturalWidth) >= 256" in rich
+    assert "Number(img.naturalHeight) >= 256" in rich
+    assert "const keys = new Set(" in rich
+    assert "oldKeys.has(candidateMediaKey(img))" in rich
+    assert "trustedMediaSource(src)" in rich
+    assert "media-new-image-card-found" in owner
+    assert "hasTransferableImage(captured) && delivered > 0" in owner
+    assert 'response_terminal_source: "verified-request-media-dom-v176"' in owner
+    assert "stream:false,timeout:300" not in playground
+    assert 'response_format:"b64_json",n:1,timeout:600' in playground
+    # No separate terminal controller was created for probe-discovered bitmaps.
+    probe = read("chrome_extension/content_probe_supervisor_v1.js")
+    assert 'type: "chat.completed"' not in probe
+    assert 'type: "chat.error"' not in probe

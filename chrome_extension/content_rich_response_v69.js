@@ -41,19 +41,27 @@
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 
-  function candidateImage(img) {
-    if (!(img instanceof Element) || !visible(img)) return false;
-    const box = img.getBoundingClientRect();
+  function candidateImage(img, allowIntrinsic = false) {
+    if (!(img instanceof Element)) return false;
     const src = String(img.currentSrc || img.getAttribute("src") || "").trim();
-    // A large preview inside the assistant's own turn is evidence of a media
-    // result. Exclude profile avatars, thumbnails and unrelated page images.
-    return box.width >= 96 && box.height >= 96
-      && /^(blob:|data:image\/|https:\/\/)/i.test(src);
+    if (!/^(blob:|data:image\/|https:\/\/)/i.test(src)) return false;
+    // The visible, >=96px image remains the preferred evidence.
+    if (visible(img)) {
+      const box = img.getBoundingClientRect();
+      if (box.width >= 96 && box.height >= 96) return true;
+    }
+    // Some ChatGPT image cards render a large loaded bitmap through a
+    // small/hidden <img> backing a separate preview. This fallback is ONLY
+    // enabled by the request controller after a correlated media handoff.
+    // It cannot make avatars, sidebar images or prior images eligible.
+    return Boolean(allowIntrinsic && img.complete === true
+      && Number(img.naturalWidth) >= 256 && Number(img.naturalHeight) >= 256
+      && img.closest?.("main,[role='main'],#thread,[data-testid^='conversation-turn']"));
   }
 
   function hasCandidateImage(node) {
     return Boolean(node instanceof Element
-      && [...node.querySelectorAll("img")].some(candidateImage));
+      && [...node.querySelectorAll("img")].some(img => candidateImage(img)));
   }
 
   // The redesigned ChatGPT image generator can render a finished preview
@@ -93,10 +101,10 @@
     return trustedMediaSource(src) ? src : "";
   }
 
-  function pageMediaCandidates() {
+  function pageMediaCandidates(allowIntrinsic = false) {
     return [...document.querySelectorAll(CHAT_MEDIA_SELECTOR)]
       .filter(img => {
-        if (!candidateImage(img)) return false;
+        if (!candidateImage(img, allowIntrinsic)) return false;
         if (img.closest("aside,nav,header,footer,form,[role='dialog'],[role='menu'],[data-message-author-role='user']")) return false;
         const turn = img.closest("article[data-testid^='conversation-turn'],[data-testid^='conversation-turn'],article[data-message-id]");
         if (turn && (turn.getAttribute("data-message-author-role") === "user"
@@ -106,12 +114,16 @@
   }
 
   function snapshotPageMedia() {
-    const images = pageMediaCandidates();
-    return { keys: new Set(images.map(candidateMediaKey)), nodes: new Set(images), count: images.length };
+    const images = pageMediaCandidates(true);
+    // Snapshot all trusted main-page media URLs, even if their image has not
+    // loaded yet. An old image loading after send must not become "new".
+    const keys = new Set([...document.querySelectorAll(CHAT_MEDIA_SELECTOR)]
+      .map(candidateMediaKey).filter(Boolean));
+    return { keys, nodes: new Set(images), count: images.length };
   }
 
-  function locateNewPageMedia(baseline, userAnchor = null) {
-    const images = pageMediaCandidates();
+  function locateNewPageMedia(baseline, userAnchor = null, allowIntrinsic = false) {
+    const images = pageMediaCandidates(allowIntrinsic);
     const oldKeys = baseline?.keys || new Set();
     const fresh = images.filter(img => !oldKeys.has(candidateMediaKey(img)));
     const afterUser = userAnchor instanceof Element
@@ -134,14 +146,14 @@
     };
   }
 
-  async function capturePageImages(images) {
+  async function capturePageImages(images, { allowIntrinsic = false } = {}) {
     if (!Array.isArray(images) || !images.length) return {
       text: "", image_inlined_count: 0, image_embedded_count: 0,
       image_inlined_bytes: 0,
     };
     const wrapper = document.createElement("div");
     for (const image of images.slice(-MAX_INLINE_IMAGES)) {
-      if (!candidateImage(image)) continue;
+      if (!candidateImage(image, allowIntrinsic)) continue;
       const src = candidateSource(image);
       if (!src) continue;
       const copy = image.cloneNode(false);
@@ -206,7 +218,7 @@
     // the button's action chrome without discarding the actual user-requested
     // image. Only preserve images that were visibly large in this same turn.
     const visibleMediaSources = new Set([...root.querySelectorAll("img")]
-      .filter(candidateImage)
+      .filter(img => candidateImage(img))
       .map(img => String(img.currentSrc || img.getAttribute("src") || "").trim()));
     for (const button of [...clone.querySelectorAll("button")]) {
       const pictureNodes = [...button.querySelectorAll("img")]
