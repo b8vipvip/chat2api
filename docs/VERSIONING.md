@@ -5,9 +5,9 @@ chat2api 同时包含服务端 Python 包、分层运行时/控制台、Chrome B
 ## 当前版本面
 
 - Python package：`0.7.1`
-- Server runtime / console：`0.22.168`
-- Chrome Bridge：`0.22.168`
-- Chrome Bundle / manifest：`0.22.168`
+- Server runtime / console：`0.22.169`
+- Chrome Bridge：`0.22.169`
+- Chrome Bundle / manifest：`0.22.169`
 - Realtime Voice protocol：`chat2api-live-v1`
 - 生产入口：`app.entry:app`
 
@@ -39,14 +39,14 @@ GET /version
   "contract_version": 1,
   "server": {
     "package_version": "0.7.1",
-    "runtime_version": "0.22.168",
-    "expected_runtime_version": "0.22.168",
+    "runtime_version": "0.22.169",
+    "expected_runtime_version": "0.22.169",
     "entrypoint": "app.entry:app",
     "runtime_aligned": true
   },
   "chrome_bridge": {
     "version": "0.8.1",
-    "bundle_version": "0.22.168",
+    "bundle_version": "0.22.169",
     "multimodal_revision": 85
   },
   "protocols": {
@@ -81,3 +81,13 @@ GET /version
 - 证据不上传提示词正文、网页完整 HTML、图片字节或带签名的图片地址。单次运行事件和存储周期设有上限。
 - 保留设计文档 `docs/worker-tools-probe-platform-design-v1.0.md`。网络、模型状态及选择器专项探针仍属于 P1，不能视为已实施。
 - 新版首次启用需确认服务端版本和对应 Worker 版本均为 `0.22.168`，并在 TX03 实机复测。
+
+## v0.22.169：P1 网络、模型与页面兼容探针
+
+- Server Runtime / Console、Chrome Bridge、Worker Bundle 统一为 `0.22.169`；Python package 保持 `0.7.1`。
+- 新增 `network_evidence_v1`：网络流是否出现、摘要事件数、字节数、终态存在性和未验证中断。
+- 新增 `model_tool_state_v1`：模型选择器、推理控件、图片编辑及文件上传入口的选择器命中计数。
+- 新增 `selector_compat_v1`：输入框、发送/停止按钮、聊天区与图片容器等页面结构计数。
+- P1 三类探针沿用 P0 的管理员身份认证、请求归属、按 Worker 策略、最大事件数、证据 ZIP 和唯一请求终态控制权。
+- 默认不启用；仅采集数值/布尔值，不保存 SSE 原文、登录信息、图片 URL 或整页 HTML。
+- 详细范围、剩余 P2 工作和实机复测建议见 `docs/worker-tools-probe-implementation-status.md`。
