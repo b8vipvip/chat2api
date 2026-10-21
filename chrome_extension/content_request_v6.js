@@ -703,8 +703,11 @@
     const text = (raw.includes("[User]") ? raw.slice(raw.lastIndexOf("[User]") + 6) : raw).slice(0, 800);
     const action = "(?:生成|绘制|画|制作|设计|create|generate|draw|design)";
     const subject = "(?:图片|图像|头像|插画|插图|照片|海报|图标|image|avatar|icon|illustration|picture)";
+    // Image-generation wording in an analysis question (e.g. 图片生成函数)
+    // is not a request to produce an image. Require a creation verb *before*
+    // the output type, or an explicit reverse-order directive.
     return new RegExp(action + "[^\\n]{0,100}" + subject, "i").test(text)
-      || new RegExp(subject + "[^\\n]{0,100}" + action, "i").test(text);
+      || new RegExp(subject + "[^\\n]{0,50}(?:请|帮我|给我|为我)" + action, "i").test(text);
   }
 
   function isLocalImageBuildCommand(value) {
