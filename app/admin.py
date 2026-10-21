@@ -21,7 +21,7 @@ ADMIN_HTML = r'''<!doctype html>
     <h2>转存管理</h2>
     <p class="muted">生成的图片按默认转存策略写入 chat2api 存储空间，并生成独立缩略图；用户收到的是 chat2api 域名，不再是 ChatGPT 地址或 Base64 数据。</p>
     <div class="toolbar">
-      <label><input id="mediaAutoArchive" type="checkbox" checked> 自动转存新生成图片</label>
+      <label><input id="mediaAutoArchive" type="checkbox" checked> 自动转存新生成图片（关闭后不提供媒体 URL 交付）</label>
       <label>默认存储位置 <select id="mediaBackend"><option value="local">服务器本地磁盘</option><option value="s3">S3 兼容对象存储</option></select></label>
     </div>
     <div class="toolbar"><label style="flex:1">公开访问域名（HTTPS，留空使用 API 当前域名）<input id="mediaPublicBase" class="field" style="width:100%" placeholder="https://chat2api.mv3.cn"></label></div>
@@ -37,7 +37,7 @@ ADMIN_HTML = r'''<!doctype html>
       </div>
       <p class="muted">凭据在服务端加密保存，不会回传至浏览器。S3 目标必须具备写入、读取权限。云数据库保存媒体元数据或其它非 S3 平台尚未提供可用驱动，暂不显示为已支持。</p>
     </fieldset>
-    <div class="toolbar" style="margin-top:14px"><button class="action good" id="mediaSaveSettings">保存转存策略</button><button class="action" id="mediaReloadSettings">重新读取</button><span class="muted" id="mediaStorageStatus">尚未连接</span></div>
+    <div class="toolbar" style="margin-top:14px"><button class="action good" id="mediaSaveSettings">保存转存策略</button><button class="action" id="mediaReloadSettings">重新读取</button><button class="action" id="mediaTestSettings">测试存储连接</button><span class="muted" id="mediaStorageStatus">尚未连接</span></div>
   </div>
   <div class="panel" style="margin-top:14px"><h3>已转存媒体</h3><p id="mediaSummary" class="muted"></p>
     <div class="scroll"><table><thead><tr><th>时间</th><th>请求 ID</th><th>媒体类型</th><th>尺寸</th><th>大小</th><th>位置</th></tr></thead><tbody id="mediaStoredRows"></tbody></table></div></div>
@@ -155,6 +155,13 @@ async function loadMediaStorage(){
   }catch(e){$('mediaStorageStatus').textContent='加载失败：'+e.message;}
 }
 $('mediaReloadSettings').onclick=loadMediaStorage;
+$('mediaTestSettings').onclick=async()=>{
+  $('mediaStorageStatus').textContent='正在执行存储写入/读取验证…';
+  try{
+    const d=await api('/api/admin/media-storage/test',{method:'POST'});
+    $('mediaStorageStatus').textContent=d.ok?'真实存储读写测试通过 · '+d.backend:'存储读写测试未通过';
+  }catch(e){$('mediaStorageStatus').textContent='真实存储读写测试失败：'+e.message;}
+};
 $('mediaSaveSettings').onclick=async()=>{
   try{
     const body={backend:$('mediaBackend').value,auto_archive:$('mediaAutoArchive').checked,
