@@ -56,7 +56,7 @@ def test_owned_media_metadata_is_private_and_both_original_and_thumb_are_served(
         original = client.get(data["url"])
         assert original.status_code == 200
         assert original.headers["content-type"] == "image/png"
-        assert original.content.startswith(b"\\x89PNG")
+        assert original.content.startswith(bytes([137, 80, 78, 71]))
         assert client.get(data["url"] + "/original").content == original.content
         thumb = client.get(data["thumbnail_url"])
         assert thumb.status_code == 200
