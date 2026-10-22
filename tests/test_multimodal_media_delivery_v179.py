@@ -87,3 +87,23 @@ def test_stream_marker_gate_withholds_source_image_until_canonical_archive_outpu
     assert gate.push("start![pic](data:image/png;base64,AAAA") == "start"
     assert gate.push("BBBB)") == ""
     assert gate.holding is True
+
+
+def test_admin_backfill_endpoint_is_authenticated_and_bounded(tmp_path: Path) -> None:
+    app = create_app(Settings(
+        CHAT2API_API_KEY="test-key", CHAT2API_PAIRING_CODE="pair-code",
+        CHAT2API_DATA_DIR=tmp_path,
+    ))
+    with TestClient(app) as client:
+        record = app.state.media_archive.store_image(_png(), "image/png", "master", "req")
+        thumb_path = app.state.media_archive.root / f"objects/{record['id']}-thumb.webp"
+        thumb_path.unlink()
+        path = "/api/admin/media-storage/backfill-thumbnails"
+        assert client.post(path).status_code == 401
+        assert client.post(path, headers={"Authorization": "Bearer wrong"}).status_code == 401
+        assert client.post(path + "?limit=201", headers={"Authorization": "Bearer test-key"}).status_code == 422
+        recovered = client.post(path + "?limit=1&offset=0", headers={"Authorization": "Bearer test-key"})
+        assert recovered.status_code == 200
+        assert recovered.json()["scanned"] == 1
+        assert recovered.json()["repaired"] == 1
+        assert thumb_path.exists()
