@@ -58,7 +58,7 @@ assert.equal(contract.promptMatchesText(layoutDrift, {
 }), false);
 assert.equal(contract.promptMatchesText(normalizedShort.replace("小红花", "小红莓"), shortState), false);
 assert.equal(contract.promptMatchesText(normalizedShort.replace("小红花", "小红花!"), shortState), false);
-assert.equal(contract.promptMatchesText(normalizedShort.replace("123", "123 "), shortState), false);
+assert.equal(contract.promptMatchesText(normalizedShort.replace("fixed IDs", "fixed I Ds"), shortState), false);
 const urlPrompt = shortPrompt + " image: https://example.com/api/media/item/token";
 const urlNormalized = urlPrompt.replace(/\s+/g, " ").trim().normalize("NFC");
 const urlState = {prompt: urlPrompt, promptNormalized: urlNormalized};
