@@ -8,6 +8,7 @@ from fastapi.responses import Response
 from fastapi.routing import APIRoute
 
 from . import admin as admin_module
+from .response_history_media_v188 import history_safe_response_text
 
 
 PATCH_ID = "admin-request-single-owner-v94"
@@ -357,7 +358,11 @@ def _install_conversation_capture(app: FastAPI) -> None:
         event_type = str(event.get("type") or "")
         if event_type in {"chat.completed", "chat.error", "chat.cancelled"}:
             state = broker.requests.get(request_id)
-            response_text = str(event.get("text") or (state.text if state is not None else ""))
+            # The browser terminal can carry a full generated PNG data URI.
+            # Only the API archival path may persist its final owned URL.
+            response_text = history_safe_response_text(
+                str(event.get("text") or (state.text if state is not None else ""))
+            )
             record = {
                 "request_id": request_id,
                 "response_text": response_text,

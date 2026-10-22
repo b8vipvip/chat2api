@@ -156,7 +156,9 @@ def test_tx03_short_rich_editor_drift_uses_existing_v6_single_send_terminal_owne
     assert 'return "rich-editor-layout-whitespace"' in source
     assert "send_prompt_nonwhitespace_equal" in source
     assert "send_prompt_layout_allowed" in source
-    assert 'send_prompt_match: promptMatchEvidence(composerText(ready.current), active)' in source
+    assert 'send_prompt_match: ready.promptMatch' in source
+    assert 'send_prompt_match_source: ready.promptMatchSource' in source
+    assert 'promptMatch: renderedMatch !== "none" ? renderedMatch : contentMatch' in source
     # The existing v6 request still owns the sole native rewrite, click and
     # chat.error completion. Telemetry and media origin remain read-only.
     assert source.count("ready.button.click()") == 1

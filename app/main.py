@@ -24,6 +24,7 @@ from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
 from .media_public_origin_v187 import media_base_for_request
+from .response_history_media_v188 import history_safe_response_text
 from .responses_multimodal_input_v183 import attachment_specs as canonical_attachment_specs
 from .media_handoff import StreamMediaMarkerGate
 from .models import (
@@ -212,7 +213,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="Unknown media") from None
-        origin = media_archive._config().get("public_base_url") or str(request.base_url).rstrip("/")
+        origin = media_archive._config().get("public_base_url") or media_base_for_request(request)
         asset = f"{origin}/api/media/{item['id']}/{item.pop('token')}"
         return JSONResponse({**item, "object": "chat2api.media", "url": asset,
                              "thumbnail_url": asset + "/thumbnail"},
@@ -669,6 +670,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "completion_chars": len(final_text),
                 "response_media": media_items or [],
                 "response_media_count": len(media_items or []),
+                # Persist only the final post-archive owned-media URL, never the
+                # browser's several-megabyte raw Base64 transport payload.
+                **({"response_text": history_safe_response_text(final_text),
+                    "response_text_available": bool(final_text)}
+                   if final_text or status_value == "completed" else {}),
                 "status": status_value,
                 "probe_summary": worker_probes.summary(state.request_id),
                 "probe_capture_status": worker_probes.summary(state.request_id)["capture_status"],
@@ -1179,7 +1185,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         logger.warning("Optional gpt-image archive skipped request=%s: %s", request_id, type(error).__name__)
                         continue
                     raise RuntimeError("Unable to archive generated image") from error
-                origin = media_archive._config().get("public_base_url") or str(request.base_url).rstrip("/")
+                origin = media_archive._config().get("public_base_url") or media_base_for_request(request)
                 owned_url = f"{origin}/api/media/{row['id']}/{row['token']}"
                 owned_media.append({"id": row["id"], "url": owned_url,
                                     "thumbnail_url": owned_url + "/thumbnail",
