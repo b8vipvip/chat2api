@@ -165,3 +165,52 @@ def test_unverified_free_default_does_not_claim_picker_validation_or_image_opera
         assert evidence["operations"]["image_generation"]["model_specific_verified"] is False
     finally:
         _restore(compatible, dynamic)
+
+
+def test_final_v147_catalog_keeps_one_evidence_projection_for_unverified_candidates(tmp_path):
+    from fastapi import Depends
+    from app.worker_text_model_management_v146_patch import install_worker_text_model_management_v146_patch
+    from app.worker_model_tasks_v147_patch import install_manual_worker_text_model_tasks_v147_patch
+
+    registry = FakeRegistry()
+    registry.clients["ext_discovered"] = SimpleNamespace(connection_enabled=True, name="Discovery", metadata={
+        "model_validation_state": "discovered",
+        "model_validation_revision": VALIDATION_REVISION,
+        "model_observed_choices": [{"id": "gpt-6", "selectable": True}],
+        "capabilities": ["text", "image-generation"],
+    })
+
+    async def touch(cid, metadata=None):
+        registry.clients[cid].metadata.update(metadata or {})
+    async def send(cid, payload):
+        return None
+    registry.touch = touch
+    registry.send = send
+    app = FastAPI()
+    app.state.registry = registry
+    app.state.settings = SimpleNamespace(data_dir=tmp_path)
+    @app.get("/api/admin/overview", dependencies=[Depends(lambda: True)])
+    def overview():
+        return {"ok": True}
+
+    compatible = routing._compatible
+    dynamic = routing._is_dynamic_text_model
+    try:
+        install_worker_model_library_v145_patch(app)
+        install_worker_text_model_management_v146_patch(app)
+        install_manual_worker_text_model_tasks_v147_patch(app)
+        catalog = {row["id"]: row for row in registry.model_catalog()}
+        selected = catalog["gpt-6"]
+        assert set(selected["clients"]) == {"ext_images", "ext_text", "ext_discovered"}
+        evidence = selected["capability_evidence"]
+        assert evidence["operations"]["text_input"]["workers"] == ["ext_images", "ext_text"]
+        assert evidence["operations"]["image_input"]["workers"] == ["ext_images"]
+        assert evidence["operations"]["image_generation"]["workers"] == ["ext_discovered", "ext_images"]
+        assert evidence["operations"]["image_generation"]["model_specific_verified"] is False
+        assert registry.supports_model("ext_discovered", "gpt-6")
+        registry.clients["ext_discovered"].metadata["model_validation_state"] = "pending"
+        updated = {row["id"]: row for row in registry.model_catalog()}["gpt-6"]
+        assert "ext_discovered" not in updated["clients"]
+        assert updated["capability_evidence"]["operations"]["image_generation"]["workers"] == ["ext_images"]
+    finally:
+        _restore(compatible, dynamic)
