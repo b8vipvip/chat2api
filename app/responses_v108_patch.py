@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .api_keys import ApiPrincipal
+from .responses_multimodal_input_v183 import needs_multimodal, resolve_responses_attachments
 from .media_handoff import StreamMediaMarkerGate
 from .token_usage import usage_for
 
@@ -261,7 +262,7 @@ async def _archive_response_media(app: FastAPI, request: Request, principal: Api
     return result, media
 
 
-async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], principal: ApiPrincipal, prompt: str, native_tools: list[str], *, request_id_override: str | None = None):
+async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], principal: ApiPrincipal, prompt: str, native_tools: list[str], *, request_id_override: str | None = None, attachments: list[dict[str, object]] | None = None):
     registry = app.state.registry
     broker = app.state.broker
     requested = str(body.get("client_id") or request.headers.get("x-chat2api-client") or "").strip() or None
@@ -317,7 +318,7 @@ async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], princi
             "type": "chat.request",
             "request_id": request_id,
             "prompt": prompt,
-            "attachments": [],
+            "attachments": attachments or [],
             "options": {
                 "auto_switch_text": True,
                 "timeout_seconds": timeout,
@@ -533,7 +534,13 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
         if not isinstance(body, dict):
             return _error("Request body must be a JSON object")
         try:
-            prompt = _input_prompt(body)
+            try:
+                prompt = _input_prompt(body)
+            except ValueError:
+                if not needs_multimodal(body):
+                    raise
+                # Image-only or file-only messages are valid OpenAI input.
+                prompt = "请分析用户提供的图片或文件。"
             # A hosted image_generation tool is an explicit image artifact
             # request. Reuse the existing Images request owner and only adapt
             # the completed result into standard Responses output items.
@@ -541,6 +548,11 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
             if is_image_generation_request(body):
                 return await handle_image_tool(app, request, body, principal, prompt)
             native_tools, force = _tool_config(body)
+            attachments = await resolve_responses_attachments(
+                body, request, app.state.file_store, app.state.media_archive, principal,
+            )
+        except HTTPException:
+            raise
         except ValueError as error:
             return _error(str(error), param="input")
         except NotImplementedError as error:
@@ -551,7 +563,7 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
         include = body.get("include") if isinstance(body.get("include"), list) else []
         include_sources = "web_search_call.action.sources" in include
         try:
-            state, request_id, client_id, timeout = await _dispatch(app, request, body, principal, prompt, native_tools)
+            state, request_id, client_id, timeout = await _dispatch(app, request, body, principal, prompt, native_tools, attachments=attachments)
         except HTTPException:
             raise
         except Exception as error:

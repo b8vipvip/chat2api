@@ -10,6 +10,8 @@ from typing import Any, AsyncIterator, Awaitable, Callable
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from .responses_multimodal_input_v183 import needs_multimodal
+
 from .responses_v108_patch import (
     SUPPORTED_NATIVE_TOOLS,
     _authenticate,
@@ -730,6 +732,11 @@ async def _emulated_stream(
 
 async def _handle(app: FastAPI, request: Request, body: dict[str, Any]):
     principal = await _authenticate(app, request)
+    # Function-tool emulation is a text protocol. Silent dropping of a user's
+    # image/file input would produce a plausible but factually invalid answer.
+    if needs_multimodal(body):
+        return _error("Emulated custom/function tools cannot accept input_image or input_file yet",
+                      param="input", code="emulated_tools_multimodal_unsupported")
     try:
         prompt, catalog = _bridge_prompt(app, body)
     except ValueError as error:
