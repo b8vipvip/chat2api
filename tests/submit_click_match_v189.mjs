@@ -26,6 +26,7 @@ const ctx = {
   buttonReady:()=>true,
   promptMatchesComposer:(node, active)=>text===active.promptNormalized,
   promptMatchEvidence:(value, active)=>value===active.promptNormalized?"exact":"none",
+  promptDriftSummary:()=>({send_prompt_drift_kind:"content_changed"}),
   composerText:()=>text,
   normalize:value=>String(value || "").trim(),
   refreshAssistantBaseline:active=>{active.baselineCount=0;},
