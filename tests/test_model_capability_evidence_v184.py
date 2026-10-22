@@ -207,6 +207,11 @@ def test_final_v147_catalog_keeps_one_evidence_projection_for_unverified_candida
         assert evidence["operations"]["image_input"]["workers"] == ["ext_images"]
         assert evidence["operations"]["image_generation"]["workers"] == ["ext_discovered", "ext_images"]
         assert evidence["operations"]["image_generation"]["model_specific_verified"] is False
+        from fastapi.testclient import TestClient
+        result = TestClient(app).get("/api/admin/text-model-tasks")
+        assert result.status_code == 200
+        payload = result.json()
+        assert payload["capability_evidence"]["gpt-6"] == evidence
         assert registry.supports_model("ext_discovered", "gpt-6")
         registry.clients["ext_discovered"].metadata["model_validation_state"] = "pending"
         updated = {row["id"]: row for row in registry.model_catalog()}["gpt-6"]
