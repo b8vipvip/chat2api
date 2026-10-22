@@ -275,7 +275,17 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
         async with lock:
             if expire_tasks():
                 await save()
-            return {"data": list(reversed(tasks[-MAX_TASKS:])), "revision": 147}
+            return {
+                "data": list(reversed(tasks[-MAX_TASKS:])),
+                "revision": 147,
+                # A read-only projection of the same final registry catalog:
+                # the administrator can inspect current capability evidence
+                # without a second model list owner or a duplicate API route.
+                "capability_evidence": {
+                    str(row["id"]): row.get("capability_evidence") or {}
+                    for row in registry.model_catalog()
+                },
+            }
 
     @app.get("/api/admin/text-model-tasks/{task_id}/logs", dependencies=auth)
     async def model_task_logs(task_id: str, worker: str | None = None):
