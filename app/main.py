@@ -23,6 +23,7 @@ from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout
 from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
+from .media_handoff import StreamMediaMarkerGate
 from .models import (
     ApiKeyCreate,
     ApiKeyUpdate,
@@ -802,30 +803,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         started_at = asyncio.get_running_loop().time()
         recorded = False
         request_type = "multimodal" if attachments_count else "text"
-        # Preserve ordinary text streaming but withhold incomplete markdown
-        # images before their base64 becomes visible to downstream clients.
+        # The presentation-only gate holds generated image syntax until the
+        # broker's single terminal event has finished archival.
         raw_seen = ""
-        media_pending = ""
-        media_holding = False
-
-        def accept_part(fragment: str) -> str:
-            nonlocal media_pending, media_holding
-            if media_holding:
-                return ""
-            media_pending += fragment
-            start = media_pending.find("![")
-            if start >= 0:
-                # An entire image marker is held until the archive has replaced
-                # its upstream source with an owned full-resolution URL. Do not
-                # leak a ChatGPT CDN link or incomplete Base64 in the stream.
-                prefix = media_pending[:start]
-                media_holding = True
-                media_pending = ""
-                return prefix
-            retain = 1 if media_pending.endswith("!") else 0
-            safe = media_pending[:-retain] if retain else media_pending
-            media_pending = media_pending[-retain:] if retain else ""
-            return safe
+        media_gate = StreamMediaMarkerGate()
 
         try:
             while True:
@@ -865,7 +846,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         if delta:
                             raw_seen = snapshot
                     if delta:
-                        safe_delta = accept_part(delta)
+                        safe_delta = media_gate.push(delta)
                         if safe_delta:
                             sent_text += safe_delta
                             yield "data: " + json.dumps(chunk_payload(response_id, model, {"content": safe_delta}), ensure_ascii=False) + "\n\n"
