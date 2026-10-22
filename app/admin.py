@@ -37,7 +37,7 @@ ADMIN_HTML = r'''<!doctype html>
       </div>
       <p class="muted">凭据在服务端加密保存，不会回传至浏览器。S3 目标必须具备写入、读取权限。云数据库保存媒体元数据或其它非 S3 平台尚未提供可用驱动，暂不显示为已支持。</p>
     </fieldset>
-    <div class="toolbar" style="margin-top:14px"><button class="action good" id="mediaSaveSettings">保存转存策略</button><button class="action" id="mediaReloadSettings">重新读取</button><button class="action" id="mediaTestSettings">测试存储连接</button><span class="muted" id="mediaStorageStatus">尚未连接</span></div>
+    <div class="toolbar" style="margin-top:14px"><button class="action good" id="mediaSaveSettings">保存转存策略</button><button class="action" id="mediaReloadSettings">重新读取</button><button class="action" id="mediaTestSettings">测试存储连接</button><button class="action" id="mediaBackfillThumbnails" title="每轮最多扫描 250 项；不修改原图或分享链接">补全历史缩略图</button><span class="muted" id="mediaStorageStatus">尚未连接</span></div>
   </div>
   <div class="panel" style="margin-top:14px"><h3>已转存媒体</h3><p id="mediaSummary" class="muted"></p>
     <div class="scroll"><table><thead><tr><th>时间</th><th>请求 ID</th><th>媒体类型</th><th>尺寸</th><th>大小</th><th>位置</th><th>操作</th></tr></thead><tbody id="mediaStoredRows"></tbody></table></div></div>
@@ -169,6 +169,22 @@ $('mediaTestSettings').onclick=async()=>{
     const d=await api('/api/admin/media-storage/test',{method:'POST'});
     $('mediaStorageStatus').textContent=d.ok?'真实存储读写测试通过 · '+d.backend:'存储读写测试未通过';
   }catch(e){$('mediaStorageStatus').textContent='真实存储读写测试失败：'+e.message;}
+};
+let mediaBackfillOffset=0;
+$('mediaBackfillThumbnails').onclick=async()=>{
+  const button=$('mediaBackfillThumbnails');button.disabled=true;
+  let scanned=0,repaired=0,failed=0,finished=false;
+  try{
+    for(let round=0;round<5;round++){
+      $('mediaStorageStatus').textContent='正在检查历史缩略图… 已扫描 '+scanned+' 项';
+      const d=await api('/api/admin/media-storage/backfill-thumbnails?limit=50&offset='+mediaBackfillOffset,{method:'POST'});
+      scanned+=Number(d.scanned||0);repaired+=Number(d.repaired||0);failed+=Number(d.failed||0);
+      if(d.next_offset==null){finished=true;mediaBackfillOffset=0;break;}
+      mediaBackfillOffset=d.next_offset;
+    }
+    $('mediaStorageStatus').textContent='历史缩略图检查：扫描 '+scanned+' 项，补全 '+repaired+' 项，失败 '+failed+' 项'+(finished?'，本轮已全部扫描':'；可再次点击继续下一批');
+  }catch(e){$('mediaStorageStatus').textContent='历史缩略图补全失败：'+e.message;}
+  finally{button.disabled=false;}
 };
 $('mediaSaveSettings').onclick=async()=>{
   try{
