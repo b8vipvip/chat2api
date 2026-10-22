@@ -17,7 +17,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .api_keys import ApiPrincipal
-from .models import ImageGenerationRequest
+from .models import AttachmentRef, ImageGenerationRequest
+from .responses_multimodal_input_v183 import needs_multimodal, resolve_responses_attachments
 from .responses_v108_patch import _error, _response, _sse
 
 
@@ -50,17 +51,8 @@ def validate_image_tool(body: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"{key} is not implemented for image_generation")
     if body.get("input") is None:
         raise ValueError("input is required")
-    # Image edits/vision inputs are not yet mapped into the canonical Images
-    # attachment contract. Fail explicitly instead of discarding user images.
-    input_value = body.get("input")
-    for entry in input_value if isinstance(input_value, list) else []:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("type") in {"input_image", "input_file"}:
-            raise ValueError("image_generation input images/files are not implemented")
-        for part in entry.get("content") if isinstance(entry.get("content"), list) else []:
-            if isinstance(part, dict) and part.get("type") in {"input_image", "input_file", "image_url", "file"}:
-                raise ValueError("image_generation input images/files are not implemented")
+    # Standard input_image references are normalized by the canonical FileStore
+    # resolver and passed to the same Images executor (one Worker attempt).
     return tool
 
 
@@ -88,9 +80,15 @@ async def _run_existing_image_request(app: FastAPI, request: Request, body: dict
     except (TypeError, ValueError) as error:
         raise ValueError("timeout must be an integer number of seconds") from error
     request_id = "imgreq_" + uuid.uuid4().hex
+    image_inputs = await resolve_responses_attachments(
+        body, request, app.state.file_store, app.state.media_archive, principal,
+    ) if needs_multimodal(body) else []
+    if any(not str(item["mime_type"]).startswith("image/") for item in image_inputs):
+        raise ValueError("image_generation reference inputs must be raster images")
     image_body = ImageGenerationRequest(
         model="gpt-image", prompt=prompt, response_format="b64_json",
         size=tool.get("size"), timeout=timeout, n=1,
+        attachments=[AttachmentRef(file_id=str(item["file_id"])) for item in image_inputs],
     )
     result = await executor(
         body=image_body, request=request,
