@@ -414,6 +414,60 @@
     throw new Error("Prompt insertion could not be confirmed in the current ChatGPT composer");
   }
 
+  // The ChatGPT rich editor can add a layout separator while hydrating a
+  // multiline draft. This is not an arbitrary fuzzy match: every non-space
+  // codepoint must remain in precisely the same order, and only 1-2 newly
+  // inserted spaces are accepted in a sufficiently long multiline draft.
+  // Protect identifiers, links, numbers and ASCII words against changes.
+  function editorLayoutWhitespaceEvidence(observed, target, source) {
+    if (!/[\r\n]/.test(String(source || "")) || target.length < 100) return null;
+    const extra = observed.length - target.length;
+    if (extra < 1 || extra > 2) return null;
+    if (observed.replace(/\s/g, "") !== target.replace(/\s/g, "")) return null;
+    let expected = 0;
+    let cursor = 0;
+    const locations = [];
+    while (cursor < observed.length) {
+      if (expected < target.length && observed[cursor] === target[expected]) {
+        cursor += 1;
+        expected += 1;
+        continue;
+      }
+      if (observed[cursor] !== " ") return null;
+      const before = target[expected - 1] || "";
+      const after = target[expected] || "";
+      // A layout separator may not split a URL, number, English word,
+      // account identifier or literal control sequence.
+      const identifier = /[A-Za-z0-9_/:.?&=%#@-]/;
+      if (identifier.test(before) && identifier.test(after)) return null;
+      locations.push(expected);
+      cursor += 1;
+    }
+    return expected === target.length && locations.length === extra ? locations : null;
+  }
+
+  // Non-content diagnostics only: never serialize the prompt, nearby text,
+  // secret token or any matching substring into runtime logs.
+  function promptDriftSummary(text, active) {
+    const observed = normalize(text);
+    const target = String(active?.promptNormalized || "");
+    let offset = 0;
+    while (offset < observed.length && offset < target.length && observed[offset] === target[offset]) offset += 1;
+    let kind = "content_changed";
+    if (observed === target) kind = "exact";
+    else if (observed.replace(/\s/g, "") === target.replace(/\s/g, "")) {
+      kind = observed.length > target.length ? "whitespace_inserted"
+        : observed.length < target.length ? "whitespace_removed" : "whitespace_relocated";
+    }
+    return {
+      send_prompt_drift_kind: kind,
+      send_prompt_drift_delta: observed.length - target.length,
+      send_prompt_drift_first_offset: offset,
+      send_prompt_nonwhitespace_equal: observed.replace(/\s/g, "") === target.replace(/\s/g, ""),
+      send_prompt_layout_allowed: Boolean(editorLayoutWhitespaceEvidence(observed, target, active?.prompt)),
+    };
+  }
+
   // The ChatGPT rich editor can add layout whitespace after accepting a
   // native insertion. Preserve exact non-whitespace content, rather than
   // comparing only innerText string lengths or accepting an arbitrary edit.
@@ -426,6 +480,12 @@
     const stripLayout = value => value.replace(/\s/g, "");
     if (target.length >= 2048 && stripLayout(observed) === stripLayout(target)) {
       return "rich-editor-whitespace";
+    }
+    // The historical 2048-character threshold excluded ordinary (~800-char)
+    // multiline API prompts, causing false send-readiness failures after
+    // Lexical inserted a single layout separator. Use explicit bounded proof.
+    if (editorLayoutWhitespaceEvidence(observed, target, active?.prompt)) {
+      return "rich-editor-layout-whitespace";
     }
     return "none";
   }
@@ -582,6 +642,7 @@
           send_composer_chars: composerText(current).length,
           send_expected_normalized_chars: String(active.promptNormalized || "").length,
           send_prompt_match: promptMatchEvidence(composerText(current), active),
+          ...promptDriftSummary(composerText(current), active),
           send_composer_unicode_nfc_matches: normalize(composerText(current)) === active.promptNormalized,
           send_composer_original: current === active.promptComposer,
           send_button_type: String(button?.type || ""),
@@ -600,6 +661,7 @@
       ready.button.scrollIntoView?.({ block: "nearest", inline: "nearest" });
       ready.button.click();
       await diagnostic(active, "clicked", {
+        send_prompt_match: promptMatchEvidence(composerText(ready.current), active),
         send_attempts: attempts,
         submit_wait_ms: Math.round((performance.now() - readyStarted) * 10) / 10,
         hydration_safe_baseline: true,
@@ -1194,6 +1256,8 @@
     refreshAssistantBaseline,
     promptMatchesText,
     promptMatchEvidence,
+    promptDriftSummary,
+    editorLayoutWhitespaceEvidence,
     turnFollows,
     plainNodeText,
     finalNodeText,
