@@ -17,8 +17,8 @@
     try {
       const url = new URL(String(value || ""), location.href);
       if (url.origin !== location.origin || url.username || url.password || url.search || url.hash) return "";
-      if (!/^\\/api\\/media\\/med_[A-Za-z0-9]+\\/[A-Za-z0-9_-]+(?:\\/(?:thumbnail|original))?$/.test(url.pathname)) return "";
-      return url.href.replace(/\\/(?:thumbnail|original)$/, "");
+      if (!/^\/api\/media\/med_[A-Za-z0-9]+\/[A-Za-z0-9_-]+(?:\/(?:thumbnail|original))?$/.test(url.pathname)) return "";
+      return url.href.replace(/\/(?:thumbnail|original)$/, "");
     } catch (_) { return ""; }
   };
   const safeImageUrl = value => {
