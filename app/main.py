@@ -23,6 +23,7 @@ from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout
 from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
+from .media_public_origin_v187 import media_base_for_request
 from .responses_multimodal_input_v183 import attachment_specs as canonical_attachment_specs
 from .media_handoff import StreamMediaMarkerGate
 from .models import (
@@ -857,7 +858,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     try:
                         final_text, archived_media = await asyncio.to_thread(
                             media_archive.rewrite_markdown, raw_final, principal.key_id,
-                            state.request_id, str(request.base_url).rstrip("/"),
+                            state.request_id, media_base_for_request(request),
                         )
                         if "data:image/" in final_text:
                             raise ValueError("Incomplete generated image payload")
@@ -1022,7 +1023,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             try:
                 text, archived_media = await asyncio.to_thread(
                     media_archive.rewrite_markdown, text, principal.key_id,
-                    request_id, str(request.base_url).rstrip("/"),
+                    request_id, media_base_for_request(request),
                 )
                 if "data:image/" in text:
                     raise ValueError("Incomplete generated image payload")

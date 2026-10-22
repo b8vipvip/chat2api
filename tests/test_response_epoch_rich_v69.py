@@ -146,3 +146,29 @@ def test_tx03_image_recipe_is_not_a_successful_image_terminal():
     probe = read("chrome_extension/content_probe_supervisor_v1.js")
     assert 'type: "chat.completed"' not in probe
     assert 'type: "chat.error"' not in probe
+
+
+def test_tx03_short_rich_editor_drift_uses_existing_v6_single_send_terminal_owner():
+    """v0.22.175 request failures must not add another click or terminal arbiter."""
+    source = read("chrome_extension/content_request_v6.js")
+    assert "function editorLayoutWhitespaceEvidence(observed, target, source)" in source
+    assert "promptMatchEvidence(composerText(current), active)" in source
+    assert 'return "rich-editor-layout-whitespace"' in source
+    assert "send_prompt_nonwhitespace_equal" in source
+    assert "send_prompt_layout_allowed" in source
+    assert 'send_prompt_match: promptMatchEvidence(composerText(ready.current), active)' in source
+    # The existing v6 request still owns the sole native rewrite, click and
+    # chat.error completion. Telemetry and media origin remain read-only.
+    assert source.count("ready.button.click()") == 1
+    assert source.count("promptRepairAttempts += 1") == 1
+    assert 'await rewriteDriftedDraft(active, current)' in source
+    assert 'function classifySubmissionState(active)' in source
+    assert 'async function submitAndConfirm(active)' in source
+    assert 'async function runRequest(message)' in source
+    assert 'type: "chat.error"' in source
+    assert 'v5.listener = listener' in source
+    result = subprocess.run(
+        ["node", "tests/composer_readiness_reconcile_v126.mjs"],
+        cwd=ROOT, capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
