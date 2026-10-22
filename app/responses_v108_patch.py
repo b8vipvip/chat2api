@@ -61,7 +61,7 @@ def _supplied_token(request: Request) -> str:
     return supplied
 
 
-async def _authenticate(app: FastAPI, request: Request) -> ApiPrincipal:
+async def _authenticate(app: FastAPI, request: Request, *, allow_images_only: bool = False) -> ApiPrincipal:
     supplied = _supplied_token(request)
     if not supplied:
         raise HTTPException(status_code=401, detail="Missing API key")
@@ -72,7 +72,10 @@ async def _authenticate(app: FastAPI, request: Request) -> ApiPrincipal:
     if not principal:
         raise HTTPException(status_code=401, detail="Invalid or disabled API key")
     if "chat" not in principal.scopes and "admin" not in principal.scopes:
-        raise HTTPException(status_code=403, detail="API key does not have chat scope")
+        if not (allow_images_only and "images" in principal.scopes):
+            raise HTTPException(status_code=403, detail="API key does not have chat scope")
+    # The caller must separately verify this is *only* an image tool request
+    # before an images-only Key may pass to the Images executor.
     return principal
 
 
@@ -526,13 +529,20 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
 
     @app.post("/v1/responses")
     async def create_response(request: Request):
-        principal = await _authenticate(app, request)
+        # An Images-only key can use the Responses hosted image tool, but not
+        # arbitrary Responses text/tool traffic. Authenticate before parsing so
+        # malformed bodies never bypass the normal 401 boundary.
+        principal = await _authenticate(app, request, allow_images_only=True)
         try:
             body = await request.json()
         except Exception:
             return _error("Request body must be valid JSON")
         if not isinstance(body, dict):
             return _error("Request body must be a JSON object")
+        from .responses_image_tool_v182 import is_image_generation_request
+        if principal.kind != "master" and "admin" not in principal.scopes and "chat" not in principal.scopes:
+            if not ("images" in principal.scopes and is_image_generation_request(body)):
+                raise HTTPException(status_code=403, detail="API key does not have chat scope")
         try:
             try:
                 prompt = _input_prompt(body)
@@ -544,7 +554,7 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
             # A hosted image_generation tool is an explicit image artifact
             # request. Reuse the existing Images request owner and only adapt
             # the completed result into standard Responses output items.
-            from .responses_image_tool_v182 import handle_image_tool, is_image_generation_request
+            from .responses_image_tool_v182 import handle_image_tool
             if is_image_generation_request(body):
                 return await handle_image_tool(app, request, body, principal, prompt)
             native_tools, force = _tool_config(body)
