@@ -20,6 +20,12 @@
     try {
       const url = new URL(text, location.href);
       const host = url.hostname.toLowerCase();
+      // The media archive serves generated thumbnails on this application origin.
+      // Only its opaque, tokenized read-only image route is eligible; do not
+      // broadly trust arbitrary same-origin URLs as image sources.
+      const sameOriginMedia = url.origin === location.origin
+        && /^\/api\/media\/med_[A-Za-z0-9]+\/[A-Za-z0-9_-]+\/(?:thumbnail|original)$/.test(url.pathname);
+      if (sameOriginMedia) return url.href;
       return url.protocol === "https:" && !url.username && !url.password
         && (["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(host)
           || [".oaiusercontent.com", ".oaistatic.com", ".openai.com", ".chatgpt.com"]
