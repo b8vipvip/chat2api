@@ -113,10 +113,25 @@
     $("requestsBody").innerHTML = rows.length ? rows.map((row) => `<tr><td>${esc(time(row.recorded_at))}</td><td><code>${esc(row.request_id)}</code></td><td><span class="pill">${esc(row.status)}</span></td><td>${esc(row.model || "-")}</td><td>${esc(num(row.usage?.total_tokens))}</td><td>${row.latency?.total_ms == null ? "-" : `${esc(Math.round(row.latency.total_ms))} ms`}</td><td title="USD ${esc(usd(row.cost?.usd_micros))}">${esc(money(row.cost?.cny_cents))}</td></tr>`).join("") : `<tr><td colspan="7" class="muted">暂无请求记录。</td></tr>`;
   }
 
+  function modelCapabilityDescription(row) {
+    const proof = row?.capability_evidence || {};
+    if (proof.legacy_transport_alias) return "旧协议兼容入口 · 不代表独立 GPT 模型";
+    const label = name => {
+      const state = proof.operations?.[name]?.state;
+      if (state === "picker_validated") return "模型已验证";
+      if (state === "model_reported") return "Worker 已上报";
+      if (state === "transport_advertised") return "仅浏览器声明（非模型验证）";
+      return "未验证";
+    };
+    return "文本：" + label("text_input") +
+      " · 图片理解：" + label("image_input") +
+      " · 图片生成：" + label("image_generation");
+  }
+
   async function loadModels() {
     const payload = await api("/api/user/models");
     state.models = payload.data || [];
-    $("modelsGrid").innerHTML = state.models.length ? state.models.map((row) => `<article class="model"><h3>${esc(row.name || row.model_id)}</h3><code>${esc(row.model_id)}</code><div class="price"><div><span class="muted">输入</span><br><b>$${Number(row.input_usd_per_million || 0).toFixed(3)}</b></div><div><span class="muted">缓存输入</span><br><b>$${Number(row.cached_input_usd_per_million || 0).toFixed(3)}</b></div><div><span class="muted">输出</span><br><b>$${Number(row.output_usd_per_million || 0).toFixed(3)}</b></div></div><div class="muted" style="margin-top:9px">每 1M Token · 管理员可调整</div></article>`).join("") : `<div class="notice">管理员尚未开放模型。</div>`;
+    $("modelsGrid").innerHTML = state.models.length ? state.models.map((row) => `<article class="model"><h3>${esc(row.name || row.model_id)}</h3><code>${esc(row.model_id)}</code><div class="price"><div><span class="muted">输入</span><br><b>$${Number(row.input_usd_per_million || 0).toFixed(3)}</b></div><div><span class="muted">缓存输入</span><br><b>$${Number(row.cached_input_usd_per_million || 0).toFixed(3)}</b></div><div><span class="muted">输出</span><br><b>$${Number(row.output_usd_per_million || 0).toFixed(3)}</b></div></div><div class="muted" style="margin-top:9px">每 1M Token · 管理员可调整</div><div class="muted" style="margin-top:7px" title="模型选项验证、Worker 上报与图片生成的真实成功是不同等级的证据">${esc(modelCapabilityDescription(row))}</div></article>`).join("") : `<div class="notice">管理员尚未开放模型。</div>`;
     syncPlayOptions();
   }
 
