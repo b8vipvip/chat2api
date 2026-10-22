@@ -121,10 +121,6 @@ def test_image_tool_validates_permissions_and_unsupported_parameters():
             {"type": "image_generation"}, {"type": "function", "name": "foo"},
         ]})
     app, calls = app_with_fake_engine()
-    result = asyncio.run(handle_image_tool(
-        app, request(), {"input": "头像", "tools": [{"type": "image_generation"}]},
-        principal(("chat",)), "头像",
-    ))
     # The same permission gate as Images is applied before any Worker dispatch.
     from fastapi import HTTPException
     with pytest.raises(HTTPException) as info:
