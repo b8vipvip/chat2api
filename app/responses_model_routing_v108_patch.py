@@ -15,6 +15,7 @@ from . import model_capability_routing_patch as model_routing
 from . import v13_patch
 from .api_keys import ApiPrincipal
 from .responses_emulated_tools_v109_patch import ResponsesEmulatedToolsMiddleware, _request_tools
+from .responses_multimodal_input_v183 import needs_multimodal
 from .responses_tool_stream_v111_patch import install_responses_tool_stream_v111_patch
 from .responses_v108_patch import _decorate_prompt, _input_prompt, _tool_config
 from .token_usage import usage_for
@@ -482,7 +483,7 @@ class _ResponsesModelContextMiddleware:
             if isinstance(parsed, dict):
                 payload = parsed
                 model = str(payload.get("model") or DEFAULT_RESPONSES_MODEL).strip().lower()
-                target = {"model": model, "needs_multimodal": False}
+                target = {"model": model, "needs_multimodal": needs_multimodal(payload)}
         except (UnicodeDecodeError, ValueError, TypeError):
             target = None
 
