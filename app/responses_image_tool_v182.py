@@ -50,6 +50,17 @@ def validate_image_tool(body: dict[str, Any]) -> dict[str, Any]:
             raise ValueError(f"{key} is not implemented for image_generation")
     if body.get("input") is None:
         raise ValueError("input is required")
+    # Image edits/vision inputs are not yet mapped into the canonical Images
+    # attachment contract. Fail explicitly instead of discarding user images.
+    input_value = body.get("input")
+    for entry in input_value if isinstance(input_value, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("type") in {"input_image", "input_file"}:
+            raise ValueError("image_generation input images/files are not implemented")
+        for part in entry.get("content") if isinstance(entry.get("content"), list) else []:
+            if isinstance(part, dict) and part.get("type") in {"input_image", "input_file", "image_url", "file"}:
+                raise ValueError("image_generation input images/files are not implemented")
     return tool
 
 
@@ -126,6 +137,8 @@ async def handle_image_tool(app: FastAPI, request: Request, body: dict[str, Any]
         tool = validate_image_tool(body)
     except ValueError as error:
         return _error(str(error), param="tools", code="image_generation_invalid")
+    if principal.kind != "master" and "images" not in principal.scopes:
+        raise HTTPException(status_code=403, detail="API key does not have images permission")
     response_id = "resp_" + uuid.uuid4().hex
     item_id = "ig_" + uuid.uuid4().hex
     created_at = int(time.time())
