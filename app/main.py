@@ -185,10 +185,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown media")
         return {"deleted": True}
 
+    @app.get("/v1/media/{media_id}")
+    async def owned_media_metadata(
+        media_id: str, request: Request, principal: ApiPrincipal = Depends(require_api_key),
+    ) -> Response:
+        # This is a chat2api extension endpoint, not an OpenAI standard resource.
+        # Require an image/chat-capable key and resolve the owner before returning
+        # bearer-capability asset URLs. Never expose the storage provider key.
+        if principal.kind != "master" and not {"chat", "images"}.intersection(principal.scopes):
+            raise HTTPException(status_code=403, detail="API key lacks media permission")
+        try:
+            item = await asyncio.to_thread(
+                media_archive.describe, media_id, principal.key_id, admin=principal.kind == "master",
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Unknown media") from None
+        origin = media_archive._config().get("public_base_url") or str(request.base_url).rstrip("/")
+        asset = f"{origin}/api/media/{item['id']}/{item.pop('token')}"
+        return JSONResponse({**item, "object": "chat2api.media", "url": asset,
+                             "thumbnail_url": asset + "/thumbnail"},
+                            headers={"Cache-Control": "no-store"})
+
     @app.get("/api/media/{media_id}/{access_token}")
     @app.get("/api/media/{media_id}/{access_token}/{variant}")
     async def media_download(media_id: str, access_token: str, variant: str = "") -> Response:
-        if variant not in {"", "thumbnail"}:
+        if variant not in {"", "original", "thumbnail"}:
             raise HTTPException(status_code=404, detail="Unknown variant")
         try:
             payload, mime = await asyncio.to_thread(media_archive.load, media_id, access_token, variant == "thumbnail")
@@ -794,16 +815,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             media_pending += fragment
             start = media_pending.find("![")
             if start >= 0:
-                prefix, candidate = media_pending[:start], media_pending[start:]
-                if len(candidate) < 500 and ")" not in candidate:
-                    media_pending = candidate
-                    return prefix
-                if "data:image/" in candidate[:500]:
-                    media_holding = True
-                    media_pending = candidate
-                    return prefix
+                # An entire image marker is held until the archive has replaced
+                # its upstream source with an owned full-resolution URL. Do not
+                # leak a ChatGPT CDN link or incomplete Base64 in the stream.
+                prefix = media_pending[:start]
+                media_holding = True
                 media_pending = ""
-                return prefix + candidate
+                return prefix
             retain = 1 if media_pending.endswith("!") else 0
             safe = media_pending[:-retain] if retain else media_pending
             media_pending = media_pending[-retain:] if retain else ""
@@ -881,8 +899,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         attachments_count=attachments_count, media_items=archived_media,
                     )
                     recorded = True
+                    meta = chat2api_meta(state, token_meta, principal)
+                    if archived_media:
+                        meta["media_files"] = archived_media
                     yield "data: " + json.dumps(
-                        chunk_payload(response_id, model, {}, "stop", usage, chat2api_meta(state, token_meta, principal)),
+                        chunk_payload(response_id, model, {}, "stop", usage, meta),
                         ensure_ascii=False,
                     ) + "\n\n"
                     yield "data: [DONE]\n\n"
