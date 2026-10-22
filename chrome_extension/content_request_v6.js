@@ -599,8 +599,18 @@
       const probe = () => {
         const current = composerHoldingPrompt(active) || active.promptComposer || findComposer();
         const button = sendButton(current);
-        return current && promptMatchesComposer(current, active) && buttonReady(button)
-          ? { current, button } : null;
+        if (!current || !promptMatchesComposer(current, active) || !buttonReady(button)) return null;
+        const renderedMatch = promptMatchEvidence(composerText(current), active);
+        // Lexical may expose correct draft text only through textContent.
+        // Preserve the exact pre-click verification source for diagnostics;
+        // click() may synchronously clear the editor.
+        const contentMatch = renderedMatch !== "none" ? "none"
+          : promptMatchEvidence(normalize(current.textContent || ""), active);
+        return {
+          current, button,
+          promptMatch: renderedMatch !== "none" ? renderedMatch : contentMatch,
+          promptMatchSource: renderedMatch !== "none" ? "rendered-composer" : "editor-text-content",
+        };
       };
       let ready = await waitFor(probe, 2400, 120);
 
@@ -661,7 +671,8 @@
       ready.button.scrollIntoView?.({ block: "nearest", inline: "nearest" });
       ready.button.click();
       await diagnostic(active, "clicked", {
-        send_prompt_match: promptMatchEvidence(composerText(ready.current), active),
+        send_prompt_match: ready.promptMatch,
+        send_prompt_match_source: ready.promptMatchSource,
         send_attempts: attempts,
         submit_wait_ms: Math.round((performance.now() - readyStarted) * 10) / 10,
         hydration_safe_baseline: true,
