@@ -176,7 +176,8 @@ class MediaArchive:
                 except Exception:
                     pass
 
-    def store_image(self, raw: bytes, mime: str, owner: str, request_id: str):
+    @staticmethod
+    def _render_thumbnail(raw: bytes, mime: str) -> tuple[int, int, bytes]:
         if mime not in ALLOWED or not raw or len(raw) > MAX_BYTES:
             raise ValueError("Unsupported image format or image too large")
         try:
@@ -198,6 +199,10 @@ class MediaArchive:
                 preview = output.getvalue()
         except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
             raise ValueError("Image did not pass raster validation") from exc
+        return width, height, preview
+
+    def store_image(self, raw: bytes, mime: str, owner: str, request_id: str):
+        width, height, preview = self._render_thumbnail(raw, mime)
         cfg = self._config()
         if not cfg["auto_archive"]:
             raise ValueError("Media auto-archiving is disabled; cannot expose inline Base64")
@@ -306,6 +311,59 @@ class MediaArchive:
                     client.delete_object(Bucket=cfg["s3"]["bucket"], Key=key)
             conn.execute("DELETE FROM media WHERE id = ?", (media_id,))
         return True
+
+    def repair_thumbnails(self, limit: int = 100, offset: int = 0) -> dict:
+        """Repair existing media thumbnails in bounded, owner-preserving batches.
+
+        This does not regenerate content through a Worker, change an original,
+        reissue an access token, or change the storage backend of an old record.
+        """
+        limit = min(200, max(1, int(limit)))
+        offset = max(0, int(offset))
+        with self._db() as conn:
+            rows = conn.execute(
+                """SELECT id,mime,width,height,backend,object_key,thumb_key
+                   FROM media ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?""",
+                (limit, offset),
+            ).fetchall()
+        cfg = self._config()
+        report = {"scanned": len(rows), "intact": 0, "repaired": 0,
+                  "failed": 0, "failures": [], "next_offset": offset + len(rows) if len(rows) == limit else None}
+        for row in rows:
+            try:
+                missing_or_invalid = False
+                try:
+                    preview = self._read(cfg, row["backend"], row["thumb_key"])
+                except FileNotFoundError:
+                    missing_or_invalid = True
+                except Exception as error:
+                    remote_code = str(getattr(error, "response", {}).get("Error", {}).get("Code", ""))
+                    if remote_code in {"NoSuchKey", "404", "NotFound"}:
+                        missing_or_invalid = True
+                    else:
+                        raise
+                if not missing_or_invalid:
+                    try:
+                        with Image.open(io.BytesIO(preview)) as image:
+                            image.verify()
+                            if image.format != "WEBP":
+                                missing_or_invalid = True
+                    except (OSError, UnidentifiedImageError, ValueError):
+                        missing_or_invalid = True
+                if not missing_or_invalid:
+                    report["intact"] += 1
+                    continue
+                original = self._read(cfg, row["backend"], row["object_key"])
+                width, height, thumbnail = self._render_thumbnail(original, row["mime"])
+                if width != row["width"] or height != row["height"]:
+                    raise ValueError("Archived original dimensions do not match metadata")
+                backend_cfg = {**cfg, "backend": row["backend"]}
+                self._write(backend_cfg, row["thumb_key"], thumbnail, "image/webp")
+                report["repaired"] += 1
+            except Exception as error:
+                report["failed"] += 1
+                report["failures"].append({"media_id": row["id"], "reason": type(error).__name__})
+        return report
 
     def list_items(self, limit: int = 80):
         with self._db() as conn:
