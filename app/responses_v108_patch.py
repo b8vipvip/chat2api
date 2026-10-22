@@ -374,8 +374,8 @@ async def _collect(state: Any, timeout: int, include_sources: bool) -> tuple[str
             text = str(event.get("text") or text)
             if text:
                 break
-        elif kind == "chat.completed" and not text:
-            text = str(event.get("text") or "")
+        elif kind == "chat.completed":
+            text = str(event.get("text") or text)
             if text:
                 break
         elif kind in {"chat.error", "chat.cancelled"}:
@@ -461,8 +461,8 @@ async def _stream(app: FastAPI, request: Request, state: Any, *, principal: ApiP
                 text = str(event.get("text") or text)
                 if text:
                     break
-            elif kind == "chat.completed" and not text:
-                text = str(event.get("text") or "")
+            elif kind == "chat.completed":
+                text = str(event.get("text") or text)
                 if text:
                     break
             elif kind in {"chat.error", "chat.cancelled"}:
