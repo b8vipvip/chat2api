@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .api_keys import ApiPrincipal
+from .media_handoff import StreamMediaMarkerGate
 from .token_usage import usage_for
 
 
@@ -241,6 +242,25 @@ def _sse(event_type: str, sequence: int, **payload: Any) -> str:
     return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+async def _archive_response_media(app: FastAPI, request: Request, principal: ApiPrincipal,
+                                  request_id: str, raw_text: str) -> tuple[str, list[dict[str, Any]]]:
+    """Use the same owned-media store as Chat Completions and Images.
+
+    The original URL stays in the OpenAI output_text; thumbnail URLs are an
+    optional chat2api extension. The worker/broker retains terminal authority.
+    """
+    archive = getattr(app.state, "media_archive", None)
+    if archive is None or not raw_text:
+        return raw_text, []
+    result, media = await asyncio.to_thread(
+        archive.rewrite_markdown, raw_text, principal.key_id,
+        request_id, str(request.base_url).rstrip("/"),
+    )
+    if "data:image/" in result:
+        raise ValueError("Incomplete image data in Responses output")
+    return result, media
+
+
 async def _dispatch(app: FastAPI, request: Request, body: dict[str, Any], principal: ApiPrincipal, prompt: str, native_tools: list[str], *, request_id_override: str | None = None):
     registry = app.state.registry
     broker = app.state.broker
@@ -354,8 +374,8 @@ async def _collect(state: Any, timeout: int, include_sources: bool) -> tuple[str
             text = str(event.get("text") or text)
             if text:
                 break
-        elif kind == "chat.completed" and not text:
-            text = str(event.get("text") or "")
+        elif kind == "chat.completed":
+            text = str(event.get("text") or text)
             if text:
                 break
         elif kind in {"chat.error", "chat.cancelled"}:
@@ -365,13 +385,15 @@ async def _collect(state: Any, timeout: int, include_sources: bool) -> tuple[str
     return text, [_web_item(call, include_sources) for call in calls]
 
 
-async def _stream(app: FastAPI, request: Request, state: Any, *, response_id: str, body: dict[str, Any], prompt: str, request_id: str, client_id: str, timeout: int, created_at: int, include_sources: bool) -> AsyncIterator[str]:
+async def _stream(app: FastAPI, request: Request, state: Any, *, principal: ApiPrincipal, response_id: str, body: dict[str, Any], prompt: str, request_id: str, client_id: str, timeout: int, created_at: int, include_sources: bool) -> AsyncIterator[str]:
     seq = 1
     message_id = "msg_" + uuid.uuid4().hex
     calls: list[dict[str, Any]] = []
     by_id: dict[str, dict[str, Any]] = {}
     text = ""
     sent = ""
+    raw_seen = ""
+    media_gate = StreamMediaMarkerGate()
     message_added = False
     deadline = asyncio.get_running_loop().time() + timeout
     created = _response(response_id, body, prompt, "", [], created_at, status="in_progress")
@@ -422,24 +444,33 @@ async def _stream(app: FastAPI, request: Request, state: Any, *, response_id: st
                     yield _sse("response.output_item.added", seq, output_index=len(calls), item=_message_item(message_id, "", "in_progress"))
                     seq += 1
                     yield _sse("response.content_part.added", seq, item_id=message_id, output_index=len(calls), content_index=0, part={"type": "output_text", "text": "", "annotations": [], "logprobs": []})
-                if snapshot.startswith(sent):
-                    delta = snapshot[len(sent):]
+                if snapshot.startswith(raw_seen):
+                    raw_delta = snapshot[len(raw_seen):]
+                    raw_seen = snapshot
+                    delta = media_gate.push(raw_delta)
                     if delta:
-                        sent = snapshot
+                        sent += delta
                         seq += 1
                         yield _sse("response.output_text.delta", seq, item_id=message_id, output_index=len(calls), content_index=0, delta=delta, logprobs=[])
+                else:
+                    # An edited/non-prefix snapshot cannot safely replace
+                    # chunks already sent through an append-only SSE protocol.
+                    media_gate.holding = True
                 continue
             if kind == "chat.response.completed":
                 text = str(event.get("text") or text)
                 if text:
                     break
-            elif kind == "chat.completed" and not text:
-                text = str(event.get("text") or "")
+            elif kind == "chat.completed":
+                text = str(event.get("text") or text)
                 if text:
                     break
             elif kind in {"chat.error", "chat.cancelled"}:
                 raise RuntimeError(str(event.get("error") or event.get("reason") or "Browser request failed"))
 
+        text, archived_media = await _archive_response_media(app, request, principal, request_id, text)
+        if not text.startswith(sent):
+            raise ValueError("Responses stream content changed after already-emitted text")
         for call in calls:
             if call.get("status") != "completed":
                 call["status"] = "completed"
@@ -462,6 +493,8 @@ async def _stream(app: FastAPI, request: Request, state: Any, *, response_id: st
         yield _sse("response.output_item.done", seq, output_index=len(calls), item=_message_item(message_id, text))
         output = [_web_item(call, include_sources) for call in calls] + [_message_item(message_id, text)]
         completed = _response(response_id, body, prompt, text, output, created_at)
+        if archived_media:
+            completed["chat2api"] = {"media_files": archived_media}
         if bool(body.get("store", True)):
             store: OrderedDict[str, dict[str, Any]] = app.state.responses_v108_store
             store[response_id] = completed
@@ -471,12 +504,12 @@ async def _stream(app: FastAPI, request: Request, state: Any, *, response_id: st
         yield _sse("response.completed", seq, response=completed)
     except asyncio.TimeoutError:
         seq += 1
-        failed = _response(response_id, body, prompt, text, [], created_at, status="failed")
+        failed = _response(response_id, body, prompt, "", [], created_at, status="failed")
         failed["error"] = {"code": "timeout", "message": "Timed out waiting for ChatGPT"}
         yield _sse("response.failed", seq, response=failed)
     except Exception as error:
         seq += 1
-        failed = _response(response_id, body, prompt, text, [], created_at, status="failed")
+        failed = _response(response_id, body, prompt, "", [], created_at, status="failed")
         failed["error"] = {"code": "browser_error", "message": str(error)}
         yield _sse("response.failed", seq, response=failed)
     finally:
@@ -519,14 +552,17 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
             return _error(str(error), status_code=503, code="browser_dispatch_failed")
         if bool(body.get("stream", False)):
             return StreamingResponse(
-                _stream(app, request, state, response_id=response_id, body=body, prompt=prompt, request_id=request_id, client_id=client_id, timeout=timeout, created_at=created_at, include_sources=include_sources),
+                _stream(app, request, state, principal=principal, response_id=response_id, body=body, prompt=prompt, request_id=request_id, client_id=client_id, timeout=timeout, created_at=created_at, include_sources=include_sources),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
         try:
             text, web_items = await _collect(state, timeout, include_sources)
+            text, archived_media = await _archive_response_media(app, request, principal, request_id, text)
             output = web_items + [_message_item("msg_" + uuid.uuid4().hex, text)]
             response = _response(response_id, body, prompt, text, output, created_at)
+            if archived_media:
+                response["chat2api"] = {"media_files": archived_media}
             if bool(body.get("store", True)):
                 store: OrderedDict[str, dict[str, Any]] = app.state.responses_v108_store
                 store[response_id] = response
@@ -539,8 +575,8 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
             except Exception:
                 pass
             return _error("Timed out waiting for ChatGPT", status_code=504, code="timeout")
-        except RuntimeError as error:
-            return _error(str(error), status_code=502, code="browser_error")
+        except (RuntimeError, ValueError) as error:
+            return _error(str(error), status_code=502, code="browser_or_media_error")
         finally:
             app.state.registry.busy_clients.discard(client_id)
             await app.state.broker.release(request_id)
