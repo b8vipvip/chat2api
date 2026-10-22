@@ -17,6 +17,8 @@ from pydantic import BaseModel
 from . import model_capability_routing_patch as routing
 from .model_catalog import normalize_concrete_model_id
 from .worker_text_model_management_v146_patch import _model_rows, _response_bytes
+from .worker_model_library_v145_patch import STATIC_SPECIAL_MODELS, _validated_model_rows
+from .model_capability_evidence_v184 import project_capabilities
 
 PATCH_ID = "manual-worker-text-model-tasks-v147"
 ASSET = "/assets/chat2api-text-model-tasks-v147.js"
@@ -180,6 +182,25 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
                 })
                 if client_id not in entry["clients"]:
                     entry["clients"].append(client_id)
+        # v147 may add selectable-but-unverified observed models. Recompute the
+        # *same* evidence projection after that existing catalog merge; otherwise
+        # the v145-only projection would become stale in the production
+        # entrypoint where v147 installs last. This is presentation evidence,
+        # not another routing or Worker capability decision.
+        candidates = [
+            client_id for client_id in registry.clients
+            if (not online_only or client_id in online)
+            and registry.chatgpt_routing_ready(client_id)
+        ]
+        validated_by_worker = {
+            cid: {str(row["id"]): row for row in _validated_model_rows(registry, cid)}
+            for cid in candidates
+        }
+        for entry in catalog.values():
+            entry["capability_evidence"] = project_capabilities(
+                registry, entry, validated_by_worker,
+                special_model=str(entry.get("id") or "") in STATIC_SPECIAL_MODELS,
+            )
         return sorted(catalog.values(), key=lambda item: str(item.get("id") or ""))
 
     registry.supports_model = supports_model
@@ -254,7 +275,17 @@ def install_manual_worker_text_model_tasks_v147_patch(app: FastAPI) -> FastAPI:
         async with lock:
             if expire_tasks():
                 await save()
-            return {"data": list(reversed(tasks[-MAX_TASKS:])), "revision": 147}
+            return {
+                "data": list(reversed(tasks[-MAX_TASKS:])),
+                "revision": 147,
+                # A read-only projection of the same final registry catalog:
+                # the administrator can inspect current capability evidence
+                # without a second model list owner or a duplicate API route.
+                "capability_evidence": {
+                    str(row["id"]): row.get("capability_evidence") or {}
+                    for row in registry.model_catalog()
+                },
+            }
 
     @app.get("/api/admin/text-model-tasks/{task_id}/logs", dependencies=auth)
     async def model_task_logs(task_id: str, worker: str | None = None):
