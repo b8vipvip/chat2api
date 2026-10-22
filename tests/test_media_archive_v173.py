@@ -165,3 +165,36 @@ def test_media_description_is_owner_scoped_and_does_not_expose_foreign_tokens(tm
     with pytest.raises(KeyError):
         store.describe("med_unknown", "key-a")
     assert store.describe(row["id"], "master", admin=True)["token"] == row["token"]
+
+
+def test_missing_or_corrupt_thumbnail_backfill_preserves_original_and_access_token(tmp_path: Path):
+    store = MediaArchive(tmp_path, "master")
+    original = example_image()
+    row = store.store_image(original, "image/png", "owner-key", "req-100")
+    thumb_path = store.root / f"objects/{row['id']}-thumb.webp"
+    first = store.repair_thumbnails()
+    assert first["scanned"] == 1 and first["intact"] == 1 and first["repaired"] == 0
+
+    thumb_path.unlink()
+    repaired = store.repair_thumbnails()
+    assert repaired["repaired"] == 1 and repaired["failed"] == 0
+    assert store.load(row["id"], row["token"])[0] == original
+    preview, mime = store.load(row["id"], row["token"], thumbnail=True)
+    assert mime == "image/webp" and preview.startswith(b"RIFF")
+    assert store.describe(row["id"], "owner-key")["token"] == row["token"]
+
+    thumb_path.write_bytes(b"corrupt")
+    repaired = store.repair_thumbnails(limit=1)
+    assert repaired["repaired"] == 1 and repaired["next_offset"] == 1
+    with Image.open(io.BytesIO(store.load(row["id"], row["token"], thumbnail=True)[0])) as image:
+        assert image.format == "WEBP"
+
+
+def test_backfill_keeps_original_backend_after_default_storage_changed(tmp_path: Path):
+    store = MediaArchive(tmp_path, "master")
+    row = store.store_image(example_image(), "image/png", "owner", "req")
+    (store.root / f"objects/{row['id']}-thumb.webp").unlink()
+    store.configure({"backend": "s3", "s3": {"bucket": "bucket", "access_key_id": "ak", "secret_access_key": "sk"}})
+    report = store.repair_thumbnails()
+    assert report["repaired"] == 1 and report["failed"] == 0
+    assert store.load(row["id"], row["token"], thumbnail=True)[1] == "image/webp"
