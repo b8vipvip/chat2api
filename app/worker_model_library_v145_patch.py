@@ -11,6 +11,7 @@ from starlette.routing import request_response
 from . import admin as admin_module
 from . import model_capability_routing_patch as model_routing
 from .model_catalog import normalize_concrete_model_id
+from .model_capability_evidence_v184 import project_capabilities
 
 PATCH_ID = "worker-model-library-v145"
 PATCH_REVISION = 145
@@ -120,7 +121,7 @@ def _validated_model_rows(registry: Any, client_id: str) -> list[dict[str, Any]]
         item = dict(raw)
         item["id"] = model_id
         item.setdefault("label", model_id)
-        item.setdefault("capabilities", ["text", "vision", "file-understanding"])
+        item.setdefault("capabilities", ["text"])
         item["source"] = "worker-validated"
         result.append(item)
     return result
@@ -218,6 +219,17 @@ def _public_user_library(registry: Any, pricing_payload: dict[str, Any]) -> list
             "price_configured": bool(price),
             "source": str(model.get("source") or ("special-static" if special else "worker-validated")),
             "capabilities": capabilities,
+            "capability_evidence": {
+                "revision": (model.get("capability_evidence") or {}).get("revision"),
+                "model_validation_state": (model.get("capability_evidence") or {}).get("model_validation_state"),
+                "legacy_transport_alias": bool((model.get("capability_evidence") or {}).get("legacy_transport_alias")),
+                "operations": {
+                    name: {"state": details.get("state"),
+                           "worker_count": len(details.get("workers") or []),
+                           "model_specific_verified": details.get("model_specific_verified")}
+                    for name, details in ((model.get("capability_evidence") or {}).get("operations") or {}).items()
+                },
+            },
             "available_workers": len(model.get("clients") or []),
             "validated": bool(model.get("validated")) if not special else None,
             "validated_at": model.get("validated_at"),
@@ -326,6 +338,10 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
         else:
             client_ids = [client_id for client_id, item in registry.clients.items() if getattr(item, "connection_enabled", False)]
         default_model = _configured_default_model(registry)
+        validated_by_worker = {
+            client_id: {str(row["id"]): row for row in _validated_model_rows(registry, client_id)}
+            for client_id in client_ids
+        }
         for client_id in client_ids:
             for special_id in STATIC_SPECIAL_MODELS:
                 special = catalog[special_id]
@@ -338,7 +354,7 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
                     "created": 0,
                     "owned_by": "chat2api",
                     "label": default_model + " · Free 页面默认（未经响应验证）",
-                    "capabilities": ["text", "vision", "file-understanding"],
+                    "capabilities": ["text"],
                     "clients": [],
                     "compatibility_clients": [],
                     "source": "free-default-compatibility-unverified",
@@ -347,7 +363,7 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
                 if client_id not in entry["clients"]:
                     entry["clients"].append(client_id)
                 entry.setdefault("compatibility_clients", []).append(client_id)
-            for model in _validated_model_rows(registry, client_id):
+            for model in validated_by_worker[client_id].values():
                 model_id = str(model["id"])
                 entry = catalog.setdefault(
                     model_id,
@@ -357,7 +373,7 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
                         "created": 0,
                         "owned_by": "chat2api",
                         "label": model.get("label") or model_id,
-                        "capabilities": model.get("capabilities") or ["text", "vision", "file-understanding"],
+                        "capabilities": model.get("capabilities") or ["text"],
                         "family": model.get("family") or model_id,
                         "reasoning": model.get("reasoning"),
                         "reasoning_efforts": model.get("reasoning_efforts") or [],
@@ -371,10 +387,20 @@ def install_worker_model_library_v145_patch(app: FastAPI) -> FastAPI:
                                  label=model.get("label") or model_id)
                 if client_id not in entry["clients"]:
                     entry["clients"].append(client_id)
+                # The visible model's capability list is the union of distinct
+                # validated Worker reports, not the first Worker's assumptions.
+                # Per-operation Worker evidence below prevents the union from
+                # being interpreted as capability support on every Worker.
+                entry["capabilities"] = sorted(set(entry.get("capabilities") or []) | set(model.get("capabilities") or ["text"]))
                 if model.get("validated_at"):
                     entry["validated_at"] = model.get("validated_at")
                 if model.get("selected"):
                     entry["selected_on"] = client_id
+        for entry in catalog.values():
+            entry["capability_evidence"] = project_capabilities(
+                registry, entry, validated_by_worker,
+                special_model=str(entry["id"]) in STATIC_SPECIAL_MODELS,
+            )
         special_order = {"gpt-image": 0, "gpt-live": 1, "gpt-live-mini": 2}
         return sorted(catalog.values(), key=lambda item: (special_order.get(str(item.get("id")), 10), str(item.get("id") or "")))
 
