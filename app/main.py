@@ -172,6 +172,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except RuntimeError as error:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
+    @app.post("/api/admin/media-storage/backfill-thumbnails", dependencies=[Depends(require_admin_key)])
+    async def backfill_media_thumbnails(
+        limit: int = Query(default=100, ge=1, le=200),
+        offset: int = Query(default=0, ge=0),
+    ) -> dict[str, object]:
+        # Explicit bounded maintenance; does not alter originals, owners or
+        # bearer links. A large archive can be paginated via next_offset.
+        return await asyncio.to_thread(media_archive.repair_thumbnails, limit, offset)
+
     @app.get("/api/admin/media-storage/files", dependencies=[Depends(require_admin_key)])
     async def media_storage_files(limit: int = Query(default=80, ge=1, le=200)) -> dict[str, object]:
         return {"data": media_archive.list_items(limit)}
