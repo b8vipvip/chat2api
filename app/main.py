@@ -1255,6 +1255,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             registry.busy_clients.discard(client_id)
             await broker.release(request_id)
 
+    # Both Images and Responses image_generation use this exact Worker/Broker
+    # lifecycle. The Responses adapter only translates the result protocol.
+    app.state.image_generation_executor = image_generations
+
     @app.get("/api/admin/requests/{request_id}/media/{file_id}", dependencies=[Depends(require_admin_key)])
     async def admin_request_media(request_id: str, file_id: str) -> Response:
         """Serve an archived image only when it belongs to the requested row."""
