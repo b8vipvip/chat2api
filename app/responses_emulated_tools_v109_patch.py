@@ -79,6 +79,11 @@ def _has_tool_output_input(body: dict[str, Any]) -> bool:
 
 
 def needs_emulated_tools(body: dict[str, Any], app: FastAPI | None = None) -> bool:
+    # Hosted image_generation is dispatched by the native Responses adapter to
+    # the existing image Worker engine, never as an emulated function tool.
+    # Combined hosted/custom tool requests are rejected there explicitly.
+    if any(tool.get("type") == "image_generation" for tool in _request_tools(body)):
+        return False
     for tool in _request_tools(body):
         kind = str(tool.get("type") or "").strip()
         if kind and kind not in SUPPORTED_NATIVE_TOOLS:
