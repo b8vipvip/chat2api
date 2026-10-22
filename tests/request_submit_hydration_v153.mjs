@@ -11,6 +11,7 @@ function section(start, end) {
 }
 const context = {globalThis: {}};
 const evidence = section("  const normalize = value =>", "  function visible(element)") +
+  section("  function editorLayoutWhitespaceEvidence(observed, target, source) {", "  function promptDriftSummary(text, active) {") +
   section("  function promptMatchEvidence(text, active) {", "  function promptMatchesText(text, active) {");
 vm.runInNewContext(evidence + "\nglobalThis.probe = {normalize,promptMatchEvidence};", context);
 const {normalize,promptMatchEvidence} = context.globalThis.probe;
@@ -21,6 +22,13 @@ assert.equal(promptMatchEvidence("Café!", active), "none",
   "a genuine extra character must not be silently submitted");
 assert.equal(promptMatchEvidence("Caé", active), "none",
   "a genuinely missing character must not be silently submitted");
+const multiline = "Project policy ".repeat(42) + "\n" + "帮我生成小红花的头像图片";
+const verified = {prompt:multiline,promptNormalized:normalize(multiline)};
+const layout = verified.promptNormalized.replace("小红花", "小红 花");
+assert.equal(promptMatchEvidence(layout, verified), "rich-editor-layout-whitespace",
+  "ordinary-length rich drafts must not fail on one proven layout separator");
+assert.equal(promptMatchEvidence(verified.promptNormalized.replace("小红花", "小红帽"), verified), "none",
+  "native rehydration must never accept changed semantic characters");
 
 let draft = "original-mutated!";
 const editor = {isConnected:true};
