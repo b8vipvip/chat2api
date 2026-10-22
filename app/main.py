@@ -23,6 +23,7 @@ from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout
 from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
+from .responses_multimodal_input_v183 import attachment_specs as canonical_attachment_specs
 from .media_handoff import StreamMediaMarkerGate
 from .models import (
     ApiKeyCreate,
@@ -585,15 +586,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     def attachment_specs(file_ids: list[str], principal: ApiPrincipal) -> list[dict[str, object]]:
-        result: list[dict[str, object]] = []
-        for file_id in file_ids:
-            item = file_store.get(file_id)
-            if not item:
-                raise HTTPException(status_code=400, detail=f"Unknown attachment file_id: {file_id}")
-            if principal.kind != "master" and item.owner_key_id != principal.key_id:
-                raise HTTPException(status_code=403, detail=f"Attachment {file_id} belongs to another API key")
-            result.append({"file_id": item.file_id, "filename": item.filename, "mime_type": item.mime_type, "size": item.size})
-        return result
+        return canonical_attachment_specs(file_store, file_ids, principal)
 
     async def inline_image_files(body: ChatCompletionRequest, principal: ApiPrincipal) -> list[str]:
         result: list[str] = []
