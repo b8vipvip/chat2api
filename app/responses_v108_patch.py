@@ -534,6 +534,12 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
             return _error("Request body must be a JSON object")
         try:
             prompt = _input_prompt(body)
+            # A hosted image_generation tool is an explicit image artifact
+            # request. Reuse the existing Images request owner and only adapt
+            # the completed result into standard Responses output items.
+            from .responses_image_tool_v182 import handle_image_tool, is_image_generation_request
+            if is_image_generation_request(body):
+                return await handle_image_tool(app, request, body, principal, prompt)
             native_tools, force = _tool_config(body)
         except ValueError as error:
             return _error(str(error), param="input")
