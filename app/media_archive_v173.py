@@ -256,12 +256,26 @@ class MediaArchive:
             prefix = (self._config().get("public_base_url") or base_url.rstrip("/"))
             asset = f"{prefix}/api/media/{record['id']}/{record['token']}"
             output.append(source[last:match.start()])
-            output.append(f"![{match.group(1) or '生成图片'}]({asset}/thumbnail)")
+            # Standard API clients receive full-resolution content. The admin
+            # playground can derive /thumbnail for lightweight preview without
+            # replacing the original download URL in the assistant response.
+            output.append(f"![{match.group(1) or '生成图片'}]({asset})")
             rows.append({**{k: record[k] for k in ("id", "mime", "bytes", "width", "height", "backend")},
                          "url": asset, "thumbnail_url": asset + "/thumbnail"})
             last = match.end()
         output.append(source[last:])
         return "".join(output), rows
+
+    def describe(self, media_id: str, owner: str, *, admin: bool = False) -> dict:
+        """Read metadata without exposing another API key's opaque media token."""
+        with self._db() as conn:
+            row = conn.execute("SELECT * FROM media WHERE id = ?", (media_id,)).fetchone()
+        if row is None or (row["owner"] != owner and not admin):
+            raise KeyError("Unknown media")
+        return {"id": row["id"], "token": row["token"],
+                "request_id": row["request_id"], "mime_type": row["mime"],
+                "bytes": row["size"], "width": row["width"], "height": row["height"],
+                "backend": row["backend"], "created_at": row["created_at"]}
 
     def load(self, media_id: str, token: str, thumbnail: bool = False):
         with self._db() as conn:

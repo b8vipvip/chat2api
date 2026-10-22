@@ -24,6 +24,8 @@ def test_generated_image_is_locally_archived_with_distinct_thumbnail_and_opaque_
     row = rows[0]
     assert "data:image" not in fixed
     assert "chat2api.example/api/media/" in fixed
+    assert f"![Generated image]({row['url']})" in fixed
+    assert row["thumbnail_url"] not in fixed
     assert fixed.endswith("\n结束")
     assert row["backend"] == "local"
     assert row["url"] != row["thumbnail_url"]
@@ -149,3 +151,17 @@ def test_admin_delete_expires_download_token_and_removes_both_variants(tmp_path:
     assert store.list_items() == []
     with pytest.raises(KeyError):
         store.load(row["id"], row["token"])
+
+
+def test_media_description_is_owner_scoped_and_does_not_expose_foreign_tokens(tmp_path: Path):
+    store = MediaArchive(tmp_path, "master")
+    row = store.store_image(example_image(), "image/png", "key-a", "req-1")
+    own = store.describe(row["id"], "key-a")
+    assert own["token"] == row["token"]
+    assert own["request_id"] == "req-1"
+    assert own["width"] == 1254 and own["height"] == 1254
+    with pytest.raises(KeyError):
+        store.describe(row["id"], "key-b")
+    with pytest.raises(KeyError):
+        store.describe("med_unknown", "key-a")
+    assert store.describe(row["id"], "master", admin=True)["token"] == row["token"]

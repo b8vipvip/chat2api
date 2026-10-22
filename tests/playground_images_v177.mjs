@@ -27,6 +27,13 @@ assert.equal(media.safeImageUrl("https://media.oaiusercontent.com.evil.example/x
 assert.equal(media.safeImageUrl("https://media.oaiusercontent.com/x.png"), "https://media.oaiusercontent.com/x.png");
 const archivedThumb = "https://chat2api.mv3.cn/api/media/med_abc123/secure_token-123/thumbnail";
 assert.equal(media.safeImageUrl(archivedThumb), archivedThumb);
+const archivedOriginal = archivedThumb.replace("/thumbnail", "");
+assert.equal(media.safeImageUrl(archivedOriginal), archivedOriginal);
+assert.equal(media.safeImageUrl(archivedOriginal + "/original"), archivedOriginal + "/original");
+const richImage = media.renderMarkdown(`![Generated image 1](${archivedOriginal})`);
+assert.match(richImage, /<a[^>]+href="https:\/\/chat2api\.mv3\.cn\/api\/media\/med_abc123\/secure_token-123"/);
+assert.match(richImage, /<img[^>]+src="https:\/\/chat2api\.mv3\.cn\/api\/media\/med_abc123\/secure_token-123\/thumbnail"/);
+assert.equal(media.safeImageUrl(archivedOriginal + "?redirect=https://evil.example"), "");
 assert.match(media.renderMarkdown(`![Generated image 1](${archivedThumb})`), /<img[^>]+src="https:\/\/chat2api\.mv3\.cn\/api\/media\//);
 assert.equal(media.safeImageUrl("https://chat2api.mv3.cn/api/admin/keys"), "");
 assert.equal(media.safeImageUrl("https://evil.example/api/media/med_abc123/secure_token-123/thumbnail"), "");

@@ -13,6 +13,14 @@
   const trustedRecoveryBlobs = new Set();
   const RASTER_DATA_URL = /^data:image\/(?:png|jpeg|webp|gif);base64,[a-z0-9+/]+={0,2}$/i;
   const MAX_IMAGE_BASE64 = 4 * Math.ceil(4 * 1024 * 1024 / 3);
+  const ownedMediaOriginalUrl = value => {
+    try {
+      const url = new URL(String(value || ""), location.href);
+      if (url.origin !== location.origin || url.username || url.password || url.search || url.hash) return "";
+      if (!/^\/api\/media\/med_[A-Za-z0-9]+\/[A-Za-z0-9_-]+(?:\/(?:thumbnail|original))?$/.test(url.pathname)) return "";
+      return url.href.replace(/\/(?:thumbnail|original)$/, "");
+    } catch (_) { return ""; }
+  };
   const safeImageUrl = value => {
     const text = String(value || "").trim();
     if (text.startsWith("blob:") && trustedRecoveryBlobs.has(text)) return text;
@@ -20,12 +28,8 @@
     try {
       const url = new URL(text, location.href);
       const host = url.hostname.toLowerCase();
-      // The media archive serves generated thumbnails on this application origin.
-      // Only its opaque, tokenized read-only image route is eligible; do not
-      // broadly trust arbitrary same-origin URLs as image sources.
-      const sameOriginMedia = url.origin === location.origin
-        && /^\/api\/media\/med_[A-Za-z0-9]+\/[A-Za-z0-9_-]+\/(?:thumbnail|original)$/.test(url.pathname);
-      if (sameOriginMedia) return url.href;
+      // Only archive-owned, tokenized image variants are trusted on this origin.
+      if (ownedMediaOriginalUrl(url.href)) return url.href;
       return url.protocol === "https:" && !url.username && !url.password
         && (["chatgpt.com", "www.chatgpt.com", "chat.openai.com"].includes(host)
           || [".oaiusercontent.com", ".oaistatic.com", ".openai.com", ".chatgpt.com"]
@@ -78,6 +82,12 @@
     source = source.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_all, alt, url) => {
       const src = safeImageUrl(url);
       if (!src) return stash(`<span class="pgChatImageMissing">图片 · ${escHtml(alt || "未命名")}</span>`);
+      const original = ownedMediaOriginalUrl(src);
+      if (original) {
+        // Render a small owned WebP, but clicking retrieves the real full-size
+        // original. This does not change the OpenAI-compatible response body.
+        return stash(`<a href="${escHtml(original)}" target="_blank" rel="noopener noreferrer" title="查看原图"><img class="pgChatImage" src="${escHtml(original + "/thumbnail")}" alt="${escHtml(alt || "图片")}" loading="lazy"></a>`);
+      }
       return stash(`<img class="pgChatImage" src="${escHtml(src)}" alt="${escHtml(alt || "图片")}" loading="lazy">`);
     });
     source = source.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_all, label, url) => {
