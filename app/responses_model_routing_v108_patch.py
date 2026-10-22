@@ -361,7 +361,13 @@ async def _record_telemetry(
             "prompt_chars": len(prompt),
             "completion_chars": len(output_text),
             "status": status,
-            "usage": _usage(prompt, output_text, response),
+            # The image engine already records and bills this single Worker
+            # generation under its imgreq_* ID. The outer Responses row is a
+            # protocol-level trace, never a second billable generation.
+            "usage": ({"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0,
+                       "cached_input_tokens": 0, "estimated": True}
+                      if "image_generation" in tool_types and trace.get("worker_request_id")
+                      else _usage(prompt, output_text, response)),
             "timings": timings,
             "diagnostics": {
                 **observed_diagnostics,
