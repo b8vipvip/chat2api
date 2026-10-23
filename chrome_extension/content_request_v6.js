@@ -376,8 +376,10 @@
       if (text.length < 100 || text.length > 40000 || baseline.get(node) === text.slice(-5000))
         continue;
       // A source fragment must be present, not merely a generic heading.
-      const fragments = normalizedSource.split(/\n+/)
-        .map(line => line.trim()).filter(line => line.length >= 65);
+      const fragments = source.split(/\r?\n/)
+        .map(line => normalize(line.replace(/^#{1,6}\s*/, "")
+          .replace(/[*_`|]/g, "").replace(/\[(.*?)\]\([^)]+\)/g, "$1")))
+        .filter(line => line.length >= 65);
       if (!fragments.some(line => text.includes(line.slice(0, 65)))) continue;
       if (active.promptNormalized && text.includes(active.promptNormalized.slice(0, 120)))
         continue;
@@ -998,6 +1000,8 @@
     let imageCaptureAt = 0;
     let imageHandoffObserved = false;
     let imageBuildArtifactObserved = false;
+    let verifiedRenderedCandidate = "";
+    let verifiedRenderedCandidateSince = 0;
     const imageCreationRequested = isImageCreationRequest(active.prompt);
     const fileCreationRequested = isFileCreationRequest(active.prompt);
 
@@ -1272,6 +1276,47 @@
         });
         active.completed = true;
         return;
+      }
+
+      // The redesigned ChatGPT UI sometimes omits assistant role nodes AND the
+      // clone reader loses its terminal frame. A current-request SSE fragment
+      // independently correlated with a rendered node that remains stable
+      // after generation is a bounded, explicit UI terminal fallback.
+      // No tool command, search JSON, prompt echo, or media-producing request
+      // can satisfy this proof. request-v6 remains the sole terminal owner.
+      if (!captureMedia && !fileCreationRequested && !imageCreationRequested
+          && current.reason === "verified-rendered-network-overlap-v189"
+          && current.text.length >= 120 && !internalToolPayload(current.text)
+          && !generating && !promptStillPresent(active)
+          && active.networkObservedAt && Date.now() - active.networkObservedAt >= 4500) {
+        if (current.text !== verifiedRenderedCandidate) {
+          verifiedRenderedCandidate = current.text;
+          verifiedRenderedCandidateSince = Date.now();
+        } else if (Date.now() - verifiedRenderedCandidateSince >= 3500) {
+          const result = await finalNodeText(current.latest);
+          const finalized = String(result?.text || current.text || "").trim();
+          if (finalized.length >= 120 && !internalToolPayload(finalized)
+              && !isGenerating() && !promptStillPresent(active)) {
+            responseStarted = await ensureResponseStarted(active, responseStarted,
+              "verified-rendered-network-overlap-v189");
+            await emit({
+              type: "chat.completed", request_id: active.requestId, text: finalized,
+              diagnostics: {
+                response_terminal_source: "same-request-network-rendered-dom-v189",
+                response_terminal_dom_reconciled: true,
+                response_integrity_evidence: "network-text-65-character-overlap-pre-submit-dom-baseline",
+                network_terminal_evidence_source: "rendered-dom-stable-after-network-observation",
+                response_terminal_final_chars: finalized.length,
+                response_format: "markdown",
+              },
+            });
+            active.completed = true;
+            return;
+          }
+        }
+      } else {
+        verifiedRenderedCandidate = "";
+        verifiedRenderedCandidateSince = 0;
       }
 
       // A DOM pause or a missing Stop button cannot override an observed SSE
