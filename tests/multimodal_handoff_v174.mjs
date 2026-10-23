@@ -11,10 +11,10 @@ assert.ok(start >= 0 && end > start, "media terminal classifier must exist");
 const sandbox = {};
 runInNewContext(
   controller.slice(start, end) +
-    "\nglobalThis.classify = { isInternalMediaHandoff, hasTransferableImage };",
+    "\nglobalThis.classify = { isInternalMediaHandoff, hasTransferableImage, combinePageMediaText };",
   sandbox,
 );
-const { isInternalMediaHandoff, hasTransferableImage } = sandbox.classify;
+const { isInternalMediaHandoff, hasTransferableImage, combinePageMediaText } = sandbox.classify;
 assert.equal(isInternalMediaHandoff('{"skipped_mainline":true}'), true);
 assert.equal(isInternalMediaHandoff('{"skipped_mainline":true}{"skipped_mainline":true}'), true);
 assert.equal(isInternalMediaHandoff(' { "skipped_mainline": true } { "skipped_mainline":true } '), true);
@@ -27,6 +27,17 @@ assert.equal(hasTransferableImage("![dog](data:image/png;base64,AAAA)"), true);
 assert.equal(hasTransferableImage("Here is ![dog](https://images.example/image.png)"), true);
 assert.equal(hasTransferableImage("![dog](blob:https://chatgpt.com/uuid)"), false);
 assert.equal(hasTransferableImage('{"skipped_mainline":true}'), false);
+
+const newImage = "![Reference image](data:image/png;base64,AAAA)";
+assert.equal(combinePageMediaText("First paragraph\n\n**bold**", newImage),
+  "First paragraph\n\n**bold**\n\n" + newImage,
+  "correlated same-turn prose must survive separate generated image cards");
+assert.equal(combinePageMediaText('{"size":"1024x1536","n":3,"transparent_background":false}', newImage),
+  newImage, "image tool parameters must never appear in the delivered body");
+assert.equal(combinePageMediaText('{"skipped_mainline":true}', newImage), newImage);
+assert.equal(combinePageMediaText("![old](blob:https://chatgpt.com/uuid)", newImage), newImage);
+assert.equal(combinePageMediaText("![old](https://example.com/img.png)", newImage), newImage);
+
 
 // Only the existing request controller may settle the request. A handoff is
 // excluded from both network-text completion and the early no-terminal error.
