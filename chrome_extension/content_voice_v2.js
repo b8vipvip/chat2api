@@ -294,6 +294,25 @@
     });
   }
 
+  async function verifyInjectedMicrophone(active) {
+    // A synthetic AudioContext destination alone is not microphone delivery.
+    // In conversation mode ChatGPT must actually call intercepted
+    // getUserMedia and receive our track before we inject uploaded audio.
+    const attached = await waitMain(active.requestId,
+      item => item.type === "voice.mic.synthetic" && Number(item.track_count || 0) > 0,
+      7000);
+    if (!attached) {
+      await diagnostic(active, "mic-not-attached", {
+        voice_failure_code: "VOICE_SYNTHETIC_MIC_NOT_ATTACHED",
+      });
+      throw voiceFailure("VOICE_SYNTHETIC_MIC_NOT_ATTACHED",
+        "Voice UI never acquired the synthetic microphone track for conversation input");
+    }
+    await diagnostic(active, "mic-injection-confirmed", {
+      synthetic_mic_seen: true, synthetic_tracks: Number(attached.track_count),
+    });
+  }
+
   async function playVoiceInput(active) {
     postMain("voice.input.play", active);
     const started = await waitMain(active.requestId, item => item.type === "voice.input.started" || item.type === "voice.input.error", 10000);
@@ -460,6 +479,10 @@
       });
       if (!prepared.peer_hook_ready) throw voiceFailure("VOICE_WEBRTC_HOOK_UNAVAILABLE",
         "The ChatGPT page's RTCPeerConnection constructor could not be observed");
+      if (active.mode === "conversation" && !prepared.mic_hook_ready) {
+        throw voiceFailure("VOICE_MIC_HOOK_UNAVAILABLE",
+          "The ChatGPT page did not accept synthetic microphone interception");
+      }
 
       const baselineCount = assistantNodes().length;
       await openVoice(active);
@@ -481,6 +504,8 @@
         await sendTypedPrompt(active, prompt);
       } else {
         if (!inputData?.base64) throw new Error("Voice conversation requires an audio input file");
+        await verifyInjectedMicrophone(active);
+        if (active.cancelled) throw voiceFailure("VOICE_CANCELLED", "Voice request cancelled");
         await delay(500);
         await playVoiceInput(active);
       }
