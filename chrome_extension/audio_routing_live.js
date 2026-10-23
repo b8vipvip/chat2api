@@ -41,6 +41,12 @@
     });
   }
 
+  async function finishLiveRoute(requestId) {
+    const router = globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
+    if (typeof router?.finishLiveSession !== "function") return false;
+    return router.finishLiveSession(String(requestId || "")).catch(() => false);
+  }
+
   async function resolveLiveWorkerTab(message) {
     const routed = globalThis.chat2apiResolveRoutedWorkerTabV24;
     if (message?.routing?.api_key_id && typeof routed === "function") {
@@ -82,10 +88,12 @@
           if (!response?.ok) throw new Error(response?.error || "GPT-Live tab rejected the live session");
         }).catch(error => {
           liveTabs.delete(requestId);
+          finishLiveRoute(requestId).catch(() => false);
           reportError(requestId, error).catch(() => {});
         });
       } catch (error) {
         liveTabs.delete(requestId);
+        await finishLiveRoute(requestId);
         await reportError(requestId, error);
       }
       return;
@@ -119,7 +127,12 @@
         await chrome.tabs.sendMessage(tabId, { type: "chat2api.voice.live.cancel", requestId });
       } else if (type === "voice.live.stop") {
         try { await chrome.tabs.sendMessage(tabId, { type: "chat2api.voice.live.stop", requestId }); }
-        finally { liveTabs.delete(requestId); }
+        finally {
+          liveTabs.delete(requestId);
+          // A live call is one continuous lease; release it only after explicit
+          // stop/disconnect, then let the router close its window after 5 seconds.
+          await finishLiveRoute(requestId);
+        }
       }
     } catch (error) {
       if (type === "voice.live.stop") liveTabs.delete(requestId);
