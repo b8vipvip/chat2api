@@ -518,7 +518,12 @@ class PlaygroundRunManager:
             )
             transcript = str(reply.get("transcript") or "")
             meta = reply.get("chat2api") or {}
+            diagnostics = meta.get("diagnostics") if isinstance(meta.get("diagnostics"), dict) else {}
             issues = ["未得到可读转写文字（已收到音频）"] if not transcript.strip() else []
+            if diagnostics.get("remote_track_seen") is not True:
+                issues.append("缺少 ChatGPT Voice 远端音轨证明")
+            if diagnostics.get("remote_sound_started") is not True:
+                issues.append("未验证远端音轨包含有效声音")
             status = "warning" if issues else "passed"
             return {
                 "kind": kind, "label": TEST_LABELS[kind], "status": status,
