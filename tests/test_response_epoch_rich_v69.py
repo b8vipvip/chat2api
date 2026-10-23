@@ -61,7 +61,7 @@ def test_generated_media_handoff_keeps_single_request_terminal_authority():
     assert 'networkText && !captureMedia && !fileCreationRequested && !imageCreationRequested' in source
     assert '!networkTerminalAt && !captureMedia' in source
     assert 'internal_tool_handoff_without_media: true' in source
-    assert 'if (mediaOutsideMarkdown) return node;' in rich
+    assert 'if (mediaOutsideMarkdown || filesOutsideMarkdown) return node;' in rich
     assert 'image_inlined_count: imageStats.inlined' in rich
     assert source.count('type: "chat.completed"') >= 2
 
