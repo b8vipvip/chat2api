@@ -185,8 +185,15 @@
   if (NativePC) {
     function WrappedRTCPeerConnection(...args) {
       const pc = new NativePC(...args);
+      const ownerRequestId = state.requestId;
       state.peerConnectionsCreated += 1;
-      pc.addEventListener("track", event => attachRemoteTrack(event.track));
+      pc.addEventListener("track", event => {
+        // A peer created by a prior Voice session can still fire a late
+        // remote-track event after the tab starts a new request. Never
+        // attribute that old audio to the new request/MediaRecorder.
+        if (!ownerRequestId || state.requestId !== ownerRequestId) return;
+        attachRemoteTrack(event.track);
+      });
       if (state.requestId) post("voice.transport.peer-created", {
         peer_connections_created: state.peerConnectionsCreated,
       });
