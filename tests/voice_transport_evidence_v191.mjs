@@ -36,6 +36,7 @@ const fakeDocument = {
 const base = {
   Date:fakeDate, Math, Number, String, Boolean,
   state:{mainSequence:0}, postMain:()=>{},
+  settleVoiceWelcome:async()=>false,
   voiceTrigger:()=>({button:{click() {}},label:"Start Voice"}),
   voiceUiReady:()=>({reason:"voice-orb"}),
   waitFor:async fn =>fn(), waitMain:async()=>null,

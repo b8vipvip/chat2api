@@ -204,17 +204,40 @@
     if (eventBucket(requestId).length > 300) eventBucket(requestId).splice(0, 150);
   });
 
-  async function openVoice(active) {
-    // A Voice orb can exist in an unfocused/background tab even though Chrome
-    // has not started microphone or WebRTC. Fail at the exact visibility gate.
-    if (document.visibilityState === "hidden") {
-      await diagnostic(active, "page-hidden-before-voice", {
-        voice_failure_code: "VOICE_PAGE_HIDDEN",
-        browser_visibility: "hidden",
-      });
-      throw voiceFailure("VOICE_PAGE_HIDDEN",
-        "ChatGPT Voice tab is hidden; foreground the Worker browser window before starting audio");
+  async function settleVoiceWelcome(active) {
+    const gate = globalThis.__CHAT2API_VOICE_UI_GATE_V185__;
+    let clicked = false;
+    // Give the first-use Meet Voice modal time to appear after Start Voice.
+    // The isolated controller owns the single click for this request.
+    const deadline = Date.now() + 3400;
+    while (Date.now() < deadline) {
+      const failure = gate?.connectionFailure?.();
+      if (failure) {
+        await diagnostic(active, "chatgpt-voice-connection-failed", {
+          voice_failure_code: failure.code, chatgpt_voice_error:failure.message,
+        });
+        throw voiceFailure(failure.code, failure.message);
+      }
+      const welcome = gate?.welcomeDialog?.();
+      if (welcome && !clicked) {
+        const action = gate.continueWelcome();
+        clicked = Boolean(action?.clicked);
+        if (clicked) await diagnostic(active, "voice-welcome-continued", {
+          voice_welcome_evidence:action.evidence,
+        });
+      }
+      await delay(120);
     }
+    return clicked;
+  }
+
+  async function openVoice(active) {
+    // Chrome reports a focused window even when its Xvfb document is hidden.
+    // Record visibility as evidence, not as permission to bypass Voice startup.
+    await diagnostic(active, "page-visibility-observed", {
+      browser_visibility: String(document.visibilityState || "unknown"),
+      browser_has_focus: typeof document.hasFocus === "function" ? Boolean(document.hasFocus()) : null,
+    });
     // Do not click Start Voice if a genuine session is already visible.
     // A generic sentence in page text is deliberately NOT proof of Voice UI.
     const preexisting = voiceUiReady();
@@ -233,6 +256,7 @@
       await diagnostic(active, "trigger-clicked");
     }
 
+    await settleVoiceWelcome(active);
     const ready = preexisting || await waitFor(() => voiceUiReady(), 20000, 150);
     if (!ready) {
       const error = pageError();
@@ -241,9 +265,30 @@
     await diagnostic(active, "ui-visible", { voice_ready_reason: ready.reason });
     // Seeing an orb is NOT proof of usable WebRTC. The actual browser must
     // request our microphone stream or expose the remote audio track.
-    const transport = await waitMain(active.requestId,
-      item => item.type === "voice.mic.synthetic" || item.type === "voice.remote.track",
-      16000);
+    let transport = null;
+    const transportDeadline = Date.now() + 16000;
+    while (Date.now() < transportDeadline) {
+      const failure = globalThis.__CHAT2API_VOICE_UI_GATE_V185__?.connectionFailure?.();
+      if (failure) {
+        postMain("voice.transport.snapshot", active);
+        const snapshot = await waitMain(active.requestId,
+          item => item.type === "voice.transport.snapshot", 1200);
+        await diagnostic(active, "chatgpt-voice-connection-failed", {
+          voice_failure_code: failure.code,
+          chatgpt_voice_error: failure.message,
+          peer_connections_in_request: Number(snapshot?.peer_connections_in_request || 0),
+          mic_requests_in_request: Number(snapshot?.mic_requests_in_request || 0),
+          ice_connection_state: String(snapshot?.ice_connection_state || "unknown"),
+          peer_connection_state: String(snapshot?.peer_connection_state || "unknown"),
+          browser_visibility: String(snapshot?.page_visibility || document.visibilityState || "unknown"),
+        });
+        throw voiceFailure(failure.code, failure.message);
+      }
+      transport = eventBucket(active.requestId).find(item =>
+        item.type === "voice.mic.synthetic" || item.type === "voice.remote.track");
+      if (transport) break;
+      await delay(100);
+    }
     if (!transport) {
       // Report what the installed MAIN-world hooks actually saw during THIS
       // request. Do not treat an earlier session's cumulative counters as
@@ -260,10 +305,13 @@
         peer_hook_still_ready: snapshot?.peer_hook_ready === true,
         mic_hook_still_ready: snapshot?.mic_hook_ready === true,
         browser_visibility: String(snapshot?.page_visibility || "unknown"),
+        ice_connection_state: String(snapshot?.ice_connection_state || "unknown"),
+        peer_connection_state: String(snapshot?.peer_connection_state || "unknown"),
+        ice_candidate_errors: Number(snapshot?.ice_candidate_errors || 0),
         transport_snapshot_received: Boolean(snapshot),
       });
       throw voiceFailure("VOICE_TRANSPORT_NOT_READY",
-        "Voice UI appeared but neither microphone acquisition nor a remote WebRTC audio track was observed");
+        "ChatGPT Voice never acquired the microphone or remote WebRTC track; inspect ICE/proxy diagnostics and Voice connection toast");
     }
     await diagnostic(active, "transport-preflight", {
       voice_ready_reason: ready.reason,

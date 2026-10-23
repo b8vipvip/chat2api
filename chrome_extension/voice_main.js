@@ -32,6 +32,9 @@
     sessionPeerCreatedBaseline: 0,
     sessionMicRequestedBaseline: 0,
     lastTransportError: "",
+    iceConnectionState: "unknown",
+    peerConnectionState: "unknown",
+    iceCandidateErrors: 0,
   };
   globalThis[KEY] = state;
 
@@ -193,6 +196,28 @@
       const pc = new NativePC(...args);
       const ownerRequestId = state.requestId;
       state.peerConnectionsCreated += 1;
+      pc.addEventListener("iceconnectionstatechange", () => {
+        if (ownerRequestId && state.requestId === ownerRequestId) {
+          state.iceConnectionState = String(pc.iceConnectionState || "unknown");
+          post("voice.transport.ice", { ice_connection_state:state.iceConnectionState }, ownerRequestId);
+        }
+      });
+      pc.addEventListener("connectionstatechange", () => {
+        if (ownerRequestId && state.requestId === ownerRequestId) {
+          state.peerConnectionState = String(pc.connectionState || "unknown");
+          post("voice.transport.connection", { peer_connection_state:state.peerConnectionState }, ownerRequestId);
+        }
+      });
+      pc.addEventListener("icecandidateerror", event => {
+        if (ownerRequestId && state.requestId === ownerRequestId) {
+          state.iceCandidateErrors += 1;
+          post("voice.transport.ice-error", {
+            error_code: Number(event?.errorCode || 0),
+            // Never log ICE candidate URLs or network addresses.
+            ice_candidate_errors: state.iceCandidateErrors,
+          }, ownerRequestId);
+        }
+      });
       pc.addEventListener("track", event => {
         // A peer created by a prior Voice session can still fire a late
         // remote-track event after the tab starts a new request. Never
@@ -326,6 +351,9 @@
       state.remoteTrackSeen = false;
       state.remoteTrackSeenAt = 0;
       state.remoteTrack = null;
+      state.iceConnectionState = "unknown";
+      state.peerConnectionState = "unknown";
+      state.iceCandidateErrors = 0;
       state.captureArmed = false;
       state.recordingStartedAt = 0;
       state.soundStarted = false;
@@ -349,6 +377,9 @@
         remote_track_seen: state.remoteTrackSeen,
         page_visibility: String(document.visibilityState || "unknown"),
         page_has_focus: typeof document.hasFocus === "function" ? Boolean(document.hasFocus()) : null,
+        ice_connection_state: state.iceConnectionState,
+        peer_connection_state: state.peerConnectionState,
+        ice_candidate_errors: state.iceCandidateErrors,
       });
     } else if (message.type === "voice.input.play" && message.request_id === state.requestId) {
       playPreparedInput().catch(error => post("voice.input.error", { error: String(error?.message || error) }));
