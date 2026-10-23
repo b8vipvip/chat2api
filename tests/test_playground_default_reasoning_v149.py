@@ -12,10 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_chat_playground_defaults_to_page_native_effort_not_medium() -> None:
     for filename in ("admin_playground_chat.js", "admin_playground_chat_v69.js"):
         source = (ROOT / "app" / filename).read_text(encoding="utf-8")
-        assert '<option value="" selected>自动（页面默认）</option>' in source
-        expected = ('if (!imageMode && model !== "gpt-5.5-mini" && $chat("pgChatReasoning").value)'
+        assert '<option value="default" selected>默认（不检查/不切换）</option>' in source
+        expected = ('if (!imageMode && model !== "gpt-5.5-mini" && $chat("pgChatReasoning").value && $chat("pgChatReasoning").value !== "default")'
                     if filename == "admin_playground_chat_v69.js"
-                    else 'if (model !== "gpt-5.5-mini" && $chat("pgChatReasoning").value)')
+                    else 'if (model !== "gpt-5.5-mini" && $chat("pgChatReasoning").value && $chat("pgChatReasoning").value !== "default")')
         assert expected in source
         if filename == "admin_playground_chat_v69.js":
             assert 'body.reasoning_effort = $chat("pgChatReasoning").value;' in source
@@ -28,7 +28,7 @@ def test_chat_playground_defaults_to_page_native_effort_not_medium() -> None:
 
 def test_automated_playground_does_not_synthesize_medium_effort() -> None:
     source = (ROOT / "app/admin_playground_lifecycle.js").read_text(encoding="utf-8")
-    assert '(document.getElementById("testReasoning")?.value || null)' in source
+    assert 'document.getElementById("testReasoning")?.value || "default"' in source
     assert '(document.getElementById("testReasoning")?.value || "medium")' not in source
     result = subprocess.run(["node", "--check", str(ROOT / "app/admin_playground_lifecycle.js")],
                             capture_output=True, text=True, check=False)
