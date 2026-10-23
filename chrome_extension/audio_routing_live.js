@@ -59,7 +59,14 @@
       try {
         const tab = await resolveLiveWorkerTab(message);
         if (!tab?.id) throw new Error("No ChatGPT tab is available for GPT-Live");
-        try { await chrome.tabs.update(tab.id, { active: true }); } catch (_) {}
+        // Reuse the same physical foreground activation as speech requests.
+        // Do not silently leave WebRTC Voice in a background/hidden document.
+        const activate = globalThis.chat2apiActivateVoiceTabV184;
+        if (typeof activate !== "function") throw new Error("Shared Voice foreground activation is unavailable");
+        const activeTab = await activate(tab);
+        if (activeTab.chat2apiWindowFocusedAfter === false) {
+          throw new Error("VOICE_WINDOW_NOT_FOCUSED: Live Voice browser window cannot be focused");
+        }
         await ensureLiveContent(tab.id);
         liveTabs.set(requestId, tab.id);
 

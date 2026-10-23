@@ -348,6 +348,7 @@
         mic_hook_ready: Boolean(state.micHookReady && mediaDevices?.getUserMedia === state.micHook),
         remote_track_seen: state.remoteTrackSeen,
         page_visibility: String(document.visibilityState || "unknown"),
+        page_has_focus: typeof document.hasFocus === "function" ? Boolean(document.hasFocus()) : null,
       });
     } else if (message.type === "voice.input.play" && message.request_id === state.requestId) {
       playPreparedInput().catch(error => post("voice.input.error", { error: String(error?.message || error) }));
