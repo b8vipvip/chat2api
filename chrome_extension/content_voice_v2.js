@@ -205,6 +205,16 @@
   });
 
   async function openVoice(active) {
+    // A Voice orb can exist in an unfocused/background tab even though Chrome
+    // has not started microphone or WebRTC. Fail at the exact visibility gate.
+    if (document.visibilityState === "hidden") {
+      await diagnostic(active, "page-hidden-before-voice", {
+        voice_failure_code: "VOICE_PAGE_HIDDEN",
+        browser_visibility: "hidden",
+      });
+      throw voiceFailure("VOICE_PAGE_HIDDEN",
+        "ChatGPT Voice tab is hidden; foreground the Worker browser window before starting audio");
+    }
     // Do not click Start Voice if a genuine session is already visible.
     // A generic sentence in page text is deliberately NOT proof of Voice UI.
     const preexisting = voiceUiReady();

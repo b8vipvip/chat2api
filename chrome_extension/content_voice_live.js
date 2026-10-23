@@ -138,6 +138,9 @@
   }
 
   async function openVoice(active) {
+    if (document.visibilityState === "hidden") {
+      throw new Error("VOICE_PAGE_HIDDEN: ChatGPT Voice tab is hidden; foreground the Worker browser window before opening Live Voice");
+    }
     const existing = voiceUiReady();
     if (!existing) {
       const trigger = await waitFor(voiceTrigger, 15000, 120);

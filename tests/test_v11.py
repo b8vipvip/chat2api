@@ -126,7 +126,8 @@ def test_voice_v4_clears_only_matching_chat2api_stale_draft() -> None:
     assert 'audio_router: "audio-routing-v4"' in routing
     assert "stale_automation_draft_cleared" in routing
     assert "stale_attachments_removed" in routing
-    assert "chrome.windows.update" not in routing
+    # Unlike text calls, WebRTC Voice requires the browser window in front.
+    assert 'chrome.windows.update(windowId, { focused: true })' in routing
 
 
 def test_file_test_v11_runs_each_document_as_single_attachment_subtest() -> None:

@@ -245,14 +245,18 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             text_by_response: dict[str, str] = {}
             while not finished:
                 event = await state.queue.get()
+                # The extension emits its existing terminal image.error with
+                # kind="voice-live". Previously that event fell through the
+                # voice-live branch (empty live_event) and was swallowed. The
+                # test then waited 55s and telemetry recorded error=null.
+                if event.get("type") == "image.error":
+                    error_message = str(event.get("error") or "ChatGPT Voice bridge failed")
+                    await send_json({
+                        "type": "error", "code": "GPT_LIVE_BROWSER_ERROR",
+                        "message": error_message, "retryable": True,
+                    })
+                    return
                 if event.get("kind") != "voice-live":
-                    if event.get("type") == "image.error":
-                        await send_json({
-                            "type": "error",
-                            "code": "GPT_LIVE_BROWSER_ERROR",
-                            "message": str(event.get("error") or "ChatGPT Voice bridge failed"),
-                            "retryable": True,
-                        })
                     continue
                 event_type = str(event.get("live_event") or "")
                 if event_type == "session.ready":
@@ -568,6 +572,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                             "session_ready": session_ready, "audio_bytes": observed_audio_bytes,
                             "input_confirmed_turns": input_confirmed,
                             "attachments_confirmed": observed_media_count,
+                            "browser_startup_error": error_message if error_message and not session_ready else None,
                         },
                         "timings": state.timings(),
                         "error": error_message or None,
