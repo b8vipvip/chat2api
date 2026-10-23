@@ -1094,7 +1094,10 @@
           active.lastCandidateReason = current.reason;
         }
       }
-      if (networkText && !isInternalMediaHandoff(networkText) && !imageBuildArtifact
+      // Media/file generation is committed only after verified archiveable bytes.
+      // Raw network snapshots can contain temporary download URLs or tool args.
+      if (networkText && !captureMedia && !fileCreationRequested && !imageCreationRequested
+          && !isInternalMediaHandoff(networkText) && !imageBuildArtifact
           && !isImageToolArguments(networkText)) {
         const preferred = preferredResponseText(lastText, networkText);
         const previous = lastText;
