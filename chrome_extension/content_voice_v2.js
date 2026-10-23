@@ -467,7 +467,8 @@
   }
 
   async function runVoice(message) {
-    if (state.active) throw new Error("This ChatGPT tab is already handling a Voice request");
+    if (state.active || globalThis.__CHAT2API_VOICE_LIVE_CONTENT_V2__?.active)
+      throw new Error("This ChatGPT tab is already handling a Voice request");
     const active = {
       requestId: message.requestId,
       mode: message.options?.mode || (message.audio ? "conversation" : "speech"),
