@@ -58,7 +58,7 @@ def test_generated_media_handoff_keeps_single_request_terminal_authority():
     assert 'networkTerminalText && !captureMedia' in source
     assert '!promptStillPresent(active)' in source
     assert 'isLocalImageBuildCommand(networkTerminalText)' in source
-    assert 'networkText && !isInternalMediaHandoff(networkText)' in source
+    assert 'networkText && !captureMedia && !fileCreationRequested && !imageCreationRequested' in source
     assert '!networkTerminalAt && !captureMedia' in source
     assert 'internal_tool_handoff_without_media: true' in source
     assert 'if (mediaOutsideMarkdown) return node;' in rich
