@@ -9,8 +9,8 @@ PATCH_VERSION = "0.21.13"
 # The historical reserve-window fields remain zero because the speculative
 # reserve pool is retired. The configured Worker window target is now an
 # explicit persistent/prewarmed physical pool owned by v132, while the legacy
-# five-minute value describes logical route compatibility only and never closes
-# physical pooled windows.
+# legacy five-minute value remains for older route compatibility. New request-scoped
+# windows close 5s after their terminal; persistent standby windows remain pool-owned.
 ROUTE_IDLE_CLOSE_SECONDS = 5 * 60
 PERSISTENT_WINDOW_IDLE_CLOSE_SECONDS = 0
 MAX_RESERVE_WINDOW_TARGET = 0
@@ -90,6 +90,9 @@ def install_v21_13_patch(app: FastAPI) -> FastAPI:
             "reserve_window_target": 0,
             "route_idle_close_seconds": ROUTE_IDLE_CLOSE_SECONDS,
             "route_idle_close_applies_to_physical_pool": False,
+            "request_window_lifecycle_revision": 189,
+            "request_window_close_after_seconds": 5,
+            "continuous_voice_session_window_lease": True,
             "max_reserve_window_target": MAX_RESERVE_WINDOW_TARGET,
             "speculative_worker_windows": False,
 
