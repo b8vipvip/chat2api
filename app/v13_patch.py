@@ -54,6 +54,8 @@ def _normalize_model(value: Any) -> str:
     # model-library resolver. This layer must not preempt it with v13's
     # historical hardcoded model list.
     raw = str(value or DEFAULT_TEXT_MODEL).strip().lower()
+    if raw in {"default", "chatgpt-web"}:
+        return "default"
     model = normalize_concrete_model_id(raw)
     if model is None or model in SPECIAL_MODELS:
         raise ValueError(f"Invalid concrete text model ID: {raw}")
@@ -61,7 +63,7 @@ def _normalize_model(value: Any) -> str:
 
 
 def _normalize_reasoning(value: Any) -> tuple[str, str] | tuple[None, None]:
-    if value is None or str(value).strip() == "":
+    if value is None or str(value).strip().lower() in {"", "default", "auto", "page-default"}:
         return None, None
     raw = str(value).strip().lower()
     normalized = REASONING_ALIASES.get(raw)
@@ -231,6 +233,10 @@ def install_v13_patch(app: FastAPI) -> FastAPI:
                 if target.get("reasoning_level"):
                     options["reasoning_level"] = target["reasoning_level"]
                     options["reasoning_effort"] = target["reasoning_effort"]
+                else:
+                    options.pop("reasoning_level", None)
+                    options.pop("reasoning_effort", None)
+                    options.pop("reasoning", None)
                 payload = {**payload, "options": options}
             return await base_send(client_id, payload)
 

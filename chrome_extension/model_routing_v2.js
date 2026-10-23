@@ -12,10 +12,12 @@
 
   function reasoningLevel(options = {}) {
     const direct = String(options.reasoning_level || "").trim().toLowerCase().replace(/_/g, "-");
+    if (["default", "auto", "page-default"].includes(direct)) return "";
     if (["instant", "low", "medium", "high", "extra-high", "xhigh"].includes(direct)) {
       return direct === "xhigh" ? "extra-high" : direct === "low" ? "instant" : direct;
     }
     const effort = String(options.reasoning_effort || "").trim().toLowerCase().replace(/_/g, "-");
+    if (["default", "auto", "page-default"].includes(effort)) return "";
     if (["low", "minimal", "none", "fast", "instant"].includes(effort)) return "instant";
     if (effort === "medium") return "medium";
     if (["high", "extended"].includes(effort)) return "high";
@@ -74,14 +76,11 @@
       }
       return requested;
     }
-    const { settings, rows } = await validatedLibrary();
+    // No model is requested: do not read catalog evidence or choose a
+    // concrete model by guessing the current/first catalog row.
+    if (!requested) return "default";
+    const { rows } = await validatedLibrary();
     if (!rows.length) throw new Error("Worker has no manually discovered text models");
-    if (!requested) {
-      const current = canonicalModel(settings.currentModel);
-      if (current && rows.some(item => item.id === current)) return current;
-      const selected = rows.find(item => item.selected)?.id;
-      return selected || rows[0].id;
-    }
     if (!rows.some(item => item.id === requested)) {
       throw new Error(`Requested model was not discovered on this Worker: ${requested}`);
     }
@@ -235,15 +234,17 @@
     let requestedModel = null;
     let requestedReasoning = reasoningLevel(message.options || {});
     try {
-      const freeDefaultCompat = message.options?.free_default_route === true;
-      requestedModel = await resolveRequestedModel(message.options?.model || message.model || "", freeDefaultCompat);
+      const defaultModelRequested = !canonicalModel(message.options?.model || message.model || "default");
+      const freeDefaultCompat = !defaultModelRequested && message.options?.free_default_route === true;
+      requestedModel = defaultModelRequested ? "default" :
+        await resolveRequestedModel(message.options?.model || message.model || "", freeDefaultCompat);
       const tab = await resolveTargetTab();
       const tabReadyMs = Date.now() - routingStarted;
       await ensureContent(tab.id);
       const preflightDiagnostics = await preflightRequest(tab.id, message);
       // A Free composer may have no model picker. Do not request an impossible
       // picker selection, and do not record the default as a verified served model.
-      const selected = freeDefaultCompat ? { current_model: null } :
+      const selected = (defaultModelRequested || freeDefaultCompat) ? { current_model: null } :
         await selectValidatedModel(tab.id, requestedModel);
       const reasoningDiagnostics = await prepareReasoning(tab.id, requestedReasoning);
       const effectiveReasoning = reasoningDiagnostics.fallback_to_page_default ? null : requestedReasoning;
@@ -252,20 +253,24 @@
         ...preflightDiagnostics,
         ...attachmentDiagnostics,
         model_library_revision: LIBRARY_REVISION,
-        model_library_authority: freeDefaultCompat ? "free-default-compatibility-unverified" : "worker-validated",
+        model_library_authority: defaultModelRequested ? "page-default-no-ui" :
+          freeDefaultCompat ? "free-default-compatibility-unverified" : "worker-validated",
         logical_requested_model: requestedModel,
+        model_default_no_ui: defaultModelRequested,
         logical_requested_reasoning: requestedReasoning || null,
-        effective_model: freeDefaultCompat ? null : requestedModel,
+        effective_model: (defaultModelRequested || freeDefaultCompat) ? null : requestedModel,
         effective_reasoning: effectiveReasoning || null,
         reasoning_default_unverified: Boolean(reasoningDiagnostics.fallback_to_page_default),
-        model_selection_validated: !freeDefaultCompat,
-        model_selection_current: freeDefaultCompat ? null : (selected.current_model || selected.model || requestedModel),
+        model_selection_validated: !defaultModelRequested && !freeDefaultCompat,
+        model_selection_current: (defaultModelRequested || freeDefaultCompat) ? null :
+          (selected.current_model || selected.model || requestedModel),
         reasoning_selection: reasoningDiagnostics,
         tab_ready_ms: tabReadyMs,
         routing_ms: Date.now() - routingStarted,
         tab_id: tab.id,
       };
-      await persistPrepared(requestedModel, effectiveReasoning, diagnostics);
+      // A no-selection call must not replace trusted current-model catalog state.
+      if (!defaultModelRequested) await persistPrepared(requestedModel, effectiveReasoning, diagnostics);
       await trySendSocket({ type: "chat.diagnostics", request_id: message.request_id, diagnostics });
       const dispatchOptions = { ...(message.options || {}) };
       if (reasoningDiagnostics.fallback_to_page_default) {
@@ -286,12 +291,12 @@
           // server-authoritative transport model.
           model: "chatgpt-web",
           requested_model: requestedModel,
-          effective_model: freeDefaultCompat ? null : requestedModel,
+          effective_model: (defaultModelRequested || freeDefaultCompat) ? null : requestedModel,
           requested_reasoning: effectiveReasoning || null,
           effective_reasoning: effectiveReasoning || null,
-          model_prepared: true,
-          model_selection_strategy: freeDefaultCompat ?
-            "free-default-compatibility-unverified" : "worker-model-library-v145",
+          model_prepared: !defaultModelRequested && !freeDefaultCompat,
+          model_selection_strategy: defaultModelRequested ? "page-default-no-ui" :
+            freeDefaultCompat ? "free-default-compatibility-unverified" : "worker-model-library-v145",
           chat2api_diagnostics: diagnostics,
         },
       });
@@ -307,7 +312,7 @@
         model_selection_after: Array.isArray(error?.model_after) ? error.model_after.slice(0,15) : [],
         logical_requested_model: requestedModel,
         logical_requested_reasoning: requestedReasoning || null,
-        effective_model: requestedModel,
+        effective_model: requestedModel === "default" ? null : requestedModel,
         effective_reasoning: requestedReasoning || null,
         model_library_revision: LIBRARY_REVISION,
         routing_ms: Date.now() - routingStarted,
