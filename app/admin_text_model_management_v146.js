@@ -74,11 +74,13 @@
     if (!element) return;
     const previous = element.value;
     const models = rows.filter(row => row.enabled).sort((a,b) => a.id.localeCompare(b.id));
-    const options = models.map(row => ({id:row.id,label:row.id}));
+    const options = [{id:"default",label:"默认（使用 ChatGPT 页面当前模型）"}, ...models
+      .filter(row => row.id !== "default")
+      .map(row => ({id:row.id,label:row.id}))];
     if (JSON.stringify(options) !== JSON.stringify([...element.options].map(o => ({id:o.value,label:o.textContent})))) {
       element.innerHTML = options.map(row => `<option value="${esc(row.id)}">${esc(row.label)}</option>`).join("");
     }
-    element.value = models.some(row => row.id === previous) ? previous : models[0]?.id || "";
+    element.value = options.some(row => row.id === previous) ? previous : "default";
   }
   function syncPlayground(catalog) {
     const rows = Array.isArray(catalog.data) ? catalog.data : [];
@@ -86,8 +88,8 @@
     syncSelect("pgChatModel", rows);
     const button = byId("pgChatSend");
     if (button && button.textContent === "发送") {
-      button.disabled = !rows.some(row => row.enabled);
-      button.title = button.disabled ? "文本模型管理中没有启用的模型" : "";
+      button.disabled = false;
+      button.title = "默认模式使用当前 ChatGPT 页面模型；不依赖模型发现或选择";
     }
   }
   function render(catalog) {

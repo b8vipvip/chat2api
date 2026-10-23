@@ -223,8 +223,8 @@
   panel.innerHTML = `
     <div class="pgChatHead"><div><h2>聊天对话</h2><div class="muted">通过真实 chat2api 请求与 ChatGPT 多轮对话。此模式等待完整回答后返回，以保留段落、列表、代码、表格、链接、表情和可传输图片等原始语义格式。</div></div><button class="action" id="pgChatNew">新建对话</button></div>
     <div class="pgChatToolbar">
-      <div><label>模型</label><select id="pgChatModel"><option value="gpt-5.6-sol">gpt-5.6-sol</option><option value="gpt-5.5-mini">gpt-5.5-mini</option></select></div>
-      <div><label>推理强度</label><select id="pgChatReasoning"><option value="" selected>自动（页面默认）</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option></select></div>
+      <div><label>模型</label><select id="pgChatModel"><option value="default" selected>默认（页面当前模型）</option><option value="gpt-5.6-sol">gpt-5.6-sol</option><option value="gpt-5.5-mini">gpt-5.5-mini</option></select></div>
+      <div><label>推理强度</label><select id="pgChatReasoning"><option value="default" selected>默认（不检查/不切换）</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option></select></div>
       <div><label>业务 API Key</label><div class="pgChatKeyBox"><select id="pgChatKey"><option value="">正在读取可用业务 Key…</option></select><input id="pgChatKeyInput" type="password" autocomplete="off" placeholder="粘贴业务 API Key（可选，优先使用）"></div></div>
       <div><label>本轮附件（最多 4 个）</label><input id="pgChatFiles" type="file" multiple></div>
     </div>
@@ -439,7 +439,7 @@
         // Omit an explicit chat timeout, preserving broker-owned adaptive
         // 300s text / 600s verified media handoff without a second clock.
         : {model,messages:normalizedHistory(),prompt_mode:"full",attachments:referenceFiles,stream:false};
-      if (!imageMode && model !== "gpt-5.5-mini" && $chat("pgChatReasoning").value) body.reasoning_effort = $chat("pgChatReasoning").value;
+      if (!imageMode && model !== "gpt-5.5-mini" && $chat("pgChatReasoning").value && $chat("pgChatReasoning").value !== "default") body.reasoning_effort = $chat("pgChatReasoning").value;
       const response = await fetch(imageMode ? "/v1/images/generations" : "/v1/chat/completions", {
         method:"POST",headers:{...headers(credential.token),"Content-Type":"application/json",
           "X-Chat2API-Request-ID": imageMode ? requestId.replace(/^req_/, "imgreq_") : requestId},
