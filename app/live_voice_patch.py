@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import re
 import secrets
 import time
 import uuid
@@ -13,6 +14,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
 from .api_keys import ApiPrincipal
+from .responses_multimodal_input_v183 import attachment_specs
 
 LIVE_PROTOCOL_VERSION = "chat2api-live-v1"
 SUPPORTED_MODELS = {"gpt-live", "gpt-live-mini"}
@@ -64,10 +66,47 @@ def _input_text_from_control(control: Any) -> str:
     return "\n".join(parts).strip()
 
 
+def _media_ids_from_control(control: dict[str, Any]) -> list[str]:
+    """FileStore IDs only; no arbitrary URLs/base64 over a live control frame."""
+    kind = str(control.get("type") or "")
+    parts = []
+    if kind == "input_media":
+        parts = control.get("attachments") or []
+    elif kind == "conversation.item.create":
+        item = control.get("item") if isinstance(control.get("item"), dict) else {}
+        parts = item.get("content") or []
+    if isinstance(parts, str) and kind == "conversation.item.create":
+        return []
+    if not isinstance(parts, list):
+        raise ValueError("Media content must be an array")
+    ids: list[str] = []
+    for part in parts:
+        if isinstance(part, str) and kind == "conversation.item.create":
+            continue
+        if not isinstance(part, dict):
+            raise ValueError("Media item must be an object")
+        ptype = str(part.get("type") or "")
+        if ptype in {"input_text", "text"}:
+            continue
+        if ptype not in {"input_image", "input_file", "image_url", "file"}:
+            raise ValueError(f"Unsupported live media part: {ptype}")
+        ref = part.get("file_id")
+        if ref is None and isinstance(part.get("image_url"), str):
+            ref = part["image_url"]
+        if not isinstance(ref, str) or not ref.startswith("file_"):
+            raise ValueError("Live images/files require an uploaded file_id (no remote URLs)")
+        ids.append(ref)
+    if len(ids) > 4:
+        raise ValueError("At most four media attachments per turn")
+    return list(dict.fromkeys(ids))
+
+
 def install_live_voice_patch(app: FastAPI) -> FastAPI:
     registry = app.state.registry
     broker = app.state.broker
     api_keys = app.state.api_keys
+    file_store = app.state.file_store
+    telemetry = app.state.telemetry
     realtime_sessions: dict[str, tuple[float, ApiPrincipal]] = {}
     realtime_sessions_lock = asyncio.Lock()
 
@@ -158,7 +197,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             "websocket_path": f"/v1/audio/realtime?session_token={token}",
             "input_audio_format": "pcm16le-16000-mono",
             "output_audio_format": "pcm16le-24000-mono",
-            "supports": ["binary_pcm_input", "binary_pcm_output", "input_text", "conversation.item.create", "barge_in"],
+            "supports": ["binary_pcm_input", "binary_pcm_output", "input_text", "conversation.item.create", "input_media", "barge_in"],
         }
 
     @app.websocket("/v1/audio/realtime")
@@ -182,6 +221,12 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         finished = False
         requested_model = "gpt-live"
         effective_model = "gpt-live"
+        observed_audio_bytes = 0
+        observed_media_count = 0
+        input_confirmed = 0
+        session_ready = False
+        error_message = ""
+        graceful_finish = False
 
         # Session controls and remote audio are sent from separate coroutines.
         # Serialize WebSocket sends so binary PCM frames cannot collide with
@@ -195,7 +240,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 await websocket.send_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
         async def relay_extension_events() -> None:
-            nonlocal finished
+            nonlocal finished, observed_audio_bytes, observed_media_count, input_confirmed, session_ready, error_message
             assert state is not None
             text_by_response: dict[str, str] = {}
             while not finished:
@@ -211,6 +256,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     continue
                 event_type = str(event.get("live_event") or "")
                 if event_type == "session.ready":
+                    session_ready = True
                     payload: dict[str, object] = {
                         "type": "session.ready",
                         "session_id": session_id,
@@ -219,7 +265,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "effective_model": effective_model,
                         "input_audio_format": "pcm16le-16000-mono",
                         "output_audio_format": "pcm16le-24000-mono",
-                        "supports": ["input_text", "conversation.item.create"],
+                        "supports": ["input_text", "conversation.item.create", "input_media", "image_file_id", "document_file_id"],
                     }
                     if requested_model != effective_model:
                         payload["model_alias_of"] = effective_model
@@ -229,10 +275,26 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 elif event_type == "input.speech_stopped":
                     await send_json({"type": "input_audio_buffer.speech_stopped"})
                 elif event_type == "input.text.sent":
+                    input_confirmed += 1
                     await send_json({
                         "type": "input_text.sent",
                         "item_id": str(event.get("item_id") or ""),
                         "text": str(event.get("text") or ""),
+                    })
+                elif event_type == "input.media.sent":
+                    input_confirmed += 1
+                    observed_media_count += int(event.get("attachment_count") or 0)
+                    await send_json({
+                        "type": "input_media.sent",
+                        "item_id": str(event.get("item_id") or ""),
+                        "attachment_count": int(event.get("attachment_count") or 0),
+                    })
+                elif event_type == "input.error":
+                    await send_json({
+                        "type": "error", "code": "VOICE_CALL_INPUT_FAILED",
+                        "item_id": str(event.get("item_id") or ""),
+                        "message": str(event.get("message") or "Media input was not accepted by the ChatGPT Voice composer"),
+                        "retryable": True,
                     })
                 elif event_type == "transcript.final":
                     text = str(event.get("text") or "").strip()
@@ -269,6 +331,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         if audio and not finished:
                             async with ws_send_lock:
                                 await websocket.send_bytes(audio)
+                            observed_audio_bytes += len(audio)
                 elif event_type == "response.audio.done":
                     response_id = str(event.get("response_id") or "")
                     if response_id:
@@ -293,6 +356,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     await send_json({"type": "session.closed", "session_id": session_id})
                     return
                 elif event_type == "error":
+                    error_message = str(event.get("message") or "GPT-Live bridge error")
                     await send_json({
                         "type": "error",
                         "code": str(event.get("code") or "GPT_LIVE_ERROR"),
@@ -321,10 +385,31 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 await send_json({"type": "error", "code": "UNSUPPORTED_MODEL", "message": f"Unsupported Live model: {requested_model}"})
                 return
             effective_model = MODEL_ALIASES.get(requested_model, requested_model)
+            provided_request_id = str(start.get("request_id") or "")
+            if provided_request_id:
+                if not re.fullmatch(r"voicereq_[A-Za-z0-9_-]{8,120}", provided_request_id):
+                    await send_json({"type": "error", "code": "INVALID_REQUEST_ID", "message": "Invalid Voice call request ID"})
+                    return
+                request_id = provided_request_id
             requested_client = str(start.get("client_id") or client_id or "").strip() or None
             selected_client = resolve_idle_client(requested_client, principal)
             state = await broker.create(request_id, selected_client)
             registry.busy_clients.add(selected_client)
+            await telemetry.append({
+                "request_id": request_id,
+                "response_id": session_id,
+                "client_id": selected_client,
+                "api_key_id": principal.key_id,
+                "api_key_name": principal.name,
+                "auth_kind": principal.kind,
+                "requested_model": effective_model,
+                "request_type": "voice_call",
+                "stream": True, "prompt_mode": "voice-call",
+                "prompt_chars": len(str(start.get("instructions") or "")),
+                "attachments_count": 0,
+                "status": "running",
+                "diagnostics": {"route": "chatgpt-voice-live", "session_id": session_id},
+            })
             await registry.send(
                 selected_client,
                 {
@@ -377,46 +462,73 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "request_id": request_id,
                         "session_id": session_id,
                     })
-                elif control_type in {"input_text", "conversation.item.create"}:
-                    input_text = _input_text_from_control(control)
-                    if not input_text:
-                        await send_json({
-                            "type": "error",
-                            "code": "INVALID_INPUT_TEXT",
-                            "message": "Text control must contain a non-empty user input_text value",
-                            "retryable": False,
-                        })
+                elif control_type in {"input_text", "conversation.item.create", "input_media"}:
+                    item = control.get("item") if isinstance(control.get("item"), dict) else {}
+                    if control_type == "conversation.item.create" and item.get("role", "user") != "user":
+                        await send_json({"type": "error", "code": "INVALID_ITEM_ROLE", "message": "Only user input is accepted"})
+                        continue
+                    input_text = (
+                        str(control.get("text") or "").strip()
+                        if control_type == "input_media"
+                        else _input_text_from_control(control)
+                    )
+                    try:
+                        file_ids = _media_ids_from_control(control)
+                        attachments = attachment_specs(file_store, file_ids, principal)
+                        for spec in attachments:
+                            mime = str(spec.get("mime_type") or "").lower()
+                            allowed = (
+                                mime in {"image/png", "image/jpeg", "image/webp", "image/gif",
+                                         "application/pdf", "text/plain", "text/csv",
+                                         "text/markdown", "application/json",
+                                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+                            )
+                            if not allowed:
+                                raise ValueError("Live image/file MIME is not supported; send PCM as binary microphone frames")
+                    except HTTPException as error:
+                        await send_json({"type": "error", "code": "MEDIA_ACCESS_DENIED", "message": str(error.detail), "retryable": False})
+                        continue
+                    except ValueError as error:
+                        await send_json({"type": "error", "code": "INVALID_MEDIA_INPUT", "message": str(error), "retryable": False})
+                        continue
+                    if not input_text and not attachments:
+                        await send_json({"type": "error", "code": "EMPTY_INPUT", "message": "Provide text, image or file", "retryable": False})
                         continue
                     if len(input_text) > 12000:
-                        await send_json({
-                            "type": "error",
-                            "code": "INPUT_TEXT_TOO_LONG",
-                            "message": "Live text input is limited to 12000 characters",
-                            "retryable": False,
-                        })
+                        await send_json({"type": "error", "code": "INPUT_TEXT_TOO_LONG", "message": "Live text input is limited to 12000 characters", "retryable": False})
                         continue
-                    item_id = str(control.get("item_id") or (control.get("item") or {}).get("id") or f"item_{uuid.uuid4().hex}")
+                    item_id = str(control.get("item_id") or item.get("id") or f"item_{uuid.uuid4().hex}")[:120]
                     await registry.send(selected_client, {
-                        "type": "voice.live.text",
+                        "type": "voice.live.multimodal" if attachments else "voice.live.text",
                         "request_id": request_id,
                         "session_id": session_id,
                         "item_id": item_id,
                         "text": input_text,
+                        "attachments": attachments,
                     })
-                    await send_json({"type": "input_text.queued", "item_id": item_id, "text": input_text})
+                    await send_json({
+                        "type": "input_media.queued" if attachments else "input_text.queued",
+                        "item_id": item_id, "text": input_text,
+                        **({"attachment_count": len(attachments)} if attachments else {}),
+                    })
                 elif control_type == "session.finish":
+                    graceful_finish = True
                     break
                 elif control_type == "ping":
                     await send_json({"type": "pong", "timestamp": control.get("timestamp")})
         except (WebSocketDisconnect, asyncio.CancelledError):
-            pass
+            error_message = error_message or "client-disconnected"
         except asyncio.TimeoutError:
+            error_message = "SESSION_START_TIMEOUT"
             with suppress(Exception):
                 await send_json({"type": "error", "code": "SESSION_START_TIMEOUT", "message": "Timed out waiting for session.start"})
         except (LookupError, KeyError, ConnectionError, RuntimeError) as error:
+            error_message = str(error)
             with suppress(Exception):
                 await send_json({"type": "error", "code": "GPT_LIVE_UNAVAILABLE", "message": str(error), "retryable": True})
         except Exception as error:
+            error_message = str(error)
             with suppress(Exception):
                 await send_json({"type": "error", "code": "GPT_LIVE_BRIDGE_ERROR", "message": str(error), "retryable": True})
         finally:
@@ -435,6 +547,31 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             if selected_client:
                 registry.busy_clients.discard(selected_client)
             if state is not None:
+                state.completed_mono = state.completed_mono or time.perf_counter()
+                with suppress(Exception):
+                    await telemetry.append({
+                        "request_id": request_id,
+                        "response_id": session_id,
+                        "client_id": selected_client,
+                        "api_key_id": principal.key_id,
+                        "api_key_name": principal.name,
+                        "auth_kind": principal.kind,
+                        "requested_model": effective_model,
+                        "request_type": "voice_call",
+                        "stream": True, "prompt_mode": "voice-call",
+                        "status": "completed" if graceful_finish or (session_ready and observed_audio_bytes) else
+                                  "cancelled" if error_message == "client-disconnected" else "error",
+                        "attachments_count": observed_media_count,
+                        "audio_bytes": observed_audio_bytes,
+                        "diagnostics": {
+                            "route": "chatgpt-voice-live", "session_id": session_id,
+                            "session_ready": session_ready, "audio_bytes": observed_audio_bytes,
+                            "input_confirmed_turns": input_confirmed,
+                            "attachments_confirmed": observed_media_count,
+                        },
+                        "timings": state.timings(),
+                        "error": error_message or None,
+                    })
                 await broker.release(request_id)
             with suppress(Exception):
                 await websocket.close(code=1000)

@@ -139,9 +139,9 @@ def test_live_voice_routes_text_to_same_bound_tab_without_stopping_audio() -> No
     routing = (EXTENSION / "audio_routing_live.js").read_text(encoding="utf-8")
     content = (EXTENSION / "content_voice_live_text_v24.js").read_text(encoding="utf-8")
 
-    assert 'control_type in {"input_text", "conversation.item.create"}' in server
-    assert '"type": "voice.live.text"' in server
-    assert '"type": "input_text.queued"' in server
+    assert 'control_type in {"input_text", "conversation.item.create", "input_media"}' in server
+    assert '"voice.live.multimodal" if attachments else "voice.live.text"' in server
+    assert '"input_media.queued" if attachments else "input_text.queued"' in server
     assert 'event_type == "input.text.sent"' in server
     assert '"type": "input_text.sent"' in server
     assert 'type === "voice.live.text"' in routing

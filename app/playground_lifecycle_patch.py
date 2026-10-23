@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import io
+import wave
 import binascii
 import json
 import logging
@@ -16,19 +18,21 @@ from fastapi.responses import JSONResponse, Response
 
 from .api_keys import ApiPrincipal
 from .models import PlaygroundRunRequest
+from .playground_voice_call_v195 import probe_voice_call
 from .timezone_utils import beijing_now_iso
 
 
 PATCH_ID = "playground-lifecycle-v1"
 TERMINAL_RUN_STATUSES = {"passed", "warning", "failed", "skipped", "cancelled", "stalled"}
-TEST_KINDS = ["text", "vision", "file", "image_generation", "voice_generation", "voice_conversation"]
+TEST_KINDS = ["text", "vision", "file", "image_generation", "voice_generation", "voice_call"]
 TEST_LABELS = {
     "text": "文本",
     "vision": "视觉理解",
     "file": "文件理解",
     "image_generation": "图片生成",
     "voice_generation": "语音生成",
-    "voice_conversation": "语音对话",
+    "voice_conversation": "语音通话",
+    "voice_call": "语音通话",
 }
 logger = logging.getLogger("chat2api.playground")
 VOICE_TRANSPORT_MODEL = "gpt-live"
@@ -117,7 +121,7 @@ class PlaygroundRunManager:
                 planned[kind] = "req_" + uuid.uuid4().hex
             elif kind == "image_generation":
                 planned[kind] = "imgreq_" + uuid.uuid4().hex
-            elif kind in {"voice_generation", "voice_conversation"}:
+            elif kind in {"voice_generation", "voice_conversation", "voice_call"}:
                 planned[kind] = "voicereq_" + uuid.uuid4().hex
                 if kind == "voice_conversation" and not self._has_audio(body):
                     # The sample itself is real speech generated via the public
@@ -467,6 +471,7 @@ class PlaygroundRunManager:
         uploaded: list[dict[str, Any]],
         setup_request_id: str | None = None,
         selected_model: str,
+        voice_test_text: str | None = None,
     ) -> dict[str, Any]:
         started = time.perf_counter()
         stage = "speech" if kind == "voice_generation" else "conversation"
@@ -508,7 +513,7 @@ class PlaygroundRunManager:
                 uploaded.append(audio_item)
             stage = "voice-dispatch"
             payload = (
-                {"input": "请用普通话自然、清晰地说：chat2api 语音生成测试成功。"}
+                {"input": voice_test_text or "请用普通话自然、清晰地说：chat2api 语音生成测试成功。"}
                 if kind == "voice_generation"
                 else {
                     "audio_file_id": str(audio_item["id"]),
@@ -570,6 +575,75 @@ class PlaygroundRunManager:
                 "failure_stage": stage,
             }
 
+    async def _run_voice_call(
+        self, *, token: str, request_id: str, uploaded: list[dict[str, Any]],
+        body: PlaygroundRunRequest,
+    ) -> dict[str, Any]:
+        """Validate the actual full-duplex ChatGPT Voice WS, not a text fallback."""
+        started = time.perf_counter()
+        stage = "voice-call-start"
+        try:
+            attachments = [
+                item for item in uploaded
+                if not str(item.get("mime_type") or "").lower().startswith("audio/")
+            ][:4]
+            pcm = b""
+            uploaded_audio = next(
+                (item for item in body.files if str(item.mime_type or "").lower().startswith("audio/")), None
+            )
+            audio_note = ""
+            if uploaded_audio:
+                if str(uploaded_audio.mime_type or "").lower() in {"audio/wav", "audio/x-wav", "audio/wave"}:
+                    with wave.open(io.BytesIO(base64.b64decode(uploaded_audio.data_base64)), "rb") as wav:
+                        if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate(), wav.getcomptype()) != (1, 2, 16000, "NONE"):
+                            raise RuntimeError("语音通话测试只接受单声道 16kHz 16bit PCM WAV 音频")
+                        pcm = wav.readframes(wav.getnframes())
+                else:
+                    audio_note = "该格式不能作为原始 PCM16 流播放；请上传单声道 16kHz PCM WAV 测试上行语音"
+            stage = "live-websocket-call"
+            proof = await asyncio.wait_for(probe_voice_call(
+                self.app, token=token, request_id=request_id,
+                attachments=attachments, pcm16=pcm,
+                text=body.voice_test_text or (
+                    "请分析通话中发送的图片或文件，保持语音通话不中断，以普通话语音回应。"
+                    if attachments else "请用普通话自然地说：chat2api 语音通话测试成功。"
+                ),
+            ), timeout=175)
+            issues = []
+            if not pcm:
+                issues.append(audio_note or "未上传 PCM16 16kHz WAV，未验证麦克风音频上行")
+            if proof.get("reverse_proxy_not_tested"):
+                issues.append("已测试服务端 ASGI WebSocket；公网反向代理 Upgrade 仍需实测")
+            status = "warning" if issues else "passed"
+            return {
+                "kind": "voice_call", "label": "语音通话", "status": status,
+                "message": "；".join(issues) if issues else "已收到真实 ChatGPT Voice PCM 语音",
+                "request_id": request_id, "total_ms": (time.perf_counter() - started) * 1000,
+                "audio_bytes": proof["audio_bytes"], "audio_frames": proof["audio_frames"],
+                "audio_mime_type": "audio/pcm;rate=24000;channels=1",
+                "transcript_preview": proof["transcript"],
+                "effective_model": VOICE_TRANSPORT_MODEL, "selected_text_model": body.model,
+                "attachments_sent": proof["attachments_count"], "media_confirmed": proof["media_sent"],
+                "input_pcm_bytes": proof["input_pcm_bytes"],
+                "quality": {
+                    "grade": status, "issues": issues, "audio_bytes": proof["audio_bytes"],
+                    "audio_frames": proof["audio_frames"], "transport": proof["transport"],
+                    "attachments_confirmed": proof["attachments_count"] if proof["media_sent"] else 0,
+                },
+            }
+        except Exception as error:
+            row = self.telemetry.get(request_id) or {}
+            evidence = row.get("diagnostics") if isinstance(row.get("diagnostics"), dict) else {}
+            return {
+                "kind": "voice_call", "label": "语音通话", "status": "failed",
+                "message": f"{stage}: {error}", "error": str(error),
+                "request_id": request_id, "failure_stage": stage,
+                "request_status": row.get("status") or "not-dispatched",
+                "voice_failure_code": evidence.get("voice_failure_code"),
+                "total_ms": (time.perf_counter() - started) * 1000,
+                "effective_model": VOICE_TRANSPORT_MODEL, "selected_text_model": body.model,
+            }
+
     async def _run_kind(
         self,
         client: httpx.AsyncClient,
@@ -581,6 +655,12 @@ class PlaygroundRunManager:
         uploaded: list[dict[str, Any]],
         setup_request_id: str | None = None,
     ) -> dict[str, Any]:
+        if kind == "voice_call":
+            if not request_id:
+                raise RuntimeError("Missing planned Voice call request ID")
+            return await self._run_voice_call(
+                token=token, request_id=request_id, uploaded=uploaded, body=body,
+            )
         if kind in {"voice_generation", "voice_conversation"}:
             if not request_id:
                 raise RuntimeError(f"Missing planned Voice request ID: {kind}")
@@ -593,6 +673,7 @@ class PlaygroundRunManager:
                     if kind == "voice_conversation" else None
                 ),
                 selected_model=body.model,
+                voice_test_text=body.voice_test_text,
             )
         if kind == "vision":
             attachment = self._file_for(uploaded, True)

@@ -132,7 +132,22 @@
     } catch (_) {}
   }
 
+  // Only one turn may own the ChatGPT composer at a time. Voice/audio
+  // streaming continues independently while upload + send is in progress.
+  let turnQueue = Promise.resolve();
+  function queueTurn(task) {
+    const next = turnQueue.catch(() => {}).then(task);
+    turnQueue = next.catch(() => {});
+    return next;
+  }
+
+  function assertLiveTurnOwner(active) {
+    if (active.stopped || globalThis.__CHAT2API_VOICE_LIVE_CONTENT_V2__?.active !== active)
+      throw new Error("Voice call ended before this input could be sent");
+  }
+
   async function sendLiveText(active, itemId, text) {
+    assertLiveTurnOwner(active);
     const target = normalize(text);
     if (!target) throw new Error("Live text input is empty");
     const composer = await waitFor(findComposer, 8000, 100);
@@ -146,6 +161,7 @@
       return value === target || (target.length > 6 && value.includes(target));
     }, 3500, 80);
     if (!retained) throw new Error("Live text input could not be retained in the ChatGPT composer");
+    assertLiveTurnOwner(active);
 
     const button = await waitFor(() => {
       const value = sendButton();
@@ -169,8 +185,30 @@
         normalize(node.innerText || node.textContent || "").includes(target));
     }, 10000, 120);
     if (!confirmed) throw new Error("ChatGPT Voice did not confirm the live text in a user conversation turn");
+    assertLiveTurnOwner(active);
 
     await emitLive(active, "input.text.sent", { item_id: itemId || "", text });
+  }
+
+  async function sendLiveMedia(active, itemId, text, attachments) {
+    assertLiveTurnOwner(active);
+    if (!Array.isArray(attachments) || !attachments.length || attachments.length > 4)
+      throw new Error("Live media message requires 1-4 uploaded attachments");
+    if (!globalThis.__CHAT2API_MULTIMODAL_V4__?.attach)
+      throw new Error("ChatGPT multimodal upload controller is not available");
+    // Reuse the canonical Worker v78 upload and settle evidence. No competing
+    // uploader, fallback automation, or terminal decision is introduced.
+    const upload = await globalThis.__CHAT2API_MULTIMODAL_V4__.attach(attachments);
+    if (upload.attachment_verified !== true || upload.attachments_count !== attachments.length)
+      throw new Error("ChatGPT did not confirm all live media attachments");
+    assertLiveTurnOwner(active);
+    const instruction = String(text || "").trim()
+      || "请直接理解我在通话中发送的图片或文件，并用语音回答，不要结束语音通话。";
+    await sendLiveText(active, itemId, instruction);
+    await emitLive(active, "input.media.sent", {
+      item_id: itemId || "",
+      attachment_count: attachments.length,
+    });
   }
 
   async function emitTerminal(requestId) {
@@ -196,9 +234,21 @@
         sendResponse({ ok: false, error: "Live session is not active" });
         return false;
       }
-      sendLiveText(active, String(message.itemId || ""), String(message.text || ""))
+      queueTurn(() => sendLiveText(active, String(message.itemId || ""), String(message.text || "")))
         .then(() => sendResponse({ ok: true, controller: "voice-live-text-v24" }))
         .catch(error => sendResponse({ ok: false, error: String(error?.message || error), controller: "voice-live-text-v24" }));
+      return true;
+    }
+    if (message.type === "chat2api.voice.live.multimodal") {
+      const active = state?.active;
+      if (!active || active.requestId !== message.requestId) {
+        sendResponse({ ok: false, error: "Live session is not active" });
+        return false;
+      }
+      queueTurn(() => sendLiveMedia(active, String(message.itemId || ""),
+        String(message.text || ""), message.attachments || []))
+        .then(() => sendResponse({ ok: true, controller: "voice-live-multimodal-v195" }))
+        .catch(error => sendResponse({ ok: false, error: String(error?.message || error), controller: "voice-live-multimodal-v195" }));
       return true;
     }
     if (message.type === "chat2api.voice.live.stop") {
