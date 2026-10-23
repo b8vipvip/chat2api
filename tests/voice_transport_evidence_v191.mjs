@@ -79,7 +79,7 @@ context.sendButton = ()=>({click() { submitCount++; turnSeen=true; }});
 await context.voiceApi.sendTypedPrompt({requestId:"v3",mode:"speech"},"chat2api spoken prompt");
 assert.equal(submitCount,2);
 assert.ok(stages.some(x=>x.stage==="prompt-accepted"));
-assert.equal(context.voiceApi.normVoiceText("文本\\n  多行"),"文本 多行",
+assert.equal(context.voiceApi.normVoiceText("文本\n  多行"),"文本 多行",
   "Voice prompt comparison must normalize actual Unicode layout whitespace");
 
 // Transport and the initial ChatGPT greeting may be audible *before* the
