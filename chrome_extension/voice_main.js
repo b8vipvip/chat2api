@@ -15,6 +15,8 @@
     recorderMime: "",
     remoteTrackSeen: false,
     remoteTrackSeenAt: 0,
+    remoteTrack: null,
+    captureArmed: false,
     recordingStartedAt: 0,
     lastSoundAt: 0,
     soundStarted: false,
@@ -105,12 +107,12 @@
     }
   }
 
-  function attachRemoteTrack(track) {
-    if (!state.requestId || !track || track.kind !== "audio" || track.readyState === "ended") return;
-    const ownerRequestId = state.requestId;
-    state.remoteTrackSeen = true;
-    state.remoteTrackSeenAt = performance.now();
-    post("voice.remote.track", { track_state: track.readyState || "live" }, ownerRequestId);
+  // The remote WebRTC track proves the transport exists. It is NOT itself
+  // permission to record a response: the Voice orb/welcome audio can play
+  // before our prompt or uploaded microphone input has been accepted.
+  function startCapture(track, ownerRequestId) {
+    if (!state.captureArmed || state.requestId !== ownerRequestId ||
+        !track || track.kind !== "audio" || track.readyState === "ended") return;
     if (state.recorder && state.recorder.state !== "inactive") return;
     try {
       const stream = new MediaStream([track]);
@@ -158,6 +160,18 @@
     } catch (error) {
       post("voice.record.error", { error: String(error?.message || error) }, ownerRequestId);
     }
+  }
+
+  function attachRemoteTrack(track) {
+    if (!state.requestId || !track || track.kind !== "audio" || track.readyState === "ended") return;
+    const ownerRequestId = state.requestId;
+    state.remoteTrack = track;
+    state.remoteTrackSeen = true;
+    state.remoteTrackSeenAt = performance.now();
+    post("voice.remote.track", { track_state: track.readyState || "live" }, ownerRequestId);
+    // A track arriving *after* the confirmed input still works; if it arrived
+    // before the input, voice.record.arm will start capture from this track.
+    if (state.captureArmed) startCapture(track, ownerRequestId);
   }
 
   // This MAIN-world script is declared at document_start: it must install
@@ -290,6 +304,9 @@
       state.preparedInput = message.input_base64 ? { base64: message.input_base64, mime_type: message.input_mime || "" } : null;
       state.remoteTrackSeen = false;
       state.remoteTrackSeenAt = 0;
+      state.remoteTrack = null;
+      state.captureArmed = false;
+      state.recordingStartedAt = 0;
       state.soundStarted = false;
       state.lastSoundAt = 0;
       post("voice.prepared", {
@@ -304,6 +321,14 @@
       });
     } else if (message.type === "voice.input.play" && message.request_id === state.requestId) {
       playPreparedInput().catch(error => post("voice.input.error", { error: String(error?.message || error) }));
+    } else if (message.type === "voice.record.arm" && message.request_id === state.requestId) {
+      state.captureArmed = true;
+      const track = state.remoteTrack;
+      const hasTrack = Boolean(track && track.kind === "audio" && track.readyState !== "ended");
+      // The acknowledgement is independent of recorder readiness; the
+      // existing response-state guard verifies that MediaRecorder starts.
+      post("voice.record.armed", { remote_track_seen: hasTrack });
+      if (hasTrack) startCapture(track, state.requestId);
     } else if (message.type === "voice.record.stop" && message.request_id === state.requestId) {
       if (state.recorder && state.recorder.state !== "inactive") state.recorder.stop();
       else post("voice.record.error", { error: "Remote voice audio track was not captured" });
@@ -313,6 +338,8 @@
       }
       state.requestId = null;
       state.preparedInput = null;
+      state.captureArmed = false;
+      state.remoteTrack = null;
     }
   });
 })();
