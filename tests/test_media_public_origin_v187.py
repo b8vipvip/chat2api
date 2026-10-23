@@ -61,8 +61,8 @@ def test_only_media_archive_urls_change_not_existing_objects(tmp_path):
 def test_all_public_media_api_routes_use_same_https_projection():
     from pathlib import Path
     source = (Path(__file__).resolve().parents[1] / "app/main.py").read_text(encoding="utf8")
-    assert source.count('media_archive._config().get("public_base_url") or media_base_for_request(request)') == 2, (
-        "metadata and Images URL mode must share the chat archive's HTTPS origin handling"
+    assert source.count('media_archive._config().get("public_base_url") or media_base_for_request(request)') == 3, (
+        "media, generated-file metadata, and Images URL mode must share the chat archive's HTTPS origin handling"
     )
     assert 'media_archive._config().get("public_base_url") or str(request.base_url)' not in source
     assert source.count('media_base_for_request(request),') == 2, (

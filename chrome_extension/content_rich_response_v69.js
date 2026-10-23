@@ -205,7 +205,8 @@
         candidateImage(img) && !selected.contains(img));
       const filesOutsideMarkdown = [...node.querySelectorAll(FILE_ANCHORS)].some(anchor =>
         recognizedFile(anchor) && !selected.contains(anchor));
-      if (mediaOutsideMarkdown || filesOutsideMarkdown) return node;
+      if (mediaOutsideMarkdown) return node;
+      if (filesOutsideMarkdown) return node;
     }
     return selected;
   }
