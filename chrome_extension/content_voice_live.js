@@ -137,30 +137,52 @@
     state.transcriptTimer = null;
   }
 
-  async function openVoice(active) {
-    if (document.visibilityState === "hidden") {
-      throw new Error("VOICE_PAGE_HIDDEN: ChatGPT Voice tab is hidden; foreground the Worker browser window before opening Live Voice");
+  async function settleVoiceWelcome() {
+    const gate = globalThis.__CHAT2API_VOICE_UI_GATE_V185__;
+    let clicked = false;
+    const deadline = Date.now() + 3400;
+    while (Date.now() < deadline) {
+      const failure = gate?.connectionFailure?.();
+      if (failure) throw new Error(failure.code + ": " + failure.message);
+      if (!clicked && gate?.welcomeDialog?.()) {
+        clicked = Boolean(gate.continueWelcome()?.clicked);
+      }
+      await delay(120);
     }
+    return clicked;
+  }
+
+  async function waitLiveTransport(type, timeout) {
+    const deadline = Date.now() + timeout;
+    while (Date.now() < deadline) {
+      const failure = globalThis.__CHAT2API_VOICE_UI_GATE_V185__?.connectionFailure?.();
+      if (failure) throw new Error(failure.code + ": " + failure.message);
+      const found = state.mainEvents.find(item => item.type === type);
+      if (found) return found;
+      await delay(80);
+    }
+    return null;
+  }
+
+  async function openVoice(active) {
+    // Visibility is only evidence: virtual-display windows may report hidden.
     const existing = voiceUiReady();
     if (!existing) {
       const trigger = await waitFor(voiceTrigger, 15000, 120);
       if (!trigger) throw new Error("ChatGPT Voice button was not found");
       trigger.button.click();
     }
+    await settleVoiceWelcome();
     const ready = existing || await waitFor(() => voiceUiReady(), 20000, 120);
     if (!ready) throw new Error("ChatGPT Voice UI did not become ready");
     // A UI orb or WebRTC track by itself is not proof that the client can
     // send microphone PCM and receive actual audio chunks. Both halves
     // must be active before the external WebSocket receives session.ready.
-    const remote = await waitFor(
-      () => state.mainEvents.find(item => item.type === "voice.live.remote.ready"),
-      15000, 80,
-    );
+    const remote = await waitLiveTransport("voice.live.remote.ready", 15000);
     if (!remote) throw new Error("ChatGPT Voice remote WebRTC PCM processor did not become ready");
-    const microphone = await waitFor(
-      () => state.mainEvents.find(item => item.type === "voice.mic.synthetic" && Number(item.track_count || 0) > 0),
-      9000, 80,
-    );
+    const microphone = await waitLiveTransport("voice.mic.synthetic", 9000);
+    if (microphone && Number(microphone.track_count || 0) <= 0)
+      throw new Error("ChatGPT Voice returned no usable bridged microphone track");
     if (!microphone) throw new Error("ChatGPT Voice did not acquire the bridged microphone for live input");
   }
 

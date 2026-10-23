@@ -51,7 +51,7 @@
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
-        files: ["content_voice_v2.js", "content_voice_fix_v3.js", "content_voice_fix_v4.js", "content_runtime_log.js"],
+        files: ["content_voice_ui_gate_v185.js", "content_voice_v2.js", "content_voice_fix_v3.js", "content_voice_fix_v4.js", "content_runtime_log.js"],
       });
     } catch (_) {}
     await sleep(180);
