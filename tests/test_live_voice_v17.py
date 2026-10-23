@@ -1,4 +1,5 @@
 import base64
+import subprocess
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -216,6 +217,15 @@ def test_live_voice_rejects_legacy_master_key_and_wrong_key(tmp_path: Path) -> N
                     raise AssertionError("unauthorized websocket unexpectedly connected")
             except Exception:
                 pass
+
+
+def test_live_remote_track_pcm_bridge_without_media_recorder() -> None:
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        ["node", "tests/voice_live_media_bridge_v194.mjs"],
+        cwd=root, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_live_extension_assets_are_wired() -> None:

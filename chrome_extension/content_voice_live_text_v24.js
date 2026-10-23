@@ -137,6 +137,7 @@
     if (!target) throw new Error("Live text input is empty");
     const composer = await waitFor(findComposer, 8000, 100);
     if (!composer) throw new Error("ChatGPT Voice text composer is not available");
+    const baselineUsers = [...document.querySelectorAll("[data-message-author-role='user']")].filter(visible).length;
 
     setComposerText(composer, text);
     const retained = await waitFor(() => {
@@ -159,6 +160,15 @@
       sent = await waitFor(() => !composerText(findComposer()), 3500, 80);
     }
     if (!sent) throw new Error("ChatGPT Voice did not confirm the live text send action");
+
+    // Composer clearing only proves that a UI action happened; require the
+    // actual new user turn before acknowledging delivery to the API caller.
+    const confirmed = await waitFor(() => {
+      const nodes = [...document.querySelectorAll("[data-message-author-role='user']")].filter(visible);
+      return nodes.slice(baselineUsers).some(node =>
+        normalize(node.innerText || node.textContent || "").includes(target));
+    }, 10000, 120);
+    if (!confirmed) throw new Error("ChatGPT Voice did not confirm the live text in a user conversation turn");
 
     await emitLive(active, "input.text.sent", { item_id: itemId || "", text });
   }
