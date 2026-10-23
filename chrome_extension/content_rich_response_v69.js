@@ -203,7 +203,9 @@
     if (node instanceof Element && node !== selected) {
       const mediaOutsideMarkdown = [...node.querySelectorAll("img")].some(img =>
         candidateImage(img) && !selected.contains(img));
-      if (mediaOutsideMarkdown) return node;
+      const filesOutsideMarkdown = [...node.querySelectorAll(FILE_ANCHORS)].some(anchor =>
+        recognizedFile(anchor) && !selected.contains(anchor));
+      if (mediaOutsideMarkdown || filesOutsideMarkdown) return node;
     }
     return selected;
   }
@@ -235,14 +237,22 @@
     for (const button of [...clone.querySelectorAll("button")]) {
       const pictureNodes = [...button.querySelectorAll("img")]
         .filter(img => visibleMediaSources.has(String(img.getAttribute("src") || "").trim()));
-      if (pictureNodes.length) button.replaceWith(...pictureNodes.map(img => img.cloneNode(true)));
+      const fileNodes = [...button.querySelectorAll(FILE_ANCHORS)]
+        .filter(anchor => recognizedFile(anchor));
+      if (pictureNodes.length || fileNodes.length)
+        button.replaceWith(...pictureNodes.map(img => img.cloneNode(true)),
+          ...fileNodes.map(anchor => anchor.cloneNode(true)));
       else button.remove();
     }
     for (const item of [...clone.querySelectorAll(ACTION_SELECTOR)]) {
       if (!clone.contains(item)) continue;
       const pictures = [...item.querySelectorAll("img")].filter(img =>
         visibleMediaSources.has(String(img.getAttribute("src") || "").trim()));
-      if (pictures.length) item.replaceWith(...pictures.map(img => img.cloneNode(true)));
+      const files = [...item.querySelectorAll(FILE_ANCHORS)]
+        .filter(anchor => recognizedFile(anchor));
+      if (pictures.length || files.length)
+        item.replaceWith(...pictures.map(img => img.cloneNode(true)),
+          ...files.map(anchor => anchor.cloneNode(true)));
       else item.remove();
     }
     for (const svg of clone.querySelectorAll("svg")) {
