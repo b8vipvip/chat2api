@@ -341,12 +341,60 @@
     // so its text cannot always match the full prompt sent to the composer.
     active.baselineUserTurns = new Set(conversationTurns().filter(userTurn));
     active.baselinePageMedia = rich?.snapshotPageMedia?.() || null;
+    captureRenderedBaseline(active);
     active.baselineCapturedAt = Date.now();
+  }
+
+  const RENDERED_ASSISTANT_SELECTORS = [
+    "main [data-message-content]", "main .markdown", "main [class*='markdown']",
+    "main [class*='prose']", "main [data-testid*='assistant']",
+    "main article", "main section", "main div",
+  ].join(",");
+
+  function captureRenderedBaseline(active) {
+    const candidates = [...document.querySelectorAll(RENDERED_ASSISTANT_SELECTORS)].slice(-220);
+    active.baselineRenderedText = new Map(candidates
+      .filter(visible)
+      .map(node => [node, normalize(node.innerText || node.textContent || "").slice(-5000)]));
+  }
+
+  function renderedNetworkCorrelatedTurn(active) {
+    // A redesigned ChatGPT page may no longer expose the role/testid attributes.
+    // Never guess from raw page position alone: bind a *changed* rendered node
+    // to a substantial fragment from this exact request's SSE observation.
+    const source = String(active?.networkObservedText || "");
+    if (source.length < 120 || internalToolPayload(source) || !active?.networkStreamSeen)
+      return null;
+    const normalizedSource = normalize(source);
+    const matches = [...document.querySelectorAll(RENDERED_ASSISTANT_SELECTORS)].slice(-220);
+    const baseline = active.baselineRenderedText || new Map();
+    for (let index = matches.length - 1; index >= 0; index -= 1) {
+      const node = matches[index];
+      if (!visible(node) || node.closest?.("form,[contenteditable='true'],nav,aside,footer"))
+        continue;
+      const text = normalize(node.innerText || node.textContent || "");
+      if (text.length < 100 || text.length > 40000 || baseline.get(node) === text.slice(-5000))
+        continue;
+      // A source fragment must be present, not merely a generic heading.
+      const fragments = normalizedSource.split(/\n+/)
+        .map(line => line.trim()).filter(line => line.length >= 65);
+      if (!fragments.some(line => text.includes(line.slice(0, 65)))) continue;
+      if (active.promptNormalized && text.includes(active.promptNormalized.slice(0, 120)))
+        continue;
+      return {
+        nodes: [node], latest: node, turn: node,
+        identity: nodeIdentity(node) || "rendered-network-correlated",
+        text: plainNodeText(node), isNew: true,
+        reason: "verified-rendered-network-overlap-v189",
+      };
+    }
+    return null;
   }
 
   function currentAssistantState(active) {
     const nodes = assistantNodes();
-    if (!nodes.length) return { nodes, latest: null, turn: null, identity: "", text: "", isNew: false, reason: "none" };
+    if (!nodes.length) return renderedNetworkCorrelatedTurn(active)
+      || { nodes, latest: null, turn: null, identity: "", text: "", isNew: false, reason: "none" };
 
     const currentUser = currentUserTurn(active);
     if (currentUser) {
