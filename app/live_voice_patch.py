@@ -105,6 +105,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
     broker = app.state.broker
     api_keys = app.state.api_keys
     file_store = app.state.file_store
+    telemetry = app.state.telemetry
     realtime_sessions: dict[str, tuple[float, ApiPrincipal]] = {}
     realtime_sessions_lock = asyncio.Lock()
 
@@ -219,6 +220,12 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         finished = False
         requested_model = "gpt-live"
         effective_model = "gpt-live"
+        observed_audio_bytes = 0
+        observed_media_count = 0
+        input_confirmed = 0
+        session_ready = False
+        error_message = ""
+        graceful_finish = False
 
         # Session controls and remote audio are sent from separate coroutines.
         # Serialize WebSocket sends so binary PCM frames cannot collide with
