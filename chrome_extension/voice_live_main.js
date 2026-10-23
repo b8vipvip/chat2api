@@ -17,7 +17,8 @@
     remoteProcessor: null,
     remoteSink: null,
     remoteWatchTimer: null,
-    recorderDrainTimer: null,
+    inputQueue: Promise.resolve(),
+    inputQueued: 0,
     speaking: false,
     responseId: null,
     lastSoundAt: 0,
@@ -135,7 +136,10 @@
 
   async function pushInput(encoded, sourceRate = 16000) {
     if (!live.prepared || !encoded) return;
+    const ownerRequestId = live.requestId;
     const state = await waitForSyntheticMic();
+    if (!live.prepared || live.requestId !== ownerRequestId ||
+        state.requestId !== ownerRequestId) return;
     const bytes = decodeBase64(encoded);
     if (bytes.byteLength < 2) return;
     const samples = pcm16ToFloat(bytes);
@@ -179,6 +183,7 @@
 
   async function attachRemoteStream(stream) {
     if (!live.prepared || live.remoteProcessor || !stream) return;
+    const ownerRequestId = live.requestId;
     const context = new AudioContext();
     const source = context.createMediaStreamSource(stream);
     const processor = context.createScriptProcessor(2048, 1, 1);
@@ -191,9 +196,10 @@
     live.remoteProcessor = processor;
     live.remoteSink = sink;
     try { await context.resume(); } catch (_) {}
+    if (!live.prepared || live.requestId !== ownerRequestId) return;
 
     processor.onaudioprocess = event => {
-      if (!live.prepared) return;
+      if (!live.prepared || live.requestId !== ownerRequestId) return;
       const samples = event.inputBuffer.getChannelData(0);
       const rms = rmsOf(samples);
       const now = Date.now();
@@ -221,29 +227,24 @@
     post("voice.live.remote.ready", { sample_rate: context.sampleRate });
   }
 
-  async function watchRemoteRecorder() {
+  function watchRemoteTrack() {
     clearInterval(live.remoteWatchTimer);
     live.remoteWatchTimer = setInterval(() => {
-      if (!live.prepared) return;
+      if (!live.prepared || live.remoteProcessor) return;
       const state = base();
-      const stream = state?.recorder?.stream;
-      if (stream && !live.remoteProcessor) attachRemoteStream(stream).catch(error => post("voice.live.error", { error: String(error?.message || error) }));
+      // The live bridge MUST consume the actual WebRTC remote track.
+      // Waiting for state.recorder.stream deadlocks: response-only recording
+      // is intentionally never armed during a bidirectional live session.
+      const track = state?.requestId === live.requestId ? state.remoteTrack : null;
+      if (!track || track.kind !== "audio" || track.readyState === "ended") return;
+      attachRemoteStream(new MediaStream([track]))
+        .catch(error => post("voice.live.error", { error: String(error?.message || error) }));
     }, 80);
-    clearInterval(live.recorderDrainTimer);
-    live.recorderDrainTimer = setInterval(() => {
-      if (!live.prepared) return;
-      const state = base();
-      if (Array.isArray(state?.recorderChunks) && state.recorderChunks.length > 8) {
-        state.recorderChunks.splice(0, state.recorderChunks.length - 2);
-      }
-    }, 1000);
   }
 
   function cleanupRemote() {
     clearInterval(live.remoteWatchTimer);
-    clearInterval(live.recorderDrainTimer);
     live.remoteWatchTimer = null;
-    live.recorderDrainTimer = null;
     try { live.remoteProcessor?.disconnect(); } catch (_) {}
     try { live.remoteSource?.disconnect(); } catch (_) {}
     try { live.remoteSink?.disconnect(); } catch (_) {}
@@ -259,6 +260,8 @@
     live.prepared = false;
     live.suppressed = false;
     live.inputNextAt = 0;
+    live.inputQueue = Promise.resolve();
+    live.inputQueued = 0;
     stopInputSpeechTimer();
     for (const source of [...live.inputSources]) {
       try { source.stop(); } catch (_) {}
@@ -280,10 +283,24 @@
       live.inputNextAt = 0;
       live.seq = 0;
       startInputSpeechTimer();
-      watchRemoteRecorder().catch(() => {});
+      watchRemoteTrack();
       post("voice.live.prepared");
     } else if (message.type === "voice.live.audio.push" && message.request_id === live.requestId) {
-      pushInput(message.pcm_base64, Number(message.sample_rate || 16000)).catch(error => post("voice.live.error", { error: String(error?.message || error) }));
+      // Preserve WebSocket PCM frame order across asynchronous AudioContext
+      // resume/decode operations. Reject a jammed queue rather than allow
+      // unbounded buffers to build up when the browser audio graph stalls.
+      if (live.inputQueued >= 100) {
+        post("voice.live.error", { error: "Live microphone audio queue exceeded 100 frames" });
+        return;
+      }
+      const ownerRequestId = live.requestId;
+      live.inputQueued += 1;
+      live.inputQueue = live.inputQueue
+        .then(() => live.prepared && live.requestId === ownerRequestId
+          ? pushInput(message.pcm_base64, Number(message.sample_rate || 16000))
+          : undefined)
+        .catch(error => post("voice.live.error", { error: String(error?.message || error) }))
+        .finally(() => { if (live.requestId === ownerRequestId) live.inputQueued -= 1; });
     } else if (message.type === "voice.live.cancel" && message.request_id === live.requestId) {
       live.suppressed = true;
       if (live.responseId) {

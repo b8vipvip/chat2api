@@ -183,10 +183,16 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
         requested_model = "gpt-live"
         effective_model = "gpt-live"
 
+        # Session controls and remote audio are sent from separate coroutines.
+        # Serialize WebSocket sends so binary PCM frames cannot collide with
+        # text acknowledgements during a full-duplex Voice session.
+        ws_send_lock = asyncio.Lock()
+
         async def send_json(payload: dict[str, object]) -> None:
             if finished:
                 return
-            await websocket.send_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+            async with ws_send_lock:
+                await websocket.send_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
         async def relay_extension_events() -> None:
             nonlocal finished
@@ -261,7 +267,8 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         except Exception:
                             continue
                         if audio and not finished:
-                            await websocket.send_bytes(audio)
+                            async with ws_send_lock:
+                                await websocket.send_bytes(audio)
                 elif event_type == "response.audio.done":
                     response_id = str(event.get("response_id") or "")
                     if response_id:

@@ -46,6 +46,7 @@
         if (/启动语音功能|start voice|voice mode|语音模式|开始语音|启动语音/i.test(label)) score += 160;
         if (/voice|语音/i.test(label)) score += 80;
         if (/听写|dictat|microphone|麦克风/i.test(label)) score -= 120;
+        if (/(end voice|exit voice|结束语音|退出语音|关闭语音)/i.test(label)) score = -10000;
         return { button, label, score };
       })
       .filter(item => item.score > 0)
@@ -55,8 +56,6 @@
   function voiceUiReady() {
     const orb = [...document.querySelectorAll("[data-testid='voice-floating-orb'], [data-testid*='voice-orb']")].find(visible);
     if (orb) return true;
-    const body = textOf(document.body);
-    if (/(准备好了，?\s*随时开始|ready when you are|start speaking|可以开始说话)/i.test(body)) return true;
     return Boolean([...document.querySelectorAll("button")].find(button => visible(button) && /(end voice|exit voice|结束语音|退出语音|关闭语音)/i.test(labelOf(button))));
   }
 
@@ -139,21 +138,32 @@
   }
 
   async function openVoice(active) {
-    const trigger = await waitFor(voiceTrigger, 15000, 120);
-    if (!trigger) throw new Error("ChatGPT Voice button was not found");
-    trigger.button.click();
-    const ready = await waitFor(() => voiceUiReady(), 20000, 120);
+    const existing = voiceUiReady();
+    if (!existing) {
+      const trigger = await waitFor(voiceTrigger, 15000, 120);
+      if (!trigger) throw new Error("ChatGPT Voice button was not found");
+      trigger.button.click();
+    }
+    const ready = existing || await waitFor(() => voiceUiReady(), 20000, 120);
     if (!ready) throw new Error("ChatGPT Voice UI did not become ready");
+    // A UI orb or WebRTC track by itself is not proof that the client can
+    // send microphone PCM and receive actual audio chunks. Both halves
+    // must be active before the external WebSocket receives session.ready.
     const remote = await waitFor(
-      () => state.mainEvents.find(item => item.type === "voice.live.remote.ready" || item.type === "voice.remote.track"),
-      15000,
-      80,
+      () => state.mainEvents.find(item => item.type === "voice.live.remote.ready"),
+      15000, 80,
     );
-    if (!remote) throw new Error("ChatGPT Voice WebRTC remote track did not become ready");
+    if (!remote) throw new Error("ChatGPT Voice remote WebRTC PCM processor did not become ready");
+    const microphone = await waitFor(
+      () => state.mainEvents.find(item => item.type === "voice.mic.synthetic" && Number(item.track_count || 0) > 0),
+      9000, 80,
+    );
+    if (!microphone) throw new Error("ChatGPT Voice did not acquire the bridged microphone for live input");
   }
 
   async function startLive(message) {
-    if (state.active) throw new Error("This ChatGPT tab already has an active Live session");
+    if (state.active || globalThis.__CHAT2API_VOICE_CONTENT_V2__?.active)
+      throw new Error("This ChatGPT tab already has an active Voice session");
     const active = {
       requestId: message.requestId,
       sessionId: message.sessionId,
@@ -206,8 +216,12 @@
     if (event.source !== window || event.data?.source !== "chat2api-main") return;
     const item = event.data;
     if (!state.active || item.request_id !== state.active.requestId) return;
-    state.mainEvents.push(item);
-    if (state.mainEvents.length > 500) state.mainEvents.splice(0, 250);
+    // Streaming PCM chunks must never accumulate in the long-lived DOM
+    // controller's diagnostics list (hundreds of MB in a long session).
+    if (item.type !== "voice.live.audio" && item.type !== "voice.audio.level") {
+      state.mainEvents.push(item);
+      if (state.mainEvents.length > 250) state.mainEvents.splice(0, 125);
+    }
     const active = state.active;
     if (item.type === "voice.live.input.speech_started") {
       emitLive(active, "input.speech_started").catch(() => {});
