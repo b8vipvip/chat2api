@@ -9,11 +9,28 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_CACHE_DIR=/root/.cache/pip
 
-# Keep dependency installation in its own layer so normal application-code
-# changes do not invalidate the expensive Python dependency step.
+# Keep dependency installation in its own layer so application-source
+# changes do not reinstall packages. Mirror endpoints are HTTPS and opt-in
+# configurable via --build-arg; the last fallback is official PyPI.
+# Pip still verifies TLS. Mirror packages are not cryptographically pinned
+# until the project adds a fully hashed dependency lockfile.
+ARG CHAT2API_PIP_PRIMARY_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+ARG CHAT2API_PIP_SECONDARY_INDEX=https://mirrors.aliyun.com/pypi/simple
 COPY requirements.txt ./
 RUN --mount=type=cache,id=chat2api-pip,target=/root/.cache/pip,sharing=locked \
-    pip install -r requirements.txt
+    set -eu; \
+    for index in "$CHAT2API_PIP_PRIMARY_INDEX" "$CHAT2API_PIP_SECONDARY_INDEX" https://pypi.org/simple; do \
+      case "$index" in https://*/simple|https://*/simple/) ;; *) echo "Invalid HTTPS PyPI index" >&2; exit 1;; esac; \
+      echo "chat2api pip: attempting HTTPS index $index (bounded to 900s)"; \
+      if timeout --signal=TERM --kill-after=10s 900s \
+        python -m pip install --index-url "$index" --timeout 25 --retries 2 -r requirements.txt; then \
+        echo "chat2api pip: dependency installation succeeded"; \
+        exit 0; \
+      fi; \
+      echo "chat2api pip: index unavailable or timed out; trying next source" >&2; \
+    done; \
+    echo "chat2api pip: all configured HTTPS indexes failed" >&2; \
+    exit 1
 
 COPY app ./app
 COPY scripts/bootstrap_linux_worker.sh ./scripts/bootstrap_linux_worker.sh

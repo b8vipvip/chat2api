@@ -11,7 +11,14 @@ def test_dockerfile_keeps_dependency_layer_cacheable():
     assert "COPY app ./app" in source
     assert source.index("COPY requirements.txt ./") < source.index("COPY app ./app")
     assert "--mount=type=cache,id=chat2api-pip,target=/root/.cache/pip,sharing=locked" in source
-    assert "pip install -r requirements.txt" in source
+    assert 'python -m pip install --index-url "$index" --timeout 25 --retries 2 -r requirements.txt' in source
+    assert "https://pypi.tuna.tsinghua.edu.cn/simple" in source
+    assert "https://mirrors.aliyun.com/pypi/simple" in source
+    assert "https://pypi.org/simple" in source
+    assert "timeout --signal=TERM --kill-after=10s 900s" in source
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "CHAT2API_PIP_PRIMARY_INDEX:" in compose
+    assert "CHAT2API_PIP_SECONDARY_INDEX:" in compose
     assert "--no-cache-dir" not in source
     assert "--prefer-binary" not in source
 

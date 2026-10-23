@@ -31,7 +31,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Build production image
-        run: DOCKER_BUILDKIT=1 docker build --progress=plain -t chat2api-production-smoke .
+        run: |
+          # GitHub-hosted runners are generally outside mainland China.
+          # Exercise the same Dockerfile with the official source on CI;
+          # production hosts default to the configured China-first mirrors.
+          DOCKER_BUILDKIT=1 docker build --progress=plain \
+            --build-arg CHAT2API_PIP_PRIMARY_INDEX=https://pypi.org/simple \
+            --build-arg CHAT2API_PIP_SECONDARY_INDEX=https://pypi.org/simple \
+            -t chat2api-production-smoke .
       - name: Verify Linux device authority and Worker bundle
         run: |
           docker run --rm --entrypoint python chat2api-production-smoke -c '
