@@ -362,7 +362,27 @@
           if (fileCache.size >= FILE_MAX_COUNT) fileCache.clear();
           fileCache.set(item.url, encoded);
         } catch (_) {
-          return { count, error: "file-download-unavailable" };
+          // A signed OpenAI CDN URL can be valid but unreadable to a content
+          // script because of CORS. The background relay is restricted to
+          // allowlisted HTTPS hosts, omit-credentials, and a smaller hard cap.
+          let relay = null;
+          try {
+            if (new URL(item.url).origin !== location.origin) {
+              relay = await chrome.runtime.sendMessage({
+                type: "chat2api.file.fetch-v188", url: item.url, filename: item.filename,
+              });
+            }
+          } catch (_) { /* Fail closed when the extension transport is absent. */ }
+          const data = String(relay?.data_url || "");
+          const bytes = Number(relay?.bytes || 0);
+          if (!relay?.ok || !data.startsWith("data:" + item.mime + ";base64,")
+              || !Number.isInteger(bytes) || bytes <= 0 || bytes > FILE_MAX_BYTES
+              || total + bytes > FILE_MAX_TOTAL) {
+            return { count, error: String(relay?.error || "file-download-unavailable") };
+          }
+          encoded = { data, bytes };
+          if (fileCache.size >= FILE_MAX_COUNT) fileCache.clear();
+          fileCache.set(item.url, encoded);
         } finally { clearTimeout(timer); }
       }
       if (total + encoded.bytes > FILE_MAX_TOTAL)

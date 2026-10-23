@@ -38,6 +38,17 @@ assert.equal(combinePageMediaText('{"skipped_mainline":true}', newImage), newIma
 assert.equal(combinePageMediaText("![old](blob:https://chatgpt.com/uuid)", newImage), newImage);
 assert.equal(combinePageMediaText("![old](https://example.com/img.png)", newImage), newImage);
 
+const archivedFilePayload = "![📎 run.py](data:text/x-python;base64,cHJpbnQoMSkK)";
+const withInlinePreview = "## 方案\n\n先看参考图 ![old](https://media.oaiusercontent.com/preview.png)\n\n"
+  + archivedFilePayload + "\n\n| 镜头 | 动作 |\n| --- | --- |\n| 1 | 太空步 |";
+assert.equal(
+  combinePageMediaText(withInlinePreview, newImage),
+  "## 方案\n\n先看参考图 \n\n" + archivedFilePayload
+    + "\n\n| 镜头 | 动作 |\n| --- | --- |\n| 1 | 太空步 |\n\n" + newImage,
+  "same-turn prose, tables and generated files must survive redundant preview image removal",
+);
+
+
 
 // Only the existing request controller may settle the request. A handoff is
 // excluded from both network-text completion and the early no-terminal error.
