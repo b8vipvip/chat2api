@@ -3,7 +3,7 @@
   if (globalThis[KEY]) return;
   globalThis[KEY] = Object.freeze({
     version: 48,
-    bundle: "0.22.188",
+    bundle: "0.22.189",
     loaded_at_ms: Date.now(),
     document_url: String(location.href || ""),
   });

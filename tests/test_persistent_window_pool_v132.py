@@ -40,6 +40,9 @@ def test_persistent_pool_is_active_routing_layer() -> None:
     assert 'route.window_owned = true' in source
     assert 'post-admission-standby-refill-v152' in source
     assert 'worker_persistent_window_pool_exhausted' in source
+    assert 'value.routePolicyForRequest(message)' in source
+    assert 'request-admission-v189' in source
+    assert 'reuse-same-request-route-v189' in source
     assert 'if (!await loginReady().catch(() => false)) return null;' in source
 
     # The pool is no longer allowed to cancel the route's 5-minute lease.
@@ -162,7 +165,7 @@ def test_admin_copy_describes_persistent_windows_without_legacy_helper_copy() ->
 
 def test_worker_extension_bundle_advertises_pool_contract() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert manifest["version"] == "0.22.188"
+    assert manifest["version"] == "0.22.189"
     assert "persistent prewarmed" in manifest["description"]
 
 

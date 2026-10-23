@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.22.189 — 2026-10-23
+
+### Request-scoped Worker windows
+
+- Give every independent `chat.request`, `image.request`, and `voice.request` its own route and a different ChatGPT window leased from the Worker persistent standby pool. Different request IDs never inherit another request's conversation.
+- Close a request window 5 seconds after success, error, or cancellation. The router remains the sole owner of terminal settlement and window lifecycle; the persistent pool only allocates/refills standby slots.
+- Keep each `voice.live.start` session on one dedicated window for the entire continuous call. On explicit stop or disconnect, close that session window after 5 seconds.
+- Use an in-memory 5-second close timer plus a persistent Chrome alarm fallback for service-worker suspension. Remove closed request-scoped route records so long-running workers do not accumulate one record per request.
+- Release contract: Server Runtime / Chrome Bridge / Worker Bundle `0.22.189`; Python package remains `0.7.1`.
+
 ## v0.22.73 — 2026-09-10
 
 ### Strict per-API Worker FIFO
