@@ -24,6 +24,7 @@ from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
 from .generated_files_v196 import GeneratedFileArchive
+from .rich_content_v196 import manifest as rich_content_manifest
 from .media_public_origin_v187 import media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
 from .responses_multimodal_input_v183 import attachment_specs as canonical_attachment_specs
@@ -957,6 +958,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         meta["media_files"] = archived_media
                     if archived_files:
                         meta["generated_files"] = archived_files
+                    if archived_media or archived_files:
+                        meta["content_blocks"] = rich_content_manifest(final_text, archived_media, archived_files)
                     yield "data: " + json.dumps(
                         chunk_payload(response_id, model, {}, "stop", usage, meta),
                         ensure_ascii=False,
@@ -1112,6 +1115,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 meta['media_files'] = archived_media
             if archived_files:
                 meta['generated_files'] = archived_files
+            if archived_media or archived_files:
+                meta['content_blocks'] = rich_content_manifest(text, archived_media, archived_files)
         except asyncio.TimeoutError as error:
             await registry.send(client_id, {"type": "chat.cancel", "request_id": request_id})
             state.completed_mono = time.perf_counter()
