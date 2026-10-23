@@ -13,6 +13,18 @@
   const startButton = document.getElementById("startTest");
   if (!startButton) return;
   const kindSelect = document.getElementById("testType");
+  const oldVoiceKind = kindSelect?.querySelector('option[value="voice_conversation"]');
+  if (oldVoiceKind) {
+    oldVoiceKind.value = "voice_call";
+    oldVoiceKind.textContent = "语音通话";
+  }
+  const filePicker = document.getElementById("testFiles");
+  if (filePicker?.parentElement && !document.getElementById("voiceTestText")) {
+    const area = document.createElement("div");
+    area.style.cssText = "grid-column:1/-1;margin-top:4px";
+    area.innerHTML = '<label for="voiceTestText">语音测试内容（可选；语音生成作为待朗读内容，语音通话作为通话中的提问）</label><textarea id="voiceTestText" rows="3" style="width:100%;margin-top:5px" placeholder="例如：一个小女孩慌张地说：好可怕，我好害怕，救救我！"></textarea><div class="muted" style="font-size:12px">语音通话支持上传图片、PDF、文档；若要验证实时麦克风 PCM 上行，请上传单声道 16kHz 16-bit PCM WAV。无音频也可单独测试文字/图片/文件 → Voice 回复。</div>';
+    filePicker.parentElement.parentElement.appendChild(area);
+  }
   const voiceHelp = document.createElement("div");
   voiceHelp.dataset.chat2apiVoiceHelp = "v178";
   voiceHelp.className = "muted";
@@ -21,11 +33,11 @@
   function refreshVoiceHelp() {
     const kind = kindSelect?.value || "";
     voiceHelp.textContent = kind === "voice_generation"
-      ? "通过 GPT Live 真实生成音频；测试场不会使用上方文本模型。"
-      : kind === "voice_conversation"
-        ? "通过 GPT Live 语音对话。可上传音频文件；未上传时先真实生成测试语音，再上传并对话（两条可追踪的请求）。"
+      ? "在后台语音生成预设提示词约束下，向 ChatGPT Voice 发送测试文本，验证非空真实语音回复；不使用上方文本模型。"
+      : kind === "voice_call"
+        ? "真正执行实时 WebSocket 语音通话，支持在通话中发送文字、图片或文件并获得 PCM 语音回复；可附加 16kHz PCM WAV 验证麦克风上行。"
         : kind === "all"
-          ? "全部测试包含真实 GPT Live 语音测试，可能额外执行语音样本生成调用。"
+          ? "全部测试包含语音生成和实时语音通话，包括附件上传与 WebSocket 音频返回。" 
           : "";
   }
   kindSelect?.addEventListener("change", refreshVoiceHelp);
@@ -167,7 +179,7 @@
         });
       }
       const testType = kindSelect?.value || "";
-      const voiceOnly = testType === "voice_generation" || testType === "voice_conversation";
+      const voiceOnly = testType === "voice_generation" || testType === "voice_call";
       const model = voiceOnly ? "gpt-live" : document.getElementById("testModel").value;
       if (!model) throw new Error("没有在线 Worker 已验证的模型，等待模型列表自动同步后重试");
       const body = {
@@ -176,6 +188,7 @@
         reasoning_effort: voiceOnly || model === "gpt-5.5-mini"
           ? null : (document.getElementById("testReasoning")?.value || null),
         files,
+        voice_test_text: document.getElementById("voiceTestText")?.value || null,
       };
       if (credential.source === "managed" && credential.key_id) {
         body.api_key_id = credential.key_id;
