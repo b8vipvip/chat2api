@@ -18,6 +18,7 @@ const sources = [
   section("  function voiceFailure(", "  async function waitFor("),
   section("  async function openVoice(", "  function normVoiceText("),
   section("  function normVoiceText(", "  async function playVoiceInput("),
+  section("  async function armRecording(", "  async function waitResponse("),
   section("  async function waitResponse(", "  async function runVoice("),
 ];
 let clock = 0;
@@ -34,6 +35,7 @@ const fakeDocument = {
 };
 const base = {
   Date:fakeDate, Math, Number, String, Boolean,
+  state:{mainSequence:0}, postMain:()=>{},
   voiceTrigger:()=>({button:{click() {}},label:"Start Voice"}),
   voiceUiReady:()=>({reason:"voice-orb"}),
   waitFor:async fn =>fn(), waitMain:async()=>null,
@@ -53,7 +55,7 @@ const base = {
 };
 const context = vm.createContext(base);
 vm.runInContext(sources.join("\n") +
-  "\nglobalThis.voiceApi = {openVoice, sendTypedPrompt, waitResponse};",
+  "\nglobalThis.voiceApi = {openVoice, sendTypedPrompt, verifyInjectedMicrophone, armRecording, waitResponse, normVoiceText};",
   context);
 
 // The orb-only condition reproduced by TX03 must not be counted as transport.
@@ -77,6 +79,61 @@ context.sendButton = ()=>({click() { submitCount++; turnSeen=true; }});
 await context.voiceApi.sendTypedPrompt({requestId:"v3",mode:"speech"},"chat2api spoken prompt");
 assert.equal(submitCount,2);
 assert.ok(stages.some(x=>x.stage==="prompt-accepted"));
+
+// Uploaded microphone audio is an actual conversation input only when the
+// page called our intercepted getUserMedia and received a synthetic track.
+context.waitMain=async()=>null;
+await assert.rejects(
+  context.voiceApi.verifyInjectedMicrophone({requestId:"mic-not-connected"}),
+  /VOICE_SYNTHETIC_MIC_NOT_ATTACHED/,
+);
+assert.ok(stages.some(x=>x.stage==="mic-not-attached"));
+context.waitMain=async (_id, predicate)=>{
+  assert.equal(predicate({type:"voice.mic.synthetic",track_count:0}),false);
+  const event={type:"voice.mic.synthetic",track_count:1};
+  assert.equal(predicate(event),true);
+  return event;
+};
+await context.voiceApi.verifyInjectedMicrophone({requestId:"mic-connected"});
+assert.ok(stages.some(x=>x.stage==="mic-injection-confirmed"));
+
+assert.equal(context.voiceApi.normVoiceText("文本\n  多行"),"文本 多行",
+  "Voice prompt comparison must normalize actual Unicode layout whitespace");
+
+// Transport and the initial ChatGPT greeting may be audible *before* the
+// verified prompt. The recorder must be explicitly armed for the reply.
+context.state.mainSequence = 45;
+let armCommands = 0;
+context.postMain = (type)=>{if (type === "voice.record.arm") armCommands++;};
+context.waitMain = async (_id, predicate)=> {
+  const event = {type:"voice.record.armed",remote_track_seen:true};
+  assert.equal(predicate(event),true);
+  return event;
+};
+const armed = {requestId:"arm1"};
+await context.voiceApi.armRecording(armed);
+assert.equal(armCommands,1);
+assert.equal(armed.captureArmSequence,45);
+assert.equal(armed.captureArmSawTrack,true);
+assert.ok(stages.some(x=>x.stage==="capture-armed"));
+await assert.rejects(
+  context.voiceApi.armRecording({requestId:"cancel1",cancelled:true}),
+  /VOICE_CANCELLED/,
+);
+assert.equal(armCommands,1, "cancelled Voice cannot start a new capture");
+
+// Old welcome sound and earlier one-time track events must be ignored; with
+// verified preexisting track proof, only response-era sound can complete.
+clock=0;
+context.eventBucket=()=>[
+  {_voice_sequence:43,type:"voice.audio.level",speaking:true,last_sound_at:2000},
+  {_voice_sequence:44,type:"voice.remote.track"},
+  {_voice_sequence:46,type:"voice.record.started"},
+];
+await assert.rejects(
+  context.voiceApi.waitResponse({...armed,timeoutSeconds:180},0),
+  /VOICE_REMOTE_AUDIO_SILENT/,
+);
 
 // After a verified submit, an absent remote track fails at the stage
 // deadline and never consumes the entire 300-second API timeout.
@@ -142,7 +199,14 @@ const peer=new page.RTCPeerConnection();
 assert.ok(peer.handlers.track);
 peer.handlers.track({track:{kind:"audio",readyState:"live"}});
 assert.ok(posted.some(x=>x.type==="voice.remote.track"));
-assert.ok(posted.some(x=>x.type==="voice.record.started"));
+assert.ok(!posted.some(x=>x.type==="voice.record.started"),
+  "orb/track discovery must not record an unsolicited Voice greeting");
+listeners.message({
+  source:pageWindow,
+  data:{source:"chat2api-isolated",type:"voice.record.arm",request_id:"v6"},
+});
+assert.ok(posted.some(x=>x.type==="voice.record.armed"&&x.request_id==="v6"));
+assert.ok(posted.some(x=>x.type==="voice.record.started"&&x.request_id==="v6"));
 
 // Reuse of the same browser tab MUST NOT turn a prior recorder's asynchronous
 // onstop Base64 output into the new Voice request's completed audio.
@@ -156,7 +220,70 @@ listeners.message({
 });
 await new Promise(resolve=>setImmediate(resolve));
 const priorCompleted=posted.filter(x=>x.type==="voice.record.complete");
-assert.ok(priorCompleted.length>0);
-assert.ok(priorCompleted.every(x=>x.request_id==="v6"),
-  "stale previous audio must never become a new request's successful response");
+assert.equal(priorCompleted.length,0,
+  "abandoned old recording must never deliver audio after next request prepares");
+assert.equal(page.__CHAT2API_VOICE_MAIN_V1__.captureArmed,false);
+const trackEventsBeforeOldPeer=posted.filter(x=>x.type==="voice.remote.track").length;
+peer.handlers.track({track:{kind:"audio",readyState:"live"}});
+assert.equal(posted.filter(x=>x.type==="voice.remote.track").length,trackEventsBeforeOldPeer,
+  "late track from a prior RTCPeerConnection cannot become this request's audio");
+const nextPeer=new page.RTCPeerConnection();
+nextPeer.handlers.track({track:{kind:"audio",readyState:"live"}});
+const recordingsBefore=posted.filter(x=>x.type==="voice.record.started").length;
+assert.equal(recordingsBefore,1,
+  "the next Voice orb/track cannot auto-record before confirmed input");
+listeners.message({
+  source:pageWindow,
+  data:{source:"chat2api-isolated",type:"voice.record.arm",request_id:"v7"},
+});
+assert.equal(posted.filter(x=>x.type==="voice.record.started").length,2);
+assert.ok(posted.some(x=>x.type==="voice.record.armed"&&x.request_id==="v7"));
+
+// A WebRTC track that arrives after confirmed input must start the same
+// recorder, without requiring a second Voice request or retry controller.
+listeners.message({
+  source:pageWindow,
+  data:{source:"chat2api-isolated",type:"voice.prepare",request_id:"v8",mode:"speech"},
+});
+const beforeLate=posted.filter(x=>x.type==="voice.record.started").length;
+listeners.message({
+  source:pageWindow,
+  data:{source:"chat2api-isolated",type:"voice.record.arm",request_id:"v8"},
+});
+const lateAck=posted.find(x=>x.type==="voice.record.armed"&&x.request_id==="v8");
+assert.ok(lateAck);
+assert.equal(lateAck.remote_track_seen,false);
+assert.equal(posted.filter(x=>x.type==="voice.record.started").length,beforeLate);
+const latePeer=new page.RTCPeerConnection();
+latePeer.handlers.track({track:{kind:"audio",readyState:"live"}});
+assert.equal(posted.filter(x=>x.type==="voice.record.started").length,beforeLate+1);
+assert.ok(posted.some(x=>x.type==="voice.record.started"&&x.request_id==="v8"));
+
+// A previous onstop can already be inside async blob.arrayBuffer() when a
+// new Voice request prepares. Do not emit its bytes after request ownership
+// has changed, even though recorderCapture was detached before the await.
+let unblockBlob;
+class SuspendedBlob extends Blob {
+  arrayBuffer() {
+    return new Promise(resolve => {
+      unblockBlob = () => Blob.prototype.arrayBuffer.call(this).then(resolve);
+    });
+  }
+}
+page.Blob = SuspendedBlob;
+const completedBeforeAsyncReset = posted.filter(x=>x.type==="voice.record.complete").length;
+listeners.message({
+  source:pageWindow,
+  data:{source:"chat2api-isolated",type:"voice.record.stop",request_id:"v8"},
+});
+assert.equal(typeof unblockBlob,"function",
+  "recording finalization must reach the asynchronous blob read");
+listeners.message({
+  source:pageWindow,
+  data:{source:"chat2api-isolated",type:"voice.prepare",request_id:"v9",mode:"speech"},
+});
+unblockBlob();
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(posted.filter(x=>x.type==="voice.record.complete").length,completedBeforeAsyncReset,
+  "stale recorder bytes must be dropped after an awaited blob read");
 console.log("Voice transport, prompt receipt, stage guards and recorder request ownership verified");

@@ -13,16 +13,28 @@
       post(requestId, "voice.mic.stopped", { stopped: false, reason: "voice-main-state-missing" });
       return;
     }
+    if (state.requestId && state.requestId !== requestId) {
+      // A delayed stop from the previous request cannot terminate a newer
+      // request's microphone or AudioContext.
+      post(requestId, "voice.mic.stopped", { stopped: false, reason: "stale-request" });
+      return;
+    }
     let stoppedTracks = 0;
+    // Detach exactly the mic owned by this session *before* any await.
+    // A second Voice request can start while close() is pending; a late old
+    // callback must not null or close the new request's microphone.
+    const destination = state.micDestination;
+    const oscillator = state.micOscillator;
+    const context = state.micContext;
+    state.micDestination = null;
+    state.micOscillator = null;
+    state.micContext = null;
     try {
-      for (const track of state.micDestination?.stream?.getTracks?.() || []) {
+      for (const track of destination?.stream?.getTracks?.() || []) {
         try { track.stop(); stoppedTracks += 1; } catch (_) {}
       }
-      try { state.micOscillator?.stop?.(); } catch (_) {}
-      try { await state.micContext?.close?.(); } catch (_) {}
-      state.micDestination = null;
-      state.micOscillator = null;
-      state.micContext = null;
+      try { oscillator?.stop?.(); } catch (_) {}
+      try { await context?.close?.(); } catch (_) {}
       post(requestId, "voice.mic.stopped", { stopped: true, stopped_tracks: stoppedTracks });
     } catch (error) {
       post(requestId, "voice.mic.stop.error", { error: String(error?.message || error), stopped_tracks: stoppedTracks });

@@ -158,3 +158,11 @@ def test_audio_router_prefers_voice_v2_and_never_routes_dictation() -> None:
     assert voice_v2.index('diagnostic(active, "ui-visible"') < voice_v2.index('diagnostic(active, "transport-preflight"')
     assert voice_v2.index('diagnostic(active, "prompt-submit-attempted"') < voice_v2.index('diagnostic(active, "prompt-accepted"')
     assert voice_v2.index("await openVoice(active)") < voice_v2.index("await sendTypedPrompt(active, prompt)")
+    # Remote track discovery is transport evidence, not proof of the requested
+    # spoken reply. The only recorder is armed after the input is confirmed.
+    assert voice_v2.index("await sendTypedPrompt(active, prompt)") < voice_v2.index("await armRecording(active)")
+    assert voice_v2.index("await playVoiceInput(active)") < voice_v2.index("await armRecording(active)")
+    assert 'postMain("voice.record.arm", active)' in voice_v2
+    assert 'postMain("voice.mic.stop", active)' in voice_v2
+    assert voice_v2.index('postMain("voice.mic.stop", active)') < voice_v2.index('postMain("voice.reset", active)')
+
