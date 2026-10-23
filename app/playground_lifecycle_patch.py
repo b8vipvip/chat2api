@@ -426,7 +426,10 @@ class PlaygroundRunManager:
                 "Authorization": f"Bearer {token}",
                 "X-Chat2API-Request-ID": request_id,
             },
-            json={"model": VOICE_TRANSPORT_MODEL, "timeout": 300, **payload},
+            # Keep the Playground diagnostic window below its stalled-run
+            # watchdog. Missing WebRTC/voice proof is reported earlier by the
+            # browser's staged guards; a 300s silent wait hides the real cause.
+            json={"model": VOICE_TRANSPORT_MODEL, "timeout": 115, **payload},
         )
         if response.status_code >= 400:
             raise RuntimeError(f"{endpoint}: {_response_error(response)}")
@@ -544,13 +547,22 @@ class PlaygroundRunManager:
                 },
             }
         except Exception as error:
-            message = f"{stage}: {error}"
-            row = self.telemetry.get(request_id) or {}
+            source_id = setup_request_id if stage in {"sample-generation", "sample-upload"} else request_id
+            row = self.telemetry.get(source_id) or {}
             actual_status = str(row.get("status") or "")
+            evidence = row.get("diagnostics") if isinstance(row.get("diagnostics"), dict) else {}
+            code = str(evidence.get("voice_failure_code") or "").strip()
+            voice_stage = str(evidence.get("voice_failure_stage") or evidence.get("voice_stage") or "").strip()
+            message = f"{stage}: {error}"
             return {
                 "kind": kind, "label": TEST_LABELS[kind],
+                # An API error is a failed Voice test, not a second stalled
+                # terminal. The existing request history remains authoritative.
                 "status": actual_status if actual_status in {"stalled", "cancelled"} else "failed",
                 "message": message, "error": message, "request_id": request_id,
+                "request_status": actual_status or "not-dispatched",
+                "voice_failure_code": code or None,
+                "voice_failure_stage": voice_stage or None,
                 "setup_request_id": setup_request_id if stage in {"sample-generation", "sample-upload"} else None,
                 "total_ms": (time.perf_counter() - started) * 1000,
                 "effective_model": VOICE_TRANSPORT_MODEL,
