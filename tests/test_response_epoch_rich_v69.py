@@ -186,6 +186,13 @@ def test_generated_file_handoff_uses_existing_single_terminal_owner():
     assert "archive_final_markdown, raw_final" in main
     assert "archive_final_markdown, text" in main
     assert "type: \"chat.completed\"" not in rich
+    relay = read("chrome_extension/background_media_fetch_v175.js")
+    assert 'type !== "chat2api.file.fetch-v188"' in relay
+    assert 'credentials: "omit", redirect: "error"' in relay
+    assert 'MAX_FILE_RELAY_BYTES = 4 * 1024 * 1024' in relay
+    assert 'type: "chat2api.file.fetch-v188"' in rich
+    assert 'const preservedProse = candidate.replace(' in owner
+    assert 'return [preservedProse, imageMarkdown].filter(Boolean).join' in owner
     result = subprocess.run(
         ["node", "tests/generated_file_handoff_v196.mjs"],
         cwd=ROOT, capture_output=True, text=True, timeout=20,
