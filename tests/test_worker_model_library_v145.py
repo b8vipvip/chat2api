@@ -149,8 +149,8 @@ def test_browser_free_compatibility_does_not_fake_validated_model_evidence() -> 
     assert 'FREE_DEFAULT_MINI' not in source
     assert 'serverFreeDefaultRoute' in source
     assert 'await freeDefaultComposerEligible()' in source
-    assert 'model_selection_validated: !freeDefaultCompat' in source
-    assert 'effective_model: freeDefaultCompat ? null : requestedModel' in source
+    assert 'model_selection_validated: !defaultModelRequested && !freeDefaultCompat' in source
+    assert 'effective_model: (defaultModelRequested || freeDefaultCompat) ? null : requestedModel' in source
     assert '"free-default-compatibility-unverified"' in source
     assert "await selectValidatedModel(tab.id, requestedModel)" in source
 

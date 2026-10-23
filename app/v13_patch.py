@@ -54,7 +54,7 @@ def _normalize_model(value: Any) -> str:
     # model-library resolver. This layer must not preempt it with v13's
     # historical hardcoded model list.
     raw = str(value or DEFAULT_TEXT_MODEL).strip().lower()
-    if raw in {"default", "chatgpt-web"}:
+    if raw == "default":
         return "default"
     model = normalize_concrete_model_id(raw)
     if model is None or model in SPECIAL_MODELS:

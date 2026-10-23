@@ -14,7 +14,10 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_default_model_and_effort_are_supported_for_chat_and_responses():
     assert _normalize_model("default") == "default"
-    assert _normalize_model("chatgpt-web") == "default"
+    # Only the explicit API model ID "default" opts out of selection.
+    import pytest
+    with pytest.raises(ValueError):
+        _normalize_model("chatgpt-web")
     for value in ("default", "auto", "page-default", None, ""):
         assert _normalize_reasoning(value) == (None, None)
     target = _target_from_payload({"model": "default", "reasoning_effort": "default"})

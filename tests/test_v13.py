@@ -92,7 +92,7 @@ def test_v13_version_catalog_and_console(tmp_path: Path) -> None:
 
 def test_removed_browser_aliases_are_rejected_before_routing(tmp_path: Path) -> None:
     with TestClient(app_v13(tmp_path)) as client:
-        for model in ("default", "chatgpt-web", "gpt-image"):
+        for model in ("chatgpt-web", "gpt-image"):
             response = client.post(
                 "/v1/chat/completions",
                 headers=headers(),
@@ -100,6 +100,14 @@ def test_removed_browser_aliases_are_rejected_before_routing(tmp_path: Path) -> 
             )
             assert response.status_code == 400
             assert response.json()["error"]["type"] == "invalid_request_error"
+        # Default is a real, supported page-native route. With no Worker
+        # connected the next failure must be capacity, not model validation.
+        page_default = client.post(
+            "/v1/chat/completions", headers=headers(),
+            json={"model": "default", "reasoning_effort": "default",
+                  "messages": [{"role": "user", "content": "hello"}]},
+        )
+        assert page_default.status_code != 400
 
 
 def test_chat_completions_sends_canonical_model_and_reasoning_to_extension(tmp_path: Path) -> None:
