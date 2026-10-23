@@ -14,6 +14,14 @@ def test_voice_transport_evidence_stage_gates():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_voice_session_activation_requires_specific_ui_proof():
+    result = subprocess.run(
+        ["node", "tests/voice_ready_gate_v193.mjs"],
+        cwd=ROOT, capture_output=True, text=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_voice_mic_cleanup_does_not_release_new_session_resources():
     result = subprocess.run(
         ["node", "tests/voice_mic_cleanup_v192.mjs"],
@@ -31,6 +39,10 @@ def test_voice_has_a_single_authority_for_error_and_audio_delivery():
     assert content.count('type: "image.error"') == 1
     assert content.count('type: "image.diagnostics"') >= 1
     assert 'VOICE_TRANSPORT_NOT_READY' in content
+    assert 'session-already-visible' in content
+    assert 'voice.transport.snapshot' in content
+    assert 'peer_connections_in_request' in main
+    assert 'sessionMicRequestedBaseline' in main
     assert 'VOICE_TEXT_SUBMISSION_UNVERIFIED' in content
     assert 'VOICE_REMOTE_TRACK_NOT_FOUND' in content
     assert 'VOICE_REMOTE_AUDIO_SILENT' in content

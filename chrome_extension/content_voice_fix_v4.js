@@ -118,10 +118,15 @@
     };
   }
 
+  // A page-wide "Ready when you are" string is not Voice transport proof.
+  // It can persist in normal conversation content before a session exists.
   function voiceReady() {
-    if ([...document.querySelectorAll("[data-testid='voice-floating-orb'],[data-testid*='voice-orb']")].some(visible)) return true;
-    const body = normalize(document.body?.innerText || "");
-    return /(准备好了，?\s*随时开始|ready when you are|start speaking|可以开始说话)/i.test(body);
+    if ([...document.querySelectorAll("[data-testid='voice-floating-orb'],[data-testid*='voice-orb']")].some(visible)) {
+      return { reason: "voice-orb" };
+    }
+    const exit = [...document.querySelectorAll("button")].find(button =>
+      visible(button) && /(end voice|exit voice|结束语音|退出语音|关闭语音)/i.test(labelOf(button)));
+    return exit ? { reason: "voice-exit-button" } : null;
   }
 
   function score(button) {
@@ -166,7 +171,8 @@
     const cleanup = await cleanupKnownAutomationDraft();
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
-      if (voiceReady()) return { ready: true, reason: "voice-ui-already-ready", label: "", cleanup };
+      const existing = voiceReady();
+      if (existing) return { ready: true, reason: "voice-ui-already-ready", evidence: existing.reason, label: "", cleanup };
       const item = strictTrigger();
       if (item) return { ready: false, reason: "strict-trigger-v4", ...annotate(item), cleanup };
       await delay(120);
