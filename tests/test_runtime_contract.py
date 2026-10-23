@@ -98,6 +98,11 @@ def test_runtime_contract_payload_names_each_version_surface():
     assert payload["chrome_bridge"]["version"] == CHROME_BRIDGE_VERSION
     assert payload["chrome_bridge"]["bundle_version"] == CHROME_BRIDGE_BUNDLE_VERSION
     assert payload["chrome_bridge"]["persistent_window_pool_runtime_ready_revision"] == 146
+    assert payload["chrome_bridge"]["request_window_lifecycle_revision"] == 189
+    assert payload["chrome_bridge"]["request_window_close_after_seconds"] == 5
+    assert payload["features"]["request_scoped_worker_window_per_api_request_v189"] is True
+    assert payload["features"]["request_scoped_worker_window_close_after_5s_v189"] is True
+    assert payload["features"]["continuous_voice_session_window_lease_v189"] is True
     assert payload["features"]["persistent_window_runtime_preflight_v146"] is True
     assert payload["features"]["runtime_ready_standby_semantics_v146"] is True
     assert payload["protocols"]["realtime_voice"] == LIVE_PROTOCOL_VERSION
