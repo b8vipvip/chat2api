@@ -776,7 +776,7 @@
       if (!keys.includes("size") || !keys.includes("n")) return false;
       if (!keys.every(key => ["size", "n", "transparent_background", "quality",
           "background", "output_format", "style"].includes(key))) return false;
-      return /^\\d{2,5}x\\d{2,5}$/.test(String(args.size || ""))
+      return /^\d{2,5}x\d{2,5}$/.test(String(args.size || ""))
         && Number.isInteger(args.n) && args.n >= 1 && args.n <= 20
         && (args.transparent_background === undefined
           || typeof args.transparent_background === "boolean");
