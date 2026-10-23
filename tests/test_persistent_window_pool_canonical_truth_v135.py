@@ -55,6 +55,9 @@ def test_runtime_config_reports_effective_persistent_window_target() -> None:
     assert payload["persistent_window_idle_close_seconds"] == 0
     assert payload["route_idle_close_seconds"] == 300
     assert payload["route_idle_close_applies_to_physical_pool"] is False
+    assert payload["request_window_lifecycle_revision"] == 190
+    assert payload["request_window_close_after_seconds"] == 5
+    assert payload["continuous_voice_session_window_lease"] is True
     assert payload["speculative_worker_windows"] is False
     assert payload["prewarmed_worker_windows"] is True
     assert payload["window_decision_authority"] == "persistent-window-pool-v132"
