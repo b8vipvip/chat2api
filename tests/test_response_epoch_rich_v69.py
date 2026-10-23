@@ -136,7 +136,7 @@ def test_tx03_image_recipe_is_not_a_successful_image_terminal():
     assert "function isImageCreationRequest(prompt)" in owner
     assert "const imageBuildArtifact = imageCreationRequested" in owner
     assert "const intrinsicHandoff = Boolean(imageHandoff) || imageBuildArtifact" in owner
-    assert "imageHandoff || imageBuildArtifact || imageToolArguments || visibleTurnMedia || pageMediaFound" in owner
+    assert "|| visibleTurnMedia || visibleTurnFiles || fileCreationRequested || pageMediaFound" in owner
     assert "media_last_baseline_excluded" in owner
     assert "ChatGPT returned an image-building command, but no verified transferable image was captured" in owner
     assert "media_excluded_by_gate" in owner
