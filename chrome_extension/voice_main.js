@@ -30,10 +30,10 @@
   };
   globalThis[KEY] = state;
 
-  const post = (type, data = {}) => window.postMessage({
+  const post = (type, data = {}, ownerRequestId = state.requestId) => window.postMessage({
     source: "chat2api-main",
     type,
-    request_id: state.requestId,
+    request_id: ownerRequestId,
     ...data,
   }, "*");
 
@@ -64,17 +64,17 @@
     state.analyserContext = null;
   }
 
-  function startAnalyser(stream) {
+  function startAnalyser(stream, ownerRequestId, recordingState) {
     stopAnalyser();
     try {
       const context = new AudioContext();
       state.analyserContext = context;
       if (context.state === "suspended" && typeof context.resume === "function") {
         context.resume()
-          .then(() => post("voice.audio.context", { state: context.state || "running" }))
+          .then(() => post("voice.audio.context", { state: context.state || "running" }, ownerRequestId))
           .catch(error => post("voice.audio.level.error", {
             error: "AudioContext resume failed: " + String(error?.message || error),
-          }));
+          }, ownerRequestId));
       }
       const source = context.createMediaStreamSource(stream);
       const analyser = context.createAnalyser();
@@ -82,6 +82,7 @@
       source.connect(analyser);
       const data = new Float32Array(analyser.fftSize);
       state.analyserTimer = setInterval(() => {
+        if (state.requestId !== ownerRequestId) return;
         try {
           analyser.getFloatTimeDomainData(data);
           let sum = 0;
@@ -89,57 +90,73 @@
           const rms = Math.sqrt(sum / data.length);
           const speaking = rms > 0.008;
           if (speaking) {
+            recordingState.soundStarted = true;
+            recordingState.lastSoundAt = Date.now();
             state.soundStarted = true;
-            state.lastSoundAt = Date.now();
+            state.lastSoundAt = recordingState.lastSoundAt;
           }
-          post("voice.audio.level", { speaking, rms, last_sound_at: state.lastSoundAt });
+          post("voice.audio.level", {
+            speaking, rms, last_sound_at: recordingState.lastSoundAt,
+          }, ownerRequestId);
         } catch (_) {}
       }, 160);
     } catch (error) {
-      post("voice.audio.level.error", { error: String(error?.message || error) });
+      post("voice.audio.level.error", { error: String(error?.message || error) }, ownerRequestId);
     }
   }
 
   function attachRemoteTrack(track) {
     if (!state.requestId || !track || track.kind !== "audio" || track.readyState === "ended") return;
+    const ownerRequestId = state.requestId;
     state.remoteTrackSeen = true;
     state.remoteTrackSeenAt = performance.now();
-    post("voice.remote.track", { track_state: track.readyState || "live" });
+    post("voice.remote.track", { track_state: track.readyState || "live" }, ownerRequestId);
     if (state.recorder && state.recorder.state !== "inactive") return;
     try {
       const stream = new MediaStream([track]);
       const mimeType = recorderMime();
-      state.recorderChunks = [];
-      state.recorderMime = mimeType || "audio/webm";
+      // Audio blobs and asynchronous callbacks belong to the request that
+      // created the recorder, NEVER to a later Voice request on the same tab.
+      const chunks = [];
+      const recordingState = { soundStarted: false, lastSoundAt: 0 };
+      const recordedMime = mimeType || "audio/webm";
+      const recordedAt = performance.now();
+      state.recorderChunks = chunks;
+      state.recorderMime = recordedMime;
       state.soundStarted = false;
       state.lastSoundAt = 0;
       const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
       state.recorder = recorder;
-      state.recordingStartedAt = performance.now();
-      recorder.ondataavailable = event => { if (event.data?.size) state.recorderChunks.push(event.data); };
-      recorder.onerror = event => post("voice.record.error", { error: String(event?.error?.message || event?.error || "MediaRecorder error") });
+      state.recordingStartedAt = recordedAt;
+      recorder.ondataavailable = event => { if (event.data?.size) chunks.push(event.data); };
+      recorder.onerror = event => post("voice.record.error", {
+        error: String(event?.error?.message || event?.error || "MediaRecorder error"),
+      }, ownerRequestId);
       recorder.onstop = async () => {
-        stopAnalyser();
+        if (state.recorder === recorder) {
+          stopAnalyser();
+          state.recorder = null;
+        }
         try {
-          const blob = new Blob(state.recorderChunks, { type: state.recorderMime || "audio/webm" });
+          const blob = new Blob(chunks, { type: recordedMime });
           const buffer = await blob.arrayBuffer();
           post("voice.record.complete", {
-            mime_type: blob.type || state.recorderMime || "audio/webm",
+            mime_type: blob.type || recordedMime,
             b64_json: arrayBufferToBase64(buffer),
             size: buffer.byteLength,
-            duration_ms: Math.round((performance.now() - state.recordingStartedAt) * 10) / 10,
-            remote_track_seen: state.remoteTrackSeen,
-            sound_started: state.soundStarted,
-          });
+            duration_ms: Math.round((performance.now() - recordedAt) * 10) / 10,
+            remote_track_seen: true,
+            sound_started: recordingState.soundStarted,
+          }, ownerRequestId);
         } catch (error) {
-          post("voice.record.error", { error: String(error?.message || error) });
+          post("voice.record.error", { error: String(error?.message || error) }, ownerRequestId);
         }
       };
       recorder.start(250);
-      startAnalyser(stream);
-      post("voice.record.started", { mime_type: state.recorderMime });
+      startAnalyser(stream, ownerRequestId, recordingState);
+      post("voice.record.started", { mime_type: recordedMime }, ownerRequestId);
     } catch (error) {
-      post("voice.record.error", { error: String(error?.message || error) });
+      post("voice.record.error", { error: String(error?.message || error) }, ownerRequestId);
     }
   }
 
@@ -261,6 +278,13 @@
     if (event.source !== window || event.data?.source !== "chat2api-isolated") return;
     const message = event.data;
     if (message.type === "voice.prepare") {
+      // A previous recorder may still be finalizing asynchronously.
+      // Detach it before starting this request; its callbacks carry its own ID.
+      if (state.recorder && state.recorder.state !== "inactive") {
+        try { state.recorder.stop(); } catch (_) {}
+      }
+      stopAnalyser();
+      state.recorder = null;
       state.requestId = message.request_id || null;
       state.mode = message.mode || "speech";
       state.preparedInput = message.input_base64 ? { base64: message.input_base64, mime_type: message.input_mime || "" } : null;
