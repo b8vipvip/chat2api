@@ -46,6 +46,21 @@ CHAT2API_UPDATE_GITHUB_HTTPS_LOW_SPEED_SECONDS=12
 
 这些值默认已经针对“快速失败、自动换路”设置，一般无需修改。
 
+## Docker 构建下载源与超时保护
+
+生产镜像的 Python 依赖下载默认按 **HTTPS 清华 PyPI 镜像 → HTTPS 阿里云 PyPI 镜像 → 官方 https://pypi.org/simple** 顺序尝试。每个来源的 `pip install` 最多持续 900 秒，内部 pip 网络请求超时 25 秒、重试 2 次；全失败才拒绝部署。更新后端采用带有 `chat2api-pip` 命名空间的 BuildKit pip 缓存，**不**执行 `docker builder prune`，不影响同机 MV3C 的 npm 缓存。国内镜像下载源走 TLS，但 PyPI wheel 目前尚未做 SHA256 锁定校验，后续可针对构建引入 hashes lockfile。
+
+如服务器某个镜像不可达，可在 `/opt/chat2api/.env` 中配置（只允许 HTTPS `/simple` 根地址）：
+
+```dotenv
+CHAT2API_PIP_PRIMARY_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple
+CHAT2API_PIP_SECONDARY_INDEX=https://mirrors.aliyun.com/pypi/simple
+```
+
+这个选项只影响 Chat2API 的镜像构建，不修改 Docker 守护进程的 registry mirrors、Docker Hub 或其他项目，也不保证修复服务器到各个镜像站的实际网络连接。修改构建参数可能使已有依赖层失效一次。GitHub Actions 的美国构建 Runner 使用官方 PyPI 验证生产镜像，其成功不代表境内镜像站在实际宿主机必然可达。
+
+更新的 systemd `TimeoutStartSec` 从 30 分钟调整为 **75 分钟**，给三个有界安装源及故障回滚保留空间。**更新后的宿主机需要重新执行** `sudo bash /opt/chat2api/scripts/install_chat2api_server_updater.sh` 以刷新本机 systemd unit；只更新容器中的代码不会改变已安装的超时。systemd 在异常结束时通过 `ExecStopPost` 将遗留的 `running/queued` 状态变为 `failed`，但不声称回滚已经成功。
+
 ## 更新流程
 
 网页只会写入 `data/admin-update-request.json`。宿主机 `systemd.path` 检测到文件后启动固定脚本 `scripts/chat2api_server_update.sh`。
