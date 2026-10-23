@@ -331,7 +331,7 @@
 
   function tableMarkdown(table) {
     const rows = [...table.querySelectorAll("tr")].map(row => [...row.querySelectorAll(":scope > th, :scope > td")]
-      .map(cell => normalizeInline(cell.innerText || cell.textContent || "").replace(/\|/g, "\\|").trim()));
+      .map(cell => inlineChildren(cell).replace(/\|/g, "\\|").replace(/\s*\n\s*/g, " ").trim()));
     if (!rows.length || !rows[0].length) return "";
     const width = Math.max(...rows.map(row => row.length));
     const padded = rows.map(row => [...row, ...Array(Math.max(0, width - row.length)).fill("")]);
@@ -379,12 +379,24 @@
 
   function blockChildren(node, depth = 0) {
     const chunks = [];
+    let inline = "";
+    const flushInline = () => {
+      if (inline.trim()) chunks.push(inline.trim());
+      inline = "";
+    };
     for (const child of node.childNodes || []) {
-      const value = child instanceof Element && /^(PRE|UL|OL|TABLE|BLOCKQUOTE|H[1-6]|HR|P|DIV|SECTION|ARTICLE)$/i.test(child.tagName)
-        ? blockMarkdown(child, depth)
-        : inlineMarkdown(child).trim();
-      if (value) chunks.push(value);
+      if (child instanceof Element
+          && /^(PRE|UL|OL|TABLE|BLOCKQUOTE|H[1-6]|HR|P|DIV|SECTION|ARTICLE)$/i.test(child.tagName)) {
+        flushInline();
+        const block = blockMarkdown(child, depth);
+        if (block) chunks.push(block);
+      } else {
+        // Text, emphasis, links and images belong to one inline run.
+        // Separating each node with a blank line corrupts rich paragraphs.
+        inline += inlineMarkdown(child);
+      }
     }
+    flushInline();
     return chunks.join("\n\n");
   }
 
