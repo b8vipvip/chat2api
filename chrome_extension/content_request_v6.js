@@ -764,6 +764,25 @@
       && /^(?:\{\s*"skipped_mainline"\s*:\s*true\s*\}\s*)+$/.test(raw);
   }
 
+  // Raw image-tool invocation parameters are never a user-facing assistant reply.
+  // Keep request-v6 as the sole terminal owner while waiting for verified media.
+  function isImageToolArguments(value) {
+    const raw = String(value || "").trim();
+    if (!raw.startsWith("{") || raw.length > 2000) return false;
+    try {
+      const args = JSON.parse(raw);
+      if (!args || Array.isArray(args) || typeof args !== "object") return false;
+      const keys = Object.keys(args);
+      if (!keys.includes("size") || !keys.includes("n")) return false;
+      if (!keys.every(key => ["size", "n", "transparent_background", "quality",
+          "background", "output_format", "style"].includes(key))) return false;
+      return /^\\d{2,5}x\\d{2,5}$/.test(String(args.size || ""))
+        && Number.isInteger(args.n) && args.n >= 1 && args.n <= 20
+        && (args.transparent_background === undefined
+          || typeof args.transparent_background === "boolean");
+    } catch (_) { return false; }
+  }
+
   function hasTransferableImage(value) {
     return /!\[[^\]]{0,400}\]\((?:data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+|https:\/\/[^)]+)\)/i.test(String(value || ""));
   }
@@ -775,7 +794,7 @@
     const raw = String(prompt || "");
     const text = (raw.includes("[User]") ? raw.slice(raw.lastIndexOf("[User]") + 6) : raw).slice(0, 800);
     const action = "(?:生成|绘制|画|制作|设计|create|generate|draw|design)";
-    const subject = "(?:图片|图像|头像|插画|插图|照片|海报|图标|image|avatar|icon|illustration|picture)";
+    const subject = "(?:图片|图像|头像|插画|插图|参考图|图标|image|avatar|icon|illustration|picture)";
     // Image-generation wording in an analysis question (e.g. 图片生成函数)
     // is not a request to produce an image. Require a creation verb *before*
     // the output type, or an explicit reverse-order directive.
@@ -849,6 +868,8 @@
       const networkTerminalAt = Number(active.networkTerminalAt || 0);
       const imageHandoff = isInternalMediaHandoff(networkText)
         || isInternalMediaHandoff(networkTerminalText);
+      const imageToolArguments = imageCreationRequested
+        && (isImageToolArguments(networkText) || isImageToolArguments(networkTerminalText));
       // Only request-v6 decides terminal state. A generated-image request
       // that received a raw local PIL command must try same-request media
       // capture before completing; such instructions are not an image.
@@ -865,13 +886,13 @@
         ? userAnchor : null;
       // Only this request's authenticated media-tool handoff enables
       // intrinsic-size-only image cards; generic page images stay excluded.
-      const intrinsicHandoff = Boolean(imageHandoff) || imageBuildArtifact;
+      const intrinsicHandoff = Boolean(imageHandoff) || imageBuildArtifact || imageToolArguments;
       const discovered = rich?.locateNewPageMedia?.(
         active.baselinePageMedia, freshUserAnchor, intrinsicHandoff,
       ) || { images: [], candidate_count_document: 0, new_image_candidate_count: 0,
         after_user_count: 0, baseline_image_count: 0, anchor: "none" };
       const pageMediaFound = discovered.images.length > 0;
-      const captureMedia = imageHandoff || imageBuildArtifact || visibleTurnMedia || pageMediaFound;
+      const captureMedia = imageHandoff || imageBuildArtifact || imageToolArguments || visibleTurnMedia || pageMediaFound;
       const captureOrigin = pageMediaFound && !visibleTurnMedia ? "new-page-media" : "assistant-turn";
       const sourceMedia = pageMediaFound && !visibleTurnMedia ? discovered.images : [];
       const sourceFingerprint = sourceMedia.map(img =>
@@ -885,7 +906,7 @@
       const sourceStable = !sourceMedia.length || (
         active.mediaSourceStableAt && Date.now() - active.mediaSourceStableAt >= 1600
       );
-      if (imageHandoff || visibleTurnMedia || pageMediaFound) imageHandoffObserved = true;
+      if (imageHandoff || imageToolArguments || visibleTurnMedia || pageMediaFound) imageHandoffObserved = true;
       if (imageBuildArtifact) imageBuildArtifactObserved = true;
       try { globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.observe?.(active, {
         handoff: imageHandoff, generating, newCandidates: discovered.new_image_candidate_count,
@@ -896,7 +917,7 @@
       active.mediaLastTrustedNewSources = Number(discovered.trusted_fresh_sources || 0);
       active.mediaLastBaselineExcluded = Number(discovered.excluded_by_baseline || 0);
       active.mediaLastEligibilityExcluded = Number(discovered.excluded_by_media_gate || 0);
-      if ((imageHandoff || imageBuildArtifact) && !sameTurnRoot && !pageMediaFound
+      if ((imageHandoff || imageBuildArtifact || imageToolArguments) && !sameTurnRoot && !pageMediaFound
           && (!active.mediaScanReportedAt || Date.now() - active.mediaScanReportedAt >= 12000)) {
         active.mediaScanReportedAt = Date.now();
         await diagnostic(active, "media-awaiting-image-anchor", {
@@ -1028,7 +1049,8 @@
           active.lastCandidateReason = current.reason;
         }
       }
-      if (networkText && !isInternalMediaHandoff(networkText) && !imageBuildArtifact) {
+      if (networkText && !isInternalMediaHandoff(networkText) && !imageBuildArtifact
+          && !isImageToolArguments(networkText)) {
         const preferred = preferredResponseText(lastText, networkText);
         const previous = lastText;
         lastText = await updateCapturedText(active, preferred, lastText);
@@ -1047,6 +1069,7 @@
       // automatically a final text payload.
       const evidenceSettledAt = Math.max(networkTerminalAt, Number(active.networkObservedAt || 0));
       if (networkTerminalAt && networkTerminalText && !captureMedia
+          && !isImageToolArguments(networkTerminalText)
           && !(imageCreationRequested && isLocalImageBuildCommand(networkTerminalText))
           && !promptStillPresent(active)
           && Date.now() - evidenceSettledAt >= 1250) {
@@ -1155,7 +1178,7 @@
     if (active.cancelled) await emit({ type: "chat.cancelled", request_id: active.requestId, reason: "Cancelled by API client" });
     else await emit({ type: "chat.error", request_id: active.requestId, error: imageBuildArtifactObserved
       ? "ChatGPT returned an image-building command, but no verified transferable image was captured"
-      : imageHandoffObserved ? "ChatGPT generated media but no transferable image was captured before the request timeout"
+      : imageHandoffObserved ? "ChatGPT generated media or image-tool arguments but no transferable image was captured before the request timeout"
       : "Timed out waiting for ChatGPT response", diagnostics: {
         response_epoch_revision: 69,
         media_local_build_command_observed: imageBuildArtifactObserved,
