@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.182"
+    assert RELEASE_VERSION == "0.22.183"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -68,7 +68,7 @@ def test_realtime_protocol_contract_matches_live_bridge():
 def test_v148_release_contract_keeps_broker_terminal_authority():
     from pathlib import Path
     from app.runtime_contract import RELEASE_VERSION, CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.182"
+    assert RELEASE_VERSION == "0.22.183"
     assert CHROME_BRIDGE_BUNDLE_VERSION == RELEASE_VERSION
     root = Path(__file__).resolve().parents[1]
     watchdog = (root / "app/request_stall_patch.py").read_text(encoding="utf-8")
