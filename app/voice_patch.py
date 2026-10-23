@@ -160,7 +160,14 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=400, detail="Invalid voicereq_ request ID")
         request_id = request_id or ("voicereq_" + uuid.uuid4().hex)
         response_id = "voice_" + uuid.uuid4().hex
-        selected_client = resolve_client(client_id)
+        # Reuse the registry's existing per-API-key sticky route authority.
+        # Voice must not randomly choose a different Worker than the selected
+        # business key, or bypass the sole Worker-list enable switch.
+        route_token = registry.routing_key_context.set(principal.key_id)
+        try:
+            selected_client = resolve_client(client_id)
+        finally:
+            registry.routing_key_context.reset(route_token)
         try:
             state = await broker.create(request_id, selected_client)
         except RuntimeError as error:
