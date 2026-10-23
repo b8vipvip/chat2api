@@ -855,7 +855,7 @@
       // Negation within the 18 characters immediately before the verb
       // overrides incidental creation words in prohibition/recap prompts.
       const before = line.slice(Math.max(0, match.index - 18), match.index);
-      if (negation.test(before)) continue;
+      if (negation.test(before) || /(?:解释|如何|怎么|分析|说明做法|explain|how to)/i.test(before)) continue;
       const rest = line.slice(match.index + match[0].length, match.index + match[0].length + 95);
       if (subjects.test(rest)) return true;
     }
