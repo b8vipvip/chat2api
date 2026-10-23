@@ -832,10 +832,16 @@
     // The prose is read only from the correlated current assistant turn.
     // Reject internal tool control, duplicate images and browser-only blobs.
     if (!candidate || isInternalMediaHandoff(candidate)
-        || isImageToolArguments(candidate) || isLocalImageBuildCommand(candidate)
-        || hasTransferableImage(candidate)
-        || /!\[[^\]]*\]\(blob:/i.test(candidate)) return imageMarkdown;
-    return [candidate, imageMarkdown].filter(Boolean).join("\n\n");
+        || isImageToolArguments(candidate) || isLocalImageBuildCommand(candidate))
+      return imageMarkdown;
+    // A separately rendered generated image can also appear as a preview
+    // inside the same assistant turn. Remove only those image Markdown links,
+    // not surrounding prose, tables, code files or generated-file handoffs.
+    // The verified detached images are appended once after the surviving text.
+    const preservedProse = candidate.replace(
+      /!\[(?!📎 )[^\]\n]{0,400}\]\((?:blob:|https:\/\/|data:image\/)[^)\s]*\)/gi, "",
+    ).trim();
+    return [preservedProse, imageMarkdown].filter(Boolean).join("\n\n");
   }
 
   async function reconcileResponsesTerminal(active, networkText) {
