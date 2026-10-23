@@ -42,8 +42,8 @@ const rich = ctx.__CHAT2API_RICH_RESPONSE_V69__;
 const paragraph = E("div", T("开头 "), E("strong", T("加粗")), T(" 后面 "),
   E("a", T("链接")), T(" 结尾"), E("p", T("下一段")));
 const output = rich.extractMarkdown(paragraph);
-assert.equal(output, "开头 **加粗** 后面 链接 结尾\\n\\n下一段");
-assert.ok(!output.includes("开头\\n\\n"), "inline segments may not become paragraphs");
+assert.equal(output, "开头 **加粗** 后面 链接 结尾\n\n下一段");
+assert.ok(!output.includes("开头\n\n"), "inline segments may not become paragraphs");
 
 const table = E("table", E("tr", E("th", T("字段")), E("th", T("值"))),
   E("tr", E("td", T("类型")), E("td", E("strong", T("重要")))));
@@ -54,7 +54,7 @@ const findFunction = (start, end) => {
   const begin = controllerSource.indexOf("  function " + start + "(");
   const finish = controllerSource.indexOf("  function " + end + "(", begin);
   assert.ok(begin >= 0 && finish > begin);
-  return runInNewContext(controllerSource.slice(begin, finish) + "\\n" + start + ";");
+  return runInNewContext(controllerSource.slice(begin, finish) + "\n" + start + ";");
 };
 const toolArgs = findFunction("isImageToolArguments", "hasTransferableImage");
 assert.equal(toolArgs('{"size":"1024x1536","n":3,"transparent_background":false}'), true);
@@ -65,7 +65,7 @@ const imageIntent = findFunction("isImageCreationRequest", "isLocalImageBuildCom
 assert.equal(imageIntent("帮我生成视频提示词和3张参考图。"), true);
 assert.equal(imageIntent("我想分析图片生成函数"), false);
 
-assert.match(controllerSource, /imageToolArguments \\|\\| visibleTurnMedia \\|\\| pageMediaFound/);
-assert.match(controllerSource, /networkTerminalAt && networkTerminalText && !captureMedia[\\s\\S]*?!isImageToolArguments\\(networkTerminalText\\)/);
+assert.match(controllerSource, /imageToolArguments \|\| visibleTurnMedia \|\| pageMediaFound/);
+assert.match(controllerSource, /networkTerminalAt && networkTerminalText && !captureMedia[\s\S]*?!isImageToolArguments\(networkTerminalText\)/);
 assert.match(controllerSource, /response_terminal_source: "verified-request-media-dom-v176"/);
 console.log("Rich Markdown inline grouping, table formatting and image-tool handoff regression passed");
