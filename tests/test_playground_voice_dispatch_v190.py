@@ -80,6 +80,13 @@ def wait_run(client, run_id, expected, seconds=8):
 
 def complete(ws, request_id, transcript="中文语音测试成功"):
     ws.send_json({
+        "type":"image.diagnostics", "kind":"voice", "request_id":request_id,
+        "diagnostics":{
+            "route":"chatgpt-voice-v2", "remote_track_seen":True,
+            "remote_sound_started":True, "audio_bytes":len(AUDIO),
+        },
+    })
+    ws.send_json({
         "type":"image.completed", "kind":"voice", "request_id":request_id,
         "voice":{
             "transcript":transcript,
