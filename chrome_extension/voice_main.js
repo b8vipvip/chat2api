@@ -17,6 +17,7 @@
     remoteTrackSeenAt: 0,
     remoteTrack: null,
     captureArmed: false,
+    recorderCapture: null,
     recordingStartedAt: 0,
     lastSoundAt: 0,
     soundStarted: false,
@@ -120,7 +121,8 @@
       // Audio blobs and asynchronous callbacks belong to the request that
       // created the recorder, NEVER to a later Voice request on the same tab.
       const chunks = [];
-      const recordingState = { soundStarted: false, lastSoundAt: 0 };
+      const recordingState = { soundStarted: false, lastSoundAt: 0, discarded: false };
+      state.recorderCapture = recordingState;
       const recordedMime = mimeType || "audio/webm";
       const recordedAt = performance.now();
       state.recorderChunks = chunks;
@@ -138,7 +140,9 @@
         if (state.recorder === recorder) {
           stopAnalyser();
           state.recorder = null;
+          state.recorderCapture = null;
         }
+        if (recordingState.discarded) return;
         try {
           const blob = new Blob(chunks, { type: recordedMime });
           const buffer = await blob.arrayBuffer();
@@ -294,11 +298,13 @@
     if (message.type === "voice.prepare") {
       // A previous recorder may still be finalizing asynchronously.
       // Detach it before starting this request; its callbacks carry its own ID.
+      if (state.recorderCapture) state.recorderCapture.discarded = true;
       if (state.recorder && state.recorder.state !== "inactive") {
         try { state.recorder.stop(); } catch (_) {}
       }
       stopAnalyser();
       state.recorder = null;
+      state.recorderCapture = null;
       state.requestId = message.request_id || null;
       state.mode = message.mode || "speech";
       state.preparedInput = message.input_base64 ? { base64: message.input_base64, mime_type: message.input_mime || "" } : null;
@@ -330,9 +336,11 @@
       post("voice.record.armed", { remote_track_seen: hasTrack });
       if (hasTrack) startCapture(track, state.requestId);
     } else if (message.type === "voice.record.stop" && message.request_id === state.requestId) {
+      state.captureArmed = false;
       if (state.recorder && state.recorder.state !== "inactive") state.recorder.stop();
       else post("voice.record.error", { error: "Remote voice audio track was not captured" });
     } else if (message.type === "voice.reset" && message.request_id === state.requestId) {
+      if (state.recorderCapture) state.recorderCapture.discarded = true;
       if (state.recorder && state.recorder.state !== "inactive") {
         try { state.recorder.stop(); } catch (_) {}
       }
