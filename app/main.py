@@ -23,6 +23,7 @@ from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout
 from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
+from .generated_files_v196 import GeneratedFileArchive
 from .media_public_origin_v187 import media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
 from .responses_multimodal_input_v183 import attachment_specs as canonical_attachment_specs
@@ -63,6 +64,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     telemetry.usage_accounting = api_keys.account_completed_usage
     file_store = FileStore(config.data_dir)
     media_archive = MediaArchive(config.data_dir, config.api_key)
+    generated_files = GeneratedFileArchive(media_archive)
     test_runs = TestRunStore(config.data_dir)
 
     @asynccontextmanager
@@ -95,6 +97,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.api_keys = api_keys
     app.state.file_store = file_store
     app.state.media_archive = media_archive
+    app.state.generated_files = generated_files
     app.state.test_runs = test_runs
     app.add_middleware(
         CORSMiddleware,
@@ -232,6 +235,57 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
             "Content-Disposition": "inline" if mime.startswith("image/") else "attachment",
             "Cache-Control": "private, max-age=86400",
+        })
+
+
+    @app.get("/api/admin/media-storage/generated-files", dependencies=[Depends(require_admin_key)])
+    async def generated_file_inventory(limit: int = Query(default=80, ge=1, le=200)) -> dict[str, object]:
+        return {"data": generated_files.list_items(limit)}
+
+    @app.delete("/api/admin/media-storage/generated-files/{file_id}", dependencies=[Depends(require_admin_key)])
+    async def delete_generated_file(file_id: str) -> dict[str, bool]:
+        try:
+            deleted = await asyncio.to_thread(generated_files.delete, file_id)
+        except (ValueError, OSError) as error:
+            raise HTTPException(status_code=503, detail="Cannot remove generated file from storage") from error
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Unknown generated file")
+        return {"deleted": True}
+
+    @app.get("/v1/generated-files/{file_id}")
+    async def generated_file_metadata(
+        file_id: str, request: Request, principal: ApiPrincipal = Depends(require_api_key),
+    ) -> Response:
+        if principal.kind != "master" and "chat" not in principal.scopes:
+            raise HTTPException(status_code=403, detail="API key lacks chat permission")
+        try:
+            record = await asyncio.to_thread(
+                generated_files.describe, file_id, principal.key_id,
+                admin=principal.kind == "master",
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Unknown generated file") from None
+        origin = media_archive._config().get("public_base_url") or media_base_for_request(request)
+        url = f"{origin}/api/generated-files/{record['id']}/{record.pop('token')}"
+        return JSONResponse({**record, "object": "chat2api.generated_file", "url": url},
+                            headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/generated-files/{file_id}/{access_token}")
+    async def download_generated_file(file_id: str, access_token: str) -> Response:
+        try:
+            data, mime, filename = await asyncio.to_thread(generated_files.read, file_id, access_token)
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(status_code=404, detail="Unknown generated file") from None
+        # Always force download, including HTML, code, SVG-like contents and PDF.
+        # Never interpret arbitrary model artifacts as same-origin active code.
+        from urllib.parse import quote
+        return Response(data, media_type="application/octet-stream", headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": "sandbox",
+            "Cache-Control": "private, max-age=86400",
+            "X-Chat2API-File-MIME": mime,
         })
 
     @app.get("/api/admin/worker-tools/catalog", dependencies=[Depends(require_admin_key)])
@@ -802,6 +856,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             state.diagnostics["request_timeout_seconds"] = effective
         return started_at + effective - asyncio.get_running_loop().time()
 
+
+    def archive_final_markdown(text: str, owner: str, request_id: str, base_url: str):
+        # Server-side archival is a presentation boundary, not a terminal arbiter.
+        # Images remain handled by their established thumbnail store. Generated
+        # file handoffs reuse that store's configured local/S3 backend.
+        text, media = media_archive.rewrite_markdown(text, owner, request_id, base_url)
+        text, files = generated_files.rewrite_markdown(text, owner, request_id, base_url)
+        if "data:image/" in text or "![📎 " in text:
+            raise ValueError("Incomplete generated attachment payload")
+        return text, media, files
+
     async def stream_request(
         request: Request, state: RequestState, response_id: str, model: str, timeout_seconds: int,
         prompt: str, principal: ApiPrincipal, prompt_mode: str, attachments_count: int,
@@ -862,12 +927,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 elif event_type == "chat.completed":
                     raw_final = str(event.get("text") or state.text)
                     try:
-                        final_text, archived_media = await asyncio.to_thread(
-                            media_archive.rewrite_markdown, raw_final, principal.key_id,
+                        final_text, archived_media, archived_files = await asyncio.to_thread(
+                            archive_final_markdown, raw_final, principal.key_id,
                             state.request_id, media_base_for_request(request),
                         )
-                        if "data:image/" in final_text:
-                            raise ValueError("Incomplete generated image payload")
                     except ValueError as error:
                         await record_request(
                             state, model, prompt, "error", principal, stream=True, prompt_mode=prompt_mode,
@@ -892,6 +955,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     meta = chat2api_meta(state, token_meta, principal)
                     if archived_media:
                         meta["media_files"] = archived_media
+                    if archived_files:
+                        meta["generated_files"] = archived_files
                     yield "data: " + json.dumps(
                         chunk_payload(response_id, model, {}, "stop", usage, meta),
                         ensure_ascii=False,
@@ -1027,12 +1092,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # The real image bytes must be on chat2api storage before the API
             # exposes any image URI; the historical data URI is never logged.
             try:
-                text, archived_media = await asyncio.to_thread(
-                    media_archive.rewrite_markdown, text, principal.key_id,
+                text, archived_media, archived_files = await asyncio.to_thread(
+                    archive_final_markdown, text, principal.key_id,
                     request_id, media_base_for_request(request),
                 )
-                if "data:image/" in text:
-                    raise ValueError("Incomplete generated image payload")
             except ValueError as error:
                 raise RuntimeError(str(error)) from error
             # The transport returns the assistant's completed text unchanged.
@@ -1047,6 +1110,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             meta = chat2api_meta(state, token_meta, principal)
             if archived_media:
                 meta['media_files'] = archived_media
+            if archived_files:
+                meta['generated_files'] = archived_files
         except asyncio.TimeoutError as error:
             await registry.send(client_id, {"type": "chat.cancel", "request_id": request_id})
             state.completed_mono = time.perf_counter()
