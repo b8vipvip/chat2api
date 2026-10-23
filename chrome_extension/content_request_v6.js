@@ -840,8 +840,39 @@
 
   async function reconcileResponsesTerminal(active, networkText) {
     const raw = String(networkText || "");
-    if (String(active.options?.response_protocol || "") !== "responses-v108"
-        || completeResponsesBridgeDocument(raw)) {
+    if (String(active.options?.response_protocol || "") !== "responses-v108") {
+      // The network can expose the source markup of a ChatGPT rich answer.
+      // It is not the same thing as the visible, rendered assistant reply.
+      // A matching same-turn DOM capture can replace *source component tags*
+      // with semantic Markdown; ordinary prose/code and Responses envelopes
+      // still retain the stronger SSE body.
+      const componentMarkup = /<\/?(?:box|row|col|grid|text|button|card|icon|svg|flow|carousel|WritingBlock|AppBlock|Chart)\b/i;
+      if (componentMarkup.test(raw) && raw.length >= 150) {
+        const until = Date.now() + 1800;
+        while (!active.cancelled && Date.now() < until) {
+          const candidateState = currentAssistantState(active);
+          if (candidateState.isNew && candidateState.latest && !isGenerating()) {
+            try {
+              const captured = await finalNodeText(candidateState.latest);
+              const markdown = String(captured?.text || "").trim();
+              // This is a same-request turn, and it must share an actual
+              // visible text fragment. Length is not proof of identity.
+              const overlaps = markdown.split(/\n+/).map(line => normalize(line))
+                .filter(line => line.length >= 18)
+                .some(line => normalize(raw).includes(line.slice(0, 18)));
+              if (overlaps && markdown.length >= 30
+                  && !componentMarkup.test(markdown)
+                  && !markdown.includes("![📎 ")) {
+                return { text: markdown, source: "validated-rendered-same-turn-dom-v196" };
+              }
+            } catch (_) { /* untrusted or unavailable DOM never defeats SSE */ }
+          }
+          await delay(180);
+        }
+      }
+      return { text: raw, source: "network-sse-terminal-v57" };
+    }
+    if (completeResponsesBridgeDocument(raw)) {
       return { text: raw, source: "network-sse-terminal-v57" };
     }
     // The request-v6 controller remains the only terminal authority. Accept
