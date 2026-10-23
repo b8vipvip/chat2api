@@ -1,6 +1,10 @@
 services:
   chat2api:
-    build: .
+    build:
+      context: .
+      args:
+        CHAT2API_PIP_PRIMARY_INDEX: ${CHAT2API_PIP_PRIMARY_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+        CHAT2API_PIP_SECONDARY_INDEX: ${CHAT2API_PIP_SECONDARY_INDEX:-https://mirrors.aliyun.com/pypi/simple}
     restart: unless-stopped
     stop_grace_period: 20s
     env_file: .env
