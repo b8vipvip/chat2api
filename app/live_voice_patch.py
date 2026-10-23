@@ -74,10 +74,14 @@ def _media_ids_from_control(control: dict[str, Any]) -> list[str]:
     elif kind == "conversation.item.create":
         item = control.get("item") if isinstance(control.get("item"), dict) else {}
         parts = item.get("content") or []
+    if isinstance(parts, str) and kind == "conversation.item.create":
+        return []
     if not isinstance(parts, list):
         raise ValueError("Media content must be an array")
     ids: list[str] = []
     for part in parts:
+        if isinstance(part, str) and kind == "conversation.item.create":
+            continue
         if not isinstance(part, dict):
             raise ValueError("Media item must be an object")
         ptype = str(part.get("type") or "")
@@ -438,8 +442,15 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         attachments = attachment_specs(file_store, file_ids, principal)
                         for spec in attachments:
                             mime = str(spec.get("mime_type") or "").lower()
-                            if mime.startswith("audio/") or mime.startswith("video/"):
-                                raise ValueError("Live media attachments support images/documents; use PCM binary frames for microphone audio")
+                            allowed = (
+                                mime in {"image/png", "image/jpeg", "image/webp", "image/gif",
+                                         "application/pdf", "text/plain", "text/csv",
+                                         "text/markdown", "application/json",
+                                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"}
+                            )
+                            if not allowed:
+                                raise ValueError("Live image/file MIME is not supported; send PCM as binary microphone frames")
                     except HTTPException as error:
                         await send_json({"type": "error", "code": "MEDIA_ACCESS_DENIED", "message": str(error.detail), "retryable": False})
                         continue
