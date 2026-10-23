@@ -152,6 +152,8 @@ def test_tool_argument_json_cannot_be_final_and_rich_markup_stays_grouped():
     """TX03 video/reference-image request must not complete with image tool args."""
     owner = read("chrome_extension/content_request_v6.js")
     rich = read("chrome_extension/content_rich_response_v69.js")
+    assert "function combinePageMediaText(prose, mediaText)" in owner
+    assert "const captured = combinePageMediaText(assistantProse, finalMedia?.text);" in owner
     assert "function isImageToolArguments(value)" in owner
     assert "const imageToolArguments = imageCreationRequested" in owner
     assert "|| imageToolArguments;" in owner
