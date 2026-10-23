@@ -29,6 +29,8 @@
     micHookReady: false,
     peerConnectionsCreated: 0,
     micRequestsSeen: 0,
+    sessionPeerCreatedBaseline: 0,
+    sessionMicRequestedBaseline: 0,
     lastTransportError: "",
   };
   globalThis[KEY] = state;
@@ -317,6 +319,8 @@
       state.recorder = null;
       state.recorderCapture = null;
       state.requestId = message.request_id || null;
+      state.sessionPeerCreatedBaseline = state.peerConnectionsCreated;
+      state.sessionMicRequestedBaseline = state.micRequestsSeen;
       state.mode = message.mode || "speech";
       state.preparedInput = message.input_base64 ? { base64: message.input_base64, mime_type: message.input_mime || "" } : null;
       state.remoteTrackSeen = false;
@@ -335,6 +339,15 @@
         peer_connections_created: state.peerConnectionsCreated,
         mic_requests_seen: state.micRequestsSeen,
         transport_error: state.lastTransportError,
+      });
+    } else if (message.type === "voice.transport.snapshot" && message.request_id === state.requestId) {
+      post("voice.transport.snapshot", {
+        peer_connections_in_request: Math.max(0, state.peerConnectionsCreated - state.sessionPeerCreatedBaseline),
+        mic_requests_in_request: Math.max(0, state.micRequestsSeen - state.sessionMicRequestedBaseline),
+        peer_hook_ready: Boolean(state.peerHookReady && globalThis.RTCPeerConnection === state.peerHook),
+        mic_hook_ready: Boolean(state.micHookReady && mediaDevices?.getUserMedia === state.micHook),
+        remote_track_seen: state.remoteTrackSeen,
+        page_visibility: String(document.visibilityState || "unknown"),
       });
     } else if (message.type === "voice.input.play" && message.request_id === state.requestId) {
       playPreparedInput().catch(error => post("voice.input.error", { error: String(error?.message || error) }));

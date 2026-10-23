@@ -117,6 +117,7 @@
         if (/启动语音功能|start voice|voice mode|语音模式|开始语音|启动语音/i.test(label)) score += 160;
         if (/voice|语音/i.test(label)) score += 80;
         if (/听写|dictat|microphone|麦克风/i.test(label)) score -= 120;
+        if (/(end voice|exit voice|结束语音|退出语音|关闭语音)/i.test(label)) score = -10000;
         if (button.querySelector("svg") && button.getBoundingClientRect().bottom > innerHeight * 0.55) score += 10;
         return { button, label, score };
       })
@@ -128,8 +129,6 @@
   function voiceUiReady() {
     const orb = [...document.querySelectorAll("[data-testid='voice-floating-orb'], [data-testid*='voice-orb']")].find(visible);
     if (orb) return { reason: "voice-orb" };
-    const body = textOf(document.body);
-    if (/(准备好了，?\s*随时开始|ready when you are|start speaking|可以开始说话)/i.test(body)) return { reason: "ready-text" };
     const exit = [...document.querySelectorAll("button")].find(button => visible(button) && /(end voice|exit voice|结束语音|退出语音|关闭语音)/i.test(labelOf(button)));
     if (exit) return { reason: "voice-exit-button" };
     return null;
@@ -206,18 +205,25 @@
   });
 
   async function openVoice(active) {
-    const trigger = await waitFor(voiceTrigger, 15000, 150);
-    if (!trigger) {
-      const labels = [...(composerRoot() || document).querySelectorAll("button")]
-        .filter(visible).map(labelOf).filter(Boolean).slice(0, 40);
-      throw new Error(`ChatGPT Voice button was not found. Visible composer buttons: ${labels.join(" | ")}`);
+    // Do not click Start Voice if a genuine session is already visible.
+    // A generic sentence in page text is deliberately NOT proof of Voice UI.
+    const preexisting = voiceUiReady();
+    if (preexisting) {
+      await diagnostic(active, "session-already-visible", { voice_ready_reason: preexisting.reason });
+    } else {
+      const trigger = await waitFor(voiceTrigger, 15000, 150);
+      if (!trigger) {
+        const labels = [...(composerRoot() || document).querySelectorAll("button")]
+          .filter(visible).map(labelOf).filter(Boolean).slice(0, 40);
+        throw new Error(`ChatGPT Voice button was not found. Visible composer buttons: ${labels.join(" | ")}`);
+      }
+      active.voiceTriggerLabel = trigger.label;
+      await diagnostic(active, "trigger-found", { voice_trigger_label: trigger.label });
+      trigger.button.click();
+      await diagnostic(active, "trigger-clicked");
     }
-    active.voiceTriggerLabel = trigger.label;
-    await diagnostic(active, "trigger-found", { voice_trigger_label: trigger.label });
-    trigger.button.click();
-    await diagnostic(active, "trigger-clicked");
 
-    const ready = await waitFor(() => voiceUiReady(), 20000, 150);
+    const ready = preexisting || await waitFor(() => voiceUiReady(), 20000, 150);
     if (!ready) {
       const error = pageError();
       throw voiceFailure("VOICE_UI_NOT_READY", error || "ChatGPT Voice UI did not become ready");
@@ -229,10 +235,22 @@
       item => item.type === "voice.mic.synthetic" || item.type === "voice.remote.track",
       16000);
     if (!transport) {
+      // Report what the installed MAIN-world hooks actually saw during THIS
+      // request. Do not treat an earlier session's cumulative counters as
+      // proof of an active WebRTC connection.
+      postMain("voice.transport.snapshot", active);
+      const snapshot = await waitMain(active.requestId,
+        item => item.type === "voice.transport.snapshot", 1200);
       await diagnostic(active, "transport-not-ready", {
         voice_failure_code: "VOICE_TRANSPORT_NOT_READY",
         synthetic_mic_seen: false, remote_track_seen: false,
         transport_wait_ms: 16000,
+        peer_connections_in_request: Number(snapshot?.peer_connections_in_request || 0),
+        mic_requests_in_request: Number(snapshot?.mic_requests_in_request || 0),
+        peer_hook_still_ready: snapshot?.peer_hook_ready === true,
+        mic_hook_still_ready: snapshot?.mic_hook_ready === true,
+        browser_visibility: String(snapshot?.page_visibility || "unknown"),
+        transport_snapshot_received: Boolean(snapshot),
       });
       throw voiceFailure("VOICE_TRANSPORT_NOT_READY",
         "Voice UI appeared but neither microphone acquisition nor a remote WebRTC audio track was observed");
