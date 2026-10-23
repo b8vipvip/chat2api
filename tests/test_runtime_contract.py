@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.189"
+    assert RELEASE_VERSION == "0.22.190"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -68,7 +68,7 @@ def test_realtime_protocol_contract_matches_live_bridge():
 def test_v148_release_contract_keeps_broker_terminal_authority():
     from pathlib import Path
     from app.runtime_contract import RELEASE_VERSION, CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.189"
+    assert RELEASE_VERSION == "0.22.190"
     assert CHROME_BRIDGE_BUNDLE_VERSION == RELEASE_VERSION
     root = Path(__file__).resolve().parents[1]
     watchdog = (root / "app/request_stall_patch.py").read_text(encoding="utf-8")
@@ -98,6 +98,11 @@ def test_runtime_contract_payload_names_each_version_surface():
     assert payload["chrome_bridge"]["version"] == CHROME_BRIDGE_VERSION
     assert payload["chrome_bridge"]["bundle_version"] == CHROME_BRIDGE_BUNDLE_VERSION
     assert payload["chrome_bridge"]["persistent_window_pool_runtime_ready_revision"] == 146
+    assert payload["chrome_bridge"]["request_window_lifecycle_revision"] == 190
+    assert payload["chrome_bridge"]["request_window_close_after_seconds"] == 5
+    assert payload["features"]["request_scoped_worker_window_per_api_request_v190"] is True
+    assert payload["features"]["request_scoped_worker_window_close_after_5s_v190"] is True
+    assert payload["features"]["continuous_voice_session_window_lease_v190"] is True
     assert payload["features"]["persistent_window_runtime_preflight_v146"] is True
     assert payload["features"]["runtime_ready_standby_semantics_v146"] is True
     assert payload["protocols"]["realtime_voice"] == LIVE_PROTOCOL_VERSION
