@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 import time
@@ -29,6 +31,8 @@ TEST_LABELS = {
     "voice_conversation": "语音对话",
 }
 logger = logging.getLogger("chat2api.playground")
+VOICE_TRANSPORT_MODEL = "gpt-live"
+VOICE_SAMPLE_TEXT = "请用普通话清楚地说出：你好，chat2api，这是一次语音对话连通性测试。"
 
 
 def _response_error(response: httpx.Response) -> str:
@@ -93,7 +97,14 @@ class PlaygroundRunManager:
 
     @staticmethod
     def _has_document(body: PlaygroundRunRequest) -> bool:
-        return any(not str(item.mime_type or "").lower().startswith("image/") for item in body.files)
+        return any(
+            not str(item.mime_type or "").lower().startswith(("image/", "audio/"))
+            for item in body.files
+        )
+
+    @staticmethod
+    def _has_audio(body: PlaygroundRunRequest) -> bool:
+        return any(str(item.mime_type or "").lower().startswith("audio/") for item in body.files)
 
     def _planned_request_ids(self, body: PlaygroundRunRequest, kinds: list[str]) -> dict[str, str]:
         planned: dict[str, str] = {}
@@ -106,6 +117,12 @@ class PlaygroundRunManager:
                 planned[kind] = "req_" + uuid.uuid4().hex
             elif kind == "image_generation":
                 planned[kind] = "imgreq_" + uuid.uuid4().hex
+            elif kind in {"voice_generation", "voice_conversation"}:
+                planned[kind] = "voicereq_" + uuid.uuid4().hex
+                if kind == "voice_conversation" and not self._has_audio(body):
+                    # The sample itself is real speech generated via the public
+                    # Speech endpoint, not a fake silence/fixture recorded as pass.
+                    planned["voice_conversation_setup"] = "voicereq_" + uuid.uuid4().hex
         return planned
 
     async def start(self, body: PlaygroundRunRequest) -> dict[str, Any]:
@@ -114,6 +131,8 @@ class PlaygroundRunManager:
         kinds = self._kinds(body.test_type)
         request_ids = self._planned_request_ids(body, kinds)
         ordered_request_ids = [request_ids[kind] for kind in kinds if kind in request_ids]
+        if "voice_conversation_setup" in request_ids:
+            ordered_request_ids.append(request_ids["voice_conversation_setup"])
         rows = [
             {
                 "kind": kind,
@@ -385,6 +404,155 @@ class PlaygroundRunManager:
             "meta": {"usage": payload.get("usage"), "chat2api": payload.get("chat2api")},
         }
 
+
+    async def _voice_api(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        kind: str,
+        token: str,
+        request_id: str,
+        payload: dict[str, Any],
+    ) -> tuple[dict[str, Any], bytes, str]:
+        """Exercise real public voice API and verify the transport artifact.
+
+        Never save raw audio/Base64 in the TestRunStore: request history only
+        holds metadata. Audio is carried in the HTTP response to the caller.
+        """
+        endpoint = "/v1/audio/speech" if kind == "voice_generation" else "/v1/audio/conversations"
+        response = await client.post(
+            endpoint,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "X-Chat2API-Request-ID": request_id,
+            },
+            json={"model": VOICE_TRANSPORT_MODEL, "timeout": 300, **payload},
+        )
+        if response.status_code >= 400:
+            raise RuntimeError(f"{endpoint}: {_response_error(response)}")
+        value = response.json()
+        if not isinstance(value, dict):
+            raise RuntimeError("Voice endpoint returned an invalid response object")
+        meta = value.get("chat2api") if isinstance(value.get("chat2api"), dict) else {}
+        if str(meta.get("request_id") or "") != request_id:
+            raise RuntimeError("Voice endpoint did not preserve the correlated request ID")
+        audio = value.get("audio") if isinstance(value.get("audio"), dict) else {}
+        mime = str(audio.get("mime_type") or "").lower()
+        encoded = audio.get("b64_json")
+        if not mime.startswith("audio/") or not isinstance(encoded, str):
+            raise RuntimeError("Voice endpoint returned no valid audio media type/Base64 payload")
+        if len(encoded) > 22_000_000:
+            raise RuntimeError("Voice output exceeds safe Playground media size")
+        try:
+            audio_bytes = base64.b64decode(encoded, validate=True)
+        except (binascii.Error, ValueError) as error:
+            raise RuntimeError("Voice endpoint returned invalid audio Base64") from error
+        if len(audio_bytes) < 128:
+            raise RuntimeError("Voice endpoint did not return a usable audio artifact")
+        row = self.telemetry.get(request_id) or {}
+        if row.get("status") != "completed" or row.get("request_type") != kind:
+            raise RuntimeError("Voice HTTP response is not correlated with completed request history")
+        return value, audio_bytes, mime
+
+    async def _run_voice(
+        self,
+        client: httpx.AsyncClient,
+        *,
+        kind: str,
+        token: str,
+        request_id: str,
+        uploaded: list[dict[str, Any]],
+        setup_request_id: str | None = None,
+        selected_model: str,
+    ) -> dict[str, Any]:
+        started = time.perf_counter()
+        stage = "speech" if kind == "voice_generation" else "conversation"
+        try:
+            audio_item = next(
+                (item for item in uploaded
+                 if str(item.get("mime_type") or "").lower().startswith("audio/")),
+                None,
+            )
+            sample_source = "administrator-upload" if audio_item else "generated-live-speech"
+            if kind == "voice_conversation" and audio_item is None:
+                if not setup_request_id:
+                    raise RuntimeError("Missing planned voice sample preparation request ID")
+                stage = "sample-generation"
+                sample, raw_audio, mime = await self._voice_api(
+                    client, kind="voice_generation", token=token,
+                    request_id=setup_request_id,
+                    payload={"input": VOICE_SAMPLE_TEXT},
+                )
+                # Uploaded only for this run; _execute performs the ordinary
+                # per-API-key file cleanup after the conversation.
+                stage = "sample-upload"
+                filename = "chat2api-voice-sample.webm" if "webm" in mime else "chat2api-voice-sample.audio"
+                upload_response = await client.post(
+                    "/v1/files",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json={
+                        "filename": filename, "mime_type": mime,
+                        "data_base64": base64.b64encode(raw_audio).decode("ascii"),
+                        "purpose": "voice-input",
+                    },
+                )
+                if upload_response.status_code >= 400:
+                    raise RuntimeError("Voice sample upload failed: " + _response_error(upload_response))
+                file_id = str(upload_response.json().get("id") or "")
+                if not file_id:
+                    raise RuntimeError("Voice sample upload returned no file ID")
+                audio_item = {"id": file_id, "filename": filename, "mime_type": mime}
+                uploaded.append(audio_item)
+            stage = "voice-dispatch"
+            payload = (
+                {"input": "请用普通话自然、清晰地说：chat2api 语音生成测试成功。"}
+                if kind == "voice_generation"
+                else {
+                    "audio_file_id": str(audio_item["id"]),
+                    "instruction": "请听取这段中文语音，并用自然简短的普通话语音回应。",
+                }
+            )
+            reply, raw, mime = await self._voice_api(
+                client, kind=kind, token=token, request_id=request_id,
+                payload=payload,
+            )
+            transcript = str(reply.get("transcript") or "")
+            meta = reply.get("chat2api") or {}
+            issues = ["未得到可读转写文字（已收到音频）"] if not transcript.strip() else []
+            status = "warning" if issues else "passed"
+            return {
+                "kind": kind, "label": TEST_LABELS[kind], "status": status,
+                "message": "；".join(issues) if issues else "已收到真实语音音频并完成请求",
+                "request_id": request_id,
+                "setup_request_id": setup_request_id if sample_source == "generated-live-speech" and kind == "voice_conversation" else None,
+                "total_ms": (time.perf_counter() - started) * 1000,
+                "audio_bytes": len(raw), "audio_mime_type": mime,
+                "transcript_preview": transcript[:250],
+                "effective_model": VOICE_TRANSPORT_MODEL,
+                "selected_text_model": selected_model,
+                "sample_source": sample_source if kind == "voice_conversation" else None,
+                "quality": {
+                    "grade": status, "issues": issues, "audio_bytes": len(raw),
+                    "audio_mime_type": mime, "sample_source": sample_source if kind == "voice_conversation" else None,
+                    "transport_model": VOICE_TRANSPORT_MODEL,
+                    "worker_client_id": meta.get("client_id"),
+                },
+            }
+        except Exception as error:
+            message = f"{stage}: {error}"
+            row = self.telemetry.get(request_id) or {}
+            actual_status = str(row.get("status") or "")
+            return {
+                "kind": kind, "label": TEST_LABELS[kind],
+                "status": actual_status if actual_status in {"stalled", "cancelled"} else "failed",
+                "message": message, "error": message, "request_id": request_id,
+                "setup_request_id": setup_request_id if stage in {"sample-generation", "sample-upload"} else None,
+                "total_ms": (time.perf_counter() - started) * 1000,
+                "effective_model": VOICE_TRANSPORT_MODEL,
+                "selected_text_model": selected_model,
+                "failure_stage": stage,
+            }
+
     async def _run_kind(
         self,
         client: httpx.AsyncClient,
@@ -394,16 +562,21 @@ class PlaygroundRunManager:
         token: str,
         request_id: str | None,
         uploaded: list[dict[str, Any]],
+        setup_request_id: str | None = None,
     ) -> dict[str, Any]:
         if kind in {"voice_generation", "voice_conversation"}:
-            return {
-                "kind": kind,
-                "label": TEST_LABELS[kind],
-                "status": "skipped",
-                "message": "当前测试场尚未接入该语音用例",
-                "reason": "当前测试场尚未接入该语音用例",
-                "request_id": None,
-            }
+            if not request_id:
+                raise RuntimeError(f"Missing planned Voice request ID: {kind}")
+            return await self._run_voice(
+                client,
+                kind=kind, token=token, request_id=request_id,
+                uploaded=uploaded,
+                setup_request_id=(
+                    setup_request_id
+                    if kind == "voice_conversation" else None
+                ),
+                selected_model=body.model,
+            )
         if kind == "vision":
             attachment = self._file_for(uploaded, True)
             if attachment is None:
@@ -484,6 +657,7 @@ class PlaygroundRunManager:
                             token=token,
                             request_id=request_ids.get(kind),
                             uploaded=uploaded,
+                            setup_request_id=request_ids.get("voice_conversation_setup"),
                         )
                     except Exception as error:
                         message = str(error)
@@ -621,15 +795,18 @@ class PlaygroundRunManager:
                 continue
             state.diagnostics["playground_cancelled"] = True
             is_image = str(request_id).startswith("imgreq_")
-            cancel_type = "image.cancel" if is_image else "chat.cancel"
-            event_type = "image.cancelled" if is_image else "chat.cancelled"
+            is_voice = str(request_id).startswith("voicereq_")
+            cancel_type = "voice.cancel" if is_voice else "image.cancel" if is_image else "chat.cancel"
+            event_type = "image.cancelled" if (is_image or is_voice) else "chat.cancelled"
             try:
                 await self.registry.send(state.client_id, {"type": cancel_type, "request_id": request_id})
             except Exception:
                 pass
             await self.broker.publish(
                 request_id,
-                {"type": event_type, "request_id": request_id, "reason": "Playground test cancelled by administrator"},
+                {"type": event_type, "request_id": request_id,
+                 **({"kind": "voice"} if is_voice else {}),
+                 "reason": "Playground test cancelled by administrator"},
             )
             asyncio.create_task(self._force_release_cancelled(request_id, state))
         return self.store.get(run_id) or run
