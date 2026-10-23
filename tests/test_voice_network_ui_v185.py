@@ -28,3 +28,21 @@ def test_voice_error_does_not_get_swallowed():
         proc=subprocess.run(["node","--check",str(ROOT/"chrome_extension"/path)],
                             capture_output=True,text=True,timeout=10)
         assert proc.returncode==0,proc.stdout+proc.stderr
+
+
+def test_fast_voice_failure_includes_request_scoped_ice_snapshot():
+    speech=(ROOT/"chrome_extension/content_voice_v2.js").read_text()
+    live=(ROOT/"chrome_extension/content_voice_live.js").read_text()
+    assert speech.count("await failChatgptVoiceConnection(active, failure)") == 2
+    assert live.count("await failLiveVoiceConnection(failure)") == 2
+    for source in (speech, live):
+        assert 'postMain("voice.transport.snapshot", active)' in source
+        assert 'item.type === "voice.transport.snapshot"' in source
+        assert "ice_candidate_errors: Number(snapshot?.ice_candidate_errors || 0)" in source
+        assert "transport_snapshot_received: Boolean(snapshot)" in source
+    assert 'kind: "voice-live"' in live
+
+def test_live_voice_final_telemetry_preserves_worker_ice_diagnostics():
+    server=(ROOT/"app/live_voice_patch.py").read_text()
+    assert "**state.diagnostics" in server
+    assert '"browser_startup_error": error_message' in server

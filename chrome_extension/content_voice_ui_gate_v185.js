@@ -39,6 +39,11 @@
     return null;
   }
   function connectionFailure() {
+    // A prior conversation can literally contain the words "Voice couldn't
+    // connect". It must never be mistaken for a current ChatGPT error toast.
+    const isConversationText = element => Boolean(element?.closest?.(
+      "[data-message-author-role],article[data-testid^='conversation-turn'],[contenteditable='true']"
+    ));
     const candidates = [...document.querySelectorAll(
       "[role='alert'],[role='status'],[data-sonner-toast],[data-testid*='toast'],[data-state='open']"
     )];
@@ -47,11 +52,12 @@
     for (const node of document.querySelectorAll("p,span,div")) {
       if (candidates.length >= 150) break;
       const value = text(node);
-      if (value.length < 175 && /voice couldn.t connect|语音.*(?:无法连接|连接失败)/i.test(value))
+      if (!isConversationText(node) && value.length < 175 &&
+          /voice couldn.t connect|语音.*(?:无法连接|连接失败)/i.test(value))
         candidates.push(node);
     }
     for (const element of candidates) {
-      if (!visible(element)) continue;
+      if (!visible(element) || isConversationText(element)) continue;
       const value = text(element).slice(0, 350);
       if (/voice couldn.t connect|语音.*(?:无法连接|连接失败)/i.test(value))
         return {code:"VOICE_CHATGPT_CONNECT_FAILED",message:value,source:"chatgpt-voice-toast"};

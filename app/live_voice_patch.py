@@ -568,6 +568,9 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "attachments_count": observed_media_count,
                         "audio_bytes": observed_audio_bytes,
                         "diagnostics": {
+                            # Preserve request-scoped bridge/ICE diagnostics collected
+                            # by broker; this final telemetry record is the sole owner.
+                            **state.diagnostics,
                             "route": "chatgpt-voice-live", "session_id": session_id,
                             "session_ready": session_ready, "audio_bytes": observed_audio_bytes,
                             "input_confirmed_turns": input_confirmed,

@@ -204,6 +204,28 @@
     if (eventBucket(requestId).length > 300) eventBucket(requestId).splice(0, 150);
   });
 
+  // One evidence path for both early welcome failures and later WebRTC failures.
+  // This is diagnostic-only: the existing speech controller retains sole terminal ownership.
+  async function failChatgptVoiceConnection(active, failure) {
+    postMain("voice.transport.snapshot", active);
+    const snapshot = await waitMain(active.requestId,
+      item => item.type === "voice.transport.snapshot", 1200);
+    await diagnostic(active, "chatgpt-voice-connection-failed", {
+      voice_failure_code: failure.code,
+      chatgpt_voice_error: failure.message,
+      peer_connections_in_request: Number(snapshot?.peer_connections_in_request || 0),
+      mic_requests_in_request: Number(snapshot?.mic_requests_in_request || 0),
+      peer_hook_still_ready: snapshot?.peer_hook_ready === true,
+      mic_hook_still_ready: snapshot?.mic_hook_ready === true,
+      ice_connection_state: String(snapshot?.ice_connection_state || "unknown"),
+      peer_connection_state: String(snapshot?.peer_connection_state || "unknown"),
+      ice_candidate_errors: Number(snapshot?.ice_candidate_errors || 0),
+      browser_visibility: String(snapshot?.page_visibility || document.visibilityState || "unknown"),
+      transport_snapshot_received: Boolean(snapshot),
+    });
+    throw voiceFailure(failure.code, failure.message);
+  }
+
   async function settleVoiceWelcome(active) {
     const gate = globalThis.__CHAT2API_VOICE_UI_GATE_V185__;
     let clicked = false;
@@ -212,12 +234,7 @@
     const deadline = Date.now() + 3400;
     while (Date.now() < deadline) {
       const failure = gate?.connectionFailure?.();
-      if (failure) {
-        await diagnostic(active, "chatgpt-voice-connection-failed", {
-          voice_failure_code: failure.code, chatgpt_voice_error:failure.message,
-        });
-        throw voiceFailure(failure.code, failure.message);
-      }
+      if (failure) await failChatgptVoiceConnection(active, failure);
       const welcome = gate?.welcomeDialog?.();
       if (welcome && !clicked) {
         const action = gate.continueWelcome();
@@ -269,21 +286,7 @@
     const transportDeadline = Date.now() + 16000;
     while (Date.now() < transportDeadline) {
       const failure = globalThis.__CHAT2API_VOICE_UI_GATE_V185__?.connectionFailure?.();
-      if (failure) {
-        postMain("voice.transport.snapshot", active);
-        const snapshot = await waitMain(active.requestId,
-          item => item.type === "voice.transport.snapshot", 1200);
-        await diagnostic(active, "chatgpt-voice-connection-failed", {
-          voice_failure_code: failure.code,
-          chatgpt_voice_error: failure.message,
-          peer_connections_in_request: Number(snapshot?.peer_connections_in_request || 0),
-          mic_requests_in_request: Number(snapshot?.mic_requests_in_request || 0),
-          ice_connection_state: String(snapshot?.ice_connection_state || "unknown"),
-          peer_connection_state: String(snapshot?.peer_connection_state || "unknown"),
-          browser_visibility: String(snapshot?.page_visibility || document.visibilityState || "unknown"),
-        });
-        throw voiceFailure(failure.code, failure.message);
-      }
+      if (failure) await failChatgptVoiceConnection(active, failure);
       transport = eventBucket(active.requestId).find(item =>
         item.type === "voice.mic.synthetic" || item.type === "voice.remote.track");
       if (transport) break;

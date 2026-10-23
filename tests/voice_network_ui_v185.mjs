@@ -47,4 +47,16 @@ state.modal=false;
 document.querySelectorAll=selector=>selector.includes("[role='dialog']")?[nonVoice]:[];
 assert.equal(gate.continueWelcome(),null,"Unrelated dialog cannot be accepted");
 assert.equal(state.clicks,1);
-console.log("Voice onboarding requires exact dialog title and fails with real ChatGPT Voice toast");
+// A user quoting the ChatGPT toast inside chat history must not generate a false failure.
+const historic=element("Voice couldn't connect");
+historic.closest=selector=>selector.includes("[data-message-author-role]")?{}:null;
+const visibleToast=element("Voice couldn't connect");
+state.toast=false;
+document.querySelectorAll=selector=>selector.includes("[role='alert']")?[historic]:
+  selector==="p,span,div"?[historic]:[];
+assert.equal(gate.connectionFailure(),null,"Conversation quotation must not become a Voice error");
+document.querySelectorAll=selector=>selector.includes("[role='alert']")?[visibleToast]:
+  selector==="p,span,div"?[historic,visibleToast]:[];
+assert.equal(gate.connectionFailure()?.code,"VOICE_CHATGPT_CONNECT_FAILED",
+  "Real visible Voice toast is still recognized");
+console.log("Voice onboarding, genuine toast and quoted-history exclusion passed");
