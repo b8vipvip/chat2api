@@ -3,7 +3,7 @@
   if (globalThis[KEY]) return;
 
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const state = { active: null, mainEvents: new Map() };
+  const state = { active: null, mainEvents: new Map(), mainSequence: 0 };
   globalThis[KEY] = state;
 
   function visible(el) {
@@ -198,7 +198,7 @@
     if (event.source !== window || event.data?.source !== "chat2api-main") return;
     const requestId = event.data.request_id;
     if (!requestId) return;
-    eventBucket(requestId).push(event.data);
+    eventBucket(requestId).push({ ...event.data, _voice_sequence: ++state.mainSequence });
     if (eventBucket(requestId).length > 300) eventBucket(requestId).splice(0, 150);
   });
 
@@ -243,7 +243,9 @@
   }
 
   function normVoiceText(value) {
-    return String(value || "").normalize("NFC").replace(/\\s+/g, " ").trim();
+    // Normalize layout whitespace, not the literal characters "\\s".
+    // Voice prompts can contain newlines when called through the public API.
+    return String(value || "").normalize("NFC").replace(/\s+/g, " ").trim();
   }
 
   function userTurnConfirmed(prompt, existingCount) {
@@ -311,6 +313,24 @@
     return recorded;
   }
 
+  async function armRecording(active) {
+    // A Voice orb or remote track may precede submission. Request-scoped
+    // capture starts only after text receipt or uploaded audio completion.
+    // The MAIN-world bridge owns MediaRecorder, not this controller.
+    active.captureArmSequence = state.mainSequence;
+    postMain("voice.record.arm", active);
+    const armed = await waitMain(active.requestId,
+      item => item.type === "voice.record.armed" || item.type === "voice.record.error", 5000);
+    if (!armed) throw voiceFailure("VOICE_CAPTURE_ARM_TIMEOUT",
+      "Voice bridge did not confirm response capture arming");
+    if (armed.type === "voice.record.error") throw voiceFailure("VOICE_RECORDER_FAILED",
+      String(armed.error || "Voice recorder could not be armed"));
+    active.captureArmSawTrack = armed.remote_track_seen === true;
+    await diagnostic(active, "capture-armed", {
+      transport_track_preexisting: active.captureArmSawTrack,
+    });
+  }
+
   async function waitResponse(active, baselineCount) {
     const timeout = Math.max(30000, Number(active.timeoutSeconds || 180) * 1000);
     const deadline = Date.now() + timeout;
@@ -318,16 +338,25 @@
     let stableAt = 0;
     let soundStarted = false;
     let lastSoundAt = 0;
-    let remoteTrackAt = 0;
-    let recordStartedAt = 0;
     const responseStartedAt = Date.now();
+    // The remote track may have been observed during Voice UI preflight,
+    // long before the model's confirmed input. Its earlier event can be
+    // evicted from the rolling diagnostic queue; the arm ack preserves proof.
+    let remoteTrackAt = active.captureArmSawTrack ? responseStartedAt : 0;
+    let recordStartedAt = 0;
+    let lastSeenSequence = active.captureArmSequence || 0;
     let lastStatusAt = 0;
 
     while (Date.now() < deadline && !active.cancelled) {
       const error = pageError();
       if (error) throw new Error(`ChatGPT Voice UI error: ${error}`);
       const events = eventBucket(active.requestId);
-      for (const item of events.slice(-40)) {
+      // Never lose one-shot track/recorder proof behind frequent (~6Hz)
+      // voice.audio.level events. The monotonic event sequence also avoids
+      // interpreting welcome audio from before capture arming as reply audio.
+      for (const item of events) {
+        const sequence = Number(item._voice_sequence || 0);
+        if (sequence && sequence <= lastSeenSequence) continue;
         if (item.type === "voice.remote.track" && !remoteTrackAt) {
           remoteTrackAt = Date.now();
           diagnostic(active, "remote-track", { remote_track_seen: true }).catch(() => {});
@@ -343,6 +372,7 @@
           item.error || "Remote audio analyser failed");
         if (item.type === "voice.input.error") throw voiceFailure("VOICE_INPUT_PLAYBACK_FAILED",
           item.error || "Voice input playback failed");
+        if (sequence) lastSeenSequence = Math.max(lastSeenSequence, sequence);
       }
 
       const nodes = assistantNodes();
@@ -453,6 +483,7 @@
         await playVoiceInput(active);
       }
 
+      await armRecording(active);
       const result = await waitResponse(active, baselineCount);
       const diagnostics = {
         route: "chatgpt-voice-v2",
@@ -491,6 +522,7 @@
     } finally {
       try { endVoiceButton()?.click(); } catch (_) {}
       postMain("voice.reset", active);
+      postMain("voice.mic.stop", active);
       state.mainEvents.delete(active.requestId);
       if (state.active === active) state.active = null;
     }
