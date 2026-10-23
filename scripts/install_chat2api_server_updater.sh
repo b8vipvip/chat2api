@@ -50,7 +50,9 @@ WorkingDirectory=${APP_DIR}
 Environment=APP_DIR=${APP_DIR}
 Environment=BRANCH=main
 ExecStart=/bin/bash ${UPDATER_SCRIPT}
-TimeoutStartSec=30min
+TimeoutStartSec=75min
+# Reconcile admin-update-status.json on SIGTERM/timeouts so UI never stays running.
+ExecStopPost=/usr/bin/python3 ${APP_DIR}/scripts/chat2api_update_reconcile.py
 Nice=5
 
 [Install]
