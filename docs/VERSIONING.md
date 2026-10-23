@@ -124,3 +124,11 @@ GET /version
 - 专用 /v1/images/generations 的 URL 返回使用自己归档的资源，而显式 response_format=b64_json 仍遵循兼容 API 语义。
 - 注意：旧 FileStore 文件上传流程仍保留独立本地存储；已生成图片的旧版历史媒体不会自动追溯迁移。新云端存储需要管理员配置凭据并点击“测试存储连接”验证。
 - 配套 mv3c Markdown 图片预览修复在 mv3c PR #17，缩略图点击时打开原图。两边应升级后实机交叉验证。
+## v0.22.189：每个独立请求使用独立 Worker 窗口
+
+- 每个 `chat.request`、`image.request`、`voice.request` 使用唯一请求路由键，并从 Worker 持续预热的备用窗口池中领取不同的 ChatGPT 窗口；不同请求 ID 不复用同一聊天上下文。
+- 请求成功、失败或取消后，窗口在 5 秒后关闭；窗口关闭后删除请求级路由记录，随后由唯一的持久窗口池控制器补足备用窗口。
+- `voice.live.start` 使用一个专属窗口承载整个连续语音会话；只有收到 stop/断开后才开始 5 秒关闭倒计时。
+- 5 秒关闭使用内存计时器，并配置持久 Chrome alarm 作为扩展 Service Worker 暂停/重启后的兜底。
+- Server Runtime、Chrome Bridge、Worker Bundle 和 manifest 统一升级为 `0.22.189`；Python package 保持 `0.7.1`。
+
