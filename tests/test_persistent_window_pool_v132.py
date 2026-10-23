@@ -40,6 +40,9 @@ def test_persistent_pool_is_active_routing_layer() -> None:
     assert 'route.window_owned = true' in source
     assert 'post-admission-standby-refill-v152' in source
     assert 'worker_persistent_window_pool_exhausted' in source
+    assert 'value.routePolicyForRequest(message)' in source
+    assert 'request-admission-v189' in source
+    assert 'reuse-same-request-route-v189' in source
     assert 'if (!await loginReady().catch(() => false)) return null;' in source
 
     # The pool is no longer allowed to cancel the route's 5-minute lease.
