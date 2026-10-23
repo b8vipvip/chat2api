@@ -41,7 +41,7 @@ assert.match(content, /networkTerminalAt && networkTerminalText && !captureMedia
 assert.match(content, /isLocalImageBuildCommand\(networkTerminalText\)/);
 assert.match(content, /&& !imageBuildArtifact[\s\S]*?!isImageToolArguments\(networkText\)\) \{/);
 assert.match(content, /ChatGPT returned an image-building command, but no verified transferable image was captured/);
-assert.match(content, /hasTransferableImage\(captured\) && delivered > 0/);
+assert.match(content, /delivered > 0 && \(hasTransferableImage\(captured\) \|\| hasTransferableFile\(captured\)\)/);
 assert.match(content, /response_terminal_source: "verified-request-media-dom-v176"/);
 assert.match(content, /media_last_baseline_excluded/);
 assert.match(rich, /excluded_by_baseline/);
