@@ -41,7 +41,7 @@ assert.equal(combinePageMediaText("![old](https://example.com/img.png)", newImag
 
 // Only the existing request controller may settle the request. A handoff is
 // excluded from both network-text completion and the early no-terminal error.
-assert.match(controller, /if \(networkText && !isInternalMediaHandoff\(networkText\) && !imageBuildArtifact[\s\S]*?!isImageToolArguments\(networkText\)/);
+assert.match(controller, /if \(networkText && !captureMedia && !fileCreationRequested && !imageCreationRequested[\s\S]*?!isImageToolArguments\(networkText\)/);
 assert.match(controller, /networkTerminalText && !captureMedia[\s\S]*!promptStillPresent/);
 assert.match(controller, /imageToolArguments[\s\S]*?\|\| visibleTurnMedia \|\| visibleTurnFiles \|\| fileCreationRequested \|\| pageMediaFound/);
 assert.match(controller, /!networkTerminalAt && !captureMedia/);
