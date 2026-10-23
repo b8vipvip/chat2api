@@ -50,6 +50,23 @@
       if (naturalWidth && naturalHeight) dimensions += 1;
       else noDimensions += 1;
     }
+    // Structural counts only. Never export download URLs, filenames, element
+    // text or DOM HTML: these facts identify redesigned file cards safely.
+    const downloadLinks = [...scope.querySelectorAll("a[href]")].slice(-200);
+    const downloadLinkStats = {https: 0, blob: 0, sandbox: 0, relative: 0, other: 0, named: 0};
+    for (const link of downloadLinks) {
+      const href = String(link.getAttribute("href") || "");
+      if (href.startsWith("https://")) downloadLinkStats.https += 1;
+      else if (href.startsWith("blob:")) downloadLinkStats.blob += 1;
+      else if (href.startsWith("sandbox:")) downloadLinkStats.sandbox += 1;
+      else if (href.startsWith("/")) downloadLinkStats.relative += 1;
+      else downloadLinkStats.other += 1;
+      if (link.hasAttribute("download") || /download/i.test(
+        String(link.getAttribute("data-testid") || ""))) downloadLinkStats.named += 1;
+    }
+    const richTextCandidateCount = scope.querySelectorAll(
+      "[data-message-content],.markdown,[class*='markdown'],[class*='prose']"
+    ).length;
     const buttons = [...scope.querySelectorAll("button")].slice(0, 100);
     const attr = node => (
       String(node.getAttribute("aria-label") || node.getAttribute("title") || "").toLowerCase()
@@ -86,6 +103,13 @@
       image_natural_height_max: maxHeight,
       edit_buttons: buttons.filter(x => /\b(edit|编辑)\b/i.test(attr(x))).length,
       download_buttons: buttons.filter(x => /(download|下载)/i.test(attr(x))).length,
+      download_link_https_count: downloadLinkStats.https,
+      download_link_blob_count: downloadLinkStats.blob,
+      download_link_sandbox_count: downloadLinkStats.sandbox,
+      download_link_relative_count: downloadLinkStats.relative,
+      download_link_other_count: downloadLinkStats.other,
+      download_link_explicit_count: downloadLinkStats.named,
+      rich_text_candidate_count: richTextCandidateCount,
       share_buttons: buttons.filter(x => /(share|分享)/i.test(attr(x))).length,
       composer_found: Boolean(document.querySelector("[contenteditable='true'],textarea")),
       page_ready: document.readyState === "complete",

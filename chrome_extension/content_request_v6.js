@@ -341,12 +341,62 @@
     // so its text cannot always match the full prompt sent to the composer.
     active.baselineUserTurns = new Set(conversationTurns().filter(userTurn));
     active.baselinePageMedia = rich?.snapshotPageMedia?.() || null;
+    captureRenderedBaseline(active);
     active.baselineCapturedAt = Date.now();
+  }
+
+  const RENDERED_ASSISTANT_SELECTORS = [
+    "main [data-message-content]", "main .markdown", "main [class*='markdown']",
+    "main [class*='prose']", "main [data-testid*='assistant']",
+    "main article", "main section", "main div",
+  ].join(",");
+
+  function captureRenderedBaseline(active) {
+    const candidates = [...document.querySelectorAll(RENDERED_ASSISTANT_SELECTORS)].slice(-220);
+    active.baselineRenderedText = new Map(candidates
+      .filter(visible)
+      .map(node => [node, normalize(node.innerText || node.textContent || "").slice(-5000)]));
+  }
+
+  function renderedNetworkCorrelatedTurn(active) {
+    // A redesigned ChatGPT page may no longer expose the role/testid attributes.
+    // Never guess from raw page position alone: bind a *changed* rendered node
+    // to a substantial fragment from this exact request's SSE observation.
+    const source = String(active?.networkObservedText || "");
+    if (source.length < 120 || internalToolPayload(source) || !active?.networkStreamSeen)
+      return null;
+    const normalizedSource = normalize(source);
+    const matches = [...document.querySelectorAll(RENDERED_ASSISTANT_SELECTORS)].slice(-220);
+    const baseline = active.baselineRenderedText || new Map();
+    for (let index = matches.length - 1; index >= 0; index -= 1) {
+      const node = matches[index];
+      if (!visible(node) || node.closest?.("form,[contenteditable='true'],nav,aside,footer"))
+        continue;
+      const text = normalize(node.innerText || node.textContent || "");
+      if (text.length < 100 || text.length > 40000 || baseline.get(node) === text.slice(-5000))
+        continue;
+      // A source fragment must be present, not merely a generic heading.
+      const fragments = source.split(/\r?\n/)
+        .map(line => normalize(line.replace(/^#{1,6}\s*/, "")
+          .replace(/[*_`|]/g, "").replace(/\[(.*?)\]\([^)]+\)/g, "$1")))
+        .filter(line => line.length >= 65);
+      if (!fragments.some(line => text.includes(line.slice(0, 65)))) continue;
+      if (active.promptNormalized && text.includes(active.promptNormalized.slice(0, 120)))
+        continue;
+      return {
+        nodes: [node], latest: node, turn: node,
+        identity: nodeIdentity(node) || "rendered-network-correlated",
+        text: plainNodeText(node), isNew: true,
+        reason: "verified-rendered-network-overlap-v189",
+      };
+    }
+    return null;
   }
 
   function currentAssistantState(active) {
     const nodes = assistantNodes();
-    if (!nodes.length) return { nodes, latest: null, turn: null, identity: "", text: "", isNew: false, reason: "none" };
+    if (!nodes.length) return renderedNetworkCorrelatedTurn(active)
+      || { nodes, latest: null, turn: null, identity: "", text: "", isNew: false, reason: "none" };
 
     const currentUser = currentUserTurn(active);
     if (currentUser) {
@@ -789,11 +839,53 @@
       .test(String(value || ""));
   }
 
-  function isFileCreationRequest(prompt) {
+  function requestedUserText(prompt) {
     const raw = String(prompt || "");
-    const text = (raw.includes("[User]") ? raw.slice(raw.lastIndexOf("[User]") + 6) : raw).slice(0, 1000);
-    return /(?:生成|创建|导出|制作|输出|下载|create|export|generate|make)[^\n]{0,100}(?:\.pdf|\.docx|\.xlsx|\.pptx|\.zip|\.csv|\.py|文件|附件|downloadable file|spreadsheet)/i.test(text)
-      && !/(?:如何|解释|分析|什么是)[^\n]{0,50}(?:生成|创建|导出|制作|输出)/i.test(text);
+    return (raw.includes("[User]") ? raw.slice(raw.lastIndexOf("[User]") + 6) : raw).slice(0, 4000);
+  }
+
+  function explicitCreationIntent(prompt, subjects) {
+    const action = /(?:生成|创建|导出|制作|绘制|画出|输出|提供下载|create|export|generate|make|draw|design)/i;
+    const negation = /(?:不要|不得|无需|不必|禁止|避免|不再|别|无需重新|仅回顾|只回顾|don't|do not|without|no need)/i;
+    for (const raw of requestedUserText(prompt).split(/\r?\n/)) {
+      const line = raw.replace(/^\s*(?:[-*]|\d+[.、])\s*/, "").trim();
+      if (!line || /^(?:如何|怎么|解释|分析|什么是|请说明如何|how to|explain|why)/i.test(line)) continue;
+      const match = action.exec(line);
+      if (!match) continue;
+      // Negation within the 18 characters immediately before the verb
+      // overrides incidental creation words in prohibition/recap prompts.
+      const before = line.slice(Math.max(0, match.index - 18), match.index);
+      if (negation.test(before) || /(?:解释|如何|怎么|分析|说明做法|explain|how to)/i.test(before)) continue;
+      const rest = line.slice(match.index + match[0].length, match.index + match[0].length + 95);
+      if (subjects.test(rest)) return true;
+    }
+    return false;
+  }
+
+  function isFileCreationRequest(prompt) {
+    // "不要重新生成新的文件" is not a creation request.
+    return explicitCreationIntent(prompt,
+      /(?:\.pdf|\.docx|\.xlsx|\.pptx|\.zip|\.csv|\.py|文件|附件|downloadable file|spreadsheet)/i);
+  }
+
+  function internalToolPayload(value) {
+    const raw = String(value || "").trim();
+    if (!raw || raw.length > 12000 || raw.charCodeAt(0) === 96 || raw.startsWith("#")) return false;
+    if (isInternalMediaHandoff(raw) || isImageToolArguments(raw) || isLocalImageBuildCommand(raw))
+      return true;
+    if (/^(?:bash\s+-lc\s+|python3?\s+-c\s+|sh\s+-c\s+)/i.test(raw)
+        && !/[\r\n]{2,}/.test(raw)) return true;
+    if (raw.startsWith("{") && raw.endsWith("}")) {
+      try {
+        const parsed = JSON.parse(raw);
+        const keys = Object.keys(parsed || {});
+        if (keys.length === 1 && keys[0] === "query" && typeof parsed.query === "string")
+          return true;
+        if (keys.includes("command") && keys.every(key =>
+          ["command", "timeout", "cwd", "workdir", "shell"].includes(key))) return true;
+      } catch (_) {}
+    }
+    return false;
   }
 
   function hasTransferableImage(value) {
@@ -802,17 +894,9 @@
 
 
   function isImageCreationRequest(prompt) {
-    // Check the user turn rather than an injected policy. This is a media
-    // *search hint*, never evidence sufficient to complete an image request.
-    const raw = String(prompt || "");
-    const text = (raw.includes("[User]") ? raw.slice(raw.lastIndexOf("[User]") + 6) : raw).slice(0, 800);
-    const action = "(?:生成|绘制|画|制作|设计|create|generate|draw|design)";
-    const subject = "(?:图片|图像|头像|插画|插图|参考图|图标|image|avatar|icon|illustration|picture)";
-    // Image-generation wording in an analysis question (e.g. 图片生成函数)
-    // is not a request to produce an image. Require a creation verb *before*
-    // the output type, or an explicit reverse-order directive.
-    return new RegExp(action + "[^\\n]{0,100}" + subject, "i").test(text)
-      || new RegExp(subject + "[^\\n]{0,50}(?:请|帮我|给我|为我)" + action, "i").test(text);
+    // An explicit "do not generate" instruction must not block text-only replies.
+    return explicitCreationIntent(prompt,
+      /(?:图片|图像|头像|插画|插图|参考图|图标|image|avatar|icon|illustration|picture)/i);
   }
 
   function isLocalImageBuildCommand(value) {
@@ -916,6 +1000,8 @@
     let imageCaptureAt = 0;
     let imageHandoffObserved = false;
     let imageBuildArtifactObserved = false;
+    let verifiedRenderedCandidate = "";
+    let verifiedRenderedCandidateSince = 0;
     const imageCreationRequested = isImageCreationRequest(active.prompt);
     const fileCreationRequested = isFileCreationRequest(active.prompt);
 
@@ -1119,7 +1205,7 @@
       if ((current.isNew || generating || networkText || visibleTurnMedia || pageMediaFound) && !responseStarted) {
         responseStarted = await ensureResponseStarted(active, responseStarted, networkText ? "network-evidence-v57" : current.isNew ? "dom-assistant" : "generation-control");
       }
-      if (current.isNew && current.text && !captureMedia && !isInternalMediaHandoff(current.text)
+      if (current.isNew && current.text && !captureMedia && !internalToolPayload(current.text)
           && !(imageCreationRequested && isLocalImageBuildCommand(current.text))) {
         const preferred = preferredResponseText(lastText, current.text);
         const previous = lastText;
@@ -1134,8 +1220,7 @@
       // Media/file generation is committed only after verified archiveable bytes.
       // Raw network snapshots can contain temporary download URLs or tool args.
       if (networkText && !captureMedia && !fileCreationRequested && !imageCreationRequested
-          && !isInternalMediaHandoff(networkText) && !imageBuildArtifact
-          && !isImageToolArguments(networkText)) {
+          && !internalToolPayload(networkText) && !imageBuildArtifact) {
         const preferred = preferredResponseText(lastText, networkText);
         const previous = lastText;
         lastText = await updateCapturedText(active, preferred, lastText);
@@ -1154,7 +1239,7 @@
       // automatically a final text payload.
       const evidenceSettledAt = Math.max(networkTerminalAt, Number(active.networkObservedAt || 0));
       if (networkTerminalAt && networkTerminalText && !captureMedia
-          && !isImageToolArguments(networkTerminalText)
+          && !internalToolPayload(networkTerminalText)
           && !(imageCreationRequested && isLocalImageBuildCommand(networkTerminalText))
           && !promptStillPresent(active)
           && Date.now() - evidenceSettledAt >= 1250) {
@@ -1191,6 +1276,47 @@
         });
         active.completed = true;
         return;
+      }
+
+      // The redesigned ChatGPT UI sometimes omits assistant role nodes AND the
+      // clone reader loses its terminal frame. A current-request SSE fragment
+      // independently correlated with a rendered node that remains stable
+      // after generation is a bounded, explicit UI terminal fallback.
+      // No tool command, search JSON, prompt echo, or media-producing request
+      // can satisfy this proof. request-v6 remains the sole terminal owner.
+      if (!captureMedia && !fileCreationRequested && !imageCreationRequested
+          && current.reason === "verified-rendered-network-overlap-v189"
+          && current.text.length >= 120 && !internalToolPayload(current.text)
+          && !generating && !promptStillPresent(active)
+          && active.networkObservedAt && Date.now() - active.networkObservedAt >= 4500) {
+        if (current.text !== verifiedRenderedCandidate) {
+          verifiedRenderedCandidate = current.text;
+          verifiedRenderedCandidateSince = Date.now();
+        } else if (Date.now() - verifiedRenderedCandidateSince >= 3500) {
+          const result = await finalNodeText(current.latest);
+          const finalized = String(result?.text || current.text || "").trim();
+          if (finalized.length >= 120 && !internalToolPayload(finalized)
+              && !isGenerating() && !promptStillPresent(active)) {
+            responseStarted = await ensureResponseStarted(active, responseStarted,
+              "verified-rendered-network-overlap-v189");
+            await emit({
+              type: "chat.completed", request_id: active.requestId, text: finalized,
+              diagnostics: {
+                response_terminal_source: "same-request-network-rendered-dom-v189",
+                response_terminal_dom_reconciled: true,
+                response_integrity_evidence: "network-text-65-character-overlap-pre-submit-dom-baseline",
+                network_terminal_evidence_source: "rendered-dom-stable-after-network-observation",
+                response_terminal_final_chars: finalized.length,
+                response_format: "markdown",
+              },
+            });
+            active.completed = true;
+            return;
+          }
+        }
+      } else {
+        verifiedRenderedCandidate = "";
+        verifiedRenderedCandidateSince = 0;
       }
 
       // A DOM pause or a missing Stop button cannot override an observed SSE

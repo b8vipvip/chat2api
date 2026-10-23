@@ -77,11 +77,14 @@ assert.equal(toolArgs('{"size":"1024x1536","n":3,"transparent_background":false}
 assert.equal(toolArgs('{"size":"1024x1536","n":3,"transparent_background":false,"text":"hello"}'), false);
 assert.equal(toolArgs('{"size":"1024x1536","n":"three"}'), false);
 assert.equal(toolArgs("这是正常的 JSON 文档"), false);
-const imageIntent = findFunction("isImageCreationRequest", "isLocalImageBuildCommand");
+const intentStart = controllerSource.indexOf("  function requestedUserText(prompt) {");
+const intentEnd = controllerSource.indexOf("  function isLocalImageBuildCommand(value) {");
+const intentHelpers = controllerSource.slice(intentStart, intentEnd);
+const imageIntent = runInNewContext(intentHelpers + "\n isImageCreationRequest;");
 assert.equal(imageIntent("帮我生成视频提示词和3张参考图。"), true);
 assert.equal(imageIntent("我想分析图片生成函数"), false);
 
 assert.match(controllerSource, /imageToolArguments[\s\S]*?\|\| visibleTurnMedia \|\| visibleTurnFiles \|\| fileCreationRequested \|\| pageMediaFound/);
-assert.match(controllerSource, /networkTerminalAt && networkTerminalText && !captureMedia[\s\S]*?!isImageToolArguments\(networkTerminalText\)/);
+assert.match(controllerSource, /networkTerminalAt && networkTerminalText && !captureMedia[\s\S]*?!internalToolPayload\(networkTerminalText\)/);
 assert.match(controllerSource, /response_terminal_source: "verified-request-media-dom-v176"/);
 console.log("Rich Markdown inline grouping, table formatting and image-tool handoff regression passed");

@@ -52,7 +52,7 @@ assert.equal(
 
 // Only the existing request controller may settle the request. A handoff is
 // excluded from both network-text completion and the early no-terminal error.
-assert.match(controller, /if \(networkText && !captureMedia && !fileCreationRequested && !imageCreationRequested[\s\S]*?!isImageToolArguments\(networkText\)/);
+assert.match(controller, /if \(networkText && !captureMedia && !fileCreationRequested && !imageCreationRequested[\s\S]*?!internalToolPayload\(networkText\)/);
 assert.match(controller, /networkTerminalText && !captureMedia[\s\S]*!promptStillPresent/);
 assert.match(controller, /imageToolArguments[\s\S]*?\|\| visibleTurnMedia \|\| visibleTurnFiles \|\| fileCreationRequested \|\| pageMediaFound/);
 assert.match(controller, /!networkTerminalAt && !captureMedia/);

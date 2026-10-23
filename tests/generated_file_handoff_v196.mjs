@@ -13,7 +13,10 @@ function helper(name, following) {
   return runInNewContext(controller.slice(start, stop) + "\n" + name + ";");
 }
 const hasTransferableFile = helper("hasTransferableFile", "isFileCreationRequest");
-const isFileCreationRequest = helper("isFileCreationRequest", "hasTransferableImage");
+const intentStart = controller.indexOf("  function requestedUserText(prompt) {");
+const intentEnd = controller.indexOf("  function hasTransferableImage(value) {");
+const intentHelpers = controller.slice(intentStart, intentEnd);
+const isFileCreationRequest = runInNewContext(intentHelpers + "\n isFileCreationRequest;");
 const file = "![📎 demo.pdf](data:application/pdf;base64,JVBERi0xLjQK)";
 assert.equal(hasTransferableFile(file), true);
 assert.equal(hasTransferableFile("[📎 demo.pdf](https://chatgpt.com/blob)"), false);
