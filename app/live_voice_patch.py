@@ -13,6 +13,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 
 from .api_keys import ApiPrincipal
+from .responses_multimodal_input_v183 import attachment_specs
 
 LIVE_PROTOCOL_VERSION = "chat2api-live-v1"
 SUPPORTED_MODELS = {"gpt-live", "gpt-live-mini"}
@@ -64,10 +65,42 @@ def _input_text_from_control(control: Any) -> str:
     return "\n".join(parts).strip()
 
 
+def _media_ids_from_control(control: dict[str, Any]) -> list[str]:
+    """FileStore IDs only; no arbitrary URLs/base64 over a live control frame."""
+    kind = str(control.get("type") or "")
+    parts = []
+    if kind == "input_media":
+        parts = control.get("attachments") or []
+    elif kind == "conversation.item.create":
+        item = control.get("item") if isinstance(control.get("item"), dict) else {}
+        parts = item.get("content") or []
+    if not isinstance(parts, list):
+        raise ValueError("Media content must be an array")
+    ids: list[str] = []
+    for part in parts:
+        if not isinstance(part, dict):
+            raise ValueError("Media item must be an object")
+        ptype = str(part.get("type") or "")
+        if ptype in {"input_text", "text"}:
+            continue
+        if ptype not in {"input_image", "input_file", "image_url", "file"}:
+            raise ValueError(f"Unsupported live media part: {ptype}")
+        ref = part.get("file_id")
+        if ref is None and isinstance(part.get("image_url"), str):
+            ref = part["image_url"]
+        if not isinstance(ref, str) or not ref.startswith("file_"):
+            raise ValueError("Live images/files require an uploaded file_id (no remote URLs)")
+        ids.append(ref)
+    if len(ids) > 4:
+        raise ValueError("At most four media attachments per turn")
+    return list(dict.fromkeys(ids))
+
+
 def install_live_voice_patch(app: FastAPI) -> FastAPI:
     registry = app.state.registry
     broker = app.state.broker
     api_keys = app.state.api_keys
+    file_store = app.state.file_store
     realtime_sessions: dict[str, tuple[float, ApiPrincipal]] = {}
     realtime_sessions_lock = asyncio.Lock()
 
@@ -158,7 +191,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             "websocket_path": f"/v1/audio/realtime?session_token={token}",
             "input_audio_format": "pcm16le-16000-mono",
             "output_audio_format": "pcm16le-24000-mono",
-            "supports": ["binary_pcm_input", "binary_pcm_output", "input_text", "conversation.item.create", "barge_in"],
+            "supports": ["binary_pcm_input", "binary_pcm_output", "input_text", "conversation.item.create", "input_media", "barge_in"],
         }
 
     @app.websocket("/v1/audio/realtime")
@@ -219,7 +252,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "effective_model": effective_model,
                         "input_audio_format": "pcm16le-16000-mono",
                         "output_audio_format": "pcm16le-24000-mono",
-                        "supports": ["input_text", "conversation.item.create"],
+                        "supports": ["input_text", "conversation.item.create", "input_media", "image_file_id", "document_file_id"],
                     }
                     if requested_model != effective_model:
                         payload["model_alias_of"] = effective_model
@@ -233,6 +266,19 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "type": "input_text.sent",
                         "item_id": str(event.get("item_id") or ""),
                         "text": str(event.get("text") or ""),
+                    })
+                elif event_type == "input.media.sent":
+                    await send_json({
+                        "type": "input_media.sent",
+                        "item_id": str(event.get("item_id") or ""),
+                        "attachment_count": int(event.get("attachment_count") or 0),
+                    })
+                elif event_type == "input.error":
+                    await send_json({
+                        "type": "error", "code": "VOICE_CALL_INPUT_FAILED",
+                        "item_id": str(event.get("item_id") or ""),
+                        "message": str(event.get("message") or "Media input was not accepted by the ChatGPT Voice composer"),
+                        "retryable": True,
                     })
                 elif event_type == "transcript.final":
                     text = str(event.get("text") or "").strip()
@@ -377,33 +423,49 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "request_id": request_id,
                         "session_id": session_id,
                     })
-                elif control_type in {"input_text", "conversation.item.create"}:
-                    input_text = _input_text_from_control(control)
-                    if not input_text:
-                        await send_json({
-                            "type": "error",
-                            "code": "INVALID_INPUT_TEXT",
-                            "message": "Text control must contain a non-empty user input_text value",
-                            "retryable": False,
-                        })
+                elif control_type in {"input_text", "conversation.item.create", "input_media"}:
+                    item = control.get("item") if isinstance(control.get("item"), dict) else {}
+                    if control_type == "conversation.item.create" and item.get("role", "user") != "user":
+                        await send_json({"type": "error", "code": "INVALID_ITEM_ROLE", "message": "Only user input is accepted"})
+                        continue
+                    input_text = (
+                        str(control.get("text") or "").strip()
+                        if control_type == "input_media"
+                        else _input_text_from_control(control)
+                    )
+                    try:
+                        file_ids = _media_ids_from_control(control)
+                        attachments = attachment_specs(file_store, file_ids, principal)
+                        for spec in attachments:
+                            mime = str(spec.get("mime_type") or "").lower()
+                            if mime.startswith("audio/") or mime.startswith("video/"):
+                                raise ValueError("Live media attachments support images/documents; use PCM binary frames for microphone audio")
+                    except HTTPException as error:
+                        await send_json({"type": "error", "code": "MEDIA_ACCESS_DENIED", "message": str(error.detail), "retryable": False})
+                        continue
+                    except ValueError as error:
+                        await send_json({"type": "error", "code": "INVALID_MEDIA_INPUT", "message": str(error), "retryable": False})
+                        continue
+                    if not input_text and not attachments:
+                        await send_json({"type": "error", "code": "EMPTY_INPUT", "message": "Provide text, image or file", "retryable": False})
                         continue
                     if len(input_text) > 12000:
-                        await send_json({
-                            "type": "error",
-                            "code": "INPUT_TEXT_TOO_LONG",
-                            "message": "Live text input is limited to 12000 characters",
-                            "retryable": False,
-                        })
+                        await send_json({"type": "error", "code": "INPUT_TEXT_TOO_LONG", "message": "Live text input is limited to 12000 characters", "retryable": False})
                         continue
-                    item_id = str(control.get("item_id") or (control.get("item") or {}).get("id") or f"item_{uuid.uuid4().hex}")
+                    item_id = str(control.get("item_id") or item.get("id") or f"item_{uuid.uuid4().hex}")[:120]
                     await registry.send(selected_client, {
-                        "type": "voice.live.text",
+                        "type": "voice.live.multimodal" if attachments else "voice.live.text",
                         "request_id": request_id,
                         "session_id": session_id,
                         "item_id": item_id,
                         "text": input_text,
+                        "attachments": attachments,
                     })
-                    await send_json({"type": "input_text.queued", "item_id": item_id, "text": input_text})
+                    await send_json({
+                        "type": "input_media.queued" if attachments else "input_text.queued",
+                        "item_id": item_id, "text": input_text,
+                        **({"attachment_count": len(attachments)} if attachments else {}),
+                    })
                 elif control_type == "session.finish":
                     break
                 elif control_type == "ping":

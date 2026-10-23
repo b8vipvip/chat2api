@@ -21,6 +21,17 @@
     await sleep(120);
   }
 
+  async function reportInputError(requestId, itemId, error) {
+    await trySendSocket({
+      type: "image.progress",
+      kind: "voice-live",
+      request_id: requestId,
+      live_event: "input.error",
+      item_id: itemId || "",
+      message: String(error?.message || error),
+    });
+  }
+
   async function reportError(requestId, error) {
     await trySendSocket({
       type: "image.error",
@@ -88,14 +99,15 @@
           sampleRate: message.sample_rate || 16000,
         });
         if (!response?.ok) throw new Error(response?.error || "Live audio chunk was rejected");
-      } else if (type === "voice.live.text") {
+      } else if (type === "voice.live.text" || type === "voice.live.multimodal") {
         const response = await chrome.tabs.sendMessage(tabId, {
-          type: "chat2api.voice.live.text",
+          type: type === "voice.live.multimodal" ? "chat2api.voice.live.multimodal" : "chat2api.voice.live.text",
           requestId,
           itemId: message.item_id || "",
           text: message.text || "",
+          attachments: message.attachments || [],
         });
-        if (!response?.ok) throw new Error(response?.error || "Live text input was rejected");
+        if (!response?.ok) throw new Error(response?.error || "Live text/media input was rejected");
       } else if (type === "voice.live.cancel_response") {
         await chrome.tabs.sendMessage(tabId, { type: "chat2api.voice.live.cancel", requestId });
       } else if (type === "voice.live.stop") {
@@ -104,7 +116,13 @@
       }
     } catch (error) {
       if (type === "voice.live.stop") liveTabs.delete(requestId);
-      await reportError(requestId, error);
+      if (type === "voice.live.text" || type === "voice.live.multimodal") {
+        // An unsupported attachment or failed composer turn must not
+        // terminate a live phone call or release its Worker lease.
+        await reportInputError(requestId, message.item_id, error);
+      } else {
+        await reportError(requestId, error);
+      }
     }
   };
 })();
