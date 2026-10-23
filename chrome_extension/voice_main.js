@@ -19,6 +19,9 @@
     lastSoundAt: 0,
     soundStarted: false,
     analyserTimer: null,
+    analyserContext: null,
+    peerHook: null,
+    micHook: null,
     peerHookReady: false,
     micHookReady: false,
     peerConnectionsCreated: 0,
@@ -57,12 +60,22 @@
   function stopAnalyser() {
     clearInterval(state.analyserTimer);
     state.analyserTimer = null;
+    try { state.analyserContext?.close?.().catch?.(() => {}); } catch (_) {}
+    state.analyserContext = null;
   }
 
   function startAnalyser(stream) {
     stopAnalyser();
     try {
       const context = new AudioContext();
+      state.analyserContext = context;
+      if (context.state === "suspended" && typeof context.resume === "function") {
+        context.resume()
+          .then(() => post("voice.audio.context", { state: context.state || "running" }))
+          .catch(error => post("voice.audio.level.error", {
+            error: "AudioContext resume failed: " + String(error?.message || error),
+          }));
+      }
       const source = context.createMediaStreamSource(stream);
       const analyser = context.createAnalyser();
       analyser.fftSize = 1024;
@@ -148,6 +161,7 @@
     Object.setPrototypeOf(WrappedRTCPeerConnection, NativePC);
     try {
       globalThis.RTCPeerConnection = WrappedRTCPeerConnection;
+      state.peerHook = WrappedRTCPeerConnection;
       state.peerHookReady = globalThis.RTCPeerConnection === WrappedRTCPeerConnection;
     } catch (error) {
       state.lastTransportError = String(error?.message || error);
@@ -191,6 +205,7 @@
     // installed; a false "mic ready" must not trigger an unbounded voice wait.
     try {
       mediaDevices.getUserMedia = intercepted;
+      state.micHook = intercepted;
       state.micHookReady = mediaDevices.getUserMedia === intercepted;
       if (!state.micHookReady) {
         Object.defineProperty(mediaDevices, "getUserMedia", {
@@ -255,8 +270,10 @@
       state.lastSoundAt = 0;
       post("voice.prepared", {
         mode: state.mode, has_input: Boolean(state.preparedInput),
-        peer_hook_ready: state.peerHookReady,
-        mic_hook_ready: state.micHookReady,
+        peer_hook_ready: state.peerHookReady &&
+          globalThis.RTCPeerConnection === state.peerHook,
+        mic_hook_ready: state.micHookReady &&
+          mediaDevices?.getUserMedia === state.micHook,
         peer_connections_created: state.peerConnectionsCreated,
         mic_requests_seen: state.micRequestsSeen,
         transport_error: state.lastTransportError,
