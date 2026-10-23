@@ -34,24 +34,33 @@ assert.equal(currentWindow.state,"normal");
 assert.equal(calls.filter(x=>x.method==="window.update"&&x.focused===true).length,1);
 assert.equal(calls.filter(x=>x.method==="tab.update"&&x.active===true).length,1);
 
-// Hidden page is a terminal failure before click and before counting a Voice
-// orb or WebRTC transport as an established session.
+// The Worker Xvfb document may report hidden even after its Chrome window
+// is focused. This alone is diagnostic, NOT a Voice admission veto.
 const speechBlock = speech.slice(speech.indexOf("  async function openVoice("),speech.indexOf("  function normVoiceText("));
 const stages=[];
 const speechCtx=vm.createContext({
-  document:{visibilityState:"hidden"},
+  document:{visibilityState:"hidden",hasFocus:()=>false},
   diagnostic:async(_,stage,details)=>stages.push({stage,...details}),
+  voiceUiReady:()=>({reason:"voice-orb"}),
+  settleVoiceWelcome:async()=>false,
+  eventBucket:()=>[{type:"voice.remote.track"}],
   voiceFailure:(code,message)=>Object.assign(new Error(code+": "+message),{code}),
 });
 vm.runInContext(speechBlock+"\nglobalThis.trySpeech=openVoice;",speechCtx);
-await assert.rejects(speechCtx.trySpeech({requestId:"speech-hidden"}),/VOICE_PAGE_HIDDEN/);
-assert.equal(stages[0].voice_failure_code,"VOICE_PAGE_HIDDEN");
+const response = await speechCtx.trySpeech({requestId:"speech-hidden"});
+assert.equal(response.transport.type,"voice.remote.track");
+assert.equal(stages[0].stage,"page-visibility-observed");
 assert.equal(stages[0].browser_visibility,"hidden");
 
 const liveBlock=live.slice(live.indexOf("  async function openVoice("),live.indexOf("  async function startLive("));
-const liveCtx=vm.createContext({document:{visibilityState:"hidden"}});
+const liveCtx=vm.createContext({
+  document:{visibilityState:"hidden"},
+  voiceUiReady:()=>true,
+  settleVoiceWelcome:async()=>false,
+  waitLiveTransport:async type=>({type,track_count:1}),
+});
 vm.runInContext(liveBlock+"\nglobalThis.tryLive=openVoice;",liveCtx);
-await assert.rejects(liveCtx.tryLive({requestId:"live-hidden"}),/VOICE_PAGE_HIDDEN/);
+await liveCtx.tryLive({requestId:"live-hidden"});
 assert.ok(liveRouting.includes("chat2apiActivateVoiceTabV184"));
 assert.ok(liveRouting.includes("VOICE_WINDOW_NOT_FOCUSED"));
-console.log("Voice speech/live share physical foreground activation and reject hidden document");
+console.log("Voice speech/live share foreground routing; hidden is evidence, not a terminal veto");

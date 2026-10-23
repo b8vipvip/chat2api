@@ -89,6 +89,8 @@ function env() {
     document:e.document, getComputedStyle:()=>({display:"block",visibility:"visible"}),
     visible:e.visible, labelOf:e.labelOf, textOf:element=>element.innerText||"",
     voiceTrigger:()=>({button:e.start,label:"Start Voice"}),
+    settleVoiceWelcome:async()=>false,
+    eventBucket:()=>[{type:"voice.remote.track"}],
     waitFor:async fn=>fn(), waitMain:async()=>({type:"voice.remote.track"}),
     diagnostic:async(_active,stage,more)=>{stages.push({stage,...more});},
     voiceFailure:(code,message)=>new Error(code+": "+message),
