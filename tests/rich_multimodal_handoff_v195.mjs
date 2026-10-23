@@ -24,7 +24,23 @@ class ElementNode {
   getBoundingClientRect() { return { width: 300, height: 200 }; }
   matches() { return false; }
   querySelector() { return null; }
-  querySelectorAll() { return []; }
+  querySelectorAll(selector) {
+    if (selector === ":scope > th, :scope > td") {
+      return this.children.filter(child => ["TH", "TD"].includes(child.tagName));
+    }
+    if (selector === "tr") {
+      const matches = [];
+      const visit = node => {
+        for (const child of node.children || []) {
+          if (child.tagName === "TR") matches.push(child);
+          visit(child);
+        }
+      };
+      visit(this);
+      return matches;
+    }
+    return [];
+  }
   cloneNode(deep) {
     return new ElementNode(this.tagName, this.attrs,
       deep ? this.childNodes.map(child => child.cloneNode(true)) : []);
