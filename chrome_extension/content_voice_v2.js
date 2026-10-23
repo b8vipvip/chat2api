@@ -521,8 +521,11 @@
       throw error;
     } finally {
       try { endVoiceButton()?.click(); } catch (_) {}
-      postMain("voice.reset", active);
+      // Detach the old synthetic microphone *before* releasing MAIN-world
+      // request ownership, so late old-request cleanup cannot reach a newer
+      // Voice request on the same tab.
       postMain("voice.mic.stop", active);
+      postMain("voice.reset", active);
       state.mainEvents.delete(active.requestId);
       if (state.active === active) state.active = null;
     }
