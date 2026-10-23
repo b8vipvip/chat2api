@@ -98,6 +98,11 @@ assert.equal(armCommands,1);
 assert.equal(armed.captureArmSequence,45);
 assert.equal(armed.captureArmSawTrack,true);
 assert.ok(stages.some(x=>x.stage==="capture-armed"));
+await assert.rejects(
+  context.voiceApi.armRecording({requestId:"cancel1",cancelled:true}),
+  /VOICE_CANCELLED/,
+);
+assert.equal(armCommands,1, "cancelled Voice cannot start a new capture");
 
 // Old welcome sound and earlier one-time track events must be ignored; with
 // verified preexisting track proof, only response-era sound can complete.
