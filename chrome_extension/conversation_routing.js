@@ -391,6 +391,9 @@
         const staleRequestId = String(legacyRoute.inflight_request_id || "");
         if (staleRequestId && staleRequestId !== requestId &&
             !state.activeRequests.has(staleRequestId)) {
+          legacyRoute.request_scoped = true;
+          legacyRoute.lifecycle_mode = "retired-legacy-route";
+          legacyRoute.close_delay_ms = REQUEST_WINDOW_CLOSE_MS;
           await retireRoute(baseKey, legacyRoute, staleRequestId, "legacy-api-key-route-stale-v189");
         } else if (!staleRequestId && Number.isInteger(legacyRoute.window_id)) {
           legacyRoute.request_scoped = true;
@@ -540,10 +543,9 @@
     if (requestId) state.retiredRequests.add(requestId);
     if (requestId) state.activeRequests.delete(requestId);
 
-    if (Number.isInteger(windowId)) {
-      // Every request window, including an errored/cancelled request, remains
-      // available for post-mortem inspection for 5s, then the single router
-      // owner closes it. It is not returned to the standby pool before removal.
+    if (Number.isInteger(windowId) && route?.request_scoped === true) {
+      // Request-scoped windows stay visible for 5s after any terminal, then the
+      // router closes them. They remain excluded from standby until Chrome removes them.
       route.inflight_request_id = null;
       route.close_delay_ms = REQUEST_WINDOW_CLOSE_MS;
       route.last_active_at = Date.now();
@@ -551,7 +553,23 @@
       await persist();
       await scheduleClose(route);
     } else {
-      resetClosedRoute(route, reason || "terminal-failure");
+      // Compatibility cleanup for pre-v189 API-key routes. Keep the old exact-owner
+      // race guard so a late terminal cannot close a window already borrowed elsewhere.
+      if (Number.isInteger(windowId)) state.retiringWindows.add(windowId);
+      try {
+        resetClosedRoute(route, reason || "terminal-failure");
+        route.last_active_at = Date.now();
+        await persist();
+        if (Number.isInteger(windowId)) {
+          const taken = [...state.activeRequests.values()].some(item => item?.window_id === windowId)
+            || Object.values(state.routes).some(item => item !== route && item?.window_id === windowId && item?.inflight_request_id);
+          if (!taken) {
+            try { await chrome.windows.remove(windowId); } catch (_) {}
+          }
+        }
+      } finally {
+        if (Number.isInteger(windowId)) state.retiringWindows.delete(windowId);
+      }
       if (route?.request_scoped && state.routes[key] === route) delete state.routes[key];
       await persist();
     }
