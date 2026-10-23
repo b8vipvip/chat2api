@@ -136,7 +136,7 @@ def test_tx03_image_recipe_is_not_a_successful_image_terminal():
     assert "function isImageCreationRequest(prompt)" in owner
     assert "const imageBuildArtifact = imageCreationRequested" in owner
     assert "const intrinsicHandoff = Boolean(imageHandoff) || imageBuildArtifact" in owner
-    assert "imageHandoff || imageBuildArtifact || visibleTurnMedia || pageMediaFound" in owner
+    assert "imageHandoff || imageBuildArtifact || imageToolArguments || visibleTurnMedia || pageMediaFound" in owner
     assert "media_last_baseline_excluded" in owner
     assert "ChatGPT returned an image-building command, but no verified transferable image was captured" in owner
     assert "media_excluded_by_gate" in owner
@@ -146,6 +146,27 @@ def test_tx03_image_recipe_is_not_a_successful_image_terminal():
     probe = read("chrome_extension/content_probe_supervisor_v1.js")
     assert 'type: "chat.completed"' not in probe
     assert 'type: "chat.error"' not in probe
+
+
+def test_tool_argument_json_cannot_be_final_and_rich_markup_stays_grouped():
+    """TX03 video/reference-image request must not complete with image tool args."""
+    owner = read("chrome_extension/content_request_v6.js")
+    rich = read("chrome_extension/content_rich_response_v69.js")
+    assert "function isImageToolArguments(value)" in owner
+    assert "const imageToolArguments = imageCreationRequested" in owner
+    assert "|| imageToolArguments;" in owner
+    assert "&& !isImageToolArguments(networkTerminalText)" in owner
+    assert "&& !isImageToolArguments(networkText)" in owner
+    assert "const subject = " in owner and "参考图" in owner
+    assert "let inline = \"\";" in rich
+    assert "inline += inlineMarkdown(child);" in rich
+    assert ".map(cell => inlineChildren(cell)" in rich
+    # Exercise the real JS serializer and parser helpers (not only static tokens).
+    result = subprocess.run(
+        ["node", "tests/rich_multimodal_handoff_v195.mjs"],
+        cwd=ROOT, capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_tx03_short_rich_editor_drift_uses_existing_v6_single_send_terminal_owner():

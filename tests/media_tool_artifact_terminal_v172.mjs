@@ -39,7 +39,7 @@ assert.match(content, /const intrinsicHandoff = Boolean\(imageHandoff\) \|\| ima
 assert.match(content, /const captureMedia = imageHandoff \|\| imageBuildArtifact/);
 assert.match(content, /networkTerminalAt && networkTerminalText && !captureMedia/);
 assert.match(content, /isLocalImageBuildCommand\(networkTerminalText\)/);
-assert.match(content, /&& !imageBuildArtifact\) \{/);
+assert.match(content, /&& !imageBuildArtifact[\s\S]*?!isImageToolArguments\(networkText\)\) \{/);
 assert.match(content, /ChatGPT returned an image-building command, but no verified transferable image was captured/);
 assert.match(content, /hasTransferableImage\(captured\) && delivered > 0/);
 assert.match(content, /response_terminal_source: "verified-request-media-dom-v176"/);
