@@ -174,6 +174,7 @@ class PlaygroundRunRequest(BaseModel):
         "image_generation",
         "voice_generation",
         "voice_conversation",
+        "voice_call",
         "all",
     ]
     model: str = Field(default="gpt-5.6-sol", min_length=1, max_length=120)
@@ -181,6 +182,7 @@ class PlaygroundRunRequest(BaseModel):
     api_key_id: str | None = Field(default=None, max_length=120)
     api_key: SecretStr | None = None
     files: list[PlaygroundFileInput] = Field(default_factory=list, max_length=4)
+    voice_test_text: str | None = Field(default=None, max_length=4000)
 
     @field_validator("model", mode="before")
     @classmethod
