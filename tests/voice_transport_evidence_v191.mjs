@@ -18,6 +18,7 @@ const sources = [
   section("  function voiceFailure(", "  async function waitFor("),
   section("  async function openVoice(", "  function normVoiceText("),
   section("  function normVoiceText(", "  async function playVoiceInput("),
+  section("  async function armRecording(", "  async function waitResponse("),
   section("  async function waitResponse(", "  async function runVoice("),
 ];
 let clock = 0;
@@ -34,6 +35,7 @@ const fakeDocument = {
 };
 const base = {
   Date:fakeDate, Math, Number, String, Boolean,
+  state:{mainSequence:0}, postMain:()=>{},
   voiceTrigger:()=>({button:{click() {}},label:"Start Voice"}),
   voiceUiReady:()=>({reason:"voice-orb"}),
   waitFor:async fn =>fn(), waitMain:async()=>null,
@@ -53,7 +55,7 @@ const base = {
 };
 const context = vm.createContext(base);
 vm.runInContext(sources.join("\n") +
-  "\nglobalThis.voiceApi = {openVoice, sendTypedPrompt, waitResponse};",
+  "\nglobalThis.voiceApi = {openVoice, sendTypedPrompt, armRecording, waitResponse};",
   context);
 
 // The orb-only condition reproduced by TX03 must not be counted as transport.
@@ -77,6 +79,36 @@ context.sendButton = ()=>({click() { submitCount++; turnSeen=true; }});
 await context.voiceApi.sendTypedPrompt({requestId:"v3",mode:"speech"},"chat2api spoken prompt");
 assert.equal(submitCount,2);
 assert.ok(stages.some(x=>x.stage==="prompt-accepted"));
+
+// Transport and the initial ChatGPT greeting may be audible *before* the
+// verified prompt. The recorder must be explicitly armed for the reply.
+context.state.mainSequence = 45;
+let armCommands = 0;
+context.postMain = (type)=>{if (type === "voice.record.arm") armCommands++;};
+context.waitMain = async (_id, predicate)=> {
+  const event = {type:"voice.record.armed",remote_track_seen:true};
+  assert.equal(predicate(event),true);
+  return event;
+};
+const armed = {requestId:"arm1"};
+await context.voiceApi.armRecording(armed);
+assert.equal(armCommands,1);
+assert.equal(armed.captureArmSequence,45);
+assert.equal(armed.captureArmSawTrack,true);
+assert.ok(stages.some(x=>x.stage==="capture-armed"));
+
+// Old welcome sound and earlier one-time track events must be ignored; with
+// verified preexisting track proof, only response-era sound can complete.
+clock=0;
+context.eventBucket=()=>[
+  {_voice_sequence:43,type:"voice.audio.level",speaking:true,last_sound_at:2000},
+  {_voice_sequence:44,type:"voice.remote.track"},
+  {_voice_sequence:46,type:"voice.record.started"},
+];
+await assert.rejects(
+  context.voiceApi.waitResponse({...armed,timeoutSeconds:180},0),
+  /VOICE_REMOTE_AUDIO_SILENT/,
+);
 
 // After a verified submit, an absent remote track fails at the stage
 // deadline and never consumes the entire 300-second API timeout.
@@ -142,7 +174,14 @@ const peer=new page.RTCPeerConnection();
 assert.ok(peer.handlers.track);
 peer.handlers.track({track:{kind:"audio",readyState:"live"}});
 assert.ok(posted.some(x=>x.type==="voice.remote.track"));
-assert.ok(posted.some(x=>x.type==="voice.record.started"));
+assert.ok(!posted.some(x=>x.type==="voice.record.started"),
+  "orb/track discovery must not record an unsolicited Voice greeting");
+listeners.message({
+  source:pageWindow,
+  data:{source:"chat2api-isolated",type:"voice.record.arm",request_id:"v6"},
+});
+assert.ok(posted.some(x=>x.type==="voice.record.armed"&&x.request_id==="v6"));
+assert.ok(posted.some(x=>x.type==="voice.record.started"&&x.request_id==="v6"));
 
 // Reuse of the same browser tab MUST NOT turn a prior recorder's asynchronous
 // onstop Base64 output into the new Voice request's completed audio.
@@ -156,7 +195,18 @@ listeners.message({
 });
 await new Promise(resolve=>setImmediate(resolve));
 const priorCompleted=posted.filter(x=>x.type==="voice.record.complete");
-assert.ok(priorCompleted.length>0);
-assert.ok(priorCompleted.every(x=>x.request_id==="v6"),
-  "stale previous audio must never become a new request's successful response");
+assert.equal(priorCompleted.length,0,
+  "abandoned old recording must never deliver audio after next request prepares");
+assert.equal(page.__CHAT2API_VOICE_MAIN_V1__.captureArmed,false);
+const nextPeer=new page.RTCPeerConnection();
+nextPeer.handlers.track({track:{kind:"audio",readyState:"live"}});
+const recordingsBefore=posted.filter(x=>x.type==="voice.record.started").length;
+assert.equal(recordingsBefore,1,
+  "the next Voice orb/track cannot auto-record before confirmed input");
+listeners.message({
+  source:pageWindow,
+  data:{source:"chat2api-isolated",type:"voice.record.arm",request_id:"v7"},
+});
+assert.equal(posted.filter(x=>x.type==="voice.record.started").length,2);
+assert.ok(posted.some(x=>x.type==="voice.record.armed"&&x.request_id==="v7"));
 console.log("Voice transport, prompt receipt, stage guards and recorder request ownership verified");
