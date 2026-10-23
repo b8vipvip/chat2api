@@ -144,8 +144,17 @@ def test_audio_router_prefers_voice_v2_and_never_routes_dictation() -> None:
     assert "dictation.request" not in routing
     assert "content_dictation" not in routing
     assert "chrome.windows.update" not in routing
-    assert "ui-ready" in voice_v2
-    assert "prompt-sent" in voice_v2
+    # A visible Voice orb and a clicked Send button are not transport or
+    # prompt-acceptance evidence. v179 requires the stronger staged proofs.
+    assert 'diagnostic(active, "ui-visible"' in voice_v2
+    assert 'diagnostic(active, "transport-preflight"' in voice_v2
+    assert 'diagnostic(active, "prompt-editor-verified"' in voice_v2
+    assert 'diagnostic(active, "prompt-submit-attempted"' in voice_v2
+    assert 'diagnostic(active, "prompt-accepted"' in voice_v2
+    assert "VOICE_TEXT_SUBMISSION_UNVERIFIED" in voice_v2
+    assert "VOICE_TRANSPORT_NOT_READY" in voice_v2
     assert "input-started" in voice_v2
     assert "remote-track" in voice_v2
+    assert voice_v2.index('diagnostic(active, "ui-visible"') < voice_v2.index('diagnostic(active, "transport-preflight"')
+    assert voice_v2.index('diagnostic(active, "prompt-submit-attempted"') < voice_v2.index('diagnostic(active, "prompt-accepted"')
     assert voice_v2.index("await openVoice(active)") < voice_v2.index("await sendTypedPrompt(active, prompt)")

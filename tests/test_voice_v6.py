@@ -166,3 +166,47 @@ def test_extension_contains_visual_error_guard_voice_and_nonfocusing_routing() -
     assert "removeAttachmentsByName" in multimodal
     assert "uploadOne" in multimodal and "attachment_verified" in multimodal
     assert "cleanupPreviousAutomationDraft" in request_v3 and "enter-fallback" in request_v3
+
+
+def test_gpt_live_stage_failure_is_propagated_and_not_misclassified_as_timeout(tmp_path: Path) -> None:
+    with TestClient(app_v6(tmp_path)) as client:
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as websocket:
+            websocket.receive_json()
+            def request():
+                return client.post("/v1/audio/speech", headers=headers(), json={
+                    "model": "gpt-live", "input": "请读一段测试语音", "timeout": 120,
+                })
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(request)
+                message = websocket.receive_json()
+                request_id = message["request_id"]
+                assert message["type"] == "voice.request"
+                # The UI was visible; synthetic microphone + remote track
+                # never appeared. The one original Worker terminal supplies a
+                # failure code to the existing Broker and request telemetry.
+                websocket.send_json({
+                    "type": "image.diagnostics", "kind": "voice",
+                    "request_id": request_id,
+                    "diagnostics": {
+                        "route": "chatgpt-voice-v2", "voice_stage": "failed",
+                        "voice_failure_stage": "transport-not-ready",
+                        "voice_failure_code": "VOICE_TRANSPORT_NOT_READY",
+                        "synthetic_mic_seen": False, "remote_track_seen": False,
+                        "audio_bytes": 0,
+                    },
+                })
+                websocket.send_json({
+                    "type": "image.error", "kind": "voice",
+                    "request_id": request_id,
+                    "error_code": "VOICE_TRANSPORT_NOT_READY",
+                    "error": "VOICE_TRANSPORT_NOT_READY: ChatGPT Voice UI visible but WebRTC transport absent",
+                })
+                response = future.result(timeout=8)
+            assert response.status_code == 502, response.text
+            assert "VOICE_TRANSPORT_NOT_READY" in response.text
+            row = client.app.state.telemetry.get(request_id)
+            assert row["status"] == "error"
+            assert row["diagnostics"]["voice_failure_code"] == "VOICE_TRANSPORT_NOT_READY"
+            assert row["diagnostics"]["voice_failure_stage"] == "transport-not-ready"
+            assert not client.app.state.broker.requests

@@ -108,6 +108,11 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             if event_type == "image.completed" and event.get("kind") == "voice":
                 return event
             if event_type in {"image.error", "image.cancelled"} and event.get("kind") == "voice":
+                code = str(event.get("error_code") or "").strip()
+                if code:
+                    # This is evidence on the existing Broker-owned failure,
+                    # not another decision path or duplicate terminal event.
+                    state.diagnostics["voice_failure_code"] = code[:80]
                 raise RuntimeError(str(event.get("error") or event.get("reason") or "Voice request failed"))
             if event_type in {"chat.error", "chat.cancelled"}:
                 raise RuntimeError(str(event.get("error") or event.get("reason") or "Chrome extension disconnected"))
@@ -233,6 +238,8 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 },
             }
         except asyncio.TimeoutError as error:
+            state.diagnostics["voice_failure_code"] = "VOICE_SERVER_WAIT_TIMEOUT"
+            state.diagnostics["voice_failure_stage"] = str(state.diagnostics.get("voice_stage") or "unknown")
             try:
                 await registry.send(selected_client, {"type": "voice.cancel", "request_id": request_id})
             except Exception:
@@ -241,9 +248,11 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             await record_voice(
                 request_id=request_id, response_id=response_id, client_id=selected_client,
                 principal=principal, model=model, request_type=request_type, prompt=prompt,
-                transcript="", state=state, status_value="error", error="Timed out waiting for GPT-Live",
+                transcript="", state=state, status_value="error",
+                error="VOICE_SERVER_WAIT_TIMEOUT: Timed out waiting for GPT-Live",
             )
-            raise HTTPException(status_code=504, detail="Timed out waiting for GPT-Live") from error
+            raise HTTPException(status_code=504,
+                detail="VOICE_SERVER_WAIT_TIMEOUT: Timed out waiting for GPT-Live") from error
         except Exception as error:
             # Includes offline WebSocket send failures as well as explicit
             # browser errors; a previously admitted voice run cannot remain
