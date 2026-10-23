@@ -20,7 +20,7 @@ from app.playground_multimodal_defaults_patch import install_playground_multimod
 from app.request_id_namespace_v136_patch import install_request_id_namespace_v136_patch
 
 
-AUDIO = b"\\x1aE\\xdf\\xa3" + b"real-voice-test-transport" * 60
+AUDIO = bytes([0x1A, 0x45, 0xDF, 0xA3]) + b"real-voice-test-transport" * 60
 
 
 def app_voice(tmp_path: Path):
