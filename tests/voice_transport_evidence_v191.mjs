@@ -55,7 +55,7 @@ const base = {
 };
 const context = vm.createContext(base);
 vm.runInContext(sources.join("\n") +
-  "\nglobalThis.voiceApi = {openVoice, sendTypedPrompt, armRecording, waitResponse};",
+  "\nglobalThis.voiceApi = {openVoice, sendTypedPrompt, armRecording, waitResponse, normVoiceText};",
   context);
 
 // The orb-only condition reproduced by TX03 must not be counted as transport.
@@ -79,6 +79,8 @@ context.sendButton = ()=>({click() { submitCount++; turnSeen=true; }});
 await context.voiceApi.sendTypedPrompt({requestId:"v3",mode:"speech"},"chat2api spoken prompt");
 assert.equal(submitCount,2);
 assert.ok(stages.some(x=>x.stage==="prompt-accepted"));
+assert.equal(context.voiceApi.normVoiceText("文本\\n  多行"),"文本 多行",
+  "Voice prompt comparison must normalize actual Unicode layout whitespace");
 
 // Transport and the initial ChatGPT greeting may be audible *before* the
 // verified prompt. The recorder must be explicitly armed for the reply.
@@ -209,4 +211,24 @@ listeners.message({
 });
 assert.equal(posted.filter(x=>x.type==="voice.record.started").length,2);
 assert.ok(posted.some(x=>x.type==="voice.record.armed"&&x.request_id==="v7"));
+
+// A WebRTC track that arrives after confirmed input must start the same
+// recorder, without requiring a second Voice request or retry controller.
+listeners.message({
+  source:pageWindow,
+  data:{source:"chat2api-isolated",type:"voice.prepare",request_id:"v8",mode:"speech"},
+});
+const beforeLate=posted.filter(x=>x.type==="voice.record.started").length;
+listeners.message({
+  source:pageWindow,
+  data:{source:"chat2api-isolated",type:"voice.record.arm",request_id:"v8"},
+});
+const lateAck=posted.find(x=>x.type==="voice.record.armed"&&x.request_id==="v8");
+assert.ok(lateAck);
+assert.equal(lateAck.remote_track_seen,false);
+assert.equal(posted.filter(x=>x.type==="voice.record.started").length,beforeLate);
+const latePeer=new page.RTCPeerConnection();
+latePeer.handlers.track({track:{kind:"audio",readyState:"live"}});
+assert.equal(posted.filter(x=>x.type==="voice.record.started").length,beforeLate+1);
+assert.ok(posted.some(x=>x.type==="voice.record.started"&&x.request_id==="v8"));
 console.log("Voice transport, prompt receipt, stage guards and recorder request ownership verified");
