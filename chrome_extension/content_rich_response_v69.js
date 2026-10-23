@@ -203,7 +203,10 @@
     if (node instanceof Element && node !== selected) {
       const mediaOutsideMarkdown = [...node.querySelectorAll("img")].some(img =>
         candidateImage(img) && !selected.contains(img));
+      const filesOutsideMarkdown = [...node.querySelectorAll(FILE_ANCHORS)].some(anchor =>
+        recognizedFile(anchor) && !selected.contains(anchor));
       if (mediaOutsideMarkdown) return node;
+      if (filesOutsideMarkdown) return node;
     }
     return selected;
   }
@@ -235,14 +238,22 @@
     for (const button of [...clone.querySelectorAll("button")]) {
       const pictureNodes = [...button.querySelectorAll("img")]
         .filter(img => visibleMediaSources.has(String(img.getAttribute("src") || "").trim()));
-      if (pictureNodes.length) button.replaceWith(...pictureNodes.map(img => img.cloneNode(true)));
+      const fileNodes = [...button.querySelectorAll(FILE_ANCHORS)]
+        .filter(anchor => recognizedFile(anchor));
+      if (pictureNodes.length || fileNodes.length)
+        button.replaceWith(...pictureNodes.map(img => img.cloneNode(true)),
+          ...fileNodes.map(anchor => anchor.cloneNode(true)));
       else button.remove();
     }
     for (const item of [...clone.querySelectorAll(ACTION_SELECTOR)]) {
       if (!clone.contains(item)) continue;
       const pictures = [...item.querySelectorAll("img")].filter(img =>
         visibleMediaSources.has(String(img.getAttribute("src") || "").trim()));
-      if (pictures.length) item.replaceWith(...pictures.map(img => img.cloneNode(true)));
+      const files = [...item.querySelectorAll(FILE_ANCHORS)]
+        .filter(anchor => recognizedFile(anchor));
+      if (pictures.length || files.length)
+        item.replaceWith(...pictures.map(img => img.cloneNode(true)),
+          ...files.map(anchor => anchor.cloneNode(true)));
       else item.remove();
     }
     for (const svg of clone.querySelectorAll("svg")) {
@@ -271,6 +282,100 @@
     return match ? match[1] : "";
   }
 
+
+  const FILE_MAX_BYTES = 6 * 1024 * 1024;
+  const FILE_MAX_TOTAL = 12 * 1024 * 1024;
+  const FILE_MAX_COUNT = 4;
+  const FILE_MIME_BY_EXT = Object.freeze({
+    pdf: "application/pdf", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    zip: "application/zip", csv: "text/csv", txt: "text/plain", md: "text/markdown",
+    json: "application/json", py: "text/x-python", js: "text/javascript",
+    ts: "text/plain", html: "text/html",
+  });
+  const FILE_ANCHORS = "a[download],a[data-testid*='download'],a[aria-label^='Download ']";
+  const fileCache = new Map();
+  function recognizedFile(anchor) {
+    if (!(anchor instanceof Element)) return null;
+    const rawUrl = String(anchor.getAttribute?.("href") || "").trim();
+    let uri;
+    try { uri = new URL(rawUrl, location.href); } catch (_) { return null; }
+    const absolute = uri.href;
+    if (!trustedMediaSource(absolute)) return null;
+    const label = String(anchor.getAttribute("download")
+      || anchor.getAttribute("aria-label")?.replace(/^Download\s*/i, "")
+      || uri.pathname.split("/").pop() || "").split(/[?#]/)[0];
+    const filename = label.replace(/[\/\\()[\]\r\n]/g, "_").trim().slice(0, 140);
+    const ext = /\.([a-z0-9]{1,8})$/i.exec(filename)?.[1]?.toLowerCase();
+    if (!ext || !FILE_MIME_BY_EXT[ext]) return null;
+    return { url: absolute, filename, mime: FILE_MIME_BY_EXT[ext] };
+  }
+
+  function hasCandidateFile(root) {
+    return Boolean(root?.querySelectorAll &&
+      [...root.querySelectorAll(FILE_ANCHORS)].some(anchor => recognizedFile(anchor)));
+  }
+
+  async function inlineGeneratedFiles(clone) {
+    let count = 0, total = 0;
+    for (const anchor of [...(clone?.querySelectorAll?.(FILE_ANCHORS) || [])].slice(0, FILE_MAX_COUNT + 1)) {
+      const item = recognizedFile(anchor);
+      if (!item) continue;
+      if (count >= FILE_MAX_COUNT) return { count, error: "file-count-limit" };
+      let encoded = fileCache.get(item.url);
+      if (!encoded) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 12000);
+        try {
+          const uri = new URL(item.url);
+          const response = await fetch(item.url, {
+            method: "GET", redirect: "error", signal: controller.signal,
+            credentials: uri.origin === location.origin ? "include" : "omit",
+          });
+          if (!response.ok) return { count, error: "file-download-unavailable" };
+          if (Number(response.headers.get("content-length") || 0) > FILE_MAX_BYTES)
+            return { count, error: "file-size-limit" };
+          // Read under a hard cap even for chunked or dishonest responses.
+          const reader = response.body?.getReader();
+          if (!reader) return { count, error: "file-stream-unavailable" };
+          const parts = [];
+          let size = 0;
+          try {
+            while (true) {
+              const { value, done } = await reader.read();
+              if (done) break;
+              size += value.byteLength;
+              if (size > FILE_MAX_BYTES || total + size > FILE_MAX_TOTAL)
+                return { count, error: "file-size-limit" };
+              parts.push(value);
+            }
+          } finally { try { await reader.cancel(); } catch (_) {} }
+          if (size <= 0) return { count, error: "file-empty" };
+          const bytes = new Uint8Array(size);
+          let offset = 0;
+          for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
+          let binary = "";
+          for (let index = 0; index < bytes.length; index += 16384)
+            binary += String.fromCharCode(...bytes.subarray(index, index + 16384));
+          encoded = { data: "data:" + item.mime + ";base64," + btoa(binary), bytes: size };
+          if (fileCache.size >= FILE_MAX_COUNT) fileCache.clear();
+          fileCache.set(item.url, encoded);
+        } catch (_) {
+          return { count, error: "file-download-unavailable" };
+        } finally { clearTimeout(timer); }
+      }
+      if (total + encoded.bytes > FILE_MAX_TOTAL)
+        return { count, error: "file-total-limit" };
+      total += encoded.bytes;
+      anchor.setAttribute("href", encoded.data);
+      anchor.setAttribute("data-chat2api-generated-file", "1");
+      anchor.setAttribute("data-chat2api-filename", item.filename);
+      count += 1;
+    }
+    return { count, bytes: total, error: "" };
+  }
+
   function inlineMarkdown(node) {
     if (!node) return "";
     if (node.nodeType === Node.TEXT_NODE) return normalizeInline(node.nodeValue || "");
@@ -283,6 +388,11 @@
       return src ? `![${alt.replace(/[\[\]]/g, "")}](${src})` : `[图片：${alt}]`;
     }
     if (tag === "a") {
+      if (node.getAttribute("data-chat2api-generated-file") === "1") {
+        const filename = String(node.getAttribute("data-chat2api-filename") || "").replace(/[\[\]\r\n]/g, "_");
+        const url = String(node.getAttribute("href") || "");
+        return filename && url.startsWith("data:") ? `![📎 ${filename}](${url})` : "";
+      }
       const label = inlineChildren(node).trim() || normalizeInline(node.getAttribute("aria-label") || "链接").trim() || "链接";
       const href = safeUrl(node.getAttribute("href") || "");
       return href ? `[${label}](${href})` : label;
@@ -520,6 +630,7 @@
       if (bounded) embedded += 1;
       else image.removeAttribute("src");
     }
+    const fileStats = await inlineGeneratedFiles(clone);
     const imageStats = await inlineBlobImages(clone);
     return {
       text: normalizeOutput(blockMarkdown(clone)),
@@ -527,6 +638,9 @@
       image_embedded_count: embedded,
       image_inlined_bytes: imageStats.bytes,
       image_transfer_stats: imageStats.stats,
+      file_inlined_count: fileStats.count,
+      file_inlined_bytes: fileStats.bytes || 0,
+      file_transfer_error: fileStats.error || "",
     };
   }
 
@@ -535,6 +649,7 @@
     format: "markdown",
     contentRoot,
     hasCandidateImage,
+    hasCandidateFile,
     snapshotPageMedia,
     locateNewPageMedia,
     capturePageImages,

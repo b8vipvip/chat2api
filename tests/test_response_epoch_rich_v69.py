@@ -58,10 +58,11 @@ def test_generated_media_handoff_keeps_single_request_terminal_authority():
     assert 'networkTerminalText && !captureMedia' in source
     assert '!promptStillPresent(active)' in source
     assert 'isLocalImageBuildCommand(networkTerminalText)' in source
-    assert 'networkText && !isInternalMediaHandoff(networkText)' in source
+    assert 'networkText && !captureMedia && !fileCreationRequested && !imageCreationRequested' in source
     assert '!networkTerminalAt && !captureMedia' in source
     assert 'internal_tool_handoff_without_media: true' in source
     assert 'if (mediaOutsideMarkdown) return node;' in rich
+    assert 'if (filesOutsideMarkdown) return node;' in rich
     assert 'image_inlined_count: imageStats.inlined' in rich
     assert source.count('type: "chat.completed"') >= 2
 
@@ -119,7 +120,7 @@ def test_verified_media_handoff_intrinsic_card_still_uses_one_request_owner():
     assert "oldKeys.has(candidateMediaKey(img))" in rich
     assert "trustedMediaSource(src)" in rich
     assert "media-new-image-card-found" in owner
-    assert "hasTransferableImage(captured) && delivered > 0" in owner
+    assert "delivered > 0 && (hasTransferableImage(captured) || hasTransferableFile(captured))" in owner
     assert 'response_terminal_source: "verified-request-media-dom-v176"' in owner
     assert "stream:false,timeout:300" not in playground
     assert 'response_format:"b64_json",n:1,timeout:600' in playground
@@ -136,7 +137,7 @@ def test_tx03_image_recipe_is_not_a_successful_image_terminal():
     assert "function isImageCreationRequest(prompt)" in owner
     assert "const imageBuildArtifact = imageCreationRequested" in owner
     assert "const intrinsicHandoff = Boolean(imageHandoff) || imageBuildArtifact" in owner
-    assert "imageHandoff || imageBuildArtifact || imageToolArguments || visibleTurnMedia || pageMediaFound" in owner
+    assert "|| visibleTurnMedia || visibleTurnFiles || fileCreationRequested || pageMediaFound" in owner
     assert "media_last_baseline_excluded" in owner
     assert "ChatGPT returned an image-building command, but no verified transferable image was captured" in owner
     assert "media_excluded_by_gate" in owner
@@ -166,6 +167,27 @@ def test_tool_argument_json_cannot_be_final_and_rich_markup_stays_grouped():
     # Exercise the real JS serializer and parser helpers (not only static tokens).
     result = subprocess.run(
         ["node", "tests/rich_multimodal_handoff_v195.mjs"],
+        cwd=ROOT, capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_generated_file_handoff_uses_existing_single_terminal_owner():
+    owner = read("chrome_extension/content_request_v6.js")
+    rich = read("chrome_extension/content_rich_response_v69.js")
+    main = read("app/main.py")
+    assert "function hasTransferableFile(value)" in owner
+    assert "function isFileCreationRequest(prompt)" in owner
+    assert "rich?.hasCandidateFile?.(sameTurnRoot)" in owner
+    assert "const captured = combinePageMediaText(assistantProse, finalMedia?.text);" in owner
+    assert "hasTransferableFile(captured)" in owner
+    assert "file_inlined_count: fileStats.count" in rich
+    assert "generated_files = GeneratedFileArchive(media_archive)" in main
+    assert "archive_final_markdown, raw_final" in main
+    assert "archive_final_markdown, text" in main
+    assert "type: \"chat.completed\"" not in rich
+    result = subprocess.run(
+        ["node", "tests/generated_file_handoff_v196.mjs"],
         cwd=ROOT, capture_output=True, text=True, timeout=20,
     )
     assert result.returncode == 0, result.stdout + result.stderr

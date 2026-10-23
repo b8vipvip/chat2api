@@ -783,6 +783,19 @@
     } catch (_) { return false; }
   }
 
+
+  function hasTransferableFile(value) {
+    return /!\[📎 [^\]\n]{1,180}\]\(data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+\)/i
+      .test(String(value || ""));
+  }
+
+  function isFileCreationRequest(prompt) {
+    const raw = String(prompt || "");
+    const text = (raw.includes("[User]") ? raw.slice(raw.lastIndexOf("[User]") + 6) : raw).slice(0, 1000);
+    return /(?:生成|创建|导出|制作|输出|下载|create|export|generate|make)[^\n]{0,100}(?:\.pdf|\.docx|\.xlsx|\.pptx|\.zip|\.csv|\.py|文件|附件|downloadable file|spreadsheet)/i.test(text)
+      && !/(?:如何|解释|分析|什么是)[^\n]{0,50}(?:生成|创建|导出|制作|输出)/i.test(text);
+  }
+
   function hasTransferableImage(value) {
     return /!\[[^\]]{0,400}\]\((?:data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+|https:\/\/[^)]+)\)/i.test(String(value || ""));
   }
@@ -827,8 +840,39 @@
 
   async function reconcileResponsesTerminal(active, networkText) {
     const raw = String(networkText || "");
-    if (String(active.options?.response_protocol || "") !== "responses-v108"
-        || completeResponsesBridgeDocument(raw)) {
+    if (String(active.options?.response_protocol || "") !== "responses-v108") {
+      // The network can expose the source markup of a ChatGPT rich answer.
+      // It is not the same thing as the visible, rendered assistant reply.
+      // A matching same-turn DOM capture can replace *source component tags*
+      // with semantic Markdown; ordinary prose/code and Responses envelopes
+      // still retain the stronger SSE body.
+      const componentMarkup = /<\/?(?:box|row|col|grid|text|button|card|icon|svg|flow|carousel|WritingBlock|AppBlock|Chart)\b/i;
+      if (componentMarkup.test(raw) && raw.length >= 150) {
+        const until = Date.now() + 1800;
+        while (!active.cancelled && Date.now() < until) {
+          const candidateState = currentAssistantState(active);
+          if (candidateState.isNew && candidateState.latest && !isGenerating()) {
+            try {
+              const captured = await finalNodeText(candidateState.latest);
+              const markdown = String(captured?.text || "").trim();
+              // This is a same-request turn, and it must share an actual
+              // visible text fragment. Length is not proof of identity.
+              const overlaps = markdown.split(/\n+/).map(line => normalize(line))
+                .filter(line => line.length >= 18)
+                .some(line => normalize(raw).includes(line.slice(0, 18)));
+              if (overlaps && markdown.length >= 30
+                  && !componentMarkup.test(markdown)
+                  && !markdown.includes("![📎 ")) {
+                return { text: markdown, source: "validated-rendered-same-turn-dom-v196" };
+              }
+            } catch (_) { /* untrusted or unavailable DOM never defeats SSE */ }
+          }
+          await delay(180);
+        }
+      }
+      return { text: raw, source: "network-sse-terminal-v57" };
+    }
+    if (completeResponsesBridgeDocument(raw)) {
       return { text: raw, source: "network-sse-terminal-v57" };
     }
     // The request-v6 controller remains the only terminal authority. Accept
@@ -867,6 +911,7 @@
     let imageHandoffObserved = false;
     let imageBuildArtifactObserved = false;
     const imageCreationRequested = isImageCreationRequest(active.prompt);
+    const fileCreationRequested = isFileCreationRequest(active.prompt);
 
     while (!active.cancelled && Date.now() - startedAt < timeoutMs) {
       const upstreamLimit = upstreamRateLimitFailure(active);
@@ -890,6 +935,7 @@
           || isLocalImageBuildCommand(networkText));
       const sameTurnRoot = current.isNew && current.latest ? (current.turn || turnOf(current.latest)) : null;
       const visibleTurnMedia = Boolean(sameTurnRoot && rich?.hasCandidateImage?.(sameTurnRoot));
+      const visibleTurnFiles = Boolean(sameTurnRoot && rich?.hasCandidateFile?.(sameTurnRoot));
       // Image-only assistant turns can lack a data-message-author-role node.
       // Compare visible chat-main images against the snapshot taken before
       // submitting this exact request; never use arbitrary document images.
@@ -904,7 +950,8 @@
       ) || { images: [], candidate_count_document: 0, new_image_candidate_count: 0,
         after_user_count: 0, baseline_image_count: 0, anchor: "none" };
       const pageMediaFound = discovered.images.length > 0;
-      const captureMedia = imageHandoff || imageBuildArtifact || imageToolArguments || visibleTurnMedia || pageMediaFound;
+      const captureMedia = imageHandoff || imageBuildArtifact || imageToolArguments
+        || visibleTurnMedia || visibleTurnFiles || fileCreationRequested || pageMediaFound;
       const captureOrigin = pageMediaFound && !visibleTurnMedia ? "new-page-media" : "assistant-turn";
       const sourceMedia = pageMediaFound && !visibleTurnMedia ? discovered.images : [];
       const sourceFingerprint = sourceMedia.map(img =>
@@ -918,7 +965,8 @@
       const sourceStable = !sourceMedia.length || (
         active.mediaSourceStableAt && Date.now() - active.mediaSourceStableAt >= 1600
       );
-      if (imageHandoff || imageToolArguments || visibleTurnMedia || pageMediaFound) imageHandoffObserved = true;
+      if (imageHandoff || imageToolArguments || visibleTurnMedia || visibleTurnFiles
+          || fileCreationRequested || pageMediaFound) imageHandoffObserved = true;
       if (imageBuildArtifact) imageBuildArtifactObserved = true;
       try { globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.observe?.(active, {
         handoff: imageHandoff, generating, newCandidates: discovered.new_image_candidate_count,
@@ -969,6 +1017,8 @@
           media_handoff_marker: imageHandoff,
           media_local_build_command_observed: imageBuildArtifact,
           media_turn_visible_image: visibleTurnMedia,
+          media_turn_downloadable_files: visibleTurnFiles,
+          media_file_creation_requested: fileCreationRequested,
           media_same_turn_anchor: current.reason,
           media_capture_origin: captureOrigin,
           media_document_candidates: discovered.candidate_count_document,
@@ -991,9 +1041,9 @@
           : await finalNodeText(sameTurnRoot);
         // On redesigned pages image cards may be siblings of the assistant
         // Markdown. Preserve same-request prose alongside those fresh images.
-        const assistantProse = sourceMedia.length && current.isNew && sameTurnRoot
-          ? String((await finalNodeText(sameTurnRoot))?.text || "").trim()
-          : "";
+        const assistantRich = sourceMedia.length && current.isNew && sameTurnRoot
+          ? await finalNodeText(sameTurnRoot) : null;
+        const assistantProse = String(assistantRich?.text || "").trim();
         const captured = combinePageMediaText(assistantProse, finalMedia?.text);
         active.mediaCaptureAttempts = Number(active.mediaCaptureAttempts || 0) + 1;
         active.mediaCaptureLastChars = captured.length;
@@ -1003,9 +1053,14 @@
         active.mediaCaptureOrigin = sourceMedia.length ? captureOrigin : "assistant-turn";
         // Never commit a browser-only blob URL or an inaccessible CDN preview.
         // The rich serializer must actually transport an image to the API.
-        const delivered = Number(finalMedia?.image_inlined_count || 0)
+        const deliveredImages = Number(finalMedia?.image_inlined_count || 0)
           + Number(finalMedia?.image_embedded_count || 0);
-        if (hasTransferableImage(captured) && delivered > 0) {
+        const deliveredFiles = Number(finalMedia?.file_inlined_count || 0)
+          + Number(assistantRich?.file_inlined_count || 0);
+        const delivered = deliveredImages + deliveredFiles;
+        if (delivered > 0 && (hasTransferableImage(captured) || hasTransferableFile(captured))
+            && (!fileCreationRequested || deliveredFiles > 0)
+            && (!imageCreationRequested || deliveredImages > 0)) {
           if (captured !== imageCandidate) {
             imageCandidate = captured;
             imageCandidateSince = Date.now();
@@ -1024,6 +1079,9 @@
                 response_format: "markdown",
                 response_image_inlined_count: Number(finalMedia?.image_inlined_count || 0),
                 response_image_inlined_bytes: Number(finalMedia?.image_inlined_bytes || 0),
+                response_generated_file_count: deliveredFiles,
+                response_generated_file_bytes: Number(finalMedia?.file_inlined_bytes || 0)
+                  + Number(assistantRich?.file_inlined_bytes || 0),
                 internal_tool_handoff_filtered: true,
               },
             });
@@ -1039,6 +1097,7 @@
               media_capture_attempts: active.mediaCaptureAttempts,
               media_capture_candidate_chars: active.mediaCaptureLastChars,
               media_capture_inline_count: active.mediaCaptureLastInlined,
+              media_file_transfer_error: finalMedia?.file_transfer_error || assistantRich?.file_transfer_error || "",
               media_capture_embedded_count: active.mediaCaptureLastEmbedded,
               media_transfer_stats: active.mediaCaptureTransferStats,
               media_turn_scope: current.reason,
@@ -1066,7 +1125,10 @@
           active.lastCandidateReason = current.reason;
         }
       }
-      if (networkText && !isInternalMediaHandoff(networkText) && !imageBuildArtifact
+      // Media/file generation is committed only after verified archiveable bytes.
+      // Raw network snapshots can contain temporary download URLs or tool args.
+      if (networkText && !captureMedia && !fileCreationRequested && !imageCreationRequested
+          && !isInternalMediaHandoff(networkText) && !imageBuildArtifact
           && !isImageToolArguments(networkText)) {
         const preferred = preferredResponseText(lastText, networkText);
         const previous = lastText;

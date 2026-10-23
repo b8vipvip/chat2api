@@ -81,7 +81,7 @@ const imageIntent = findFunction("isImageCreationRequest", "isLocalImageBuildCom
 assert.equal(imageIntent("帮我生成视频提示词和3张参考图。"), true);
 assert.equal(imageIntent("我想分析图片生成函数"), false);
 
-assert.match(controllerSource, /imageToolArguments \|\| visibleTurnMedia \|\| pageMediaFound/);
+assert.match(controllerSource, /imageToolArguments[\s\S]*?\|\| visibleTurnMedia \|\| visibleTurnFiles \|\| fileCreationRequested \|\| pageMediaFound/);
 assert.match(controllerSource, /networkTerminalAt && networkTerminalText && !captureMedia[\s\S]*?!isImageToolArguments\(networkTerminalText\)/);
 assert.match(controllerSource, /response_terminal_source: "verified-request-media-dom-v176"/);
 console.log("Rich Markdown inline grouping, table formatting and image-tool handoff regression passed");
