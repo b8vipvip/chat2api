@@ -813,6 +813,18 @@
       && /\.(?:save|resize)\s*\(/.test(raw);
   }
 
+  function combinePageMediaText(prose, mediaText) {
+    const candidate = String(prose || "").trim();
+    const imageMarkdown = String(mediaText || "");
+    // The prose is read only from the correlated current assistant turn.
+    // Reject internal tool control, duplicate images and browser-only blobs.
+    if (!candidate || isInternalMediaHandoff(candidate)
+        || isImageToolArguments(candidate) || isLocalImageBuildCommand(candidate)
+        || hasTransferableImage(candidate)
+        || /!\[[^\]]*\]\(blob:/i.test(candidate)) return imageMarkdown;
+    return [candidate, imageMarkdown].filter(Boolean).join("\n\n");
+  }
+
   async function reconcileResponsesTerminal(active, networkText) {
     const raw = String(networkText || "");
     if (String(active.options?.response_protocol || "") !== "responses-v108"
@@ -982,15 +994,7 @@
         const assistantProse = sourceMedia.length && current.isNew && sameTurnRoot
           ? String((await finalNodeText(sameTurnRoot))?.text || "").trim()
           : "";
-        const safeProse = assistantProse && !isInternalMediaHandoff(assistantProse)
-          && !isImageToolArguments(assistantProse)
-          && !isLocalImageBuildCommand(assistantProse)
-          && !hasTransferableImage(assistantProse)
-          && !/!\[[^\]]*\]\(blob:/i.test(assistantProse)
-          ? assistantProse : "";
-        const captured = safeProse
-          ? [safeProse, String(finalMedia?.text || "")].join("\n\n")
-          : String(finalMedia?.text || "");
+        const captured = combinePageMediaText(assistantProse, finalMedia?.text);
         active.mediaCaptureAttempts = Number(active.mediaCaptureAttempts || 0) + 1;
         active.mediaCaptureLastChars = captured.length;
         active.mediaCaptureLastInlined = Number(finalMedia?.image_inlined_count || 0);
