@@ -337,8 +337,12 @@
           if (item.speaking) soundStarted = true;
           if (item.last_sound_at) lastSoundAt = Number(item.last_sound_at);
         }
-        if (item.type === "voice.record.error") throw new Error(item.error || "Voice audio recorder failed");
-        if (item.type === "voice.input.error") throw new Error(item.error || "Voice input playback failed");
+        if (item.type === "voice.record.error") throw voiceFailure("VOICE_RECORDER_FAILED",
+          item.error || "Voice audio recorder failed");
+        if (item.type === "voice.audio.level.error") throw voiceFailure("VOICE_AUDIO_ANALYZER_UNAVAILABLE",
+          item.error || "Remote audio analyser failed");
+        if (item.type === "voice.input.error") throw voiceFailure("VOICE_INPUT_PLAYBACK_FAILED",
+          item.error || "Voice input playback failed");
       }
 
       const nodes = assistantNodes();
