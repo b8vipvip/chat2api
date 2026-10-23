@@ -19,6 +19,11 @@
     lastSoundAt: 0,
     soundStarted: false,
     analyserTimer: null,
+    peerHookReady: false,
+    micHookReady: false,
+    peerConnectionsCreated: 0,
+    micRequestsSeen: 0,
+    lastTransportError: "",
   };
   globalThis[KEY] = state;
 
@@ -83,7 +88,7 @@
   }
 
   function attachRemoteTrack(track) {
-    if (!track || track.kind !== "audio") return;
+    if (!state.requestId || !track || track.kind !== "audio" || track.readyState === "ended") return;
     state.remoteTrackSeen = true;
     state.remoteTrackSeenAt = performance.now();
     post("voice.remote.track", { track_state: track.readyState || "live" });
@@ -125,16 +130,28 @@
     }
   }
 
+  // This MAIN-world script is declared at document_start: it must install
+  // before ChatGPT constructs its voice peer. Do not infer transport readiness
+  // merely because the Voice orb is visible.
   const NativePC = globalThis.RTCPeerConnection;
   if (NativePC) {
     function WrappedRTCPeerConnection(...args) {
       const pc = new NativePC(...args);
+      state.peerConnectionsCreated += 1;
       pc.addEventListener("track", event => attachRemoteTrack(event.track));
+      if (state.requestId) post("voice.transport.peer-created", {
+        peer_connections_created: state.peerConnectionsCreated,
+      });
       return pc;
     }
     WrappedRTCPeerConnection.prototype = NativePC.prototype;
     Object.setPrototypeOf(WrappedRTCPeerConnection, NativePC);
-    try { globalThis.RTCPeerConnection = WrappedRTCPeerConnection; } catch (_) {}
+    try {
+      globalThis.RTCPeerConnection = WrappedRTCPeerConnection;
+      state.peerHookReady = globalThis.RTCPeerConnection === WrappedRTCPeerConnection;
+    } catch (error) {
+      state.lastTransportError = String(error?.message || error);
+    }
   }
 
   async function ensureSyntheticMic() {
@@ -157,19 +174,33 @@
   const mediaDevices = navigator.mediaDevices;
   const nativeGetUserMedia = mediaDevices?.getUserMedia?.bind(mediaDevices);
   if (mediaDevices && nativeGetUserMedia) {
+    const intercepted = async function chat2apiGetUserMedia(constraints) {
+      if (state.requestId && constraints?.audio) {
+        state.micRequestsSeen += 1;
+        post("voice.mic.requested", { mode: state.mode, mic_requests_seen: state.micRequestsSeen });
+        const synthetic = await ensureSyntheticMic();
+        const tracks = [...synthetic.getAudioTracks()];
+        post("voice.mic.synthetic", { track_count: tracks.length, mode: state.mode });
+        if (!constraints?.video) return new MediaStream(tracks);
+        const native = await nativeGetUserMedia({ ...constraints, audio: false });
+        return new MediaStream([...tracks, ...native.getVideoTracks()]);
+      }
+      return nativeGetUserMedia(constraints);
+    };
+    // Assignment to a browser-native method may silently fail. Prove it was
+    // installed; a false "mic ready" must not trigger an unbounded voice wait.
     try {
-      mediaDevices.getUserMedia = async function chat2apiGetUserMedia(constraints) {
-        if (state.requestId && constraints?.audio) {
-          const synthetic = await ensureSyntheticMic();
-          const tracks = [...synthetic.getAudioTracks()];
-          post("voice.mic.synthetic", { track_count: tracks.length, mode: state.mode });
-          if (!constraints?.video) return new MediaStream(tracks);
-          const native = await nativeGetUserMedia({ ...constraints, audio: false });
-          return new MediaStream([...tracks, ...native.getVideoTracks()]);
-        }
-        return nativeGetUserMedia(constraints);
-      };
-    } catch (_) {}
+      mediaDevices.getUserMedia = intercepted;
+      state.micHookReady = mediaDevices.getUserMedia === intercepted;
+      if (!state.micHookReady) {
+        Object.defineProperty(mediaDevices, "getUserMedia", {
+          value: intercepted, writable: true, configurable: true,
+        });
+        state.micHookReady = mediaDevices.getUserMedia === intercepted;
+      }
+    } catch (error) {
+      state.lastTransportError = String(error?.message || error);
+    }
   }
 
   async function waitForRemoteTrackBeforeInput(timeoutMs = 8000) {
@@ -222,7 +253,14 @@
       state.remoteTrackSeenAt = 0;
       state.soundStarted = false;
       state.lastSoundAt = 0;
-      post("voice.prepared", { mode: state.mode, has_input: Boolean(state.preparedInput) });
+      post("voice.prepared", {
+        mode: state.mode, has_input: Boolean(state.preparedInput),
+        peer_hook_ready: state.peerHookReady,
+        mic_hook_ready: state.micHookReady,
+        peer_connections_created: state.peerConnectionsCreated,
+        mic_requests_seen: state.micRequestsSeen,
+        transport_error: state.lastTransportError,
+      });
     } else if (message.type === "voice.input.play" && message.request_id === state.requestId) {
       playPreparedInput().catch(error => post("voice.input.error", { error: String(error?.message || error) }));
     } else if (message.type === "voice.record.stop" && message.request_id === state.requestId) {
