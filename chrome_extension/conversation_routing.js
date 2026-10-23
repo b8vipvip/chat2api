@@ -213,6 +213,7 @@
   }
 
   function clearWindowCloseTimer(windowId) {
+    if (windowId == null) return;
     const id = Number(windowId);
     if (!Number.isInteger(id)) return;
     const timer = state.closeTimers.get(id);
@@ -221,7 +222,7 @@
   }
 
   async function clearCloseAlarm(route) {
-    const windowId = Number(route?.window_id);
+    const windowId = route?.window_id;
     if (Number.isInteger(windowId)) {
       clearWindowCloseTimer(windowId);
       try { await chrome.alarms.clear(`${ALARM_PREFIX}${windowId}`); } catch (_) {}
