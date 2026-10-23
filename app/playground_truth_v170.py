@@ -65,6 +65,18 @@ async def reconcile_playground_runs(test_runs: Any, telemetry: Any, limit: int =
                 statuses.append(str(entry.get("status") or "running"))
                 continue
             status = _test_status(row)
+            # A completed Voice call can still have a partial-coverage test
+            # warning (e.g. no real PCM microphone input or reverse-proxy
+            # Upgrade check). Backend success must not silently turn it
+            # into a full coverage pass. The request terminal still belongs
+            # exclusively to the server/Worker broker.
+            if (
+                status == "passed"
+                and entry.get("kind") == "voice_call"
+                and isinstance(entry.get("quality"), dict)
+                and entry["quality"].get("grade") == "warning"
+            ):
+                status = "warning"
             statuses.append(status)
             if entry.get("status") != status or entry.get("authoritative_request_status") != row["status"]:
                 entry.update({
