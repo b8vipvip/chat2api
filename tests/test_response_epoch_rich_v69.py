@@ -159,7 +159,7 @@ def test_tool_argument_json_cannot_be_final_and_rich_markup_stays_grouped():
     assert "const imageToolArguments = imageCreationRequested" in owner
     assert "|| imageToolArguments;" in owner
     assert "&& !isImageToolArguments(networkTerminalText)" in owner
-    assert "&& !isImageToolArguments(networkText)" in owner
+    assert "&& !internalToolPayload(networkText)" in owner
     assert "const subject = " in owner and "参考图" in owner
     assert "let inline = \"\";" in rich
     assert "inline += inlineMarkdown(child);" in rich
