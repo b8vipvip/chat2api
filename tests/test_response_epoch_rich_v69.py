@@ -119,7 +119,7 @@ def test_verified_media_handoff_intrinsic_card_still_uses_one_request_owner():
     assert "oldKeys.has(candidateMediaKey(img))" in rich
     assert "trustedMediaSource(src)" in rich
     assert "media-new-image-card-found" in owner
-    assert "hasTransferableImage(captured) && delivered > 0" in owner
+    assert "delivered > 0 && (hasTransferableImage(captured) || hasTransferableFile(captured))" in owner
     assert 'response_terminal_source: "verified-request-media-dom-v176"' in owner
     assert "stream:false,timeout:300" not in playground
     assert 'response_format:"b64_json",n:1,timeout:600' in playground
