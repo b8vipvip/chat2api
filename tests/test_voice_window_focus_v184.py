@@ -20,6 +20,9 @@ def test_voice_workflows_share_focus_and_preserve_fatal_browser_error():
     server = (ROOT / "app/live_voice_patch.py").read_text()
     assert "globalThis.chat2apiActivateVoiceTabV184 = activateAudioTab" in routes
     assert "const activate = globalThis.chat2apiActivateVoiceTabV184" in live
+    assert "finishLiveRoute(requestId)" in live
+    assert "await finishLiveRoute(requestId)" in live
+    assert "voice-live-session-ended-v189" in (ROOT / "chrome_extension/conversation_routing.js").read_text()
     assert 'if event.get("type") == "image.error":' in server
     assert 'error_message = str(event.get("error") or "ChatGPT Voice bridge failed")' in server
     assert '"browser_startup_error": error_message if error_message and not session_ready else None' in server
