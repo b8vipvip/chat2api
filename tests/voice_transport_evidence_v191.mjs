@@ -55,7 +55,7 @@ const base = {
 };
 const context = vm.createContext(base);
 vm.runInContext(sources.join("\n") +
-  "\nglobalThis.voiceApi = {openVoice, sendTypedPrompt, armRecording, waitResponse, normVoiceText};",
+  "\nglobalThis.voiceApi = {openVoice, sendTypedPrompt, verifyInjectedMicrophone, armRecording, waitResponse, normVoiceText};",
   context);
 
 // The orb-only condition reproduced by TX03 must not be counted as transport.
@@ -79,6 +79,24 @@ context.sendButton = ()=>({click() { submitCount++; turnSeen=true; }});
 await context.voiceApi.sendTypedPrompt({requestId:"v3",mode:"speech"},"chat2api spoken prompt");
 assert.equal(submitCount,2);
 assert.ok(stages.some(x=>x.stage==="prompt-accepted"));
+
+// Uploaded microphone audio is an actual conversation input only when the
+// page called our intercepted getUserMedia and received a synthetic track.
+context.waitMain=async()=>null;
+await assert.rejects(
+  context.voiceApi.verifyInjectedMicrophone({requestId:"mic-not-connected"}),
+  /VOICE_SYNTHETIC_MIC_NOT_ATTACHED/,
+);
+assert.ok(stages.some(x=>x.stage==="mic-not-attached"));
+context.waitMain=async (_id, predicate)=>{
+  assert.equal(predicate({type:"voice.mic.synthetic",track_count:0}),false);
+  const event={type:"voice.mic.synthetic",track_count:1};
+  assert.equal(predicate(event),true);
+  return event;
+};
+await context.voiceApi.verifyInjectedMicrophone({requestId:"mic-connected"});
+assert.ok(stages.some(x=>x.stage==="mic-injection-confirmed"));
+
 assert.equal(context.voiceApi.normVoiceText("文本\n  多行"),"文本 多行",
   "Voice prompt comparison must normalize actual Unicode layout whitespace");
 
