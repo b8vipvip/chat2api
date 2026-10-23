@@ -27,6 +27,7 @@
   }
 
   async function diagnostic(active, stage, extra = {}) {
+    active.lastStage = stage;
     await emit({
       type: "image.diagnostics",
       kind: "voice",
@@ -38,6 +39,12 @@
         ...extra,
       },
     });
+  }
+
+  function voiceFailure(code, message) {
+    const error = new Error(code + ": " + message);
+    error.code = code;
+    return error;
   }
 
   async function waitFor(fn, timeout = 12000, interval = 120) {
@@ -208,27 +215,81 @@
     await diagnostic(active, "trigger-clicked");
 
     const ready = await waitFor(() => voiceUiReady(), 20000, 150);
-    const mic = await waitMain(active.requestId, item => item.type === "voice.mic.synthetic", ready ? 1200 : 20000);
-    if (!ready && !mic) {
+    if (!ready) {
       const error = pageError();
-      throw new Error(error ? `ChatGPT Voice failed to start: ${error}` : "ChatGPT Voice UI did not become ready after clicking the Voice button");
+      throw voiceFailure("VOICE_UI_NOT_READY", error || "ChatGPT Voice UI did not become ready");
     }
-    await diagnostic(active, "ui-ready", {
-      voice_ready_reason: ready?.reason || "synthetic-microphone",
-      synthetic_mic_seen: Boolean(mic),
+    await diagnostic(active, "ui-visible", { voice_ready_reason: ready.reason });
+    // Seeing an orb is NOT proof of usable WebRTC. The actual browser must
+    // request our microphone stream or expose the remote audio track.
+    const transport = await waitMain(active.requestId,
+      item => item.type === "voice.mic.synthetic" || item.type === "voice.remote.track",
+      16000);
+    if (!transport) {
+      await diagnostic(active, "transport-not-ready", {
+        voice_failure_code: "VOICE_TRANSPORT_NOT_READY",
+        synthetic_mic_seen: false, remote_track_seen: false,
+        transport_wait_ms: 16000,
+      });
+      throw voiceFailure("VOICE_TRANSPORT_NOT_READY",
+        "Voice UI appeared but neither microphone acquisition nor a remote WebRTC audio track was observed");
+    }
+    await diagnostic(active, "transport-preflight", {
+      voice_ready_reason: ready.reason,
+      synthetic_mic_seen: transport.type === "voice.mic.synthetic",
+      remote_track_seen: transport.type === "voice.remote.track",
     });
-    return { ready, mic };
+    return { ready, transport };
+  }
+
+  function normVoiceText(value) {
+    return String(value || "").normalize("NFC").replace(/\\s+/g, " ").trim();
+  }
+
+  function userTurnConfirmed(prompt, existingCount) {
+    const nodes = [...document.querySelectorAll("[data-message-author-role='user']")].filter(visible);
+    if (nodes.length <= existingCount) return false;
+    const target = normVoiceText(prompt);
+    return nodes.slice(existingCount).some(node => normVoiceText(textOf(node)).includes(target));
   }
 
   async function sendTypedPrompt(active, prompt) {
     const input = await waitFor(composerInput, 15000, 150);
-    if (!input) throw new Error("Voice session is active but the text composer was not found");
+    if (!input) throw voiceFailure("VOICE_TEXT_COMPOSER_MISSING",
+      "Voice UI has no accessible text composer");
+    const baselineUsers = [...document.querySelectorAll("[data-message-author-role='user']")].filter(visible).length;
+    const baselineAssistants = assistantNodes().length;
     setText(input, prompt);
-    await delay(280);
+    const written = await waitFor(() => {
+      const value = ("value" in input ? input.value : input.innerText || input.textContent) || "";
+      return normVoiceText(value) === normVoiceText(prompt) ? true : false;
+    }, 3500, 100);
+    if (!written) throw voiceFailure("VOICE_PROMPT_EDITOR_MISMATCH",
+      "The Voice text composer did not retain the complete requested prompt");
     const button = await waitFor(sendButton, 5000, 100);
-    if (button) button.click();
-    else input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true }));
-    await diagnostic(active, "prompt-sent", { prompt_chars: prompt.length });
+    if (!button) throw voiceFailure("VOICE_SEND_BUTTON_NOT_READY",
+      "Voice text composer has no verified enabled send button");
+    await diagnostic(active, "prompt-editor-verified", { prompt_chars: prompt.length });
+    button.click();
+    await diagnostic(active, "prompt-submit-attempted", { prompt_chars: prompt.length });
+    // A button click is not delivery. Require evidence from the same ChatGPT
+    // conversation before waiting for the model's remote speech audio.
+    const accepted = await waitFor(() => {
+      if (userTurnConfirmed(prompt, baselineUsers)) return "user-turn";
+      if (assistantNodes().length > baselineAssistants) return "assistant-turn";
+      return null;
+    }, 12000, 160);
+    if (!accepted) {
+      await diagnostic(active, "prompt-unverified", {
+        voice_failure_code: "VOICE_TEXT_SUBMISSION_UNVERIFIED",
+        send_button_clicked: true,
+      });
+      throw voiceFailure("VOICE_TEXT_SUBMISSION_UNVERIFIED",
+        "Clicked Voice send, but ChatGPT did not confirm a new user or assistant turn");
+    }
+    await diagnostic(active, "prompt-accepted", {
+      prompt_chars: prompt.length, confirmation: accepted,
+    });
   }
 
   async function playVoiceInput(active) {
@@ -259,6 +320,8 @@
     let lastSoundAt = 0;
     let remoteTrackAt = 0;
     let recordStartedAt = 0;
+    const responseStartedAt = Date.now();
+    let lastStatusAt = 0;
 
     while (Date.now() < deadline && !active.cancelled) {
       const error = pageError();
@@ -290,17 +353,39 @@
       const now = Date.now();
       const silentFor = lastSoundAt ? now - lastSoundAt : 0;
       const stableFor = stableAt ? now - stableAt : 0;
+      if (!remoteTrackAt && now - responseStartedAt > 18000) {
+        throw voiceFailure("VOICE_REMOTE_TRACK_NOT_FOUND",
+          "ChatGPT did not expose a remote WebRTC audio track within 18 seconds of confirmed input");
+      }
+      if (remoteTrackAt && !recordStartedAt && now - remoteTrackAt > 4500) {
+        throw voiceFailure("VOICE_RECORDER_NOT_STARTED",
+          "Remote WebRTC track was found but MediaRecorder never started");
+      }
+      if (recordStartedAt && !soundStarted && now - recordStartedAt > 25000) {
+        throw voiceFailure("VOICE_REMOTE_AUDIO_SILENT",
+          "Remote track was recorded but no actual voice audio energy was detected");
+      }
       if (soundStarted && silentFor > 1700 && (!transcript || stableFor > 700)) break;
-      if (transcript && remoteTrackAt && stableFor > 2200) break;
-      // Some Voice UIs do not expose transcript text until the Voice surface exits.
-      // For the short standardized tests, a live remote track recorded for long enough
-      // is sufficient to finalize instead of waiting the whole 180-second API timeout.
-      if (remoteTrackAt && recordStartedAt && now - recordStartedAt > 22000) break;
+      // A transcript and a track alone must never count as successful audio:
+      // only the analyser's actual sound activity authorizes recording handoff.
+      if (soundStarted && transcript && remoteTrackAt && stableFor > 2200) break;
+      if (now - lastStatusAt > 5000) {
+        lastStatusAt = now;
+        diagnostic(active, "response-progress", {
+          remote_track_seen: Boolean(remoteTrackAt),
+          recorder_started: Boolean(recordStartedAt),
+          remote_sound_started: soundStarted,
+          elapsed_ms: now - responseStartedAt,
+        }).catch(() => {});
+      }
       await delay(140);
     }
 
-    if (active.cancelled) throw new Error("Voice request cancelled");
-    if (!remoteTrackAt) throw new Error("Timed out waiting for GPT-Live remote audio track");
+    if (active.cancelled) throw voiceFailure("VOICE_CANCELLED", "Voice request cancelled");
+    if (!remoteTrackAt) throw voiceFailure("VOICE_REMOTE_TRACK_NOT_FOUND",
+      "Response deadline elapsed before a remote track was observed");
+    if (!soundStarted) throw voiceFailure("VOICE_REMOTE_AUDIO_SILENT",
+      "Response deadline elapsed without confirmed remote audio energy");
     const recorded = await finalizeRecording(active);
     return { transcript, recorded, soundStarted, lastSoundAt };
   }
@@ -328,8 +413,17 @@
         input_mime: inputData?.mime_type || message.audio?.mime_type || "",
       });
       const prepared = await waitMain(active.requestId, item => item.type === "voice.prepared", 5000);
-      if (!prepared) throw new Error("Voice MAIN-world bridge did not acknowledge preparation");
-      await diagnostic(active, "main-prepared", { has_input: Boolean(inputData?.base64) });
+      if (!prepared) throw voiceFailure("VOICE_MAIN_BRIDGE_UNAVAILABLE",
+        "Voice MAIN-world bridge did not acknowledge preparation");
+      await diagnostic(active, "main-prepared", {
+        has_input: Boolean(inputData?.base64),
+        peer_hook_ready: Boolean(prepared.peer_hook_ready),
+        mic_hook_ready: Boolean(prepared.mic_hook_ready),
+        peer_connections_created: Number(prepared.peer_connections_created || 0),
+        transport_hook_error: prepared.transport_error || "",
+      });
+      if (!prepared.peer_hook_ready) throw voiceFailure("VOICE_WEBRTC_HOOK_UNAVAILABLE",
+        "The ChatGPT page's RTCPeerConnection constructor could not be observed");
 
       const baselineCount = assistantNodes().length;
       await openVoice(active);
@@ -381,6 +475,15 @@
           duration_ms: result.recorded.duration_ms,
         },
       });
+    } catch (error) {
+      const code = String(error?.code || "VOICE_EXECUTION_FAILED");
+      const failedAfter = String(active.lastStage || "unknown");
+      await diagnostic(active, "failed", {
+        voice_failure_code: code,
+        voice_failure_stage: failedAfter,
+        voice_error_message: String(error?.message || error).slice(0, 240),
+      });
+      throw error;
     } finally {
       try { endVoiceButton()?.click(); } catch (_) {}
       postMain("voice.reset", active);
@@ -403,6 +506,7 @@
         kind: "voice",
         request_id: message.requestId,
         error: String(error?.message || error),
+        error_code: String(error?.code || "VOICE_EXECUTION_FAILED"),
       }));
       sendResponse({ ok: true, controller: "voice-v2" });
       return false;
