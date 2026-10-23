@@ -171,6 +171,27 @@ def test_tool_argument_json_cannot_be_final_and_rich_markup_stays_grouped():
     assert result.returncode == 0, result.stdout + result.stderr
 
 
+def test_generated_file_handoff_uses_existing_single_terminal_owner():
+    owner = read("chrome_extension/content_request_v6.js")
+    rich = read("chrome_extension/content_rich_response_v69.js")
+    main = read("app/main.py")
+    assert "function hasTransferableFile(value)" in owner
+    assert "function isFileCreationRequest(prompt)" in owner
+    assert "rich?.hasCandidateFile?.(sameTurnRoot)" in owner
+    assert "const captured = combinePageMediaText(assistantProse, finalMedia?.text);" in owner
+    assert "hasTransferableFile(captured)" in owner
+    assert "file_inlined_count: fileStats.count" in rich
+    assert "generated_files = GeneratedFileArchive(media_archive)" in main
+    assert "archive_final_markdown, raw_final" in main
+    assert "archive_final_markdown, text" in main
+    assert "type: \"chat.completed\"" not in rich
+    result = subprocess.run(
+        ["node", "tests/generated_file_handoff_v196.mjs"],
+        cwd=ROOT, capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
 def test_tx03_short_rich_editor_drift_uses_existing_v6_single_send_terminal_owner():
     """v0.22.175 request failures must not add another click or terminal arbiter."""
     source = read("chrome_extension/content_request_v6.js")
