@@ -26,6 +26,10 @@ def test_live_voice_browser_start_error_propagates_and_is_recorded(tmp_path: Pat
                   "metadata":{"chatgpt_login_state":"ready",
                               "chatgpt_login_composer_ready": True}}).json()
         cid, token = paired["client_id"],paired["token"]
+        business_key = client.post(
+            "/api/admin/keys", headers={"Authorization":"Bearer master-key"},
+            json={"name":"voice-browser-error-regression"},
+        ).json()["token"]
         app.state.registry.clients[cid].metadata.update({
             "chatgpt_login_state":"ready", "chatgpt_login_composer_ready":True,
         })
@@ -34,7 +38,7 @@ def test_live_voice_browser_start_error_propagates_and_is_recorded(tmp_path: Pat
             ext.receive_json()
             with client.websocket_connect(
                 f"/v1/audio/realtime?client_id={cid}",
-                headers={"Authorization":"Bearer master-key"},
+                headers={"Authorization":f"Bearer {business_key}"},
             ) as live:
                 live.send_json({"type":"session.start","model":"gpt-live","request_id":request_id})
                 started = ext.receive_json()
