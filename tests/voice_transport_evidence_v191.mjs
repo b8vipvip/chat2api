@@ -120,12 +120,14 @@ class Recorder {
   static isTypeSupported(){return true;}
   constructor(){this.state="inactive";}
   start(){this.state="recording";}
+  stop(){this.state="inactive";this.onstop?.();}
 }
 const page=vm.createContext({
   window:pageWindow,navigator:{mediaDevices:{getUserMedia:async()=>({})}},
   RTCPeerConnection:Peer, AudioContext:AudioCtx, MediaStream:Stream,
   MediaRecorder:Recorder, performance:{now:()=>42}, setInterval:()=>1,
   clearInterval(){}, setTimeout:fn=>fn(), console,
+  Blob, Uint8Array, btoa,
 });
 vm.runInContext(main,page);
 listeners.message({
@@ -141,4 +143,20 @@ assert.ok(peer.handlers.track);
 peer.handlers.track({track:{kind:"audio",readyState:"live"}});
 assert.ok(posted.some(x=>x.type==="voice.remote.track"));
 assert.ok(posted.some(x=>x.type==="voice.record.started"));
-console.log("Voice transport, prompt receipt, track and sound stage gates verified");
+
+// Reuse of the same browser tab MUST NOT turn a prior recorder's asynchronous
+// onstop Base64 output into the new Voice request's completed audio.
+const priorRecorder = page.__CHAT2API_VOICE_MAIN_V1__.recorder;
+priorRecorder.ondataavailable({
+  data:new Blob([Uint8Array.from([1,2,3,4])],{type:"audio/webm"}),
+});
+listeners.message({
+  source:pageWindow,
+  data:{source:"chat2api-isolated",type:"voice.prepare",request_id:"v7",mode:"speech"},
+});
+await new Promise(resolve=>setImmediate(resolve));
+const priorCompleted=posted.filter(x=>x.type==="voice.record.complete");
+assert.ok(priorCompleted.length>0);
+assert.ok(priorCompleted.every(x=>x.request_id==="v6"),
+  "stale previous audio must never become a new request's successful response");
+console.log("Voice transport, prompt receipt, stage guards and recorder request ownership verified");
