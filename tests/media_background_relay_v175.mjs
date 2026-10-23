@@ -112,6 +112,7 @@ assertFromVm(await sendFile({
 }), {ok: false, error: "untrusted-file-source"});
 assert.equal(calls, callsBeforeFile, "untrusted file requests must never make network requests");
 
+sizeOverride = null;
 nextType = "application/octet-stream";
 const fileResult = await sendFile({
   type: "chat2api.file.fetch-v188",
