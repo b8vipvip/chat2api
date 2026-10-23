@@ -258,4 +258,32 @@ const latePeer=new page.RTCPeerConnection();
 latePeer.handlers.track({track:{kind:"audio",readyState:"live"}});
 assert.equal(posted.filter(x=>x.type==="voice.record.started").length,beforeLate+1);
 assert.ok(posted.some(x=>x.type==="voice.record.started"&&x.request_id==="v8"));
+
+// A previous onstop can already be inside async blob.arrayBuffer() when a
+// new Voice request prepares. Do not emit its bytes after request ownership
+// has changed, even though recorderCapture was detached before the await.
+let unblockBlob;
+class SuspendedBlob extends Blob {
+  arrayBuffer() {
+    return new Promise(resolve => {
+      unblockBlob = () => Blob.prototype.arrayBuffer.call(this).then(resolve);
+    });
+  }
+}
+page.Blob = SuspendedBlob;
+const completedBeforeAsyncReset = posted.filter(x=>x.type==="voice.record.complete").length;
+listeners.message({
+  source:pageWindow,
+  data:{source:"chat2api-isolated",type:"voice.record.stop",request_id:"v8"},
+});
+assert.equal(typeof unblockBlob,"function",
+  "recording finalization must reach the asynchronous blob read");
+listeners.message({
+  source:pageWindow,
+  data:{source:"chat2api-isolated",type:"voice.prepare",request_id:"v9",mode:"speech"},
+});
+unblockBlob();
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(posted.filter(x=>x.type==="voice.record.complete").length,completedBeforeAsyncReset,
+  "stale recorder bytes must be dropped after an awaited blob read");
 console.log("Voice transport, prompt receipt, stage guards and recorder request ownership verified");

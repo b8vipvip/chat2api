@@ -41,6 +41,8 @@ def test_voice_has_a_single_authority_for_error_and_audio_delivery():
     assert 'if (sequence && sequence <= lastSeenSequence) continue' in content
     assert 'if (state.captureArmed) startCapture(track, ownerRequestId)' in main
     assert 'if (recordingState.discarded) return' in main
+    assert 'recordingState.discarded || state.requestId !== ownerRequestId' in main
+    assert 'state.active?.requestId !== requestId' in content
 
     assert 'voice_failure_code' in voice
     assert 'VOICE_SERVER_WAIT_TIMEOUT' in voice

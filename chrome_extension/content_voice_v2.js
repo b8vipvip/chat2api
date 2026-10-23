@@ -197,7 +197,10 @@
   window.addEventListener("message", event => {
     if (event.source !== window || event.data?.source !== "chat2api-main") return;
     const requestId = event.data.request_id;
-    if (!requestId) return;
+    // Ignore callbacks belonging to a Voice request that already ended.
+    // Otherwise a late blob-completion event recreates an abandoned bucket
+    // and holds its Base64 audio in this long-lived content script.
+    if (!requestId || state.active?.requestId !== requestId) return;
     eventBucket(requestId).push({ ...event.data, _voice_sequence: ++state.mainSequence });
     if (eventBucket(requestId).length > 300) eventBucket(requestId).splice(0, 150);
   });

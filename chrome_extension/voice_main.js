@@ -146,6 +146,10 @@
         try {
           const blob = new Blob(chunks, { type: recordedMime });
           const buffer = await blob.arrayBuffer();
+          // reset/prepare may run while arrayBuffer() awaits. The onstop
+          // callback has already detached recorderCapture, so re-check the
+          // request lease immediately before exposing encoded old audio.
+          if (recordingState.discarded || state.requestId !== ownerRequestId) return;
           post("voice.record.complete", {
             mime_type: blob.type || recordedMime,
             b64_json: arrayBufferToBase64(buffer),
