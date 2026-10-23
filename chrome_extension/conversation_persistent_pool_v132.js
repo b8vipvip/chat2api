@@ -883,8 +883,8 @@
   }
 
   async function claimSlotForRequest(message) {
-    const key = routingKey(message);
-    if (!key) return null;
+    const apiKey = routingKey(message);
+    if (!apiKey) return null;
     await ensureLoaded();
     const target = normalizeTarget(state.target);
     if (!target || await disabled()) return null;
@@ -893,7 +893,23 @@
     return serial(async () => {
       const value = await routerReady();
       if (!value) return null;
+      if (typeof value.routePolicyForRequest !== "function") {
+        const error = new Error("Canonical request-window policy is unavailable in the Worker router");
+        error.code = "worker_request_window_policy_unavailable";
+        throw error;
+      }
+      const policy = value.routePolicyForRequest(message);
+      const key = String(policy?.key || "");
+      if (!key) throw new Error("Canonical request-window policy returned no route key");
       const route = value.routes[key] || (value.routes[key] = freshRoute(key));
+      route.api_key_id = apiKey;
+      route.logical_api_key_id = apiKey;
+      route.request_id = String(message?.request_id || "");
+      route.request_scoped = policy.request_scoped === true;
+      route.lifecycle_mode = String(policy.lifecycle_mode || "api-key-legacy");
+      route.continuous = policy.continuous === true;
+      route.close_delay_ms = Number(policy.close_delay_ms || 300000);
+
       let existing = await routeLiveTab(route);
       if (existing) {
         try {
@@ -907,9 +923,8 @@
             existing = await chrome.tabs.get(existing.id);
           }
         } catch (error) {
-          // A leased route remains owned by its API key even when the browser
-          // is slow or its runtime preflight temporarily fails. A failed probe
-          // cannot close the tab and destroy an in-progress ChatGPT navigation.
+          // The route owns this physical window. A failed runtime probe cannot
+          // close a tab that may still be loading or handling this same request.
           state.runtimeReadyTabs.set(existing.id, false);
           state.runtimeRetryAfter.set(existing.id, Date.now() + RUNTIME_RETRY_COOLDOWN_MS);
           const unavailable = new Error("Leased ChatGPT page is still loading or its Worker runtime is not ready");
@@ -920,17 +935,15 @@
         }
       }
       if (existing) {
-        // Once a standby is assigned to an API key the conversation router owns
-        // the physical window. Its five-minute close alarm must never be cleared
-        // by the standby pool. The inner router will clear/re-arm that lease when
-        // the same key starts/completes another request.
+        // Only a retry of the exact same request/session may find an existing
+        // route. A different API request has a different canonical route key.
         route.window_owned = true;
         route.last_active_at = Date.now();
         route.persistent_pool_revision = 132;
         state.reservations.set(key, existing.windowId);
         await persistRoutes(value);
         state.reused += 1;
-        return { key, window_id: existing.windowId, tab_id: existing.id, strategy: "reuse-leased-route-v152" };
+        return { key, window_id: existing.windowId, tab_id: existing.id, strategy: "reuse-same-request-route-v190" };
       }
 
       route.window_id = null;
@@ -939,10 +952,10 @@
       route.close_after = null;
 
       let physical = await physicalWindows();
-      const runtimeValidation = await validateIdleRuntime(value, physical, "request-admission-v152");
+      const runtimeValidation = await validateIdleRuntime(value, physical, "request-admission-v190");
       let rows = runtimeValidation.rows;
       let slot = standbyRows(rows, value)[0] || null;
-      let strategy = "claim-standby-v152";
+      let strategy = "claim-standby-request-scoped-v190";
 
       if (!slot && unassignedWindowRows(rows, value).length) {
         // An existing loading window occupies the physical slot. Never open
@@ -953,9 +966,9 @@
         throw pending;
       }
       if (!slot) {
-        slot = await createStandby("request-admission");
+        slot = await createStandby("request-admission-v190");
         rows.push(slot);
-        strategy = "warm-on-admission-v152";
+        strategy = "warm-on-admission-request-scoped-v190";
       }
       if (!slot) {
         const error = new Error(`Persistent standby window pool exhausted (target=${target})`);
@@ -988,8 +1001,9 @@
       } finally {
         if (assignment?.key) state.reservations.delete(assignment.key);
         // Consuming a standby immediately makes standby cardinality N-1. Refill
-        // after the normal short admission delay; the leased route is excluded
-        // from standby and remains owned by conversation_routing for five minutes.
+        // after the normal short admission delay. Each request-scoped route keeps
+        // its slot excluded until conversation_routing closes it 5s after terminal;
+        // continuous Voice keeps one slot for the lifetime of that session.
         scheduleReconcile("post-admission-standby-refill-v152", 250);
       }
     };
