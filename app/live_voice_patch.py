@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import re
 import secrets
 import time
 import uuid
@@ -239,7 +240,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 await websocket.send_text(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
         async def relay_extension_events() -> None:
-            nonlocal finished
+            nonlocal finished, observed_audio_bytes, observed_media_count, input_confirmed, session_ready, error_message
             assert state is not None
             text_by_response: dict[str, str] = {}
             while not finished:
@@ -255,6 +256,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     continue
                 event_type = str(event.get("live_event") or "")
                 if event_type == "session.ready":
+                    session_ready = True
                     payload: dict[str, object] = {
                         "type": "session.ready",
                         "session_id": session_id,
@@ -273,12 +275,15 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 elif event_type == "input.speech_stopped":
                     await send_json({"type": "input_audio_buffer.speech_stopped"})
                 elif event_type == "input.text.sent":
+                    input_confirmed += 1
                     await send_json({
                         "type": "input_text.sent",
                         "item_id": str(event.get("item_id") or ""),
                         "text": str(event.get("text") or ""),
                     })
                 elif event_type == "input.media.sent":
+                    input_confirmed += 1
+                    observed_media_count += int(event.get("attachment_count") or 0)
                     await send_json({
                         "type": "input_media.sent",
                         "item_id": str(event.get("item_id") or ""),
@@ -326,6 +331,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         if audio and not finished:
                             async with ws_send_lock:
                                 await websocket.send_bytes(audio)
+                            observed_audio_bytes += len(audio)
                 elif event_type == "response.audio.done":
                     response_id = str(event.get("response_id") or "")
                     if response_id:
@@ -350,6 +356,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     await send_json({"type": "session.closed", "session_id": session_id})
                     return
                 elif event_type == "error":
+                    error_message = str(event.get("message") or "GPT-Live bridge error")
                     await send_json({
                         "type": "error",
                         "code": str(event.get("code") or "GPT_LIVE_ERROR"),
@@ -378,10 +385,31 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 await send_json({"type": "error", "code": "UNSUPPORTED_MODEL", "message": f"Unsupported Live model: {requested_model}"})
                 return
             effective_model = MODEL_ALIASES.get(requested_model, requested_model)
+            provided_request_id = str(start.get("request_id") or "")
+            if provided_request_id:
+                if not re.fullmatch(r"voicereq_[A-Za-z0-9_-]{8,120}", provided_request_id):
+                    await send_json({"type": "error", "code": "INVALID_REQUEST_ID", "message": "Invalid Voice call request ID"})
+                    return
+                request_id = provided_request_id
             requested_client = str(start.get("client_id") or client_id or "").strip() or None
             selected_client = resolve_idle_client(requested_client, principal)
             state = await broker.create(request_id, selected_client)
             registry.busy_clients.add(selected_client)
+            await telemetry.append({
+                "request_id": request_id,
+                "response_id": session_id,
+                "client_id": selected_client,
+                "api_key_id": principal.key_id,
+                "api_key_name": principal.name,
+                "auth_kind": principal.kind,
+                "requested_model": effective_model,
+                "request_type": "voice_call",
+                "stream": True, "prompt_mode": "voice-call",
+                "prompt_chars": len(str(start.get("instructions") or "")),
+                "attachments_count": 0,
+                "status": "running",
+                "diagnostics": {"route": "chatgpt-voice-live", "session_id": session_id},
+            })
             await registry.send(
                 selected_client,
                 {
@@ -485,18 +513,22 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         **({"attachment_count": len(attachments)} if attachments else {}),
                     })
                 elif control_type == "session.finish":
+                    graceful_finish = True
                     break
                 elif control_type == "ping":
                     await send_json({"type": "pong", "timestamp": control.get("timestamp")})
         except (WebSocketDisconnect, asyncio.CancelledError):
-            pass
+            error_message = error_message or "client-disconnected"
         except asyncio.TimeoutError:
+            error_message = "SESSION_START_TIMEOUT"
             with suppress(Exception):
                 await send_json({"type": "error", "code": "SESSION_START_TIMEOUT", "message": "Timed out waiting for session.start"})
         except (LookupError, KeyError, ConnectionError, RuntimeError) as error:
+            error_message = str(error)
             with suppress(Exception):
                 await send_json({"type": "error", "code": "GPT_LIVE_UNAVAILABLE", "message": str(error), "retryable": True})
         except Exception as error:
+            error_message = str(error)
             with suppress(Exception):
                 await send_json({"type": "error", "code": "GPT_LIVE_BRIDGE_ERROR", "message": str(error), "retryable": True})
         finally:
@@ -515,6 +547,31 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             if selected_client:
                 registry.busy_clients.discard(selected_client)
             if state is not None:
+                state.completed_mono = state.completed_mono or time.perf_counter()
+                with suppress(Exception):
+                    await telemetry.append({
+                        "request_id": request_id,
+                        "response_id": session_id,
+                        "client_id": selected_client,
+                        "api_key_id": principal.key_id,
+                        "api_key_name": principal.name,
+                        "auth_kind": principal.kind,
+                        "requested_model": effective_model,
+                        "request_type": "voice_call",
+                        "stream": True, "prompt_mode": "voice-call",
+                        "status": "completed" if graceful_finish or (session_ready and observed_audio_bytes) else
+                                  "cancelled" if error_message == "client-disconnected" else "error",
+                        "attachments_count": observed_media_count,
+                        "audio_bytes": observed_audio_bytes,
+                        "diagnostics": {
+                            "route": "chatgpt-voice-live", "session_id": session_id,
+                            "session_ready": session_ready, "audio_bytes": observed_audio_bytes,
+                            "input_confirmed_turns": input_confirmed,
+                            "attachments_confirmed": observed_media_count,
+                        },
+                        "timings": state.timings(),
+                        "error": error_message or None,
+                    })
                 await broker.release(request_id)
             with suppress(Exception):
                 await websocket.close(code=1000)
