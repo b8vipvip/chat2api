@@ -977,7 +977,20 @@
         const finalMedia = sourceMedia.length
           ? await rich.capturePageImages(sourceMedia, {allowIntrinsic: intrinsicHandoff})
           : await finalNodeText(sameTurnRoot);
-        const captured = String(finalMedia?.text || "");
+        // On redesigned pages image cards may be siblings of the assistant
+        // Markdown. Preserve same-request prose alongside those fresh images.
+        const assistantProse = sourceMedia.length && current.isNew && sameTurnRoot
+          ? String((await finalNodeText(sameTurnRoot))?.text || "").trim()
+          : "";
+        const safeProse = assistantProse && !isInternalMediaHandoff(assistantProse)
+          && !isImageToolArguments(assistantProse)
+          && !isLocalImageBuildCommand(assistantProse)
+          && !hasTransferableImage(assistantProse)
+          && !/!\[[^\]]*\]\(blob:/i.test(assistantProse)
+          ? assistantProse : "";
+        const captured = safeProse
+          ? [safeProse, String(finalMedia?.text || "")].join("\n\n")
+          : String(finalMedia?.text || "");
         active.mediaCaptureAttempts = Number(active.mediaCaptureAttempts || 0) + 1;
         active.mediaCaptureLastChars = captured.length;
         active.mediaCaptureLastInlined = Number(finalMedia?.image_inlined_count || 0);
