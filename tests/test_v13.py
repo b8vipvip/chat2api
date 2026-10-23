@@ -141,6 +141,33 @@ def test_chat_completions_sends_canonical_model_and_reasoning_to_extension(tmp_p
         assert response.json()["choices"][0]["message"]["content"] == "chat-ok"
 
 
+def test_explicit_page_default_model_and_effort_reach_worker_unchanged(tmp_path: Path) -> None:
+    with TestClient(app_v13(tmp_path)) as client:
+        client_id, token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={token}") as websocket:
+            websocket.receive_json()
+            for endpoint, body in (
+                ("/v1/chat/completions", {
+                    "model": "default", "reasoning_effort": "default",
+                    "messages": [{"role": "user", "content": "Hello page default"}],
+                }),
+                ("/v1/responses", {
+                    "model": "default", "reasoning": {"effort": "default"},
+                    "input": "Hello Responses page default",
+                }),
+            ):
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(client.post, endpoint, headers=headers(), json=body)
+                    message = websocket.receive_json()
+                    assert message["type"] == "chat.request"
+                    assert message["options"]["model"] == "default"
+                    assert "reasoning_level" not in message["options"]
+                    assert "reasoning_effort" not in message["options"]
+                    complete_chat(websocket, message["request_id"], "Page-default-ok")
+                    response = future.result(timeout=5)
+                    assert response.status_code == 200, response.text
+
+
 def test_omitted_reasoning_preserves_current_page_strength(tmp_path: Path) -> None:
     with TestClient(app_v13(tmp_path)) as client:
         client_id, token = pair_extension(client)
