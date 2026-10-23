@@ -200,6 +200,10 @@ const priorCompleted=posted.filter(x=>x.type==="voice.record.complete");
 assert.equal(priorCompleted.length,0,
   "abandoned old recording must never deliver audio after next request prepares");
 assert.equal(page.__CHAT2API_VOICE_MAIN_V1__.captureArmed,false);
+const trackEventsBeforeOldPeer=posted.filter(x=>x.type==="voice.remote.track").length;
+peer.handlers.track({track:{kind:"audio",readyState:"live"}});
+assert.equal(posted.filter(x=>x.type==="voice.remote.track").length,trackEventsBeforeOldPeer,
+  "late track from a prior RTCPeerConnection cannot become this request's audio");
 const nextPeer=new page.RTCPeerConnection();
 nextPeer.handlers.track({track:{kind:"audio",readyState:"live"}});
 const recordingsBefore=posted.filter(x=>x.type==="voice.record.started").length;
