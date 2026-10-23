@@ -65,6 +65,9 @@
         <label style="display:block;margin-top:12px">系统默认前置提示词</label>
         <textarea id="pcSystemDefaultPrefix" rows="9" readonly style="width:100%;margin-top:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--surface-2,#f6f7f9)" placeholder="系统当前没有默认前置提示词"></textarea>
         <div class="muted" style="margin-top:6px">该内容由 chat2api 运行时内置，用于保证 API 请求不调用 ChatGPT 外部账户连接器。</div>
+        <label style="display:block;margin-top:14px">语音生成预设提示词（TTS）</label>
+        <div class="muted">仅作用于语音生成 /v1/audio/speech；让 ChatGPT Voice 将调用方文本按语义、台词和情绪直接说出来，不影响文本对话或语音通话。清空可关闭预设。</div>
+        <textarea id="pcSpeechPrefix" rows="7" style="width:100%;margin-top:6px" placeholder="自定义语音生成前置提示词；保存后立即生效"></textarea>
         <label style="display:block;margin-top:12px">自定义前置提示词</label>
         <textarea id="pcPrefix" rows="7" style="width:100%;margin-top:6px" placeholder="留空表示不添加。会插入到系统默认前置提示词之后。"></textarea>
         <label style="display:block;margin-top:12px">自定义后置提示词</label>
@@ -118,6 +121,7 @@
   function renderConfig(config) {
     state.config = config || {};
     if ($("pcSystemDefaultPrefix")) $("pcSystemDefaultPrefix").value = config?.system_default_prefix || "";
+    if ($("pcSpeechPrefix")) $("pcSpeechPrefix").value = config?.speech_prefix ?? "";
     if ($("pcPrefix")) $("pcPrefix").value = config?.prefix || "";
     if ($("pcSuffix")) $("pcSuffix").value = config?.suffix || "";
     if ($("pcRedactionEnabled")) $("pcRedactionEnabled").checked = Boolean(config?.redaction_enabled);
@@ -142,6 +146,7 @@
     return {
       system_default_prefix: $("pcSystemDefaultPrefix")?.value || "",
       prefix: $("pcPrefix")?.value || "",
+      speech_prefix: $("pcSpeechPrefix")?.value ?? "",
       suffix: $("pcSuffix")?.value || "",
       redaction_enabled: $("pcRedactionEnabled")?.checked === true,
       audit_final_prompt: $("pcAudit")?.checked !== false,

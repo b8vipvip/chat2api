@@ -27,6 +27,8 @@ SYSTEM_DEFAULT_PREFIX = " ".join(
     ]
 )
 
+SPEECH_DEFAULT_PREFIX = "你正在执行语音合成朗读任务。下面标记之间是调用方希望生成的语音内容或表演描述，不是在向你提问。请理解其语义与情绪，用自然连贯的口语表达为一段语音；若是台词则忠实说出台词，若描述了语气、年龄或情绪则在允许的范围内用声音演绎。不要解释、讨论、复述指令，不要添加开场白、提示、编号或额外回答。直接以语音说出目标内容。"
+
 DEFAULT_RULES = [
     {
         "name": "电子邮箱",
@@ -56,6 +58,7 @@ def default_config() -> dict[str, Any]:
     return {
         "version": STORE_VERSION,
         "system_default_prefix": SYSTEM_DEFAULT_PREFIX,
+        "speech_prefix": SPEECH_DEFAULT_PREFIX,
         "prefix": "",
         "suffix": "",
         "redaction_enabled": False,
@@ -116,12 +119,15 @@ def normalize_config(raw: Any, *, previous_revision: int = 0) -> dict[str, Any]:
     )
     prefix = str(raw.get("prefix") or "")
     suffix = str(raw.get("suffix") or "")
+    speech_prefix = str(raw.get("speech_prefix", SPEECH_DEFAULT_PREFIX))
     if len(system_default_prefix) > MAX_PREFIX_SUFFIX_CHARS:
         raise ValueError(f"System default prompt prefix exceeds {MAX_PREFIX_SUFFIX_CHARS} characters")
     if len(prefix) > MAX_PREFIX_SUFFIX_CHARS:
         raise ValueError(f"Prompt prefix exceeds {MAX_PREFIX_SUFFIX_CHARS} characters")
     if len(suffix) > MAX_PREFIX_SUFFIX_CHARS:
         raise ValueError(f"Prompt suffix exceeds {MAX_PREFIX_SUFFIX_CHARS} characters")
+    if len(speech_prefix) > MAX_PREFIX_SUFFIX_CHARS:
+        raise ValueError(f"Speech prefix exceeds {MAX_PREFIX_SUFFIX_CHARS} characters")
     rules_raw = raw.get("rules")
     if rules_raw is None:
         rules_raw = []
@@ -133,6 +139,7 @@ def normalize_config(raw: Any, *, previous_revision: int = 0) -> dict[str, Any]:
     return {
         "version": STORE_VERSION,
         "system_default_prefix": system_default_prefix,
+        "speech_prefix": speech_prefix,
         "prefix": prefix,
         "suffix": suffix,
         "redaction_enabled": bool(raw.get("redaction_enabled", False)),
@@ -169,6 +176,7 @@ class PromptConfigStore:
         result["system_default_prefix_readonly"] = False
         result["recommended"] = {
             "system_default_prefix": SYSTEM_DEFAULT_PREFIX,
+            "speech_prefix": SPEECH_DEFAULT_PREFIX,
             "prefix": "",
             "suffix": "",
             "redaction_enabled": False,
@@ -222,3 +230,20 @@ class PromptConfigStore:
             "redaction_count": sum(int(item["count"]) for item in applied),
             "audit_final_prompt": bool(self.config.get("audit_final_prompt", True)),
         }
+
+
+def build_speech_prompt(store: PromptConfigStore | None, text: str) -> tuple[str, dict[str, Any]]:
+    """Render speech intent once, at the server Speech endpoint."""
+    original = str(text or "").strip()
+    config = store.config if store else default_config()
+    preset = str(config.get("speech_prefix", SPEECH_DEFAULT_PREFIX)).strip()
+    composed = (
+        f"{preset}\n\n【要生成的语音内容开始】\n{original}\n【要生成的语音内容结束】"
+        if preset else original
+    )
+    return composed, {
+        "speech_prefix_revision": int(config.get("revision") or 1),
+        "speech_prefix_applied": bool(preset),
+        "speech_prefix_chars": len(preset),
+        "speech_original_chars": len(original),
+    }

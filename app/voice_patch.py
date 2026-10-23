@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from .api_keys import ApiPrincipal
 from .token_usage import usage_for
+from .prompt_config import build_speech_prompt
 
 PATCH_VERSION = "0.6.0"
 
@@ -165,6 +166,11 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=400, detail="Invalid voicereq_ request ID")
         request_id = request_id or ("voicereq_" + uuid.uuid4().hex)
         response_id = "voice_" + uuid.uuid4().hex
+        prompt_policy: dict[str, object] = {}
+        if request_type == "voice_generation":
+            prompt, prompt_policy = build_speech_prompt(
+                getattr(app.state, "prompt_config", None), prompt
+            )
         # Reuse the registry's existing per-API-key sticky route authority.
         # Voice must not randomly choose a different Worker than the selected
         # business key, or bypass the sole Worker-list enable switch.
@@ -178,6 +184,8 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         registry.busy_clients.add(selected_client)
+        if prompt_policy:
+            state.diagnostics.update(prompt_policy)
         try:
             # Persist the same request before sending it to the Worker. This is
             # a telemetry projection, NOT another owner of the request terminal.
@@ -186,6 +194,16 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 principal=principal, model=model, request_type=request_type, prompt=prompt,
                 transcript="", state=state, status_value="running",
             )
+            # The only TTS preset authority is this endpoint. The Worker
+            # sees the final prompt unchanged, including across retries.
+            store = getattr(app.state, "prompt_config", None)
+            if request_type == "voice_generation" and store and store.config.get("audit_final_prompt", True):
+                await telemetry.upsert({
+                    "request_id": request_id,
+                    "final_prompt": prompt,
+                    "final_prompt_chars": len(prompt),
+                    "prompt_config_revision": prompt_policy.get("speech_prefix_revision"),
+                })
             await registry.send(
                 selected_client,
                 {

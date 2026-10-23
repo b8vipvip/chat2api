@@ -30,6 +30,7 @@
     return {
       system_default_prefix: current.system_default_prefix ?? "",
       prefix: current.prefix ?? "",
+      speech_prefix: current.speech_prefix ?? "",
       suffix: current.suffix ?? "",
       redaction_enabled: Boolean(current.redaction_enabled),
       audit_final_prompt: current.audit_final_prompt !== false,
@@ -164,6 +165,7 @@
       oldHelp.textContent = "该提示词现在可编辑并持久化。修改后点击输入框右下角“保存”即可立即应用到新请求；“默认推荐”可恢复 chat2api 推荐值。";
     }
     addPromptActionBar("pcSystemDefaultPrefix", "system_default_prefix");
+    addPromptActionBar("pcSpeechPrefix", "speech_prefix");
     addPromptActionBar("pcPrefix", "prefix");
     addPromptActionBar("pcSuffix", "suffix");
     installRedactionActions();
