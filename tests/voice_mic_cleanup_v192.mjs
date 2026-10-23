@@ -16,6 +16,7 @@ let stoppedTracks=0;
 let oldOscStopped=0;
 const oldContext={close:()=>new Promise(resolve=>{closeOld=resolve;})};
 const oldMic={
+  requestId:"old-voice",
   micDestination:{stream:{getTracks:()=>[{stop(){stoppedTracks++;}}]}},
   micOscillator:{stop(){oldOscStopped++;}},
   micContext:oldContext,
@@ -47,4 +48,14 @@ assert.equal(oldMic.micDestination,newMic);
 assert.equal(oldMic.micOscillator,newOsc);
 assert.equal(oldMic.micContext,newContext);
 assert.ok(posted.some(e=>e.type==="voice.mic.stopped"&&e.request_id==="old-voice"));
+oldMic.requestId="new-voice";
+listeners[0]({
+  source:page,
+  data:{source:"chat2api-isolated",type:"voice.mic.stop",request_id:"old-voice"},
+});
+await new Promise(resolve=>setImmediate(resolve));
+assert.equal(oldMic.micDestination,newMic);
+assert.equal(oldMic.micContext,newContext);
+assert.ok(posted.some(e=>e.type==="voice.mic.stopped"&&e.reason==="stale-request"),
+  "late previous-request mic-stop cannot shut down a newly active session");
 console.log("Voice microphone is released per request without corrupting next-session microphone");
