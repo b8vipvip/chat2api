@@ -12,6 +12,24 @@
 
   const startButton = document.getElementById("startTest");
   if (!startButton) return;
+  const kindSelect = document.getElementById("testType");
+  const voiceHelp = document.createElement("div");
+  voiceHelp.dataset.chat2apiVoiceHelp = "v178";
+  voiceHelp.className = "muted";
+  voiceHelp.style.cssText = "font-size:12px;margin-top:7px;line-height:1.5";
+  kindSelect?.parentElement?.appendChild(voiceHelp);
+  function refreshVoiceHelp() {
+    const kind = kindSelect?.value || "";
+    voiceHelp.textContent = kind === "voice_generation"
+      ? "通过 GPT Live 真实生成音频；测试场不会使用上方文本模型。"
+      : kind === "voice_conversation"
+        ? "通过 GPT Live 语音对话。可上传音频文件；未上传时先真实生成测试语音，再上传并对话（两条可追踪的请求）。"
+        : kind === "all"
+          ? "全部测试包含真实 GPT Live 语音测试，可能额外执行语音样本生成调用。"
+          : "";
+  }
+  kindSelect?.addEventListener("change", refreshVoiceHelp);
+  refreshVoiceHelp();
 
   if (!document.querySelector("style[data-chat2api-playground-lifecycle]")) {
     const style = document.createElement("style");
@@ -148,12 +166,15 @@
           data_base64: await fileToBase64(file),
         });
       }
-      const model = document.getElementById("testModel").value;
+      const testType = kindSelect?.value || "";
+      const voiceOnly = testType === "voice_generation" || testType === "voice_conversation";
+      const model = voiceOnly ? "gpt-live" : document.getElementById("testModel").value;
       if (!model) throw new Error("没有在线 Worker 已验证的模型，等待模型列表自动同步后重试");
       const body = {
-        test_type: document.getElementById("testType").value,
+        test_type: testType,
         model,
-        reasoning_effort: model === "gpt-5.5-mini" ? null : (document.getElementById("testReasoning")?.value || null),
+        reasoning_effort: voiceOnly || model === "gpt-5.5-mini"
+          ? null : (document.getElementById("testReasoning")?.value || null),
         files,
       };
       if (credential.source === "managed" && credential.key_id) {

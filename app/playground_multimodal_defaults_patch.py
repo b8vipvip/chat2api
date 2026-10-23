@@ -133,6 +133,7 @@ def install_playground_multimodal_defaults_patch(app: FastAPI) -> FastAPI:
         token: str,
         request_id: str | None,
         uploaded: list[dict[str, Any]],
+        setup_request_id: str | None = None,
     ) -> dict[str, Any]:
         if kind not in {"vision", "file"}:
             # Generated self-test inputs must not accidentally become a reference
@@ -145,6 +146,7 @@ def install_playground_multimodal_defaults_patch(app: FastAPI) -> FastAPI:
                 token=token,
                 request_id=request_id,
                 uploaded=explicit_only,
+                setup_request_id=setup_request_id,
             )
 
         want_image = kind == "vision"

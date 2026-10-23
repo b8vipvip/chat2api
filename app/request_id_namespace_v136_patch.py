@@ -17,6 +17,8 @@ PATH_PREFIXES = {
     "/v1/completions": ("req_", "completions"),
     "/v1/images/generations": ("imgreq_", "images"),
     "/v1/responses": ("resp_req_", "responses"),
+    "/v1/audio/speech": ("voicereq_", "audio_speech"),
+    "/v1/audio/conversations": ("voicereq_", "audio_conversation"),
 }
 
 

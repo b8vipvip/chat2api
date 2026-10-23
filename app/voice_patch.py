@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import secrets
 import time
 import uuid
@@ -136,6 +137,8 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 "prompt_chars": len(prompt),
                 "completion_chars": len(transcript),
                 "status": status_value,
+                "response_text": transcript if status_value == "completed" else "",
+                "response_text_available": bool(transcript) if status_value == "completed" else False,
                 "usage": {**usage, **token_meta},
                 "timings": state.timings(),
                 "diagnostics": diagnostics,
@@ -147,16 +150,37 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
     async def execute_voice(
         *, principal: ApiPrincipal, model: str, prompt: str, client_id: str | None,
         timeout_seconds: int, audio_spec: dict[str, object] | None, request_type: str,
+        request_id: str | None = None,
     ) -> dict[str, object]:
-        request_id = "voicereq_" + uuid.uuid4().hex
+        # The public Speech/Conversation protocols use the GPT Live transport.
+        # Never report a generic text-picker model as if Voice had executed it.
+        if model not in {"gpt-live", "gpt-live-mini"}:
+            raise HTTPException(status_code=400, detail="Voice endpoints require gpt-live or gpt-live-mini")
+        if request_id is not None and not re.fullmatch(r"voicereq_[A-Za-z0-9_-]{8,120}", request_id):
+            raise HTTPException(status_code=400, detail="Invalid voicereq_ request ID")
+        request_id = request_id or ("voicereq_" + uuid.uuid4().hex)
         response_id = "voice_" + uuid.uuid4().hex
-        selected_client = resolve_client(client_id)
+        # Reuse the registry's existing per-API-key sticky route authority.
+        # Voice must not randomly choose a different Worker than the selected
+        # business key, or bypass the sole Worker-list enable switch.
+        route_token = registry.routing_key_context.set(principal.key_id)
+        try:
+            selected_client = resolve_client(client_id)
+        finally:
+            registry.routing_key_context.reset(route_token)
         try:
             state = await broker.create(request_id, selected_client)
         except RuntimeError as error:
             raise HTTPException(status_code=409, detail=str(error)) from error
         registry.busy_clients.add(selected_client)
         try:
+            # Persist the same request before sending it to the Worker. This is
+            # a telemetry projection, NOT another owner of the request terminal.
+            await record_voice(
+                request_id=request_id, response_id=response_id, client_id=selected_client,
+                principal=principal, model=model, request_type=request_type, prompt=prompt,
+                transcript="", state=state, status_value="running",
+            )
             await registry.send(
                 selected_client,
                 {
@@ -220,12 +244,17 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
                 transcript="", state=state, status_value="error", error="Timed out waiting for GPT-Live",
             )
             raise HTTPException(status_code=504, detail="Timed out waiting for GPT-Live") from error
-        except RuntimeError as error:
+        except Exception as error:
+            # Includes offline WebSocket send failures as well as explicit
+            # browser errors; a previously admitted voice run cannot remain
+            # stuck in request history as running.
             state.completed_mono = state.completed_mono or time.perf_counter()
             await record_voice(
                 request_id=request_id, response_id=response_id, client_id=selected_client,
                 principal=principal, model=model, request_type=request_type, prompt=prompt,
-                transcript="", state=state, status_value="error", error=str(error),
+                transcript="", state=state,
+                status_value="cancelled" if state.diagnostics.get("playground_cancelled") else "error",
+                error=str(error),
             )
             raise HTTPException(status_code=502, detail=str(error)) from error
         finally:
@@ -236,6 +265,7 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
     async def audio_speech(
         body: SpeechRequest,
         x_chat2api_client: str | None = Header(default=None),
+        x_chat2api_request_id: str | None = Header(default=None),
         principal: ApiPrincipal = Depends(require_audio_key),
     ) -> dict[str, object]:
         return await execute_voice(
@@ -246,12 +276,14 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             timeout_seconds=body.timeout or max(settings.request_timeout_seconds, 180),
             audio_spec=None,
             request_type="voice_generation",
+            request_id=x_chat2api_request_id,
         )
 
     @app.post("/v1/audio/conversations")
     async def audio_conversation(
         body: VoiceConversationRequest,
         x_chat2api_client: str | None = Header(default=None),
+        x_chat2api_request_id: str | None = Header(default=None),
         principal: ApiPrincipal = Depends(require_audio_key),
     ) -> dict[str, object]:
         item = file_store.get(body.audio_file_id)
@@ -269,6 +301,7 @@ def install_voice_patch(app: FastAPI) -> FastAPI:
             timeout_seconds=body.timeout or max(settings.request_timeout_seconds, 180),
             audio_spec={"file_id": item.file_id, "filename": item.filename, "mime_type": item.mime_type, "size": item.size},
             request_type="voice_conversation",
+            request_id=x_chat2api_request_id,
         )
 
     @app.get("/assets/chat2api-v6.js")
