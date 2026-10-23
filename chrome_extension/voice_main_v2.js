@@ -13,6 +13,12 @@
       post(requestId, "voice.mic.stopped", { stopped: false, reason: "voice-main-state-missing" });
       return;
     }
+    if (state.requestId && state.requestId !== requestId) {
+      // A delayed stop from the previous request cannot terminate a newer
+      // request's microphone or AudioContext.
+      post(requestId, "voice.mic.stopped", { stopped: false, reason: "stale-request" });
+      return;
+    }
     let stoppedTracks = 0;
     // Detach exactly the mic owned by this session *before* any await.
     // A second Voice request can start while close() is pending; a late old
