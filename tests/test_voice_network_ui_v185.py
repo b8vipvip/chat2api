@@ -41,3 +41,8 @@ def test_fast_voice_failure_includes_request_scoped_ice_snapshot():
         assert "ice_candidate_errors: Number(snapshot?.ice_candidate_errors || 0)" in source
         assert "transport_snapshot_received: Boolean(snapshot)" in source
     assert 'kind: "voice-live"' in live
+
+def test_live_voice_final_telemetry_preserves_worker_ice_diagnostics():
+    server=(ROOT/"app/live_voice_patch.py").read_text()
+    assert "**state.diagnostics" in server
+    assert '"browser_startup_error": error_message' in server
