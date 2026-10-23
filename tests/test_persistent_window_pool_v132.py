@@ -1,3 +1,44 @@
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def text(path: str) -> str:
+    return (ROOT / path).read_text(encoding="utf-8")
+
+
+def test_persistent_pool_is_active_routing_layer() -> None:
+    entry = text("chrome_extension/background_entry.js")
+    router = entry.index('"conversation_routing.js"')
+    limiter = entry.index('"background_window_limit_v121.js"')
+    pool = entry.index('"conversation_persistent_pool_v132.js"')
+    restore = entry.index('"conversation_persistent_route_restore_v132.js"')
+    dispatch = entry.index('"conversation_dispatch.js"')
+    assert router < limiter < pool < restore < dispatch
+
+    source = text("chrome_extension/conversation_persistent_pool_v132.js")
+    assert 'policy: "persistent-prewarmed-total-window-pool-v132"' in source
+    assert 'const target = normalizeTarget(state.target)' in source
+    assert 'row.runtime_ready === true' in source
+    assert 'validateIdleRuntime' in source
+    assert 'function standbyRows(rows, value)' in source
+    assert '!assigned.has(row.window_id)' in source
+    assert '!busy.has(row.window_id)' in source
+    assert 'standby.length === target' in source
+    assert 'standby_semantics_revision: STANDBY_SEMANTICS_REVISION' in source
+    assert 'const STANDBY_SEMANTICS_REVISION = 152' in source
+    assert 'await createStandby(reason)' in source
+    assert 'while (unassignedWindowRows(rows, value).length < target)' in source
+    assert 'const DOCUMENT_SETTLE_MS = 4000' in source
+    assert 'const RUNTIME_RETRY_COOLDOWN_MS = 15000' in source
+    assert 'runtime_loading_total:' in source
+    assert 'route.window_owned = true' in source
+    assert 'post-admission-standby-refill-v152' in source
     assert 'worker_persistent_window_pool_exhausted' in source
     assert 'value.routePolicyForRequest(message)' in source
     assert 'request-admission-v190' in source
