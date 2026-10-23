@@ -876,6 +876,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield "data: " + json.dumps(chunk_payload(response_id, model, {"role": "assistant"}), ensure_ascii=False) + "\n\n"
         sent_text = ""
         started_at = asyncio.get_running_loop().time()
+        next_heartbeat_at = started_at + 15.0
         recorded = False
         request_type = "multimodal" if attachments_count else "text"
         # The presentation-only gate holds generated image syntax until the
@@ -885,6 +886,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
         try:
             while True:
+                # SSE comments are invisible to Chat Completions clients.
+                # A long Worker generation can have no text chunks for minutes;
+                # keep intermediaries/SDK body-timeouts from aborting before
+                # the authoritative Worker terminal arrives.
+                now = asyncio.get_running_loop().time()
+                if now >= next_heartbeat_at:
+                    next_heartbeat_at = now + 15.0
+                    yield ": chat2api-keepalive\n\n"
                 if await request.is_disconnected():
                     await registry.send(state.client_id, {"type": "chat.cancel", "request_id": state.request_id})
                     state.completed_mono = state.completed_mono or time.perf_counter()
