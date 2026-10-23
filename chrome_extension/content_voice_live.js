@@ -137,13 +137,44 @@
     state.transcriptTimer = null;
   }
 
+  // Capture ICE evidence before fast-failing the live session. Diagnostic only:
+  // startLive / the existing broker continue to own lifecycle and terminal status.
+  async function failLiveVoiceConnection(failure) {
+    const active = state.active;
+    if (active) {
+      postMain("voice.transport.snapshot", active);
+      const snapshot = await waitFor(() =>
+        state.mainEvents.find(item => item.type === "voice.transport.snapshot"), 1200, 80);
+      await emit({
+        type: "image.diagnostics",
+        kind: "voice-live",
+        request_id: active.requestId,
+        diagnostics: {
+          voice_stage: "chatgpt-voice-connection-failed",
+          voice_failure_code: failure.code,
+          chatgpt_voice_error: failure.message,
+          peer_connections_in_request: Number(snapshot?.peer_connections_in_request || 0),
+          mic_requests_in_request: Number(snapshot?.mic_requests_in_request || 0),
+          peer_hook_still_ready: snapshot?.peer_hook_ready === true,
+          mic_hook_still_ready: snapshot?.mic_hook_ready === true,
+          ice_connection_state: String(snapshot?.ice_connection_state || "unknown"),
+          peer_connection_state: String(snapshot?.peer_connection_state || "unknown"),
+          ice_candidate_errors: Number(snapshot?.ice_candidate_errors || 0),
+          browser_visibility: String(snapshot?.page_visibility || document.visibilityState || "unknown"),
+          transport_snapshot_received: Boolean(snapshot),
+        },
+      });
+    }
+    throw new Error(failure.code + ": " + failure.message);
+  }
+
   async function settleVoiceWelcome() {
     const gate = globalThis.__CHAT2API_VOICE_UI_GATE_V185__;
     let clicked = false;
     const deadline = Date.now() + 3400;
     while (Date.now() < deadline) {
       const failure = gate?.connectionFailure?.();
-      if (failure) throw new Error(failure.code + ": " + failure.message);
+      if (failure) await failLiveVoiceConnection(failure);
       if (!clicked && gate?.welcomeDialog?.()) {
         clicked = Boolean(gate.continueWelcome()?.clicked);
       }
@@ -156,7 +187,7 @@
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
       const failure = globalThis.__CHAT2API_VOICE_UI_GATE_V185__?.connectionFailure?.();
-      if (failure) throw new Error(failure.code + ": " + failure.message);
+      if (failure) await failLiveVoiceConnection(failure);
       const found = state.mainEvents.find(item => item.type === type);
       if (found) return found;
       await delay(80);
