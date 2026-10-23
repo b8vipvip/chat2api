@@ -178,7 +178,7 @@ class PlaygroundRunRequest(BaseModel):
         "all",
     ]
     model: str = Field(default="gpt-5.6-sol", min_length=1, max_length=120)
-    reasoning_effort: Literal["low", "medium", "high"] | None = None
+    reasoning_effort: Literal["default", "low", "medium", "high"] | None = "default"
     api_key_id: str | None = Field(default=None, max_length=120)
     api_key: SecretStr | None = None
     files: list[PlaygroundFileInput] = Field(default_factory=list, max_length=4)

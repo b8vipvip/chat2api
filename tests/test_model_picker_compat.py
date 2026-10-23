@@ -163,7 +163,8 @@ def test_api_default_text_model_is_canonical_and_dynamic_router_has_no_static_al
     assert 'model: str = "gpt-5.6-sol"' in source
     assert 'reasoning_effort: str | None' in source
     router = (EXTENSION / "model_routing_v2.js").read_text(encoding="utf-8")
-    assert "default-no-ui" not in router
+    assert '"page-default-no-ui"' in router
+    assert 'requestedModel = defaultModelRequested ? "default"' in router
     assert "Unsupported text model" not in router
     assert "Requested model was not discovered on this Worker" in router
     assert "validatedLibrary" in router

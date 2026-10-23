@@ -24,8 +24,9 @@
     reasoningSelect = document.createElement("select");
     reasoningSelect.id = "testReasoning";
     reasoningSelect.innerHTML = `
+      <option value="default" selected>默认（不检查/不切换）</option>
       <option value="low">极速</option>
-      <option value="medium" selected>中</option>
+      <option value="medium">中</option>
       <option value="high">高</option>`;
     modelBlock.appendChild(label);
     modelBlock.appendChild(reasoningSelect);
@@ -45,7 +46,7 @@
       timeout: 300,
     };
     const effort = document.getElementById("testReasoning")?.value || "";
-    if (effort) body.reasoning_effort = effort;
+    if (effort && effort !== "default") body.reasoning_effort = effort;
 
     const response = await fetch("/v1/chat/completions", {
       method: "POST",
@@ -108,7 +109,7 @@
     block.dataset.chat2apiV13Docs = "1";
     block.innerHTML = `
       <h2>文本模型与推理强度</h2>
-      <p>文本/视觉/文件理解统一使用 <code>gpt-5.6-sol</code> 或 <code>gpt-5.5</code>。旧的 <code>default</code>、<code>chatgpt-web</code> 已移除。推理强度使用 OpenAI 风格 <code>reasoning_effort</code>：<code>low</code>=极速、<code>medium</code>=中、<code>high</code>=高；省略该参数时保留当前 ChatGPT 页面强度。</p>
+      <p>文本/视觉/文件理解统一使用 <code>gpt-5.6-sol</code> 或 <code>gpt-5.5</code>。<code>model:"default"</code> 跳过页面模型检查与选择；<code>reasoning_effort:"default"</code> 或省略参数跳过页面推理强度检查与切换。推理强度使用 OpenAI 风格 <code>reasoning_effort</code>：<code>low</code>=极速、<code>medium</code>=中、<code>high</code>=高；省略该参数时保留当前 ChatGPT 页面强度。</p>
       <h2>Chat Completions</h2>
       <div class="codebox">POST /v1/chat/completions\n{\n  "model": "gpt-5.6-sol",\n  "reasoning_effort": "high",\n  "messages": [{"role":"user","content":"你好"}],\n  "stream": true\n}</div>
       <h2>Responses API</h2>

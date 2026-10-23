@@ -181,12 +181,15 @@
       const testType = kindSelect?.value || "";
       const voiceOnly = testType === "voice_generation" || testType === "voice_call";
       const model = voiceOnly ? "gpt-live" : document.getElementById("testModel").value;
-      if (!model) throw new Error("没有在线 Worker 已验证的模型，等待模型列表自动同步后重试");
+      if (!model) throw new Error("请选择具体模型或默认");
       const body = {
         test_type: testType,
         model,
         reasoning_effort: voiceOnly || model === "gpt-5.5-mini"
-          ? null : (document.getElementById("testReasoning")?.value || null),
+          ? null : (() => {
+              const level = document.getElementById("testReasoning")?.value || "default";
+              return level === "default" ? null : level;
+            })(),
         files,
         voice_test_text: document.getElementById("voiceTestText")?.value || null,
       };
