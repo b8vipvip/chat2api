@@ -789,11 +789,53 @@
       .test(String(value || ""));
   }
 
-  function isFileCreationRequest(prompt) {
+  function requestedUserText(prompt) {
     const raw = String(prompt || "");
-    const text = (raw.includes("[User]") ? raw.slice(raw.lastIndexOf("[User]") + 6) : raw).slice(0, 1000);
-    return /(?:生成|创建|导出|制作|输出|下载|create|export|generate|make)[^\n]{0,100}(?:\.pdf|\.docx|\.xlsx|\.pptx|\.zip|\.csv|\.py|文件|附件|downloadable file|spreadsheet)/i.test(text)
-      && !/(?:如何|解释|分析|什么是)[^\n]{0,50}(?:生成|创建|导出|制作|输出)/i.test(text);
+    return (raw.includes("[User]") ? raw.slice(raw.lastIndexOf("[User]") + 6) : raw).slice(0, 4000);
+  }
+
+  function explicitCreationIntent(prompt, subjects) {
+    const action = /(?:生成|创建|导出|制作|绘制|画出|输出|提供下载|create|export|generate|make|draw|design)/i;
+    const negation = /(?:不要|不得|无需|不必|禁止|避免|不再|别|无需重新|仅回顾|只回顾|don't|do not|without|no need)/i;
+    for (const raw of requestedUserText(prompt).split(/\r?\n/)) {
+      const line = raw.replace(/^\s*(?:[-*]|\d+[.、])\s*/, "").trim();
+      if (!line || /^(?:如何|怎么|解释|分析|什么是|请说明如何|how to|explain|why)/i.test(line)) continue;
+      const match = action.exec(line);
+      if (!match) continue;
+      // Negation within the 18 characters immediately before the verb
+      // overrides incidental creation words in prohibition/recap prompts.
+      const before = line.slice(Math.max(0, match.index - 18), match.index);
+      if (negation.test(before)) continue;
+      const rest = line.slice(match.index + match[0].length, match.index + match[0].length + 95);
+      if (subjects.test(rest)) return true;
+    }
+    return false;
+  }
+
+  function isFileCreationRequest(prompt) {
+    // "不要重新生成新的文件" is not a creation request.
+    return explicitCreationIntent(prompt,
+      /(?:\.pdf|\.docx|\.xlsx|\.pptx|\.zip|\.csv|\.py|文件|附件|downloadable file|spreadsheet)/i);
+  }
+
+  function internalToolPayload(value) {
+    const raw = String(value || "").trim();
+    if (!raw || raw.length > 12000 || raw.charCodeAt(0) === 96 || raw.startsWith("#")) return false;
+    if (isInternalMediaHandoff(raw) || isImageToolArguments(raw) || isLocalImageBuildCommand(raw))
+      return true;
+    if (/^(?:bash\s+-lc\s+|python3?\s+-c\s+|sh\s+-c\s+)/i.test(raw)
+        && !/[\r\n]{2,}/.test(raw)) return true;
+    if (raw.startsWith("{") && raw.endsWith("}")) {
+      try {
+        const parsed = JSON.parse(raw);
+        const keys = Object.keys(parsed || {});
+        if (keys.length === 1 && keys[0] === "query" && typeof parsed.query === "string")
+          return true;
+        if (keys.includes("command") && keys.every(key =>
+          ["command", "timeout", "cwd", "workdir", "shell"].includes(key))) return true;
+      } catch (_) {}
+    }
+    return false;
   }
 
   function hasTransferableImage(value) {
@@ -802,17 +844,9 @@
 
 
   function isImageCreationRequest(prompt) {
-    // Check the user turn rather than an injected policy. This is a media
-    // *search hint*, never evidence sufficient to complete an image request.
-    const raw = String(prompt || "");
-    const text = (raw.includes("[User]") ? raw.slice(raw.lastIndexOf("[User]") + 6) : raw).slice(0, 800);
-    const action = "(?:生成|绘制|画|制作|设计|create|generate|draw|design)";
-    const subject = "(?:图片|图像|头像|插画|插图|参考图|图标|image|avatar|icon|illustration|picture)";
-    // Image-generation wording in an analysis question (e.g. 图片生成函数)
-    // is not a request to produce an image. Require a creation verb *before*
-    // the output type, or an explicit reverse-order directive.
-    return new RegExp(action + "[^\\n]{0,100}" + subject, "i").test(text)
-      || new RegExp(subject + "[^\\n]{0,50}(?:请|帮我|给我|为我)" + action, "i").test(text);
+    // An explicit "do not generate" instruction must not block text-only replies.
+    return explicitCreationIntent(prompt,
+      /(?:图片|图像|头像|插画|插图|参考图|图标|image|avatar|icon|illustration|picture)/i);
   }
 
   function isLocalImageBuildCommand(value) {
@@ -1119,7 +1153,7 @@
       if ((current.isNew || generating || networkText || visibleTurnMedia || pageMediaFound) && !responseStarted) {
         responseStarted = await ensureResponseStarted(active, responseStarted, networkText ? "network-evidence-v57" : current.isNew ? "dom-assistant" : "generation-control");
       }
-      if (current.isNew && current.text && !captureMedia && !isInternalMediaHandoff(current.text)
+      if (current.isNew && current.text && !captureMedia && !internalToolPayload(current.text)
           && !(imageCreationRequested && isLocalImageBuildCommand(current.text))) {
         const preferred = preferredResponseText(lastText, current.text);
         const previous = lastText;
@@ -1134,8 +1168,7 @@
       // Media/file generation is committed only after verified archiveable bytes.
       // Raw network snapshots can contain temporary download URLs or tool args.
       if (networkText && !captureMedia && !fileCreationRequested && !imageCreationRequested
-          && !isInternalMediaHandoff(networkText) && !imageBuildArtifact
-          && !isImageToolArguments(networkText)) {
+          && !internalToolPayload(networkText) && !imageBuildArtifact) {
         const preferred = preferredResponseText(lastText, networkText);
         const previous = lastText;
         lastText = await updateCapturedText(active, preferred, lastText);
@@ -1154,7 +1187,7 @@
       // automatically a final text payload.
       const evidenceSettledAt = Math.max(networkTerminalAt, Number(active.networkObservedAt || 0));
       if (networkTerminalAt && networkTerminalText && !captureMedia
-          && !isImageToolArguments(networkTerminalText)
+          && !internalToolPayload(networkTerminalText)
           && !(imageCreationRequested && isLocalImageBuildCommand(networkTerminalText))
           && !promptStillPresent(active)
           && Date.now() - evidenceSettledAt >= 1250) {
