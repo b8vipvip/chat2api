@@ -314,6 +314,7 @@
   }
 
   async function armRecording(active) {
+    if (active.cancelled) throw voiceFailure("VOICE_CANCELLED", "Voice request cancelled");
     // A Voice orb or remote track may precede submission. Request-scoped
     // capture starts only after text receipt or uploaded audio completion.
     // The MAIN-world bridge owns MediaRecorder, not this controller.
@@ -325,6 +326,7 @@
       "Voice bridge did not confirm response capture arming");
     if (armed.type === "voice.record.error") throw voiceFailure("VOICE_RECORDER_FAILED",
       String(armed.error || "Voice recorder could not be armed"));
+    if (active.cancelled) throw voiceFailure("VOICE_CANCELLED", "Voice request cancelled");
     active.captureArmSawTrack = armed.remote_track_seen === true;
     await diagnostic(active, "capture-armed", {
       transport_track_preexisting: active.captureArmSawTrack,
@@ -485,6 +487,7 @@
 
       await armRecording(active);
       const result = await waitResponse(active, baselineCount);
+      if (active.cancelled) throw voiceFailure("VOICE_CANCELLED", "Voice request cancelled");
       const diagnostics = {
         route: "chatgpt-voice-v2",
         voice_mode: active.mode,
@@ -498,6 +501,7 @@
         voice_stage: "completed",
       };
       await emit({ type: "image.diagnostics", kind: "voice", request_id: active.requestId, diagnostics });
+      if (active.cancelled) throw voiceFailure("VOICE_CANCELLED", "Voice request cancelled");
       await emit({
         type: "image.completed",
         kind: "voice",
