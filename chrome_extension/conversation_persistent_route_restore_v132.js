@@ -123,6 +123,12 @@
   if (typeof baseResolver === "function" && !baseResolver.__chat2apiPersistentRouteRestoreV132) {
     const wrappedResolver = async message => {
       const key = routingKey(message);
+      const router = globalThis[ROUTER_KEY];
+      const policy = typeof router?.routePolicyForRequest === "function"
+        ? router.routePolicyForRequest(message) : null;
+      // Request-scoped routes must start in a clean ChatGPT chat. Never compare
+      // their new tab with an older conversation leased to the same API key.
+      if (policy?.request_scoped === true) return baseResolver(message);
       const before = routeFor(key);
       const expectedId = String(before?.conversation_id || "").trim();
       const tab = await baseResolver(message);
