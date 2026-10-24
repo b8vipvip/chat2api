@@ -12,10 +12,10 @@ def test_short_sse_preamble_is_not_rich_document_terminal():
     owner = read("chrome_extension/content_request_v6.js")
     assert "Number(active.networkTerminalBytes || 0) > 32768" in owner
     assert '"verified-short-sse-rich-dom-v192"' in owner
-    assert 'source: "incomplete-short-sse-rich-reply-v192"' in owner
+    assert 'source: "network-sse-short-unreconciled-v192"' in owner
     assert 'type: "chat.error", request_id: active.requestId' in owner
     assert '"verified-rendered-dom-baseline-v191"' in owner
-    assert "return { text: \"\", source: \"incomplete-short-sse-rich-reply-v192\" }" in owner
+    assert 'return { text: raw, source: "network-sse-short-unreconciled-v192" }' in owner
     assert "request-v6 must cross-check" in owner
 
 
