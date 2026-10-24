@@ -164,7 +164,7 @@ def test_tool_argument_json_cannot_be_final_and_rich_markup_stays_grouped():
     assert "不需要|不用|不要求|不应该" in owner
     assert "function renderedCurrentRequestCandidate(active)" in owner
     assert "async function reconcileResponsesTerminal(active, networkText)" in owner
-    assert "incomplete-short-sse-rich-reply-v192" in owner
+    assert "network-sse-short-unreconciled-v192" in owner
     assert "verified-short-sse-rich-dom-v192" in owner
     assert 'response_terminal_dom_reconciled: ["validated-same-turn-dom-v163"' in owner
     assert "renderedCurrentRequestCandidate(active)" in owner
