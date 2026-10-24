@@ -37,10 +37,16 @@ const complete = await caseRun({bytes:131185,rich:richReply,available:true});
 assert.equal(complete.source, "verified-short-sse-rich-dom-v192");
 assert.equal(complete.text, richReply);
 const missing = await caseRun({bytes:131185,rich:"",available:false});
-assert.equal(missing.source,"incomplete-short-sse-rich-reply-v192");
-assert.equal(missing.text,"");
+assert.equal(missing.source,"network-sse-short-unreconciled-v192");
+assert.equal(missing.text,"以下是一");
+// Real bot2 requests have >43KB of upstream metadata but need 10-60 chars.
+for (const count of [43791,43868,49160]) {
+  const r = await caseRun({bytes:count,rich:"",available:false});
+  assert.equal(r.text,"以下是一");
+  assert.equal(r.source,"network-sse-short-unreconciled-v192");
+}
 const shortLegitimate = await caseRun({bytes:1200,rich:"",available:false});
 assert.equal(shortLegitimate.text,"以下是一");
 assert.match(source,/if \(!reconciled.text\) \{/);
 assert.match(source,/response_integrity_guard: "incomplete-short-sse-rich-reply-v192"/);
-console.log("v192: 4-character SSE is never accepted as a 131KB rich reply");
+console.log("v192: verified rich DOM wins, while valid short assistant completions survive absent DOM");

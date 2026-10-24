@@ -1006,9 +1006,13 @@
         }
         await delay(180);
       }
-      // Never claim completed with a 4-character stub after a huge rich
-      // response; report an explicit integrity error for further diagnosis.
-      return { text: "", source: "incomplete-short-sse-rich-reply-v192" };
+      // A large SSE response includes protocol metadata, not just answer text.
+      // Many real customer-service answers are intentionally 10-60 characters:
+      // the absence of a matching long-form DOM node cannot turn an explicit
+      // completed assistant message into an error. Only POSITIVE evidence of a
+      // larger same-request DOM answer may override the terminal SSE body.
+      // Log this weaker evidence separately for rich-reply diagnostics.
+      return { text: raw, source: "network-sse-short-unreconciled-v192" };
     }
     if (String(active.options?.response_protocol || "") !== "responses-v108") {
       // The network can expose the source markup of a ChatGPT rich answer.
