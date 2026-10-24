@@ -6,7 +6,7 @@ const source = readFileSync("chrome_extension/content_request_v6.js", "utf8");
 const start = source.indexOf("  async function reconcileResponsesTerminal(active, networkText) {");
 const end = source.indexOf("  async function monitor(active) {", start);
 assert.ok(start !== -1 && end > start, "single terminal owner must contain the reconciler");
-const richReply = "# 晨雾咖啡商业计划\\n" + "这里包含预算表、人员安排、商业预测与行动计划。\\n".repeat(40);
+const richReply = "# 晨雾咖啡商业计划\n" + "这里包含预算表、人员安排、商业预测与行动计划。\n".repeat(40);
 
 async function caseRun({bytes, rich, available}) {
   let clock = 0;
@@ -25,7 +25,7 @@ async function caseRun({bytes, rich, available}) {
     normalize: v => v,
   };
   const reconcile = runInNewContext(source.slice(start, end) +
-    "\\nreconcileResponsesTerminal", context);
+    "\nreconcileResponsesTerminal", context);
   return await reconcile({
     networkTerminalBytes: bytes,
     options: {response_protocol: "chat-completions"},
