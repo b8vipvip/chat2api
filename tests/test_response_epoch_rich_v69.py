@@ -237,3 +237,15 @@ def test_tx03_short_rich_editor_drift_uses_existing_v6_single_send_terminal_owne
         cwd=ROOT, capture_output=True, text=True, timeout=20,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_a_inline_document_does_not_create_second_terminal_or_media_owner():
+    owner = read("chrome_extension/content_request_v6.js")
+    server = read("app/main.py")
+    assert "if (inlineOnly && noDownloads) return false;" in owner
+    assert "return explicitCreationIntent(prompt," in owner
+    assert 'const fileCreationRequested = isFileCreationRequest(active.prompt);' in owner
+    assert 'networkTerminalText && !captureMedia' in owner
+    assert 'type: "chat.completed"' in owner
+    assert "long_text_requested=long_text_requested" in server
+    assert "server_effective_timeout_seconds" in server

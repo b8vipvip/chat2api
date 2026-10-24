@@ -904,7 +904,13 @@
   }
 
   function isFileCreationRequest(prompt) {
-    // "不要重新生成新的文件" is not a creation request.
+    // An explicit output-channel instruction overrides incidental "export a
+    // CSV file" verbs inside runnable code examples. A chat-only document is
+    // not a request for a separately transferable attachment.
+    const userText = requestedUserText(prompt);
+    const inlineOnly = /(?:所有|全部)[^\r\n。]{0,140}(?:直接在|直接于)[^\r\n。]{0,40}(?:聊天|对话|本次回复)[^\r\n。]{0,30}(?:呈现|展示|输出)/i.test(userText);
+    const noDownloads = /(?:不需要|无需|不要|不用|不必|禁止|请勿)[^\r\n。]{0,80}(?:下载附件|下载文件|可下载附件|可下载文件)/i.test(userText);
+    if (inlineOnly && noDownloads) return false;
     return explicitCreationIntent(prompt,
       /(?:\.pdf|\.docx|\.xlsx|\.pptx|\.zip|\.csv|\.py|文件|附件|downloadable file|spreadsheet)/i);
   }
