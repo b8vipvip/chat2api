@@ -294,7 +294,10 @@
     json: "application/json", py: "text/x-python", js: "text/javascript",
     ts: "text/plain", html: "text/html",
   });
-  const FILE_ANCHORS = "a[download],a[data-testid*='download'],a[aria-label^='Download ']";
+  // Recent ChatGPT file cards use ordinary same-origin links with a nearby
+  // filename. Never require the legacy a[download] attribute just to detect
+  // a candidate. Actual bytes are still validated server-side before delivery.
+  const FILE_ANCHORS = "a[href]";
   const fileCache = new Map();
   function recognizedFile(anchor) {
     if (!(anchor instanceof Element)) return null;
@@ -303,8 +306,13 @@
     try { uri = new URL(rawUrl, location.href); } catch (_) { return null; }
     const absolute = uri.href;
     if (!trustedMediaSource(absolute)) return null;
+    const card = anchor.closest?.("li,[role='row'],[data-testid*='file'],[data-testid*='attachment']");
+    const filenameInCard = String(card?.innerText || card?.textContent || "")
+      .match(/(?:^|[\s\n])([^\s\n<>:"\\/|?*]{1,135}\.(?:pdf|docx|xlsx|pptx|zip|csv|txt|md|json|py|js|ts|html))(?:\s|$)/i)?.[1] || "";
     const label = String(anchor.getAttribute("download")
-      || anchor.getAttribute("aria-label")?.replace(/^Download\s*/i, "")
+      || anchor.getAttribute("data-filename")
+      || anchor.getAttribute("aria-label")?.replace(/^(?:Download|下载)\s*/i, "")
+      || filenameInCard
       || uri.pathname.split("/").pop() || "").split(/[?#]/)[0];
     const filename = label.replace(/[\/\\()[\]\r\n]/g, "_").trim().slice(0, 140);
     const ext = /\.([a-z0-9]{1,8})$/i.exec(filename)?.[1]?.toLowerCase();
@@ -319,7 +327,9 @@
 
   async function inlineGeneratedFiles(clone) {
     let count = 0, total = 0;
-    for (const anchor of [...(clone?.querySelectorAll?.(FILE_ANCHORS) || [])].slice(0, FILE_MAX_COUNT + 1)) {
+    const anchors = [...(clone?.querySelectorAll?.(FILE_ANCHORS) || [])]
+      .filter(anchor => Boolean(recognizedFile(anchor)));
+    for (const anchor of anchors) {
       const item = recognizedFile(anchor);
       if (!item) continue;
       if (count >= FILE_MAX_COUNT) return { count, error: "file-count-limit" };

@@ -23,6 +23,13 @@ const D = [
   "6. 不要重新生成新的图片或新的文件。",
   "7. 只使用普通文本回答。",
 ].join("\n");
+// Reproduce the exact A-group negation that v0.22.189 misclassified.
+const realA = "这是一次严格的富文本测试，不需要生成图片、附件或可下载文件。请直接在聊天正文中完成全部内容。";
+const realD = "本轮只需回顾已有信息，不要重新生成任何图片、文档、CSV 文件或其它附件。";
+assert.equal(api.isFileCreationRequest(realA), false, "A must not await downloadable artifacts");
+assert.equal(api.isImageCreationRequest(realA), false);
+assert.equal(api.isFileCreationRequest(realD), false, "D2 must not create files");
+assert.equal(api.isImageCreationRequest(realD), false);
 assert.equal(api.isImageCreationRequest(A), false);
 assert.equal(api.isFileCreationRequest(A), false);
 assert.equal(api.isImageCreationRequest(B), true);
@@ -34,6 +41,9 @@ assert.equal(api.internalToolPayload('bash -lc cat /home/oai/skills/pdfs/SKILL.m
 assert.equal(api.internalToolPayload('{"name":"sample","query":"keyword"}'), false);
 assert.equal(api.internalToolPayload('# Normal reply\n\nSome content'), false);
 assert.match(owner, /renderedNetworkCorrelatedTurn\(active\)/);
+assert.match(owner, /renderedCurrentRequestCandidate\(active\)/);
+assert.match(owner, /same-request-rendered-dom-baseline-v191/);
+assert.match(owner, /baseline\.get\(node\) === text\.slice\(-5000\)/);
 assert.match(owner, /baselineRenderedText = new Map/);
 assert.match(owner, /same-request-network-rendered-dom-v189/);
 assert.match(owner, /!internalToolPayload\(networkTerminalText\)/);

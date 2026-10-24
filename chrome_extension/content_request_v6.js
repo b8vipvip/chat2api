@@ -393,9 +393,50 @@
     return null;
   }
 
+  function renderedCurrentRequestCandidate(active) {
+    // The current ChatGPT canvas/document renderer exposes neither assistant
+    // roles nor a long assistant SSE fragment. Anchor instead to the *exact
+    // pre-submit node snapshot* of this routed tab and the subsequent network
+    // response. This is candidate evidence only: request-v6 exclusively owns
+    // the stable final decision.
+    if (!active?.networkStreamSeen || !active?.submitStartedAt
+        || !active?.networkObservedAt || active.networkObservedAt < active.submitStartedAt
+        || !active.baselineRenderedText) return null;
+    const nodes = [...document.querySelectorAll(RENDERED_ASSISTANT_SELECTORS)].slice(-220);
+    const baseline = active.baselineRenderedText;
+    const promptStart = active.promptNormalized?.slice(0, 110) || "";
+    const promptEnd = active.promptNormalized?.slice(-120) || "";
+    const candidates = [];
+    for (const node of nodes) {
+      if (!visible(node) || node.closest?.("form,[contenteditable='true'],aside,nav,footer,header,[role='dialog']"))
+        continue;
+      const text = normalize(node.innerText || node.textContent || "");
+      // No historical node, prompt echo, transient status, or page wrapper.
+      if (text.length < 240 || text.length > 70000
+          || baseline.get(node) === text.slice(-5000)
+          || (promptStart && text.includes(promptStart))
+          || (promptEnd && text.includes(promptEnd))) continue;
+      // Content must exist inside the live chat main surface, not an overlay.
+      if (!node.closest?.("main,[role='main'],#thread")) continue;
+      candidates.push({node, text});
+    }
+    if (!candidates.length) return null;
+    // Prefer the complete response document (tables and paragraphs together).
+    // A page-wide parent containing the user's prompt is already excluded.
+    candidates.sort((a,b) => b.text.length - a.text.length);
+    const chosen = candidates[0];
+    return {
+      nodes:[chosen.node],latest:chosen.node,turn:chosen.node,
+      identity:nodeIdentity(chosen.node) || "changed-content-baseline",
+      text:plainNodeText(chosen.node),isNew:true,
+      reason:"verified-rendered-dom-baseline-v191",
+    };
+  }
+
   function currentAssistantState(active) {
     const nodes = assistantNodes();
     if (!nodes.length) return renderedNetworkCorrelatedTurn(active)
+      || renderedCurrentRequestCandidate(active)
       || { nodes, latest: null, turn: null, identity: "", text: "", isNew: false, reason: "none" };
 
     const currentUser = currentUserTurn(active);
@@ -846,7 +887,7 @@
 
   function explicitCreationIntent(prompt, subjects) {
     const action = /(?:生成|创建|导出|制作|绘制|画出|输出|提供下载|create|export|generate|make|draw|design)/i;
-    const negation = /(?:不要|不得|无需|不必|禁止|避免|不再|别|无需重新|仅回顾|只回顾|don't|do not|without|no need)/i;
+    const negation = /(?:不需要|不用|不要求|不应该|无需|不必|不要|不得|禁止|避免|不再|别|无需重新|仅回顾|只回顾|don't|do not|without|no need)/i;
     for (const raw of requestedUserText(prompt).split(/\r?\n/)) {
       const line = raw.replace(/^\s*(?:[-*]|\d+[.、])\s*/, "").trim();
       if (!line || /^(?:如何|怎么|解释|分析|什么是|请说明如何|how to|explain|why)/i.test(line)) continue;
@@ -1285,7 +1326,7 @@
       // No tool command, search JSON, prompt echo, or media-producing request
       // can satisfy this proof. request-v6 remains the sole terminal owner.
       if (!captureMedia && !fileCreationRequested && !imageCreationRequested
-          && current.reason === "verified-rendered-network-overlap-v189"
+          && ["verified-rendered-network-overlap-v189","verified-rendered-dom-baseline-v191"].includes(current.reason)
           && current.text.length >= 120 && !internalToolPayload(current.text)
           && !generating && !promptStillPresent(active)
           && active.networkObservedAt && Date.now() - active.networkObservedAt >= 4500) {
@@ -1302,9 +1343,11 @@
             await emit({
               type: "chat.completed", request_id: active.requestId, text: finalized,
               diagnostics: {
-                response_terminal_source: "same-request-network-rendered-dom-v189",
+                response_terminal_source: current.reason === "verified-rendered-dom-baseline-v191"
+                  ? "same-request-rendered-dom-baseline-v191" : "same-request-network-rendered-dom-v189",
                 response_terminal_dom_reconciled: true,
-                response_integrity_evidence: "network-text-65-character-overlap-pre-submit-dom-baseline",
+                response_integrity_evidence: current.reason === "verified-rendered-dom-baseline-v191"
+                  ? "network-accepted-changed-main-dom-pre-submit-baseline-stable" : "network-text-65-character-overlap-pre-submit-dom-baseline",
                 network_terminal_evidence_source: "rendered-dom-stable-after-network-observation",
                 response_terminal_final_chars: finalized.length,
                 response_format: "markdown",
