@@ -161,6 +161,12 @@ def test_tool_argument_json_cannot_be_final_and_rich_markup_stays_grouped():
     assert "&& !internalToolPayload(networkTerminalText)" in owner
     assert "&& !internalToolPayload(networkText)" in owner
     assert "function explicitCreationIntent(prompt, subjects)" in owner and "参考图" in owner
+    assert "不需要|不用|不要求|不应该" in owner
+    assert "function renderedCurrentRequestCandidate(active)" in owner
+    assert "renderedCurrentRequestCandidate(active)" in owner
+    assert "same-request-rendered-dom-baseline-v191" in owner
+    assert "baseline.get(node) === text.slice(-5000)" in owner
+    assert 'const FILE_ANCHORS = "a[href]"' in rich
     assert "let inline = \"\";" in rich
     assert "inline += inlineMarkdown(child);" in rich
     assert ".map(cell => inlineChildren(cell)" in rich
