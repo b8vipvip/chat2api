@@ -421,9 +421,9 @@
       candidates.push({node, text});
     }
     if (!candidates.length) return null;
-    // Prefer the smallest independent rendered answer subtree. A parent may
-    // contain the entire chat history, even when its own text changed.
-    candidates.sort((a,b) => a.text.length - b.text.length);
+    // Prefer the complete response document (tables and paragraphs together).
+    // A page-wide parent containing the user's prompt is already excluded.
+    candidates.sort((a,b) => b.text.length - a.text.length);
     const chosen = candidates[0];
     return {
       nodes:[chosen.node],latest:chosen.node,turn:chosen.node,
