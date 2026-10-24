@@ -20,6 +20,7 @@ from .admin import admin_response
 from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
 from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout, long_form_text_requested
+from .chat_stream_delivery_v194 import StagedStreamText, final_text_chunks
 from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
@@ -888,6 +889,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # The presentation-only gate holds generated image syntax until the
         # broker's single terminal event has finished archival.
         raw_seen = ""
+        staged_text = StagedStreamText()
+        # Provisional browser snapshots are not authoritative assistant content.
+        # They can diverge from the verified final DOM answer (TX03 2026-10-24).
+        # Standard OpenAI SSE content is append-only; never emit a speculative
+        # prefix that cannot be revoked on the wire.
         media_gate = StreamMediaMarkerGate()
 
         try:
@@ -936,10 +942,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         if delta:
                             raw_seen = snapshot
                     if delta:
-                        safe_delta = media_gate.push(delta)
-                        if safe_delta:
-                            sent_text += safe_delta
-                            yield "data: " + json.dumps(chunk_payload(response_id, model, {"content": safe_delta}), ensure_ascii=False) + "\n\n"
+                        # The visible ChatGPT analysis/preview is optionally
+                        # streamed in a separate, non-answer lane. It must not
+                        # be appended to final assistant content or persisted
+                        # as the canonical answer.
+                        preview = staged_text.preview_delta(
+                            delta,
+                            enabled=state.diagnostics.get("visible_reasoning_status_kind") == "reasoning",
+                        )
+                        if preview:
+                            yield "data: " + json.dumps(
+                                chunk_payload(response_id, model, {"reasoning": preview}),
+                                ensure_ascii=False,
+                            ) + "\n\n"
                 elif event_type == "chat.completed":
                     raw_final = str(event.get("text") or state.text)
                     try:
@@ -957,11 +972,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         yield "data: " + json.dumps({"error": {"type": "media_storage_error", "message": str(error)}}) + "\n\n"
                         yield "data: [DONE]\n\n"
                         break
-                    if final_text.startswith(sent_text):
-                        delta = final_text[len(sent_text):]
-                        if delta:
-                            sent_text = final_text
-                            yield "data: " + json.dumps(chunk_payload(response_id, model, {"content": delta}), ensure_ascii=False) + "\n\n"
+                    # The final same-request Worker terminal is the one owner
+                    # of assistant content, regardless of provisional snapshots.
+                    # Emit the *whole* authoritative text in bounded SSE chunks
+                    # even if the preview is unrelated ("我会..." -> "# ...").
+                    for delta in final_text_chunks(final_text):
+                        sent_text += delta
+                        yield "data: " + json.dumps(
+                            chunk_payload(response_id, model, {"content": delta}),
+                            ensure_ascii=False,
+                        ) + "\n\n"
                     usage, token_meta = await record_request(
                         state, model, prompt, "completed", principal, stream=True, prompt_mode=prompt_mode,
                         response_id=response_id, final_text=final_text, request_type=request_type,
