@@ -236,6 +236,15 @@
       .filter(img => candidateImage(img))
       .map(img => String(img.currentSrc || img.getAttribute("src") || "").trim()));
     for (const button of [...clone.querySelectorAll("button")]) {
+      const downloadable = recognizedFile(button);
+      if (downloadable) {
+        const link = document.createElement("a");
+        link.setAttribute("href", downloadable.url);
+        link.setAttribute("download", downloadable.filename);
+        link.textContent = downloadable.filename;
+        button.replaceWith(link);
+        continue;
+      }
       const pictureNodes = [...button.querySelectorAll("img")]
         .filter(img => visibleMediaSources.has(String(img.getAttribute("src") || "").trim()));
       const fileNodes = [...button.querySelectorAll(FILE_ANCHORS)]
@@ -297,11 +306,19 @@
   // Recent ChatGPT file cards use ordinary same-origin links with a nearby
   // filename. Never require the legacy a[download] attribute just to detect
   // a candidate. Actual bytes are still validated server-side before delivery.
-  const FILE_ANCHORS = "a[href]";
+  // New cards can render download actions as buttons carrying a signed
+  // URL in a data attribute, rather than a literal <a>. This still requires
+  // a concrete allowlisted URL and verified bytes; click-only buttons remain
+  // observational and cannot become fabricated attachments.
+  const FILE_ANCHORS = "a[href],button[data-download-url],button[data-file-url],button[data-href],button[data-url],[role='button'][data-download-url]";
   const fileCache = new Map();
   function recognizedFile(anchor) {
     if (!(anchor instanceof Element)) return null;
-    const rawUrl = String(anchor.getAttribute?.("href") || "").trim();
+    const rawUrl = String(anchor.getAttribute?.("href")
+      || anchor.getAttribute?.("data-download-url")
+      || anchor.getAttribute?.("data-file-url")
+      || anchor.getAttribute?.("data-href")
+      || anchor.getAttribute?.("data-url") || "").trim();
     let uri;
     try { uri = new URL(rawUrl, location.href); } catch (_) { return null; }
     const absolute = uri.href;

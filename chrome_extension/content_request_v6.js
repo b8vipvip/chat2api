@@ -971,6 +971,45 @@
 
   async function reconcileResponsesTerminal(active, networkText) {
     const raw = String(networkText || "");
+    // A completed short assistant preamble can precede an extensive rendered
+    // document in the same response. The 2026-10-24 TX03 case emitted "以下是一"
+    // (4 characters) after 131KB of SSE while the actual document was visible.
+    // Neither that preamble nor the SSE protocol marker is proof that the
+    // rich response has been captured. Preserve a single terminal owner:
+    // request-v6 must cross-check the current request's rendered DOM first.
+    if (raw.length < 64 && Number(active.networkTerminalBytes || 0) > 32768
+        && String(active.options?.response_protocol || "") !== "responses-v108") {
+      const deadline = Date.now() + 4200;
+      let lastRendered = "", stableAt = 0;
+      while (!active.cancelled && Date.now() < deadline) {
+        const candidate = currentAssistantState(active);
+        if (candidate.isNew && candidate.latest && !isGenerating()
+            && ["verified-rendered-network-overlap-v189",
+                "verified-rendered-dom-baseline-v191",
+                "after-current-user-turn"].includes(candidate.reason)) {
+          try {
+            const captured = await finalNodeText(candidate.latest);
+            const rendered = String(captured?.text || "").trim();
+            if (rendered.length >= 240 && rendered.length >= raw.length * 8
+                && !internalToolPayload(rendered) && !promptStillPresent(active)) {
+              if (rendered !== lastRendered) {
+                lastRendered = rendered;
+                stableAt = Date.now();
+              } else if (Date.now() - stableAt >= 1100) {
+                return {
+                  text: rendered,
+                  source: "verified-short-sse-rich-dom-v192",
+                };
+              }
+            }
+          } catch (_) { /* A failed DOM read cannot prove a final answer. */ }
+        }
+        await delay(180);
+      }
+      // Never claim completed with a 4-character stub after a huge rich
+      // response; report an explicit integrity error for further diagnosis.
+      return { text: "", source: "incomplete-short-sse-rich-reply-v192" };
+    }
     if (String(active.options?.response_protocol || "") !== "responses-v108") {
       // The network can expose the source markup of a ChatGPT rich answer.
       // It is not the same thing as the visible, rendered assistant reply.
@@ -1291,6 +1330,20 @@
         const reconciled = await reconcileResponsesTerminal(active, networkTerminalText);
         if (active.cancelled) break;
         if (String(active.networkTerminalText || "") !== networkTerminalText) continue;
+        if (!reconciled.text) {
+          await emit({
+            type: "chat.error", request_id: active.requestId,
+            error: "ChatGPT signaled completion but the full rich reply could not be verified",
+            diagnostics: {
+              response_integrity_guard: "incomplete-short-sse-rich-reply-v192",
+              response_terminal_network_chars: networkTerminalText.length,
+              network_stream_bytes: Number(active.networkTerminalBytes || 0),
+              response_terminal_source: reconciled.source,
+              response_terminal_dom_reconciled: false,
+            },
+          });
+          return;
+        }
         lastText = await updateCapturedText(active, reconciled.text, lastText);
         await emit({
           type: "chat.completed",
@@ -1300,7 +1353,7 @@
             response_epoch_revision: 69,
             response_terminal_settle_revision: 82,
             response_terminal_source: reconciled.source,
-            response_terminal_dom_reconciled: reconciled.source === "validated-same-turn-dom-v163",
+            response_terminal_dom_reconciled: ["validated-same-turn-dom-v163", "verified-short-sse-rich-dom-v192", "validated-rendered-same-turn-dom-v196"].includes(reconciled.source),
             response_terminal_stable_ms: Date.now() - networkTerminalAt,
             response_epoch_candidate_reason: active.lastCandidateReason || "network-assistant-evidence-v57",
             network_stream_id: String(active.networkTerminalStreamId || ""),
