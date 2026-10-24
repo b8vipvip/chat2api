@@ -81,8 +81,18 @@ const intentStart = controllerSource.indexOf("  function requestedUserText(promp
 const intentEnd = controllerSource.indexOf("  function isLocalImageBuildCommand(value) {");
 const intentHelpers = controllerSource.slice(intentStart, intentEnd);
 const imageIntent = runInNewContext(intentHelpers + "\n isImageCreationRequest;");
+const fileIntent = runInNewContext(intentHelpers + "\n isFileCreationRequest;");
 assert.equal(imageIntent("帮我生成视频提示词和3张参考图。"), true);
 assert.equal(imageIntent("我想分析图片生成函数"), false);
+assert.equal(fileIntent(`[User]
+请编写不少于 3,000 字的完整博物馆方案。
+- 导出清洗后的 CSV 文件
+所有正文、Markdown 表格、代码、公式和 Mermaid 图表直接在聊天回复中呈现。
+不需要另外制作图片、PDF 或下载附件。`), false,
+  "A is a chat-only rich text task: code examples do not request separate files");
+assert.equal(fileIntent("请制作可下载的 XLSX、PPTX、JSON 和 ZIP 四个文件，并给出下载链接。"), true,
+  "C must remain a genuine file-delivery task");
+assert.equal(fileIntent("请创建一个 CSV 文件，附上下载链接。"), true);
 
 assert.match(controllerSource, /imageToolArguments[\s\S]*?\|\| visibleTurnMedia \|\| visibleTurnFiles \|\| fileCreationRequested \|\| pageMediaFound/);
 assert.match(controllerSource, /networkTerminalAt && networkTerminalText && !captureMedia[\s\S]*?!internalToolPayload\(networkTerminalText\)/);

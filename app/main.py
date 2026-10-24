@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from .admin import admin_response
 from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
-from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout
+from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout, long_form_text_requested
 from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
@@ -844,17 +844,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def chat_deadline_remaining(
         state: RequestState, started_at: float, timeout_seconds: int, automatic_media_extension: bool,
+        long_text_requested: bool = False,
     ) -> float:
         # The broker retains sole terminal authority; the Worker may only
         # supply request-correlated media handoff evidence to adjust its deadline.
         effective = chat_timeout_window(
             timeout_seconds, automatic_extension=automatic_media_extension,
             media_handoff_proven=state.diagnostics.get("media_handoff_marker") is True,
+            long_text_requested=long_text_requested,
         )
         if effective > timeout_seconds:
-            state.diagnostics["media_timeout_extended_seconds"] = effective
-            state.diagnostics["media_timeout_extension_authority"] = "server-chat-deadline-v171"
-            state.diagnostics["request_timeout_seconds"] = effective
+            if state.diagnostics.get("media_handoff_marker") is True:
+                state.diagnostics["media_timeout_extended_seconds"] = effective
+                state.diagnostics["media_timeout_extension_authority"] = "server-chat-deadline-v171"
+            elif long_text_requested:
+                state.diagnostics["long_text_timeout_extended_seconds"] = effective
+                state.diagnostics["long_text_timeout_extension_authority"] = "server-chat-deadline-v171"
+        state.diagnostics["server_effective_timeout_seconds"] = effective
         return started_at + effective - asyncio.get_running_loop().time()
 
 
@@ -871,7 +877,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def stream_request(
         request: Request, state: RequestState, response_id: str, model: str, timeout_seconds: int,
         prompt: str, principal: ApiPrincipal, prompt_mode: str, attachments_count: int,
-        automatic_media_extension: bool = False,
+        automatic_media_extension: bool = False, long_text_requested: bool = False,
     ) -> AsyncIterator[str]:
         yield "data: " + json.dumps(chunk_payload(response_id, model, {"role": "assistant"}), ensure_ascii=False) + "\n\n"
         sent_text = ""
@@ -902,7 +908,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                          request_type=request_type, attachments_count=attachments_count)
                     recorded = True
                     break
-                remaining = chat_deadline_remaining(state, started_at, timeout_seconds, automatic_media_extension)
+                remaining = chat_deadline_remaining(state, started_at, timeout_seconds, automatic_media_extension, long_text_requested)
                 if remaining <= 0:
                     await registry.send(state.client_id, {"type": "chat.cancel", "request_id": state.request_id})
                     state.completed_mono = state.completed_mono or time.perf_counter()
@@ -1040,6 +1046,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         state.probe_policy = probe_policy(client_id)
         timeout_seconds = body.timeout or config.request_timeout_seconds
         automatic_media_extension = body.timeout is None
+        long_text_requested = long_form_text_requested(prompt)
         browser_timeout_seconds = worker_chat_timeout(
             timeout_seconds, automatic_extension=automatic_media_extension,
         )
@@ -1078,7 +1085,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if body.stream:
             return StreamingResponse(
                 stream_request(request, state, response_id, body.model, timeout_seconds, prompt, principal,
-                               body.prompt_mode, len(attachments), automatic_media_extension),
+                               body.prompt_mode, len(attachments), automatic_media_extension, long_text_requested),
                 media_type="text/event-stream",
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
@@ -1090,7 +1097,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             started_at = asyncio.get_running_loop().time()
             while True:
                 remaining = chat_deadline_remaining(
-                    state, started_at, timeout_seconds, automatic_media_extension,
+                    state, started_at, timeout_seconds, automatic_media_extension, long_text_requested,
                 )
                 if remaining <= 0:
                     raise asyncio.TimeoutError

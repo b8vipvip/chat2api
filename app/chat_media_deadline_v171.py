@@ -11,7 +11,17 @@ is introduced here.
 
 from __future__ import annotations
 
+import re
+
 MEDIA_HANDOFF_TIMEOUT_SECONDS = 600
+LONG_FORM_TEXT_TIMEOUT_SECONDS = 600
+_LONG_FORM_WORDS = re.compile(r"(?:不少于|至少|不低于|at\\s+least|minimum\\s+of)\\s*([0-9][0-9,]*)\\s*(?:个?汉?字|words?|characters?)", re.I)
+
+
+def long_form_text_requested(prompt: str) -> bool:
+    """Positive user-specified length evidence; not a Worker completion signal."""
+    user_text = str(prompt or "").rsplit("[User]", 1)[-1]
+    return any(int(m.group(1).replace(",", "")) >= 2500 for m in _LONG_FORM_WORDS.finditer(user_text))
 
 
 def chat_timeout_window(
@@ -19,6 +29,7 @@ def chat_timeout_window(
     *,
     automatic_extension: bool,
     media_handoff_proven: bool,
+    long_text_requested: bool = False,
 ) -> int:
     """Return the sole request deadline window, relative to request start.
 
@@ -29,6 +40,8 @@ def chat_timeout_window(
     baseline = int(base_timeout_seconds)
     if automatic_extension and media_handoff_proven:
         return max(baseline, MEDIA_HANDOFF_TIMEOUT_SECONDS)
+    if automatic_extension and long_text_requested:
+        return max(baseline, LONG_FORM_TEXT_TIMEOUT_SECONDS)
     return baseline
 
 
