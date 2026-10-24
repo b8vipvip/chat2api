@@ -15,7 +15,7 @@ import re
 
 MEDIA_HANDOFF_TIMEOUT_SECONDS = 600
 LONG_FORM_TEXT_TIMEOUT_SECONDS = 600
-_LONG_FORM_WORDS = re.compile(r"(?:不少于|至少|不低于|at\\s+least|minimum\\s+of)\\s*([0-9][0-9,]*)\\s*(?:个?汉?字|words?|characters?)", re.I)
+_LONG_FORM_WORDS = re.compile(r"(?:不少于|至少|不低于|at\s+least|minimum\s+of)\s*([0-9][0-9,]*)\s*(?:个?汉?字|words?|characters?)", re.I)
 
 
 def long_form_text_requested(prompt: str) -> bool:
