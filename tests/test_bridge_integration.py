@@ -1,4 +1,7 @@
+import json
 from concurrent.futures import ThreadPoolExecutor
+
+import pytest
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -59,7 +62,14 @@ def test_non_stream_bridge_round_trip(tmp_path: Path) -> None:
             assert response.json()["choices"][0]["message"]["content"] == "Hi there"
 
 
-def test_stream_bridge_round_trip(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "provisional, final_answer",
+    [
+        (["A", "B"], "ABC"),
+        (["我会先分析", "正在组织结构"], "# qnbot 最终报告\\n完整的正式正文与表格。"),
+    ],
+)
+def test_stream_bridge_round_trip(tmp_path: Path, provisional: list[str], final_answer: str) -> None:
     with TestClient(create_app(make_settings(tmp_path))) as client:
         client_id, token = pair(client)
         with client.websocket_connect(f"/ws/extensions/{client_id}?token={token}") as websocket:
@@ -82,13 +92,28 @@ def test_stream_bridge_round_trip(tmp_path: Path) -> None:
             with ThreadPoolExecutor(max_workers=1) as pool:
                 future = pool.submit(make_stream_request)
                 request = websocket.receive_json()
-                websocket.send_json({"type": "chat.delta", "request_id": request["request_id"], "delta": "A"})
-                websocket.send_json({"type": "chat.delta", "request_id": request["request_id"], "delta": "B"})
-                websocket.send_json({"type": "chat.completed", "request_id": request["request_id"], "text": "ABC"})
+                for provisional_delta in provisional:
+                    websocket.send_json({
+                        "type": "chat.delta",
+                        "request_id": request["request_id"],
+                        "delta": provisional_delta,
+                    })
+                websocket.send_json({
+                    "type": "chat.completed",
+                    "request_id": request["request_id"],
+                    "text": final_answer,
+                })
                 status_code, lines = future.result(timeout=5)
             assert status_code == 200
-            joined = "\n".join(lines)
-            assert '\"content\": \"A\"' in joined
-            assert '\"content\": \"B\"' in joined
-            assert '\"content\": \"C\"' in joined
-            assert "data: [DONE]" in joined
+            events = [
+                json.loads(line.removeprefix("data: "))
+                for line in lines
+                if line.startswith("data: {")
+            ]
+            content = "".join(
+                choice.get("delta", {}).get("content", "")
+                for event in events
+                for choice in event.get("choices", [])
+            )
+            assert content == final_answer
+            assert "data: [DONE]" in lines
