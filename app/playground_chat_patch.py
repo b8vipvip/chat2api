@@ -17,6 +17,7 @@ from .timezone_utils import beijing_now_iso
 PATCH_ID = "playground-chat-v3"
 ASSET_PATH = "/assets/chat2api-playground-chat.js"
 RECORDS_ASSET_PATH = "/assets/chat2api-playground-chat-records-v3.js"
+ABCD_ASSET_PATH = "/assets/chat2api-playground-abcd-v197.js"
 
 
 class PlaygroundChatStart(BaseModel):
@@ -188,6 +189,15 @@ def install_playground_chat_patch(app: FastAPI) -> FastAPI:
             headers={"Cache-Control": "no-store"},
         )
 
+    @app.get(ABCD_ASSET_PATH, include_in_schema=False)
+    async def playground_abcd_js() -> Response:
+        path = Path(__file__).with_name("admin_playground_abcd_v197.js")
+        return Response(
+            path.read_text(encoding="utf-8"),
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-store"},
+        )
+
     @app.post("/api/admin/playground/chat-runs")
     async def start_playground_chat_run(body: PlaygroundChatStart) -> dict[str, Any]:
         run_id = _chat_run_id(body.request_id)
@@ -220,10 +230,13 @@ def install_playground_chat_patch(app: FastAPI) -> FastAPI:
         text = raw.decode("utf-8", errors="replace")
         marker = f'<script src="{ASSET_PATH}"></script>'
         records_marker = f'<script src="{RECORDS_ASSET_PATH}"></script>'
+        abcd_marker = f'<script src="{ABCD_ASSET_PATH}"></script>'
         if marker not in text:
-            text = text.replace("</body>", marker + records_marker + "</body>")
+            text = text.replace("</body>", marker + records_marker + abcd_marker + "</body>")
         elif records_marker not in text:
             text = text.replace(marker, marker + records_marker)
+        if abcd_marker not in text:
+            text = text.replace("</body>", abcd_marker + "</body>")
         headers = {
             key: value
             for key, value in response.headers.items()
