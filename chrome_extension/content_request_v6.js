@@ -392,7 +392,8 @@
               "after-current-user-turn"].includes(current.reason)
         || String(current.text || "").length < 240
         || internalToolPayload(current.text) || promptStillPresent(active)) return null;
-    const fresh = responseFinishActions().filter(button => !active.baselineFinishActions.has(button));
+    const fresh = responseFinishActions().filter(button =>
+      !active.baselineFinishActions.has(button) && turnFollows(current.latest, button));
     if (!fresh.length) return null;
     const text = String(current.text || "");
     const start = String(active.promptNormalized || "").slice(0, 110);
@@ -1526,7 +1527,8 @@
                 abortedRenderedCandidateSince = Date.now();
               } else if (Date.now() - abortedRenderedCandidateSince >= 8000
                   && Date.now() - Number(active.networkObservedAt || 0) >= 12000
-                  && responseFinishActions().some(button => !active.baselineFinishActions.has(button))) {
+                  && responseFinishActions().some(button =>
+                    !active.baselineFinishActions.has(button) && turnFollows(rendered.node, button))) {
                 responseStarted = await ensureResponseStarted(active, responseStarted,
                   "verified-aborted-stream-rendered-dom-v200");
                 await emit({
