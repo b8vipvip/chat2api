@@ -24,6 +24,7 @@ function candidate({hasToolbar=true, after=true, baseline=false, aborted=true,
     text:promptEcho?active.promptNormalized+" ".repeat(300):"商业执行方案".repeat(Math.ceil(size/6))};
   const ctx={
     responseFinishActions:()=>hasToolbar?[action]:[],
+    renderedResponseBoundaryEvidence:()=>({nodes:[node],complete_scope:true,candidate_chars:1000,independent_count:0}),
     turnFollows:(n,a)=>n===node&&a===action&&after,
     internalToolPayload:()=>false,
     promptStillPresent:()=>false,
