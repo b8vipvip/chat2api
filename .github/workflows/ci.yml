@@ -207,6 +207,8 @@ jobs:
         run: node --test tests/playground_abcd_v197.mjs
       - name: TX03 verified network transport terminal regression
         run: node --test tests/verified_transport_terminal_v199.mjs
+      - name: TX03 aborted SSE rich DOM recovery regression
+        run: node --test tests/aborted_rich_dom_recovery_v200.mjs
 
       - name: Worker probe observer regression
         run: node tests/worker_probe_supervisor_v1.mjs
