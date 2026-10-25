@@ -16,12 +16,20 @@ import re
 MEDIA_HANDOFF_TIMEOUT_SECONDS = 600
 LONG_FORM_TEXT_TIMEOUT_SECONDS = 600
 _LONG_FORM_WORDS = re.compile(r"(?:不少于|至少|不低于|at\s+least|minimum\s+of)\s*([0-9][0-9,]*)\s*(?:个?汉?字|words?|characters?)", re.I)
+_LONG_FORM_HANDOFF = re.compile(
+    r"(?:生成|撰写|编写|整理|输出|提供|制作).{0,48}"
+    r"(?:项目交接上下文|项目交接文档|项目交接报告|开发交接报告)",
+    re.I | re.S,
+)
 
 
 def long_form_text_requested(prompt: str) -> bool:
     """Positive user-specified length evidence; not a Worker completion signal."""
     user_text = str(prompt or "").rsplit("[User]", 1)[-1]
-    return any(int(m.group(1).replace(",", "")) >= 2500 for m in _LONG_FORM_WORDS.finditer(user_text))
+    return (
+        any(int(m.group(1).replace(",", "")) >= 2500 for m in _LONG_FORM_WORDS.finditer(user_text))
+        or bool(_LONG_FORM_HANDOFF.search(user_text))
+    )
 
 
 def chat_timeout_window(
