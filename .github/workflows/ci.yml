@@ -217,6 +217,8 @@ jobs:
 
       - name: Worker P1 evidence regression
         run: node tests/worker_probe_p1_evidence.mjs
+      - name: ABCD scene evidence probes VM privacy and budget
+        run: node --test tests/worker_probe_abcd_v201.mjs
 
       - name: FDEX request history regression
         run: pytest -q tests/test_fdex_request_integrity_v155.py --timeout=120
