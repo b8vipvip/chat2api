@@ -264,6 +264,7 @@
         await globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.capture?.(
           state.active, "before_terminal", {
             completed: event.type === "chat.completed",
+            deliveredText: event.type === "chat.completed" ? String(event.text || "") : "",
             captured: Number(state.active.mediaCaptureLastInlined || 0)
               + Number(state.active.mediaCaptureLastEmbedded || 0),
           });
