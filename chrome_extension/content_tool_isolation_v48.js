@@ -34,7 +34,11 @@
   const authDanger = /(captcha|verify you are human|security check|two[- ]?factor|2fa|authenticator|passkey|password|payment|billing|subscription|identity verification|人机验证|安全验证|两步验证|双重验证|密码|付款|账单|订阅|身份验证)/i;
 
   function activeRequestId() {
-    return String(globalThis.__CHAT2API_REQUEST_CONTENT_V5__?.active?.requestId || "");
+    return String(
+      globalThis.__CHAT2API_REQUEST_CONTENT_V6__?.active?.requestId
+      || globalThis.__CHAT2API_REQUEST_CONTENT_V5__?.active?.requestId
+      || ""
+    );
   }
 
   async function report(category, action, context) {
@@ -69,9 +73,10 @@
       "[role='dialog']",
       "[aria-modal='true']",
       "[data-state='open'][role='dialog']",
-      "article",
-      "[data-testid^='conversation-turn']",
-      "main",
+      // Never scan article/conversation-turn/main as a connection prompt.
+      // The user's echoed prompt includes the server's tool-policy string,
+      // which would otherwise match integrationContext and cause synthetic
+      // Escape in the active ChatGPT conversation (A group 2026-10-25).
     ];
     for (const selector of selectors) {
       for (const node of document.querySelectorAll(selector)) {
@@ -99,13 +104,15 @@
     const connectorPhrase = integrationContext.test(context);
     const reconnectPair = Boolean(positive && /reconnect|重新连接/i.test(positive.label) && negative);
     if (!connectorPhrase && !reconnectPair) return null;
-    if (!positive && !negative) return null;
+    // Prevent positive actions at capture phase even for positive-only dialogs;
+    // auto-dismiss is safe only when the dialog exposes an explicit decline.
+    if (!positive) return null;
     return { context, buttons, positive, negative, category: "external-account-tool" };
   }
 
   function integrationRootForAction(node) {
     if (!(node instanceof Element)) return null;
-    for (const root of [node.closest("[role='dialog']"), node.closest("[aria-modal='true']"), node.closest("article"), node.closest("[data-testid^='conversation-turn']"), node.closest("main")]) {
+    for (const root of [node.closest("[role='dialog']"), node.closest("[aria-modal='true']")]) {
       if (!root) continue;
       const match = classify(root);
       if (match?.positive?.node === node || (positiveAction.test(labelOf(node)) && integrationContext.test(match?.context || labelOf(root)))) {
@@ -134,6 +141,7 @@
   }
 
   function dismissRoot(root, match) {
+    if (!match?.negative) return false;
     if (handled.has(root)) return false;
     handled.add(root);
     let action = match.negative;

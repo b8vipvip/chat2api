@@ -885,7 +885,7 @@
     return (raw.includes("[User]") ? raw.slice(raw.lastIndexOf("[User]") + 6) : raw).slice(0, 4000);
   }
 
-  function explicitCreationIntent(prompt, subjects) {
+  function explicitCreationIntent(prompt, subjects, stopAtClauseBoundary = false) {
     const action = /(?:生成|创建|导出|制作|绘制|画出|输出|提供下载|create|export|generate|make|draw|design)/i;
     const negation = /(?:不需要|不用|不要求|不应该|无需|不必|不要|不得|禁止|避免|不再|别|无需重新|仅回顾|只回顾|don't|do not|without|no need)/i;
     for (const raw of requestedUserText(prompt).split(/\r?\n/)) {
@@ -898,7 +898,14 @@
       const before = line.slice(Math.max(0, match.index - 18), match.index);
       if (negation.test(before) || /(?:解释|如何|怎么|分析|说明做法|explain|how to)/i.test(before)) continue;
       const rest = line.slice(match.index + match[0].length, match.index + match[0].length + 95);
-      if (subjects.test(rest)) return true;
+      // File output is a direct object of the creation verb, not a detail
+      // mentioned in the next clause (e.g. "生成交接上下文，包含关键文件").
+      // This boundary is purpose-specific: image requests retain their existing
+      // looser detection, and only the v6 request owner decides captureMedia.
+      const subjectScope = stopAtClauseBoundary
+        ? rest.split(/(?:包含|包括|涵盖|涉及|列出|列明|重点|such as|including|covering)|[，,。；;]/i, 1)[0]
+        : rest;
+      if (subjects.test(subjectScope)) return true;
     }
     return false;
   }
@@ -912,7 +919,8 @@
     const noDownloads = /(?:不需要|无需|不要|不用|不必|禁止|请勿)[^\r\n。]{0,80}(?:下载附件|下载文件|可下载附件|可下载文件)/i.test(userText);
     if (inlineOnly && noDownloads) return false;
     return explicitCreationIntent(prompt,
-      /(?:\.pdf|\.docx|\.xlsx|\.pptx|\.zip|\.csv|\.py|文件|附件|downloadable file|spreadsheet)/i);
+      /(?:\.pdf|\.docx|\.xlsx|\.pptx|\.zip|\.csv|\.py|文件(?!清单|列表|目录|分析|架构|说明|路径|名称|内容|结构|摘要)|附件|downloadable file|spreadsheet)/i,
+      true);
   }
 
   function internalToolPayload(value) {
