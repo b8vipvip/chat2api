@@ -96,6 +96,26 @@
     active.networkTerminalBytes = Number(detail?.bytes ?? row.bytes ?? 0);
   }
 
+  function recordTransportOutcome(row, phase, detail) {
+    // The main-world network observer supplies facts, never finalizes a request.
+    // An assistant-end-turn / protocol-complete hint is provisional: ChatGPT
+    // may still stream tools, patches, or subsequent rich output. Only a clean
+    // EOF of the same stream with the verified assistant terminal can promote
+    // this hint into an actionable completion proof for request-v6.
+    const active = activeRequest();
+    if (String(active?.requestId || "") !== row.requestId || active.cancelled) return;
+    if (phase === "done" && row.terminalSeen && detail.completion_hint === true) {
+      active.networkTerminalTransportDoneAt = Date.now();
+      active.networkTerminalTransportStreamId = row.streamId;
+      active.networkTerminalTransportErrorAt = 0;
+      active.networkTerminalTransportErrorReason = "";
+    } else {
+      active.networkTerminalTransportErrorAt = Date.now();
+      active.networkTerminalTransportErrorReason =
+        String(detail.error || (phase === "done" ? "missing-verified-assistant-terminal" : "stream-reader-failed")).slice(0, 240);
+    }
+  }
+
   async function diagnostics(row, detail) {
     state.diagnostics += 1;
     await emit({
@@ -205,6 +225,7 @@
       return;
     }
     if (phase === "done") {
+      recordTransportOutcome(row, phase, detail);
       row.chunks = Number(detail.chunks || row.chunks || 0);
       row.bytes = Number(detail.bytes || row.bytes || 0);
       if (row.terminalSeen) {
@@ -220,6 +241,7 @@
       return;
     }
     if (phase === "error") {
+      recordTransportOutcome(row, phase, detail);
       const active = activeRequest();
       if (active?.requestId === row.requestId) active.networkStreamEndedWithoutTerminalAt = Date.now();
       await diagnostics(row, detail);
