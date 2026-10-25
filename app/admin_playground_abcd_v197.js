@@ -2,18 +2,24 @@
 "use strict";
 const host=document.getElementById("playgroundChatPanel");
 if(!host||document.getElementById("pgABCD"))return;
-const cases={
-A:{title:"晨雾咖啡商业运营",prompts:["我计划在成都经营精品咖啡品牌「晨雾咖啡 Morning Mist」。请提供完整、可执行的开店运营方案，涵盖定位、市场竞品、选址、菜单、定价及毛利、供应链、团队排班、获客、90天运营规划和风险。至少提供两张Markdown表格、一个可运行的代码示例和明确的数学公式。不要只给提纲，最后以「落地执行清单」收尾，列出十项具体行动及负责人。"]},
-B:{title:"云端图书馆三张插画",prompts:["请创作完整三幕奇幻绘本《云朵尽头的图书馆》，并分别实际生成三张独立可下载的3:4竖版高清插画：《清晨的云端图书馆》《星光书籍的秘密》《月光灯塔的重逢》。主人公露米的斗篷、书包、项链在三张图片中保持一致。请不要交付拼接图、提示词、绘图代码或路径，实际交付三张不同的图片。"]},
-C:{title:"海滨音乐节XLSX/PPTX/JSON/ZIP",prompts:["为「BlueWave 海滨音乐节」编写完整策划，并实际交付四个独立可下载文件：含预算公式的XLSX、至少8页的招商PPTX、合法日程和场地资源JSON、包含前述资料和说明书的ZIP。正文另外解释预算、活动风险、赞助收益和执行步骤。不能使用代码块、虚构下载地址或本地文件路径代替真实文件。"]},
-D:{title:"午夜钟楼连续两轮",prompts:["为1928年虚构的海滨城市雾港设计复古悬疑游戏《午夜钟楼》。1876年钟楼每天午夜敲十三声，第十三声会令一人遗忘最重要的秘密。完整设计世界观、三名人物、五条线索、第一章调查对话和三条分支选择；实际交付可下载的Markdown人物档案文件，第一章结尾留下悬念。","沿用上一轮《午夜钟楼》的雾港背景、人物档案、十三声钟声规则和三条分支，请续写第二章，承接第一章的选择后果，设计五段可交互对话、两个反转、关联线索，并明确引用前一轮人物档案中的角色和秘密，不要重新开始故事。"]}
-};
+// Task content lives in the persistent server-side one-shot pool, never in the JS bundle.
+const cases={A:{title:"长篇图文与公式",prompts:[]},B:{title:"三幅独立插画",prompts:[]},C:{title:"四份实际交付文件",prompts:[]},D:{title:"连续两轮互动剧情",prompts:[]}};
 const byId=id=>document.getElementById(id),note=s=>{byId("pgABCDNote").textContent=s};
 const el=document.createElement("section");el.className="panel";el.id="pgABCD";el.style.margin="12px 0";
-el.innerHTML='<h3>ABCD 真实场景验收</h3><p class="muted">通过已选业务Key和文本模型实际发起API流式请求。A检验全文结构、B检验3张图片、C检验4份文件、D连续两轮上下文。必须收到权威SSE完成事件和真实产物才可通过。</p><div style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0"><select id="pgABCDSelect"></select><button class="action good" id="pgABCDRun">运行场景</button><button class="action" id="pgABCDExport" disabled>导出诊断报告</button></div><p id="pgABCDNote" role="status" style="white-space:pre-wrap;line-height:1.6">尚未执行</p>';
+el.innerHTML='<h3>ABCD 真实场景验收</h3><p class="muted">通过已选业务Key和文本模型实际发起API流式请求。A检验全文结构、B检验3张图片、C检验4份文件、D连续两轮上下文。每次运行将当前题目立即从持久化队列移除，自动换成全新主题；API SSE 完成不代表上游 ChatGPT 终态已验证。</p><div style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0"><select id="pgABCDSelect"></select><button class="action good" id="pgABCDRun">运行场景</button><button class="action" id="pgABCDExport" disabled>导出诊断报告</button></div><p id="pgABCDNote" role="status" style="white-space:pre-wrap;line-height:1.6">尚未执行</p>';
 host.querySelector(".pgChatMode")?.after(el);
 byId("pgABCDSelect").innerHTML=Object.entries(cases).map(([id,s])=>'<option value="'+id+'">'+id+' · '+s.title+'</option>').join("");
 let working=false,report=null;
+async function refreshPool(){
+  try {
+    const selected=byId('pgABCDSelect').value;
+    const data=await api('/api/admin/playground/abcd/preview');
+    for(const [id,item] of Object.entries(data.scenes||{}))if(cases[id]) cases[id].title=item.title;
+    byId('pgABCDSelect').innerHTML=Object.entries(cases).map(([id,item])=>'<option value="'+id+'">'+id+' · '+item.title+'</option>').join('');
+    byId('pgABCDSelect').value=selected||'A';
+  }catch(error){note('提示词池暂不可用：'+String(error.message||error));}
+}
+refreshPool();
 async function key(){
 const raw=byId("pgChatKeyInput").value.trim();
 if(raw)return {token:raw,id:null,label:"手动粘贴"};
@@ -72,15 +78,19 @@ if(!image&&["xlsx","pptx","zip"].includes(ext)&&!zip)throw Error("文件头不�
 if(!image&&ext==="json")JSON.parse(new TextDecoder().decode(b));
 return {name:asset.name,url:u.href,bytes:b.length};
 }
-async function inspect(id,turns){
-const checks=[],assets=[],text=turns.map(x=>x.text).join("\n");
+async function inspect(id,turns,task){
+const checks=[],assets=[],warnings=[],text=turns.map(x=>x.text).join("\n");
 const check=(ok,label)=>checks.push({passed:Boolean(ok),label});
 if(id==="A"){
 check(text.length>=2500,"全文至少2500字符");
 check((text.match(/^\|[^\n]+\|$/gm)||[]).length>=5,"包含Markdown表格");
-check(text.includes(String.fromCharCode(96).repeat(3)),"包含代码块");
-check(/\\\(|\\\[|\$[^$\n]{3,}\$/.test(text),"包含数学公式");
-check(text.lastIndexOf("落地执行清单")>text.length*.5,"末段含落地执行清单");
+const fenced=text.includes(String.fromCharCode(96).repeat(3));
+const codePresent=fenced||/(?:^|\n)[ \t]*[`]?(?:import\s+\w+|from\s+\w+\s+import|def\s+\w+\s*\(|function\s+\w+\s*\(|const\s+\w+\s*=)/m.test(text);
+check(codePresent,"实际包含代码内容");
+if(codePresent&&!fenced) warnings.push("代码内容已出现，但 Markdown 代码围栏丢失；展示保真仍需修复");
+const formula=["\\boxed","\\frac","\\dfrac","\\sqrt","\\sum","\\begin","\\(","\\["].some(mark=>text.includes(mark))||/\$[^$\n]{3,}\$/.test(text);
+check(formula,"包含可识别的数学公式内容");
+check(text.lastIndexOf(task.end_anchor||"执行任务表")>text.length*.5,"末段含指定执行清单");
 }
 if(id==="B"){
 const all=unique(images(text));check(all.length===3,"三张独立图片");
@@ -99,22 +109,30 @@ check(assets.length===4,"全部四种文件真实下载");
 if(id==="D"){
 check(turns.length===2,"完成两轮请求");
 check(turns.every(x=>x.text.length>=450),"两轮都有完整内容");
-check(/雾港|钟楼|钟声/.test(turns[1]?.text||""),"第二轮延续故事");
+check((task.keywords||[]).some(word=>(turns[1]?.text||"").includes(word)),"第二轮延续当前题目的关键设定");
 const md=files(turns[0]?.text||"").find(x=>x.name.toLowerCase().endsWith(".md"));
 check(Boolean(md),"第一轮有Markdown档案");
 if(md)assets.push(await verifyAsset(md,false));
 }
-return {checks,assets,passed:checks.every(x=>x.passed)&&checks.length>0};
+return {checks,assets,warnings,passed:checks.every(x=>x.passed)&&checks.length>0};
 }
 async function run(){
 if(working)return;
 working=true;byId("pgABCDRun").disabled=true;byId("pgABCDExport").disabled=true;
-const sceneId=byId("pgABCDSelect").value,scene=cases[sceneId],model=byId("pgChatModel").value;
-report={scene:sceneId,model,started_at:new Date().toISOString(),turns:[],checks:[],assets:[],status:"running"};
+const sceneId=byId("pgABCDSelect").value,model=byId("pgChatModel").value;
+let scene=null;
+report={scene:sceneId,model,started_at:new Date().toISOString(),turns:[],checks:[],assets:[],warnings:[],status:"running",pool_version:"abcd-one-shot-v198"};
 let auth=null;
 try{
 if(!model)throw Error("请选择在线Worker支持的模型");
 auth=await key();
+// Consume once before dispatch. Database BEGIN IMMEDIATE prevents reuse across
+// browsers/workers; retrying with same claim_id is idempotent.
+const claim_id="abcd_"+crypto.randomUUID().replace(/-/g,"");
+scene=await api("/api/admin/playground/abcd/claim",{method:"POST",body:{scene:sceneId,claim_id}});
+if(!scene||!Array.isArray(scene.prompts)||!scene.prompts.length)throw Error("无法领取持久化新提示词");
+Object.assign(report,{prompt_claim_id:claim_id,scene_title:scene.title,scene_serial:scene.serial,prompts_consumed:true,next_title:scene.next?.title||null});
+await refreshPool();
 const history=[];
 for(let i=0;i<scene.prompts.length;i++){
 const prompt=scene.prompts[i],request_id="req_"+crypto.randomUUID().replace(/-/g,""),begin=performance.now();
@@ -130,16 +148,34 @@ report.turns.push({request_id,prompt,text:"",frames:0,error:String(e),duration_m
 throw e;
 }
 }
-Object.assign(report,await inspect(sceneId,report.turns));
-report.status=report.passed?"passed":"failed";
+Object.assign(report,await inspect(sceneId,report.turns,scene));
+for(const turn of report.turns){
+  // API-level SSE stop+[DONE] proves that our endpoint finished, not that
+  // ChatGPT conversation-fetch completed normally. Read immutable request
+  // evidence without giving this observer authority to change request state.
+  try{
+    const detail=await api("/api/admin/requests/"+encodeURIComponent(turn.request_id));
+    const diag=detail.diagnostics||{};
+    turn.upstream_evidence={
+      api_status:detail.status,
+      network_terminal_proof:diag.network_stream_terminal_proof===true,
+      network_stream_phase:diag.network_stream_phase||null,
+      network_stream_error:diag.network_stream_error||null,
+      response_terminal_source:diag.response_terminal_source||null
+    };
+    if(detail.status!=="completed"||diag.network_stream_terminal_proof!==true)
+      report.warnings.push("请求 "+turn.request_id+" 的底层ChatGPT流缺乏正常终态证据，请人工复核；API completed 不能替代上游终态");
+  }catch(e){report.warnings.push("请求 "+turn.request_id+" 无法读取上游终态诊断："+String(e.message||e));}
+}
+report.status=report.passed?(report.warnings.length?"warning":"passed"):"failed";
 }catch(e){report.status="failed";report.error=String(e?.message||e);}
 finally{
 report.finished_at=new Date().toISOString();
 for(const turn of report.turns){
-try{await api("/api/admin/playground/chat-records",{method:"POST",body:{request_id:turn.request_id,model,prompt:turn.prompt,api_key_id:auth?.id||null,api_key_name:auth?.label||"未解析",status:report.status==="passed"?"passed":"failed",duration_ms:turn.duration_ms,response_chars:turn.text.length,attachments_count:0,error:turn.error||report.error||(report.status==="passed"?null:"产物验证失败")}});}
+try{await api("/api/admin/playground/chat-records",{method:"POST",body:{request_id:turn.request_id,model,prompt:turn.prompt,api_key_id:auth?.id||null,api_key_name:auth?.label||"未解析",status:report.status,duration_ms:turn.duration_ms,response_chars:turn.text.length,attachments_count:0,error:turn.error||report.error||(report.status==="passed"?null:(report.warnings.join("；")||"产物验证失败"))}});}
 catch(e){console.warn("ABCD record persistence failed",e);}
 }
-note(sceneId+" · "+(report.status==="passed"?"接口和产物结构验收通过":"未通过")+"\n"+(report.error||report.checks.map(c=>(c.passed?"✓ ":"✗ ")+c.label).join("\n"))+"\n图像质量、PPT真实页数及业务准确性仍需人工核查。");
+note(sceneId+" · "+(report.status==="passed"?"协议和上游终态已证实":report.status==="warning"?"内容验收有警告／上游终态未证实":"未通过")+"\n"+(report.error||report.checks.map(c=>(c.passed?"✓ ":"✗ ")+c.label).join("\n"))+"\n"+(report.warnings||[]).join("\n")+"\n此题已从待用池移除，下次自动使用新主题。图像质量、PPT页数及业务准确性仍需人工复核。");
 working=false;byId("pgABCDRun").disabled=false;byId("pgABCDExport").disabled=false;
 if(typeof loadTests==="function")Promise.resolve(loadTests()).catch(()=>{});
 }

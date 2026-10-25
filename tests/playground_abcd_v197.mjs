@@ -8,7 +8,7 @@ const FULL = "## 开店\n" + "咖啡运营".repeat(900) +
   "\n| 类别 | 数值 |\n|---|---|\n| A | 1 |\n| 类别 | 数值 |\n|---|---|\n| B | 2 |" +
   "\n\\(100+200=300\\)\n" + String.fromCharCode(96).repeat(3) +
   "js\nconsole.log(1)\n" + String.fromCharCode(96).repeat(3) +
-  "\n落地执行清单：指定负责人与期限。";
+  "\n执行任务表：指定负责人与期限。";
 const IMG_LINK=i=>"![插画](https://api.test/api/media/med_1234567890/abc"+i+")";
 const FILE_LINK=(ext,i)=>"[📎 资料"+i+"."+ext+"](https://api.test/api/generated-files/gen_abc"+i+"/token"+i+")";
 const frames=(text,includeDone=true)=>
@@ -58,7 +58,17 @@ function scenario(id, outputs) {
     else bytes=Uint8Array.from([80,75,3,4,...Array(25).fill(1)]);
     return {ok:true,arrayBuffer:async()=>bytes.buffer};
   };
+  let claimSerial=0;
   const api=async (endpoint,options)=>{
+    if(endpoint.endsWith("/abcd/preview"))return {scenes:Object.fromEntries("ABCD".split("").map(k=>[k,{scene:k,title:"新主题"+k+claimSerial,serial:claimSerial}]))};
+    if(endpoint.endsWith("/abcd/claim")) {
+      const scene=options.body.scene;
+      const title="新主题"+scene+claimSerial++;
+      const prompts=scene==="D"?["第一章 "+title,"续写第二章 "+title]:["写出完整"+scene+"方案 "+title];
+      return {scene,title,serial:claimSerial-1,claim_id:options.body.claim_id,
+        prompts,end_anchor:"执行任务表",keywords:[title],next:{title:"新主题"+scene+claimSerial}};
+    }
+    if(endpoint.includes("/api/admin/requests/"))return {status:"completed",diagnostics:{network_stream_terminal_proof:true,network_stream_phase:"complete"}};
     if(endpoint.endsWith("/chat-runs"))records.push({kind:"start",body:options.body});
     if(endpoint.endsWith("/chat-records"))records.push({kind:"terminal",body:options.body});
     return {};
@@ -77,10 +87,11 @@ function scenario(id, outputs) {
 
 test("A: real SSE terminal and full-length report is accepted",async()=>{
   const r=await scenario("A",[FULL]).run();
-  assert.match(r.status,/验收通过/);
+  assert.match(r.status,/协议和上游终态已证实/);
   assert.equal(r.requests.length,1);
   assert.equal(r.requests[0].body.stream,true);
   assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"passed");
+  assert.match(r.requests[0].body.messages[0].content,/新主题A/);
 });
 test("Incomplete SSE without [DONE] must fail even with full content",async()=>{
   const r=await scenario("A",[{text:FULL,done:false}]).run();
@@ -89,18 +100,26 @@ test("Incomplete SSE without [DONE] must fail even with full content",async()=>{
 });
 test("B: three distinct image files are fetched",async()=>{
   const r=await scenario("B",[IMG_LINK(1)+"\n"+IMG_LINK(2)+"\n"+IMG_LINK(3)]).run();
-  assert.match(r.status,/验收通过/);
+  assert.match(r.status,/协议和上游终态已证实/);
   assert.equal(r.downloads.length,3);
 });
 test("C: XLSX PPTX JSON ZIP links require real file downloads",async()=>{
   const r=await scenario("C",[["xlsx","pptx","json","zip"].map(FILE_LINK).join("\n")]).run();
-  assert.match(r.status,/验收通过/);
+  assert.match(r.status,/协议和上游终态已证实/);
   assert.equal(r.downloads.length,4);
 });
 test("D: second turn keeps prior messages",async()=>{
-  const r=await scenario("D",[FILE_LINK("md",0)+"\n"+"钟楼故事".repeat(200),"雾港钟声人物".repeat(200)]).run();
-  assert.match(r.status,/验收通过/);
+  const r=await scenario("D",[FILE_LINK("md",0)+"\n"+"新主题D0".repeat(200),"新主题D0的剧情延续".repeat(120)]).run();
+  assert.match(r.status,/协议和上游终态已证实/);
   assert.equal(r.requests.length,2);
   assert.equal(r.requests[1].body.messages.length,3);
   assert.equal(r.records.filter(x=>x.kind==="terminal").length,2);
+});
+
+test("A: recovered long-form LaTex and one-backtick Python counts as content, with formatting warning",async()=>{
+  const fallback=FULL.replace(/\`\`\`js\nconsole.log\(1\)\n\`\`\`/, "\`import math\\ndef profit():\\n return 1\`").replace("\\(100+200=300\\)","\\\\boxed{100+200=300}");
+  const r=await scenario("A",[fallback]).run();
+  assert.match(r.status,/内容验收有警告/);
+  assert.doesNotMatch(r.status,/未通过/);
+  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"warning");
 });
