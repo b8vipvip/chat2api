@@ -211,6 +211,8 @@ jobs:
         run: node --test tests/aborted_rich_dom_recovery_v200.mjs
       - name: ABCD multi-block response boundary and integrity VM regression
         run: node --test tests/abcd_response_boundary_v201.mjs
+      - name: Long ABCD headings/math and structural overflow regression
+        run: node --test tests/complete_rich_blocks_v203.mjs
       - name: ABCD whole-reply terminal boundary and toolbar verification
         run: node --test tests/complete_reply_boundary_v202.mjs
       - name: ABCD rich-text code and math serialization VM
