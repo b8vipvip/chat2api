@@ -6,7 +6,7 @@ import io
 import json
 import zipfile
 
-from app.worker_probe_store import WorkerProbeStore, ACTIVE_TOOLS, TOOL_CATALOG
+from app.worker_probe_store import WorkerProbeStore, ACTIVE_TOOLS, TOOL_CATALOG, _sanitize_facts
 
 
 SCENE_TOOLS = (
@@ -74,3 +74,18 @@ def test_abcd_evidence_is_sanitized_and_exported_per_request(tmp_path):
         assert "private.invalid" not in raw
         assert "3793" in raw
     assert store.summary("req_neverrun0123456789")["capture_status"] == "not_collected"
+
+
+def test_short_blocks_and_overflow_are_sanitized_as_numbers_only():
+    source = {
+        "scene_structural_scan_nodes": 1701,
+        "scene_structural_scan_overflow": True,
+        "scene_short_semantic_blocks": 21,
+        "dialogue_transcript": "private dialog MUST NOT BE STORED",
+    }
+    result = _sanitize_facts(source)
+    assert result == {
+        "scene_structural_scan_nodes": 1701,
+        "scene_structural_scan_overflow": True,
+        "scene_short_semantic_blocks": 21,
+    }
