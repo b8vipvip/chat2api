@@ -138,6 +138,21 @@
     } catch (error) { status(error.message, true); }
   }
 
+  function enableAbcdEvidencePreset() {
+    const selectable = [...document.querySelectorAll("#workerToolsPolicyRows select[data-probe]")]
+      .filter(select => !select.disabled);
+    if (!chosenPolicy || selectable.length === 0) {
+      status("请先读取 Worker 工具策略，再勾选探针", true);
+      return;
+    }
+    // Fill the currently selected policy only. A deliberate Save action is
+    // still required so a diagnosis preset cannot silently enable collection.
+    for (const select of selectable) select.value = "on";
+    const scope = $("workerToolsScope")?.value || "global";
+    status("已勾选当前范围 " + scope + " 的 " + selectable.length
+      + " 个可用探针。请点击“保存策略”，再运行新的 ABCD 请求。");
+  }
+
   async function save() {
     const scope = $("workerToolsScope").value;
     const tools = {};
@@ -187,6 +202,7 @@
   }
 
   $("workerToolsScope").addEventListener("change", loadPolicy);
+  $("workerToolsEnableAbcd").addEventListener("click", enableAbcdEvidencePreset);
   $("workerToolsSave").addEventListener("click", save);
   $("workerToolsReload").addEventListener("click", load);
   $("workerToolsRefreshRuns").addEventListener("click", refreshRuns);
