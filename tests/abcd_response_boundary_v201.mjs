@@ -12,7 +12,7 @@ function fixture() {
   function make(id,value,pos){
     return {
       id, pos, innerText:value, textContent:value,
-      closest:()=>main, contains(other){return this===other;},
+      closest:(selector)=>selector.includes("main")?main:null, contains(other){return this===other;},
       compareDocumentPosition(other){return pos<other.pos?4:2;},
     };
   }
