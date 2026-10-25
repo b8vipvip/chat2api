@@ -31,6 +31,24 @@
   function nativeStatus() {
     // Read only compact status surfaces in the current conversation. Never
     // scrape entire <main>, the prompt, or arbitrary assistant markdown.
+    const active = globalThis.__CHAT2API_REQUEST_CONTENT_V6__?.active;
+    if (Number(active?.submitStartedAt || 0) > 0 && active?.networkStreamSeen === true) {
+      // Strictly UI-labelled summary widgets; no raw markdown or invisible CoT.
+      for (const selector of [
+        "main [data-testid*='reasoning-summary' i]",
+        "main [data-testid*='thinking-summary' i]",
+      ]) {
+        for (const node of [...document.querySelectorAll(selector)].slice(-6)) {
+          if (!visible(node)) continue;
+          const text = String(node.innerText || node.textContent || "").replace(/\s+/g, " ").trim();
+          const promptStart = String(active?.promptNormalized || "").slice(0, 80);
+          if (text.length >= 8 && text.length <= 240
+              && (!promptStart || !text.includes(promptStart))) {
+            return {text, kind: "reasoning", source: "visible-chatgpt-ui-v196"};
+          }
+        }
+      }
+    }
     const selectors = [
       "main [data-testid*='thinking' i]",
       "main [data-testid*='reasoning' i]",
