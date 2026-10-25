@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import {runInNewContext} from "node:vm";
+import {runInNewContext,createContext,runInContext} from "node:vm";
 import {test} from "node:test";
 
 const ownerSource=readFileSync(new URL("../chrome_extension/content_request_v6.js", import.meta.url),"utf8");
@@ -27,9 +27,13 @@ function observer(){
   };
   ctx.globalThis=ctx;
   ctx.__CHAT2API_REQUEST_CONTENT_V6__={active};
-  runInNewContext(observerSource,ctx);
+  const context=createContext(ctx);
+  runInContext(observerSource,context);
+  // vm's contextified globalThis is not strictly equal to the host sandbox
+  // object. Browser window postMessage uses the contextified source.
+  const sourceWindow=runInContext("globalThis",context);
   async function push(phase,more={}){
-    onMessage({source:ctx,data:{source:"chat2api-network-stream-v55",
+    onMessage({source:sourceWindow,data:{source:"chat2api-network-stream-v55",
       stream_id:"stream-1",phase,...more}});
     await flush();
   }
