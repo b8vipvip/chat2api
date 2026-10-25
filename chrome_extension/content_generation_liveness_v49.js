@@ -37,11 +37,11 @@
       "main [role='status']",
       "main [aria-live='polite']",
     ];
-    const statusPattern = /^(?:正在(?:思考|分析|推理|生成|处理|搜索|浏览|读取|整理)(?:中|内容|回复|答案|文件)?|(?:thinking|analyzing|reasoning|generating|working|searching|browsing)(?: now|\\.\\.\\.)?)$/i;
+    const statusPattern = /^(?:正在(?:思考|分析|推理|生成|处理|搜索|浏览|读取|整理)(?:中|内容|回复|答案|文件)?|(?:thinking|analyzing|reasoning|generating|working|searching|browsing)(?: now|\.\.\.)?)$/i;
     for (const selector of selectors) {
       for (const node of [...document.querySelectorAll(selector)].slice(-12)) {
         if (!visible(node)) continue;
-        const text = String(node.innerText || node.textContent || "").replace(/\\s+/g, " ").trim();
+        const text = String(node.innerText || node.textContent || "").replace(/\s+/g, " ").trim();
         if (text.length > 0 && text.length <= 80 && statusPattern.test(text)) {
           return { text, kind: "working", source: "visible-chatgpt-ui-v196" };
         }
@@ -81,7 +81,8 @@
   }
 
   async function tick() {
-    const request = globalThis[REQUEST_KEY]?.active;
+    const request = globalThis.__CHAT2API_REQUEST_CONTENT_V6__?.active
+      || globalThis[REQUEST_KEY]?.active;
     const track = globalThis[STALL_KEY]?.track;
     const requestId = String(request?.requestId || "");
     if (!requestId || request?.cancelled) {
@@ -95,7 +96,13 @@
       state.heartbeatSequence = 0;
       state.lastEmitAt = 0;
     }
-    if (String(track?.requestId || "") !== requestId || !track?.sawGenerating || track?.failed) return;
+    // The v34 stall tracker may not see the redesigned page's Stop control.
+    // Bound this to the canonical request-v6 submission/network evidence.
+    const pageActive = Number(request?.submitStartedAt || 0) > 0
+      && (request?.networkStreamSeen === true || generationControlVisible());
+    const legacyActive = String(track?.requestId || "") === requestId
+      && track?.sawGenerating && !track?.failed;
+    if (!pageActive && !legacyActive) return;
     if (Date.now() - state.lastEmitAt < INTERVAL_MS) return;
 
     // This heartbeat is deliberately diagnostic-only. In v42 the changing
