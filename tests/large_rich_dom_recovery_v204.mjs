@@ -11,8 +11,8 @@ function scene({count=610,toolbarAt=count+1,oldCount=0}={}){
   const main={querySelectorAll:()=>blocks};
   const blocks=Array.from({length:count},(_,i)=>({
     id:"block-"+i,pos:i,tagName:i%23===0?"H2":i%11===0?"TABLE":i%7===0?"PRE":"P",
-    innerText:"经营计划和路线模型第"+i+"项，包含成本、人工工时和复修目标。".repeat(3),
-    textContent:"经营计划和路线模型第"+i+"项，包含成本、人工工时和复修目标。".repeat(3),
+    innerText:"经营计划和路线模型第"+i+"项，包含成本、人工工时和复修目标。".repeat(12),
+    textContent:"经营计划和路线模型第"+i+"项，包含成本、人工工时和复修目标。".repeat(12),
     classList:{contains:()=>false},
     closest(selector){return selector.includes("main")?main:null;},
     contains(other){return this===other;},
@@ -62,8 +62,8 @@ test("The 1600 structural scan limit remains a refusal, not a truncated success"
   assert.equal(scene({count:1601}).result,null);
 });
 test("The sole terminal owner still revalidates full rich text and 8s stability",()=>{
-  assert.match(source,/response_integrity_full_block_count: rendered\\.coverage\\.nodes\\.length/);
-  assert.match(source,/Date\\.now\\(\\) - abortedRenderedCandidateSince >= 8000/);
-  assert.match(source,/rich\\.captureFinalMarkdown\\(wrapper\\)/);
-  assert.match(source,/if \\(coverage\\.scan_overflow \\|\\| !coverage\\.nodes\\?\\.length\\) return null/);
+  assert.ok(source.includes("response_integrity_full_block_count: rendered.coverage.nodes.length"));
+  assert.ok(source.includes("Date.now() - abortedRenderedCandidateSince >= 8000"));
+  assert.ok(source.includes("rich.captureFinalMarkdown(wrapper)"));
+  assert.ok(source.includes("if (coverage.scan_overflow || !coverage.nodes?.length) return null"));
 });
