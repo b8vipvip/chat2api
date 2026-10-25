@@ -16,6 +16,7 @@ def test_first_12_tasks_have_different_real_world_topics():
         assert len(set(x["prompts"][0] for x in items)) == len(topics)
         assert all("PG-" not in x["prompts"][0] and "测试标识" not in x["prompts"][0] for x in items)
         assert len(build_case(scene, len(topics))["prompts"][0]) > 100
+        assert len({build_case(scene, i)["prompts"][0] for i in range(5 * len(topics))}) == 5 * len(topics)
 
 
 def test_claim_consumes_even_if_no_response_and_stays_after_restart():
