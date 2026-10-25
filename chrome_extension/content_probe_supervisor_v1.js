@@ -98,7 +98,7 @@
       scene_final_action_count: completed.length,
       scene_new_final_action_count: active?.baselineFinishActions instanceof Set
         ? completed.filter(node=>!active.baselineFinishActions.has(node)).length : 0,
-      scene_finish_after_all_blocks: Boolean(current && independent.length
+      scene_finish_after_all_blocks: Boolean(current
         && active?.baselineFinishActions instanceof Set
         && completed.some(button => !active.baselineFinishActions.has(button)
           && independent.concat([current]).every(node => node !== button
