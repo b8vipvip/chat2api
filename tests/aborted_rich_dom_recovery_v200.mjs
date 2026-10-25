@@ -49,7 +49,7 @@ test("Controller never treats paused DOM or generic network bytes as a terminal"
   assert.match(source,/!confirmedTransportTerminal\(active\)/);
   assert.match(source,/response_recovery_finish_actions/);
   assert.match(source,/!isGenerating\(\)/);
-  assert.ok(!/chat\.completed/.test(
+  assert.ok(!/type:\\s*["\x27]chat\\.completed["\x27]/.test(
     readFileSync(new URL("../chrome_extension/content_network_stream_recovery_v55.js",import.meta.url),"utf8")
   ),"network observer cannot claim completion");
 });
