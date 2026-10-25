@@ -983,6 +983,18 @@
     return [preservedProse, imageMarkdown].filter(Boolean).join("\n\n");
   }
 
+  function confirmedTransportTerminal(active) {
+    // request-v6 owns the ONLY outward completion. A provisional SSE end-turn
+    // or generic protocol-complete event alone may be followed by thousands
+    // of streamed bytes or a clone-reader abort. A clean EOF for that exact
+    // stream is the minimum network proof of terminal delivery.
+    return Boolean(Number(active.networkTerminalAt || 0) > 0
+      && Number(active.networkTerminalTransportDoneAt || 0) >= Number(active.networkTerminalAt || 0)
+      && String(active.networkTerminalTransportStreamId || "")
+        === String(active.networkTerminalStreamId || "")
+      && !Number(active.networkTerminalTransportErrorAt || 0));
+  }
+
   async function reconcileResponsesTerminal(active, networkText) {
     const raw = String(networkText || "");
     // A completed short assistant preamble can precede an extensive rendered
@@ -1337,6 +1349,7 @@
       // automatically a final text payload.
       const evidenceSettledAt = Math.max(networkTerminalAt, Number(active.networkObservedAt || 0));
       if (networkTerminalAt && networkTerminalText && !captureMedia
+          && confirmedTransportTerminal(active)
           && !internalToolPayload(networkTerminalText)
           && !(imageCreationRequested && isLocalImageBuildCommand(networkTerminalText))
           && !promptStillPresent(active)
@@ -1379,6 +1392,8 @@
             network_stream_chunks: Number(active.networkTerminalChunks || 0),
             network_stream_bytes: Number(active.networkTerminalBytes || 0),
             network_terminal_evidence_source: String(active.networkTerminalEvidenceSource || "stream-eof"),
+            network_transport_terminal_confirmed: true,
+            network_terminal_transport: "clean-same-stream-eof-v199",
             response_terminal_network_chars: networkTerminalText.length,
             response_terminal_final_chars: reconciled.text.length,
             response_format: "markdown",
@@ -1402,6 +1417,7 @@
       // No tool command, search JSON, prompt echo, or media-producing request
       // can satisfy this proof. request-v6 remains the sole terminal owner.
       if (networkTerminalAt && networkTerminalText && !captureMedia
+          && confirmedTransportTerminal(active)
           && !fileCreationRequested && !imageCreationRequested
           && ["verified-rendered-network-overlap-v189","verified-rendered-dom-baseline-v191"].includes(current.reason)
           && current.text.length >= 120 && !internalToolPayload(current.text)
@@ -1584,6 +1600,10 @@
       networkTerminalChunks: 0,
       networkTerminalBytes: 0,
       networkTerminalEvidenceSource: "",
+      networkTerminalTransportDoneAt: 0,
+      networkTerminalTransportStreamId: "",
+      networkTerminalTransportErrorAt: 0,
+      networkTerminalTransportErrorReason: "",
       networkStreamSeen: false,
       networkStreamEndedWithoutTerminalAt: 0,
     };
