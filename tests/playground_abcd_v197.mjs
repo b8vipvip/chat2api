@@ -4,11 +4,11 @@ import vm from "node:vm";
 import { test } from "node:test";
 
 const source=readFileSync(new URL("../app/admin_playground_abcd_v197.js",import.meta.url),"utf8");
-const FULL = "## 开店\\n" + "咖啡运营".repeat(900) + 
-  "\\n| 类别 | 数值 |\\n|---|---|\\n| A | 1 |\\n| 类别 | 数值 |\\n|---|---|\\n| B | 2 |" +
-  "\\n\\\\(100+200=300\\\\)\\n" + String.fromCharCode(96).repeat(3) +
-  "js\\nconsole.log(1)\\n" + String.fromCharCode(96).repeat(3) +
-  "\\n落地执行清单：指定负责人与期限。";
+const FULL = "## 开店\n" + "咖啡运营".repeat(900) + 
+  "\n| 类别 | 数值 |\n|---|---|\n| A | 1 |\n| 类别 | 数值 |\n|---|---|\n| B | 2 |" +
+  "\n\\(100+200=300\\)\n" + String.fromCharCode(96).repeat(3) +
+  "js\nconsole.log(1)\n" + String.fromCharCode(96).repeat(3) +
+  "\n落地执行清单：指定负责人与期限。";
 const IMG_LINK=i=>"![插画](https://api.test/api/media/med_1234567890/abc"+i+")";
 const FILE_LINK=(ext,i)=>"[📎 资料"+i+"."+ext+"](https://api.test/api/generated-files/gen_abc"+i+"/token"+i+")";
 const frames=(text,includeDone=true)=>
