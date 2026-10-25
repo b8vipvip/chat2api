@@ -26,6 +26,9 @@ def status_from_diagnostics(diagnostics: dict[str, Any] | None) -> dict[str, str
         return None
     text = " ".join(str(diagnostics.get("visible_reasoning_status") or "").split()).strip()
     kind = str(diagnostics.get("visible_reasoning_status_kind") or "working").lower()
+    # The page's native label is commonly 'thinking', not 'working'.
+    if kind in {"thinking", "generating", "analyzing"}:
+        kind = "working"
     if not text or len(text) > STATUS_LIMIT or _UNSAFE.search(text) or kind not in {"working", "reasoning"}:
         return None
     # A UI status is short and explicit. A longer summary is passed only when

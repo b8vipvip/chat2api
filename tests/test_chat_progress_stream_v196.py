@@ -15,6 +15,8 @@ def test_worker_status_is_not_assistant_answer():
         "visible_reasoning_status_kind": "working",
         "visible_reasoning_status": "正在分析",
     }
+    assert status_from_diagnostics({**diag, "visible_reasoning_status": "Thinking",
+                                    "visible_reasoning_status_kind": "thinking"})["kind"] == "working"
     assert status_from_diagnostics(diag) == {
         "text": "正在分析", "kind": "working", "source": "visible-chatgpt-ui-v196"
     }
@@ -70,7 +72,7 @@ def test_stream_status_keeps_final_content_separate_and_is_nonterminal():
     main = (ROOT / "app/main.py").read_text()
     broker = (ROOT / "app/broker.py").read_text()
     assert 'chunk_payload(response_id, model, {"chat2api_status":' in main
-    assert 'if observed["kind"] == "reasoning" and observed["text"] != last_reasoning_text:' in main
+    assert 'if observed["text"] != last_reasoning_text:' in main
     assert '"reasoning": preview' in main
     assert "for delta in final_text_chunks(final_text):" in main
     assert "yield \": chat2api-keepalive" in main

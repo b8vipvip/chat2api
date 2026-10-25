@@ -961,7 +961,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             delta = {"chat2api_status": {**observed, "active": True}}
                             # Only source-verified reasoning synopsis may enter
                             # the optional reasoning lane; a spinner never does.
-                            if observed["kind"] == "reasoning" and observed["text"] != last_reasoning_text:
+                            if observed["text"] != last_reasoning_text:
+                                # mv3c/OpenAI clients already render the independent
+                                # reasoning lane; the status is not assistant content.
+                                # It will be collapsed when final content arrives.
                                 delta["reasoning"] = observed["text"]
                                 last_reasoning_text = observed["text"]
                             yield "data: " + json.dumps(
