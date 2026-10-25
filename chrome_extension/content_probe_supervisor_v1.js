@@ -7,7 +7,9 @@
   if (globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__) return;
 
   const tools = ["media_delivery_v1", "conversation_dom_v1",
-    "network_evidence_v1", "model_tool_state_v1", "selector_compat_v1"];
+    "network_evidence_v1", "model_tool_state_v1", "selector_compat_v1",
+    "abcd_richtext_v1", "abcd_images_v1", "abcd_files_v1",
+    "abcd_context_v1", "response_boundary_v1"];
   const limits = {maxSnapshots: 8, thresholdMs: 20000};
   const delayByStage = {
     request_pre_submit: 0,
@@ -18,6 +20,110 @@
     progress_checkpoint: 0,
   };
   const allowedRoots = ["main", "[role='main']", "#thread", "[data-testid='conversation-turns']"];
+
+  function safeVisible(node) {
+    try {
+      const rect = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return rect.width > 0 && rect.height > 0 && style.display !== "none"
+        && style.visibility !== "hidden";
+    } catch (_) { return false; }
+  }
+
+  // Data-minimized scene evidence: only counters and lengths, never prompt
+  // contents, generated code, model text, file names, URLs or DOM markup.
+  function sceneFacts(active, scope) {
+    const blocks = [...scope.querySelectorAll(
+      "[data-message-content],.markdown,[class*='markdown'],[class*='prose'],pre,table,article,section"
+    )].slice(-280).filter(safeVisible);
+    const text = node => String(node.innerText || node.textContent || "").trim();
+    const lengths = blocks.map(node => text(node).length);
+    const baseline = active?.baselineRenderedText instanceof Map
+      ? active.baselineRenderedText : null;
+    const changed = baseline ? blocks.filter(node =>
+      baseline.get(node) !== text(node).replace(/\s+/g, " ").slice(-5000)) : [];
+    const candidates = changed.filter(node => !changed.some(other =>
+      other !== node && other.contains(node)));
+    const promptStart = String(active?.promptNormalized || "").slice(0, 100);
+    const promptEnd = String(active?.promptNormalized || "").slice(-100);
+    const independent = candidates.filter(node => {
+      const value = text(node);
+      return value.length >= 120 && !(promptStart && value.includes(promptStart))
+        && !(promptEnd && value.includes(promptEnd));
+    });
+    const current = active?.lastCandidateNode || null;
+    const uncovered = current && independent.length
+      ? independent.filter(node => node !== current && !current.contains(node)
+          && !node.contains(current)) : [];
+    const numbers = nodes => nodes.length;
+    const namedButtons = [...scope.querySelectorAll("button")].filter(safeVisible);
+    const completed = namedButtons.filter(node =>
+      /copy|复制|regenerate|重新生成|good response|bad response/i.test(
+        String(node.getAttribute("aria-label") || "")+" "+
+        String(node.getAttribute("data-testid") || "")));
+    const fileTags = {pdf:0,xlsx:0,pptx:0,zip:0,json:0};
+    for (const link of [...scope.querySelectorAll("a[download],a[href]")].slice(-200)) {
+      const name = String(link.getAttribute("download") || link.textContent || "")
+        .trim().toLowerCase().slice(-200);
+      for (const ext of Object.keys(fileTags)) {
+        if (new RegExp("\\."+ext+"(?:$|[\\s）)])").test(name)) fileTags[ext]++;
+      }
+    }
+    const stream = String(active?.networkObservedText || "");
+    const trailing = String(active?.networkTerminalText || "");
+    return {
+      scene_rich_block_count: blocks.length,
+      scene_changed_block_count: changed.length,
+      scene_independent_block_count: independent.length,
+      scene_uncovered_block_count: uncovered.length,
+      scene_uncovered_block_chars: uncovered.reduce((sum,node)=>sum+text(node).length,0),
+      scene_rich_max_chars: Math.max(0,...lengths),
+      scene_rich_total_chars: lengths.reduce((sum,n)=>sum+n,0),
+      scene_candidate_chars: Number(active?.lastCandidateTextLength || 0),
+      scene_capture_chars: String(active?.lastCapturedText || "").length,
+      scene_network_candidate_chars: stream.length,
+      scene_network_terminal_chars: trailing.length,
+      scene_network_transport_error: Boolean(active?.networkTerminalTransportErrorAt),
+      scene_network_clean_terminal: Boolean(active?.networkTerminalTransportDoneAt
+        && active?.networkTerminalAt
+        && active.networkTerminalTransportDoneAt >= active.networkTerminalAt),
+      scene_markdown_table_count: numbers(scope.querySelectorAll("table")),
+      scene_markdown_row_count: numbers(scope.querySelectorAll("table tr")),
+      scene_code_block_count: numbers(scope.querySelectorAll("pre")),
+      scene_inline_code_count: numbers(scope.querySelectorAll("code:not(pre code)")),
+      scene_math_node_count: numbers(scope.querySelectorAll(
+        "math,.katex,.katex-display,.MathJax,[data-testid*='math']")),
+      scene_heading_count: numbers(scope.querySelectorAll("h1,h2,h3,h4,h5,h6")),
+      scene_list_count: numbers(scope.querySelectorAll("ul,ol")),
+      scene_final_action_count: completed.length,
+      scene_new_final_action_count: active?.baselineFinishActions instanceof Set
+        ? completed.filter(node=>!active.baselineFinishActions.has(node)).length : 0,
+      scene_image_count: numbers(scope.querySelectorAll("img")),
+      scene_image_large_count: [...scope.querySelectorAll("img")].filter(node=>
+        safeVisible(node) && node.getBoundingClientRect().width>=96).length,
+      scene_picture_count: numbers(scope.querySelectorAll("picture")),
+      scene_canvas_count: numbers(scope.querySelectorAll("canvas")),
+      scene_file_card_count: numbers(scope.querySelectorAll(
+        "[data-testid*='file'],[data-testid*='attachment'],[data-testid*='download']")),
+      scene_file_input_count: numbers(scope.querySelectorAll("input[type='file']")),
+      scene_file_pdf_count: fileTags.pdf,
+      scene_file_xlsx_count: fileTags.xlsx,
+      scene_file_pptx_count: fileTags.pptx,
+      scene_file_zip_count: fileTags.zip,
+      scene_file_json_count: fileTags.json,
+      scene_context_turn_count: numbers(scope.querySelectorAll(
+        "[data-testid^='conversation-turn'],[data-message-id]")),
+      scene_context_user_role_count: numbers(scope.querySelectorAll(
+        "[data-message-author-role='user']")),
+      scene_context_assistant_role_count: numbers(scope.querySelectorAll(
+        "[data-message-author-role='assistant']")),
+      scene_context_request_has_user_anchor: Boolean(active?.baselineUserTurns),
+      scene_context_prior_assistants: Number(active?.baselineCount || 0),
+      scene_context_submit_confirmed: Boolean(active?.submitStartedAt),
+      scene_context_generation_active: Boolean(document.querySelector(
+        "button[data-testid='stop-button'],button[aria-label='Stop generating']")),
+    };
+  }
 
   function observerFacts(active = null) {
     const at = performance.now();
@@ -96,6 +202,7 @@
       "[style*='background-image'],[style*='background:']"
     )].slice(0, 120).length;
     return {
+      ...sceneFacts(active, scope),
       main_found: Boolean(root),
       main_selector: root ? (root.id === "thread" ? "#thread" : root.tagName.toLowerCase()) : null,
       assistant_turn_nodes: roleStats.assistant,
@@ -227,6 +334,19 @@
     if (typeof extra.handoff === "boolean") facts.media_handoff_observed = extra.handoff;
     if (typeof extra.newCandidates === "number") facts.new_image_candidate_count = extra.newCandidates;
     if (typeof extra.captured === "number") facts.image_transfer_successes = extra.captured;
+    if (stage === "before_terminal" && typeof extra.deliveredText === "string") {
+      const output = extra.deliveredText;
+      const lines = output.split(/\r?\n/);
+      facts.scene_delivered_chars = output.length;
+      facts.scene_delivered_table_rows = lines.filter(line => /^\s*\|.*\|\s*$/.test(line)).length;
+      facts.scene_delivered_code_fences = lines.filter(line => /^\s*`{3,}/.test(line)).length;
+      facts.scene_delivered_formula_markers = ["$", "\\[", "\\]", "\\(", "\\)"]
+        .reduce((sum, marker) => sum + output.split(marker).length - 1, 0);
+      facts.scene_delivered_heading_count = lines.filter(line => /^#{1,6}\s+/.test(line)).length;
+    }
+    // Scene evidence is sampled by the existing Worker tool supervisor. No
+    // extra request listeners or terminal owners are introduced.
+    if (active?.lastCandidateNode?.isConnected === false) active.lastCandidateNode = null;
     let classification = "baseline";
     if (stage === "before_terminal") classification = extra.completed
       ? "completed_observed" : "request_error_observed";

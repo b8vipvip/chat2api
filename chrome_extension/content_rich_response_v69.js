@@ -444,11 +444,29 @@
       const href = safeUrl(node.getAttribute("href") || "");
       return href ? `[${label}](${href})` : label;
     }
+    // ChatGPT can render multiline code without <pre>; do not flatten it into inline backticks.
     if (tag === "code" && node.parentElement?.tagName?.toLowerCase() !== "pre") {
-      const text = normalizeInline(node.textContent || "").trim();
+      const text = String(node.textContent || "").replace(/\r\n?/g, "\n").trim();
       if (!text) return "";
+      if (text.includes("\n")) {
+        const language = languageOf(node) || languageOf(node.parentElement);
+        const ticks = "`".repeat(Math.max(3, ...[...text.matchAll(/`+/g)].map(hit => hit[0].length + 1)));
+        return "\n\n" + ticks + language + "\n" + text + "\n" + ticks + "\n\n";
+      }
       const fence = text.includes("`") ? "``" : "`";
-      return `${fence}${text}${fence}`;
+      return fence + text + fence;
+    }
+    // Recover original LaTeX annotation when MathML or KaTeX is rendered.
+    if (tag === "math" || node.classList?.contains("katex")
+        || node.classList?.contains("katex-display")) {
+      const annotation = node.querySelector?.('annotation[encoding="application/x-tex"]');
+      const tex = String(annotation?.textContent
+        || node.getAttribute?.("data-tex") || node.getAttribute?.("data-latex") || "").trim();
+      if (tex) {
+        const display = node.classList?.contains("katex-display")
+          || node.getAttribute?.("display") === "block";
+        return display ? "\n\n\\[" + tex + "\\]\n\n" : "\\(" + tex + "\\)";
+      }
     }
     if (["strong", "b"].includes(tag)) {
       const text = inlineChildren(node).trim();

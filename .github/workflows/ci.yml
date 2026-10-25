@@ -209,12 +209,18 @@ jobs:
         run: node --test tests/verified_transport_terminal_v199.mjs
       - name: TX03 aborted SSE rich DOM recovery regression
         run: node --test tests/aborted_rich_dom_recovery_v200.mjs
+      - name: ABCD multi-block response boundary and integrity VM regression
+        run: node --test tests/abcd_response_boundary_v201.mjs
+      - name: ABCD rich-text code and math serialization VM
+        run: node --test tests/rich_code_math_v201.mjs
 
       - name: Worker probe observer regression
         run: node tests/worker_probe_supervisor_v1.mjs
 
       - name: Worker P1 evidence regression
         run: node tests/worker_probe_p1_evidence.mjs
+      - name: ABCD scene evidence probes VM privacy and budget
+        run: node --test tests/worker_probe_abcd_v201.mjs
 
       - name: FDEX request history regression
         run: pytest -q tests/test_fdex_request_integrity_v155.py --timeout=120

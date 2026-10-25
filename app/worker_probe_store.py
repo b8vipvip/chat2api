@@ -30,8 +30,18 @@ TOOL_CATALOG = (
      "phase": "P1", "platforms": ["linux", "win"], "triggers": ["request_pre_submit", "unresolved_after_threshold", "before_terminal"]},
     {"id": "selector_compat_v1", "name": "页面改版兼容探针", "version": "1.0.0",
      "phase": "P1", "platforms": ["linux", "win"], "triggers": ["request_pre_submit", "unresolved_after_threshold", "before_terminal"]},
+    {"id": "abcd_richtext_v1", "name": "A 组富文本/表格/代码/公式证据", "version": "1.0.0",
+     "phase": "P2", "platforms": ["linux", "win"], "triggers": ["request_pre_submit", "unresolved_after_threshold", "before_terminal"]},
+    {"id": "abcd_images_v1", "name": "B 组多图片生成与交付证据", "version": "1.0.0",
+     "phase": "P2", "platforms": ["linux", "win"], "triggers": ["request_pre_submit", "media_handoff", "before_terminal"]},
+    {"id": "abcd_files_v1", "name": "C 组多文件类型与下载证据", "version": "1.0.0",
+     "phase": "P2", "platforms": ["linux", "win"], "triggers": ["request_pre_submit", "media_handoff", "before_terminal"]},
+    {"id": "abcd_context_v1", "name": "D 组上下文/回合关联证据", "version": "1.0.0",
+     "phase": "P2", "platforms": ["linux", "win"], "triggers": ["request_pre_submit", "unresolved_after_threshold", "before_terminal"]},
+    {"id": "response_boundary_v1", "name": "回复正文选区完整性与终态证据", "version": "1.0.0",
+     "phase": "P2", "platforms": ["linux", "win"], "triggers": ["request_pre_submit", "progress_checkpoint", "before_terminal"]},
 )
-ACTIVE_TOOLS = frozenset(item["id"] for item in TOOL_CATALOG if item["phase"] in {"P0", "P1"})
+ACTIVE_TOOLS = frozenset(item["id"] for item in TOOL_CATALOG if item["phase"] in {"P0", "P1", "P2"})
 STAGES = frozenset(["request_pre_submit", "request_submitted", "media_handoff",
                     "unresolved_after_threshold", "progress_checkpoint", "before_terminal", "manual_capture"])
 ID_RE = re.compile(r"^(?:req|imgreq|resp|probe)[_-][a-zA-Z0-9_-]{6,100}$")
@@ -58,6 +68,24 @@ ALLOWED_FACTS = frozenset([
     "tool_selector_count", "file_upload_selector_count",
     "image_editor_count", "selector_composer_count",
     "selector_send_button_count", "selector_stop_button_count",
+    "scene_rich_block_count", "scene_changed_block_count", "scene_independent_block_count",
+    "scene_uncovered_block_count", "scene_uncovered_block_chars",
+    "scene_rich_max_chars", "scene_rich_total_chars", "scene_candidate_chars",
+    "scene_capture_chars", "scene_network_candidate_chars", "scene_network_terminal_chars",
+    "scene_network_transport_error", "scene_network_clean_terminal",
+    "scene_markdown_table_count", "scene_markdown_row_count", "scene_code_block_count",
+    "scene_inline_code_count", "scene_math_node_count", "scene_heading_count",
+    "scene_list_count", "scene_final_action_count", "scene_new_final_action_count",
+    "scene_image_count", "scene_image_large_count", "scene_picture_count",
+    "scene_canvas_count", "scene_file_card_count", "scene_file_input_count",
+    "scene_file_pdf_count", "scene_file_xlsx_count", "scene_file_pptx_count",
+    "scene_file_zip_count", "scene_file_json_count",
+    "scene_context_turn_count", "scene_context_user_role_count",
+    "scene_context_assistant_role_count", "scene_context_request_has_user_anchor",
+    "scene_context_prior_assistants", "scene_context_submit_confirmed",
+    "scene_context_generation_active",
+    "scene_delivered_chars", "scene_delivered_table_rows", "scene_delivered_code_fences",
+    "scene_delivered_formula_markers", "scene_delivered_heading_count",
 ])
 ALLOWED_CLASSIFICATIONS = frozenset([
     "baseline", "no_assistant_turn", "handoff_without_visible_media",
@@ -67,7 +95,7 @@ ALLOWED_CLASSIFICATIONS = frozenset([
 ])
 MAX_EVENTS_PER_REQUEST = 32
 MAX_JSON_BYTES = 12_000
-MAX_FACTS = 80
+MAX_FACTS = 160
 
 
 def _safe_id(value: Any) -> str:
@@ -316,6 +344,11 @@ class WorkerProbeStore:
             "network_evidence_v1": "network-evidence",
             "model_tool_state_v1": "model-tool-state",
             "selector_compat_v1": "selector-compat",
+            "abcd_richtext_v1": "abcd-a-richtext",
+            "abcd_images_v1": "abcd-b-images",
+            "abcd_files_v1": "abcd-c-files",
+            "abcd_context_v1": "abcd-d-context",
+            "response_boundary_v1": "response-boundary",
         }
         for tool, name in tool_files.items():
             items = [event for event in events if event["tool_id"] == tool]

@@ -264,6 +264,7 @@
         await globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.capture?.(
           state.active, "before_terminal", {
             completed: event.type === "chat.completed",
+            deliveredText: event.type === "chat.completed" ? String(event.text || "") : "",
             captured: Number(state.active.mediaCaptureLastInlined || 0)
               + Number(state.active.mediaCaptureLastEmbedded || 0),
           });
@@ -376,6 +377,53 @@
     active.baselineFinishActions = new Set(responseFinishActions());
   }
 
+  // A redesigned reply can render one Markdown/code/table component per
+  // sibling. A stable code cell is not a stable *answer*. Audit all independently
+  // changed structural content before accepting any partial DOM selection.
+  function renderedResponseBoundaryEvidence(active, candidate) {
+    const scope = candidate?.closest?.("main,[role='main'],#thread");
+    const baseline = active?.baselineRenderedText;
+    if (!scope || !baseline || !candidate) return {
+      independent_count: 0, independent_chars: 0, max_independent_chars: 0,
+      candidate_chars: 0, complete_scope: false,
+    };
+    const promptStart = String(active.promptNormalized || "").slice(0, 100);
+    const promptEnd = String(active.promptNormalized || "").slice(-100);
+    const selectors = [
+      "[data-message-content]", ".markdown", "[class*='markdown']",
+      "[class*='prose']", "pre", "table", "article", "section",
+      "p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "math", ".katex-display",
+    ].join(",");
+    const changed = [...scope.querySelectorAll(selectors)].slice(-420)
+      .filter(node => {
+        if (!visible(node) || candidate.contains(node) || node.contains(candidate)
+            || node.closest?.("nav,aside,header,footer,form,[role='dialog'],[contenteditable='true']"))
+          return false;
+        const text = normalize(node.innerText || node.textContent || "");
+        if (text.length < 120 || text.length > 85000 || transientText(text)
+            || (promptStart && text.includes(promptStart))
+            || (promptEnd && text.includes(promptEnd))) return false;
+        const old = baseline.get(node);
+        return old === undefined || old !== text.slice(-5000);
+      });
+    // Do not count ancestor and descendant wrappers twice.
+    const independent = changed.filter(node => !changed.some(other => other !== node && other.contains(node)));
+    const sizes = independent.map(node => normalize(node.innerText || node.textContent || "").length);
+    const candidateChars = normalize(candidate.innerText || candidate.textContent || "").length;
+    const all = [candidate, ...independent].filter(node => ![candidate,...independent]
+      .some(other => other !== node && other.contains(node)));
+    all.sort((left,right) => left === right ? 0
+      : left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+    return {
+      nodes: all.slice(0, 160),
+      independent_count: independent.length,
+      independent_chars: sizes.reduce((sum, n) => sum + n, 0),
+      max_independent_chars: Math.max(0, ...sizes),
+      candidate_chars: candidateChars,
+      complete_scope: independent.length === 0,
+    };
+  }
+
   // Only request-v6 consumes the evidence below. The SSE observer and DOM
   // selector never emit terminal events or decide status. A fresh answer toolbar
   // in the original routed tab is positive UI completion proof, unlike simply
@@ -399,8 +447,13 @@
     const start = String(active.promptNormalized || "").slice(0, 110);
     const end = String(active.promptNormalized || "").slice(-120);
     if ((start && text.includes(start)) || (end && text.includes(end))) return null;
+    const coverage = renderedResponseBoundaryEvidence(active, current.latest);
+    // A finished toolbar next to one Python cell is not proof that the reply
+    // ends at this cell. Preserve all independently changed same-request blocks
+    // and let the sole controller evaluate their serialized union instead.
+    if (!coverage.nodes?.length || coverage.nodes.length > 155) return null;
     return {node: current.latest, text, reason: current.reason,
-      finishActionCount: fresh.length};
+      finishActionCount: fresh.length, coverage};
   }
 
   function renderedNetworkCorrelatedTurn(active) {
@@ -1168,6 +1221,8 @@
       const error = pageError();
       if (error && responseStarted) throw new Error(`ChatGPT response UI error: ${error}`);
       const current = currentAssistantState(active);
+      active.lastCandidateNode = current.isNew ? current.latest : null;
+      active.lastCandidateTextLength = current.isNew ? current.text.length : 0;
       const generating = isGenerating();
       const networkText = String(active.networkObservedText || "");
       const networkTerminalText = String(active.networkTerminalText || "");
@@ -1518,9 +1573,21 @@
         const rendered = verifiedRenderedAbortCandidate(active, current);
         if (rendered) {
           try {
-            const capture = await finalNodeText(rendered.node);
-            const finalText = String(capture?.text || rendered.text || "").trim();
-            if (finalText.length >= 240 && !internalToolPayload(finalText)
+            // Serialize the entire changed reply surface, not just the largest
+            // child. The v200 TX03 case selected only a Python block while
+            // preceding tables, narrative, formulas and task list were siblings.
+            const parts = rendered.coverage.nodes;
+            const wrapper = document.createElement("div");
+            wrapper.setAttribute("class", "markdown");
+            for (const part of parts) wrapper.appendChild(part.cloneNode(true));
+            const capture = typeof rich?.captureFinalMarkdown === "function"
+              ? await rich.captureFinalMarkdown(wrapper) : {text:""};
+            const finalText = String(capture?.text || "").trim();
+            const completePartSet = parts.every(part => part.isConnected
+              && visible(part) && !promptStillPresent(active));
+            if (completePartSet && finalText.length >= 240
+                && finalText.length >= rendered.text.length * 0.85
+                && !internalToolPayload(finalText)
                 && !promptStillPresent(active) && !isGenerating()) {
               if (finalText !== abortedRenderedCandidate) {
                 abortedRenderedCandidate = finalText;
@@ -1541,6 +1608,11 @@
                     response_terminal_final_chars: finalText.length,
                     response_terminal_stable_ms: Date.now() - abortedRenderedCandidateSince,
                     response_finish_action_count: rendered.finishActionCount,
+                    response_integrity_scope: "all-new-structural-blocks-serialized-v201",
+                    response_integrity_candidate_chars: rendered.coverage.candidate_chars,
+                    response_integrity_uncovered_blocks: rendered.coverage.independent_count,
+                    response_integrity_merged_blocks: parts.length,
+                    response_integrity_merged_final_chars: finalText.length,
                     network_transport_terminal_confirmed: false,
                     network_transport_error: String(active.networkTerminalTransportErrorReason || ""),
                     response_format: "markdown",
@@ -1563,6 +1635,10 @@
             response_recovery_candidate_chars: String(current.text || "").length,
             response_recovery_finish_actions: responseFinishActions()
               .filter(button => !active.baselineFinishActions.has(button)).length,
+            response_recovery_uncovered_blocks: current.latest
+              ? renderedResponseBoundaryEvidence(active, current.latest).independent_count : null,
+            response_recovery_uncovered_chars: current.latest
+              ? renderedResponseBoundaryEvidence(active, current.latest).independent_chars : null,
             response_recovery_stable_ms: abortedRenderedCandidateSince
               ? Date.now() - abortedRenderedCandidateSince : 0,
             response_recovery_network_quiet_ms: Date.now() - active.networkObservedAt,

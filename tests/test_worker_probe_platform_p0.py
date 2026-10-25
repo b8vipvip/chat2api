@@ -229,7 +229,7 @@ def test_p1_network_model_and_selector_probe_exports_are_sanitized(tmp_path: Pat
 
 def test_p1_fact_schema_and_event_bound_are_documented(tmp_path: Path) -> None:
     store = WorkerProbeStore(tmp_path)
-    assert len(store.catalog()) == 5
+    assert len(store.catalog()) == 10  # five P0/P1 + five opt-in ABCD/response-integrity probes
     assert all(item["available"] for item in store.catalog())
     source = (Path(__file__).resolve().parents[1] /
               "chrome_extension/content_probe_supervisor_v1.js").read_text(encoding="utf-8")
