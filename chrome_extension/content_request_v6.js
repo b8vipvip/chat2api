@@ -1526,8 +1526,18 @@
     else await emit({ type: "chat.error", request_id: active.requestId, error: imageBuildArtifactObserved
       ? "ChatGPT returned an image-building command, but no verified transferable image was captured"
       : imageHandoffObserved ? "ChatGPT generated media or image-tool arguments but no transferable image was captured before the request timeout"
-      : "Timed out waiting for ChatGPT response", diagnostics: {
+      : Number(active.networkTerminalTransportErrorAt || 0) > 0
+        ? "ChatGPT network transport ended without a verifiable final answer: "
+          + String(active.networkTerminalTransportErrorReason || "stream-incomplete")
+        : active.networkTerminalAt && !confirmedTransportTerminal(active)
+          ? "ChatGPT emitted a provisional end-turn, but the network stream never ended cleanly"
+          : "Timed out waiting for ChatGPT response", diagnostics: {
         response_epoch_revision: 69,
+        network_terminal_completion_guard: "clean-same-stream-eof-v199",
+        network_terminal_provisional: Boolean(active.networkTerminalAt),
+        network_transport_terminal_confirmed: confirmedTransportTerminal(active),
+        network_terminal_transport_error: String(active.networkTerminalTransportErrorReason || ""),
+        network_terminal_transport_error_at: Number(active.networkTerminalTransportErrorAt || 0),
         media_local_build_command_observed: imageBuildArtifactObserved,
         media_image_creation_requested: imageCreationRequested,
         media_baseline_key_count: Number(active.baselinePageMedia?.keys?.size || 0),
