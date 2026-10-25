@@ -87,7 +87,7 @@ function scenario(id, outputs) {
 
 test("A: real SSE terminal and full-length report is accepted",async()=>{
   const r=await scenario("A",[FULL]).run();
-  assert.match(r.status,/验收通过/);
+  assert.match(r.status,/协议和上游终态已证实/);
   assert.equal(r.requests.length,1);
   assert.equal(r.requests[0].body.stream,true);
   assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"passed");
@@ -100,17 +100,17 @@ test("Incomplete SSE without [DONE] must fail even with full content",async()=>{
 });
 test("B: three distinct image files are fetched",async()=>{
   const r=await scenario("B",[IMG_LINK(1)+"\n"+IMG_LINK(2)+"\n"+IMG_LINK(3)]).run();
-  assert.match(r.status,/验收通过/);
+  assert.match(r.status,/协议和上游终态已证实/);
   assert.equal(r.downloads.length,3);
 });
 test("C: XLSX PPTX JSON ZIP links require real file downloads",async()=>{
   const r=await scenario("C",[["xlsx","pptx","json","zip"].map(FILE_LINK).join("\n")]).run();
-  assert.match(r.status,/验收通过/);
+  assert.match(r.status,/协议和上游终态已证实/);
   assert.equal(r.downloads.length,4);
 });
 test("D: second turn keeps prior messages",async()=>{
   const r=await scenario("D",[FILE_LINK("md",0)+"\n"+"新主题D0".repeat(200),"新主题D0的剧情延续".repeat(120)]).run();
-  assert.match(r.status,/验收通过/);
+  assert.match(r.status,/协议和上游终态已证实/);
   assert.equal(r.requests.length,2);
   assert.equal(r.requests[1].body.messages.length,3);
   assert.equal(r.records.filter(x=>x.kind==="terminal").length,2);
