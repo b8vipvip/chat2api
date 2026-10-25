@@ -402,6 +402,21 @@
     if (!session) return;
     if (handoff && !session.handoffReported) capture(active, "media_handoff",
       {handoff, generating, newCandidates, captured});
+    // Ten enabled ABCD tools exhaust the 32-event budget after just three
+    // snapshots. Reserve the last for request-v6's terminal decision and
+    // move the middle snapshot close to the configured deadline instead of
+    // spending it on a misleading 20-second page that is still generating.
+    if (session.cap <= 3) {
+      const effectiveTimeoutMs = Math.max(60000,
+        Number(active?.options?.timeout_seconds || 300) * 1000);
+      const checkpointAt = Math.max(30000, effectiveTimeoutMs - 45000);
+      if (!session.thresholdReported && Date.now() - session.started_at >= checkpointAt) {
+        session.thresholdReported = true;
+        capture(active, "progress_checkpoint",
+          {handoff, generating, newCandidates, captured});
+      }
+      return;
+    }
     if (!session.thresholdReported && Date.now() - session.started_at >= session.threshold)
       capture(active, "unresolved_after_threshold",
         {handoff, generating, newCandidates, captured});

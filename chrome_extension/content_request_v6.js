@@ -428,7 +428,7 @@
     all.sort((left,right) => left === right ? 0
       : left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
     return {
-      nodes: scanOverflow ? [] : all.slice(0, 160),
+      nodes: scanOverflow ? [] : all,
       scan_overflow: scanOverflow,
       scan_structural_node_count: structuralNodes.length,
       independent_count: independent.length,
@@ -466,7 +466,7 @@
     // A finished toolbar next to one Python cell is not proof that the reply
     // ends at this cell. Preserve all independently changed same-request blocks
     // and let the sole controller evaluate their serialized union instead.
-    if (coverage.scan_overflow || !coverage.nodes?.length || coverage.nodes.length > 155) return null;
+    if (coverage.scan_overflow || !coverage.nodes?.length) return null;
     // The completion toolbar must follow *every* independently changed
     // response block. A copy action after a Python cell is not proof that
     // later tables, math or the execution checklist have finished rendering.
@@ -1233,6 +1233,7 @@
     let verifiedRenderedCandidateSince = 0;
     let abortedRenderedCandidate = "";
     let abortedRenderedCandidateSince = 0;
+    let lastAbortedRenderedCaptureAt = 0;
     const imageCreationRequested = isImageCreationRequest(active.prompt);
     const fileCreationRequested = isFileCreationRequest(active.prompt);
 
@@ -1592,7 +1593,8 @@
           && active.networkObservedAt && Date.now() - active.networkObservedAt >= 10000
           && !generating) {
         const rendered = verifiedRenderedAbortCandidate(active, current);
-        if (rendered) {
+        if (rendered && Date.now() - lastAbortedRenderedCaptureAt >= 750) {
+          lastAbortedRenderedCaptureAt = Date.now();
           try {
             // Serialize the entire changed reply surface, not just the largest
             // child. The v200 TX03 case selected only a Python block while
@@ -1634,6 +1636,7 @@
                     response_integrity_candidate_chars: rendered.coverage.candidate_chars,
                     response_integrity_uncovered_blocks: rendered.coverage.independent_count,
                     response_integrity_merged_blocks: parts.length,
+                    response_integrity_full_block_count: rendered.coverage.nodes.length,
                     response_integrity_structural_scan_nodes: rendered.coverage.scan_structural_node_count,
                     response_integrity_scan_overflow: false,
                     response_integrity_merged_final_chars: finalText.length,
@@ -1650,7 +1653,7 @@
             abortedRenderedCandidate = "";
             abortedRenderedCandidateSince = 0;
           }
-        } else { abortedRenderedCandidate = ""; abortedRenderedCandidateSince = 0; }
+        } else if (!rendered) { abortedRenderedCandidate = ""; abortedRenderedCandidateSince = 0; }
         if (!active.abortRecoveryReportedAt || Date.now() - active.abortRecoveryReportedAt >= 20000) {
           active.abortRecoveryReportedAt = Date.now();
           await diagnostic(active, "aborted-sse-dom-recovery", {
@@ -1659,6 +1662,8 @@
             response_recovery_candidate_chars: String(current.text || "").length,
             response_recovery_finish_actions: responseFinishActions()
               .filter(button => !active.baselineFinishActions.has(button)).length,
+            response_recovery_mergeable_blocks: current.latest
+              ? renderedResponseBoundaryEvidence(active, current.latest).nodes.length : null,
             response_recovery_uncovered_blocks: current.latest
               ? renderedResponseBoundaryEvidence(active, current.latest).independent_count : null,
             response_recovery_uncovered_chars: current.latest
