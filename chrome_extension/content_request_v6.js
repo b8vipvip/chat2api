@@ -351,11 +351,55 @@
     "main article", "main section", "main div",
   ].join(",");
 
+  const COMPLETED_RESPONSE_ACTIONS = [
+    "main button[data-testid*='copy']",
+    "main button[data-testid*='thumb']",
+    "main button[aria-label*='Copy']",
+    "main button[aria-label*='复制']",
+    "main button[aria-label*='Good response']",
+    "main button[aria-label*='Bad response']",
+    "main button[aria-label*='Regenerate']",
+    "main button[aria-label*='重新生成']",
+    "main button[aria-label*='Try again']",
+  ].join(",");
+
+  function responseFinishActions() {
+    return [...document.querySelectorAll(COMPLETED_RESPONSE_ACTIONS)].filter(node =>
+      visible(node) && !node.closest?.("nav,aside,header,footer,form,[role='dialog']"));
+  }
+
   function captureRenderedBaseline(active) {
     const candidates = [...document.querySelectorAll(RENDERED_ASSISTANT_SELECTORS)].slice(-220);
     active.baselineRenderedText = new Map(candidates
       .filter(visible)
       .map(node => [node, normalize(node.innerText || node.textContent || "").slice(-5000)]));
+    active.baselineFinishActions = new Set(responseFinishActions());
+  }
+
+  // Only request-v6 consumes the evidence below. The SSE observer and DOM
+  // selector never emit terminal events or decide status. A fresh answer toolbar
+  // in the original routed tab is positive UI completion proof, unlike simply
+  // losing a Stop button or pausing between paragraphs.
+  function verifiedRenderedAbortCandidate(active, current) {
+    if (!active.networkStreamSeen || !active.submitStartedAt
+        || !active.networkObservedAt || active.networkObservedAt < active.submitStartedAt
+        || !Number(active.networkTerminalTransportErrorAt || 0)
+        || !Number(active.networkStreamEndedWithoutTerminalAt || 0)
+        || !active.baselineRenderedText || !active.baselineFinishActions
+        || !current?.isNew || !current.latest
+        || !["verified-rendered-network-overlap-v189",
+              "verified-rendered-dom-baseline-v191",
+              "after-current-user-turn"].includes(current.reason)
+        || String(current.text || "").length < 240
+        || internalToolPayload(current.text) || promptStillPresent(active)) return null;
+    const fresh = responseFinishActions().filter(button => !active.baselineFinishActions.has(button));
+    if (!fresh.length) return null;
+    const text = String(current.text || "");
+    const start = String(active.promptNormalized || "").slice(0, 110);
+    const end = String(active.promptNormalized || "").slice(-120);
+    if ((start && text.includes(start)) || (end && text.includes(end))) return null;
+    return {node: current.latest, text, reason: current.reason,
+      finishActionCount: fresh.length};
   }
 
   function renderedNetworkCorrelatedTurn(active) {
@@ -1112,6 +1156,8 @@
     let imageBuildArtifactObserved = false;
     let verifiedRenderedCandidate = "";
     let verifiedRenderedCandidateSince = 0;
+    let abortedRenderedCandidate = "";
+    let abortedRenderedCandidateSince = 0;
     const imageCreationRequested = isImageCreationRequest(active.prompt);
     const fileCreationRequested = isFileCreationRequest(active.prompt);
 
@@ -1455,6 +1501,77 @@
         verifiedRenderedCandidateSince = 0;
       }
 
+      // v200: Chrome can abort an SSE response clone after ChatGPT has rendered
+      // the actual final answer. The observer has no completion authority and
+      // the aborted transport is NOT a successful network terminal. Permit only
+      // a positively completed same-request DOM answer: changed since the
+      // pre-submit baseline, new answer toolbar, quiet network, no Stop button,
+      // and an independently stable rich-text capture. The request-v6 controller
+      // remains the one and only owner of chat.completed/chat.error.
+      if (!captureMedia && !fileCreationRequested && !imageCreationRequested
+          && !confirmedTransportTerminal(active)
+          && active.networkTerminalTransportErrorAt
+          && Date.now() - active.networkTerminalTransportErrorAt >= 5000
+          && active.networkObservedAt && Date.now() - active.networkObservedAt >= 10000
+          && !generating) {
+        const rendered = verifiedRenderedAbortCandidate(active, current);
+        if (rendered) {
+          try {
+            const capture = await finalNodeText(rendered.node);
+            const finalText = String(capture?.text || rendered.text || "").trim();
+            if (finalText.length >= 240 && !internalToolPayload(finalText)
+                && !promptStillPresent(active) && !isGenerating()) {
+              if (finalText !== abortedRenderedCandidate) {
+                abortedRenderedCandidate = finalText;
+                abortedRenderedCandidateSince = Date.now();
+              } else if (Date.now() - abortedRenderedCandidateSince >= 8000
+                  && Date.now() - Number(active.networkObservedAt || 0) >= 12000
+                  && responseFinishActions().some(button => !active.baselineFinishActions.has(button))) {
+                responseStarted = await ensureResponseStarted(active, responseStarted,
+                  "verified-aborted-stream-rendered-dom-v200");
+                await emit({
+                  type: "chat.completed", request_id: active.requestId, text: finalText,
+                  diagnostics: {
+                    response_terminal_source: "verified-aborted-stream-rendered-dom-v200",
+                    response_terminal_dom_reconciled: true,
+                    response_integrity_evidence: "fresh-rendered-baseline+new-finish-action+8s-stable+aborted-sse",
+                    response_epoch_candidate_reason: rendered.reason,
+                    response_terminal_final_chars: finalText.length,
+                    response_terminal_stable_ms: Date.now() - abortedRenderedCandidateSince,
+                    response_finish_action_count: rendered.finishActionCount,
+                    network_transport_terminal_confirmed: false,
+                    network_transport_error: String(active.networkTerminalTransportErrorReason || ""),
+                    response_format: "markdown",
+                  },
+                });
+                active.completed = true;
+                return;
+              }
+            } else { abortedRenderedCandidate = ""; abortedRenderedCandidateSince = 0; }
+          } catch (_) {
+            abortedRenderedCandidate = "";
+            abortedRenderedCandidateSince = 0;
+          }
+        } else { abortedRenderedCandidate = ""; abortedRenderedCandidateSince = 0; }
+        if (!active.abortRecoveryReportedAt || Date.now() - active.abortRecoveryReportedAt >= 20000) {
+          active.abortRecoveryReportedAt = Date.now();
+          await diagnostic(active, "aborted-sse-dom-recovery", {
+            response_recovery_revision: 200,
+            response_recovery_candidate_reason: current.reason,
+            response_recovery_candidate_chars: String(current.text || "").length,
+            response_recovery_finish_actions: responseFinishActions()
+              .filter(button => !active.baselineFinishActions.has(button)).length,
+            response_recovery_stable_ms: abortedRenderedCandidateSince
+              ? Date.now() - abortedRenderedCandidateSince : 0,
+            response_recovery_network_quiet_ms: Date.now() - active.networkObservedAt,
+            network_stream_error: String(active.networkTerminalTransportErrorReason || ""),
+          });
+        }
+      } else {
+        abortedRenderedCandidate = "";
+        abortedRenderedCandidateSince = 0;
+      }
+
       // A DOM pause or a missing Stop button cannot override an observed SSE
       // response that has not reached a verified assistant terminal.
       if (active.networkStreamEndedWithoutTerminalAt && !networkTerminalAt && !captureMedia
@@ -1614,6 +1731,7 @@
       networkTerminalTransportStreamId: "",
       networkTerminalTransportErrorAt: 0,
       networkTerminalTransportErrorReason: "",
+      baselineFinishActions: null,
       networkStreamSeen: false,
       networkStreamEndedWithoutTerminalAt: 0,
     };
