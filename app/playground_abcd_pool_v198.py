@@ -171,7 +171,17 @@ class OneShotPool:
 def install_playground_abcd_pool(app: FastAPI) -> None:
     if getattr(app.state,"playground_abcd_one_shot_installed",False):
         return
-    data_dir = app.state.settings.data_dir
+    settings = getattr(app.state, "settings", None)
+    if settings is not None:
+        data_dir = settings.data_dir
+    else:
+        # Thin FastAPI integration tests mount TestRunStore without Settings.
+        # Share its exact persistent test data root; never write to a global
+        # working-directory database or relax production authentication.
+        test_run_store = getattr(app.state, "test_runs", None)
+        if test_run_store is None or not getattr(test_run_store, "path", None):
+            raise RuntimeError("ABCD prompt pool requires Settings or TestRunStore data path")
+        data_dir = test_run_store.path.parent
     pool = OneShotPool(data_dir)
     app.state.playground_abcd_one_shot_pool = pool
     app.state.playground_abcd_one_shot_installed = True
@@ -181,7 +191,7 @@ def install_playground_abcd_pool(app: FastAPI) -> None:
         provided = str(x_api_key or "").strip()
         if authorization and authorization.lower().startswith("bearer "):
             provided = authorization[7:].strip()
-        expected = str(app.state.settings.api_key or "")
+        expected = str(getattr(getattr(app.state, "settings", None), "api_key", "") or "")
         if not expected or not secrets.compare_digest(provided, expected):
             raise HTTPException(status_code=401, detail="Administrator API key required")
 
