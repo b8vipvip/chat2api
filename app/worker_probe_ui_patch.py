@@ -20,6 +20,7 @@ PANEL = r'''
       <label for="workerToolsScope">策略范围</label>
       <select id="workerToolsScope"><option value="global">全局默认</option></select>
       <button class="action" id="workerToolsReload">刷新配置</button>
+      <button class="action" id="workerToolsEnableAbcd">勾选 ABCD 全部证据探针</button>
       <button class="action good" id="workerToolsSave">保存策略</button>
       <span class="muted" id="workerToolsRevision"></span>
     </div>
@@ -32,7 +33,7 @@ PANEL = r'''
   </div>
   <div class="panel" style="margin-top:12px">
     <h3>Worker 有效配置</h3>
-    <p class="muted">单 Worker 可继承全局策略或显式开启/关闭。配置变更只对新请求生效；已运行的请求不受影响。</p>
+    <p class="muted">单 Worker 可继承全局策略或显式开启/关闭。勾选全部证据探针只会修改当前页面的选项，必须点击“保存策略”才生效。建议选择 TX03 的目标 Worker 而不是全局。配置仅影响新请求；单个请求最多 32 条探针事件，事件数达到上限时依然保留终态前证据。</p>
     <div class="scroll"><table><thead>
       <tr><th>工具</th><th>阶段</th><th>配置</th></tr>
     </thead><tbody id="workerToolsPolicyRows"></tbody></table></div>
