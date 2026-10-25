@@ -211,6 +211,8 @@ jobs:
         run: node --test tests/aborted_rich_dom_recovery_v200.mjs
       - name: ABCD multi-block response boundary and integrity VM regression
         run: node --test tests/abcd_response_boundary_v201.mjs
+      - name: ABCD rich-text code and math serialization VM
+        run: node --test tests/rich_code_math_v201.mjs
 
       - name: Worker probe observer regression
         run: node tests/worker_probe_supervisor_v1.mjs
