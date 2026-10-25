@@ -394,15 +394,28 @@
       "[class*='prose']", "pre", "table", "article", "section",
       "p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "math", ".katex-display",
     ].join(",");
-    const changed = [...scope.querySelectorAll(selectors)].slice(-420)
+    // Never silently take only the tail of a long response. The previous
+    // slice(-420) discarded opening sections of lengthy rich-text answers.
+    const structuralNodes = [...scope.querySelectorAll(selectors)];
+    const scanOverflow = structuralNodes.length > 1600;
+    const changed = (scanOverflow ? [] : structuralNodes)
       .filter(node => {
         if (!visible(node) || candidate.contains(node) || node.contains(candidate)
             || node.closest?.("nav,aside,header,footer,form,[role='dialog'],[contenteditable='true']"))
           return false;
         const text = normalize(node.innerText || node.textContent || "");
-        if (text.length < 120 || text.length > 85000 || transientText(text)
+        const tag = String(node.tagName || "").toLowerCase();
+        // Short headings, list items, paragraphs and rendered formulas are
+        // complete semantic blocks, not incidental fragments. They were
+        // previously discarded by the universal 120-character threshold.
+        const semanticShort = /^(?:p|h[1-6]|li|math|blockquote)$/.test(tag)
+          || Boolean(node.classList?.contains("katex-display"));
+        const minimum = semanticShort ? 2 : 120;
+        if (text.length < minimum || text.length > 85000 || transientText(text)
             || (promptStart && text.includes(promptStart))
-            || (promptEnd && text.includes(promptEnd))) return false;
+            || (promptEnd && text.includes(promptEnd))
+            || node.closest?.("[data-message-author-role='user'],[data-testid='user-message']"))
+          return false;
         const old = baseline.get(node);
         return old === undefined || old !== text.slice(-5000);
       });
@@ -415,7 +428,9 @@
     all.sort((left,right) => left === right ? 0
       : left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
     return {
-      nodes: all.slice(0, 160),
+      nodes: scanOverflow ? [] : all.slice(0, 160),
+      scan_overflow: scanOverflow,
+      scan_structural_node_count: structuralNodes.length,
       independent_count: independent.length,
       independent_chars: sizes.reduce((sum, n) => sum + n, 0),
       max_independent_chars: Math.max(0, ...sizes),
@@ -451,7 +466,7 @@
     // A finished toolbar next to one Python cell is not proof that the reply
     // ends at this cell. Preserve all independently changed same-request blocks
     // and let the sole controller evaluate their serialized union instead.
-    if (!coverage.nodes?.length || coverage.nodes.length > 155) return null;
+    if (coverage.scan_overflow || !coverage.nodes?.length || coverage.nodes.length > 155) return null;
     // The completion toolbar must follow *every* independently changed
     // response block. A copy action after a Python cell is not proof that
     // later tables, math or the execution checklist have finished rendering.
@@ -1619,6 +1634,8 @@
                     response_integrity_candidate_chars: rendered.coverage.candidate_chars,
                     response_integrity_uncovered_blocks: rendered.coverage.independent_count,
                     response_integrity_merged_blocks: parts.length,
+                    response_integrity_structural_scan_nodes: rendered.coverage.scan_structural_node_count,
+                    response_integrity_scan_overflow: false,
                     response_integrity_merged_final_chars: finalText.length,
                     network_transport_terminal_confirmed: false,
                     network_transport_error: String(active.networkTerminalTransportErrorReason || ""),
@@ -1646,6 +1663,10 @@
               ? renderedResponseBoundaryEvidence(active, current.latest).independent_count : null,
             response_recovery_uncovered_chars: current.latest
               ? renderedResponseBoundaryEvidence(active, current.latest).independent_chars : null,
+            response_recovery_scan_overflow: current.latest
+              ? renderedResponseBoundaryEvidence(active, current.latest).scan_overflow : null,
+            response_recovery_structural_scan_nodes: current.latest
+              ? renderedResponseBoundaryEvidence(active, current.latest).scan_structural_node_count : null,
             response_recovery_finish_after_all_blocks: current.latest
               ? responseFinishActions().some(button =>
                   !active.baselineFinishActions.has(button)
