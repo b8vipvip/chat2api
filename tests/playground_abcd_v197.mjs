@@ -68,7 +68,7 @@ function scenario(id, outputs) {
       return {scene,title,serial:claimSerial-1,claim_id:options.body.claim_id,
         prompts,end_anchor:"执行任务表",keywords:[title],next:{title:"新主题"+scene+claimSerial}};
     }
-    if(endpoint.includes("/api/admin/requests/"))return {status:"completed",diagnostics:{network_terminal_proof:true,network_stream_phase:"complete"}};
+    if(endpoint.includes("/api/admin/requests/"))return {status:"completed",diagnostics:{network_stream_terminal_proof:true,network_stream_phase:"complete"}};
     if(endpoint.endsWith("/chat-runs"))records.push({kind:"start",body:options.body});
     if(endpoint.endsWith("/chat-records"))records.push({kind:"terminal",body:options.body});
     return {};
