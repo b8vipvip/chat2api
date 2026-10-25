@@ -1390,13 +1390,19 @@
         return;
       }
 
+      // v196: A stable rendered DOM is NEVER sufficient when a network stream
+      // has not proved final assistant completion. TX03 req_d12e2aca
+      // incorrectly committed a 1338-char partial report at 39s while SSE was
+      // still streaming. This fallback must also have networkTerminalAt.
+      // The existing network-terminal branch above remains preferred.
       // The redesigned ChatGPT UI sometimes omits assistant role nodes AND the
       // clone reader loses its terminal frame. A current-request SSE fragment
       // independently correlated with a rendered node that remains stable
       // after generation is a bounded, explicit UI terminal fallback.
       // No tool command, search JSON, prompt echo, or media-producing request
       // can satisfy this proof. request-v6 remains the sole terminal owner.
-      if (!captureMedia && !fileCreationRequested && !imageCreationRequested
+      if (networkTerminalAt && networkTerminalText && !captureMedia
+          && !fileCreationRequested && !imageCreationRequested
           && ["verified-rendered-network-overlap-v189","verified-rendered-dom-baseline-v191"].includes(current.reason)
           && current.text.length >= 120 && !internalToolPayload(current.text)
           && !generating && !promptStillPresent(active)
