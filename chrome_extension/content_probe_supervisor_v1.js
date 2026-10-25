@@ -334,6 +334,16 @@
     if (typeof extra.handoff === "boolean") facts.media_handoff_observed = extra.handoff;
     if (typeof extra.newCandidates === "number") facts.new_image_candidate_count = extra.newCandidates;
     if (typeof extra.captured === "number") facts.image_transfer_successes = extra.captured;
+    if (stage === "before_terminal" && typeof extra.deliveredText === "string") {
+      const output = extra.deliveredText;
+      const lines = output.split(/\r?\n/);
+      facts.scene_delivered_chars = output.length;
+      facts.scene_delivered_table_rows = lines.filter(line => /^\s*\|.*\|\s*$/.test(line)).length;
+      facts.scene_delivered_code_fences = lines.filter(line => /^\s*`{3,}/.test(line)).length;
+      facts.scene_delivered_formula_markers = ["$", "\\[", "\\]", "\\(", "\\)"]
+        .reduce((sum, marker) => sum + output.split(marker).length - 1, 0);
+      facts.scene_delivered_heading_count = lines.filter(line => /^#{1,6}\s+/.test(line)).length;
+    }
     // Scene evidence is sampled by the existing Worker tool supervisor. No
     // extra request listeners or terminal owners are introduced.
     if (active?.lastCandidateNode?.isConnected === false) active.lastCandidateNode = null;
