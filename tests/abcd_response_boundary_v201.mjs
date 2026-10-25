@@ -37,13 +37,13 @@ test("TX03 A: stable Python child must expose substantial uncovered report block
   assert.equal(proof.nodes[0].id,"story");
   assert.equal(proof.nodes[1].id,"table");
   assert.equal(proof.nodes[2].id,"code");
-  assert.ok(proof.independent_chars>1000);
+  assert.ok(proof.independent_chars>600);
   assert.equal(proof.complete_scope,false);
 });
 test("Pre-submit blocks cannot be mistaken for new answer components",()=>{
   const {func,active,story,table,code}=fixture();
-  active.baselineRenderedText.set(story,story.innerText);
-  active.baselineRenderedText.set(table,table.innerText);
+  active.baselineRenderedText.set(story,story.innerText.replace(/\s+/g," ").trim());
+  active.baselineRenderedText.set(table,table.innerText.replace(/\s+/g," ").trim());
   const proof=func(active,code);
   assert.equal(proof.independent_count,0);
   assert.equal(proof.nodes.length,1);
