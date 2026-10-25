@@ -60,7 +60,7 @@ test("All ABCD probes share one read-only supervisor and stay within 32 events",
   assert.ok(facts.scene_rich_max_chars>=18);
   await probes.capture(active,"unresolved_after_threshold");
   await probes.capture(active,"before_terminal",{completed:false,
-    deliveredText:"| Month | Revenue |\\n| --- | --- |\\n```python\\nprint(123)\\n```\\n$x=1$"});
+    deliveredText:"| Month | Revenue |\n| --- | --- |\n```python\nprint(123)\n```\n$x=1$"});
   assert.equal(sent.length,30);
   assert.equal(sent[20].facts.scene_delivered_table_rows,2);
   assert.equal(sent[20].facts.scene_delivered_code_fences,2);
