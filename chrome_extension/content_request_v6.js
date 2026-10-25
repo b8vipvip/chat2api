@@ -452,8 +452,14 @@
     // ends at this cell. Preserve all independently changed same-request blocks
     // and let the sole controller evaluate their serialized union instead.
     if (!coverage.nodes?.length || coverage.nodes.length > 155) return null;
+    // The completion toolbar must follow *every* independently changed
+    // response block. A copy action after a Python cell is not proof that
+    // later tables, math or the execution checklist have finished rendering.
+    const completionAfterWholeReply = fresh.filter(button =>
+      coverage.nodes.every(node => node === button || turnFollows(node, button)));
+    if (!completionAfterWholeReply.length) return null;
     return {node: current.latest, text, reason: current.reason,
-      finishActionCount: fresh.length, coverage};
+      finishActionCount: completionAfterWholeReply.length, coverage};
   }
 
   function renderedNetworkCorrelatedTurn(active) {
@@ -1595,7 +1601,8 @@
               } else if (Date.now() - abortedRenderedCandidateSince >= 8000
                   && Date.now() - Number(active.networkObservedAt || 0) >= 12000
                   && responseFinishActions().some(button =>
-                    !active.baselineFinishActions.has(button) && turnFollows(rendered.node, button))) {
+                    !active.baselineFinishActions.has(button)
+                    && parts.every(node => turnFollows(node, button)))) {
                 responseStarted = await ensureResponseStarted(active, responseStarted,
                   "verified-aborted-stream-rendered-dom-v200");
                 await emit({
@@ -1608,7 +1615,7 @@
                     response_terminal_final_chars: finalText.length,
                     response_terminal_stable_ms: Date.now() - abortedRenderedCandidateSince,
                     response_finish_action_count: rendered.finishActionCount,
-                    response_integrity_scope: "all-new-structural-blocks-serialized-v201",
+                    response_integrity_scope: "whole-reply-blocks-then-finish-action-v202",
                     response_integrity_candidate_chars: rendered.coverage.candidate_chars,
                     response_integrity_uncovered_blocks: rendered.coverage.independent_count,
                     response_integrity_merged_blocks: parts.length,
@@ -1639,6 +1646,11 @@
               ? renderedResponseBoundaryEvidence(active, current.latest).independent_count : null,
             response_recovery_uncovered_chars: current.latest
               ? renderedResponseBoundaryEvidence(active, current.latest).independent_chars : null,
+            response_recovery_finish_after_all_blocks: current.latest
+              ? responseFinishActions().some(button =>
+                  !active.baselineFinishActions.has(button)
+                  && (renderedResponseBoundaryEvidence(active, current.latest).nodes || [])
+                    .every(node => turnFollows(node, button))) : false,
             response_recovery_stable_ms: abortedRenderedCandidateSince
               ? Date.now() - abortedRenderedCandidateSince : 0,
             response_recovery_network_quiet_ms: Date.now() - active.networkObservedAt,
