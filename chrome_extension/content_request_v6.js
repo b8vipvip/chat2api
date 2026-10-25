@@ -391,8 +391,9 @@
     const selectors = [
       "[data-message-content]", ".markdown", "[class*='markdown']",
       "[class*='prose']", "pre", "table", "article", "section",
+      "p", "h1", "h2", "h3", "h4", "h5", "h6", "ul", "ol", "math", ".katex-display",
     ].join(",");
-    const changed = [...scope.querySelectorAll(selectors)].slice(-280)
+    const changed = [...scope.querySelectorAll(selectors)].slice(-420)
       .filter(node => {
         if (!visible(node) || candidate.contains(node) || node.contains(candidate)
             || node.closest?.("nav,aside,header,footer,form,[role='dialog'],[contenteditable='true']"))
@@ -413,7 +414,7 @@
     all.sort((left,right) => left === right ? 0
       : left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
     return {
-      nodes: all.slice(0, 96),
+      nodes: all.slice(0, 160),
       independent_count: independent.length,
       independent_chars: sizes.reduce((sum, n) => sum + n, 0),
       max_independent_chars: Math.max(0, ...sizes),
@@ -449,7 +450,7 @@
     // A finished toolbar next to one Python cell is not proof that the reply
     // ends at this cell. Preserve all independently changed same-request blocks
     // and let the sole controller evaluate their serialized union instead.
-    if (!coverage.nodes?.length || coverage.nodes.length > 90) return null;
+    if (!coverage.nodes?.length || coverage.nodes.length > 155) return null;
     return {node: current.latest, text, reason: current.reason,
       finishActionCount: fresh.length, coverage};
   }
