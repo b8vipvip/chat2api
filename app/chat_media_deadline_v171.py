@@ -15,6 +15,7 @@ import re
 
 MEDIA_HANDOFF_TIMEOUT_SECONDS = 600
 LONG_FORM_TEXT_TIMEOUT_SECONDS = 600
+STREAM_PROGRESS_TIMEOUT_SECONDS = 900
 _LONG_FORM_WORDS = re.compile(r"(?:不少于|至少|不低于|at\s+least|minimum\s+of)\s*([0-9][0-9,]*)\s*(?:个?汉?字|words?|characters?)", re.I)
 _LONG_FORM_HANDOFF = re.compile(
     r"(?:生成|撰写|编写|整理|输出|提供|制作).{0,48}"
@@ -38,6 +39,7 @@ def chat_timeout_window(
     automatic_extension: bool,
     media_handoff_proven: bool,
     long_text_requested: bool = False,
+    stream_progress_proven: bool = False,
 ) -> int:
     """Return the sole request deadline window, relative to request start.
 
@@ -46,6 +48,8 @@ def chat_timeout_window(
     screenshot, editor canvas or browser-displayed image cannot set the flag.
     """
     baseline = int(base_timeout_seconds)
+    if automatic_extension and stream_progress_proven:
+        return max(baseline, STREAM_PROGRESS_TIMEOUT_SECONDS)
     if automatic_extension and media_handoff_proven:
         return max(baseline, MEDIA_HANDOFF_TIMEOUT_SECONDS)
     if automatic_extension and long_text_requested:
@@ -54,11 +58,14 @@ def chat_timeout_window(
 
 
 def worker_chat_timeout(
-    base_timeout_seconds: int, *, automatic_extension: bool,
+    base_timeout_seconds: int, *, automatic_extension: bool, stream: bool = False,
 ) -> int:
     """Give the same Worker owner enough time to finish a possible image job.
 
     The server still enforces the normal deadline for requests with no verified
     media handoff. An explicit timeout is respected on both sides.
     """
-    return max(int(base_timeout_seconds), MEDIA_HANDOFF_TIMEOUT_SECONDS) if automatic_extension else int(base_timeout_seconds)
+    if not automatic_extension:
+        return int(base_timeout_seconds)
+    # The Worker must outlive the server's bounded active-progress lease.
+    return max(int(base_timeout_seconds), STREAM_PROGRESS_TIMEOUT_SECONDS if stream else MEDIA_HANDOFF_TIMEOUT_SECONDS)

@@ -20,6 +20,7 @@ from .admin import admin_response
 from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
 from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout, long_form_text_requested
+from .chat_progress_stream_v196 import status_from_diagnostics, progress_is_real
 from .chat_stream_delivery_v194 import StagedStreamText, final_text_chunks
 from .config import Settings, get_settings
 from .file_store import FileStore
@@ -845,7 +846,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     def chat_deadline_remaining(
         state: RequestState, started_at: float, timeout_seconds: int, automatic_media_extension: bool,
-        long_text_requested: bool = False,
+        long_text_requested: bool = False, stream: bool = False,
     ) -> float:
         # The broker retains sole terminal authority; the Worker may only
         # supply request-correlated media handoff evidence to adjust its deadline.
@@ -853,11 +854,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             timeout_seconds, automatic_extension=automatic_media_extension,
             media_handoff_proven=state.diagnostics.get("media_handoff_marker") is True,
             long_text_requested=long_text_requested,
+            stream_progress_proven=stream and progress_is_real(state),
         )
         if effective > timeout_seconds:
             if state.diagnostics.get("media_handoff_marker") is True:
                 state.diagnostics["media_timeout_extended_seconds"] = effective
                 state.diagnostics["media_timeout_extension_authority"] = "server-chat-deadline-v171"
+            elif stream and progress_is_real(state):
+                state.diagnostics["stream_progress_timeout_extended_seconds"] = effective
+                state.diagnostics["stream_progress_timeout_authority"] = "server-chat-deadline-v196"
             elif long_text_requested:
                 state.diagnostics["long_text_timeout_extended_seconds"] = effective
                 state.diagnostics["long_text_timeout_extension_authority"] = "server-chat-deadline-v171"
@@ -884,6 +889,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         sent_text = ""
         started_at = asyncio.get_running_loop().time()
         next_heartbeat_at = started_at + 15.0
+        last_status_key = None
+        last_reasoning_text = ""
         recorded = False
         request_type = "multimodal" if attachments_count else "text"
         # The presentation-only gate holds generated image syntax until the
@@ -905,6 +912,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 now = asyncio.get_running_loop().time()
                 if now >= next_heartbeat_at:
                     next_heartbeat_at = now + 15.0
+                    # Send a real data frame as well as an SSE comment: some
+                    # OpenAI clients ignore comments but need visible activity.
+                    current_status = status_from_diagnostics(state.diagnostics)
+                    if current_status:
+                        yield "data: " + json.dumps(
+                            chunk_payload(response_id, model, {"chat2api_status": {
+                                **current_status, "elapsed_seconds": int(now - started_at),
+                                "active": True,
+                            }}), ensure_ascii=False,
+                        ) + "\n\n"
                     yield ": chat2api-keepalive\n\n"
                 if await request.is_disconnected():
                     await registry.send(state.client_id, {"type": "chat.cancel", "request_id": state.request_id})
@@ -914,7 +931,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                          request_type=request_type, attachments_count=attachments_count)
                     recorded = True
                     break
-                remaining = chat_deadline_remaining(state, started_at, timeout_seconds, automatic_media_extension, long_text_requested)
+                remaining = chat_deadline_remaining(
+                    state, started_at, timeout_seconds, automatic_media_extension,
+                    long_text_requested, stream=True,
+                )
                 if remaining <= 0:
                     await registry.send(state.client_id, {"type": "chat.cancel", "request_id": state.request_id})
                     state.completed_mono = state.completed_mono or time.perf_counter()
@@ -931,6 +951,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     continue
                 event_type = event.get("type")
                 if event_type in {"chat.diagnostics", "chat.started"}:
+                    observed = status_from_diagnostics(
+                        event.get("diagnostics") if event_type == "chat.diagnostics" else state.diagnostics
+                    )
+                    if observed:
+                        signature = (observed["text"], observed["kind"], observed["source"])
+                        if signature != last_status_key:
+                            last_status_key = signature
+                            delta = {"chat2api_status": {**observed, "active": True}}
+                            # Only source-verified reasoning synopsis may enter
+                            # the optional reasoning lane; a spinner never does.
+                            if observed["text"] != last_reasoning_text:
+                                # mv3c/OpenAI clients already render the independent
+                                # reasoning lane; the status is not assistant content.
+                                # It will be collapsed when final content arrives.
+                                delta["reasoning"] = observed["text"]
+                                last_reasoning_text = observed["text"]
+                            yield "data: " + json.dumps(
+                                chunk_payload(response_id, model, delta), ensure_ascii=False
+                            ) + "\n\n"
                     continue
                 if event_type in {"chat.delta", "chat.snapshot"}:
                     if event_type == "chat.delta":
@@ -1068,7 +1107,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         automatic_media_extension = body.timeout is None
         long_text_requested = long_form_text_requested(prompt)
         browser_timeout_seconds = worker_chat_timeout(
-            timeout_seconds, automatic_extension=automatic_media_extension,
+            timeout_seconds, automatic_extension=automatic_media_extension, stream=body.stream,
         )
         try:
             await record_request_running(
