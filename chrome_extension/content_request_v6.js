@@ -376,6 +376,47 @@
     active.baselineFinishActions = new Set(responseFinishActions());
   }
 
+  // A redesigned reply can render one Markdown/code/table component per
+  // sibling. A stable code cell is not a stable *answer*. Audit all independently
+  // changed structural content before accepting any partial DOM selection.
+  function renderedResponseBoundaryEvidence(active, candidate) {
+    const scope = candidate?.closest?.("main,[role='main'],#thread");
+    const baseline = active?.baselineRenderedText;
+    if (!scope || !baseline || !candidate) return {
+      independent_count: 0, independent_chars: 0, max_independent_chars: 0,
+      candidate_chars: 0, complete_scope: false,
+    };
+    const promptStart = String(active.promptNormalized || "").slice(0, 100);
+    const promptEnd = String(active.promptNormalized || "").slice(-100);
+    const selectors = [
+      "[data-message-content]", ".markdown", "[class*='markdown']",
+      "[class*='prose']", "pre", "table", "article", "section",
+    ].join(",");
+    const changed = [...scope.querySelectorAll(selectors)].slice(-280)
+      .filter(node => {
+        if (!visible(node) || candidate.contains(node) || node.contains(candidate)
+            || node.closest?.("nav,aside,header,footer,form,[role='dialog'],[contenteditable='true']"))
+          return false;
+        const text = normalize(node.innerText || node.textContent || "");
+        if (text.length < 120 || text.length > 85000 || transientText(text)
+            || (promptStart && text.includes(promptStart))
+            || (promptEnd && text.includes(promptEnd))) return false;
+        const old = baseline.get(node);
+        return old === undefined || old !== text.slice(-5000);
+      });
+    // Do not count ancestor and descendant wrappers twice.
+    const independent = changed.filter(node => !changed.some(other => other !== node && other.contains(node)));
+    const sizes = independent.map(node => normalize(node.innerText || node.textContent || "").length);
+    const candidateChars = normalize(candidate.innerText || candidate.textContent || "").length;
+    return {
+      independent_count: independent.length,
+      independent_chars: sizes.reduce((sum, n) => sum + n, 0),
+      max_independent_chars: Math.max(0, ...sizes),
+      candidate_chars: candidateChars,
+      complete_scope: independent.length === 0,
+    };
+  }
+
   // Only request-v6 consumes the evidence below. The SSE observer and DOM
   // selector never emit terminal events or decide status. A fresh answer toolbar
   // in the original routed tab is positive UI completion proof, unlike simply
@@ -399,8 +440,13 @@
     const start = String(active.promptNormalized || "").slice(0, 110);
     const end = String(active.promptNormalized || "").slice(-120);
     if ((start && text.includes(start)) || (end && text.includes(end))) return null;
+    const coverage = renderedResponseBoundaryEvidence(active, current.latest);
+    // In the TX03 v200 incident a Python component (3,793 chars) was stable,
+    // while 43,600 visible chars were elsewhere in the reply. Never finalize
+    // such a fragment solely because a new toolbar is present.
+    if (!coverage.complete_scope) return null;
     return {node: current.latest, text, reason: current.reason,
-      finishActionCount: fresh.length};
+      finishActionCount: fresh.length, coverage};
   }
 
   function renderedNetworkCorrelatedTurn(active) {
@@ -1541,6 +1587,9 @@
                     response_terminal_final_chars: finalText.length,
                     response_terminal_stable_ms: Date.now() - abortedRenderedCandidateSince,
                     response_finish_action_count: rendered.finishActionCount,
+                    response_integrity_scope: "all-new-structural-blocks-accounted-v201",
+                    response_integrity_candidate_chars: rendered.coverage.candidate_chars,
+                    response_integrity_uncovered_blocks: rendered.coverage.independent_count,
                     network_transport_terminal_confirmed: false,
                     network_transport_error: String(active.networkTerminalTransportErrorReason || ""),
                     response_format: "markdown",
@@ -1563,6 +1612,10 @@
             response_recovery_candidate_chars: String(current.text || "").length,
             response_recovery_finish_actions: responseFinishActions()
               .filter(button => !active.baselineFinishActions.has(button)).length,
+            response_recovery_uncovered_blocks: current.latest
+              ? renderedResponseBoundaryEvidence(active, current.latest).independent_count : null,
+            response_recovery_uncovered_chars: current.latest
+              ? renderedResponseBoundaryEvidence(active, current.latest).independent_chars : null,
             response_recovery_stable_ms: abortedRenderedCandidateSince
               ? Date.now() - abortedRenderedCandidateSince : 0,
             response_recovery_network_quiet_ms: Date.now() - active.networkObservedAt,
