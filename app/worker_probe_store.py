@@ -84,6 +84,8 @@ ALLOWED_FACTS = frozenset([
     "scene_context_assistant_role_count", "scene_context_request_has_user_anchor",
     "scene_context_prior_assistants", "scene_context_submit_confirmed",
     "scene_context_generation_active",
+    "scene_delivered_chars", "scene_delivered_table_rows", "scene_delivered_code_fences",
+    "scene_delivered_formula_markers", "scene_delivered_heading_count",
 ])
 ALLOWED_CLASSIFICATIONS = frozenset([
     "baseline", "no_assistant_turn", "handoff_without_visible_media",
