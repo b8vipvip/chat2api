@@ -15,7 +15,7 @@ PANEL = r'''
 <section class="view" id="view-worker-tools">
   <div class="panel">
     <h2>Worker 工具</h2>
-    <p class="muted">集中管理只读诊断探针。P0 支持图片交付与聊天 DOM；P1 支持网络摘要、模型与工具控件状态、页面选择器兼容性采样。所有工具只提交证据，不参与请求终态决策。</p>
+    <p class="muted">集中管理只读诊断探针：基础图片/DOM/网络/模型控件，以及 ABCD 四组场景（A 富文本、B 多图片、C 多文件、D 多轮上下文）和回复边界完整性。启用后仅对新请求采样；探针不修改请求终态，不保存对话原文、私有下载链接或图片字节。</p>
     <div class="toolbar">
       <label for="workerToolsScope">策略范围</label>
       <select id="workerToolsScope"><option value="global">全局默认</option></select>
