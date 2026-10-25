@@ -98,6 +98,11 @@
       scene_final_action_count: completed.length,
       scene_new_final_action_count: active?.baselineFinishActions instanceof Set
         ? completed.filter(node=>!active.baselineFinishActions.has(node)).length : 0,
+      scene_finish_after_all_blocks: Boolean(current && independent.length
+        && active?.baselineFinishActions instanceof Set
+        && completed.some(button => !active.baselineFinishActions.has(button)
+          && independent.concat([current]).every(node => node !== button
+            && Boolean(node.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING)))),
       scene_image_count: numbers(scope.querySelectorAll("img")),
       scene_image_large_count: [...scope.querySelectorAll("img")].filter(node=>
         safeVisible(node) && node.getBoundingClientRect().width>=96).length,
