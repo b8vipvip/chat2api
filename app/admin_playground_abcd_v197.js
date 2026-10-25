@@ -88,7 +88,7 @@ const fenced=text.includes(String.fromCharCode(96).repeat(3));
 const codePresent=fenced||/(?:^|\n)[ \t]*[`]?(?:import\s+\w+|from\s+\w+\s+import|def\s+\w+\s*\(|function\s+\w+\s*\(|const\s+\w+\s*=)/m.test(text);
 check(codePresent,"实际包含代码内容");
 if(codePresent&&!fenced) warnings.push("代码内容已出现，但 Markdown 代码围栏丢失；展示保真仍需修复");
-const formula=/(\\\\(?:boxed|frac|dfrac|sqrt|sum|begin|text)\b|\\\\\(|\\\\\[|\$[^$\n]{3,}\$)/.test(text);
+const formula=["\\boxed","\\frac","\\dfrac","\\sqrt","\\sum","\\begin","\\(","\\["].some(mark=>text.includes(mark))||/\$[^$\n]{3,}\$/.test(text);
 check(formula,"包含可识别的数学公式内容");
 check(text.lastIndexOf(task.end_anchor||"执行任务表")>text.length*.5,"末段含指定执行清单");
 }
