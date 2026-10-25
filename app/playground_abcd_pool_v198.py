@@ -7,9 +7,9 @@ diagnostics, but cannot return to the available pool after page refresh.
 from __future__ import annotations
 
 import json
-import re
 import secrets
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -109,7 +109,7 @@ def build_case(scene: str, serial: int) -> dict:
         end_anchor = ""
     return {
         "scene": scene, "serial": serial, "title": topic[0],
-        "prompts": prompts, "end_anchor": end_anchor, "keywords": [topic[0]],
+        "prompts": prompts, "end_anchor": end_anchor, "keywords": ([topic[0], topic[3]] if scene == "D" else [topic[0]]),
         "kind": {"A":"rich_text", "B":"three_images", "C":"four_files", "D":"two_turns"}[scene],
     }
 
@@ -129,8 +129,13 @@ class OneShotPool:
             db.execute("CREATE TABLE IF NOT EXISTS abcd_claim (claim_id TEXT PRIMARY KEY, scene TEXT NOT NULL, case_json TEXT NOT NULL, claimed_at TEXT NOT NULL)")
             db.commit()
 
+    @contextmanager
     def connection(self):
-        return sqlite3.connect(str(self.filename), timeout=15)
+        db = sqlite3.connect(str(self.filename), timeout=15)
+        try:
+            yield db
+        finally:
+            db.close()
 
     def preview(self, scene: str) -> dict:
         if scene not in "ABCD" or len(scene) != 1:
