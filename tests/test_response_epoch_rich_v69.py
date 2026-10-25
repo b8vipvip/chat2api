@@ -160,7 +160,9 @@ def test_tool_argument_json_cannot_be_final_and_rich_markup_stays_grouped():
     assert "|| imageToolArguments;" in owner
     assert "&& !internalToolPayload(networkTerminalText)" in owner
     assert "&& !internalToolPayload(networkText)" in owner
-    assert "function explicitCreationIntent(prompt, subjects)" in owner and "参考图" in owner
+    assert "function explicitCreationIntent(prompt, subjects, stopAtClauseBoundary = false)" in owner and "参考图" in owner
+    assert "const subjectScope = stopAtClauseBoundary" in owner
+    assert "const captureMedia = imageHandoff" in owner
     assert "不需要|不用|不要求|不应该" in owner
     assert "function renderedCurrentRequestCandidate(active)" in owner
     assert "async function reconcileResponsesTerminal(active, networkText)" in owner
