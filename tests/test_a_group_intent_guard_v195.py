@@ -1,4 +1,4 @@
-"""Regression tests for TX03 A group 2026-10-25 (v0.22.195)."""
+"""Regression tests for TX03 A group 2026-10-25 (v0.22.196)."""
 from pathlib import Path
 import subprocess
 
