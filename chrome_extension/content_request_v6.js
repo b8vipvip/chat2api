@@ -408,7 +408,12 @@
     const independent = changed.filter(node => !changed.some(other => other !== node && other.contains(node)));
     const sizes = independent.map(node => normalize(node.innerText || node.textContent || "").length);
     const candidateChars = normalize(candidate.innerText || candidate.textContent || "").length;
+    const all = [candidate, ...independent].filter(node => ![candidate,...independent]
+      .some(other => other !== node && other.contains(node)));
+    all.sort((left,right) => left === right ? 0
+      : left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
     return {
+      nodes: all.slice(0, 96),
       independent_count: independent.length,
       independent_chars: sizes.reduce((sum, n) => sum + n, 0),
       max_independent_chars: Math.max(0, ...sizes),
@@ -441,10 +446,10 @@
     const end = String(active.promptNormalized || "").slice(-120);
     if ((start && text.includes(start)) || (end && text.includes(end))) return null;
     const coverage = renderedResponseBoundaryEvidence(active, current.latest);
-    // In the TX03 v200 incident a Python component (3,793 chars) was stable,
-    // while 43,600 visible chars were elsewhere in the reply. Never finalize
-    // such a fragment solely because a new toolbar is present.
-    if (!coverage.complete_scope) return null;
+    // A finished toolbar next to one Python cell is not proof that the reply
+    // ends at this cell. Preserve all independently changed same-request blocks
+    // and let the sole controller evaluate their serialized union instead.
+    if (!coverage.nodes?.length || coverage.nodes.length > 90) return null;
     return {node: current.latest, text, reason: current.reason,
       finishActionCount: fresh.length, coverage};
   }
@@ -1214,6 +1219,8 @@
       const error = pageError();
       if (error && responseStarted) throw new Error(`ChatGPT response UI error: ${error}`);
       const current = currentAssistantState(active);
+      active.lastCandidateNode = current.isNew ? current.latest : null;
+      active.lastCandidateTextLength = current.isNew ? current.text.length : 0;
       const generating = isGenerating();
       const networkText = String(active.networkObservedText || "");
       const networkTerminalText = String(active.networkTerminalText || "");
@@ -1564,9 +1571,21 @@
         const rendered = verifiedRenderedAbortCandidate(active, current);
         if (rendered) {
           try {
-            const capture = await finalNodeText(rendered.node);
-            const finalText = String(capture?.text || rendered.text || "").trim();
-            if (finalText.length >= 240 && !internalToolPayload(finalText)
+            // Serialize the entire changed reply surface, not just the largest
+            // child. The v200 TX03 case selected only a Python block while
+            // preceding tables, narrative, formulas and task list were siblings.
+            const parts = rendered.coverage.nodes;
+            const wrapper = document.createElement("div");
+            wrapper.setAttribute("class", "markdown");
+            for (const part of parts) wrapper.appendChild(part.cloneNode(true));
+            const capture = typeof rich?.captureFinalMarkdown === "function"
+              ? await rich.captureFinalMarkdown(wrapper) : {text:""};
+            const finalText = String(capture?.text || "").trim();
+            const completePartSet = parts.every(part => part.isConnected
+              && visible(part) && !promptStillPresent(active));
+            if (completePartSet && finalText.length >= 240
+                && finalText.length >= rendered.text.length * 0.85
+                && !internalToolPayload(finalText)
                 && !promptStillPresent(active) && !isGenerating()) {
               if (finalText !== abortedRenderedCandidate) {
                 abortedRenderedCandidate = finalText;
@@ -1587,9 +1606,11 @@
                     response_terminal_final_chars: finalText.length,
                     response_terminal_stable_ms: Date.now() - abortedRenderedCandidateSince,
                     response_finish_action_count: rendered.finishActionCount,
-                    response_integrity_scope: "all-new-structural-blocks-accounted-v201",
+                    response_integrity_scope: "all-new-structural-blocks-serialized-v201",
                     response_integrity_candidate_chars: rendered.coverage.candidate_chars,
                     response_integrity_uncovered_blocks: rendered.coverage.independent_count,
+                    response_integrity_merged_blocks: parts.length,
+                    response_integrity_merged_final_chars: finalText.length,
                     network_transport_terminal_confirmed: false,
                     network_transport_error: String(active.networkTerminalTransportErrorReason || ""),
                     response_format: "markdown",
