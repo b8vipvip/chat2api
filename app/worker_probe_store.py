@@ -69,6 +69,8 @@ ALLOWED_FACTS = frozenset([
     "image_editor_count", "selector_composer_count",
     "selector_send_button_count", "selector_stop_button_count",
     "scene_rich_block_count", "scene_changed_block_count", "scene_independent_block_count",
+    "scene_structural_scan_nodes", "scene_structural_scan_overflow",
+    "scene_short_semantic_blocks",
     "scene_uncovered_block_count", "scene_uncovered_block_chars",
     "scene_rich_max_chars", "scene_rich_total_chars", "scene_candidate_chars",
     "scene_capture_chars", "scene_network_candidate_chars", "scene_network_terminal_chars",
