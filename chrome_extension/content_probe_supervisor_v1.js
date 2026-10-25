@@ -33,9 +33,13 @@
   // Data-minimized scene evidence: only counters and lengths, never prompt
   // contents, generated code, model text, file names, URLs or DOM markup.
   function sceneFacts(active, scope) {
-    const blocks = [...scope.querySelectorAll(
-      "[data-message-content],.markdown,[class*='markdown'],[class*='prose'],pre,table,article,section"
-    )].slice(-280).filter(safeVisible);
+    const allBlocks = [...scope.querySelectorAll(
+      "[data-message-content],.markdown,[class*='markdown'],[class*='prose'],pre,table,article,section,p,h1,h2,h3,h4,h5,h6,li,blockquote,math,.katex-display"
+    )];
+    const sceneScanOverflow = allBlocks.length > 1600;
+    // Preserve the first sections in probe evidence too, rather than hiding
+    // them by taking only the last 280 blocks as older probes did.
+    const blocks = allBlocks.slice(0, 1600).filter(safeVisible);
     const text = node => String(node.innerText || node.textContent || "").trim();
     const lengths = blocks.map(node => text(node).length);
     const baseline = active?.baselineRenderedText instanceof Map
@@ -48,9 +52,15 @@
     const promptEnd = String(active?.promptNormalized || "").slice(-100);
     const independent = candidates.filter(node => {
       const value = text(node);
-      return value.length >= 120 && !(promptStart && value.includes(promptStart))
+      const tag = String(node.tagName || "").toLowerCase();
+      const shortSemantic = /^(?:p|h[1-6]|li|math|blockquote)$/.test(tag)
+        || Boolean(node.classList?.contains("katex-display"));
+      return value.length >= (shortSemantic ? 2 : 120)
+        && !(promptStart && value.includes(promptStart))
         && !(promptEnd && value.includes(promptEnd));
     });
+    const sceneShortSemanticBlocks = independent.filter(node =>
+      text(node).length < 120).length;
     const current = active?.lastCandidateNode || null;
     const uncovered = current && independent.length
       ? independent.filter(node => node !== current && !current.contains(node)
@@ -73,6 +83,9 @@
     const trailing = String(active?.networkTerminalText || "");
     return {
       scene_rich_block_count: blocks.length,
+      scene_structural_scan_nodes: allBlocks.length,
+      scene_structural_scan_overflow: sceneScanOverflow,
+      scene_short_semantic_blocks: sceneShortSemanticBlocks,
       scene_changed_block_count: changed.length,
       scene_independent_block_count: independent.length,
       scene_uncovered_block_count: uncovered.length,
