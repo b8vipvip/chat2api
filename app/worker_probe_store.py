@@ -75,7 +75,7 @@ ALLOWED_FACTS = frozenset([
     "scene_network_transport_error", "scene_network_clean_terminal",
     "scene_markdown_table_count", "scene_markdown_row_count", "scene_code_block_count",
     "scene_inline_code_count", "scene_math_node_count", "scene_heading_count",
-    "scene_list_count", "scene_final_action_count", "scene_new_final_action_count",
+    "scene_list_count", "scene_final_action_count", "scene_new_final_action_count", "scene_finish_after_all_blocks",
     "scene_image_count", "scene_image_large_count", "scene_picture_count",
     "scene_canvas_count", "scene_file_card_count", "scene_file_input_count",
     "scene_file_pdf_count", "scene_file_xlsx_count", "scene_file_pptx_count",
