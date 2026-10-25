@@ -11,8 +11,8 @@ function scene({count=610,toolbarAt=count+1,oldCount=0}={}){
   const main={querySelectorAll:()=>blocks};
   const blocks=Array.from({length:count},(_,i)=>({
     id:"block-"+i,pos:i,tagName:i%23===0?"H2":i%11===0?"TABLE":i%7===0?"PRE":"P",
-    innerText:"经营计划和路线模型第"+i+"项，包含成本、人工工时和复修目标。".repeat(12),
-    textContent:"经营计划和路线模型第"+i+"项，包含成本、人工工时和复修目标。".repeat(12),
+    innerText:("经营计划和路线模型第"+i+"项，包含成本、人工工时和复修目标。").repeat(12),
+    textContent:("经营计划和路线模型第"+i+"项，包含成本、人工工时和复修目标。").repeat(12),
     classList:{contains:()=>false},
     closest(selector){return selector.includes("main")?main:null;},
     contains(other){return this===other;},
