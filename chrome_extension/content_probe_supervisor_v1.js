@@ -221,19 +221,19 @@
     ].filter(Boolean).join(" ")).trim().slice(0, 350);
     const isOfficePreview = node => {
       const label = previewLabel(node);
-      return /\\.(?:xlsx|pptx|json|zip)(?:\\b|[\\s）)]|$)/i.test(label)
+      return /\.(?:xlsx|pptx|json|zip)(?:\b|[\s）)]|$)/i.test(label)
         && /(?:open preview of|打开预览|预览文件|excel|powerpoint|code|文件|artifact)/i.test(label);
     };
     const previewControls = previewCandidates.filter(isOfficePreview);
     const previewExtCount = ext => previewControls.filter(node =>
-      new RegExp("\\\\." + ext + "(?:\\\\b|[\\\\s）)]|$)", "i")
+      new RegExp("\\." + ext + "(?:\\b|[\\s）)]|$)", "i")
         .test(previewLabel(node))).length;
     const previewConversationLinks = previewControls.filter(node => {
       const href = String(node.getAttribute?.("href") || "");
       try {
         const uri = new URL(href, location.href);
-        return /(?:^|\\.)chatgpt\\.com$/i.test(uri.hostname)
-          && /^\\/c\\/[a-f0-9-]{20,}$/i.test(uri.pathname);
+        return /(?:^|\.)chatgpt\.com$/i.test(uri.hostname)
+          && /^\/c\/[a-f0-9-]{20,}$/i.test(uri.pathname);
       } catch (_) { return false; }
     });
 
