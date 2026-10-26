@@ -25,6 +25,7 @@ function attempt({completionIndex=1,blocks=2}={}){
   const fn=runInNewContext(source.slice(helperStart,helperEnd)+source.slice(start,end)+"\nverifiedRenderedAbortCandidate",{
     responseFinishActions:()=>[action],
     turnFollows:(left,right)=>right===action && left.pos < completionIndex,
+    normalize:value=>String(value).trim(),
     internalToolPayload:()=>false,promptStillPresent:()=>false,
     renderedResponseBoundaryEvidence:()=>({nodes:content,independent_count:blocks-1,
       candidate_chars:current.text.length,complete_scope:blocks===1}),
