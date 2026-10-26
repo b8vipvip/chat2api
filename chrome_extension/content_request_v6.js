@@ -377,11 +377,34 @@
     active.baselineFinishActions = new Set(responseFinishActions());
   }
 
+  // Bind each completion action to the smallest current reply container.
+  // A page-wide main scan includes unrelated after-toolbar widgets; conversely
+  // a code-cell Copy button cannot prove an entire answer completed.
+  function replyScopeForFinishAction(candidate, button) {
+    if (!candidate || !button || !turnFollows(candidate, button)) return null;
+    const label = String(button.getAttribute?.("aria-label") || "") + " " +
+      String(button.getAttribute?.("data-testid") || "");
+    if (/copy[\\s_-]*code|复制代码/i.test(label) || button.closest?.(
+      "pre,code,[data-testid*='code-block'],[class*='code-block'],[class*='codeBlock']")) return null;
+    let common = candidate;
+    // At most a bounded climb, and never promote a per-answer action to the
+    // whole chat main or conversation list. The button and answer must truly
+    // share one non-page ancestor, without an identified user message.
+    for (let depth = 0; common && depth < 24; depth++, common = common.parentElement) {
+      if (!common.contains?.(button)) continue;
+      if (common.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']")
+          || common.querySelector?.("[data-message-author-role='user'],[data-testid='user-message']"))
+        return null;
+      return common;
+    }
+    return null;
+  }
+
   // A redesigned reply can render one Markdown/code/table component per
   // sibling. A stable code cell is not a stable *answer*. Audit all independently
   // changed structural content before accepting any partial DOM selection.
-  function renderedResponseBoundaryEvidence(active, candidate) {
-    const scope = candidate?.closest?.("main,[role='main'],#thread");
+  function renderedResponseBoundaryEvidence(active, candidate, replyScope = null) {
+    const scope = replyScope || candidate?.closest?.("main,[role='main'],#thread");
     const baseline = active?.baselineRenderedText;
     if (!scope || !baseline || !candidate) return {
       independent_count: 0, independent_chars: 0, max_independent_chars: 0,
@@ -462,19 +485,24 @@
     const start = String(active.promptNormalized || "").slice(0, 110);
     const end = String(active.promptNormalized || "").slice(-120);
     if ((start && text.includes(start)) || (end && text.includes(end))) return null;
-    const coverage = renderedResponseBoundaryEvidence(active, current.latest);
-    // A finished toolbar next to one Python cell is not proof that the reply
-    // ends at this cell. Preserve all independently changed same-request blocks
-    // and let the sole controller evaluate their serialized union instead.
-    if (coverage.scan_overflow || !coverage.nodes?.length) return null;
-    // The completion toolbar must follow *every* independently changed
-    // response block. A copy action after a Python cell is not proof that
-    // later tables, math or the execution checklist have finished rendering.
-    const completionAfterWholeReply = fresh.filter(button =>
-      coverage.nodes.every(node => node === button || turnFollows(node, button)));
-    if (!completionAfterWholeReply.length) return null;
+    let best = null;
+    // A current reply may have headings, tables and math before its toolbar,
+    // while another assistant card or page widget follows it in main. Audit
+    // the exact shared reply ancestor instead of assigning all of main to it.
+    for (const button of fresh) {
+      const scope = replyScopeForFinishAction(current.latest, button);
+      if (!scope) continue;
+      const coverage = renderedResponseBoundaryEvidence(active, current.latest, scope);
+      if (coverage.scan_overflow || !coverage.nodes?.length
+          || !coverage.nodes.every(node => turnFollows(node, button))) continue;
+      const chars = coverage.nodes.reduce((total, node) =>
+        total + normalize(node.innerText || node.textContent || "").length, 0);
+      if (!best || chars > best.chars) best = {button, scope, coverage, chars};
+    }
+    if (!best) return null;
     return {node: current.latest, text, reason: current.reason,
-      finishActionCount: completionAfterWholeReply.length, coverage};
+      finishActionCount: fresh.length, finishAction: best.button,
+      replyScope: best.scope, coverage: best.coverage};
   }
 
   function renderedNetworkCorrelatedTurn(active) {
@@ -1617,9 +1645,11 @@
                 abortedRenderedCandidateSince = Date.now();
               } else if (Date.now() - abortedRenderedCandidateSince >= 8000
                   && Date.now() - Number(active.networkObservedAt || 0) >= 12000
-                  && responseFinishActions().some(button =>
-                    !active.baselineFinishActions.has(button)
-                    && parts.every(node => turnFollows(node, button)))) {
+                  && rendered.finishAction?.isConnected
+                  && responseFinishActions().includes(rendered.finishAction)
+                  && replyScopeForFinishAction(current.latest, rendered.finishAction)
+                    === rendered.replyScope
+                  && parts.every(node => turnFollows(node, rendered.finishAction))) {
                 responseStarted = await ensureResponseStarted(active, responseStarted,
                   "verified-aborted-stream-rendered-dom-v200");
                 await emit({
@@ -1632,7 +1662,7 @@
                     response_terminal_final_chars: finalText.length,
                     response_terminal_stable_ms: Date.now() - abortedRenderedCandidateSince,
                     response_finish_action_count: rendered.finishActionCount,
-                    response_integrity_scope: "whole-reply-blocks-then-finish-action-v202",
+                    response_integrity_scope: "same-answer-container-before-toolbar-v205",
                     response_integrity_candidate_chars: rendered.coverage.candidate_chars,
                     response_integrity_uncovered_blocks: rendered.coverage.independent_count,
                     response_integrity_merged_blocks: parts.length,
@@ -1672,11 +1702,12 @@
               ? renderedResponseBoundaryEvidence(active, current.latest).scan_overflow : null,
             response_recovery_structural_scan_nodes: current.latest
               ? renderedResponseBoundaryEvidence(active, current.latest).scan_structural_node_count : null,
-            response_recovery_finish_after_all_blocks: current.latest
-              ? responseFinishActions().some(button =>
+            response_recovery_finish_after_all_blocks: Boolean(
+              verifiedRenderedAbortCandidate(active, current)),
+            response_recovery_scoped_finish_actions: current.latest
+              ? responseFinishActions().filter(button =>
                   !active.baselineFinishActions.has(button)
-                  && (renderedResponseBoundaryEvidence(active, current.latest).nodes || [])
-                    .every(node => turnFollows(node, button))) : false,
+                  && replyScopeForFinishAction(current.latest, button)).length : 0,
             response_recovery_stable_ms: abortedRenderedCandidateSince
               ? Date.now() - abortedRenderedCandidateSince : 0,
             response_recovery_network_quiet_ms: Date.now() - active.networkObservedAt,
