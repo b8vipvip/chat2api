@@ -232,6 +232,9 @@ jobs:
       - name: Verified C-file ZIP packaging v211
         run: node --test tests/c_native_file_bundle_v211.mjs
 
+      - name: Request prompt echo boundary v212
+        run: node tests/request_prompt_echo_boundary_v212.mjs
+
       - name: Worker probe observer regression
         run: node tests/worker_probe_supervisor_v1.mjs
 
