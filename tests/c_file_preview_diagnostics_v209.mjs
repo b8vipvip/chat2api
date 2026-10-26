@@ -53,10 +53,14 @@ test("baseline, 1/3/7/12-minute checkpoints and final stay within 32 events",asy
       tools:Object.fromEntries(toolIds.map(id=>[id,{enabled:true}]))}},
   };
   probes.begin(active);
+  await Promise.resolve();
+  await Promise.resolve();
   assert.equal(sent.length,10);
   for(const tick of [60000,180000,420000,720000]){
     now=tick;
     probes.observe(active);
+    await Promise.resolve();
+    await Promise.resolve();
   }
   assert.equal(sent.length,22);
   await probes.capture(active,"before_terminal",{completed:false});
