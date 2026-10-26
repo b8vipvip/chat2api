@@ -4,7 +4,9 @@ import {readFileSync} from "node:fs";
 import {runInNewContext} from "node:vm";
 
 const source=readFileSync(new URL("../chrome_extension/content_request_v6.js",import.meta.url),"utf8");
-const scanStart=source.indexOf("  function renderedResponseBoundaryEvidence(active, candidate) {");
+const helperStart=source.indexOf("  function replyScopeForFinishAction(candidate, button) {");
+const helperEnd=source.indexOf("  // A redesigned reply can render",helperStart);
+const scanStart=source.indexOf("  function renderedResponseBoundaryEvidence(active, candidate");
 const guardEnd=source.indexOf("  function renderedNetworkCorrelatedTurn(active) {",scanStart);
 assert.ok(scanStart>0 && guardEnd>scanStart);
 function scene({count=610,toolbarAt=count+1,oldCount=0,unrelatedAfter=false,
@@ -36,7 +38,7 @@ function scene({count=610,toolbarAt=count+1,oldCount=0,unrelatedAfter=false,
     baselineFinishActions:new Set(),promptNormalized};
   const current={isNew:true,latest:chosen,reason:"verified-rendered-dom-baseline-v191",
     text:chosen.innerText};
-  const code=source.slice(scanStart,guardEnd);
+  const code=source.slice(helperStart,helperEnd)+source.slice(scanStart,guardEnd);
   const context={
     document:{},visible:()=>true,
     normalize:s=>String(s).replace(/\\s+/g," ").trim(),
