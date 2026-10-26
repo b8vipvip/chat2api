@@ -4,6 +4,8 @@ import {readFileSync} from "node:fs";
 import {runInNewContext} from "node:vm";
 
 const source=readFileSync(new URL("../chrome_extension/content_request_v6.js", import.meta.url),"utf8");
+const helperStart=source.indexOf("  function replyScopeForFinishAction(candidate, button) {");
+const helperEnd=source.indexOf("  // A redesigned reply can render",helperStart);
 const start=source.indexOf("  function verifiedRenderedAbortCandidate(active, current) {");
 const end=source.indexOf("  function renderedNetworkCorrelatedTurn(active) {",start);
 assert.ok(start>0 && end>start,"recovery guard must be in sole request-v6 controller");
@@ -30,7 +32,7 @@ function candidate({hasToolbar=true, after=true, baseline=false, aborted=true,
     internalToolPayload:()=>false,
     promptStillPresent:()=>false,
   };
-  const guard=runInNewContext(source.slice(start,end)+"\nverifiedRenderedAbortCandidate",ctx);
+  const guard=runInNewContext(source.slice(helperStart,helperEnd)+source.slice(start,end)+"\nverifiedRenderedAbortCandidate",ctx);
   return guard(active,current);
 }
 test("TX03 aborted 733KB stream: new 5006-char answer with fresh finished toolbar is recoverable",()=>{
