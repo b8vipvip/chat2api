@@ -266,7 +266,56 @@
     return found;
   }
 
+  // The redesigned ChatGPT reply boundary can contain the current USER turn
+  // followed by the assistant turn. Verify the echoed input against the exact
+  // submitted prompt before removing it; never strip a user-authored transcript.
+  // Incomplete matching prefixes are quarantined until the reply boundary arrives.
+  function assistantOnlyReplyText(active, value) {
+    const raw = String(value || "");
+    const heading = /^\s*(?:#{1,6}\s*)?You said\s*:\s*/i.exec(raw);
+    if (!heading || !active?.promptNormalized)
+      return { text: raw, stripped: false, pending: false };
+    const remainder = raw.slice(heading[0].length);
+    const boundary = /(?:^|\n)\s*(?:#{1,6}\s*)?ChatGPT said\s*:\s*/gi;
+    let found;
+    while ((found = boundary.exec(remainder))) {
+      if (normalize(remainder.slice(0, found.index)) !== active.promptNormalized) continue;
+      const body = remainder.slice(found.index + found[0].length).trimStart();
+      return { text: body, stripped: true, pending: !body.trim() };
+    }
+    const seen = normalize(remainder);
+    const expected = active.promptNormalized;
+    const echoLead = expected.slice(0, Math.min(80, expected.length));
+    if (!seen || expected.startsWith(seen) || seen.startsWith(expected)
+        || (echoLead.length >= 12 && seen.includes(echoLead))) {
+      return { text: "", stripped: false, pending: true };
+    }
+    return { text: raw, stripped: false, pending: false };
+  }
+
   async function emit(event) {
+    // Sanitize the request-correlated user-turn echo at the single Worker
+    // egress, before either SSE delivery or terminal evidence capture.
+    const active = state.active?.requestId === event?.request_id ? state.active : null;
+    if (active && ["chat.completed", "chat.snapshot"].includes(event?.type)) {
+      const result = assistantOnlyReplyText(active, event.text);
+      if (result.pending && event.type === "chat.snapshot") return;
+      if (result.pending && event.type === "chat.completed") {
+        event = {
+          type: "chat.error", request_id: active.requestId,
+          error: "ChatGPT reply boundary was not verified; refusing to return a user-prompt transcript",
+          diagnostics: { response_boundary_guard: "request-correlated-prompt-echo-v212",
+            response_boundary_echo_unverified: true },
+        };
+      } else if (result.stripped) {
+        event = { ...event, text: result.text,
+          diagnostics: { ...(event.diagnostics || {}),
+            response_boundary_guard: "request-correlated-prompt-echo-v212",
+            response_boundary_prompt_echo_removed: true,
+            response_boundary_removed_chars: String(event.text || "").length - result.text.length,
+          } };
+      }
+    }
     // Flush read-only evidence before a real request terminal event is sent.
     // This never changes the sole terminal decision of request-v6.
     if (["chat.completed", "chat.error", "chat.cancelled"].includes(event?.type)
@@ -1003,6 +1052,11 @@
   }
 
   async function updateCapturedText(active, text, previous) {
+    // Quarantine a partial ChatGPT "You said" surface rather than streaming
+    // the prompt echo before the real assistant heading has arrived.
+    const bounded = assistantOnlyReplyText(active, text);
+    if (bounded.pending) return previous;
+    text = bounded.text;
     if (!text || text === previous) return previous;
     active.lastCaptureAt = Date.now();
     active.lastCapturedText = text;
@@ -1739,8 +1793,9 @@
             // Redesigned ChatGPT sometimes includes empty role labels in the
             // cloned reply container. Remove ONLY the known leading chrome;
             // never strip an ordinary user-authored heading in the body.
-            const finalText = String(capture?.text || "")
-              .replace(/^#### You said:\s*#### ChatGPT said:\s*/i, "").trim();
+            const bounded = assistantOnlyReplyText(active, capture?.text);
+            if (bounded.pending) continue;
+            const finalText = String(bounded.text || "").trim();
             const completePartSet = parts.every(part => part.isConnected
               && visible(part) && !promptStillPresent(active));
             if (completePartSet
