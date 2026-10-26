@@ -23,6 +23,9 @@ assert.equal(hasTransferableFile("[📎 demo.pdf](https://chatgpt.com/blob)"), f
 assert.equal(hasTransferableFile("![📎 demo.pdf](blob:https://chatgpt.com/123)"), false);
 assert.equal(isFileCreationRequest("请帮我生成docx文件并提供下载"), true);
 assert.equal(isFileCreationRequest("给我解释如何生成docx文件"), false);
+assert.equal(isFileCreationRequest("我要组织未来农场创新展，请提供完整执行计划并实际交付4份独立可下载文件：（1）包含计算公式的XLSX工作簿；（2）不少于8页的PPTX演示稿；（3）有效JSON文件；（4）ZIP压缩包。不能把伪链接当成文件交付。"), true);
+assert.equal(isFileCreationRequest("请不要交付文件，只要介绍方法"), false);
+assert.equal(isFileCreationRequest("请解释如何交付xlsx文件"), false);
 assert.match(controller, /const visibleTurnFiles = Boolean\(sameTurnRoot/);
 assert.match(controller, /const deliveredFiles = Number\(finalMedia\?\.file_inlined_count/);
 assert.match(controller, /response_generated_file_count: deliveredFiles/);
