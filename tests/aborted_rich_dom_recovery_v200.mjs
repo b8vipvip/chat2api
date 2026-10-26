@@ -10,8 +10,9 @@ assert.ok(start>0 && end>start,"recovery guard must be in sole request-v6 contro
 
 function candidate({hasToolbar=true, after=true, baseline=false, aborted=true,
                     newDOM=true, size=1000, promptEcho=false, networkSeen=true}={}){
-  const node={id:"new-response"};
-  const action={id:"copy-reply"};
+  const root={contains:x=>x===node||x===action,matches:()=>false,querySelector:()=>null};
+  const node={id:"new-response",parentElement:root};
+  const action={id:"copy-reply",parentElement:root,getAttribute:()=>""};
   const active={
     networkStreamSeen:networkSeen, submitStartedAt:100, networkObservedAt:101,
     networkTerminalTransportErrorAt:aborted?150:0,
