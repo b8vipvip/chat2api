@@ -29,6 +29,7 @@ function candidate({hasToolbar=true, after=true, baseline=false, aborted=true,
     responseFinishActions:()=>hasToolbar?[action]:[],
     renderedResponseBoundaryEvidence:()=>({nodes:[node],complete_scope:true,candidate_chars:1000,independent_count:0}),
     turnFollows:(n,a)=>n===node&&a===action&&after,
+    normalize:value=>String(value).trim(),
     internalToolPayload:()=>false,
     promptStillPresent:()=>false,
   };
