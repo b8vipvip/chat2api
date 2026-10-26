@@ -109,7 +109,7 @@
       if(session.files.size>=4 || total>=MAX_TOTAL)break;
       if(session.files.has(item.filename))continue;
       const attempts=session.attempts.get(item.filename)||0;
-      if(attempts>=2 || attempts && Date.now()-attempts.at<25000)continue;
+      if(attempts.count>=2 || (attempts.count && Date.now()-attempts.at<25000))continue;
       session.attempts.set(item.filename,{at:Date.now(),count:(attempts.count||0)+1});
       const result=await oneClick(item.button,item.filename);
       if(!result){session.lastError="native-download-not-observed";continue;}
