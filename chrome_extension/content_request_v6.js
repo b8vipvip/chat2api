@@ -1345,8 +1345,16 @@
         && (isLocalImageBuildCommand(networkTerminalText)
           || isLocalImageBuildCommand(networkText));
       const sameTurnRoot = current.isNew && current.latest ? (current.turn || turnOf(current.latest)) : null;
-      const visibleTurnMedia = Boolean(sameTurnRoot && rich?.hasCandidateImage?.(sameTurnRoot));
-      const visibleTurnFiles = Boolean(sameTurnRoot && rich?.hasCandidateFile?.(sameTurnRoot));
+      // New ChatGPT Office cards are often siblings of the text candidate,
+      // not children of its .markdown node. Only the request controller may
+      // widen capture to a verified fresh reply + finish-toolbar scope.
+      const fileReplyBoundary = fileCreationRequested && !generating
+        && Number(active.networkTerminalTransportErrorAt || 0) > 0
+        ? verifiedRenderedAbortCandidate(active, current) : null;
+      const mediaReplyRoot = fileReplyBoundary?.replyScope || sameTurnRoot;
+      const visibleTurnMedia = Boolean(mediaReplyRoot && rich?.hasCandidateImage?.(mediaReplyRoot));
+      const visibleTurnFiles = Boolean(mediaReplyRoot && rich?.hasCandidateFile?.(mediaReplyRoot));
+      const visibleTurnPreviews = Boolean(mediaReplyRoot && rich?.hasPreviewFile?.(mediaReplyRoot));
       // Image-only assistant turns can lack a data-message-author-role node.
       // Compare visible chat-main images against the snapshot taken before
       // submitting this exact request; never use arbitrary document images.
@@ -1362,7 +1370,7 @@
         after_user_count: 0, baseline_image_count: 0, anchor: "none" };
       const pageMediaFound = discovered.images.length > 0;
       const captureMedia = imageHandoff || imageBuildArtifact || imageToolArguments
-        || visibleTurnMedia || visibleTurnFiles || fileCreationRequested || pageMediaFound;
+        || visibleTurnMedia || visibleTurnFiles || visibleTurnPreviews || fileCreationRequested || pageMediaFound;
       const captureOrigin = pageMediaFound && !visibleTurnMedia ? "new-page-media" : "assistant-turn";
       const sourceMedia = pageMediaFound && !visibleTurnMedia ? discovered.images : [];
       const sourceFingerprint = sourceMedia.map(img =>
@@ -1429,6 +1437,8 @@
           media_local_build_command_observed: imageBuildArtifact,
           media_turn_visible_image: visibleTurnMedia,
           media_turn_downloadable_files: visibleTurnFiles,
+          media_turn_file_previews: visibleTurnPreviews,
+          media_reply_scope_verified: Boolean(fileReplyBoundary),
           media_file_creation_requested: fileCreationRequested,
           media_same_turn_anchor: current.reason,
           media_capture_origin: captureOrigin,
@@ -1442,14 +1452,14 @@
       // {"skipped_mainline":true} while the actual image is rendered later.
       // Only request-v6 can complete this request; harvest same-turn media,
       // never send the internal marker as the user-visible answer.
-      if (captureMedia && (sameTurnRoot || sourceMedia.length) && sourceStable && !generating
+      if (captureMedia && (mediaReplyRoot || sourceMedia.length) && sourceStable && !generating
           && Date.now() - imageCaptureAt >= 1000) {
         imageCaptureAt = Date.now();
         // Prefer the validated current assistant turn, but permit a strictly
         // post-baseline new-image card when the page supplies no assistant role.
         const finalMedia = sourceMedia.length
           ? await rich.capturePageImages(sourceMedia, {allowIntrinsic: intrinsicHandoff})
-          : await finalNodeText(sameTurnRoot);
+          : await finalNodeText(mediaReplyRoot);
         // On redesigned pages image cards may be siblings of the assistant
         // Markdown. Preserve same-request prose alongside those fresh images.
         const assistantRich = sourceMedia.length && current.isNew && sameTurnRoot
@@ -1509,6 +1519,7 @@
               media_capture_candidate_chars: active.mediaCaptureLastChars,
               media_capture_inline_count: active.mediaCaptureLastInlined,
               media_file_transfer_error: finalMedia?.file_transfer_error || assistantRich?.file_transfer_error || "",
+              media_file_preview_count: Number(finalMedia?.file_preview_count || 0),
               media_capture_embedded_count: active.mediaCaptureLastEmbedded,
               media_transfer_stats: active.mediaCaptureTransferStats,
               media_turn_scope: current.reason,
