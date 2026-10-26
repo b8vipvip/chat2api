@@ -207,6 +207,10 @@
         recognizedFile(anchor) && !selected.contains(anchor));
       if (mediaOutsideMarkdown) return node;
       if (filesOutsideMarkdown) return node;
+      // Preview-only Office/Code cards can be siblings of the Markdown
+      // content on redesigned ChatGPT. Keep the verified reply scope intact
+      // for discovery; they still must not be serialized as downloaded files.
+      if (hasPreviewFile(node) && !hasPreviewFile(selected)) return node;
     }
     return selected;
   }
