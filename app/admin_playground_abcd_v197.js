@@ -118,7 +118,7 @@ return {checks,assets,warnings,passed:checks.every(x=>x.passed)&&checks.length>0
 }
 async function run(){
 if(working)return;
-working=true;byId("pgABCDRun").disabled=true;byId("pgABCDExport").disabled=true;
+working=true;byId("pgABCDRun").disabled=true;
 const sceneId=byId("pgABCDSelect").value,model=byId("pgChatModel").value;
 let scene=null;
 report={scene:sceneId,model,started_at:new Date().toISOString(),turns:[],checks:[],assets:[],warnings:[],status:"running",pool_version:"abcd-one-shot-v198"};
