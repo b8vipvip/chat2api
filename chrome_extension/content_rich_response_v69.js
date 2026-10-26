@@ -315,8 +315,8 @@
   // A ChatGPT Office/Code preview often links back to /c/<conversation>.
   // That page is HTML, never a downloadable XLSX/PPTX/JSON/ZIP.
   function conversationPreviewUrl(uri) {
-    return /(?:^|\\.)chatgpt\\.com$/i.test(uri.hostname)
-      && /^\\/c\\/[a-f0-9-]{20,}$/i.test(uri.pathname);
+    return /(?:^|\.)chatgpt\.com$/i.test(uri.hostname)
+      && /^\/c\/[a-f0-9-]{20,}$/i.test(uri.pathname);
   }
 
   function previewFileControls(root) {
@@ -327,7 +327,7 @@
       const label = String(element.getAttribute?.("aria-label")
         || element.getAttribute?.("title") || element.textContent || "")
         .trim().slice(0, 240);
-      return /\\.(?:xlsx|pptx|json|zip)(?:\\b|[\\s）)]|$)/i.test(label)
+      return /\.(?:xlsx|pptx|json|zip)(?:\b|[\s）)]|$)/i.test(label)
         && /(?:open preview of|打开预览|预览文件|excel|powerpoint|code)/i.test(label);
     });
   }
