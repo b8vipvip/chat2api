@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import uuid
+import json
+import secrets
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
@@ -219,6 +221,51 @@ def install_playground_chat_patch(app: FastAPI) -> FastAPI:
             existing = await app.state.test_runs.upsert(_running_row(body))
         row = await app.state.test_runs.update(run_id, _terminal_changes(body))
         return {"run": row}
+
+    async def require_abcd_report_admin(authorization: str | None = Header(default=None)) -> None:
+        supplied = authorization[7:].strip() if authorization and authorization.lower().startswith("bearer ") else ""
+        master = str(app.state.settings.api_key or "")
+        if not master or not supplied or not secrets.compare_digest(supplied, master):
+            raise HTTPException(status_code=403, detail="Administrator key required")
+
+    @app.post("/api/admin/playground/abcd/report", dependencies=[Depends(require_abcd_report_admin)])
+    async def save_playground_abcd_report(body: dict[str, Any]) -> dict[str, Any]:
+        """Archive browser-side content checks separately from protocol status.
+
+        The ABCD report can never overwrite the API request's completed/error
+        terminal state or the primary TestRunStore status.
+        """
+        scene = str(body.get("scene") or "")
+        report = body.get("report")
+        if scene not in {"A", "B", "C", "D"} or not isinstance(report, dict):
+            raise HTTPException(status_code=422, detail="Invalid ABCD report")
+        if str(report.get("scene") or "") != scene:
+            raise HTTPException(status_code=422, detail="Scene mismatch")
+        encoded = json.dumps(report, ensure_ascii=False, default=str)
+        if len(encoded.encode("utf-8")) > 160_000:
+            raise HTTPException(status_code=413, detail="ABCD report exceeds diagnostic limit")
+        rows = [x for x in report.get("turns", []) if isinstance(x, dict)]
+        if not rows or len(rows) > 2:
+            raise HTTPException(status_code=422, detail="Missing scene request IDs")
+        saved = []
+        for item in rows:
+            rid = str(item.get("request_id") or "")
+            if not rid.startswith("req_") or len(rid) > 160:
+                raise HTTPException(status_code=422, detail="Invalid test request ID")
+            run_id = _chat_run_id(rid)
+            current = app.state.test_runs.get(run_id)
+            if not current or rid not in current.get("request_ids", []):
+                raise HTTPException(status_code=409, detail="No matching persisted Playground request")
+            # Strip full response duplication: the per-request telemetry log
+            # already owns full prompt/response, so save test checks once.
+            result = dict(report)
+            result["turns"] = [
+                {key: val for key, val in turn.items() if key not in {"text", "prompt"}}
+                for turn in rows
+            ]
+            await app.state.test_runs.update(run_id, {"abcd_report": result, "abcd_scene": scene})
+            saved.append(rid)
+        return {"saved_request_ids": saved, "scene": scene}
 
     @app.middleware("http")
     async def playground_chat_console(request: Request, call_next):
