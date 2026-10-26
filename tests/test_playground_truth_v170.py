@@ -56,6 +56,40 @@ def test_browser_failed_fetch_does_not_overwrite_authoritative_success(tmp_path:
         assert latest["status"] == "passed", "The backend terminal is the single status authority"
 
 
+def test_abcd_file_failure_remains_failed_while_api_is_completed(tmp_path: Path):
+    app = _app(tmp_path)
+    rid = "req_abcd_c_test_v208"
+    run_id = _chat_run_id(rid)
+    with TestClient(app) as client:
+        async def seed():
+            await app.state.test_runs.upsert({
+                "run_id": run_id,
+                "request_id": rid,
+                "request_ids": [rid],
+                "test_type": "chat",
+                "status": "failed",
+                "quality": {"source": "manual-playground-chat"},
+                "abcd_report": {
+                    "scene": "C", "passed": False, "status": "failed",
+                    "checks": [{"label": "全部四种文件真实下载", "passed": False}],
+                },
+                "results": [{"kind": "chat", "request_id": rid, "status": "failed"}],
+            })
+            await app.state.telemetry.upsert({
+                "request_id": rid, "status": "completed", "request_type": "text",
+                "response_media_count": 0, "completion_chars": 3454,
+                "requested_model": "gpt-5.6-sol",
+            })
+        asyncio.run(seed())
+        run = client.get("/api/admin/tests/" + run_id,
+                         headers={"Authorization": "Bearer test-key"}).json()
+        assert run["status"] == "failed"
+        assert run["quality"]["abcd_content_validation_status"] == "failed"
+        assert run["results"][0]["status"] == "failed"
+        assert run["results"][0]["authoritative_request_status"] == "completed"
+        assert app.state.telemetry.get(rid)["status"] == "completed"
+
+
 def test_long_image_running_not_falsely_finalized(tmp_path: Path):
     app = _app(tmp_path)
     rid = "imgreq_1234567890abc"
