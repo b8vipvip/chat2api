@@ -9,6 +9,7 @@ from fastapi.routing import APIRoute
 
 from . import admin as admin_module
 from .response_history_media_v188 import history_safe_response_text
+from .playground_request_evidence_v207 import request_test_index, playground_link
 
 
 PATCH_ID = "admin-request-single-owner-v94"
@@ -208,6 +209,13 @@ async function loadRequests(){
       requestHistoryCell(tr,fmtTime(r?.recorded_at||r?.created_at));
       const shortRequestId=requestId?requestId.slice(-4):'-';
       const idCell=requestHistoryCell(tr,shortRequestId);
+      if(r?.is_playground_test===true){
+        const marker=document.createElement('span');
+        marker.textContent='测';
+        marker.title='测试场发起 · '+requestHistoryText(r?.playground_test_type,'测试');
+        marker.style.cssText='display:inline-block;margin-left:4px;padding:1px 4px;border:1px solid currentColor;border-radius:4px;font-size:11px;line-height:1.2';
+        idCell.appendChild(marker);
+      }
       idCell.title=requestId+(r?.parent_request_id?(' · 来源请求 '+r.parent_request_id):'');
       // v0.22.154 internal repair rows did not persist type/key/status.
       // Label legacy absence explicitly; do not fabricate an API Key or
@@ -387,9 +395,11 @@ def _install_conversation_capture(app: FastAPI) -> None:
         result = base_query(*args, **kwargs)
         rows = result.get("data") if isinstance(result, dict) else None
         if isinstance(rows, list):
+            tests_by_request = request_test_index(getattr(app.state, "test_runs", None))
             for row in rows:
                 if not isinstance(row, dict):
                     continue
+                row.update(playground_link(tests_by_request.get(str(row.get("request_id") or ""))))
                 row["response_text_available"] = bool(row.get("response_text"))
                 row["final_prompt_available"] = bool(row.get("final_prompt"))
                 # List rows need only the availability flags; complete prompt
