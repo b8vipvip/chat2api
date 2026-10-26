@@ -338,10 +338,12 @@
       enabled: new Set(enabled),
       threshold: Math.max(5000, Math.min(120000,
         Number(policy.tools.media_delivery_v1?.unresolved_after_ms) || limits.thresholdMs)),
-      // 32 server-side events max; every enabled tool gets an equal share,
-      // while reserving its last snapshot for pre-terminal evidence.
-      cap: Math.max(1, Math.min(8, Math.floor(32 / enabled.length),
-        Number(policy.tools.media_delivery_v1?.max_snapshots) || limits.maxSnapshots)),
+      // Full baseline and final evidence for every enabled tool. During the
+      // request, spend the remaining event budget on the 3 most diagnostic
+      // tools instead of exhausting 10 slots per early snapshot.
+      maxEvents: 32, terminalSlots: enabled.length,
+      progressTools: ["abcd_files_v1","response_boundary_v1","network_evidence_v1"]
+        .filter(id => enabled.includes(id)),
       handoffReported: false, thresholdReported: false, lastSentAt: 0,
       checkpointsReported: 0,
     };
@@ -354,14 +356,22 @@
     const session = active?.probeSession;
     if (!session || !Object.prototype.hasOwnProperty.call(delayByStage, stage)) return Promise.resolve();
     if (stage === "before_terminal" && session.terminalReported) return Promise.resolve();
-    // Always reserve one snapshot for the final evidence, even if periodic probes run.
-    if (session.count >= (stage === "before_terminal" ? session.cap : Math.max(0, session.cap - 1))) return Promise.resolve();
+    // Probes are observers, not owners. Reserve an event for each enabled
+    // tool at before_terminal, and dedicate intermediate slots to file,
+    // boundary, and network evidence, including late (>10min) checkpoints.
+    // Never exceed the server's hard 32-event request budget.
+    const terminal = stage === "before_terminal";
+    const baseline = stage === "request_pre_submit";
+    const selectedTools = baseline || terminal ? [...session.enabled]
+      : (session.progressTools.length ? session.progressTools : [...session.enabled]);
+    const available = session.maxEvents - session.sequence - (terminal ? 0 : session.terminalSlots);
+    const sampledTools = selectedTools.slice(0, Math.max(0, available));
+    if (!sampledTools.length) return Promise.resolve();
     if (stage === "media_handoff" && session.handoffReported) return Promise.resolve();
     if (stage === "unresolved_after_threshold" && session.thresholdReported) return Promise.resolve();
-    if (stage === "before_terminal") session.terminalReported = true;
+    if (terminal) session.terminalReported = true;
     if (stage === "media_handoff") session.handoffReported = true;
     if (stage === "unresolved_after_threshold") session.thresholdReported = true;
-    session.count += 1;
     let facts;
     try { facts = observerFacts(active); }
     catch (_) {
@@ -400,7 +410,7 @@
     else if (stage === "unresolved_after_threshold")
       classification = "waiting_for_result";
     const sends = [];
-    for (const tool_id of session.enabled) {
+    for (const tool_id of sampledTools) {
       if (session.sequence >= 32) break;
       session.sequence += 1;
       sends.push(Promise.resolve().then(() => chrome.runtime.sendMessage({
@@ -423,32 +433,20 @@
     if (!session) return;
     if (handoff && !session.handoffReported) capture(active, "media_handoff",
       {handoff, generating, newCandidates, captured});
-    // Ten enabled ABCD tools can capture only three snapshots: baseline,
-    // a progress checkpoint and reserved terminal evidence. A Worker may
-    // advertise a longer timeout than the HTTP client/server actually permits
-    // (bot2: 600s Worker option vs 300s server). Do not postpone the only
-    // nonterminal sample to 555s, after the server already disconnected.
-    if (session.cap <= 3) {
-      const effectiveTimeoutMs = Math.max(60000,
-        Number(active?.options?.timeout_seconds || 300) * 1000);
-      const checkpointAt = Math.min(60000, Math.max(30000, effectiveTimeoutMs - 45000));
-      if (!session.thresholdReported && Date.now() - session.started_at >= checkpointAt) {
-        session.thresholdReported = true;
-        capture(active, "progress_checkpoint",
-          {handoff, generating, newCandidates, captured});
-      }
-      return;
-    }
-    if (!session.thresholdReported && Date.now() - session.started_at >= session.threshold)
+    // A 900-second C run needs post-generation evidence, not just 60s data.
+    // With ten tools: 10 baseline + four three-tool checkpoints + 10 final
+    // = 32. If a media handoff consumes slots, later samples yield before
+    // violating the cap; final capture still has the reserved slots.
+    const elapsed = Date.now() - session.started_at;
+    const milestones = [60000, 180000, 420000, 720000];
+    if (session.enabled.size < 5 && !session.thresholdReported
+        && elapsed >= session.threshold) {
       capture(active, "unresolved_after_threshold",
         {handoff, generating, newCandidates, captured});
-    // The image controller can legitimately run for 600 seconds. Capture
-    // bounded checkpoints after 60, 120, 240 and 480 seconds; otherwise
-    // the last evidence would be a misleading 20-second canvas snapshot.
-    const milestones = [60000, 120000, 240000, 480000];
-    while (session.checkpointsReported < milestones.length &&
-      Date.now() - session.started_at >= milestones[session.checkpointsReported]) {
-      session.checkpointsReported++;
+    }
+    while (session.checkpointsReported < milestones.length
+      && elapsed >= milestones[session.checkpointsReported]) {
+      session.checkpointsReported += 1;
       capture(active, "progress_checkpoint",
         {handoff, generating, newCandidates, captured});
     }
