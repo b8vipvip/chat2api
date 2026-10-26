@@ -53,6 +53,14 @@ async def reconcile_playground_runs(test_runs: Any, telemetry: Any, limit: int =
         if not ids:
             continue
         result_rows = [dict(x) for x in (run.get("results") or [])]
+        # ABCD artifact/quality checks are a separate observer. The production
+        # broker remains the only owner of completed/error, while test history
+        # must not turn a failed four-file acceptance into "passed" merely
+        # because the SSE API returned stop + DONE.
+        abcd = run.get("abcd_report")
+        abcd_failed = isinstance(abcd, dict) and (
+            abcd.get("status") == "failed" or abcd.get("passed") is False
+        )
         statuses: list[str] = []
         changed = False
         for entry in result_rows:
@@ -77,12 +85,19 @@ async def reconcile_playground_runs(test_runs: Any, telemetry: Any, limit: int =
                 and entry["quality"].get("grade") == "warning"
             ):
                 status = "warning"
+            if status == "passed" and abcd_failed:
+                status = "failed"
             statuses.append(status)
             if entry.get("status") != status or entry.get("authoritative_request_status") != row["status"]:
                 entry.update({
                     "status": status,
                     "authoritative_request_status": row["status"],
-                    "message": "已按服务端请求记录同步完成" if status == "passed" else str(row.get("error") or status)[:300],
+                    "message": (
+                        "ABCD 文件/内容验收失败；API 请求本身已完成"
+                        if abcd_failed and row["status"] == "completed"
+                        else "已按服务端请求记录同步完成" if status == "passed"
+                        else str(row.get("error") or status)[:300]
+                    ),
                     "request_id": rid,
                     "response_chars": int(row.get("completion_chars") or 0),
                     "image_count": int(row.get("response_media_count") or 0),
@@ -106,10 +121,17 @@ async def reconcile_playground_runs(test_runs: Any, telemetry: Any, limit: int =
             quality = dict(run.get("quality") or {})
             quality["authoritative_request_status"] = "reconciled"
             quality["record_lifecycle"] = "server-request-terminal-reconciliation-v170"
+            if isinstance(abcd, dict):
+                quality["abcd_content_validation_status"] = abcd.get("status") or "unknown"
+                quality["abcd_content_validation_scene"] = abcd.get("scene")
             await test_runs.update(run["run_id"], {
                 "results": result_rows, "status": status, "quality": quality,
                 "finished_at": run.get("finished_at") or beijing_now_iso(),
-                "summary": "已同步服务端请求终态：" + status,
+                "summary": (
+                    "ABCD 内容验收失败；底层 API 请求状态独立记录"
+                    if abcd_failed and status == "failed"
+                    else "已同步服务端请求终态：" + status
+                ),
                 "error": next((x["message"] for x in result_rows if x.get("status") in {"stalled", "failed"}), None),
             })
             count += 1

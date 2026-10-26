@@ -1090,7 +1090,7 @@
   }
 
   function explicitCreationIntent(prompt, subjects, stopAtClauseBoundary = false) {
-    const action = /(?:生成|创建|导出|制作|绘制|画出|输出|提供下载|create|export|generate|make|draw|design)/i;
+    const action = /(?:生成|创建|导出|制作|交付|绘制|画出|输出|提供下载|create|export|generate|deliver|make|draw|design)/i;
     const negation = /(?:不需要|不用|不要求|不应该|无需|不必|不要|不得|禁止|避免|不再|别|无需重新|仅回顾|只回顾|don't|do not|without|no need)/i;
     for (const raw of requestedUserText(prompt).split(/\r?\n/)) {
       const line = raw.replace(/^\s*(?:[-*]|\d+[.、])\s*/, "").trim();
