@@ -4,6 +4,8 @@ import {readFileSync} from "node:fs";
 import {runInNewContext} from "node:vm";
 
 const source=readFileSync(new URL("../chrome_extension/content_request_v6.js",import.meta.url),"utf8");
+const helperStart=source.indexOf("  function replyScopeForFinishAction(candidate, button) {");
+const helperEnd=source.indexOf("  // A redesigned reply can render",helperStart);
 const start=source.indexOf("  function verifiedRenderedAbortCandidate(active, current) {");
 const end=source.indexOf("  function renderedNetworkCorrelatedTurn(active) {",start);
 assert.ok(start>0&&end>start);
@@ -20,7 +22,7 @@ function attempt({completionIndex=1,blocks=2}={}){
   };
   const current={isNew:true,latest:content[0],reason:"verified-rendered-dom-baseline-v191",
     text:"This long complete reply has valid narrative, structured tables and code.".repeat(8)};
-  const fn=runInNewContext(source.slice(start,end)+"\nverifiedRenderedAbortCandidate",{
+  const fn=runInNewContext(source.slice(helperStart,helperEnd)+source.slice(start,end)+"\nverifiedRenderedAbortCandidate",{
     responseFinishActions:()=>[action],
     turnFollows:(left,right)=>right===action && left.pos < completionIndex,
     internalToolPayload:()=>false,promptStillPresent:()=>false,
