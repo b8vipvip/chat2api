@@ -57,7 +57,7 @@ const magicStart=rich.indexOf("  function validGeneratedFileBytes(filename, byte
 const magicEnd=rich.indexOf("  function hasCandidateFile(root) {",magicStart);
 assert.ok(magicStart>0 && magicEnd>magicStart);
 const magic=runInNewContext(rich.slice(magicStart,magicEnd)+"\nvalidGeneratedFileBytes",
-  {TextDecoder});
+  {TextDecoder, Uint8Array});
 test("reject HTML preview falsely labeled as Office ZIP or PDF",()=>{
   const html=new TextEncoder().encode("<html><title>Preview</title></html>");
   assert.equal(magic("预算.xlsx",html),false);
