@@ -154,7 +154,8 @@ def test_tool_argument_json_cannot_be_final_and_rich_markup_stays_grouped():
     owner = read("chrome_extension/content_request_v6.js")
     rich = read("chrome_extension/content_rich_response_v69.js")
     assert "function combinePageMediaText(prose, mediaText)" in owner
-    assert "const captured = combinePageMediaText(assistantProse, finalMedia?.text);" in owner
+    assert "const serialized = combinePageMediaText(assistantProse, finalMedia?.text);" in owner
+    assert 'const captured = [serialized, native?.text || ""].filter(Boolean).join("\\n\\n");' in owner
     assert "function isImageToolArguments(value)" in owner
     assert "const imageToolArguments = imageCreationRequested" in owner
     assert "|| imageToolArguments;" in owner
@@ -192,7 +193,8 @@ def test_generated_file_handoff_uses_existing_single_terminal_owner():
     assert "function hasTransferableFile(value)" in owner
     assert "function isFileCreationRequest(prompt)" in owner
     assert "rich?.hasCandidateFile?.(mediaReplyRoot)" in owner
-    assert "const captured = combinePageMediaText(assistantProse, finalMedia?.text);" in owner
+    assert "const serialized = combinePageMediaText(assistantProse, finalMedia?.text);" in owner
+    assert 'const captured = [serialized, native?.text || ""].filter(Boolean).join("\\n\\n");' in owner
     assert "hasTransferableFile(captured)" in owner
     assert "file_inlined_count: fileStats.count" in rich
     assert "generated_files = GeneratedFileArchive(media_archive)" in main
