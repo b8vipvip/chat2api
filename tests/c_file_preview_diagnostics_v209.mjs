@@ -86,3 +86,14 @@ test("conversation preview URLs never become generated-file binary",()=>{
   assert.equal(result,null);
   assert.match(rich,/preview-only-no-binary-link/);
 });
+
+test("only the single request controller may capture sibling cards in a verified reply",()=>{
+  const request=readFileSync("chrome_extension/content_request_v6.js","utf8");
+  assert.match(request,/const fileReplyBoundary = fileCreationRequested/);
+  assert.match(request,/verifiedRenderedAbortCandidate\(active, current\)/);
+  assert.match(request,/const mediaReplyRoot = fileReplyBoundary\?\.replyScope \|\| sameTurnRoot/);
+  assert.match(request,/await finalNodeText\(mediaReplyRoot\)/);
+  assert.match(request,/const delivered = deliveredImages \+ deliveredFiles/);
+  assert.match(request,/delivered > 0 && \(hasTransferableImage\(captured\) \|\| hasTransferableFile\(captured\)\)/);
+  assert.match(rich,/if \(conversationPreviewUrl\(uri\)\) return null/);
+});
