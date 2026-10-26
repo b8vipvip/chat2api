@@ -175,6 +175,13 @@ for(const turn of report.turns){
 try{await api("/api/admin/playground/chat-records",{method:"POST",body:{request_id:turn.request_id,model,prompt:turn.prompt,api_key_id:auth?.id||null,api_key_name:auth?.label||"未解析",status:report.status,duration_ms:turn.duration_ms,response_chars:turn.text.length,attachments_count:0,error:turn.error||report.error||(report.status==="passed"?null:(report.warnings.join("；")||"产物验证失败"))}});}
 catch(e){console.warn("ABCD record persistence failed",e);}
 }
+if(report.turns.length){
+try{
+  await api("/api/admin/playground/abcd/report",{method:"POST",body:{scene:sceneId,report}});
+}catch(error){
+  report.warnings.push("ABCD 诊断报告写入请求日志失败："+String(error?.message||error));
+}
+}
 note(sceneId+" · "+(report.status==="passed"?"协议和上游终态已证实":report.status==="warning"?"内容验收有警告／上游终态未证实":"未通过")+"\n"+(report.error||report.checks.map(c=>(c.passed?"✓ ":"✗ ")+c.label).join("\n"))+"\n"+(report.warnings||[]).join("\n")+"\n此题已从待用池移除，下次自动使用新主题。图像质量、PPT页数及业务准确性仍需人工复核。");
 working=false;byId("pgABCDRun").disabled=false;byId("pgABCDExport").disabled=false;
 if(typeof loadTests==="function")Promise.resolve(loadTests()).catch(()=>{});
