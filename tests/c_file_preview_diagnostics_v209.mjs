@@ -72,6 +72,23 @@ test("baseline, 1/3/7/12-minute checkpoints and final stay within 32 events",asy
   assert.ok(!script.includes('type: "chat.completed"'));
 });
 
+test("server-side timeout still records all ten tools without a Worker terminal",async()=>{
+  const active={
+    requestId:"req_deadline1234567",options:{timeout_seconds:900,probe_policy:{
+      schema_version:1,tools:Object.fromEntries(toolIds.map(id=>[id,{enabled:true}]))}},
+  };
+  sent.length=0;now=0;probes.begin(active);
+  for(const time of [60000,180000,420000,720000,810000]){
+    now=time;probes.observe(active);
+    await Promise.resolve();await Promise.resolve();
+  }
+  assert.equal(sent.length,32);
+  assert.equal(sent.filter(e=>e.stage==="deadline_checkpoint").length,10);
+  assert.ok(sent.filter(e=>e.stage==="deadline_checkpoint").every(e=>
+    e.classification==="approaching_server_deadline"));
+  assert.equal(new Set(sent.map(e=>e.sequence)).size,32);
+});
+
 test("conversation preview URLs never become generated-file binary",()=>{
   const start=rich.indexOf("  function conversationPreviewUrl(uri) {");
   const end=rich.indexOf("  function validGeneratedFileBytes",start);
