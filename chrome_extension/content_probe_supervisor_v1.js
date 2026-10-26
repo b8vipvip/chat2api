@@ -209,6 +209,22 @@
       node.matches?.("a[href]") || Boolean(node.querySelector?.("a[href]")));
     const fileCardsWithButtons = fileCardNodes.filter(node =>
       node.matches?.("button") || Boolean(node.querySelector?.("button")));
+    // ChatGPT's new Office artifacts may use preview actions (not conventional
+    // data-testid file cards). Count only suffix classes, never filenames or
+    // URLs. These are observational and never imply transferable file bytes.
+    const previewControls = [...scope.querySelectorAll(
+      "a,button,[role='button']"
+    )].slice(-200).filter(node => {
+      const label = String(node.getAttribute("aria-label") || node.getAttribute("title")
+        || node.textContent || "").trim();
+      return /(?:open preview of|打开预览|预览文件)/i.test(label)
+        && /\.(?:xlsx|pptx|json|zip)(?:\b|$)/i.test(label);
+    });
+    const previewExtCount = ext => previewControls.filter(node => {
+      const label = String(node.getAttribute("aria-label") || node.getAttribute("title")
+        || node.textContent || "").trim();
+      return new RegExp("\\." + ext + "(?:\\b|$)", "i").test(label);
+    }).length;
 
     const roleStats = conversationNodes.reduce((summary, node) => {
       const role = String(node.getAttribute("data-message-author-role") || "").toLowerCase();
@@ -248,6 +264,11 @@
       file_card_candidates_count: fileCardNodes.length,
       file_card_href_count: fileCardsWithLinks.length,
       file_card_button_count: fileCardsWithButtons.length,
+      file_preview_control_count: previewControls.length,
+      file_preview_xlsx_count: previewExtCount("xlsx"),
+      file_preview_pptx_count: previewExtCount("pptx"),
+      file_preview_json_count: previewExtCount("json"),
+      file_preview_zip_count: previewExtCount("zip"),
       download_link_https_count: downloadLinkStats.https,
       download_link_blob_count: downloadLinkStats.blob,
       download_link_sandbox_count: downloadLinkStats.sandbox,
