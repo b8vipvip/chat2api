@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, Response
 from .api_keys import ApiPrincipal
 from .diagnostics import DiagnosticMiddleware, DiagnosticStore, configure_file_logging
 from .runtime_contract import SERVER_RUNTIME_VERSION
+from .playground_request_evidence_v207 import request_test_index, playground_diagnostics
 
 
 PATCH_VERSION = "0.8.0"
@@ -95,6 +96,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
         if not row:
             raise HTTPException(status_code=404, detail="Request record not found")
         trace_id = str(row.get("trace_id") or "")
+        test_run = request_test_index(getattr(app.state, "test_runs", None)).get(request_id)
         return {
             "report_type": "chat2api-request-diagnostic",
             "report_version": 1,
@@ -103,6 +105,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             "request": row,
             "http_trace": diagnostic_store.by_trace(trace_id) if trace_id else [],
             "worker_probe_evidence": request_probe_evidence(request_id),
+            "playground_diagnostics": playground_diagnostics(test_run),
             "extension_snapshot": _safe_client_rows(registry),
             "notes": [
                 "API keys, Authorization headers, pairing codes, prompt bodies and base64 payloads are not included.",
