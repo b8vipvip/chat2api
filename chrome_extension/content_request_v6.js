@@ -152,6 +152,17 @@
 
   const isGenerating = () => Boolean(stopButton());
 
+  // A redesigned ChatGPT page can continue its reasoning after removing the
+  // Stop button. Re-read the live status immediately before DOM-only terminal
+  // recovery; old heartbeat metadata is evidence, never current UI truth.
+  function upstreamStillWorking() {
+    if (isGenerating()) return true;
+    try {
+      return globalThis.__CHAT2API_GENERATION_LIVENESS_V49__?.nativeStatus?.()?.kind === "working";
+    } catch (_) { return false; }
+  }
+
+
   function conversationTurns() {
     const result = [];
     const seen = new Set();
@@ -1619,7 +1630,7 @@
           && active.networkTerminalTransportErrorAt
           && Date.now() - active.networkTerminalTransportErrorAt >= 5000
           && active.networkObservedAt && Date.now() - active.networkObservedAt >= 10000
-          && !generating) {
+          && !generating && !upstreamStillWorking()) {
         const rendered = verifiedRenderedAbortCandidate(active, current);
         if (rendered && Date.now() - lastAbortedRenderedCaptureAt >= 750) {
           lastAbortedRenderedCaptureAt = Date.now();
@@ -1633,13 +1644,17 @@
             for (const part of parts) wrapper.appendChild(part.cloneNode(true));
             const capture = typeof rich?.captureFinalMarkdown === "function"
               ? await rich.captureFinalMarkdown(wrapper) : {text:""};
-            const finalText = String(capture?.text || "").trim();
+            // Redesigned ChatGPT sometimes includes empty role labels in the
+            // cloned reply container. Remove ONLY the known leading chrome;
+            // never strip an ordinary user-authored heading in the body.
+            const finalText = String(capture?.text || "")
+              .replace(/^#### You said:\\s*#### ChatGPT said:\\s*/i, "").trim();
             const completePartSet = parts.every(part => part.isConnected
               && visible(part) && !promptStillPresent(active));
             if (completePartSet && finalText.length >= 240
                 && finalText.length >= rendered.text.length * 0.85
                 && !internalToolPayload(finalText)
-                && !promptStillPresent(active) && !isGenerating()) {
+                && !promptStillPresent(active) && !upstreamStillWorking()) {
               if (finalText !== abortedRenderedCandidate) {
                 abortedRenderedCandidate = finalText;
                 abortedRenderedCandidateSince = Date.now();
@@ -1649,7 +1664,8 @@
                   && responseFinishActions().includes(rendered.finishAction)
                   && replyScopeForFinishAction(current.latest, rendered.finishAction)
                     === rendered.replyScope
-                  && parts.every(node => turnFollows(node, rendered.finishAction))) {
+                  && parts.every(node => turnFollows(node, rendered.finishAction))
+                  && !upstreamStillWorking()) {
                 responseStarted = await ensureResponseStarted(active, responseStarted,
                   "verified-aborted-stream-rendered-dom-v200");
                 await emit({
@@ -1662,7 +1678,8 @@
                     response_terminal_final_chars: finalText.length,
                     response_terminal_stable_ms: Date.now() - abortedRenderedCandidateSince,
                     response_finish_action_count: rendered.finishActionCount,
-                    response_integrity_scope: "same-answer-container-before-toolbar-v205",
+                    response_integrity_scope: "same-answer-container-before-toolbar-v206",
+                    response_terminal_live_working_guard: true,
                     response_integrity_candidate_chars: rendered.coverage.candidate_chars,
                     response_integrity_uncovered_blocks: rendered.coverage.independent_count,
                     response_integrity_merged_blocks: parts.length,
@@ -1704,6 +1721,7 @@
               ? renderedResponseBoundaryEvidence(active, current.latest).scan_structural_node_count : null,
             response_recovery_finish_after_all_blocks: Boolean(
               verifiedRenderedAbortCandidate(active, current)),
+            response_recovery_native_working: upstreamStillWorking(),
             response_recovery_scoped_finish_actions: current.latest
               ? responseFinishActions().filter(button =>
                   !active.baselineFinishActions.has(button)
