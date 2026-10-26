@@ -94,7 +94,7 @@ assert.equal(fileIntent("请制作可下载的 XLSX、PPTX、JSON 和 ZIP 四个
   "C must remain a genuine file-delivery task");
 assert.equal(fileIntent("请创建一个 CSV 文件，附上下载链接。"), true);
 
-assert.match(controllerSource, /imageToolArguments[\s\S]*?\|\| visibleTurnMedia \|\| visibleTurnFiles \|\| fileCreationRequested \|\| pageMediaFound/);
+assert.match(controllerSource, /imageToolArguments[\s\S]*?\|\| visibleTurnMedia \|\| visibleTurnFiles \|\| visibleTurnPreviews \|\| fileCreationRequested \|\| pageMediaFound/);
 assert.match(controllerSource, /networkTerminalAt && networkTerminalText && !captureMedia[\s\S]*?!internalToolPayload\(networkTerminalText\)/);
 assert.match(controllerSource, /response_terminal_source: "verified-request-media-dom-v176"/);
 console.log("Rich Markdown inline grouping, table formatting and image-tool handoff regression passed");
