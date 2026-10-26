@@ -76,17 +76,14 @@ def install_worker_probe_ui_v1(app: FastAPI) -> FastAPI:
       .then(report => {
         if(report && requestHistoryMediaSequence === sequence){
           const count = Number(report.summary?.event_count || 0);
-          meta.textContent += ' · 探针证据 ' + count + ' 条';
+          meta.textContent += ' · 日志内含探针证据 ' + count + ' 条';
           const jump = document.createElement('button');
           jump.className = 'action';
-          jump.textContent = '查看探针';
-          jump.onclick = () => {
-            document.getElementById('requestConversationClose')?.click();
-            document.querySelector('.nav button[data-view="worker-tools"]')?.click();
-            const input = document.getElementById('workerToolsRequestId');
-            if(input)input.value=requestId;
-            document.getElementById('workerToolsInspect')?.click();
-          };
+          jump.textContent = '下载完整诊断日志（含探针）';
+          jump.onclick = () => requestHistoryDownload(
+            '/api/admin/requests/' + encodeURIComponent(requestId) + '/log',
+            'chat2api-request-' + requestId + '.json'
+          ).catch(error => status(String(error?.message || error), 'bad'));
           meta.appendChild(jump);
         }
       }).catch(() => {});
