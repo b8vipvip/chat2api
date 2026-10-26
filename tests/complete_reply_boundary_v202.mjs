@@ -9,8 +9,9 @@ const end=source.indexOf("  function renderedNetworkCorrelatedTurn(active) {",st
 assert.ok(start>0&&end>start);
 
 function attempt({completionIndex=1,blocks=2}={}){
-  const content=Array.from({length:blocks},(_,i)=>({pos:i, id:"answer-block-"+i}));
-  const action={id:"finished-answer-toolbar"};
+  const root={contains:x=>x===action||content.includes(x),matches:()=>false,querySelector:()=>null};
+  const content=Array.from({length:blocks},(_,i)=>({pos:i, id:"answer-block-"+i, parentElement:root}));
+  const action={id:"finished-answer-toolbar",parentElement:root,getAttribute:()=>""};
   const active={
     networkStreamSeen:true,submitStartedAt:100,networkObservedAt:110,
     networkTerminalTransportErrorAt:150,networkStreamEndedWithoutTerminalAt:151,
@@ -41,8 +42,8 @@ test("Simple one-block response still qualifies",()=>{
   assert.ok(attempt({completionIndex:1,blocks:1}));
 });
 test("Request-v6 terminal must revalidate all parts just before commit",()=>{
-  assert.match(source,/parts\.every\(node => turnFollows\(node, button\)\)/);
-  assert.match(source,/response_integrity_scope: "whole-reply-blocks-then-finish-action-v202"/);
+  assert.match(source,/parts\.every\(node => turnFollows\(node, rendered\.finishAction\)\)/);
+  assert.match(source,/response_integrity_scope: "same-answer-container-before-toolbar-v205"/);
   assert.match(source,/response_recovery_finish_after_all_blocks/);
   assert.ok(!/type:\s*["']chat\.completed["']/.test(
     readFileSync(new URL("../chrome_extension/content_probe_supervisor_v1.js",import.meta.url),"utf8")));
