@@ -55,8 +55,8 @@
     // armed by one verified reply button; ordinary preview/navigation links
     // must never be read as binary file handoffs.
     const path = new URL(raw, location.href).pathname.toLowerCase();
-    const fileEndpoint = /\\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md)$/.test(path)
-      || /\\/(?:download|files?\\/download)(?:\\/|$)/.test(path);
+    const fileEndpoint = /\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md)$/.test(path)
+      || /\/(?:download|files?\/download)(?:\/|$)/.test(path);
     if (!blob && !anchor?.hasAttribute?.("download") && !fileEndpoint) return;
     if (session.inFlight) return;
     session.inFlight = true;
@@ -104,7 +104,7 @@
         const disposition = String(response.headers?.get?.("content-disposition") || "");
         const type = String(response.headers?.get?.("content-type") || "").toLowerCase();
         const ext = session.filename.split(".").pop().toLowerCase();
-        const mimeMatches = (ext === "zip" && /application\\/(?:zip|x-zip-compressed)/.test(type))
+        const mimeMatches = (ext === "zip" && /application\/(?:zip|x-zip-compressed)/.test(type))
           || (ext === "xlsx" && type.includes("spreadsheetml.sheet"))
           || (ext === "pptx" && type.includes("presentationml.presentation"))
           || (ext === "json" && type.includes("application/json") && /attachment/i.test(disposition));
