@@ -229,6 +229,8 @@ jobs:
 
       - name: Native C-file browser download byte capture v210
         run: node --test tests/c_native_file_handoff_v210.mjs
+      - name: Verified C-file ZIP packaging v211
+        run: node --test tests/c_native_file_bundle_v211.mjs
 
       - name: Worker probe observer regression
         run: node tests/worker_probe_supervisor_v1.mjs
