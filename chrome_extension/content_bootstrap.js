@@ -7,7 +7,7 @@
       await chrome.scripting.executeScript({
         target: { tabId },
         world: "MAIN",
-        files: ["network_stream_main_v55.js", "model_evidence_main_v144.js", "native_tool_stream_main_v63.js", "multimodal_main_v78.js"],
+        files: ["network_stream_main_v55.js", "model_evidence_main_v144.js", "native_tool_stream_main_v63.js", "native_file_main_v210.js", "multimodal_main_v78.js"],
       });
       await chrome.scripting.executeScript({
         target: { tabId },
@@ -35,6 +35,7 @@
           "content_request_v4.js",
           "content_request_v5.js",
           "content_rich_response_v69.js",
+          "content_native_file_v210.js",
           "content_request_v6.js",
           "content_chatgpt_choice_policy_v143.js",
           "content_request_lifecycle_v50.js",
