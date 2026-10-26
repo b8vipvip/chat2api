@@ -50,9 +50,16 @@
     const raw = String(anchor?.href || "");
     if (!validName(name) || !allowedSource(raw)) return;
     const blob = blobs.get(raw);
-    // Only an explicit browser download action, not a conversation preview.
-    if (!blob && !anchor?.hasAttribute?.("download")) return;
-    session.used = true;
+    // A finished reply may trigger a file link without an HTML download
+    // attribute. Permit only a file-shaped, allowlisted URL while specifically
+    // armed by one verified reply button; ordinary preview/navigation links
+    // must never be read as binary file handoffs.
+    const path = new URL(raw, location.href).pathname.toLowerCase();
+    const fileEndpoint = /\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md)$/.test(path)
+      || /\/(?:download|files?\/download)(?:\/|$)/.test(path);
+    if (!blob && !anchor?.hasAttribute?.("download") && !fileEndpoint) return;
+    if (session.inFlight) return;
+    session.inFlight = true;
     try {
       let bytes;
       if (blob) {
@@ -74,13 +81,52 @@
         } finally { clearTimeout(timer); }
       }
       if (!bytes || bytes.length < 4 || bytes.length > MAX_BYTES) return;
+      session.used = true;
       window.postMessage({
         kind: KIND, direction: "captured", nonce: session.nonce,
         filename: name, bytes: bytes.length, base64: encoded(bytes),
       }, location.origin);
-    } catch (_) { /* Explicitly report timeout to the isolated observer. */ }
+    } catch (_) { /* Do not consume this one-shot arm on a failed preview. */ }
+    finally { session.inFlight = false; }
   }
-  const nativeClick = HTMLAnchorElement.prototype.click;
+  // Some ChatGPT download controls use fetch() and a browser-owned save
+  // operation rather than <a download>. Inspect only an armed, allowlisted
+  // file response; never intercept normal conversation SSE or mutate it.
+  const beforeFileFetch = globalThis.fetch;
+  globalThis.fetch = function(...args) {
+    const result = Reflect.apply(beforeFileFetch, this, args);
+    const session = armed;
+    if (session && !session.used && Date.now() < session.until) {
+      void Promise.resolve(result).then(async response => {
+        if (session !== armed || session.used || session.inFlight || !response?.ok) return;
+        const raw = String(response.url || "");
+        if (!allowedSource(raw)) return;
+        const disposition = String(response.headers?.get?.("content-disposition") || "");
+        const type = String(response.headers?.get?.("content-type") || "").toLowerCase();
+        const ext = session.filename.split(".").pop().toLowerCase();
+        const mimeMatches = (ext === "zip" && /application\/(?:zip|x-zip-compressed)/.test(type))
+          || (ext === "xlsx" && type.includes("spreadsheetml.sheet"))
+          || (ext === "pptx" && type.includes("presentationml.presentation"))
+          || (ext === "json" && type.includes("application/json") && /attachment/i.test(disposition));
+        const exactName = disposition.includes(session.filename);
+        const pathName = new URL(raw).pathname.toLowerCase().endsWith("/" + session.filename.toLowerCase());
+        if (!exactName && !pathName && !mimeMatches) return;
+        if (Number(response.headers.get("content-length") || 0) > MAX_BYTES) return;
+        session.inFlight = true;
+        try {
+          const buffer = await response.clone().arrayBuffer();
+          if (!buffer.byteLength || buffer.byteLength > MAX_BYTES || session !== armed || session.used) return;
+          session.used = true;
+          window.postMessage({kind:KIND,direction:"captured",nonce:session.nonce,
+            filename:session.filename,bytes:buffer.byteLength,base64:encoded(new Uint8Array(buffer))},
+            location.origin);
+        } catch (_) { /* read-only observation must not change native fetch */ }
+        finally { session.inFlight = false; }
+      }).catch(() => {});
+    }
+    return result;
+  };
+    const nativeClick = HTMLAnchorElement.prototype.click;
   HTMLAnchorElement.prototype.click = function() {
     void observed(this);
     return Reflect.apply(nativeClick, this, arguments);

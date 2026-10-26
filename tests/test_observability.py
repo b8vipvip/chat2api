@@ -80,13 +80,13 @@ def test_playground_supports_test_keys_without_exposing_them_in_reports() -> Non
     assert "api_key_token" not in ADMIN_HTML
 
 
-def test_playground_reports_are_history_actions_not_a_permanent_panel() -> None:
+def test_playground_results_are_viewed_through_request_history_only() -> None:
     assert 'id="testReport"' not in ADMIN_HTML
-    assert 'id="reportDialog"' in ADMIN_HTML
-    assert "查看报告" in ADMIN_HTML
-    assert "下载 JSON" in ADMIN_HTML
-    assert "downloadTest" in ADMIN_HTML
-    assert "downloadReportObject" in ADMIN_HTML
+    assert 'id="reportDialog"' not in ADMIN_HTML
+    assert 'id="testHistory"' in ADMIN_HTML
+    assert "查看报告" not in ADMIN_HTML
+    assert "downloadTest" not in ADMIN_HTML
+    assert "downloadReportObject" not in ADMIN_HTML
 
 
 def test_server_exposes_multimodal_diagnostics_and_admin_routes() -> None:

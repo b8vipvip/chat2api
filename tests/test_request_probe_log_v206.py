@@ -30,8 +30,10 @@ def test_per_request_log_includes_the_original_sanitized_probe_timeline(tmp_path
     assert "Worker facts are already allowlisted" in source
 
 
-def test_request_chat_downloads_same_log_without_separate_probe_package():
+def test_request_chat_shows_probe_count_without_duplicate_log_download():
     source = (APP / "worker_probe_ui_patch.py").read_text(encoding="utf-8")
-    assert "下载完整诊断日志（含探针）" in source
-    assert "'/log'" in source
-    assert "查看探针" not in source
+    history = (APP / "request_history_v94_patch.py").read_text(encoding="utf-8")
+    assert "日志内含探针证据" in source
+    assert "下载完整诊断日志（含探针）" not in source
+    assert "requestHistoryButton(tr,'下载日志'" in history
+    assert "/log" in history

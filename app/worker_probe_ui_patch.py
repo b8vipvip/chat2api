@@ -77,14 +77,7 @@ def install_worker_probe_ui_v1(app: FastAPI) -> FastAPI:
         if(report && requestHistoryMediaSequence === sequence){
           const count = Number(report.summary?.event_count || 0);
           meta.textContent += ' · 日志内含探针证据 ' + count + ' 条';
-          const jump = document.createElement('button');
-          jump.className = 'action';
-          jump.textContent = '下载完整诊断日志（含探针）';
-          jump.onclick = () => requestHistoryDownload(
-            '/api/admin/requests/' + encodeURIComponent(requestId) + '/log',
-            'chat2api-request-' + requestId + '.json'
-          ).catch(error => status(String(error?.message || error), 'bad'));
-          meta.appendChild(jump);
+
         }
       }).catch(() => {});
 """, 1)
