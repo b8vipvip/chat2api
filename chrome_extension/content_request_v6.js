@@ -516,6 +516,52 @@
       replyScope: best.scope, coverage: best.coverage};
   }
 
+  // A short real answer (<240 chars) on redesigned pages has no role-labelled
+  // assistant node. The long-form DOM recovery cannot detect it. Correlate a
+  // fresh, exact reply text fragment from THIS request's SSE with a fresh
+  // same-answer copy toolbar; never promote a mere pause or snapshot to final.
+  function verifiedShortAbortCandidate(active) {
+    const source = normalize(String(active?.networkObservedText || ""));
+    if (!active?.networkStreamSeen || !active?.networkTerminalTransportErrorAt
+        || !active?.networkStreamEndedWithoutTerminalAt
+        || source.length < 8 || source.length > 180
+        || !active?.baselineRenderedText || !active?.baselineFinishActions
+        || promptStillPresent(active) || upstreamStillWorking()
+        || internalToolPayload(source)) return null;
+    const freshActions = responseFinishActions()
+      .filter(button => !active.baselineFinishActions.has(button));
+    if (!freshActions.length) return null;
+    const candidates = [...document.querySelectorAll(
+      "main [data-message-content],main .markdown,main [class*='markdown'],main p,main [class*='prose']"
+    )].filter(node => visible(node)
+      && !node.closest?.("form,[contenteditable='true'],nav,aside,header,footer,[role='dialog']"));
+    for (const node of candidates.reverse()) {
+      const raw = normalize(node.innerText || node.textContent || "");
+      const baseline = active.baselineRenderedText.get(node);
+      const text = plainNodeText(node);
+      if (raw.length < source.length || raw.length > 220
+          || !raw.includes(source.slice(0, Math.min(12, source.length)))
+          || normalize(text).length < 8
+          || (baseline !== undefined && baseline === raw.slice(-5000))
+          || (active.promptNormalized && raw.includes(active.promptNormalized.slice(0, 120)))
+          || transientText(raw)) continue;
+      for (const button of freshActions) {
+        if (!turnFollows(node, button)) continue;
+        const scope = replyScopeForFinishAction(node, button);
+        if (!scope) continue;
+        const evidence = renderedResponseBoundaryEvidence(active, node, scope);
+        if (evidence.scan_overflow || evidence.independent_count !== 0) continue;
+        return {
+          node, text, latest: node, reason: "verified-short-sse-rendered-answer-v207",
+          shortTextVerified: true, finishAction: button, finishActionCount: freshActions.length,
+          replyScope: scope, coverage: {nodes: [node], candidate_chars: raw.length,
+            independent_count: 0, scan_structural_node_count: evidence.scan_structural_node_count},
+        };
+      }
+    }
+    return null;
+  }
+
   function renderedNetworkCorrelatedTurn(active) {
     // A redesigned ChatGPT page may no longer expose the role/testid attributes.
     // Never guess from raw page position alone: bind a *changed* rendered node
@@ -1631,7 +1677,8 @@
           && Date.now() - active.networkTerminalTransportErrorAt >= 5000
           && active.networkObservedAt && Date.now() - active.networkObservedAt >= 10000
           && !generating && !upstreamStillWorking()) {
-        const rendered = verifiedRenderedAbortCandidate(active, current);
+        const rendered = verifiedRenderedAbortCandidate(active, current)
+          || verifiedShortAbortCandidate(active);
         if (rendered && Date.now() - lastAbortedRenderedCaptureAt >= 750) {
           lastAbortedRenderedCaptureAt = Date.now();
           try {
@@ -1642,8 +1689,12 @@
             const wrapper = document.createElement("div");
             wrapper.setAttribute("class", "markdown");
             for (const part of parts) wrapper.appendChild(part.cloneNode(true));
-            const capture = typeof rich?.captureFinalMarkdown === "function"
-              ? await rich.captureFinalMarkdown(wrapper) : {text:""};
+            // Short replies have one tightly scoped network-correlated node.
+            // Do not concatenate duplicate page wrappers into the reply.
+            const capture = rendered.shortTextVerified
+              ? await finalNodeText(rendered.node)
+              : typeof rich?.captureFinalMarkdown === "function"
+                ? await rich.captureFinalMarkdown(wrapper) : {text:""};
             // Redesigned ChatGPT sometimes includes empty role labels in the
             // cloned reply container. Remove ONLY the known leading chrome;
             // never strip an ordinary user-authored heading in the body.
@@ -1651,7 +1702,11 @@
               .replace(/^#### You said:\s*#### ChatGPT said:\s*/i, "").trim();
             const completePartSet = parts.every(part => part.isConnected
               && visible(part) && !promptStillPresent(active));
-            if (completePartSet && finalText.length >= 240
+            if (completePartSet
+                && (rendered.shortTextVerified
+                  ? finalText.length >= 8 && finalText.length <= 220
+                    && normalize(finalText).includes(normalize(String(active.networkObservedText || "")).slice(0, 8))
+                  : finalText.length >= 240)
                 && finalText.length >= rendered.text.length * 0.85
                 && !internalToolPayload(finalText)
                 && !promptStillPresent(active) && !upstreamStillWorking()) {
@@ -1665,15 +1720,23 @@
                   && replyScopeForFinishAction(current.latest, rendered.finishAction)
                     === rendered.replyScope
                   && parts.every(node => turnFollows(node, rendered.finishAction))
-                  && !upstreamStillWorking()) {
+                  && !upstreamStillWorking()
+                  && (!rendered.shortTextVerified || (
+                    normalize(String(active.networkObservedText || "")).length >= 8
+                    && normalize(finalText).includes(normalize(String(active.networkObservedText || "")).slice(0, 8))
+                  ))) {
                 responseStarted = await ensureResponseStarted(active, responseStarted,
                   "verified-aborted-stream-rendered-dom-v200");
                 await emit({
                   type: "chat.completed", request_id: active.requestId, text: finalText,
                   diagnostics: {
-                    response_terminal_source: "verified-aborted-stream-rendered-dom-v200",
+                    response_terminal_source: rendered.shortTextVerified
+                      ? "verified-short-sse-rendered-answer-v207"
+                      : "verified-aborted-stream-rendered-dom-v200",
                     response_terminal_dom_reconciled: true,
-                    response_integrity_evidence: "fresh-rendered-baseline+new-finish-action+8s-stable+aborted-sse",
+                    response_integrity_evidence: rendered.shortTextVerified
+                      ? "same-request-short-sse+fresh-scope-toolbar+8s-stable+aborted-sse"
+                      : "fresh-rendered-baseline+new-finish-action+8s-stable+aborted-sse",
                     response_epoch_candidate_reason: rendered.reason,
                     response_terminal_final_chars: finalText.length,
                     response_terminal_stable_ms: Date.now() - abortedRenderedCandidateSince,

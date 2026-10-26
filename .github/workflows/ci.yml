@@ -221,6 +221,8 @@ jobs:
         run: node --test tests/rich_code_math_v201.mjs
       - name: Live upstream terminal and MathML v206 regression
         run: node --test tests/request_upstream_math_v206.mjs
+      - name: Verified short replies and generated-file signatures v207
+        run: node --test tests/short_reply_file_delivery_v207.mjs
 
       - name: Worker probe observer regression
         run: node tests/worker_probe_supervisor_v1.mjs

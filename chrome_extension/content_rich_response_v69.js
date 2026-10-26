@@ -314,16 +314,24 @@
   const fileCache = new Map();
   function recognizedFile(anchor) {
     if (!(anchor instanceof Element)) return null;
-    const rawUrl = String(anchor.getAttribute?.("href")
-      || anchor.getAttribute?.("data-download-url")
+    // A file preview may have an ordinary href to an HTML viewer while its
+    // actual binary download is in an explicit download data attribute.
+    const card = anchor.closest?.("li,[role='row'],[data-testid*='file'],[data-testid*='attachment']");
+    const linkedDownload = card?.querySelector?.(
+      "[data-download-url],[data-file-url],a[download]"
+    );
+    const rawUrl = String(anchor.getAttribute?.("data-download-url")
       || anchor.getAttribute?.("data-file-url")
       || anchor.getAttribute?.("data-href")
+      || linkedDownload?.getAttribute?.("data-download-url")
+      || linkedDownload?.getAttribute?.("data-file-url")
+      || linkedDownload?.getAttribute?.("href")
+      || anchor.getAttribute?.("href")
       || anchor.getAttribute?.("data-url") || "").trim();
     let uri;
     try { uri = new URL(rawUrl, location.href); } catch (_) { return null; }
     const absolute = uri.href;
     if (!trustedMediaSource(absolute)) return null;
-    const card = anchor.closest?.("li,[role='row'],[data-testid*='file'],[data-testid*='attachment']");
     const filenameInCard = String(card?.innerText || card?.textContent || "")
       .match(/(?:^|[\s\n])([^\s\n<>:"\\/|?*]{1,135}\.(?:pdf|docx|xlsx|pptx|zip|csv|txt|md|json|py|js|ts|html))(?:\s|$)/i)?.[1] || "";
     const label = String(anchor.getAttribute("download")
@@ -335,6 +343,24 @@
     const ext = /\.([a-z0-9]{1,8})$/i.exec(filename)?.[1]?.toLowerCase();
     if (!ext || !FILE_MIME_BY_EXT[ext]) return null;
     return { url: absolute, filename, mime: FILE_MIME_BY_EXT[ext] };
+  }
+
+  function validGeneratedFileBytes(filename, bytes) {
+    if (!(bytes instanceof Uint8Array) || bytes.length < 4) return false;
+    const ext = String(filename || "").split(".").pop().toLowerCase();
+    if (["xlsx", "pptx", "docx", "zip"].includes(ext))
+      return bytes[0] === 80 && bytes[1] === 75 && bytes[2] === 3 && bytes[3] === 4;
+    if (ext === "pdf") return bytes.length >= 5
+      && bytes[0] === 37 && bytes[1] === 80 && bytes[2] === 68
+      && bytes[3] === 70 && bytes[4] === 45;
+    if (["json", "md", "csv", "txt", "py", "js", "ts", "html"].includes(ext)) {
+      if (bytes.slice(0, Math.min(4096, bytes.length)).includes(0)) return false;
+      if (ext === "json") {
+        try { JSON.parse(new TextDecoder().decode(bytes)); }
+        catch (_) { return false; }
+      }
+    }
+    return true;
   }
 
   function hasCandidateFile(root) {
@@ -382,6 +408,10 @@
           const bytes = new Uint8Array(size);
           let offset = 0;
           for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
+          // Never relabel a 200-OK HTML preview as a generated XLSX/ZIP.
+          // Let a trusted background download relay retry only if eligible.
+          if (!validGeneratedFileBytes(item.filename, bytes))
+            throw new Error("file-signature-mismatch");
           let binary = "";
           for (let index = 0; index < bytes.length; index += 16384)
             binary += String.fromCharCode(...bytes.subarray(index, index + 16384));
@@ -405,8 +435,16 @@
           if (!relay?.ok || !data.startsWith("data:" + item.mime + ";base64,")
               || !Number.isInteger(bytes) || bytes <= 0 || bytes > FILE_MAX_BYTES
               || total + bytes > FILE_MAX_TOTAL) {
-            return { count, error: String(relay?.error || "file-download-unavailable") };
+            return { count, error: String(relay?.error || "file-download-unavailable-or-invalid-signature") };
           }
+          let decoded;
+          try {
+            const payload = data.split(",", 2)[1];
+            const binary = atob(payload);
+            decoded = Uint8Array.from(binary, c => c.charCodeAt(0));
+          } catch (_) { return { count, error: "file-relay-invalid-base64" }; }
+          if (decoded.length !== bytes || !validGeneratedFileBytes(item.filename, decoded))
+            return { count, error: "file-signature-mismatch" };
           encoded = { data, bytes };
           if (fileCache.size >= FILE_MAX_COUNT) fileCache.clear();
           fileCache.set(item.url, encoded);
