@@ -428,12 +428,15 @@
     const sends = [];
     for (const tool_id of sampledTools) {
       if (session.sequence >= 32) break;
-      session.sequence += 1;
+      // Snapshot the unique sequence *before* the asynchronous send. Reading
+      // session.sequence inside Promise.then gave every tool in the same
+      // stage the last sequence number instead of its own assigned number.
+      const sequence = ++session.sequence;
       sends.push(Promise.resolve().then(() => chrome.runtime.sendMessage({
         type: "chat2api.event",
         event: {
           type: "probe.event", request_id: session.request_id,
-          tool_id, stage, sequence: session.sequence,
+          tool_id, stage, sequence,
           classification, facts,
         },
       })).catch(() => {}));
