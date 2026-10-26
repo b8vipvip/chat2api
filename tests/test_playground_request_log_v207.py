@@ -58,7 +58,6 @@ def test_browser_abcd_report_persisted_after_chat_records():
     root = Path(__file__).resolve().parents[1] / "app"
     browser = (root / "admin_playground_abcd_v197.js").read_text()
     server = (root / "playground_chat_patch.py").read_text()
-    assert browser.indexOf if False else True  # No DOM script execution here.
     assert browser.index('"/api/admin/playground/chat-records"') < browser.index('"/api/admin/playground/abcd/report"')
     assert 'dependencies=[Depends(require_abcd_report_admin)]' in server
     assert 'app.state.test_runs.update(run_id, {"abcd_report": result, "abcd_scene": scene})' in server
