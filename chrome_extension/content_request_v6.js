@@ -1492,8 +1492,8 @@
           + Number(assistantRich?.file_inlined_count || 0)
           + Number(native?.count || 0);
         const requiredFileExts = [...new Set(
-          (requestedUserText(active.prompt).match(/\.(?:xlsx|pptx|json|zip|pdf|docx|csv)\b/gi) || [])
-            .map(ext => ext.toLowerCase())
+          (requestedUserText(active.prompt).match(/(?:\.(?:xlsx|pptx|json|zip|pdf|docx|csv)\b|\b(?:xlsx|pptx|json|zip|pdf|docx|csv)\b)/gi) || [])
+            .map(ext => "." + ext.replace(/^\./, "").toLowerCase())
         )];
         const allRequiredFileTypesDelivered = requiredFileExts.every(ext =>
           captured.match(new RegExp("!\\[📎 [^\\]\\n]{1,180}" +
