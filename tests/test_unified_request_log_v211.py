@@ -33,3 +33,11 @@ def test_request_log_contains_probe_and_playground_evidence_without_changing_sta
     assert "probe" in probes
     assert callable(playground_diagnostics)
     assert callable(WorkerProbeStore.events)
+
+
+def test_standard_playground_requests_use_same_canonical_request_history_log():
+    html = (ROOT / "app/admin.py").read_text(encoding="utf-8")
+    assert "'X-Chat2API-Request-ID':requestId" in html
+    assert "'X-Chat2API-Request-ID':r.request_id" in html
+    assert "request_id:requestId||null" in html
+    assert "crypto.randomUUID()" in html
