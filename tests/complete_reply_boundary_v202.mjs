@@ -46,7 +46,7 @@ test("Simple one-block response still qualifies",()=>{
 });
 test("Request-v6 terminal must revalidate all parts just before commit",()=>{
   assert.match(source,/parts\.every\(node => turnFollows\(node, rendered\.finishAction\)\)/);
-  assert.match(source,/response_integrity_scope: "same-answer-container-before-toolbar-v205"/);
+  assert.match(source,/response_integrity_scope: "same-answer-container-before-toolbar-v206"/);
   assert.match(source,/response_recovery_finish_after_all_blocks/);
   assert.ok(!/type:\s*["']chat\.completed["']/.test(
     readFileSync(new URL("../chrome_extension/content_probe_supervisor_v1.js",import.meta.url),"utf8")));
