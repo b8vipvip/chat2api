@@ -9,8 +9,10 @@ const guardEnd=source.indexOf("  function renderedNetworkCorrelatedTurn(active) 
 assert.ok(scanStart>0 && guardEnd>scanStart);
 function scene({count=610,toolbarAt=count+1,oldCount=0}={}){
   const main={querySelectorAll:()=>blocks};
+  const turn={contains:x=>x===action||blocks.includes(x),
+    matches:()=>false,querySelector:()=>null,querySelectorAll:()=>blocks};
   const blocks=Array.from({length:count},(_,i)=>({
-    id:"block-"+i,pos:i,tagName:i%23===0?"H2":i%11===0?"TABLE":i%7===0?"PRE":"P",
+    id:"block-"+i,pos:i,parentElement:turn,tagName:i%23===0?"H2":i%11===0?"TABLE":i%7===0?"PRE":"P",
     innerText:("经营计划和路线模型第"+i+"项，包含成本、人工工时和复修目标。").repeat(12),
     textContent:("经营计划和路线模型第"+i+"项，包含成本、人工工时和复修目标。").repeat(12),
     classList:{contains:()=>false},
@@ -19,7 +21,7 @@ function scene({count=610,toolbarAt=count+1,oldCount=0}={}){
     compareDocumentPosition(other){return this.pos<other.pos?4:2;},
   }));
   const chosen=blocks[Math.floor(count/2)];
-  const action={pos:toolbarAt,id:"final-answer-copy"};
+  const action={pos:toolbarAt,id:"final-answer-copy",parentElement:turn,getAttribute:()=>""};
   const promptNormalized="Unique request identifying the latest leather-repair business proposal";
   const active={networkStreamSeen:true,submitStartedAt:100,networkObservedAt:101,
     networkTerminalTransportErrorAt:150,networkStreamEndedWithoutTerminalAt:151,
