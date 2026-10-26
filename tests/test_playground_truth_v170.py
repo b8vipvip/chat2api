@@ -157,5 +157,5 @@ def test_probe_has_long_job_checkpoints_without_second_terminal_owner():
     js = (root / "chrome_extension/content_probe_supervisor_v1.js").read_text()
     python = (root / "app/worker_probe_store.py").read_text()
     assert "progress_checkpoint" in js and "progress_checkpoint" in python
-    assert "[60000, 120000, 240000, 480000]" in js
+    assert "[60000, 180000, 420000, 720000]" in js
     assert "chat.completed" not in js and "image.completed" not in js
