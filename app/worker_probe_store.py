@@ -43,7 +43,7 @@ TOOL_CATALOG = (
 )
 ACTIVE_TOOLS = frozenset(item["id"] for item in TOOL_CATALOG if item["phase"] in {"P0", "P1", "P2"})
 STAGES = frozenset(["request_pre_submit", "request_submitted", "media_handoff",
-                    "unresolved_after_threshold", "progress_checkpoint", "before_terminal", "manual_capture"])
+                    "unresolved_after_threshold", "progress_checkpoint", "deadline_checkpoint", "before_terminal", "manual_capture"])
 ID_RE = re.compile(r"^(?:req|imgreq|resp|probe)[_-][a-zA-Z0-9_-]{6,100}$")
 WORKER_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{2,105}$")
 ALLOWED_FACTS = frozenset([
@@ -101,6 +101,7 @@ ALLOWED_CLASSIFICATIONS = frozenset([
     "visible_media_unattributed", "media_candidate_detected", "media_transfer_unavailable",
     "waiting_for_result", "delivery_evidence_only", "completed_observed",
     "request_error_observed", "capture_unavailable",
+    "rendered_reply_without_role", "approaching_server_deadline",
 ])
 MAX_EVENTS_PER_REQUEST = 32
 MAX_JSON_BYTES = 12_000
