@@ -13,7 +13,7 @@ function currentContract() {
     terminal_prompt_revision: 88,
     conversation_quota_failover_revision: 95,
     ui_hygiene_revision: 101,
-    marker: { bundle: "0.22.211", revision: 71 },
+    marker: { bundle: "0.22.212", revision: 71 },
     modules: {
       request_v6: true,
       rich_response_v69: true,
