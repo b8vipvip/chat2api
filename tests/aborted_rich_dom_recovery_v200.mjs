@@ -4,14 +4,17 @@ import {readFileSync} from "node:fs";
 import {runInNewContext} from "node:vm";
 
 const source=readFileSync(new URL("../chrome_extension/content_request_v6.js", import.meta.url),"utf8");
+const helperStart=source.indexOf("  function replyScopeForFinishAction(candidate, button) {");
+const helperEnd=source.indexOf("  // A redesigned reply can render",helperStart);
 const start=source.indexOf("  function verifiedRenderedAbortCandidate(active, current) {");
 const end=source.indexOf("  function renderedNetworkCorrelatedTurn(active) {",start);
 assert.ok(start>0 && end>start,"recovery guard must be in sole request-v6 controller");
 
 function candidate({hasToolbar=true, after=true, baseline=false, aborted=true,
                     newDOM=true, size=1000, promptEcho=false, networkSeen=true}={}){
-  const node={id:"new-response"};
-  const action={id:"copy-reply"};
+  const root={contains:x=>x===node||x===action,matches:()=>false,querySelector:()=>null};
+  const node={id:"new-response",parentElement:root};
+  const action={id:"copy-reply",parentElement:root,getAttribute:()=>""};
   const active={
     networkStreamSeen:networkSeen, submitStartedAt:100, networkObservedAt:101,
     networkTerminalTransportErrorAt:aborted?150:0,
@@ -26,10 +29,11 @@ function candidate({hasToolbar=true, after=true, baseline=false, aborted=true,
     responseFinishActions:()=>hasToolbar?[action]:[],
     renderedResponseBoundaryEvidence:()=>({nodes:[node],complete_scope:true,candidate_chars:1000,independent_count:0}),
     turnFollows:(n,a)=>n===node&&a===action&&after,
+    normalize:value=>String(value).trim(),
     internalToolPayload:()=>false,
     promptStillPresent:()=>false,
   };
-  const guard=runInNewContext(source.slice(start,end)+"\nverifiedRenderedAbortCandidate",ctx);
+  const guard=runInNewContext(source.slice(helperStart,helperEnd)+source.slice(start,end)+"\nverifiedRenderedAbortCandidate",ctx);
   return guard(active,current);
 }
 test("TX03 aborted 733KB stream: new 5006-char answer with fresh finished toolbar is recoverable",()=>{

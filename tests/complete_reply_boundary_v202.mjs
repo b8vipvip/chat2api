@@ -4,13 +4,16 @@ import {readFileSync} from "node:fs";
 import {runInNewContext} from "node:vm";
 
 const source=readFileSync(new URL("../chrome_extension/content_request_v6.js",import.meta.url),"utf8");
+const helperStart=source.indexOf("  function replyScopeForFinishAction(candidate, button) {");
+const helperEnd=source.indexOf("  // A redesigned reply can render",helperStart);
 const start=source.indexOf("  function verifiedRenderedAbortCandidate(active, current) {");
 const end=source.indexOf("  function renderedNetworkCorrelatedTurn(active) {",start);
 assert.ok(start>0&&end>start);
 
 function attempt({completionIndex=1,blocks=2}={}){
-  const content=Array.from({length:blocks},(_,i)=>({pos:i, id:"answer-block-"+i}));
-  const action={id:"finished-answer-toolbar"};
+  const root={contains:x=>x===action||content.includes(x),matches:()=>false,querySelector:()=>null};
+  const content=Array.from({length:blocks},(_,i)=>({pos:i, id:"answer-block-"+i, parentElement:root}));
+  const action={id:"finished-answer-toolbar",parentElement:root,getAttribute:()=>""};
   const active={
     networkStreamSeen:true,submitStartedAt:100,networkObservedAt:110,
     networkTerminalTransportErrorAt:150,networkStreamEndedWithoutTerminalAt:151,
@@ -19,9 +22,10 @@ function attempt({completionIndex=1,blocks=2}={}){
   };
   const current={isNew:true,latest:content[0],reason:"verified-rendered-dom-baseline-v191",
     text:"This long complete reply has valid narrative, structured tables and code.".repeat(8)};
-  const fn=runInNewContext(source.slice(start,end)+"\nverifiedRenderedAbortCandidate",{
+  const fn=runInNewContext(source.slice(helperStart,helperEnd)+source.slice(start,end)+"\nverifiedRenderedAbortCandidate",{
     responseFinishActions:()=>[action],
     turnFollows:(left,right)=>right===action && left.pos < completionIndex,
+    normalize:value=>String(value).trim(),
     internalToolPayload:()=>false,promptStillPresent:()=>false,
     renderedResponseBoundaryEvidence:()=>({nodes:content,independent_count:blocks-1,
       candidate_chars:current.text.length,complete_scope:blocks===1}),
@@ -41,8 +45,8 @@ test("Simple one-block response still qualifies",()=>{
   assert.ok(attempt({completionIndex:1,blocks:1}));
 });
 test("Request-v6 terminal must revalidate all parts just before commit",()=>{
-  assert.match(source,/parts\.every\(node => turnFollows\(node, button\)\)/);
-  assert.match(source,/response_integrity_scope: "whole-reply-blocks-then-finish-action-v202"/);
+  assert.match(source,/parts\.every\(node => turnFollows\(node, rendered\.finishAction\)\)/);
+  assert.match(source,/response_integrity_scope: "same-answer-container-before-toolbar-v205"/);
   assert.match(source,/response_recovery_finish_after_all_blocks/);
   assert.ok(!/type:\s*["']chat\.completed["']/.test(
     readFileSync(new URL("../chrome_extension/content_probe_supervisor_v1.js",import.meta.url),"utf8")));

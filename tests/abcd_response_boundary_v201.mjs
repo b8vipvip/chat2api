@@ -4,7 +4,7 @@ import {readFileSync} from "node:fs";
 import {runInNewContext} from "node:vm";
 
 const source=readFileSync(new URL("../chrome_extension/content_request_v6.js",import.meta.url),"utf8");
-const begin=source.indexOf("  function renderedResponseBoundaryEvidence(active, candidate) {");
+const begin=source.indexOf("  function renderedResponseBoundaryEvidence(active, candidate");
 const end=source.indexOf("  // Only request-v6 consumes the evidence below.",begin);
 assert.ok(begin>0&&end>begin);
 function fixture() {

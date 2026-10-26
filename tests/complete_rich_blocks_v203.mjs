@@ -4,7 +4,7 @@ import {readFileSync} from "node:fs";
 import {runInNewContext} from "node:vm";
 
 const source=readFileSync(new URL("../chrome_extension/content_request_v6.js",import.meta.url),"utf8");
-const start=source.indexOf("  function renderedResponseBoundaryEvidence(active, candidate) {");
+const start=source.indexOf("  function renderedResponseBoundaryEvidence(active, candidate");
 const end=source.indexOf("  // Only request-v6 consumes the evidence below.",start);
 assert.ok(start>0&&end>start,"single request controller contains structural scan");
 const fn=runInNewContext(source.slice(start,end)+"\nrenderedResponseBoundaryEvidence",{
