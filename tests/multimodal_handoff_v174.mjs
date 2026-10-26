@@ -54,7 +54,7 @@ assert.equal(
 // excluded from both network-text completion and the early no-terminal error.
 assert.match(controller, /if \(networkText && !captureMedia && !fileCreationRequested && !imageCreationRequested[\s\S]*?!internalToolPayload\(networkText\)/);
 assert.match(controller, /networkTerminalText && !captureMedia[\s\S]*!promptStillPresent/);
-assert.match(controller, /imageToolArguments[\s\S]*?\|\| visibleTurnMedia \|\| visibleTurnFiles \|\| fileCreationRequested \|\| pageMediaFound/);
+assert.match(controller, /imageToolArguments[\s\S]*?\|\| visibleTurnMedia \|\| visibleTurnFiles \|\| visibleTurnPreviews \|\| fileCreationRequested \|\| pageMediaFound/);
 assert.match(controller, /!networkTerminalAt && !captureMedia/);
 assert.match(controller, /!generating && !captureMedia && !active\.networkStreamSeen/);
 assert.match(controller, /response_terminal_source: "verified-request-media-dom-v176"/);

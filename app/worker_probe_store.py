@@ -61,6 +61,7 @@ ALLOWED_FACTS = frozenset([
     "download_link_relative_count", "download_link_other_count", "download_link_explicit_count",
     "file_preview_control_count", "file_preview_xlsx_count", "file_preview_pptx_count",
     "file_preview_json_count", "file_preview_zip_count",
+    "file_preview_conversation_link_count", "file_preview_click_only_count",
     "share_buttons", "composer_found", "generating", "page_ready",
     "new_image_in_current_turn", "candidate_after_user", "candidate_unattributed",
     "image_transfer_attempts", "image_transfer_successes",

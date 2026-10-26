@@ -16,6 +16,8 @@ def test_file_preview_probe_fields_survive_sanitization():
         "file_preview_pptx_count": 1,
         "file_preview_json_count": 1,
         "file_preview_zip_count": 0,
+        "file_preview_conversation_link_count": 3,
+        "file_preview_click_only_count": 0,
         "download_link_https_count": 3,
         "secret_signed_url": "must-never-export",
         "filename": "private.xlsx",
@@ -24,6 +26,7 @@ def test_file_preview_probe_fields_survive_sanitization():
     assert safe["download_button_click_only_count"] == 4
     assert safe["file_preview_control_count"] == 3
     assert safe["file_preview_zip_count"] == 0
+    assert safe["file_preview_conversation_link_count"] == 3
     assert "secret_signed_url" not in safe
     assert "filename" not in safe
 

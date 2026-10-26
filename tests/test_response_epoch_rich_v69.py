@@ -52,7 +52,7 @@ def test_generated_media_handoff_keeps_single_request_terminal_authority():
     rich = read("chrome_extension/content_rich_response_v69.js")
     assert 'function isInternalMediaHandoff(value)' in source
     assert 'function hasTransferableImage(value)' in source
-    assert 'captureMedia && (sameTurnRoot || sourceMedia.length) && sourceStable && !generating' in source
+    assert 'captureMedia && (mediaReplyRoot || sourceMedia.length) && sourceStable && !generating' in source
     assert 'active.baselineUserTurns = new Set' in source
     assert 'response_terminal_source: "verified-request-media-dom-v176"' in source
     assert 'networkTerminalText && !captureMedia' in source
@@ -137,7 +137,7 @@ def test_tx03_image_recipe_is_not_a_successful_image_terminal():
     assert "function isImageCreationRequest(prompt)" in owner
     assert "const imageBuildArtifact = imageCreationRequested" in owner
     assert "const intrinsicHandoff = Boolean(imageHandoff) || imageBuildArtifact" in owner
-    assert "|| visibleTurnMedia || visibleTurnFiles || fileCreationRequested || pageMediaFound" in owner
+    assert "|| visibleTurnMedia || visibleTurnFiles || visibleTurnPreviews || fileCreationRequested || pageMediaFound" in owner
     assert "media_last_baseline_excluded" in owner
     assert "ChatGPT returned an image-building command, but no verified transferable image was captured" in owner
     assert "media_excluded_by_gate" in owner
@@ -191,7 +191,7 @@ def test_generated_file_handoff_uses_existing_single_terminal_owner():
     main = read("app/main.py")
     assert "function hasTransferableFile(value)" in owner
     assert "function isFileCreationRequest(prompt)" in owner
-    assert "rich?.hasCandidateFile?.(sameTurnRoot)" in owner
+    assert "rich?.hasCandidateFile?.(mediaReplyRoot)" in owner
     assert "const captured = combinePageMediaText(assistantProse, finalMedia?.text);" in owner
     assert "hasTransferableFile(captured)" in owner
     assert "file_inlined_count: fileStats.count" in rich

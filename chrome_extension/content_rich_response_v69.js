@@ -207,6 +207,10 @@
         recognizedFile(anchor) && !selected.contains(anchor));
       if (mediaOutsideMarkdown) return node;
       if (filesOutsideMarkdown) return node;
+      // Preview-only Office/Code cards can be siblings of the Markdown
+      // content on redesigned ChatGPT. Keep the verified reply scope intact
+      // for discovery; they still must not be serialized as downloaded files.
+      if (hasPreviewFile(node) && !hasPreviewFile(selected)) return node;
     }
     return selected;
   }
@@ -312,6 +316,28 @@
   // observational and cannot become fabricated attachments.
   const FILE_ANCHORS = "a[href],button[data-download-url],button[data-file-url],button[data-href],button[data-url],[role='button'][data-download-url]";
   const fileCache = new Map();
+  // A ChatGPT Office/Code preview often links back to /c/<conversation>.
+  // That page is HTML, never a downloadable XLSX/PPTX/JSON/ZIP.
+  function conversationPreviewUrl(uri) {
+    return /(?:^|\.)chatgpt\.com$/i.test(uri.hostname)
+      && /^\/c\/[a-f0-9-]{20,}$/i.test(uri.pathname);
+  }
+
+  function previewFileControls(root) {
+    if (!root?.querySelectorAll) return [];
+    return [...root.querySelectorAll(
+      "a,button,[role='button'],[tabindex='0'],[data-testid*='artifact']"
+    )].slice(-160).filter(element => {
+      const label = String(element.getAttribute?.("aria-label")
+        || element.getAttribute?.("title") || element.textContent || "")
+        .trim().slice(0, 240);
+      return /\.(?:xlsx|pptx|json|zip)(?:\b|[\s）)]|$)/i.test(label)
+        && /(?:open preview of|打开预览|预览文件|excel|powerpoint|code)/i.test(label);
+    });
+  }
+
+  function hasPreviewFile(root) { return previewFileControls(root).length > 0; }
+
   function recognizedFile(anchor) {
     if (!(anchor instanceof Element)) return null;
     // A file preview may have an ordinary href to an HTML viewer while its
@@ -331,6 +357,7 @@
     let uri;
     try { uri = new URL(rawUrl, location.href); } catch (_) { return null; }
     const absolute = uri.href;
+    if (conversationPreviewUrl(uri)) return null;
     if (!trustedMediaSource(absolute)) return null;
     const filenameInCard = String(card?.innerText || card?.textContent || "")
       .match(/(?:^|[\s\n])([^\s\n<>:"\\/|?*]{1,135}\.(?:pdf|docx|xlsx|pptx|zip|csv|txt|md|json|py|js|ts|html))(?:\s|$)/i)?.[1] || "";
@@ -733,6 +760,7 @@
       if (bounded) embedded += 1;
       else image.removeAttribute("src");
     }
+    const previewCount = previewFileControls(node).length;
     const fileStats = await inlineGeneratedFiles(clone);
     const imageStats = await inlineBlobImages(clone);
     return {
@@ -743,7 +771,9 @@
       image_transfer_stats: imageStats.stats,
       file_inlined_count: fileStats.count,
       file_inlined_bytes: fileStats.bytes || 0,
-      file_transfer_error: fileStats.error || "",
+      file_preview_count: previewCount,
+      file_transfer_error: fileStats.error
+        || (previewCount && fileStats.count === 0 ? "preview-only-no-binary-link" : ""),
     };
   }
 
@@ -753,6 +783,7 @@
     contentRoot,
     hasCandidateImage,
     hasCandidateFile,
+    hasPreviewFile,
     snapshotPageMedia,
     locateNewPageMedia,
     capturePageImages,
