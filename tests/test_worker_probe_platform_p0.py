@@ -233,7 +233,9 @@ def test_p1_fact_schema_and_event_bound_are_documented(tmp_path: Path) -> None:
     assert all(item["available"] for item in store.catalog())
     source = (Path(__file__).resolve().parents[1] /
               "chrome_extension/content_probe_supervisor_v1.js").read_text(encoding="utf-8")
-    assert "Math.floor(32 / enabled.length)" in source
+    assert "maxEvents: 32, terminalSlots: enabled.length" in source
+    assert "file_preview_conversation_link_count" in source
+    assert "[60000, 180000, 420000, 720000]" in source
     assert "network_stream_seen" in source and "network_stream_bytes" in source
     assert "model_picker_count" in source and "selector_composer_count" in source
     assert "getAttribute" in source
