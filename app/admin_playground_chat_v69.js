@@ -343,7 +343,7 @@
   const style = document.createElement("style");
   style.dataset.chat2apiPlaygroundChat = "69";
   style.textContent = `
-    .pgChatDisplayMath{overflow-x:auto;text-align:center;padding:9px 0;max-width:100%}.pgChatDisplayMath math{font-size:1.12em;margin:auto}.pgChatInlineMath math{display:inline math;vertical-align:middle}
+    .pgChatDisplayMath{overflow-x:auto;text-align:center;padding:9px 0;max-width:100%}.pgChatDisplayMath math{font-size:1.12em;margin:auto}.pgChatInlineMath{display:inline-block;vertical-align:middle}.pgChatInlineMath math{vertical-align:middle}
     .pgChatPanel{margin-bottom:14px;overflow:hidden}.pgChatHead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px}.pgChatHead h2{margin:0 0 4px}
     .pgChatToolbar{display:grid;grid-template-columns:minmax(180px,.8fr) 150px minmax(260px,1.2fr) minmax(220px,1fr);gap:9px;margin-bottom:12px}.pgChatToolbar label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}.pgChatKeyBox{display:grid;grid-template-columns:1fr;gap:7px}
     .pgChatMessages{height:min(52vh,560px);min-height:360px;overflow:auto;border:1px solid var(--line);border-radius:13px;background:#08111f;padding:18px;display:flex;flex-direction:column;gap:14px}.pgChatEmpty{margin:auto;color:var(--muted);text-align:center;max-width:520px}
