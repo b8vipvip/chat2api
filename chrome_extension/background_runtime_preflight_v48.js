@@ -4,20 +4,20 @@
 
   // Worker bundle 0.8.42 keeps the mature bounded v71 preflight lifecycle.
   // request-v6 is the sole response terminal owner; network v55 supplies evidence only.
-  const REQUIRED_BUNDLE = "0.22.209";
+  const REQUIRED_BUNDLE = "0.22.210";
   const REQUIRED_REVISION = 71;
   const CONTRACT_TIMEOUT_MS = 700;
   const HOT_HEAL_BUDGET_MS = 2400;
   const RELOAD_BUDGET_MS = 3500;
   const FINAL_HEAL_BUDGET_MS = 1800;
   const MAIN_FILES = ["network_stream_main_v55.js", "model_evidence_main_v144.js", "multimodal_main_v78.js"];
-  const NATIVE_MAIN_FILES = ["native_tool_stream_main_v63.js"];
+  const NATIVE_MAIN_FILES = ["native_tool_stream_main_v63.js", "native_file_main_v210.js"];
   const CURRENT_MAIN_FILES = [MAIN_FILES[0], MAIN_FILES[1], ...NATIVE_MAIN_FILES, MAIN_FILES[2]];
   const OVERLAY_FILES = [
     "content_model_evidence_v144.js", "content_ui_hygiene_v31.js", "content_rate_limit_guard_v52.js", "content_tool_isolation_v48.js",
     "content_multimodal_v78.js", "content_multimodal_settle_v84.js", "content_multimodal_settle_v85.js",
     "content_request_lifecycle_v50.js", "content_conversation_quota_failover_v95.js", "content_request_hygiene_v42.js",
-    "content_draft_managed_recovery_v55.js", "content_rich_response_v69.js", "content_request_v6.js",
+    "content_draft_managed_recovery_v55.js", "content_rich_response_v69.js", "content_native_file_v210.js", "content_request_v6.js",
     "content_network_stream_recovery_v55.js", "content_native_tool_stream_v63.js", "content_request_terminal_prompt_v88.js",
     "content_response_semantic_recovery_v51.js", "content_transient_retry_v50.js", "content_generation_liveness_v49.js",
     "content_bundle_marker_v71.js", "content_runtime_contract_v48.js", "content_runtime_contract_v71.js",

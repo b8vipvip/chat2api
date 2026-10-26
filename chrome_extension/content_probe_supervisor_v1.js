@@ -18,6 +18,7 @@
     unresolved_after_threshold: 0,
     before_terminal: 0,
     progress_checkpoint: 0,
+    deadline_checkpoint: 0,
   };
   const allowedRoots = ["main", "[role='main']", "#thread", "[data-testid='conversation-turns']"];
 
@@ -361,7 +362,7 @@
       progressTools: ["abcd_files_v1","response_boundary_v1","network_evidence_v1"]
         .filter(id => enabled.includes(id)),
       handoffReported: false, thresholdReported: false, lastSentAt: 0,
-      checkpointsReported: 0,
+      checkpointsReported: 0, deadlineReported: false,
     };
     active.probeSession = session;
     capture(active, "request_pre_submit", {});
@@ -378,9 +379,12 @@
     // Never exceed the server's hard 32-event request budget.
     const terminal = stage === "before_terminal";
     const baseline = stage === "request_pre_submit";
-    const selectedTools = baseline || terminal ? [...session.enabled]
+    const deadline = stage === "deadline_checkpoint";
+    const selectedTools = baseline || terminal || deadline ? [...session.enabled]
       : (session.progressTools.length ? session.progressTools : [...session.enabled]);
-    const available = session.maxEvents - session.sequence - (terminal ? 0 : session.terminalSlots);
+    // On server-enforced 900s timeout, the content controller may never
+    // receive cancellation/terminal. Spend the final reserve at 13.5min.
+    const available = session.maxEvents - session.sequence - (terminal || deadline ? 0 : session.terminalSlots);
     const sampledTools = selectedTools.slice(0, Math.max(0, available));
     if (!sampledTools.length) return Promise.resolve();
     if (stage === "media_handoff" && session.handoffReported) return Promise.resolve();
@@ -418,13 +422,16 @@
     else if (extra.handoff && !facts.candidate_image_count)
       classification = "handoff_without_visible_media";
     else if (!facts.assistant_turn_nodes)
-      classification = "no_assistant_turn";
+      classification = Number(facts.scene_changed_block_count || 0) > 0
+        || Number(facts.scene_new_final_action_count || 0) > 0
+        ? "rendered_reply_without_role" : "no_assistant_turn";
     else if (Number(extra.newCandidates || 0) > 0)
       classification = "media_candidate_detected";
     else if (facts.visible_large_images)
       classification = "visible_media_unattributed";
     else if (stage === "unresolved_after_threshold")
       classification = "waiting_for_result";
+    if (deadline) classification = "approaching_server_deadline";
     const sends = [];
     for (const tool_id of sampledTools) {
       if (session.sequence >= 32) break;
@@ -467,6 +474,11 @@
       && elapsed >= milestones[session.checkpointsReported]) {
       session.checkpointsReported += 1;
       capture(active, "progress_checkpoint",
+        {handoff, generating, newCandidates, captured});
+    }
+    if (!session.deadlineReported && elapsed >= 810000) {
+      session.deadlineReported = true;
+      capture(active, "deadline_checkpoint",
         {handoff, generating, newCandidates, captured});
     }
   }

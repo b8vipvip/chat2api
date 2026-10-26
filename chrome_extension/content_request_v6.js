@@ -1348,7 +1348,10 @@
       // New ChatGPT Office cards are often siblings of the text candidate,
       // not children of its .markdown node. Only the request controller may
       // widen capture to a verified fresh reply + finish-toolbar scope.
+      // Reuse the existing positively finished same-request reply scope. The
+      // native byte observer has no right to widen it or decide completion.
       const fileReplyBoundary = fileCreationRequested && !generating
+        && !upstreamStillWorking()
         && Number(active.networkTerminalTransportErrorAt || 0) > 0
         ? verifiedRenderedAbortCandidate(active, current) : null;
       const mediaReplyRoot = fileReplyBoundary?.replyScope || sameTurnRoot;
@@ -1465,7 +1468,16 @@
         const assistantRich = sourceMedia.length && current.isNew && sameTurnRoot
           ? await finalNodeText(sameTurnRoot) : null;
         const assistantProse = String(assistantRich?.text || "").trim();
-        const captured = combinePageMediaText(assistantProse, finalMedia?.text);
+        // A click-only ChatGPT download button has no usable href. In the
+        // verified current reply only, trigger it once and capture the actual
+        // browser-produced bytes. Never infer success from a preview or button.
+        const native = fileCreationRequested && fileReplyBoundary
+          && !visibleTurnFiles && !upstreamStillWorking()
+          && Date.now() - Number(active.networkObservedAt || 0) >= 2500
+          ? await globalThis.__CHAT2API_NATIVE_FILE_V210__?.capture?.(
+              fileReplyBoundary.replyScope, active.requestId) : null;
+        const serialized = combinePageMediaText(assistantProse, finalMedia?.text);
+        const captured = [serialized, native?.text || ""].filter(Boolean).join("\n\n");
         active.mediaCaptureAttempts = Number(active.mediaCaptureAttempts || 0) + 1;
         active.mediaCaptureLastChars = captured.length;
         active.mediaCaptureLastInlined = Number(finalMedia?.image_inlined_count || 0);
@@ -1477,10 +1489,18 @@
         const deliveredImages = Number(finalMedia?.image_inlined_count || 0)
           + Number(finalMedia?.image_embedded_count || 0);
         const deliveredFiles = Number(finalMedia?.file_inlined_count || 0)
-          + Number(assistantRich?.file_inlined_count || 0);
+          + Number(assistantRich?.file_inlined_count || 0)
+          + Number(native?.count || 0);
+        const requiredFileExts = [...new Set(
+          (requestedUserText(active.prompt).match(/(?:\.(?:xlsx|pptx|json|zip|pdf|docx|csv)\b|\b(?:xlsx|pptx|json|zip|pdf|docx|csv)\b)/gi) || [])
+            .map(ext => "." + ext.replace(/^\./, "").toLowerCase())
+        )];
+        const allRequiredFileTypesDelivered = requiredFileExts.every(ext =>
+          captured.match(new RegExp("!\\[📎 [^\\]\\n]{1,180}" +
+            ext.replace(".", "\\.") + "\\]\\(data:[^\\s)]+;base64,", "i")));
         const delivered = deliveredImages + deliveredFiles;
         if (delivered > 0 && (hasTransferableImage(captured) || hasTransferableFile(captured))
-            && (!fileCreationRequested || deliveredFiles > 0)
+            && (!fileCreationRequested || (deliveredFiles > 0 && allRequiredFileTypesDelivered))
             && (!imageCreationRequested || deliveredImages > 0)) {
           if (captured !== imageCandidate) {
             imageCandidate = captured;
@@ -1502,7 +1522,10 @@
                 response_image_inlined_bytes: Number(finalMedia?.image_inlined_bytes || 0),
                 response_generated_file_count: deliveredFiles,
                 response_generated_file_bytes: Number(finalMedia?.file_inlined_bytes || 0)
-                  + Number(assistantRich?.file_inlined_bytes || 0),
+                  + Number(assistantRich?.file_inlined_bytes || 0)
+                  + Number(native?.bytes || 0),
+                response_native_file_handoff: Boolean(native?.count),
+                response_required_file_types_satisfied: allRequiredFileTypesDelivered,
                 internal_tool_handoff_filtered: true,
               },
             });
@@ -1518,8 +1541,12 @@
               media_capture_attempts: active.mediaCaptureAttempts,
               media_capture_candidate_chars: active.mediaCaptureLastChars,
               media_capture_inline_count: active.mediaCaptureLastInlined,
-              media_file_transfer_error: finalMedia?.file_transfer_error || assistantRich?.file_transfer_error || "",
+              media_file_transfer_error: native?.error || finalMedia?.file_transfer_error || assistantRich?.file_transfer_error || "",
               media_file_preview_count: Number(finalMedia?.file_preview_count || 0),
+              media_native_file_button_candidates: Number(native?.button_candidates || 0),
+              media_native_file_capture_count: Number(native?.count || 0),
+              media_required_file_types_satisfied: allRequiredFileTypesDelivered,
+              media_reply_scope_verified: Boolean(fileReplyBoundary),
               media_capture_embedded_count: active.mediaCaptureLastEmbedded,
               media_transfer_stats: active.mediaCaptureTransferStats,
               media_turn_scope: current.reason,
