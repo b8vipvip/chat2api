@@ -384,7 +384,7 @@
     if (!candidate || !button || !turnFollows(candidate, button)) return null;
     const label = String(button.getAttribute?.("aria-label") || "") + " " +
       String(button.getAttribute?.("data-testid") || "");
-    if (/copy[\\s_-]*code|复制代码/i.test(label) || button.closest?.(
+    if (/copy[\s_-]*code|复制代码/i.test(label) || button.closest?.(
       "pre,code,[data-testid*='code-block'],[class*='code-block'],[class*='codeBlock']")) return null;
     let common = candidate;
     // At most a bounded climb, and never promote a per-answer action to the
