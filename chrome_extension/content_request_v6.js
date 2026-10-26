@@ -1648,7 +1648,7 @@
             // cloned reply container. Remove ONLY the known leading chrome;
             // never strip an ordinary user-authored heading in the body.
             const finalText = String(capture?.text || "")
-              .replace(/^#### You said:\\s*#### ChatGPT said:\\s*/i, "").trim();
+              .replace(/^#### You said:\s*#### ChatGPT said:\s*/i, "").trim();
             const completePartSet = parts.every(part => part.isConnected
               && visible(part) && !promptStillPresent(active));
             if (completePartSet && finalText.length >= 240
