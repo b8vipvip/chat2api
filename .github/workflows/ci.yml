@@ -224,6 +224,9 @@ jobs:
       - name: Verified short replies and generated-file signatures v207
         run: node --test tests/short_reply_file_delivery_v207.mjs
 
+      - name: C generated-file preview and late-stage evidence regression
+        run: node --test tests/c_file_preview_diagnostics_v209.mjs
+
       - name: Worker probe observer regression
         run: node tests/worker_probe_supervisor_v1.mjs
 
