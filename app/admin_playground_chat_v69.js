@@ -70,6 +70,114 @@
     return /!\[[^\]]*\]\((?:data:image\/(?:png|jpeg|webp|gif);base64,|https:\/\/)/i.test(String(markdown || ""));
   }
 
+  // Native MathML: keeps LaTeX data as the API format while rendering common
+  // ChatGPT mathematics locally, without remote scripts or arbitrary HTML.
+  // Unsupported TeX falls back to escaped source rather than a false formula.
+  function mathMarkup(tex, display = false) {
+    const input = String(tex || "").trim();
+    if (!input || input.length > 8000) return null;
+    let offset = 0;
+    let failed = false;
+    const esc = text => escHtml(String(text));
+    const commands = {
+      times:"×", cdot:"·", div:"÷", pm:"±", leq:"≤", le:"≤", geq:"≥", ge:"≥",
+      neq:"≠", approx:"≈", to:"→", rightarrow:"→", leftarrow:"←",
+      infty:"∞", sum:"∑", prod:"∏", int:"∫", alpha:"α", beta:"β",
+      gamma:"γ", delta:"δ", theta:"θ", lambda:"λ", mu:"μ", pi:"π", sigma:"σ",
+      Delta:"Δ", Sigma:"Σ", Omega:"Ω"
+    };
+    const skip = () => { while (/\s/.test(input[offset] || "") && offset < input.length) offset++; };
+    function groupText() {
+      skip();
+      if (input[offset] !== "{") { failed = true; return ""; }
+      offset++;
+      const from = offset;
+      let depth = 1;
+      while (offset < input.length && depth > 0) {
+        if (input[offset] === "{") depth++;
+        if (input[offset] === "}") depth--;
+        offset++;
+      }
+      if (depth) { failed = true; return ""; }
+      return input.slice(from, offset - 1);
+    }
+    function atom() {
+      skip();
+      const c = input[offset];
+      if (!c) return "";
+      if (c === "{") {
+        offset++;
+        const children = parse("}");
+        if (input[offset] !== "}") failed = true;
+        else offset++;
+        return "<mrow>" + children + "</mrow>";
+      }
+      if (c === "\\") {
+        offset++;
+        const match = input.slice(offset).match(/^[A-Za-z]+/);
+        if (!match) {
+          const literal = input[offset++] || "";
+          if (/[{}%_$]/.test(literal)) return "<mo>" + esc(literal) + "</mo>";
+          failed = true; return "";
+        }
+        const command = match[0];
+        offset += command.length;
+        if (command === "frac" || command === "dfrac" || command === "tfrac") {
+          const top = atom(), bottom = atom();
+          if (!top || !bottom) failed = true;
+          return "<mfrac>" + top + bottom + "</mfrac>";
+        }
+        if (["text", "mathrm", "operatorname", "mathbf"].includes(command))
+          return "<mtext>" + esc(groupText()) + "</mtext>";
+        if (commands[command]) return "<mo>" + esc(commands[command]) + "</mo>";
+        failed = true; return "";
+      }
+      if (/[0-9]/.test(c)) {
+        const from = offset++;
+        while (/[0-9.,]/.test(input[offset] || "") && offset < input.length) offset++;
+        return "<mn>" + esc(input.slice(from, offset)) + "</mn>";
+      }
+      if (/[A-Za-z]/.test(c)) {
+        const from = offset++;
+        while (/[A-Za-z]/.test(input[offset] || "") && offset < input.length) offset++;
+        return "<mi>" + esc(input.slice(from, offset)) + "</mi>";
+      }
+      if (/[\u3400-\u9fff]/.test(c)) {
+        const from = offset++;
+        while (/[\u3400-\u9fff]/.test(input[offset] || "") && offset < input.length) offset++;
+        return "<mtext>" + esc(input.slice(from, offset)) + "</mtext>";
+      }
+      if (/[=+\-*\/()\[\],.:<>|%!?]/.test(c)) {
+        offset++;
+        return "<mo>" + esc(c) + "</mo>";
+      }
+      failed = true;
+      offset++;
+      return "";
+    }
+    function parse(end = "") {
+      const parts = [];
+      while (offset < input.length && !failed) {
+        skip();
+        if (end && input[offset] === end) break;
+        if (!input[offset]) break;
+        if (input[offset] === "^" || input[offset] === "_") {
+          const type = input[offset++];
+          const base = parts.pop();
+          const script = atom();
+          if (!base || !script) { failed = true; break; }
+          parts.push(type === "^" ? "<msup>" + base + script + "</msup>"
+            : "<msub>" + base + script + "</msub>");
+        } else parts.push(atom());
+      }
+      return parts.join("");
+    }
+    const body = parse();
+    if (failed || offset < input.length || !body) return null;
+    return '<math xmlns="http://www.w3.org/1998/Math/MathML" display="' +
+      (display ? "block" : "inline") + '"><mrow>' + body + '</mrow></math>';
+  }
+
   function inlineMarkdown(value) {
     let source = String(value || "");
     const slots = [];
@@ -79,6 +187,10 @@
       return token;
     };
     source = source.replace(/`([^`\n]+)`/g, (_all, code) => stash(`<code>${escHtml(code)}</code>`));
+    source = source.replace(/\\\(([\s\S]*?)\\\)/g, (raw, math) => {
+      const result = mathMarkup(math, false);
+      return result ? stash('<span class="pgChatInlineMath">' + result + "</span>") : raw;
+    });
     source = source.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_all, alt, url) => {
       const src = safeImageUrl(url);
       if (!src) return stash(`<span class="pgChatImageMissing">图片 · ${escHtml(alt || "未命名")}</span>`);
@@ -114,6 +226,31 @@
     while (index < lines.length) {
       const line = lines[index];
       if (!line.trim()) { index += 1; continue; }
+
+      if (/^\s*\\\[/.test(line)) {
+        const content = [];
+        let done = false;
+        const first = line.replace(/^\s*\\\[/, "");
+        let part = first;
+        while (true) {
+          const pos = part.indexOf("\\]");
+          if (pos >= 0) { content.push(part.slice(0, pos)); done = true; break; }
+          content.push(part);
+          index++;
+          if (index >= lines.length) break;
+          part = lines[index];
+        }
+        if (done) {
+          const math = mathMarkup(content.join("\n"), true);
+          out.push(math
+            ? '<div class="pgChatDisplayMath">' + math + "</div>"
+            : "<pre><code>" + escHtml("\\[" + content.join("\n") + "\\]") + "</code></pre>");
+          index++;
+          continue;
+        }
+        out.push("<pre><code>" + escHtml("\\[" + content.join("\n")) + "</code></pre>");
+        continue;
+      }
 
       const fence = line.match(/^\s*```([^\s`]*)\s*$/);
       if (fence) {
@@ -206,6 +343,7 @@
   const style = document.createElement("style");
   style.dataset.chat2apiPlaygroundChat = "69";
   style.textContent = `
+    .pgChatDisplayMath{overflow-x:auto;text-align:center;padding:9px 0;max-width:100%}.pgChatDisplayMath math{font-size:1.12em;margin:auto}.pgChatInlineMath{display:inline-block;vertical-align:middle}.pgChatInlineMath math{vertical-align:middle}
     .pgChatPanel{margin-bottom:14px;overflow:hidden}.pgChatHead{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px}.pgChatHead h2{margin:0 0 4px}
     .pgChatToolbar{display:grid;grid-template-columns:minmax(180px,.8fr) 150px minmax(260px,1.2fr) minmax(220px,1fr);gap:9px;margin-bottom:12px}.pgChatToolbar label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}.pgChatKeyBox{display:grid;grid-template-columns:1fr;gap:7px}
     .pgChatMessages{height:min(52vh,560px);min-height:360px;overflow:auto;border:1px solid var(--line);border-radius:13px;background:#08111f;padding:18px;display:flex;flex-direction:column;gap:14px}.pgChatEmpty{margin:auto;color:var(--muted);text-align:center;max-width:520px}
@@ -512,6 +650,6 @@
   $chat("pgChatModel").addEventListener("change", updateReasoningState); $chat("pgChatModel").addEventListener("focus", syncModels); $chat("pgChatKey").addEventListener("focus", syncKeys);
   loadHistory(); renderMessages(); updateReasoningState(); setTimeout(syncModels,100); setTimeout(syncKeys,180); setTimeout(syncModels,900);
   globalThis.__CHAT2API_PLAYGROUND_CHAT_V69__ = Object.freeze({
-    version:177, renderMarkdown, imageResultMarkdown, normalizeAssistantContent, safeImageUrl,
+    version:206, renderMarkdown, mathMarkup, imageResultMarkdown, normalizeAssistantContent, safeImageUrl,
   });
 })();

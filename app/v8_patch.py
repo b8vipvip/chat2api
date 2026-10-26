@@ -77,6 +77,19 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             raise HTTPException(status_code=403, detail="Managed API keys cannot access administrator endpoints")
         raise HTTPException(status_code=401, detail="Invalid administrator API key")
 
+    def request_probe_evidence(request_id: str) -> dict[str, Any]:
+        # One authenticated request log is the canonical diagnostics artifact.
+        # Persisted Worker facts are already allowlisted/redacted at ingest;
+        # read them in sequence, without making probes a terminal authority.
+        store = getattr(app.state, "worker_probes", None)
+        if store is None:
+            return {"capture_status": "not_collected", "event_count": 0, "events": []}
+        try:
+            summary = store.summary(request_id)
+            return {**summary, "events": store.events(request_id)}
+        except (ValueError, OSError, json.JSONDecodeError):
+            return {"capture_status": "unavailable", "event_count": 0, "events": []}
+
     def request_log_report(request_id: str) -> dict[str, Any]:
         row = telemetry.get(request_id)
         if not row:
@@ -89,10 +102,12 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             "server_version": SERVER_RUNTIME_VERSION,
             "request": row,
             "http_trace": diagnostic_store.by_trace(trace_id) if trace_id else [],
+            "worker_probe_evidence": request_probe_evidence(request_id),
             "extension_snapshot": _safe_client_rows(registry),
             "notes": [
                 "API keys, Authorization headers, pairing codes, prompt bodies and base64 payloads are not included.",
                 "trace_id is available for requests created after server v0.8.0 was deployed.",
+                "worker_probe_evidence includes all captured allowlisted facts and timestamps, bounded to 32 events per request; it contains no raw page HTML or pixels.",
             ],
         }
 
@@ -123,6 +138,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                 {
                     "request": row,
                     "http_trace": diagnostic_store.by_trace(trace_id) if trace_id else [],
+                    "worker_probe_evidence": request_probe_evidence(str(row.get("request_id") or "")),
                 }
             )
 
@@ -146,6 +162,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                 "pairing_code_included": False,
                 "prompt_bodies_included": False,
                 "base64_payloads_included": False,
+                "worker_probe_events_included_for_failures": True,
             },
         }
 

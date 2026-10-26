@@ -32,6 +32,27 @@
     // Read only compact status surfaces in the current conversation. Never
     // scrape entire <main>, the prompt, or arbitrary assistant markdown.
     const active = globalThis.__CHAT2API_REQUEST_CONTENT_V6__?.active;
+    const selectors = [
+      "main [data-testid*='thinking' i]",
+      "main [data-testid*='reasoning' i]",
+      "main [role='status']",
+      "main [aria-live='polite']",
+    ];
+    const statusPattern = /^(?:(?:思考|分析|推理|生成|处理|搜索|浏览)|正在(?:思考|分析|推理|生成|处理|搜索|浏览|读取|整理)(?:中|内容|回复|答案|文件)?|(?:thinking|analyzing|reasoning|generating|working|searching|browsing)(?: now|\.\.\.)?)$/i;
+    for (const selector of selectors) {
+      for (const node of [...document.querySelectorAll(selector)].slice(-12)) {
+        if (!visible(node)) continue;
+        const text = String(node.innerText || node.textContent || "").replace(/\s+/g, " ").trim();
+        if (text.length > 0 && text.length <= 80 && statusPattern.test(text)) {
+          return { text, kind: "working", source: "visible-chatgpt-ui-v196" };
+        }
+      }
+    }
+    if (generationControlVisible()) {
+      return {text: "正在生成", kind: "working", source: "generation-control-v196"};
+    }
+    // Completed reasoning summaries can remain visible during generation.
+    // Check live working/status widgets before considering a summary label.
     if (Number(active?.submitStartedAt || 0) > 0 && active?.networkStreamSeen === true) {
       // Strictly UI-labelled summary widgets; no raw markdown or invisible CoT.
       for (const selector of [
@@ -48,25 +69,6 @@
           }
         }
       }
-    }
-    const selectors = [
-      "main [data-testid*='thinking' i]",
-      "main [data-testid*='reasoning' i]",
-      "main [role='status']",
-      "main [aria-live='polite']",
-    ];
-    const statusPattern = /^(?:正在(?:思考|分析|推理|生成|处理|搜索|浏览|读取|整理)(?:中|内容|回复|答案|文件)?|(?:thinking|analyzing|reasoning|generating|working|searching|browsing)(?: now|\.\.\.)?)$/i;
-    for (const selector of selectors) {
-      for (const node of [...document.querySelectorAll(selector)].slice(-12)) {
-        if (!visible(node)) continue;
-        const text = String(node.innerText || node.textContent || "").replace(/\s+/g, " ").trim();
-        if (text.length > 0 && text.length <= 80 && statusPattern.test(text)) {
-          return { text, kind: "working", source: "visible-chatgpt-ui-v196" };
-        }
-      }
-    }
-    if (generationControlVisible()) {
-      return {text: "正在生成", kind: "working", source: "generation-control-v196"};
     }
     return null;
   }
