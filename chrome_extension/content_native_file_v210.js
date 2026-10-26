@@ -102,7 +102,7 @@
     if (!requestId || !scope?.isConnected || !scope.closest?.("main,[role='main'],#thread")) 
       return {text:"",count:0,bytes:0,error:"unverified-reply-scope"};
     if(!session || session.requestId!==requestId)
-      session={requestId,files:new Map(),attempts:new Map(),lastError:""};
+      session={requestId,files:new Map(),attempts:new Map(),lastError:"",failures:new Map()};
     const candidates=candidateButtons(scope).slice(0,12);
     let total=[...session.files.values()].reduce((sum,file)=>sum+file.bytes,0);
     for(const item of candidates) {
@@ -112,9 +112,10 @@
       if(attempts.count>=2 || (attempts.count && Date.now()-attempts.at<25000))continue;
       session.attempts.set(item.filename,{at:Date.now(),count:(attempts.count||0)+1});
       const result=await oneClick(item.button,item.filename);
-      if(!result){session.lastError="native-download-not-observed";continue;}
+      if(!result){session.lastError="native-download-not-observed";session.failures.set(item.filename.split(".").pop().toLowerCase(),"native-download-not-observed");continue;}
       if(total+result.bytes>MAX_TOTAL){session.lastError="file-total-limit";break;}
       session.files.set(result.filename,result);
+      session.failures.delete(item.filename.split(".").pop().toLowerCase());
       total+=result.bytes;
     }
     const files=[...session.files.values()];
@@ -122,11 +123,15 @@
       text:files.map(file=>"!["+"📎 "+file.filename.replace(/[\[\]\r\n]/g,"_")+"]("+file.data_url+")").join("\n\n"),
       count:files.length,bytes:total,error:session.lastError,
       button_candidates:candidates.length,attempted:session.attempts.size,
+      captured_types:files.map(file=>file.filename.split(".").pop().toLowerCase()),
+      failed_types:[...session.failures.keys()],
     };
   }
   function stats(requestId) {
     if(!session||session.requestId!==requestId)return {count:0,attempted:0,error:""};
-    return {count:session.files.size,attempted:session.attempts.size,error:session.lastError};
+    return {count:session.files.size,attempted:session.attempts.size,error:session.lastError,
+      captured_types:[...session.files.keys()].map(name=>name.split(".").pop().toLowerCase()),
+      failed_types:[...session.failures.keys()]};
   }
   globalThis[KEY]=Object.freeze({version:210,capture,stats});
 })();
