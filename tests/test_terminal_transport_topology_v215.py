@@ -75,3 +75,30 @@ def test_stream_completed_is_persisted_before_any_content_sse_yield():
     assert persisted < first_sse_output
     assert 'recorded = True' in segment[persisted:first_sse_output]
     assert 'terminal_transport_server_seen' in source
+
+
+def test_telemetry_first_terminal_is_absorbing(tmp_path):
+    from app.telemetry import TelemetryStore
+
+    async def check():
+        store = TelemetryStore(tmp_path)
+        await store.upsert({"request_id": "req_terminal_history", "status": "running"})
+        await store.upsert({
+            "request_id": "req_terminal_history", "status": "completed",
+            "response_text": "real full answer", "completion_chars": 16,
+        })
+        stable = store.get("req_terminal_history")
+        late = await store.upsert({
+            "request_id": "req_terminal_history", "status": "running",
+            "response_text": "partial",
+        })
+        assert late == stable
+        assert store.get("req_terminal_history") == stable
+        also_late = await store.upsert({
+            "request_id": "req_terminal_history", "status": "error",
+            "error": "late timeout",
+        })
+        assert also_late == stable
+        assert store.get("req_terminal_history")["status"] == "completed"
+        assert store.get("req_terminal_history")["response_text"] == "real full answer"
+    asyncio.run(check())
