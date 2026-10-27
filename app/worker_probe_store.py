@@ -85,6 +85,9 @@ ALLOWED_FACTS = frozenset([
     "scene_markdown_table_count", "scene_markdown_row_count", "scene_code_block_count",
     "scene_inline_code_count", "scene_math_node_count", "scene_heading_count",
     "scene_list_count", "scene_final_action_count", "scene_new_final_action_count", "scene_finish_after_all_blocks",
+    "scene_current_branch", "scene_new_action_count", "scene_new_actions_after_candidate",
+    "scene_new_actions_after_all", "scene_new_actions_same_branch",
+    "scene_changed_block_branches", "scene_reply_topology",
     "scene_image_count", "scene_image_large_count", "scene_picture_count",
     "scene_canvas_count", "scene_file_card_count", "scene_file_input_count",
     "scene_file_pdf_count", "scene_file_xlsx_count", "scene_file_pptx_count",
@@ -132,6 +135,10 @@ def _sanitize_facts(value: Any) -> dict[str, str | bool | int | float | None]:
             result[key] = fact
         elif isinstance(fact, (int, float)) and not isinstance(fact, bool):
             if -1_000_000_000 < fact < 1_000_000_000:
+                result[key] = fact
+        elif key == "scene_reply_topology" and isinstance(fact, str):
+            # Only bounded DOM tag/ordinal/length tuples, never user text.
+            if len(fact) <= 1350 and re.fullmatch(r"[A-Za-z0-9:;_+-]*", fact):
                 result[key] = fact
         elif key in {"last_turn_role", "main_selector"} and isinstance(fact, str):
             if len(fact) <= 50 and re.fullmatch(r"[a-zA-Z0-9_#\[\]=' .-]*", fact):
