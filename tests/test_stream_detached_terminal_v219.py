@@ -93,6 +93,6 @@ def test_sse_disconnect_only_changes_delivery_state_and_keepalive_is_outermost()
     assert 'await registry.send(state.client_id, {' not in segment
     entry = (ROOT / "app/entry.py").read_text()
     assert entry.rindex("install_stream_keepalive_patch(app)") > entry.rindex(
-        "install_request_history_v94_patch(app)"
+        "install_worker_probe_ui_v1(app)"
     )
     assert entry.rstrip().endswith("install_request_history_v94_patch(app)")
