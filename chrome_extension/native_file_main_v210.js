@@ -34,6 +34,20 @@
     return btoa(result);
   };
   const validName = text => /^[^\/\\\r\n]{1,140}\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md)$/i.test(text);
+  // Never consume a one-shot verified file arm with an HTML preview or a
+  // failed download: the real browser file may arrive on a later click.
+  const validBytes = (bytes, filename) => {
+    if (!bytes || bytes.length < 4 || bytes.length > MAX_BYTES) return false;
+    const ext = String(filename || "").split(".").pop().toLowerCase();
+    if (["xlsx","pptx","zip","docx"].includes(ext))
+      return bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 3 && bytes[3] === 4;
+    if (ext === "json") {
+      try { JSON.parse(new TextDecoder().decode(bytes)); return true; }
+      catch (_) { return false; }
+    }
+    if (ext === "pdf") return bytes[0] === 37 && bytes[1] === 80 && bytes[2] === 68 && bytes[3] === 70;
+    return !bytes.slice(0, Math.min(256,bytes.length)).includes(0);
+  };
   const allowedSource = raw => {
     try {
       const url = new URL(raw, location.href);
@@ -80,7 +94,7 @@
           bytes = new Uint8Array(await body.arrayBuffer());
         } finally { clearTimeout(timer); }
       }
-      if (!bytes || bytes.length < 4 || bytes.length > MAX_BYTES) return;
+      if (!validBytes(bytes,name)) return;
       session.used = true;
       window.postMessage({
         kind: KIND, direction: "captured", nonce: session.nonce,
@@ -115,7 +129,8 @@
         session.inFlight = true;
         try {
           const buffer = await response.clone().arrayBuffer();
-          if (!buffer.byteLength || buffer.byteLength > MAX_BYTES || session !== armed || session.used) return;
+          if (session !== armed || session.used) return;
+          if (!validBytes(new Uint8Array(buffer), session.filename)) return;
           session.used = true;
           window.postMessage({kind:KIND,direction:"captured",nonce:session.nonce,
             filename:session.filename,bytes:buffer.byteLength,base64:encoded(new Uint8Array(buffer))},
