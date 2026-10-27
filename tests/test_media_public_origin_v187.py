@@ -65,6 +65,6 @@ def test_all_public_media_api_routes_use_same_https_projection():
         "media, generated-file metadata, and Images URL mode must share the chat archive's HTTPS origin handling"
     )
     assert 'media_archive._config().get("public_base_url") or str(request.base_url)' not in source
-    assert source.count('media_base_for_request(request),') == 2, (
-        "stream and nonstream chat image archival must use identical origin handling"
+    assert source.count('media_base_for_request(request),') == 3, (
+        "connected/detached stream and nonstream media archive need identical origin handling"
     )

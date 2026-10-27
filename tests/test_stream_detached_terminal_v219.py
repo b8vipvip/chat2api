@@ -87,10 +87,12 @@ def test_sse_disconnect_only_changes_delivery_state_and_keepalive_is_outermost()
                   src.index('    @app.post("/v1/chat/completions")')]
     assert 'state.diagnostics["api_delivery_state"] = "disconnected"' in segment
     assert "settle_detached_stream(" in segment
-    assert "await broker.release(state.request_id)" not in segment
+    assert "async def release_broker_after_terminal()" in segment
+    assert "if recorded:" in segment
     assert '"cancelled" if not worker_terminal' not in segment
     assert 'await registry.send(state.client_id, {' not in segment
     entry = (ROOT / "app/entry.py").read_text()
     assert entry.rindex("install_stream_keepalive_patch(app)") > entry.rindex(
         "install_request_history_v94_patch(app)"
     )
+    assert entry.rstrip().endswith("install_request_history_v94_patch(app)")

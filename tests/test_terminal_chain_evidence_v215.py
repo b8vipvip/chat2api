@@ -22,13 +22,15 @@ def test_worker_probe_dom_topology_is_structured_and_text_free():
     assert _sanitize_facts({"scene_reply_topology": "<user-token>"}) == {}
 
 
-def test_sse_disconnect_must_write_terminal_even_without_worker_completed_timestamp():
+def test_sse_disconnect_is_delivery_only_until_broker_worker_terminal():
     source = (ROOT / "app/main.py").read_text()
     # Original guard lost the SSE request at 12 seconds when ChatGPT only
     # finished later at 206 seconds.
     assert "if not recorded and state.completed_mono:" not in source
     assert 'state.diagnostics["api_stream_closed_before_delivery"] = True' in source
-    assert '"cancelled" if not worker_terminal else "error"' in source
+    assert '"cancelled" if not worker_terminal else "error"' not in source
+    assert "settle_detached_stream(" in source
+    assert 'state.diagnostics["api_delivery_state"] = "disconnected"' in source
     assert "api_stream_closure_worker_terminal" in source
 
 
