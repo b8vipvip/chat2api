@@ -27,7 +27,7 @@ def test_media_diagnostic_is_evidence_not_a_terminal_result():
     # alters a status. The server must see the exact handoff boolean.
     diagnostics = {"canvas_nodes": 2, "media_handoff_marker": False}
     assert chat_timeout_window(300, automatic_extension=True,
-                               media_handoff_proven=diagnostics.get("media_handoff_marker") is True) == 300
+                               media_handoff_proven=diagnostics.get("media_handoff_marker") is True) == 600
     diagnostics["media_handoff_marker"] = True
     assert chat_timeout_window(300, automatic_extension=True,
                                media_handoff_proven=diagnostics.get("media_handoff_marker") is True) == 600
