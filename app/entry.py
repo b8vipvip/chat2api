@@ -129,7 +129,6 @@ install_linux_worker_xray_patch(app)
 install_linux_worker_bridge_binding_patch(app)
 install_linux_worker_ui_state_patch(app)
 install_linux_worker_proxy_catalog_patch(app)
-install_stream_keepalive_patch(app)
 install_request_stall_patch(app)
 install_request_recovery_patch(app)
 # Preserve active browser requests through brief Worker WebSocket reconnects.
@@ -300,4 +299,8 @@ install_legacy_mini_default_alias(app)
 # P0 Worker tools mount only their own UI after canonical normalization.
 # Preserve the existing final request-history owner as the final call.
 install_worker_probe_ui_v1(app)
+# The transport-only SSE guard is the final ASGI middleware installation, after
+# every patch that can register a BaseHTTPMiddleware wrapper. The trailing
+# idempotent request-history call only reasserts its table ownership.
+install_stream_keepalive_patch(app)
 install_request_history_v94_patch(app)

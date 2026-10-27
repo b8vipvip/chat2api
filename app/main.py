@@ -22,6 +22,7 @@ from .broker import RequestBroker, RequestState
 from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout, long_form_text_requested
 from .chat_progress_stream_v196 import status_from_diagnostics, progress_is_real
 from .chat_stream_delivery_v194 import StagedStreamText, final_text_chunks
+from .stream_detached_terminal_v219 import settle_detached_stream
 from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
@@ -102,6 +103,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.media_archive = media_archive
     app.state.generated_files = generated_files
     app.state.test_runs = test_runs
+    # Keep detached-stream supervisors alive until their Broker terminal is persisted.
+    app.state.detached_sse_tasks = set()
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.origins,
@@ -958,12 +961,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         ) + "\n\n"
                     yield ": chat2api-keepalive\n\n"
                 if await request.is_disconnected():
-                    await registry.send(state.client_id, {"type": "chat.cancel", "request_id": state.request_id})
-                    state.completed_mono = state.completed_mono or time.perf_counter()
-                    await record_request(state, model, prompt, "error", principal, stream=True, prompt_mode=prompt_mode,
-                                         response_id=response_id, final_text=sent_text, error="API client disconnected",
-                                         request_type=request_type, attachments_count=attachments_count)
-                    recorded = True
+                    # The API transport may vanish while ChatGPT continues.
+                    # Preserve the active Broker lease; detached supervisor
+                    # settles only after request-v6's Worker terminal.
+                    state.diagnostics["api_stream_close_cause"] = "http-disconnect-observed"
                     break
                 remaining = chat_deadline_remaining(
                     state, started_at, timeout_seconds, automatic_media_extension,
@@ -1094,52 +1095,85 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     yield "data: [DONE]\n\n"
                     break
         except asyncio.CancelledError:
-            # ASGI may cancel the streaming generator when a browser, proxy,
-            # or upstream client stops consuming. This is an HTTP delivery
-            # event, not a Worker terminal or proof that ChatGPT failed.
+            # ASGI is cancelling an HTTP delivery task, not a Worker request.
             if not recorded:
                 state.diagnostics["api_stream_close_cause"] = "asgi-stream-task-cancelled"
             raise
         finally:
-            if not recorded:
+            if recorded:
+                registry.busy_clients.discard(state.client_id)
+                await broker.release(state.request_id)
+            else:
+                # The previous v216-v218 branch independently wrote 'cancelled',
+                # sent chat.cancel and released the Broker before request-v6
+                # could produce its genuine completion. Do NONE of those here.
                 state.diagnostics.setdefault(
                     "api_stream_close_cause", "generator-closed-without-final-delivery"
                 )
                 state.diagnostics["api_stream_closed_at"] = time.time()
-                # A client can terminate an SSE response before the Worker
-                # supplies any terminal event. The old completed_mono guard
-                # silently skipped the history status transition, leaving
-                # a request 'running' indefinitely even after a subsequent
-                # browser terminal was captured as response_text.
-                worker_terminal = str(state.terminal_event_type or "")
-                message = ("API SSE stream ended before final delivery"
-                           if not worker_terminal else
-                           "API SSE stream ended after Worker terminal without final delivery")
                 state.diagnostics["api_stream_closed_before_delivery"] = True
-                state.diagnostics["api_stream_closure_worker_terminal"] = worker_terminal or "not-yet-received"
-                state.completed_mono = state.completed_mono or time.perf_counter()
-                if not worker_terminal:
-                    # The external client has left, so request-v6 may stop
-                    # occupying a browser tab. This cancellation cannot decide
-                    # request success or fabricate an assistant completion.
-                    try:
-                        await registry.send(state.client_id, {
-                            "type": "chat.cancel", "request_id": state.request_id,
-                        })
-                    except Exception:
-                        logger.warning("SSE disconnect cancel notification failed for %s", state.request_id)
-                try:
-                    await record_request(
-                        state, model, prompt, "cancelled" if not worker_terminal else "error",
-                        principal, stream=True, prompt_mode=prompt_mode,
-                        response_id=response_id, final_text=sent_text,
-                        error=message, request_type=request_type,
-                        attachments_count=attachments_count,
+                state.diagnostics["api_stream_closure_worker_terminal"] = (
+                    state.terminal_event_type or "not-yet-received"
+                )
+                state.diagnostics["api_delivery_state"] = "disconnected"
+                state.diagnostics["server_finalization_stage"] = (
+                    "awaiting-broker-terminal-after-http-disconnect"
+                )
+
+                async def persist_broker_terminal(terminal_error: str | None) -> None:
+                    terminal = str(state.terminal_event_type or "")
+                    is_success = terminal == "chat.completed"
+                    error_message = None if is_success else (
+                        terminal_error or "Worker terminal: " + (terminal or "missing")
                     )
-                except Exception:
-                    logger.exception("Failed to persist SSE closure for %s", state.request_id)
-            registry.busy_clients.discard(state.client_id)
-            await broker.release(state.request_id)
+                    final_status = "completed" if is_success else failure_status(
+                        state, terminal, error_message or ""
+                    )
+                    final_text = state.text if is_success else ""
+                    archived_media = []
+                    if is_success:
+                        try:
+                            final_text, archived_media, _ = await archive_verified_terminal(
+                                state, final_text, principal.key_id, state.request_id,
+                                media_base_for_request(request),
+                            )
+                        except ValueError as error:
+                            final_status = "error"
+                            error_message = str(error)
+                            state.diagnostics["detached_stream_media_archive_error"] = error_message
+                    await record_request(
+                        state, model, prompt, final_status, principal,
+                        stream=True, prompt_mode=prompt_mode, response_id=response_id,
+                        final_text=final_text if final_status == "completed" else "",
+                        error=error_message,
+                        request_type=request_type, attachments_count=attachments_count,
+                        media_items=archived_media,
+                    )
+
+                async def release_broker_after_terminal() -> None:
+                    registry.busy_clients.discard(state.client_id)
+                    await broker.release(state.request_id)
+
+                # Wait as long as the actual Worker lease (which may exceed
+                # the HTTP client's 300s deadline), plus a small cleanup grace.
+                lease_seconds = max(
+                    float(timeout_seconds),
+                    float(state.diagnostics.get("request_timeout_seconds") or 0),
+                )
+                task = asyncio.create_task(settle_detached_stream(
+                    state=state, broker=broker,
+                    finalize=persist_broker_terminal,
+                    release=release_broker_after_terminal,
+                    wait_seconds=lease_seconds + 45.0,
+                ))
+                app.state.detached_sse_tasks.add(task)
+
+                def detached_task_finished(done: asyncio.Task) -> None:
+                    app.state.detached_sse_tasks.discard(done)
+                    if not done.cancelled():
+                        done.exception()  # Retrieve and log errors from supervisor.
+
+                task.add_done_callback(detached_task_finished)
 
     @app.post("/v1/chat/completions")
     async def chat_completions(
