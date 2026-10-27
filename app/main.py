@@ -1093,8 +1093,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     ) + "\n\n"
                     yield "data: [DONE]\n\n"
                     break
+        except asyncio.CancelledError:
+            # ASGI may cancel the streaming generator when a browser, proxy,
+            # or upstream client stops consuming. This is an HTTP delivery
+            # event, not a Worker terminal or proof that ChatGPT failed.
+            if not recorded:
+                state.diagnostics["api_stream_close_cause"] = "asgi-stream-task-cancelled"
+            raise
         finally:
             if not recorded:
+                state.diagnostics.setdefault(
+                    "api_stream_close_cause", "generator-closed-without-final-delivery"
+                )
+                state.diagnostics["api_stream_closed_at"] = time.time()
                 # A client can terminate an SSE response before the Worker
                 # supplies any terminal event. The old completed_mono guard
                 # silently skipped the history status transition, leaving
