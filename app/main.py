@@ -1094,12 +1094,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     yield "data: [DONE]\n\n"
                     break
         finally:
-            if not recorded and state.completed_mono:
-                message = "Streaming request ended before completion"
-                await record_request(state, model, prompt, failure_status(state, message=message), principal, stream=True, prompt_mode=prompt_mode,
-                                     response_id=response_id, final_text=sent_text,
-                                     error=message, request_type=request_type,
-                                     attachments_count=attachments_count)
+            if not recorded:
+                # A client can terminate an SSE response before the Worker
+                # supplies any terminal event. The old completed_mono guard
+                # silently skipped the history status transition, leaving
+                # a request 'running' indefinitely even after a subsequent
+                # browser terminal was captured as response_text.
+                worker_terminal = str(state.terminal_event_type or "")
+                message = ("API SSE stream ended before final delivery"
+                           if not worker_terminal else
+                           "API SSE stream ended after Worker terminal without final delivery")
+                state.diagnostics["api_stream_closed_before_delivery"] = True
+                state.diagnostics["api_stream_closure_worker_terminal"] = worker_terminal or "not-yet-received"
+                state.completed_mono = state.completed_mono or time.perf_counter()
+                try:
+                    await record_request(
+                        state, model, prompt, "cancelled" if not worker_terminal else "error",
+                        principal, stream=True, prompt_mode=prompt_mode,
+                        response_id=response_id, final_text=sent_text,
+                        error=message, request_type=request_type,
+                        attachments_count=attachments_count,
+                    )
+                except Exception:
+                    logger.exception("Failed to persist SSE closure for %s", state.request_id)
             registry.busy_clients.discard(state.client_id)
             await broker.release(state.request_id)
 
