@@ -31,6 +31,44 @@
     } catch (_) { return false; }
   }
 
+  // Read-only page topology: ordered tags, branch ordinal, size, finish-action placement.
+  // No page text, HTML, URLs, prompts, credentials or browser state are exported.
+  function responseTopology(active, scope, changed, independent, candidate, actions) {
+    const finish = actions.filter(node => !(active?.baselineFinishActions instanceof Set)
+      || !active.baselineFinishActions.has(node));
+    const first = candidate || independent[0] || null;
+    const branch = node => {
+      if (!node) return -1;
+      let current = node, hops = 0;
+      while (current?.parentElement && current.parentElement !== scope && hops++ < 32)
+        current = current.parentElement;
+      if (!current?.parentElement) return -1;
+      return Array.prototype.indexOf.call(current.parentElement.children, current);
+    };
+    const after = (a,b) => Boolean(a && b && a !== b &&
+      (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING));
+    const all = [...new Set([...independent, ...(candidate ? [candidate] : []), ...finish])]
+      .filter(Boolean).sort((left,right) => after(left,right) ? -1 : after(right,left) ? 1 : 0);
+    const tags = {P:'p',DIV:'d',H1:'h',H2:'h',H3:'h',H4:'h',H5:'h',H6:'h',
+      SECTION:'s',ARTICLE:'a',PRE:'c',TABLE:'t',UL:'u',OL:'o',LI:'l',BUTTON:'b',SPAN:'n'};
+    const topo = all.slice(0,110).map(node => {
+      const tag = tags[node.tagName] || 'x';
+      const kind = finish.includes(node) ? 'f' : node===candidate ? 'r' : 'i';
+      const length = Math.min(99999,String(node.innerText||node.textContent||'').length);
+      return kind + Math.min(999,Math.max(0,branch(node))) + tag + length;
+    }).join(';');
+    return {
+      scene_reply_topology: topo,
+      scene_current_branch: branch(first),
+      scene_new_action_count: finish.length,
+      scene_new_actions_after_candidate: finish.filter(node=>after(candidate,node)).length,
+      scene_new_actions_after_all: finish.filter(button=>
+        independent.every(node=>after(node,button))).length,
+      scene_new_actions_same_branch: finish.filter(node=>branch(node)===branch(first)).length,
+      scene_changed_block_branches: new Set(changed.map(branch)).size,
+    };
+  }
+
   // Data-minimized scene evidence: only counters and lengths, never prompt
   // contents, generated code, model text, file names, URLs or DOM markup.
   function sceneFacts(active, scope) {
@@ -114,6 +152,7 @@
         const stream = String(active?.networkObservedText || "");
     const trailing = String(active?.networkTerminalText || "");
     return {
+      ...responseTopology(active, scope, changed, independent, current, completed),
       scene_rich_block_count: blocks.length,
       scene_structural_scan_nodes: allBlocks.length,
       scene_structural_scan_overflow: sceneScanOverflow,
