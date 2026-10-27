@@ -812,6 +812,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "diagnostics": {"request_admission_stage": "selecting-worker"},
             "error": None,
         })
+        logger.info(
+            "API request queued before Worker selection request_id=%s model=%s key=%s",
+            request_id, requested_model, principal.key_id,
+            extra={"request_id": request_id, "admission_stage": "selecting-worker"},
+        )
 
     async def record_request_running(
         state: RequestState,
@@ -1249,6 +1254,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "client_id": client_id,
                 "diagnostics": {"request_admission_stage": "waiting-capacity"},
             })
+            logger.info(
+                "API request awaiting Broker capacity request_id=%s worker=%s",
+                request_id, client_id,
+                extra={"request_id": request_id, "client_id": client_id,
+                       "admission_stage": "waiting-capacity"},
+            )
             state = await broker.create(request_id, client_id)
         except HTTPException as error:
             await record_early_error(request_id=request_id, response_id=response_id, requested_model=body.model,
