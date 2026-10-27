@@ -198,8 +198,8 @@ def test_generated_file_handoff_uses_existing_single_terminal_owner():
     assert "hasTransferableFile(captured)" in owner
     assert "file_inlined_count: fileStats.count" in rich
     assert "generated_files = GeneratedFileArchive(media_archive)" in main
-    assert "archive_final_markdown, raw_final" in main
-    assert "archive_final_markdown, text" in main
+    assert "state, raw_final, principal.key_id, state.request_id" in main
+    assert "state, text, principal.key_id, request_id" in main
     assert "type: \"chat.completed\"" not in rich
     relay = read("chrome_extension/background_media_fetch_v175.js")
     assert 'type !== "chat2api.file.fetch-v188"' in relay
