@@ -66,7 +66,9 @@ def test_live_window_truth_distinguishes_standby_in_use_and_leased() -> None:
     assert 'api_key_name' in server
     assert 'return "CHAT2API_API_KEY"' in server
     assert 'return `正在接待${name || "API请求"}`' in admin
-    assert 'if (value === "ready") return "可接待"' in admin
+    # Physical readiness and a v58 server admission permit are distinct.
+    assert 'row.server_admission_available === false ? "待机（调度容量已满）" : "可接待"' in admin
+    assert 'broker.capacity_snapshot(client_id)' in server
     assert 'return "已关闭"' in admin
 
 
