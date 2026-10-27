@@ -290,19 +290,32 @@
     // from the submitted prompt (links are expanded, icons become IMG nodes).
     // Correlate multiple *plain sentences* from the actual previous assistant
     // text before trusting the LAST role boundary as the current answer.
-    const matches = [...remainder.matchAll(/(?:^|\\n)\\s*(?:#{1,6}\\s*)?ChatGPT said\\s*:\\s*/gi)];
-    if (matches.length >= 2 && /\\[Assistant\\]/.test(active.prompt)
-        && /\\[User\\]/.test(active.prompt)) {
-      const previous = String(active.prompt).split(/\\[Assistant\\]/).slice(1)
-        .join("[Assistant]").split(/\\n\\[User\\]\\s*/)[0];
-      const plainSentences = previous.split(/\\n+/).map(line => normalize(line))
-        .filter(line => line.length >= 65 && line.length <= 400
-          && !/https?:\\/\\/|!\\[|\\]\(/.test(line))
-        .slice(0, 32);
+    const matches = [...remainder.matchAll(/(?:^|\n)\s*(?:#{1,6}\s*)?ChatGPT said\s*:\s*/gi)];
+    if (matches.length >= 2 && /\[Assistant\]/.test(active.prompt)
+        && /\[User\]/.test(active.prompt)) {
+      // The current prompt contains a previously generated assistant answer
+      // and the LAST [User] is the current question. Prior ChatGPT said:
+      // markers inside the echo are not current-request answers.
+      const promptHistory = String(active.prompt);
+      const lastUserPosition = promptHistory.lastIndexOf("\n[User]");
+      const historicalContext = lastUserPosition >= 0
+        ? promptHistory.slice(0, lastUserPosition) : "";
+      const previousRole = historicalContext.lastIndexOf("ChatGPT said:");
+      const fallbackRole = historicalContext.lastIndexOf("[Assistant]");
+      const previousStart = previousRole >= 0
+        ? previousRole + "ChatGPT said:".length
+        : fallbackRole >= 0 ? fallbackRole + "[Assistant]".length : -1;
+      const previous = previousStart >= 0
+        ? historicalContext.slice(previousStart) : "";
+      const plainSentences = previous.split(/\n+/).map(line => normalize(line))
+        .filter(line => line.length >= 42 && line.length <= 400
+          && !/https?:\/\/|!\[|\]\(/.test(line))
+        .slice(0, 40);
       const beforeLast = normalize(remainder.slice(0, matches[matches.length - 1].index));
       const corroborated = plainSentences.filter(line =>
-        beforeLast.includes(line.slice(0, Math.min(65, line.length)))).length;
-      const latestUser = String(active.prompt).split(/\\n\\[User\\]\\s*/).slice(-1)[0].trim();
+        beforeLast.includes(line.slice(0, Math.min(42, line.length)))).length;
+      const latestUser = lastUserPosition >= 0
+        ? promptHistory.slice(lastUserPosition + "\n[User]".length).trim() : "";
       const latestUserLead = normalize(latestUser).slice(0, 48);
       const currentUserVerified = latestUserLead.length >= 12
         && beforeLast.includes(latestUserLead);
@@ -313,9 +326,9 @@
           multiTurn: true, corroborated };
       }
     }
-    // Keep an incomplete echoed history quarantined while the page is still
-    // producing the current answer. Never stream earlier user/assistant turns.
-    if (/\\[Assistant\\]/.test(active.prompt) && /\\[User\\]/.test(active.prompt)
+    // A partly rendered transcript must never leak earlier turns as an API
+    // delta: wait for positive evidence of the current assistant boundary.
+    if (/\[Assistant\]/.test(active.prompt) && /\[User\]/.test(active.prompt)
         && matches.length && normalize(remainder).length > 160)
       return { text: "", stripped: false, pending: true };
     const seen = normalize(remainder);
