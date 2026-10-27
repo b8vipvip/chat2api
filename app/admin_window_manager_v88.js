@@ -251,6 +251,20 @@
         } finally { button.disabled = false; }
       });
       wrap.appendChild(button);
+      // A live verified physical standby is not a permit by itself. Offer a
+      // deliberate one-click adjustment without silently changing capacity.
+      const proposed = Math.min(32, used + idle);
+      if (proposed > limit && worker.chatgpt_routing_ready === true) {
+        const proposal = document.createElement("button");
+        proposal.type = "button"; proposal.className = "action";
+        proposal.textContent = `按当前${proposed}个窗口设定`;
+        proposal.title = "将当前执行窗口和实测待机窗口合计作为新的并发上限；浏览器资源开销会增加";
+        proposal.addEventListener("click", () => {
+          input.value = String(proposed);
+          button.click();
+        });
+        wrap.appendChild(proposal);
+      }
       box.appendChild(wrap);
     }
   }
