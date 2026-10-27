@@ -135,19 +135,40 @@
   }
 
   async function dispatchKnownRequest(message) {
-    const target = state.requestTabs.get(String(message?.request_id || ""));
-    if (!target?.tabId) return baseHandleServerMessage(message);
+    const requestId = String(message?.request_id || "");
+    const target = state.requestTabs.get(requestId);
+    const router = globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
     let tab = null;
-    try { tab = await chrome.tabs.get(target.tabId); } catch (_) {}
-    if (!tab?.id) return baseHandleServerMessage(message);
-    return withCurrentTab(tab, () => baseHandleServerMessage(message));
+    try {
+      if (target?.tabId) tab = await chrome.tabs.get(target.tabId).catch(() => null);
+      // Never send an old request's cancel to the latest bound tab. If its
+      // original tab is already gone, exact-owner route retirement is enough.
+      // This whole operation runs inside the dispatch chain, so a replacement
+      // request cannot lease the old route before cancellation settles.
+      if (tab?.id) return await withCurrentTab(tab, () => baseHandleServerMessage(message));
+      return null;
+    } finally {
+      let retired = false;
+      if (requestId && typeof router?.failRequest === "function") {
+        retired = await router.failRequest(requestId, "server-cancel-control-v136").catch(() => false);
+      }
+      state.requestTabs.delete(requestId);
+      state.lastCancelHandoff = {
+        request_id: requestId,
+        target_tab_id: target?.tabId ?? null,
+        target_found: Boolean(tab?.id),
+        retired_by_router: Boolean(retired),
+        at_ms: Date.now(),
+      };
+    }
   }
 
   handleServerMessage = async function handleConversationAwareServerMessage(message) {
     const isRoutedRequest = ["chat.request", "image.request", "voice.request", "voice.live.start"].includes(message?.type)
       && Boolean(message?.routing?.api_key_id);
-    const isTargetedControl = ["chat.cancel", "image.cancel", "voice.cancel"].includes(message?.type)
-      && state.requestTabs.has(String(message?.request_id || ""));
+    // Queue every cancellation even when its tab mapping vanished. Falling
+    // through to the generic handler may cancel an unrelated/newer window.
+    const isTargetedControl = ["chat.cancel", "image.cancel", "voice.cancel"].includes(message?.type);
     if (!isRoutedRequest && !isTargetedControl) return baseHandleServerMessage(message);
 
     // This chain serializes only brief route allocation/page hand-off operations.
