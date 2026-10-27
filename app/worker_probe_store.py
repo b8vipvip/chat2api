@@ -138,7 +138,7 @@ def _sanitize_facts(value: Any) -> dict[str, str | bool | int | float | None]:
                 result[key] = fact
         elif key == "scene_reply_topology" and isinstance(fact, str):
             # Only bounded DOM tag/ordinal/length tuples, never user text.
-            if len(fact) <= 1350 and re.fullmatch(r"[A-Za-z0-9:;_+-]*", fact):
+            if len(fact) <= 5600 and re.fullmatch(r"[A-Za-z0-9:;_+-]*", fact):
                 result[key] = fact
         elif key in {"last_turn_role", "main_selector"} and isinstance(fact, str):
             if len(fact) <= 50 and re.fullmatch(r"[a-zA-Z0-9_#\[\]=' .-]*", fact):
