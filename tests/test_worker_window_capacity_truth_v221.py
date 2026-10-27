@@ -16,6 +16,8 @@ def test_scheduler_remains_single_authority_and_exposes_explicit_limit_source():
     assert '"worker-configured-override-v58"' in scheduler
     assert '"worker-default-concurrency-v58"' in scheduler
     assert '"worker_explicit_limit"' in scheduler
+    assert 'sessions.authenticate(request.cookies.get(SESSION_COOKIE))' in scheduler
+    assert 'Administrator login required' in scheduler
     assert '"queued_requests": queue_depth(client_id)' in scheduler
     # Physical windows cannot silently override the administrator's cap.
     assert 'row.get("max_concurrency")' in scheduler
