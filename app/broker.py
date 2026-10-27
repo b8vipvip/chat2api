@@ -67,10 +67,12 @@ _TERMINAL_PROVENANCE_NUMBERS = {
     "response_terminal_stable_ms", "network_stream_chunks", "network_stream_bytes",
     "network_stream_sequence", "terminal_integrity_initial_chars",
     "terminal_integrity_final_chars",
+    "terminal_worker_send_attempt",
 }
 _TERMINAL_PROVENANCE_STRINGS = {
     "response_terminal_source", "network_terminal_evidence_source",
     "terminal_integrity_source",
+    "terminal_worker_ack_type",
 }
 
 
