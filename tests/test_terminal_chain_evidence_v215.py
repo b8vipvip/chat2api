@@ -7,7 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_worker_probe_dom_topology_is_structured_and_text_free():
     probe = (ROOT / "chrome_extension/content_probe_supervisor_v1.js").read_text()
-    assert "responseTopology(active, scope, changed, independent, current, completed)" in probe
+    assert "scene_reply_topology: topology.slice(0,5600)" in probe
     assert "scene_new_actions_after_all" in probe
     assert "scene_new_actions_same_branch" in probe
     assert "scene_changed_block_branches" in probe
