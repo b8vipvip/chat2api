@@ -80,7 +80,38 @@
         if (new RegExp("\\."+ext+"(?:$|[\\s）)])").test(name)) fileTags[ext]++;
       }
     }
-    const stream = String(active?.networkObservedText || "");
+
+    // Request-scoped DOM topology: bounded, text-free ancestry and ordinal
+    // evidence. This records WHY a finish toolbar cannot cover a multi-block
+    // response, without collecting prompt bodies, private page HTML or URLs.
+    const pageBranch = node => {
+      let child=node,parent=child?.parentElement,depth=0;
+      while(parent && parent!==scope && depth<32) {
+        child=parent;parent=parent.parentElement;depth++;
+      }
+      return parent===scope ? [...scope.children].indexOf(child) : -1;
+    };
+    const nodeOrder = node => allBlocks.indexOf(node);
+    const candidateBranch = current && current.isConnected ? pageBranch(current) : -1;
+    const freshActions = completed.filter(node =>
+      active?.baselineFinishActions instanceof Set
+        && !active.baselineFinishActions.has(node));
+    const actionEvidence = freshActions.slice(-10).map(node => ({
+      branch:pageBranch(node), afterCandidate: Boolean(current && current.isConnected
+        && (current.compareDocumentPosition(node) & Node.DOCUMENT_POSITION_FOLLOWING)),
+      afterAll: independent.every(part =>
+        part !== node && Boolean(part.compareDocumentPosition(node)
+          & Node.DOCUMENT_POSITION_FOLLOWING)),
+    }));
+    const topology = [...new Set([
+      ...independent.slice(0,36), ...independent.slice(-140),
+      ...uncovered.slice(-80), ...(current?.isConnected ? [current] : []),
+    ])].filter(Boolean).map(node => {
+      const mark=node===current?"C":uncovered.includes(node)?"U":"I";
+      return [Math.max(0,nodeOrder(node)),String(node.tagName||"node").toLowerCase().slice(0,8),
+        pageBranch(node),Math.min(99999,text(node).length),mark].join(":");
+    }).join(";");
+        const stream = String(active?.networkObservedText || "");
     const trailing = String(active?.networkTerminalText || "");
     return {
       scene_rich_block_count: blocks.length,
@@ -112,6 +143,13 @@
       scene_final_action_count: completed.length,
       scene_new_final_action_count: active?.baselineFinishActions instanceof Set
         ? completed.filter(node=>!active.baselineFinishActions.has(node)).length : 0,
+      scene_current_branch: candidateBranch,
+      scene_new_action_count: freshActions.length,
+      scene_new_actions_after_candidate: actionEvidence.filter(x=>x.afterCandidate).length,
+      scene_new_actions_after_all: actionEvidence.filter(x=>x.afterAll).length,
+      scene_new_actions_same_branch: actionEvidence.filter(x=>x.branch>=0&&x.branch===candidateBranch).length,
+      scene_changed_block_branches: new Set(independent.map(pageBranch)).size,
+      scene_reply_topology: topology.slice(0,5600),
       scene_finish_after_all_blocks: Boolean(current
         && active?.baselineFinishActions instanceof Set
         && completed.some(button => !active.baselineFinishActions.has(button)

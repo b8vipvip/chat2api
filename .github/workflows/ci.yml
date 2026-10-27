@@ -237,6 +237,13 @@ jobs:
       - name: Request prompt echo boundary v212
         run: node tests/request_prompt_echo_boundary_v212.mjs
 
+      - name: Sole-owner terminal delivery evidence v215
+        run: |
+          node --check chrome_extension/content_request_v6.js
+          node --check chrome_extension/content_probe_supervisor_v1.js
+          node tests/terminal_transport_evidence_v215.mjs
+          pytest -q tests/test_terminal_transport_topology_v215.py
+
       - name: Multi-turn external reply boundary regression v214
         run: node tests/multiturn_prompt_boundary_v214.mjs
       - name: Worker probe observer regression

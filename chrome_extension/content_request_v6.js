@@ -381,7 +381,28 @@
           });
       } catch (_) {}
     }
-    try { await chrome.runtime.sendMessage({ type: "chat2api.event", event }); } catch (_) {}
+    // A before_terminal probe proves intent, not successful socket delivery.
+    // Do not ignore background ok:false: retry only the identical terminal
+    // from the one request-v6 owner, without giving probes any terminal power.
+    const terminal = ["chat.completed","chat.error","chat.cancelled",
+      "image.completed","image.error","image.cancelled"].includes(event?.type);
+    const tries = terminal ? 3 : 1;
+    for(let attempt=1;attempt<=tries;attempt++) {
+      try {
+        const outgoing = terminal
+          ? {...event,diagnostics:{...(event.diagnostics||{}),
+              terminal_worker_send_attempt:attempt,
+              terminal_worker_ack_type:"background-websocket-enqueue-v215"}}
+          : event;
+        const result = await chrome.runtime.sendMessage({type:"chat2api.event",event:outgoing});
+        if(result?.ok === true) return;
+        if(!terminal) return;
+      } catch (_) {
+        if(!terminal) return;
+      }
+      if(attempt<tries) await new Promise(resolve=>setTimeout(resolve,450*attempt));
+    }
+    if(terminal) throw new Error("Worker terminal event was not queued by background WebSocket");
   }
 
   async function diagnostic(active, stage, extra = {}) {

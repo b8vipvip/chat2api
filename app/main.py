@@ -1011,6 +1011,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         yield "data: " + json.dumps({"error": {"type": "media_storage_error", "message": str(error)}}) + "\n\n"
                         yield "data: [DONE]\n\n"
                         break
+                    # Record the one genuine Worker terminal BEFORE yielding SSE
+                    # content: slow or disconnected clients must not leave a
+                    # completed browser request stuck in telemetry.running.
+                    state.diagnostics["server_stream_terminal_stage"] = "persisting-before-sse"
+                    usage, token_meta = await record_request(
+                        state, model, prompt, "completed", principal, stream=True, prompt_mode=prompt_mode,
+                        response_id=response_id, final_text=final_text, request_type=request_type,
+                        attachments_count=attachments_count, media_items=archived_media,
+                    )
+                    recorded = True
+                    state.diagnostics["server_stream_terminal_stage"] = "persisted-before-sse"
                     # The final same-request Worker terminal is the one owner
                     # of assistant content, regardless of provisional snapshots.
                     # Emit the *whole* authoritative text in bounded SSE chunks
@@ -1021,12 +1032,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             chunk_payload(response_id, model, {"content": delta}),
                             ensure_ascii=False,
                         ) + "\n\n"
-                    usage, token_meta = await record_request(
-                        state, model, prompt, "completed", principal, stream=True, prompt_mode=prompt_mode,
-                        response_id=response_id, final_text=final_text, request_type=request_type,
-                        attachments_count=attachments_count, media_items=archived_media,
-                    )
-                    recorded = True
                     meta = chat2api_meta(state, token_meta, principal)
                     if archived_media:
                         meta["media_files"] = archived_media
@@ -1489,7 +1494,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "chat.error", "chat.cancelled", "image.diagnostics", "image.started", "image.progress",
                     "image.completed", "image.error", "image.cancelled",
                 }:
-                    await broker.publish(request_id, message)
+                    terminal_message = message_type in {
+                        "chat.completed", "chat.error", "chat.cancelled",
+                        "image.completed", "image.error", "image.cancelled",
+                    }
+                    active_state = broker.requests.get(request_id)
+                    if terminal_message and active_state and active_state.client_id == client_id:
+                        active_state.diagnostics["terminal_transport_server_seen"] = True
+                        active_state.diagnostics["terminal_transport_server_received_at"] = time.time()
+                        active_state.diagnostics["terminal_transport_payload_chars"] = len(str(message.get("text") or ""))
+                    accepted = await broker.publish(request_id, message)
+                    if terminal_message:
+                        if active_state and active_state.client_id == client_id:
+                            active_state.diagnostics["terminal_transport_broker_accepted"] = bool(accepted)
+                        if not accepted:
+                            logger.warning(
+                                "Worker terminal not accepted request=%s type=%s active=%s",
+                                request_id, message_type, bool(active_state),
+                            )
         except WebSocketDisconnect:
             pass
         except Exception:
