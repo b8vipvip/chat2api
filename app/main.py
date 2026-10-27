@@ -1124,20 +1124,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     terminal = str(state.terminal_event_type or "")
                     is_success = terminal == "chat.completed"
                     error_message = None if is_success else (
-                        terminal_error or
-                        "Worker terminal: " + (terminal or "missing")
+                        terminal_error or "Worker terminal: " + (terminal or "missing")
                     )
-                    final_status = (
-                        "completed" if is_success else
-                        failure_status(state, terminal, error_message or "")
+                    final_status = "completed" if is_success else failure_status(
+                        state, terminal, error_message or ""
                     )
+                    final_text = state.text if is_success else ""
+                    archived_media = []
+                    if is_success:
+                        try:
+                            final_text, archived_media, _ = await archive_verified_terminal(
+                                state, final_text, principal.key_id, state.request_id,
+                                media_base_for_request(request),
+                            )
+                        except ValueError as error:
+                            final_status = "error"
+                            error_message = str(error)
+                            state.diagnostics["detached_stream_media_archive_error"] = error_message
                     await record_request(
                         state, model, prompt, final_status, principal,
                         stream=True, prompt_mode=prompt_mode, response_id=response_id,
-                        final_text=state.text if is_success else "",
+                        final_text=final_text if final_status == "completed" else "",
                         error=error_message,
-                        request_type=request_type,
-                        attachments_count=attachments_count,
+                        request_type=request_type, attachments_count=attachments_count,
+                        media_items=archived_media,
                     )
 
                 async def release_broker_after_terminal() -> None:
