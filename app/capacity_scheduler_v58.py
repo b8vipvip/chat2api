@@ -164,7 +164,17 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
             "active_requests": used,
             "request_weights": dict(broker.client_active_requests.get(str(client_id), {}) or {}),
             "queued_requests": queue_depth(client_id),
-            "limit_source": "worker-window-capacity-v147",
+            # Worker admission is controlled by this persisted scheduling
+            # ceiling, NOT by the number of ready standby Chrome windows.
+            # A ready standby can exist while all admitted request slots are
+            # occupied. Report the actual authority instead of calling the
+            # setting a physical window count.
+            "limit_source": (
+                "worker-configured-override-v58"
+                if str(client_id) in config["workers"]
+                else "worker-default-concurrency-v58"
+            ),
+            "worker_explicit_limit": str(client_id) in config["workers"],
             "account_generation_limit": limit,
             "account_generation_queue": True,
             "account_generation_queue_wait_seconds": None,
