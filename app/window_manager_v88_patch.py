@@ -284,10 +284,22 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
             "closed": closed,
             "workers": workers,
             "truth": {
-                "scheduler_used_units": sum(int(w.get("scheduler_used_units") or 0) for w in workers if w.get("online")),
-                "scheduler_limit_units": sum(int(w.get("scheduler_limit_units") or 0) for w in workers if w.get("online")),
-                "scheduler_queued_requests": sum(int(w.get("scheduler_queued_requests") or 0) for w in workers if w.get("online")),
-                "scheduler_available_units": sum(int(w.get("scheduler_available_units") or 0) for w in workers if w.get("online")),
+                "scheduler_used_units": sum(int(w.get("scheduler_used_units") or 0) for w in workers if w.get("online") and (
+                    int(w.get("scheduler_used_units") or 0) > 0
+                    or int(w.get("scheduler_queued_requests") or 0) > 0
+                )),
+                "scheduler_limit_units": sum(int(w.get("scheduler_limit_units") or 0) for w in workers if w.get("online") and (
+                    int(w.get("scheduler_used_units") or 0) > 0
+                    or int(w.get("scheduler_queued_requests") or 0) > 0
+                )),
+                "scheduler_queued_requests": sum(int(w.get("scheduler_queued_requests") or 0) for w in workers if w.get("online") and (
+                    int(w.get("scheduler_used_units") or 0) > 0
+                    or int(w.get("scheduler_queued_requests") or 0) > 0
+                )),
+                "scheduler_available_units": sum(int(w.get("scheduler_available_units") or 0) for w in workers if w.get("online") and (
+                    int(w.get("scheduler_used_units") or 0) > 0
+                    or int(w.get("scheduler_queued_requests") or 0) > 0
+                )),
                 "verified_workers": sum(1 for row in workers if row.get("live_verified")),
                 "online_workers": sum(1 for row in workers if row.get("online")),
                 "unverified_workers": len(unverified),
