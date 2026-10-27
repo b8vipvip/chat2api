@@ -71,7 +71,7 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
     app.state.window_manager_v88_installed = True
 
     registry = app.state.registry
-    broker = app.state.broker
+    broker = getattr(app.state, "broker", None)
     sessions = app.state.admin_sessions
     api_keys = getattr(app.state, "api_keys", None)
     refresh_lock = asyncio.Lock()
