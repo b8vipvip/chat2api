@@ -299,8 +299,8 @@ install_legacy_mini_default_alias(app)
 # P0 Worker tools mount only their own UI after canonical normalization.
 # Preserve the existing final request-history owner as the final call.
 install_worker_probe_ui_v1(app)
-install_request_history_v94_patch(app)
-# The SSE transport guard is installed last (outermost ASGI middleware), not
-# between historical BaseHTTPMiddleware wrappers that can end downstream tasks.
-# This guard reports delivery only; RequestBroker still owns the generation terminal.
+# The transport-only SSE guard is the final ASGI middleware installation, after
+# every patch that can register a BaseHTTPMiddleware wrapper. The trailing
+# idempotent request-history call only reasserts its table ownership.
 install_stream_keepalive_patch(app)
+install_request_history_v94_patch(app)
