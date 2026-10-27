@@ -27,6 +27,8 @@ jobs:
           node-version: '22'
       - name: Install Python dependencies
         run: python -m pip install -e '.[dev]' pytest-timeout
+      - name: Recent request logs ZIP export regression v213
+        run: pytest -q tests/test_request_logs_batch_export_v213.py --timeout=120
       - name: Python compile
         run: |
           python -m compileall -q app
