@@ -22,7 +22,7 @@ def test_dom_topology_is_data_minimized():
         "scene_reply_topology": "8:div:<script>secret</script>"
     })
     assert "scene_reply_topology" not in _sanitize_facts({
-        "scene_reply_topology": "a" * 1400
+        "scene_reply_topology": "a" * 5700
     })
 
 
@@ -60,7 +60,7 @@ def test_server_websocket_records_receipt_and_broker_acceptance_only():
 
 def test_worker_probe_topology_does_not_capture_private_raw_page_text():
     source = (ROOT / "chrome_extension/content_probe_supervisor_v1.js").read_text(encoding="utf-8")
-    assert 'scene_reply_topology: topology.slice(0,1350)' in source
+    assert 'scene_reply_topology: topology.slice(0,5600)' in source
     assert 'pageBranch' in source
     assert 'scene_new_actions_after_all' in source
 
