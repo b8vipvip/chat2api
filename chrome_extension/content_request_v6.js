@@ -283,6 +283,54 @@
       const body = remainder.slice(found.index + found[0].length).trimStart();
       return { text: body, stripped: true, pending: !body.trim() };
     }
+    // Multi-turn OpenAI clients (including mv3c) send the previous assistant
+    // response back inside the next prompt. The roleless ChatGPT DOM may echo
+    // that previous exchange and then append this turn's new assistant body.
+    // The v212 equality check cannot pass because rendered Markdown differs
+    // from the submitted prompt (links are expanded, icons become IMG nodes).
+    // Correlate multiple *plain sentences* from the actual previous assistant
+    // text before trusting the LAST role boundary as the current answer.
+    const matches = [...remainder.matchAll(/(?:^|\n)\s*(?:#{1,6}\s*)?ChatGPT said\s*:\s*/gi)];
+    if (matches.length >= 2 && /\[Assistant\]/.test(active.prompt)
+        && /\[User\]/.test(active.prompt)) {
+      // The current prompt contains a previously generated assistant answer
+      // and the LAST [User] is the current question. Prior ChatGPT said:
+      // markers inside the echo are not current-request answers.
+      const promptHistory = String(active.prompt);
+      const lastUserPosition = promptHistory.lastIndexOf("\n[User]");
+      const historicalContext = lastUserPosition >= 0
+        ? promptHistory.slice(0, lastUserPosition) : "";
+      const previousRole = historicalContext.lastIndexOf("ChatGPT said:");
+      const fallbackRole = historicalContext.lastIndexOf("[Assistant]");
+      const previousStart = previousRole >= 0
+        ? previousRole + "ChatGPT said:".length
+        : fallbackRole >= 0 ? fallbackRole + "[Assistant]".length : -1;
+      const previous = previousStart >= 0
+        ? historicalContext.slice(previousStart) : "";
+      const plainSentences = previous.split(/\n+/).map(line => normalize(line))
+        .filter(line => line.length >= 42 && line.length <= 400
+          && !/https?:\/\/|!\[|\]\(/.test(line))
+        .slice(0, 40);
+      const beforeLast = normalize(remainder.slice(0, matches[matches.length - 1].index));
+      const corroborated = plainSentences.filter(line =>
+        beforeLast.includes(line.slice(0, Math.min(42, line.length)))).length;
+      const latestUser = lastUserPosition >= 0
+        ? promptHistory.slice(lastUserPosition + "\n[User]".length).trim() : "";
+      const latestUserLead = normalize(latestUser).slice(0, 48);
+      const currentUserVerified = latestUserLead.length >= 12
+        && beforeLast.includes(latestUserLead);
+      if (corroborated >= 2 && currentUserVerified) {
+        const last = matches[matches.length - 1];
+        const body = remainder.slice(last.index + last[0].length).trimStart();
+        return { text: body, stripped: true, pending: !body.trim(),
+          multiTurn: true, corroborated };
+      }
+    }
+    // A partly rendered transcript must never leak earlier turns as an API
+    // delta: wait for positive evidence of the current assistant boundary.
+    if (/\[Assistant\]/.test(active.prompt) && /\[User\]/.test(active.prompt)
+        && matches.length && normalize(remainder).length > 160)
+      return { text: "", stripped: false, pending: true };
     const seen = normalize(remainder);
     const expected = active.promptNormalized;
     const echoLead = expected.slice(0, Math.min(80, expected.length));
@@ -312,6 +360,9 @@
           diagnostics: { ...(event.diagnostics || {}),
             response_boundary_guard: "request-correlated-prompt-echo-v212",
             response_boundary_prompt_echo_removed: true,
+            response_boundary_multiturn_verified: result.multiTurn === true,
+            response_boundary_previous_text_matches: Number(result.corroborated || 0),
+            response_boundary_current_user_verified: result.multiTurn === true,
             response_boundary_removed_chars: String(event.text || "").length - result.text.length,
           } };
       }
@@ -1601,6 +1652,7 @@
               media_native_file_capture_count: Number(native?.count || 0),
               media_native_file_captured_types: native?.captured_types || [],
               media_native_file_failed_types: native?.failed_types || [],
+              media_native_file_attempt_counts: native?.attempt_counts || {},
               media_native_file_synthesized_zip: native?.synthesized_zip === true,
               media_required_file_types_satisfied: allRequiredFileTypesDelivered,
               media_reply_scope_verified: Boolean(fileReplyBoundary),

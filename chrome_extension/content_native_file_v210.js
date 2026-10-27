@@ -169,7 +169,7 @@
         }
       };
       window.addEventListener("message",onMessage);
-      const timer=setTimeout(()=>finish(),7500);
+      const timer=setTimeout(()=>finish(),9000);
       window.postMessage({kind:KIND,direction:"arm",nonce,filename},location.origin);
     });
   }
@@ -184,7 +184,12 @@
       if(session.files.size>=4 || total>=MAX_TOTAL)break;
       if(session.files.has(item.filename))continue;
       const attempts=session.attempts.get(item.filename)||0;
-      if(attempts.count>=2 || (attempts.count && Date.now()-attempts.at<25000))continue;
+      // A file preview may become downloadable well after the first finished
+      // reply toolbar. Exhausting two attempts in the first minute left
+      // subsequent 10+ minutes of scans without another real capture attempt.
+      // Retry sparingly across the long-running server request, and never
+      // claim a generated file without validated bytes.
+      if(attempts.count>=6 || (attempts.count && Date.now()-attempts.at<45000))continue;
       session.attempts.set(item.filename,{at:Date.now(),count:(attempts.count||0)+1});
       const result=await oneClick(item.button,item.filename);
       if(!result){session.lastError="native-download-not-observed";session.failures.set(item.filename.split(".").pop().toLowerCase(),"native-download-not-observed");continue;}
@@ -213,6 +218,7 @@
       text:files.map(file=>"!["+"📎 "+file.filename.replace(/[\[\]\r\n]/g,"_")+"]("+file.data_url+")").join("\n\n"),
       count:files.length,bytes:total,error:session.lastError,
       button_candidates:candidates.length,attempted:session.attempts.size,
+      attempt_counts:Object.fromEntries([...session.attempts.entries()].map(([name,entry])=>[name.split(".").pop().toLowerCase(),entry.count])),
       captured_types:files.map(file=>file.filename.split(".").pop().toLowerCase()),
       failed_types:[...session.failures.keys()],
       synthesized_zip:session.synthesizedZip===true,
