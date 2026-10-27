@@ -1489,7 +1489,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "chat.error", "chat.cancelled", "image.diagnostics", "image.started", "image.progress",
                     "image.completed", "image.error", "image.cancelled",
                 }:
-                    await broker.publish(request_id, message)
+                    terminal_message = message_type in {
+                        "chat.completed", "chat.error", "chat.cancelled",
+                        "image.completed", "image.error", "image.cancelled",
+                    }
+                    active_state = broker.requests.get(request_id)
+                    if terminal_message and active_state and active_state.client_id == client_id:
+                        active_state.diagnostics["terminal_transport_server_seen"] = True
+                        active_state.diagnostics["terminal_transport_server_received_at"] = time.time()
+                        active_state.diagnostics["terminal_transport_payload_chars"] = len(str(message.get("text") or ""))
+                    accepted = await broker.publish(request_id, message)
+                    if terminal_message:
+                        if active_state and active_state.client_id == client_id:
+                            active_state.diagnostics["terminal_transport_broker_accepted"] = bool(accepted)
+                        if not accepted:
+                            logger.warning(
+                                "Worker terminal not accepted request=%s type=%s active=%s",
+                                request_id, message_type, bool(active_state),
+                            )
         except WebSocketDisconnect:
             pass
         except Exception:
