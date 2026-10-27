@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from app.broker import RequestBroker
@@ -25,27 +26,29 @@ def test_dom_topology_is_data_minimized():
     })
 
 
-async def test_broker_records_original_worker_terminal_ack_provenance():
-    broker = RequestBroker()
-    state = await broker.create("req_transport_proof", "ext_transport")
-    accepted = await broker.publish("req_transport_proof", {
-        "type": "chat.completed", "request_id": "req_transport_proof",
-        "text": "verified assistant",
-        "diagnostics": {
-            "response_terminal_source": "verified-rendered-dom",
-            "terminal_worker_send_attempt": 2,
-            "terminal_worker_ack_type": "background-websocket-enqueue-v215",
-        },
-    })
-    assert accepted
-    assert await state.final_future == "verified assistant"
-    assert state.diagnostics["terminal_worker_send_attempt"] == 2
-    assert state.diagnostics["terminal_worker_ack_type"] == "background-websocket-enqueue-v215"
-    assert not await broker.publish("req_transport_proof", {
-        "type": "chat.error", "request_id": "req_transport_proof", "error": "late"
-    })
-    assert state.terminal_event_type == "chat.completed"
+def test_broker_records_original_worker_terminal_ack_provenance():
+    async def verify():
+        broker = RequestBroker()
+        state = await broker.create("req_transport_proof", "ext_transport")
+        accepted = await broker.publish("req_transport_proof", {
+            "type": "chat.completed", "request_id": "req_transport_proof",
+            "text": "verified assistant",
+            "diagnostics": {
+                "response_terminal_source": "verified-rendered-dom",
+                "terminal_worker_send_attempt": 2,
+                "terminal_worker_ack_type": "background-websocket-enqueue-v215",
+            },
+        })
+        assert accepted
+        assert await state.final_future == "verified assistant"
+        assert state.diagnostics["terminal_worker_send_attempt"] == 2
+        assert state.diagnostics["terminal_worker_ack_type"] == "background-websocket-enqueue-v215"
+        assert not await broker.publish("req_transport_proof", {
+            "type": "chat.error", "request_id": "req_transport_proof", "error": "late"
+        })
+        assert state.terminal_event_type == "chat.completed"
 
+    asyncio.run(verify())
 
 def test_server_websocket_records_receipt_and_broker_acceptance_only():
     source = (ROOT / "app/main.py").read_text(encoding="utf-8")
