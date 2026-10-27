@@ -25,6 +25,7 @@ let tabExists = true;
 const ctx = {
   console, Date, Map, Set, Promise,
   chrome: {
+    runtime: { onMessage: { addListener() {} } },
     tabs: { async get(id) {
       if (id === 42 && tabExists) return { id: 42, windowId: 41 };
       if (id === 99) return { id: 99, windowId: 98 };
