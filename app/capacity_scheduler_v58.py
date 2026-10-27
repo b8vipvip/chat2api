@@ -9,7 +9,9 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+
+from .admin_auth import SESSION_COOKIE
 
 from .broker import RequestState
 
@@ -377,7 +379,13 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         }
 
     @app.put("/api/admin/extensions/{client_id}/capacity-v57")
-    async def update_worker_capacity(client_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    async def update_worker_capacity(client_id: str, body: dict[str, Any], request: Request) -> dict[str, Any]:
+        # The administrative capacity mutation must not be callable via an
+        # unauthenticated public endpoint. Keep the window manager and Worker
+        # scheduler on the same administrator session boundary.
+        sessions = getattr(app.state, "admin_sessions", None)
+        if sessions is None or not sessions.authenticate(request.cookies.get(SESSION_COOKIE)):
+            raise HTTPException(status_code=401, detail="Administrator login required")
         client_id = str(client_id or "").strip()
         if client_id not in registry.clients:
             raise HTTPException(status_code=404, detail="Unknown client_id")
