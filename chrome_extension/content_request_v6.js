@@ -1639,6 +1639,7 @@
               media_native_file_capture_count: Number(native?.count || 0),
               media_native_file_captured_types: native?.captured_types || [],
               media_native_file_failed_types: native?.failed_types || [],
+              media_native_file_attempt_counts: native?.attempt_counts || {},
               media_native_file_synthesized_zip: native?.synthesized_zip === true,
               media_required_file_types_satisfied: allRequiredFileTypesDelivered,
               media_reply_scope_verified: Boolean(fileReplyBoundary),
