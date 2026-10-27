@@ -874,11 +874,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         error: str, request_type: str = "text", attachments_count: int = 0,
     ) -> None:
         usage, token_meta = standard_usage(prompt, "")
+        existing = telemetry.get(request_id) or {}
+        diagnostics = dict(existing.get("diagnostics") or {})
+        if diagnostics.get("request_admission_stage"):
+            diagnostics["request_admission_failure_stage"] = diagnostics["request_admission_stage"]
+            diagnostics["request_admission_stage"] = "failed-before-worker-dispatch"
+            diagnostics["request_admission_wait_ms"] = round(
+                (time.perf_counter() - started_mono) * 1000, 1
+            )
         await telemetry.upsert(
             {
                 "request_id": request_id,
                 "response_id": response_id,
-                "client_id": None,
+                "client_id": existing.get("client_id"),
                 "api_key_id": principal.key_id,
                 "api_key_name": principal.name,
                 "auth_kind": principal.kind,
@@ -892,7 +900,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "status": "error",
                 "usage": {**usage, **token_meta},
                 "timings": {"total_ms": round((time.perf_counter() - started_mono) * 1000, 1)},
-                "diagnostics": {},
+                "diagnostics": diagnostics,
                 "error": error,
             }
         )
