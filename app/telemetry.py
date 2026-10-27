@@ -70,6 +70,15 @@ class TelemetryStore:
         async with self.lock:
             request_id = str(record.get("request_id") or "")
             existing = self.get(request_id) if request_id else None
+            # Request-v6's first terminal is authoritative. An asynchronous
+            # observer or late write from an earlier running snapshot may not
+            # reopen the completed/error request or replace its final body.
+            if existing and str(existing.get("status") or "") in {
+                "completed", "error", "cancelled", "stalled",
+            } and record.get("status") is not None and (
+                str(record["status"]) != str(existing["status"])
+            ):
+                return dict(existing)
             record = {**(existing or {}), **record}
             record.setdefault("recorded_at", utc_now())
             record["updated_at"] = utc_now()
