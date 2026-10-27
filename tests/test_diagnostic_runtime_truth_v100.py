@@ -19,7 +19,7 @@ def test_v8_diagnostics_use_canonical_runtime_contract_not_historical_patch_vers
     runtime = read("app/runtime_contract.py")
 
     assert "from .runtime_contract import SERVER_RUNTIME_VERSION" in source
-    assert source.count('"server_version": SERVER_RUNTIME_VERSION') == 2
+    assert source.count('"server_version": SERVER_RUNTIME_VERSION') == 3
     assert '"server_version": PATCH_VERSION' not in source
     match = re.search(r'^SERVER_RUNTIME_VERSION = "([^"]+)"$', runtime, re.MULTILINE)
     assert match is not None

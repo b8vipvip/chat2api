@@ -3,13 +3,15 @@ from __future__ import annotations
 import io
 import json
 import secrets
+import re
+import tempfile
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from .api_keys import ApiPrincipal
 from .diagnostics import DiagnosticMiddleware, DiagnosticStore, configure_file_logging
@@ -91,12 +93,18 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
         except (ValueError, OSError, json.JSONDecodeError):
             return {"capture_status": "unavailable", "event_count": 0, "events": []}
 
-    def request_log_report(request_id: str) -> dict[str, Any]:
-        row = telemetry.get(request_id)
+    def request_log_report(
+        request_id: str, *, row_override: dict[str, Any] | None = None,
+        test_index: dict[str, Any] | None = None,
+        extension_snapshot: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        row = dict(row_override) if row_override is not None else telemetry.get(request_id)
         if not row:
             raise HTTPException(status_code=404, detail="Request record not found")
         trace_id = str(row.get("trace_id") or "")
-        test_run = request_test_index(getattr(app.state, "test_runs", None)).get(request_id)
+        if test_index is None:
+            test_index = request_test_index(getattr(app.state, "test_runs", None))
+        test_run = test_index.get(request_id)
         return {
             "report_type": "chat2api-request-diagnostic",
             "report_version": 1,
@@ -106,9 +114,9 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             "http_trace": diagnostic_store.by_trace(trace_id) if trace_id else [],
             "worker_probe_evidence": request_probe_evidence(request_id),
             "playground_diagnostics": playground_diagnostics(test_run),
-            "extension_snapshot": _safe_client_rows(registry),
+            "extension_snapshot": extension_snapshot if extension_snapshot is not None else _safe_client_rows(registry),
             "notes": [
-                "API keys, Authorization headers, pairing codes, prompt bodies and base64 payloads are not included.",
+                "Stored final prompts and assistant responses ARE included; review and redact before sharing. Authorization credentials and pairing codes are not intentionally exported.",
                 "trace_id is available for requests created after server v0.8.0 was deployed.",
                 "worker_probe_evidence includes all captured allowlisted facts and timestamps, bounded to 32 events per request; it contains no raw page HTML or pixels.",
             ],
@@ -126,6 +134,101 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             _json_bytes(report),
             media_type="application/json",
             headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/admin/requests/logs/batch", dependencies=[Depends(require_admin_key)])
+    async def download_recent_request_logs(
+        limit: int = Query(default=20, ge=1, le=500),
+    ) -> StreamingResponse:
+        # Reuse the exact single-request report builder and its Worker probe /
+        # Playground evidence; batch export is read-only, not a terminal owner.
+        # Telemetry is bounded to 500 retained distinct requests, and recent()
+        # uses the same newest-first ordering as the request-history UI.
+        selected = telemetry.recent(limit)
+        if not selected:
+            raise HTTPException(status_code=404, detail="No request records to export")
+
+        test_index = request_test_index(getattr(app.state, "test_runs", None))
+        extension_snapshot = _safe_client_rows(registry)
+        exported = []
+        plain_bytes = 0
+        max_plain_bytes = 160 * 1024 * 1024
+        spool = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
+        try:
+            with zipfile.ZipFile(spool, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+                for index, row in enumerate(selected, start=1):
+                    request_id = str(row.get("request_id") or "")
+                    if not request_id:
+                        continue
+                    # The manifest and each JSON share an immutable row snapshot
+                    # from the selection point, even if a live request later ends.
+                    report = request_log_report(
+                        request_id, row_override=row, test_index=test_index,
+                        extension_snapshot=extension_snapshot,
+                    )
+                    payload = _json_bytes(report)
+                    plain_bytes += len(payload)
+                    if plain_bytes > max_plain_bytes:
+                        raise HTTPException(
+                            status_code=413,
+                            detail="Combined request logs exceed 160 MiB; choose fewer recent requests",
+                        )
+                    safe_id = request_id if re.fullmatch(r"[A-Za-z0-9_-]{1,100}", request_id) else f"record_{index:04d}"
+                    filename = f"requests/{index:04d}-chat2api-request-{safe_id}.json"
+                    archive.writestr(filename, payload)
+                    exported.append({
+                        "request_id": request_id,
+                        "recorded_at": row.get("recorded_at"),
+                        "status": row.get("status"),
+                        "filename": filename,
+                    })
+
+                if not exported:
+                    raise HTTPException(status_code=404, detail="No named request records to export")
+                manifest = {
+                    "report_type": "chat2api-recent-request-log-bundle",
+                    "report_version": 1,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                    "server_version": SERVER_RUNTIME_VERSION,
+                    "requested_limit": limit,
+                    "exported_count": len(exported),
+                    "retention_note": "Only currently retained request records can be included.",
+                    "selection_order": "request-history newest first, by last record update",
+                    "single_request_log_route": "/api/admin/requests/{request_id}/log",
+                    "contains": "The same per-request JSON, HTTP trace, Worker probes, and Playground diagnostics as single-log downloads.",
+                    "privacy_note": "Stored prompts and replies may be included. Review before sharing.",
+                    "requests": exported,
+                }
+                archive.writestr("index.json", _json_bytes(manifest))
+                archive.writestr(
+                    "README.txt",
+                    ("chat2api — 最近请求日志合并包\n"
+                     f"导出数量：{len(exported)} / 所请求的最近 {limit} 条\n"
+                     "requests/ 目录中每条 JSON 对应一次请求，结构与请求记录列表中的“下载日志”一致。\n"
+                     "index.json 按页面最新记录顺序给出 ID、状态和文件名；打包只读，不修改请求终态。\n"
+                     "注意：日志可能包含完整提示词、生成回复和诊断证据，分享前请检查并脱敏。\n").encode("utf-8"),
+                )
+            spool.seek(0)
+        except BaseException:
+            spool.close()
+            raise
+
+        def chunks():
+            try:
+                while data := spool.read(1024 * 1024):
+                    yield data
+            finally:
+                spool.close()
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        return StreamingResponse(
+            chunks(),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="chat2api-request-logs-latest-{len(exported)}-{stamp}.zip"',
+                "Cache-Control": "no-store",
+                "X-Chat2API-Exported-Count": str(len(exported)),
+            },
         )
 
     @app.get("/api/admin/diagnostics/export", dependencies=[Depends(require_admin_key)])
