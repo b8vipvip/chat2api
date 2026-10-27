@@ -175,6 +175,38 @@ window.showRequestConversationV97=requestHistoryShowConversation;
 function requestHistoryEnsureControls(){
   requestHistoryEnsureConversationModal();
   const section=document.getElementById('view-requests'),toolbar=section?.querySelector('.toolbar');
+  if(toolbar&&!document.getElementById('rqBatchExportLogs')){
+    const group=document.createElement('div');
+    group.id='rqBatchExportLogs';
+    group.style.cssText='display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap';
+    const label=document.createElement('label');label.textContent='最近';
+    label.htmlFor='rqBatchExportLimit';
+    const limit=document.createElement('input');
+    limit.id='rqBatchExportLimit';limit.type='number';limit.min='1';limit.max='500';
+    limit.step='1';limit.value='20';limit.title='输入要导出的最近请求条数，最多 500 条';
+    limit.style.cssText='width:84px;padding:7px 8px';
+    const suffix=document.createElement('span');suffix.textContent='条';
+    const button=document.createElement('button');button.type='button';
+    button.className='action';button.textContent='合并打包导出请求日志';
+    button.title='将最近 N 条请求记录对应的完整单条日志合并到一个 ZIP，包含 Worker 探针、HTTP Trace 和测试场关联诊断';
+    button.addEventListener('click',async()=>{
+      const raw=limit.value.trim(),n=Number(raw);
+      if(!/^\d+$/.test(raw)||!Number.isSafeInteger(n)||n<1||n>500){
+        status('请输入 1–500 的整数条数','bad');limit.focus();return;
+      }
+      button.disabled=true;const oldLabel=button.textContent;button.textContent='正在打包…';
+      try{
+        status(`正在导出最近 ${n} 条请求的完整日志…`);
+        await requestHistoryDownload(
+          `/api/admin/requests/logs/batch?limit=${encodeURIComponent(n)}`,
+          `chat2api-request-logs-latest-${n}.zip`);
+        status('合并请求日志 ZIP 已下载','ok');
+      }catch(error){status(String(error?.message||error),'bad');}
+      finally{button.disabled=false;button.textContent=oldLabel;}
+    });
+    group.append(label,limit,suffix,button);
+    toolbar.appendChild(group);
+  }
   if(toolbar&&!document.getElementById('rqDownloadDiagnostics')){
     const button=document.createElement('button');button.type='button';button.className='action';button.id='rqDownloadDiagnostics';button.textContent='下载诊断日志包';
     button.title='下载最近请求、失败原因、HTTP Trace、Worker 状态和服务端日志；自动隐藏敏感内容';
@@ -183,7 +215,7 @@ function requestHistoryEnsureControls(){
   }
   if(section&&!section.querySelector('[data-request-history-diagnostic-hint]')){
     const hint=document.createElement('div');hint.dataset.requestHistoryDiagnosticHint='1';hint.className='footer';
-    hint.textContent='排障建议：单条失败点“下载日志”；多个外部调用一起失败时点“下载诊断日志包”。导出的请求诊断可能包含已保存的完整提示词与回复；向外分享前请核对并脱敏。API Key 凭据、Authorization 等敏感字段应由导出器单独保护。';
+    hint.textContent='排障建议：单条请求点“下载日志”；需要最近 N 条完整日志时点“合并打包导出请求日志”（每条均含探针及测试诊断）；“下载诊断日志包”则另外汇总服务端运行日志、Worker 状态与故障摘要。请求日志可能包含已保存的完整提示词与回复，分享前请核对并脱敏。';
     section.appendChild(hint);
   }
 }
