@@ -36,7 +36,7 @@ def test_worker_status_is_not_assistant_answer():
     }) is not None
 
 
-def test_static_spinner_can_never_extend_deadline():
+def test_static_spinner_does_not_change_canonical_worker_server_deadline():
     spinner = SimpleNamespace(diagnostics={
         "generation_liveness": "page-state-heartbeat-v49",
         "generation_heartbeat_sequence": 50000,
@@ -47,20 +47,20 @@ def test_static_spinner_can_never_extend_deadline():
     assert not progress_is_real(spinner)
     assert chat_timeout_window(300, automatic_extension=True,
                                media_handoff_proven=False,
-                               stream_progress_proven=progress_is_real(spinner)) == 300
+                               stream_progress_proven=progress_is_real(spinner), stream=True) == 900
     assert not progress_is_real(SimpleNamespace(diagnostics={
         "network_recovered_assistant_chars": "invalid",
     }, text=""))
 
 
-def test_real_progress_extends_only_automatic_stream_up_to_900():
+def test_real_progress_is_diagnostic_and_stream_deadline_matches_worker():
     active = SimpleNamespace(diagnostics={
         "network_recovered_assistant_chars": 270,
         "network_stream_chunks": 84,
     }, text="")
     assert progress_is_real(active)
     assert chat_timeout_window(300, automatic_extension=True, media_handoff_proven=False,
-                               stream_progress_proven=progress_is_real(active)) == 900
+                               stream_progress_proven=progress_is_real(active), stream=True) == 900
     assert worker_chat_timeout(300, automatic_extension=True, stream=True) == 900
     assert worker_chat_timeout(300, automatic_extension=True, stream=False) == 600
     assert chat_timeout_window(120, automatic_extension=False, media_handoff_proven=False,
