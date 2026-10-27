@@ -71,6 +71,7 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
     app.state.window_manager_v88_installed = True
 
     registry = app.state.registry
+    broker = getattr(app.state, "broker", None)
     sessions = app.state.admin_sessions
     api_keys = getattr(app.state, "api_keys", None)
     refresh_lock = asyncio.Lock()
@@ -183,6 +184,15 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
             )
             leased_count = sum(1 for item in cached_active if str(item.get("status") or "") == "leased")
             in_use_count = sum(1 for item in cached_active if str(item.get("status") or "") == "in_use")
+            # Read-only snapshot from the SINGLE v58 Broker admission owner.
+            # Physical Chrome-ready windows and scheduling permits are distinct.
+            scheduler = broker.capacity_snapshot(client_id) if callable(
+                getattr(broker, "capacity_snapshot", None)
+            ) else {}
+            scheduler_limit = int(scheduler.get("limit_units") or 0)
+            scheduler_used = int(scheduler.get("used_units") or 0)
+            scheduler_available = max(0, int(scheduler.get("available_units") or 0))
+            scheduler_queued = int(scheduler.get("queued_requests") or 0)
 
             if live_verified and not login_ready:
                 truth_status = "login-required" if login.get("state") == "login_required" else "login-not-ready"
@@ -215,13 +225,28 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
                 "chatgpt_login_composer_ready": bool(login.get("composer_ready")),
                 "chatgpt_routing_ready": login_ready,
                 "reception_ready": bool(online and live_verified and login_ready),
+                "scheduler_limit_units": scheduler_limit,
+                "scheduler_used_units": scheduler_used,
+                "scheduler_available_units": scheduler_available,
+                "scheduler_queued_requests": scheduler_queued,
+                "scheduler_limit_source": scheduler.get("limit_source"),
+                "scheduler_explicit_limit": bool(scheduler.get("worker_explicit_limit")),
+                "scheduler_cooldown_seconds": scheduler.get("rate_limit_cooldown_remaining_seconds", 0),
                 "truth_status": truth_status,
                 "truth_revision": LIVE_TRUTH_REVISION,
             })
 
             if live_verified and login_ready:
+                # A standby is physically ready even when dispatch is blocked.
+                # Mark the first N ready rows display-eligible, but do not
+                # reserve or claim capacity here: only v58 does that.
+                eligible_ready = scheduler_available
                 for raw in cached_active:
                     item = dict(raw)
+                    if str(raw.get("status") or "") == "ready":
+                        item["server_admission_available"] = eligible_ready > 0
+                        if eligible_ready > 0:
+                            eligible_ready -= 1
                     item.update({
                         "client_id": client_id,
                         "device_name": device_name,
@@ -259,6 +284,22 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
             "closed": closed,
             "workers": workers,
             "truth": {
+                "scheduler_used_units": sum(int(w.get("scheduler_used_units") or 0) for w in workers if w.get("online") and (
+                    int(w.get("scheduler_used_units") or 0) > 0
+                    or int(w.get("scheduler_queued_requests") or 0) > 0
+                )),
+                "scheduler_limit_units": sum(int(w.get("scheduler_limit_units") or 0) for w in workers if w.get("online") and (
+                    int(w.get("scheduler_used_units") or 0) > 0
+                    or int(w.get("scheduler_queued_requests") or 0) > 0
+                )),
+                "scheduler_queued_requests": sum(int(w.get("scheduler_queued_requests") or 0) for w in workers if w.get("online") and (
+                    int(w.get("scheduler_used_units") or 0) > 0
+                    or int(w.get("scheduler_queued_requests") or 0) > 0
+                )),
+                "scheduler_available_units": sum(int(w.get("scheduler_available_units") or 0) for w in workers if w.get("online") and (
+                    int(w.get("scheduler_used_units") or 0) > 0
+                    or int(w.get("scheduler_queued_requests") or 0) > 0
+                )),
                 "verified_workers": sum(1 for row in workers if row.get("live_verified")),
                 "online_workers": sum(1 for row in workers if row.get("online")),
                 "unverified_workers": len(unverified),

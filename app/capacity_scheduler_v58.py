@@ -9,7 +9,9 @@ from collections import defaultdict, deque
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+
+from .admin_auth import SESSION_COOKIE
 
 from .broker import RequestState
 
@@ -164,7 +166,17 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
             "active_requests": used,
             "request_weights": dict(broker.client_active_requests.get(str(client_id), {}) or {}),
             "queued_requests": queue_depth(client_id),
-            "limit_source": "worker-window-capacity-v147",
+            # Worker admission is controlled by this persisted scheduling
+            # ceiling, NOT by the number of ready standby Chrome windows.
+            # A ready standby can exist while all admitted request slots are
+            # occupied. Report the actual authority instead of calling the
+            # setting a physical window count.
+            "limit_source": (
+                "worker-configured-override-v58"
+                if str(client_id) in config["workers"]
+                else "worker-default-concurrency-v58"
+            ),
+            "worker_explicit_limit": str(client_id) in config["workers"],
             "account_generation_limit": limit,
             "account_generation_queue": True,
             "account_generation_queue_wait_seconds": None,
@@ -367,7 +379,13 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         }
 
     @app.put("/api/admin/extensions/{client_id}/capacity-v57")
-    async def update_worker_capacity(client_id: str, body: dict[str, Any]) -> dict[str, Any]:
+    async def update_worker_capacity(client_id: str, body: dict[str, Any], request: Request) -> dict[str, Any]:
+        # The administrative capacity mutation must not be callable via an
+        # unauthenticated public endpoint. Keep the window manager and Worker
+        # scheduler on the same administrator session boundary.
+        sessions = getattr(app.state, "admin_sessions", None)
+        if sessions is None or not sessions.authenticate(request.cookies.get(SESSION_COOKIE)):
+            raise HTTPException(status_code=401, detail="Administrator login required")
         client_id = str(client_id or "").strip()
         if client_id not in registry.clients:
             raise HTTPException(status_code=404, detail="Unknown client_id")
