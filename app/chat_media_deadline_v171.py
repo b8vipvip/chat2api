@@ -40,21 +40,25 @@ def chat_timeout_window(
     media_handoff_proven: bool,
     long_text_requested: bool = False,
     stream_progress_proven: bool = False,
+    stream: bool = False,
 ) -> int:
-    """Return the sole request deadline window, relative to request start.
+    """Return the same lease sent to the Worker, for default requests.
 
-    Only a correlated chat.diagnostics event from the active Worker can set
-    media_handoff_marker=True on the broker's request state. A probe event,
-    screenshot, editor canvas or browser-displayed image cannot set the flag.
+    Previously, ordinary non-stream chats expired server-side at 300 seconds
+    while the Worker was granted 600 seconds; default stream chats could also
+    have a shorter API deadline than their Worker lease before first progress.
+    Both halves must use one absolute deadline budget. Only explicit client
+    timeouts override the default, and no page status/evidence is promoted into
+    a completion decision.
     """
     baseline = int(base_timeout_seconds)
-    if automatic_extension and stream_progress_proven:
-        return max(baseline, STREAM_PROGRESS_TIMEOUT_SECONDS)
-    if automatic_extension and media_handoff_proven:
-        return max(baseline, MEDIA_HANDOFF_TIMEOUT_SECONDS)
-    if automatic_extension and long_text_requested:
-        return max(baseline, LONG_FORM_TEXT_TIMEOUT_SECONDS)
-    return baseline
+    if not automatic_extension:
+        return baseline
+    # A streaming request's default Worker lease is 900s even before the
+    # first delta. Real progress remains diagnostic, not a competing clock.
+    if stream:
+        return worker_chat_timeout(baseline, automatic_extension=True, stream=True)
+    return worker_chat_timeout(baseline, automatic_extension=True, stream=False)
 
 
 def worker_chat_timeout(
