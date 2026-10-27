@@ -6,7 +6,31 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from tests.test_v8 import app_v8, headers
+from app.config import Settings
+from app.main import create_app
+from app.v7_patch import install_v7_patch
+from app.v8_patch import install_v8_patch
+from app.voice_patch import install_voice_patch
+
+
+def headers():
+    return {"Authorization": "Bearer master-key"}
+
+
+def app_v8(tmp_path: Path):
+    settings = Settings(
+        CHAT2API_API_KEY="master-key",
+        CHAT2API_PAIRING_CODE="pair-code",
+        CHAT2API_PUBLIC_URL="https://chat2api.example.test",
+        CHAT2API_DATA_DIR=tmp_path,
+        CHAT2API_REQUEST_TIMEOUT_SECONDS=10,
+        CHAT2API_DESKTOP_WAKE_TIMEOUT_SECONDS=2,
+    )
+    app = create_app(settings)
+    install_voice_patch(app)
+    install_v7_patch(app)
+    install_v8_patch(app)
+    return app
 
 
 def test_recent_n_download_preserves_single_request_report_and_status(tmp_path: Path):
