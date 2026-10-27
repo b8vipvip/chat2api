@@ -283,6 +283,37 @@
       const body = remainder.slice(found.index + found[0].length).trimStart();
       return { text: body, stripped: true, pending: !body.trim() };
     }
+    // Multi-turn OpenAI clients (including mv3c) send the previous assistant
+    // response back inside the next prompt. The roleless ChatGPT DOM may echo
+    // that previous exchange and then append this turn's new assistant body.
+    // The v212 equality check cannot pass because rendered Markdown differs
+    // from the submitted prompt (links are expanded, icons become IMG nodes).
+    // Correlate multiple *plain sentences* from the actual previous assistant
+    // text before trusting the LAST role boundary as the current answer.
+    const matches = [...remainder.matchAll(/(?:^|\\n)\\s*(?:#{1,6}\\s*)?ChatGPT said\\s*:\\s*/gi)];
+    if (matches.length >= 2 && /\\[Assistant\\]/.test(active.prompt)
+        && /\\[User\\]/.test(active.prompt)) {
+      const previous = String(active.prompt).split(/\\[Assistant\\]/).slice(1)
+        .join("[Assistant]").split(/\\n\\[User\\]\\s*/)[0];
+      const plainSentences = previous.split(/\\n+/).map(line => normalize(line))
+        .filter(line => line.length >= 65 && line.length <= 400
+          && !/https?:\\/\\/|!\\[|\\]\(/.test(line))
+        .slice(0, 32);
+      const beforeLast = normalize(remainder.slice(0, matches[matches.length - 1].index));
+      const corroborated = plainSentences.filter(line =>
+        beforeLast.includes(line.slice(0, Math.min(65, line.length)))).length;
+      if (corroborated >= 2) {
+        const last = matches[matches.length - 1];
+        const body = remainder.slice(last.index + last[0].length).trimStart();
+        return { text: body, stripped: true, pending: !body.trim(),
+          multiTurn: true, corroborated };
+      }
+    }
+    // Keep an incomplete echoed history quarantined while the page is still
+    // producing the current answer. Never stream earlier user/assistant turns.
+    if (/\\[Assistant\\]/.test(active.prompt) && /\\[User\\]/.test(active.prompt)
+        && matches.length && normalize(remainder).length > 160)
+      return { text: "", stripped: false, pending: true };
     const seen = normalize(remainder);
     const expected = active.promptNormalized;
     const echoLead = expected.slice(0, Math.min(80, expected.length));
@@ -312,6 +343,8 @@
           diagnostics: { ...(event.diagnostics || {}),
             response_boundary_guard: "request-correlated-prompt-echo-v212",
             response_boundary_prompt_echo_removed: true,
+            response_boundary_multiturn_verified: result.multiTurn === true,
+            response_boundary_previous_text_matches: Number(result.corroborated || 0),
             response_boundary_removed_chars: String(event.text || "").length - result.text.length,
           } };
       }
