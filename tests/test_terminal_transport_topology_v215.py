@@ -63,3 +63,15 @@ def test_worker_probe_topology_does_not_capture_private_raw_page_text():
     assert 'scene_reply_topology: topology.slice(0,1350)' in source
     assert 'pageBranch' in source
     assert 'scene_new_actions_after_all' in source
+
+
+def test_stream_completed_is_persisted_before_any_content_sse_yield():
+    source = (ROOT / "app/main.py").read_text(encoding="utf-8")
+    segment = source.split('elif event_type == "chat.completed":', 1)[1].split(
+        'elif event_type in {"chat.error", "chat.cancelled"}:', 1
+    )[0]
+    persisted = segment.index('usage, token_meta = await record_request(')
+    first_sse_output = segment.index('for delta in final_text_chunks(final_text):')
+    assert persisted < first_sse_output
+    assert 'recorded = True' in segment[persisted:first_sse_output]
+    assert 'terminal_transport_server_seen' in source
