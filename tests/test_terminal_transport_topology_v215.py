@@ -102,3 +102,13 @@ def test_telemetry_first_terminal_is_absorbing(tmp_path):
         assert store.get("req_terminal_history")["status"] == "completed"
         assert store.get("req_terminal_history")["response_text"] == "real full answer"
     asyncio.run(check())
+
+
+def test_client_stream_abandonment_cannot_leave_request_running():
+    source = (ROOT / "app/main.py").read_text(encoding="utf-8")
+    stream = source.split('async def stream_chat(',1)[1].split('@app.post("/v1/chat/completions")',1)[0]
+    assert 'if not recorded:' in stream
+    assert 'API stream disconnected before Worker terminal' in stream
+    assert 'server_stream_closed_without_worker_terminal' in stream
+    assert 'status = "cancelled"' in stream
+    assert 'await record_request(' in stream
