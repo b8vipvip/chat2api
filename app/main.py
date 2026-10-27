@@ -780,6 +780,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
         return usage, token_meta
 
+    async def record_request_queued(
+        *, request_id: str, response_id: str, requested_model: str, prompt: str,
+        principal: ApiPrincipal, stream: bool, prompt_mode: str,
+        request_type: str, attachments_count: int,
+    ) -> None:
+        """Persist request visibility before Worker selection/capacity admission.
+
+        A caller waiting for the Free-account queue must be searchable by its
+        original request ID without pretending ChatGPT has started generating.
+        Only the existing terminal path may mark a dispatched request complete.
+        """
+        usage, token_meta = standard_usage(prompt, "")
+        await telemetry.upsert({
+            "request_id": request_id,
+            "response_id": response_id,
+            "client_id": None,
+            "api_key_id": principal.key_id,
+            "api_key_name": principal.name,
+            "auth_kind": principal.kind,
+            "requested_model": requested_model,
+            "request_type": request_type,
+            "attachments_count": attachments_count,
+            "stream": stream,
+            "prompt_mode": prompt_mode,
+            "prompt_chars": len(prompt),
+            "completion_chars": 0,
+            "status": "queued",
+            "usage": {**usage, **token_meta},
+            "timings": {},
+            "diagnostics": {"request_admission_stage": "selecting-worker"},
+            "error": None,
+        })
+
     async def record_request_running(
         state: RequestState,
         requested_model: str,
@@ -1194,24 +1227,52 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         requested_client = body.client_id or x_chat2api_client
         request_type = "multimodal" if attachments else "text"
 
+        # v220: the request exists from admission ingress, not only after a
+        # capacity slot opens. The queued row remains visible in Request History.
+        await record_request_queued(
+            request_id=request_id, response_id=response_id, requested_model=body.model,
+            prompt=prompt, principal=principal, stream=body.stream,
+            prompt_mode=body.prompt_mode, request_type=request_type,
+            attachments_count=len(attachments),
+        )
         try:
             client_id = await resolve_client_with_reconnect_grace(requested_client)
+            await telemetry.update(request_id, {
+                "client_id": client_id,
+                "diagnostics": {"request_admission_stage": "waiting-capacity"},
+            })
+            state = await broker.create(request_id, client_id)
         except HTTPException as error:
             await record_early_error(request_id=request_id, response_id=response_id, requested_model=body.model,
                                      prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
                                      started_mono=request_started, error=str(error.detail), request_type=request_type,
                                      attachments_count=len(attachments))
             raise
-
-        try:
-            state = await broker.create(request_id, client_id)
         except RuntimeError as error:
             await record_early_error(request_id=request_id, response_id=response_id, requested_model=body.model,
                                      prompt=prompt, principal=principal, stream=body.stream, prompt_mode=body.prompt_mode,
                                      started_mono=request_started, error=str(error), request_type=request_type,
                                      attachments_count=len(attachments))
             raise HTTPException(status_code=409, detail=str(error)) from error
+        except asyncio.CancelledError:
+            # No Broker allocation or browser dispatch completed. Preserve the
+            # admission failure separately from request-v6's Worker terminal.
+            await telemetry.update(request_id, {
+                "status": "error",
+                "diagnostics": {
+                    "request_admission_stage": "aborted-before-worker-dispatch",
+                    "request_admission_wait_ms": round(
+                        (time.perf_counter() - request_started) * 1000, 1
+                    ),
+                },
+                "error": "API transport ended before Worker admission",
+            })
+            raise
 
+        state.diagnostics["request_admission_stage"] = "dispatched"
+        state.diagnostics["request_admission_wait_ms"] = round(
+            (time.perf_counter() - request_started) * 1000, 1
+        )
         registry.busy_clients.add(client_id)
         state.probe_policy = probe_policy(client_id)
         timeout_seconds = body.timeout or config.request_timeout_seconds
