@@ -5,7 +5,7 @@
     try { chrome.runtime.onMessage.removeListener(prior.listener); } catch (_) {}
   }
 
-  const REQUIRED_BUNDLE = "0.22.219";
+  const REQUIRED_BUNDLE = "0.22.220";
   const REQUIRED_REVISION = 71;
 
   function snapshot() {
