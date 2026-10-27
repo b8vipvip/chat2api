@@ -1107,6 +1107,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 state.diagnostics["api_stream_closed_before_delivery"] = True
                 state.diagnostics["api_stream_closure_worker_terminal"] = worker_terminal or "not-yet-received"
                 state.completed_mono = state.completed_mono or time.perf_counter()
+                if not worker_terminal:
+                    # The external client has left, so request-v6 may stop
+                    # occupying a browser tab. This cancellation cannot decide
+                    # request success or fabricate an assistant completion.
+                    try:
+                        await registry.send(state.client_id, {
+                            "type": "chat.cancel", "request_id": state.request_id,
+                        })
+                    except Exception:
+                        logger.warning("SSE disconnect cancel notification failed for %s", state.request_id)
                 try:
                     await record_request(
                         state, model, prompt, "cancelled" if not worker_terminal else "error",
