@@ -59,11 +59,12 @@ function requestHistoryCell(tr,value,className=''){
   tr.appendChild(td);
   return td;
 }
-function requestHistoryStatusCell(tr,value){
+function requestHistoryStatusCell(tr,value,stage=''){
   const td=document.createElement('td'),span=document.createElement('span');
   const text=requestHistoryText(value);
-  span.className='pill '+(text==='completed'?'ok':text==='error'?'bad':text==='running'?'warn':'');
-  span.textContent=text;
+  span.className='pill '+(text==='completed'?'ok':text==='error'?'bad':(text==='running'||text==='queued')?'warn':'');
+  span.textContent=text==='queued'?'排队中':text;
+  if(text==='queued')span.title=stage==='waiting-capacity'?'已选中 Worker，正在等待容量释放':'正在选择可用 Worker';
   td.appendChild(span);tr.appendChild(td);return td;
 }
 function requestHistoryButton(tr,label,title,handler,enabled=true){
@@ -223,6 +224,13 @@ async function loadRequests(){
   const body=$('rqBody');
   if(!body)return;
   requestHistoryEnsureControls();
+  // Queue is a real, persisted pre-dispatch stage and must be filterable.
+  const statusFilter=$('rqStatus');
+  if(statusFilter&&!Array.from(statusFilter.options).some(option=>option.value==='queued')){
+    const queuedOption=document.createElement('option');
+    queuedOption.value='queued';queuedOption.textContent='排队中';
+    statusFilter.appendChild(queuedOption);
+  }
   const search=$('rqSearch')?.value.trim()||'',st=$('rqStatus')?.value||'',m=$('rqModel')?.value.trim()||'';
   const qs=new URLSearchParams({limit:'100'});
   if(search)qs.set('q',search);if(st)qs.set('status',st);if(m)qs.set('model',m);
@@ -253,7 +261,7 @@ async function loadRequests(){
       // Label legacy absence explicitly; do not fabricate an API Key or
       // claim a browser completion meant a protocol-valid success.
       requestHistoryCell(tr,r?.request_type||r?.type||(historicalRepair?'responses-repair':'-'));
-      requestHistoryStatusCell(tr,r?.status||(historicalRepair?'历史未记录':'-'));
+      requestHistoryStatusCell(tr,r?.status||(historicalRepair?'历史未记录':'-'),r?.diagnostics?.request_admission_stage||'');
       requestHistoryCell(tr,r?.api_key_name||r?.key_name||(historicalRepair?'历史未记录':'-'));
       const clientId=requestHistoryText(r?.worker_client_id||r?.client_id,'');
       requestHistoryCell(tr,r?.device_name||(clientId?`未绑定 · ${clientId}`:'-'));
