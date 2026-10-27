@@ -129,7 +129,6 @@ install_linux_worker_xray_patch(app)
 install_linux_worker_bridge_binding_patch(app)
 install_linux_worker_ui_state_patch(app)
 install_linux_worker_proxy_catalog_patch(app)
-install_stream_keepalive_patch(app)
 install_request_stall_patch(app)
 install_request_recovery_patch(app)
 # Preserve active browser requests through brief Worker WebSocket reconnects.
@@ -301,3 +300,7 @@ install_legacy_mini_default_alias(app)
 # Preserve the existing final request-history owner as the final call.
 install_worker_probe_ui_v1(app)
 install_request_history_v94_patch(app)
+# The SSE transport guard is installed last (outermost ASGI middleware), not
+# between historical BaseHTTPMiddleware wrappers that can end downstream tasks.
+# This guard reports delivery only; RequestBroker still owns the generation terminal.
+install_stream_keepalive_patch(app)
