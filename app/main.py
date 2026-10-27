@@ -693,6 +693,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "token_usage": token_meta,
         }
 
+    async def archive_verified_terminal(state: RequestState, text: str, key_id: str,
+                                       request_id: str, base_url: str):
+        # The Worker/Broker alone decides completion. This is a bounded
+        # *post-terminal delivery step*: if archival stalls, persist an actual
+        # API delivery failure instead of leaving the log in running forever.
+        state.diagnostics["server_finalization_stage"] = "archive-started"
+        state.diagnostics["server_finalization_started_at"] = time.time()
+        await telemetry.upsert({
+            "request_id": request_id,
+            "diagnostics": dict(state.diagnostics),
+        })
+        try:
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    archive_final_markdown, text, key_id, request_id, base_url
+                ),
+                timeout=180.0,
+            )
+        except asyncio.TimeoutError as error:
+            state.diagnostics["server_finalization_stage"] = "archive-timeout"
+            state.diagnostics["server_finalization_elapsed_ms"] = round(
+                (time.time() - state.diagnostics["server_finalization_started_at"]) * 1000
+            )
+            raise ValueError("Post-terminal media archival exceeded 180 seconds") from error
+        except Exception:
+            state.diagnostics["server_finalization_stage"] = "archive-error"
+            raise
+        state.diagnostics["server_finalization_stage"] = "archive-finished"
+        state.diagnostics["server_finalization_elapsed_ms"] = round(
+            (time.time() - state.diagnostics["server_finalization_started_at"]) * 1000
+        )
+        return result
+
     async def record_request(
         state: RequestState,
         requested_model: str,
@@ -710,6 +743,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         media_items: list[dict[str, object]] | None = None,
     ) -> tuple[dict[str, int], dict[str, object]]:
         usage, token_meta = standard_usage(prompt, final_text)
+        state.diagnostics["server_finalization_stage"] = "request-row-finalized"
         await telemetry.upsert(
             {
                 "request_id": state.request_id,
@@ -997,9 +1031,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 elif event_type == "chat.completed":
                     raw_final = str(event.get("text") or state.text)
                     try:
-                        final_text, archived_media, archived_files = await asyncio.to_thread(
-                            archive_final_markdown, raw_final, principal.key_id,
-                            state.request_id, media_base_for_request(request),
+                        final_text, archived_media, archived_files = await archive_verified_terminal(
+                            state, raw_final, principal.key_id, state.request_id,
+                            media_base_for_request(request),
                         )
                     except ValueError as error:
                         await record_request(
@@ -1175,9 +1209,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # The real image bytes must be on chat2api storage before the API
             # exposes any image URI; the historical data URI is never logged.
             try:
-                text, archived_media, archived_files = await asyncio.to_thread(
-                    archive_final_markdown, text, principal.key_id,
-                    request_id, media_base_for_request(request),
+                text, archived_media, archived_files = await archive_verified_terminal(
+                    state, text, principal.key_id, request_id,
+                    media_base_for_request(request),
                 )
             except ValueError as error:
                 raise RuntimeError(str(error)) from error
@@ -1507,6 +1541,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if terminal_message:
                         if active_state and active_state.client_id == client_id:
                             active_state.diagnostics["terminal_transport_broker_accepted"] = bool(accepted)
+                            # Persist acknowledgement as an observation, never as
+                            # a competing completed/error terminal. If the API
+                            # handler is stuck in archival, the exported log
+                            # now reveals the precise boundary it reached.
+                            active_state.diagnostics["server_terminal_receipt_stage"] = (
+                                "broker-accepted" if accepted else "broker-rejected"
+                            )
+                            active_state.diagnostics["server_terminal_receipt_type"] = str(message_type)
+                            await telemetry.upsert({
+                                "request_id": request_id,
+                                "diagnostics": dict(active_state.diagnostics),
+                            })
                         if not accepted:
                             logger.warning(
                                 "Worker terminal not accepted request=%s type=%s active=%s",
