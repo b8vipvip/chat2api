@@ -938,6 +938,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             media_handoff_proven=state.diagnostics.get("media_handoff_marker") is True,
             long_text_requested=long_text_requested,
             stream_progress_proven=stream and progress_is_real(state),
+            stream=stream,
         )
         if effective > timeout_seconds:
             if state.diagnostics.get("media_handoff_marker") is True:
@@ -950,6 +951,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 state.diagnostics["long_text_timeout_extended_seconds"] = effective
                 state.diagnostics["long_text_timeout_extension_authority"] = "server-chat-deadline-v171"
         state.diagnostics["server_effective_timeout_seconds"] = effective
+        worker_lease = state.diagnostics.get("request_timeout_seconds")
+        if worker_lease is not None:
+            state.diagnostics["server_worker_lease_aligned"] = (
+                abs(float(worker_lease) - float(effective)) < 0.01
+            )
+            state.diagnostics["server_worker_lease_diff_seconds"] = round(
+                float(worker_lease) - float(effective), 3
+            )
+        state.diagnostics["deadline_policy_authority"] = "server-worker-one-lease-v222"
         return started_at + effective - asyncio.get_running_loop().time()
 
 
