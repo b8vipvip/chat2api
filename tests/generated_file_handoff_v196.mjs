@@ -37,8 +37,14 @@ assert.match(rich, /credentials: uri\.origin === location\.origin \? "include" :
 assert.match(rich, /hasCandidateFile,/);
 assert.match(rich, /file_inlined_count: fileStats.count/);
 assert.match(rich, /!\[📎 /);
-assert.match(main, /archive_final_markdown, raw_final/);
-assert.match(main, /archive_final_markdown, text/);
+// Both streamed and non-streamed responses must enter the SAME bounded post-terminal
+// archive boundary. The media archival implementation runs in a background
+// thread, so matching its old inline call shape would reject safe refactors.
+assert.match(main, /async def archive_verified_terminal\(/);
+assert.match(main, /asyncio\.to_thread\(\s*archive_final_markdown, text, key_id, request_id, base_url/);
+assert.match(main, /timeout=180\.0/);
+assert.match(main, /archive_verified_terminal\(\s*state, raw_final, principal\.key_id, state\.request_id/);
+assert.match(main, /archive_verified_terminal\(\s*state, text, principal\.key_id, request_id/);
 assert.match(main, /meta\["generated_files"\] = archived_files/);
 assert.match(main, /meta\['generated_files'\] = archived_files/);
 console.log("File handoff, scoped artifact extraction, and both completion modes verified");
