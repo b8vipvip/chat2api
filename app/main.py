@@ -1060,12 +1060,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     yield "data: [DONE]\n\n"
                     break
         finally:
-            if not recorded and state.completed_mono:
-                message = "Streaming request ended before completion"
-                await record_request(state, model, prompt, failure_status(state, message=message), principal, stream=True, prompt_mode=prompt_mode,
-                                     response_id=response_id, final_text=sent_text,
-                                     error=message, request_type=request_type,
-                                     attachments_count=attachments_count)
+            if not recorded:
+                # The SSE reader can disconnect before the Worker terminal.
+                # Never leave a stale running row or release its broker state
+                # without recording the transport-level cancellation.
+                if state.completed_mono:
+                    message = "Streaming request ended before completion"
+                    status = failure_status(state, message=message)
+                else:
+                    message = "API stream disconnected before Worker terminal"
+                    status = "cancelled"
+                    state.completed_mono = time.perf_counter()
+                    state.diagnostics["server_stream_closed_without_worker_terminal"] = True
+                    try:
+                        await registry.send(state.client_id, {
+                            "type": "chat.cancel", "request_id": state.request_id,
+                        })
+                    except Exception:
+                        pass
+                await record_request(
+                    state, model, prompt, status, principal,
+                    stream=True, prompt_mode=prompt_mode, response_id=response_id,
+                    final_text=sent_text, error=message,
+                    request_type=request_type, attachments_count=attachments_count,
+                )
             registry.busy_clients.discard(state.client_id)
             await broker.release(state.request_id)
 
