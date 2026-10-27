@@ -237,6 +237,8 @@ jobs:
       - name: Request prompt echo boundary v212
         run: node tests/request_prompt_echo_boundary_v212.mjs
 
+      - name: Multi-turn external reply boundary regression v214
+        run: node tests/multiturn_prompt_boundary_v214.mjs
       - name: Worker probe observer regression
         run: node tests/worker_probe_supervisor_v1.mjs
 
