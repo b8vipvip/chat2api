@@ -302,7 +302,11 @@
       const beforeLast = normalize(remainder.slice(0, matches[matches.length - 1].index));
       const corroborated = plainSentences.filter(line =>
         beforeLast.includes(line.slice(0, Math.min(65, line.length)))).length;
-      if (corroborated >= 2) {
+      const latestUser = String(active.prompt).split(/\\n\\[User\\]\\s*/).slice(-1)[0].trim();
+      const latestUserLead = normalize(latestUser).slice(0, 48);
+      const currentUserVerified = latestUserLead.length >= 12
+        && beforeLast.includes(latestUserLead);
+      if (corroborated >= 2 && currentUserVerified) {
         const last = matches[matches.length - 1];
         const body = remainder.slice(last.index + last[0].length).trimStart();
         return { text: body, stripped: true, pending: !body.trim(),
@@ -345,6 +349,7 @@
             response_boundary_prompt_echo_removed: true,
             response_boundary_multiturn_verified: result.multiTurn === true,
             response_boundary_previous_text_matches: Number(result.corroborated || 0),
+            response_boundary_current_user_verified: result.multiTurn === true,
             response_boundary_removed_chars: String(event.text || "").length - result.text.length,
           } };
       }
