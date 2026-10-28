@@ -94,11 +94,13 @@ def test_v58_same_api_can_run_concurrently_until_worker_capacity() -> None:
             registry.routing_key_context.reset(token)
             assert broker.capacity_snapshot("ext_test")["active_requests"] == 3
 
-            fourth = asyncio.create_task(broker.create("req_a3", "ext_test"))
-            await asyncio.sleep(0.02)
-            assert not fourth.done()
+            # N=3 is the normal physical total, not a hard request cap.
+            # v132 grows one real standby after the third active request.
+            admitted = await asyncio.wait_for(
+                broker.create("req_a3", "ext_test"), timeout=0.5
+            )
+            assert broker.capacity_snapshot("ext_test")["active_requests"] == 4
             await broker.release(first.request_id)
-            admitted = await asyncio.wait_for(fourth, timeout=0.5)
             assert admitted.diagnostics["api_key_capacity_limit"] is None
             for state in (second, third, admitted):
                 await broker.release(state.request_id)
