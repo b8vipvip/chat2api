@@ -128,6 +128,10 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
     # A single v58 FIFO owns these admission reservations. IDs correspond
     # to verified v132 standby windows, not new physical-window ownership.
     pool_window_claims: dict[str, dict[str, int | None]] = defaultdict(dict)
+    # A claimed physical ID cannot be offered again immediately upon HTTP
+    # release: the last ready-window snapshot may predate Chrome's claim.
+    # Wait until a verified status actually sees that ID leave standby.
+    retired_window_claims: dict[str, set[int]] = defaultdict(set)
     cooldown_until: dict[str, float] = {}
     rate_limit_strikes: dict[str, int] = {}
 
@@ -165,7 +169,14 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
             return {"fresh": False, "age_seconds": round(age, 2)}
         claims = pool_window_claims.get(client_id, {})
         held_ids = {item for item in claims.values() if item is not None}
-        unheld = [item for item in verified_ids if item not in held_ids]
+        retired = retired_window_claims[client_id]
+        retired.intersection_update(verified_ids)
+        # Once the ID disappeared from a verified ready snapshot, its old
+        # reservation epoch is over. A later reappearance can be reallocated.
+        unheld = [
+            item for item in verified_ids
+            if item not in held_ids and item not in retired
+        ]
         # Some calls were admitted during an older Worker version/telemetry
         # outage; only their count beyond reported physical active windows
         # consumes extra ready capacity.
@@ -180,6 +191,7 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
             "verified_ready_windows": len(verified_ids),
             "observed_active_windows": active,
             "reserved_window_ids": sorted(held_ids),
+            "retired_window_claims": sorted(retired),
             "anonymous_pending_claims": anonymous_pending,
             "available_window_ids": unheld[:spare],
             "unclaimed_ready_windows": spare,
@@ -341,8 +353,10 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
 
     async def release(request_id: str) -> None:
         await base_release(request_id)
-        for held in pool_window_claims.values():
-            held.pop(str(request_id), None)
+        for client_id, held in pool_window_claims.items():
+            retired_id = held.pop(str(request_id), None)
+            if retired_id is not None:
+                retired_window_claims[client_id].add(retired_id)
         async with condition:
             condition.notify_all()
 
@@ -403,6 +417,13 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                 "worker_limit": worker_limit(client_id),
                 "max_concurrency": worker_baseline_total(client_id),
                 "window_baseline_total": worker_baseline_total(client_id),
+                # A v132-verified physical standby is reserved exactly once at
+                # admission. Carry its identity through to the actual Chrome
+                # claimant; a diagnostic-only reservation is not sufficient.
+                "worker_verified_spare_window_claim": pool_window_claims.get(
+                    str(client_id), {}
+                ).get(str(message.get("request_id") or "")),
+                "request_scoped_window": str(message.get("type") or "") in {"chat.request", "image.request", "voice.request"},
                 "reserve_window_target": 0,
                 "strict_api_fifo": False,
                 "browser_side_api_fifo": False,

@@ -122,10 +122,26 @@ def test_v58_same_api_can_run_concurrently_until_worker_capacity() -> None:
             registry.worker_pool_capacity_received_at["ext_test"] = time.monotonic()
             await asyncio.wait_for(fifth, timeout=1.6)
             assert admitted.diagnostics["worker_verified_spare_window_claim"] == 104
+            # The routing payload must carry the same physical-window lease,
+            # not merely display it in Request History diagnostics.
+            await registry.send("ext_test", {"type": "chat.request", "request_id": "req_a3"})
+            assert registry.sent[-1][1]["routing"]["worker_verified_spare_window_claim"] == 104
+            await registry.send("ext_test", {"type": "chat.request", "request_id": "req_a4"})
+            assert registry.sent[-1][1]["routing"]["worker_verified_spare_window_claim"] == 105
             assert admitted.diagnostics["api_key_capacity_limit"] is None
-            for state in (second, third, admitted):
-                await broker.release(state.request_id)
+            # Releasing a request does NOT make its previously reserved ID
+            # reusable from the same stale, verified-ready snapshot.
             await broker.release("req_a4")
+            sixth = asyncio.create_task(broker.create("req_a5", "ext_test"))
+            await asyncio.sleep(0.03)
+            assert not sixth.done(), "released claim 105 must remain fenced until Worker reports it absent"
+            assert 105 in broker.capacity_snapshot("ext_test")["verified_pool_capacity"]["retired_window_claims"]
+            registry.clients["ext_test"].metadata["worker_pool_ready_window_ids"] = [106]
+            registry.worker_pool_capacity_received_at["ext_test"] = time.monotonic()
+            sixth_admitted = await asyncio.wait_for(sixth, timeout=1.6)
+            assert sixth_admitted.diagnostics["worker_verified_spare_window_claim"] == 106
+            for state in (second, third, admitted, sixth_admitted):
+                await broker.release(state.request_id)
 
     asyncio.run(scenario())
 
@@ -160,12 +176,12 @@ def test_release_contract_is_v02275_and_worker_bundle_0831() -> None:
     marker = read("chrome_extension/content_bundle_marker_v48.js")
     preflight = read("chrome_extension/background_runtime_preflight_v48.js")
     contract = read("chrome_extension/content_runtime_contract_v48.js")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.224"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.224"' in runtime
-    assert '"version": "0.22.224"' in manifest
-    assert 'bundle: "0.22.224"' in marker
-    assert 'REQUIRED_BUNDLE = "0.22.224"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.22.224"' in contract
+    assert 'SERVER_RUNTIME_VERSION = "0.22.225"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.225"' in runtime
+    assert '"version": "0.22.225"' in manifest
+    assert 'bundle: "0.22.225"' in marker
+    assert 'REQUIRED_BUNDLE = "0.22.225"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.22.225"' in contract
     assert '"capacity_scheduler_v58": True' in runtime
     assert '"worker_single_route_authority_v30": True' in runtime
     assert '"window_observer_v90": True' in runtime

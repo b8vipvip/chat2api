@@ -56,9 +56,12 @@ async function routeScenario({stale = false, strict = true} = {}) {
   // Both legacy strict flags must permit a new server-admitted request.
   const tab=await ctx.resolveTargetTabForRequest(msg);
   assert.ok(tab?.id);
-  assert.equal(data.chat2apiConversationRoutesV1.key_A.inflight_request_id,"req_new");
-  if (stale) assert.equal(removedWindows,1,"stale route's old window should be retired");
-  else assert.equal(removedWindows,0,"completed request should reuse its existing route");
+  const next = data.chat2apiConversationRoutesV1["key_A::request::req_new"];
+  assert.equal(next.inflight_request_id,"req_new");
+  assert.equal(next.api_key_id,"key_A");
+  assert.equal(next.window_id,200,"new request must claim a new window");
+  assert.equal(removedWindows,0,"a new request must not retire an unrelated window");
+  if (stale) assert.equal(data.chat2apiConversationRoutesV1.key_A.inflight_request_id,"req_previous");
 }
 await routeScenario();
 await routeScenario({stale:true});

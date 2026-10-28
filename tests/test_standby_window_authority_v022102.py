@@ -50,7 +50,8 @@ def test_standby_target_excludes_active_and_five_minute_route_leases() -> None:
     assert 'const IDLE_CLOSE_MS = 5 * 1000' in router
     assert 'route.last_active_at = Date.now()' in router
     assert 'route.close_after = route.last_active_at + IDLE_CLOSE_MS' in router
-    assert 'chrome.alarms.create(`${ALARM_PREFIX}${route.window_id}`, { when: route.close_after })' in router
+    assert "closeDueWindow(windowId, closeAt)" in router
+    assert "Math.max(closeAt, Date.now() + MIN_CHROME_ALARM_MS)" in router
 
 
 def test_live_window_truth_distinguishes_standby_in_use_and_leased() -> None:
