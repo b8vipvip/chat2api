@@ -149,3 +149,100 @@ def test_p1_second_store_failure_rolls_back_only_new_artifacts(tmp_path, monkeyp
             "owner", "req-rollback", "https://example.org")
     assert [row["id"] for row in files.list_items()] == [rows[0]["id"]]
     assert "data:" not in existing
+
+
+def test_p1_parallel_terminal_retries_are_one_stable_file(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from app.media_archive_v173 import MediaArchive
+
+    # Independent archive instances share SQLite, as happens with parallel
+    # API request tasks/processes. No in-memory mutex may be required.
+    archive = MediaArchive(tmp_path, "secret")
+    stores = [GeneratedFileArchive(archive) for _ in range(8)]
+    payload = b"%PDF-1.7\nparallel request bytes"
+    def one(i):
+        return stores[i].store(
+            payload, "shared.pdf", "application/pdf", "api-owner", "req-replay")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        rows = list(pool.map(one, range(8)))
+    assert len({r["id"] for r in rows}) == 1
+    assert len({r["token"] for r in rows}) == 1
+    assert sum(r["_created"] for r in rows) == 1
+    assert len(stores[0].list_items()) == 1
+    assert len(list((archive.root / "objects").glob("gen_*"))) == 1
+
+
+def test_p1_multi_file_rollback_removes_unindexed_partial_bytes(tmp_path, monkeypatch):
+    from app.media_archive_v173 import MediaArchive
+    archive = MediaArchive(tmp_path, "secret")
+    files = GeneratedFileArchive(archive)
+    original_write = archive._write
+    source = (
+        handoff("one.pdf", "application/pdf", b"%PDF-1.7\none")
+        + "\n" + handoff("two.pdf", "application/pdf", b"%PDF-1.7\ntwo")
+    )
+    def fail_after_partial_write(cfg, key, data, mime):
+        original_write(cfg, key, data, mime)
+        if data.endswith(b"two"):
+            raise RuntimeError("write-succeeded-but-ack-lost")
+    monkeypatch.setattr(archive, "_write", fail_after_partial_write)
+    with pytest.raises(RuntimeError, match="ack-lost"):
+        files.rewrite_markdown(source, "owner", "req-failed", "https://example.org")
+    assert files.list_items() == []
+    assert list((archive.root / "objects").glob("gen_*")) == []
+
+
+def test_p1_mixed_valid_and_malformed_handoff_is_never_partially_published(tmp_path):
+    from app.media_archive_v173 import MediaArchive
+    files = GeneratedFileArchive(MediaArchive(tmp_path, "secret"))
+    good = handoff("one.pdf", "application/pdf", b"%PDF-1.7\none")
+    bad = "![📎 bogus.pdf](data:application/pdf;base64,!!!!)"
+    with pytest.raises(ValueError, match="malformed"):
+        files.rewrite_markdown(good + "\n" + bad, "owner", "req-bad", "https://example.org")
+    assert files.list_items() == []
+
+
+def test_p1_simultaneous_two_file_batches_are_replayed_without_duplication(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    from app.media_archive_v173 import MediaArchive
+    archive = MediaArchive(tmp_path, "secret")
+    stores = [GeneratedFileArchive(archive) for _ in range(4)]
+    source = (handoff("a.pdf", "application/pdf", b"%PDF-1.7\nA")
+              + "\n" + handoff("b.pdf", "application/pdf", b"%PDF-1.7\nB"))
+    def one(i):
+        return stores[i].rewrite_markdown(source, "owner", "same-request", "https://example.org")
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        rows = list(pool.map(one, range(4)))
+    assert len({pair[0] for pair in rows}) == 1
+    assert all(len(pair[1]) == 2 for pair in rows)
+    assert len(stores[0].list_items()) == 2
+
+
+def test_p1_persisted_corrupt_bytes_never_download_as_success(tmp_path):
+    from app.media_archive_v173 import MediaArchive
+    from app.config import Settings
+    from app.main import create_app
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="test-key",
+        CHAT2API_PAIRING_CODE="pair-code",
+        CHAT2API_DATA_DIR=tmp_path,
+    ))
+    archive = app.state.generated_files
+    record = archive.store(
+        b"%PDF-1.7\noriginal content", "sample.pdf", "application/pdf",
+        "owner", "request-integrity",
+    )
+    with archive._db() as conn:
+        object_key = conn.execute(
+            "SELECT object_key FROM generated_files WHERE id=?", (record["id"],)
+        ).fetchone()["object_key"]
+    filename = (archive.storage.root / object_key)
+    filename.write_bytes(b"%PDF-1.7\ncorrupted but plausible")
+    with pytest.raises(ValueError, match="integrity verification"):
+        archive.read(record["id"], record["token"])
+    with TestClient(app) as client:
+        response = client.get(f"/api/generated-files/{record['id']}/{record['token']}")
+        assert response.status_code == 503
+        assert "storage integrity" in response.json()["detail"].lower()
+        assert "corrupted" not in response.text

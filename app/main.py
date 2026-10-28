@@ -282,6 +282,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             data, mime, filename = await asyncio.to_thread(generated_files.read, file_id, access_token)
         except (KeyError, FileNotFoundError):
             raise HTTPException(status_code=404, detail="Unknown generated file") from None
+        except (ValueError, OSError):
+            # A missing/corrupt S3/local object must never be a successful
+            # delivery; do not expose backend paths or credentials to clients.
+            raise HTTPException(status_code=503, detail="Generated file storage integrity unavailable") from None
         # Always force download, including HTML, code, SVG-like contents and PDF.
         # Never interpret arbitrary model artifacts as same-origin active code.
         from urllib.parse import quote

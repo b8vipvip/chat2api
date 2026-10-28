@@ -1,6 +1,16 @@
 (() => {
   const baseHandleServerMessage = handleServerMessage;
   const liveTabs = new Map();
+  // A stop can arrive while start is awaiting Chrome foreground activation or
+  // a content-script/WebRTC handshake. Record stop intention synchronously,
+  // before any await; otherwise a late start can resurrect an orphaned call.
+  const stoppedLiveRequests = new Map();
+  function markStopped(requestId) {
+    stoppedLiveRequests.set(requestId, Date.now());
+    if (stoppedLiveRequests.size > 256)
+      stoppedLiveRequests.delete(stoppedLiveRequests.keys().next().value);
+  }
+  const wasStopped = requestId => stoppedLiveRequests.has(requestId);
   const liveRouter = () => globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
 
   // Background MV3 memory can be discarded between PCM/control frames.
@@ -74,19 +84,40 @@
     const requestId = String(message.request_id || "");
     if (!requestId) return;
 
+    if (type === "voice.live.stop") markStopped(requestId);
     if (type === "voice.live.start") {
+      // An identical start retransmission for a settled session must not
+      // regain a tab whose dedicated physical lease has been released.
+      if (wasStopped(requestId)) return;
       try {
         const tab = await resolveLiveWorkerTab(message);
+        if (wasStopped(requestId)) {
+          await releaseLiveSession(requestId, "stopped-before-tab-allocation-completed");
+          return;
+        }
         if (!tab?.id) throw new Error("No ChatGPT tab is available for GPT-Live");
         // Reuse the same physical foreground activation as speech requests.
         // Do not silently leave WebRTC Voice in a background/hidden document.
         const activate = globalThis.chat2apiActivateVoiceTabV184;
         if (typeof activate !== "function") throw new Error("Shared Voice foreground activation is unavailable");
         const activeTab = await activate(tab);
+        if (wasStopped(requestId)) {
+          await releaseLiveSession(requestId, "stopped-during-foreground-activation");
+          return;
+        }
         if (activeTab.chat2apiWindowFocusedAfter === false) {
           throw new Error("VOICE_WINDOW_NOT_FOCUSED: Live Voice browser window cannot be focused");
         }
         await ensureLiveContent(tab.id);
+        // The tab could have been retired by a stop while injection awaited.
+        // Never start Voice in an unrelated/replaced physical window.
+        const current = await tabForLiveRequest(requestId);
+        if (wasStopped(requestId) || current?.id !== tab.id
+            || current?.windowId !== tab.windowId) {
+          if (wasStopped(requestId))
+            await releaseLiveSession(requestId, "stopped-during-live-content-injection");
+          return;
+        }
         liveTabs.set(requestId, tab.id);
 
         // Starting ChatGPT Voice can take many seconds while the page establishes
@@ -97,14 +128,31 @@
           requestId,
           sessionId: message.session_id,
           options: message.options || {},
-        }).then(response => {
+        }).then(async response => {
+          if (wasStopped(requestId)) {
+            // A stop can overtake the asynchronous start sendMessage ACK.
+            // Re-send stop to the same tab, not to an arbitrary new Worker tab.
+            await chrome.tabs.sendMessage(tab.id, {
+              type: "chat2api.voice.live.stop", requestId,
+            }).catch(() => {});
+            await releaseLiveSession(requestId, "stopped-before-live-start-ack");
+            return;
+          }
           if (!response?.ok) throw new Error(response?.error || "GPT-Live tab rejected the live session");
         }).catch(async error => {
+          if (wasStopped(requestId)) {
+            await releaseLiveSession(requestId, "stopped-after-live-start-error");
+            return;
+          }
           liveTabs.delete(requestId);
           await liveRouter()?.failRequest?.(requestId, "voice-live-start-failed");
           await reportError(requestId, error);
         }).catch(() => {});
       } catch (error) {
+        if (wasStopped(requestId)) {
+          await releaseLiveSession(requestId, "stopped-during-live-start");
+          return;
+        }
         liveTabs.delete(requestId);
         await liveRouter()?.failRequest?.(requestId, "voice-live-start-dispatch-failed").catch(() => false);
         await reportError(requestId, error);
@@ -112,6 +160,9 @@
       return;
     }
 
+    // Intermediate audio/text frames are not allowed to revive a completed
+    // session while the physical window awaits its 5-second close.
+    if (wasStopped(requestId) && type !== "voice.live.stop") return;
     const tab = await tabForLiveRequest(requestId);
     const tabId = tab?.id;
     if (!Number.isInteger(tabId)) {
