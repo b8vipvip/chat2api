@@ -29,7 +29,7 @@
   function statusLabel(row, closed = false) {
     if (closed || String(row?.status || "") === "closed") return "已关闭";
     const value = String(row?.status || "");
-    if (value === "ready") return row.server_admission_available === false ? "待机（调度容量已满）" : "可接待";
+    if (value === "ready") return "可接待";
     if (value === "in_use" || value === "leased") {
       const name = String(row?.api_key_name || row?.route_key || "").trim();
       return `正在接待${name || "API请求"}`;
@@ -93,7 +93,7 @@
       section.innerHTML = `
         <div class="panel">
           <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
-            <div><h2 style="margin:0">窗口管理</h2><div class="muted">备用窗口表示浏览器页面已经准备好，不代表服务端还有分发额度。只有调度额度与物理窗口同时可用时，新请求才能接待。请求终态及窗口关闭分别由现有请求控制器和窗口管理器决定。</div></div>
+            <div><h2 style="margin:0">窗口管理</h2><div class="muted">配置的备用窗口数表示正常总窗口目标，例如3。低负载保持总数3；3个都在执行时补1个可接待窗口，任务结束关闭后逐步回到3。只有浏览器页面实际准备好才显示可接待。</div></div>
             <button class="action" id="wmRefresh">刷新</button>
           </div>
           <div id="wmTruthStatus" class="muted" style="margin-top:10px"></div>
@@ -156,7 +156,7 @@
       <td>${esc(device)}</td>
       <td><code>${esc(req)}</code></td>
       <td>${esc(formatTime(row.opened_at_ms))}</td>
-      <td><span class="pill ${row.status === "ready" && row.server_admission_available !== false ? "ok" : leased || row.server_admission_available === false ? "warn" : ""}">${esc(statusLabel(row, closed))}</span></td>
+      <td><span class="pill ${row.status === "ready" ? "ok" : leased ? "warn" : ""}">${esc(statusLabel(row, closed))}</span></td>
       <td>${canCapture ? '<button class="action" data-capture>截图</button>' : "-"}</td>
       <td>${hasShot ? `<button class="action" data-view-shot>查看${row.screenshot_at_ms ? ` · ${esc(formatTime(row.screenshot_at_ms))}` : ""}</button>` : `<span class="muted">${row.screenshot_error ? esc(row.screenshot_error) : "暂无截图"}</span>`}</td>
     </tr>`;
@@ -196,76 +196,27 @@
     const scheduled = Math.max(0, Number(truth.scheduler_used_units || 0));
     const limit = Math.max(0, Number(truth.scheduler_limit_units || 0));
     const queued = Math.max(0, Number(truth.scheduler_queued_requests || 0));
-    box.textContent = `实时物理核验：${verified}/${online} 个在线 Worker 已核验；物理待机 ${standby} 个，执行中 ${inUse} 个；服务端调度已占用 ${scheduled}/${limit}，排队 ${queued} 个；5分钟接待租约 ${leased} 个。${unverified > 0 ? `另有 ${unverified} 个 Worker 未完成核验。` : ""}`;
+    box.textContent = `实时物理核验：${verified}/${online} 个在线 Worker 已核验；物理待机 ${standby} 个，执行中 ${inUse} 个；服务端已分配请求 ${scheduled} 个，排队 ${queued} 个；已完成待关闭 ${leased} 个（5秒关闭）。${unverified > 0 ? `另有 ${unverified} 个 Worker 未完成核验。` : ""}`;
   }
 
   function renderCapacityControls() {
     const box = document.getElementById("wmSchedulerCapacity");
     if (!box) return;
-    const workers = state.workers.filter(worker => worker.online && worker.live_verified);
     box.replaceChildren();
-    const explanation = document.createElement("div");
-    explanation.className = "muted";
-    explanation.textContent = "Worker并发是服务端v58唯一准入上限（默认3），与物理待机窗口数量不是同一个值。可以按设备资源调整；提高上限会增加浏览器内存及账号请求负载。";
-    box.appendChild(explanation);
-    for (const worker of workers) {
-      const wrap = document.createElement("div");
-      wrap.style.cssText = "display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:8px";
-      const used = Number(worker.scheduler_used_units || 0);
-      const limit = Number(worker.scheduler_limit_units || 0);
-      const available = Number(worker.scheduler_available_units || 0);
+    const note = document.createElement("div");
+    note.className = "muted";
+    note.textContent = "这里的3表示常态窗口总数，不是3个额外空闲窗口，也不是固定请求并发上限。满载时由唯一窗口池增加1个真正可接待的窗口，完成后自动收缩。";
+    box.appendChild(note);
+    for (const worker of state.workers.filter(row => row.online && row.live_verified)) {
+      const line = document.createElement("div");
+      line.style.marginTop = "8px";
+      const total = Number(worker.cached_active_count || 0);
+      const inUse = Number(worker.in_use_window_count || 0);
+      const ready = Number(worker.standby_window_count || 0);
+      const baseline = Number(worker.scheduler_baseline_total || 0);
       const queued = Number(worker.scheduler_queued_requests || 0);
-      const idle = Number(worker.standby_window_count || 0);
-      const label = document.createElement("span");
-      label.textContent = `${worker.device_name || worker.client_id} · 分发额度 ${used}/${limit} · 可准入 ${available} · 物理待机 ${idle} · 排队 ${queued}`;
-      wrap.appendChild(label);
-      const input = document.createElement("input");
-      input.type = "number"; input.min = "1"; input.max = "32"; input.step = "1";
-      input.value = String(limit || 3);
-      input.style.cssText = "width:68px;max-width:68px";
-      input.setAttribute("aria-label", `设置${worker.device_name || worker.client_id}最大并发`);
-      wrap.appendChild(input);
-      const button = document.createElement("button");
-      button.type = "button";button.className = "action";button.textContent = "更新并发额度";
-      button.addEventListener("click", async () => {
-        const target = Number(input.value);
-        if (!Number.isInteger(target) || target < 1 || target > 32) {
-          alert("Worker并发额度应为1至32的整数");return;
-        }
-        if (target === limit) return;
-        if (!confirm(`将 ${worker.device_name || worker.client_id} 的Worker最大并发从 ${limit} 调整为 ${target}？增加会占用更多浏览器资源；只改变v58准入额度，不改变终态判定。`)) return;
-        button.disabled = true;
-        try {
-          const response = await fetch(`/api/admin/extensions/${encodeURIComponent(worker.client_id)}/capacity-v57`, {
-            method: "PUT", credentials: "same-origin",
-            headers: {"Content-Type":"application/json"},
-            body: JSON.stringify({max_concurrency:target})
-          });
-          if (!response.ok) {
-            const payload = await response.json().catch(() => ({}));
-            throw new Error(payload.detail || `HTTP ${response.status}`);
-          }
-          await refresh(true);
-        } catch (error) {
-          alert("更新Worker并发失败："+String(error.message || error));
-        } finally { button.disabled = false; }
-      });
-      wrap.appendChild(button);
-      // A live verified physical standby is not a permit by itself. Offer a
-      // deliberate one-click adjustment without silently changing capacity.
-      const proposed = Math.min(32, used + idle);
-      if (proposed > limit && worker.chatgpt_routing_ready === true) {
-        const proposal = document.createElement("button");
-        proposal.type = "button"; proposal.className = "action";
-        proposal.textContent = `按当前${proposed}个窗口设定`;
-        proposal.title = "将当前执行窗口和实测待机窗口合计作为新的并发上限；浏览器资源开销会增加";
-        proposal.addEventListener("click", () => {
-          input.value = String(proposed);
-          button.click();
-        });
-        wrap.appendChild(proposal);
-      }
-      box.appendChild(wrap);
+      line.textContent = `${worker.device_name || worker.client_id} · 常态总数 ${baseline} · 当前总数 ${total} · 执行 ${inUse} · 可接待 ${ready} · 排队 ${queued}`;
+      box.appendChild(line);
     }
   }
 
