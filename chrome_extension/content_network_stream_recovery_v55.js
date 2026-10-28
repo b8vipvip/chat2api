@@ -160,20 +160,12 @@
         terminal_evidence_source: row.terminalEvidenceSource || "assistant-end-turn-patch",
       });
     }
+    // v227: Network is an evidence observer ONLY. Previously this emitted a
+    // chat.snapshot directly to Broker; request-v6 then emitted the same
+    // assistant bytes again as chat.delta, duplicating many short answers.
+    // recordEvidence already refreshed active.networkObservedText. Only the
+    // request-v6 controller may emit user-visible text or a terminal event.
     state.snapshots += 1;
-    await emit({
-      type: "chat.snapshot",
-      request_id: row.requestId,
-      text: row.lastText,
-      diagnostics: {
-        response_stream_recovery: "network-sse-evidence-v57",
-        response_semantic_recovery: "assistant-role-only-sse-v55",
-        network_stream_id: row.streamId,
-        network_recovered_assistant_chars: row.lastText.length,
-        network_recovery_source: String(detail.parser_source || "assistant-message"),
-        network_terminal_authority: "request-v6",
-      },
-    });
   }
 
   async function terminalHint(row, detail) {
