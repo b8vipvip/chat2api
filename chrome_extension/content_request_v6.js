@@ -279,8 +279,29 @@
     const raw = String(value || "");
     const heading = /^\s*(#{2,6})\s+You said\s*:\s*/i.exec(raw)
       || /^\s*You said\s*:\s*/i.exec(raw);
-    if (!heading || !active?.promptNormalized)
+    if (!heading || !active?.promptNormalized) {
+      // v239: A roleless ChatGPT page may render only the ASSISTANT section
+      // in its Markdown capture, omitting the preceding "You said" heading.
+      // Strip browser chrome only when BOTH role headings are freshly created
+      // after this request's submit baseline. Never remove an authored quote,
+      // a user-supplied transcript, or an old conversation's label.
+      const lone = /^\\s*#{2,6}\\s+ChatGPT said\\s*:\\s*(?:\\r?\\n)+/i.exec(raw);
+      if (lone && active?.baselineRolelessHeadings && active?.submitStartedAt) {
+        const headings = [...document.querySelectorAll(
+          "main h4,[role='main'] h4,#thread h4")].filter(visible)
+          .filter(node => !active.baselineRolelessHeadings.has(node));
+        const headText = node => normalize(node.innerText || node.textContent || "");
+        const user = headings.find(node => /^You said\\s*[:：]$/i.test(headText(node)));
+        const assistant = headings.find(node => /^ChatGPT said\\s*[:：]$/i.test(headText(node))
+          && (!user || turnFollows(user, node)));
+        if (user && assistant && assistant.isConnected) {
+          const text = raw.slice(lone[0].length).trimStart();
+          return {text, stripped:true, pending:!text.trim(),
+            boundaryEvidence:"fresh-paired-roleless-heading-v239"};
+        }
+      }
       return { text: raw, stripped: false, pending: false };
+    }
     const isRenderedHeading = /^\s*#{2,6}\s+You said\s*:/i.test(raw);
     const remainder = raw.slice(heading[0].length);
     const boundary = /(?:^|\n)\s*(?:#{1,6}\s*)?ChatGPT said\s*:\s*/gi;
