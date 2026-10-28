@@ -13,7 +13,7 @@ const button = {};
 const now = Date.now();
 let hasCandidate = true, hasToolbar = true;
 const ctx = {
-  normalize:v=>String(v || "").replace(/\\s+/g," ").trim(),
+  normalize:v=>String(v || "").replace(/\s+/g," ").trim(),
   visible:()=>true,
   transientText:()=>false,
   internalToolPayload:()=>false,

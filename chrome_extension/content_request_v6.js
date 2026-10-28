@@ -808,8 +808,8 @@
     const freshHeadings = active?.baselineRolelessHeadings
       ? headings.filter(node => !active.baselineRolelessHeadings.has(node)) : [];
     const headingText = node => normalize(node.innerText || node.textContent || "");
-    const userHeadings = freshHeadings.filter(node => /^You said\\s*[:：]$/i.test(headingText(node)));
-    const assistantHeadings = freshHeadings.filter(node => /^ChatGPT said\\s*[:：]$/i.test(headingText(node)));
+    const userHeadings = freshHeadings.filter(node => /^You said\s*[:：]$/i.test(headingText(node)));
+    const assistantHeadings = freshHeadings.filter(node => /^ChatGPT said\s*[:：]$/i.test(headingText(node)));
     const freshActions = active?.baselineFinishActions
       ? responseFinishActions().filter(node => !active.baselineFinishActions.has(node)) : [];
     const candidate = rolelessShortReplyCandidate(active);
