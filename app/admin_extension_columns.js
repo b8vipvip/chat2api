@@ -276,7 +276,7 @@
     const label = lastVerified ? ' <small data-chat2api-standby-stale="1" style="font-size:11px">上次核验</small>' : "";
     return {
       html: `${used} / <span data-chat2api-live-standby-count="1" data-chat2api-standby-source="${standbyKnown ? "live" : lastVerified ? "cached" : "unknown"}" style="color:${color};font-weight:700">${standbyText}</span>${label}${queued > 0 ? ` · 排队 ${queued}` : ""}`,
-      title: `正在执行请求 ${used}；备用窗口 ${standbyText}${standbyKnown ? "（实时物理核验，已排除正在接待及5分钟租约窗口）" : lastVerified ? "（上次核验成功的数量，本次尚未获得实时数据；此值不可用于实时调度判断）" : "（尚未实时核验）"}${queued > 0 ? `；排队 ${queued}` : ""}`,
+      title: `正在执行请求 ${used}；备用窗口 ${standbyText}${standbyKnown ? "（实时物理核验，已排除正在接待及完成后5秒待关窗口）" : lastVerified ? "（上次核验成功的数量，本次尚未获得实时数据；此值不可用于实时调度判断）" : "（尚未实时核验）"}${queued > 0 ? `；排队 ${queued}` : ""}`,
       cls: used > 0 ? "warnText" : "muted",
     };
   }
