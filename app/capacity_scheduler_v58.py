@@ -134,6 +134,13 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
     base_summaries = registry.summaries
 
     def worker_baseline_total(client_id: str) -> int:
+        # Explicit Worker '常态窗口总数' is the only configurable pool baseline.
+        # Read the existing windows/limit owner, not the retired independent
+        # concurrency setting. Fallback remains for unconfigured Workers.
+        settings = getattr(app.state, "worker_window_limits", None)
+        explicit = settings.get("explicit", {}) if isinstance(settings, dict) else {}
+        if str(client_id) in explicit:
+            return _limit(explicit[str(client_id)])
         row = config["workers"].get(str(client_id)) or {}
         return _limit(row.get("max_concurrency"), config["default_worker_concurrency"])
 
@@ -444,5 +451,6 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         "worker_queues": worker_queues,
         "cooldown_until": cooldown_until,
         "rate_limit_strikes": rate_limit_strikes,
+        "baseline_total_for": worker_baseline_total,
     }
     return app
