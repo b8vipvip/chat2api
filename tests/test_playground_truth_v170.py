@@ -213,3 +213,38 @@ def test_running_worker_never_returns_full_or_false_completed_text(tmp_path: Pat
         ).json()
         assert outcome["status"] == "running"
         assert "response_text" not in outcome
+
+
+
+def test_worker_completed_after_sse_disconnection_is_delivery_warning(tmp_path: Path):
+    app = _app(tmp_path)
+    rid = "req_sseabortedbutfinished1234"
+    run_id = _chat_run_id(rid)
+    with TestClient(app) as client:
+        async def seed():
+            await app.state.test_runs.upsert({
+                "run_id": run_id, "request_id": rid, "request_ids": [rid],
+                "test_type": "chat", "status": "running",
+                "quality": {"source": "manual-playground-chat"},
+                "results": [{"kind": "chat", "request_id": rid, "status": "running"}],
+            })
+            await app.state.telemetry.upsert({
+                "request_id": rid, "status": "completed",
+                "request_type": "text", "completion_chars": 1351,
+                "diagnostics": {
+                    "api_stream_close_cause": "asgi-stream-task-cancelled",
+                    "api_stream_closed_before_delivery": True,
+                    "api_delivery_state": "disconnected",
+                    "server_finalization_stage": "request-row-finalized",
+                },
+            })
+        asyncio.run(seed())
+        result = client.get(
+            "/api/admin/tests/" + run_id,
+            headers={"Authorization": "Bearer test-key"},
+        ).json()
+        assert result["status"] == "warning"
+        assert result["results"][0]["status"] == "warning"
+        assert "HTTP" in result["results"][0]["message"]
+        assert result["results"][0]["authoritative_request_status"] == "completed"
+        assert app.state.telemetry.get(rid)["status"] == "completed"
