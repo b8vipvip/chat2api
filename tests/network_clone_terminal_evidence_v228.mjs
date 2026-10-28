@@ -45,6 +45,8 @@ async function isolatedSession(){
   for(let i=0;i<8;i++)await tick();
   assert.equal(active.networkTerminalTransportErrorAt,0);
   assert.equal(active.networkTerminalTransportStreamId,"stream-new");
+  assert.equal(active.networkStreamEndedWithoutTerminalAt,0,
+    "stale stream errors cannot invalidate a later verified EOF");
   assert.ok(frames.some(f=>f?.diagnostics?.network_stream_failure_stage==="read"));
   assert.ok(frames.some(f=>f?.diagnostics?.network_stream_error_name==="AbortError"));
   assert.ok(frames.some(f=>f?.diagnostics?.network_stream_abort_signal===true));
