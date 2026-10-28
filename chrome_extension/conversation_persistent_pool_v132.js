@@ -816,7 +816,26 @@
 
   async function reconcile(reason = "scheduled") {
     if (state.reconcilePromise) return state.reconcilePromise;
-    const task = serial(() => reconcileNow(reason)).finally(() => {
+    const task = serial(() => reconcileNow(reason)).then(result => {
+      // The v132 physical-window owner publishes *verified* admission evidence.
+      // Browser loading surfaces and completed leased routes are not ready.
+      // v58 remains the ONLY server FIFO admission owner and consumes this
+      // snapshot; this reporter cannot allocate requests or close windows.
+      if (typeof trySendSocket === "function" && result?.target) {
+        Promise.resolve(trySendSocket({
+          type: "extension.status",
+          metadata: {
+            worker_pool_admission_revision: 224,
+            worker_pool_ready_windows: Math.max(0, Number(result.standby || 0)),
+            worker_pool_active_windows: Math.max(0, Number(result.active || 0)),
+            worker_pool_baseline_total: Math.max(0, Number(result.target || 0)),
+            worker_pool_login_ready: result.login_ready === true && result.worker_disabled !== true,
+            worker_pool_capacity_observed_at: String(result.observed_at || ""),
+          },
+        })).catch(() => {});
+      }
+      return result;
+    }).finally(() => {
       if (state.reconcilePromise === task) state.reconcilePromise = null;
     });
     state.reconcilePromise = task;
