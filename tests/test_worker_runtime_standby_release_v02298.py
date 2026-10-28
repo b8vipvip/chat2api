@@ -51,4 +51,4 @@ def test_v02298_standby_is_routable_idle_capacity() -> None:
     assert "runtime_ready_standby: true" in pool
     assert "validateIdleRuntime" in pool
     assert "const standby = Number(snapshot.idle || snapshot.standby || 0);" in capacity
-    assert "standby === target" in capacity
+    assert "snapshot.target_reached === true" in capacity
