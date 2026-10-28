@@ -33,7 +33,7 @@ def test_successful_route_five_minute_lease_is_owned_by_v30_router_in_production
     assert "selected.route.close_after = now + IDLE_CLOSE_MS" in legacy
     assert 'action: "successful-route-protected-5m"' in legacy
     assert '"background_window_affinity_v87.js"' not in entry
-    assert "const IDLE_CLOSE_MS = 5 * 60 * 1000" in router
+    assert "const IDLE_CLOSE_MS = 5 * 1000" in router
     assert 'authority: "single-route-window-authority-v30"' in router
 
 

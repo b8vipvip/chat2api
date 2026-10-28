@@ -155,7 +155,7 @@ def test_legacy_warm_pool_logic_remains_inspectable_but_production_uses_v30_rout
     assert 'changes.socketState?.newValue === "connected"' in source
     assert "tab.status" not in source
 
-    assert "IDLE_CLOSE_MS = 5 * 60 * 1000" in routing
+    assert "IDLE_CLOSE_MS = 5 * 1000" in routing
     assert "resetClosedRoute" in routing
     assert "reopen-saved-conversation" not in routing
     assert '"closed-window-new-chat"' in routing

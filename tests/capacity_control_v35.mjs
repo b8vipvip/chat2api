@@ -32,13 +32,14 @@ const pool = {
   setTarget: async (target, source) => {
     windowTarget = Number(target);
     windowSource = String(source || 'explicit');
-    const idleCount = () => activeRows.filter(row => row.status !== 'in_use').length;
-    while (idleCount() < windowTarget) {
+    const activeCount = () => activeRows.filter(row => row.status === 'in_use').length;
+    const requiredTotal = Math.max(windowTarget, activeCount() + 1);
+    while (activeRows.length < requiredTotal) {
       const maxId = activeRows.reduce((value, row) => Math.max(value, Number(row.window_id || 0)), 100);
       const n = maxId + 1;
       activeRows.push({ window_id: n, tab_id: n + 100, status: 'ready' });
     }
-    while (idleCount() > windowTarget) {
+    while (activeRows.length > requiredTotal) {
       const index = activeRows.map(row => row.status !== 'in_use').lastIndexOf(true);
       if (index < 0) break;
       activeRows.splice(index, 1);
@@ -54,8 +55,8 @@ const pool = {
       policy: 'persistent-prewarmed-total-window-pool-v132',
       target: windowTarget,
       configured_target: windowTarget,
-      effective_target: windowTarget + active,
-      target_reached: standby === windowTarget,
+      effective_target: Math.max(windowTarget, active + 1),
+      target_reached: activeRows.length >= Math.max(windowTarget, active + 1) && standby >= 1,
       total: activeRows.length,
       routable_total: activeRows.length,
       unroutable_total: 0,
@@ -142,10 +143,10 @@ result = sent.at(-1);
 assert.equal(result.ok, true);
 assert.equal(result.data.target, 5);
 assert.equal(result.data.target_reached, true);
-assert.equal(result.data.window_policy, 'persistent-prewarmed-total-window-pool-v132');
-assert.equal(result.data.window_snapshot.total, 6, 'one busy routable window is additional to five standby windows');
+assert.equal(result.data.window_policy, 'baseline-total-plus-one-ready-if-saturated-v223');
+assert.equal(result.data.window_snapshot.total, 5, 'one busy plus four idle preserves baseline total five');
 assert.equal(result.data.window_snapshot.active, 1);
-assert.equal(result.data.window_snapshot.idle, 5);
+assert.equal(result.data.window_snapshot.idle, 4);
 assert.equal(result.data.window_snapshot.target, 5);
 assert.equal(result.data.window_snapshot.window_decision_authority, 'persistent-window-pool-v132');
 

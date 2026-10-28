@@ -133,9 +133,26 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
     base_send = registry.send
     base_summaries = registry.summaries
 
-    def worker_limit(client_id: str) -> int:
+    def worker_baseline_total(client_id: str) -> int:
         row = config["workers"].get(str(client_id)) or {}
         return _limit(row.get("max_concurrency"), config["default_worker_concurrency"])
+
+    def worker_limit(client_id: str) -> int:
+        # The saved N describes the normal physical TOTAL, not a parallel
+        # request ceiling. The single v58 FIFO may admit another request when
+        # all N are busy; v132 then warms one additional real standby.
+        # Bound absolute resource consumption by the existing MAX_LIMIT.
+        baseline = worker_baseline_total(client_id)
+        used = used_units(client_id)
+        metadata = getattr(registry.clients.get(str(client_id)), "metadata", None) or {}
+        observed_total = 0
+        try:
+            observed_total = int(metadata.get("reserve_window_total") or 0)
+        except (ValueError, TypeError):
+            pass
+        # Never trust stale or unverified metadata to *reduce* the baseline.
+        # used+1 gives one pending admission while v132 prepares its spare.
+        return min(MAX_LIMIT, max(baseline, used + 1, observed_total))
 
     def logical_key() -> str:
         return str(registry.routing_key_context.get() or "master")
@@ -160,22 +177,15 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         remaining = rate_limit_remaining(client_id)
         return {
             "limit_units": limit,
-            "configured_limit_units": limit,
+            "configured_limit_units": worker_baseline_total(client_id),
+            "baseline_total_window_target": worker_baseline_total(client_id),
+            "dynamic_window_buffer": max(0, limit - worker_baseline_total(client_id)),
             "used_units": used,
             "available_units": max(0, limit - used),
             "active_requests": used,
             "request_weights": dict(broker.client_active_requests.get(str(client_id), {}) or {}),
             "queued_requests": queue_depth(client_id),
-            # Worker admission is controlled by this persisted scheduling
-            # ceiling, NOT by the number of ready standby Chrome windows.
-            # A ready standby can exist while all admitted request slots are
-            # occupied. Report the actual authority instead of calling the
-            # setting a physical window count.
-            "limit_source": (
-                "worker-configured-override-v58"
-                if str(client_id) in config["workers"]
-                else "worker-default-concurrency-v58"
-            ),
+            "limit_source": "baseline-total-with-dynamic-spare-v223",
             "worker_explicit_limit": str(client_id) in config["workers"],
             "account_generation_limit": limit,
             "account_generation_queue": True,
@@ -216,7 +226,13 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                         except asyncio.TimeoutError:
                             pass
                     else:
-                        await condition.wait()
+                        # Worker metadata may advertise a new physical spare
+                        # without a Broker release. Reevaluate one FIFO owner
+                        # periodically; never add a second queue.
+                        try:
+                            await asyncio.wait_for(condition.wait(), timeout=1.0)
+                        except asyncio.TimeoutError:
+                            pass
 
                 if request_id in broker.requests:
                     raise RuntimeError(f"Duplicate request_id: {request_id}")
@@ -237,7 +253,8 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                     "capacity_queue_mode": "server-worker-fifo-v147",
                     "capacity_queue_scheduler": "oldest-request-worker-capacity-v147",
                     "extension_capacity_limit_units": worker_limit(client_id),
-                    "extension_capacity_configured_units": worker_limit(client_id),
+                    "extension_capacity_configured_units": worker_baseline_total(client_id),
+                    "window_baseline_total": worker_baseline_total(client_id),
                     "extension_capacity_weight": 1,
                     "extension_capacity_used_before": before,
                     "extension_capacity_used_after": before + 1,
@@ -330,7 +347,8 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                 "server_api_fifo_revision": 58,
                 "worker_index": 1,
                 "worker_limit": worker_limit(client_id),
-                "max_concurrency": worker_limit(client_id),
+                "max_concurrency": worker_baseline_total(client_id),
+                "window_baseline_total": worker_baseline_total(client_id),
                 "reserve_window_target": 0,
                 "strict_api_fifo": False,
                 "browser_side_api_fifo": False,
@@ -345,13 +363,14 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
             snapshot = capacity_snapshot(client_id)
             row["busy"] = snapshot["used_units"] >= snapshot["limit_units"]
             row["capacity"] = snapshot
-            row["max_concurrency"] = snapshot["limit_units"]
-            row["configured_max_concurrency"] = snapshot["limit_units"]
+            row["max_concurrency"] = snapshot["baseline_total_window_target"]
+            row["configured_max_concurrency"] = snapshot["baseline_total_window_target"]
             row["concurrency_limit_source"] = snapshot["limit_source"]
             row["account_generation_limit"] = snapshot["limit_units"]
             row["worker_window_settings"] = {
-                "max_concurrency": snapshot["limit_units"],
+                "max_concurrency": snapshot["baseline_total_window_target"],
                 "reserve_windows": 0,
+                "baseline_total_window_target": snapshot["baseline_total_window_target"],
             }
         return rows
 
@@ -410,7 +429,7 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
     broker.release = release
     broker.publish = publish
     broker.account_generation_limit_for = worker_limit
-    broker.account_generation_configured_limit_for = worker_limit
+    broker.account_generation_configured_limit_for = worker_baseline_total
     broker._chat2api_capacity_scheduler_v58 = True
     registry.send = send
     registry.summaries = summaries

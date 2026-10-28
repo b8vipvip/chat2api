@@ -117,6 +117,12 @@
   }
 
   async function reconcile(reason = "scheduled") {
+    // Compatibility shim only. v132 is the sole physical window owner:
+    // v121 must not close a valid spare or interpret baseline N as a hard cap.
+    if (globalThis.__CHAT2API_PERSISTENT_WINDOW_POOL_V132__) {
+      return { ok: true, reason, owner: "persistent-window-pool-v132",
+        closed: 0, limit_is_advisory: true };
+    }
     await ensureLoaded();
     const value = await routerReady();
     const limit = normalizeLimit(state.limit);
@@ -188,6 +194,9 @@
   }
 
   async function reserveForRequest(message) {
+    // v132 claims available ChatGPT windows with one serialized lease.
+    // Do not create a second fixed-window admission/eviction authority.
+    if (globalThis.__CHAT2API_PERSISTENT_WINDOW_POOL_V132__) return false;
     await ensureLoaded();
     const value = await routerReady();
     const limit = normalizeLimit(state.limit);

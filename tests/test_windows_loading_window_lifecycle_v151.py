@@ -27,4 +27,4 @@ def test_no_second_physical_window_owner_and_no_reloading_same_loading_url() -> 
     assert 'current !== desired || tab.status !== "complete"' not in source
     assert 'state.runtimeRetryAfter.set(row.tab_id' in source
     assert 'chrome.windows.remove(created.id); } catch (_) {}\n      throw error;' not in source
-    assert 'while (unassignedWindowRows(rows, value).length < target)' in source
+    assert 'while (rows.length < requiredTotal && rows.length < MAX_TARGET)' in source

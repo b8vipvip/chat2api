@@ -16,7 +16,7 @@ def test_reserve_target_counts_spares_not_routed_windows():
     assert "const ROUTE_IDLE_CLOSE_MS = 5 * 60 * 1000;" in source
 
 def test_conversation_affinity_is_five_minutes():
-    assert "const IDLE_CLOSE_MS = 5 * 60 * 1000;" in text("chrome_extension/conversation_routing.js")
+    assert "const IDLE_CLOSE_MS = 5 * 1000;" in text("chrome_extension/conversation_routing.js")
     assert "ROUTE_IDLE_CLOSE_SECONDS = 5 * 60" in text("app/v21_13_patch.py")
 
 def test_response_requires_terminal_rich_dom_settlement():
@@ -49,6 +49,6 @@ def test_historical_v212_does_not_stamp_runtime_identity():
 def test_release_versions():
     runtime = text("app/runtime_contract.py")
     manifest = text("chrome_extension/manifest.json")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.222"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.222"' in runtime
-    assert '"version": "0.22.222"' in manifest
+    assert 'SERVER_RUNTIME_VERSION = "0.22.223"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.223"' in runtime
+    assert '"version": "0.22.223"' in manifest

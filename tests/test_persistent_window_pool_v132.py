@@ -29,11 +29,11 @@ def test_persistent_pool_is_active_routing_layer() -> None:
     assert 'function standbyRows(rows, value)' in source
     assert '!assigned.has(row.window_id)' in source
     assert '!busy.has(row.window_id)' in source
-    assert 'standby.length === target' in source
+    assert 'standby.length >= expectedReady' in source
     assert 'standby_semantics_revision: STANDBY_SEMANTICS_REVISION' in source
     assert 'const STANDBY_SEMANTICS_REVISION = 152' in source
     assert 'await createStandby(reason)' in source
-    assert 'while (unassignedWindowRows(rows, value).length < target)' in source
+    assert 'while (rows.length < requiredTotal && rows.length < MAX_TARGET)' in source
     assert 'const DOCUMENT_SETTLE_MS = 4000' in source
     assert 'const RUNTIME_RETRY_COOLDOWN_MS = 15000' in source
     assert 'runtime_loading_total:' in source
@@ -50,10 +50,10 @@ def test_persistent_pool_is_active_routing_layer() -> None:
 def test_persistent_pool_keeps_configured_unassigned_standby_cardinality() -> None:
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     assert 'let rows = await physicalWindows();' in source
-    assert 'while (unassignedWindowRows(rows, value).length < target)' in source
+    assert 'while (rows.length < requiredTotal && rows.length < MAX_TARGET)' in source
     assert 'const compactStandby = isDisabled || auth.explicit_logout === true;' in source
-    assert 'const standbyTarget = compactStandby ? Math.min(1, target) : target;' in source
-    assert 'Math.max(0, standby.length - effective)' in source
+    assert 'const standbyTarget = compactStandby ? Math.min(1, target) : idleTarget;' in source
+    assert 'Math.max(0, rows.length - effective)' in source
     assert 'routable_total: routableRows.length' in source
     assert 'unroutable_total: unroutableRows.length' in source
     assert 'runtime_ready_total: runtimeReadyRows.length' in source
@@ -76,7 +76,7 @@ def test_transient_login_readiness_never_compacts_configured_standby() -> None:
     assert 'ready: stateValue === "ready" && composerReady' in source
     assert 'explicit_logout: stateValue === "login_required"' in source
     assert 'const compactStandby = isDisabled || auth.explicit_logout === true;' in source
-    assert 'const standbyTarget = compactStandby ? Math.min(1, target) : target;' in source
+    assert 'const standbyTarget = compactStandby ? Math.min(1, target) : idleTarget;' in source
     assert 'ready ? target : Math.min(1, target)' not in source
     assert 'transient_login_state_preserves_standby_target: true' in source
 
@@ -146,7 +146,7 @@ def test_capacity_control_uses_persistent_pool_as_window_authority() -> None:
     assert 'pool.setTarget(target, cleanSource)' in source
     assert 'persistent-prewarmed-total-window-pool-v132' in source
     assert 'const standby = Number(snapshot.idle || snapshot.standby || 0);' in source
-    assert 'standby === target' in source
+    assert 'snapshot.target_reached === true' in source
     assert 'window_decision_authority: "persistent-window-pool-v132"' in source
     assert 'prewarmed_windows: true' in source
 
@@ -162,7 +162,7 @@ def test_admin_copy_describes_persistent_windows_without_legacy_helper_copy() ->
 
 def test_worker_extension_bundle_advertises_pool_contract() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert manifest["version"] == "0.22.222"
+    assert manifest["version"] == "0.22.223"
     assert "persistent prewarmed" in manifest["description"]
 
 
@@ -212,6 +212,6 @@ def test_bootstrap_is_adopted_before_remaining_standby_windows_are_warmed() -> N
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     bootstrap = source.index('if (!isDisabled && rows.length === 0)')
     early_return = source.index('return snapshotFrom(rows, value, auth, isDisabled);', bootstrap)
-    warm = source.index('while (unassignedWindowRows(rows, value).length < target)', early_return)
+    warm = source.index('while (rows.length < requiredTotal && rows.length < MAX_TARGET)', early_return)
     assert bootstrap < early_return < warm
     assert 'if (ready && !isDisabled && !lastError)' in source

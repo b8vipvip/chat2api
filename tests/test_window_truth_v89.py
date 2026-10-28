@@ -79,7 +79,7 @@ def test_admin_surfaces_verified_standby_and_suppressed_history_state() -> None:
     assert "实时物理核验" in ui
     assert "历史缓存" in ui
     assert "备用窗口" in ui
-    assert "5分钟接待租约" in ui
+    assert "已完成待关闭" in ui
     assert '{key: "occupancy", label: "请求 / 备用窗口"}' in worker_ui
     assert 'api("/api/admin/window-manager")' in worker_ui
     assert "function truthByClient(payload)" in worker_ui

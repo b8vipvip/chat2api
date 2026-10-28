@@ -152,7 +152,7 @@
         target: state.target,
         source: state.source,
         policy: state.policy,
-        semantics: "unassigned-standby-target-v152",
+        semantics: "baseline-total-plus-one-ready-if-saturated-v223",
         updated_at: new Date().toISOString(),
       },
     }).catch(() => {});
@@ -534,6 +534,15 @@
       deferred, skipped: false, reason };
   }
 
+  function requiredWindowTotal(target, routed, occupied, compact = false) {
+    const baseline = normalizeTarget(target) || 0;
+    if (!baseline) return 0;
+    if (compact) return Math.min(1, baseline);
+    // The configured N is the normal TOTAL, not the spare count.
+    // N=3, busy=0/1/2 => 3; busy=3 => 4; after close => 3.
+    return Math.min(MAX_TARGET, Math.max(baseline, routed + 1, occupied + 1));
+  }
+
   function snapshotFrom(rows, value, auth, isDisabled) {
     const target = normalizeTarget(state.target) || 0;
     const ready = auth?.ready === true;
@@ -548,7 +557,12 @@
     const inUse = routedRows.filter(row => busy.has(row.window_id)).length;
     const leased = routedRows.filter(row => !busy.has(row.window_id)).length;
     const compactStandby = isDisabled || explicitLogout;
-    const effective = target ? (compactStandby ? Math.min(1, target) : target) : 0;
+    // target is the NORMAL TOTAL count, not the number of spare windows.
+    // N=3: 0/1/2 active => three total; 3 active => four total
+    // (one verified unassigned standby). On release, shrink toward N.
+    const effective = requiredWindowTotal(target, routedRows.length, busy.size, compactStandby);
+    const expectedReady = target && !compactStandby
+      ? Math.max(0, effective - routedRows.length) : 0;
     return {
       version: 132,
       revision: 132,
@@ -556,7 +570,12 @@
       target,
       configured_target: target,
       effective_target: effective,
-      target_reached: Boolean(target && !compactStandby && standby.length === target) || Boolean(target && compactStandby && standby.length <= effective),
+      target_reached: Boolean(target && !compactStandby
+        && rows.length >= effective && standby.length >= expectedReady)
+        || Boolean(target && compactStandby && rows.length <= effective),
+      baseline_total: target,
+      required_total: effective,
+      required_idle: expectedReady,
       total: rows.length,
       routable_total: routableRows.length,
       unroutable_total: unroutableRows.length,
@@ -588,7 +607,7 @@
       online_integrity_eligible: state.onlineIntegrityEligible,
       online_integrity_last_check_at: state.onlineIntegrityLastCheckAt || null,
       online_integrity_last_reason: state.onlineIntegrityLastReason || "",
-      route_idle_lease_ms: 5 * 60 * 1000,
+      route_idle_lease_ms: 5 * 1000,
       runtime_ready_standby: true,
       runtime_preflight_checks: state.runtimeChecks,
       runtime_preflight_failures: state.runtimeFailures,
@@ -597,8 +616,9 @@
       login_ready: ready,
       login_explicit_logout: explicitLogout,
       worker_disabled: isDisabled,
-      warming: Boolean(target && ready && !isDisabled && standby.length < target),
-      excess: Math.max(0, standby.length - effective),
+      warming: Boolean(target && ready && !isDisabled
+        && (rows.length < effective || standby.length < expectedReady)),
+      excess: Math.max(0, rows.length - effective),
       reserved: state.reservations.size,
       source: state.source,
       created_total: state.created,
@@ -680,7 +700,17 @@
     // compact configured standby capacity. Transient checking/unknown/composer
     // detection gaps pause warming but must never destroy already-warm capacity.
     const compactStandby = isDisabled || auth.explicit_logout === true;
-    const standbyTarget = compactStandby ? Math.min(1, target) : target;
+    // Count only routes that actually own one of the verified physical
+    // windows. Number(null) becomes 0 in legacy route maps, which must NOT
+    // count as an occupied window and accidentally shrink a healthy spare.
+    const physicalIds = new Set(rows.map(row => row.window_id));
+    const busyCount = [...busyWindowIds(value)].filter(id => physicalIds.has(id)).length;
+    const routedCount = [...routeByWindow(value).keys()].filter(id => physicalIds.has(id)).length;
+    const requiredTotal = requiredWindowTotal(target, routedCount, busyCount, compactStandby);
+    // Only unused, unassigned windows may be shrunk. Routes and active work
+    // belong to the conversation router; a pool reconciliation never kills them.
+    const idleTarget = Math.max(0, requiredTotal - routedCount);
+    const standbyTarget = compactStandby ? Math.min(1, target) : idleTarget;
     const reduced = await shrinkStandby(value, rows, standbyTarget, reason);
     rows = reduced.rows;
 
@@ -712,6 +742,7 @@
         reason,
         target,
         standby_target: standbyTarget,
+        required_total: requiredTotal,
         standby_before_or_after_total: standbyRows(rows, value).length,
         total_windows: rows.length,
         routed_windows: routeByWindow(value).size,
@@ -734,7 +765,7 @@
     }
 
     if (ready && !isDisabled && !lastError) {
-      while (unassignedWindowRows(rows, value).length < target) {
+      while (rows.length < requiredTotal && rows.length < MAX_TARGET) {
         try {
           const row = await createStandby(reason);
           rows.push(row);
@@ -762,6 +793,7 @@
       reason,
       target,
       standby_target: standbyTarget,
+      required_total: requiredTotal,
       standby_before_or_after_total: currentStandby,
       total_windows: rows.length,
       routed_windows: routeByWindow(value).size,
@@ -987,9 +1019,8 @@
         return await baseResolver(message);
       } finally {
         if (assignment?.key) state.reservations.delete(assignment.key);
-        // Consuming a standby immediately makes standby cardinality N-1. Refill
-        // after the normal short admission delay; the leased route is excluded
-        // from standby and remains owned by conversation_routing for five minutes.
+        // Reconcile the minimum TOTAL and one ready spare when saturated.
+        // Never manufacture N additional idle windows alongside N busy ones.
         scheduleReconcile("post-admission-standby-refill-v152", 250);
       }
     };

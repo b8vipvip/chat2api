@@ -69,6 +69,11 @@
   }
 
   async function reconcile(reason = "scheduled") {
+    // v132 owns physical windows; this older routed-window cap must never
+    // retire a window based on the configured baseline count.
+    if (globalThis.__CHAT2API_PERSISTENT_WINDOW_POOL_V132__) {
+      return { reason, skipped: true, owner: "persistent-window-pool-v132", closed: 0 };
+    }
     if (state.reconcileInFlight) return state.reconcileInFlight;
     state.reconcileInFlight = (async () => {
       const router = globalThis[ROUTER_KEY];

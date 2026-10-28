@@ -94,11 +94,13 @@ def test_v58_same_api_can_run_concurrently_until_worker_capacity() -> None:
             registry.routing_key_context.reset(token)
             assert broker.capacity_snapshot("ext_test")["active_requests"] == 3
 
-            fourth = asyncio.create_task(broker.create("req_a3", "ext_test"))
-            await asyncio.sleep(0.02)
-            assert not fourth.done()
+            # N=3 is the normal physical total, not a hard request cap.
+            # v132 grows one real standby after the third active request.
+            admitted = await asyncio.wait_for(
+                broker.create("req_a3", "ext_test"), timeout=0.5
+            )
+            assert broker.capacity_snapshot("ext_test")["active_requests"] == 4
             await broker.release(first.request_id)
-            admitted = await asyncio.wait_for(fourth, timeout=0.5)
             assert admitted.diagnostics["api_key_capacity_limit"] is None
             for state in (second, third, admitted):
                 await broker.release(state.request_id)
@@ -136,12 +138,12 @@ def test_release_contract_is_v02275_and_worker_bundle_0831() -> None:
     marker = read("chrome_extension/content_bundle_marker_v48.js")
     preflight = read("chrome_extension/background_runtime_preflight_v48.js")
     contract = read("chrome_extension/content_runtime_contract_v48.js")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.222"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.222"' in runtime
-    assert '"version": "0.22.222"' in manifest
-    assert 'bundle: "0.22.222"' in marker
-    assert 'REQUIRED_BUNDLE = "0.22.222"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.22.222"' in contract
+    assert 'SERVER_RUNTIME_VERSION = "0.22.223"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.223"' in runtime
+    assert '"version": "0.22.223"' in manifest
+    assert 'bundle: "0.22.223"' in marker
+    assert 'REQUIRED_BUNDLE = "0.22.223"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.22.223"' in contract
     assert '"capacity_scheduler_v58": True' in runtime
     assert '"worker_single_route_authority_v30": True' in runtime
     assert '"window_observer_v90": True' in runtime

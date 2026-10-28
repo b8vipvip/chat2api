@@ -4,7 +4,7 @@
 
   const STORAGE_KEY = "chat2apiConversationRoutesV1";
   const NEW_CHAT_URL = "https://chatgpt.com/";
-  const IDLE_CLOSE_MS = 5 * 60 * 1000;
+  const IDLE_CLOSE_MS = 5 * 1000; // Completed API window closes after 5s; v132 restores baseline total.
   const SLOW_LOAD_MS = 8000;
   const HARD_SLOW_LOAD_MS = 15000;
   const MAX_TURNS = 32;

@@ -16,7 +16,7 @@ def text(path: str) -> str:
 def test_v85_safe_submit_is_shipped() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
     assert SERVER_RUNTIME_VERSION
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.222"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.223"
     assert manifest["version"] == CHROME_BRIDGE_BUNDLE_VERSION
     scripts = next(item for item in manifest["content_scripts"] if item.get("world") != "MAIN")["js"]
     assert scripts.index("content_multimodal_settle_v84.js") < scripts.index("content_multimodal_settle_v85.js")
@@ -38,7 +38,7 @@ def test_v85_safe_submit_is_shipped() -> None:
 def test_same_key_affinity_is_five_minutes_in_both_deadline_owners() -> None:
     routing = text("chrome_extension/conversation_routing.js")
     reserve = text("chrome_extension/background_reserve_pool_v29.js")
-    assert "const IDLE_CLOSE_MS = 5 * 60 * 1000" in routing
+    assert "const IDLE_CLOSE_MS = 5 * 1000" in routing
     assert "const ROUTE_IDLE_CLOSE_MS = 5 * 60 * 1000" in reserve
     assert "max_turns: MAX_TURNS" in routing
     assert "max_text_chars: MAX_TEXT_CHARS" in routing
