@@ -149,7 +149,7 @@
         network_stream_parser_assistant_role_seen: detail.assistant_role_seen === true,
         network_stream_terminal_proof: detail.completion_hint === true,
         generation_progress: `${row.streamId}:${Number(detail.sequence || 0)}:${Number(detail.bytes ?? row.bytes ?? 0)}`,
-        generating_observed: !["done", "error"].includes(String(detail.phase || "")),
+        generating_observed: !/^(?:done|error)(?:$|-)/.test(String(detail.phase || "")),
       },
     });
   }
