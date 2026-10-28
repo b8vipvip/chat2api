@@ -16,7 +16,7 @@ def test_worker_list_has_one_final_renderer_without_old_flash_passes() -> None:
     behavior = text("app/admin_worker_limits_clipboard_v121.js")
     legacy = text("app/admin_worker_presentation_v66.js")
 
-    assert '{key: "worker_settings", label: "并发 / 备用设置"}' in canonical
+    assert '{key: "worker_settings", label: "常态窗口总数"}' in canonical
     assert '{key: "occupancy", label: "请求 / 备用窗口"}' in canonical
     assert 'table.style.visibility = "hidden"' in canonical
     assert 'Promise.all([' in canonical
