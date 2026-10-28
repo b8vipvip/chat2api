@@ -135,8 +135,8 @@
           || (ext === "xlsx" && type.includes("spreadsheetml.sheet"))
           || (ext === "pptx" && type.includes("presentationml.presentation"))
           || (ext === "json" && type.includes("application/json") && /attachment/i.test(disposition));
-        const rawName = /filename\\*\\s*=\\s*utf-8''([^;]+)/i.exec(disposition)?.[1]
-          || /filename\\s*=\\s*"?([^";]+)"?/i.exec(disposition)?.[1] || "";
+        const rawName = /filename\*\s*=\s*utf-8''([^;]+)/i.exec(disposition)?.[1]
+          || /filename\s*=\s*"?([^";]+)"?/i.exec(disposition)?.[1] || "";
         let dispositionName = rawName.trim();
         try { dispositionName = decodeURIComponent(dispositionName); } catch (_) {}
         const exactName = dispositionName.toLowerCase() === session.filename.toLowerCase();
