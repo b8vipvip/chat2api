@@ -126,7 +126,7 @@ def test_remote_login_unicode_clipboard_is_ticket_scoped_and_bidirectional() -> 
     assert 'event.stopImmediatePropagation()' in console
 
 
-def test_worker_settings_ui_has_one_renderer_and_distinct_concurrency_standby_values() -> None:
+def test_worker_settings_ui_has_one_baseline_total_value_and_one_save_endpoint() -> None:
     behavior = (ROOT / "app" / "admin_worker_limits_clipboard_v121.js").read_text(encoding="utf-8")
     canonical = (ROOT / "app" / "admin_extension_columns.js").read_text(encoding="utf-8")
     presentation = (ROOT / "app" / "worker_presentation_v64_patch.py").read_text(encoding="utf-8")
@@ -134,8 +134,8 @@ def test_worker_settings_ui_has_one_renderer_and_distinct_concurrency_standby_va
     patch = (ROOT / "app" / "worker_limits_clipboard_v121_patch.py").read_text(encoding="utf-8")
     identity = (ROOT / "app" / "admin_worker_identity_v131.js").read_text(encoding="utf-8")
 
-    assert '{key: "worker_settings", label: "并发 / 备用设置"}' in canonical
-    assert '/concurrency`' in behavior
+    assert '{key: "worker_settings", label: "常态窗口总数"}' in canonical
+    assert '/concurrency`' not in behavior
     assert '/windows/limit`' in behavior
     assert "data-v121-limit-summary" in canonical
     assert "data-v121-edit-limits" in canonical
@@ -143,7 +143,7 @@ def test_worker_settings_ui_has_one_renderer_and_distinct_concurrency_standby_va
     assert 'install_worker_limits_clipboard_v121_patch(app)' in entry
     assert 'install_worker_limits_clipboard_v121_patch(app)' not in presentation
     assert '?v={ASSET_RELEASE}' in patch
-    assert "持续维持的可接待空闲窗口数量" in behavior
+    assert "常态窗口总数N" in behavior
     assert "data-v121-cancel-limits" in canonical
     assert "extensionDeviceBody" not in identity
 
