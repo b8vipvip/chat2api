@@ -34,7 +34,7 @@ async function harness({bytes=new Uint8Array([80,75,3,4,0,1]),
   FakeURL.revokeObjectURL=()=>{};
   const button={
     disabled:false,getAttribute(name){return name==="aria-label"?"Download":"";},
-    parentElement:{parentElement:null,innerText:"Bookkeeping.xlsx",querySelectorAll:()=>[]},
+    parentElement:{parentElement:null,innerText:fileName,querySelectorAll:()=>[]},
     getBoundingClientRect:()=>({width:140,height:40}),
     click(){
       clicked++;
