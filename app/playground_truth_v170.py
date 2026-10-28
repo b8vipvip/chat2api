@@ -24,6 +24,15 @@ DATA_IMAGE = re.compile(
 def _test_status(row: dict[str, Any]) -> str:
     state = str(row.get("status") or "")
     if state == "completed":
+        diagnostics = row.get("diagnostics")
+        if isinstance(diagnostics, dict) and (
+            diagnostics.get("api_stream_closed_before_delivery") is True
+            and diagnostics.get("api_delivery_state") == "disconnected"
+        ):
+            # The Worker completed in the background after the HTTP consumer
+            # disappeared. This is NOT an end-to-end successful SSE delivery.
+            # Preserve the broker's completed terminal and surface a warning.
+            return "warning"
         return "passed"
     if state == "cancelled":
         return "cancelled"
@@ -97,6 +106,10 @@ async def reconcile_playground_runs(test_runs: Any, telemetry: Any, limit: int =
                         "ABCD 文件/内容验收失败；API 请求本身已完成"
                         if abcd_failed and row["status"] == "completed"
                         else "已按服务端请求记录同步完成" if status == "passed"
+                        else "Worker 已完成但 HTTP 流提前断开；调用方没有完整收到最终回复"
+                            if status == "warning"
+                            and isinstance(row.get("diagnostics"), dict)
+                            and row["diagnostics"].get("api_stream_closed_before_delivery") is True
                         else str(row.get("error") or status)[:300]
                     ),
                     "request_id": rid,

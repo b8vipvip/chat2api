@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.238"
+    assert RELEASE_VERSION == "0.22.239"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -68,7 +68,7 @@ def test_realtime_protocol_contract_matches_live_bridge():
 def test_v148_release_contract_keeps_broker_terminal_authority():
     from pathlib import Path
     from app.runtime_contract import RELEASE_VERSION, CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.238"
+    assert RELEASE_VERSION == "0.22.239"
     assert CHROME_BRIDGE_BUNDLE_VERSION == RELEASE_VERSION
     root = Path(__file__).resolve().parents[1]
     watchdog = (root / "app/request_stall_patch.py").read_text(encoding="utf-8")
@@ -162,7 +162,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v3"' in columns_script
     assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2"' in columns_script
     assert '{key: "bound_api_keys", label: "绑定 API Key 数"}' not in columns_script
-    assert '{key: "worker_settings", label: "并发 / 备用设置"}' in columns_script
+    assert '{key: "worker_settings", label: "并发设置"}' in columns_script
     assert '{key: "device_name", label: "设备名称"}' in columns_script
     assert '{key: "occupancy", label: "请求 / 备用窗口"}' in columns_script
     assert 'button.id = "extensionColumnSettingsButton"' in columns_script

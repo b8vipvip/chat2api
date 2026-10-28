@@ -13,7 +13,7 @@ def test_effective_columns_are_registered_once_in_canonical_settings_schema():
     canonical = read("app/admin_extension_columns.js")
     assert canonical.count('{key: "device_name", label: "设备名称"}') == 1
     assert canonical.count('{key: "occupancy", label: "请求 / 备用窗口"}') == 1
-    assert canonical.count('{key: "worker_settings", label: "并发 / 备用设置"}') == 1
+    assert canonical.count('{key: "worker_settings", label: "并发设置"}') == 1
     assert '{key: "occupied_windows",' not in canonical
     assert 'data-chat2api-column-key="device_name"' in canonical
     assert 'data-chat2api-column-key="occupancy"' in canonical

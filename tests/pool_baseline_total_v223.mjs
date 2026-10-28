@@ -6,7 +6,7 @@ const poolSource = fs.readFileSync(new URL('../chrome_extension/conversation_per
 const start = poolSource.indexOf('  function requiredWindowTotal(');
 const stop = poolSource.indexOf('  function snapshotFrom(', start);
 assert.ok(start > 0 && stop > start, 'real v132 policy must exist');
-const context = { MAX_TARGET: 32, normalizeTarget: value => Number(value) >= 1 && Number(value) <= 32 ? Math.floor(Number(value)) : null };
+const context = { MAX_TARGET: 32, MAX_PHYSICAL_WINDOWS: 33, normalizeTarget: value => Number(value) >= 1 && Number(value) <= 32 ? Math.floor(Number(value)) : null };
 const policy = vm.runInNewContext(poolSource.slice(start, stop) + '\nrequiredWindowTotal', context);
 const cases = [
   [0, 3, 3], // no requests: three ready
@@ -15,17 +15,17 @@ const cases = [
   [3, 4, 1], // three busy: create a fourth ready window
   [2, 3, 1], // one request terminates and router closes it
   [0, 3, 3], // normal baseline restored
-  [4, 5, 1], // one more request can claim prior standby
 ];
 for (const [busy, total, idle] of cases) {
   assert.equal(policy(3, busy, busy), total, `busy ${busy}: baseline 3 requires total ${total}`);
   assert.equal(total - busy, idle);
 }
-assert.equal(policy(3, 4, 4), 5);
+assert.equal(policy(3, 4, 4), 5, 'existing in-flight routes are protected even if old state briefly exceeds cap');
 assert.equal(policy(3, 2, 3), 4, 'leased route ownership protects fourth window until it closes');
-assert.equal(policy(3, 32, 32), 32, 'no unbounded physical window creation');
+assert.equal(policy(3, 32, 32), 33, 'no unbounded physical window creation');
+assert.equal(policy(32, 32, 32), 33, 'even max concurrency 32 keeps one non-admissible standby');
 assert.equal(policy(3, 2, 2, true), 1, 'explicit logout compact mode');
-assert.match(poolSource, /while \(rows\.length < requiredTotal && rows\.length < MAX_TARGET\)/);
+assert.match(poolSource, /while \(rows\.length < requiredTotal && rows\.length < MAX_PHYSICAL_WINDOWS\)/);
 assert.match(poolSource, /busyWindowIds\(value\)/);
 assert.match(poolSource, /await shrinkStandby\(value, rows, standbyTarget, reason\)/);
 assert.match(poolSource, /if \(protectedIds\.has\(row\.window_id\)\) continue;/);

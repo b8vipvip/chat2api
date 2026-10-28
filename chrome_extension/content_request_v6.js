@@ -279,8 +279,29 @@
     const raw = String(value || "");
     const heading = /^\s*(#{2,6})\s+You said\s*:\s*/i.exec(raw)
       || /^\s*You said\s*:\s*/i.exec(raw);
-    if (!heading || !active?.promptNormalized)
+    if (!heading || !active?.promptNormalized) {
+      // v239: A roleless ChatGPT page may render only the ASSISTANT section
+      // in its Markdown capture, omitting the preceding "You said" heading.
+      // Strip browser chrome only when BOTH role headings are freshly created
+      // after this request's submit baseline. Never remove an authored quote,
+      // a user-supplied transcript, or an old conversation's label.
+      const lone = /^\s*#{2,6}\s+ChatGPT said\s*:\s*(?:\r?\n)+/i.exec(raw);
+      if (lone && active?.baselineRolelessHeadings && active?.submitStartedAt) {
+        const headings = [...document.querySelectorAll(
+          "main h4,[role='main'] h4,#thread h4")].filter(visible)
+          .filter(node => !active.baselineRolelessHeadings.has(node));
+        const headText = node => normalize(node.innerText || node.textContent || "");
+        const user = headings.find(node => /^You said\s*[:：]$/i.test(headText(node)));
+        const assistant = headings.find(node => /^ChatGPT said\s*[:：]$/i.test(headText(node))
+          && (!user || turnFollows(user, node)));
+        if (user && assistant && assistant.isConnected) {
+          const text = raw.slice(lone[0].length).trimStart();
+          return {text, stripped:true, pending:!text.trim(),
+            boundaryEvidence:"fresh-paired-roleless-heading-v239"};
+        }
+      }
       return { text: raw, stripped: false, pending: false };
+    }
     const isRenderedHeading = /^\s*#{2,6}\s+You said\s*:/i.test(raw);
     const remainder = raw.slice(heading[0].length);
     const boundary = /(?:^|\n)\s*(?:#{1,6}\s*)?ChatGPT said\s*:\s*/gi;
@@ -1850,6 +1871,18 @@
                   + Number(native?.bytes || 0),
                 response_native_file_handoff: Boolean(native?.count),
                 response_required_file_types_satisfied: allRequiredFileTypesDelivered,
+                // These are FINAL verified transfer results. Prior
+                // media-not-transferable probe diagnostics are a retry
+                // checkpoint; they must not masquerade as the terminal status.
+                media_delivery_phase: "terminal-verified",
+                media_file_transfer_error: "",
+                media_required_file_types_satisfied: allRequiredFileTypesDelivered,
+                media_native_file_capture_count: Number(native?.count || 0),
+                media_native_file_captured_types: native?.captured_types || [],
+                media_native_file_failed_types: native?.failed_types || [],
+                media_native_file_failure_stages: native?.failure_stages || {},
+                media_native_file_attempt_counts: native?.attempt_counts || {},
+                media_native_file_synthesized_zip: native?.synthesized_zip === true,
                 internal_tool_handoff_filtered: true,
               },
             });
@@ -1862,6 +1895,7 @@
           if (!active.mediaCaptureLastReportAt || Date.now() - active.mediaCaptureLastReportAt >= 8000) {
             active.mediaCaptureLastReportAt = Date.now();
             await diagnostic(active, "media-not-transferable", {
+              media_delivery_phase: "retry-checkpoint",
               media_capture_attempts: active.mediaCaptureAttempts,
               media_capture_candidate_chars: active.mediaCaptureLastChars,
               media_capture_inline_count: active.mediaCaptureLastInlined,

@@ -16,7 +16,7 @@ def test_worker_settings_has_one_structural_owner() -> None:
     health = read("app/admin_v21_6.js")
     columns = read("app/admin_extension_columns.js")
 
-    assert '{key: "worker_settings", label: "并发 / 备用设置"}' in columns
+    assert '{key: "worker_settings", label: "并发设置"}' in columns
     assert 'data-chat2api-structural-owner="worker-settings-v152"' in columns
     assert 'data-v121-limit-summary' in columns
     assert 'data-v121-edit-limits' in columns

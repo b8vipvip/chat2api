@@ -17,14 +17,15 @@ def test_window_policy_busy_zero_one_two_three_then_release():
     assert result.returncode == 0, result.stderr + result.stdout
 
 
-def test_worker_admission_is_not_a_second_fixed_n_window_cap():
+def test_worker_admission_is_fixed_at_configured_n_despite_extra_window():
     server = source("app/capacity_scheduler_v58.py")
     assert 'def worker_baseline_total(client_id: str) -> int:' in server
     assert 'def worker_limit(client_id: str) -> int:' in server
     assert 'worker_pool_ready_window_ids' in server
     assert 'pool_window_claims' in server
     assert 'held.pop(str(request_id), None)' in server
-    assert 'return min(MAX_LIMIT, used + evidence["unclaimed_ready_windows"])' in server
+    assert 'return worker_baseline_total(client_id)' in server
+    assert '"standby_admission_permits": 0' in server
     assert '"baseline_total_window_target"' in server
     assert 'broker.create = create' in server
     assert 'broker.capacity_snapshot = capacity_snapshot' in server
@@ -38,7 +39,7 @@ def test_standby_ready_cannot_be_displayed_as_unavailable():
     assert "待机（调度容量已满）" not in ui
     assert "server_admission_available" not in server
     assert '"scheduler_baseline_total"' in server
-    assert '常态窗口总数' in ui
+    assert '常态窗口' in ui
     assert '5秒关闭' in ui
 
 

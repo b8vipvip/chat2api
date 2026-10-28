@@ -650,7 +650,7 @@
       '<tbody id="unifiedDeviceRowsV160"><tr><td colspan="7">正在加载…</td></tr></tbody></table></div>'+
       '<div class="v160-creation" id="unifiedCreationHostV160" hidden></div></div>'+
       '<div class="panel"><h3>Worker列表</h3><div class="v153-muted" id="unifiedWorkerSummaryV160"></div>'+
-      '<div class="scroll"><table id="unifiedWorkerTableV160"><thead><tr><th>Worker ID</th><th>设备名称</th><th>系统</th><th>版本</th><th>账户类型</th><th>状态</th><th>请求 / 备用窗口</th><th>并发 / 备用设置</th><th>ChatGPT</th><th>操作</th></tr></thead>'+
+      '<div class="scroll"><table id="unifiedWorkerTableV160"><thead><tr><th>Worker ID</th><th>设备名称</th><th>系统</th><th>版本</th><th>账户类型</th><th>状态</th><th>请求 / 备用窗口</th><th>并发设置</th><th>ChatGPT</th><th>操作</th></tr></thead>'+
       '<tbody id="unifiedWorkerRowsV160"></tbody></table></div></div>';
     section.insertBefore(root,legacy);
     const chooser=document.createElement("dialog");

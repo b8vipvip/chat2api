@@ -33,7 +33,7 @@ def test_persistent_pool_is_active_routing_layer() -> None:
     assert 'standby_semantics_revision: STANDBY_SEMANTICS_REVISION' in source
     assert 'const STANDBY_SEMANTICS_REVISION = 152' in source
     assert 'await createStandby(reason)' in source
-    assert 'while (rows.length < requiredTotal && rows.length < MAX_TARGET)' in source
+    assert 'while (rows.length < requiredTotal && rows.length < MAX_PHYSICAL_WINDOWS)' in source
     assert 'const DOCUMENT_SETTLE_MS = 4000' in source
     assert 'const RUNTIME_RETRY_COOLDOWN_MS = 15000' in source
     assert 'runtime_loading_total:' in source
@@ -50,7 +50,7 @@ def test_persistent_pool_is_active_routing_layer() -> None:
 def test_persistent_pool_keeps_configured_unassigned_standby_cardinality() -> None:
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     assert 'let rows = await physicalWindows();' in source
-    assert 'while (rows.length < requiredTotal && rows.length < MAX_TARGET)' in source
+    assert 'while (rows.length < requiredTotal && rows.length < MAX_PHYSICAL_WINDOWS)' in source
     assert 'const compactStandby = isDisabled || auth.explicit_logout === true;' in source
     assert 'const standbyTarget = compactStandby ? Math.min(1, target) : idleTarget;' in source
     assert 'Math.max(0, rows.length - effective)' in source
@@ -155,14 +155,14 @@ def test_admin_copy_describes_persistent_windows_without_legacy_helper_copy() ->
     behavior = text("app/admin_worker_limits_clipboard_v121.js")
     canonical = text("app/admin_extension_columns.js")
     identity = text("app/admin_worker_identity_v131.js")
-    assert "持续维持的可接待空闲窗口数量" in behavior
-    assert "并发=同时执行请求上限；备用=持续维持的未分配可接待窗口数量" in canonical
+    assert "满载时自动增加的备用窗口不增加并发名额" in behavior
+    assert "最大并发请求数 N；满载时额外保留一个不参与调度的备用窗口" in canonical
     assert "extensionDeviceBody" not in identity
 
 
 def test_worker_extension_bundle_advertises_pool_contract() -> None:
     manifest = json.loads(text("chrome_extension/manifest.json"))
-    assert manifest["version"] == "0.22.238"
+    assert manifest["version"] == "0.22.239"
     assert "persistent prewarmed" in manifest["description"]
 
 
@@ -212,6 +212,6 @@ def test_bootstrap_is_adopted_before_remaining_standby_windows_are_warmed() -> N
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     bootstrap = source.index('if (!isDisabled && rows.length === 0)')
     early_return = source.index('return snapshotFrom(rows, value, auth, isDisabled);', bootstrap)
-    warm = source.index('while (rows.length < requiredTotal && rows.length < MAX_TARGET)', early_return)
+    warm = source.index('while (rows.length < requiredTotal && rows.length < MAX_PHYSICAL_WINDOWS)', early_return)
     assert bootstrap < early_return < warm
     assert 'if (ready && !isDisabled && !lastError)' in source

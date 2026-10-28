@@ -36,6 +36,27 @@ assert.equal(ctx.inspect(state,"#### You said:\n\n"+echo).pending,true);
 const ordinary="You said:\n\nUnrelated context\n\nChatGPT said:\n\nExample";
 assert.equal(ctx.inspect(state,ordinary).text,ordinary);
 assert.equal(ctx.inspect(state,answer).text,answer);
+// A v238 stalled roleless request leaked "#### ChatGPT said:" into the
+// snapshot. The isolated heading may be stripped only with a NEW paired
+// "You said" / "ChatGPT said" DOM heading from the current submit.
+const userHeading = {isConnected:true,innerText:"You said:"};
+const assistantHeading = {isConnected:true,innerText:"ChatGPT said:"};
+ctx.document = {querySelectorAll:()=>[userHeading,assistantHeading]};
+ctx.visible = () => true;
+ctx.turnFollows = (left,right)=>left===userHeading && right===assistantHeading;
+const fresh = {...state,submitStartedAt:Date.now(),
+  baselineRolelessHeadings:new Set()};
+const isolated = "#### ChatGPT said:\n\n# Chapter two\n\nFinished answer";
+const freshResult=ctx.inspect(fresh,isolated);
+assert.equal(freshResult.stripped,true);
+assert.equal(freshResult.text,"# Chapter two\n\nFinished answer");
+assert.equal(freshResult.boundaryEvidence,"fresh-paired-roleless-heading-v239");
+const old = {...fresh,baselineRolelessHeadings:new Set([assistantHeading])};
+assert.equal(ctx.inspect(old,isolated).text,isolated,
+  "a historical role heading is never stripped");
+ctx.document = {querySelectorAll:()=>[assistantHeading]};
+assert.equal(ctx.inspect(fresh,isolated).text,isolated,
+  "a single assistant label without fresh user heading remains untrusted");
 const transientStart=src.indexOf("  function transientText(");
 const transientEnd=src.indexOf("\n  function plainNodeText(",transientStart);
 assert.ok(transientStart > 0 && transientEnd > transientStart);

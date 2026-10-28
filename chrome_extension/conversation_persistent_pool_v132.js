@@ -25,6 +25,7 @@
   const NEW_CHAT_URL = "https://chatgpt.com/";
   const MIN_TARGET = 1;
   const MAX_TARGET = 32;
+  const MAX_PHYSICAL_WINDOWS = MAX_TARGET + 1; // one non-admissible overflow standby
   const STANDBY_SEMANTICS_REVISION = 152;
   const TERMINAL_TYPES = new Set([
     "chat.completed", "chat.error", "chat.cancelled",
@@ -547,7 +548,7 @@
     if (compact) return Math.min(1, baseline);
     // The configured N is the normal TOTAL, not the spare count.
     // N=3, busy=0/1/2 => 3; busy=3 => 4; after close => 3.
-    return Math.min(MAX_TARGET, Math.max(baseline, routed + 1, occupied + 1));
+    return Math.min(MAX_PHYSICAL_WINDOWS, Math.max(baseline, routed + 1, occupied + 1));
   }
 
   function snapshotFrom(rows, value, auth, isDisabled) {
@@ -775,7 +776,7 @@
     }
 
     if (ready && !isDisabled && !lastError) {
-      while (rows.length < requiredTotal && rows.length < MAX_TARGET) {
+      while (rows.length < requiredTotal && rows.length < MAX_PHYSICAL_WINDOWS) {
         try {
           const row = await createStandby(reason);
           rows.push(row);

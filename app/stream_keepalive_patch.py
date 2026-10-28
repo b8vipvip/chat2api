@@ -42,6 +42,11 @@ class ChatSseKeepaliveMiddleware:
         stream_abort = False
         request_id = next((v.decode("latin-1", "replace") for k, v in scope.get("headers", [])
                            if k.lower() == b"x-chat2api-request-id"), "-")
+        # Share transport evidence with the inner FastAPI request, without
+        # introducing a second terminal owner. The Worker/Broker still decides
+        # completed/error; this flag only attributes a lost HTTP stream.
+        transport_truth = {"http_disconnect_seen": False, "asgi_cancelled": False}
+        scope["chat2api_sse_transport_truth"] = transport_truth
         queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
 
         async def queued_send(message: dict[str, Any]) -> None:
@@ -52,6 +57,7 @@ class ChatSseKeepaliveMiddleware:
             message = await receive()
             if message.get("type") == "http.disconnect":
                 saw_http_disconnect = True
+                transport_truth["http_disconnect_seen"] = True
             return message
 
         downstream = asyncio.create_task(self.app(scope, tracked_receive, queued_send))
@@ -108,6 +114,7 @@ class ChatSseKeepaliveMiddleware:
                     response_finished = True
         except asyncio.CancelledError:
             stream_abort = True
+            transport_truth["asgi_cancelled"] = True
             raise
         finally:
             if get_task is not None and not get_task.done():

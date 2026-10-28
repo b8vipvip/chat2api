@@ -79,7 +79,7 @@ def test_v57_remains_historical_but_v58_is_final_entry_owner() -> None:
     assert '"reserve_window_target": 0' in new
 
 
-def test_v58_same_api_can_run_concurrently_until_worker_capacity() -> None:
+def test_v58_hard_concurrency_cap_keeps_overflow_spare_unadmitted_and_fifo() -> None:
     async def scenario() -> None:
         with tempfile.TemporaryDirectory() as tmp:
             _app, registry, broker = build_v58(tmp)
@@ -87,61 +87,74 @@ def test_v58_same_api_can_run_concurrently_until_worker_capacity() -> None:
             first = await broker.create("req_a1", "ext_test")
             second = await asyncio.wait_for(broker.create("req_a2", "ext_test"), timeout=0.5)
             registry.routing_key_context.reset(token)
-            assert first.diagnostics["api_key_capacity_limit"] is None
-            assert second.diagnostics["same_api_parallel_requests"] is True
-
             token = registry.routing_key_context.set("key_b")
             third = await asyncio.wait_for(broker.create("req_b1", "ext_test"), timeout=0.5)
             registry.routing_key_context.reset(token)
             assert broker.capacity_snapshot("ext_test")["active_requests"] == 3
 
-            # With no verified spare yet, N=3 must NOT silently admit the
-            # fourth request just because used+1 is below the global cap.
-            fourth = asyncio.create_task(broker.create("req_a3", "ext_test"))
-            await asyncio.sleep(0.03)
-            assert not fourth.done()
+            # Even if Chrome reports two extra ready tabs, neither may
+            # increase the administrator's configured max-concurrency cap.
             registry.clients["ext_test"].metadata.update({
                 "worker_pool_admission_revision": 224,
-                "worker_pool_ready_windows": 1,
-                "worker_pool_ready_window_ids": [104],
+                "worker_pool_ready_window_ids": [104, 105],
                 "worker_pool_active_windows": 3,
                 "worker_pool_login_ready": True,
             })
             registry.worker_pool_capacity_received_at = {"ext_test": time.monotonic()}
-            admitted = await asyncio.wait_for(fourth, timeout=1.6)
-            assert broker.capacity_snapshot("ext_test")["active_requests"] == 4
-            assert admitted.diagnostics["worker_verified_pool_capacity_at_admission"]["fresh"] is True
-            # The same reported spare was claimed: it cannot be admitted twice.
+            fourth = asyncio.create_task(broker.create("req_a3", "ext_test"))
             fifth = asyncio.create_task(broker.create("req_a4", "ext_test"))
-            await asyncio.sleep(0.03)
-            assert not fifth.done()
+            await asyncio.sleep(0.06)
+            assert not fourth.done() and not fifth.done()
+            snapshot = broker.capacity_snapshot("ext_test")
+            assert snapshot["limit_units"] == 3
+            assert snapshot["available_units"] == 0
+            assert snapshot["queued_requests"] == 2
+            assert snapshot["verified_pool_capacity"]["unclaimed_ready_windows"] == 2
+            assert snapshot["standby_admission_permits"] == 0
+
+            # Only a finished request opens a slot, even with a live spare.
             await broker.release(first.request_id)
-            await asyncio.sleep(0.03)
-            assert not fifth.done(), "releasing another request cannot reissue the same ready tab"
-            registry.clients["ext_test"].metadata["worker_pool_ready_window_ids"] = [105]
-            registry.worker_pool_capacity_received_at["ext_test"] = time.monotonic()
-            await asyncio.wait_for(fifth, timeout=1.6)
-            assert admitted.diagnostics["worker_verified_spare_window_claim"] == 104
-            # The routing payload must carry the same physical-window lease,
-            # not merely display it in Request History diagnostics.
+            admitted_fourth = await asyncio.wait_for(fourth, timeout=1.6)
+            assert admitted_fourth.diagnostics["worker_verified_spare_window_claim"] == 104
+            assert not fifth.done()
+            assert broker.capacity_snapshot("ext_test")["active_requests"] == 3
             await registry.send("ext_test", {"type": "chat.request", "request_id": "req_a3"})
+            assert registry.sent[-1][1]["routing"]["worker_limit"] == 3
             assert registry.sent[-1][1]["routing"]["worker_verified_spare_window_claim"] == 104
-            await registry.send("ext_test", {"type": "chat.request", "request_id": "req_a4"})
-            assert registry.sent[-1][1]["routing"]["worker_verified_spare_window_claim"] == 105
-            assert admitted.diagnostics["api_key_capacity_limit"] is None
-            # Releasing a request does NOT make its previously reserved ID
-            # reusable from the same stale, verified-ready snapshot.
-            await broker.release("req_a4")
-            sixth = asyncio.create_task(broker.create("req_a5", "ext_test"))
-            await asyncio.sleep(0.03)
-            assert not sixth.done(), "released claim 105 must remain fenced until Worker reports it absent"
-            assert 105 in broker.capacity_snapshot("ext_test")["verified_pool_capacity"]["retired_window_claims"]
-            registry.clients["ext_test"].metadata["worker_pool_ready_window_ids"] = [106]
-            registry.worker_pool_capacity_received_at["ext_test"] = time.monotonic()
-            sixth_admitted = await asyncio.wait_for(sixth, timeout=1.6)
-            assert sixth_admitted.diagnostics["worker_verified_spare_window_claim"] == 106
-            for state in (second, third, admitted, sixth_admitted):
+
+            await broker.release(second.request_id)
+            admitted_fifth = await asyncio.wait_for(fifth, timeout=1.6)
+            assert admitted_fifth.diagnostics["worker_verified_spare_window_claim"] == 105
+            assert broker.capacity_snapshot("ext_test")["active_requests"] == 3
+            assert third.diagnostics["api_key_capacity_limit"] is None
+            for state in (third, admitted_fourth, admitted_fifth):
                 await broker.release(state.request_id)
+
+    asyncio.run(scenario())
+
+
+def test_v58_even_one_verified_spare_cannot_overrun_single_request_cap() -> None:
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "capacity_v57.json"
+            path.write_text('{"workers":{"ext_test":{"max_concurrency":1}}}', encoding="utf-8")
+            _app, registry, broker = build_v58(tmp)
+            first = await broker.create("req_1", "ext_test")
+            registry.clients["ext_test"].metadata.update({
+                "worker_pool_admission_revision": 224,
+                "worker_pool_ready_window_ids": [201],
+                "worker_pool_active_windows": 1,
+                "worker_pool_login_ready": True,
+            })
+            registry.worker_pool_capacity_received_at = {"ext_test": time.monotonic()}
+            pending = asyncio.create_task(broker.create("req_2", "ext_test"))
+            await asyncio.sleep(0.05)
+            assert not pending.done()
+            assert broker.capacity_snapshot("ext_test")["limit_units"] == 1
+            await broker.release(first.request_id)
+            second = await asyncio.wait_for(pending, timeout=1.6)
+            assert second.diagnostics["worker_verified_spare_window_claim"] == 201
+            await broker.release(second.request_id)
 
     asyncio.run(scenario())
 
@@ -176,12 +189,12 @@ def test_release_contract_is_v02275_and_worker_bundle_0831() -> None:
     marker = read("chrome_extension/content_bundle_marker_v48.js")
     preflight = read("chrome_extension/background_runtime_preflight_v48.js")
     contract = read("chrome_extension/content_runtime_contract_v48.js")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.238"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.238"' in runtime
-    assert '"version": "0.22.238"' in manifest
-    assert 'bundle: "0.22.238"' in marker
-    assert 'REQUIRED_BUNDLE = "0.22.238"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.22.238"' in contract
+    assert 'SERVER_RUNTIME_VERSION = "0.22.239"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.239"' in runtime
+    assert '"version": "0.22.239"' in manifest
+    assert 'bundle: "0.22.239"' in marker
+    assert 'REQUIRED_BUNDLE = "0.22.239"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.22.239"' in contract
     assert '"capacity_scheduler_v58": True' in runtime
     assert '"worker_single_route_authority_v30": True' in runtime
     assert '"window_observer_v90": True' in runtime

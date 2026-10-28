@@ -22,6 +22,12 @@ class CapacityApplyRequest(BaseModel):
 
 
 def _configured_limit(app: FastAPI, client_id: str) -> int:
+    # v58 is the sole persisted Worker concurrency authority. A manual browser
+    # capacity apply must never consult an obsolete v21 JSON override first.
+    broker = getattr(app.state, "broker", None)
+    configured_for = getattr(broker, "account_generation_configured_limit_for", None)
+    if callable(configured_for):
+        return max(MIN_TARGET, min(MAX_TARGET, int(configured_for(client_id))))
     runtime = getattr(app.state, "concurrency_config", {})
     limit_for = runtime.get("limit_for") if isinstance(runtime, dict) else None
     if callable(limit_for):

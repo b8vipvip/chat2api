@@ -304,6 +304,9 @@ def install_v21_1_patch(app: FastAPI) -> FastAPI:
 
     @app.put("/api/admin/concurrency")
     async def update_concurrency_config(body: ConcurrencyUpdate) -> dict[str, Any]:
+        if getattr(app.state, "capacity_scheduler_v58_installed", False):
+            raise HTTPException(status_code=409,
+                                detail="Legacy concurrency writes retired; use /api/admin/extensions/{client_id}/capacity-v57")
         # Compatibility endpoint: this now changes only the default inherited by
         # extensions without an explicit per-ID override.
         previous = int(runtime["default_max_concurrency"])
@@ -345,6 +348,9 @@ def install_v21_1_patch(app: FastAPI) -> FastAPI:
 
     @app.put("/api/admin/extensions/{client_id}/concurrency")
     async def update_extension_concurrency(client_id: str, body: ConcurrencyUpdate) -> dict[str, Any]:
+        if getattr(app.state, "capacity_scheduler_v58_installed", False):
+            raise HTTPException(status_code=409,
+                                detail="Legacy concurrency writes retired; use /api/admin/extensions/{client_id}/capacity-v57")
         client_id = ensure_client(client_id)
         previous = runtime["client_limits"].get(client_id)
         runtime["client_limits"][client_id] = _normalize_limit(body.max_concurrency)
@@ -360,6 +366,9 @@ def install_v21_1_patch(app: FastAPI) -> FastAPI:
 
     @app.delete("/api/admin/extensions/{client_id}/concurrency")
     async def reset_extension_concurrency(client_id: str) -> dict[str, Any]:
+        if getattr(app.state, "capacity_scheduler_v58_installed", False):
+            raise HTTPException(status_code=409,
+                                detail="Legacy concurrency writes retired; use /api/admin/extensions/{client_id}/capacity-v57")
         client_id = ensure_client(client_id)
         previous = runtime["client_limits"].pop(client_id, None)
         try:

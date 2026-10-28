@@ -16,8 +16,8 @@ def read(path: str) -> str:
 
 def test_v02288_server_only_release_contract() -> None:
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
-    assert SERVER_RUNTIME_VERSION == "0.22.238"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.238"
+    assert SERVER_RUNTIME_VERSION == "0.22.239"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.239"
     assert payload["server"]["runtime_aligned"] is True
     assert payload["features"]["admin_worker_manager_layout_v138"] is True
     assert payload["features"]["window_identity_v138"] is True
@@ -42,7 +42,7 @@ def test_worker_limit_cell_uses_compact_summary_with_single_popover_editor() -> 
     assert "data-v121-edit-limits" in canonical
     assert "data-v121-limit-popover" in canonical
     assert "data-v121-concurrency" in canonical
-    assert "data-v121-windows" in canonical
+    assert "data-v121-windows" not in canonical
     assert "data-v121-save-limits" in canonical
     assert "data-v121-refresh-limits" not in canonical
     assert "窗口跟随并发" not in canonical

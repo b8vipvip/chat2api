@@ -8,7 +8,7 @@
     {key: "device_id", label: "设备标识"},
     {key: "account_type", label: "账户类型"},
     {key: "status", label: "状态"},
-    {key: "worker_settings", label: "并发 / 备用设置"},
+    {key: "worker_settings", label: "并发设置"},
     {key: "last_seen", label: "最后在线"},
     {key: "chatgpt", label: "ChatGPT"},
     {key: "actions", label: "操作"},
@@ -143,7 +143,7 @@
       const health = key === "network" || key === "chatgpt" ? ` data-chat2api-health-column="${key}"` : "";
       const owner = key === "worker_settings" ? ' data-chat2api-structural-owner="worker-settings-v152"' : "";
       const title = key === "worker_settings"
-        ? ' title="并发=同时执行请求上限；备用=持续维持的未分配可接待窗口数量"'
+        ? ' title="最大并发请求数 N；满载时额外保留一个不参与调度的备用窗口"'
         : key === "occupancy" ? ' title="正在执行请求 / 实时核验的未分配备用窗口"' : "";
       return `<th data-chat2api-column-key="${key}"${health}${owner}${title}>${label}</th>`;
     }).join("");
@@ -193,16 +193,13 @@
 
   function limitEditor(row) {
     const id = String(row?.client_id || "");
-    const concurrency = Math.max(1, Math.min(32, Number(row?.max_concurrency || row?.capacity?.limit_units || 1)));
-    const windows = Math.max(1, Math.min(32, Number(row?.max_windows || 1)));
+    const concurrency = Math.max(1, Math.min(32, Number(row?.configured_max_concurrency || row?.max_concurrency || row?.capacity?.configured_limit_units || 3)));
     return `<div data-v121-worker-limits="${esc(id)}" style="position:relative;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;min-width:78px">
-      <strong data-v121-limit-summary style="font-variant-numeric:tabular-nums">${concurrency}/${windows}</strong>
-      <button class="action" type="button" data-v121-edit-limits title="编辑并发 / 备用设置" aria-label="编辑并发 / 备用设置" style="padding:4px 7px;min-width:30px">✎</button>
-      <div data-v121-limit-popover hidden style="position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:250px;padding:12px;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 14px 34px rgba(0,0,0,.38);white-space:normal">
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-          <label style="display:grid;gap:5px;font-size:12px">并发<input data-v121-concurrency type="number" min="1" max="32" value="${concurrency}" style="width:100%;padding:7px 8px"></label>
-          <label style="display:grid;gap:5px;font-size:12px">备用<input data-v121-windows type="number" min="1" max="32" value="${windows}" style="width:100%;padding:7px 8px"></label>
-        </div>
+      <strong data-v121-limit-summary style="font-variant-numeric:tabular-nums">${concurrency}</strong>
+      <button class="action" type="button" data-v121-edit-limits title="编辑并发设置" aria-label="编辑并发设置" style="padding:4px 7px;min-width:30px">✎</button>
+      <div data-v121-limit-popover hidden style="position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:260px;padding:12px;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 14px 34px rgba(0,0,0,.38);white-space:normal">
+        <label style="display:grid;gap:5px;font-size:12px">最大并发请求数<input data-v121-concurrency type="number" min="1" max="32" value="${concurrency}" style="width:100%;box-sizing:border-box;padding:7px 8px"></label>
+        <div class="muted" style="font-size:11px;line-height:1.5;margin-top:7px">最多同时执行 ${concurrency} 个请求。满载时自动额外保留 1 个备用窗口；只有释放并发名额后才可调用。</div>
         <div style="display:flex;align-items:center;justify-content:flex-end;gap:7px;margin-top:10px">
           <span class="muted" data-v121-limit-note style="font-size:11px;margin-right:auto"></span>
           <button class="action" type="button" data-v121-cancel-limits>取消</button>

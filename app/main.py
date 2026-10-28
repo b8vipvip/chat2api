@@ -1169,7 +1169,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except asyncio.CancelledError:
             # ASGI is cancelling an HTTP delivery task, not a Worker request.
             if not recorded:
-                state.diagnostics["api_stream_close_cause"] = "asgi-stream-task-cancelled"
+                transport = request.scope.get("chat2api_sse_transport_truth")
+                peer_disconnect = bool(isinstance(transport, dict)
+                                       and transport.get("http_disconnect_seen"))
+                state.diagnostics["api_stream_peer_disconnect_seen"] = peer_disconnect
+                state.diagnostics["api_stream_close_cause"] = (
+                    "http-peer-disconnected" if peer_disconnect else "asgi-stream-task-cancelled"
+                )
             raise
         finally:
             if recorded:

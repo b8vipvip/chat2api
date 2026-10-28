@@ -169,12 +169,12 @@ def test_console_and_bridge_expose_server_capacity_and_persistent_window_control
     dispatcher = (ROOT / "chrome_extension" / "background_capacity_control_v36.js").read_text(encoding="utf-8")
 
     assert "data-v121-concurrency" in canonical
-    assert "data-v121-windows" in canonical
+    assert "data-v121-windows" not in canonical
     assert "data-v121-save-limits" in canonical
-    assert '{key: "worker_settings", label: "并发 / 备用设置"}' in canonical
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/concurrency' in behavior
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in behavior
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' in behavior
+    assert '{key: "worker_settings", label: "并发设置"}' in canonical
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57' in behavior
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' not in behavior
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' not in behavior
     assert 'renderer: "canonical-worker-list-v152"' in behavior
     assert "data-worker-window-editor" not in legacy
     assert 'delegated_to: "admin_extension_columns-v152"' in legacy

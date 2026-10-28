@@ -104,7 +104,7 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
     The invariant is deliberately simple:
 
     * API keys have no per-key concurrency limit;
-    * the Worker's real generation/window capacity bounds execution;
+    * the configured Worker max concurrency is a hard request-admission ceiling;
     * requests wait in a single Worker FIFO without a second key admission;
     * Chrome receives only already-admitted requests and therefore does not own
       a second FIFO or speculative per-key worker allocator.
@@ -145,7 +145,7 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         return _limit(row.get("max_concurrency"), config["default_worker_concurrency"])
 
     def verified_window_capacity(client_id: str) -> dict[str, Any]:
-        """Only fresh v132 runtime-ready spare-window evidence grants overflow."""
+        """Observe verified standby IDs for a physical lease; never grant extra capacity."""
         client_id = str(client_id)
         metadata = getattr(registry.clients.get(client_id), "metadata", None) or {}
         received = getattr(registry, "worker_pool_capacity_received_at", {}).get(client_id)
@@ -198,17 +198,10 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         }
 
     def worker_limit(client_id: str) -> int:
-        # N is the normal TOTAL, not a hard parallel-request ceiling. Only
-        # verified, presently unclaimed spare windows permit live overflow.
-        # v58 still is the ONLY FIFO admission owner; v132 owns Chrome windows.
-        baseline = worker_baseline_total(client_id)
-        used = used_units(client_id)
-        evidence = verified_window_capacity(client_id)
-        if evidence["fresh"]:
-            return min(MAX_LIMIT, used + evidence["unclaimed_ready_windows"])
-        # Backward compatibility while an old Worker is upgrading: bounded
-        # baseline admission. Never grant unlimited used+1 speculative slots.
-        return min(MAX_LIMIT, max(used, baseline))
+        # The configured N is a hard simultaneous-request ceiling.
+        # The persistent browser pool may open N+1 windows while N are busy,
+        # but the extra standby never grants an additional admission permit.
+        return worker_baseline_total(client_id)
 
     def logical_key() -> str:
         return str(registry.routing_key_context.get() or "master")
@@ -237,18 +230,20 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
             "limit_units": limit,
             "configured_limit_units": worker_baseline_total(client_id),
             "baseline_total_window_target": worker_baseline_total(client_id),
-            "dynamic_window_buffer": max(0, limit - worker_baseline_total(client_id)),
+            "dynamic_window_buffer": 0,
+            "standby_admission_permits": 0,
             "used_units": used,
             "available_units": max(0, limit - used),
             "active_requests": used,
             "request_weights": dict(broker.client_active_requests.get(str(client_id), {}) or {}),
             "queued_requests": queue_depth(client_id),
-            "limit_source": "verified-window-id-admission-v224",
+            "limit_source": "configured-max-concurrency-v239",
             "worker_explicit_limit": str(client_id) in config["workers"],
             "account_generation_limit": limit,
             "account_generation_queue": True,
             "account_generation_queue_wait_seconds": None,
             "reserve_window_target": 0,
+            "standby_window_not_admissible_at_limit": True,
             "speculative_window_pool": False,
             "scheduler_authority": PATCH_ID,
             "rate_limit_cooldown_active": remaining > 0,
@@ -284,9 +279,8 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                         except asyncio.TimeoutError:
                             pass
                     else:
-                        # Worker metadata may advertise a new physical spare
-                        # without a Broker release. Reevaluate one FIFO owner
-                        # periodically; never add a second queue.
+                        # Only Broker releases / configuration changes unblock
+                        # this FIFO; spare-window telemetry never raises N.
                         try:
                             await asyncio.wait_for(condition.wait(), timeout=1.0)
                         except asyncio.TimeoutError:
@@ -483,16 +477,39 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         client_id = str(client_id or "").strip()
         if client_id not in registry.clients:
             raise HTTPException(status_code=404, detail="Unknown client_id")
-        maximum = _limit(body.get("max_concurrency"), config["default_worker_concurrency"])
+        requested = body.get("max_concurrency")
+        if type(requested) is not int or not MIN_LIMIT <= requested <= MAX_LIMIT:
+            raise HTTPException(status_code=422, detail="max_concurrency must be an integer between 1 and 32")
+        maximum = requested
+        previous = config["workers"].get(client_id)
         config["workers"][client_id] = {"max_concurrency": maximum}
-        _save_worker_limits(config_path, config)
+        try:
+            _save_worker_limits(config_path, config)
+        except OSError:
+            if previous is None:
+                config["workers"].pop(client_id, None)
+            else:
+                config["workers"][client_id] = previous
+            raise
         async with condition:
             condition.notify_all()
+        # One authority: N request permits, N baseline physical windows.
+        # The Worker pool independently keeps its N+1th non-admissible buffer.
+        window_runtime = getattr(app.state, "worker_window_limits", {})
+        sync = window_runtime.get("sync_online") if isinstance(window_runtime, dict) else None
+        target_sync = {"sent": False, "pending": True, "reason": "window_sync_unavailable"}
+        if callable(sync):
+            try:
+                target_sync = await sync(client_id)
+            except Exception:
+                target_sync = {"sent": False, "pending": True, "reason": "window_sync_failed"}
         return {
             "ok": True,
             "client_id": client_id,
             "max_concurrency": maximum,
             "reserve_windows": 0,
+            "window_baseline_total": maximum,
+            "window_target_sync": target_sync,
             "scheduler_authority": PATCH_ID,
         }
 
