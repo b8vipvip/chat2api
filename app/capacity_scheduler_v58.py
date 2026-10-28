@@ -137,22 +137,52 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         row = config["workers"].get(str(client_id)) or {}
         return _limit(row.get("max_concurrency"), config["default_worker_concurrency"])
 
+    def verified_window_capacity(client_id: str) -> dict[str, Any]:
+        """Only fresh v132 runtime-ready spare-window evidence grants overflow."""
+        client_id = str(client_id)
+        metadata = getattr(registry.clients.get(client_id), "metadata", None) or {}
+        received = getattr(registry, "worker_pool_capacity_received_at", {}).get(client_id)
+        age = max(0.0, time.monotonic() - float(received)) if received is not None else None
+        fresh = (
+            metadata.get("worker_pool_admission_revision") == 224
+            and age is not None and age <= 45.0
+        )
+        if not fresh:
+            return {"fresh": False, "age_seconds": round(age, 2) if age is not None else None}
+        try:
+            ready = max(0, min(MAX_LIMIT, int(metadata.get("worker_pool_ready_windows") or 0)))
+            active = max(0, min(MAX_LIMIT, int(metadata.get("worker_pool_active_windows") or 0)))
+        except (TypeError, ValueError):
+            return {"fresh": False, "age_seconds": round(age, 2)}
+        used = used_units(client_id)
+        # Server-admitted requests need time to claim their physical windows.
+        # Deduct those claims from reported ready windows to prevent duplicate
+        # dispatch while Chrome and the next status report are catching up.
+        pending_claims = max(0, used - active)
+        spare = max(0, ready - pending_claims)
+        if metadata.get("worker_pool_login_ready") is not True:
+            spare = 0
+        return {
+            "fresh": True,
+            "age_seconds": round(age, 2),
+            "verified_ready_windows": ready,
+            "observed_active_windows": active,
+            "pending_server_claims": pending_claims,
+            "unclaimed_ready_windows": spare,
+        }
+
     def worker_limit(client_id: str) -> int:
-        # The saved N describes the normal physical TOTAL, not a parallel
-        # request ceiling. The single v58 FIFO may admit another request when
-        # all N are busy; v132 then warms one additional real standby.
-        # Bound absolute resource consumption by the existing MAX_LIMIT.
+        # N is the normal TOTAL, not a hard parallel-request ceiling. Only
+        # verified, presently unclaimed spare windows permit live overflow.
+        # v58 still is the ONLY FIFO admission owner; v132 owns Chrome windows.
         baseline = worker_baseline_total(client_id)
         used = used_units(client_id)
-        metadata = getattr(registry.clients.get(str(client_id)), "metadata", None) or {}
-        observed_total = 0
-        try:
-            observed_total = int(metadata.get("reserve_window_total") or 0)
-        except (ValueError, TypeError):
-            pass
-        # Never trust stale or unverified metadata to *reduce* the baseline.
-        # used+1 gives one pending admission while v132 prepares its spare.
-        return min(MAX_LIMIT, max(baseline, used + 1, observed_total))
+        evidence = verified_window_capacity(client_id)
+        if evidence["fresh"]:
+            return min(MAX_LIMIT, used + evidence["unclaimed_ready_windows"])
+        # Backward compatibility while an old Worker is upgrading: bounded
+        # baseline admission. Never grant unlimited used+1 speculative slots.
+        return min(MAX_LIMIT, max(used, baseline))
 
     def logical_key() -> str:
         return str(registry.routing_key_context.get() or "master")
@@ -175,7 +205,9 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         limit = worker_limit(client_id)
         used = used_units(client_id)
         remaining = rate_limit_remaining(client_id)
+        evidence = verified_window_capacity(client_id)
         return {
+            "verified_pool_capacity": evidence,
             "limit_units": limit,
             "configured_limit_units": worker_baseline_total(client_id),
             "baseline_total_window_target": worker_baseline_total(client_id),
@@ -253,6 +285,7 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                     "capacity_queue_mode": "server-worker-fifo-v147",
                     "capacity_queue_scheduler": "oldest-request-worker-capacity-v147",
                     "extension_capacity_limit_units": worker_limit(client_id),
+                    "worker_verified_pool_capacity_at_admission": verified_window_capacity(client_id),
                     "extension_capacity_configured_units": worker_baseline_total(client_id),
                     "window_baseline_total": worker_baseline_total(client_id),
                     "extension_capacity_weight": 1,
