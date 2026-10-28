@@ -29,6 +29,7 @@
     terminalSettlements: new Map(),
     // The router alone assigns isolated route-window leases to parallel requests.
     routeAllocations: new Map(),
+    closeTimers: new Map(), // best-effort 5s close; persistent Chrome alarm is fallback
   };
   globalThis[KEY] = state;
 
@@ -263,6 +264,8 @@
   async function emitDiagnostics(message, route, tab, strategy) {
     const diagnostics = {
       conversation_router: "single-authority-v30",
+      conversation_request_scoped_window: route.request_scoped === true,
+      conversation_server_spare_window_claim: message?.routing?.worker_verified_spare_window_claim ?? null,
       conversation_api_key_id: route.api_key_id,
       conversation_id: route.conversation_id,
       conversation_generation: route.generation,
@@ -289,32 +292,48 @@
     if (!requestId) throw new Error("Routed request requires a request ID");
     await ensureLoaded();
 
-    // Keep one reusable primary conversation per API key. If already leased,
-    // reuse an idle sibling, or open one request-scoped sibling. No active
-    // request may ever force-retire another request's window.
-    const siblingKeys = Object.keys(state.routes).filter(candidate =>
-      candidate !== baseKey && state.routes[candidate]?.api_key_id === baseKey);
+    // Standalone API requests are strictly request-scoped: even when another
+    // request for this API key finished less than five seconds ago, its route
+    // and ChatGPT conversation cannot be assigned again.
+    const isolated = ["chat.request", "image.request", "voice.request"].includes(message?.type);
     let key = null;
     let route = null;
-    for (const candidate of [baseKey, ...siblingKeys]) {
-      const settlement = state.terminalSettlements.get(candidate);
+    if (isolated) {
+      key = `${baseKey}::request::${requestId}`;
+      const settlement = state.terminalSettlements.get(key);
       if (settlement) await settlement.catch(() => {});
-      const item = await routeFor(candidate);
-      if (item.inflight_request_id && item.inflight_request_id !== requestId &&
-          !state.activeRequests.has(String(item.inflight_request_id))) {
-        await retireRoute(candidate, item, item.inflight_request_id,
-          "restore-stale-router-lease-v147");
-      }
-      if (item.inflight_request_id && item.inflight_request_id !== requestId) continue;
-      key = candidate;
-      route = item;
-      break;
-    }
-    if (!route) {
-      key = `${baseKey}::parallel::${requestId}`;
       route = await routeFor(key);
-      route.api_key_id = baseKey;
+      if (route.inflight_request_id && route.inflight_request_id !== requestId) {
+        const busy = new Error("Request-scoped ChatGPT window belongs to another request");
+        busy.code = "worker_request_window_busy";
+        throw busy;
+      }
+    } else {
+      // Continuous voice / legacy control sessions preserve existing routing.
+      const siblingKeys = Object.keys(state.routes).filter(candidate =>
+        candidate !== baseKey && state.routes[candidate]?.api_key_id === baseKey);
+      for (const candidate of [baseKey, ...siblingKeys]) {
+        const settlement = state.terminalSettlements.get(candidate);
+        if (settlement) await settlement.catch(() => {});
+        const item = await routeFor(candidate);
+        if (item.inflight_request_id && item.inflight_request_id !== requestId &&
+            !state.activeRequests.has(String(item.inflight_request_id))) {
+          await retireRoute(candidate, item, item.inflight_request_id,
+            "restore-stale-router-lease-v147");
+        }
+        if (item.inflight_request_id && item.inflight_request_id !== requestId) continue;
+        key = candidate;
+        route = item;
+        break;
+      }
+      if (!route) {
+        key = `${baseKey}::parallel::${requestId}`;
+        route = await routeFor(key);
+      }
     }
+    route.api_key_id = baseKey;
+    route.request_scoped = isolated;
+    route.request_id = requestId;
 
     const hadLiveTab = Boolean(await liveTab(route));
     await clearCloseAlarm(route);
@@ -333,7 +352,7 @@
       started_at: Date.now(),
     });
     await persist();
-    await emitDiagnostics(message, route, tab, hadLiveTab ? "reuse-live-window" : "new-chat-window");
+    await emitDiagnostics(message, route, tab, hadLiveTab ? "retry-same-request-window" : "claim-isolated-request-window");
     return tab;
   }
 
