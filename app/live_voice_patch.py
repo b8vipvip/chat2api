@@ -367,6 +367,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "message": str(event.get("message") or "GPT-Live bridge error"),
                         "retryable": True,
                     })
+                    # Fatal browser-side error is a session terminal, not an
+                    # input-item error. Let the sole websocket owner reclaim
+                    # this request's physical window and Broker state.
+                    return
 
         try:
             first = await asyncio.wait_for(websocket.receive(), timeout=15)
@@ -438,7 +442,23 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
             relay_task = asyncio.create_task(relay_extension_events())
 
             while True:
-                message = await websocket.receive()
+                # The Worker relay can terminate first (browser startup
+                # error, fatal live error or remote session.closed). Do not
+                # strand this session waiting indefinitely for another
+                # client frame after the Worker is already finished.
+                client_receive = asyncio.create_task(websocket.receive())
+                try:
+                    completed, _ = await asyncio.wait(
+                        {client_receive, relay_task}, return_when=asyncio.FIRST_COMPLETED)
+                    if relay_task in completed:
+                        await relay_task  # Surface unexpected relay failures.
+                        break
+                    message = client_receive.result()
+                finally:
+                    if not client_receive.done():
+                        client_receive.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await client_receive
                 if message.get("type") == "websocket.disconnect":
                     break
                 payload = message.get("bytes")
@@ -575,8 +595,9 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "requested_model": effective_model,
                         "request_type": "voice_call",
                         "stream": True, "prompt_mode": "voice-call",
-                        "status": "completed" if session_ready and (graceful_finish or observed_audio_bytes) else
-                                  "cancelled" if error_message == "client-disconnected" else "error",
+                        "status": "cancelled" if error_message == "client-disconnected" else
+                                  "error" if error_message else
+                                  "completed" if session_ready and (graceful_finish or observed_audio_bytes) else "error",
                         "attachments_count": observed_media_count,
                         "audio_bytes": observed_audio_bytes,
                         "diagnostics": {
