@@ -14,6 +14,20 @@ def test_assistant_role_shell_is_not_model_output() -> None:
     assert sanitize_assistant_text("正常回答") == ("正常回答", False)
 
 
+def test_v226_roleless_empty_user_shell_and_elapsed_status_are_not_answer_content() -> None:
+    wrapped = "#### You said:\\n\\n#### ChatGPT said:\\n\\n" + '{"status":"ok"}'
+    assert sanitize_assistant_text(wrapped) == ('{"status":"ok"}', True)
+    assert sanitize_assistant_text("#### You said:\\n\\n#### ChatGPT said:\\n\\n") == ("", True)
+    assert sanitize_assistant_text("Worked for 5s") == ("", True)
+    assert sanitize_assistant_text("Worked for a few seconds") == ("", True)
+    assert sanitize_assistant_text("This text mentions ChatGPT said: but is a legitimate body") == (
+        "This text mentions ChatGPT said: but is a legitimate body", False
+    )
+    # Nonempty input is not safe to remove without Worker request evidence.
+    unverified = "#### You said:\\n\\nUnrelated input\\n\\n#### ChatGPT said:\\n\\nHello"
+    assert sanitize_assistant_text(unverified) == (unverified, False)
+
+
 def test_broker_does_not_complete_on_role_shell_and_accepts_real_body() -> None:
     async def scenario() -> None:
         app = FastAPI()
