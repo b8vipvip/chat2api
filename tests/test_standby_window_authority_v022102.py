@@ -59,7 +59,8 @@ def test_live_window_truth_distinguishes_standby_in_use_and_leased() -> None:
     admin = text("app/admin_window_manager_v88.js")
 
     assert 'source: routed ? "route-observer-v152" : "standby-observer-v152"' in observer
-    assert 'status: routed ? (inflight ? "in_use" : "leased") : "ready"' in observer
+    assert 'verifiedReady ? "ready" : "loading"' in observer
+    assert 'pool?.runtimeReadyTabs?.get(tab.id) === true' in observer
     assert 'standby_count:' in observer
     assert 'leased_count:' in observer
     assert 'standby_window_count' in server

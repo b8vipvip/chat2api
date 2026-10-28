@@ -13,7 +13,7 @@ def test_scheduler_remains_single_authority_and_exposes_explicit_limit_source():
     scheduler = src("app/capacity_scheduler_v58.py")
     assert 'broker.create = create' in scheduler
     assert 'broker.capacity_snapshot = capacity_snapshot' in scheduler
-    assert '"baseline-total-with-dynamic-spare-v223"' in scheduler
+    assert '"verified-window-id-admission-v224"' in scheduler
     assert "worker_baseline_total" in scheduler
     assert '"worker_explicit_limit"' in scheduler
     assert 'sessions.authenticate(request.cookies.get(SESSION_COOKIE))' in scheduler

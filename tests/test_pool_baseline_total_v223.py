@@ -21,7 +21,10 @@ def test_worker_admission_is_not_a_second_fixed_n_window_cap():
     server = source("app/capacity_scheduler_v58.py")
     assert 'def worker_baseline_total(client_id: str) -> int:' in server
     assert 'def worker_limit(client_id: str) -> int:' in server
-    assert 'max(baseline, used + 1, observed_total)' in server
+    assert 'worker_pool_ready_window_ids' in server
+    assert 'pool_window_claims' in server
+    assert 'held.pop(str(request_id), None)' in server
+    assert 'return min(MAX_LIMIT, used + evidence["unclaimed_ready_windows"])' in server
     assert '"baseline_total_window_target"' in server
     assert 'broker.create = create' in server
     assert 'broker.capacity_snapshot = capacity_snapshot' in server

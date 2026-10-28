@@ -69,7 +69,7 @@ def test_v132_is_canonical_serialized_physical_window_authority() -> None:
     assert 'speculative_windows: false' in source
     assert 'logical_route_authority: "conversation-routing-v30"' in source
     assert 'window_decision_authority: "persistent-window-pool-v132"' in source
-    assert 'const task = serial(() => reconcileNow(reason)).finally(() => {' in source
+    assert 'const task = serial(() => reconcileNow(reason)).then(result => {' in source
     assert 'return serial(async () => {' in source
 
 

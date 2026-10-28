@@ -175,12 +175,19 @@
       const route = routed?.route || null;
       const inflight = String(route?.inflight_request_id || "");
       const leaseUntil = Number(route?.close_after || 0);
+      // A Chrome window merely existing is not proof it is usable.
+      // Reuse v132's preflight result instead of declaring every unassigned
+      // loading/new page "可接待" before its content script is ready.
+      const pool = poolState();
+      const verifiedReady = tab.status === "complete"
+        && pool?.runtimeReadyTabs?.get(tab.id) === true;
       recordFor(windowId, tab.id, {
         source: routed ? "route-observer-v152" : "standby-observer-v152",
         route_key: routed?.key || null,
         request_id: inflight || null,
         lease_until_ms: routed ? leaseUntil : 0,
-        status: routed ? (inflight ? "in_use" : "leased") : "ready",
+        status: routed ? (inflight ? "in_use" : "leased")
+          : (verifiedReady ? "ready" : "loading"),
         opened_at_ms: Number(route?.window_opened_at_ms || route?.last_active_at || state.active.get(windowId)?.opened_at_ms || Date.now()),
       });
     }
