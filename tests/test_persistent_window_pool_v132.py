@@ -212,6 +212,6 @@ def test_bootstrap_is_adopted_before_remaining_standby_windows_are_warmed() -> N
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     bootstrap = source.index('if (!isDisabled && rows.length === 0)')
     early_return = source.index('return snapshotFrom(rows, value, auth, isDisabled);', bootstrap)
-    warm = source.index('while (unassignedWindowRows(rows, value).length < target)', early_return)
+    warm = source.index('while (rows.length < requiredTotal && rows.length < MAX_TARGET)', early_return)
     assert bootstrap < early_return < warm
     assert 'if (ready && !isDisabled && !lastError)' in source
