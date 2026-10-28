@@ -403,6 +403,12 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                 "worker_limit": worker_limit(client_id),
                 "max_concurrency": worker_baseline_total(client_id),
                 "window_baseline_total": worker_baseline_total(client_id),
+                # A v132-verified physical standby is reserved exactly once at
+                # admission. Carry its identity through to the actual Chrome
+                # claimant; a diagnostic-only reservation is not sufficient.
+                "worker_verified_spare_window_claim": pool_window_claims.get(
+                    str(client_id), {}
+                ).get(str(message.get("request_id") or "")),
                 "reserve_window_target": 0,
                 "strict_api_fifo": False,
                 "browser_side_api_fifo": False,
