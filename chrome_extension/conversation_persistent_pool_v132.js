@@ -106,6 +106,8 @@
     // A standalone request receives a fresh route, never a previous API-key
     // conversation. Continuous Voice sessions retain their separate lease.
     const requestId = String(message?.request_id || "").trim();
+    if (requestId && message?.type === "voice.live.start")
+      return `${value}::live::${requestId}`;
     return requestId && ["chat.request", "image.request", "voice.request"].includes(message?.type)
       ? `${value}::request::${requestId}` : value;
   }
