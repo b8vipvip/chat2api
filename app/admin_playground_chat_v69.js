@@ -669,8 +669,9 @@
           meta:{request_id:recoveryId,model,total_ms:totalMs,recovery_pending:true}});
         lastRequest={request_id:recoveryId,model,total_ms:totalMs,pending:true};
         saveHistory();renderMessages();status("服务端仍在运行，等待后台真实终态", "warn");
-        await recordChatTurn({requestId:recoveryId,model,credential,text,statusValue:"running",
-          totalMs,firstTokenMs,responseChars:0,attachmentsCount:userFiles.length,error:null});
+        // The pre-dispatch Playground run stays running and will reconcile
+        // from the real Broker terminal. Do NOT call chat-records here:
+        // it is a terminal-only endpoint and maps unknown "running" to failed.
       } else {
       const totalMs = performance.now() - started;
       const errorText = String(recovered?.error || error?.message || error);
