@@ -26,8 +26,13 @@ FILE_MARKER = re.compile(
     r"(data:([a-z0-9.+-]+/[a-z0-9.+-]+);base64,([A-Za-z0-9+/=]+))\)",
     re.IGNORECASE,
 )
-MAX_FILE_BYTES = 6 * 1024 * 1024
-MAX_TOTAL_BYTES = 12 * 1024 * 1024
+MAX_FILE_BYTES = 12 * 1024 * 1024
+MAX_INLINE_FILE_BYTES = 6 * 1024 * 1024
+MAX_TOTAL_BYTES = 24 * 1024 * 1024
+STAGED_MARKER = re.compile(
+    r"!\[📎 ([^\]\r\n]{1,180})\]\(chat2api-staged:([a-f0-9]{32})\)",
+    re.IGNORECASE,
+)
 MAX_FILES_PER_RESPONSE = 4
 
 # Downloads only, never serve as inline HTML or script.
@@ -163,7 +168,10 @@ class GeneratedFileArchive:
 
     def rewrite_markdown(self, text: str, owner: str, request_id: str, base_url: str):
         source = str(text or "")
-        matches = list(FILE_MARKER.finditer(source))
+        matches = sorted(
+            [*FILE_MARKER.finditer(source), *STAGED_MARKER.finditer(source)],
+            key=lambda match: match.start(),
+        )
         # Even one malformed marker mixed with valid entries must fail before
         # storage. Otherwise an unarchived data: payload could escape in a
         # successful completion alongside otherwise valid file links.
@@ -178,14 +186,23 @@ class GeneratedFileArchive:
         # Phase 1: validate every payload and total budget before any writes.
         total = 0
         decoded: list[tuple[re.Match[str], str, str, bytes]] = []
+        consumed_stages: list[str] = []
         for match in matches:
-            filename, mime, encoded = match.group(1), match.group(3), match.group(4)
-            if len(encoded) > 4 * ((MAX_FILE_BYTES + 2) // 3) + 4:
-                raise ValueError("Generated file exceeds transfer limit")
-            try:
-                data = base64.b64decode(encoded, validate=True)
-            except (binascii.Error, ValueError) as exc:
-                raise ValueError("Generated file handoff has invalid Base64") from exc
+            filename = match.group(1)
+            if match.re is STAGED_MARKER:
+                upload_id = match.group(2).lower()
+                if not getattr(self, "staging", None):
+                    raise ValueError("Generated staged upload transport unavailable")
+                data, mime = self.staging.read(request_id, upload_id, filename)
+                consumed_stages.append(upload_id)
+            else:
+                mime, encoded = match.group(3), match.group(4)
+                if len(encoded) > 4 * ((MAX_INLINE_FILE_BYTES + 2) // 3) + 4:
+                    raise ValueError("Generated inline file exceeds transfer limit")
+                try:
+                    data = base64.b64decode(encoded, validate=True)
+                except (binascii.Error, ValueError) as exc:
+                    raise ValueError("Generated file handoff has invalid Base64") from exc
             total += len(data)
             if total > MAX_TOTAL_BYTES:
                 raise ValueError("Generated files exceed response transfer limit")
@@ -219,6 +236,9 @@ class GeneratedFileArchive:
             self._rollback_unpublished_objects(new_objects)
             raise
         output.append(source[offset:])
+        if getattr(self, "staging", None):
+            for upload_id in consumed_stages:
+                self.staging.drop(request_id, upload_id)
         return "".join(output), records
 
     def describe(self, file_id: str, owner: str, *, admin: bool = False):
