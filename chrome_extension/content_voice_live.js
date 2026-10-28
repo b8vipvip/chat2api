@@ -321,12 +321,9 @@
       startLive(message)
         .then(() => sendResponse({ ok: true }))
         .catch(error => {
-          emit({
-            type: "image.error",
-            kind: "voice-live",
-            request_id: message.requestId,
-            error: String(error?.message || error),
-          }).catch(() => {});
+          // Only the background live-session dispatcher publishes a startup
+          // error. Sending image.error here AND returning ok:false previously
+          // produced two competing error events for the same failed startup.
           sendResponse({ ok: false, error: String(error?.message || error) });
         });
       return true;
