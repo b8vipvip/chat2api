@@ -157,7 +157,7 @@
           ||event.data?.kind!==KIND||event.data.nonce!==nonce)return;
         if(event.data.direction==="probe") {
           const code=String(event.data.stage || "");
-          if (/^(?:download|fetch|same-tab)-[a-z-]{3,60}$/.test(code)) lastStage=code;
+          if (/^(?:download|fetch|same-tab|new-blob)-[a-z-]{3,60}$/.test(code)) lastStage=code;
           return;
         }
         if(event.data.direction==="armed"&&!started) {

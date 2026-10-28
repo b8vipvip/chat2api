@@ -144,6 +144,16 @@
         network_stream_failure_stage: String(detail.failure_stage || "").slice(0, 32),
         network_stream_error_name: String(detail.error_name || "").slice(0, 50),
         network_stream_abort_signal: detail.signal_aborted === true,
+        network_stream_native_signal_initially_aborted: detail.native_signal_initially_aborted === true,
+        network_stream_native_signal_abort_observed: detail.native_signal_abort_observed === true,
+        network_stream_native_signal_abort_after_ms:
+          Number.isFinite(detail.native_signal_abort_after_ms)
+            ? Number(detail.native_signal_abort_after_ms) : null,
+        network_stream_clone_last_chunk_age_ms:
+          Number.isFinite(detail.clone_last_chunk_age_ms)
+            ? Number(detail.clone_last_chunk_age_ms) : null,
+        network_stream_reader_failure_kind:
+          String(detail.clone_reader_failure_kind || "").slice(0, 60),
         network_stream_response_body_used: detail.response_body_used === true,
         network_stream_response_body_locked: detail.response_body_locked === true,
         network_stream_parser_assistant_role_seen: detail.assistant_role_seen === true,
