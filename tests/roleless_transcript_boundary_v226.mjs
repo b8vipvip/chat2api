@@ -41,6 +41,8 @@ const transientEnd=src.indexOf("\n  function plainNodeText(",transientStart);
 assert.ok(transientStart > 0 && transientEnd > transientStart);
 vm.runInNewContext(src.slice(transientStart,transientEnd)+"\nthis.transient=transientText;",ctx);
 assert.equal(ctx.transient("Worked for 5s"),true);
+assert.equal(ctx.transient("Worked for 5sWorked for 5s"),true);
+assert.equal(ctx.transient("Worked for a few secondsWorked for a few seconds"),true);
 assert.equal(ctx.transient("Worked for 6s"),true);
 assert.equal(ctx.transient("Worked for a few seconds"),true);
 assert.equal(ctx.transient("Worked for a couple of seconds"),true);
