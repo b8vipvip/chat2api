@@ -127,7 +127,7 @@ def test_realtime_window_refresh_is_compacted_into_worker_settings_column():
     assert 'data-v121-concurrency' in canonical
     assert 'data-v121-windows' not in canonical
     assert 'data-v121-save-limits' in canonical
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' in behavior
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' not in behavior
     assert 'renderer: "canonical-worker-list-v152"' in behavior
     assert 'data-worker-refresh' not in retired
     assert 'data-worker-reserve' not in retired

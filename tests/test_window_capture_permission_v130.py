@@ -28,7 +28,7 @@ def test_worker_window_setting_is_a_persistent_prewarmed_pool_target() -> None:
     assert "persistent-prewarmed-total-window-pool-v132" in server
     assert "persistent-window-pool-v132" in server
     assert '{key: "worker_settings", label: "并发设置"}' in canonical
-    assert "持续维持的未分配可接待窗口数量" in canonical
+    assert "满载时额外保留一个不参与调度的备用窗口" in canonical
     assert "data-v121-limit-summary" in canonical
     assert 'renderer: "canonical-worker-list-v152"' in behavior
     assert "extensionDeviceBody" not in identity

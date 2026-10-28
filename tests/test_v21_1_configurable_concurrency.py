@@ -53,9 +53,9 @@ def test_v211_static_contracts() -> None:
     assert "data-v121-concurrency" in canonical
     assert "data-v121-windows" not in canonical
     assert "data-v121-save-limits" in canonical
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/concurrency' in behavior
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' in behavior
-    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' in behavior
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57' in behavior
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' not in behavior
+    assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' not in behavior
     assert 'renderer: "canonical-worker-list-v152"' in behavior
     assert '{key: "bound_api_keys"' not in canonical
     assert 'data-chat2api-column-key="bound_api_keys"' not in canonical

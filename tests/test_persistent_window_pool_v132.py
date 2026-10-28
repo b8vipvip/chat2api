@@ -156,7 +156,7 @@ def test_admin_copy_describes_persistent_windows_without_legacy_helper_copy() ->
     canonical = text("app/admin_extension_columns.js")
     identity = text("app/admin_worker_identity_v131.js")
     assert "满载时自动增加的备用窗口不增加并发名额" in behavior
-    assert "并发=同时执行请求上限；备用=持续维持的未分配可接待窗口数量" in canonical
+    assert "最大并发请求数 N；满载时额外保留一个不参与调度的备用窗口" in canonical
     assert "extensionDeviceBody" not in identity
 
 
