@@ -1,6 +1,25 @@
 (() => {
   const baseHandleServerMessage = handleServerMessage;
   const liveTabs = new Map();
+  const liveRouter = () => globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
+
+  // Background MV3 memory can be discarded between PCM/control frames.
+  // Only the persistent, request-id-bound route may restore a session tab.
+  async function tabForLiveRequest(requestId) {
+    const cached = liveTabs.get(requestId);
+    const routed = await liveRouter()?.liveTabForRequest?.(requestId);
+    if (!routed?.id) {
+      liveTabs.delete(requestId);
+      return null;
+    }
+    if (cached !== routed.id) liveTabs.set(requestId, routed.id);
+    return routed;
+  }
+
+  async function releaseLiveSession(requestId, reason) {
+    liveTabs.delete(requestId);
+    return liveRouter()?.finishLiveSession?.(requestId, reason);
+  }
 
   async function ensureLiveContent(tabId) {
     await ensureContent(tabId);
@@ -80,19 +99,28 @@
           options: message.options || {},
         }).then(response => {
           if (!response?.ok) throw new Error(response?.error || "GPT-Live tab rejected the live session");
-        }).catch(error => {
+        }).catch(async error => {
           liveTabs.delete(requestId);
-          reportError(requestId, error).catch(() => {});
-        });
+          await liveRouter()?.failRequest?.(requestId, "voice-live-start-failed");
+          await reportError(requestId, error);
+        }).catch(() => {});
       } catch (error) {
         liveTabs.delete(requestId);
+        await liveRouter()?.failRequest?.(requestId, "voice-live-start-dispatch-failed").catch(() => false);
         await reportError(requestId, error);
       }
       return;
     }
 
-    const tabId = liveTabs.get(requestId);
+    const tab = await tabForLiveRequest(requestId);
+    const tabId = tab?.id;
     if (!Number.isInteger(tabId)) {
+      // A WebSocket disconnect must always release its own lease, even if
+      // Chrome has already removed its tab or the service worker restarted.
+      if (type === "voice.live.stop") {
+        await releaseLiveSession(requestId, "voice-live-stop-missing-tab");
+        return;
+      }
       await reportError(requestId, new Error("GPT-Live tab binding was lost"));
       return;
     }
@@ -119,10 +147,15 @@
         await chrome.tabs.sendMessage(tabId, { type: "chat2api.voice.live.cancel", requestId });
       } else if (type === "voice.live.stop") {
         try { await chrome.tabs.sendMessage(tabId, { type: "chat2api.voice.live.stop", requestId }); }
-        finally { liveTabs.delete(requestId); }
+        finally { await releaseLiveSession(requestId, "voice-live-stop"); }
       }
     } catch (error) {
-      if (type === "voice.live.stop") liveTabs.delete(requestId);
+      if (type === "voice.live.stop") {
+        await releaseLiveSession(requestId, "voice-live-stop-after-send-failure");
+        // The session is already ending: a missing content ACK must not
+        // resurrect a completed call or keep its dedicated window busy.
+        return;
+      }
       if (type === "voice.live.text" || type === "voice.live.multimodal") {
         // An unsupported attachment or failed composer turn must not
         // terminate a live phone call or release its Worker lease.
