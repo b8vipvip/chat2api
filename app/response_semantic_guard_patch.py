@@ -37,6 +37,19 @@ def _compact(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
 
 
+def _native_elapsed_chrome_only(value: str) -> bool:
+    compact = _compact(value)
+    if _NATIVE_ELAPSED_BADGE.fullmatch(compact):
+        return True
+    # Two identical elapsed badges concatenated without a separator are also
+    # browser chrome, not a repeated model-authored answer.
+    if len(compact) % 2 == 0:
+        half = compact[: len(compact) // 2]
+        if half == compact[len(compact) // 2 :] and _NATIVE_ELAPSED_BADGE.fullmatch(half):
+            return True
+    return False
+
+
 def sanitize_assistant_text(value: object) -> tuple[str, bool]:
     """Remove ChatGPT page role chrome without accepting it as model output.
 
@@ -48,7 +61,7 @@ def sanitize_assistant_text(value: object) -> tuple[str, bool]:
     compact = _compact(raw)
     if not compact:
         return "", False
-    if _UI_ROLE_ONLY.fullmatch(compact) or _NATIVE_ELAPSED_BADGE.fullmatch(compact):
+    if _UI_ROLE_ONLY.fullmatch(compact) or _native_elapsed_chrome_only(compact):
         return "", True
     shell_stripped = _ROLELESS_EMPTY_USER_SHELL.sub("", raw, count=1).strip()
     if shell_stripped != raw:
@@ -100,7 +113,7 @@ def install_response_semantic_guard_patch(app: FastAPI) -> FastAPI:
             # a response. Once real response text exists, ordinary deltas pass
             # through unchanged except for an exact role-only shell.
             compact = _compact(original)
-            if _UI_ROLE_ONLY.fullmatch(compact) or _NATIVE_ELAPSED_BADGE.fullmatch(compact):
+            if _UI_ROLE_ONLY.fullmatch(compact) or _native_elapsed_chrome_only(compact):
                 cleaned, filtered = "", True
             elif not str(getattr(state, "text", "") or ""):
                 cleaned, filtered = sanitize_assistant_text(original)
