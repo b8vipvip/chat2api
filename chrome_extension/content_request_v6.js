@@ -218,7 +218,11 @@
   function transientText(value) {
     const text = normalize(value).replace(/[.。…·:：]+$/g, "").trim().toLowerCase();
     return /^(正在)?(思考|分析|推理|生成|处理|搜索|浏览)(中)?$/.test(text)
-      || /^(thinking|analyzing|reasoning|generating|working|searching|browsing)( now)?$/.test(text);
+      || /^(thinking|analyzing|reasoning|generating|working|searching|browsing)( now)?$/.test(text)
+      // Native ChatGPT elapsed-time badges are NOT assistant responses.
+      // v222 diagnostics surfaced doubled `Worked for 5s` fragments as API
+      // output while the true assistant turn was still unidentified.
+      || /^worked for (?:\\d+(?:\\.\\d+)?\\s*(?:s|sec|secs|seconds?|m|mins?|minutes?)|a (?:few|couple of) seconds?)$/.test(text);
   }
 
   function plainNodeText(node) {
