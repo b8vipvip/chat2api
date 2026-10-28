@@ -13,8 +13,8 @@ def test_scheduler_remains_single_authority_and_exposes_explicit_limit_source():
     scheduler = src("app/capacity_scheduler_v58.py")
     assert 'broker.create = create' in scheduler
     assert 'broker.capacity_snapshot = capacity_snapshot' in scheduler
-    assert '"worker-configured-override-v58"' in scheduler
-    assert '"worker-default-concurrency-v58"' in scheduler
+    assert '"baseline-total-with-dynamic-spare-v223"' in scheduler
+    assert "worker_baseline_total" in scheduler
     assert '"worker_explicit_limit"' in scheduler
     assert 'sessions.authenticate(request.cookies.get(SESSION_COOKIE))' in scheduler
     assert 'Administrator login required' in scheduler
@@ -30,25 +30,23 @@ def test_window_manager_reads_broker_snapshot_and_does_not_claim_requests():
     for item in (
         '"scheduler_limit_units"', '"scheduler_used_units"',
         '"scheduler_available_units"', '"scheduler_queued_requests"',
-        '"scheduler_limit_source"', '"server_admission_available"',
+        '"scheduler_limit_source"', '"scheduler_baseline_total"',
     ):
         assert item in manager
-    assert 'item["server_admission_available"] = eligible_ready > 0' in manager
+    assert 'server_admission_available' not in manager
     assert "broker.create(" not in manager
     assert "broker.publish(" not in manager
 
 
-def test_ready_standby_does_not_claim_capacity_automatically():
+def test_ready_window_and_baseline_total_use_one_consistent_status():
     ui = src("app/admin_window_manager_v88.js")
-    assert '待机（调度容量已满）' in ui
-    assert 'worker.scheduler_limit_units' in ui
-    assert 'worker.scheduler_used_units' in ui
+    assert 'if (value === "ready") return "可接待"' in ui
+    assert '待机（调度容量已满）' not in ui
+    assert '常态窗口总数' in ui
+    assert 'worker.scheduler_baseline_total' in ui
     assert 'worker.scheduler_queued_requests' in ui
     assert 'worker.standby_window_count' in ui
-    assert 'capacity-v57' in ui
-    assert "method: \"PUT\"" in ui
-    assert '按当前${proposed}个窗口设定' in ui
-    assert 'confirm(' in ui
+    assert '更新并发额度' not in ui
     result = subprocess.run(
         ["node", "--check", str(ROOT / "app/admin_window_manager_v88.js")],
         capture_output=True, text=True,
