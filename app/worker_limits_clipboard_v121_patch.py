@@ -118,7 +118,7 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
 
     def concurrency_for(client_id: str) -> int:
         # v58 owns the persisted per-Worker concurrency, not legacy v21.
-        configured_for = getattr(app.state.broker, "account_generation_configured_limit_for", None)
+        configured_for = getattr(getattr(app.state, "broker", None), "account_generation_configured_limit_for", None)
         if callable(configured_for):
             return _normalize_limit(configured_for(client_id), 3)
         runtime = getattr(app.state, "concurrency_config", {})
