@@ -185,3 +185,17 @@ def test_gptwork_response_evidence_bridge_matches_server_truth() -> None:
         check=False,
     )
     assert run.returncode == 0, run.stdout + run.stderr
+
+def test_served_mismatch_is_explicit_model_conflict_not_silent_fallback() -> None:
+    from app.model_observability_v144_patch import _trace
+    authority = {"requested_model": "gpt-5.6-sol", "routed_model": "gpt-5.6-sol"}
+    evidence = {"request_model": "gpt-5.6-sol", "served_model": "gpt-6",
+                "model_conflict": False, "evidence_source": "network_response_metadata"}
+    trace = _trace(authority, evidence)
+    assert trace["model_conflict"] is True
+    assert trace["model_verified"] is False
+    assert trace["model_fallback_reason"] == "upstream_served_model_mismatch"
+    assert trace["model_authority_violation"] is False
+    # A page default alone cannot invent a served-model conflict.
+    unknown = _trace(authority, {"default_model": "gpt-6"})
+    assert unknown["model_conflict"] is False

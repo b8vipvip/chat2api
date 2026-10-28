@@ -53,7 +53,11 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
     # Profile/default metadata is diagnostic only. It must never prove which
     # concrete model actually served this request.
     observed = served
-    conflict = bool(evidence.get("model_conflict"))
+    # This is served-model evidence, not a profile-default mismatch.
+    # A network-confirmed different model must be visible as a conflict
+    # even when the lower-level observer did not flag an intra-stream clash.
+    served_mismatch = bool(routed and served and routed != served)
+    conflict = bool(evidence.get("model_conflict")) or served_mismatch
     page_default_route = authority.get("default_page_route") is True
     authority_violation = bool(not page_default_route and routed and request_model and routed != request_model)
     verified = bool(routed and served and routed == served and not conflict and not authority_violation)
