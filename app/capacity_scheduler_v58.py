@@ -363,7 +363,7 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
             snapshot = capacity_snapshot(client_id)
             row["busy"] = snapshot["used_units"] >= snapshot["limit_units"]
             row["capacity"] = snapshot
-            row["max_concurrency"] = snapshot["limit_units"]
+            row["max_concurrency"] = snapshot["baseline_total_window_target"]
             row["configured_max_concurrency"] = snapshot["baseline_total_window_target"]
             row["concurrency_limit_source"] = snapshot["limit_source"]
             row["account_generation_limit"] = snapshot["limit_units"]
