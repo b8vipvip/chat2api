@@ -246,3 +246,19 @@ def test_p1_persisted_corrupt_bytes_never_download_as_success(tmp_path):
         assert response.status_code == 503
         assert "storage integrity" in response.json()["detail"].lower()
         assert "corrupted" not in response.text
+
+def test_p1_same_bytes_different_declared_mime_never_reuses_wrong_manifest(tmp_path):
+    """A byte-identical CSV may be text/plain or text/csv; each typed
+    archive must return the MIME actually declared and validated this time."""
+    from app.media_archive_v173 import MediaArchive
+    files = GeneratedFileArchive(MediaArchive(tmp_path, "secret"))
+    payload = b"id,value\n1,2\n"
+    plain = files.store(payload, "data.csv", "text/plain", "owner", "request-id")
+    csv = files.store(payload, "data.csv", "text/csv", "owner", "request-id")
+    retry = files.store(payload, "data.csv", "text/csv", "owner", "request-id")
+    assert csv["id"] == retry["id"]
+    assert csv["mime_type"] == "text/csv"
+    assert plain["mime_type"] == "text/plain"
+    assert csv["id"] != plain["id"]
+    assert files.read(csv["id"], csv["token"])[1] == "text/csv"
+    assert len(files.list_items()) == 2

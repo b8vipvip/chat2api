@@ -242,3 +242,30 @@ def test_live_extension_assets_are_wired() -> None:
     assert "chat2api.voice.live.start" in content
     assert "input.speech_started" in content
     assert "voice.live.start" in router
+
+def test_live_finish_before_browser_ready_never_reports_completed(tmp_path: Path) -> None:
+    """A client finish cannot turn an unstarted/failed WebRTC call green."""
+    app = app_live(tmp_path)
+    with TestClient(app) as client:
+        managed_key = create_managed_key(client)
+        client_id, extension_token = pair_extension(client)
+        with client.websocket_connect(f"/ws/extensions/{client_id}?token={extension_token}") as extension:
+            assert extension.receive_json()["type"] == "server.hello"
+            with client.websocket_connect(
+                f"/v1/audio/realtime?client_id={client_id}",
+                headers={"Authorization": f"Bearer {managed_key}"},
+            ) as live:
+                live.send_json({"type": "session.start", "model": "gpt-live"})
+                started = extension.receive_json()
+                assert started["type"] == "voice.live.start"
+                request_id = started["request_id"]
+                live.send_json({"type": "session.finish"})
+                message = live.receive_json()
+                assert message["type"] == "error"
+                assert message["code"] == "VOICE_SESSION_NOT_READY"
+                stopped = extension.receive_json()
+                assert stopped["type"] == "voice.live.stop"
+                assert stopped["request_id"] == request_id
+        record = app.state.telemetry.get(request_id)
+        assert record["status"] == "error"
+        assert "not ready" in record["error"].lower()

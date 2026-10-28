@@ -414,6 +414,10 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                 "status": "running",
                 "diagnostics": {"route": "chatgpt-voice-live", "session_id": session_id},
             })
+            # Mark dispatch intent BEFORE the async send. A delivery can
+            # reach the Worker even when the transport raises before ACK;
+            # finally must still send the exact-session stop in that case.
+            started = True
             await registry.send(
                 selected_client,
                 {
@@ -431,7 +435,6 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     },
                 },
             )
-            started = True
             relay_task = asyncio.create_task(relay_extension_events())
 
             while True:
@@ -518,6 +521,15 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                     })
                 elif control_type == "session.finish":
                     graceful_finish = True
+                    # A client-controlled finish is not evidence that the
+                    # browser started Voice. Never record a false completion
+                    # when Chrome has not confirmed its live session.
+                    if not session_ready:
+                        error_message = "GPT-Live session was not ready before session.finish"
+                        await send_json({
+                            "type": "error", "code": "VOICE_SESSION_NOT_READY",
+                            "message": error_message, "retryable": True,
+                        })
                     break
                 elif control_type == "ping":
                     await send_json({"type": "pong", "timestamp": control.get("timestamp")})
@@ -563,7 +575,7 @@ def install_live_voice_patch(app: FastAPI) -> FastAPI:
                         "requested_model": effective_model,
                         "request_type": "voice_call",
                         "stream": True, "prompt_mode": "voice-call",
-                        "status": "completed" if graceful_finish or (session_ready and observed_audio_bytes) else
+                        "status": "completed" if session_ready and (graceful_finish or observed_audio_bytes) else
                                   "cancelled" if error_message == "client-disconnected" else "error",
                         "attachments_count": observed_media_count,
                         "audio_bytes": observed_audio_bytes,
