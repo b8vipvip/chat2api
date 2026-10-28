@@ -37,9 +37,10 @@ for(let i=0;i<700;i++){
 const candidate=element("current-request assistant paragraph", "P", root);
 const active={baselineRenderedText:new Map(),promptNormalized:"unique user prompt"};
 const normalize=value=>String(value||"").replace(/\s+/g," ").trim();
-const scope=vm.runInNewContext(
-  source.slice(start,end)+"\nthis.readBoundary=renderedResponseBoundaryEvidence;",
-  {normalize,visible:()=>true,transientText:()=>false,Node:{DOCUMENT_POSITION_FOLLOWING:4}});
+const scope={normalize,visible:()=>true,transientText:()=>false,
+  Node:{DOCUMENT_POSITION_FOLLOWING:4}};
+vm.runInNewContext(
+  source.slice(start,end)+"\nthis.readBoundary=renderedResponseBoundaryEvidence;", scope);
 const actual=scope.readBoundary(active,candidate);
 assert.equal(actual.scan_overflow,false);
 assert.equal(actual.independent_count,700);
