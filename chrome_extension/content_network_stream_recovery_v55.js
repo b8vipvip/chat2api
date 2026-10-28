@@ -255,7 +255,12 @@
     if (phase === "error") {
       recordTransportOutcome(row, phase, detail);
       const active = activeRequest();
-      if (active?.requestId === row.requestId) active.networkStreamEndedWithoutTerminalAt = Date.now();
+      // A stale clone reader may abort after a newer stream finished. Keep
+      // the old error in diagnostics but do not re-mark this request unverified.
+      const newerVerified = Number(active?.networkTerminalTransportDoneAt || 0) > 0
+        && String(active?.networkTerminalTransportStreamId || "") !== row.streamId;
+      if (active?.requestId === row.requestId && !newerVerified)
+        active.networkStreamEndedWithoutTerminalAt = Date.now();
       await diagnostics(row, detail);
       streams.delete(row.streamId);
     }
