@@ -5,6 +5,7 @@ import contextvars
 import hashlib
 import json
 import secrets
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -55,6 +56,9 @@ class ClientRegistry:
         self.sockets: dict[str, WebSocket] = {}
         self.socket_locks: dict[str, asyncio.Lock] = {}
         self.busy_clients: set[str] = set()
+        # Server-receipt monotonic time. Worker browser clocks may be skewed;
+        # only new correlated extension.status updates refresh this timestamp.
+        self.worker_pool_capacity_received_at: dict[str, float] = {}
         self.api_key_routes: dict[str, str] = {}
         self.routing_key_context: contextvars.ContextVar[str | None] = contextvars.ContextVar(
             "chat2api_api_key_route", default=None
@@ -219,6 +223,8 @@ class ClientRegistry:
         client.last_seen_at = utc_now()
         changed = False
         if metadata:
+            if metadata.get("worker_pool_admission_revision") == 224:
+                self.worker_pool_capacity_received_at[client_id] = time.monotonic()
             for key, value in metadata.items():
                 if client.metadata.get(key) != value:
                     client.metadata[key] = value
@@ -254,6 +260,7 @@ class ClientRegistry:
             socket = self.sockets.pop(client_id, None)
             self.socket_locks.pop(client_id, None)
             self.busy_clients.discard(client_id)
+            self.worker_pool_capacity_received_at.pop(client_id, None)
             self.api_key_routes = {
                 key_id: routed_client
                 for key_id, routed_client in self.api_key_routes.items()
