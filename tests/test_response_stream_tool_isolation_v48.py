@@ -76,7 +76,8 @@ def test_network_stream_recovery_is_evidence_only():
     assert 'owner: "network-stream-evidence-v57"' in network
     assert 'network_response_recovery: "evidence-only-v57"' in network
     assert 'network_terminal_authority: "request-v6"' in network
-    assert 'type: "chat.snapshot"' in network
+    assert 'type: "chat.snapshot"' not in network
+    assert "active.networkObservedText = value" in network
     assert 'type: "chat.completed"' not in network
     assert 'active.cancelled = true' not in network
     assert 'const PARSER_REVISION = 63;' in network_main

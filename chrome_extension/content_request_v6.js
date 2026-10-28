@@ -781,6 +781,10 @@
     if (current?.reason !== "fresh-roleless-short-answer-v227"
         || !current.rolelessHeading?.isConnected
         || !current.rolelessUserHeading?.isConnected
+        || active?.baselineRolelessHeadings?.has(current.rolelessHeading)
+        || active?.baselineRolelessHeadings?.has(current.rolelessUserHeading)
+        || current.rolelessHeading.parentElement !== current.rolelessUserHeading.parentElement
+        || !turnFollows(current.rolelessUserHeading, current.rolelessHeading)
         || !active?.baselineFinishActions || promptStillPresent(active)
         || upstreamStillWorking()) return null;
     const fresh = responseFinishActions().filter(button =>

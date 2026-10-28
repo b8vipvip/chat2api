@@ -37,7 +37,8 @@ def test_worker_bundle_uses_request_v6_with_network_evidence_and_liveness() -> N
     assert 'type: "chat.completed"' in request
     assert 'network_response_recovery: "evidence-only-v57"' in network
     assert 'network_terminal_authority: "request-v6"' in network
-    assert 'type: "chat.snapshot"' in network
+    assert 'type: "chat.snapshot"' not in network
+    assert "active.networkObservedText = value" in network
     assert 'type: "chat.completed"' not in network
     assert 'const PARSER_REVISION = 63;' in network_main
     assert 'mode: "semantic-helper-only"' in semantic
