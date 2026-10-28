@@ -25,4 +25,4 @@ def test_live_worker_lock_is_released_before_webrtc_startup() -> None:
     allocation = live.index("const tab = await resolveLiveWorkerTab(message)")
     startup = live.index("chrome.tabs.sendMessage(tab.id", allocation)
     assert allocation < startup
-    assert ".then(response =>" in live[startup:]
+    assert ".then(async response =>" in live[startup:]
