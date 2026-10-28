@@ -28,6 +28,30 @@
     if (object instanceof Blob && object.size > 0 && object.size <= MAX_BYTES) {
       blobs.set(String(url), {blob: object, createdAt: Date.now()});
       pruneBlobs();
+      // Some ChatGPT Office download buttons call createObjectURL(Blob) and
+      // the browser's save operation directly; no <a download> ever appears.
+      // Observe only a Blob CREATED AFTER an exact request-reply button was
+      // explicitly armed, with the filename's expected MIME and real signature.
+      // Never label an old pre-armed Blob or an octet-stream by guesswork.
+      const session = armed;
+      if (session && !session.used && !session.inFlight
+          && Date.now() < session.until && mimeForName(session.filename)
+            === String(object.type || "").toLowerCase()) {
+        session.inFlight = true;
+        stage(session, "same-tab-typed-blob-created");
+        void object.arrayBuffer().then(raw => {
+          if (session !== armed || session.used || Date.now() >= session.until) return;
+          const bytes = new Uint8Array(raw);
+          if (!validBytes(bytes, session.filename)) {
+            stage(session, "new-blob-signature-invalid"); return;
+          }
+          session.used = true;
+          window.postMessage({kind: KIND, direction: "captured",
+            nonce: session.nonce, filename: session.filename,
+            bytes: bytes.length, base64: encoded(bytes)}, location.origin);
+        }).catch(() => { stage(session, "new-blob-read-failed"); })
+          .finally(() => { session.inFlight = false; });
+      }
     }
     return url;
   };
@@ -53,6 +77,14 @@
     return btoa(result);
   };
   const validName = text => /^[^\/\\\r\n]{1,140}\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md)$/i.test(text);
+  const mimeForName = filename => ({
+    xlsx:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    pptx:"application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    docx:"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    zip:"application/zip",
+    pdf:"application/pdf",
+    json:"application/json",
+  })[String(filename || "").split(".").pop().toLowerCase()] || "";
   // Never consume a one-shot verified file arm with an HTML preview or a
   // failed download: the real browser file may arrive on a later click.
   const validBytes = (bytes, filename) => {

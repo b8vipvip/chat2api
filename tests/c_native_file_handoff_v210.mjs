@@ -8,7 +8,8 @@ const contentCode=readFileSync("chrome_extension/content_native_file_v210.js","u
 const request=readFileSync("chrome_extension/content_request_v6.js","utf8");
 const manifest=JSON.parse(readFileSync("chrome_extension/manifest.json","utf8"));
 
-async function harness({bytes=new Uint8Array([80,75,3,4,0,1]),precreated=false}={}) {
+async function harness({bytes=new Uint8Array([80,75,3,4,0,1]),
+  precreated=false, typedButtonOnly=false, mime="", fileName="Bookkeeping.xlsx"}={}) {
   let clicked=0, next=0, precreatedUrl=null;
   const listeners=new Map();
   const pageOrigin="https://chatgpt.com";
@@ -37,9 +38,10 @@ async function harness({bytes=new Uint8Array([80,75,3,4,0,1]),precreated=false}=
     getBoundingClientRect:()=>({width:140,height:40}),
     click(){
       clicked++;
-      const uri=precreatedUrl || FakeURL.createObjectURL(new Blob([bytes]));
+      const uri=precreatedUrl || FakeURL.createObjectURL(new Blob([bytes],{type:mime}));
+      if (typedButtonOnly) return;
       const anchor=new FakeAnchor();
-      anchor.download="Bookkeeping.xlsx";anchor.href=uri;anchor.click();
+      anchor.download=fileName;anchor.href=uri;anchor.click();
     },
   };
   const scope={
@@ -112,4 +114,23 @@ test("file failure reasons are categorized and never contain URLs or model text"
   assert.equal(result.failure_stages.xlsx,"download-signature-invalid");
   assert.ok(!JSON.stringify(result.failure_stages).includes("https://"));
   assert.match(request,/media_native_file_failure_stages/);
+});
+
+test("Office Blob created by a verified Download button without a link is captured",async()=>{
+  for(const [fileName,mime] of [
+    ["Bookkeeping.xlsx","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+    ["Bookkeeping.pptx","application/vnd.openxmlformats-officedocument.presentationml.presentation"],
+  ]){
+    const h=await harness({typedButtonOnly:true,fileName,mime});
+    const result=await h.content.capture(h.scope,"req_justcreated_"+fileName);
+    assert.equal(result.count,1);
+    assert.equal(result.bytes,6);
+    assert.equal(h.clicked(),1);
+  }
+});
+test("MIME-less Blob without an anchor cannot be fabricated as an XLSX",async()=>{
+  const h=await harness({typedButtonOnly:true,mime:""});
+  const result=await h.content.capture(h.scope,"req_ambiguous");
+  assert.equal(result.count,0);
+  assert.equal(result.failure_stages.xlsx,"no-native-download-event");
 });

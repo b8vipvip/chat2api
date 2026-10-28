@@ -457,14 +457,32 @@
         signal_aborted: signal?.aborted === true,
         response_body_used: response?.bodyUsed === true,
         response_body_locked: response?.body?.locked === true,
+        native_signal_initially_aborted: signalInitiallyAborted,
+        native_signal_abort_observed: Boolean(nativeSignalAbortAt || signal?.aborted),
+        native_signal_abort_after_ms: nativeSignalAbortAt
+          ? Math.max(0, nativeSignalAbortAt - observerStartedAt) : null,
+        clone_last_chunk_age_ms: lastChunkAt ? Date.now() - lastChunkAt : null,
+        clone_reader_failure_kind: signal?.aborted || nativeSignalAbortAt
+          ? "page-fetch-signal-aborted" : "clone-reader-without-native-abort",
         ...extra,
       });
     }
+    // Distinguish a page-owned AbortController cancelling the original
+    // ChatGPT fetch from a clone-only reader failure. The native page signal
+    // is never replaced or overridden. We record timing and booleans only:
+    // AbortSignal.reason may contain user/private data and must not be sent.
+    const observerStartedAt = Date.now();
+    const signalInitiallyAborted = signal?.aborted === true;
+    let nativeSignalAbortAt = signalInitiallyAborted ? observerStartedAt : 0;
+    const onNativeAbort = () => { nativeSignalAbortAt ||= Date.now(); };
+    try { signal?.addEventListener?.("abort", onNativeAbort, {once:true}); } catch (_) {}
+    let lastChunkAt = 0;
     let clone;
     try {
       clone = response.clone();
     } catch (error) {
       fail("clone", error);
+      try { signal?.removeEventListener?.("abort", onNativeAbort); } catch (_) {}
       return;
     }
     let reader;
@@ -473,6 +491,7 @@
       if (!reader) throw new Error("cloned-response-reader-unavailable");
     } catch (error) {
       fail("get-reader", error);
+      try { signal?.removeEventListener?.("abort", onNativeAbort); } catch (_) {}
       return;
     }
     const decoder = decoderFactory();
@@ -489,6 +508,7 @@
         const byteLength = Number(value?.byteLength || value?.length || 0);
         chunks += 1;
         bytes += byteLength;
+        lastChunkAt = Date.now();
         stage = "parse";
         parser.push(decoder.decode(value, { stream: true }));
         post({ channel: CHANNEL, phase: "chunk", stream_id: streamId,
@@ -516,6 +536,7 @@
       });
     } finally {
       try { reader.releaseLock(); } catch (_) {}
+      try { signal?.removeEventListener?.("abort", onNativeAbort); } catch (_) {}
     }
   }
 

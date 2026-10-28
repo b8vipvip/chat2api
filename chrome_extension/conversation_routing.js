@@ -473,7 +473,23 @@
     const key = await keyForRequest(requestId);
     if (!key) return false;
     const route = await routeFor(key);
-    return retireRoute(key, route, requestId, reason);
+    // A one-shot error/cancel is still a terminal event, not permission for
+    // another request to reuse its window. Match the normal completed path:
+    // release this exact lease and give its private window the same five-second
+    // close grace, with the EXISTING route alarm as its sole lifecycle owner.
+    // Keep immediate retirement for legacy/non-scoped routes or missing
+    // physical windows; there is nothing safe to schedule in those cases.
+    if (!route?.request_scoped || !Number.isInteger(route.window_id))
+      return retireRoute(key, route, requestId, reason);
+    if (route.inflight_request_id !== String(requestId)) return false;
+    route.inflight_request_id = null;
+    route.live_session = false;
+    route.last_rotation_reason = String(reason || "request-terminal-failure").slice(0, 90);
+    route.last_active_at = Date.now();
+    state.activeRequests.delete(String(requestId));
+    await persist();
+    await scheduleClose(route);
+    return true;
   }
   state.failRequest = failRequest;
   state.retireRoute = retireRoute;
