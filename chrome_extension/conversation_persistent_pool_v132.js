@@ -102,7 +102,12 @@
 
   function routingKey(message) {
     const value = String(message?.routing?.api_key_id || "").trim();
-    return value || null;
+    if (!value) return null;
+    // A standalone request receives a fresh route, never a previous API-key
+    // conversation. Continuous Voice sessions retain their separate lease.
+    const requestId = String(message?.request_id || "").trim();
+    return requestId && ["chat.request", "image.request", "voice.request"].includes(message?.type)
+      ? `${value}::request::${requestId}` : value;
   }
 
   function freshRoute(key) {
@@ -945,12 +950,20 @@
     const target = normalizeTarget(state.target);
     if (!target || await disabled()) return null;
     if (!await loginReady().catch(() => false)) return null;
+    const claimedId = Number(message?.routing?.worker_verified_spare_window_claim);
+    const hasServerClaim = Number.isSafeInteger(claimedId) && claimedId > 0;
 
     return serial(async () => {
       const value = await routerReady();
       if (!value) return null;
       const route = value.routes[key] || (value.routes[key] = freshRoute(key));
       let existing = await routeLiveTab(route);
+      if (existing && hasServerClaim && existing.windowId !== claimedId) {
+        const conflict = new Error("Request window differs from its server-reserved physical standby");
+        conflict.code = "worker_verified_window_claim_conflict";
+        conflict.retry_after_ms = 1000;
+        throw conflict;
+      }
       if (existing) {
         try {
           const completedAt = Number(state.runtimePageCompleteAt.get(existing.id) || 0);
@@ -997,8 +1010,18 @@
       let physical = await physicalWindows();
       const runtimeValidation = await validateIdleRuntime(value, physical, "request-admission-v152");
       let rows = runtimeValidation.rows;
-      let slot = standbyRows(rows, value)[0] || null;
+      const readySlots = standbyRows(rows, value);
+      let slot = hasServerClaim
+        ? readySlots.find(row => row.window_id === claimedId) || null
+        : readySlots[0] || null;
       let strategy = "claim-standby-v152";
+      if (hasServerClaim && !slot) {
+        const stale = new Error(`Reserved Chrome window ${claimedId} is no longer verified standby`);
+        stale.code = "worker_verified_window_claim_stale";
+        stale.retry_after_ms = 1000;
+        scheduleReconcile("stale-server-window-claim-v225", 0);
+        throw stale;
+      }
 
       if (!slot && unassignedWindowRows(rows, value).length) {
         // An existing loading window occupies the physical slot. Never open
