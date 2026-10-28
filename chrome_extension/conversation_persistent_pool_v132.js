@@ -700,8 +700,12 @@
     // compact configured standby capacity. Transient checking/unknown/composer
     // detection gaps pause warming but must never destroy already-warm capacity.
     const compactStandby = isDisabled || auth.explicit_logout === true;
-    const busyCount = busyWindowIds(value).size;
-    const routedCount = [...routeByWindow(value).keys()].length;
+    // Count only routes that actually own one of the verified physical
+    // windows. Number(null) becomes 0 in legacy route maps, which must NOT
+    // count as an occupied window and accidentally shrink a healthy spare.
+    const physicalIds = new Set(rows.map(row => row.window_id));
+    const busyCount = [...busyWindowIds(value)].filter(id => physicalIds.has(id)).length;
+    const routedCount = [...routeByWindow(value).keys()].filter(id => physicalIds.has(id)).length;
     const requiredTotal = requiredWindowTotal(target, routedCount, busyCount, compactStandby);
     // Only unused, unassigned windows may be shrunk. Routes and active work
     // belong to the conversation router; a pool reconciliation never kills them.
