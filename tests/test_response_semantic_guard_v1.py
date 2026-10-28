@@ -19,6 +19,8 @@ def test_v226_roleless_empty_user_shell_and_elapsed_status_are_not_answer_conten
     assert sanitize_assistant_text(wrapped) == ('{"status":"ok"}', True)
     assert sanitize_assistant_text("#### You said:\n\n#### ChatGPT said:\n\n") == ("", True)
     assert sanitize_assistant_text("Worked for 5s") == ("", True)
+    assert sanitize_assistant_text("Worked for 5sWorked for 5s") == ("", True)
+    assert sanitize_assistant_text("Worked for a few secondsWorked for a few seconds") == ("", True)
     assert sanitize_assistant_text("Worked for a few seconds") == ("", True)
     assert sanitize_assistant_text("This text mentions ChatGPT said: but is a legitimate body") == (
         "This text mentions ChatGPT said: but is a legitimate body", False
