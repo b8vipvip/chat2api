@@ -531,6 +531,10 @@
         if (!observed && attempt >= 3) return null;
         if (consecutiveErrors >= 12) break;
       }
+      // The dispatch may have been rejected before any Broker request ID
+      // existed. Four missing/empty records are sufficient to stop looking;
+      // otherwise the UI would spin for twenty minutes on a 404/empty row.
+      if (!observed && attempt >= 3) return null;
       if (attempt + 1 < maxChecks)
         await new Promise(resolve => setTimeout(resolve, waitForTerminal ? 4000 : 400));
     }
