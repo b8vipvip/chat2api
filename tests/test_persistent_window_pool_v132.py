@@ -33,7 +33,7 @@ def test_persistent_pool_is_active_routing_layer() -> None:
     assert 'standby_semantics_revision: STANDBY_SEMANTICS_REVISION' in source
     assert 'const STANDBY_SEMANTICS_REVISION = 152' in source
     assert 'await createStandby(reason)' in source
-    assert 'while (rows.length < requiredTotal && rows.length < MAX_TARGET)' in source
+    assert 'while (rows.length < requiredTotal && rows.length < MAX_PHYSICAL_WINDOWS)' in source
     assert 'const DOCUMENT_SETTLE_MS = 4000' in source
     assert 'const RUNTIME_RETRY_COOLDOWN_MS = 15000' in source
     assert 'runtime_loading_total:' in source
@@ -50,7 +50,7 @@ def test_persistent_pool_is_active_routing_layer() -> None:
 def test_persistent_pool_keeps_configured_unassigned_standby_cardinality() -> None:
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     assert 'let rows = await physicalWindows();' in source
-    assert 'while (rows.length < requiredTotal && rows.length < MAX_TARGET)' in source
+    assert 'while (rows.length < requiredTotal && rows.length < MAX_PHYSICAL_WINDOWS)' in source
     assert 'const compactStandby = isDisabled || auth.explicit_logout === true;' in source
     assert 'const standbyTarget = compactStandby ? Math.min(1, target) : idleTarget;' in source
     assert 'Math.max(0, rows.length - effective)' in source
