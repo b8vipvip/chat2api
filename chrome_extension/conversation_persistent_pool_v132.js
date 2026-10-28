@@ -599,7 +599,7 @@
       online_integrity_eligible: state.onlineIntegrityEligible,
       online_integrity_last_check_at: state.onlineIntegrityLastCheckAt || null,
       online_integrity_last_reason: state.onlineIntegrityLastReason || "",
-      route_idle_lease_ms: 5 * 60 * 1000,
+      route_idle_lease_ms: 5 * 1000,
       runtime_ready_standby: true,
       runtime_preflight_checks: state.runtimeChecks,
       runtime_preflight_failures: state.runtimeFailures,
