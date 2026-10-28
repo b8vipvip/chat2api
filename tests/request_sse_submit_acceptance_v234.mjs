@@ -25,7 +25,7 @@ assert.equal(ctx.classify({...active,networkStreamResponseStatus:403}),null);
 assert.equal(ctx.classify({...active,networkStreamResponseId:""}),null);
 assert.equal(ctx.classify({...active,networkStreamSeen:false}),null);
 assert.equal(ctx.classify({...active,submitStartedAt:0}),null);
-assert.match(observer,/active\.requestId === row\.requestId/);
+assert.ok(observer.includes("active?.requestId === row.requestId"));
 assert.match(observer,/active\.networkStreamResponseAt = Date\.now\(\)/);
 assert.match(content,/request-scoped-sse-accepted/);
 assert.ok(!observer.includes('type: "chat.completed"'));
