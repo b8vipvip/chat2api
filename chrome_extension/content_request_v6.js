@@ -285,14 +285,14 @@
       // Strip browser chrome only when BOTH role headings are freshly created
       // after this request's submit baseline. Never remove an authored quote,
       // a user-supplied transcript, or an old conversation's label.
-      const lone = /^\\s*#{2,6}\\s+ChatGPT said\\s*:\\s*(?:\\r?\\n)+/i.exec(raw);
+      const lone = /^\s*#{2,6}\s+ChatGPT said\s*:\s*(?:\r?\n)+/i.exec(raw);
       if (lone && active?.baselineRolelessHeadings && active?.submitStartedAt) {
         const headings = [...document.querySelectorAll(
           "main h4,[role='main'] h4,#thread h4")].filter(visible)
           .filter(node => !active.baselineRolelessHeadings.has(node));
         const headText = node => normalize(node.innerText || node.textContent || "");
-        const user = headings.find(node => /^You said\\s*[:：]$/i.test(headText(node)));
-        const assistant = headings.find(node => /^ChatGPT said\\s*[:：]$/i.test(headText(node))
+        const user = headings.find(node => /^You said\s*[:：]$/i.test(headText(node)));
+        const assistant = headings.find(node => /^ChatGPT said\s*[:：]$/i.test(headText(node))
           && (!user || turnFollows(user, node)));
         if (user && assistant && assistant.isConnected) {
           const text = raw.slice(lone[0].length).trimStart();
