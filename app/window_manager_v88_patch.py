@@ -226,6 +226,7 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
                 "chatgpt_routing_ready": login_ready,
                 "reception_ready": bool(online and live_verified and login_ready),
                 "scheduler_limit_units": scheduler_limit,
+                "scheduler_baseline_total": int(scheduler.get("baseline_total_window_target") or scheduler_limit),
                 "scheduler_used_units": scheduler_used,
                 "scheduler_available_units": scheduler_available,
                 "scheduler_queued_requests": scheduler_queued,
@@ -237,16 +238,11 @@ def install_window_manager_v88_patch(app: FastAPI) -> FastAPI:
             })
 
             if live_verified and login_ready:
-                # A standby is physically ready even when dispatch is blocked.
-                # Mark the first N ready rows display-eligible, but do not
-                # reserve or claim capacity here: only v58 does that.
-                eligible_ready = scheduler_available
+                # Window pool v132 is the sole authority for physical ready
+                # windows. A ready slot may not simultaneously be labelled
+                # unavailable by a separate server concurrency projection.
                 for raw in cached_active:
                     item = dict(raw)
-                    if str(raw.get("status") or "") == "ready":
-                        item["server_admission_available"] = eligible_ready > 0
-                        if eligible_ready > 0:
-                            eligible_ready -= 1
                     item.update({
                         "client_id": client_id,
                         "device_name": device_name,
