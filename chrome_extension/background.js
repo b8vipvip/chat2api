@@ -84,6 +84,42 @@ async function resolveTargetTab() {
   if (tabs.length > 1) throw new Error("Multiple ChatGPT tabs are open. Bind the target tab in the extension popup.");
   return tabs[0];
 }
+// Each chunk ACK is tied to the original WebSocket object. Never interpret a
+// locally enqueued socket.send as persisted server-side bytes.
+const pendingFileChunkAcks = new Map();
+const fileChunkKey = event => [event?.request_id, event?.upload_id, event?.sequence].join(":");
+function rejectPendingFileChunks(reason) {
+  for (const [key, row] of pendingFileChunkAcks) {
+    clearTimeout(row.timer);
+    pendingFileChunkAcks.delete(key);
+    row.resolve({ok:false,error:reason});
+  }
+}
+function awaitFileChunkAck(event) {
+  if (!socketReady()) return Promise.resolve({ok:false,error:"socket-disconnected"});
+  if (event?.type !== "chat.file.chunk" || !/^[a-f0-9]{32}$/.test(String(event.upload_id || ""))
+      || !Number.isInteger(event.sequence) || event.sequence < 0
+      || !String(event.request_id || "")) return Promise.resolve({ok:false,error:"invalid-chunk-envelope"});
+  const key = fileChunkKey(event);
+  if (pendingFileChunkAcks.has(key)) return Promise.resolve({ok:false,error:"chunk-pending"});
+  const sentOn = socket;
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      pendingFileChunkAcks.delete(key);
+      resolve({ok:false,error:"chunk-ack-timeout"});
+    }, 20000);
+    pendingFileChunkAcks.set(key,{resolve,timer,socket:sentOn});
+    if (sentOn !== socket || !socketReady()) {
+      clearTimeout(timer);pendingFileChunkAcks.delete(key);
+      resolve({ok:false,error:"socket-replaced"});return;
+    }
+    try { sentOn.send(JSON.stringify(event)); }
+    catch (_) {
+      clearTimeout(timer);pendingFileChunkAcks.delete(key);
+      resolve({ok:false,error:"chunk-send-failed"});
+    }
+  });
+}
 function socketReady() { return Boolean(socket && socket.readyState === WebSocket.OPEN); }
 async function sendSocket(payload) {
   if (!socketReady()) throw new Error("Server WebSocket is not connected");
@@ -286,11 +322,23 @@ async function connectSocket() {
     keepAliveTimer = setInterval(() => trySendSocket({ type: "heartbeat", ts: Date.now() }), 20000);
   };
   socket.onmessage = event => {
-    try { handleServerMessage(JSON.parse(event.data)).catch(console.error); }
-    catch (error) { console.warn("chat2api invalid server message", error); }
+    try {
+      const message = JSON.parse(event.data);
+      if (message?.type === "chat.file.chunk.ack") {
+        const key = fileChunkKey(message);
+        const pending = pendingFileChunkAcks.get(key);
+        if (!pending || pending.socket !== event.target && pending.socket !== socket) return;
+        clearTimeout(pending.timer);
+        pendingFileChunkAcks.delete(key);
+        pending.resolve({ok:message.ok===true,error:String(message.error || "").slice(0,100)});
+        return;
+      }
+      handleServerMessage(message).catch(console.error);
+    } catch (error) { console.warn("chat2api invalid server message", error); }
   };
   socket.onerror = () => updateState("error", "WebSocket connection error");
   socket.onclose = event => {
+    rejectPendingFileChunks("socket-closed-before-server-ack");
     clearInterval(keepAliveTimer);
     updateState("disconnected", event.reason || `WebSocket closed (${event.code})`);
     scheduleReconnect();
@@ -322,6 +370,11 @@ async function fetchAttachment(fileId) {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "chat2api.file.chunk") {
+    awaitFileChunkAck(message.event).then(sendResponse)
+      .catch(error=>sendResponse({ok:false,error:String(error?.message || error)}));
+    return true;
+  }
   if (message.type === "chat2api.event") { trySendSocket(message.event).then(sent => sendResponse({ ok: sent })); return true; }
   if (message.type === "chat2api.attachment.fetch") {
     fetchAttachment(message.fileId).then(data => sendResponse({ ok: true, data })).catch(error => sendResponse({ ok: false, error: String(error?.message || error) }));

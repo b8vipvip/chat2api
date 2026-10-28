@@ -1404,7 +1404,7 @@
 
 
   function hasTransferableFile(value) {
-    return /!\[📎 [^\]\n]{1,180}\]\(data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+\)/i
+    return /!\[📎 [^\]\n]{1,180}\]\((?:data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+|chat2api-staged:[a-f0-9]{32})\)/i
       .test(String(value || ""));
   }
 
@@ -1821,7 +1821,7 @@
         )];
         const allRequiredFileTypesDelivered = requiredFileExts.every(ext =>
           captured.match(new RegExp("!\\[📎 [^\\]\\n]{1,180}" +
-            ext.replace(".", "\\.") + "\\]\\(data:[^\\s)]+;base64,", "i")));
+            ext.replace(".", "\\.") + "\\]\\((?:data:[^\\s)]+;base64,|chat2api-staged:[a-f0-9]{32}\\))", "i")));
         const delivered = deliveredImages + deliveredFiles;
         if (delivered > 0 && (hasTransferableImage(captured) || hasTransferableFile(captured))
             && (!fileCreationRequested || (deliveredFiles > 0 && allRequiredFileTypesDelivered))

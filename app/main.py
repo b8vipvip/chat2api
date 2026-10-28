@@ -27,6 +27,7 @@ from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
 from .generated_files_v196 import GeneratedFileArchive
+from .generated_file_staging_v238 import GeneratedFileStaging
 from .rich_content_v196 import manifest as rich_content_manifest
 from .media_public_origin_v187 import media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
@@ -69,6 +70,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     file_store = FileStore(config.data_dir)
     media_archive = MediaArchive(config.data_dir, config.api_key)
     generated_files = GeneratedFileArchive(media_archive)
+    generated_staging = GeneratedFileStaging(media_archive.root)
+    generated_files.staging = generated_staging
     test_runs = TestRunStore(config.data_dir)
 
     @asynccontextmanager
@@ -102,6 +105,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.file_store = file_store
     app.state.media_archive = media_archive
     app.state.generated_files = generated_files
+    app.state.generated_staging = generated_staging
     app.state.test_runs = test_runs
     # Keep detached-stream supervisors alive until their Broker terminal is persisted.
     app.state.detached_sse_tasks = set()
@@ -786,6 +790,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "error": error,
             }
         )
+        # The Broker has now persisted its authoritative terminal; completed
+        # chunks were already archived and all other partial staging bytes
+        # are no longer eligible to be attached to a future request.
+        await asyncio.to_thread(generated_staging.drop_request, state.request_id)
         return usage, token_meta
 
     async def record_request_queued(
@@ -1731,6 +1739,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         await websocket.send_json({"type": "heartbeat.ack", "ts": time.time()})
                     continue
                 request_id = str(message.get("request_id") or "")
+                if message_type == "chat.file.chunk":
+                    # A successful socket.send is NOT a persisted chunk ACK.
+                    # The server replies to the same authenticated socket only
+                    # after the bounded stage write/validation completes.
+                    accepted, reason = False, "request-or-socket-not-active"
+                    state = broker.requests.get(request_id)
+                    if (state and state.client_id == client_id
+                        and registry.sockets.get(client_id) is websocket
+                        and state.terminal_event_type is None):
+                        try:
+                            await asyncio.to_thread(
+                                generated_staging.ingest,
+                                request_id=request_id,
+                                upload_id=message.get("upload_id"),
+                                filename=message.get("filename"),
+                                mime=message.get("mime"),
+                                sequence=message.get("sequence"),
+                                expected_bytes=message.get("expected_bytes"),
+                                expected_sha256=message.get("expected_sha256"),
+                                base64_chunk=message.get("base64_chunk"),
+                                final=message.get("final"),
+                            )
+                            state.diagnostics["generated_chunk_upload_seen"] = True
+                            accepted, reason = True, ""
+                        except (ValueError, OSError) as exc:
+                            # Persist only safe fixed-class evidence, never
+                            # Base64 bytes or the browser's source URL.
+                            reason = type(exc).__name__ + ":" + str(exc)[:90]
+                            state.diagnostics["generated_chunk_failure"] = reason
+                    await websocket.send_json({
+                        "type": "chat.file.chunk.ack",
+                        "request_id": request_id,
+                        "upload_id": str(message.get("upload_id") or "")[:40],
+                        "sequence": message.get("sequence"),
+                        "ok": accepted,
+                        "error": reason,
+                    })
+                    continue
                 if message_type == "probe.event" and request_id:
                     # Existing authenticated socket and broker are the sole
                     # request-to-Worker authority; probe events never reach the

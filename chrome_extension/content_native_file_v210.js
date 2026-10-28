@@ -6,8 +6,10 @@
   const KEY = "__CHAT2API_NATIVE_FILE_V210__";
   if (globalThis[KEY]) return;
   const KIND = "chat2api.native-file.v210";
-  const MAX_BYTES = 6 * 1024 * 1024;
-  const MAX_TOTAL = 12 * 1024 * 1024;
+  const MAX_BYTES = 12 * 1024 * 1024;
+  const MAX_INLINE_BYTES = 6 * 1024 * 1024;
+  const MAX_TOTAL = 24 * 1024 * 1024;
+  const UPLOAD_CHUNK_BYTES = 96 * 1024;
   const MIMES = Object.freeze({
     xlsx:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     pptx:"application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -118,7 +120,8 @@
     return output;
   }
   function fallbackZip(session) {
-    if(session.files.size!==3 || session.files.has("chat2api-artifacts.zip"))return null;
+    if(session.files.size!==3 || session.files.has("chat2api-artifacts.zip")
+      || [...session.files.values()].some(file=>!file.data_url))return null;
     const byExt={};
     for(const file of session.files.values()) {
       const ext=file.filename.split(".").pop().toLowerCase();
@@ -178,6 +181,34 @@
       window.postMessage({kind:KIND,direction:"arm",nonce,filename},location.origin);
     });
   }
+  async function stageLargeFile(file,requestId) {
+    // A request-scoped verified file above 6 MiB travels as <=96 KiB chunks
+    // over the *existing* authenticated Worker WebSocket. Never embed these
+    // bytes in a completion event, telemetry row or long SSE response.
+    if (file.bytes <= MAX_INLINE_BYTES) return file;
+    if (typeof crypto?.subtle?.digest !== "function") return null;
+    const binary = atob(String(file.data_url || "").split("base64,")[1] || "");
+    if (binary.length !== file.bytes || file.bytes > MAX_BYTES) return null;
+    const uploadId = crypto.randomUUID().replace(/-/g, "").toLowerCase();
+    if (!/^[a-f0-9]{32}$/.test(uploadId)) return null;
+    const raw = Uint8Array.from(binary,c=>c.charCodeAt(0));
+    const hash = new Uint8Array(await crypto.subtle.digest("SHA-256",raw));
+    const sha256 = [...hash].map(byte=>byte.toString(16).padStart(2,"0")).join("");
+    const mime = MIMES[file.filename.split(".").pop().toLowerCase()];
+    for(let offset=0,sequence=0;offset<binary.length;offset+=UPLOAD_CHUNK_BYTES,sequence++){
+      const part=binary.slice(offset,offset+UPLOAD_CHUNK_BYTES);
+      const result=await chrome.runtime.sendMessage({type:"chat2api.file.chunk",event:{
+        type:"chat.file.chunk",request_id:requestId,
+        upload_id:uploadId,filename:file.filename,mime,
+        sequence,expected_bytes:file.bytes,expected_sha256:sha256,
+        base64_chunk:btoa(part),final:offset+part.length===binary.length,
+      }});
+      if(!result?.ok) return null;
+    }
+    return {filename:file.filename,bytes:file.bytes,
+      stage_marker:"chat2api-staged:"+uploadId,source:"worker-bounded-chunk-staging-v238"};
+  }
+
   async function capture(scope,requestId) {
     if (!requestId || !scope?.isConnected || !scope.closest?.("main,[role='main'],#thread")) 
       return {text:"",count:0,bytes:0,error:"unverified-reply-scope"};
@@ -197,8 +228,18 @@
       // claim a generated file without validated bytes.
       if(attempts.count>=6 || (attempts.count && Date.now()-attempts.at<45000))continue;
       session.attempts.set(item.filename,{at:Date.now(),count:(attempts.count||0)+1});
-      const result=await oneClick(item.button,item.filename);
-      if(!result?.data_url){
+      let result=await oneClick(item.button,item.filename);
+      if(result?.data_url && result.bytes>MAX_INLINE_BYTES) {
+        try { result=await stageLargeFile(result,requestId); }
+        catch (_) { result=null; }
+        if(!result) {
+          session.lastError="native-chunk-upload-failed";
+          session.failures.set(item.filename.split(".").pop().toLowerCase(),"native-chunk-upload-failed");
+          session.failureStages.set(item.filename.split(".").pop().toLowerCase(),"chunk-transport-unavailable");
+          continue;
+        }
+      }
+      if(!result?.data_url && !result?.stage_marker){
         session.lastError="native-download-not-observed";
         const ext=item.filename.split(".").pop().toLowerCase();
         session.failures.set(ext,"native-download-not-observed");
@@ -228,7 +269,8 @@
     }
     const files=[...session.files.values()];
     return {
-      text:files.map(file=>"!["+"📎 "+file.filename.replace(/[\[\]\r\n]/g,"_")+"]("+file.data_url+")").join("\n\n"),
+      text:files.map(file=>"!["+"📎 "+file.filename.replace(/[\[\]\r\n]/g,"_")+"]("+
+        (file.stage_marker || file.data_url)+")").join("\n\n"),
       count:files.length,bytes:total,error:session.lastError,
       button_candidates:candidates.length,attempted:session.attempts.size,
       attempt_counts:Object.fromEntries([...session.attempts.entries()].map(([name,entry])=>[name.split(".").pop().toLowerCase(),entry.count])),

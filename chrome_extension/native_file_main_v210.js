@@ -7,7 +7,7 @@
   const KEY = "__CHAT2API_NATIVE_FILE_MAIN_V210__";
   if (globalThis[KEY]) return;
   const KIND = "chat2api.native-file.v210";
-  const MAX_BYTES = 6 * 1024 * 1024;
+  const MAX_BYTES = 12 * 1024 * 1024;
   // The page can prepare an Office Blob before the user clicks Download.
   // Retain at most eight recent, bounded Blobs in THIS physical tab. Their
   // bytes are exposed only after the separately verified request-scoped click
