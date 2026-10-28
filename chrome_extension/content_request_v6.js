@@ -222,7 +222,7 @@
       // Native ChatGPT elapsed-time badges are NOT assistant responses.
       // v222 diagnostics surfaced doubled `Worked for 5s` fragments as API
       // output while the true assistant turn was still unidentified.
-      || /^worked for (?:\\d+(?:\\.\\d+)?\\s*(?:s|sec|secs|seconds?|m|mins?|minutes?)|a (?:few|couple of) seconds?)$/.test(text);
+      || /^worked for (?:\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds?|m|mins?|minutes?)|a (?:few|couple of) seconds?)$/.test(text);
   }
 
   function plainNodeText(node) {
