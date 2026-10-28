@@ -423,6 +423,7 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                 "worker_verified_spare_window_claim": pool_window_claims.get(
                     str(client_id), {}
                 ).get(str(message.get("request_id") or "")),
+                "request_scoped_window": request_type in {"chat.request", "image.request", "voice.request"},
                 "reserve_window_target": 0,
                 "strict_api_fifo": False,
                 "browser_side_api_fifo": False,
