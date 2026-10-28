@@ -103,6 +103,7 @@ def test_v58_same_api_can_run_concurrently_until_worker_capacity() -> None:
             registry.clients["ext_test"].metadata.update({
                 "worker_pool_admission_revision": 224,
                 "worker_pool_ready_windows": 1,
+                "worker_pool_ready_window_ids": [104],
                 "worker_pool_active_windows": 3,
                 "worker_pool_login_ready": True,
             })
@@ -115,7 +116,12 @@ def test_v58_same_api_can_run_concurrently_until_worker_capacity() -> None:
             await asyncio.sleep(0.03)
             assert not fifth.done()
             await broker.release(first.request_id)
+            await asyncio.sleep(0.03)
+            assert not fifth.done(), "releasing another request cannot reissue the same ready tab"
+            registry.clients["ext_test"].metadata["worker_pool_ready_window_ids"] = [105]
+            registry.worker_pool_capacity_received_at["ext_test"] = time.monotonic()
             await asyncio.wait_for(fifth, timeout=1.6)
+            assert admitted.diagnostics["worker_verified_spare_window_claim"] == 104
             assert admitted.diagnostics["api_key_capacity_limit"] is None
             for state in (second, third, admitted):
                 await broker.release(state.request_id)
