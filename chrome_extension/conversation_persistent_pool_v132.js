@@ -534,6 +534,15 @@
       deferred, skipped: false, reason };
   }
 
+  function requiredWindowTotal(target, routed, occupied, compact = false) {
+    const baseline = normalizeTarget(target) || 0;
+    if (!baseline) return 0;
+    if (compact) return Math.min(1, baseline);
+    // The configured N is the normal TOTAL, not the spare count.
+    // N=3, busy=0/1/2 => 3; busy=3 => 4; after close => 3.
+    return Math.min(MAX_TARGET, Math.max(baseline, routed + 1, occupied + 1));
+  }
+
   function snapshotFrom(rows, value, auth, isDisabled) {
     const target = normalizeTarget(state.target) || 0;
     const ready = auth?.ready === true;
@@ -551,8 +560,7 @@
     // target is the NORMAL TOTAL count, not the number of spare windows.
     // N=3: 0/1/2 active => three total; 3 active => four total
     // (one verified unassigned standby). On release, shrink toward N.
-    const effective = target ? (compactStandby ? Math.min(1, target)
-      : Math.min(MAX_TARGET, Math.max(target, routedRows.length + 1))) : 0;
+    const effective = requiredWindowTotal(target, routedRows.length, busy.size, compactStandby);
     const expectedReady = target && !compactStandby
       ? Math.max(0, effective - routedRows.length) : 0;
     return {
@@ -694,8 +702,7 @@
     const compactStandby = isDisabled || auth.explicit_logout === true;
     const busyCount = busyWindowIds(value).size;
     const routedCount = [...routeByWindow(value).keys()].length;
-    const requiredTotal = compactStandby ? Math.min(1, target)
-      : Math.min(MAX_TARGET, Math.max(target, routedCount + 1, busyCount + 1));
+    const requiredTotal = requiredWindowTotal(target, routedCount, busyCount, compactStandby);
     // Only unused, unassigned windows may be shrunk. Routes and active work
     // belong to the conversation router; a pool reconciliation never kills them.
     const idleTarget = Math.max(0, requiredTotal - routedCount);
