@@ -39,7 +39,9 @@ def test_v146_request_admission_filters_stale_standby() -> None:
     claim = pool.split("async function claimSlotForRequest(message)", 1)[1]
     assert 'validateIdleRuntime(value, physical, "request-admission-v152")' in claim
     assert "let rows = runtimeValidation.rows" in claim
-    assert "let slot = standbyRows(rows, value)[0] || null" in claim
+    assert "const readySlots = standbyRows(rows, value);" in claim
+    assert "readySlots.find(row => row.window_id === claimedId)" in claim
+    assert "worker_verified_window_claim_stale" in claim
     assert 'scheduleReconcile("post-admission-standby-refill-v152", 250)' in claim
 
 
