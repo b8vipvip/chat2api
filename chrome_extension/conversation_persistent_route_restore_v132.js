@@ -28,7 +28,10 @@
 
   function routingKey(message) {
     const value = String(message?.routing?.api_key_id || "").trim();
-    return value || null;
+    const requestId = String(message?.request_id || "").trim();
+    if (!value) return null;
+    return requestId && ["chat.request", "image.request", "voice.request"].includes(message?.type)
+      ? `${value}::request::${requestId}` : value;
   }
 
   function routeFor(key) {
