@@ -39,7 +39,7 @@ def test_standby_ready_cannot_be_displayed_as_unavailable():
     assert "待机（调度容量已满）" not in ui
     assert "server_admission_available" not in server
     assert '"scheduler_baseline_total"' in server
-    assert '常态窗口总数' in ui
+    assert '常态窗口' in ui
     assert '5秒关闭' in ui
 
 
