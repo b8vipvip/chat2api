@@ -31,7 +31,7 @@ def test_server_claim_is_bound_to_physical_verified_spare_id() -> None:
     assert "retired.intersection_update(verified_ids)" in scheduler
     assert "row.window_id === claimedId" in pool
     assert "worker_verified_window_claim_stale" in pool
-    assert '"request_scoped_window": request_type in' in scheduler
+    assert '"request_scoped_window": str(message.get("type") or "") in' in scheduler
     recovery = read("chrome_extension/conversation_route_recovery_v136.js")
     assert 'message?.routing?.request_scoped_window === true' in recovery
 
