@@ -13,7 +13,7 @@ def test_manifest_installs_v55_main_world_stream_evidence_without_legacy_termina
     manifest = json.loads(read("chrome_extension/manifest.json"))
     main = manifest["content_scripts"][0]
     isolated = manifest["content_scripts"][1]["js"]
-    assert manifest["version"] == "0.22.227"
+    assert manifest["version"] == "0.22.228"
     assert main["world"] == "MAIN"
     assert main["run_at"] == "document_start"
     assert "network_stream_main_v55.js" in main["js"]
@@ -28,7 +28,7 @@ def test_manifest_installs_v55_main_world_stream_evidence_without_legacy_termina
 
 def test_main_world_v55_uses_parser_revision_63_for_conversation_sse() -> None:
     source = read("chrome_extension/network_stream_main_v55.js")
-    for token in ('url.pathname === "/backend-api/f/conversation"','const PARSER_REVISION = 63;','data-chat2api-network-stream-parser','type.includes("text/event-stream")',"response.clone()","clone.body?.getReader",'phase: "assistant-snapshot"','phase: "assistant-complete"','type === "message_stream_complete"','patch?.p !== undefined ? patch.p : patch?.path','if (pointer == null || pointer === "") return [];','if (typeof payload === "string") return;'):
+    for token in ('url.pathname === "/backend-api/f/conversation"','const PARSER_REVISION = 63;','data-chat2api-network-stream-parser','type.includes("text/event-stream")',"response.clone()","clone?.body?.getReader",'phase: "assistant-snapshot"','phase: "assistant-complete"','type === "message_stream_complete"','patch?.p !== undefined ? patch.p : patch?.path','if (pointer == null || pointer === "") return [];','if (typeof payload === "string") return;'):
         assert token in source
     for forbidden in ("Authorization", "Cookie", "request_body", "prompt_text"):
         assert forbidden not in source
@@ -58,11 +58,11 @@ def test_runtime_preflight_requires_v55_parser_63_main_and_isolated_evidence_mod
     bootstrap=read("chrome_extension/content_bootstrap.js"); preflight=read("chrome_extension/background_runtime_preflight_v48.js"); contract=read("chrome_extension/content_runtime_contract_v48.js"); contract_v71=read("chrome_extension/content_runtime_contract_v71.js"); marker=read("chrome_extension/content_bundle_marker_v48.js")
     assert 'world: "MAIN"' in bootstrap
     assert '"network_stream_main_v55.js"' in bootstrap and '"content_network_stream_recovery_v55.js"' in bootstrap
-    assert 'const REQUIRED_BUNDLE = "0.22.227"' in preflight
+    assert 'const REQUIRED_BUNDLE = "0.22.228"' in preflight
     assert '"content_network_stream_recovery_v55.js"' in preflight
     assert "network_stream_recovery_v55" in contract and "network_stream_parser_v63" in contract
     assert "native_tool_stream_v63" in contract_v71
-    assert 'bundle: "0.22.227"' in marker
+    assert 'bundle: "0.22.228"' in marker
 
 def test_linux_worker_bundle_actually_packages_generation_probe() -> None:
     dockerfile=read("Dockerfile"); dockerignore=read(".dockerignore")

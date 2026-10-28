@@ -556,6 +556,28 @@
   });
 
 
+  // A physically removed in-flight tab has no content script left to explain
+  // why the API remains running. Record owner-scoped, metadata-only evidence.
+  // This is never a second terminal path; only request-v6 decides terminal.
+  function reportUnexpectedWindowLoss(route, requestId, kind, id) {
+    if (!requestId || typeof trySendSocket !== "function") return;
+    const active = state.activeRequests.get(requestId);
+    const payload = {
+      type: "chat.diagnostics", request_id: requestId,
+      diagnostics: {
+        worker_window_lost_during_request: true,
+        worker_window_loss_kind: kind,
+        worker_window_loss_id: Number(id) || null,
+        worker_window_loss_request_scoped: route?.request_scoped === true,
+        worker_window_loss_owned_tab: Number(active?.tab_id) || null,
+        worker_window_loss_owned_window: Number(active?.window_id) || null,
+        worker_window_loss_at_ms: Date.now(),
+        worker_window_loss_terminal_authority: "request-v6",
+      },
+    };
+    trySendSocket(payload).catch(() => false);
+  }
+
   chrome.tabs.onRemoved.addListener(tabId => {
     ensureLoaded().then(async () => {
       let changed = false;
@@ -566,6 +588,7 @@
           chrome.alarms.clear(`${ALARM_PREFIX}${route.window_id}`).catch(() => {});
         }
         const requestId = String(route.inflight_request_id || "");
+        if (requestId) reportUnexpectedWindowLoss(route, requestId, "tab-removed", tabId);
         if (requestId) state.activeRequests.delete(requestId);
         if (route.request_scoped === true) delete state.routes[key];
         else resetClosedRoute(route, "window-closed-new-chat-next-request");
@@ -583,6 +606,7 @@
       for (const [key, route] of Object.entries(state.routes)) {
         if (route?.window_id !== windowId) continue;
         const requestId = String(route.inflight_request_id || "");
+        if (requestId) reportUnexpectedWindowLoss(route, requestId, "window-removed", windowId);
         if (requestId) state.activeRequests.delete(requestId);
         if (route.request_scoped === true) delete state.routes[key];
         else resetClosedRoute(route, "window-closed-new-chat-next-request");

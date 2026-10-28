@@ -104,7 +104,12 @@
     // this hint into an actionable completion proof for request-v6.
     const active = activeRequest();
     if (String(active?.requestId || "") !== row.requestId || active.cancelled) return;
+    // A late error on an older parallel/tool stream cannot erase a newer,
+    // already verified clean EOF for this same request.
+    if (phase === "error" && Number(active.networkTerminalTransportDoneAt || 0) > 0
+        && String(active.networkTerminalTransportStreamId || "") !== row.streamId) return;
     if (phase === "done" && row.terminalSeen && detail.completion_hint === true) {
+      active.networkStreamEndedWithoutTerminalAt = 0;
       active.networkTerminalTransportDoneAt = Date.now();
       active.networkTerminalTransportStreamId = row.streamId;
       active.networkTerminalTransportErrorAt = 0;
@@ -136,9 +141,15 @@
         network_evidence_active_owner: globalThis[REQUEST_V6_KEY] ? "request-v6" : "legacy-v5",
         network_legacy_active_conflict: Boolean(globalThis[REQUEST_V6_KEY]?.active && globalThis[REQUEST_KEY]?.active && globalThis[REQUEST_V6_KEY].active !== globalThis[REQUEST_KEY].active),
         network_stream_error: String(detail.phase || "") === "error" ? String(detail.error || "stream-reader-failed").slice(0, 240) : null,
+        network_stream_failure_stage: String(detail.failure_stage || "").slice(0, 32),
+        network_stream_error_name: String(detail.error_name || "").slice(0, 50),
+        network_stream_abort_signal: detail.signal_aborted === true,
+        network_stream_response_body_used: detail.response_body_used === true,
+        network_stream_response_body_locked: detail.response_body_locked === true,
+        network_stream_parser_assistant_role_seen: detail.assistant_role_seen === true,
         network_stream_terminal_proof: detail.completion_hint === true,
         generation_progress: `${row.streamId}:${Number(detail.sequence || 0)}:${Number(detail.bytes ?? row.bytes ?? 0)}`,
-        generating_observed: true,
+        generating_observed: !/^(?:done|error)(?:$|-)/.test(String(detail.phase || "")),
       },
     });
   }
@@ -217,13 +228,22 @@
       return;
     }
     if (phase === "done") {
-      recordTransportOutcome(row, phase, detail);
       row.chunks = Number(detail.chunks || row.chunks || 0);
       row.bytes = Number(detail.bytes || row.bytes || 0);
+      // v228: Accept a verified protocol completion in the EOF frame *before*
+      // deciding transport outcome. Previously the order wrote a permanent
+      // "missing-verified-assistant-terminal" error, then supplied the proof.
+      // Never create terminal evidence from mere EOF: completion_hint is
+      // emitted only after the main-world parser observed explicit proof.
+      const eofProof = !row.terminalSeen && Boolean(row.lastText)
+        && detail.completion_hint === true;
+      if (eofProof) await terminalHint(row, {
+        ...detail, text: row.lastText, terminal_evidence_source: "sse-eof-confirmed-explicit-marker",
+      });
+      recordTransportOutcome(row, phase, detail);
       if (row.terminalSeen) {
-        await diagnostics(row, { ...detail, phase: "done-after-terminal" });
-      } else if (row.lastText && detail.completion_hint === true) {
-        await terminalHint(row, { ...detail, text: row.lastText });
+        await diagnostics(row, { ...detail,
+          phase: eofProof ? "done-with-verified-eof-proof" : "done-after-terminal" });
       } else {
         const active = activeRequest();
         if (active?.requestId === row.requestId) active.networkStreamEndedWithoutTerminalAt = Date.now();
@@ -235,7 +255,12 @@
     if (phase === "error") {
       recordTransportOutcome(row, phase, detail);
       const active = activeRequest();
-      if (active?.requestId === row.requestId) active.networkStreamEndedWithoutTerminalAt = Date.now();
+      // A stale clone reader may abort after a newer stream finished. Keep
+      // the old error in diagnostics but do not re-mark this request unverified.
+      const newerVerified = Number(active?.networkTerminalTransportDoneAt || 0) > 0
+        && String(active?.networkTerminalTransportStreamId || "") !== row.streamId;
+      if (active?.requestId === row.requestId && !newerVerified)
+        active.networkStreamEndedWithoutTerminalAt = Date.now();
       await diagnostics(row, detail);
       streams.delete(row.streamId);
     }

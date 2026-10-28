@@ -418,6 +418,11 @@
         buffer = blocks.pop() || "";
         for (const block of blocks) processEvent(block);
       },
+      peek() {
+        // Read-only diagnostics. A parser snapshot never owns HTTP completion.
+        return { assistant_chars: latestText.length, assistant_role_seen: assistantRoleSeen,
+          completion_hint: terminalPosted, sequence };
+      },
       finish() {
         if (buffer.trim()) processEvent(buffer);
         if (!latestText && fallbackText) emitSnapshot(fallbackText, "assistant-fallback");
@@ -431,68 +436,83 @@
     };
   }
 
-  async function observeConversation(response, streamId) {
+  async function observeConversation(response, streamId, signal = null) {
     const type = contentType(response);
     const eventStream = response.ok && type.includes("text/event-stream");
     post({
-      channel: CHANNEL,
-      phase: "response",
-      stream_id: streamId,
-      status: Number(response.status || 0),
-      ok: Boolean(response.ok),
-      event_stream: eventStream,
-      content_type: type.slice(0, 120),
+      channel: CHANNEL, phase: "response", stream_id: streamId,
+      status: Number(response.status || 0), ok: Boolean(response.ok),
+      event_stream: eventStream, content_type: type.slice(0, 120),
     });
     if (!eventStream || !response.body) return;
 
+    // Do not expose prompt text, URL, cookies, headers or stack traces.
+    // An aborted clone is evidence-reader failure, NOT a model terminal.
+    function fail(stage, error, extra = {}) {
+      post({
+        channel: CHANNEL, phase: "error", stream_id: streamId,
+        failure_stage: stage,
+        error_name: String(error?.name || "Error").slice(0, 50),
+        error: String(error?.message || error || "stream-reader-failed").slice(0, 240),
+        signal_aborted: signal?.aborted === true,
+        response_body_used: response?.bodyUsed === true,
+        response_body_locked: response?.body?.locked === true,
+        ...extra,
+      });
+    }
     let clone;
-    try { clone = response.clone(); } catch (_) { return; }
-    const reader = clone.body?.getReader?.();
-    if (!reader) return;
+    try {
+      clone = response.clone();
+    } catch (error) {
+      fail("clone", error);
+      return;
+    }
+    let reader;
+    try {
+      reader = clone?.body?.getReader?.() || null;
+      if (!reader) throw new Error("cloned-response-reader-unavailable");
+    } catch (error) {
+      fail("get-reader", error);
+      return;
+    }
     const decoder = decoderFactory();
     const parser = streamParser(streamId);
     let chunks = 0;
     let bytes = 0;
-
+    let stage = "read";
     try {
       while (true) {
+        stage = "read";
         const result = await reader.read();
         if (result.done) break;
         const value = result.value;
         const byteLength = Number(value?.byteLength || value?.length || 0);
         chunks += 1;
         bytes += byteLength;
+        stage = "parse";
         parser.push(decoder.decode(value, { stream: true }));
-        post({
-          channel: CHANNEL,
-          phase: "chunk",
-          stream_id: streamId,
-          sequence: chunks,
-          chunks,
-          bytes,
-        });
+        post({ channel: CHANNEL, phase: "chunk", stream_id: streamId,
+          sequence: chunks, chunks, bytes });
       }
+      stage = "eof-parse";
       parser.push(decoder.decode());
       const parsed = parser.finish();
       post({
-        channel: CHANNEL,
-        phase: "done",
-        stream_id: streamId,
+        channel: CHANNEL, phase: "done", stream_id: streamId,
         sequence: Math.max(chunks, parsed.sequence || 0) + 1,
-        chunks,
-        bytes,
+        chunks, bytes,
         assistant_chars: String(parsed.latestText || "").length,
         completion_hint: Boolean(parsed.sawDone),
         assistant_role_seen: Boolean(parsed.assistantRoleSeen),
       });
     } catch (error) {
-      post({
-        channel: CHANNEL,
-        phase: "error",
-        stream_id: streamId,
-        chunks,
-        bytes,
-        error: String(error?.message || error).slice(0, 240),
+      // A late clone abort can arrive after a genuine assistant end-turn.
+      // Report both facts; never forge success from bytes or the abort itself.
+      const evidence = parser.peek();
+      fail(stage, error, {
+        chunks, bytes, assistant_chars: evidence.assistant_chars,
+        assistant_role_seen: evidence.assistant_role_seen,
+        completion_hint: evidence.completion_hint,
       });
     } finally {
       try { reader.releaseLock(); } catch (_) {}
@@ -504,7 +524,15 @@
     const response = await nativeFetch(input, init);
     if (!watched) return response;
     const streamId = `${Date.now().toString(36)}-${++state.streams}`;
-    observeConversation(response, streamId).catch(() => {});
+    const signal = init?.signal || input?.signal || null;
+    observeConversation(response, streamId, signal).catch(error => {
+      // Last-resort observer failure is diagnostic-only and cannot cancel
+      // the underlying ChatGPT fetch or complete the API request.
+      post({channel: CHANNEL, phase: "error", stream_id: streamId,
+        failure_stage: "observer", error_name: String(error?.name || "Error").slice(0, 50),
+        error: String(error?.message || error).slice(0, 240),
+        signal_aborted: signal?.aborted === true});
+    });
     return response;
   };
 })();
