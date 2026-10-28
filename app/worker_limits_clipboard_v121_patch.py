@@ -131,9 +131,9 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
         configured = explicit_limits.get(str(client_id or ""))
         if configured is None:
             return concurrency
-        # v121 stores the requested standby-window cardinality independently of
-        # request concurrency. v132 is the sole browser lifecycle authority and
-        # must converge the number of idle/standby (可接待) windows to this target.
+        # The saved value N is the normal TOTAL physical window target.
+        # v132 is the sole owner of warming one spare on saturation and
+        # shrinking back to N; never interpret N as N additional idle windows.
         return _normalize_limit(configured, concurrency)
 
     def window_source_for(client_id: str) -> str:
