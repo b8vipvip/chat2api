@@ -159,3 +159,57 @@ def test_probe_has_long_job_checkpoints_without_second_terminal_owner():
     assert "progress_checkpoint" in js and "progress_checkpoint" in python
     assert "[60000, 180000, 420000, 720000]" in js
     assert "chat.completed" not in js and "image.completed" not in js
+
+def test_complete_long_response_recovery_requires_admin_and_is_opt_in(tmp_path: Path):
+    app = _app(tmp_path)
+    rid = "req_longtextrecoverabcde12345"
+    long_text = "第一个完整段落\\n" + "完整商业方案含表格与代码段。\\n" * 1400
+    with TestClient(app) as client:
+        asyncio.run(app.state.telemetry.upsert({
+            "request_id": rid, "status": "completed",
+            "response_text": long_text, "completion_chars": len(long_text),
+        }))
+        url = f"/api/admin/playground/requests/{rid}/outcome"
+        assert client.get(url + "?full_text=1").status_code == 401
+        auth = {"Authorization": "Bearer test-key"}
+        compact = client.get(url, headers=auth).json()
+        assert len(compact["response_text_preview"]) == 3500
+        assert "response_text" not in compact
+        full = client.get(url + "?full_text=1", headers=auth).json()
+        assert full["response_text"] == long_text
+        assert full["response_text_truncated"] is False
+        assert full["status"] == "completed"
+
+
+def test_legacy_inline_media_never_escapes_full_text_recovery(tmp_path: Path):
+    app = _app(tmp_path)
+    rid = "req_mediarecoverabcdef123456"
+    # This fixture represents legacy history not yet sanitized at write time.
+    legacy = "正文\\n" + "![x](data:application/pdf;base64," + ("QUJD" * 200) + ")"
+    with TestClient(app) as client:
+        asyncio.run(app.state.telemetry.upsert({
+            "request_id": rid, "status": "completed", "response_text": legacy,
+            "completion_chars": len(legacy),
+        }))
+        auth = {"Authorization": "Bearer test-key"}
+        payload = client.get(
+            f"/api/admin/playground/requests/{rid}/outcome?full_text=1",
+            headers=auth,
+        ).json()
+        assert "base64," not in payload["response_text"]
+        assert "QUJD" not in payload["response_text"]
+
+
+def test_running_worker_never_returns_full_or_false_completed_text(tmp_path: Path):
+    app = _app(tmp_path)
+    rid = "req_currentlyrunning012345"
+    with TestClient(app) as client:
+        asyncio.run(app.state.telemetry.upsert({
+            "request_id": rid, "status": "running", "response_text": "stale partial",
+        }))
+        outcome = client.get(
+            f"/api/admin/playground/requests/{rid}/outcome?full_text=1",
+            headers={"Authorization": "Bearer test-key"},
+        ).json()
+        assert outcome["status"] == "running"
+        assert "response_text" not in outcome

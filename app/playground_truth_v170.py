@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from .timezone_utils import beijing_now_iso
+from .response_history_media_v188 import history_safe_response_text
 
 TERMINAL_REQUESTS = {"completed", "error", "cancelled", "stalled"}
 DATA_IMAGE = re.compile(
@@ -160,7 +161,10 @@ def present_playground_run(run: dict[str, Any]) -> dict[str, Any]:
     return displayed
 
 
-async def compact_playground_outcome(row: dict[str, Any], telemetry: Any, file_store: Any) -> dict[str, Any]:
+async def compact_playground_outcome(
+    row: dict[str, Any], telemetry: Any, file_store: Any,
+    *, include_full_text: bool = False,
+) -> dict[str, Any]:
     """Return a small, admin-authenticated reply preview without image base64."""
     rid = str(row.get("request_id") or "")
     status = str(row.get("status") or "")
@@ -201,7 +205,7 @@ async def compact_playground_outcome(row: dict[str, Any], telemetry: Any, file_s
         preview = DATA_IMAGE.sub("【生成图片：请在请求记录中预览】", content)
     else:
         preview = content
-    return {
+    result = {
         "request_id": rid, "status": status, "error": row.get("error"),
         "request_type": row.get("request_type"), "model": row.get("requested_model"),
         "response_chars": int(row.get("completion_chars") or 0),
@@ -210,3 +214,11 @@ async def compact_playground_outcome(row: dict[str, Any], telemetry: Any, file_s
         "response_media_count": len(media),
         "is_authoritative": True,
     }
+    if include_full_text and status == "completed":
+        # Opt-in, admin-authenticated recovery of original long text. The
+        # default endpoint remains compact, and inline Base64 is NEVER exposed
+        # from legacy history even when a previous version saved it verbatim.
+        safe = history_safe_response_text(preview)
+        result["response_text"] = safe[:500000]
+        result["response_text_truncated"] = len(safe) > 500000
+    return result

@@ -516,11 +516,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return present_playground_run(row)
 
     @app.get("/api/admin/playground/requests/{request_id}/outcome", dependencies=[Depends(require_admin_key)])
-    async def admin_playground_request_outcome(request_id: str) -> dict[str, object]:
+    async def admin_playground_request_outcome(
+        request_id: str, full_text: bool = Query(default=False),
+    ) -> dict[str, object]:
         row = telemetry.get(request_id)
         if not row:
             raise HTTPException(status_code=404, detail="Request record not found")
-        return await compact_playground_outcome(row, telemetry, file_store)
+        return await compact_playground_outcome(
+            row, telemetry, file_store, include_full_text=full_text,
+        )
 
     @app.post("/api/admin/tests", dependencies=[Depends(require_admin_key)])
     async def save_test_report(body: TestRunCreate) -> dict[str, object]:

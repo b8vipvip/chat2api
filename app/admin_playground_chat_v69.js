@@ -502,21 +502,46 @@
   function normalizedHistory() {
     return messages.filter(item => item.include_in_context !== false).slice(-MAX_HISTORY_MESSAGES).map(item => ({role:item.role, content:item.content}));
   }
-  async function recoverAuthoritativeResult(requestId) {
+  async function recoverAuthoritativeResult(requestId, {waitForTerminal=false} = {}) {
     if (!/^((imgreq|req)_[a-z0-9-]{12,110})$/i.test(requestId)) return null;
-    let outcome = null;
-    // The API request may have completed even when a proxy drops the large
-    // browser fetch. Retry only the small admin status endpoint.
-    for (let attempt = 0; attempt < 4; attempt++) {
+    let outcome = null, observed = false, consecutiveErrors = 0;
+    // A disconnected HTTP body does not cancel the Worker-owned request.
+    // Poll only the EXISTING authenticated request-id outcome; never submit
+    // another prompt or infer success from a timeout, DOM hint or SSE closure.
+    // The longer loop is presentation-only and stops as soon as Broker
+    // persisted its actual terminal. If it runs out, return UNCONFIRMED, not
+    // an invented error/success terminal.
+    const maxChecks = waitForTerminal ? 300 : 4;
+    for (let attempt = 0; attempt < maxChecks; attempt++) {
       try {
         outcome = await api("/api/admin/playground/requests/" +
-          encodeURIComponent(requestId) + "/outcome");
-        if (outcome.status && outcome.status !== "running") break;
-      } catch (_) { /* one last reconciliation attempt below */ }
-      await new Promise(resolve => setTimeout(resolve, 400));
+          encodeURIComponent(requestId) + "/outcome?full_text=1");
+        if (outcome?.status) {
+          observed = true;
+          consecutiveErrors = 0;
+          if (!["running","queued","pending"].includes(outcome.status)) break;
+          if (waitForTerminal && (attempt === 0 || attempt % 8 === 0))
+            status("浏览器连接已中断；服务端请求 " + requestId +
+              " 仍在执行，正在等待实际 Worker 终态", "warn");
+        }
+      } catch (_) {
+        consecutiveErrors++;
+        // A request rejected before reaching the Broker has no durable ID.
+        // Do not spend twenty minutes polling an unregistered request.
+        if (!observed && attempt >= 3) return null;
+        if (consecutiveErrors >= 12) break;
+      }
+      if (attempt + 1 < maxChecks)
+        await new Promise(resolve => setTimeout(resolve, waitForTerminal ? 4000 : 400));
     }
-    if (outcome?.status !== "completed") return null;
-    let markdown = String(outcome.response_text_preview || "生成请求已完成");
+    if (!outcome || !observed) return null;
+    if (["running","queued","pending"].includes(outcome.status))
+      return {pending:true, requestId, status:outcome.status};
+    if (outcome.status !== "completed")
+      return {terminalStatus:outcome.status, error:String(outcome.error || ""),requestId};
+    const full = typeof outcome.response_text === "string"
+      ? outcome.response_text : String(outcome.response_text_preview || "");
+    let markdown = full || "服务端确认已完成，但未返回可恢复的文字内容";
     let downloaded = 0;
     for (const media of (outcome.response_media || []).slice(0, 4)) {
       const fileId = String(media?.file_id || "");
@@ -536,7 +561,8 @@
         downloaded++;
       } catch (_) { /* preserve completion status even without preview */ }
     }
-    return {content:markdown, imageCount:downloaded, requestId:outcome.request_id};
+    return {content:markdown,imageCount:downloaded,requestId:outcome.request_id,
+      terminalStatus:"completed",textTruncated:outcome.response_text_truncated === true};
   }
 
   async function recordChatTurn({requestId, model, credential, text, statusValue, totalMs, firstTokenMs, responseChars, attachmentsCount, error}) {
@@ -615,20 +641,41 @@
       await recordChatTurn({requestId:actualRequestId,model,credential,text,statusValue:"passed",totalMs,firstTokenMs,responseChars:assistantText.length,attachmentsCount:userFiles.length,error:null});
     } catch (error) {
       const recoveryId = imageMode ? requestId.replace(/^req_/, "imgreq_") : requestId;
-      const recovered = await recoverAuthoritativeResult(recoveryId).catch(() => null);
-      if (recovered) {
+      const recovered = await recoverAuthoritativeResult(recoveryId, {waitForTerminal:true}).catch(() => null);
+      if (recovered?.terminalStatus === "completed") {
         const totalMs = performance.now() - started;
         document.getElementById("pgChatPending")?.remove();
-        messages.push({role:"assistant",content:recovered.content,include_in_context:false,
+        messages.push({role:"assistant",content:recovered.content,
+          include_in_context:!imageMode && !recovered.imageCount && !recovered.textTruncated,
           created_at:new Date().toISOString(),meta:{request_id:recoveryId,model,total_ms:totalMs,
           recovered_from:"server-request-terminal-v170",response_format:recovered.imageCount?"image":"text"}});
-        lastRequest={request_id:recoveryId,model,total_ms:totalMs,recovered:true};
+        lastRequest={request_id:recoveryId,model,total_ms:totalMs,recovered:true,
+          text_truncated:recovered.textTruncated};
         saveHistory(); renderMessages();
-        status("请求已由服务端确认为完成；浏览器连接中断后已恢复结果", "ok");
+        status(recovered.textTruncated
+          ? "服务端已完成；恢复正文超过 500,000 字符，已明确截断且不会用于后续上下文"
+          : "服务端已完成；浏览器连接中断后已恢复完整文本及可用媒体", "ok");
         await recordChatTurn({requestId:recoveryId,model,credential,text,statusValue:"passed",
           totalMs,firstTokenMs,responseChars:recovered.content.length,attachmentsCount:userFiles.length,error:null});
+      } else if (recovered?.pending) {
+        // Never label a live Worker request failed because its HTTP stream
+        // disappeared or the presentation-only observation window elapsed.
+        const totalMs = performance.now() - started;
+        document.getElementById("pgChatPending")?.remove();
+        if (messages[userIndex]) messages[userIndex].include_in_context=false;
+        messages.push({role:"assistant",content:"浏览器连接已中断，但服务端请求仍未结束。请求 ID：" + recoveryId +
+          "。可在请求记录查看该请求的真实终态；此处不判定成功或失败。",
+          include_in_context:false,created_at:new Date().toISOString(),
+          meta:{request_id:recoveryId,model,total_ms:totalMs,recovery_pending:true}});
+        lastRequest={request_id:recoveryId,model,total_ms:totalMs,pending:true};
+        saveHistory();renderMessages();status("服务端仍在运行，等待后台真实终态", "warn");
+        await recordChatTurn({requestId:recoveryId,model,credential,text,statusValue:"running",
+          totalMs,firstTokenMs,responseChars:0,attachmentsCount:userFiles.length,error:null});
       } else {
-      const totalMs = performance.now() - started, errorText = String(error?.message || error), failedStatus = /(stalled|watchdog|timed out|timeout|no observable|no response progress)/i.test(errorText) ? "stalled" : "failed";
+      const totalMs = performance.now() - started;
+      const errorText = String(recovered?.error || error?.message || error);
+      const failedStatus = recovered?.terminalStatus === "cancelled" ? "cancelled"
+        : /(stalled|watchdog|timed out|timeout|no observable|no response progress)/i.test(errorText) ? "stalled" : "failed";
       document.getElementById("pgChatPending")?.remove(); if (messages[userIndex]) messages[userIndex].include_in_context=false;
       messages.push({role:"assistant",content:`请求失败：${errorText}`,include_in_context:false,error:true,created_at:new Date().toISOString(),meta:{request_id:requestId,model,total_ms:totalMs}}); lastRequest={request_id:requestId,model,total_ms:totalMs,error:errorText,diagnostics}; saveHistory(); renderMessages(); status(`聊天请求失败：${errorText}`,"bad");
       await recordChatTurn({requestId:recoveryId,model,credential,text,statusValue:failedStatus,totalMs,firstTokenMs,responseChars:assistantText.length,attachmentsCount:userFiles.length,error:errorText});
