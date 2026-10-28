@@ -627,12 +627,28 @@
         const old = baseline.get(node);
         return old === undefined || old !== text.slice(-5000);
       });
-    // Do not count ancestor and descendant wrappers twice.
-    const independent = changed.filter(node => !changed.some(other => other !== node && other.contains(node)));
+    // Do not count ancestor and descendant wrappers twice. The previous
+    // nested .some(other.contains(node)) did O(N²) DOM containment checks for
+    // 1,000+ structured replies and repeated on every recovery poll. Browser
+    // DOMs already expose parentElement: walk ancestors against a Set to
+    // preserve exactly the same outermost-only selection in O(N * depth).
+    function outermost(nodes) {
+      const chosen = new Set(nodes);
+      return nodes.filter(node => {
+        // Older pure Node fixtures have no DOM parentElement property;
+        // preserve their original containment semantics in that test path.
+        if (!("parentElement" in node))
+          return !nodes.some(other => other !== node && other.contains(node));
+        for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+          if (chosen.has(parent)) return false;
+        }
+        return true;
+      });
+    }
+    const independent = outermost(changed);
     const sizes = independent.map(node => normalize(node.innerText || node.textContent || "").length);
     const candidateChars = normalize(candidate.innerText || candidate.textContent || "").length;
-    const all = [candidate, ...independent].filter(node => ![candidate,...independent]
-      .some(other => other !== node && other.contains(node)));
+    const all = outermost([candidate, ...independent]);
     all.sort((left,right) => left === right ? 0
       : left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
     return {
@@ -671,13 +687,21 @@
     const end = String(active.promptNormalized || "").slice(-120);
     if ((start && text.includes(start)) || (end && text.includes(end))) return null;
     let best = null;
+    // Several fresh Copy/Regenerate actions can map to the same answer scope.
+    // Its structural set is immutable during this synchronous verification,
+    // so reuse the coverage for the same scope instead of rescanning it.
+    const coverageByScope = new Map();
     // A current reply may have headings, tables and math before its toolbar,
     // while another assistant card or page widget follows it in main. Audit
     // the exact shared reply ancestor instead of assigning all of main to it.
     for (const button of fresh) {
       const scope = replyScopeForFinishAction(current.latest, button);
       if (!scope) continue;
-      const coverage = renderedResponseBoundaryEvidence(active, current.latest, scope);
+      let coverage = coverageByScope.get(scope);
+      if (!coverage) {
+        coverage = renderedResponseBoundaryEvidence(active, current.latest, scope);
+        coverageByScope.set(scope, coverage);
+      }
       if (coverage.scan_overflow || !coverage.nodes?.length
           || !coverage.nodes.every(node => turnFollows(node, button))) continue;
       const chars = coverage.nodes.reduce((total, node) =>
