@@ -799,6 +799,52 @@
       candidate_chars:current.text.length,independent_count:0,scan_structural_node_count:1}};
   }
 
+  // #535: bounded, privacy-safe diagnostics for short, roleless UI replies.
+  // This is READ-ONLY. It must never decide a terminal, reschedule a request,
+  // or publish text: only request-v6 owns chat.completed/chat.error.
+  function shortAbortGateEvidence(active, current) {
+    const observed = normalize(String(active?.networkObservedText || ""));
+    const headings = [...document.querySelectorAll("main h4,[role='main'] h4,#thread h4")].filter(visible);
+    const freshHeadings = active?.baselineRolelessHeadings
+      ? headings.filter(node => !active.baselineRolelessHeadings.has(node)) : [];
+    const headingText = node => normalize(node.innerText || node.textContent || "");
+    const userHeadings = freshHeadings.filter(node => /^You said\s*[:：]$/i.test(headingText(node)));
+    const assistantHeadings = freshHeadings.filter(node => /^ChatGPT said\s*[:：]$/i.test(headingText(node)));
+    const freshActions = active?.baselineFinishActions
+      ? responseFinishActions().filter(node => !active.baselineFinishActions.has(node)) : [];
+    const candidate = rolelessShortReplyCandidate(active);
+    const verified = candidate && verifiedRolelessShortAbortCandidate(active, candidate);
+    const shortSse = verifiedShortAbortCandidate(active);
+    let reason = "eligible";
+    if (!active?.networkStreamSeen) reason = "network-not-observed";
+    else if (!active?.submitStartedAt) reason = "submit-epoch-missing";
+    else if (Number(active?.networkObservedAt || 0) < Number(active.submitStartedAt))
+      reason = "network-evidence-predates-submit";
+    else if (!active?.baselineRolelessHeadings) reason = "pre-submit-headings-missing";
+    else if (observed.length < 4) reason = "network-text-too-short";
+    else if (observed.length > 180) reason = "network-text-exceeds-short-bound";
+    else if (transientText(observed) || internalToolPayload(observed)) reason = "not-assistant-prose";
+    else if (!assistantHeadings.length) reason = "no-fresh-assistant-heading";
+    else if (!userHeadings.length) reason = "no-fresh-user-heading";
+    else if (!candidate) reason = "heading-pair-or-answer-node-mismatch";
+    else if (!freshActions.length) reason = "no-fresh-completion-toolbar";
+    else if (promptStillPresent(active)) reason = "composer-still-contains-prompt";
+    else if (upstreamStillWorking()) reason = "browser-still-generating";
+    else if (!verified) reason = "completion-toolbar-outside-reply-scope";
+    return {
+      response_recovery_short_gate_revision: 233,
+      response_recovery_short_gate: reason,
+      response_recovery_short_sse_observed_chars: observed.length,
+      response_recovery_short_sse_eligible: Boolean(shortSse),
+      response_recovery_fresh_user_headings: userHeadings.length,
+      response_recovery_fresh_assistant_headings: assistantHeadings.length,
+      response_recovery_fresh_completion_actions: freshActions.length,
+      response_recovery_roleless_candidate: Boolean(candidate),
+      response_recovery_roleless_verified: Boolean(verified),
+      response_recovery_short_current_reason: String(current?.reason || "none").slice(0, 100),
+    };
+  }
+
   function renderedNetworkCorrelatedTurn(active) {
     // A redesigned ChatGPT page may no longer expose the role/testid attributes.
     // Never guess from raw page position alone: bind a *changed* rendered node
@@ -2065,6 +2111,7 @@
           await diagnostic(active, "aborted-sse-dom-recovery", {
             response_recovery_revision: 200,
             response_recovery_candidate_reason: current.reason,
+            ...shortAbortGateEvidence(active, current),
             response_recovery_candidate_chars: String(current.text || "").length,
             response_recovery_finish_actions: responseFinishActions()
               .filter(button => !active.baselineFinishActions.has(button)).length,
