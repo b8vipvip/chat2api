@@ -117,6 +117,10 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
         return clean
 
     def concurrency_for(client_id: str) -> int:
+        # v58 owns the persisted per-Worker concurrency, not legacy v21.
+        configured_for = getattr(app.state.broker, "account_generation_configured_limit_for", None)
+        if callable(configured_for):
+            return _normalize_limit(configured_for(client_id), 3)
         runtime = getattr(app.state, "concurrency_config", {})
         resolver = runtime.get("limit_for") if isinstance(runtime, dict) else None
         if callable(resolver):
@@ -127,34 +131,24 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
         return _normalize_limit(fallback, 1)
 
     def window_limit_for(client_id: str) -> int:
-        concurrency = concurrency_for(client_id)
-        configured = explicit_limits.get(str(client_id or ""))
-        if configured is None:
-            return concurrency
-        # v121 stores the requested standby-window cardinality independently of
-        # request concurrency. v132 is the sole browser lifecycle authority and
-        # must converge the number of idle/standby (可接待) windows to this target.
-        return _normalize_limit(configured, concurrency)
+        # Retire independently persisted worker_window_limits.json overrides.
+        # N is both the hard FIFO cap and normal total-window target.
+        return concurrency_for(client_id)
 
     def window_source_for(client_id: str) -> str:
-        client_id = str(client_id or "")
-        configured = explicit_limits.get(client_id)
-        if configured is None:
-            return "concurrency"
-        return "explicit"
+        return "concurrency"
 
     def window_payload(client_id: str) -> dict[str, Any]:
         client_id = ensure_client(client_id)
         concurrency = concurrency_for(client_id)
         effective = window_limit_for(client_id)
-        configured = explicit_limits.get(client_id)
         return {
             "client_id": client_id,
             "max_concurrency": concurrency,
             "max_windows": effective,
-            "configured_max_windows": int(configured) if configured is not None else None,
+            "configured_max_windows": None,
             "source": window_source_for(client_id),
-            "inherits_concurrency": configured is None,
+            "inherits_concurrency": True,
             "min": MIN_LIMIT,
             "max": MAX_LIMIT,
             "policy": PERSISTENT_WINDOW_POLICY,
@@ -278,7 +272,7 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
                 if not client_id:
                     continue
                 row["max_windows"] = window_limit_for(client_id)
-                row["configured_max_windows"] = explicit_limits.get(client_id)
+                row["configured_max_windows"] = None
                 row["window_limit_source"] = window_source_for(client_id)
                 capacity = row.get("capacity") if isinstance(row.get("capacity"), dict) else {}
                 if isinstance(capacity, dict):
@@ -327,35 +321,16 @@ def install_worker_limits_clipboard_v121_patch(app: FastAPI) -> FastAPI:
     @app.put("/api/admin/extensions/{client_id}/windows/limit")
     async def put_window_limit(client_id: str, body: WindowLimitUpdate, request: Request) -> dict[str, Any]:
         admin(request)
-        client_id = ensure_client(client_id)
-        previous = explicit_limits.get(client_id)
-        explicit_limits[client_id] = _normalize_limit(body.max_windows)
-        try:
-            await persist()
-        except Exception:
-            if previous is None:
-                explicit_limits.pop(client_id, None)
-            else:
-                explicit_limits[client_id] = previous
-            raise
-        payload = window_payload(client_id)
-        control = await request_window_control(client_id, payload["max_windows"], payload["source"])
-        return {**payload, "saved": True, "applied": control.get("ok") is True, "control": control}
+        ensure_client(client_id)
+        raise HTTPException(status_code=409,
+                            detail="Independent window limits retired; use /api/admin/extensions/{client_id}/capacity-v57")
 
     @app.delete("/api/admin/extensions/{client_id}/windows/limit")
     async def reset_window_limit(client_id: str, request: Request) -> dict[str, Any]:
         admin(request)
-        client_id = ensure_client(client_id)
-        previous = explicit_limits.pop(client_id, None)
-        try:
-            await persist()
-        except Exception:
-            if previous is not None:
-                explicit_limits[client_id] = previous
-            raise
-        payload = window_payload(client_id)
-        control = await request_window_control(client_id, payload["max_windows"], payload["source"])
-        return {**payload, "saved": True, "applied": control.get("ok") is True, "control": control}
+        ensure_client(client_id)
+        raise HTTPException(status_code=409,
+                            detail="Window baseline now follows max_concurrency; independent override retired")
 
     def require_login_ticket(worker_id: str, request: Request) -> str:
         ticket = str(request.headers.get(LOGIN_TICKET_HEADER) or "")
