@@ -216,3 +216,33 @@ def test_p1_simultaneous_two_file_batches_are_replayed_without_duplication(tmp_p
     assert len({pair[0] for pair in rows}) == 1
     assert all(len(pair[1]) == 2 for pair in rows)
     assert len(stores[0].list_items()) == 2
+
+
+def test_p1_persisted_corrupt_bytes_never_download_as_success(tmp_path):
+    from app.media_archive_v173 import MediaArchive
+    from app.config import Settings
+    from app.main import create_app
+
+    app = create_app(Settings(
+        CHAT2API_API_KEY="test-key",
+        CHAT2API_PAIRING_CODE="pair-code",
+        CHAT2API_DATA_DIR=tmp_path,
+    ))
+    archive = app.state.generated_files
+    record = archive.store(
+        b"%PDF-1.7\noriginal content", "sample.pdf", "application/pdf",
+        "owner", "request-integrity",
+    )
+    with archive._db() as conn:
+        object_key = conn.execute(
+            "SELECT object_key FROM generated_files WHERE id=?", (record["id"],)
+        ).fetchone()["object_key"]
+    filename = (archive.storage.root / object_key)
+    filename.write_bytes(b"%PDF-1.7\ncorrupted but plausible")
+    with pytest.raises(ValueError, match="integrity verification"):
+        archive.read(record["id"], record["token"])
+    with TestClient(app) as client:
+        response = client.get(f"/api/generated-files/{record['id']}/{record['token']}")
+        assert response.status_code == 503
+        assert "storage integrity" in response.json()["detail"].lower()
+        assert "corrupted" not in response.text
