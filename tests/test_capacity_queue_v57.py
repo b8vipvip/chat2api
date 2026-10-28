@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import subprocess
 import tempfile
+import time
 from contextvars import ContextVar
 from pathlib import Path
 from types import SimpleNamespace
@@ -94,16 +95,31 @@ def test_v58_same_api_can_run_concurrently_until_worker_capacity() -> None:
             registry.routing_key_context.reset(token)
             assert broker.capacity_snapshot("ext_test")["active_requests"] == 3
 
-            # N=3 is the normal physical total, not a hard request cap.
-            # v132 grows one real standby after the third active request.
-            admitted = await asyncio.wait_for(
-                broker.create("req_a3", "ext_test"), timeout=0.5
-            )
+            # With no verified spare yet, N=3 must NOT silently admit the
+            # fourth request just because used+1 is below the global cap.
+            fourth = asyncio.create_task(broker.create("req_a3", "ext_test"))
+            await asyncio.sleep(0.03)
+            assert not fourth.done()
+            registry.clients["ext_test"].metadata.update({
+                "worker_pool_admission_revision": 224,
+                "worker_pool_ready_windows": 1,
+                "worker_pool_active_windows": 3,
+                "worker_pool_login_ready": True,
+            })
+            registry.worker_pool_capacity_received_at = {"ext_test": time.monotonic()}
+            admitted = await asyncio.wait_for(fourth, timeout=1.6)
             assert broker.capacity_snapshot("ext_test")["active_requests"] == 4
+            assert admitted.diagnostics["worker_verified_pool_capacity_at_admission"]["fresh"] is True
+            # The same reported spare was claimed: it cannot be admitted twice.
+            fifth = asyncio.create_task(broker.create("req_a4", "ext_test"))
+            await asyncio.sleep(0.03)
+            assert not fifth.done()
             await broker.release(first.request_id)
+            await asyncio.wait_for(fifth, timeout=1.6)
             assert admitted.diagnostics["api_key_capacity_limit"] is None
             for state in (second, third, admitted):
                 await broker.release(state.request_id)
+            await broker.release("req_a4")
 
     asyncio.run(scenario())
 
