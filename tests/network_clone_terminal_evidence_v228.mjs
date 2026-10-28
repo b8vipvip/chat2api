@@ -18,9 +18,11 @@ async function isolatedSession(){
     addEventListener:(event,callback)=>{if(event==="message")handlers.push(callback)},
   };
   ctx.globalThis=ctx;
-  vm.runInNewContext(isolated,ctx);
+  vm.createContext(ctx);
+  vm.runInContext(isolated,ctx);
+  const pageWindow = vm.runInContext("globalThis",ctx);
   function send(stream_id,phase,other={}){
-    handlers[0]({source:ctx,data:{source:"chat2api-network-stream-v55",
+    handlers[0]({source:pageWindow,data:{source:"chat2api-network-stream-v55",
       stream_id,phase,...other}});
   }
   send("stream-old","response",{event_stream:true,status:200});
