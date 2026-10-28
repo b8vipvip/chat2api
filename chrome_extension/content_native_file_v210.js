@@ -184,7 +184,7 @@
   async function stageLargeFile(file,requestId) {
     // A request-scoped verified file above 6 MiB travels as <=96 KiB chunks
     // over the *existing* authenticated Worker WebSocket. Never embed these
-    // bytes in a chat.completed event, telemetry row or long SSE response.
+    // bytes in a completion event, telemetry row or long SSE response.
     if (file.bytes <= MAX_INLINE_BYTES) return file;
     if (typeof crypto?.subtle?.digest !== "function") return null;
     const binary = atob(String(file.data_url || "").split("base64,")[1] || "");
