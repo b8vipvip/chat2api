@@ -87,11 +87,29 @@ class GeneratedFileArchive:
         config = self.storage._config()
         if not config["auto_archive"]:
             raise ValueError("Generated file auto-archiving is disabled")
+        digest = hashlib.sha256(data).hexdigest()
+        # Retried terminal delivery must not manufacture a different download
+        # URL for identical bytes owned by the same request. Avoid filename-only
+        # identity: a genuine edited artifact has a different digest.
+        with self._db() as conn:
+            prior = conn.execute(
+                """SELECT * FROM generated_files
+                   WHERE owner=? AND request_id=? AND filename=? AND sha256=?
+                   ORDER BY created_at ASC LIMIT 1""",
+                (owner, request_id, name, digest),
+            ).fetchone()
+        if prior:
+            return {
+                "id": prior["id"], "token": prior["token"],
+                "filename": prior["filename"], "mime_type": prior["mime"],
+                "bytes": prior["size"], "sha256": prior["sha256"],
+                "backend": prior["backend"], "created_at": prior["created_at"],
+                "request_id": request_id, "_created": False,
+            }
         file_id = "gen_" + secrets.token_urlsafe(15).replace("-", "").replace("_", "")
         token = secrets.token_urlsafe(24)
         key = f"objects/{file_id}{Path(name).suffix.lower()}"
         self.storage._write(config, key, data, canonical)
-        digest = hashlib.sha256(data).hexdigest()
         now = datetime.now(timezone.utc).isoformat()
         try:
             with self._db() as conn:
@@ -107,7 +125,7 @@ class GeneratedFileArchive:
         return {
             "id": file_id, "token": token, "filename": name, "mime_type": canonical,
             "bytes": len(data), "sha256": digest, "backend": config["backend"],
-            "created_at": now, "request_id": request_id,
+            "created_at": now, "request_id": request_id, "_created": True,
         }
 
     def rewrite_markdown(self, text: str, owner: str, request_id: str, base_url: str):
@@ -120,9 +138,10 @@ class GeneratedFileArchive:
             return source, []
         if len(matches) > MAX_FILES_PER_RESPONSE:
             raise ValueError("Too many generated files in one response")
-        total, output, offset, records = 0, [], 0, []
-        cfg = self.storage._config()
-        origin = (cfg.get("public_base_url") or base_url.rstrip("/"))
+        # Phase 1: validate ALL markers and byte signatures before touching
+        # storage. An invalid 4th file must not leave the first three archived.
+        total = 0
+        decoded: list[tuple[re.Match[str], str, str, bytes]] = []
         for match in matches:
             filename, mime, encoded = match.group(1), match.group(3), match.group(4)
             if len(encoded) > 4 * ((MAX_FILE_BYTES + 2) // 3) + 4:
@@ -134,13 +153,37 @@ class GeneratedFileArchive:
             total += len(data)
             if total > MAX_TOTAL_BYTES:
                 raise ValueError("Generated files exceed response transfer limit")
-            record = self.store(data, filename, mime, owner, request_id)
-            asset = f"{origin}/api/generated-files/{record['id']}/{record['token']}"
-            output.append(source[offset:match.start()])
-            output.append(f"[📎 {record['filename'].replace('[', '').replace(']', '')}]({asset})")
-            records.append({key: value for key, value in record.items() if key != "token"} |
-                           {"url": asset, "kind": "file", "position": match.start()})
-            offset = match.end()
+            name, canonical = self.validate(filename, mime, data)
+            decoded.append((match, name, canonical, data))
+
+        # Phase 2: the same response owns every archived object. Roll back only
+        # newly written records on a backend failure, never previously published
+        # files reused by an identical request replay.
+        output, offset, records, created = [], 0, [], []
+        cfg = self.storage._config()
+        origin = (cfg.get("public_base_url") or base_url.rstrip("/"))
+        try:
+            for match, filename, mime, data in decoded:
+                record = self.store(data, filename, mime, owner, request_id)
+                if record["_created"]:
+                    created.append(record["id"])
+                asset = f"{origin}/api/generated-files/{record['id']}/{record['token']}"
+                output.append(source[offset:match.start()])
+                output.append(f"[📎 {record['filename'].replace('[', '').replace(']', '')}]({asset})")
+                records.append({key: value for key, value in record.items()
+                                if key not in {"token", "_created"}} |
+                               {"url": asset, "kind": "file", "position": match.start(),
+                                "status": "archived"})
+                offset = match.end()
+        except Exception:
+            for file_id in reversed(created):
+                try:
+                    self.delete(file_id)
+                except Exception:
+                    # A failed remote delete must not falsely complete the
+                    # response; the object remains inaccessible without token.
+                    pass
+            raise
         output.append(source[offset:])
         return "".join(output), records
 
