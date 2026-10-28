@@ -202,6 +202,9 @@ class ClientRegistry:
                 raise PermissionError("Worker is disabled by administrator")
             old = self.sockets.get(client_id)
             self.sockets[client_id] = websocket
+            # New Chrome connection means any former physical window IDs may
+            # no longer exist. Require a new v132 verified snapshot.
+            self.worker_pool_capacity_received_at.pop(client_id, None)
             self.socket_locks.setdefault(client_id, asyncio.Lock())
             client.last_seen_at = utc_now()
             await self.save()
@@ -215,6 +218,7 @@ class ClientRegistry:
         async with self.lock:
             if self.sockets.get(client_id) is websocket:
                 self.sockets.pop(client_id, None)
+                self.worker_pool_capacity_received_at.pop(client_id, None)
 
     async def touch(self, client_id: str, metadata: dict[str, Any] | None = None) -> None:
         client = self.clients.get(client_id)
