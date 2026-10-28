@@ -51,6 +51,10 @@
   }
 
   async function recoverStaleOwner(message) {
+    // The v225 request-scoped route never supersedes an API-key window.
+    // v136's historical recovery assumed a single key-level owner and could
+    // otherwise cancel another still-live request of the SAME API key.
+    if (message?.routing?.request_scoped_window === true) return false;
     const router = routerState();
     const key = logicalKey(message);
     const requestId = String(message?.request_id || "");
