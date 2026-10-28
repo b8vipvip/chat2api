@@ -316,10 +316,12 @@
     // request for this API key finished less than five seconds ago, its route
     // and ChatGPT conversation cannot be assigned again.
     const isolated = ["chat.request", "image.request", "voice.request"].includes(message?.type);
+    const liveSession = message?.type === "voice.live.start";
     let key = null;
     let route = null;
-    if (isolated) {
-      key = `${baseKey}::request::${requestId}`;
+    if (isolated || liveSession) {
+      key = liveSession ? `${baseKey}::live::${requestId}`
+        : `${baseKey}::request::${requestId}`;
       const settlement = state.terminalSettlements.get(key);
       if (settlement) await settlement.catch(() => {});
       route = await routeFor(key);
@@ -352,7 +354,8 @@
       }
     }
     route.api_key_id = baseKey;
-    route.request_scoped = isolated;
+    route.request_scoped = isolated || liveSession;
+    route.live_session = liveSession;
     route.request_id = requestId;
 
     const hadLiveTab = Boolean(await liveTab(route));
@@ -474,6 +477,39 @@
   }
   state.failRequest = failRequest;
   state.retireRoute = retireRoute;
+
+  // v229: same router owns the complete GPT-Live physical lease lifecycle.
+  // Content audio turns, response.done and barge-in are NOT session terminals.
+  // Recover the exact leased tab from persisted routes after MV3 suspension.
+  async function liveTabForRequest(requestId) {
+    const key = await keyForRequest(requestId);
+    if (!key) return null;
+    const route = state.routes[key];
+    if (!route?.live_session || route.inflight_request_id !== String(requestId)
+        || !Number.isInteger(route.tab_id) || !Number.isInteger(route.window_id)) return null;
+    try {
+      const tab = await chrome.tabs.get(route.tab_id);
+      return tab?.id === route.tab_id && tab.windowId === route.window_id ? tab : null;
+    } catch (_) { return null; }
+  }
+
+  async function finishLiveSession(requestId, reason = "voice-live-stopped") {
+    const key = await keyForRequest(requestId);
+    if (!key) return false;
+    const route = state.routes[key];
+    if (!route?.live_session || route.inflight_request_id !== String(requestId)) return false;
+    // A second stop/control from an old client must never close a replacement.
+    route.inflight_request_id = null;
+    route.live_session = false;
+    route.last_rotation_reason = String(reason || "voice-live-stopped").slice(0,90);
+    route.last_active_at = Date.now();
+    state.activeRequests.delete(String(requestId));
+    await persist();
+    await scheduleClose(route); // exactly the existing v30 5s + MV3 alarm
+    return true;
+  }
+  state.liveTabForRequest = liveTabForRequest;
+  state.finishLiveSession = finishLiveSession;
 
   async function completeRequest(event, sender) {
     const requestId = String(event?.request_id || "");
