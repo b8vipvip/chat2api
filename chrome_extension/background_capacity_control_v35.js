@@ -108,8 +108,8 @@
   async function applyWindowLimit(requestedTarget, source) {
     const target = targetValue(requestedTarget);
     const cleanSource = String(source || "explicit");
-    // Keep v121's stored limit as a backwards-compatible admission guard, while
-    // v132 becomes the physical lifecycle authority and prewarms to the target.
+    // v121 retains only a compatibility setting. v132 exclusively owns
+    // physical allocation; N is baseline TOTAL, never N additional standbys.
     const limiter = windowLimiter();
     const pool = persistentPool();
     const [limitApplied, poolApplied] = await Promise.all([
@@ -118,17 +118,17 @@
     ]);
     const snapshot = await windowSnapshot();
     const standby = Number(snapshot.idle || snapshot.standby || 0);
-    const reached = snapshot.login_ready === true && snapshot.worker_disabled !== true && standby === target;
+    const reached = snapshot.login_ready === true && snapshot.worker_disabled !== true
+      && snapshot.target_reached === true;
     let pendingReason = "";
     if (snapshot.worker_disabled === true) pendingReason = "worker_disabled";
     else if (snapshot.login_ready !== true) pendingReason = "login_not_ready";
-    else if (standby < target) pendingReason = "warming";
-    else if (standby > target) pendingReason = "excess_standby";
+    else if (!reached) pendingReason = "warming";
     return {
       target,
       target_reached: reached,
       pending_reason: pendingReason,
-      window_policy: "persistent-prewarmed-total-window-pool-v132",
+      window_policy: "baseline-total-plus-one-ready-if-saturated-v223",
       window_limit: limitApplied,
       persistent_pool: poolApplied,
       window_snapshot: snapshot,
