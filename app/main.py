@@ -790,6 +790,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "error": error,
             }
         )
+        # The Broker has now persisted its authoritative terminal; completed
+        # chunks were already archived and all other partial staging bytes
+        # are no longer eligible to be attached to a future request.
+        await asyncio.to_thread(generated_staging.drop_request, state.request_id)
         return usage, token_meta
 
     async def record_request_queued(
