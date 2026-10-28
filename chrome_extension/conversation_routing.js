@@ -11,6 +11,7 @@
   const MAX_TEXT_CHARS = 96000;
   const MAX_ATTACHMENTS = 16;
   const ALARM_PREFIX = "chat2api-route-close:";
+  const MIN_CHROME_ALARM_MS = 30 * 1000;
   const FAILURE_TYPES = new Set(["chat.error", "chat.cancelled", "image.error", "image.cancelled", "voice.error", "voice.cancelled"]);
   const SUCCESS_TYPES = new Set(["chat.completed", "image.completed"]);
   const state = {
@@ -164,8 +165,16 @@
     } catch (_) { return null; }
   }
 
+
+  function clearCloseTimer(windowId) {
+    const timer = state.closeTimers.get(Number(windowId));
+    if (timer) clearTimeout(timer);
+    state.closeTimers.delete(Number(windowId));
+  }
+
   async function clearCloseAlarm(route) {
     if (Number.isInteger(route?.window_id)) {
+      clearCloseTimer(route.window_id);
       try { await chrome.alarms.clear(`${ALARM_PREFIX}${route.window_id}`); } catch (_) {}
     }
     if (route) route.close_after = null;
@@ -173,10 +182,21 @@
 
   async function scheduleClose(route) {
     if (!Number.isInteger(route?.window_id) || !route.window_owned || route.inflight_request_id) return;
+    const windowId = route.window_id;
     route.last_active_at = Date.now();
     route.close_after = route.last_active_at + IDLE_CLOSE_MS;
-    await chrome.alarms.create(`${ALARM_PREFIX}${route.window_id}`, { when: route.close_after });
+    const closeAt = route.close_after;
     await persist();
+    clearCloseTimer(windowId);
+    // Same route owner: normal 5s close + durable MV3 alarm fallback.
+    const timer = setTimeout(() => {
+      if (state.closeTimers.get(windowId) === timer) state.closeTimers.delete(windowId);
+      closeDueWindow(windowId, closeAt).catch(() => {});
+    }, IDLE_CLOSE_MS);
+    state.closeTimers.set(windowId, timer);
+    await chrome.alarms.create(`${ALARM_PREFIX}${windowId}`, {
+      when: Math.max(closeAt, Date.now() + MIN_CHROME_ALARM_MS),
+    });
   }
 
   async function navigateFresh(route, reason) {
@@ -437,6 +457,10 @@
     } finally {
       if (Number.isInteger(windowId)) state.retiringWindows.delete(windowId);
     }
+    if (route?.request_scoped === true && state.routes[key] === route) {
+      delete state.routes[key];
+      await persist();
+    }
     setTimeout(() => state.retiredRequests.delete(requestId), 60000);
     await sendExtensionStatus(false).catch(() => {});
     return true;
@@ -531,14 +555,20 @@
     }).catch(() => {});
   });
 
+
   chrome.tabs.onRemoved.addListener(tabId => {
     ensureLoaded().then(async () => {
       let changed = false;
-      for (const route of Object.values(state.routes)) {
+      for (const [key, route] of Object.entries(state.routes)) {
         if (route?.tab_id !== tabId) continue;
+        clearCloseTimer(route.window_id);
+        if (Number.isInteger(route.window_id)) {
+          chrome.alarms.clear(`${ALARM_PREFIX}${route.window_id}`).catch(() => {});
+        }
         const requestId = String(route.inflight_request_id || "");
-        resetClosedRoute(route, "window-closed-new-chat-next-request");
         if (requestId) state.activeRequests.delete(requestId);
+        if (route.request_scoped === true) delete state.routes[key];
+        else resetClosedRoute(route, "window-closed-new-chat-next-request");
         changed = true;
       }
       if (changed) await persist();
@@ -548,45 +578,60 @@
   chrome.windows.onRemoved.addListener(windowId => {
     ensureLoaded().then(async () => {
       let changed = false;
-      for (const route of Object.values(state.routes)) {
+      clearCloseTimer(windowId);
+      chrome.alarms.clear(`${ALARM_PREFIX}${windowId}`).catch(() => {});
+      for (const [key, route] of Object.entries(state.routes)) {
         if (route?.window_id !== windowId) continue;
         const requestId = String(route.inflight_request_id || "");
-        resetClosedRoute(route, "window-closed-new-chat-next-request");
         if (requestId) state.activeRequests.delete(requestId);
+        if (route.request_scoped === true) delete state.routes[key];
+        else resetClosedRoute(route, "window-closed-new-chat-next-request");
         changed = true;
       }
       if (changed) await persist();
     }).catch(() => {});
   });
 
+  async function closeDueWindow(windowId, expectedCloseAt = null) {
+    await ensureLoaded();
+    windowId = Number(windowId);
+    if (!Number.isInteger(windowId)) return false;
+    const entry = Object.entries(state.routes).find(([, item]) => item?.window_id === windowId);
+    if (!entry) return false;
+    const [key, route] = entry;
+    if (expectedCloseAt !== null && Number(route.close_after) !== Number(expectedCloseAt)) return false;
+    if (route.inflight_request_id || !Number(route.close_after)) return false;
+    if (Date.now() + 100 < Number(route.close_after)) return false;
+    if (state.retiringWindows.has(windowId)) return false;
+    state.retiringWindows.add(windowId);
+    try {
+      await chrome.windows.remove(windowId);
+      // Recheck exact identity after asynchronous removal.
+      if (state.routes[key] === route && route.window_id === windowId && !route.inflight_request_id) {
+        if (route.request_scoped === true) delete state.routes[key];
+        else resetClosedRoute(route, "idle-window-closed-new-chat-next-request");
+        await persist();
+      }
+    } catch (_) {
+      return false; // keep owner and window on a failed close
+    } finally {
+      state.retiringWindows.delete(windowId);
+      clearCloseTimer(windowId);
+      chrome.alarms.clear(`${ALARM_PREFIX}${windowId}`).catch(() => {});
+    }
+    const settings = await config().catch(() => ({}));
+    if (settings.boundTabId && !await chrome.tabs.get(settings.boundTabId).catch(() => null)) {
+      await chrome.storage.local.set({ boundTabId: null });
+    }
+    await sendExtensionStatus(false).catch(() => {});
+    return true;
+  }
+
   chrome.alarms.onAlarm.addListener(alarm => {
     if (!alarm?.name?.startsWith(ALARM_PREFIX)) return;
     const windowId = Number(alarm.name.slice(ALARM_PREFIX.length));
     if (!Number.isInteger(windowId)) return;
-    ensureLoaded().then(async () => {
-      const entry = Object.entries(state.routes).find(([, route]) => route?.window_id === windowId);
-      if (!entry) return;
-      const [, route] = entry;
-      const now = Date.now();
-      if (route.inflight_request_id) {
-        route.close_after = now + IDLE_CLOSE_MS;
-        await chrome.alarms.create(alarm.name, { when: route.close_after });
-        await persist();
-        return;
-      }
-      if (Number(route.close_after || 0) > now + 500) {
-        await chrome.alarms.create(alarm.name, { when: route.close_after });
-        return;
-      }
-      try { await chrome.windows.remove(windowId); } catch (_) {}
-      resetClosedRoute(route, "idle-window-closed-new-chat-next-request");
-      await persist();
-      const settings = await config().catch(() => ({}));
-      if (settings.boundTabId && !await chrome.tabs.get(settings.boundTabId).catch(() => null)) {
-        await chrome.storage.local.set({ boundTabId: null });
-      }
-      await sendExtensionStatus(false).catch(() => {});
-    }).catch(() => {});
+    closeDueWindow(windowId).catch(() => {});
   });
 
   ensureLoaded().catch(() => {});
