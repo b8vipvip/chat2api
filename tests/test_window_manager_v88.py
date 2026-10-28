@@ -30,7 +30,7 @@ def test_terminal_prompt_overlay_does_not_arbitrate_terminal_events() -> None:
     assert 'event?.type === "chat.cancelled" || event?.type === "chat.error"' not in guard
     assert "state.protectedUntil" in manager
     assert "repairSuccessfulRoute" in manager
-    assert "SUCCESS_LEASE_MS = 5 * 60 * 1000" in manager
+    assert "SUCCESS_LEASE_MS = 5 * 1000" in manager
 
 
 def test_long_prompt_preserves_editor_native_input_state() -> None:
