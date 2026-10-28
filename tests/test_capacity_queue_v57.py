@@ -122,6 +122,12 @@ def test_v58_same_api_can_run_concurrently_until_worker_capacity() -> None:
             registry.worker_pool_capacity_received_at["ext_test"] = time.monotonic()
             await asyncio.wait_for(fifth, timeout=1.6)
             assert admitted.diagnostics["worker_verified_spare_window_claim"] == 104
+            # The routing payload must carry the same physical-window lease,
+            # not merely display it in Request History diagnostics.
+            await registry.send("ext_test", {"type": "chat.request", "request_id": "req_a3"})
+            assert registry.sent[-1][1]["routing"]["worker_verified_spare_window_claim"] == 104
+            await registry.send("ext_test", {"type": "chat.request", "request_id": "req_a4"})
+            assert registry.sent[-1][1]["routing"]["worker_verified_spare_window_claim"] == 105
             assert admitted.diagnostics["api_key_capacity_limit"] is None
             for state in (second, third, admitted):
                 await broker.release(state.request_id)
