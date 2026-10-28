@@ -235,6 +235,10 @@ class GeneratedFileArchive:
         if not row or not secrets.compare_digest(row["token"], token):
             raise KeyError("Unknown generated file")
         data = self.storage._read(self.storage._config(), row["backend"], row["object_key"])
+        # The durable manifest is not proof of the bytes fetched later from
+        # local disk/S3. Never respond HTTP 200 with a truncated/replaced file.
+        if len(data) != row["size"] or hashlib.sha256(data).hexdigest() != row["sha256"]:
+            raise ValueError("Generated file integrity verification failed")
         return data, row["mime"], row["filename"]
 
     def list_items(self, limit: int = 80):
