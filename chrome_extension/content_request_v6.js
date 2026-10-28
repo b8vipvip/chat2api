@@ -222,7 +222,8 @@
       // Native ChatGPT elapsed-time badges are NOT assistant responses.
       // v222 diagnostics surfaced doubled `Worked for 5s` fragments as API
       // output while the true assistant turn was still unidentified.
-      || /^worked for (?:\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds?|m|mins?|minutes?)|a (?:few|couple of) seconds?)$/.test(text);
+      || /^worked for (?:\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds?|m|mins?|minutes?)|a (?:few|couple of) seconds?)$/.test(text)
+      || /^(worked for (?:\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds?|m|mins?|minutes?)|a (?:few|couple of) seconds?))\1$/.test(text);
   }
 
   function plainNodeText(node) {
@@ -1179,7 +1180,7 @@
     const bounded = assistantOnlyReplyText(active, text);
     if (bounded.pending) return previous;
     text = bounded.text;
-    if (!text || text === previous) return previous;
+    if (!text || transientText(text) || text === previous) return previous;
     active.lastCaptureAt = Date.now();
     active.lastCapturedText = text;
     if (text.startsWith(previous)) {
