@@ -138,6 +138,15 @@ class GeneratedFileStaging:
                 raise ValueError("Generated staged file integrity mismatch")
             return payload, row.mime
 
+    def drop_request(self, request_id: str) -> None:
+        # Once the authoritative Broker outcome is persisted, unfinished
+        # pieces are no longer usable and must not accumulate on disk.
+        with self.lock:
+            self._prune()
+            for key in [key for key in self.entries if key[0] == request_id]:
+                row = self.entries.pop(key)
+                row.path.unlink(missing_ok=True)
+
     def drop(self, request_id: str, upload_id: str) -> None:
         with self.lock:
             row = self.entries.pop((request_id, upload_id), None)

@@ -197,7 +197,7 @@
     const mime = MIMES[file.filename.split(".").pop().toLowerCase()];
     for(let offset=0,sequence=0;offset<binary.length;offset+=UPLOAD_CHUNK_BYTES,sequence++){
       const part=binary.slice(offset,offset+UPLOAD_CHUNK_BYTES);
-      const result=await chrome.runtime.sendMessage({type:"chat2api.event",event:{
+      const result=await chrome.runtime.sendMessage({type:"chat2api.file.chunk",event:{
         type:"chat.file.chunk",request_id:requestId,
         upload_id:uploadId,filename:file.filename,mime,
         sequence,expected_bytes:file.bytes,expected_sha256:sha256,

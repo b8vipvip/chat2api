@@ -1735,10 +1735,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         await websocket.send_json({"type": "heartbeat.ack", "ts": time.time()})
                     continue
                 request_id = str(message.get("request_id") or "")
-                if message_type == "chat.file.chunk" and request_id:
-                    # Bounded binary transport, not a chat.snapshot or a second
-                    # Worker terminal. Only the exact active authenticated
-                    # Worker socket may stage bytes for its assigned request.
+                if message_type == "chat.file.chunk":
+                    # A successful socket.send is NOT a persisted chunk ACK.
+                    # The server replies to the same authenticated socket only
+                    # after the bounded stage write/validation completes.
+                    accepted, reason = False, "request-or-socket-not-active"
                     state = broker.requests.get(request_id)
                     if (state and state.client_id == client_id
                         and registry.sockets.get(client_id) is websocket
@@ -1757,12 +1758,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 final=message.get("final"),
                             )
                             state.diagnostics["generated_chunk_upload_seen"] = True
+                            accepted, reason = True, ""
                         except (ValueError, OSError) as exc:
                             # Persist only safe fixed-class evidence, never
                             # Base64 bytes or the browser's source URL.
-                            state.diagnostics["generated_chunk_failure"] = (
-                                type(exc).__name__ + ":" + str(exc)[:90]
-                            )
+                            reason = type(exc).__name__ + ":" + str(exc)[:90]
+                            state.diagnostics["generated_chunk_failure"] = reason
+                    await websocket.send_json({
+                        "type": "chat.file.chunk.ack",
+                        "request_id": request_id,
+                        "upload_id": str(message.get("upload_id") or "")[:40],
+                        "sequence": message.get("sequence"),
+                        "ok": accepted,
+                        "error": reason,
+                    })
                     continue
                 if message_type == "probe.event" and request_id:
                     # Existing authenticated socket and broker are the sole
