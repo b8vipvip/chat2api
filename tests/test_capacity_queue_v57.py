@@ -129,9 +129,19 @@ def test_v58_same_api_can_run_concurrently_until_worker_capacity() -> None:
             await registry.send("ext_test", {"type": "chat.request", "request_id": "req_a4"})
             assert registry.sent[-1][1]["routing"]["worker_verified_spare_window_claim"] == 105
             assert admitted.diagnostics["api_key_capacity_limit"] is None
-            for state in (second, third, admitted):
-                await broker.release(state.request_id)
+            # Releasing a request does NOT make its previously reserved ID
+            # reusable from the same stale, verified-ready snapshot.
             await broker.release("req_a4")
+            sixth = asyncio.create_task(broker.create("req_a5", "ext_test"))
+            await asyncio.sleep(0.03)
+            assert not sixth.done(), "released claim 105 must remain fenced until Worker reports it absent"
+            assert 105 in broker.capacity_snapshot("ext_test")["verified_pool_capacity"]["retired_window_claims"]
+            registry.clients["ext_test"].metadata["worker_pool_ready_window_ids"] = [106]
+            registry.worker_pool_capacity_received_at["ext_test"] = time.monotonic()
+            sixth_admitted = await asyncio.wait_for(sixth, timeout=1.6)
+            assert sixth_admitted.diagnostics["worker_verified_spare_window_claim"] == 106
+            for state in (second, third, admitted, sixth_admitted):
+                await broker.release(state.request_id)
 
     asyncio.run(scenario())
 
