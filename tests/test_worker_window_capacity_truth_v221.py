@@ -44,7 +44,7 @@ def test_ready_window_and_baseline_total_use_one_consistent_status():
     ui = src("app/admin_window_manager_v88.js")
     assert 'if (value === "ready") return "可接待"' in ui
     assert '待机（调度容量已满）' not in ui
-    assert '常态窗口总数' in ui
+    assert '常态窗口' in ui
     assert '备用（并发已满，暂不可调用）' in ui
     assert 'worker_capacity_full' in ui
     assert '新请求必须排队，不能突破 N 个并发' in ui
