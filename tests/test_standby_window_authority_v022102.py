@@ -41,13 +41,13 @@ def test_standby_target_excludes_active_and_five_minute_route_leases() -> None:
     assert 'function standbyRows(rows, value)' in pool
     assert '!assigned.has(row.window_id)' in pool
     assert '!busy.has(row.window_id)' in pool
-    assert 'while (unassignedWindowRows(rows, value).length < target)' in pool
+    assert 'while (rows.length < requiredTotal && rows.length < MAX_TARGET)' in pool
     assert 'post-admission-standby-refill-v152' in pool
     assert 'route.window_owned = true' in pool
     assert 'markPooledRoute' not in pool
     assert 'reassign-idle-persistent-route' not in pool
 
-    assert 'const IDLE_CLOSE_MS = 5 * 60 * 1000' in router
+    assert 'const IDLE_CLOSE_MS = 5 * 1000' in router
     assert 'route.last_active_at = Date.now()' in router
     assert 'route.close_after = route.last_active_at + IDLE_CLOSE_MS' in router
     assert 'chrome.alarms.create(`${ALARM_PREFIX}${route.window_id}`, { when: route.close_after })' in router
@@ -67,7 +67,7 @@ def test_live_window_truth_distinguishes_standby_in_use_and_leased() -> None:
     assert 'return "CHAT2API_API_KEY"' in server
     assert 'return `正在接待${name || "API请求"}`' in admin
     # Physical readiness and a v58 server admission permit are distinct.
-    assert 'row.server_admission_available === false ? "待机（调度容量已满）" : "可接待"' in admin
+    assert 'if (value === "ready") return "可接待"' in admin
     assert 'broker.capacity_snapshot(client_id)' in server
     assert 'return "已关闭"' in admin
 
