@@ -162,7 +162,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v3"' in columns_script
     assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2"' in columns_script
     assert '{key: "bound_api_keys", label: "绑定 API Key 数"}' not in columns_script
-    assert '{key: "worker_settings", label: "并发 / 备用设置"}' in columns_script
+    assert '{key: "worker_settings", label: "并发设置"}' in columns_script
     assert '{key: "device_name", label: "设备名称"}' in columns_script
     assert '{key: "occupancy", label: "请求 / 备用窗口"}' in columns_script
     assert 'button.id = "extensionColumnSettingsButton"' in columns_script

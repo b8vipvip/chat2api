@@ -155,7 +155,7 @@ def test_admin_copy_describes_persistent_windows_without_legacy_helper_copy() ->
     behavior = text("app/admin_worker_limits_clipboard_v121.js")
     canonical = text("app/admin_extension_columns.js")
     identity = text("app/admin_worker_identity_v131.js")
-    assert "持续维持的可接待空闲窗口数量" in behavior
+    assert "满载时自动增加的备用窗口不增加并发名额" in behavior
     assert "并发=同时执行请求上限；备用=持续维持的未分配可接待窗口数量" in canonical
     assert "extensionDeviceBody" not in identity
 
@@ -212,6 +212,6 @@ def test_bootstrap_is_adopted_before_remaining_standby_windows_are_warmed() -> N
     source = text("chrome_extension/conversation_persistent_pool_v132.js")
     bootstrap = source.index('if (!isDisabled && rows.length === 0)')
     early_return = source.index('return snapshotFrom(rows, value, auth, isDisabled);', bootstrap)
-    warm = source.index('while (rows.length < requiredTotal && rows.length < MAX_TARGET)', early_return)
+    warm = source.index('while (rows.length < requiredTotal && rows.length < MAX_PHYSICAL_WINDOWS)', early_return)
     assert bootstrap < early_return < warm
     assert 'if (ready && !isDisabled && !lastError)' in source

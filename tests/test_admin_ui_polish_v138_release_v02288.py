@@ -42,7 +42,7 @@ def test_worker_limit_cell_uses_compact_summary_with_single_popover_editor() -> 
     assert "data-v121-edit-limits" in canonical
     assert "data-v121-limit-popover" in canonical
     assert "data-v121-concurrency" in canonical
-    assert "data-v121-windows" in canonical
+    assert "data-v121-windows" not in canonical
     assert "data-v121-save-limits" in canonical
     assert "data-v121-refresh-limits" not in canonical
     assert "窗口跟随并发" not in canonical

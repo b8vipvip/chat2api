@@ -36,7 +36,7 @@ def test_column_layout_uses_one_canonical_semantic_schema():
         ("device_id", "设备标识"),
         ("account_type", "账户类型"),
         ("status", "状态"),
-        ("worker_settings", "并发 / 备用设置"),
+        ("worker_settings", "并发设置"),
         ("last_seen", "最后在线"),
         ("chatgpt", "ChatGPT"),
         ("actions", "操作"),

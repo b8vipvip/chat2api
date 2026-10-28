@@ -121,11 +121,11 @@ def test_realtime_window_refresh_is_compacted_into_worker_settings_column():
     assert '["reserve_windows", "实时窗口"]' not in health
     assert 'data-live-window-refresh' not in health
     assert 'renderReserveWindowCell' not in health
-    assert '{key: "worker_settings", label: "并发 / 备用设置"}' in canonical
+    assert '{key: "worker_settings", label: "并发设置"}' in canonical
     assert 'data-chat2api-structural-owner="worker-settings-v152"' in canonical
     assert 'data-v121-limit-summary' in canonical
     assert 'data-v121-concurrency' in canonical
-    assert 'data-v121-windows' in canonical
+    assert 'data-v121-windows' not in canonical
     assert 'data-v121-save-limits' in canonical
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' in behavior
     assert 'renderer: "canonical-worker-list-v152"' in behavior

@@ -116,7 +116,7 @@ def test_health_center_and_worker_settings_support_reordered_columns():
     assert "insertCell" not in health
     assert "insertBefore(cell" not in health
 
-    assert '{key: "worker_settings", label: "并发 / 备用设置"}' in columns
+    assert '{key: "worker_settings", label: "并发设置"}' in columns
     assert '{key: "occupancy", label: "请求 / 备用窗口"}' in columns
     assert '{key: "bound_api_keys", label: "绑定 API Key 数"}' not in columns
     assert 'data-chat2api-health-column="${key}"' in columns
