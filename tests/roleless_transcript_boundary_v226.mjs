@@ -46,10 +46,10 @@ ctx.visible = () => true;
 ctx.turnFollows = (left,right)=>left===userHeading && right===assistantHeading;
 const fresh = {...state,submitStartedAt:Date.now(),
   baselineRolelessHeadings:new Set()};
-const isolated = "#### ChatGPT said:\\n\\n# Chapter two\\n\\nFinished answer";
+const isolated = "#### ChatGPT said:\n\n# Chapter two\n\nFinished answer";
 const freshResult=ctx.inspect(fresh,isolated);
 assert.equal(freshResult.stripped,true);
-assert.equal(freshResult.text,"# Chapter two\\n\\nFinished answer");
+assert.equal(freshResult.text,"# Chapter two\n\nFinished answer");
 assert.equal(freshResult.boundaryEvidence,"fresh-paired-roleless-heading-v239");
 const old = {...fresh,baselineRolelessHeadings:new Set([assistantHeading])};
 assert.equal(ctx.inspect(old,isolated).text,isolated,
