@@ -49,7 +49,10 @@ def install_v21_13_patch(app: FastAPI) -> FastAPI:
 
         runtime = getattr(app.state, "concurrency_config", {})
         broker = getattr(app.state, "broker", None)
-        limit_for = runtime.get("limit_for") if isinstance(runtime, dict) else None
+        configured_for = getattr(broker, "account_generation_configured_limit_for", None)
+        limit_for = configured_for if callable(configured_for) else (
+            runtime.get("limit_for") if isinstance(runtime, dict) else None
+        )
         if callable(limit_for):
             configured = max(1, int(limit_for(client_id)))
         else:
