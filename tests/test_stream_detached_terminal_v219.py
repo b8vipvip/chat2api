@@ -96,3 +96,62 @@ def test_sse_disconnect_only_changes_delivery_state_and_keepalive_is_outermost()
         "install_worker_probe_ui_v1(app)"
     )
     assert entry.rstrip().endswith("install_request_history_v94_patch(app)")
+
+def test_nonstream_http_cancel_keeps_same_broker_terminal_owner():
+    source = (ROOT / "app/main.py").read_text(encoding="utf-8")
+    handler = source.split('    @app.post("/v1/chat/completions")', 1)[1].split(
+        '    @app.post("/v1/images/generations")', 1
+    )[0]
+    assert 'detached_nonstream = False' in handler
+    assert 'except asyncio.CancelledError:' in handler
+    assert 'api_nonstream_close_cause' in handler
+    assert 'awaiting-broker-terminal-after-http-disconnect' in handler
+    assert 'settle_detached_stream(' in handler
+    assert 'if not detached_nonstream:' in handler
+    assert 'async def persist_detached_nonstream(' in handler
+    assert 'async def release_detached_nonstream(' in handler
+    # No synthetic successful terminal on ASGI cancellation and no extra
+    # request controller. The sole Broker remains the final event owner.
+    detached = handler.split('        except asyncio.CancelledError:', 2)[-1].split(
+        '        except asyncio.TimeoutError as error:', 1
+    )[0]
+    assert '"type": "chat.completed"' not in detached
+    assert 'await broker.release(request_id)' in detached  # only in release callback
+    assert 'state.terminal_event_type' in detached
+
+
+def test_nonstream_cancelled_http_wait_preserves_late_worker_completion():
+    from app.broker import RequestBroker
+
+    async def exercise():
+        broker = RequestBroker()
+        state = await broker.create("req_nonstream_disconnect", "ext_one")
+        events = []
+
+        async def finalize(error):
+            assert error is None
+            assert state.terminal_event_type == "chat.completed"
+            events.append(("persist", state.text))
+        async def release():
+            events.append(("release", state.terminal_event_type))
+            await broker.release(state.request_id)
+
+        detached = asyncio.create_task(settle_detached_stream(
+            state=state, broker=broker, finalize=finalize, release=release,
+            wait_seconds=2,
+        ))
+        await asyncio.sleep(0)
+        assert state.request_id in broker.requests
+        assert not detached.done() and not events
+        await broker.publish(state.request_id, {
+            "type": "chat.completed", "request_id":state.request_id,
+            "text": "The actual full Worker final answer",
+        })
+        await detached
+        assert events == [
+            ("persist", "The actual full Worker final answer"),
+            ("release", "chat.completed"),
+        ]
+        assert state.request_id not in broker.requests
+
+    asyncio.run(exercise())

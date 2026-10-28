@@ -82,7 +82,7 @@ def test_live_browser_error_reclaims_without_client_finish_even_after_audio(tmp_
     with TestClient(app) as client:
         paired = client.post("/api/extensions/register",
             headers={"X-Pairing-Code": "pair-code"},
-            json={"name": "Chrome", "version": "0.22.235",
+            json={"name": "Chrome", "version": "0.22.236",
                   "metadata": {"chatgpt_login_state": "ready",
                                "chatgpt_login_composer_ready": True}}).json()
         cid, token = paired["client_id"], paired["token"]
@@ -136,7 +136,7 @@ def test_live_remote_closed_reclaims_lease_without_client_finish(tmp_path: Path)
     with TestClient(app) as client:
         paired = client.post("/api/extensions/register",
             headers={"X-Pairing-Code": "pair-code"},
-            json={"name": "Chrome", "version": "0.22.235",
+            json={"name": "Chrome", "version": "0.22.236",
                   "metadata": {"chatgpt_login_state": "ready",
                                "chatgpt_login_composer_ready": True}}).json()
         cid, token = paired["client_id"], paired["token"]

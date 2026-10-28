@@ -516,11 +516,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return present_playground_run(row)
 
     @app.get("/api/admin/playground/requests/{request_id}/outcome", dependencies=[Depends(require_admin_key)])
-    async def admin_playground_request_outcome(request_id: str) -> dict[str, object]:
+    async def admin_playground_request_outcome(
+        request_id: str, full_text: bool = Query(default=False),
+    ) -> dict[str, object]:
         row = telemetry.get(request_id)
         if not row:
             raise HTTPException(status_code=404, detail="Request record not found")
-        return await compact_playground_outcome(row, telemetry, file_store)
+        return await compact_playground_outcome(
+            row, telemetry, file_store, include_full_text=full_text,
+        )
 
     @app.post("/api/admin/tests", dependencies=[Depends(require_admin_key)])
     async def save_test_report(body: TestRunCreate) -> dict[str, object]:
@@ -1354,6 +1358,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
+        detached_nonstream = False
         try:
             # Shield the same broker Future rather than cancelling it at 300s.
             # Only request-v6 emits a terminal; correlated media handoff may
@@ -1397,6 +1402,65 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 meta['generated_files'] = archived_files
             if archived_media or archived_files:
                 meta['content_blocks'] = rich_content_manifest(text, archived_media, archived_files)
+        except asyncio.CancelledError:
+            # The HTTP task is gone, not the Worker request. Never release the
+            # Broker lease here: otherwise the real completion will be dropped
+            # and Request History will remain running forever. Reuse exactly
+            # the detached SSE supervisor and existing Broker terminal owner.
+            state.diagnostics["api_delivery_state"] = "disconnected"
+            state.diagnostics["api_nonstream_close_cause"] = "asgi-task-cancelled"
+            state.diagnostics["server_finalization_stage"] = (
+                "awaiting-broker-terminal-after-http-disconnect"
+            )
+
+            async def persist_detached_nonstream(terminal_error: str | None) -> None:
+                terminal = str(state.terminal_event_type or "")
+                is_success = terminal == "chat.completed"
+                status_value = "completed" if is_success else failure_status(
+                    state, terminal, terminal_error or ""
+                )
+                error_message = None if is_success else (
+                    terminal_error or "Worker terminal: " + (terminal or "missing")
+                )
+                final_text, archived_media = "", []
+                if is_success:
+                    try:
+                        final_text, archived_media, _ = await archive_verified_terminal(
+                            state, state.text, principal.key_id, request_id,
+                            media_base_for_request(request),
+                        )
+                    except Exception as exc:
+                        status_value = "error"
+                        error_message = str(exc)[:500]
+                        state.diagnostics["detached_nonstream_archive_error"] = error_message
+                await record_request(
+                    state, body.model, prompt, status_value, principal, stream=False,
+                    prompt_mode=body.prompt_mode, response_id=response_id,
+                    final_text=final_text if status_value == "completed" else "",
+                    error=error_message, request_type=request_type,
+                    attachments_count=len(attachments), media_items=archived_media,
+                )
+
+            async def release_detached_nonstream() -> None:
+                registry.busy_clients.discard(client_id)
+                await broker.release(request_id)
+
+            lease_remaining = max(1.0, float(browser_timeout_seconds)
+                - (asyncio.get_running_loop().time() - started_at))
+            task = asyncio.create_task(settle_detached_stream(
+                state=state, broker=broker,
+                finalize=persist_detached_nonstream,
+                release=release_detached_nonstream,
+                wait_seconds=lease_remaining + 45.0,
+            ))
+            app.state.detached_sse_tasks.add(task)
+            def detached_nonstream_finished(done: asyncio.Task) -> None:
+                app.state.detached_sse_tasks.discard(done)
+                if not done.cancelled():
+                    done.exception()
+            task.add_done_callback(detached_nonstream_finished)
+            detached_nonstream = True
+            raise
         except asyncio.TimeoutError as error:
             await registry.send(client_id, {"type": "chat.cancel", "request_id": request_id})
             state.completed_mono = time.perf_counter()
@@ -1412,8 +1476,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                  error=message, request_type=request_type, attachments_count=len(attachments))
             raise HTTPException(status_code=502, detail=str(error)) from error
         finally:
-            registry.busy_clients.discard(client_id)
-            await broker.release(request_id)
+            if not detached_nonstream:
+                registry.busy_clients.discard(client_id)
+                await broker.release(request_id)
 
         return JSONResponse(
             {"id": response_id, "object": "chat.completion", "created": int(time.time()), "model": body.model,
