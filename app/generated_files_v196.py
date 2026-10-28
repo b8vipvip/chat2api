@@ -90,9 +90,9 @@ class GeneratedFileArchive:
         digest = hashlib.sha256(data).hexdigest()
         prior = conn.execute(
             """SELECT * FROM generated_files
-               WHERE owner=? AND request_id=? AND filename=? AND sha256=?
+               WHERE owner=? AND request_id=? AND filename=? AND mime=? AND sha256=?
                ORDER BY created_at ASC LIMIT 1""",
-            (owner, request_id, name, digest),
+            (owner, request_id, name, canonical, digest),
         ).fetchone()
         if prior:
             return {
