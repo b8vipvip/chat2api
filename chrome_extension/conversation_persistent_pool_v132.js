@@ -592,6 +592,9 @@
       own: rows.length,
       warm: standby.length,
       standby: standby.length,
+      // Stable physical identities allow v58 to reserve the *same* ready slot
+      // just once, even if the API request has not reached Chrome yet.
+      verified_ready_window_ids: standby.map(row => row.window_id),
       routed: routedRows.length,
       idle_routed: leased,
       all_chatgpt_windows: rows.length,
@@ -828,6 +831,8 @@
             worker_pool_admission_revision: 224,
             worker_pool_ready_windows: Math.max(0, Number(result.standby || 0)),
             worker_pool_active_windows: Math.max(0, Number(result.active || 0)),
+            worker_pool_ready_window_ids: Array.isArray(result.verified_ready_window_ids)
+              ? result.verified_ready_window_ids.slice(0, MAX_TARGET) : [],
             worker_pool_baseline_total: Math.max(0, Number(result.target || 0)),
             worker_pool_login_ready: result.login_ready === true && result.worker_disabled !== true,
             worker_pool_capacity_observed_at: String(result.observed_at || ""),
