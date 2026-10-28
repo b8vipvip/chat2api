@@ -10,7 +10,7 @@
   const WARM_STORAGE_KEY = "chat2apiConversationWarmPoolV2";
   const RESERVE_STORAGE_KEY = "chat2apiReservePoolV29";
   const ROUTE_ALARM_PREFIX = "chat2api-route-close:";
-  const SUCCESS_LEASE_MS = 5 * 60 * 1000;
+  const SUCCESS_LEASE_MS = 5 * 1000; // Match sole conversation router lease owner.
   const CLOSED_LIMIT = 80;
   const REPORT_DELAY_MS = 80;
 
