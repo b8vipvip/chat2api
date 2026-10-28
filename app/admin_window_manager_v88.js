@@ -29,6 +29,7 @@
   function statusLabel(row, closed = false) {
     if (closed || String(row?.status || "") === "closed") return "已关闭";
     const value = String(row?.status || "");
+    if (value === "ready" && row?.worker_capacity_full === true) return "备用（并发已满，暂不可调用）";
     if (value === "ready") return "可接待";
     if (value === "in_use" || value === "leased") {
       const name = String(row?.api_key_name || row?.route_key || "").trim();
@@ -93,7 +94,7 @@
       section.innerHTML = `
         <div class="panel">
           <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap">
-            <div><h2 style="margin:0">窗口管理</h2><div class="muted">配置的备用窗口数表示正常总窗口目标，例如3。低负载保持总数3；3个都在执行时补1个可接待窗口，任务结束关闭后逐步回到3。只有浏览器页面实际准备好才显示可接待。</div></div>
+            <div><h2 style="margin:0">窗口管理</h2><div class="muted">设置的最大并发数 N 也是常态窗口数。N 个请求同时执行时额外补充 1 个备用窗口，但并发已满时该窗口不可调用；新请求排队，完成后逐步恢复常态 N 个窗口。</div></div>
             <button class="action" id="wmRefresh">刷新</button>
           </div>
           <div id="wmTruthStatus" class="muted" style="margin-top:10px"></div>
@@ -143,6 +144,12 @@
     const req = String(row.request_id || "-");
     const canCapture = !closed && row.worker_online !== false && row.live_verified !== false && clientId && Number.isInteger(windowId);
     const leased = row.status === "leased" || row.status === "in_use";
+    const worker = state.workers.find(item => String(item.client_id || "") === clientId);
+    const used = Number(worker?.scheduler_used_units || 0);
+    const limit = Number(worker?.scheduler_limit_units || 0);
+    const workerCapacityFull = limit > 0 && used >= limit;
+    const displayedRow = row.status === "ready" && workerCapacityFull
+      ? {...row, worker_capacity_full: true} : row;
     const title = [
       `window_id=${windowId}`,
       row.source ? `source=${row.source}` : "",
@@ -156,7 +163,7 @@
       <td>${esc(device)}</td>
       <td><code>${esc(req)}</code></td>
       <td>${esc(formatTime(row.opened_at_ms))}</td>
-      <td><span class="pill ${row.status === "ready" ? "ok" : leased ? "warn" : ""}">${esc(statusLabel(row, closed))}</span></td>
+      <td><span class="pill ${row.status === "ready" ? "ok" : leased ? "warn" : ""}">${esc(statusLabel(displayedRow, closed))}</span></td>
       <td>${canCapture ? '<button class="action" data-capture>截图</button>' : "-"}</td>
       <td>${hasShot ? `<button class="action" data-view-shot>查看${row.screenshot_at_ms ? ` · ${esc(formatTime(row.screenshot_at_ms))}` : ""}</button>` : `<span class="muted">${row.screenshot_error ? esc(row.screenshot_error) : "暂无截图"}</span>`}</td>
     </tr>`;
@@ -205,7 +212,7 @@
     box.replaceChildren();
     const note = document.createElement("div");
     note.className = "muted";
-    note.textContent = "这里的3表示常态窗口总数，不是3个额外空闲窗口，也不是固定请求并发上限。满载时由唯一窗口池增加1个真正可接待的窗口，完成后自动收缩。";
+    note.textContent = "这里的 N 是 Worker 最大并发请求硬上限，也是常态窗口总数。满载时窗口池额外补充1个物理备用窗口，但新请求必须排队，不能突破 N 个并发。";
     box.appendChild(note);
     for (const worker of state.workers.filter(row => row.online && row.live_verified)) {
       const line = document.createElement("div");
@@ -215,7 +222,10 @@
       const ready = Number(worker.standby_window_count || 0);
       const baseline = Number(worker.scheduler_baseline_total || 0);
       const queued = Number(worker.scheduler_queued_requests || 0);
-      line.textContent = `${worker.device_name || worker.client_id} · 常态总数 ${baseline} · 当前总数 ${total} · 执行 ${inUse} · 可接待 ${ready} · 排队 ${queued}`;
+      const used = Number(worker.scheduler_used_units || 0);
+      const hardLimit = Number(worker.scheduler_limit_units || baseline);
+      const readyLabel = hardLimit > 0 && used >= hardLimit ? "备用（不可调度）" : "可接待";
+      line.textContent = `${worker.device_name || worker.client_id} · 并发 ${used}/${hardLimit} · 常态窗口 ${baseline} · 当前窗口 ${total} · 执行 ${inUse} · ${readyLabel} ${ready} · 排队 ${queued}`;
       box.appendChild(line);
     }
   }
