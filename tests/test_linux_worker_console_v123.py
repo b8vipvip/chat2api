@@ -93,7 +93,8 @@ def test_window_observer_still_only_observes_physical_chatgpt_windows():
     source = (ROOT / "chrome_extension" / "background_window_observer_v90.js").read_text(encoding="utf-8")
     assert 'chrome.windows.getAll({ populate: true })' in source
     assert 'source: routed ? "route-observer-v152" : "standby-observer-v152"' in source
-    assert 'status: routed ? (inflight ? "in_use" : "leased") : "ready"' in source
+    assert 'verifiedReady ? "ready" : "loading"' in source
+    assert 'pool?.runtimeReadyTabs?.get(tab.id) === true' in source
     assert 'decision_authority: false' in source
     assert 'chrome.windows.create' not in source
     assert 'chrome.windows.remove' not in source
