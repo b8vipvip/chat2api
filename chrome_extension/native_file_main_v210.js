@@ -8,25 +8,44 @@
   if (globalThis[KEY]) return;
   const KIND = "chat2api.native-file.v210";
   const MAX_BYTES = 6 * 1024 * 1024;
+  // The page can prepare an Office Blob before the user clicks Download.
+  // Retain at most eight recent, bounded Blobs in THIS physical tab. Their
+  // bytes are exposed only after the separately verified request-scoped click
+  // and exact filename/signature checks; no background harvesting occurs.
+  const BLOB_TTL_MS = 10 * 60 * 1000;
   let armed = null;
   const blobs = new Map();
+  function pruneBlobs() {
+    const now = Date.now();
+    for (const [url, item] of blobs) {
+      if (now - item.createdAt > BLOB_TTL_MS) blobs.delete(url);
+    }
+    while (blobs.size > 8) blobs.delete(blobs.keys().next().value);
+  }
   const nativeCreate = URL.createObjectURL;
   URL.createObjectURL = function(object) {
     const url = Reflect.apply(nativeCreate, this, arguments);
-    if (armed && Date.now() < armed.until && object instanceof Blob
-        && object.size > 0 && object.size <= MAX_BYTES) {
-      if (blobs.size >= 8) blobs.clear();
-      blobs.set(url, object);
+    if (object instanceof Blob && object.size > 0 && object.size <= MAX_BYTES) {
+      blobs.set(String(url), {blob: object, createdAt: Date.now()});
+      pruneBlobs();
     }
     return url;
   };
   const nativeRevoke = URL.revokeObjectURL;
   URL.revokeObjectURL = function(url) {
     const result = Reflect.apply(nativeRevoke, this, arguments);
-    // Preserve just-created Blobs during the short, armed native download.
-    if (!armed || Date.now() >= armed.until) blobs.delete(String(url));
+    // Blob URLs may be revoked immediately after download. Keep only our
+    // bounded, short-lived reference for a verified same-reply retry.
+    pruneBlobs();
     return result;
   };
+  // Diagnostics only: fixed stage codes, no URLs, response bytes or page text.
+  // Page-side observation never decides a request terminal.
+  function stage(session, code) {
+    if (session && session === armed && !session.used)
+      window.postMessage({kind: KIND, direction: "probe", nonce: session.nonce,
+        stage: code}, location.origin);
+  }
   const encoded = bytes => {
     let result = "";
     for (let at = 0; at < bytes.length; at += 16384)
@@ -62,8 +81,10 @@
     if (!session || session.used || Date.now() >= session.until) return;
     const name = String(anchor?.download || session.filename || "").trim();
     const raw = String(anchor?.href || "");
-    if (!validName(name) || !allowedSource(raw)) return;
-    const blob = blobs.get(raw);
+    if (!validName(name)) { stage(session, "download-filename-invalid"); return; }
+    if (!allowedSource(raw)) { stage(session, "download-url-not-trusted"); return; }
+    pruneBlobs();
+    const blob = blobs.get(raw)?.blob;
     // A finished reply may trigger a file link without an HTML download
     // attribute. Permit only a file-shaped, allowlisted URL while specifically
     // armed by one verified reply button; ordinary preview/navigation links
@@ -71,7 +92,10 @@
     const path = new URL(raw, location.href).pathname.toLowerCase();
     const fileEndpoint = /\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md)$/.test(path)
       || /\/(?:download|files?\/download)(?:\/|$)/.test(path);
-    if (!blob && !anchor?.hasAttribute?.("download") && !fileEndpoint) return;
+    if (!blob && !anchor?.hasAttribute?.("download") && !fileEndpoint) {
+      stage(session, "download-action-is-preview"); return;
+    }
+    stage(session, blob ? "same-tab-blob-found" : "trusted-download-fetch");
     if (session.inFlight) return;
     session.inFlight = true;
     try {
@@ -94,13 +118,16 @@
           bytes = new Uint8Array(await body.arrayBuffer());
         } finally { clearTimeout(timer); }
       }
-      if (!validBytes(bytes,name)) return;
+      if (!validBytes(bytes,name)) { stage(session, "download-signature-invalid"); return; }
       session.used = true;
       window.postMessage({
         kind: KIND, direction: "captured", nonce: session.nonce,
         filename: name, bytes: bytes.length, base64: encoded(bytes),
       }, location.origin);
-    } catch (_) { /* Do not consume this one-shot arm on a failed preview. */ }
+    } catch (_) {
+      stage(session, "download-read-failed");
+      // Do not consume this one-shot arm on a failed preview.
+    }
     finally { session.inFlight = false; }
   }
   // Some ChatGPT download controls use fetch() and a browser-owned save
@@ -122,20 +149,45 @@
           || (ext === "xlsx" && type.includes("spreadsheetml.sheet"))
           || (ext === "pptx" && type.includes("presentationml.presentation"))
           || (ext === "json" && type.includes("application/json") && /attachment/i.test(disposition));
-        const exactName = disposition.includes(session.filename);
+        const rawName = /filename\*\s*=\s*utf-8''([^;]+)/i.exec(disposition)?.[1]
+          || /filename\s*=\s*"?([^";]+)"?/i.exec(disposition)?.[1] || "";
+        let dispositionName = rawName.trim();
+        try { dispositionName = decodeURIComponent(dispositionName); } catch (_) {}
+        const exactName = dispositionName.toLowerCase() === session.filename.toLowerCase();
         const pathName = new URL(raw).pathname.toLowerCase().endsWith("/" + session.filename.toLowerCase());
+        // Explicitly named OTHER downloads must never satisfy this request.
+        if (dispositionName && !exactName) { stage(session, "fetch-filename-mismatch"); return; }
         if (!exactName && !pathName && !mimeMatches) return;
         if (Number(response.headers.get("content-length") || 0) > MAX_BYTES) return;
         session.inFlight = true;
         try {
-          const buffer = await response.clone().arrayBuffer();
+          // A clone's arrayBuffer() is unbounded if Content-Length is absent.
+          // Read incrementally and enforce the SAME 6 MiB limit as Blob paths.
+          const reader = response.clone().body?.getReader();
+          if (!reader) return;
+          const parts = [];
+          let size = 0;
+          try {
+            for (;;) {
+              const {done, value} = await reader.read();
+              if (done) break;
+              size += value.byteLength;
+              if (size > MAX_BYTES) return;
+              parts.push(value);
+            }
+          } finally { try { await reader.cancel(); } catch (_) {} }
+          const bytes = new Uint8Array(size);
+          let offset = 0;
+          for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
           if (session !== armed || session.used) return;
-          if (!validBytes(new Uint8Array(buffer), session.filename)) return;
+          if (!validBytes(bytes, session.filename)) {
+            stage(session, "fetch-signature-invalid"); return;
+          }
           session.used = true;
           window.postMessage({kind:KIND,direction:"captured",nonce:session.nonce,
-            filename:session.filename,bytes:buffer.byteLength,base64:encoded(new Uint8Array(buffer))},
+            filename:session.filename,bytes:bytes.length,base64:encoded(bytes)},
             location.origin);
-        } catch (_) { /* read-only observation must not change native fetch */ }
+        } catch (_) { stage(session, "fetch-clone-read-failed"); /* read-only */ }
         finally { session.inFlight = false; }
       }).catch(() => {});
     }
@@ -158,7 +210,8 @@
         || typeof data.nonce !== "string" || !/^[a-z0-9-]{16,80}$/i.test(data.nonce)
         || !validName(String(data.filename || ""))) return;
     armed = {nonce:data.nonce, filename:data.filename, used:false, until:Date.now()+8500};
-    blobs.clear();
+    // Do not clear pre-created same-tab Blobs when a verified click is armed.
+    pruneBlobs();
     window.postMessage({kind:KIND, direction:"armed", nonce:data.nonce}, location.origin);
   });
   globalThis[KEY] = Object.freeze({version:210});

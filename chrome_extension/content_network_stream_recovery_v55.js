@@ -205,7 +205,18 @@
     if (!row) return;
     if (phase === "response") {
       const active = activeRequest();
-      if (active?.requestId === row.requestId && detail.event_stream === true) active.networkStreamSeen = true;
+      if (active?.requestId === row.requestId && detail.event_stream === true) {
+        active.networkStreamSeen = true;
+        // A successful response to a stream bound to THIS active request is
+        // positive send acceptance, even before a model-authored text delta.
+        // This is never a ChatGPT completion/end-turn signal.
+        const status = Number(detail.status || 0);
+        if (status >= 200 && status < 300) {
+          active.networkStreamResponseAt = Date.now();
+          active.networkStreamResponseStatus = status;
+          active.networkStreamResponseId = row.streamId;
+        }
+      }
       row.responseSeen = true;
       row.status = Number(detail.status || 0) || null;
       row.eventStream = detail.event_stream === true;

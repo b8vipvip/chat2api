@@ -1112,6 +1112,17 @@
     if (submitAt > 0 && terminalText && terminalAt >= submitAt) {
       return { reason: "network-terminal-evidence", composerCleared: true, generating: isGenerating(), current };
     }
+    // The network observer bound this successful SSE response to the current
+    // request ID. It proves SEND acceptance only, NOT an assistant reply or
+    // completion; retain the full normal terminal/timeout checks thereafter.
+    if (submitAt > 0 && active.networkStreamSeen
+        && Number(active.networkStreamResponseAt || 0) >= submitAt
+        && Number(active.networkStreamResponseStatus || 0) >= 200
+        && Number(active.networkStreamResponseStatus || 0) < 300
+        && String(active.networkStreamResponseId || "")) {
+      return { reason: "request-scoped-sse-accepted", composerCleared: true,
+        generating: isGenerating(), current };
+    }
     // Stop/Generating UI is not submission proof. A stale generation control from
     // another hydration epoch can coexist with this request's draft in a second
     // composer. Only the current user turn, current response, or this request's
@@ -1836,6 +1847,7 @@
               media_native_file_capture_count: Number(native?.count || 0),
               media_native_file_captured_types: native?.captured_types || [],
               media_native_file_failed_types: native?.failed_types || [],
+            media_native_file_failure_stages: native?.failure_stages || {},
               media_native_file_attempt_counts: native?.attempt_counts || {},
               media_native_file_synthesized_zip: native?.synthesized_zip === true,
               media_required_file_types_satisfied: allRequiredFileTypesDelivered,
@@ -2305,6 +2317,9 @@
       baselineFinishActions: null,
       baselineRolelessHeadings: null,
       networkStreamSeen: false,
+      networkStreamResponseAt: 0,
+      networkStreamResponseStatus: 0,
+      networkStreamResponseId: "",
       networkStreamEndedWithoutTerminalAt: 0,
     };
     state.active = active;

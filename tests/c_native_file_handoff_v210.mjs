@@ -8,8 +8,8 @@ const contentCode=readFileSync("chrome_extension/content_native_file_v210.js","u
 const request=readFileSync("chrome_extension/content_request_v6.js","utf8");
 const manifest=JSON.parse(readFileSync("chrome_extension/manifest.json","utf8"));
 
-async function harness({bytes=new Uint8Array([80,75,3,4,0,1])}={}) {
-  let clicked=0, next=0;
+async function harness({bytes=new Uint8Array([80,75,3,4,0,1]),precreated=false}={}) {
+  let clicked=0, next=0, precreatedUrl=null;
   const listeners=new Map();
   const pageOrigin="https://chatgpt.com";
   const window={
@@ -37,7 +37,7 @@ async function harness({bytes=new Uint8Array([80,75,3,4,0,1])}={}) {
     getBoundingClientRect:()=>({width:140,height:40}),
     click(){
       clicked++;
-      const uri=FakeURL.createObjectURL(new Blob([bytes]));
+      const uri=precreatedUrl || FakeURL.createObjectURL(new Blob([bytes]));
       const anchor=new FakeAnchor();
       anchor.download="Bookkeeping.xlsx";anchor.href=uri;anchor.click();
     },
@@ -55,6 +55,7 @@ async function harness({bytes=new Uint8Array([80,75,3,4,0,1])}={}) {
     setTimeout,clearTimeout,getComputedStyle:()=>({display:"block",visibility:"visible"}),
   };
   runInNewContext(mainCode,context);
+  if (precreated) precreatedUrl=FakeURL.createObjectURL(new Blob([bytes]));
   runInNewContext(contentCode,context);
   return {content:context.__CHAT2API_NATIVE_FILE_V210__,scope,clicked:()=>clicked};
 }
@@ -83,6 +84,7 @@ test("file signature guard does not accept HTML relabeled XLSX",async()=>{
   const result=await h.content.capture(h.scope,"req_cfile3");
   assert.equal(result.count,0);
   assert.equal(result.error,"native-download-not-observed");
+  assert.equal(result.failure_stages.xlsx,"download-signature-invalid");
   assert.equal(h.clicked(),1);
 });
 
@@ -93,4 +95,21 @@ test("native hook remains observational; v6 alone owns terminal and required fil
   assert.match(request,/response_native_file_handoff/);
   assert.ok(manifest.content_scripts.some(item=>item.world==="MAIN"&&item.js.includes("native_file_main_v210.js")));
   assert.ok(manifest.content_scripts.some(item=>item.world!=="MAIN"&&item.js.includes("content_native_file_v210.js")));
+});
+
+test("verified current-reply Download can capture a Blob created before arm",async()=>{
+  const h=await harness({precreated:true});
+  const result=await h.content.capture(h.scope,"req_cfile_precreated");
+  assert.equal(result.count,1);
+  assert.equal(result.bytes,6);
+  assert.equal(h.clicked(),1);
+});
+
+test("file failure reasons are categorized and never contain URLs or model text",async()=>{
+  const h=await harness({bytes:new TextEncoder().encode("<html>not an Office file</html>")});
+  const result=await h.content.capture(h.scope,"req_failure_reason");
+  assert.equal(result.count,0);
+  assert.equal(result.failure_stages.xlsx,"download-signature-invalid");
+  assert.ok(!JSON.stringify(result.failure_stages).includes("https://"));
+  assert.match(request,/media_native_file_failure_stages/);
 });
