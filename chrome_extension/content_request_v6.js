@@ -218,7 +218,12 @@
   function transientText(value) {
     const text = normalize(value).replace(/[.。…·:：]+$/g, "").trim().toLowerCase();
     return /^(正在)?(思考|分析|推理|生成|处理|搜索|浏览)(中)?$/.test(text)
-      || /^(thinking|analyzing|reasoning|generating|working|searching|browsing)( now)?$/.test(text);
+      || /^(thinking|analyzing|reasoning|generating|working|searching|browsing)( now)?$/.test(text)
+      // Native ChatGPT elapsed-time badges are NOT assistant responses.
+      // v222 diagnostics surfaced doubled `Worked for 5s` fragments as API
+      // output while the true assistant turn was still unidentified.
+      || /^worked for (?:\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds?|m|mins?|minutes?)|a (?:few|couple of) seconds?)$/.test(text)
+      || /^(worked for (?:\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds?|m|mins?|minutes?)|a (?:few|couple of) seconds?))\1$/.test(text);
   }
 
   function plainNodeText(node) {
@@ -272,9 +277,11 @@
   // Incomplete matching prefixes are quarantined until the reply boundary arrives.
   function assistantOnlyReplyText(active, value) {
     const raw = String(value || "");
-    const heading = /^\s*(?:#{1,6}\s*)?You said\s*:\s*/i.exec(raw);
+    const heading = /^\s*(#{2,6})\s+You said\s*:\s*/i.exec(raw)
+      || /^\s*You said\s*:\s*/i.exec(raw);
     if (!heading || !active?.promptNormalized)
       return { text: raw, stripped: false, pending: false };
+    const isRenderedHeading = /^\s*#{2,6}\s+You said\s*:/i.test(raw);
     const remainder = raw.slice(heading[0].length);
     const boundary = /(?:^|\n)\s*(?:#{1,6}\s*)?ChatGPT said\s*:\s*/gi;
     let found;
@@ -283,6 +290,45 @@
       const body = remainder.slice(found.index + found[0].length).trimStart();
       return { text: body, stripped: true, pending: !body.trim() };
     }
+    // v226: A roleless renderer can hide the entire user turn, leaving only
+    // two newly rendered accessibility headings followed by the assistant.
+    // Such an *empty* user segment cannot be model-authored prompt text.
+    // Correlate its specific H4/H4 structure, not arbitrary role phrases
+    // inside normal answers or JSON/code fences.
+    const matchesFromHeader = [...remainder.matchAll(
+      /(?:^|\n)\s*(?:#{1,6}\s*)?ChatGPT said\s*:\s*/gi)];
+    if (isRenderedHeading && matchesFromHeader.length === 1) {
+      const role = matchesFromHeader[0];
+      const echo = normalize(remainder.slice(0, role.index));
+      const headingOnly = /^\s*#{2,6}\s+ChatGPT said\s*:/i.test(
+        remainder.slice(role.index).trimStart());
+      const body = remainder.slice(role.index + role[0].length).trimStart();
+      if (headingOnly && !echo) {
+        return { text: body, stripped: true, pending: !body.trim(),
+          boundaryEvidence: "empty-rendered-user-heading-v226" };
+      }
+      // The submitted user content may be only a SUBSTRING of final_prompt:
+      // a server policy precedes it, while the page can alter whitespace or
+      // collapse a long section. Require three separated prompt fingerprints
+      // at their corresponding positions; never strip merely because the page
+      // contains two role labels.
+      if (headingOnly && echo.length >= 120) {
+        const prompt = active.promptNormalized;
+        const size = Math.min(64, Math.floor(echo.length / 5));
+        const first = echo.slice(0, size);
+        const middle = echo.slice(Math.floor((echo.length - size) / 2),
+          Math.floor((echo.length - size) / 2) + size);
+        const last = echo.slice(-size);
+        const p1 = prompt.indexOf(first);
+        const p2 = prompt.indexOf(middle, Math.max(0, p1 + size));
+        const p3 = prompt.indexOf(last, Math.max(0, p2 + size));
+        if (p1 >= 0 && p2 > p1 && p3 > p2) {
+          return { text: body, stripped: true, pending: !body.trim(),
+            boundaryEvidence: "three-ordered-echo-fingerprints-v226" };
+        }
+      }
+    }
+
     // Multi-turn OpenAI clients (including mv3c) send the previous assistant
     // response back inside the next prompt. The roleless ChatGPT DOM may echo
     // that previous exchange and then append this turn's new assistant body.
@@ -338,6 +384,10 @@
         || (echoLead.length >= 12 && seen.includes(echoLead))) {
       return { text: "", stripped: false, pending: true };
     }
+    // An unverified H4 "You said" surface is *never* a trustworthy
+    // assistant answer. Keep it pending for snapshots; a terminal must fail
+    // closed rather than leaking the customer's original prompt.
+    if (isRenderedHeading) return { text: "", stripped: false, pending: true };
     return { text: raw, stripped: false, pending: false };
   }
 
@@ -361,6 +411,7 @@
             response_boundary_guard: "request-correlated-prompt-echo-v212",
             response_boundary_prompt_echo_removed: true,
             response_boundary_multiturn_verified: result.multiTurn === true,
+            response_boundary_evidence_v226: result.boundaryEvidence || "",
             response_boundary_previous_text_matches: Number(result.corroborated || 0),
             response_boundary_current_user_verified: result.multiTurn === true,
             response_boundary_removed_chars: String(event.text || "").length - result.text.length,
@@ -1129,7 +1180,7 @@
     const bounded = assistantOnlyReplyText(active, text);
     if (bounded.pending) return previous;
     text = bounded.text;
-    if (!text || text === previous) return previous;
+    if (!text || transientText(text) || text === previous) return previous;
     active.lastCaptureAt = Date.now();
     active.lastCapturedText = text;
     if (text.startsWith(previous)) {

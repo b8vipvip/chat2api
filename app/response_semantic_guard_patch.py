@@ -17,10 +17,37 @@ _UI_ROLE_PREFIX = re.compile(
     r"^(?:chatgpt|assistant|ai)\s*(?:said|says|回复|回答|说)\s*[:：]\s*",
     re.IGNORECASE,
 )
+# A roleless page sometimes exports only two H4 accessibility labels plus
+# assistant text (the user content is collapsed/hidden by ChatGPT). Strip
+# this exact EMPTY-user shell; nonempty user echoes require request-bound
+# proof in the Worker and must not be blindly truncated on the server.
+_ROLELESS_EMPTY_USER_SHELL = re.compile(
+    r"^\s*#{2,6}[ \t]+You said[ \t]*:[ \t]*\r?\n[ \t]*\r?\n?"
+    r"#{2,6}[ \t]+ChatGPT said[ \t]*:[ \t]*\r?\n*",
+    re.IGNORECASE,
+)
+_NATIVE_ELAPSED_BADGE = re.compile(
+    r"Worked for (?:\d+(?:\.\d+)?\s*(?:s|sec|secs|seconds?|m|mins?|minutes?)"
+    r"|a (?:few|couple of) seconds?)",
+    re.IGNORECASE,
+)
 
 
 def _compact(value: object) -> str:
     return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def _native_elapsed_chrome_only(value: str) -> bool:
+    compact = _compact(value)
+    if _NATIVE_ELAPSED_BADGE.fullmatch(compact):
+        return True
+    # Two identical elapsed badges concatenated without a separator are also
+    # browser chrome, not a repeated model-authored answer.
+    if len(compact) % 2 == 0:
+        half = compact[: len(compact) // 2]
+        if half == compact[len(compact) // 2 :] and _NATIVE_ELAPSED_BADGE.fullmatch(half):
+            return True
+    return False
 
 
 def sanitize_assistant_text(value: object) -> tuple[str, bool]:
@@ -34,8 +61,11 @@ def sanitize_assistant_text(value: object) -> tuple[str, bool]:
     compact = _compact(raw)
     if not compact:
         return "", False
-    if _UI_ROLE_ONLY.fullmatch(compact):
+    if _UI_ROLE_ONLY.fullmatch(compact) or _native_elapsed_chrome_only(compact):
         return "", True
+    shell_stripped = _ROLELESS_EMPTY_USER_SHELL.sub("", raw, count=1).strip()
+    if shell_stripped != raw:
+        return shell_stripped, True
     cleaned = _UI_ROLE_PREFIX.sub("", raw, count=1).strip()
     if cleaned != raw:
         return cleaned, True
@@ -83,7 +113,7 @@ def install_response_semantic_guard_patch(app: FastAPI) -> FastAPI:
             # a response. Once real response text exists, ordinary deltas pass
             # through unchanged except for an exact role-only shell.
             compact = _compact(original)
-            if _UI_ROLE_ONLY.fullmatch(compact):
+            if _UI_ROLE_ONLY.fullmatch(compact) or _native_elapsed_chrome_only(compact):
                 cleaned, filtered = "", True
             elif not str(getattr(state, "text", "") or ""):
                 cleaned, filtered = sanitize_assistant_text(original)
