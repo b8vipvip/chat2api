@@ -31,6 +31,7 @@ function setup({deferAllocation=false, deferStartAck=false}={}) {
   };
   const env = {
     globalThis:null,
+    __CHAT2API_CONVERSATION_ROUTING_V1__:router,
     handleServerMessage:async()=>{},
     chat2apiResolveRoutedWorkerTabV24:async()=>deferAllocation?allocation.promise:allocated,
     chat2apiActivateVoiceTabV184:async tab=>({...tab,chat2apiWindowFocusedAfter:true}),
