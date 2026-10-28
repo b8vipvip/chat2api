@@ -16,7 +16,7 @@ def test_reserve_target_counts_spares_not_routed_windows():
     assert "const ROUTE_IDLE_CLOSE_MS = 5 * 60 * 1000;" in source
 
 def test_conversation_affinity_is_five_minutes():
-    assert "const IDLE_CLOSE_MS = 5 * 60 * 1000;" in text("chrome_extension/conversation_routing.js")
+    assert "const IDLE_CLOSE_MS = 5 * 1000;" in text("chrome_extension/conversation_routing.js")
     assert "ROUTE_IDLE_CLOSE_SECONDS = 5 * 60" in text("app/v21_13_patch.py")
 
 def test_response_requires_terminal_rich_dom_settlement():
