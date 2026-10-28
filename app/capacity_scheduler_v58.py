@@ -125,6 +125,9 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         broker._chat2api_v21_condition = condition
 
     worker_queues: dict[str, deque[str]] = defaultdict(deque)
+    # A single v58 FIFO owns these admission reservations. IDs correspond
+    # to verified v132 standby windows, not new physical-window ownership.
+    pool_window_claims: dict[str, dict[str, int | None]] = defaultdict(dict)
     cooldown_until: dict[str, float] = {}
     rate_limit_strikes: dict[str, int] = {}
 
@@ -150,24 +153,35 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
         if not fresh:
             return {"fresh": False, "age_seconds": round(age, 2) if age is not None else None}
         try:
-            ready = max(0, min(MAX_LIMIT, int(metadata.get("worker_pool_ready_windows") or 0)))
             active = max(0, min(MAX_LIMIT, int(metadata.get("worker_pool_active_windows") or 0)))
+            raw_ids = metadata.get("worker_pool_ready_window_ids")
+            if not isinstance(raw_ids, list):
+                raise ValueError("Missing verified standby identities")
+            verified_ids = list(dict.fromkeys(
+                identifier for item in raw_ids[:MAX_LIMIT]
+                if (identifier := int(item)) > 0
+            ))
         except (TypeError, ValueError):
             return {"fresh": False, "age_seconds": round(age, 2)}
-        used = used_units(client_id)
-        # Server-admitted requests need time to claim their physical windows.
-        # Deduct those claims from reported ready windows to prevent duplicate
-        # dispatch while Chrome and the next status report are catching up.
-        pending_claims = max(0, used - active)
-        spare = max(0, ready - pending_claims)
+        claims = pool_window_claims.get(client_id, {})
+        held_ids = {item for item in claims.values() if item is not None}
+        unheld = [item for item in verified_ids if item not in held_ids]
+        # Some calls were admitted during an older Worker version/telemetry
+        # outage; only their count beyond reported physical active windows
+        # consumes extra ready capacity.
+        unknown_claims = sum(value is None for value in claims.values())
+        anonymous_pending = max(0, unknown_claims - active)
+        spare = max(0, len(unheld) - anonymous_pending)
         if metadata.get("worker_pool_login_ready") is not True:
             spare = 0
         return {
             "fresh": True,
             "age_seconds": round(age, 2),
-            "verified_ready_windows": ready,
+            "verified_ready_windows": len(verified_ids),
             "observed_active_windows": active,
-            "pending_server_claims": pending_claims,
+            "reserved_window_ids": sorted(held_ids),
+            "anonymous_pending_claims": anonymous_pending,
+            "available_window_ids": unheld[:spare],
             "unclaimed_ready_windows": spare,
         }
 
@@ -217,7 +231,7 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
             "active_requests": used,
             "request_weights": dict(broker.client_active_requests.get(str(client_id), {}) or {}),
             "queued_requests": queue_depth(client_id),
-            "limit_source": "baseline-total-with-dynamic-spare-v223",
+            "limit_source": "verified-window-id-admission-v224",
             "worker_explicit_limit": str(client_id) in config["workers"],
             "account_generation_limit": limit,
             "account_generation_queue": True,
@@ -276,6 +290,10 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                 loop = asyncio.get_running_loop()
                 state = RequestState(request_id=request_id, client_id=client_id, final_future=loop.create_future())
                 before = used_units(client_id)
+                evidence_at_admission = verified_window_capacity(client_id)
+                available_ids = evidence_at_admission.get("available_window_ids") or []
+                selected_window_id = available_ids[0] if available_ids else None
+                pool_window_claims[client_id][request_id] = selected_window_id
                 broker.requests[request_id] = state
                 broker.client_active_requests.setdefault(client_id, {})[request_id] = 1
                 broker.client_requests.setdefault(client_id, request_id)
@@ -285,7 +303,8 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                     "capacity_queue_mode": "server-worker-fifo-v147",
                     "capacity_queue_scheduler": "oldest-request-worker-capacity-v147",
                     "extension_capacity_limit_units": worker_limit(client_id),
-                    "worker_verified_pool_capacity_at_admission": verified_window_capacity(client_id),
+                    "worker_verified_pool_capacity_at_admission": evidence_at_admission,
+                    "worker_verified_spare_window_claim": selected_window_id,
                     "extension_capacity_configured_units": worker_baseline_total(client_id),
                     "window_baseline_total": worker_baseline_total(client_id),
                     "extension_capacity_weight": 1,
@@ -322,6 +341,8 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
 
     async def release(request_id: str) -> None:
         await base_release(request_id)
+        for held in pool_window_claims.values():
+            held.pop(str(request_id), None)
         async with condition:
             condition.notify_all()
 
