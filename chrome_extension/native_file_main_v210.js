@@ -39,6 +39,13 @@
     pruneBlobs();
     return result;
   };
+  // Diagnostics only: fixed stage codes, no URLs, response bytes or page text.
+  // Page-side observation never decides a request terminal.
+  function stage(session, code) {
+    if (session && session === armed && !session.used)
+      window.postMessage({kind: KIND, direction: "probe", nonce: session.nonce,
+        stage: code}, location.origin);
+  }
   const encoded = bytes => {
     let result = "";
     for (let at = 0; at < bytes.length; at += 16384)
@@ -74,7 +81,8 @@
     if (!session || session.used || Date.now() >= session.until) return;
     const name = String(anchor?.download || session.filename || "").trim();
     const raw = String(anchor?.href || "");
-    if (!validName(name) || !allowedSource(raw)) return;
+    if (!validName(name)) { stage(session, "download-filename-invalid"); return; }
+    if (!allowedSource(raw)) { stage(session, "download-url-not-trusted"); return; }
     pruneBlobs();
     const blob = blobs.get(raw)?.blob;
     // A finished reply may trigger a file link without an HTML download
@@ -84,7 +92,10 @@
     const path = new URL(raw, location.href).pathname.toLowerCase();
     const fileEndpoint = /\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md)$/.test(path)
       || /\/(?:download|files?\/download)(?:\/|$)/.test(path);
-    if (!blob && !anchor?.hasAttribute?.("download") && !fileEndpoint) return;
+    if (!blob && !anchor?.hasAttribute?.("download") && !fileEndpoint) {
+      stage(session, "download-action-is-preview"); return;
+    }
+    stage(session, blob ? "same-tab-blob-found" : "trusted-download-fetch");
     if (session.inFlight) return;
     session.inFlight = true;
     try {
@@ -107,13 +118,16 @@
           bytes = new Uint8Array(await body.arrayBuffer());
         } finally { clearTimeout(timer); }
       }
-      if (!validBytes(bytes,name)) return;
+      if (!validBytes(bytes,name)) { stage(session, "download-signature-invalid"); return; }
       session.used = true;
       window.postMessage({
         kind: KIND, direction: "captured", nonce: session.nonce,
         filename: name, bytes: bytes.length, base64: encoded(bytes),
       }, location.origin);
-    } catch (_) { /* Do not consume this one-shot arm on a failed preview. */ }
+    } catch (_) {
+      stage(session, "download-read-failed");
+      // Do not consume this one-shot arm on a failed preview.
+    }
     finally { session.inFlight = false; }
   }
   // Some ChatGPT download controls use fetch() and a browser-owned save
@@ -142,7 +156,7 @@
         const exactName = dispositionName.toLowerCase() === session.filename.toLowerCase();
         const pathName = new URL(raw).pathname.toLowerCase().endsWith("/" + session.filename.toLowerCase());
         // Explicitly named OTHER downloads must never satisfy this request.
-        if (dispositionName && !exactName) return;
+        if (dispositionName && !exactName) { stage(session, "fetch-filename-mismatch"); return; }
         if (!exactName && !pathName && !mimeMatches) return;
         if (Number(response.headers.get("content-length") || 0) > MAX_BYTES) return;
         session.inFlight = true;
@@ -165,12 +179,15 @@
           const bytes = new Uint8Array(size);
           let offset = 0;
           for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
-          if (session !== armed || session.used || !validBytes(bytes, session.filename)) return;
+          if (session !== armed || session.used) return;
+          if (!validBytes(bytes, session.filename)) {
+            stage(session, "fetch-signature-invalid"); return;
+          }
           session.used = true;
           window.postMessage({kind:KIND,direction:"captured",nonce:session.nonce,
             filename:session.filename,bytes:bytes.length,base64:encoded(bytes)},
             location.origin);
-        } catch (_) { /* read-only observation must not change native fetch */ }
+        } catch (_) { stage(session, "fetch-clone-read-failed"); /* read-only */ }
         finally { session.inFlight = false; }
       }).catch(() => {});
     }

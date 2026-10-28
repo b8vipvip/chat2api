@@ -149,12 +149,17 @@
   function oneClick(button,filename) {
     return new Promise(resolve=>{
       const nonce=crypto.randomUUID();
-      let done=false, started=false;
+      let done=false, started=false, lastStage="no-native-download-event";
       const finish=(payload=null)=>{if(done)return;done=true;clearTimeout(timer);
         window.removeEventListener("message",onMessage);resolve(payload);};
       const onMessage=event=>{
         if(event.source!==window||event.origin!==location.origin
           ||event.data?.kind!==KIND||event.data.nonce!==nonce)return;
+        if(event.data.direction==="probe") {
+          const code=String(event.data.stage || "");
+          if (/^(?:download|fetch|same-tab)-[a-z-]{3,60}$/.test(code)) lastStage=code;
+          return;
+        }
         if(event.data.direction==="armed"&&!started) {
           started=true;
           try{button.click();}catch(_){finish();}
@@ -162,14 +167,14 @@
           const name=String(event.data.filename||"");
           // The filename may be supplied by ChatGPT's native anchor.
           // An exact match protects against unrelated page download events.
-          if(name!==filename){finish();return;}
+          if(name!==filename){finish({failure_stage:"download-filename-mismatch"});return;}
           const bytes=Number(event.data.bytes||0);
           const url=dataUrl(filename,String(event.data.base64||""),bytes);
-          finish(url?{filename,data_url:url,bytes}:null);
+          finish(url?{filename,data_url:url,bytes}:{failure_stage:"download-signature-invalid"});
         }
       };
       window.addEventListener("message",onMessage);
-      const timer=setTimeout(()=>finish(),9000);
+      const timer=setTimeout(()=>finish({failure_stage:lastStage}),9000);
       window.postMessage({kind:KIND,direction:"arm",nonce,filename},location.origin);
     });
   }
@@ -177,7 +182,8 @@
     if (!requestId || !scope?.isConnected || !scope.closest?.("main,[role='main'],#thread")) 
       return {text:"",count:0,bytes:0,error:"unverified-reply-scope"};
     if(!session || session.requestId!==requestId)
-      session={requestId,files:new Map(),attempts:new Map(),lastError:"",failures:new Map()};
+      session={requestId,files:new Map(),attempts:new Map(),lastError:"",
+        failures:new Map(),failureStages:new Map()};
     const candidates=candidateButtons(scope).slice(0,12);
     let total=[...session.files.values()].reduce((sum,file)=>sum+file.bytes,0);
     for(const item of candidates) {
@@ -192,10 +198,17 @@
       if(attempts.count>=6 || (attempts.count && Date.now()-attempts.at<45000))continue;
       session.attempts.set(item.filename,{at:Date.now(),count:(attempts.count||0)+1});
       const result=await oneClick(item.button,item.filename);
-      if(!result){session.lastError="native-download-not-observed";session.failures.set(item.filename.split(".").pop().toLowerCase(),"native-download-not-observed");continue;}
+      if(!result?.data_url){
+        session.lastError="native-download-not-observed";
+        const ext=item.filename.split(".").pop().toLowerCase();
+        session.failures.set(ext,"native-download-not-observed");
+        session.failureStages.set(ext,String(result?.failure_stage || "no-native-download-event").slice(0,80));
+        continue;
+      }
       if(total+result.bytes>MAX_TOTAL){session.lastError="file-total-limit";break;}
       session.files.set(result.filename,result);
       session.failures.delete(item.filename.split(".").pop().toLowerCase());
+      session.failureStages.delete(item.filename.split(".").pop().toLowerCase());
       total+=result.bytes;
     }
     // Never manufacture a bundle for missing/invalid originals or while
@@ -221,6 +234,7 @@
       attempt_counts:Object.fromEntries([...session.attempts.entries()].map(([name,entry])=>[name.split(".").pop().toLowerCase(),entry.count])),
       captured_types:files.map(file=>file.filename.split(".").pop().toLowerCase()),
       failed_types:[...session.failures.keys()],
+      failure_stages:Object.fromEntries(session.failureStages),
       synthesized_zip:session.synthesizedZip===true,
     };
   }
@@ -228,7 +242,8 @@
     if(!session||session.requestId!==requestId)return {count:0,attempted:0,error:""};
     return {count:session.files.size,attempted:session.attempts.size,error:session.lastError,
       captured_types:[...session.files.keys()].map(name=>name.split(".").pop().toLowerCase()),
-      failed_types:[...session.failures.keys()]};
+      failed_types:[...session.failures.keys()],
+      failure_stages:Object.fromEntries(session.failureStages)};
   }
   globalThis[KEY]=Object.freeze({version:210,capture,stats});
 })();

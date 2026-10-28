@@ -84,6 +84,7 @@ test("file signature guard does not accept HTML relabeled XLSX",async()=>{
   const result=await h.content.capture(h.scope,"req_cfile3");
   assert.equal(result.count,0);
   assert.equal(result.error,"native-download-not-observed");
+  assert.equal(result.failure_stages.xlsx,"download-signature-invalid");
   assert.equal(h.clicked(),1);
 });
 
@@ -102,4 +103,13 @@ test("verified current-reply Download can capture a Blob created before arm",asy
   assert.equal(result.count,1);
   assert.equal(result.bytes,6);
   assert.equal(h.clicked(),1);
+});
+
+test("file failure reasons are categorized and never contain URLs or model text",async()=>{
+  const h=await harness({bytes:new TextEncoder().encode("<html>not an Office file</html>")});
+  const result=await h.content.capture(h.scope,"req_failure_reason");
+  assert.equal(result.count,0);
+  assert.equal(result.failure_stages.xlsx,"download-signature-invalid");
+  assert.ok(!JSON.stringify(result.failure_stages).includes("https://"));
+  assert.match(request,/media_native_file_failure_stages/);
 });
