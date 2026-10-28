@@ -28,7 +28,7 @@ def test_manifest_installs_v55_main_world_stream_evidence_without_legacy_termina
 
 def test_main_world_v55_uses_parser_revision_63_for_conversation_sse() -> None:
     source = read("chrome_extension/network_stream_main_v55.js")
-    for token in ('url.pathname === "/backend-api/f/conversation"','const PARSER_REVISION = 63;','data-chat2api-network-stream-parser','type.includes("text/event-stream")',"response.clone()","clone.body?.getReader",'phase: "assistant-snapshot"','phase: "assistant-complete"','type === "message_stream_complete"','patch?.p !== undefined ? patch.p : patch?.path','if (pointer == null || pointer === "") return [];','if (typeof payload === "string") return;'):
+    for token in ('url.pathname === "/backend-api/f/conversation"','const PARSER_REVISION = 63;','data-chat2api-network-stream-parser','type.includes("text/event-stream")',"response.clone()","clone?.body?.getReader",'phase: "assistant-snapshot"','phase: "assistant-complete"','type === "message_stream_complete"','patch?.p !== undefined ? patch.p : patch?.path','if (pointer == null || pointer === "") return [];','if (typeof payload === "string") return;'):
         assert token in source
     for forbidden in ("Authorization", "Cookie", "request_body", "prompt_text"):
         assert forbidden not in source
