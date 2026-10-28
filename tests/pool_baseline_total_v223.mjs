@@ -25,7 +25,7 @@ assert.equal(policy(3, 4, 4), 5);
 assert.equal(policy(3, 2, 3), 4, 'leased route ownership protects fourth window until it closes');
 assert.equal(policy(3, 32, 32), 32, 'no unbounded physical window creation');
 assert.equal(policy(3, 2, 2, true), 1, 'explicit logout compact mode');
-assert.match(poolSource, /while \(rows\.length < requiredTotal && rows\.length < MAX_TARGET\)/);
+assert.match(poolSource, /while \(rows\.length < requiredTotal && rows\.length < MAX_PHYSICAL_WINDOWS\)/);
 assert.match(poolSource, /busyWindowIds\(value\)/);
 assert.match(poolSource, /await shrinkStandby\(value, rows, standbyTarget, reason\)/);
 assert.match(poolSource, /if \(protectedIds\.has\(row\.window_id\)\) continue;/);
