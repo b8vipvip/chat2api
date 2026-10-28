@@ -2,7 +2,7 @@
   const KEY = "__CHAT2API_WORKER_LIMITS_CLIPBOARD_V121__";
   if (globalThis[KEY]) return;
 
-  const SETTINGS_HELP = "并发=同时执行的请求上限；备用=登录正常时持续维持的可接待空闲窗口数量。点击编辑按钮修改。";
+  const SETTINGS_HELP = "并发=Worker 同时执行请求的硬上限；满载时自动增加的备用窗口不增加并发名额。";
   const state = {
     version: 121,
     renderer: "canonical-worker-list-v152",
@@ -47,35 +47,20 @@
     if (!editor) return;
     const clientId = String(editor.dataset.v121WorkerLimits || "");
     const concurrency = Number(editor.querySelector("[data-v121-concurrency]")?.value || 0);
-    const windows = Number(editor.querySelector("[data-v121-windows]")?.value || 0);
     const note = editor.querySelector("[data-v121-limit-note]");
-    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32 || !Number.isInteger(windows) || windows < 1 || windows > 32) {
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32) {
       if (note) note.textContent = "请输入 1~32 的整数";
       return;
     }
     button.disabled = true;
     if (note) note.textContent = "保存中…";
     try {
-      await jsonRequest(`/api/admin/extensions/${encodeURIComponent(clientId)}/concurrency`, {
+      const saved = await jsonRequest(`/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57`, {
         method:"PUT",
         body:{max_concurrency:concurrency},
       });
-      let concurrencyApplied = true;
-      try {
-        const applied = await jsonRequest(`/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply`, {
-          method:"POST",
-          body:{target:concurrency},
-        });
-        concurrencyApplied = applied?.applied === true || applied?.ok === true;
-      } catch (_) {
-        concurrencyApplied = false;
-      }
-      const windowResult = await jsonRequest(`/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit`, {
-        method:"PUT",
-        body:{max_windows:windows},
-      });
-      const windowsApplied = windowResult?.applied === true;
-      if (note) note.textContent = concurrencyApplied && windowsApplied ? "已保存并生效" : "已保存 · Worker 在线后自动生效";
+      const sync = saved?.window_target_sync;
+      if (note) note.textContent = sync?.sent === true ? "并发上限已保存，窗口池已收到同步指令" : "并发上限已保存，Worker 在线后同步窗口池";
       const reload = globalThis.chat2apiReloadCanonicalWorkerListV59;
       if (typeof reload === "function") await reload();
     } catch (error) {
