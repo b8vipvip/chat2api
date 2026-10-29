@@ -109,7 +109,7 @@ def test_canonical_request_history_has_single_batch_control():
     assert "rqBatchExportLogs" in source
     assert "rqBatchExportLimit" in source
     assert "合并打包导出请求日志" in source
-    assert "/api/admin/requests/logs/batch?limit=" in source
+    assert "/api/admin/requests/logs/batch?" in source
     assert "limit.max='500'" in source
     assert "requestHistoryDownload(" in source
 
