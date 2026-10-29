@@ -887,6 +887,27 @@
     const candidate = rolelessShortReplyCandidate(active);
     const verified = candidate && verifiedRolelessShortAbortCandidate(active, candidate);
     const shortSse = verifiedShortAbortCandidate(active);
+    // Read-only, privacy-safe structural evidence. An h4 pair can be fresh
+    // yet live in different DOM wrappers, or the reply may be a nested card.
+    // Neither condition by itself authorizes a completion.
+    const answerHeading = assistantHeadings.at(-1) || null;
+    const promptHeading = userHeadings.at(-1) || null;
+    const nextReplyNode = answerHeading?.nextElementSibling || null;
+    const nextReplyText = nextReplyNode
+      ? normalize(nextReplyNode.innerText || nextReplyNode.textContent || "") : "";
+    const replyNodeIsVisible = Boolean(nextReplyNode && visible(nextReplyNode));
+    const rolelessStructure = {
+      response_recovery_roleless_pair_same_parent: Boolean(answerHeading && promptHeading
+        && answerHeading.parentElement === promptHeading.parentElement),
+      response_recovery_roleless_answer_sibling_tag: String(nextReplyNode?.tagName || "").slice(0,20),
+      response_recovery_roleless_answer_sibling_chars: nextReplyText.length,
+      response_recovery_roleless_answer_sibling_visible: replyNodeIsVisible,
+      response_recovery_roleless_answer_sibling_source_overlap: Boolean(observed.length >= 4
+        && nextReplyText.includes(observed)),
+      response_recovery_roleless_fresh_action_after_heading: Boolean(answerHeading
+        && typeof turnFollows === "function"
+        && freshActions.some(action => turnFollows(answerHeading, action))),
+    };
     let reason = "eligible";
     if (!active?.networkStreamSeen) reason = "network-not-observed";
     else if (!active?.submitStartedAt) reason = "submit-epoch-missing";
@@ -913,6 +934,7 @@
       response_recovery_fresh_completion_actions: freshActions.length,
       response_recovery_roleless_candidate: Boolean(candidate),
       response_recovery_roleless_verified: Boolean(verified),
+      ...rolelessStructure,
       response_recovery_short_current_reason: String(current?.reason || "none").slice(0, 100),
     };
   }

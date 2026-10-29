@@ -231,9 +231,19 @@ function requestHistoryEnsureControls(){
         :parsed?'已识别：'+parsed.iso+(parsed.assumedBeijing?'（按北京时间）':'（使用输入时区）')
         :'时间格式无效，请检查日期、秒数或时区';
     });
+    const versionLabel=document.createElement('label');
+    versionLabel.style.cssText='display:inline-flex;align-items:center;gap:5px;cursor:pointer;white-space:nowrap';
+    const versionOnly=document.createElement('input');
+    versionOnly.id='rqBatchExportCurrentVersion';
+    versionOnly.type='checkbox';
+    versionOnly.checked=false;
+    versionOnly.style.cssText='width:16px;height:16px;min-width:16px;padding:0;margin:0;cursor:pointer;accent-color:var(--accent)';
+    versionOnly.setAttribute('aria-label','仅合并打包导出当前版本的请求日志');
+    versionOnly.title='仅包含在当前服务端版本创建的请求；缺少可靠创建版本的旧请求不会被归入';
+    versionLabel.append(versionOnly,document.createTextNode('当前版本'));
     const button=document.createElement('button');button.type='button';
     button.className='action';button.textContent='合并打包导出请求日志';
-    button.title='按输入的起始时间（包含该时刻）导出全部仍留存的请求日志，最多 500 条';
+    button.title='从输入起始时间（含）导出留存请求日志；勾选当前版本按请求创建版本筛选（最多 500 条）';
     button.addEventListener('click',async()=>{
       const parsed=requestHistoryParseExportSince(since.value);
       if(!parsed){
@@ -241,9 +251,10 @@ function requestHistoryEnsureControls(){
         since.focus();return;
       }
       const query=new URLSearchParams({since:parsed.iso});
+      if(versionOnly.checked)query.set('current_version_only','true');
       button.disabled=true;const oldLabel=button.textContent;button.textContent='正在打包…';
       try{
-        status('正在导出指定时刻起全部留存请求的完整日志…');
+        status(versionOnly.checked?'正在导出指定时刻起当前版本的完整请求日志…':'正在导出指定时刻起全部留存请求的完整日志…');
         await requestHistoryDownload(
           '/api/admin/requests/logs/batch?'+query.toString(),
           'chat2api-request-logs-since.zip');
@@ -251,7 +262,7 @@ function requestHistoryEnsureControls(){
       }catch(error){status(String(error?.message||error),'bad');}
       finally{button.disabled=false;button.textContent=oldLabel;}
     });
-    group.append(label,since,button,note);
+    group.append(label,since,versionLabel,button,note);
     toolbar.appendChild(group);
   }
   if(toolbar&&!document.getElementById('rqDownloadDiagnostics')){
@@ -262,7 +273,7 @@ function requestHistoryEnsureControls(){
   }
   if(section&&!section.querySelector('[data-request-history-diagnostic-hint]')){
     const hint=document.createElement('div');hint.dataset.requestHistoryDiagnosticHint='1';hint.className='footer';
-    hint.textContent='排障建议：单条请求点“下载日志”；需要从指定起始时间（含）导出全部仍留存的请求时点“合并打包导出请求日志”（每条均含探针及测试诊断）；“下载诊断日志包”则另外汇总服务端运行日志、Worker 状态与故障摘要。请求日志可能包含已保存的完整提示词与回复，分享前请核对并脱敏。';
+    hint.textContent='排障建议：单条请求点“下载日志”；需要从指定起始时间（含）导出全部仍留存的请求时点“合并打包导出请求日志”；勾选“当前版本”则只包含创建于当前服务端版本的请求（每条均含探针及测试诊断）；“下载诊断日志包”则另外汇总服务端运行日志、Worker 状态与故障摘要。请求日志可能包含已保存的完整提示词与回复，分享前请核对并脱敏。';
     section.appendChild(hint);
   }
 }
