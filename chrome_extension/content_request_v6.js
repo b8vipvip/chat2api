@@ -742,6 +742,18 @@
   // to arm a bounded, signature-checked download observer; the full response
   // still needs ALL required verified files before chat.completed.
   function verifiedFileReplyBoundary(active, current) {
+    // v247: v246's fully scoped rich roleless answer is a legitimate
+    // request-local file container. The old allowlist excluded it, leaving
+    // downloadable Office cards invisible for all 900s of request lifetime.
+    // Use the exact assistant DIV, NEVER its page-wide main ancestor.
+    if (current?.reason === "fresh-roleless-rich-answer-v246") {
+      const richReply = verifiedRolelessRichAbortCandidate(active, current);
+      if (richReply && current.latest?.isConnected
+          && current.latest.closest?.("main,[role='main'],#thread"))
+        return {replyScope:current.latest,finishAction:richReply.finishAction,
+          boundaryEvidence:"v247-same-request-roleless-rich-DIV-with-fresh-toolbar"};
+      return null;
+    }
     if (!active?.submitStartedAt || !active.baselineFinishActions
         || !active.networkStreamSeen || !active.networkObservedAt
         || active.networkObservedAt < active.submitStartedAt
