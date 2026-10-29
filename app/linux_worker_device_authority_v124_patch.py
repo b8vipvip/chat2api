@@ -916,7 +916,7 @@ def install_linux_worker_device_authority_v124_patch(app: FastAPI) -> FastAPI:
         # Historical Linux console scripts are removed instead of hidden so they
         # cannot poll, render, relay actions, or make device decisions.
         html = LEGACY_LINUX_ASSET_RE.sub("", html)
-        marker = f'<script src="{ASSET_PATH}?v=0.22.244"></script>'
+        marker = f'<script src="{ASSET_PATH}?v=0.22.245"></script>'
         if marker not in html:
             html = html.replace("</body>", marker + "</body>") if "</body>" in html else html + marker
         headers = {key: value for key, value in response.headers.items() if key.lower() not in {"content-length", "content-type"}}
