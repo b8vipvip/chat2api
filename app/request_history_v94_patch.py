@@ -237,6 +237,7 @@ function requestHistoryEnsureControls(){
     versionOnly.id='rqBatchExportCurrentVersion';
     versionOnly.type='checkbox';
     versionOnly.checked=false;
+    versionOnly.style.cssText='width:16px;height:16px;min-width:16px;padding:0;margin:0;cursor:pointer;accent-color:var(--accent)';
     versionOnly.setAttribute('aria-label','仅合并打包导出当前版本的请求日志');
     versionOnly.title='仅包含在当前服务端版本创建的请求；缺少可靠创建版本的旧请求不会被归入';
     versionLabel.append(versionOnly,document.createTextNode('当前版本'));
