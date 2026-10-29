@@ -975,6 +975,22 @@
     return null;
   }
 
+  // Rich capture may shorten HTML while converting tables/math to Markdown.
+  // Require concrete content anchors near BOTH ends of the same DOM DIV,
+  // preventing a stable but truncated first half from becoming completed.
+  function rolelessRichCaptureComplete(node, markdown) {
+    if (!node || !markdown) return false;
+    const content = normalize(String(markdown)).replace(/[\x60*_|]/g, "");
+    const blocks = [...node.querySelectorAll?.("p,h1,h2,h3,h4,h5,h6,li,pre,td,th") || []]
+      .filter(visible).map(block => normalize(block.innerText || block.textContent || ""))
+      .filter(text => text.length >= 20 && !transientText(text));
+    const raw = normalize(node.innerText || node.textContent || "");
+    const start = (blocks[0] || raw).slice(0, 12);
+    const end = (blocks[blocks.length - 1] || raw).slice(-12);
+    return start.length >= 8 && end.length >= 8
+      && content.includes(start) && content.includes(end);
+  }
+
   function verifiedRolelessRichAbortCandidate(active, current) {
     if (current?.reason !== "fresh-roleless-rich-answer-v246"
         || !current.rolelessHeading?.isConnected
@@ -2321,6 +2337,7 @@
                   : finalText.length >= 240)
                 && (rendered.rolelessRichVerified
                   ? finalText.length >= rendered.text.length * 0.65
+                    && rolelessRichCaptureComplete(rendered.node, finalText)
                   : finalText.length >= rendered.text.length * 0.85)
                 && !internalToolPayload(finalText)
                 && !promptStillPresent(active) && !upstreamStillWorking()) {
