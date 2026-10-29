@@ -124,7 +124,7 @@
   function applyLayout() {
     const activePrefs = loadPrefs();
     const {body, headerRow} = tableParts();
-    if (!body || !headerRow) return;
+    if (!body || !headerRow || document.querySelector('[data-v121-inline-editing="1"]')) return;
     reorder(headerRow, activePrefs);
     applyVisibility(headerRow, activePrefs);
     for (const tr of body.rows) {
