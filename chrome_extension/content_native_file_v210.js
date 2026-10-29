@@ -66,8 +66,8 @@
         if (href && !/^(?:javascript|data|file):/i.test(href)) {
           try {
             const parsed=new URL(href,location.href);
-            sameOriginFileLink=(parsed.origin===location.origin || parsed.protocol==="blob:")
-              && (Boolean(button.getAttribute("download"))
+            sameOriginFileLink=(parsed.origin===location.origin)
+              && (Boolean(button.hasAttribute?.("download"))
                 || /\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md)(?:[?#]|$)/i.test(parsed.pathname)
                 || label.includes(filename));
           } catch (_) {}
