@@ -1889,6 +1889,10 @@
     return { text: raw, source: "network-sse-terminal-v57" };
   }
 
+  function abortedReplyStableThreshold(rendered) {
+    return rendered?.shortTextVerified ? 4500 : 8000;
+  }
+
   async function monitor(active) {
     const timeoutMs = Math.max(5000, Number(active.options.timeout_seconds || 300) * 1000);
     const startedAt = Date.now();
@@ -2365,10 +2369,24 @@
             // cloned reply container. Remove ONLY the known leading chrome;
             // never strip an ordinary user-authored heading in the body.
             const bounded = assistantOnlyReplyText(active, capture?.text);
-            if (bounded.pending) continue;
+            if (bounded.pending) {
+              active.abortRecoveryReadOnly = {response_recovery_capture_pending:true};
+              continue;
+            }
             const finalText = String(bounded.text || "").trim();
             const completePartSet = parts.every(part => part.isConnected
               && visible(part) && !promptStillPresent(active));
+            // Fixed-schema read-only facts distinguish a bad serializer
+            // from an unsafe candidate boundary. No prompt/body is logged.
+            active.abortRecoveryReadOnly = {
+              response_recovery_serializer_chars: finalText.length,
+              response_recovery_expected_chars: rendered.text.length,
+              response_recovery_part_set_complete: completePartSet,
+              response_recovery_rich_tail_complete: rendered.rolelessRichVerified
+                ? rolelessRichCaptureComplete(rendered.node, finalText) : null,
+              response_recovery_capture_pending: false,
+              response_recovery_threshold_ms: abortedReplyStableThreshold(rendered),
+            };
             if (completePartSet
                 && (rendered.shortTextVerified
                   ? finalText.length >= (rendered.rolelessHeaderVerified ? 3 : 8)
@@ -2386,7 +2404,7 @@
               if (finalText !== abortedRenderedCandidate) {
                 abortedRenderedCandidate = finalText;
                 abortedRenderedCandidateSince = Date.now();
-              } else if (Date.now() - abortedRenderedCandidateSince >= 8000
+              } else if (Date.now() - abortedRenderedCandidateSince >= abortedReplyStableThreshold(rendered)
                   && Date.now() - Number(active.networkObservedAt || 0) >= 12000
                   && rendered.finishAction?.isConnected
                   && responseFinishActions().includes(rendered.finishAction)
@@ -2441,6 +2459,7 @@
                     response_epoch_candidate_reason: rendered.reason,
                     response_terminal_final_chars: finalText.length,
                     response_terminal_stable_ms: Date.now() - abortedRenderedCandidateSince,
+                    response_terminal_required_stable_ms: abortedReplyStableThreshold(rendered),
                     response_finish_action_count: rendered.finishActionCount,
                     response_integrity_scope: "same-answer-container-before-toolbar-v206",
                     response_terminal_live_working_guard: true,
@@ -2461,6 +2480,7 @@
               }
             } else { abortedRenderedCandidate = ""; abortedRenderedCandidateSince = 0; }
           } catch (_) {
+            active.abortRecoveryReadOnly = {response_recovery_capture_error:true};
             abortedRenderedCandidate = "";
             abortedRenderedCandidateSince = 0;
           }
@@ -2470,6 +2490,7 @@
           await diagnostic(active, "aborted-sse-dom-recovery", {
             response_recovery_revision: 200,
             response_recovery_candidate_reason: current.reason,
+            ...(active.abortRecoveryReadOnly || {}),
             ...shortAbortGateEvidence(active, current),
             response_recovery_candidate_chars: String(current.text || "").length,
             response_recovery_finish_actions: responseFinishActions()
