@@ -67,7 +67,7 @@ def test_extension_console_uses_canonical_worker_settings_column():
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57' in behavior
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' not in behavior
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' not in behavior
-    assert 'method: "PUT"' in behavior
+    assert "method:'PUT'" in behavior
     assert 'method:"POST"' in behavior
     assert 'renderer: "canonical-worker-list-v152"' in behavior
 
