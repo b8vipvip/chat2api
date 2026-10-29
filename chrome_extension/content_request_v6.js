@@ -1290,8 +1290,8 @@
       let end=Math.min(text.length,offset+chunkSize);
       // Never divide a UTF-16 surrogate pair between native input events.
       if(end<text.length && end>offset
-          && /[\\uD800-\\uDBFF]/.test(text[end-1])
-          && /[\\uDC00-\\uDFFF]/.test(text[end])) end-=1;
+          && text.charCodeAt(end-1)>=0xD800 && text.charCodeAt(end-1)<=0xDBFF
+          && text.charCodeAt(end)>=0xDC00 && text.charCodeAt(end)<=0xDFFF) end-=1;
       const part=text.slice(offset,end);
       if(!part || document.execCommand("insertText",false,part)!==true)
         throw new Error("ChatGPT native editor rejected a long prompt batch");
