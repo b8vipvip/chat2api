@@ -227,3 +227,14 @@ def test_v246_roleless_rich_reply_preserves_one_terminal_controller():
     assert "current.latest === current.rolelessHeading.nextElementSibling" in src
     assert "abortedRenderedCandidateSince >= 8000" in src
     assert 'response_terminal_source: rendered.rolelessRichVerified' in src
+
+def test_v247_single_worker_terminal_and_file_archive_separation():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    worker = (root / "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
+    backend = (root / "app/main.py").read_text(encoding="utf-8")
+    assert "v247-same-request-roleless-rich-DIV-with-fresh-toolbar" in worker
+    assert "media_file_ready_since_submit_ms" in worker
+    assert "type: \"chat.completed\"" in worker
+    assert "deferred_generated_files.rewrite(text, owner, request_id, base_url)" in backend
+    assert "/api/generated-files/pending/{file_id}/{access_token}" in backend
