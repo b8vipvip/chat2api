@@ -37,8 +37,8 @@ def parse_request_since(raw: str | None) -> datetime | None:
     if not source:
         return None
     if not re.fullmatch(
-        r"\\d{4}-\\d{2}-\\d{2}[ T]\\d{2}:\\d{2}"
-        r"(?::\\d{2}(?:\\.\\d{1,6})?)?(?:Z|[+-]\\d{2}:?\\d{2})?",
+        r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}"
+        r"(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:?\d{2})?",
         source, flags=re.IGNORECASE,
     ):
         raise ValueError("Invalid since timestamp format")
