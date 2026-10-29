@@ -90,6 +90,8 @@ def test_since_only_export_preserves_single_request_reports_and_status(tmp_path:
                 assert artifact["playground_diagnostics"] == single["playground_diagnostics"]
                 assert artifact["http_trace"] == single["http_trace"]
                 assert "extension_snapshot" in artifact
+                assert artifact["request"]["final_prompt"] == f"customer prompt {row['request_id']}"
+                assert artifact["request"]["response_text"] == f"answer {row['request_id']}"
                 assert "final_prompt" in artifact["request"]
             readme = bundle.read("README.txt").decode("utf-8")
             assert "起始时间（含）" in readme
