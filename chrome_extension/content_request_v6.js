@@ -735,6 +735,32 @@
       replyScope: best.scope, coverage: best.coverage};
   }
 
+  // A verified download button is EVIDENCE, not a terminal. File cards can
+  // exist before SSE EOF (or behind an aborted clone), so don't require the
+  // aborted-network long-text terminal conditions just to collect bytes. One
+  // fresh reply toolbar and its current request-local answer scope are enough
+  // to arm a bounded, signature-checked download observer; the full response
+  // still needs ALL required verified files before chat.completed.
+  function verifiedFileReplyBoundary(active, current) {
+    if (!active?.submitStartedAt || !active.baselineFinishActions
+        || !active.networkStreamSeen || !active.networkObservedAt
+        || active.networkObservedAt < active.submitStartedAt
+        || !current?.isNew || !current.latest || promptStillPresent(active)
+        || !["verified-rendered-network-overlap-v189",
+              "verified-rendered-dom-baseline-v191",
+              "after-current-user-turn"].includes(current.reason)) return null;
+    const buttons = responseFinishActions().filter(button =>
+      !active.baselineFinishActions.has(button)
+      && button.isConnected && turnFollows(current.latest, button));
+    for (const button of buttons) {
+      const scope = replyScopeForFinishAction(current.latest, button);
+      if (scope?.isConnected && scope.closest?.("main,[role='main'],#thread"))
+        return {replyScope:scope, finishAction:button,
+          boundaryEvidence:"same-request-new-reply-toolbar-v242"};
+    }
+    return null;
+  }
+
   // A short real answer (<240 chars) on redesigned pages has no role-labelled
   // assistant node. The long-form DOM recovery cannot detect it. Correlate a
   // fresh, exact reply text fragment from THIS request's SSE with a fresh
@@ -1697,8 +1723,7 @@
       // native byte observer has no right to widen it or decide completion.
       const fileReplyBoundary = fileCreationRequested && !generating
         && !upstreamStillWorking()
-        && Number(active.networkTerminalTransportErrorAt || 0) > 0
-        ? verifiedRenderedAbortCandidate(active, current) : null;
+        ? verifiedFileReplyBoundary(active, current) : null;
       const mediaReplyRoot = fileReplyBoundary?.replyScope || sameTurnRoot;
       const visibleTurnMedia = Boolean(mediaReplyRoot && rich?.hasCandidateImage?.(mediaReplyRoot));
       const visibleTurnFiles = Boolean(mediaReplyRoot && rich?.hasCandidateFile?.(mediaReplyRoot));
@@ -1817,10 +1842,16 @@
         // verified current reply only, trigger it once and capture the actual
         // browser-produced bytes. Never infer success from a preview or button.
         const native = fileCreationRequested && fileReplyBoundary
-          && !visibleTurnFiles && !upstreamStillWorking()
+          && !upstreamStillWorking()
           && Date.now() - Number(active.networkObservedAt || 0) >= 2500
           ? await globalThis.__CHAT2API_NATIVE_FILE_V210__?.capture?.(
               fileReplyBoundary.replyScope, active.requestId) : null;
+        if (native) {
+          active.mediaNativeFileFailedTypes = native.failed_types || [];
+          active.mediaNativeFileFailureStages = native.failure_stages || {};
+          active.mediaNativeFileCapturedTypes = native.captured_types || [];
+          active.mediaNativeFileAttemptCounts = native.attempt_counts || {};
+        }
         const serialized = combinePageMediaText(assistantProse, finalMedia?.text);
         const captured = [serialized, native?.text || ""].filter(Boolean).join("\n\n");
         active.mediaCaptureAttempts = Number(active.mediaCaptureAttempts || 0) + 1;
@@ -2281,9 +2312,12 @@
     }
 
     if (active.cancelled) await emit({ type: "chat.cancelled", request_id: active.requestId, reason: "Cancelled by API client" });
-    else await emit({ type: "chat.error", request_id: active.requestId, error: imageBuildArtifactObserved
-      ? "ChatGPT returned an image-building command, but no verified transferable image was captured"
-      : imageHandoffObserved ? "ChatGPT generated media or image-tool arguments but no transferable image was captured before the request timeout"
+    else await emit({ type: "chat.error", request_id: active.requestId, error: fileCreationRequested
+      ? "ChatGPT did not deliver all required verified downloadable file bytes before the deadline"
+      : imageBuildArtifactObserved
+        ? "ChatGPT returned an image-building command, but no verified transferable image was captured"
+      : imageCreationRequested && imageHandoffObserved
+        ? "ChatGPT generated image media but no transferable image was captured before the request timeout"
       : Number(active.networkTerminalTransportErrorAt || 0) > 0
         ? "ChatGPT network transport ended without a verifiable final answer: "
           + String(active.networkTerminalTransportErrorReason || "stream-incomplete")
@@ -2296,6 +2330,11 @@
         network_transport_terminal_confirmed: confirmedTransportTerminal(active),
         network_terminal_transport_error: String(active.networkTerminalTransportErrorReason || ""),
         network_terminal_transport_error_at: Number(active.networkTerminalTransportErrorAt || 0),
+        media_file_creation_requested: fileCreationRequested,
+        media_native_file_failed_types: active.mediaNativeFileFailedTypes || [],
+        media_native_file_failure_stages: active.mediaNativeFileFailureStages || {},
+        media_native_file_captured_types: active.mediaNativeFileCapturedTypes || [],
+        media_native_file_attempt_counts: active.mediaNativeFileAttemptCounts || {},
         media_local_build_command_observed: imageBuildArtifactObserved,
         media_image_creation_requested: imageCreationRequested,
         media_baseline_key_count: Number(active.baselinePageMedia?.keys?.size || 0),
