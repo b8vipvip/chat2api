@@ -157,7 +157,7 @@
     // reconstruction must not claim that the wire model was rewritten.
     const actualWire = rewritten ? rawModel(payload) : originalWire;
     const after = normalizeModel(actualWire);
-    const violation = Boolean(target && after !== target);
+    const violation = Boolean(target && after && after !== target);
     if (rewritten) state.rewrites += 1;
     post({ phase: "request", stream_id: streamId,
       request_model: after, request_wire_model: actualWire,
