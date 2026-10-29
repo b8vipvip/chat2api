@@ -1264,11 +1264,63 @@
     };
   }
 
+  // #568: One 34K Lexical insertText transaction took 425 seconds on TX03.
+  // Avoid a giant single beforeinput transaction. Use bounded native editor
+  // transactions on the *same* focused selection, never DOM assignment/paste,
+  // and verify the exact final composer before any send is enabled.
+  async function setComposerTextBatched(active, element, text) {
+    if (String(text || "").length < 8192
+        || element instanceof HTMLTextAreaElement
+        || element instanceof HTMLInputElement) {
+      setComposerText(element, text);
+      return {method:"single-native", chunks:1, elapsed_ms:0};
+    }
+    const started=performance.now();
+    const chunkSize=2048;
+    const selection=window.getSelection();
+    const range=document.createRange();
+    element.focus();
+    range.selectNodeContents(element);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    let chunks=0;
+    for(let offset=0;offset<text.length;) {
+      if(active?.cancelled || element.isConnected===false)
+        throw new Error("Native editor batch cancelled or detached");
+      let end=Math.min(text.length,offset+chunkSize);
+      // Never divide a UTF-16 surrogate pair between native input events.
+      if(end<text.length && end>offset
+          && text.charCodeAt(end-1)>=0xD800 && text.charCodeAt(end-1)<=0xDBFF
+          && text.charCodeAt(end)>=0xDC00 && text.charCodeAt(end)<=0xDFFF) end-=1;
+      const part=text.slice(offset,end);
+      if(!part || document.execCommand("insertText",false,part)!==true)
+        throw new Error("ChatGPT native editor rejected a long prompt batch");
+      chunks+=1;offset=end;
+      // Permit Lexical to finish a bounded transaction before the next one.
+      // No additional synthetic input: execCommand is the native input owner.
+      if(offset<text.length) await delay(0);
+      if(performance.now()-started>90000)
+        throw new Error("ChatGPT native editor long prompt exceeded 90-second insertion budget");
+    }
+    if(!promptMatchesText(composerText(element),active))
+      throw new Error("ChatGPT native editor batch failed exact prompt verification");
+    const elapsed=Math.round((performance.now()-started)*10)/10;
+    await diagnostic(active,"prompt-native-batches-ready",{
+      prompt_batched_native_revision:251,
+      prompt_batched_native_method:"bounded-native-insertText",
+      prompt_batched_native_chunks:chunks,
+      prompt_batched_native_chars:text.length,
+      prompt_batched_native_ms:elapsed,
+      prompt_batched_native_verified:true,
+    });
+    return {method:"bounded-native-insertText",chunks,elapsed_ms:elapsed};
+  }
+
   async function writePrompt(active, prompt) {
     let composer = await ensureComposer();
     const target = normalize(prompt);
     for (let attempt = 1; attempt <= 3; attempt += 1) {
-      setComposerText(composer, prompt);
+      await setComposerTextBatched(active, composer, prompt);
       const retained = await waitFor(() => {
         for (const current of composerCandidates(active)) {
           const text = composerText(current);
@@ -1465,7 +1517,7 @@
     setComposerText(editor, "");
     const cleared = await waitFor(() => composerText(editor) === "" && editor.isConnected !== false, 1200, 100);
     if (!cleared) return false;
-    setComposerText(editor, active.prompt);
+    await setComposerTextBatched(active, editor, active.prompt);
     return Boolean(await waitFor(() => promptMatchesComposer(editor, active), 2400, 100));
   }
 
