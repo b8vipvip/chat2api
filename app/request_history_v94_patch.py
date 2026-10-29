@@ -173,6 +173,35 @@ async function requestHistoryShowConversation(requestId){
   }
 }
 window.showRequestConversationV97=requestHistoryShowConversation;
+// The UI and API use the SAME unambiguous instant. When the pasted value
+// carries no offset, interpret it in the request-history's Beijing timezone,
+// NOT in the browser's OS zone (admins often work through remote desktops).
+function requestHistoryParseExportSince(value){
+  const source=String(value||'').trim();
+  const m=/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?\s*(Z|[+-]\d{2}:?\d{2})?$/i.exec(source);
+  if(!m)return null;
+  const year=Number(m[1]),month=Number(m[2]),day=Number(m[3]);
+  const hour=Number(m[4]),minute=Number(m[5]),second=Number(m[6]||0);
+  const ms=Number((m[7]||'').padEnd(3,'0')||0);
+  if(year<100||month<1||month>12||day<1||day>31||hour>23||minute>59||second>59)return null;
+  const wall=new Date(Date.UTC(year,month-1,day,hour,minute,second,ms));
+  if(wall.getUTCFullYear()!==year||wall.getUTCMonth()+1!==month||
+      wall.getUTCDate()!==day||wall.getUTCHours()!==hour||
+      wall.getUTCMinutes()!==minute||wall.getUTCSeconds()!==second)return null;
+  const zone=m[8]||'';
+  let offsetMinutes=480;
+  if(zone.toUpperCase()==='Z')offsetMinutes=0;
+  else if(zone){
+    const sign=zone[0]==='+'?1:-1;
+    const digits=zone.slice(1).replace(':','');
+    const hh=Number(digits.slice(0,2)),mm=Number(digits.slice(2,4));
+    if(hh>14||mm>59||(hh===14&&mm!==0))return null;
+    offsetMinutes=sign*(hh*60+mm);
+  }
+  const instant=new Date(wall.getTime()-offsetMinutes*60000);
+  if(!Number.isFinite(instant.getTime()))return null;
+  return {iso:instant.toISOString(),assumedBeijing:!zone};
+}
 function requestHistoryEnsureControls(){
   requestHistoryEnsureConversationModal();
   const section=document.getElementById('view-requests'),toolbar=section?.querySelector('.toolbar');
@@ -180,50 +209,49 @@ function requestHistoryEnsureControls(){
     const group=document.createElement('div');
     group.id='rqBatchExportLogs';
     group.style.cssText='display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap';
-    const label=document.createElement('label');label.textContent='最近';
-    label.htmlFor='rqBatchExportLimit';
-    const limit=document.createElement('input');
-    limit.id='rqBatchExportLimit';limit.type='number';limit.min='1';limit.max='500';
-    limit.step='1';limit.value='20';limit.title='输入要导出的最近请求条数，最多 500 条';
-    limit.style.cssText='width:84px;padding:7px 8px';
-    const suffix=document.createElement('span');suffix.textContent='条';
-    const sinceLabel=document.createElement('label');
-    sinceLabel.textContent='或从';
-    sinceLabel.htmlFor='rqBatchExportSince';
+    const label=document.createElement('label');
+    label.textContent='从时间（含）';label.htmlFor='rqBatchExportSince';
     const since=document.createElement('input');
     since.id='rqBatchExportSince';
-    since.type='datetime-local';
-    since.title='选择请求创建的起始时间（包含该时刻）；留空则导出最近 N 条';
-    since.style.cssText='max-width:205px;padding:7px 8px';
+    since.type='text';
+    since.placeholder='2026-10-29 10:39:31';
+    since.autocomplete='off';
+    since.setAttribute('aria-label','请求日志导出起始时间');
+    since.title='可粘贴 2026-10-29 10:39:31 或 2026-10-29T11:28:29+08:00；不带时区按北京时间 UTC+08:00';
+    since.style.cssText='width:258px;max-width:calc(100vw - 48px);box-sizing:border-box;padding:7px 8px;font-variant-numeric:tabular-nums';
+    const note=document.createElement('span');
+    note.id='rqBatchExportTimeHint';
+    note.style.cssText='font-size:12px;opacity:.85;overflow-wrap:anywhere';
+    note.setAttribute('role','status');
+    note.textContent='未标注时区按北京时间 UTC+08:00';
+    since.addEventListener('input',()=>{
+      const value=since.value.trim();
+      const parsed=value?requestHistoryParseExportSince(value):null;
+      note.textContent=!value?'未标注时区按北京时间 UTC+08:00'
+        :parsed?'已识别：'+parsed.iso+(parsed.assumedBeijing?'（按北京时间）':'（使用输入时区）')
+        :'时间格式无效，请检查日期、秒数或时区';
+    });
     const button=document.createElement('button');button.type='button';
     button.className='action';button.textContent='合并打包导出请求日志';
-    button.title='将最近 N 条请求记录对应的完整单条日志合并到一个 ZIP，包含 Worker 探针、HTTP Trace 和测试场关联诊断';
+    button.title='按输入的起始时间（包含该时刻）导出全部仍留存的请求日志，最多 500 条';
     button.addEventListener('click',async()=>{
-      const raw=limit.value.trim(),n=Number(raw);
-      if(!/^\d+$/.test(raw)||!Number.isSafeInteger(n)||n<1||n>500){
-        status('请输入 1–500 的整数条数','bad');limit.focus();return;
+      const parsed=requestHistoryParseExportSince(since.value);
+      if(!parsed){
+        status('请输入有效起始时间，例如 2026-10-29 10:39:31 或 2026-10-29T11:28:29+08:00','bad');
+        since.focus();return;
       }
-      const from=since.value.trim();
-      // datetime-local uses the admin browser's local zone; transmit UTC
-      // ISO-8601 so the server handles timezone and DST unambiguously.
-      const start=from ? new Date(from) : null;
-      if(from && (!start || !Number.isFinite(start.getTime()))){
-        status('起始时间无效，请重新选择','bad');since.focus();return;
-      }
-      const bound=from ? 500 : n;
-      const query=new URLSearchParams({limit:String(bound)});
-      if(start)query.set('since',start.toISOString());
+      const query=new URLSearchParams({since:parsed.iso});
       button.disabled=true;const oldLabel=button.textContent;button.textContent='正在打包…';
       try{
-        status(start ? '正在导出起始时间之后的全部留存请求日志…' : `正在导出最近 ${n} 条请求的完整日志…`);
+        status('正在导出指定时刻起全部留存请求的完整日志…');
         await requestHistoryDownload(
-          `/api/admin/requests/logs/batch?${query.toString()}`,
-          start ? 'chat2api-request-logs-since.zip' : `chat2api-request-logs-latest-${n}.zip`);
+          '/api/admin/requests/logs/batch?'+query.toString(),
+          'chat2api-request-logs-since.zip');
         status('合并请求日志 ZIP 已下载','ok');
       }catch(error){status(String(error?.message||error),'bad');}
       finally{button.disabled=false;button.textContent=oldLabel;}
     });
-    group.append(label,limit,suffix,sinceLabel,since,button);
+    group.append(label,since,button,note);
     toolbar.appendChild(group);
   }
   if(toolbar&&!document.getElementById('rqDownloadDiagnostics')){
@@ -234,7 +262,7 @@ function requestHistoryEnsureControls(){
   }
   if(section&&!section.querySelector('[data-request-history-diagnostic-hint]')){
     const hint=document.createElement('div');hint.dataset.requestHistoryDiagnosticHint='1';hint.className='footer';
-    hint.textContent='排障建议：单条请求点“下载日志”；需要最近 N 条日志或指定起始时间时点“合并打包导出请求日志”（每条均含探针及测试诊断）；“下载诊断日志包”则另外汇总服务端运行日志、Worker 状态与故障摘要。请求日志可能包含已保存的完整提示词与回复，分享前请核对并脱敏。';
+    hint.textContent='排障建议：单条请求点“下载日志”；需要从指定起始时间（含）导出全部仍留存的请求时点“合并打包导出请求日志”（每条均含探针及测试诊断）；“下载诊断日志包”则另外汇总服务端运行日志、Worker 状态与故障摘要。请求日志可能包含已保存的完整提示词与回复，分享前请核对并脱敏。';
     section.appendChild(hint);
   }
 }
