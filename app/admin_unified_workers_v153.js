@@ -295,7 +295,7 @@
       if(!document.hidden && selectedType === "windows" && section.classList.contains("active") && !document.querySelector("dialog[open]")){
         refreshWindowsDevices().catch(()=>{});
       }
-      if (!document.hidden && selectedType === "linux" && section.classList.contains("active") && !document.querySelector("dialog[open]") && !document.querySelector("#linuxWorkerListPanelV155 [data-v121-limit-popover]:not([hidden])")) {
+      if (!document.hidden && selectedType === "linux" && section.classList.contains("active") && !document.querySelector("dialog[open]") && !document.querySelector("#v240WorkerConcurrencyDialog[open]")) {
         byId("refreshLinuxDevicesV124")?.click();
       }
     }, 15000);
@@ -711,7 +711,7 @@
     refresh().catch(e=>{el("unifiedDeviceSummaryV160").textContent=e.message;});
     setInterval(()=>{
       if(!document.hidden&&section.classList.contains("active")&&!document.querySelector("dialog[open]")&&
-        !document.querySelector("[data-v121-limit-popover]:not([hidden])")){
+        !document.querySelector("#v240WorkerConcurrencyDialog[open]")){
         el("refreshLinuxDevicesV124")?.click();
       }
     },15000);
