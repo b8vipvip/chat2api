@@ -274,3 +274,19 @@ def test_v250_abcd_disconnect_is_presentation_recovery_not_worker_terminal():
     assert "recovered_after_disconnect:out.recovered===true" in source
     assert "if(!stopped||!done)" in source
     assert "SSE 连接已断开，服务端仍在运行" in source
+
+
+def test_v251_terminal_recovery_migration_keeps_single_request_controller():
+    manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text("utf-8"))
+    scripts = manifest["content_scripts"][1]["js"]
+    assert scripts.count("content_request_v6.js") == 1
+    source = (ROOT / "chrome_extension" / "content_request_v6.js").read_text("utf-8")
+    assert "function abortedReplyStableThreshold(rendered)" in source
+    assert "return rendered?.shortTextVerified ? 4500 : 8000" in source
+    # Externally visible terminal state must remain owned by request-v6,
+    # not the native file observer, model inspector or read-only probes.
+    for path in ("content_native_file_v210.js", "native_file_main_v210.js",
+                 "content_model_evidence_v144.js", "model_evidence_main_v144.js"):
+        observer = (ROOT / "chrome_extension" / path).read_text("utf-8")
+        assert 'type: "chat.completed"' not in observer
+        assert 'type: "chat.error"' not in observer
