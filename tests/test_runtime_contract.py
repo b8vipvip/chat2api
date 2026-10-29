@@ -238,3 +238,13 @@ def test_v247_single_worker_terminal_and_file_archive_separation():
     assert "type: \"chat.completed\"" in worker
     assert "deferred_generated_files.rewrite(text, owner, request_id, base_url)" in backend
     assert "/api/generated-files/pending/{file_id}/{access_token}" in backend
+
+def test_v248_compact_div_uses_original_single_terminal_controller():
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] /
+              "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
+    assert "fresh-roleless-compact-div-v248" in source
+    assert "shortRolelessSourceOverlap(raw, observed)" in source
+    assert "verifiedRolelessRichAbortCandidate(active, current)" in source
+    assert "abortedRenderedCandidateSince >= 8000" in source
+    assert 'type: "chat.completed", request_id: active.requestId' in source
