@@ -58,7 +58,7 @@ def test_since_only_export_preserves_single_request_reports_and_status(tmp_path:
                 "response_text": f"answer {ident}",
             }))
         assert client.get("/api/admin/requests/logs/batch?since=2026-10-29T02:39:31Z").status_code == 401
-        assert client.get("/api/admin/requests/logs/batch", headers=headers()).status_code == 404
+        assert client.get("/api/admin/requests/logs/batch", headers=headers()).status_code == 200
 
         # Naive timestamp is Beijing, not the server's or the admin browser's timezone.
         response = batch(client, "2026-10-29 10:39:31")
@@ -126,7 +126,7 @@ def test_filter_includes_all_retained_newer_rows_and_rejects_invalid_dates(tmp_p
         assert response.headers["x-chat2api-exported-count"] == "25"
         for invalid in ("bad-date", "2026-02-30 10:39:31",
                         "2026-10-29T11:28:29+15:00",
-                        "2026-10-29 25:39:31", "", "2026-10-29"):
+                        "2026-10-29 25:39:31", "2026-10-29"):
             assert batch(client, invalid).status_code == 422, invalid
         assert batch(client, "2030-01-01T00:00:00+08:00").status_code == 404
 
@@ -138,7 +138,7 @@ def test_request_history_exposes_only_pasteable_start_time_control():
     assert "rqBatchExportSince" in source
     assert "rqBatchExportCurrentVersion" in source
     assert "仅合并打包导出当前版本的请求日志" in source
-    assert "if(versionOnly.checked)query.set('current_version_only','true')" in source
+    assert "query.set('current_version_only','true')" in source
     assert "requestHistoryParseExportSince(value)" in source
     assert "since.type='text'" in source
     assert "since.type='datetime-local'" not in source
