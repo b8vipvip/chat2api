@@ -904,8 +904,9 @@
       response_recovery_roleless_answer_sibling_visible: replyNodeIsVisible,
       response_recovery_roleless_answer_sibling_source_overlap: Boolean(observed.length >= 4
         && nextReplyText.includes(observed)),
-      response_recovery_roleless_fresh_action_after_heading: Boolean(answerHeading &&
-        freshActions.some(action => turnFollows(answerHeading, action))),
+      response_recovery_roleless_fresh_action_after_heading: Boolean(answerHeading
+        && typeof turnFollows === "function"
+        && freshActions.some(action => turnFollows(answerHeading, action))),
     };
     let reason = "eligible";
     if (!active?.networkStreamSeen) reason = "network-not-observed";
