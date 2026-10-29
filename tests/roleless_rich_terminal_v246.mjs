@@ -3,7 +3,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 
 const source=fs.readFileSync("chrome_extension/content_request_v6.js","utf8");
-const start=source.indexOf("  function rolelessRichReplyCandidate(active) {");
+const start=source.indexOf("  function rolelessRichCaptureComplete(node, markdown) {");
 const end=source.indexOf("\n  // #535: bounded, privacy-safe diagnostics",start);
 assert.ok(start>0&&end>start);
 function setup(){
@@ -32,7 +32,7 @@ function setup(){
    responseFinishActions:()=>actions,promptStillPresent:()=>promptHeld,
    upstreamStillWorking:()=>working,
  };
- vm.runInNewContext(source.slice(start,end)+"\nthis.find=rolelessRichReplyCandidate;this.verify=verifiedRolelessRichAbortCandidate;",ctx);
+ vm.runInNewContext(source.slice(start,end)+"\nthis.find=rolelessRichReplyCandidate;this.verify=verifiedRolelessRichAbortCandidate;this.complete=rolelessRichCaptureComplete;",ctx);
  const active={
    networkStreamSeen:true,submitStartedAt:1000,networkObservedAt:1050,
    networkObservedText:"hello from upstream",
@@ -56,6 +56,9 @@ function setup(){
  assert.equal(verified?.rolelessRichVerified,true);
  assert.equal(verified.coverage.nodes.length,1);
  assert.equal(verified.coverage.nodes[0],f.response);
+ assert.equal(f.ctx.complete(f.response, f.response.innerText),true);
+ assert.equal(f.ctx.complete(f.response, f.response.innerText.slice(0,-60)),false,
+   "a truncated trailing section must not be delivered");
 }
 {
  const f=setup();f.setActions([f.toolbar]);
