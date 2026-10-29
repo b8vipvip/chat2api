@@ -53,7 +53,7 @@ def test_v211_static_contracts() -> None:
     assert "data-v121-concurrency" not in canonical
     assert "data-v121-concurrency" in behavior
     assert "data-v121-windows" not in canonical
-    assert "data-v121-save-limits" in canonical
+    assert "data-v121-save-limits" in behavior
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57' in behavior
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity/apply' not in behavior
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' not in behavior
