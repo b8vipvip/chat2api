@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.22.130-worker-list-v156";
+  const VERSION = "0.22.240-worker-list-v157";
   const COLUMN_SCHEMA_REVISION = 152;
   const STORAGE_KEY = "chat2api.extensionColumns.v3";
   const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2";
@@ -194,21 +194,13 @@
   function limitEditor(row) {
     const id = String(row?.client_id || "");
     const concurrency = Math.max(1, Math.min(32, Number(row?.configured_max_concurrency || row?.max_concurrency || row?.capacity?.configured_limit_units || 3)));
-    return `<div data-v121-worker-limits="${esc(id)}" style="position:relative;display:inline-flex;align-items:center;gap:7px;white-space:nowrap;min-width:78px">
+    // Only an edit trigger lives in the scrolling table. The form is a body-level
+    // native dialog, otherwise the table clips its Save and Cancel buttons.
+    return `<div data-v121-worker-limits="${esc(id)}" style="display:inline-flex;align-items:center;gap:7px;white-space:nowrap;min-width:78px">
       <strong data-v121-limit-summary style="font-variant-numeric:tabular-nums">${concurrency}</strong>
-      <button class="action" type="button" data-v121-edit-limits title="编辑并发设置" aria-label="编辑并发设置" style="padding:4px 7px;min-width:30px">✎</button>
-      <div data-v121-limit-popover hidden style="position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:260px;padding:12px;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 14px 34px rgba(0,0,0,.38);white-space:normal">
-        <label style="display:grid;gap:5px;font-size:12px">最大并发请求数<input data-v121-concurrency type="number" min="1" max="32" value="${concurrency}" style="width:100%;box-sizing:border-box;padding:7px 8px"></label>
-        <div class="muted" style="font-size:11px;line-height:1.5;margin-top:7px">最多同时执行 ${concurrency} 个请求。满载时自动额外保留 1 个备用窗口；只有释放并发名额后才可调用。</div>
-        <div style="display:flex;align-items:center;justify-content:flex-end;gap:7px;margin-top:10px">
-          <span class="muted" data-v121-limit-note style="font-size:11px;margin-right:auto"></span>
-          <button class="action" type="button" data-v121-cancel-limits>取消</button>
-          <button class="action good" type="button" data-v121-save-limits>保存</button>
-        </div>
-      </div>
+      <button class="action" type="button" data-v121-edit-limits title="编辑最大并发数" aria-label="编辑最大并发数" style="padding:4px 7px;min-width:30px">✎</button>
     </div>`;
   }
-
   function truthByClient(payload) {
     const result = new Map();
     const now = Date.now();
