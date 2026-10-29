@@ -207,3 +207,13 @@ def test_request_terminal_migration_owns_one_loaded_controller():
     assert 'type: "chat.completed"' in request
     assert "reconcileStrictTerminal" not in request
 
+
+def test_v245_short_reply_is_owned_by_single_request_controller():
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] /
+              "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
+    assert 'reason:"fresh-roleless-short-answer-v245"' in source
+    assert 'rendered.rolelessHeaderVerified ? 3 : 8' in source
+    assert 'abortedRenderedCandidateSince >= 8000' in source
+    assert source.count('type: "chat.completed", request_id: active.requestId') >= 1
+    assert 'baselineRolelessHeadings' in source
