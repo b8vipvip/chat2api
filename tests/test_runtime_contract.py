@@ -263,3 +263,15 @@ def test_v249_native_file_candidate_probe_is_bounded_and_not_a_terminal_owner():
     assert ".slice(0,48)" in isolated
     assert 'type: "chat.completed"' not in main
     assert 'type: "chat.completed"' not in isolated
+
+def test_v249_native_generated_file_format_parity_and_private_diagnostics():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    isolated = (root / "chrome_extension/content_native_file_v210.js").read_text(encoding="utf-8")
+    main = (root / "chrome_extension/native_file_main_v210.js").read_text(encoding="utf-8")
+    request = (root / "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
+    for ext in ("py", "js", "ts", "html"):
+        assert f'{ext}:"' in isolated
+        assert f'{ext}:"' in main
+    assert "candidateExclusionEvidence(scope)" in isolated
+    assert "media_native_file_candidate_exclusion_counts" in request
