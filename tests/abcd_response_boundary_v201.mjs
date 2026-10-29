@@ -53,6 +53,7 @@ test("Abort recovery serializes all changed pieces as one Markdown response",()=
   assert.match(source,/rich\.captureFinalMarkdown\(wrapper\)/);
   assert.match(source,/response_integrity_merged_blocks: parts\.length/);
   assert.match(source,/response_recovery_uncovered_chars/);
-  assert.match(source,/Date\.now\(\) - abortedRenderedCandidateSince >= 8000/);
+  assert.match(source,/Date\.now\(\) - abortedRenderedCandidateSince >= abortedReplyStableThreshold\(rendered\)/);
+  assert.match(source,/return rendered\?\.shortTextVerified \? 4500 : 8000/);
   assert.match(source,/!isGenerating\(\)/);
 });

@@ -144,8 +144,9 @@ for(const [answer,observed] of [
   f.ctx.document.querySelectorAll=()=>[f.user,f.assistant,next];
   assert.equal(f.ctx.findCandidate(f.active),null);
 }
-// Terminal owner remains request-v6 and retains 8s stability / working guard.
-assert.match(source,/abortedRenderedCandidateSince >= 8000/);
+// Terminal owner remains request-v6 and retains evidence-dependent stability / working guard.
+assert.match(source,/abortedRenderedCandidateSince >= abortedReplyStableThreshold\(rendered\)/);
+assert.match(source,/return rendered\?\.shortTextVerified \? 4500 : 8000/);
 assert.match(source,/rendered\.rolelessHeaderVerified \? 3 : 8/);
 assert.match(source,/response_terminal_stable_ms:/);
 assert.match(source,/type: "chat.completed", request_id: active.requestId/);

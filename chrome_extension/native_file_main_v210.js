@@ -30,21 +30,29 @@
       pruneBlobs();
       // Some ChatGPT Office download buttons call createObjectURL(Blob) and
       // the browser's save operation directly; no <a download> ever appears.
-      // Observe only a Blob CREATED AFTER an exact request-reply button was
-      // explicitly armed, with the filename's expected MIME and real signature.
-      // Never label an old pre-armed Blob or an octet-stream by guesswork.
+      // Observe only a Blob CREATED AFTER an exact verified reply button.
+      // ChatGPT may save a generated workbook with a generic octet-stream MIME;
+      // that is acceptable ONLY after proving the OOXML workbook structure.
+      // Never accept MIME-less blobs or a generic ZIP relabeled as XLSX.
       const session = armed;
+      const mime = String(object.type || "").toLowerCase();
+      const expected = session ? mimeForName(session.filename) : "";
+      const typed = Boolean(expected && mime === expected);
+      const octetWorkbook = Boolean(session && mime === "application/octet-stream"
+        && /\.xlsx$/i.test(session.filename));
       if (session && !session.used && !session.inFlight
-          && Date.now() < session.until && mimeForName(session.filename)
-            === String(object.type || "").toLowerCase()) {
+          && Date.now() < session.until && (typed || octetWorkbook)) {
         session.inFlight = true;
         stage(session, "same-tab-typed-blob-created");
         void object.arrayBuffer().then(raw => {
           if (session !== armed || session.used || Date.now() >= session.until) return;
           const bytes = new Uint8Array(raw);
-          if (!validBytes(bytes, session.filename)) {
-            stage(session, "new-blob-signature-invalid"); return;
+          if (!validBytes(bytes, session.filename)
+              || (octetWorkbook && !hasWorkbookZipEntries(bytes))) {
+            stage(session, octetWorkbook ? "new-blob-workbook-structure-invalid"
+              : "new-blob-signature-invalid"); return;
           }
+          if (octetWorkbook) stage(session, "same-tab-workbook-octet-verified");
           session.used = true;
           window.postMessage({kind: KIND, direction: "captured",
             nonce: session.nonce, filename: session.filename,
@@ -87,6 +95,23 @@
     py:"text/x-python",js:"text/javascript",
     ts:"application/typescript",html:"text/html",
   })[String(filename || "").split(".").pop().toLowerCase()] || "";
+  // OOXML filenames are uncompressed in ZIP local headers. Use a bounded
+  // structural check for ambiguous application/octet-stream after the click.
+  // A generic PK signature alone would accept an arbitrary ZIP as a workbook.
+  function hasWorkbookZipEntries(bytes) {
+    const names = new Set();
+    if (!bytes || bytes.length < 30 || bytes[0] !== 80 || bytes[1] !== 75) return false;
+    for (let at = 0; at + 30 < bytes.length; at++) {
+      if (bytes[at] !== 80 || bytes[at+1] !== 75
+          || bytes[at+2] !== 3 || bytes[at+3] !== 4) continue;
+      const nameLength = bytes[at+26] | (bytes[at+27] << 8);
+      if (!nameLength || nameLength > 300 || at + 30 + nameLength > bytes.length) continue;
+      const name = new TextDecoder("utf-8").decode(bytes.subarray(at+30,at+30+nameLength));
+      if (name === "[Content_Types].xml" || name === "xl/workbook.xml") names.add(name);
+      if (names.size === 2) return true;
+    }
+    return false;
+  }
   // Never consume a one-shot verified file arm with an HTML preview or a
   // failed download: the real browser file may arrive on a later click.
   const validBytes = (bytes, filename) => {

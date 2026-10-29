@@ -59,7 +59,17 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
     served_mismatch = bool(routed and served and routed != served)
     conflict = bool(evidence.get("model_conflict")) or served_mismatch
     page_default_route = authority.get("default_page_route") is True
-    authority_violation = bool(not page_default_route and routed and request_model and routed != request_model)
+    expected_wire = None if page_default_route else str(
+        authority.get("transport_model") or model_transport_id(routed) or ""
+    ).strip().lower()
+    observed_wire = str(evidence.get("request_wire_model") or "").strip().lower()
+    wire_verified = (
+        None if not expected_wire or not observed_wire else expected_wire == observed_wire
+    )
+    authority_violation = bool(not page_default_route and (
+        (routed and request_model and routed != request_model)
+        or wire_verified is False
+    ))
     verified = bool(routed and served and routed == served and not conflict and not authority_violation)
     level = "served" if served else "page-default-unverified" if page_default_route else "profile-default" if default_model else "unverified"
     fallback_reason = str(evidence.get("fallback_reason") or "").strip() or None
@@ -73,6 +83,8 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
         "transport_model": None if page_default_route else (authority.get("transport_model") or model_transport_id(routed)),
         "default_page_route": page_default_route,
         "worker_request_model": request_model,
+        "request_wire_model": observed_wire or None,
+        "model_wire_transport_matches": wire_verified,
         "served_model": served,
         "observed_model": observed,
         "default_model": default_model,

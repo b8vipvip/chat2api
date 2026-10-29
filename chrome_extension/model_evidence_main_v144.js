@@ -106,6 +106,10 @@
     try { const value = JSON.parse(data); return value && typeof value === "object" ? value : null; } catch (_) { return null; }
   }
   function requestModel(payload) { return payload && typeof payload === "object" ? normalizeModel(payload.model) : null; }
+  function rawModel(payload) {
+    const value = String(payload?.model || "").trim().toLowerCase();
+    return /^[a-z0-9._:-]{1,128}$/.test(value) ? value : null;
+  }
 
   async function bodyText(input, init) {
     if (typeof init?.body === "string") return init.body;
@@ -117,13 +121,16 @@
     let payload = null;
     try { payload = raw ? JSON.parse(raw) : null; } catch (_) {}
     const before = requestModel(payload);
+    const originalWire = rawModel(payload);
     if (authority?.default_page_route === true) {
       // Free default has no concrete picker. Keep ChatGPT's native network
       // model untouched; the logical API alias is NOT a served-model claim.
       post({phase:"request",stream_id:streamId,request_model:before,
+        request_wire_model:rawModel(payload),
         original_request_model:before,authority,request_rewritten:false,
         authority_violation:false});
-      return {input,init,requestModel:before,authorityViolation:false,rewritten:false};
+      return {input,init,requestModel:before,
+        requestWireModel:rawModel(payload),authorityViolation:false,rewritten:false};
     }
     const target = normalizeModel(authority?.routed_model);
     const transport = String(authority?.transport_model || "").trim() || target;
@@ -146,11 +153,19 @@
         }
       }
     }
-    const after = requestModel(payload) || before;
+    // Only describe the bytes actually handed to fetch(). A failed Request
+    // reconstruction must not claim that the wire model was rewritten.
+    const actualWire = rewritten ? rawModel(payload) : originalWire;
+    const after = normalizeModel(actualWire);
+    const violation = Boolean(target && after && after !== target);
     if (rewritten) state.rewrites += 1;
-    post({ phase: "request", stream_id: streamId, request_model: after, original_request_model: before, authority, request_rewritten: rewritten,
-      authority_violation: Boolean(target && after && target !== after) });
-    return { input: nextInput, init: nextInit, requestModel: after, authorityViolation: Boolean(target && after && target !== after), rewritten };
+    post({ phase: "request", stream_id: streamId,
+      request_model: after, request_wire_model: actualWire,
+      original_request_model: before, original_wire_model: originalWire,
+      authority, request_rewritten: rewritten,
+      authority_violation: violation });
+    return { input: nextInput, init: nextInit, requestModel: after,
+      requestWireModel: actualWire, authorityViolation: violation, rewritten };
   }
 
   function observeResponse(response, streamId, requestInfo) {
@@ -158,7 +173,8 @@
     try { clone = response.clone(); } catch (_) { return; }
     const headerModel = ["x-openai-model", "openai-model", "x-gpt-model", "x-model"]
       .map(name => normalizeModel(clone.headers?.get?.(name))).find(Boolean) || null;
-    post({ phase: "response", stream_id: streamId, status: Number(clone.status || 0), ok: Boolean(clone.ok), request_model: requestInfo.requestModel,
+    post({ phase: "response", stream_id: streamId, status: Number(clone.status || 0), ok: Boolean(clone.ok),
+      request_model: requestInfo.requestModel, request_wire_model: requestInfo.requestWireModel,
       request_rewritten: requestInfo.rewritten, authority_violation: requestInfo.authorityViolation, header_model: headerModel });
     const reader = clone.body?.getReader?.();
     if (!reader) return;
@@ -178,7 +194,8 @@
       if (!terminal && fingerprint === lastFingerprint) return;
       lastFingerprint = fingerprint;
       state.evidence += 1;
-      post({ phase: "evidence", stream_id: streamId, terminal: Boolean(terminal), request_model: requestInfo.requestModel,
+      post({ phase: "evidence", stream_id: streamId, terminal: Boolean(terminal),
+        request_model: requestInfo.requestModel, request_wire_model: requestInfo.requestWireModel,
         request_rewritten: requestInfo.rewritten, authority_violation: requestInfo.authorityViolation, ...evidence });
     };
     (async () => {

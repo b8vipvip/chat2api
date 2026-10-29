@@ -57,6 +57,13 @@
   function publicEvidence(row, detail) {
     const evidence = {
       request_model: normalizeModel(detail.request_model || row.evidence.request_model),
+      // Raw model field actually handed to same-request /conversation fetch.
+      // Keep transport suffixes here; logical normalization would hide a
+      // failed rewrite even while falsely claiming the picker was correct.
+      request_wire_model: (() => {
+        const raw=String(detail.request_wire_model || row.evidence.request_wire_model || "").toLowerCase();
+        return /^[a-z0-9._:-]{1,128}$/.test(raw) ? raw : null;
+      })(),
       served_model: normalizeModel(detail.served_model || row.evidence.served_model),
       default_model: normalizeModel(detail.default_model || row.evidence.default_model),
       reasoning: detail.reasoning || row.evidence.reasoning || null,
@@ -106,6 +113,7 @@
       row.requestId = row.requestId || activeRequestId;
       row.authority = row.authority || activeAuthority;
       row.evidence.request_model = detail.request_model || null;
+      row.evidence.request_wire_model = detail.request_wire_model || null;
       row.evidence.request_rewritten = Boolean(detail.request_rewritten);
       row.evidence.authority_violation = Boolean(detail.authority_violation);
       publishEvidence(row, detail).catch(() => {});

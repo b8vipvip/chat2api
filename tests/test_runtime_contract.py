@@ -214,7 +214,7 @@ def test_v245_short_reply_is_owned_by_single_request_controller():
               "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
     assert 'reason:"fresh-roleless-short-answer-v245"' in source
     assert 'rendered.rolelessHeaderVerified ? 3 : 8' in source
-    assert 'abortedRenderedCandidateSince >= 8000' in source
+    assert 'abortedRenderedCandidateSince >= abortedReplyStableThreshold(rendered)' in source
     assert source.count('type: "chat.completed", request_id: active.requestId') >= 1
     assert 'baselineRolelessHeadings' in source
 
@@ -226,7 +226,7 @@ def test_v246_roleless_rich_reply_preserves_one_terminal_controller():
     assert '"fresh-roleless-compact-div-v248"' in src
     assert "verifiedRolelessRichAbortCandidate(active, current)" in src
     assert "current.latest === current.rolelessHeading.nextElementSibling" in src
-    assert "abortedRenderedCandidateSince >= 8000" in src
+    assert "abortedRenderedCandidateSince >= abortedReplyStableThreshold(rendered)" in src
     assert 'response_terminal_source: rendered.rolelessRichVerified' in src
 
 def test_v247_single_worker_terminal_and_file_archive_separation():
@@ -247,7 +247,7 @@ def test_v248_compact_div_uses_original_single_terminal_controller():
     assert "fresh-roleless-compact-div-v248" in source
     assert "shortRolelessSourceOverlap(raw, observed)" in source
     assert "verifiedRolelessRichAbortCandidate(active, current)" in source
-    assert "abortedRenderedCandidateSince >= 8000" in source
+    assert "abortedRenderedCandidateSince >= abortedReplyStableThreshold(rendered)" in source
     assert 'type: "chat.completed", request_id: active.requestId' in source
 
 def test_v249_native_file_candidate_probe_is_bounded_and_not_a_terminal_owner():
@@ -274,3 +274,19 @@ def test_v250_abcd_disconnect_is_presentation_recovery_not_worker_terminal():
     assert "recovered_after_disconnect:out.recovered===true" in source
     assert "if(!stopped||!done)" in source
     assert "SSE 连接已断开，服务端仍在运行" in source
+
+
+def test_v251_terminal_recovery_migration_keeps_single_request_controller():
+    manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text("utf-8"))
+    scripts = manifest["content_scripts"][1]["js"]
+    assert scripts.count("content_request_v6.js") == 1
+    source = (ROOT / "chrome_extension" / "content_request_v6.js").read_text("utf-8")
+    assert "function abortedReplyStableThreshold(rendered)" in source
+    assert "return rendered?.shortTextVerified ? 4500 : 8000" in source
+    # Externally visible terminal state must remain owned by request-v6,
+    # not the native file observer, model inspector or read-only probes.
+    for path in ("content_native_file_v210.js", "native_file_main_v210.js",
+                 "content_model_evidence_v144.js", "model_evidence_main_v144.js"):
+        observer = (ROOT / "chrome_extension" / path).read_text("utf-8")
+        assert 'type: "chat.completed"' not in observer
+        assert 'type: "chat.error"' not in observer
