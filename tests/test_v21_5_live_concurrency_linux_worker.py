@@ -56,7 +56,7 @@ def test_extension_console_uses_canonical_worker_settings_column():
     assert '{key: "occupancy", label: "请求 / 备用窗口"}' in canonical
     assert 'data-chat2api-structural-owner="worker-settings-v152"' in canonical
     assert "data-v121-concurrency" not in canonical
-    assert "data-v121-concurrency" in behavior
+    assert "data-v121-inline-input" in behavior
     assert "data-v121-windows" not in canonical
     assert "data-v121-save-limits" in behavior
     assert 'data-worker-live' not in canonical
