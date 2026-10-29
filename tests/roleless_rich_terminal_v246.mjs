@@ -3,7 +3,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 
 const source=fs.readFileSync("chrome_extension/content_request_v6.js","utf8");
-const start=source.indexOf("  function rolelessRichCaptureComplete(node, markdown) {");
+const start=source.indexOf("  function rolelessRichReplyCandidate(active) {");
 const end=source.indexOf("\n  // #535: bounded, privacy-safe diagnostics",start);
 assert.ok(start>0&&end>start);
 function setup(){
