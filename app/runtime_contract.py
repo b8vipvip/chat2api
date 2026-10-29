@@ -365,7 +365,8 @@ def install_runtime_contract(app: FastAPI) -> FastAPI:
                 text = text.replace("</body>", version_marker + "</body>")
             if path == "/admin":
                 for asset in (ADMIN_LINUX_WORKERS_ASSET, ADMIN_LINUX_PROXY_CATALOG_ASSET, ADMIN_EXTENSION_COLUMNS_ASSET):
-                    marker = f'<script src="{asset}"></script>'
+                    source = asset + ("?v=0.22.240" if asset == ADMIN_EXTENSION_COLUMNS_ASSET else "")
+                    marker = f'<script src="{source}"></script>'
                     if marker not in text:
                         text = text.replace("</body>", marker + "</body>")
             headers = {key: value for key, value in response.headers.items() if key.lower() not in {"content-length", "content-type"}}
