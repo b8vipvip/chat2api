@@ -3,7 +3,7 @@ import fs from "node:fs";
 import vm from "node:vm";
 
 const source=fs.readFileSync("chrome_extension/content_request_v6.js","utf8");
-const start=source.indexOf("  function rolelessShortReplyCandidate(active) {");
+const start=source.indexOf("  function shortRolelessSourceOverlap(answer, observed) {");
 const end=source.indexOf("\n  // #535: bounded, privacy-safe diagnostics",start);
 assert.ok(start>=0 && end>start, "new roleless v245 routines must exist");
 const code=source.slice(start,end);
@@ -76,6 +76,18 @@ for(const [answer,observed] of [
   assert.equal(current?.reason,"fresh-roleless-short-answer-v245");
   assert.equal(f.ctx.verifyCandidate(f.active,current)?.shortTextVerified,true);
   assert.equal(f.ctx.verifyCandidate(f.active,current)?.rolelessHeaderVerified,true);
+}
+// A short SSE tail can omit a linking word but still correlate to the exact
+// new reply: neither old prompt nor old toolbar alone is sufficient.
+{
+  const f=fixture("手机号收到了，接下来输入验证码并继续充值。",
+                  "手机号收到了，接下来验证码并继续充值。");
+  assert.equal(f.ctx.findCandidate(f.active)?.latest,f.response);
+}
+{
+  const f=fixture("您是兑换链接打不开，还是点进去后进不去呢？",
+                  "您是兑换链接打不开，时进不去呢？");
+  assert.equal(f.ctx.findCandidate(f.active)?.latest,f.response);
 }
 // No stale answer or old toolbar may complete the new request.
 {
