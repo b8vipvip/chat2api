@@ -47,9 +47,10 @@ test("short answer requires current SSE, live scoped toolbar and unchanged worki
   assert.equal(shortCandidate({source:"别的内容"}),null);
   assert.equal(shortCandidate({source:"好的"}),null);
 });
-test("short DOM terminal stays under the sole request-v6 8-second guard",()=>{
+test("short DOM terminal stays under the sole request-v6 short-only stable guard",()=>{
   assert.match(request,/verifiedShortAbortCandidate\(active\)/);
-  assert.match(request,/Date\.now\(\) - abortedRenderedCandidateSince >= 8000/);
+  assert.match(request,/Date\.now\(\) - abortedRenderedCandidateSince >= abortedReplyStableThreshold\(rendered\)/);
+  assert.match(request,/return rendered\?\.shortTextVerified \? 4500 : 8000/);
   assert.match(request,/&& !upstreamStillWorking\(\)/);
   assert.match(request,/verified-short-sse-rendered-answer-v207/);
 });
