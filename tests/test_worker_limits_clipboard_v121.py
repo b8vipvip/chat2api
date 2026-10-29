@@ -142,12 +142,18 @@ def test_worker_settings_ui_has_one_hard_concurrency_field_and_no_standby_overri
     assert 'data-v121-windows' not in canonical
     assert "data-v121-limit-summary" in canonical
     assert "data-v121-edit-limits" in canonical
-    assert "data-v121-limit-popover" in canonical
+    assert "v240WorkerConcurrencyDialog" in behavior
+    assert "data-v121-limit-popover" not in canonical
+    assert "dialog.showModal()" in behavior
+    assert "document.body.appendChild(dialog)" in behavior
     assert 'install_worker_limits_clipboard_v121_patch(app)' in entry
     assert 'install_worker_limits_clipboard_v121_patch(app)' not in presentation
     assert '?v={ASSET_RELEASE}' in patch
     assert "满载时自动增加的备用窗口不增加并发名额" in behavior
-    assert "data-v121-cancel-limits" in canonical
+    assert "data-v121-cancel-limits" in behavior
+    assert "data-v121-save-limits" in behavior
+    assert "data-v121-concurrency" in behavior
+    assert "data-v121-concurrency" not in canonical
     assert "extensionDeviceBody" not in identity
 
     # v121 no longer owns rows, fetches extension data, or adds delayed passes.

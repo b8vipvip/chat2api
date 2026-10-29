@@ -48,7 +48,8 @@ def test_worker_settings_refresh_is_owned_by_canonical_renderer_only() -> None:
     assert 'ensureWorkerSettingsStructure' not in legacy
     assert 'refreshWorkerSettings' not in legacy
     assert 'data-v121-worker-limits' in columns
-    assert 'data-v121-save-limits' in columns
+    assert 'data-v121-save-limits' not in columns
+    assert 'data-v121-save-limits' in read("app/admin_worker_limits_clipboard_v121.js")
     assert 'loadCanonicalExtensions' in columns
     assert 'table.style.visibility = "hidden"' in columns
 
