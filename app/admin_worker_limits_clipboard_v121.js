@@ -97,7 +97,8 @@
     dialog.showModal();
     const input = dialog.querySelector("[data-v121-concurrency]");
     input.focus();
-    input.select();
+    // Numeric input selection is not supported consistently across browsers.
+    try { input.select?.(); } catch (_) {}
   }
 
   async function saveLimits(button) {
