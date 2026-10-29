@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.248"
+    assert RELEASE_VERSION == "0.22.249"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -68,7 +68,7 @@ def test_realtime_protocol_contract_matches_live_bridge():
 def test_v148_release_contract_keeps_broker_terminal_authority():
     from pathlib import Path
     from app.runtime_contract import RELEASE_VERSION, CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.248"
+    assert RELEASE_VERSION == "0.22.249"
     assert CHROME_BRIDGE_BUNDLE_VERSION == RELEASE_VERSION
     root = Path(__file__).resolve().parents[1]
     watchdog = (root / "app/request_stall_patch.py").read_text(encoding="utf-8")
@@ -142,7 +142,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     client = TestClient(runtime)
     html = client.get("/admin").text
     assert f'<script src="{ADMIN_VERSION_ASSET}"></script>' in html
-    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.248"></script>' in html
+    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.249"></script>' in html
     assert html.index('/assets/historical.js') < html.index(ADMIN_VERSION_ASSET) < html.index(ADMIN_EXTENSION_COLUMNS_ASSET)
 
     developers_html = client.get("/developers").text
@@ -157,7 +157,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     assert "MutationObserver" in script
 
     columns_script = client.get(ADMIN_EXTENSION_COLUMNS_ASSET).text
-    assert 'const VERSION = "0.22.248-worker-list-v157"' in columns_script
+    assert 'const VERSION = "0.22.249-worker-list-v157"' in columns_script
     assert 'const COLUMN_SCHEMA_REVISION = 152' in columns_script
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v3"' in columns_script
     assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2"' in columns_script
@@ -249,3 +249,17 @@ def test_v248_compact_div_uses_original_single_terminal_controller():
     assert "verifiedRolelessRichAbortCandidate(active, current)" in source
     assert "abortedRenderedCandidateSince >= 8000" in source
     assert 'type: "chat.completed", request_id: active.requestId' in source
+
+def test_v249_native_file_candidate_probe_is_bounded_and_not_a_terminal_owner():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    main = (root / "chrome_extension/native_file_main_v210.js").read_text(encoding="utf-8")
+    isolated = (root / "chrome_extension/content_native_file_v210.js").read_text(encoding="utf-8")
+    controller = (root / "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
+    assert "candidateExclusionEvidence(scope)" in isolated
+    assert "media_native_file_candidate_exclusion_counts:" in controller
+    assert "source.slice(0,48)" not in isolated  # no source-text logging
+    assert 'const nodes=[...scope.querySelectorAll(' in isolated
+    assert ".slice(0,48)" in isolated
+    assert 'type: "chat.completed"' not in main
+    assert 'type: "chat.completed"' not in isolated

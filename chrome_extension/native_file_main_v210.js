@@ -76,7 +76,7 @@
       result += String.fromCharCode(...bytes.subarray(at, at + 16384));
     return btoa(result);
   };
-  const validName = text => /^[^\/\\\r\n]{1,140}\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md)$/i.test(text);
+  const validName = text => /^[^\/\\\r\n]{1,140}\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md|py|js|ts|html)$/i.test(text);
   const mimeForName = filename => ({
     xlsx:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     pptx:"application/vnd.openxmlformats-officedocument.presentationml.presentation",
@@ -84,6 +84,8 @@
     zip:"application/zip",
     pdf:"application/pdf",
     json:"application/json",
+    py:"text/x-python",js:"text/javascript",
+    ts:"application/typescript",html:"text/html",
   })[String(filename || "").split(".").pop().toLowerCase()] || "";
   // Never consume a one-shot verified file arm with an HTML preview or a
   // failed download: the real browser file may arrive on a later click.
@@ -122,7 +124,7 @@
     // armed by one verified reply button; ordinary preview/navigation links
     // must never be read as binary file handoffs.
     const path = new URL(raw, location.href).pathname.toLowerCase();
-    const fileEndpoint = /\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md)$/.test(path)
+    const fileEndpoint = /\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md|py|js|ts|html)$/.test(path)
       || /\/(?:download|files?\/download)(?:\/|$)/.test(path);
     if (!blob && !anchor?.hasAttribute?.("download") && !fileEndpoint) {
       stage(session, "download-action-is-preview"); return;

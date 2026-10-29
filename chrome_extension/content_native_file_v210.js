@@ -16,8 +16,9 @@
     docx:"application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     zip:"application/zip", json:"application/json", pdf:"application/pdf",
     csv:"text/csv", txt:"text/plain", md:"text/markdown",
+    py:"text/x-python", js:"text/javascript", ts:"application/typescript", html:"text/html",
   });
-  const FILENAME = /([^\s\n<>:"\/\\|?*]{1,135}\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md))(?=$|[\s）),;])/ig;
+  const FILENAME = /([^\s\n<>:"\/\\|?*]{1,135}\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md|py|js|ts|html))(?=$|[\s）),;])/ig;
   let session = null;
   const visible = node => {
     try {const rect=node.getBoundingClientRect(),css=getComputedStyle(node);
@@ -68,7 +69,7 @@
             const parsed=new URL(href,location.href);
             sameOriginFileLink=(parsed.origin===location.origin)
               && (Boolean(button.hasAttribute?.("download"))
-                || /\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md)(?:[?#]|$)/i.test(parsed.pathname)
+                || /\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md|py|js|ts|html)(?:[?#]|$)/i.test(parsed.pathname)
                 || label.includes(filename));
           } catch (_) {}
         }
@@ -82,6 +83,45 @@
       seen.add(button);
     }
     return result;
+  }
+  // Bounded diagnostic for missing native file-card actions. Never emit the
+  // filename, DOM text/HTML, href, raw bytes, account or request metadata.
+  function candidateExclusionEvidence(scope) {
+    const counts = {scanned:0,filename_absent:0,unsupported_type:0,
+      non_download_control:0,external_link:0,valid_controls:0};
+    if (!scope?.querySelectorAll) return counts;
+    const nodes=[...scope.querySelectorAll("button,[role='button'],a[href],a[download]")].slice(0,48);
+    for (const node of nodes) {
+      if (!visible(node) || node.disabled || node.getAttribute?.("aria-disabled")==="true") continue;
+      counts.scanned++;
+      const filename=matchButtonFilename(node) ||
+        (filenames(node).length===1 ? filenames(node)[0] : "");
+      if (!filename) {counts.filename_absent++;continue;}
+      if (!MIMES[filename.split(".").pop().toLowerCase()]) {counts.unsupported_type++;continue;}
+      const label=[node.getAttribute?.("aria-label"),node.getAttribute?.("title"),
+        node.getAttribute?.("data-testid"),node.textContent].filter(Boolean).join(" ").slice(0,220);
+      if (/download|下载/i.test(label)) {counts.valid_controls++;continue;}
+      const isAnchor=String(node.tagName||"").toLowerCase()==="a";
+      if (isAnchor) {
+        let safe=false;
+        const href=String(node.getAttribute?.("href")||"").trim();
+        try {
+          const url=new URL(href,location.href);
+          safe=Boolean(href) && url.origin===location.origin &&
+            !url.username && !url.password;
+        } catch (_) {}
+        if (!safe) {counts.external_link++;continue;}
+        if (label.includes(filename) || node.hasAttribute?.("download")) {
+          counts.valid_controls++;continue;
+        }
+      }
+      if (!isAnchor && label.includes(filename)
+          && node.closest?.("[data-testid*='file'],[class*='file-card'],[class*='fileCard'],[data-state='closed']")) {
+        counts.valid_controls++;continue;
+      }
+      counts.non_download_control++;
+    }
+    return counts;
   }
   function signedBytes(filename,bytes) {
     const ext=filename.split(".").pop().toLowerCase();
@@ -304,7 +344,9 @@
       text:files.map(file=>"!["+"📎 "+file.filename.replace(/[\[\]\r\n]/g,"_")+"]("+
         (file.stage_marker || file.data_url)+")").join("\n\n"),
       count:files.length,bytes:total,error:session.lastError,
-      button_candidates:candidates.length,attempted:session.attempts.size,
+      button_candidates:candidates.length,
+      candidate_exclusion_counts:candidates.length?null:candidateExclusionEvidence(scope),
+      attempted:session.attempts.size,
       attempt_counts:Object.fromEntries([...session.attempts.entries()].map(([name,entry])=>[name.split(".").pop().toLowerCase(),entry.count])),
       captured_types:files.map(file=>file.filename.split(".").pop().toLowerCase()),
       failed_types:[...session.failures.keys()],
