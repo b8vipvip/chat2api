@@ -1,3 +1,4 @@
+"""Time-only combined request-log export: all retained rows from the requested instant."""
 import asyncio
 import io
 import json
@@ -33,43 +34,49 @@ def app_v8(tmp_path: Path):
     return app
 
 
-def test_recent_n_download_preserves_single_request_report_and_status(tmp_path: Path):
+def batch(client, since):
+    return client.get(
+        "/api/admin/requests/logs/batch",
+        params={"since": since},
+        headers=headers(),
+    )
+
+
+def test_since_only_export_preserves_single_request_reports_and_status(tmp_path: Path):
     with TestClient(app_v8(tmp_path)) as client:
         store = client.app.state.telemetry
-        for i, status in [(1, "completed"), (2, "error"), (3, "running")]:
+        for ident, status, recorded in (
+            ("req_old", "completed", "2026-10-29T10:39:30+08:00"),
+            ("req_start", "error", "2026-10-29T10:39:31+08:00"),
+            ("req_new", "running", "2026-10-29T11:00:00+08:00"),
+        ):
             asyncio.run(store.upsert({
-                "request_id": f"req_recent_{i}",
-                "status": status,
-                "requested_model": "gpt-6",
-                "final_prompt": f"customer prompt {i}",
-                "response_text": f"answer {i}",
+                "request_id": ident, "status": status,
+                "recorded_at": recorded, "requested_model": "gpt-6",
+                "final_prompt": f"customer prompt {ident}",
+                "response_text": f"answer {ident}",
             }))
+        assert client.get("/api/admin/requests/logs/batch?since=2026-10-29T02:39:31Z").status_code == 401
+        assert client.get("/api/admin/requests/logs/batch", headers=headers()).status_code == 422
 
-        unauthorized = client.get("/api/admin/requests/logs/batch?limit=2")
-        assert unauthorized.status_code == 401
-
-        invalid = client.get("/api/admin/requests/logs/batch?limit=501", headers=headers())
-        assert invalid.status_code == 422
-        invalid_zero = client.get("/api/admin/requests/logs/batch?limit=0", headers=headers())
-        assert invalid_zero.status_code == 422
-
-        response = client.get("/api/admin/requests/logs/batch?limit=2", headers=headers())
-        assert response.status_code == 200
+        # Naive timestamp is Beijing, not the server's or the admin browser's timezone.
+        response = batch(client, "2026-10-29 10:39:31")
+        assert response.status_code == 200, response.text
         assert response.headers["content-type"].startswith("application/zip")
-        assert "attachment" in response.headers["content-disposition"]
         assert response.headers["x-chat2api-exported-count"] == "2"
-
+        assert "since" in response.headers["content-disposition"]
         with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
             assert bundle.testzip() is None
-            names = bundle.namelist()
-            assert len(names) == 4
-            index = json.loads(bundle.read("index.json"))
-            assert index["requested_limit"] == 2
-            assert index["exported_count"] == 2
-            assert [r["request_id"] for r in index["requests"]] == [
-                "req_recent_3", "req_recent_2",
+            manifest = json.loads(bundle.read("index.json"))
+            assert manifest["selection_mode"] == "since"
+            assert manifest["since"] == "2026-10-29T02:39:31+00:00"
+            assert manifest["time_filter_field"] == "recorded_at"
+            assert "requested_limit" not in manifest
+            assert manifest["exported_count"] == 2
+            assert [item["request_id"] for item in manifest["requests"]] == [
+                "req_new", "req_start",
             ]
-            for row in index["requests"]:
+            for row in manifest["requests"]:
                 artifact = json.loads(bundle.read(row["filename"]))
                 single = client.get(
                     f"/api/admin/requests/{row['request_id']}/log",
@@ -83,83 +90,57 @@ def test_recent_n_download_preserves_single_request_report_and_status(tmp_path: 
                 assert artifact["http_trace"] == single["http_trace"]
                 assert "extension_snapshot" in artifact
                 assert "final_prompt" in artifact["request"]
-            assert "只读" in bundle.read("README.txt").decode("utf-8")
-        assert store.get("req_recent_3")["status"] == "running"
+            readme = bundle.read("README.txt").decode("utf-8")
+            assert "起始时间（含）" in readme
+            assert "只读" in readme
+        assert store.get("req_new")["status"] == "running"
+
+        # Explicit offset and Z are the same UTC instant as the unzoned example.
+        for raw in ("2026-10-29T10:39:31+08:00", "2026-10-29T02:39:31Z"):
+            explicit = batch(client, raw)
+            assert explicit.status_code == 200, explicit.text
+            assert explicit.headers["x-chat2api-exported-count"] == "2"
 
 
-def test_recent_n_obeys_retention_and_rejects_empty_history(tmp_path: Path):
+def test_filter_includes_all_retained_newer_rows_and_rejects_invalid_dates(tmp_path: Path):
     with TestClient(app_v8(tmp_path)) as client:
-        response = client.get("/api/admin/requests/logs/batch?limit=1", headers=headers())
-        assert response.status_code == 404
-
-        asyncio.run(client.app.state.telemetry.upsert({
-            "request_id": "req_only", "status": "completed",
-        }))
-        response = client.get("/api/admin/requests/logs/batch?limit=500", headers=headers())
+        assert batch(client, "2026-10-29 00:00:00").status_code == 404
+        store = client.app.state.telemetry
+        for i in range(25):
+            asyncio.run(store.upsert({
+                "request_id": f"req_{i:03d}", "status": "completed",
+                "recorded_at": "2026-10-29T03:00:00+08:00",
+            }))
+        response = batch(client, "2026-10-29 02:59:59")
         assert response.status_code == 200
         with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
-            manifest = json.loads(bundle.read("index.json"))
-            assert manifest["requested_limit"] == 500
-            assert manifest["exported_count"] == 1
+            assert json.loads(bundle.read("index.json"))["exported_count"] == 25
+
+        # Old N is no longer a selection mechanism, even if a legacy caller supplies it.
+        response = client.get(
+            "/api/admin/requests/logs/batch",
+            params={"since": "2026-10-29 02:59:59", "limit": 1},
+            headers=headers(),
+        )
+        assert response.headers["x-chat2api-exported-count"] == "25"
+        for invalid in ("bad-date", "2026-02-30 10:39:31",
+                        "2026-10-29T11:28:29+15:00",
+                        "2026-10-29 25:39:31", "", "2026-10-29"):
+            assert batch(client, invalid).status_code == 422, invalid
+        assert batch(client, "2030-01-01T00:00:00+08:00").status_code == 404
 
 
-def test_canonical_request_history_has_single_batch_control():
+def test_request_history_exposes_only_pasteable_start_time_control():
     source = (Path(__file__).resolve().parents[1] / "app" /
               "request_history_v94_patch.py").read_text(encoding="utf-8")
     assert "rqBatchExportLogs" in source
-    assert "rqBatchExportLimit" in source
-    assert "合并打包导出请求日志" in source
-    assert "/api/admin/requests/logs/batch?" in source
-    assert "limit.max='500'" in source
-    assert "requestHistoryDownload(" in source
-
-
-def test_since_filter_inclusive_created_time_timezone_and_retention(tmp_path: Path):
-    with TestClient(app_v8(tmp_path)) as client:
-        store = client.app.state.telemetry
-        for ident, created in [
-            ("req_old", "2026-10-28T23:59:59+00:00"),
-            ("req_boundary", "2026-10-29T00:00:00+00:00"),
-            ("req_new", "2026-10-29T00:05:00+00:00"),
-        ]:
-            asyncio.run(store.upsert({
-                "request_id": ident, "status": "completed",
-                "recorded_at": created, "response_text": ident,
-            }))
-        # 08:00 China Standard Time is 00:00 UTC.
-        response = client.get(
-            "/api/admin/requests/logs/batch",
-            params={"limit": 500, "since": "2026-10-29T08:00:00+08:00"},
-            headers=headers(),
-        )
-        assert response.status_code == 200, response.text
-        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
-            manifest = json.loads(archive.read("index.json"))
-            assert manifest["exported_count"] == 2
-            assert manifest["time_filter_field"] == "recorded_at"
-            assert manifest["since"] == "2026-10-29T00:00:00+00:00"
-            assert [item["request_id"] for item in manifest["requests"]] == [
-                "req_new", "req_boundary",
-            ]
-            assert "起始时间（含）" in archive.read("README.txt").decode("utf-8")
-        for invalid in ("2026-10-29T08:00:00", "bad-date"):
-            response = client.get(
-                "/api/admin/requests/logs/batch",
-                params={"since": invalid}, headers=headers(),
-            )
-            assert response.status_code == 422, invalid
-        response = client.get(
-            "/api/admin/requests/logs/batch",
-            params={"since": "2030-01-01T00:00:00Z"}, headers=headers(),
-        )
-        assert response.status_code == 404
-
-
-def test_time_filtered_batch_admin_control_is_explicit_and_timezone_aware():
-    source = (Path(__file__).resolve().parents[1] / "app" /
-              "request_history_v94_patch.py").read_text(encoding="utf-8")
     assert "rqBatchExportSince" in source
-    assert "datetime-local" in source
-    assert "start.toISOString()" in source
-    assert "query.set('since',start.toISOString())" in source
-    assert "const bound=from ? 500 : n" in source
+    assert "requestHistoryParseExportSince(value)" in source
+    assert "since.type='text'" in source
+    assert "since.type='datetime-local'" not in source
+    assert "rqBatchExportLimit" not in source
+    assert "query.set('since'" not in source  # single URLSearchParams construction
+    assert "new URLSearchParams({since:parsed.iso})" in source
+    assert "合并打包导出请求日志" in source
+    assert "requestHistoryDownload(" in source
+    assert "未标注时区按北京时间" in source
