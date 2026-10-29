@@ -168,7 +168,7 @@ def test_console_and_bridge_expose_server_capacity_and_persistent_window_control
     pool = (ROOT / "chrome_extension" / "conversation_persistent_pool_v132.js").read_text(encoding="utf-8")
     dispatcher = (ROOT / "chrome_extension" / "background_capacity_control_v36.js").read_text(encoding="utf-8")
 
-    assert "data-v121-concurrency" in behavior
+    assert "data-v121-inline-input" in behavior
     assert "data-v121-concurrency" not in canonical
     assert "data-v121-windows" not in canonical
     assert "data-v121-save-limits" in behavior
