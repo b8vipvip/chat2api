@@ -152,12 +152,21 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             cutoff = parse_request_since(since)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
-        selected = telemetry.query(
+        # Query is the single predicate owner, but admin list middleware
+        # intentionally removes prompt and response text. Rehydrate from the
+        # original request history BEFORE assembling the export; exporting
+        # list-view copies would silently destroy diagnostic evidence.
+        filtered_rows = telemetry.query(
             limit=telemetry.items.maxlen or 500, offset=0,
             q=q, status=status, model=model, since=cutoff,
             current_version_only=current_version_only,
             server_version=SERVER_RUNTIME_VERSION,
         )["data"]
+        matching_ids = {str(row.get("request_id") or "") for row in filtered_rows}
+        selected = [
+            row for row in telemetry.recent(telemetry.items.maxlen or 500)
+            if str(row.get("request_id") or "") in matching_ids
+        ]
         if not selected:
             detail = "No retained request records match the selected filters"
             raise HTTPException(status_code=404, detail=detail)
