@@ -2163,6 +2163,8 @@
               media_binary_wait_since_page_finish_ms: active.mediaFileBoundaryVerifiedAt
                 ? Date.now() - active.mediaFileBoundaryVerifiedAt : null,
               media_native_file_button_candidates: Number(native?.button_candidates || 0),
+              media_native_file_candidate_exclusion_counts:
+                native?.candidate_exclusion_counts || null,
               media_native_file_capture_count: Number(native?.count || 0),
               media_native_file_captured_types: native?.captured_types || [],
               media_native_file_failed_types: native?.failed_types || [],
