@@ -18,6 +18,7 @@ const ctx={
  isGenerating:()=>false,
  turnFollows:()=>false,
  rolelessShortReplyCandidate:()=>null,
+ rolelessRichReplyCandidate:()=>null,
  renderedNetworkCorrelatedTurn:()=>null,
  renderedCurrentRequestCandidate:()=>{invocations++;return fallback?replacement:null;},
 };
