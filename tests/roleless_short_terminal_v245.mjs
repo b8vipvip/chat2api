@@ -89,6 +89,16 @@ for(const [answer,observed] of [
                   "您是兑换链接打不开，时进不去呢？");
   assert.equal(f.ctx.findCandidate(f.active)?.latest,f.response);
 }
+// A two-paragraph response must NOT be truncated by this one-paragraph
+// recovery path, even if its first paragraph overlaps SSE text.
+{
+  const f=fixture();
+  const original=f.root.querySelectorAll.bind(f.root);
+  const more=node("P","第二段仍然属于当前回答。",13.5,f.root);
+  f.root.querySelectorAll=selector=>selector==="p"
+    ? [...original(selector),more] : original(selector);
+  assert.equal(f.ctx.findCandidate(f.active),null);
+}
 // No stale answer or old toolbar may complete the new request.
 {
   const f=fixture();
