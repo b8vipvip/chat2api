@@ -39,7 +39,7 @@
       const expected = session ? mimeForName(session.filename) : "";
       const typed = Boolean(expected && mime === expected);
       const octetWorkbook = Boolean(session && mime === "application/octet-stream"
-        && /\\.xlsx$/i.test(session.filename));
+        && /\.xlsx$/i.test(session.filename));
       if (session && !session.used && !session.inFlight
           && Date.now() < session.until && (typed || octetWorkbook)) {
         session.inFlight = true;
