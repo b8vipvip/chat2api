@@ -4,7 +4,7 @@
 
   const SETTINGS_HELP = "并发=Worker 同时执行请求的硬上限；满载时自动增加的备用窗口不增加并发名额。";
   const state = {
-    version: 121,
+    version: 240,
     renderer: "canonical-worker-list-v152",
     login: {workerId:"", ticket:"", sourceWidth:1920, sourceHeight:1080},
     dragging: false,
@@ -42,50 +42,103 @@
     return null;
   }
 
-  async function saveLimits(button) {
-    const editor = button.closest("[data-v121-worker-limits]");
-    if (!editor) return;
-    const clientId = String(editor.dataset.v121WorkerLimits || "");
-    const concurrency = Number(editor.querySelector("[data-v121-concurrency]")?.value || 0);
-    const note = editor.querySelector("[data-v121-limit-note]");
-    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 32) {
-      if (note) note.textContent = "请输入 1~32 的整数";
-      return;
-    }
-    button.disabled = true;
-    if (note) note.textContent = "保存中…";
-    try {
-      const saved = await jsonRequest(`/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57`, {
-        method:"PUT",
-        body:{max_concurrency:concurrency},
-      });
-      const sync = saved?.window_target_sync;
-      if (note) note.textContent = sync?.sent === true ? "并发上限已保存，窗口池已收到同步指令" : "并发上限已保存，Worker 在线后同步窗口池";
-      const reload = globalThis.chat2apiReloadCanonicalWorkerListV59;
-      if (typeof reload === "function") await reload();
-    } catch (error) {
-      if (note) note.textContent = String(error?.message || error);
-    } finally {
-      button.disabled = false;
-    }
+  // Keep the one concurrency form in the browser top layer, not inside the
+  // Worker table's overflow: auto scroll container (which cut off Save).
+  function ensureLimitDialog() {
+    let dialog = document.getElementById("v240WorkerConcurrencyDialog");
+    if (dialog) return dialog;
+    dialog = document.createElement("dialog");
+    dialog.id = "v240WorkerConcurrencyDialog";
+    dialog.setAttribute("aria-label", "Worker 并发设置");
+    dialog.style.cssText = "position:fixed;inset:0;margin:auto;width:min(390px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto;box-sizing:border-box;padding:20px;border:1px solid #475569;border-radius:14px;background:#111827;color:#e5e7eb;box-shadow:0 24px 70px rgba(0,0,0,.58)";
+    dialog.innerHTML = `<form data-v240-concurrency-form style="display:grid;gap:13px">
+      <strong style="font-size:17px">并发设置</strong>
+      <div class="muted" data-v240-worker-label style="font-size:12px;overflow-wrap:anywhere"></div>
+      <label style="display:grid;gap:7px">最大并发请求数
+        <input data-v121-concurrency type="number" min="1" max="32" step="1" required style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #475569;border-radius:7px;background:#0b1220;color:inherit"/>
+      </label>
+      <p class="muted" style="font-size:12px;line-height:1.6;margin:0">最多同时执行 N 个请求；满载时自动额外保留 1 个备用窗口，但不允许突破并发上限。超额请求按顺序排队。</p>
+      <div role="status" aria-live="polite" data-v121-limit-note style="font-size:12px;min-height:16px;overflow-wrap:anywhere"></div>
+      <div style="display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap">
+        <button class="action" type="button" data-v121-cancel-limits>取消</button>
+        <button class="action good" type="submit" data-v121-save-limits>保存</button>
+      </div>
+    </form>`;
+    document.body.appendChild(dialog);
+    dialog.querySelector("form").addEventListener("submit", event => {
+      event.preventDefault();
+      const button = dialog.querySelector("[data-v121-save-limits]");
+      if (button && !button.disabled) void saveLimits(button);
+    });
+    dialog.addEventListener("cancel", event => {
+      if (dialog.querySelector("[data-v121-save-limits]")?.disabled) event.preventDefault();
+    });
+    dialog.addEventListener("close", () => { delete dialog.dataset.clientId; });
+    return dialog;
   }
 
-  function closeLimitPopovers(except = null) {
-    document.querySelectorAll("[data-v121-limit-popover]").forEach(node => {
-      if (node !== except) node.hidden = true;
-    });
+  function closeLimitPopovers() {
+    const dialog = document.getElementById("v240WorkerConcurrencyDialog");
+    if (dialog?.open && !dialog.querySelector("[data-v121-save-limits]")?.disabled) dialog.close();
   }
 
   function toggleLimitPopover(button) {
     const editor = button.closest("[data-v121-worker-limits]");
-    const popover = editor?.querySelector("[data-v121-limit-popover]");
-    if (!popover) return;
-    const opening = popover.hidden;
-    closeLimitPopovers(opening ? popover : null);
-    popover.hidden = !opening;
-    if (opening) editor.querySelector("[data-v121-concurrency]")?.focus();
+    const clientId = String(editor?.dataset.v121WorkerLimits || "");
+    if (!clientId) return;
+    const dialog = ensureLimitDialog();
+    if (dialog.open) dialog.close();
+    dialog.dataset.clientId = clientId;
+    const current = Number(editor.querySelector("[data-v121-limit-summary]")?.textContent || 3);
+    dialog.querySelector("[data-v121-concurrency]").value = String(Number.isInteger(current) && current >= 1 && current <= 32 ? current : 3);
+    dialog.querySelector("[data-v240-worker-label]").textContent = "Worker ID：" + clientId;
+    dialog.querySelector("[data-v121-limit-note]").textContent = "";
+    dialog.querySelector("[data-v121-cancel-limits]").textContent = "取消";
+    dialog.showModal();
+    const input = dialog.querySelector("[data-v121-concurrency]");
+    input.focus();
+    input.select();
   }
 
+  async function saveLimits(button) {
+    const dialog = button.closest("#v240WorkerConcurrencyDialog");
+    if (!dialog?.open || button.disabled) return;
+    const clientId = String(dialog.dataset.clientId || "");
+    const raw = String(dialog.querySelector("[data-v121-concurrency]")?.value || "").trim();
+    const note = dialog.querySelector("[data-v121-limit-note]");
+    if (!clientId || !/^(?:[1-9]|[12][0-9]|3[0-2])$/.test(raw)) {
+      note.textContent = "请输入 1～32 的整数";
+      return;
+    }
+    const concurrency = Number(raw);
+    button.disabled = true;
+    note.textContent = "保存中，正在同步 Worker…";
+    try {
+      const saved = await jsonRequest(`/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57`, {
+        method: "PUT", body: {max_concurrency: concurrency},
+      });
+      if (saved?.ok !== true || Number(saved?.max_concurrency) !== concurrency)
+        throw new Error("服务端没有确认保存的并发上限，请刷新后核对");
+      for (const editor of document.querySelectorAll("[data-v121-worker-limits]")) {
+        if (editor.dataset.v121WorkerLimits !== clientId) continue;
+        const summary = editor.querySelector("[data-v121-limit-summary]");
+        if (summary) summary.textContent = String(concurrency);
+      }
+      note.textContent = saved?.window_target_sync?.sent === true
+        ? "保存成功，窗口池已收到同步指令"
+        : "保存成功，Worker 重新连接或刷新时同步窗口池";
+      dialog.querySelector("[data-v121-cancel-limits]").textContent = "关闭";
+      const reload = globalThis.chat2apiReloadCanonicalWorkerListV59;
+      if (typeof reload === "function") {
+        try { await reload(); }
+        catch (_) { note.textContent += "（列表刷新失败，请手动刷新）"; }
+      }
+    } catch (error) {
+      note.textContent = "保存失败：" + String(error?.message || error);
+    } finally {
+      button.disabled = false;
+    }
+  }
   function loginEndpoint(workerId) {
     return `/api/admin/linux-workers/${encodeURIComponent(workerId)}/login-session/clipboard`;
   }
@@ -295,25 +348,23 @@
     const cancel = event.target?.closest?.("[data-v121-cancel-limits]");
     if (cancel) {
       event.preventDefault();
-      event.stopPropagation();
-      const popover = cancel.closest("[data-v121-limit-popover]");
-      if (popover) popover.hidden = true;
+      closeLimitPopovers();
       return;
     }
     const save = event.target?.closest?.("[data-v121-save-limits]");
     if (save) {
       event.preventDefault();
       event.stopPropagation();
-      saveLimits(save);
+      void saveLimits(save);
       return;
     }
-    if (!event.target?.closest?.("[data-v121-worker-limits]")) closeLimitPopovers();
   });
 
   function start() {
     installFetchObserver();
     installLoginEvents();
     renderLimits();
+    ensureLimitDialog();
     ensureClipboardToolbar();
   }
 
