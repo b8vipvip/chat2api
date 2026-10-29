@@ -223,3 +223,33 @@ def test_capacity_and_runtime_javascript_parse() -> None:
             check=False,
         )
         assert result.returncode == 0, f"{path}: {result.stderr}"
+
+def test_v241_verified_zero_ready_windows_stays_in_one_fifo_until_physical_ready() -> None:
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, registry, broker = build_v58(tmp)
+            registry.clients["ext_test"].metadata.update({
+                "worker_pool_admission_revision": 224,
+                "worker_pool_ready_window_ids": [],
+                "worker_pool_active_windows": 2,
+                "worker_pool_login_ready": True,
+            })
+            registry.worker_pool_capacity_received_at = {"ext_test": time.monotonic()}
+            first = asyncio.create_task(broker.create("req_first", "ext_test"))
+            await asyncio.sleep(0.07)
+            assert not first.done()
+            snap = broker.capacity_snapshot("ext_test")
+            assert snap["queued_requests"] == 1
+            assert snap["verified_pool_capacity"]["fresh"] is True
+            assert snap["verified_pool_capacity"]["unclaimed_ready_windows"] == 0
+            # A Chrome runtime-ready window is reported later, without
+            # raising the configured limit or creating another queue.
+            registry.clients["ext_test"].metadata["worker_pool_ready_window_ids"] = [301]
+            registry.worker_pool_capacity_received_at["ext_test"] = time.monotonic()
+            admitted = await asyncio.wait_for(first, timeout=2.0)
+            assert admitted.diagnostics["worker_verified_spare_window_claim"] == 301
+            assert broker.capacity_snapshot("ext_test")["active_requests"] == 1
+            assert broker.capacity_snapshot("ext_test")["limit_units"] == 3
+            await broker.release(admitted.request_id)
+
+    asyncio.run(scenario())
