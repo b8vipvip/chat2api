@@ -112,3 +112,54 @@ def test_canonical_request_history_has_single_batch_control():
     assert "/api/admin/requests/logs/batch?limit=" in source
     assert "limit.max='500'" in source
     assert "requestHistoryDownload(" in source
+
+
+def test_since_filter_inclusive_created_time_timezone_and_retention(tmp_path: Path):
+    with TestClient(app_v8(tmp_path)) as client:
+        store = client.app.state.telemetry
+        for ident, created in [
+            ("req_old", "2026-10-28T23:59:59+00:00"),
+            ("req_boundary", "2026-10-29T00:00:00+00:00"),
+            ("req_new", "2026-10-29T00:05:00+00:00"),
+        ]:
+            asyncio.run(store.upsert({
+                "request_id": ident, "status": "completed",
+                "recorded_at": created, "response_text": ident,
+            }))
+        # 08:00 China Standard Time is 00:00 UTC.
+        response = client.get(
+            "/api/admin/requests/logs/batch",
+            params={"limit": 500, "since": "2026-10-29T08:00:00+08:00"},
+            headers=headers(),
+        )
+        assert response.status_code == 200, response.text
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            manifest = json.loads(archive.read("index.json"))
+            assert manifest["exported_count"] == 2
+            assert manifest["time_filter_field"] == "recorded_at"
+            assert manifest["since"] == "2026-10-29T00:00:00+00:00"
+            assert [item["request_id"] for item in manifest["requests"]] == [
+                "req_new", "req_boundary",
+            ]
+            assert "起始时间（含）" in archive.read("README.txt").decode("utf-8")
+        for invalid in ("2026-10-29T08:00:00", "bad-date"):
+            response = client.get(
+                "/api/admin/requests/logs/batch",
+                params={"since": invalid}, headers=headers(),
+            )
+            assert response.status_code == 422, invalid
+        response = client.get(
+            "/api/admin/requests/logs/batch",
+            params={"since": "2030-01-01T00:00:00Z"}, headers=headers(),
+        )
+        assert response.status_code == 404
+
+
+def test_time_filtered_batch_admin_control_is_explicit_and_timezone_aware():
+    source = (Path(__file__).resolve().parents[1] / "app" /
+              "request_history_v94_patch.py").read_text(encoding="utf-8")
+    assert "rqBatchExportSince" in source
+    assert "datetime-local" in source
+    assert "start.toISOString()" in source
+    assert "query.set('since',start.toISOString())" in source
+    assert "const bound=from ? 500 : n" in source
