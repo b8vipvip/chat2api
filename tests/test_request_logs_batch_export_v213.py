@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.config import Settings
 from app.main import create_app
+from app.runtime_contract import SERVER_RUNTIME_VERSION
 from app.v7_patch import install_v7_patch
 from app.v8_patch import install_v8_patch
 from app.voice_patch import install_voice_patch
@@ -135,6 +136,9 @@ def test_request_history_exposes_only_pasteable_start_time_control():
               "request_history_v94_patch.py").read_text(encoding="utf-8")
     assert "rqBatchExportLogs" in source
     assert "rqBatchExportSince" in source
+    assert "rqBatchExportCurrentVersion" in source
+    assert "仅合并打包导出当前版本的请求日志" in source
+    assert "if(versionOnly.checked)query.set('current_version_only','true')" in source
     assert "requestHistoryParseExportSince(value)" in source
     assert "since.type='text'" in source
     assert "since.type='datetime-local'" not in source
@@ -144,3 +148,57 @@ def test_request_history_exposes_only_pasteable_start_time_control():
     assert "合并打包导出请求日志" in source
     assert "requestHistoryDownload(" in source
     assert "未标注时区按北京时间" in source
+
+def test_batch_export_current_version_is_creation_version_and_legacy_is_excluded(tmp_path: Path):
+    with TestClient(app_v8(tmp_path)) as client:
+        store = client.app.state.telemetry
+        since = "2026-10-29 00:00:00"
+        for ident in ("req_current", "req_old", "req_unmarked"):
+            asyncio.run(store.upsert({
+                "request_id": ident,
+                "recorded_at": "2026-10-29T10:39:31+08:00",
+                "status": "running",
+                "requested_model": "gpt-6",
+            }))
+        asyncio.run(store.update("req_current", {"status": "completed",
+                             "request_server_version": "spoofed-version"}))
+        assert store.get("req_current")["request_server_version"] == SERVER_RUNTIME_VERSION
+
+        # Older deployment and unversioned historical records are not
+        # evidence of creation under this release.
+        for ident, stamp in (("req_old", "0.22.242"), ("req_unmarked", None)):
+            old = store.get(ident)
+            if stamp is None:
+                old.pop("request_server_version", None)
+            else:
+                old["request_server_version"] = stamp
+            store._remember(old)
+        asyncio.run(store.update("req_unmarked", {"status": "completed"}))
+        assert "request_server_version" not in store.get("req_unmarked")
+
+        response = client.get("/api/admin/requests/logs/batch",
+                              params={"since": since, "current_version_only": "true"},
+                              headers=headers())
+        assert response.status_code == 200, response.text
+        assert response.headers["x-chat2api-exported-count"] == "1"
+        assert response.headers["x-chat2api-version-scope"] == SERVER_RUNTIME_VERSION
+        assert "current-version" in response.headers["content-disposition"]
+        with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
+            manifest = json.loads(bundle.read("index.json"))
+            assert manifest["selection_mode"] == "since_current_version"
+            assert manifest["selected_server_version"] == SERVER_RUNTIME_VERSION
+            assert manifest["current_version_only"] is True
+            assert manifest["request_version_field"] == "request_server_version"
+            assert [row["request_id"] for row in manifest["requests"]] == ["req_current"]
+            report = json.loads(bundle.read(manifest["requests"][0]["filename"]))
+            assert report["request"]["request_server_version"] == SERVER_RUNTIME_VERSION
+
+        all_rows = batch(client, since)
+        assert all_rows.headers["x-chat2api-exported-count"] == "3"
+        assert all_rows.headers["x-chat2api-version-scope"] == "all"
+
+        other = client.get("/api/admin/requests/logs/batch",
+                           params={"since": "2026-10-29 10:39:32",
+                                   "current_version_only": "true"},
+                           headers=headers())
+        assert other.status_code == 404
