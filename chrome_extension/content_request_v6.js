@@ -748,7 +748,8 @@
         || !current?.isNew || !current.latest || promptStillPresent(active)
         || !["verified-rendered-network-overlap-v189",
               "verified-rendered-dom-baseline-v191",
-              "after-current-user-turn"].includes(current.reason)) return null;
+              "after-current-user-turn", "new-turn-identity",
+              "new-node-after-baseline", "no-baseline"].includes(current.reason)) return null;
     const buttons = responseFinishActions().filter(button =>
       !active.baselineFinishActions.has(button)
       && button.isConnected && turnFollows(current.latest, button));
