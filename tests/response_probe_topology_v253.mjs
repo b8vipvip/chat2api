@@ -21,7 +21,8 @@ function fixture(){
  const after=node(25);
  const prior=node(3);
  const toolbar=node(20,replyScope);
- const scope={querySelectorAll:(selector)=>selector==="h4"?[heading]:[]};
+ root.querySelectorAll=(selector)=>selector==="h4"?[heading]:[];
+ const scope=root;
  const active={baselineRolelessHeadings:new Set()};
  const uncovered=[prior,inside,after];
  const context={scope,active,uncovered,current,freshActions:[toolbar],
