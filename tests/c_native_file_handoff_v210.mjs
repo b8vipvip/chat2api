@@ -134,3 +134,30 @@ test("MIME-less Blob without an anchor cannot be fabricated as an XLSX",async()=
   assert.equal(result.count,0);
   assert.equal(result.failure_stages.xlsx,"no-native-download-event");
 });
+
+
+function workbookHeaderBytes(names=["[Content_Types].xml","xl/workbook.xml"]) {
+  const bytes=[];
+  for(const name of names){
+    const title=Array.from(new TextEncoder().encode(name));
+    const header=new Array(30).fill(0);
+    header.splice(0,4,80,75,3,4);
+    header[26]=title.length&255; header[27]=title.length>>8;
+    bytes.push(...header,...title);
+  }
+  return new Uint8Array(bytes);
+}
+
+test("armed current-reply octet-stream workbook requires verified OOXML entries",async()=>{
+  const good=await harness({typedButtonOnly:true,mime:"application/octet-stream",
+    bytes:workbookHeaderBytes()});
+  const captured=await good.content.capture(good.scope,"req_workbook_ooxml");
+  assert.equal(captured.count,1);
+  assert.equal(good.clicked(),1);
+  assert.deepEqual(Array.from(captured.captured_types),["xlsx"]);
+  const fakeZip=await harness({typedButtonOnly:true,mime:"application/octet-stream",
+    bytes:workbookHeaderBytes(["other/file.txt"])});
+  const rejected=await fakeZip.content.capture(fakeZip.scope,"req_fake_workbook");
+  assert.equal(rejected.count,0);
+  assert.equal(rejected.failure_stages.xlsx,"new-blob-workbook-structure-invalid");
+});
