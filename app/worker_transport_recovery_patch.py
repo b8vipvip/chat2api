@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 
 PATCH_ID = "worker-transport-recovery-v47"
-WORKER_RECONNECT_GRACE_SECONDS = 8.0
+WORKER_RECONNECT_GRACE_SECONDS = 20.0
 logger = logging.getLogger("chat2api.worker_transport")
 
 
