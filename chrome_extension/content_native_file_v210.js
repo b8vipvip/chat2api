@@ -42,14 +42,46 @@
   }
   function candidateButtons(scope) {
     if (!scope?.querySelectorAll) return [];
-    return [...scope.querySelectorAll("button,[role='button']")].filter(button =>
-      visible(button) && !button.disabled && button.getAttribute("aria-disabled")!=="true"
-      && /(?:download|下载)/i.test([
-        button.getAttribute("aria-label"), button.getAttribute("title"),
+    const result=[], seen=new Set();
+    const nodes=[...scope.querySelectorAll("button,[role='button'],a[href],a[download]")];
+    for (const button of nodes) {
+      if (!visible(button) || button.disabled
+          || button.getAttribute("aria-disabled")==="true" || seen.has(button)) continue;
+      const filename=matchButtonFilename(button) || (
+        filenames(button).length===1 ? filenames(button)[0] : "");
+      if (!filename || !MIMES[filename.split(".").pop().toLowerCase()]) continue;
+      const label=[
+        button.getAttribute("aria-label"),button.getAttribute("title"),
         button.getAttribute("data-testid"),button.textContent,
-      ].filter(Boolean).join(" ").slice(0,180))
-    ).map(button=>({button, filename:matchButtonFilename(button)}))
-      .filter(item=>Boolean(item.filename) && MIMES[item.filename.split(".").pop().toLowerCase()]);
+      ].filter(Boolean).join(" ").slice(0,220);
+      const isNativeDownload=/(?:download|下载)/i.test(label);
+      const isAnchor=String(button.tagName||"").toLowerCase()==="a";
+      // Redesigned Office file cards are often accessible links or an icon
+      // whose action label is the filename, *not* "Download". Only allow
+      // a link to the SAME ChatGPT origin or a browser blob: URL; never
+      // click external redirect targets or unrelated navigation controls.
+      let sameOriginFileLink=false;
+      if (isAnchor) {
+        const href=String(button.getAttribute("href")||"").trim();
+        if (href && !/^(?:javascript|data|file):/i.test(href)) {
+          try {
+            const parsed=new URL(href,location.href);
+            sameOriginFileLink=(parsed.origin===location.origin || parsed.protocol==="blob:")
+              && (Boolean(button.getAttribute("download"))
+                || /\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md)(?:[?#]|$)/i.test(parsed.pathname)
+                || label.includes(filename));
+          } catch (_) {}
+        }
+      }
+      // Do not promote plain file-name buttons unless their semantic action
+      // clearly denotes a file attachment rather than an editor/menu action.
+      const isFileCardButton=!isAnchor && label.includes(filename)
+        && Boolean(button.closest?.("[data-testid*='file'],[class*='file-card'],[class*='fileCard'],[data-state='closed']"));
+      if (!isNativeDownload && !sameOriginFileLink && !isFileCardButton) continue;
+      result.push({button,filename});
+      seen.add(button);
+    }
+    return result;
   }
   function signedBytes(filename,bytes) {
     const ext=filename.split(".").pop().toLowerCase();
