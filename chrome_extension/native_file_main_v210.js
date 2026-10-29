@@ -187,8 +187,21 @@
         try { dispositionName = decodeURIComponent(dispositionName); } catch (_) {}
         const exactName = dispositionName.toLowerCase() === session.filename.toLowerCase();
         const pathName = new URL(raw).pathname.toLowerCase().endsWith("/" + session.filename.toLowerCase());
-        // Explicitly named OTHER downloads must never satisfy this request.
-        if (dispositionName && !exactName) { stage(session, "fetch-filename-mismatch"); return; }
+        // ChatGPT can label a verified XLSX button with a friendly name,
+        // but the download response uses a different generated filename.
+        // Accept a SAME-TYPE alias only for a real attachment whose full MIME
+        // agrees with the requested extension and whose bytes later pass the
+        // strict file signature. Never accept another extension, inline JSON,
+        // preview, old/unarmed fetch or untrusted source as an alias.
+        const alias = Boolean(dispositionName && !exactName
+          && validName(dispositionName)
+          && dispositionName.split(".").pop().toLowerCase() === ext
+          && /attachment/i.test(disposition) && mimeMatches
+          && Date.now() - Number(session.armedAt || 0) <= 6000);
+        if (dispositionName && !exactName && !alias) {
+          stage(session, "fetch-filename-mismatch"); return;
+        }
+        if (alias) stage(session, "fetch-verified-same-type-alias");
         if (!exactName && !pathName && !mimeMatches) return;
         if (Number(response.headers.get("content-length") || 0) > MAX_BYTES) return;
         session.inFlight = true;
@@ -241,7 +254,8 @@
     if (data?.kind !== KIND || data.direction !== "arm"
         || typeof data.nonce !== "string" || !/^[a-z0-9-]{16,80}$/i.test(data.nonce)
         || !validName(String(data.filename || ""))) return;
-    armed = {nonce:data.nonce, filename:data.filename, used:false, until:Date.now()+8500};
+    armed = {nonce:data.nonce, filename:data.filename, used:false,
+      armedAt:Date.now(), until:Date.now()+8500};
     // Do not clear pre-created same-tab Blobs when a verified click is armed.
     pruneBlobs();
     window.postMessage({kind:KIND, direction:"armed", nonce:data.nonce}, location.origin);
