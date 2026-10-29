@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from .api_keys import ApiPrincipal
 from .diagnostics import DiagnosticMiddleware, DiagnosticStore, configure_file_logging
 from .runtime_contract import SERVER_RUNTIME_VERSION
+from .telemetry import parse_request_since
 from .playground_request_evidence_v207 import request_test_index, playground_diagnostics
 
 
@@ -140,55 +141,25 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
     async def download_recent_request_logs(
         since: str | None = Query(default=None, max_length=64),
         current_version_only: bool = Query(default=False),
+        q: str | None = Query(default=None, max_length=200),
+        status: str | None = Query(default=None, max_length=40),
+        model: str | None = Query(default=None, max_length=120),
     ) -> StreamingResponse:
-        # A checked current-version export deliberately includes every
-        # retained request created under this runtime version. It has no
-        # time constraint; even a stale browser since input is ignored.
-        # Unchecked (historical) exports still require a valid timestamp.
-        cutoff = None
-        if not current_version_only:
-            raw_since = str(since or "").strip()
-            if not re.fullmatch(
-                r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}"
-                r"(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:?\d{2})?",
-                raw_since, flags=re.IGNORECASE,
-            ):
-                raise HTTPException(status_code=422, detail="Invalid since timestamp format")
-            try:
-                cutoff = datetime.fromisoformat(raw_since.replace("Z", "+00:00").replace("z", "+00:00"))
-                if cutoff.tzinfo is None:
-                    cutoff = cutoff.replace(tzinfo=timezone(timedelta(hours=8)))
-                else:
-                    offset = cutoff.utcoffset()
-                    if offset is None or abs(offset.total_seconds()) > 14 * 3600:
-                        raise ValueError("invalid timezone offset")
-                cutoff = cutoff.astimezone(timezone.utc)
-            except (ValueError, OverflowError):
-                raise HTTPException(status_code=422, detail="Invalid since calendar date or timezone")
-
-        # Scan EVERY currently retained distinct request. Never apply a
-        # newest-N slice before filtering or silently truncate the export.
-        selected = []
-        for row in telemetry.recent(telemetry.items.maxlen or 500):
-            # Top-level report.server_version is the EXPORTER version,
-            # not the version at which this request was created.
-            if current_version_only and str(row.get("request_server_version") or "") != SERVER_RUNTIME_VERSION:
-                continue
-            if cutoff is None:
-                selected.append(row)
-                continue
-            created_raw = row.get("recorded_at")
-            try:
-                created = datetime.fromisoformat(str(created_raw).replace("Z", "+00:00"))
-                if created.tzinfo is None:
-                    created = created.replace(tzinfo=timezone(timedelta(hours=8)))
-                if created.astimezone(timezone.utc) >= cutoff:
-                    selected.append(row)
-            except (ValueError, OverflowError, TypeError):
-                continue
+        # Exactly the same retained-row predicate as /api/admin/requests.
+        # No timestamp means no time restriction, including version-scoped export.
+        # Reject invalid nonblank time rather than silently skipping the filter.
+        try:
+            cutoff = parse_request_since(since)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        selected = telemetry.query(
+            limit=telemetry.items.maxlen or 500, offset=0,
+            q=q, status=status, model=model, since=cutoff,
+            current_version_only=current_version_only,
+            server_version=SERVER_RUNTIME_VERSION,
+        )["data"]
         if not selected:
-            detail = ("No retained requests have the current creation version"
-                      if current_version_only else "No retained request records match the selected start time")
+            detail = "No retained request records match the selected filters"
             raise HTTPException(status_code=404, detail=detail)
 
         test_index = request_test_index(getattr(app.state, "test_runs", None))
@@ -232,7 +203,8 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                 manifest = {
                     "report_type": "chat2api-recent-request-log-bundle",
                     "report_version": 3,
-                    "selection_mode": "current_version" if current_version_only else "since",
+                    "selection_mode": "current_version" if current_version_only else ("since" if cutoff and not any((q, status, model)) else "filtered"),
+                    "filters": {"q": q or None, "status": status or None, "model": model or None},
                     "current_version_only": current_version_only,
                     "request_version_field": "request_server_version",
                     "selected_server_version": SERVER_RUNTIME_VERSION if current_version_only else None,
