@@ -1926,6 +1926,18 @@
       const fileReplyBoundary = fileCreationRequested && !generating
         && !upstreamStillWorking()
         ? verifiedFileReplyBoundary(active, current) : null;
+      // v247: distinguish page generation latency from file transfer latency.
+      // Report only the first validated same-request completion boundary.
+      if (fileReplyBoundary && !active.mediaFileBoundaryVerifiedAt) {
+        active.mediaFileBoundaryVerifiedAt = Date.now();
+        await diagnostic(active, "file-page-reply-finished", {
+          media_file_ready_boundary: String(fileReplyBoundary.boundaryEvidence || "").slice(0, 100),
+          media_file_ready_epoch_ms: active.mediaFileBoundaryVerifiedAt,
+          media_file_ready_since_submit_ms: Math.max(0,
+            active.mediaFileBoundaryVerifiedAt - Number(active.submitStartedAt || active.mediaFileBoundaryVerifiedAt)),
+          media_delivery_phase: "native-binary-capture-pending",
+        });
+      }
       const mediaReplyRoot = fileReplyBoundary?.replyScope || sameTurnRoot;
       const visibleTurnMedia = Boolean(mediaReplyRoot && rich?.hasCandidateImage?.(mediaReplyRoot));
       const visibleTurnFiles = Boolean(mediaReplyRoot && rich?.hasCandidateFile?.(mediaReplyRoot));
@@ -2134,6 +2146,8 @@
               media_capture_inline_count: active.mediaCaptureLastInlined,
               media_file_transfer_error: native?.error || finalMedia?.file_transfer_error || assistantRich?.file_transfer_error || "",
               media_file_preview_count: Number(finalMedia?.file_preview_count || 0),
+              media_binary_wait_since_page_finish_ms: active.mediaFileBoundaryVerifiedAt
+                ? Date.now() - active.mediaFileBoundaryVerifiedAt : null,
               media_native_file_button_candidates: Number(native?.button_candidates || 0),
               media_native_file_capture_count: Number(native?.count || 0),
               media_native_file_captured_types: native?.captured_types || [],
