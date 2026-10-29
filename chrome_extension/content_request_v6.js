@@ -1030,6 +1030,19 @@
     );
     const noBaseline = !active.baselineLatestNode && Boolean(latest);
     const isNew = noBaseline || identityNew || sameIdentityChanged || noIdentityNodeAfterBaseline;
+    // v239 log: a prior, role-labelled assistant turn can remain in the DOM
+    // while the NEW answer is rendered without a role. Presence of stale
+    // assistantNodes must not mask the already gated roleless/changed-rendered
+    // fallback. These are candidates only; request-v6 still requires positive
+    // current-request end evidence before issuing chat.completed.
+    if (!isNew) {
+      const fallback = rolelessShortReplyCandidate(active)
+        || renderedNetworkCorrelatedTurn(active)
+        || renderedCurrentRequestCandidate(active);
+      if (fallback?.isNew) return {...fallback,
+        legacy_assistant_nodes_present: nodes.length,
+        candidate_fallback_revision: 242};
+    }
     return {
       nodes,
       latest,
