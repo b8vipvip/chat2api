@@ -102,6 +102,12 @@
       element.replaceChildren(p);
     }
     if (!text && normalize(element.textContent || "")) element.replaceChildren();
+    // Chrome's native execCommand("insertText") already dispatches a trusted
+    // input/edit transaction to Lexical. Replaying a second synthetic input
+    // with 34K characters re-enters editor observers and may cause expensive
+    // duplicate reconciliation. Trust the native event on successful long
+    // insertions; the existing exact post-write composer check still applies.
+    if (text && text.length >= 2048 && applied) return;
     try {
       element.dispatchEvent(new InputEvent("input", {
         bubbles: true,
