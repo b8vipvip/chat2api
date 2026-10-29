@@ -28,11 +28,49 @@ const k=await api("/api/admin/keys/"+encodeURIComponent(id)+"/secret");
 if(!k.token)throw Error("业务API Key无法恢复");
 return {token:k.token,id,label:byId("pgChatKey").selectedOptions?.[0]?.dataset?.keyName||id};
 }
+// The browser/proxy can close this SSE HTTP connection 3-6 seconds after
+// admission while the *same* Worker request remains in the Broker for minutes.
+// Restore by authenticated request ID; never issue another model request or
+// equate an HTTP disconnect with a Worker terminal.
+async function recoverDisconnectedStream(requestId, update) {
+  if (!/^req_[a-z0-9_-]{12,110}$/i.test(String(requestId||""))) return null;
+  let observed=false, last=null, missed=0;
+  for(let i=0;i<230;i++){
+    try{
+      last=await api("/api/admin/playground/requests/"+
+        encodeURIComponent(requestId)+"/outcome?full_text=1");
+      if(last?.status){
+        observed=true;missed=0;
+        const status=String(last.status);
+        if(status==="completed"){
+          const text=String(last.response_text||"");
+          // A bounded diagnostic preview is NOT a full assistant reply.
+          if(last.response_text_truncated===true || !text.trim())
+            throw Error("服务端回复无法完整恢复，不能按已交付处理");
+          return {text,frames:0,recovered:true};
+        }
+        if(!["running","queued","pending"].includes(status))
+          throw Error("请求实际终态："+status+"；"+String(last.error||""));
+        if(i===0 || i%8===0) update(0,0,
+          "SSE 连接已断开，服务端仍在运行；按相同请求 ID 恢复中");
+      }else if(++missed>=4 && !observed)return null;
+    }catch(error){
+      // An observed error/failure terminal must propagate, not become an
+      // indefinite polling loop or an invented completed response.
+      if(observed && last && !["running","queued","pending"].includes(last.status))
+        throw error;
+      if(!observed && ++missed>=4)return null;
+    }
+    if(i<229) await new Promise(resolve=>setTimeout(resolve,4000));
+  }
+  throw Error("恢复等待结束，但服务端尚无已验证终态；请按请求 ID 查看请求记录");
+}
+
 async function stream(model,auth,requestId,messages,update){
 const r=await fetch("/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+auth.token,"X-Chat2API-Request-ID":requestId},body:JSON.stringify({model,messages,prompt_mode:"full",stream:true})});
 if(!r.ok)throw Error("API HTTP "+r.status+": "+(await r.text()).slice(0,300));
 if(!r.body)throw Error("缺少SSE响应体");
-let buffer="",answer="",stopped=false,done=false,frames=0,lastStatus="";
+let buffer="",answer="",stopped=false,done=false,frames=0,lastStatus="",streamError=null;
 const reader=r.body.getReader(),decoder=new TextDecoder();
 try{
 while(!done){
@@ -56,8 +94,13 @@ if(c.finish_reason==="stop")stopped=true;
 update(answer.length,frames,lastStatus);
 }
 }
-}finally{try{await reader.cancel()}catch(e){}}
-if(!stopped||!done)throw Error("SSE缺少stop或[DONE]，不能判为完成");
+}catch(error){streamError=error;}
+finally{try{await reader.cancel()}catch(e){}}
+if(!stopped||!done){
+  const recovered=await recoverDisconnectedStream(requestId,update);
+  if(recovered)return recovered;
+  throw streamError||Error("SSE缺少stop或[DONE]，不能判为完成");
+}
 if(!answer.trim())throw Error("权威正文为空");
 return {text:answer,frames};
 }
@@ -142,13 +185,16 @@ await api("/api/admin/playground/chat-runs",{method:"POST",body:{request_id,mode
 try{
 const out=await stream(model,auth,request_id,history,(chars,frames,status)=>note(sceneId+" 第"+(i+1)+"轮 "+request_id+"\n正文"+chars+"字符，SSE帧"+frames+"\n"+status));
 history.push({role:"assistant",content:out.text});
-report.turns.push({request_id,prompt,text:out.text,frames:out.frames,duration_ms:Math.round(performance.now()-begin)});
+report.turns.push({request_id,prompt,text:out.text,frames:out.frames,
+  recovered_after_disconnect:out.recovered===true,duration_ms:Math.round(performance.now()-begin)});
 }catch(e){
 report.turns.push({request_id,prompt,text:"",frames:0,error:String(e),duration_ms:Math.round(performance.now()-begin)});
 throw e;
 }
 }
 Object.assign(report,await inspect(sceneId,report.turns,scene));
+if(report.turns.some(turn=>turn.recovered_after_disconnect===true))
+  report.warnings.push("至少一条请求在 SSE 提前断开后按相同请求 ID 从服务端真实终态恢复；不把原始 SSE 交付误报为成功");
 for(const turn of report.turns){
   // API-level SSE stop+[DONE] proves that our endpoint finished, not that
   // ChatGPT conversation-fetch completed normally. Read immutable request
