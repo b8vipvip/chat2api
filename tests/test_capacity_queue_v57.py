@@ -189,12 +189,12 @@ def test_release_contract_is_v02275_and_worker_bundle_0831() -> None:
     marker = read("chrome_extension/content_bundle_marker_v48.js")
     preflight = read("chrome_extension/background_runtime_preflight_v48.js")
     contract = read("chrome_extension/content_runtime_contract_v48.js")
-    assert 'SERVER_RUNTIME_VERSION = "0.22.240"' in runtime
-    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.240"' in runtime
-    assert '"version": "0.22.240"' in manifest
-    assert 'bundle: "0.22.240"' in marker
-    assert 'REQUIRED_BUNDLE = "0.22.240"' in preflight
-    assert 'REQUIRED_BUNDLE = "0.22.240"' in contract
+    assert 'SERVER_RUNTIME_VERSION = "0.22.241"' in runtime
+    assert 'CHROME_BRIDGE_BUNDLE_VERSION = "0.22.241"' in runtime
+    assert '"version": "0.22.241"' in manifest
+    assert 'bundle: "0.22.241"' in marker
+    assert 'REQUIRED_BUNDLE = "0.22.241"' in preflight
+    assert 'REQUIRED_BUNDLE = "0.22.241"' in contract
     assert '"capacity_scheduler_v58": True' in runtime
     assert '"worker_single_route_authority_v30": True' in runtime
     assert '"window_observer_v90": True' in runtime
@@ -223,3 +223,33 @@ def test_capacity_and_runtime_javascript_parse() -> None:
             check=False,
         )
         assert result.returncode == 0, f"{path}: {result.stderr}"
+
+def test_v241_verified_zero_ready_windows_stays_in_one_fifo_until_physical_ready() -> None:
+    async def scenario() -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            _, registry, broker = build_v58(tmp)
+            registry.clients["ext_test"].metadata.update({
+                "worker_pool_admission_revision": 224,
+                "worker_pool_ready_window_ids": [],
+                "worker_pool_active_windows": 2,
+                "worker_pool_login_ready": True,
+            })
+            registry.worker_pool_capacity_received_at = {"ext_test": time.monotonic()}
+            first = asyncio.create_task(broker.create("req_first", "ext_test"))
+            await asyncio.sleep(0.07)
+            assert not first.done()
+            snap = broker.capacity_snapshot("ext_test")
+            assert snap["queued_requests"] == 1
+            assert snap["verified_pool_capacity"]["fresh"] is True
+            assert snap["verified_pool_capacity"]["unclaimed_ready_windows"] == 0
+            # A Chrome runtime-ready window is reported later, without
+            # raising the configured limit or creating another queue.
+            registry.clients["ext_test"].metadata["worker_pool_ready_window_ids"] = [301]
+            registry.worker_pool_capacity_received_at["ext_test"] = time.monotonic()
+            admitted = await asyncio.wait_for(first, timeout=2.0)
+            assert admitted.diagnostics["worker_verified_spare_window_claim"] == 301
+            assert broker.capacity_snapshot("ext_test")["active_requests"] == 1
+            assert broker.capacity_snapshot("ext_test")["limit_units"] == 3
+            await broker.release(admitted.request_id)
+
+    asyncio.run(scenario())

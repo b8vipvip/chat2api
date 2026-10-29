@@ -232,6 +232,7 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
             "baseline_total_window_target": worker_baseline_total(client_id),
             "dynamic_window_buffer": 0,
             "standby_admission_permits": 0,
+            "verified_ready_required_when_fresh": True,
             "used_units": used,
             "available_units": max(0, limit - used),
             "active_requests": used,
@@ -267,9 +268,20 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                             "selected extension went offline while waiting in the canonical API queue"
                         )
                     remaining = rate_limit_remaining(client_id)
+                    # A fresh v224 pool report with ZERO unclaimed ready
+                    # physical windows must never be routed immediately. Such
+                    # requests generated 9 avoidable 'standby still loading'
+                    # 502s in the v239 evidence. Wait on this SAME FIFO until
+                    # Chrome reports an actual ready window; no second queue.
+                    pool = verified_window_capacity(client_id)
+                    pool_has_ready = (
+                        not pool.get("fresh")
+                        or int(pool.get("unclaimed_ready_windows") or 0) > 0
+                    )
                     worker_ready = (
                         used_units(client_id) < worker_limit(client_id)
                         and first_eligible(client_id) == request_id
+                        and pool_has_ready
                     )
                     if worker_ready and remaining <= 0:
                         break
@@ -279,8 +291,9 @@ def install_capacity_scheduler_v58(app: FastAPI) -> FastAPI:
                         except asyncio.TimeoutError:
                             pass
                     else:
-                        # Only Broker releases / configuration changes unblock
-                        # this FIFO; spare-window telemetry never raises N.
+                        # Broker releases, configuration changes or newly
+                        # verified idle window evidence may unblock FIFO, but
+                        # physical standby never increases the configured N.
                         try:
                             await asyncio.wait_for(condition.wait(), timeout=1.0)
                         except asyncio.TimeoutError:

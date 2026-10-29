@@ -295,7 +295,7 @@
       if(!document.hidden && selectedType === "windows" && section.classList.contains("active") && !document.querySelector("dialog[open]")){
         refreshWindowsDevices().catch(()=>{});
       }
-      if (!document.hidden && selectedType === "linux" && section.classList.contains("active") && !document.querySelector("dialog[open]") && !document.querySelector("#v240WorkerConcurrencyDialog[open]")) {
+      if (!document.hidden && selectedType === "linux" && section.classList.contains("active") && !document.querySelector("dialog[open]") && !document.querySelector('[data-v121-inline-editing="1"]')) {
         byId("refreshLinuxDevicesV124")?.click();
       }
     }, 15000);
@@ -536,6 +536,7 @@
       esc(version)+'</code>';
   }
   function renderWorkers(){
+    if(document.querySelector('[data-v121-inline-editing="1"]'))return;
     const target=el("unifiedWorkerRowsV160");if(!target)return;
     if(!extensionsLoaded||!linuxLoaded){
       target.innerHTML='<tr><td colspan="10" class="v153-muted">正在同步 Worker 状态…</td></tr>';
@@ -711,7 +712,7 @@
     refresh().catch(e=>{el("unifiedDeviceSummaryV160").textContent=e.message;});
     setInterval(()=>{
       if(!document.hidden&&section.classList.contains("active")&&!document.querySelector("dialog[open]")&&
-        !document.querySelector("#v240WorkerConcurrencyDialog[open]")){
+        !document.querySelector('[data-v121-inline-editing="1"]')){
         el("refreshLinuxDevicesV124")?.click();
       }
     },15000);

@@ -1,5 +1,5 @@
 (() => {
-  const VERSION = "0.22.240-worker-list-v157";
+  const VERSION = "0.22.241-worker-list-v157";
   const COLUMN_SCHEMA_REVISION = 152;
   const STORAGE_KEY = "chat2api.extensionColumns.v3";
   const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2";
@@ -124,7 +124,7 @@
   function applyLayout() {
     const activePrefs = loadPrefs();
     const {body, headerRow} = tableParts();
-    if (!body || !headerRow) return;
+    if (!body || !headerRow || document.querySelector('[data-v121-inline-editing="1"]')) return;
     reorder(headerRow, activePrefs);
     applyVisibility(headerRow, activePrefs);
     for (const tr of body.rows) {

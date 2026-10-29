@@ -139,14 +139,43 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
     @app.get("/api/admin/requests/logs/batch", dependencies=[Depends(require_admin_key)])
     async def download_recent_request_logs(
         limit: int = Query(default=20, ge=1, le=500),
+        since: str | None = Query(default=None, max_length=64),
     ) -> StreamingResponse:
         # Reuse the exact single-request report builder and its Worker probe /
         # Playground evidence; batch export is read-only, not a terminal owner.
         # Telemetry is bounded to 500 retained distinct requests, and recent()
         # uses the same newest-first ordering as the request-history UI.
-        selected = telemetry.recent(limit)
+        cutoff: datetime | None = None
+        if since is not None:
+            # Time-filtered export scans all retained rows, then applies the
+            # upper bound; filtering an already-limited latest-N list would
+            # silently drop matching earlier requests.
+            try:
+                cutoff = datetime.fromisoformat(since.replace("Z", "+00:00"))
+            except (ValueError, OverflowError):
+                raise HTTPException(status_code=422, detail="since must be an ISO-8601 date/time with timezone")
+            if cutoff.tzinfo is None or cutoff.utcoffset() is None:
+                raise HTTPException(status_code=422, detail="since requires a timezone (Z or ±HH:MM)")
+            cutoff = cutoff.astimezone(timezone.utc)
+
+        retained = telemetry.recent(500 if cutoff is not None else limit)
+        if cutoff is not None:
+            selected = []
+            for row in retained:
+                raw = row.get("recorded_at")
+                try:
+                    created = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=timezone.utc)
+                    if created.astimezone(timezone.utc) >= cutoff:
+                        selected.append(row)
+                except (ValueError, OverflowError, TypeError):
+                    continue
+            selected = selected[:limit]
+        else:
+            selected = retained
         if not selected:
-            raise HTTPException(status_code=404, detail="No request records to export")
+            raise HTTPException(status_code=404, detail="No retained request records match the selected time range")
 
         test_index = request_test_index(getattr(app.state, "test_runs", None))
         extension_snapshot = _safe_client_rows(registry)
@@ -191,6 +220,8 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                     "server_version": SERVER_RUNTIME_VERSION,
                     "requested_limit": limit,
+                    "since": cutoff.isoformat() if cutoff else None,
+                    "time_filter_field": "recorded_at" if cutoff else None,
                     "exported_count": len(exported),
                     "retention_note": "Only currently retained request records can be included.",
                     "selection_order": "request-history newest first, by last record update",
@@ -203,7 +234,8 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                 archive.writestr(
                     "README.txt",
                     ("chat2api — 最近请求日志合并包\n"
-                     f"导出数量：{len(exported)} / 所请求的最近 {limit} 条\n"
+                     f"导出数量：{len(exported)} / 最多 {limit} 条\n"
+                     f"起始时间（含）：{cutoff.isoformat() if cutoff else '未指定'}\n"
                      "requests/ 目录中每条 JSON 对应一次请求，结构与请求记录列表中的“下载日志”一致。\n"
                      "index.json 按页面最新记录顺序给出 ID、状态和文件名；打包只读，不修改请求终态。\n"
                      "注意：日志可能包含完整提示词、生成回复和诊断证据，分享前请检查并脱敏。\n").encode("utf-8"),
@@ -225,7 +257,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             chunks(),
             media_type="application/zip",
             headers={
-                "Content-Disposition": f'attachment; filename="chat2api-request-logs-latest-{len(exported)}-{stamp}.zip"',
+                "Content-Disposition": f'attachment; filename="chat2api-request-logs-{"since" if cutoff else "latest"}-{len(exported)}-{stamp}.zip"',
                 "Cache-Control": "no-store",
                 "X-Chat2API-Exported-Count": str(len(exported)),
             },

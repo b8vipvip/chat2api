@@ -4,7 +4,7 @@
 
   const SETTINGS_HELP = "并发=Worker 同时执行请求的硬上限；满载时自动增加的备用窗口不增加并发名额。";
   const state = {
-    version: 240,
+    version: 241,
     renderer: "canonical-worker-list-v152",
     login: {workerId:"", ticket:"", sourceWidth:1920, sourceHeight:1080},
     dragging: false,
@@ -42,104 +42,103 @@
     return null;
   }
 
-  // Keep the one concurrency form in the browser top layer, not inside the
-  // Worker table's overflow: auto scroll container (which cut off Save).
-  function ensureLimitDialog() {
-    let dialog = document.getElementById("v240WorkerConcurrencyDialog");
-    if (dialog) return dialog;
-    dialog = document.createElement("dialog");
-    dialog.id = "v240WorkerConcurrencyDialog";
-    dialog.setAttribute("aria-label", "Worker 并发设置");
-    dialog.style.cssText = "position:fixed;inset:0;margin:auto;width:min(390px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:auto;box-sizing:border-box;padding:20px;border:1px solid #475569;border-radius:14px;background:#111827;color:#e5e7eb;box-shadow:0 24px 70px rgba(0,0,0,.58)";
-    dialog.innerHTML = `<form data-v240-concurrency-form style="display:grid;gap:13px">
-      <strong style="font-size:17px">并发设置</strong>
-      <div class="muted" data-v240-worker-label style="font-size:12px;overflow-wrap:anywhere"></div>
-      <label style="display:grid;gap:7px">最大并发请求数
-        <input data-v121-concurrency type="number" min="1" max="32" step="1" required style="width:100%;box-sizing:border-box;padding:9px;border:1px solid #475569;border-radius:7px;background:#0b1220;color:inherit"/>
-      </label>
-      <p class="muted" style="font-size:12px;line-height:1.6;margin:0">最多同时执行 N 个请求；满载时自动额外保留 1 个备用窗口，但不允许突破并发上限。超额请求按顺序排队。</p>
-      <div role="status" aria-live="polite" data-v121-limit-note style="font-size:12px;min-height:16px;overflow-wrap:anywhere"></div>
-      <div style="display:flex;gap:9px;justify-content:flex-end;flex-wrap:wrap">
-        <button class="action" type="button" data-v121-cancel-limits>取消</button>
-        <button class="action good" type="submit" data-v121-save-limits>保存</button>
-      </div>
-    </form>`;
-    document.body.appendChild(dialog);
-    dialog.querySelector("form").addEventListener("submit", event => {
-      event.preventDefault();
-      const button = dialog.querySelector("[data-v121-save-limits]");
-      if (button && !button.disabled) void saveLimits(button);
+
+  // v241: one inline editor in whichever Worker row the user clicked.
+  // The canonical Windows and Linux renderers supply the SAME minimal markup.
+  // This module alone handles edit/save; it never owns a second window quota.
+  function closeLimitPopovers(except = null) {
+    document.querySelectorAll('[data-v121-inline-editing="1"]').forEach(editor => {
+      if (editor !== except && !editor.querySelector('[data-v121-save-limits]')?.disabled)
+        restoreLimitEditor(editor);
     });
-    dialog.addEventListener("cancel", event => {
-      if (dialog.querySelector("[data-v121-save-limits]")?.disabled) event.preventDefault();
-    });
-    dialog.addEventListener("close", () => { delete dialog.dataset.clientId; });
-    return dialog;
   }
 
-  function closeLimitPopovers() {
-    const dialog = document.getElementById("v240WorkerConcurrencyDialog");
-    if (dialog?.open && !dialog.querySelector("[data-v121-save-limits]")?.disabled) dialog.close();
+  function restoreLimitEditor(editor) {
+    editor.querySelector('[data-v121-inline-input]')?.remove();
+    editor.querySelector('[data-v121-save-limits]')?.remove();
+    editor.querySelector('[data-v121-limit-note]')?.remove();
+    const summary = editor.querySelector('[data-v121-limit-summary]');
+    const edit = editor.querySelector('[data-v121-edit-limits]');
+    if (summary) summary.hidden = false;
+    if (edit) edit.hidden = false;
+    delete editor.dataset.v121InlineEditing;
   }
 
   function toggleLimitPopover(button) {
-    const editor = button.closest("[data-v121-worker-limits]");
-    const clientId = String(editor?.dataset.v121WorkerLimits || "");
-    if (!clientId) return;
-    const dialog = ensureLimitDialog();
-    if (dialog.open) dialog.close();
-    dialog.dataset.clientId = clientId;
-    const current = Number(editor.querySelector("[data-v121-limit-summary]")?.textContent || 3);
-    dialog.querySelector("[data-v121-concurrency]").value = String(Number.isInteger(current) && current >= 1 && current <= 32 ? current : 3);
-    dialog.querySelector("[data-v240-worker-label]").textContent = "Worker ID：" + clientId;
-    dialog.querySelector("[data-v121-limit-note]").textContent = "";
-    dialog.querySelector("[data-v121-cancel-limits]").textContent = "取消";
-    dialog.showModal();
-    const input = dialog.querySelector("[data-v121-concurrency]");
+    const editor = button.closest('[data-v121-worker-limits]');
+    if (!editor || editor.dataset.v121InlineEditing === '1') return;
+    closeLimitPopovers(editor);
+    const summary = editor.querySelector('[data-v121-limit-summary]');
+    const value = Number(summary?.textContent || 3);
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = '1'; input.max = '32'; input.step = '1';
+    input.value = String(Number.isInteger(value) && value >= 1 && value <= 32 ? value : 3);
+    input.dataset.v121InlineInput = '1';
+    input.setAttribute('aria-label', '最大并发请求数');
+    input.style.cssText = 'width:65px;box-sizing:border-box;padding:5px 6px;border:1px solid #475569;border-radius:6px;background:#0b1220;color:inherit';
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.className = 'action good';
+    save.dataset.v121SaveLimits = '1';
+    save.textContent = '保存';
+    const note = document.createElement('span');
+    note.dataset.v121LimitNote = '1';
+    note.setAttribute('role', 'status');
+    note.style.cssText = 'font-size:11px;color:#fca5a5;white-space:normal;max-width:160px';
+    if (summary) summary.hidden = true;
+    button.hidden = true;
+    editor.dataset.v121InlineEditing = '1';
+    editor.append(input,save,note);
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { event.preventDefault(); restoreLimitEditor(editor); }
+      if (event.key === 'Enter') { event.preventDefault(); if (!save.disabled) void saveLimits(save); }
+    });
     input.focus();
-    // Numeric input selection is not supported consistently across browsers.
-    try { input.select?.(); } catch (_) {}
   }
 
   async function saveLimits(button) {
-    const dialog = button.closest("#v240WorkerConcurrencyDialog");
-    if (!dialog?.open || button.disabled) return;
-    const clientId = String(dialog.dataset.clientId || "");
-    const raw = String(dialog.querySelector("[data-v121-concurrency]")?.value || "").trim();
-    const note = dialog.querySelector("[data-v121-limit-note]");
+    const editor = button.closest('[data-v121-worker-limits]');
+    if (!editor || button.disabled || editor.dataset.v121InlineEditing !== '1') return;
+    const clientId = String(editor.dataset.v121WorkerLimits || '');
+    const raw = String(editor.querySelector('[data-v121-inline-input]')?.value || '').trim();
+    const note = editor.querySelector('[data-v121-limit-note]');
     if (!clientId || !/^(?:[1-9]|[12][0-9]|3[0-2])$/.test(raw)) {
-      note.textContent = "请输入 1～32 的整数";
+      if (note) note.textContent = '输入 1～32 的整数';
       return;
     }
     const concurrency = Number(raw);
     button.disabled = true;
-    note.textContent = "保存中，正在同步 Worker…";
+    button.textContent = '保存中…';
+    if (note) note.textContent = '';
     try {
       const saved = await jsonRequest(`/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57`, {
-        method: "PUT", body: {max_concurrency: concurrency},
+        method:'PUT', body:{max_concurrency:concurrency},
       });
       if (saved?.ok !== true || Number(saved?.max_concurrency) !== concurrency)
-        throw new Error("服务端没有确认保存的并发上限，请刷新后核对");
-      for (const editor of document.querySelectorAll("[data-v121-worker-limits]")) {
-        if (editor.dataset.v121WorkerLimits !== clientId) continue;
-        const summary = editor.querySelector("[data-v121-limit-summary]");
+        throw new Error('服务端未确认保存值');
+      // Update both the hidden source row and visible unified row. No false
+      // success on errors; only the single v58 scheduler owns this setting.
+      document.querySelectorAll('[data-v121-worker-limits]').forEach(row => {
+        if (row.dataset.v121WorkerLimits !== clientId) return;
+        const summary = row.querySelector('[data-v121-limit-summary]');
         if (summary) summary.textContent = String(concurrency);
-      }
-      note.textContent = saved?.window_target_sync?.sent === true
-        ? "保存成功，窗口池已收到同步指令"
-        : "保存成功，Worker 重新连接或刷新时同步窗口池";
-      dialog.querySelector("[data-v121-cancel-limits]").textContent = "关闭";
+        if (row.dataset.v121InlineEditing === '1') restoreLimitEditor(row);
+      });
       const reload = globalThis.chat2apiReloadCanonicalWorkerListV59;
-      if (typeof reload === "function") {
-        try { await reload(); }
-        catch (_) { note.textContent += "（列表刷新失败，请手动刷新）"; }
+      if (typeof reload === 'function') {
+        try { await reload(); } catch (_) { /* saved configuration remains authoritative */ }
       }
     } catch (error) {
-      note.textContent = "保存失败：" + String(error?.message || error);
+      if (note) note.textContent = '保存失败：' + String(error?.message || error);
+      button.textContent = '重试保存';
     } finally {
       button.disabled = false;
+      if (editor.isConnected && editor.dataset.v121InlineEditing === '1' && button.textContent === '保存中…')
+        button.textContent = '保存';
     }
   }
+
   function loginEndpoint(workerId) {
     return `/api/admin/linux-workers/${encodeURIComponent(workerId)}/login-session/clipboard`;
   }
@@ -346,12 +345,6 @@
       toggleLimitPopover(edit);
       return;
     }
-    const cancel = event.target?.closest?.("[data-v121-cancel-limits]");
-    if (cancel) {
-      event.preventDefault();
-      closeLimitPopovers();
-      return;
-    }
     const save = event.target?.closest?.("[data-v121-save-limits]");
     if (save) {
       event.preventDefault();
@@ -365,7 +358,6 @@
     installFetchObserver();
     installLoginEvents();
     renderLimits();
-    ensureLimitDialog();
     ensureClipboardToolbar();
   }
 

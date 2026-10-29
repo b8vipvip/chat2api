@@ -125,7 +125,7 @@ def test_realtime_window_refresh_is_compacted_into_worker_settings_column():
     assert 'data-chat2api-structural-owner="worker-settings-v152"' in canonical
     assert 'data-v121-limit-summary' in canonical
     assert 'data-v121-concurrency' not in canonical
-    assert 'data-v121-concurrency' in behavior
+    assert 'data-v121-inline-input' in behavior
     assert 'data-v121-windows' not in canonical
     assert 'data-v121-save-limits' in behavior
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' not in behavior
@@ -143,7 +143,7 @@ def test_reserve_versions_match_manifest_and_runtime_contract():
     bundle = re.search(r'CHROME_BRIDGE_BUNDLE_VERSION = "([0-9.]+)"', runtime)
     assert server and protocol and bundle
     assert _semver(server.group(1)) >= (0, 21, 13)
-    assert protocol.group(1) == "0.22.240"
+    assert protocol.group(1) == "0.22.241"
     assert _semver(manifest["version"]) >= (0, 8, 0)
     assert bundle.group(1) == manifest["version"]
 
