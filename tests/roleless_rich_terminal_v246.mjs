@@ -17,7 +17,7 @@ function setup(){
  const historical=make("H4","ChatGPT said:",1);
  const user=make("H4","You said:",10);
  const heading=make("H4","ChatGPT said:",12);
- const response=make("DIV","第一章 施工规划。".repeat(250),13);
+ const response=make("DIV","第一章 施工规划。".repeat(250) + "终章：所有步骤确认结束，完整交付。",13);
  const status=make("H4","Worked for 5s",14);
  const toolbar=make("BUTTON","Copy",16);
  const staleToolbar=make("BUTTON","Copy",2);
