@@ -967,7 +967,7 @@
     else if (Number(active?.networkObservedAt || 0) < Number(active.submitStartedAt))
       reason = "network-evidence-predates-submit";
     else if (!active?.baselineRolelessHeadings) reason = "pre-submit-headings-missing";
-    else if (observed.length < 4) reason = "network-text-too-short";
+    else if (observed.length < 3) reason = "network-text-too-short";
     else if (observed.length > 180) reason = "network-text-exceeds-short-bound";
     else if (transientText(observed) || internalToolPayload(observed)) reason = "not-assistant-prose";
     else if (!assistantHeadings.length) reason = "no-fresh-assistant-heading";
