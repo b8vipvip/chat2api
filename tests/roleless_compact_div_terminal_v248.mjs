@@ -106,7 +106,8 @@ for(const [answer,network] of [
  assert.equal(f.ctx.candidate(f.active),null);
 }
 assert.match(source,/rendered\.shortTextVerified\s*\?/);
-assert.match(source,/abortedRenderedCandidateSince >= 8000/);
+assert.match(source,/abortedRenderedCandidateSince >= abortedReplyStableThreshold\(rendered\)/);
+assert.match(source,/return rendered\?\.shortTextVerified \? 4500 : 8000/);
 assert.match(source,/fresh-roleless-compact-div-v248/);
 assert.match(source,/type: "chat.completed", request_id: active.requestId/);
 console.log("v248 compact DIV: real short answers, stale/foreign/working and partial guards passed");
