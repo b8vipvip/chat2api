@@ -138,31 +138,33 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
 
     @app.get("/api/admin/requests/logs/batch", dependencies=[Depends(require_admin_key)])
     async def download_recent_request_logs(
-        since: str = Query(..., min_length=1, max_length=64),
+        since: str | None = Query(default=None, max_length=64),
         current_version_only: bool = Query(default=False),
     ) -> StreamingResponse:
-        # Time is required; optional current-version scope is an additional filter. Parse both
-        # "2026-10-29 10:39:31" and "2026-10-29T11:28:29+08:00".
-        # Unzoned input uses the same Beijing timezone as request history;
-        # never guess using the cloud server's own local timezone.
-        raw_since = since.strip()
-        if not re.fullmatch(
-            r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}"
-            r"(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:?\d{2})?",
-            raw_since, flags=re.IGNORECASE,
-        ):
-            raise HTTPException(status_code=422, detail="Invalid since timestamp format")
-        try:
-            cutoff = datetime.fromisoformat(raw_since.replace("Z", "+00:00").replace("z", "+00:00"))
-            if cutoff.tzinfo is None:
-                cutoff = cutoff.replace(tzinfo=timezone(timedelta(hours=8)))
-            else:
-                offset = cutoff.utcoffset()
-                if offset is None or abs(offset.total_seconds()) > 14 * 3600:
-                    raise ValueError("invalid timezone offset")
-            cutoff = cutoff.astimezone(timezone.utc)
-        except (ValueError, OverflowError):
-            raise HTTPException(status_code=422, detail="Invalid since calendar date or timezone")
+        # A checked current-version export deliberately includes every
+        # retained request created under this runtime version. It has no
+        # time constraint; even a stale browser since input is ignored.
+        # Unchecked (historical) exports still require a valid timestamp.
+        cutoff = None
+        if not current_version_only:
+            raw_since = str(since or "").strip()
+            if not re.fullmatch(
+                r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}"
+                r"(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:?\d{2})?",
+                raw_since, flags=re.IGNORECASE,
+            ):
+                raise HTTPException(status_code=422, detail="Invalid since timestamp format")
+            try:
+                cutoff = datetime.fromisoformat(raw_since.replace("Z", "+00:00").replace("z", "+00:00"))
+                if cutoff.tzinfo is None:
+                    cutoff = cutoff.replace(tzinfo=timezone(timedelta(hours=8)))
+                else:
+                    offset = cutoff.utcoffset()
+                    if offset is None or abs(offset.total_seconds()) > 14 * 3600:
+                        raise ValueError("invalid timezone offset")
+                cutoff = cutoff.astimezone(timezone.utc)
+            except (ValueError, OverflowError):
+                raise HTTPException(status_code=422, detail="Invalid since calendar date or timezone")
 
         # Scan EVERY currently retained distinct request. Never apply a
         # newest-N slice before filtering or silently truncate the export.
@@ -171,6 +173,9 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             # Top-level report.server_version is the EXPORTER version,
             # not the version at which this request was created.
             if current_version_only and str(row.get("request_server_version") or "") != SERVER_RUNTIME_VERSION:
+                continue
+            if cutoff is None:
+                selected.append(row)
                 continue
             created_raw = row.get("recorded_at")
             try:
@@ -182,7 +187,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             except (ValueError, OverflowError, TypeError):
                 continue
         if not selected:
-            detail = ("No retained requests with a verified current creation version match the selected start time"
+            detail = ("No retained requests have the current creation version"
                       if current_version_only else "No retained request records match the selected start time")
             raise HTTPException(status_code=404, detail=detail)
 
@@ -227,14 +232,14 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                 manifest = {
                     "report_type": "chat2api-recent-request-log-bundle",
                     "report_version": 3,
-                    "selection_mode": "since_current_version" if current_version_only else "since",
+                    "selection_mode": "current_version" if current_version_only else "since",
                     "current_version_only": current_version_only,
                     "request_version_field": "request_server_version",
                     "selected_server_version": SERVER_RUNTIME_VERSION if current_version_only else None,
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                     "server_version": SERVER_RUNTIME_VERSION,
-                    "since": cutoff.isoformat(),
-                    "time_filter_field": "recorded_at",
+                    "since": cutoff.isoformat() if cutoff else None,
+                    "time_filter_field": "recorded_at" if cutoff else None,
                     "exported_count": len(exported),
                     "retention_note": "Includes all matching currently retained requests (currently up to 500 distinct records); earlier history is not available.",
                     "selection_order": "request-history newest first, by last record update",
@@ -246,9 +251,9 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                 archive.writestr("index.json", _json_bytes(manifest))
                 archive.writestr(
                     "README.txt",
-                    ("chat2api — 从指定时间开始的请求日志合并包\n"
+                    ("chat2api — 请求日志合并包\n"
                      f"导出数量：{len(exported)} 条（仅限仍留存的请求记录）\n"
-                     f"起始时间（含）：{cutoff.isoformat()}\n"
+                     f"起始时间（含）：{cutoff.isoformat() if cutoff else '不限制（当前版本全部留存请求）'}\n"
                      f"仅当前版本：{'是，'+SERVER_RUNTIME_VERSION if current_version_only else '否'}\n"
                      "历史请求若缺少创建版本标记，不会被归入当前版本。\n"
                      "requests/ 目录中每条 JSON 对应一次请求，结构与请求记录列表中的“下载日志”一致。\n"
@@ -272,7 +277,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             chunks(),
             media_type="application/zip",
             headers={
-                "Content-Disposition": f'attachment; filename="chat2api-request-logs-{"current-version-" if current_version_only else ""}since-{len(exported)}-{stamp}.zip"',
+                "Content-Disposition": f'attachment; filename="chat2api-request-logs-{"current-version-" if current_version_only else "since-"}{len(exported)}-{stamp}.zip"',
                 "Cache-Control": "no-store",
                 "X-Chat2API-Exported-Count": str(len(exported)),
                 "X-Chat2API-Version-Scope": SERVER_RUNTIME_VERSION if current_version_only else "all",
