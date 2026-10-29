@@ -1092,7 +1092,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if not current_status:
                         yield "data: " + json.dumps(
                             chunk_payload(response_id, model, {}), ensure_ascii=False
-                        ) + "\\n\\n"
+                        ) + "\n\n"
                     yield ": chat2api-keepalive\n\n"
                 if await request.is_disconnected():
                     # The API transport may vanish while ChatGPT continues.
