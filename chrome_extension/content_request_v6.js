@@ -1056,6 +1056,34 @@
         independent_count:0,scan_structural_node_count:1}};
   }
 
+  // #554: ChatGPT sometimes renders a plain roleless DIV correctly but the
+  // Markdown serializer returns only a partial fragment. Under the SAME
+  // request-v6 abort+toolbar+generation guards, recover its plain text only
+  // when it is complete, carries no rich/media structure, and a bounded scan
+  // proves that there are no substantial un-attributed answer blocks nearby.
+  // A be17-style 255 uncovered block page must NEVER satisfy this path.
+  function verifiedPlainRolelessCaptureFallback(active, rendered, captured) {
+    if(!rendered?.rolelessRichVerified || rendered.shortTextVerified
+        || !rendered.node?.isConnected || !rendered.replyScope?.isConnected
+        || !active?.baselineRenderedText) return null;
+    const node=rendered.node;
+    const raw=normalize(node.innerText || node.textContent || "");
+    if(raw.length<240 || raw.length>12000 || raw!==normalize(rendered.text)
+        || transientText(raw) || internalToolPayload(raw)
+        || node.querySelector?.("img,picture,canvas,video,svg,table,pre,code,math,.katex,a[href],iframe,[role='table']"))
+      return null;
+    // A substantial uncovered block may be another paragraph or a media
+    // artifact. That invalidates any claim the plain DIV is the full reply.
+    const coverage=renderedResponseBoundaryEvidence(active,node,rendered.replyScope);
+    if(coverage.scan_overflow || coverage.independent_count>3
+        || coverage.independent_chars>60 || coverage.max_independent_chars>35)
+      return null;
+    if(!rolelessRichCaptureComplete(node,raw)) return null;
+    const output=String(captured || "").trim();
+    if(output && rolelessRichCaptureComplete(node,output)) return null;
+    return raw;
+  }
+
   // #535: bounded, privacy-safe diagnostics for short, roleless UI replies.
   // This is READ-ONLY. It must never decide a terminal, reschedule a request,
   // or publish text: only request-v6 owns chat.completed/chat.error.
@@ -2427,7 +2455,8 @@
             // Redesigned ChatGPT sometimes includes empty role labels in the
             // cloned reply container. Remove ONLY the known leading chrome;
             // never strip an ordinary user-authored heading in the body.
-            const bounded = assistantOnlyReplyText(active, capture?.text);
+            const plainFallback=verifiedPlainRolelessCaptureFallback(active,rendered,capture?.text);
+            const bounded = assistantOnlyReplyText(active, plainFallback || capture?.text);
             if (bounded.pending) {
               active.abortRecoveryReadOnly = {response_recovery_capture_pending:true};
               continue;
@@ -2443,6 +2472,7 @@
               response_recovery_part_set_complete: completePartSet,
               response_recovery_rich_tail_complete: rendered.rolelessRichVerified
                 ? rolelessRichCaptureComplete(rendered.node, finalText) : null,
+              response_recovery_plain_roleless_fallback: Boolean(plainFallback),
               response_recovery_capture_pending: false,
               response_recovery_threshold_ms: abortedReplyStableThreshold(rendered),
             };
@@ -2517,6 +2547,7 @@
                       : "fresh-rendered-baseline+new-finish-action+8s-stable+aborted-sse",
                     response_epoch_candidate_reason: rendered.reason,
                     response_terminal_final_chars: finalText.length,
+                    response_terminal_plain_roleless_fallback: Boolean(plainFallback),
                     response_terminal_stable_ms: Date.now() - abortedRenderedCandidateSince,
                     response_terminal_required_stable_ms: abortedReplyStableThreshold(rendered),
                     response_finish_action_count: rendered.finishActionCount,
