@@ -125,7 +125,7 @@ def test_realtime_window_refresh_is_compacted_into_worker_settings_column():
     assert 'data-chat2api-structural-owner="worker-settings-v152"' in canonical
     assert 'data-v121-limit-summary' in canonical
     assert 'data-v121-concurrency' not in canonical
-    assert 'data-v121-concurrency' in behavior
+    assert 'data-v121-inline-input' in behavior
     assert 'data-v121-windows' not in canonical
     assert 'data-v121-save-limits' in behavior
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/windows/limit' not in behavior
