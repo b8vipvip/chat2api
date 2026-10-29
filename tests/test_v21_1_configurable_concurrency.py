@@ -51,7 +51,7 @@ def test_v211_static_contracts() -> None:
     assert '{key: "worker_settings", label: "并发设置"}' in canonical
     assert 'data-chat2api-structural-owner="worker-settings-v152"' in canonical
     assert "data-v121-concurrency" not in canonical
-    assert "data-v121-concurrency" in behavior
+    assert "data-v121-inline-input" in behavior
     assert "data-v121-windows" not in canonical
     assert "data-v121-save-limits" in behavior
     assert '/api/admin/extensions/${encodeURIComponent(clientId)}/capacity-v57' in behavior
