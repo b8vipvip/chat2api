@@ -40,7 +40,7 @@ async function harness(extensions=["xlsx","pptx","json"]) {
   });
   const scope={
     isConnected:true,closest:()=>({}),
-    querySelectorAll(sel){return sel==="button,[role='button']"?buttons:[];},
+    querySelectorAll(sel){return sel==="button,[role='button'],a[href],a[download]"?buttons:[];},
   };
   const clock=class extends Date {static now(){return now;}};
   const context={window,document:{addEventListener(){}},location:{origin,href:origin+"/c/demo"},
