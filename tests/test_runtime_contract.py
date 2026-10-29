@@ -290,3 +290,13 @@ def test_v251_terminal_recovery_migration_keeps_single_request_controller():
         observer = (ROOT / "chrome_extension" / path).read_text("utf-8")
         assert 'type: "chat.completed"' not in observer
         assert 'type: "chat.error"' not in observer
+
+
+def test_v252_native_prompt_uses_one_request_v6_editor_writer():
+    source = (ROOT / "chrome_extension" / "content_request_v6.js").read_text("utf-8")
+    assert "async function setComposerTextBatched(active, element, text)" in source
+    assert "await setComposerTextBatched(active, composer, prompt)" in source
+    assert "await setComposerTextBatched(active, editor, active.prompt)" in source
+    assert "Native editor batch cancelled or detached" in source
+    assert "prompt_batched_native_verified:true" in source
+    assert "function abortedReplyStableThreshold(rendered)" in source
