@@ -1003,6 +1003,11 @@
       .filter(visible).map(block => normalize(block.innerText || block.textContent || ""))
       .filter(text => text.length >= 20 && !transientText(text));
     const raw = normalize(node.innerText || node.textContent || "");
+    // A complete 3–220-character DIV is not a truncated rich document.
+    // Exact normalized equality plus the independent request-local SSE,
+    // fresh heading and toolbar checks are stronger than a 12-char anchor.
+    if (raw.length >= 3 && raw.length <= 220)
+      return content === raw;
     const start = (blocks[0] || raw).slice(0, 12);
     const end = (blocks[blocks.length - 1] || raw).slice(-12);
     return start.length >= 8 && end.length >= 8
