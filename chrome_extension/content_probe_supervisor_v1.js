@@ -118,7 +118,7 @@
     const freshAssistantHeadings=[...scope.querySelectorAll("h4")].filter(node =>
       safeVisible(node) && node.isConnected
       && !active?.baselineRolelessHeadings?.has(node)
-      && /^ChatGPT said\\s*[:：]$/i.test(text(node)));
+      && /^ChatGPT said\s*[:：]$/i.test(text(node)));
     const latestHeading=freshAssistantHeadings.at(-1)||null;
     const lastFreshAction=freshActions.at(-1)||null;
     const follows=(before,after)=>Boolean(before?.isConnected && after?.isConnected
