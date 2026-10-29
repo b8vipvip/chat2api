@@ -47,7 +47,8 @@ from .models import (
 )
 from .prompting import build_prompt
 from .registry import ClientRegistry
-from .telemetry import TelemetryStore
+from .telemetry import TelemetryStore, parse_request_since
+from .runtime_contract import SERVER_RUNTIME_VERSION
 from .worker_probe_store import WorkerProbeStore
 from .test_runs import TestRunStore
 from .playground_truth_v170 import reconcile_playground_runs, compact_playground_outcome, present_playground_run
@@ -540,8 +541,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         model: str | None = Query(default=None),
         key_id: str | None = Query(default=None),
         q: str | None = Query(default=None),
+        since: str | None = Query(default=None, max_length=64),
+        current_version_only: bool = Query(default=False),
     ) -> dict[str, object]:
-        result = telemetry.query(limit=limit, offset=offset, status=status_filter, model=model, key_id=key_id, q=q)
+        try:
+            cutoff = parse_request_since(since)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        result = telemetry.query(
+            limit=limit, offset=offset, status=status_filter, model=model,
+            key_id=key_id, q=q, since=cutoff,
+            current_version_only=current_version_only,
+            server_version=SERVER_RUNTIME_VERSION,
+        )
         return {**result, "summary": telemetry.summary()}
 
     @app.get("/api/admin/requests/{request_id}", dependencies=[Depends(require_admin_key)])

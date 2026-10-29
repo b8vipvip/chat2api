@@ -58,7 +58,7 @@ def test_since_only_export_preserves_single_request_reports_and_status(tmp_path:
                 "response_text": f"answer {ident}",
             }))
         assert client.get("/api/admin/requests/logs/batch?since=2026-10-29T02:39:31Z").status_code == 401
-        assert client.get("/api/admin/requests/logs/batch", headers=headers()).status_code == 422
+        assert client.get("/api/admin/requests/logs/batch", headers=headers()).status_code == 200
 
         # Naive timestamp is Beijing, not the server's or the admin browser's timezone.
         response = batch(client, "2026-10-29 10:39:31")
@@ -90,6 +90,8 @@ def test_since_only_export_preserves_single_request_reports_and_status(tmp_path:
                 assert artifact["playground_diagnostics"] == single["playground_diagnostics"]
                 assert artifact["http_trace"] == single["http_trace"]
                 assert "extension_snapshot" in artifact
+                assert artifact["request"]["final_prompt"] == f"customer prompt {row['request_id']}"
+                assert artifact["request"]["response_text"] == f"answer {row['request_id']}"
                 assert "final_prompt" in artifact["request"]
             readme = bundle.read("README.txt").decode("utf-8")
             assert "起始时间（含）" in readme
@@ -126,7 +128,7 @@ def test_filter_includes_all_retained_newer_rows_and_rejects_invalid_dates(tmp_p
         assert response.headers["x-chat2api-exported-count"] == "25"
         for invalid in ("bad-date", "2026-02-30 10:39:31",
                         "2026-10-29T11:28:29+15:00",
-                        "2026-10-29 25:39:31", "", "2026-10-29"):
+                        "2026-10-29 25:39:31", "2026-10-29"):
             assert batch(client, invalid).status_code == 422, invalid
         assert batch(client, "2030-01-01T00:00:00+08:00").status_code == 404
 
@@ -138,15 +140,15 @@ def test_request_history_exposes_only_pasteable_start_time_control():
     assert "rqBatchExportSince" in source
     assert "rqBatchExportCurrentVersion" in source
     assert "仅合并打包导出当前版本的请求日志" in source
-    assert "if(versionOnly.checked)query.set('current_version_only','true')" in source
+    assert "query.set('current_version_only','true')" in source
     assert "requestHistoryParseExportSince(value)" in source
     assert "since.type='text'" in source
     assert "since.type='datetime-local'" not in source
     assert "rqBatchExportLimit" not in source
-    assert "else query.set('since',parsed.iso)" in source
-    assert "if(!versionOnly.checked && !parsed)" in source
-    assert "since.disabled=versionOnly.checked" in source
-    assert "const query=new URLSearchParams()" in source
+    assert "if(parsed)query.set('since',parsed.iso)" in source
+    assert "if(hasTime && !parsed)" in source
+    assert "since.disabled=versionOnly.checked" not in source
+    assert "const query=requestHistoryFilterParams()" in source
     assert "合并打包导出请求日志" in source
     assert "requestHistoryDownload(" in source
     assert "rqBatchExportTimeHint" not in source
@@ -205,8 +207,8 @@ def test_batch_export_current_version_is_creation_version_and_legacy_is_excluded
                            params={"since": "2026-10-29 10:39:32",
                                    "current_version_only": "true"},
                            headers=headers())
-        # Current-version mode intentionally ignores a time filter.
-        assert other.status_code == 200
+        # Version and a provided start timestamp are now intersected.
+        assert other.status_code == 404
 
 def test_current_version_without_since_includes_all_retained_current_rows(tmp_path: Path):
     with TestClient(app_v8(tmp_path)) as client:
@@ -222,24 +224,76 @@ def test_current_version_without_since_includes_all_retained_current_rows(tmp_pa
                 row = store.get(name)
                 row["request_server_version"] = version
                 store._remember(row)
-        # The active checkbox has no time requirement, even if an old
-        # browser sends a stale/invalid since value.
-        for params in ({"current_version_only": "true"},
-                       {"current_version_only": "true", "since": "bad-date"},
-                       {"current_version_only": "true", "since": "2030-01-01T00:00:00Z"}):
+        response = client.get("/api/admin/requests/logs/batch",
+                              params={"current_version_only": "true"},
+                              headers=headers())
+        assert response.status_code == 200, response.text
+        assert response.headers["x-chat2api-exported-count"] == "2"
+        with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
+            manifest = json.loads(bundle.read("index.json"))
+            assert manifest["selection_mode"] == "current_version"
+            assert manifest["since"] is None
+            assert manifest["time_filter_field"] is None
+        for since, expected in (("bad-date", 422), ("2030-01-01T00:00:00Z", 404)):
             response = client.get("/api/admin/requests/logs/batch",
-                                  params=params, headers=headers())
-            assert response.status_code == 200, response.text
-            assert response.headers["x-chat2api-exported-count"] == "2"
-            with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
-                manifest = json.loads(bundle.read("index.json"))
-                assert manifest["selection_mode"] == "current_version"
-                assert manifest["since"] is None
-                assert manifest["time_filter_field"] is None
-                assert {row["request_id"] for row in manifest["requests"]} == {
-                    "req_v1", "req_v2"}
-        # Without current version, the explicit timestamp is still mandatory.
+                                  params={"current_version_only": "true", "since": since},
+                                  headers=headers())
+            assert response.status_code == expected
+        # Without a timestamp and without a version scope, export all retained rows.
         assert client.get("/api/admin/requests/logs/batch",
-                          headers=headers()).status_code == 422
+                          headers=headers()).headers["x-chat2api-exported-count"] == "3"
 
 
+
+
+def test_filter_parity_between_history_table_and_full_retained_zip(tmp_path: Path):
+    """Export all matched rows, not merely the first 100 displayed rows."""
+    with TestClient(app_v8(tmp_path)) as client:
+        store = client.app.state.telemetry
+        for i in range(130):
+            row = {
+                "request_id": f"req_match_{i:03d}",
+                "recorded_at": "2026-10-29T17:28:00+08:00",
+                "api_key_name": "mv3c", "status": "completed",
+                "requested_model": "gpt-6",
+            }
+            asyncio.run(store.upsert(row))
+        for ident, time, version, key_name in (
+            ("req_older", "2026-10-29T17:27:48+08:00", SERVER_RUNTIME_VERSION, "mv3c"),
+            ("req_other_key", "2026-10-29T17:28:00+08:00", SERVER_RUNTIME_VERSION, "another"),
+            ("req_other_version", "2026-10-29T17:28:00+08:00", "0.22.248", "mv3c"),
+        ):
+            asyncio.run(store.upsert({
+                "request_id": ident, "recorded_at": time,
+                "status": "completed", "requested_model": "gpt-6",
+                "api_key_name": key_name,
+            }))
+            if version != SERVER_RUNTIME_VERSION:
+                row = store.get(ident)
+                row["request_server_version"] = version
+                store._remember(row)
+        filters = {
+            "q": "mv3c", "status": "completed", "model": "gpt-6",
+            "current_version_only": "true", "since": "2026-10-29 17:27:49",
+        }
+        listed = client.get("/api/admin/requests",
+                            params={**filters, "limit": 100}, headers=headers())
+        assert listed.status_code == 200, listed.text
+        assert listed.json()["total"] == 130
+        assert len(listed.json()["data"]) == 100
+
+        exported = client.get("/api/admin/requests/logs/batch",
+                              params=filters, headers=headers())
+        assert exported.status_code == 200, exported.text
+        assert exported.headers["x-chat2api-exported-count"] == "130"
+        with zipfile.ZipFile(io.BytesIO(exported.content)) as bundle:
+            manifest = json.loads(bundle.read("index.json"))
+            assert manifest["exported_count"] == 130
+            assert manifest["current_version_only"] is True
+            assert manifest["time_filter_field"] == "recorded_at"
+            assert manifest["filters"] == {
+                "q": "mv3c", "status": "completed", "model": "gpt-6",
+            }
+            assert {v["request_id"] for v in manifest["requests"]} == {
+                f"req_match_{i:03d}" for i in range(130)
+            }

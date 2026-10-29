@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
+from datetime import datetime, timedelta, timezone
 from collections import deque
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,44 @@ def _normalize_record_time(row: dict[str, Any]) -> dict[str, Any]:
         if normalized.get(key):
             normalized[key] = to_beijing_iso(normalized[key]) or normalized[key]
     return normalized
+
+
+
+def parse_request_since(raw: str | None) -> datetime | None:
+    """One strict timestamp contract for history list and ZIP export.
+
+    A missing value means no time filter. Zoned timestamps honor their own
+    offsets; naive values mean Beijing time, matching the admin UI.
+    """
+    source = str(raw or "").strip()
+    if not source:
+        return None
+    if not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}"
+        r"(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:?\d{2})?",
+        source, flags=re.IGNORECASE,
+    ):
+        raise ValueError("Invalid since timestamp format")
+    try:
+        parsed = datetime.fromisoformat(source.replace("Z", "+00:00").replace("z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone(timedelta(hours=8)))
+        offset = parsed.utcoffset()
+        if offset is None or abs(offset.total_seconds()) > 14 * 3600:
+            raise ValueError("Invalid timezone offset")
+        return parsed.astimezone(timezone.utc)
+    except (ValueError, OverflowError) as exc:
+        raise ValueError("Invalid since timestamp or timezone") from exc
+
+
+def request_record_created_after(row: dict[str, Any], cutoff: datetime) -> bool:
+    try:
+        recorded = datetime.fromisoformat(str(row.get("recorded_at") or "").replace("Z", "+00:00"))
+        if recorded.tzinfo is None:
+            recorded = recorded.replace(tzinfo=timezone(timedelta(hours=8)))
+        return recorded.astimezone(timezone.utc) >= cutoff
+    except (ValueError, OverflowError, TypeError):
+        return False
 
 
 class TelemetryStore:
@@ -124,6 +164,9 @@ class TelemetryStore:
         model: str | None = None,
         key_id: str | None = None,
         q: str | None = None,
+        since: datetime | None = None,
+        current_version_only: bool = False,
+        server_version: str | None = None,
     ) -> dict[str, Any]:
         # Query consumers are allowed to decorate/redact list rows. Return copies
         # so list-only redaction (final_prompt/response_text) can never mutate the
@@ -135,6 +178,12 @@ class TelemetryStore:
         search = (q or "").strip().lower()
 
         def matches(row: dict[str, Any]) -> bool:
+            if current_version_only and (
+                not server_version or str(row.get("request_server_version") or "") != server_version
+            ):
+                return False
+            if since is not None and not request_record_created_after(row, since):
+                return False
             if status_value and str(row.get("status") or "").lower() != status_value:
                 return False
             requested_model = str(row.get("requested_model") or "")
@@ -162,7 +211,7 @@ class TelemetryStore:
             return True
 
         filtered = [row for row in rows if matches(row)]
-        safe_limit = max(1, min(int(limit), 200))
+        safe_limit = max(1, min(int(limit), self.items.maxlen or 500))
         safe_offset = max(0, int(offset))
         return {
             "data": filtered[safe_offset : safe_offset + safe_limit],

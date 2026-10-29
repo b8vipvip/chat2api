@@ -202,6 +202,18 @@ function requestHistoryParseExportSince(value){
   if(!Number.isFinite(instant.getTime()))return null;
   return {iso:instant.toISOString(),assumedBeijing:!zone};
 }
+function requestHistoryFilterParams(){
+  const query=new URLSearchParams();
+  const search=document.getElementById('rqSearch')?.value.trim()||'';
+  const state=document.getElementById('rqStatus')?.value||'';
+  const model=document.getElementById('rqModel')?.value.trim()||'';
+  if(search)query.set('q',search);
+  if(state)query.set('status',state);
+  if(model)query.set('model',model);
+  if(document.getElementById('rqBatchExportCurrentVersion')?.checked)
+    query.set('current_version_only','true');
+  return query;
+}
 function requestHistoryEnsureControls(){
   requestHistoryEnsureConversationModal();
   const section=document.getElementById('view-requests'),toolbar=section?.querySelector('.toolbar');
@@ -209,8 +221,6 @@ function requestHistoryEnsureControls(){
     const group=document.createElement('div');
     group.id='rqBatchExportLogs';
     group.style.cssText='display:inline-flex;align-items:center;gap:7px;flex-wrap:wrap';
-    const label=document.createElement('label');
-    label.textContent='从时间（含）';label.htmlFor='rqBatchExportSince';
     const since=document.createElement('input');
     since.id='rqBatchExportSince';
     since.type='text';
@@ -221,6 +231,28 @@ function requestHistoryEnsureControls(){
     since.style.cssText='width:258px;max-width:calc(100vw - 48px);box-sizing:border-box;padding:7px 8px;font-variant-numeric:tabular-nums';
     const versionLabel=document.createElement('label');
     versionLabel.style.cssText='display:inline-flex;align-items:center;gap:5px;cursor:pointer;white-space:nowrap';
+    // Keep text paste/offset support while a native date-time picker opens
+    // when the input is clicked. The picker uses Beijing wall-clock time.
+    const timeBox=document.createElement('span');
+    timeBox.style.cssText='position:relative;display:inline-flex;align-items:center';
+    const picker=document.createElement('input');
+    picker.type='datetime-local';picker.step='1';
+    picker.setAttribute('aria-label','选择起始日期和时间（北京时间）');
+    picker.title='选择北京时间；也可直接在左侧输入框粘贴带时区的时间';
+    picker.style.cssText='position:absolute;right:4px;top:calc(50% - 10px);width:20px;height:20px;opacity:0.02;cursor:pointer';
+    const openPicker=()=>{
+      const parsed=requestHistoryParseExportSince(since.value);
+      if(parsed){
+        const beijing=new Date(Date.parse(parsed.iso)+8*3600000);
+        picker.value=beijing.toISOString().slice(0,19);
+      }
+      try{picker.showPicker?.();}catch(_){}
+    };
+    since.addEventListener('click',openPicker);
+    picker.addEventListener('change',()=>{
+      if(picker.value)since.value=picker.value.replace('T',' ');
+    });
+    timeBox.append(since,picker);
     const versionOnly=document.createElement('input');
     versionOnly.id='rqBatchExportCurrentVersion';
     versionOnly.type='checkbox';
@@ -229,30 +261,23 @@ function requestHistoryEnsureControls(){
     versionOnly.setAttribute('aria-label','仅合并打包导出当前版本的请求日志');
     versionOnly.title='仅包含在当前服务端版本创建的请求；缺少可靠创建版本的旧请求不会被归入';
     versionLabel.append(versionOnly,document.createTextNode('当前版本'));
-    const updateTimeState=()=>{
-      since.disabled=versionOnly.checked;
-      since.placeholder=versionOnly.checked?'当前版本全部留存请求':'2026-10-29 10:39:31';
-      label.style.opacity=versionOnly.checked?'0.55':'1';
-    };
-    versionOnly.addEventListener('change',updateTimeState);
-    updateTimeState();
+    // Time and version are independent intersecting predicates. Never disable
+    // a provided time merely because the version checkbox is checked.
     const button=document.createElement('button');button.type='button';
     button.className='action';button.textContent='合并打包导出请求日志';
     button.title='勾选当前版本导出该版本全部留存请求；不勾选时按输入起始时间导出（最多 500 条）';
     button.addEventListener('click',async()=>{
-      // Current-version export intentionally ignores any prior time input.
-      // For all-version export a valid start instant remains mandatory.
-      const parsed=versionOnly.checked?null:requestHistoryParseExportSince(since.value);
-      if(!versionOnly.checked && !parsed){
+      const hasTime=Boolean(since.value.trim());
+      const parsed=hasTime?requestHistoryParseExportSince(since.value):null;
+      if(hasTime && !parsed){
         status('请输入有效起始时间，例如 2026-10-29 10:39:31 或 2026-10-29T11:28:29+08:00','bad');
         since.focus();return;
       }
-      const query=new URLSearchParams();
-      if(versionOnly.checked)query.set('current_version_only','true');
-      else query.set('since',parsed.iso);
+      const query=requestHistoryFilterParams();
+      if(parsed)query.set('since',parsed.iso);
       button.disabled=true;const oldLabel=button.textContent;button.textContent='正在打包…';
       try{
-        status(versionOnly.checked?'正在导出当前版本所有留存请求的完整日志…':'正在导出指定时刻起全部留存请求的完整日志…');
+        status('正在打包当前筛选条件下的全部留存请求日志…');
         await requestHistoryDownload(
           '/api/admin/requests/logs/batch?'+query.toString(),
           'chat2api-request-logs-since.zip');
@@ -260,12 +285,16 @@ function requestHistoryEnsureControls(){
       }catch(error){status(String(error?.message||error),'bad');}
       finally{button.disabled=false;button.textContent=oldLabel;}
     });
-    group.append(label,since,versionLabel,button);
+    // Keep one filter button, immediately after the time box.
+    const filterButton=document.getElementById('rqGo');
+    group.append(versionLabel,timeBox);
+    if(filterButton)group.appendChild(filterButton);
+    group.appendChild(button);
     toolbar.appendChild(group);
   }
   if(section&&!section.querySelector('[data-request-history-diagnostic-hint]')){
     const hint=document.createElement('div');hint.dataset.requestHistoryDiagnosticHint='1';hint.className='footer';
-    hint.textContent='排障建议：单条请求点“下载日志”；需要从指定起始时间（含）导出全部仍留存的请求时点“合并打包导出请求日志”；勾选“当前版本”无需输入时间，将导出所有创建于当前服务端版本的留存请求（包含探针及测试诊断）；请求日志可能包含已保存的完整提示词与回复，分享前请核对并脱敏。';
+    hint.textContent='列表筛选与合并打包使用同一组条件（搜索、状态、模型、起始时间、当前版本），未填时间则不限制时间；勾选当前版本并填写时间时两者取交集。单条请求仍可下载完整日志；所有结果仅限当前仍留存记录，分享前请核对并脱敏。';
     section.appendChild(hint);
   }
 }
@@ -280,9 +309,15 @@ async function loadRequests(){
     queuedOption.value='queued';queuedOption.textContent='排队中';
     statusFilter.appendChild(queuedOption);
   }
-  const search=$('rqSearch')?.value.trim()||'',st=$('rqStatus')?.value||'',m=$('rqModel')?.value.trim()||'';
-  const qs=new URLSearchParams({limit:'100'});
-  if(search)qs.set('q',search);if(st)qs.set('status',st);if(m)qs.set('model',m);
+  const qs=requestHistoryFilterParams();
+  const timeText=document.getElementById('rqBatchExportSince')?.value.trim()||'';
+  const parsed=timeText?requestHistoryParseExportSince(timeText):null;
+  if(timeText&&!parsed){
+    status('起始时间无效：请使用 2026-10-29 10:39:31 或带时区的 ISO 格式','bad');
+    return;
+  }
+  if(parsed)qs.set('since',parsed.iso);
+  qs.set('limit','100');
   body.replaceChildren();
   const loading=document.createElement('tr'),loadingCell=document.createElement('td');
   loadingCell.colSpan=13;loadingCell.className='muted';loadingCell.textContent='正在读取请求记录…';
