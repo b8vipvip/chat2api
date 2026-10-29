@@ -249,3 +249,17 @@ def test_v248_compact_div_uses_original_single_terminal_controller():
     assert "verifiedRolelessRichAbortCandidate(active, current)" in source
     assert "abortedRenderedCandidateSince >= 8000" in source
     assert 'type: "chat.completed", request_id: active.requestId' in source
+
+def test_v249_native_file_candidate_probe_is_bounded_and_not_a_terminal_owner():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    main = (root / "chrome_extension/native_file_main_v210.js").read_text(encoding="utf-8")
+    isolated = (root / "chrome_extension/content_native_file_v210.js").read_text(encoding="utf-8")
+    controller = (root / "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
+    assert "candidateExclusionEvidence(scope)" in isolated
+    assert "media_native_file_candidate_exclusion_counts:" in controller
+    assert "source.slice(0,48)" not in isolated  # no source-text logging
+    assert 'const nodes=[...scope.querySelectorAll(' in isolated
+    assert ".slice(0,48)" in isolated
+    assert 'type: "chat.completed"' not in main
+    assert 'type: "chat.completed"' not in isolated
