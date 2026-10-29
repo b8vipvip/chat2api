@@ -217,3 +217,13 @@ def test_v245_short_reply_is_owned_by_single_request_controller():
     assert 'abortedRenderedCandidateSince >= 8000' in source
     assert source.count('type: "chat.completed", request_id: active.requestId') >= 1
     assert 'baselineRolelessHeadings' in source
+
+def test_v246_roleless_rich_reply_preserves_one_terminal_controller():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parents[1] /
+           "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
+    assert 'reason:"fresh-roleless-rich-answer-v246"' in src
+    assert "verifiedRolelessRichAbortCandidate(active, current)" in src
+    assert "current.latest === current.rolelessHeading.nextElementSibling" in src
+    assert "abortedRenderedCandidateSince >= 8000" in src
+    assert 'response_terminal_source: rendered.rolelessRichVerified' in src
