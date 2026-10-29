@@ -222,7 +222,8 @@ def test_v246_roleless_rich_reply_preserves_one_terminal_controller():
     from pathlib import Path
     src = (Path(__file__).resolve().parents[1] /
            "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
-    assert 'reason:"fresh-roleless-rich-answer-v246"' in src
+    assert '"fresh-roleless-rich-answer-v246"' in src
+    assert '"fresh-roleless-compact-div-v248"' in src
     assert "verifiedRolelessRichAbortCandidate(active, current)" in src
     assert "current.latest === current.rolelessHeading.nextElementSibling" in src
     assert "abortedRenderedCandidateSince >= 8000" in src
