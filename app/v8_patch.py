@@ -6,7 +6,7 @@ import secrets
 import re
 import tempfile
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -138,44 +138,46 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
 
     @app.get("/api/admin/requests/logs/batch", dependencies=[Depends(require_admin_key)])
     async def download_recent_request_logs(
-        limit: int = Query(default=20, ge=1, le=500),
-        since: str | None = Query(default=None, max_length=64),
+        since: str = Query(..., min_length=1, max_length=64),
     ) -> StreamingResponse:
-        # Reuse the exact single-request report builder and its Worker probe /
-        # Playground evidence; batch export is read-only, not a terminal owner.
-        # Telemetry is bounded to 500 retained distinct requests, and recent()
-        # uses the same newest-first ordering as the request-history UI.
-        cutoff: datetime | None = None
-        if since is not None:
-            # Time-filtered export scans all retained rows, then applies the
-            # upper bound; filtering an already-limited latest-N list would
-            # silently drop matching earlier requests.
-            try:
-                cutoff = datetime.fromisoformat(since.replace("Z", "+00:00"))
-            except (ValueError, OverflowError):
-                raise HTTPException(status_code=422, detail="since must be an ISO-8601 date/time with timezone")
-            if cutoff.tzinfo is None or cutoff.utcoffset() is None:
-                raise HTTPException(status_code=422, detail="since requires a timezone (Z or ±HH:MM)")
+        # The timestamp is the ONLY batch selection control. Parse both
+        # "2026-10-29 10:39:31" and "2026-10-29T11:28:29+08:00".
+        # Unzoned input uses the same Beijing timezone as request history;
+        # never guess using the cloud server's own local timezone.
+        raw_since = since.strip()
+        if not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}"
+            r"(?::\d{2}(?:\.\d{1,6})?)?(?:Z|[+-]\d{2}:?\d{2})?",
+            raw_since, flags=re.IGNORECASE,
+        ):
+            raise HTTPException(status_code=422, detail="Invalid since timestamp format")
+        try:
+            cutoff = datetime.fromisoformat(raw_since.replace("Z", "+00:00").replace("z", "+00:00"))
+            if cutoff.tzinfo is None:
+                cutoff = cutoff.replace(tzinfo=timezone(timedelta(hours=8)))
+            else:
+                offset = cutoff.utcoffset()
+                if offset is None or abs(offset.total_seconds()) > 14 * 3600:
+                    raise ValueError("invalid timezone offset")
             cutoff = cutoff.astimezone(timezone.utc)
+        except (ValueError, OverflowError):
+            raise HTTPException(status_code=422, detail="Invalid since calendar date or timezone")
 
-        retained = telemetry.recent(500 if cutoff is not None else limit)
-        if cutoff is not None:
-            selected = []
-            for row in retained:
-                raw = row.get("recorded_at")
-                try:
-                    created = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-                    if created.tzinfo is None:
-                        created = created.replace(tzinfo=timezone.utc)
-                    if created.astimezone(timezone.utc) >= cutoff:
-                        selected.append(row)
-                except (ValueError, OverflowError, TypeError):
-                    continue
-            selected = selected[:limit]
-        else:
-            selected = retained
+        # Scan EVERY currently retained distinct request. Never apply a
+        # newest-N slice before filtering or silently truncate the export.
+        selected = []
+        for row in telemetry.recent(telemetry.items.maxlen or 500):
+            created_raw = row.get("recorded_at")
+            try:
+                created = datetime.fromisoformat(str(created_raw).replace("Z", "+00:00"))
+                if created.tzinfo is None:
+                    created = created.replace(tzinfo=timezone(timedelta(hours=8)))
+                if created.astimezone(timezone.utc) >= cutoff:
+                    selected.append(row)
+            except (ValueError, OverflowError, TypeError):
+                continue
         if not selected:
-            raise HTTPException(status_code=404, detail="No retained request records match the selected time range")
+            raise HTTPException(status_code=404, detail="No retained request records match the selected start time")
 
         test_index = request_test_index(getattr(app.state, "test_runs", None))
         extension_snapshot = _safe_client_rows(registry)
@@ -200,7 +202,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                     if plain_bytes > max_plain_bytes:
                         raise HTTPException(
                             status_code=413,
-                            detail="Combined request logs exceed 160 MiB; choose fewer recent requests",
+                            detail="Combined request logs exceed 160 MiB; choose a later start time",
                         )
                     safe_id = request_id if re.fullmatch(r"[A-Za-z0-9_-]{1,100}", request_id) else f"record_{index:04d}"
                     filename = f"requests/{index:04d}-chat2api-request-{safe_id}.json"
@@ -216,14 +218,14 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                     raise HTTPException(status_code=404, detail="No named request records to export")
                 manifest = {
                     "report_type": "chat2api-recent-request-log-bundle",
-                    "report_version": 1,
+                    "report_version": 2,
+                    "selection_mode": "since",
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                     "server_version": SERVER_RUNTIME_VERSION,
-                    "requested_limit": limit,
-                    "since": cutoff.isoformat() if cutoff else None,
-                    "time_filter_field": "recorded_at" if cutoff else None,
+                    "since": cutoff.isoformat(),
+                    "time_filter_field": "recorded_at",
                     "exported_count": len(exported),
-                    "retention_note": "Only currently retained request records can be included.",
+                    "retention_note": "Includes all matching currently retained requests (currently up to 500 distinct records); earlier history is not available.",
                     "selection_order": "request-history newest first, by last record update",
                     "single_request_log_route": "/api/admin/requests/{request_id}/log",
                     "contains": "The same per-request JSON, HTTP trace, Worker probes, and Playground diagnostics as single-log downloads.",
@@ -233,9 +235,9 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                 archive.writestr("index.json", _json_bytes(manifest))
                 archive.writestr(
                     "README.txt",
-                    ("chat2api — 最近请求日志合并包\n"
-                     f"导出数量：{len(exported)} / 最多 {limit} 条\n"
-                     f"起始时间（含）：{cutoff.isoformat() if cutoff else '未指定'}\n"
+                    ("chat2api — 从指定时间开始的请求日志合并包\n"
+                     f"导出数量：{len(exported)} 条（仅限仍留存的请求记录）\n"
+                     f"起始时间（含）：{cutoff.isoformat()}\n"
                      "requests/ 目录中每条 JSON 对应一次请求，结构与请求记录列表中的“下载日志”一致。\n"
                      "index.json 按页面最新记录顺序给出 ID、状态和文件名；打包只读，不修改请求终态。\n"
                      "注意：日志可能包含完整提示词、生成回复和诊断证据，分享前请检查并脱敏。\n").encode("utf-8"),
@@ -257,7 +259,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             chunks(),
             media_type="application/zip",
             headers={
-                "Content-Disposition": f'attachment; filename="chat2api-request-logs-{"since" if cutoff else "latest"}-{len(exported)}-{stamp}.zip"',
+                "Content-Disposition": f'attachment; filename="chat2api-request-logs-since-{len(exported)}-{stamp}.zip"',
                 "Cache-Control": "no-store",
                 "X-Chat2API-Exported-Count": str(len(exported)),
             },
