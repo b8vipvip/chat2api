@@ -810,6 +810,21 @@
 
   // One candidate path within request-v6, never an additional terminal owner.
   // New H4 User/Assistant siblings are the only trusted roleless short boundary.
+  // SSE clone tails may be truncated or lose a short interior span.
+  // This is only a network cross-check AFTER fresh request-local role labels,
+  // DOM baseline and a new completion toolbar have established the boundary.
+  function shortRolelessSourceOverlap(answer, observed) {
+    const text = normalize(String(answer || ""));
+    const source = normalize(String(observed || ""));
+    if (source.length < 3 || !text) return false;
+    if (text.includes(source)) return true;
+    const width = source.length >= 12 ? 8 : source.length;
+    for (let i=0; i + width<=source.length; i+=1) {
+      if (text.includes(source.slice(i,i+width))) return true;
+    }
+    return false;
+  }
+
   // v245: Short assistant answers live in the same conversation root as the
   // H4 role labels, but the heading and the answer P are often in *different*
   // nested wrappers. Do not require nextElementSibling/same parent. Anchor
@@ -853,7 +868,7 @@
         const normalized = normalize(text);
         if (raw.length < 3 || raw.length > 220
             || normalized.length < 3 || normalized.length > 220
-            || !normalized.includes(source)
+            || !shortRolelessSourceOverlap(normalized, source)
             || transientText(normalized) || internalToolPayload(normalized)
             || active.baselineRenderedText.get(node) === raw.slice(-5000)
             || (active.promptNormalized && normalized.length > 20
@@ -2206,7 +2221,9 @@
                 && (rendered.shortTextVerified
                   ? finalText.length >= (rendered.rolelessHeaderVerified ? 3 : 8)
                     && finalText.length <= 220
-                    && normalize(finalText).includes(normalize(String(active.networkObservedText || "")).slice(0, 8))
+                    && (rendered.rolelessHeaderVerified
+                      ? shortRolelessSourceOverlap(finalText, active.networkObservedText)
+                      : normalize(finalText).includes(normalize(String(active.networkObservedText || "")).slice(0, 8)))
                   : finalText.length >= 240)
                 && finalText.length >= rendered.text.length * 0.85
                 && !internalToolPayload(finalText)
@@ -2232,7 +2249,9 @@
                   && (!rendered.shortTextVerified || (
                     normalize(String(active.networkObservedText || "")).length >=
                       (rendered.rolelessHeaderVerified ? 3 : 8)
-                    && normalize(finalText).includes(normalize(String(active.networkObservedText || "")).slice(0, 8))
+                    && (rendered.rolelessHeaderVerified
+                      ? shortRolelessSourceOverlap(finalText, active.networkObservedText)
+                      : normalize(finalText).includes(normalize(String(active.networkObservedText || "")).slice(0, 8)))
                   ))) {
                 responseStarted = await ensureResponseStarted(active, responseStarted,
                   "verified-aborted-stream-rendered-dom-v200");
