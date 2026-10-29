@@ -82,7 +82,8 @@ test("The 1600 structural scan limit remains a refusal, not a truncated success"
 });
 test("The sole terminal owner still revalidates full rich text and 8s stability",()=>{
   assert.ok(source.includes("response_integrity_full_block_count: rendered.coverage.nodes.length"));
-  assert.ok(source.includes("Date.now() - abortedRenderedCandidateSince >= 8000"));
+  assert.ok(source.includes("Date.now() - abortedRenderedCandidateSince >= abortedReplyStableThreshold(rendered)"))
+  assert.ok(source.includes("return rendered?.shortTextVerified ? 4500 : 8000"));
   assert.ok(source.includes("rich.captureFinalMarkdown(wrapper)"));
   assert.ok(source.includes("if (coverage.scan_overflow || !coverage.nodes?.length"));
 });
