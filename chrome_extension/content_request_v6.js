@@ -924,6 +924,89 @@
         candidate_chars:current.text.length,independent_count:0,scan_structural_node_count:1}};
   }
 
+  // v246: The redesigned roleless page puts a COMPLETE rich assistant DIV
+  // immediately after its freshly-rendered "ChatGPT said:" H4. The old
+  // generic candidate can pick a 600-character descendant from a 6K answer,
+  // while the DOM-boundary scanner sees unrelated prompt/history blocks.
+  // Capture this one whole newly created response DIV, never main/page text.
+  function rolelessRichReplyCandidate(active) {
+    if (!active?.networkStreamSeen || !active?.submitStartedAt
+        || Number(active.networkObservedAt || 0) < active.submitStartedAt
+        || !active.baselineRolelessHeadings || !active.baselineRenderedText
+        || !active.baselineFinishActions) return null;
+    const headings = [...document.querySelectorAll("main h4,[role='main'] h4,#thread h4")]
+      .filter(visible);
+    const fresh = headings.filter(node => !active.baselineRolelessHeadings.has(node));
+    const isUser = node => /^You said\s*[:：]$/i.test(normalize(node.innerText || node.textContent || ""));
+    const isAssistant = node => /^ChatGPT said\s*[:：]$/i.test(normalize(node.innerText || node.textContent || ""));
+    for (const heading of [...fresh].reverse()) {
+      if (!isAssistant(heading) || !heading.isConnected) continue;
+      const root = heading.closest?.("main,[role='main'],#thread");
+      const user = [...fresh].reverse().find(node => isUser(node)
+        && node.isConnected && node.closest?.("main,[role='main'],#thread") === root
+        && turnFollows(node, heading));
+      if (!root || !user) continue;
+      const node = heading.nextElementSibling;
+      if (!node || !node.isConnected || !visible(node)
+          || String(node.tagName || "").toUpperCase() !== "DIV"
+          || !turnFollows(heading,node)
+          || node.closest?.("form,[contenteditable='true'],nav,aside,header,footer,[role='dialog']")
+          || node.querySelector?.("[data-message-author-role='user'],[data-testid='user-message']"))
+        continue;
+      // Never take just a first response component; the next sibling must
+      // be a status heading or toolbar rather than another content component.
+      const next = node.nextElementSibling;
+      if (next && !/^(H[1-6]|BUTTON)$/i.test(String(next.tagName || ""))
+          && !next.querySelector?.("button[data-testid*='copy'],button[aria-label*='Copy']"))
+        continue;
+      const raw = normalize(node.innerText || node.textContent || "");
+      const promptStart = String(active.promptNormalized || "").slice(0, 100);
+      const promptEnd = String(active.promptNormalized || "").slice(-100);
+      if (raw.length < 240 || raw.length > 85000 || transientText(raw)
+          || internalToolPayload(raw)
+          || (promptStart && raw.includes(promptStart))
+          || (promptEnd && raw.includes(promptEnd))
+          || active.baselineRenderedText.get(node) === raw.slice(-5000))
+        continue;
+      return {nodes:[node],latest:node,turn:node,identity:"fresh-roleless-rich",
+        text:raw,isNew:true,reason:"fresh-roleless-rich-answer-v246",
+        rolelessHeading:heading,rolelessUserHeading:user,rolelessRoot:root};
+    }
+    return null;
+  }
+
+  function verifiedRolelessRichAbortCandidate(active, current) {
+    if (current?.reason !== "fresh-roleless-rich-answer-v246"
+        || !current.rolelessHeading?.isConnected
+        || !current.rolelessUserHeading?.isConnected
+        || !current.latest?.isConnected || !current.rolelessRoot
+        || active?.baselineRolelessHeadings?.has(current.rolelessHeading)
+        || active?.baselineRolelessHeadings?.has(current.rolelessUserHeading)
+        || !turnFollows(current.rolelessUserHeading,current.rolelessHeading)
+        || !turnFollows(current.rolelessHeading,current.latest)
+        || current.latest !== current.rolelessHeading.nextElementSibling
+        || current.latest.closest?.("main,[role='main'],#thread") !== current.rolelessRoot
+        || !active?.baselineFinishActions || promptStillPresent(active)
+        || upstreamStillWorking()) return null;
+    const headings = [...document.querySelectorAll("main h4,[role='main'] h4,#thread h4")];
+    const nextUser = headings.find(node => !active.baselineRolelessHeadings.has(node)
+      && /^You said\s*[:：]$/i.test(normalize(node.innerText || node.textContent || ""))
+      && turnFollows(current.latest,node));
+    const fresh = responseFinishActions().filter(button =>
+      !active.baselineFinishActions.has(button) && button.isConnected
+      && button.closest?.("main,[role='main'],#thread") === current.rolelessRoot
+      && turnFollows(current.latest,button)
+      && (!nextUser || turnFollows(button,nextUser))
+      && !button.closest?.("pre,code,[data-testid*='code-block']"));
+    if (!fresh.length) return null;
+    // Full response container, not 211 unrelated changed blocks in main.
+    return {node:current.latest,text:current.text,reason:current.reason,
+      rolelessRichVerified:true,replyScope:current.rolelessRoot,
+      finishAction:fresh[0],finishActionCount:fresh.length,
+      coverage:{nodes:[current.latest],candidate_chars:current.text.length,
+        independent_count:0,scan_structural_node_count:1}};
+  }
+
   // #535: bounded, privacy-safe diagnostics for short, roleless UI replies.
   // This is READ-ONLY. It must never decide a terminal, reschedule a request,
   // or publish text: only request-v6 owns chat.completed/chat.error.
@@ -1070,6 +1153,7 @@
   function currentAssistantState(active) {
     const nodes = assistantNodes();
     if (!nodes.length) return rolelessShortReplyCandidate(active)
+      || rolelessRichReplyCandidate(active)
       || renderedNetworkCorrelatedTurn(active)
       || renderedCurrentRequestCandidate(active)
       || { nodes, latest: null, turn: null, identity: "", text: "", isNew: false, reason: "none" };
@@ -1113,6 +1197,7 @@
     // current-request end evidence before issuing chat.completed.
     if (!isNew) {
       const fallback = rolelessShortReplyCandidate(active)
+        || rolelessRichReplyCandidate(active)
         || renderedNetworkCorrelatedTurn(active)
         || renderedCurrentRequestCandidate(active);
       if (fallback?.isNew) return {...fallback,
@@ -2198,7 +2283,8 @@
           && Date.now() - active.networkTerminalTransportErrorAt >= 5000
           && active.networkObservedAt && Date.now() - active.networkObservedAt >= 10000
           && !generating && !upstreamStillWorking()) {
-        const rendered = verifiedRenderedAbortCandidate(active, current)
+        const rendered = verifiedRolelessRichAbortCandidate(active, current)
+          || verifiedRenderedAbortCandidate(active, current)
           || verifiedRolelessShortAbortCandidate(active, current)
           || verifiedShortAbortCandidate(active);
         if (rendered && Date.now() - lastAbortedRenderedCaptureAt >= 750) {
@@ -2233,7 +2319,9 @@
                       ? shortRolelessSourceOverlap(finalText, active.networkObservedText)
                       : normalize(finalText).includes(normalize(String(active.networkObservedText || "")).slice(0, 8)))
                   : finalText.length >= 240)
-                && finalText.length >= rendered.text.length * 0.85
+                && (rendered.rolelessRichVerified
+                  ? finalText.length >= rendered.text.length * 0.4
+                  : finalText.length >= rendered.text.length * 0.85)
                 && !internalToolPayload(finalText)
                 && !promptStillPresent(active) && !upstreamStillWorking()) {
               if (finalText !== abortedRenderedCandidate) {
@@ -2243,7 +2331,15 @@
                   && Date.now() - Number(active.networkObservedAt || 0) >= 12000
                   && rendered.finishAction?.isConnected
                   && responseFinishActions().includes(rendered.finishAction)
-                  && (rendered.rolelessHeaderVerified
+                  && (rendered.rolelessRichVerified
+                    ? (current.rolelessHeading?.isConnected
+                      && current.rolelessUserHeading?.isConnected
+                      && current.latest?.isConnected
+                      && current.latest === current.rolelessHeading.nextElementSibling
+                      && current.rolelessRoot === rendered.replyScope
+                      && turnFollows(current.rolelessUserHeading,current.rolelessHeading)
+                      && turnFollows(current.rolelessHeading,current.latest))
+                    : rendered.rolelessHeaderVerified
                     ? (current.rolelessHeading?.isConnected
                       && current.rolelessUserHeading?.isConnected
                       && current.latest?.isConnected
@@ -2266,13 +2362,17 @@
                 await emit({
                   type: "chat.completed", request_id: active.requestId, text: finalText,
                   diagnostics: {
-                    response_terminal_source: rendered.shortTextVerified
+                    response_terminal_source: rendered.rolelessRichVerified
+                      ? "fresh-roleless-rich-answer-v246"
+                      : rendered.shortTextVerified
                       ? (rendered.rolelessHeaderVerified
                         ? "fresh-roleless-short-answer-v245"
                         : "verified-short-sse-rendered-answer-v207")
                       : "verified-aborted-stream-rendered-dom-v200",
                     response_terminal_dom_reconciled: true,
-                    response_integrity_evidence: rendered.shortTextVerified
+                    response_integrity_evidence: rendered.rolelessRichVerified
+                      ? "fresh-roleless-H4-pair+whole-next-DIV+fresh-toolbar+8s-stable+aborted-sse"
+                      : rendered.shortTextVerified
                       ? "same-request-short-sse+fresh-scope-toolbar+8s-stable+aborted-sse"
                       : "fresh-rendered-baseline+new-finish-action+8s-stable+aborted-sse",
                     response_epoch_candidate_reason: rendered.reason,
