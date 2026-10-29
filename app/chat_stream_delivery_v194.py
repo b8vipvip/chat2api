@@ -36,3 +36,13 @@ def final_text_chunks(final_text: str):
     text = str(final_text or "")
     for start in range(0, len(text), FINAL_CHUNK_CHARS):
         yield text[start : start + FINAL_CHUNK_CHARS]
+
+
+def sse_heartbeat_interval(elapsed_seconds: float) -> float:
+    """Keep an admitted SSE request alive before the first slow Worker event.
+
+    Real 2026-10-29 requests lost their HTTP peer after 2-8 seconds, before the
+    former 15-second heartbeat. This is transport cadence only: provisional
+    heartbeats cannot claim an assistant completion or change Broker state.
+    """
+    return 1.0 if max(0.0, float(elapsed_seconds)) < 30.0 else 5.0
