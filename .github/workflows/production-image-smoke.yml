@@ -279,7 +279,7 @@ jobs:
 
           html = open('/tmp/chat2api-admin.html', encoding='utf-8').read()
           assets = re.findall(r'<script[^>]+src=["\'](/assets/chat2api-linux-[^"\']+)["\']', html, re.I)
-          assert assets == ['/assets/chat2api-linux-device-authority-v124.js?v=0.22.245'], assets
+          assert assets == ['/assets/chat2api-linux-device-authority-v124.js?v=0.22.246'], assets
           v124 = open('/tmp/chat2api-v124.js', encoding='utf-8').read()
           assert 'linuxDeviceTableV124' in v124
           assert '新增设备' in v124
