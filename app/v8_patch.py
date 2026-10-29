@@ -235,7 +235,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                     ("chat2api — 请求日志合并包\n"
                      f"导出数量：{len(exported)} 条（仅限仍留存的请求记录）\n"
                      f"起始时间（含）：{cutoff.isoformat() if cutoff else '不限制时间'}\n"
-                     f"其它筛选：搜索={q or '不限'}，状态={status or '不限'}，模型={model or '不限'}\\n"
+                     f"其它筛选：搜索={q or '不限'}，状态={status or '不限'}，模型={model or '不限'}\n"
                      f"仅当前版本：{'是，'+SERVER_RUNTIME_VERSION if current_version_only else '否'}\n"
                      "历史请求若缺少创建版本标记，不会被归入当前版本。\n"
                      "requests/ 目录中每条 JSON 对应一次请求，结构与请求记录列表中的“下载日志”一致。\n"
