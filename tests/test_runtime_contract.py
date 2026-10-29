@@ -309,3 +309,11 @@ def test_roleless_plain_fallback_v252_stays_request_v6_owned():
     assert "coverage.independent_chars>60" in source
     assert "response_terminal_plain_roleless_fallback" in source
     assert "function abortedReplyStableThreshold(rendered)" in source
+
+
+def test_file_type_evidence_is_observational_under_only_request_v6_terminal_owner():
+    content=(ROOT/"chrome_extension"/"content_request_v6.js").read_text("utf-8")
+    assert "function fileHandoffTypeInventory(required, captured)" in content
+    assert "media_file_handoff_verified_types: fileHandoffInventory.verified" in content
+    assert "media_native_file_unresolved_failures: nativeUnresolvedFailedTypes" in content
+    assert "function abortedReplyStableThreshold(rendered)" in content

@@ -1980,6 +1980,19 @@
     return rendered?.shortTextVerified ? 4500 : 8000;
   }
 
+  // #560: a failed native click is a transport attempt, not a verdict on
+  // final delivery. Another verified handoff can supply the same type.
+  function fileHandoffTypeInventory(required, captured) {
+    const found=new Set([...String(captured || "").matchAll(
+      /!\[📎 [^\]\r\n]{1,180}\.(xlsx|pptx|json|zip|pdf|docx|csv)\]\((?:data:[^\s)]+;base64,|chat2api-staged:[a-f0-9]{32}\))/gi
+    )].map(hit => "."+hit[1].toLowerCase()));
+    const expected=[...new Set((required || []).map(ext => String(ext || "").toLowerCase()))];
+    return {
+      verified: expected.filter(ext=>found.has(ext)),
+      missing: expected.filter(ext=>!found.has(ext)),
+    };
+  }
+
   async function monitor(active) {
     const timeoutMs = Math.max(5000, Number(active.options.timeout_seconds || 300) * 1000);
     const startedAt = Date.now();
@@ -2193,6 +2206,9 @@
         const allRequiredFileTypesDelivered = requiredFileExts.every(ext =>
           captured.match(new RegExp("!\\[📎 [^\\]\\n]{1,180}" +
             ext.replace(".", "\\.") + "\\]\\((?:data:[^\\s)]+;base64,|chat2api-staged:[a-f0-9]{32}\\))", "i")));
+        const fileHandoffInventory=fileHandoffTypeInventory(requiredFileExts,captured);
+        const nativeUnresolvedFailedTypes=(native?.failed_types || []).filter(ext =>
+          fileHandoffInventory.missing.includes("."+String(ext).replace(/^\./,"").toLowerCase()));
         const delivered = deliveredImages + deliveredFiles;
         if (delivered > 0 && (hasTransferableImage(captured) || hasTransferableFile(captured))
             && (!fileCreationRequested || (deliveredFiles > 0 && allRequiredFileTypesDelivered))
@@ -2227,6 +2243,9 @@
                 media_delivery_phase: "terminal-verified",
                 media_file_transfer_error: "",
                 media_required_file_types_satisfied: allRequiredFileTypesDelivered,
+                media_file_handoff_verified_types: fileHandoffInventory.verified,
+                media_file_handoff_missing_types: fileHandoffInventory.missing,
+                media_native_file_unresolved_failures: nativeUnresolvedFailedTypes,
                 media_native_file_capture_count: Number(native?.count || 0),
                 media_native_file_captured_types: native?.captured_types || [],
                 media_native_file_failed_types: native?.failed_types || [],
@@ -2263,6 +2282,9 @@
               media_native_file_attempt_counts: native?.attempt_counts || {},
               media_native_file_synthesized_zip: native?.synthesized_zip === true,
               media_required_file_types_satisfied: allRequiredFileTypesDelivered,
+              media_file_handoff_verified_types: fileHandoffInventory.verified,
+              media_file_handoff_missing_types: fileHandoffInventory.missing,
+              media_native_file_unresolved_failures: nativeUnresolvedFailedTypes,
               media_reply_scope_verified: Boolean(fileReplyBoundary),
               media_capture_embedded_count: active.mediaCaptureLastEmbedded,
               media_transfer_stats: active.mediaCaptureTransferStats,
