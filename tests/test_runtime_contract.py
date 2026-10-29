@@ -263,3 +263,14 @@ def test_v249_native_file_candidate_probe_is_bounded_and_not_a_terminal_owner():
     assert ".slice(0,48)" in isolated
     assert 'type: "chat.completed"' not in main
     assert 'type: "chat.completed"' not in isolated
+
+def test_v250_abcd_disconnect_is_presentation_recovery_not_worker_terminal():
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] /
+              "app/admin_playground_abcd_v197.js").read_text(encoding="utf-8")
+    assert "recoverDisconnectedStream(requestId,update)" in source
+    assert '"/outcome?full_text=1"' in source
+    assert "response_text_truncated===true" in source
+    assert "recovered_after_disconnect:out.recovered===true" in source
+    assert "if(!stopped||!done)" in source
+    assert "SSE 连接已断开，服务端仍在运行" in source
