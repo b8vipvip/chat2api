@@ -21,7 +21,7 @@ from .api_keys import ApiKeyStore, ApiPrincipal, UNSET
 from .broker import RequestBroker, RequestState
 from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout, long_form_text_requested
 from .chat_progress_stream_v196 import status_from_diagnostics, progress_is_real
-from .chat_stream_delivery_v194 import StagedStreamText, final_text_chunks
+from .chat_stream_delivery_v194 import StagedStreamText, final_text_chunks, sse_heartbeat_interval
 from .stream_detached_terminal_v219 import settle_detached_stream
 from .config import Settings, get_settings
 from .file_store import FileStore
@@ -1045,7 +1045,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         yield "data: " + json.dumps(chunk_payload(response_id, model, {"role": "assistant"}), ensure_ascii=False) + "\n\n"
         sent_text = ""
         started_at = asyncio.get_running_loop().time()
-        next_heartbeat_at = started_at + 15.0
+        next_heartbeat_at = started_at + sse_heartbeat_interval(0.0)
+        state.diagnostics["api_stream_keepalive_policy"] = "1s-first-30s-5s-after"
         last_status_key = None
         last_reasoning_text = ""
         recorded = False
@@ -1068,7 +1069,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 # the authoritative Worker terminal arrives.
                 now = asyncio.get_running_loop().time()
                 if now >= next_heartbeat_at:
-                    next_heartbeat_at = now + 15.0
+                    next_heartbeat_at = now + sse_heartbeat_interval(now - started_at)
+                    state.diagnostics["api_stream_keepalive_sent"] = (
+                        int(state.diagnostics.get("api_stream_keepalive_sent") or 0) + 1
+                    )
+                    state.diagnostics.setdefault(
+                        "api_stream_first_keepalive_ms", round((now - started_at) * 1000)
+                    )
                     # Send a real data frame as well as an SSE comment: some
                     # OpenAI clients ignore comments but need visible activity.
                     current_status = status_from_diagnostics(state.diagnostics)
@@ -1079,6 +1086,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                                 "active": True,
                             }}), ensure_ascii=False,
                         ) + "\n\n"
+                    # Before a Worker status exists, a valid empty OpenAI delta
+                    # prevents SSE proxies/SDK readers from waiting without a
+                    # data frame. No assistant content or terminal is inferred.
+                    if not current_status:
+                        yield "data: " + json.dumps(
+                            chunk_payload(response_id, model, {}), ensure_ascii=False
+                        ) + "\\n\\n"
                     yield ": chat2api-keepalive\n\n"
                 if await request.is_disconnected():
                     # The API transport may vanish while ChatGPT continues.
