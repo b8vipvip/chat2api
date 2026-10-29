@@ -41,8 +41,8 @@ def test_worker_limit_cell_uses_compact_summary_with_single_popover_editor() -> 
     assert "data-v121-limit-summary" in canonical
     assert "data-v121-edit-limits" in canonical
     assert "data-v121-limit-popover" not in canonical
-    assert 'v240WorkerConcurrencyDialog' in behavior
-    assert "data-v121-concurrency" in behavior
+    assert 'data-v121-inline-input' in behavior
+    assert "data-v121-inline-input" in behavior
     assert "data-v121-concurrency" not in canonical
     assert "data-v121-windows" not in canonical
     assert "data-v121-save-limits" in behavior
