@@ -111,7 +111,34 @@
       return [Math.max(0,nodeOrder(node)),String(node.tagName||"node").toLowerCase().slice(0,8),
         pageBranch(node),Math.min(99999,text(node).length),mark].join(":");
     }).join(";");
-        const stream = String(active?.networkObservedText || "");
+        // #568: page-wide totals do not tell whether 255 uncovered blocks are
+    // siblings of the current assistant response, prompt history or trailing
+    // widgets. Record only bounded positional/ancestry counts. No content,
+    // DOM HTML, URLs, hashes of private text, or terminal decisions.
+    const freshAssistantHeadings=[...scope.querySelectorAll("h4")].filter(node =>
+      safeVisible(node) && node.isConnected
+      && !active?.baselineRolelessHeadings?.has(node)
+      && /^ChatGPT said\\s*[:：]$/i.test(text(node)));
+    const latestHeading=freshAssistantHeadings.at(-1)||null;
+    const lastFreshAction=freshActions.at(-1)||null;
+    const follows=(before,after)=>Boolean(before?.isConnected && after?.isConnected
+      && before!==after && (before.compareDocumentPosition(after)
+        & Node.DOCUMENT_POSITION_FOLLOWING));
+    const sharesBoundedAncestor=(a,b)=>{
+      if(!a?.isConnected || !b?.isConnected) return false;
+      const chain=new Set();
+      for(let node=a,depth=0;node&&node!==scope&&depth<32;node=node.parentElement,depth++)
+        chain.add(node);
+      for(let node=b,depth=0;node&&node!==scope&&depth<32;node=node.parentElement,depth++)
+        if(chain.has(node)) return true;
+      return false;
+    };
+    const activeUncovered=uncovered.filter(node=>node.isConnected).slice(0,1600);
+    const afterHeading=activeUncovered.filter(node=>follows(latestHeading,node));
+    const beforeLastAction=activeUncovered.filter(node=>follows(node,lastFreshAction));
+    const sharedCandidate=activeUncovered.filter(node=>
+      sharesBoundedAncestor(node,current));
+    const stream = String(active?.networkObservedText || "");
     const trailing = String(active?.networkTerminalText || "");
     return {
       scene_rich_block_count: blocks.length,
@@ -149,6 +176,16 @@
       scene_new_actions_after_all: actionEvidence.filter(x=>x.afterAll).length,
       scene_new_actions_same_branch: actionEvidence.filter(x=>x.branch>=0&&x.branch===candidateBranch).length,
       scene_changed_block_branches: new Set(independent.map(pageBranch)).size,
+      scene_roleless_fresh_assistant_heading_count: freshAssistantHeadings.length,
+      scene_uncovered_connected_count: activeUncovered.length,
+      scene_uncovered_after_assistant_heading_count: afterHeading.length,
+      scene_uncovered_before_last_toolbar_count: beforeLastAction.length,
+      scene_uncovered_between_heading_toolbar_count: activeUncovered.filter(node =>
+        follows(latestHeading,node) && follows(node,lastFreshAction)).length,
+      scene_uncovered_after_last_toolbar_count: activeUncovered.filter(node =>
+        follows(lastFreshAction,node)).length,
+      scene_uncovered_shared_bounded_ancestor_count: sharedCandidate.length,
+      scene_uncovered_outside_candidate_ancestry_count: activeUncovered.length-sharedCandidate.length,
       scene_reply_topology: topology.slice(0,5600),
       scene_finish_after_all_blocks: Boolean(current
         && active?.baselineFinishActions instanceof Set
