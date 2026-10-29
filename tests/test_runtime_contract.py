@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.249"
+    assert RELEASE_VERSION == "0.22.250"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -68,7 +68,7 @@ def test_realtime_protocol_contract_matches_live_bridge():
 def test_v148_release_contract_keeps_broker_terminal_authority():
     from pathlib import Path
     from app.runtime_contract import RELEASE_VERSION, CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.249"
+    assert RELEASE_VERSION == "0.22.250"
     assert CHROME_BRIDGE_BUNDLE_VERSION == RELEASE_VERSION
     root = Path(__file__).resolve().parents[1]
     watchdog = (root / "app/request_stall_patch.py").read_text(encoding="utf-8")
@@ -142,7 +142,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     client = TestClient(runtime)
     html = client.get("/admin").text
     assert f'<script src="{ADMIN_VERSION_ASSET}"></script>' in html
-    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.249"></script>' in html
+    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.250"></script>' in html
     assert html.index('/assets/historical.js') < html.index(ADMIN_VERSION_ASSET) < html.index(ADMIN_EXTENSION_COLUMNS_ASSET)
 
     developers_html = client.get("/developers").text
@@ -157,7 +157,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     assert "MutationObserver" in script
 
     columns_script = client.get(ADMIN_EXTENSION_COLUMNS_ASSET).text
-    assert 'const VERSION = "0.22.249-worker-list-v157"' in columns_script
+    assert 'const VERSION = "0.22.250-worker-list-v157"' in columns_script
     assert 'const COLUMN_SCHEMA_REVISION = 152' in columns_script
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v3"' in columns_script
     assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2"' in columns_script
@@ -263,3 +263,14 @@ def test_v249_native_file_candidate_probe_is_bounded_and_not_a_terminal_owner():
     assert ".slice(0,48)" in isolated
     assert 'type: "chat.completed"' not in main
     assert 'type: "chat.completed"' not in isolated
+
+def test_v250_abcd_disconnect_is_presentation_recovery_not_worker_terminal():
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] /
+              "app/admin_playground_abcd_v197.js").read_text(encoding="utf-8")
+    assert "recoverDisconnectedStream(requestId,update)" in source
+    assert '"/outcome?full_text=1"' in source
+    assert "response_text_truncated===true" in source
+    assert "recovered_after_disconnect:out.recovered===true" in source
+    assert "if(!stopped||!done)" in source
+    assert "SSE 连接已断开，服务端仍在运行" in source
