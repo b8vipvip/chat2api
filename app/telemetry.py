@@ -79,6 +79,13 @@ class TelemetryStore:
                 str(record["status"]) != str(existing["status"])
             ):
                 return dict(existing)
+            # Stamp at creation, not when a later status update is written.
+            # Historical unversioned requests must remain unversioned.
+            if existing:
+                record.pop("request_server_version", None)
+            else:
+                from .runtime_contract import SERVER_RUNTIME_VERSION
+                record["request_server_version"] = SERVER_RUNTIME_VERSION
             record = {**(existing or {}), **record}
             record.setdefault("recorded_at", utc_now())
             record["updated_at"] = utc_now()
