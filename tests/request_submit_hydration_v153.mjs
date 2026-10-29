@@ -37,6 +37,10 @@ const rewriteContext = {
   composerCandidates: () => [editor],
   composerText: () => draft,
   setComposerText: (_element,value) => { draft = value; },
+  // The production rewrite now uses the bounded writer for large drafts.
+  // This legacy small-draft VM keeps its mutable simulated native editor.
+  setComposerTextBatched: async (_active,element,value) =>
+    rewriteContext.setComposerText(element,value),
   waitFor: async fn => fn(),
   promptMatchesComposer: () => draft === "original",
 };
