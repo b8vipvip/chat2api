@@ -8,8 +8,8 @@ const archive=fs.readFileSync("app/generated_files_v196.py","utf8");
 const worker=fs.readFileSync("chrome_extension/content_request_v6.js","utf8");
 
 for(const ext of ["py","js","ts","html"]) {
-  assert.match(isolated,new RegExp("\\b"+ext+":\\""));
-  assert.match(main,new RegExp("\\b"+ext+":\\""));
+  assert.match(isolated,new RegExp("\\b"+ext+':"'));
+  assert.match(main,new RegExp("\\b"+ext+':"'));
   assert.match(archive,new RegExp('"\\.'+ext+'":'));
 }
 const start=isolated.indexOf("  function candidateButtons(scope) {");
