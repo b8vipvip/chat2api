@@ -50,7 +50,9 @@ test("No SSE abort, no new DOM, stale toolbar, or user-copy toolbar cannot final
 test("Controller never treats paused DOM or generic network bytes as a terminal",()=>{
   assert.match(source,/Date\.now\(\) - abortedRenderedCandidateSince >= 8000/);
   assert.match(source,/Date\.now\(\) - active\.networkObservedAt >= 10000/);
-  assert.match(source,/response_terminal_source: rendered\.rolelessRichVerified/);\n  assert.match(source,/: rendered\.shortTextVerified/);\n  assert.match(source,/fresh-roleless-rich-answer-v246/);
+  assert.match(source,/response_terminal_source: rendered\.rolelessRichVerified/);
+  assert.match(source,/: rendered\.shortTextVerified/);
+  assert.match(source,/fresh-roleless-rich-answer-v246/);
   assert.match(source,/verified-aborted-stream-rendered-dom-v200/);
   assert.match(source,/!confirmedTransportTerminal\(active\)/);
   assert.match(source,/response_recovery_finish_actions/);
