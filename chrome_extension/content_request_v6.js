@@ -107,7 +107,8 @@
     // with 34K characters re-enters editor observers and may cause expensive
     // duplicate reconciliation. Trust the native event on successful long
     // insertions; the existing exact post-write composer check still applies.
-    if (text && text.length >= 2048 && applied) return;
+    if (text && text.length >= 2048 && applied
+        && normalize(element.textContent || "") === normalize(text)) return;
     try {
       element.dispatchEvent(new InputEvent("input", {
         bubbles: true,
