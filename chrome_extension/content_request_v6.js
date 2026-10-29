@@ -810,65 +810,118 @@
 
   // One candidate path within request-v6, never an additional terminal owner.
   // New H4 User/Assistant siblings are the only trusted roleless short boundary.
+  // SSE clone tails may be truncated or lose a short interior span.
+  // This is only a network cross-check AFTER fresh request-local role labels,
+  // DOM baseline and a new completion toolbar have established the boundary.
+  function shortRolelessSourceOverlap(answer, observed) {
+    const text = normalize(String(answer || ""));
+    const source = normalize(String(observed || ""));
+    if (source.length < 3 || !text) return false;
+    if (text.includes(source)) return true;
+    const width = source.length >= 12 ? 8 : source.length;
+    for (let i=0; i + width<=source.length; i+=1) {
+      if (text.includes(source.slice(i,i+width))) return true;
+    }
+    return false;
+  }
+
+  // v245: Short assistant answers live in the same conversation root as the
+  // H4 role labels, but the heading and the answer P are often in *different*
+  // nested wrappers. Do not require nextElementSibling/same parent. Anchor
+  // instead to two NEW ordered role labels, then the first NEW answer
+  // paragraph before any later role label. Never scan old prompt paragraphs.
+  // This is only a candidate; request-v6 still owns the terminal decision.
   function rolelessShortReplyCandidate(active) {
     if (!active?.networkStreamSeen || !active?.submitStartedAt
         || Number(active.networkObservedAt || 0) < active.submitStartedAt
-        || !active.baselineRolelessHeadings) return null;
+        || !active.baselineRolelessHeadings || !active.baselineRenderedText
+        || !active.baselineFinishActions) return null;
     const source = normalize(String(active.networkObservedText || ""));
-    if (source.length < 4 || source.length > 180 || transientText(source)
+    if (source.length < 3 || source.length > 180 || transientText(source)
         || internalToolPayload(source)) return null;
     const headings = [...document.querySelectorAll("main h4,[role='main'] h4,#thread h4")]
       .filter(visible);
     const fresh = headings.filter(node => !active.baselineRolelessHeadings.has(node));
-    for (const heading of fresh.reverse()) {
-      if (!/^ChatGPT said\s*[:：]$/i.test(normalize(heading.innerText || heading.textContent || ""))) continue;
-      const parent = heading.parentElement;
-      if (!parent || !heading.isConnected) continue;
-      const user = fresh.find(node => node.parentElement === parent
-        && /^You said\s*[:：]$/i.test(normalize(node.innerText || node.textContent || ""))
+    const headingText = node => normalize(node.innerText || node.textContent || "");
+    const isUser = node => /^You said\s*[:：]$/i.test(headingText(node));
+    const isAssistant = node => /^ChatGPT said\s*[:：]$/i.test(headingText(node));
+    for (const heading of [...fresh].reverse()) {
+      if (!isAssistant(heading) || !heading.isConnected) continue;
+      const root = heading.closest?.("main,[role='main'],#thread");
+      if (!root) continue;
+      const user = [...fresh].reverse().find(node => isUser(node)
+        && node.isConnected && node.closest?.("main,[role='main'],#thread") === root
         && turnFollows(node, heading));
       if (!user) continue;
-      const node = heading.nextElementSibling;
-      if (!node || !node.isConnected || !visible(node)
-          || !/^(P|DIV|SECTION|PRE|UL|OL|BLOCKQUOTE)$/i.test(String(node.tagName || ""))
-          || node.closest?.("form,[contenteditable='true'],nav,aside,header,footer,[role='dialog']"))
-        continue;
-      const text = plainNodeText(node).trim();
-      if (text.length < 4 || text.length > 220 || transientText(text)
-          || !normalize(text).includes(source)
-          || (active.promptNormalized && normalize(text) === active.promptNormalized))
-        continue;
-      const next = node.nextElementSibling;
-      if (next && !/^(H[1-6]|BUTTON)$/i.test(String(next.tagName || ""))
-          && !next.querySelector?.("button[data-testid*='copy'],button[aria-label*='Copy']"))
-        continue;
-      return { nodes:[node], latest:node, turn:node, identity:"fresh-roleless-heading",
-        text, isNew:true, reason:"fresh-roleless-short-answer-v227",
-        rolelessHeading:heading, rolelessUserHeading:user };
+      const nextRole = fresh.find(node => node !== heading
+        && (isUser(node) || isAssistant(node)) && turnFollows(heading, node));
+      // The short-answer path handles a SINGLE new response paragraph.
+      // Multiple paragraphs/code/tables belong to rich-answer recovery; never
+      // complete with a single child while the rest of the answer is omitted.
+      const nextHeading = headings.find(node => node !== heading
+        && turnFollows(heading, node));
+      const paragraphNodes = [...root.querySelectorAll("p")].filter(node =>
+        node.isConnected && visible(node) && turnFollows(heading, node)
+        && (!nextHeading || turnFollows(node, nextHeading)));
+      if (paragraphNodes.length !== 1) continue;
+      for (const node of paragraphNodes) {
+        if (!node.isConnected || !visible(node)
+            || !turnFollows(heading, node)
+            || (nextRole && !turnFollows(node, nextRole))
+            || node.closest?.("form,[contenteditable='true'],nav,aside,header,footer,[role='dialog']")
+            || node.closest?.("[data-message-author-role='user'],[data-testid='user-message']"))
+          continue;
+        const raw = normalize(node.innerText || node.textContent || "");
+        const text = plainNodeText(node).trim();
+        const normalized = normalize(text);
+        if (raw.length < 3 || raw.length > 220
+            || normalized.length < 3 || normalized.length > 220
+            || !shortRolelessSourceOverlap(normalized, source)
+            || transientText(normalized) || internalToolPayload(normalized)
+            || active.baselineRenderedText.get(node) === raw.slice(-5000)
+            || (active.promptNormalized && normalized.length > 20
+                && normalized.includes(active.promptNormalized.slice(0, 100))))
+          continue;
+        return {nodes:[node],latest:node,turn:node,identity:"fresh-roleless-heading",
+          text,isNew:true,reason:"fresh-roleless-short-answer-v245",
+          rolelessHeading:heading,rolelessUserHeading:user,rolelessRoot:root};
+      }
     }
     return null;
   }
 
   function verifiedRolelessShortAbortCandidate(active, current) {
-    if (current?.reason !== "fresh-roleless-short-answer-v227"
+    if (current?.reason !== "fresh-roleless-short-answer-v245"
         || !current.rolelessHeading?.isConnected
         || !current.rolelessUserHeading?.isConnected
+        || !current.latest?.isConnected
         || active?.baselineRolelessHeadings?.has(current.rolelessHeading)
         || active?.baselineRolelessHeadings?.has(current.rolelessUserHeading)
-        || current.rolelessHeading.parentElement !== current.rolelessUserHeading.parentElement
         || !turnFollows(current.rolelessUserHeading, current.rolelessHeading)
+        || !turnFollows(current.rolelessHeading, current.latest)
+        || current.latest.closest?.("main,[role='main'],#thread") !== current.rolelessRoot
         || !active?.baselineFinishActions || promptStillPresent(active)
         || upstreamStillWorking()) return null;
+    // The new toolbar must be after THIS reply, in the same routed chat root.
+    // A historical button, a code-cell button, or a subsequent turn cannot
+    // prove completion. Keep this check separate from candidate discovery.
+    const headings = [...document.querySelectorAll("main h4,[role='main'] h4,#thread h4")];
+    const nextUser = headings.find(node => !active.baselineRolelessHeadings.has(node)
+      && /^You said\s*[:：]$/i.test(normalize(node.innerText || node.textContent || ""))
+      && turnFollows(current.latest, node));
     const fresh = responseFinishActions().filter(button =>
       !active.baselineFinishActions.has(button)
+      && button.isConnected
+      && button.closest?.("main,[role='main'],#thread") === current.rolelessRoot
       && turnFollows(current.latest, button)
+      && (!nextUser || turnFollows(button, nextUser))
       && !button.closest?.("pre,code,[data-testid*='code-block']"));
     if (!fresh.length) return null;
     return {node:current.latest,text:current.text,reason:current.reason,
       shortTextVerified:true,rolelessHeaderVerified:true,
-      replyScope:current.rolelessHeading.parentElement,finishAction:fresh[0],
+      replyScope:current.rolelessRoot,finishAction:fresh[0],
       finishActionCount:fresh.length,coverage:{nodes:[current.latest],
-      candidate_chars:current.text.length,independent_count:0,scan_structural_node_count:1}};
+        candidate_chars:current.text.length,independent_count:0,scan_structural_node_count:1}};
   }
 
   // #535: bounded, privacy-safe diagnostics for short, roleless UI replies.
@@ -914,7 +967,7 @@
     else if (Number(active?.networkObservedAt || 0) < Number(active.submitStartedAt))
       reason = "network-evidence-predates-submit";
     else if (!active?.baselineRolelessHeadings) reason = "pre-submit-headings-missing";
-    else if (observed.length < 4) reason = "network-text-too-short";
+    else if (observed.length < 3) reason = "network-text-too-short";
     else if (observed.length > 180) reason = "network-text-exceeds-short-bound";
     else if (transientText(observed) || internalToolPayload(observed)) reason = "not-assistant-prose";
     else if (!assistantHeadings.length) reason = "no-fresh-assistant-heading";
@@ -2174,9 +2227,11 @@
               && visible(part) && !promptStillPresent(active));
             if (completePartSet
                 && (rendered.shortTextVerified
-                  ? finalText.length >= (rendered.rolelessHeaderVerified ? 4 : 8)
+                  ? finalText.length >= (rendered.rolelessHeaderVerified ? 3 : 8)
                     && finalText.length <= 220
-                    && normalize(finalText).includes(normalize(String(active.networkObservedText || "")).slice(0, 8))
+                    && (rendered.rolelessHeaderVerified
+                      ? shortRolelessSourceOverlap(finalText, active.networkObservedText)
+                      : normalize(finalText).includes(normalize(String(active.networkObservedText || "")).slice(0, 8)))
                   : finalText.length >= 240)
                 && finalText.length >= rendered.text.length * 0.85
                 && !internalToolPayload(finalText)
@@ -2191,7 +2246,9 @@
                   && (rendered.rolelessHeaderVerified
                     ? (current.rolelessHeading?.isConnected
                       && current.rolelessUserHeading?.isConnected
-                      && current.rolelessHeading.parentElement === rendered.replyScope
+                      && current.latest?.isConnected
+                      && current.rolelessRoot === rendered.replyScope
+                      && turnFollows(current.rolelessUserHeading, current.rolelessHeading)
                       && turnFollows(current.rolelessHeading, current.latest))
                     : replyScopeForFinishAction(current.latest, rendered.finishAction)
                         === rendered.replyScope)
@@ -2199,8 +2256,10 @@
                   && !upstreamStillWorking()
                   && (!rendered.shortTextVerified || (
                     normalize(String(active.networkObservedText || "")).length >=
-                      (rendered.rolelessHeaderVerified ? 4 : 8)
-                    && normalize(finalText).includes(normalize(String(active.networkObservedText || "")).slice(0, 8))
+                      (rendered.rolelessHeaderVerified ? 3 : 8)
+                    && (rendered.rolelessHeaderVerified
+                      ? shortRolelessSourceOverlap(finalText, active.networkObservedText)
+                      : normalize(finalText).includes(normalize(String(active.networkObservedText || "")).slice(0, 8)))
                   ))) {
                 responseStarted = await ensureResponseStarted(active, responseStarted,
                   "verified-aborted-stream-rendered-dom-v200");
@@ -2209,7 +2268,7 @@
                   diagnostics: {
                     response_terminal_source: rendered.shortTextVerified
                       ? (rendered.rolelessHeaderVerified
-                        ? "fresh-roleless-short-answer-v227"
+                        ? "fresh-roleless-short-answer-v245"
                         : "verified-short-sse-rendered-answer-v207")
                       : "verified-aborted-stream-rendered-dom-v200",
                     response_terminal_dom_reconciled: true,
