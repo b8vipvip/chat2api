@@ -187,6 +187,14 @@ function requestHistoryEnsureControls(){
     limit.step='1';limit.value='20';limit.title='输入要导出的最近请求条数，最多 500 条';
     limit.style.cssText='width:84px;padding:7px 8px';
     const suffix=document.createElement('span');suffix.textContent='条';
+    const sinceLabel=document.createElement('label');
+    sinceLabel.textContent='或从';
+    sinceLabel.htmlFor='rqBatchExportSince';
+    const since=document.createElement('input');
+    since.id='rqBatchExportSince';
+    since.type='datetime-local';
+    since.title='选择请求创建的起始时间（包含该时刻）；留空则导出最近 N 条';
+    since.style.cssText='max-width:205px;padding:7px 8px';
     const button=document.createElement('button');button.type='button';
     button.className='action';button.textContent='合并打包导出请求日志';
     button.title='将最近 N 条请求记录对应的完整单条日志合并到一个 ZIP，包含 Worker 探针、HTTP Trace 和测试场关联诊断';
@@ -195,17 +203,27 @@ function requestHistoryEnsureControls(){
       if(!/^\d+$/.test(raw)||!Number.isSafeInteger(n)||n<1||n>500){
         status('请输入 1–500 的整数条数','bad');limit.focus();return;
       }
+      const from=since.value.trim();
+      // datetime-local uses the admin browser's local zone; transmit UTC
+      // ISO-8601 so the server handles timezone and DST unambiguously.
+      const start=from ? new Date(from) : null;
+      if(from && (!start || !Number.isFinite(start.getTime()))){
+        status('起始时间无效，请重新选择','bad');since.focus();return;
+      }
+      const bound=from ? 500 : n;
+      const query=new URLSearchParams({limit:String(bound)});
+      if(start)query.set('since',start.toISOString());
       button.disabled=true;const oldLabel=button.textContent;button.textContent='正在打包…';
       try{
-        status(`正在导出最近 ${n} 条请求的完整日志…`);
+        status(start ? '正在导出起始时间之后的全部留存请求日志…' : `正在导出最近 ${n} 条请求的完整日志…`);
         await requestHistoryDownload(
-          `/api/admin/requests/logs/batch?limit=${encodeURIComponent(n)}`,
-          `chat2api-request-logs-latest-${n}.zip`);
+          `/api/admin/requests/logs/batch?${query.toString()}`,
+          start ? 'chat2api-request-logs-since.zip' : `chat2api-request-logs-latest-${n}.zip`);
         status('合并请求日志 ZIP 已下载','ok');
       }catch(error){status(String(error?.message||error),'bad');}
       finally{button.disabled=false;button.textContent=oldLabel;}
     });
-    group.append(label,limit,suffix,button);
+    group.append(label,limit,suffix,sinceLabel,since,button);
     toolbar.appendChild(group);
   }
   if(toolbar&&!document.getElementById('rqDownloadDiagnostics')){
@@ -216,7 +234,7 @@ function requestHistoryEnsureControls(){
   }
   if(section&&!section.querySelector('[data-request-history-diagnostic-hint]')){
     const hint=document.createElement('div');hint.dataset.requestHistoryDiagnosticHint='1';hint.className='footer';
-    hint.textContent='排障建议：单条请求点“下载日志”；需要最近 N 条完整日志时点“合并打包导出请求日志”（每条均含探针及测试诊断）；“下载诊断日志包”则另外汇总服务端运行日志、Worker 状态与故障摘要。请求日志可能包含已保存的完整提示词与回复，分享前请核对并脱敏。';
+    hint.textContent='排障建议：单条请求点“下载日志”；需要最近 N 条日志或指定起始时间时点“合并打包导出请求日志”（每条均含探针及测试诊断）；“下载诊断日志包”则另外汇总服务端运行日志、Worker 状态与故障摘要。请求日志可能包含已保存的完整提示词与回复，分享前请核对并脱敏。';
     section.appendChild(hint);
   }
 }
