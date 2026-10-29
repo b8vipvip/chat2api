@@ -178,6 +178,8 @@
   }
 
   function renderWorkers(){
+    // Do not destroy an active inline edit during Linux Worker polling.
+    if (document.querySelector('[data-v121-inline-editing="1"]')) return;
     const body=document.getElementById("linuxWorkerRowsV155");
     if(!body)return;
     let online=0,count=0;
@@ -203,8 +205,8 @@
         const running=usedRaw!=null && Number.isFinite(Number(usedRaw))?String(Math.max(0,Number(usedRaw))):"-";
         const reserve=linuxStandbyCell(w,ext); // Verified physical standby per Bridge ID.
         const concurrency=Math.max(1,Math.min(32,Number(ext.max_concurrency||capacity.limit_units||1)));
-        const windows=Math.max(1,Math.min(32,Number(ext.max_windows||1)));
-        const limits=ext.client_id?`<div data-v121-worker-limits="${esc(ext.client_id)}" style="display:inline-flex;position:relative;gap:6px;align-items:center;white-space:nowrap"><strong>${concurrency}/${windows}</strong><button type="button" class="action" data-v121-edit-limits title="编辑并发 / 备用设置">✎</button><div data-v121-limit-popover hidden style="position:absolute;right:0;top:calc(100% + 7px);z-index:80;min-width:250px;padding:12px;border:1px solid #334155;border-radius:10px;background:#111827;box-shadow:0 14px 34px rgba(0,0,0,.38);white-space:normal"><div style="display:grid;grid-template-columns:1fr 1fr;gap:10px"><label>并发<input data-v121-concurrency type="number" min="1" max="32" value="${concurrency}" style="width:96px"></label><label>备用<input data-v121-windows type="number" min="1" max="32" value="${windows}" style="width:96px"></label></div><div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px"><span class="v124-muted" data-v121-limit-note></span><button type="button" class="action" data-v121-cancel-limits>取消</button><button type="button" class="action good" data-v121-save-limits>保存</button></div></div></div>`:"-";
+        // Single server-owned maximum concurrency, never a separate window count.
+        const limits=ext.client_id?`<div data-v121-worker-limits="${esc(ext.client_id)}" style="display:inline-flex;gap:6px;align-items:center;white-space:nowrap;min-width:78px"><strong data-v121-limit-summary>${concurrency}</strong><button type="button" class="action" data-v121-edit-limits title="编辑最大并发请求数">✎</button></div>`:"-";
                 rows.push(`<tr data-linux-worker-id="${esc(id)}"><td><code>${esc(id)}</code><div class="v124-muted">Worker ${slot} · ${esc(w.extension_client_id||"未绑定 Bridge")}</div></td><td>${esc(accountLabel)}</td><td><span class="v124-pill v124-worker-status ${mismatch?"bad":tone}">${esc(mismatch?"Bridge 绑定冲突":status==="运行正常"&&(ext.busy===true||Number(running)>0)?"忙碌":status)}</span></td><td>${esc(running)} / ${reserve}</td><td>${limits}</td><td>${esc(d.device_name)}<div class="v124-muted">Slot ${slot}</div></td><td>${esc(chatgpt(w,ext))}</td><td><div class="v124-actions"><button class="action" data-worker-login-edit="${esc(id)}">登录</button><button class="action" data-worker-action="initialize" data-worker="${esc(id)}">初始化</button><button class="action" data-login-worker="${esc(id)}" data-name="${esc(d.device_name)} · Worker ${slot}">远程</button><button class="action" data-diagnostics="${esc(id)}">诊断日志</button><button class="action ${w.enabled===false?"good":"danger"}" data-linux-worker-enable="${esc(id)}" data-enabled="${w.enabled===false?"1":"0"}">${w.enabled===false?"启用":"禁用"}</button><button class="action danger" data-linux-worker-delete="${esc(id)}" data-worker-slot="${slot}">删除</button></div></td></tr>`);
       }
     }
