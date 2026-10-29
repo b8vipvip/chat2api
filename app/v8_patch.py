@@ -139,8 +139,9 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
     @app.get("/api/admin/requests/logs/batch", dependencies=[Depends(require_admin_key)])
     async def download_recent_request_logs(
         since: str = Query(..., min_length=1, max_length=64),
+        current_version_only: bool = Query(default=False),
     ) -> StreamingResponse:
-        # The timestamp is the ONLY batch selection control. Parse both
+        # Time is required; optional current-version scope is an additional filter. Parse both
         # "2026-10-29 10:39:31" and "2026-10-29T11:28:29+08:00".
         # Unzoned input uses the same Beijing timezone as request history;
         # never guess using the cloud server's own local timezone.
@@ -167,6 +168,10 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
         # newest-N slice before filtering or silently truncate the export.
         selected = []
         for row in telemetry.recent(telemetry.items.maxlen or 500):
+            # Top-level report.server_version is the EXPORTER version,
+            # not the version at which this request was created.
+            if current_version_only and str(row.get("request_server_version") or "") != SERVER_RUNTIME_VERSION:
+                continue
             created_raw = row.get("recorded_at")
             try:
                 created = datetime.fromisoformat(str(created_raw).replace("Z", "+00:00"))
@@ -177,7 +182,9 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             except (ValueError, OverflowError, TypeError):
                 continue
         if not selected:
-            raise HTTPException(status_code=404, detail="No retained request records match the selected start time")
+            detail = ("No retained requests with a verified current creation version match the selected start time"
+                      if current_version_only else "No retained request records match the selected start time")
+            raise HTTPException(status_code=404, detail=detail)
 
         test_index = request_test_index(getattr(app.state, "test_runs", None))
         extension_snapshot = _safe_client_rows(registry)
@@ -211,6 +218,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                         "request_id": request_id,
                         "recorded_at": row.get("recorded_at"),
                         "status": row.get("status"),
+                        "request_server_version": row.get("request_server_version"),
                         "filename": filename,
                     })
 
@@ -218,8 +226,11 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                     raise HTTPException(status_code=404, detail="No named request records to export")
                 manifest = {
                     "report_type": "chat2api-recent-request-log-bundle",
-                    "report_version": 2,
-                    "selection_mode": "since",
+                    "report_version": 3,
+                    "selection_mode": "since_current_version" if current_version_only else "since",
+                    "current_version_only": current_version_only,
+                    "request_version_field": "request_server_version",
+                    "selected_server_version": SERVER_RUNTIME_VERSION if current_version_only else None,
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                     "server_version": SERVER_RUNTIME_VERSION,
                     "since": cutoff.isoformat(),
@@ -238,6 +249,8 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                     ("chat2api — 从指定时间开始的请求日志合并包\n"
                      f"导出数量：{len(exported)} 条（仅限仍留存的请求记录）\n"
                      f"起始时间（含）：{cutoff.isoformat()}\n"
+                     f"仅当前版本：{'是，'+SERVER_RUNTIME_VERSION if current_version_only else '否'}\n"
+                     "历史请求若缺少创建版本标记，不会被归入当前版本。\n"
                      "requests/ 目录中每条 JSON 对应一次请求，结构与请求记录列表中的“下载日志”一致。\n"
                      "index.json 按页面最新记录顺序给出 ID、状态和文件名；打包只读，不修改请求终态。\n"
                      "注意：日志可能包含完整提示词、生成回复和诊断证据，分享前请检查并脱敏。\n").encode("utf-8"),
@@ -259,9 +272,10 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             chunks(),
             media_type="application/zip",
             headers={
-                "Content-Disposition": f'attachment; filename="chat2api-request-logs-since-{len(exported)}-{stamp}.zip"',
+                "Content-Disposition": f'attachment; filename="chat2api-request-logs-{"current-version-" if current_version_only else ""}since-{len(exported)}-{stamp}.zip"',
                 "Cache-Control": "no-store",
                 "X-Chat2API-Exported-Count": str(len(exported)),
+                "X-Chat2API-Version-Scope": SERVER_RUNTIME_VERSION if current_version_only else "all",
             },
         )
 
