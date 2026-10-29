@@ -855,7 +855,15 @@
       if (!user) continue;
       const nextRole = fresh.find(node => node !== heading
         && (isUser(node) || isAssistant(node)) && turnFollows(heading, node));
-      const paragraphNodes = [...root.querySelectorAll("p")];
+      // The short-answer path handles a SINGLE new response paragraph.
+      // Multiple paragraphs/code/tables belong to rich-answer recovery; never
+      // complete with a single child while the rest of the answer is omitted.
+      const nextHeading = headings.find(node => node !== heading
+        && turnFollows(heading, node));
+      const paragraphNodes = [...root.querySelectorAll("p")].filter(node =>
+        node.isConnected && visible(node) && turnFollows(heading, node)
+        && (!nextHeading || turnFollows(node, nextHeading)));
+      if (paragraphNodes.length !== 1) continue;
       for (const node of paragraphNodes) {
         if (!node.isConnected || !visible(node)
             || !turnFollows(heading, node)
