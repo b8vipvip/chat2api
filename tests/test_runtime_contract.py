@@ -214,7 +214,7 @@ def test_v245_short_reply_is_owned_by_single_request_controller():
               "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
     assert 'reason:"fresh-roleless-short-answer-v245"' in source
     assert 'rendered.rolelessHeaderVerified ? 3 : 8' in source
-    assert 'abortedRenderedCandidateSince >= 8000' in source
+    assert 'abortedRenderedCandidateSince >= abortedReplyStableThreshold(rendered)' in source
     assert source.count('type: "chat.completed", request_id: active.requestId') >= 1
     assert 'baselineRolelessHeadings' in source
 
@@ -226,7 +226,7 @@ def test_v246_roleless_rich_reply_preserves_one_terminal_controller():
     assert '"fresh-roleless-compact-div-v248"' in src
     assert "verifiedRolelessRichAbortCandidate(active, current)" in src
     assert "current.latest === current.rolelessHeading.nextElementSibling" in src
-    assert "abortedRenderedCandidateSince >= 8000" in src
+    assert "abortedRenderedCandidateSince >= abortedReplyStableThreshold(rendered)" in src
     assert 'response_terminal_source: rendered.rolelessRichVerified' in src
 
 def test_v247_single_worker_terminal_and_file_archive_separation():
@@ -247,7 +247,7 @@ def test_v248_compact_div_uses_original_single_terminal_controller():
     assert "fresh-roleless-compact-div-v248" in source
     assert "shortRolelessSourceOverlap(raw, observed)" in source
     assert "verifiedRolelessRichAbortCandidate(active, current)" in source
-    assert "abortedRenderedCandidateSince >= 8000" in source
+    assert "abortedRenderedCandidateSince >= abortedReplyStableThreshold(rendered)" in source
     assert 'type: "chat.completed", request_id: active.requestId' in source
 
 def test_v249_native_file_candidate_probe_is_bounded_and_not_a_terminal_owner():
