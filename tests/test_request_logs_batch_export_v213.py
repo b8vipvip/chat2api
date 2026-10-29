@@ -143,11 +143,15 @@ def test_request_history_exposes_only_pasteable_start_time_control():
     assert "since.type='text'" in source
     assert "since.type='datetime-local'" not in source
     assert "rqBatchExportLimit" not in source
-    assert "query.set('since'" not in source  # single URLSearchParams construction
-    assert "new URLSearchParams({since:parsed.iso})" in source
+    assert "else query.set('since',parsed.iso)" in source
+    assert "if(!versionOnly.checked && !parsed)" in source
+    assert "since.disabled=versionOnly.checked" in source
+    assert "const query=new URLSearchParams()" in source
     assert "合并打包导出请求日志" in source
     assert "requestHistoryDownload(" in source
-    assert "未标注时区按北京时间" in source
+    assert "rqBatchExportTimeHint" not in source
+    assert "rqDownloadDiagnostics" not in source
+    assert "下载诊断日志包" not in source
 
 def test_batch_export_current_version_is_creation_version_and_legacy_is_excluded(tmp_path: Path):
     with TestClient(app_v8(tmp_path)) as client:
@@ -185,7 +189,7 @@ def test_batch_export_current_version_is_creation_version_and_legacy_is_excluded
         assert "current-version" in response.headers["content-disposition"]
         with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
             manifest = json.loads(bundle.read("index.json"))
-            assert manifest["selection_mode"] == "since_current_version"
+            assert manifest["selection_mode"] == "current_version"
             assert manifest["selected_server_version"] == SERVER_RUNTIME_VERSION
             assert manifest["current_version_only"] is True
             assert manifest["request_version_field"] == "request_server_version"
@@ -201,4 +205,41 @@ def test_batch_export_current_version_is_creation_version_and_legacy_is_excluded
                            params={"since": "2026-10-29 10:39:32",
                                    "current_version_only": "true"},
                            headers=headers())
-        assert other.status_code == 404
+        # Current-version mode intentionally ignores a time filter.
+        assert other.status_code == 200
+
+def test_current_version_without_since_includes_all_retained_current_rows(tmp_path: Path):
+    with TestClient(app_v8(tmp_path)) as client:
+        store = client.app.state.telemetry
+        for name, version in (("req_v1", SERVER_RUNTIME_VERSION),
+                              ("req_v2", SERVER_RUNTIME_VERSION),
+                              ("req_legacy", "0.22.246")):
+            asyncio.run(store.upsert({
+                "request_id": name, "recorded_at": "2026-10-29T07:00:00+08:00",
+                "status": "completed",
+            }))
+            if version != SERVER_RUNTIME_VERSION:
+                row = store.get(name)
+                row["request_server_version"] = version
+                store._remember(row)
+        # The active checkbox has no time requirement, even if an old
+        # browser sends a stale/invalid since value.
+        for params in ({"current_version_only": "true"},
+                       {"current_version_only": "true", "since": "bad-date"},
+                       {"current_version_only": "true", "since": "2030-01-01T00:00:00Z"}):
+            response = client.get("/api/admin/requests/logs/batch",
+                                  params=params, headers=headers())
+            assert response.status_code == 200, response.text
+            assert response.headers["x-chat2api-exported-count"] == "2"
+            with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
+                manifest = json.loads(bundle.read("index.json"))
+                assert manifest["selection_mode"] == "current_version"
+                assert manifest["since"] is None
+                assert manifest["time_filter_field"] is None
+                assert {row["request_id"] for row in manifest["requests"]} == {
+                    "req_v1", "req_v2"}
+        # Without current version, the explicit timestamp is still mandatory.
+        assert client.get("/api/admin/requests/logs/batch",
+                          headers=headers()).status_code == 422
+
+

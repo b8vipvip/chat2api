@@ -746,7 +746,7 @@
     // request-local file container. The old allowlist excluded it, leaving
     // downloadable Office cards invisible for all 900s of request lifetime.
     // Use the exact assistant DIV, NEVER its page-wide main ancestor.
-    if (current?.reason === "fresh-roleless-rich-answer-v246") {
+    if (["fresh-roleless-rich-answer-v246","fresh-roleless-compact-div-v248"].includes(current?.reason)) {
       const richReply = verifiedRolelessRichAbortCandidate(active, current);
       if (richReply && current.latest?.isConnected
           && current.latest.closest?.("main,[role='main'],#thread"))
@@ -974,14 +974,20 @@
       const raw = normalize(node.innerText || node.textContent || "");
       const promptStart = String(active.promptNormalized || "").slice(0, 100);
       const promptEnd = String(active.promptNormalized || "").slice(-100);
-      if (raw.length < 240 || raw.length > 85000 || transientText(raw)
+      const compact = raw.length < 240;
+      const observed = normalize(String(active.networkObservedText || ""));
+      if (raw.length < 3 || raw.length > 85000
+          || (compact && (raw.length > 220 || !shortRolelessSourceOverlap(raw, observed)))
+          || transientText(raw)
           || internalToolPayload(raw)
           || (promptStart && raw.includes(promptStart))
           || (promptEnd && raw.includes(promptEnd))
           || active.baselineRenderedText.get(node) === raw.slice(-5000))
         continue;
-      return {nodes:[node],latest:node,turn:node,identity:"fresh-roleless-rich",
-        text:raw,isNew:true,reason:"fresh-roleless-rich-answer-v246",
+      return {nodes:[node],latest:node,turn:node,
+        identity:compact?"fresh-roleless-compact-DIV":"fresh-roleless-rich",
+        text:raw,isNew:true,
+        reason:compact?"fresh-roleless-compact-div-v248":"fresh-roleless-rich-answer-v246",
         rolelessHeading:heading,rolelessUserHeading:user,rolelessRoot:root};
     }
     return null;
@@ -997,6 +1003,11 @@
       .filter(visible).map(block => normalize(block.innerText || block.textContent || ""))
       .filter(text => text.length >= 20 && !transientText(text));
     const raw = normalize(node.innerText || node.textContent || "");
+    // A complete 3–220-character DIV is not a truncated rich document.
+    // Exact normalized equality plus the independent request-local SSE,
+    // fresh heading and toolbar checks are stronger than a 12-char anchor.
+    if (raw.length >= 3 && raw.length <= 220)
+      return content === raw;
     const start = (blocks[0] || raw).slice(0, 12);
     const end = (blocks[blocks.length - 1] || raw).slice(-12);
     return start.length >= 8 && end.length >= 8
@@ -1004,7 +1015,7 @@
   }
 
   function verifiedRolelessRichAbortCandidate(active, current) {
-    if (current?.reason !== "fresh-roleless-rich-answer-v246"
+    if (!["fresh-roleless-rich-answer-v246","fresh-roleless-compact-div-v248"].includes(current?.reason)
         || !current.rolelessHeading?.isConnected
         || !current.rolelessUserHeading?.isConnected
         || !current.latest?.isConnected || !current.rolelessRoot
@@ -1028,8 +1039,11 @@
       && !button.closest?.("pre,code,[data-testid*='code-block']"));
     if (!fresh.length) return null;
     // Full response container, not 211 unrelated changed blocks in main.
+    const compact = current.reason === "fresh-roleless-compact-div-v248";
+    if (compact && !shortRolelessSourceOverlap(current.text, active.networkObservedText)) return null;
     return {node:current.latest,text:current.text,reason:current.reason,
-      rolelessRichVerified:true,replyScope:current.rolelessRoot,
+      rolelessRichVerified:true,shortTextVerified:compact,
+      rolelessHeaderVerified:compact,replyScope:current.rolelessRoot,
       finishAction:fresh[0],finishActionCount:fresh.length,
       coverage:{nodes:[current.latest],candidate_chars:current.text.length,
         independent_count:0,scan_structural_node_count:1}};
@@ -2406,7 +2420,9 @@
                   type: "chat.completed", request_id: active.requestId, text: finalText,
                   diagnostics: {
                     response_terminal_source: rendered.rolelessRichVerified
-                      ? "fresh-roleless-rich-answer-v246"
+                      ? (rendered.shortTextVerified
+                        ? "fresh-roleless-compact-div-v248"
+                        : "fresh-roleless-rich-answer-v246")
                       : rendered.shortTextVerified
                       ? (rendered.rolelessHeaderVerified
                         ? "fresh-roleless-short-answer-v245"
@@ -2414,7 +2430,9 @@
                       : "verified-aborted-stream-rendered-dom-v200",
                     response_terminal_dom_reconciled: true,
                     response_integrity_evidence: rendered.rolelessRichVerified
-                      ? "fresh-roleless-H4-pair+whole-next-DIV+fresh-toolbar+8s-stable+aborted-sse"
+                      ? (rendered.shortTextVerified
+                        ? "fresh-roleless-H4-pair+whole-compact-DIV+SSE-overlap+fresh-toolbar+8s-stable"
+                        : "fresh-roleless-H4-pair+whole-next-DIV+fresh-toolbar+8s-stable+aborted-sse")
                       : rendered.shortTextVerified
                       ? "same-request-short-sse+fresh-scope-toolbar+8s-stable+aborted-sse"
                       : "fresh-rendered-baseline+new-finish-action+8s-stable+aborted-sse",

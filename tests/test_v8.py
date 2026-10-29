@@ -109,6 +109,6 @@ def test_admin_v8_request_history_ui_is_retired_to_canonical_owner() -> None:
     assert "loadRequestsV8" not in legacy
     assert "data-chat2api-log" not in legacy
     assert "rqBody" not in legacy
-    assert "下载诊断日志包" in canonical
-    assert "/api/admin/diagnostics/export" in canonical
+    assert "下载诊断日志包" not in canonical
+    assert "/api/admin/diagnostics/export" not in canonical
     assert "/log" in canonical

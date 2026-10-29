@@ -61,7 +61,7 @@ def test_request_history_v94_normalizer_replaces_base_owner_instead_of_wrapping_
     assert "requestHistoryShowConversation" in html
     assert "生成回复" in html
     assert "requestHistoryDownload" in html
-    assert "下载诊断日志包" in html
+    assert "下载诊断日志包" not in html
     assert "下载日志" in html
     assert ".innerHTML=d.data.map" not in html
 

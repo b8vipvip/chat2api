@@ -31,6 +31,7 @@ function setup(){
    turnFollows:(a,b)=>Boolean(a&&b&&a.pos<b.pos),
    responseFinishActions:()=>actions,promptStillPresent:()=>promptHeld,
    upstreamStillWorking:()=>working,
+   shortRolelessSourceOverlap:()=>false,
  };
  vm.runInNewContext(source.slice(start,end)+"\nthis.find=rolelessRichReplyCandidate;this.verify=verifiedRolelessRichAbortCandidate;this.complete=rolelessRichCaptureComplete;",ctx);
  const active={

@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.247"
+    assert RELEASE_VERSION == "0.22.248"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -68,7 +68,7 @@ def test_realtime_protocol_contract_matches_live_bridge():
 def test_v148_release_contract_keeps_broker_terminal_authority():
     from pathlib import Path
     from app.runtime_contract import RELEASE_VERSION, CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.247"
+    assert RELEASE_VERSION == "0.22.248"
     assert CHROME_BRIDGE_BUNDLE_VERSION == RELEASE_VERSION
     root = Path(__file__).resolve().parents[1]
     watchdog = (root / "app/request_stall_patch.py").read_text(encoding="utf-8")
@@ -142,7 +142,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     client = TestClient(runtime)
     html = client.get("/admin").text
     assert f'<script src="{ADMIN_VERSION_ASSET}"></script>' in html
-    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.247"></script>' in html
+    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.248"></script>' in html
     assert html.index('/assets/historical.js') < html.index(ADMIN_VERSION_ASSET) < html.index(ADMIN_EXTENSION_COLUMNS_ASSET)
 
     developers_html = client.get("/developers").text
@@ -157,7 +157,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     assert "MutationObserver" in script
 
     columns_script = client.get(ADMIN_EXTENSION_COLUMNS_ASSET).text
-    assert 'const VERSION = "0.22.247-worker-list-v157"' in columns_script
+    assert 'const VERSION = "0.22.248-worker-list-v157"' in columns_script
     assert 'const COLUMN_SCHEMA_REVISION = 152' in columns_script
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v3"' in columns_script
     assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2"' in columns_script
@@ -222,7 +222,8 @@ def test_v246_roleless_rich_reply_preserves_one_terminal_controller():
     from pathlib import Path
     src = (Path(__file__).resolve().parents[1] /
            "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
-    assert 'reason:"fresh-roleless-rich-answer-v246"' in src
+    assert '"fresh-roleless-rich-answer-v246"' in src
+    assert '"fresh-roleless-compact-div-v248"' in src
     assert "verifiedRolelessRichAbortCandidate(active, current)" in src
     assert "current.latest === current.rolelessHeading.nextElementSibling" in src
     assert "abortedRenderedCandidateSince >= 8000" in src
@@ -238,3 +239,13 @@ def test_v247_single_worker_terminal_and_file_archive_separation():
     assert "type: \"chat.completed\"" in worker
     assert "deferred_generated_files.rewrite(text, owner, request_id, base_url)" in backend
     assert "/api/generated-files/pending/{file_id}/{access_token}" in backend
+
+def test_v248_compact_div_uses_original_single_terminal_controller():
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1] /
+              "chrome_extension/content_request_v6.js").read_text(encoding="utf-8")
+    assert "fresh-roleless-compact-div-v248" in source
+    assert "shortRolelessSourceOverlap(raw, observed)" in source
+    assert "verifiedRolelessRichAbortCandidate(active, current)" in source
+    assert "abortedRenderedCandidateSince >= 8000" in source
+    assert 'type: "chat.completed", request_id: active.requestId' in source
