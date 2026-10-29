@@ -300,3 +300,12 @@ def test_v252_native_prompt_uses_one_request_v6_editor_writer():
     assert "Native editor batch cancelled or detached" in source
     assert "prompt_batched_native_verified:true" in source
     assert "function abortedReplyStableThreshold(rendered)" in source
+
+
+def test_roleless_plain_fallback_v252_stays_request_v6_owned():
+    source=(ROOT / "chrome_extension" / "content_request_v6.js").read_text("utf-8")
+    assert "function verifiedPlainRolelessCaptureFallback(active, rendered, captured)" in source
+    assert "coverage.independent_count>3" in source
+    assert "coverage.independent_chars>60" in source
+    assert "response_terminal_plain_roleless_fallback" in source
+    assert "function abortedReplyStableThreshold(rendered)" in source
