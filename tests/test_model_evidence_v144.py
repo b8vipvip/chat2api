@@ -199,3 +199,40 @@ def test_served_mismatch_is_explicit_model_conflict_not_silent_fallback() -> Non
     # A page default alone cannot invent a served-model conflict.
     unknown = _trace(authority, {"default_model": "gpt-6"})
     assert unknown["model_conflict"] is False
+
+
+def test_same_request_wire_slug_distinguishes_bad_rewrite_from_upstream_fallback():
+    from app.model_observability_v144_patch import _trace
+
+    authority = {"requested_model": "gpt-5.6-sol",
+                 "routed_model": "gpt-5.6-sol",
+                 "transport_model": "gpt-5.6-sol-wm"}
+    # The specific failure from the 2026-10-29 v250 logs: correct wire
+    # transport, but upstream metadata resolves a *different* model.
+    upstream = _trace(authority, {"request_model": "gpt-5.6-sol",
+                                  "request_wire_model": "gpt-5.6-sol-wm",
+                                  "served_model": "gpt-6"})
+    assert upstream["model_wire_transport_matches"] is True
+    assert upstream["model_authority_violation"] is False
+    assert upstream["model_conflict"] is True
+    assert upstream["model_fallback_reason"] == "upstream_served_model_mismatch"
+
+    # Same-page request reconstruction failed: the raw fetch was never
+    # rewritten. Do not report logical normalization as wire success.
+    failed_rewrite = _trace(authority, {
+        "request_model": "gpt-5.6-sol",
+        "request_wire_model": "gpt-5.6-sol",
+        "served_model": "gpt-6",
+    })
+    assert failed_rewrite["model_wire_transport_matches"] is False
+    assert failed_rewrite["model_authority_violation"] is True
+    assert failed_rewrite["model_fallback_reason"] == "worker_request_model_rewrite"
+
+    old = _trace(authority, {"request_model": "gpt-5.6-sol"})
+    assert old["model_wire_transport_matches"] is None
+    assert old["model_authority_violation"] is False
+    main = (ROOT / "chrome_extension/model_evidence_main_v144.js").read_text(encoding="utf-8")
+    content = (ROOT / "chrome_extension/content_model_evidence_v144.js").read_text(encoding="utf-8")
+    assert "request_wire_model: actualWire" in main
+    assert "request_wire_model: requestInfo.requestWireModel" in main
+    assert 'request_wire_model: (() =>' in content
