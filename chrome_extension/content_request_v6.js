@@ -2320,7 +2320,7 @@
                       : normalize(finalText).includes(normalize(String(active.networkObservedText || "")).slice(0, 8)))
                   : finalText.length >= 240)
                 && (rendered.rolelessRichVerified
-                  ? finalText.length >= rendered.text.length * 0.4
+                  ? finalText.length >= rendered.text.length * 0.65
                   : finalText.length >= rendered.text.length * 0.85)
                 && !internalToolPayload(finalText)
                 && !promptStillPresent(active) && !upstreamStillWorking()) {
