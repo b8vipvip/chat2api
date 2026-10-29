@@ -127,7 +127,7 @@ def test_device_tables_and_worker_tables_have_separate_owners():
     assert 'const clientById=new Map(state.extensions' in linux
     assert 'data-worker-action="initialize"' in linux.split('function renderWorkers()',1)[1]
     assert 'data-v121-worker-limits' in linux
-    assert 'data-v121-save-limits' in linux
+    assert 'data-v121-limit-summary' in linux
     header = linux.split('id="linuxDeviceTableV124"',1)[1].split('</thead>',1)[0]
     assert '<th>Worker ID</th>' not in header
     assert '<th>ChatGPT</th>' not in header
