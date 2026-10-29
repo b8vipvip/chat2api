@@ -77,4 +77,4 @@ def test_heartbeat_does_not_claim_worker_completion_or_modify_final_text():
     assert '"content"' not in keepalive
     assert '"stop"' not in keepalive
     assert '"chat.completed"' not in keepalive
-    assert '"\\n\\n"' in keepalive
+    assert 'yield ": chat2api-keepalive' in keepalive
