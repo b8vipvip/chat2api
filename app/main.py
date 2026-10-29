@@ -28,6 +28,7 @@ from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
 from .generated_files_v196 import GeneratedFileArchive
 from .generated_file_staging_v238 import GeneratedFileStaging
+from .generated_file_deferred_v247 import DeferredGeneratedFiles, FileStillProcessing, FileTransferFailed
 from .rich_content_v196 import manifest as rich_content_manifest
 from .media_public_origin_v187 import media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
@@ -72,6 +73,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     generated_files = GeneratedFileArchive(media_archive)
     generated_staging = GeneratedFileStaging(media_archive.root)
     generated_files.staging = generated_staging
+    deferred_generated_files = DeferredGeneratedFiles(generated_files)
     test_runs = TestRunStore(config.data_dir)
 
     @asynccontextmanager
@@ -279,6 +281,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         url = f"{origin}/api/generated-files/{record['id']}/{record.pop('token')}"
         return JSONResponse({**record, "object": "chat2api.generated_file", "url": url},
                             headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/generated-files/pending/{file_id}/{access_token}")
+    async def download_deferred_generated_file(file_id: str, access_token: str) -> Response:
+        try:
+            data, mime, filename = await asyncio.to_thread(
+                deferred_generated_files.read, file_id, access_token)
+        except FileStillProcessing:
+            return JSONResponse(
+                {"status": "processing", "message": "文件正在转存，请稍后重试"},
+                status_code=202,
+                headers={"Cache-Control": "no-store", "Retry-After": "3",
+                         "X-Chat2API-File-Status": "processing"},
+            )
+        except FileTransferFailed:
+            return JSONResponse(
+                {"status": "failed", "message": "文件转存未完成，请重新发起生成"},
+                status_code=503,
+                headers={"Cache-Control": "no-store",
+                         "X-Chat2API-File-Status": "failed"},
+            )
+        except (KeyError, FileNotFoundError):
+            raise HTTPException(status_code=404, detail="Unknown generated file") from None
+        except (ValueError, OSError):
+            raise HTTPException(status_code=503, detail="Generated file storage integrity unavailable") from None
+        from urllib.parse import quote
+        return Response(data, media_type="application/octet-stream", headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
+            "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer",
+            "Content-Security-Policy": "sandbox",
+            "Cache-Control": "private, max-age=300",
+            "X-Chat2API-File-Status": "ready",
+            "X-Chat2API-File-MIME": mime,
+        })
+
+    @app.get("/api/generated-files/pending/{file_id}/{access_token}/status")
+    async def status_deferred_generated_file(file_id: str, access_token: str) -> Response:
+        try:
+            value = await asyncio.to_thread(
+                deferred_generated_files.status, file_id, access_token)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Unknown generated file") from None
+        return JSONResponse(value, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/generated-files/{file_id}/{access_token}")
     async def download_generated_file(file_id: str, access_token: str) -> Response:
@@ -984,7 +1029,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Images remain handled by their established thumbnail store. Generated
         # file handoffs reuse that store's configured local/S3 backend.
         text, media = media_archive.rewrite_markdown(text, owner, request_id, base_url)
-        text, files = generated_files.rewrite_markdown(text, owner, request_id, base_url)
+        # Verified bytes are staged before the API text is delivered. Local/S3
+        # transfer proceeds independently and the bearer URL reports 202 until
+        # real archive bytes have passed the existing signature/hash checks.
+        text, files = deferred_generated_files.rewrite(text, owner, request_id, base_url)
         if "data:image/" in text or "![📎 " in text:
             raise ValueError("Incomplete generated attachment payload")
         return text, media, files

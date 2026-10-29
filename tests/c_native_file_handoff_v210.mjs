@@ -47,7 +47,7 @@ async function harness({bytes=new Uint8Array([80,75,3,4,0,1]),
   const scope={
     isConnected:true,
     closest:()=>({}),
-    querySelectorAll(selector){return selector==="button,[role='button']"?[button]:[];},
+    querySelectorAll(selector){return selector==="button,[role='button'],a[href],a[download]"?[button]:[];},
   };
   const context={
     window,document:{addEventListener(){}},location:{origin:pageOrigin,href:pageOrigin+"/c/demo"},

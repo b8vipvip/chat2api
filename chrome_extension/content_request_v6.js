@@ -742,6 +742,18 @@
   // to arm a bounded, signature-checked download observer; the full response
   // still needs ALL required verified files before chat.completed.
   function verifiedFileReplyBoundary(active, current) {
+    // v247: v246's fully scoped rich roleless answer is a legitimate
+    // request-local file container. The old allowlist excluded it, leaving
+    // downloadable Office cards invisible for all 900s of request lifetime.
+    // Use the exact assistant DIV, NEVER its page-wide main ancestor.
+    if (current?.reason === "fresh-roleless-rich-answer-v246") {
+      const richReply = verifiedRolelessRichAbortCandidate(active, current);
+      if (richReply && current.latest?.isConnected
+          && current.latest.closest?.("main,[role='main'],#thread"))
+        return {replyScope:current.latest,finishAction:richReply.finishAction,
+          boundaryEvidence:"v247-same-request-roleless-rich-DIV-with-fresh-toolbar"};
+      return null;
+    }
     if (!active?.submitStartedAt || !active.baselineFinishActions
         || !active.networkStreamSeen || !active.networkObservedAt
         || active.networkObservedAt < active.submitStartedAt
@@ -1914,6 +1926,18 @@
       const fileReplyBoundary = fileCreationRequested && !generating
         && !upstreamStillWorking()
         ? verifiedFileReplyBoundary(active, current) : null;
+      // v247: distinguish page generation latency from file transfer latency.
+      // Report only the first validated same-request completion boundary.
+      if (fileReplyBoundary && !active.mediaFileBoundaryVerifiedAt) {
+        active.mediaFileBoundaryVerifiedAt = Date.now();
+        await diagnostic(active, "file-page-reply-finished", {
+          media_file_ready_boundary: String(fileReplyBoundary.boundaryEvidence || "").slice(0, 100),
+          media_file_ready_epoch_ms: active.mediaFileBoundaryVerifiedAt,
+          media_file_ready_since_submit_ms: Math.max(0,
+            active.mediaFileBoundaryVerifiedAt - Number(active.submitStartedAt || active.mediaFileBoundaryVerifiedAt)),
+          media_delivery_phase: "native-binary-capture-pending",
+        });
+      }
       const mediaReplyRoot = fileReplyBoundary?.replyScope || sameTurnRoot;
       const visibleTurnMedia = Boolean(mediaReplyRoot && rich?.hasCandidateImage?.(mediaReplyRoot));
       const visibleTurnFiles = Boolean(mediaReplyRoot && rich?.hasCandidateFile?.(mediaReplyRoot));
@@ -2122,6 +2146,8 @@
               media_capture_inline_count: active.mediaCaptureLastInlined,
               media_file_transfer_error: native?.error || finalMedia?.file_transfer_error || assistantRich?.file_transfer_error || "",
               media_file_preview_count: Number(finalMedia?.file_preview_count || 0),
+              media_binary_wait_since_page_finish_ms: active.mediaFileBoundaryVerifiedAt
+                ? Date.now() - active.mediaFileBoundaryVerifiedAt : null,
               media_native_file_button_candidates: Number(native?.button_candidates || 0),
               media_native_file_capture_count: Number(native?.count || 0),
               media_native_file_captured_types: native?.captured_types || [],
