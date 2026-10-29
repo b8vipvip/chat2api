@@ -146,7 +146,7 @@ def test_worker_settings_ui_has_one_hard_concurrency_field_and_no_standby_overri
     assert "v240WorkerConcurrencyDialog" not in behavior
     assert "data-v121-limit-popover" not in canonical
     assert "restoreLimitEditor(editor)" in behavior
-    assert "document.body.appendChild(dialog)" in behavior
+    assert "editor.append(input,save,note)" in behavior
     assert 'install_worker_limits_clipboard_v121_patch(app)' in entry
     assert 'install_worker_limits_clipboard_v121_patch(app)' not in presentation
     assert '?v={ASSET_RELEASE}' in patch
