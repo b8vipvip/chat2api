@@ -53,6 +53,7 @@ assert.equal(ctx.find({...active,networkObservedText:"unrelated"}),null);
 assert.equal(ctx.find({...active,submitStartedAt:now+10000}),null);
 assert.equal(ctx.verify({...active,baselineFinishActions:new Set([toolbar])},candidate),null);
 assert.equal(ctx.verify(active,{...candidate,rolelessHeading:old}),null);
-assert.ok(source.includes('response_terminal_source: rendered.shortTextVerified'));
+assert.ok(source.includes('response_terminal_source: rendered.rolelessRichVerified') &&
+  source.includes(': rendered.shortTextVerified'));
 assert.ok(source.includes('"fresh-roleless-short-answer-v245"'));
 console.log("v245 short roleless reply remains single-publisher and rejects old headings/buttons");
