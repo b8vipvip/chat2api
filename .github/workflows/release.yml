@@ -96,6 +96,18 @@ jobs:
           ci_success_id="$(success_id "CI")"
           smoke_success_id="$(success_id "Production image smoke")"
 
+          # Smart path classification may skip the costly image build. An
+          # overall green workflow with a skipped build is NOT production
+          # image evidence and must never authorize an automatic Release.
+          if [[ -n "$smoke_success_id" ]]; then
+            build_ok="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$smoke_success_id/jobs?per_page=100" \
+              --jq '[.jobs[] | select(.name == "build") | .conclusion] | any(. == "success")')"
+            if [[ "$build_ok" != "true" ]]; then
+              echo "Production image smoke skipped image build; no Release image proof"
+              smoke_success_id=""
+            fi
+          fi
+
           echo "validation snapshot: CI latest=${ci_latest} success_run=${ci_success_id:-none} | Production image smoke latest=${smoke_latest} success_run=${smoke_success_id:-none}"
 
           # A completed success is durable evidence for this immutable SHA.
