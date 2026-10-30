@@ -1,3 +1,7 @@
+# GPTAuto 统一智能更新规则（本仓库强制执行）
+
+对任何 AI / ChatGPT / GPTAuto 修复与版本更新，首先读取 [GPTAuto 统一策略](.github/GPTAUTO_SMART_UPDATE.md)，然后遵守其 Git SHA 绑定的更新分类、Fast CI、按需编译、人工点击部署、宿主机唯一更新器及回滚规则。不能凭 PR 标题或版本号自动触发完整 Docker Build；无法验证安全热更新前置条件时，必须保持已有正式构建/发布保护。下文产品专属安全约束继续生效。
+
 # AI 开发入口
 
 本仓库已启用 **GitHub Agent v3**。本文件是进入仓库进行开发、排障和 CI 修复时的 AI 入口说明，适用于整个仓库。
@@ -6,7 +10,7 @@
 
 当任务涉及 GitHub Actions、CI、测试失败、卡死、排队异常或历史异常 Run 时，AI 必须先：
 
-1. 阅读 [`.github/GITHUB_AGENT.md`](.github/GITHUB_AGENT.md)。
+1. 阅读 [`.github/GPTAUTO_SMART_UPDATE.md`](.github/GITHUB_AGENT.md)。
 2. 搜索未关闭的 `[GitHub Agent][AI Repair]` Issue，优先找到与当前 Workflow / Run / 分支对应的问题单。
 3. 阅读问题单指向的完整 Source Run、失败 Job / Step、日志和对应 Commit；Issue 中的日志摘要只用于定位，不能替代完整日志。
 4. 检查源 Commit 是否已经被更新提交或已有修复取代，避免修复过时代码。
