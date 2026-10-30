@@ -205,7 +205,13 @@ def native_delivery_fingerprint(snapshot: dict | None) -> tuple | None:
     """An asset becoming ready is a new SSE state even at the same DOM revision."""
     if not snapshot:
         return None
-    return snapshot["revision"], tuple(snapshot.get("assets") or ())
+    # Files may become available after the last DOM update, exactly as
+    # image archives do. The SSE must publish this same-revision change.
+    files = tuple(
+        (item.get("url"), item.get("status"))
+        for item in (snapshot.get("files") or []) if isinstance(item, dict)
+    )
+    return snapshot["revision"], tuple(snapshot.get("assets") or ()), files
 
 
 def native_layout_summary(snapshot: dict, archived_assets: int) -> dict:
