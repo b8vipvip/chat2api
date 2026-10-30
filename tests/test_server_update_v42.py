@@ -115,7 +115,7 @@ def test_update_console_and_host_scripts_use_narrow_systemd_boundary():
 
     for token in (
         "版本更新",
-        "从 GitHub 更新服务端",
+        "检查并智能更新",
         "systemd.path + 固定更新脚本",
         "install_chat2api_server_updater.sh",
         "/api/admin/server-update/start",

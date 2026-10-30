@@ -25,7 +25,48 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  classify:
+    runs-on: ubuntu-latest
+    outputs:
+      full_image: ${{ steps.plan.outputs.full_image }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Classify exact changed paths using GPTAuto
+        id: plan
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '' }}
+          FORCE_IMAGE: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          set -euo pipefail
+          echo "full_image=true" >> "$GITHUB_OUTPUT"
+          if [[ "$FORCE_IMAGE" == "true" ]]; then
+            echo "Explicit image validation requested"
+            exit 0
+          fi
+          target="$(git rev-parse HEAD)"
+          base="$BASE_SHA"
+          if [[ ! "$base" =~ ^[a-f0-9]{40}$ ]] || [[ "$base" == 0000000000000000000000000000000000000000 ]]; then
+            base="$(git rev-parse HEAD^)"
+          fi
+          classifier=.github/gptauto/smart_update.py
+          [[ -f "$classifier" ]] || { echo "Classifier not installed; image proof required"; exit 0; }
+          if ! python3 "$classifier" --repo chat2api --worktree . \
+              --from-sha "$base" --target-sha "$target" > /tmp/smart-plan.json; then
+            echo "Classification failed; image proof required"
+            exit 0
+          fi
+          cat /tmp/smart-plan.json
+          mode="$(python3 -c 'import json; print(json.load(open("/tmp/smart-plan.json"))["mode"])')"
+          if [[ "$mode" == runtime-hotfix || "$mode" == checks-only || "$mode" == no-op ]]; then
+            echo "full_image=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build:
+    needs: classify
+    if: needs.classify.outputs.full_image == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
