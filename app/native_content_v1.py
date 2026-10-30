@@ -10,6 +10,7 @@ import json
 import os
 import re
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 
@@ -117,7 +118,9 @@ class NativeContentStore:
     """Bounded latest-revision store; persistence is independent of request terminal."""
     def __init__(self, data_dir: Path):
         self.root = Path(data_dir) / "native_content"
-        self.root.mkdir(parents=True, exist_ok=True)
+        self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.root.chmod(0o700)
+        self._persist_count = 0
         self._lock = threading.Lock()
         self._live: OrderedDict[str, tuple[str, dict]] = OrderedDict()
 
@@ -168,8 +171,21 @@ class NativeContentStore:
         temp = path.with_suffix(".tmp")
         data = json.dumps({"owner": owner, "snapshot": snapshot}, ensure_ascii=False)
         try:
-            temp.write_text(data, encoding="utf-8")
+            fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(data)
             os.replace(temp, path)
+            self._persist_count += 1
+            # Bounded on-disk cache, independent of request_history.jsonl and
+            # existing MediaArchive retention. Max 1000 snapshots / 90 days.
+            if self._persist_count % 32 == 0:
+                saved = sorted(self.root.glob("req_*.json"),
+                               key=lambda p: p.stat().st_mtime, reverse=True)
+                cutoff = time.time() - 90 * 86400
+                for index, candidate in enumerate(saved):
+                    if index >= 1000 or candidate.stat().st_mtime < cutoff:
+                        candidate.unlink(missing_ok=True)
             return True
         except OSError:
             return False
