@@ -54,6 +54,8 @@ async function isolatedSession(){
   assert.ok(frames.some(f=>f?.diagnostics?.network_stream_abort_signal===true));
   const finalDiag=frames.find(f=>f?.diagnostics?.network_stream_phase==="done-with-verified-eof-proof");
   assert.ok(finalDiag);
+  assert.equal(finalDiag.diagnostics.network_stream_terminal_proof,true,
+    "only matching stream with clean verified EOF supplies transport proof");
   assert.equal(finalDiag.diagnostics.generating_observed,false);
   assert.equal(frames.filter(f=>["chat.completed","chat.error","chat.snapshot","chat.delta"].includes(f?.type)).length,0);
 
@@ -64,6 +66,25 @@ async function isolatedSession(){
   for(let i=0;i<8;i++)await tick();
   assert.ok(active.networkTerminalTransportErrorAt>0,
     "bare EOF without assistant marker cannot falsely complete");
+  const unverifiedDiag = frames.find(f => f?.diagnostics?.network_stream_phase === "done-without-assistant-terminal");
+  assert.equal(unverifiedDiag?.diagnostics?.network_stream_terminal_proof, false);
+
+  // A parser may have observed an end_turn marker before the browser aborts.
+  // This is diagnostic marker evidence, NOT a clean transport completion.
+  send("marker-aborted","response",{event_stream:true,status:200});
+  send("marker-aborted","assistant-snapshot",{text:"partial response",sequence:1});
+  await tick();
+  send("marker-aborted","assistant-complete",{text:"partial response",sequence:2,
+    completion_hint:true,terminal_evidence_source:"assistant-end-turn-patch"});
+  await tick();
+  send("marker-aborted","error",{error:"signal is aborted without reason",
+    error_name:"AbortError",completion_hint:true,signal_aborted:true});
+  for(let i=0;i<8;i++)await tick();
+  const abortDiag = frames.find(f => f?.diagnostics?.network_stream_phase === "error" &&
+    f?.diagnostics?.network_stream_id === "marker-aborted");
+  assert.equal(abortDiag?.diagnostics?.network_stream_terminal_marker_seen,true);
+  assert.equal(abortDiag?.diagnostics?.network_stream_terminal_proof,false,
+    "aborted reader may not advertise clean EOF completion");
 }
 
 async function mainWorldSession(kind){
