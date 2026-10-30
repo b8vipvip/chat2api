@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from .api_keys import ApiPrincipal
 from .diagnostics import DiagnosticMiddleware, DiagnosticStore, configure_file_logging
 from .runtime_contract import SERVER_RUNTIME_VERSION
+from .runtime_code_identity import runtime_code_sha
 from .telemetry import parse_request_since
 from .playground_request_evidence_v207 import request_test_index, playground_diagnostics
 
@@ -152,6 +153,12 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             cutoff = parse_request_since(since)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        active_commit = runtime_code_sha() if current_version_only else ""
+        if current_version_only and not active_commit:
+            raise HTTPException(
+                status_code=409,
+                detail="Current running Git commit is unverified; cannot export by current code revision",
+            )
         # Query is the single predicate owner, but admin list middleware
         # intentionally removes prompt and response text. Rehydrate from the
         # original request history BEFORE assembling the export; exporting
@@ -161,6 +168,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             q=q, status=status, model=model, since=cutoff,
             current_version_only=current_version_only,
             server_version=SERVER_RUNTIME_VERSION,
+            server_commit=active_commit,
         )["data"]
         matching_ids = {str(row.get("request_id") or "") for row in filtered_rows}
         selected = [
@@ -204,6 +212,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                         "recorded_at": row.get("recorded_at"),
                         "status": row.get("status"),
                         "request_server_version": row.get("request_server_version"),
+                        "request_server_commit": row.get("request_server_commit"),
                         "filename": filename,
                     })
 
@@ -215,7 +224,9 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                     "selection_mode": "current_version" if current_version_only else ("since" if cutoff and not any((q, status, model)) else "filtered"),
                     "filters": {"q": q or None, "status": status or None, "model": model or None},
                     "current_version_only": current_version_only,
-                    "request_version_field": "request_server_version",
+                    "request_version_field": "request_server_commit",
+                    "request_commit_field": "request_server_commit",
+                    "selected_server_commit": active_commit if current_version_only else None,
                     "selected_server_version": SERVER_RUNTIME_VERSION if current_version_only else None,
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                     "server_version": SERVER_RUNTIME_VERSION,
@@ -236,8 +247,9 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                      f"导出数量：{len(exported)} 条（仅限仍留存的请求记录）\n"
                      f"起始时间（含）：{cutoff.isoformat() if cutoff else '不限制时间'}\n"
                      f"其它筛选：搜索={q or '不限'}，状态={status or '不限'}，模型={model or '不限'}\n"
-                     f"仅当前版本：{'是，'+SERVER_RUNTIME_VERSION if current_version_only else '否'}\n"
-                     "历史请求若缺少创建版本标记，不会被归入当前版本。\n"
+                     f"仅当前运行提交：{'是，'+active_commit if current_version_only else '否'}\n"
+                     f"当前正式版本：{SERVER_RUNTIME_VERSION}\n"
+                     "历史请求若缺少创建时的可靠 Git SHA 标记，不会被归入当前提交。\n"
                      "requests/ 目录中每条 JSON 对应一次请求，结构与请求记录列表中的“下载日志”一致。\n"
                      "index.json 按页面最新记录顺序给出 ID、状态和文件名；打包只读，不修改请求终态。\n"
                      "注意：日志可能包含完整提示词、生成回复和诊断证据，分享前请检查并脱敏。\n").encode("utf-8"),
@@ -262,7 +274,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                 "Content-Disposition": f'attachment; filename="chat2api-request-logs-{"current-version-" if current_version_only else ("since-" if cutoff else "filtered-")}{len(exported)}-{stamp}.zip"',
                 "Cache-Control": "no-store",
                 "X-Chat2API-Exported-Count": str(len(exported)),
-                "X-Chat2API-Version-Scope": SERVER_RUNTIME_VERSION if current_version_only else "all",
+                "X-Chat2API-Version-Scope": active_commit if current_version_only else "all",
             },
         )
 
