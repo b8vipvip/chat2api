@@ -217,7 +217,16 @@ def install_server_update_patch(app: FastAPI) -> FastAPI:
         marker = _read_json(data_dir / UPDATER_MARKER_NAME)
         deployment = _read_json(data_dir / DEPLOYMENT_NAME)
         remote = await _remote_main(app, refresh=bool(refresh))
-        deployed_commit = str(deployment.get("commit") or "")
+        # Prefer the marker inside the *running* container. The host's Git
+        # checkout is not proof that Docker actually loaded that revision.
+        runtime_marker = Path("/app/.gptauto-runtime-sha")
+        runtime_code_sha = (
+            runtime_marker.read_text(encoding="ascii").strip()
+            if runtime_marker.is_file() else
+            os.environ.get("CHAT2API_BUILD_COMMIT", "")
+        )
+        runtime_code_sha = runtime_code_sha if re.fullmatch(r"[0-9a-f]{40}", runtime_code_sha) else ""
+        deployed_commit = runtime_code_sha or str(deployment.get("commit") or "")
         remote_sha = str(remote.get("sha") or "")
         return {
             "repository": GITHUB_REPOSITORY,
