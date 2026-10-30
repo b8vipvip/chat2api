@@ -60,6 +60,11 @@ digest = hashlib.sha256(out.read_bytes()).hexdigest()
 Path('/app/bootstrap/linux-worker-bundle.sha256').write_text(digest + '\n', encoding='utf-8')
 PY
 
+# Stamp the exact repository commit for safe next-update baseline validation.
+ARG CHAT2API_BUILD_COMMIT=unknown
+ENV CHAT2API_BUILD_COMMIT=${CHAT2API_BUILD_COMMIT}
+LABEL org.opencontainers.image.revision="${CHAT2API_BUILD_COMMIT}"
+
 EXPOSE 8765
 # exec makes uvicorn PID 1 inside the container so Docker SIGTERM reaches the
 # server directly during an update instead of relying on /bin/sh forwarding it.
