@@ -13,6 +13,38 @@ def test_browser_media_origin_uses_verified_https_same_host():
     ) == "https://chat2api.mv3.cn"
 
 
+def test_configured_https_origin_fixes_server_to_server_without_browser_origin():
+    # MV3C's upstream client is a server and normally has no browser Origin.
+    assert effective_media_base_url(
+        "http://chat2api.mv3.cn", None, "https://chat2api.mv3.cn"
+    ) == "https://chat2api.mv3.cn"
+    assert effective_media_base_url(
+        "http://127.0.0.1:8000", None, "https://chat2api.mv3.cn"
+    ) == "https://chat2api.mv3.cn"
+
+    from types import SimpleNamespace
+    from app.media_public_origin_v187 import media_base_for_request
+    request = SimpleNamespace(
+        base_url="http://chat2api.mv3.cn/", headers={},
+        app=SimpleNamespace(state=SimpleNamespace(settings=SimpleNamespace(
+            public_url="https://chat2api.mv3.cn"))),
+    )
+    assert media_base_for_request(request) == "https://chat2api.mv3.cn"
+
+
+def test_invalid_configured_origin_cannot_override_request_origin():
+    for configured in (
+        "http://chat2api.mv3.cn", "https://evil.com/path",
+        "https://user:secret@chat2api.mv3.cn",
+        "https://chat2api.mv3.cn?token=leak",
+        "https://chat2api.mv3.cn#fragment",
+        "https://chat2api.mv3.cn:badport",
+    ):
+        assert effective_media_base_url(
+            "http://chat2api.mv3.cn", None, configured
+        ) == "http://chat2api.mv3.cn"
+
+
 def test_untrusted_or_cross_host_origin_never_controls_media_links():
     base = "http://chat2api.mv3.cn"
     for origin in (
