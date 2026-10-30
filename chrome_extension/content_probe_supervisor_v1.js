@@ -219,6 +219,91 @@
     };
   }
 
+  /**
+   * Privacy-bounded, request-scoped layout fingerprint. No text, DOM HTML,
+   * classes, selectors, filenames, URLs, media bytes, or screen screenshots.
+   * Element geometry is relative to the reply scope; records establish whether
+   * pictures share a visual row, are in a flex/grid container, and retain their
+   * intrinsic aspect ratio. This is evidence, NOT rendering authority.
+   */
+  function visualLayoutFacts(active, scope) {
+    const empty = {
+      scene_layout_version: 1, scene_layout_image_count: 0,
+      scene_layout_image_rows: 0, scene_layout_element_count: 0,
+      scene_layout_geometry: "",
+    };
+    if (!active?.submitStartedAt) return empty;
+    try {
+      const preferred = typeof Element !== "undefined" && active.lastCandidateNode instanceof Element && active.lastCandidateNode.isConnected
+        ? active.lastCandidateNode : null;
+      const latestAssistant = [...scope.querySelectorAll(
+        "[data-message-author-role='assistant'],[data-testid^='conversation-turn']"
+      )].slice(-1)[0];
+      const reply = preferred || latestAssistant || scope;
+      const rootBox = reply.getBoundingClientRect?.() || {left: 0, top: 0};
+      const n = value => Math.max(-99999, Math.min(99999, Math.round(Number(value) || 0)));
+      const box = element => {
+        const r = element.getBoundingClientRect();
+        return [n(r.left - (rootBox.left || 0)), n(r.top - (rootBox.top || 0)),
+          n(r.width), n(r.height)];
+      };
+      const paint = element => {
+        const css = getComputedStyle(element);
+        return css.display === "grid" ? 2 : css.display === "flex" ? 1 : 0;
+      };
+      const images = [...reply.querySelectorAll("img")].filter(node => {
+        try { return safeVisible(node) && node.getBoundingClientRect().width >= 36; }
+        catch (_) { return false; }
+      }).slice(-28);
+      let lastTop = null, row = -1;
+      const codes = [];
+      for (const img of images) {
+        const [x,y,w,h] = box(img);
+        if (lastTop === null || Math.abs(lastTop - y) > 18) row += 1;
+        lastTop = y;
+        const css = getComputedStyle(img);
+        const fit = css.objectFit === "cover" ? 2 : css.objectFit === "contain" ? 1 : 0;
+        const parent = img.parentElement;
+        const container = parent?.parentElement || parent;
+        const layout = container ? paint(container) : 0;
+        codes.push(["I", x, y, w, h,
+          n(img.naturalWidth), n(img.naturalHeight), row, fit, layout].join(":"));
+      }
+      // Other structurally important elements; never inspect innerText.
+      const structures = [...reply.querySelectorAll("h1,h2,h3,h4,pre,table,figure,ul,ol")]
+        .filter(safeVisible).slice(-20);
+      for (const node of structures) {
+        const tag = node.tagName.toUpperCase();
+        const type = /^H[1-4]$/.test(tag) ? "H" : tag === "TABLE" ? "T"
+          : tag === "PRE" ? "C" : tag === "FIGURE" ? "F" : "L";
+        codes.push([type, ...box(node), paint(node)].join(":"));
+      }
+      // Explicit gallery/group candidates, bounded separately from all DIVs.
+      const containers = [...reply.querySelectorAll("div,section,figure")]
+        .filter(node => {
+          if (!safeVisible(node)) return false;
+          const css = getComputedStyle(node);
+          if (css.display !== "grid" && css.display !== "flex") return false;
+          return node.querySelectorAll("img").length >= 2;
+        }).slice(-8);
+      for (const node of containers) {
+        const css = getComputedStyle(node);
+        const gap = n(parseFloat(css.columnGap) || parseFloat(css.gap) || 0);
+        const axis = css.flexDirection === "column" ? 2 : 1;
+        codes.push(["G", ...box(node), paint(node),
+          Math.min(50, node.querySelectorAll("img").length), gap, axis].join(":"));
+      }
+      const geometry = codes.join(";");
+      // Bounded at source and validated again by the server allowlist.
+      return {
+        scene_layout_version: 1, scene_layout_image_count: images.length,
+        scene_layout_image_rows: row + 1,
+        scene_layout_element_count: codes.length,
+        scene_layout_geometry: geometry.length <= 4400 ? geometry : geometry.slice(0, 4400),
+      };
+    } catch (_) { return empty; }
+  }
+
   function observerFacts(active = null) {
     const at = performance.now();
     const root = allowedRoots.map(selector => document.querySelector(selector)).find(Boolean);
@@ -324,6 +409,7 @@
     )].slice(0, 120).length;
     return {
       ...sceneFacts(active, scope),
+      ...visualLayoutFacts(active, scope),
       main_found: Boolean(root),
       main_selector: root ? (root.id === "thread" ? "#thread" : root.tagName.toLowerCase()) : null,
       assistant_turn_nodes: roleStats.assistant,

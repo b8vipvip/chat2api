@@ -32,6 +32,7 @@ const fakeDocument = {
   },
 };
 const context = {
+  Element: class Element {},
   document: fakeDocument,
   performance: {now: () => 5}, setTimeout,
   chrome: {runtime: {sendMessage: async message => { sent.push(message); return true; }}},
@@ -65,10 +66,14 @@ const disabled = {requestId: "req_disabled12345", options: {probe_policy: {schem
 probes.begin(disabled);
 await Promise.resolve();
 assert.equal(sent.length, 2, "disabled tools must not run");
+active.submitStartedAt = Date.now();
 probes.observe(active, {handoff: true, generating: true});
 await Promise.resolve();
 await Promise.resolve();
 assert.equal(sent.length, 4);
+assert.equal(sent[2].event.facts.scene_layout_version, 1);
+assert.ok(sent[2].event.facts.scene_layout_geometry.startsWith('I:'));
+assert.equal(sent[2].event.facts.scene_layout_image_rows, 1);
 probes.observe(active, {handoff: true, generating: true});
 await Promise.resolve();
 assert.equal(sent.length, 4, "handoff should be sampled only once");

@@ -108,6 +108,8 @@ ALLOWED_FACTS = frozenset([
     "scene_context_generation_active",
     "scene_delivered_chars", "scene_delivered_table_rows", "scene_delivered_code_fences",
     "scene_delivered_formula_markers", "scene_delivered_heading_count",
+    "scene_layout_version", "scene_layout_image_count", "scene_layout_image_rows",
+    "scene_layout_element_count", "scene_layout_geometry",
 ])
 ALLOWED_CLASSIFICATIONS = frozenset([
     "baseline", "no_assistant_turn", "handoff_without_visible_media",
@@ -145,6 +147,12 @@ def _sanitize_facts(value: Any) -> dict[str, str | bool | int | float | None]:
             result[key] = fact
         elif isinstance(fact, (int, float)) and not isinstance(fact, bool):
             if -1_000_000_000 < fact < 1_000_000_000:
+                result[key] = fact
+        elif key == "scene_layout_geometry" and isinstance(fact, str):
+            # Image/structure tag plus bounded integer rectangles; no URLs,
+            # text, stylesheets, attributes, markup, classes, or private data.
+            part = r"(?:I(?::-?\d{1,5}){9}|[HTCFL](?::-?\d{1,5}){5}|G(?::-?\d{1,5}){8})"
+            if len(fact) <= 4400 and re.fullmatch(rf"{part}(?:;{part})*", fact):
                 result[key] = fact
         elif key == "scene_reply_topology" and isinstance(fact, str):
             # Only bounded DOM tag/ordinal/length tuples, never user text.
