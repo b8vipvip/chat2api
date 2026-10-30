@@ -20,7 +20,7 @@ MAX_DEPTH = 14
 MAX_TEXT = 48000
 MAX_ACTIVE = 128
 MAX_AGE_SECONDS = 90 * 86400
-SNAPSHOT_FILENAME = re.compile(r"(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}\\.json")
+SNAPSHOT_FILENAME = re.compile(r"(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}\.json")
 SAFE_TAGS = {"div", "p", "span", "strong", "em", "h1", "h2", "h3", "h4",
              "ul", "ol", "li", "blockquote", "pre", "code", "table", "thead",
              "tbody", "tr", "td", "th", "figure", "figcaption", "img", "hr", "br"}
