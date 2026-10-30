@@ -131,7 +131,13 @@ def test_post_submit_without_generation_fails_and_force_releases(monkeypatch):
 
         assert state.diagnostics["post_submit_generation_watchdog_fired"] is True
         assert any(payload.get("type") == "chat.cancel" for _client, payload in registry.sent)
-        await asyncio.sleep(0.05)
+        # The watchdog emits the terminal before scheduling a separate
+        # orphan-release task. On a busy CI runner, that task can execute
+        # after an arbitrary 50ms sleep even though it releases correctly.
+        # Wait for the actual invariant, with a strict deadline.
+        deadline = asyncio.get_running_loop().time() + 1.5
+        while state.request_id in broker.requests and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
         assert state.request_id not in broker.requests
         assert broker.capacity_snapshot("ext_post_submit")["used_units"] == 0
 

@@ -479,7 +479,7 @@ def install_worker_auto_login_v153_patch(app: FastAPI) -> FastAPI:
         async for chunk in response.body_iterator:
             content += chunk
         html = content.decode("utf-8", errors="replace")
-        marker = '<script src="/assets/chat2api-unified-workers-v153.js?v=0.22.258"></script>'
+        marker = '<script src="/assets/chat2api-unified-workers-v153.js?v=0.22.259"></script>'
         if marker not in html:
             html = html.replace("</body>", marker + "</body>")
         headers = {k: v for k, v in response.headers.items() if k.lower() not in {"content-length", "content-type"}}
