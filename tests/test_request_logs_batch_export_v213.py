@@ -155,7 +155,8 @@ def test_request_history_exposes_only_pasteable_start_time_control():
     assert "rqDownloadDiagnostics" not in source
     assert "下载诊断日志包" not in source
 
-def test_batch_export_current_version_is_creation_version_and_legacy_is_excluded(tmp_path: Path):
+def test_batch_export_current_version_is_creation_version_and_legacy_is_excluded(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CHAT2API_BUILD_COMMIT", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     with TestClient(app_v8(tmp_path)) as client:
         store = client.app.state.telemetry
         since = "2026-10-29 00:00:00"
@@ -167,34 +168,39 @@ def test_batch_export_current_version_is_creation_version_and_legacy_is_excluded
                 "requested_model": "gpt-6",
             }))
         asyncio.run(store.update("req_current", {"status": "completed",
-                             "request_server_version": "spoofed-version"}))
+                             "request_server_version": "spoofed-version",
+                             "request_server_commit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}))
         assert store.get("req_current")["request_server_version"] == SERVER_RUNTIME_VERSION
+        assert store.get("req_current")["request_server_commit"] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
         # Older deployment and unversioned historical records are not
         # evidence of creation under this release.
-        for ident, stamp in (("req_old", "0.22.242"), ("req_unmarked", None)):
+        for ident, commit in (("req_old", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"), ("req_unmarked", None)):
             old = store.get(ident)
-            if stamp is None:
-                old.pop("request_server_version", None)
+            # They deliberately share the current formal release version.
+            assert old["request_server_version"] == SERVER_RUNTIME_VERSION
+            if commit is None:
+                old.pop("request_server_commit", None)
             else:
-                old["request_server_version"] = stamp
+                old["request_server_commit"] = commit
             store._remember(old)
         asyncio.run(store.update("req_unmarked", {"status": "completed"}))
-        assert "request_server_version" not in store.get("req_unmarked")
+        assert "request_server_commit" not in store.get("req_unmarked")
 
         response = client.get("/api/admin/requests/logs/batch",
                               params={"since": since, "current_version_only": "true"},
                               headers=headers())
         assert response.status_code == 200, response.text
         assert response.headers["x-chat2api-exported-count"] == "1"
-        assert response.headers["x-chat2api-version-scope"] == SERVER_RUNTIME_VERSION
+        assert response.headers["x-chat2api-version-scope"] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         assert "current-version" in response.headers["content-disposition"]
         with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
             manifest = json.loads(bundle.read("index.json"))
             assert manifest["selection_mode"] == "current_version"
             assert manifest["selected_server_version"] == SERVER_RUNTIME_VERSION
             assert manifest["current_version_only"] is True
-            assert manifest["request_version_field"] == "request_server_version"
+            assert manifest["request_version_field"] == "request_server_commit"
+            assert manifest["selected_server_commit"] == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             assert [row["request_id"] for row in manifest["requests"]] == ["req_current"]
             report = json.loads(bundle.read(manifest["requests"][0]["filename"]))
             assert report["request"]["request_server_version"] == SERVER_RUNTIME_VERSION
@@ -210,19 +216,20 @@ def test_batch_export_current_version_is_creation_version_and_legacy_is_excluded
         # Version and a provided start timestamp are now intersected.
         assert other.status_code == 404
 
-def test_current_version_without_since_includes_all_retained_current_rows(tmp_path: Path):
+def test_current_version_without_since_includes_all_retained_current_rows(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("CHAT2API_BUILD_COMMIT", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     with TestClient(app_v8(tmp_path)) as client:
         store = client.app.state.telemetry
-        for name, version in (("req_v1", SERVER_RUNTIME_VERSION),
-                              ("req_v2", SERVER_RUNTIME_VERSION),
-                              ("req_legacy", "0.22.246")):
+        for name, commit in (("req_v1", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                             ("req_v2", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                             ("req_legacy", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")):
             asyncio.run(store.upsert({
                 "request_id": name, "recorded_at": "2026-10-29T07:00:00+08:00",
                 "status": "completed",
             }))
-            if version != SERVER_RUNTIME_VERSION:
+            if commit != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":
                 row = store.get(name)
-                row["request_server_version"] = version
+                row["request_server_commit"] = commit
                 store._remember(row)
         response = client.get("/api/admin/requests/logs/batch",
                               params={"current_version_only": "true"},
@@ -246,8 +253,9 @@ def test_current_version_without_since_includes_all_retained_current_rows(tmp_pa
 
 
 
-def test_filter_parity_between_history_table_and_full_retained_zip(tmp_path: Path):
+def test_filter_parity_between_history_table_and_full_retained_zip(tmp_path: Path, monkeypatch):
     """Export all matched rows, not merely the first 100 displayed rows."""
+    monkeypatch.setenv("CHAT2API_BUILD_COMMIT", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     with TestClient(app_v8(tmp_path)) as client:
         store = client.app.state.telemetry
         for i in range(130):
@@ -258,19 +266,19 @@ def test_filter_parity_between_history_table_and_full_retained_zip(tmp_path: Pat
                 "requested_model": "gpt-6",
             }
             asyncio.run(store.upsert(row))
-        for ident, time, version, key_name in (
-            ("req_older", "2026-10-29T17:27:48+08:00", SERVER_RUNTIME_VERSION, "mv3c"),
-            ("req_other_key", "2026-10-29T17:28:00+08:00", SERVER_RUNTIME_VERSION, "another"),
-            ("req_other_version", "2026-10-29T17:28:00+08:00", "0.22.248", "mv3c"),
+        for ident, time, commit, key_name in (
+            ("req_older", "2026-10-29T17:27:48+08:00", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "mv3c"),
+            ("req_other_key", "2026-10-29T17:28:00+08:00", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "another"),
+            ("req_other_version", "2026-10-29T17:28:00+08:00", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "mv3c"),
         ):
             asyncio.run(store.upsert({
                 "request_id": ident, "recorded_at": time,
                 "status": "completed", "requested_model": "gpt-6",
                 "api_key_name": key_name,
             }))
-            if version != SERVER_RUNTIME_VERSION:
+            if commit != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":
                 row = store.get(ident)
-                row["request_server_version"] = version
+                row["request_server_commit"] = commit
                 store._remember(row)
         filters = {
             "q": "mv3c", "status": "completed", "model": "gpt-6",
@@ -297,3 +305,104 @@ def test_filter_parity_between_history_table_and_full_retained_zip(tmp_path: Pat
             assert {v["request_id"] for v in manifest["requests"]} == {
                 f"req_match_{i:03d}" for i in range(130)
             }
+
+
+def test_current_sha_changes_after_hotfix_while_formal_version_is_unchanged(tmp_path: Path, monkeypatch):
+    old_commit = "1" * 40
+    current_commit = "2" * 40
+    monkeypatch.setenv("CHAT2API_BUILD_COMMIT", old_commit)
+    with TestClient(app_v8(tmp_path)) as client:
+        store = client.app.state.telemetry
+        asyncio.run(store.upsert({
+            "request_id": "before_hotfix", "status": "running",
+            "recorded_at": "2026-10-29T10:39:31+08:00",
+        }))
+        monkeypatch.setenv("CHAT2API_BUILD_COMMIT", current_commit)
+        asyncio.run(store.upsert({
+            "request_id": "after_hotfix", "status": "completed",
+            "recorded_at": "2026-10-29T10:40:31+08:00",
+        }))
+        # Late status writes must preserve the creation SHA, regardless of
+        # the actual current runtime or a forged incoming field.
+        asyncio.run(store.update("before_hotfix", {
+            "status": "completed", "request_server_commit": current_commit,
+            "request_server_version": "spoofed",
+        }))
+        before = store.get("before_hotfix")
+        after = store.get("after_hotfix")
+        assert before["request_server_version"] == after["request_server_version"] == SERVER_RUNTIME_VERSION
+        assert before["request_server_commit"] == old_commit
+        assert after["request_server_commit"] == current_commit
+
+        filters = {"current_version_only": "true"}
+        listing = client.get("/api/admin/requests", params=filters, headers=headers())
+        assert listing.status_code == 200
+        assert listing.json()["total"] == 1
+        assert listing.json()["current_version_commit"] == current_commit
+        assert [r["request_id"] for r in listing.json()["data"]] == ["after_hotfix"]
+
+        export = client.get("/api/admin/requests/logs/batch", params=filters,
+                            headers=headers())
+        assert export.status_code == 200
+        assert export.headers["x-chat2api-version-scope"] == current_commit
+        with zipfile.ZipFile(io.BytesIO(export.content)) as archive:
+            manifest = json.loads(archive.read("index.json"))
+            assert manifest["request_version_field"] == "request_server_commit"
+            assert manifest["selected_server_commit"] == current_commit
+            assert [r["request_id"] for r in manifest["requests"]] == ["after_hotfix"]
+            assert manifest["requests"][0]["request_server_commit"] == current_commit
+            report = json.loads(archive.read(manifest["requests"][0]["filename"]))
+            assert report["request"]["request_server_commit"] == current_commit
+
+        monkeypatch.setenv("CHAT2API_BUILD_COMMIT", old_commit)
+        earlier = client.get("/api/admin/requests", params=filters, headers=headers())
+        assert [r["request_id"] for r in earlier.json()["data"]] == ["before_hotfix"]
+
+
+def test_unknown_runtime_and_old_unstamped_requests_are_not_misattributed(tmp_path: Path, monkeypatch):
+    from app import runtime_code_identity
+
+    monkeypatch.setattr(runtime_code_identity, "_RUNTIME_STAMP", tmp_path / "no-stamp")
+    monkeypatch.delenv("CHAT2API_BUILD_COMMIT", raising=False)
+    with TestClient(app_v8(tmp_path)) as client:
+        store = client.app.state.telemetry
+        asyncio.run(store.upsert({
+            "request_id": "legacy", "status": "completed",
+            "request_server_commit": "f" * 40,
+        }))
+        assert "request_server_commit" not in store.get("legacy")
+        assert store.get("legacy")["request_server_version"] == SERVER_RUNTIME_VERSION
+
+        for uri in ("/api/admin/requests", "/api/admin/requests/logs/batch"):
+            result = client.get(uri, params={"current_version_only": "true"},
+                                headers=headers())
+            assert result.status_code == 409
+            assert "unverified" in result.json()["detail"]
+
+        valid_commit = "a" * 40
+        monkeypatch.setenv("CHAT2API_BUILD_COMMIT", valid_commit)
+        asyncio.run(store.upsert({
+            "request_id": "current", "status": "completed",
+        }))
+        data = client.get("/api/admin/requests",
+                          params={"current_version_only": "true"},
+                          headers=headers()).json()
+        assert data["total"] == 1
+        assert [r["request_id"] for r in data["data"]] == ["current"]
+        assert client.get("/api/admin/requests",
+                          headers=headers()).json()["total"] == 2
+
+
+def test_effective_container_hotfix_marker_beats_image_sha_and_fails_closed(tmp_path: Path, monkeypatch):
+    from app import runtime_code_identity
+
+    marker = tmp_path / "runtime.sha"
+    monkeypatch.setattr(runtime_code_identity, "_RUNTIME_STAMP", marker)
+    monkeypatch.setenv("CHAT2API_BUILD_COMMIT", "a" * 40)
+    assert runtime_code_identity.runtime_code_sha() == "a" * 40
+    marker.write_text("b" * 40 + "\n", encoding="ascii")
+    assert runtime_code_identity.runtime_code_sha() == "b" * 40
+    marker.write_text("not-a-commit\n", encoding="ascii")
+    assert runtime_code_identity.runtime_code_sha() == ""
+    marker.write_text("B" * 40, encoding="ascii")
+    assert runtime_code_identity.runtime_code_sha() == ""

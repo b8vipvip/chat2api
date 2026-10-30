@@ -10,6 +10,7 @@ from typing import Any
 
 from .diagnostics import current_trace_id
 from .jsonl_tail import iter_recent_jsonl
+from .runtime_code_identity import runtime_code_sha
 from .timezone_utils import beijing_now_iso, to_beijing_iso
 
 
@@ -123,9 +124,17 @@ class TelemetryStore:
             # Historical unversioned requests must remain unversioned.
             if existing:
                 record.pop("request_server_version", None)
+                record.pop("request_server_commit", None)
             else:
                 from .runtime_contract import SERVER_RUNTIME_VERSION
                 record["request_server_version"] = SERVER_RUNTIME_VERSION
+                # Never trust an upstream-supplied revision. Stamp the actual
+                # running code at request creation and keep it immutable.
+                commit = runtime_code_sha()
+                if commit:
+                    record["request_server_commit"] = commit
+                else:
+                    record.pop("request_server_commit", None)
             record = {**(existing or {}), **record}
             record.setdefault("recorded_at", utc_now())
             record["updated_at"] = utc_now()
@@ -167,6 +176,7 @@ class TelemetryStore:
         since: datetime | None = None,
         current_version_only: bool = False,
         server_version: str | None = None,
+        server_commit: str | None = None,
     ) -> dict[str, Any]:
         # Query consumers are allowed to decorate/redact list rows. Return copies
         # so list-only redaction (final_prompt/response_text) can never mutate the
@@ -179,7 +189,8 @@ class TelemetryStore:
 
         def matches(row: dict[str, Any]) -> bool:
             if current_version_only and (
-                not server_version or str(row.get("request_server_version") or "") != server_version
+                not server_commit
+                or str(row.get("request_server_commit") or "") != server_commit
             ):
                 return False
             if since is not None and not request_record_created_after(row, since):

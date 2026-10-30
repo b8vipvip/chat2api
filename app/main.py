@@ -49,6 +49,7 @@ from .prompting import build_prompt
 from .registry import ClientRegistry
 from .telemetry import TelemetryStore, parse_request_since
 from .runtime_contract import SERVER_RUNTIME_VERSION
+from .runtime_code_identity import runtime_code_sha
 from .worker_probe_store import WorkerProbeStore
 from .test_runs import TestRunStore
 from .playground_truth_v170 import reconcile_playground_runs, compact_playground_outcome, present_playground_run
@@ -548,13 +549,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             cutoff = parse_request_since(since)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
+        active_commit = runtime_code_sha() if current_version_only else ""
+        if current_version_only and not active_commit:
+            raise HTTPException(
+                status_code=409,
+                detail="Current running Git commit is unverified; cannot filter by current code revision",
+            )
         result = telemetry.query(
             limit=limit, offset=offset, status=status_filter, model=model,
             key_id=key_id, q=q, since=cutoff,
             current_version_only=current_version_only,
             server_version=SERVER_RUNTIME_VERSION,
+            server_commit=active_commit,
         )
-        return {**result, "summary": telemetry.summary()}
+        return {**result, "summary": telemetry.summary(),
+                "current_version_commit": active_commit if current_version_only else None}
 
     @app.get("/api/admin/requests/{request_id}", dependencies=[Depends(require_admin_key)])
     async def admin_request_detail(request_id: str) -> dict[str, object]:

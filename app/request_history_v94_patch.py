@@ -259,13 +259,14 @@ function requestHistoryEnsureControls(){
     versionOnly.checked=false;
     versionOnly.style.cssText='width:16px;height:16px;min-width:16px;padding:0;margin:0;cursor:pointer;accent-color:var(--accent)';
     versionOnly.setAttribute('aria-label','仅合并打包导出当前版本的请求日志');
-    versionOnly.title='仅包含在当前服务端版本创建的请求；缺少可靠创建版本的旧请求不会被归入';
-    versionLabel.append(versionOnly,document.createTextNode('当前版本'));
+    versionOnly.title='按当前容器实际运行代码的 Git SHA 筛选；正式版本号相同但 SHA 不同的请求不混合';
+    versionLabel.title=versionOnly.title;
+    versionLabel.append(versionOnly,document.createTextNode('当前版本（Git SHA）'));
     // Time and version are independent intersecting predicates. Never disable
     // a provided time merely because the version checkbox is checked.
     const button=document.createElement('button');button.type='button';
     button.className='action';button.textContent='合并打包导出请求日志';
-    button.title='勾选当前版本导出该版本全部留存请求；不勾选时按输入起始时间导出（最多 500 条）';
+    button.title='勾选当前版本仅导出当前运行 Git SHA 创建的留存请求；不勾选时使用其它筛选条件（最多 500 条）';
     button.addEventListener('click',async()=>{
       const hasTime=Boolean(since.value.trim());
       const parsed=hasTime?requestHistoryParseExportSince(since.value):null;
@@ -294,7 +295,7 @@ function requestHistoryEnsureControls(){
   }
   if(section&&!section.querySelector('[data-request-history-diagnostic-hint]')){
     const hint=document.createElement('div');hint.dataset.requestHistoryDiagnosticHint='1';hint.className='footer';
-    hint.textContent='列表筛选与合并打包使用同一组条件（搜索、状态、模型、起始时间、当前版本），未填时间则不限制时间；勾选当前版本并填写时间时两者取交集。单条请求仍可下载完整日志；所有结果仅限当前仍留存记录，分享前请核对并脱敏。';
+    hint.textContent='「当前版本」按实际运行代码的完整 Git SHA 筛选，不按 v0.x 正式版本号；无可靠创建 SHA 的旧请求不会混入。列表与 ZIP 导出共用相同筛选；填写起始时间时取交集。只包含仍留存的记录，分享前请脱敏。';
     section.appendChild(hint);
   }
 }
