@@ -253,8 +253,9 @@ def test_current_version_without_since_includes_all_retained_current_rows(tmp_pa
 
 
 
-def test_filter_parity_between_history_table_and_full_retained_zip(tmp_path: Path):
+def test_filter_parity_between_history_table_and_full_retained_zip(tmp_path: Path, monkeypatch):
     """Export all matched rows, not merely the first 100 displayed rows."""
+    monkeypatch.setenv("CHAT2API_BUILD_COMMIT", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     with TestClient(app_v8(tmp_path)) as client:
         store = client.app.state.telemetry
         for i in range(130):
@@ -265,19 +266,19 @@ def test_filter_parity_between_history_table_and_full_retained_zip(tmp_path: Pat
                 "requested_model": "gpt-6",
             }
             asyncio.run(store.upsert(row))
-        for ident, time, version, key_name in (
-            ("req_older", "2026-10-29T17:27:48+08:00", SERVER_RUNTIME_VERSION, "mv3c"),
-            ("req_other_key", "2026-10-29T17:28:00+08:00", SERVER_RUNTIME_VERSION, "another"),
-            ("req_other_version", "2026-10-29T17:28:00+08:00", "0.22.248", "mv3c"),
+        for ident, time, commit, key_name in (
+            ("req_older", "2026-10-29T17:27:48+08:00", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "mv3c"),
+            ("req_other_key", "2026-10-29T17:28:00+08:00", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "another"),
+            ("req_other_version", "2026-10-29T17:28:00+08:00", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "mv3c"),
         ):
             asyncio.run(store.upsert({
                 "request_id": ident, "recorded_at": time,
                 "status": "completed", "requested_model": "gpt-6",
                 "api_key_name": key_name,
             }))
-            if version != SERVER_RUNTIME_VERSION:
+            if commit != "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa":
                 row = store.get(ident)
-                row["request_server_version"] = version
+                row["request_server_commit"] = commit
                 store._remember(row)
         filters = {
             "q": "mv3c", "status": "completed", "model": "gpt-6",
