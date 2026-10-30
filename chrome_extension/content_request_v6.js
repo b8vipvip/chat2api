@@ -9,6 +9,7 @@
   }
 
   const rich = globalThis.__CHAT2API_RICH_RESPONSE_V69__ || null;
+  const native = globalThis.__CHAT2API_NATIVE_CONTENT_V1__ || null;
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
   const state = { active: null, listener: null, contract: null, revision: 69 };
   globalThis[KEY] = state;
@@ -445,6 +446,9 @@
             response_boundary_removed_chars: String(event.text || "").length - result.text.length,
           } };
       }
+    }
+    if (event?.type === "chat.completed" && active) {
+      try { await native?.capture?.(active, true); } catch (_) {}
     }
     // Flush read-only evidence before a real request terminal event is sent.
     // This never changes the sole terminal decision of request-v6.
@@ -1735,6 +1739,10 @@
     if (!text || transientText(text) || text === previous) return previous;
     active.lastCaptureAt = Date.now();
     active.lastCapturedText = text;
+    // Optional independent native rich update. No await: a slow snapshot
+    // cannot delay normal OpenAI deltas or the Browser/Broker terminal.
+    void native?.capture?.(active, false);
+
     if (text.startsWith(previous)) {
       const delta = text.slice(previous.length);
       if (delta) await emit({ type: "chat.delta", request_id: active.requestId, delta });
