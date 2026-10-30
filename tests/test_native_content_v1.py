@@ -67,7 +67,8 @@ def test_expired_disk_and_live_snapshots_are_unreadable(tmp_path, monkeypatch):
     assert NativeContentStore(tmp_path).get(rid, "key_a") is None
     assert not path.exists()
     # Long-running workers must also expire in-memory snapshots after 90 days.
-    monkeypatch.setattr(native.time, "time", lambda: old_time + 91 * 86400)
+    future_time = time.time() + 91 * 86400
+    monkeypatch.setattr(native.time, "time", lambda: future_time)
     assert store.get(rid, "key_a") is None
 
 
