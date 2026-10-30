@@ -238,3 +238,59 @@ def test_native_file_status_follows_deferred_archive_after_openai_completed(tmp_
         assert third.json()["files"][0]["status"] == "failed"
         assert native_delivery_fingerprint(second.json()) != native_delivery_fingerprint(third.json())
         assert client.get(route).status_code == 401
+
+
+def test_slow_deferred_file_status_does_not_block_http_event_loop(tmp_path: Path, monkeypatch):
+    import time
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from app.generated_file_deferred_v247 import DeferredGeneratedFiles
+
+    app = create_app(Settings(CHAT2API_API_KEY="test-key",
+        CHAT2API_PAIRING_CODE="test-pair", CHAT2API_DATA_DIR=tmp_path))
+    with TestClient(app) as client:
+        rid = "req_asyncfilestatus123"
+        pending_id = "pgen_" + "b" * 32
+        token = "C" * 24
+        url = f"https://files.example.com/api/generated-files/pending/{pending_id}/{token}"
+
+        async def record():
+            await app.state.telemetry.upsert({
+                "request_id": rid, "api_key_id": "master", "status": "completed",
+                "response_text": f"[📎 plan.xlsx]({url})",
+                "response_generated_files": [{"filename": "plan.xlsx", "url": url,
+                                              "bytes": 321, "status": "processing"}],
+            })
+        asyncio.run(record())
+        assert app.state.native_content.publish(rid, "master", {
+            "version": 1, "revision": 3,
+            "root": {"tag": "p", "text": "A spreadsheet"},
+        })
+        began, release = threading.Event(), threading.Event()
+
+        def blocked_status(self, file_id, access_token):
+            assert file_id == pending_id and access_token == token
+            began.set()
+            release.wait(timeout=2)
+            return {"status": "processing", "filename": "plan.xlsx"}
+
+        monkeypatch.setattr(DeferredGeneratedFiles, "status", blocked_status)
+        auth = {"Authorization": "Bearer test-key"}
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            result = pool.submit(
+                client.get, f"/v1/native-content/{rid}", headers=auth,
+            )
+            try:
+                assert began.wait(timeout=3)
+                start = time.monotonic()
+                health = client.get("/healthz")
+                elapsed = time.monotonic() - start
+                assert health.status_code == 200
+                # A synchronous SQLite read in an async route would prevent
+                # /healthz from executing until the 2-second writer wait ended.
+                assert elapsed < 1.3
+            finally:
+                release.set()
+            completed = result.result(timeout=5)
+            assert completed.status_code == 200
+            assert completed.json()["files"][0]["status"] == "processing"
