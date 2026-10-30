@@ -122,6 +122,7 @@
   }
 
   async function diagnostics(row, detail) {
+    const active = activeRequest();
     state.diagnostics += 1;
     await emit({
       type: "chat.diagnostics",
