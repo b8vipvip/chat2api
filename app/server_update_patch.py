@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timezone
@@ -226,7 +227,7 @@ def install_server_update_patch(app: FastAPI) -> FastAPI:
             os.environ.get("CHAT2API_BUILD_COMMIT", "")
         )
         runtime_code_sha = runtime_code_sha if re.fullmatch(r"[0-9a-f]{40}", runtime_code_sha) else ""
-        deployed_commit = runtime_code_sha or str(deployment.get("commit") or "")
+        deployed_commit = str(deployment.get("commit") or "") or runtime_code_sha
         remote_sha = str(remote.get("sha") or "")
         return {
             "repository": GITHUB_REPOSITORY,
@@ -235,6 +236,8 @@ def install_server_update_patch(app: FastAPI) -> FastAPI:
             "chrome_bridge_version": CHROME_BRIDGE_VERSION,
             "chrome_bundle_version": CHROME_BRIDGE_BUNDLE_VERSION,
             "deployed_commit": deployed_commit,
+            "runtime_code_sha": runtime_code_sha,
+            "runtime_drift": bool(runtime_code_sha and deployed_commit and runtime_code_sha != deployed_commit),
             "deployed_short_commit": deployed_commit[:12],
             "deployment": deployment,
             "remote": remote,
