@@ -31,10 +31,10 @@
         </div>
         <div class="toolbar" style="margin:0">
           <button class="action" id="updCheck">重新检查 GitHub</button>
-          <button class="action good" id="updStart">从 GitHub 更新服务端</button>
+          <button class="action good" id="updStart">检查并智能更新</button>
         </div>
       </div>
-      <div style="margin-top:12px;padding:10px 12px;border:1px solid var(--line);border-radius:9px;background:#07101e">
+      <div style="display:none">
         <label style="display:flex;align-items:center;gap:9px;cursor:pointer">
           <input id="updUseBuildCache" type="checkbox" checked>
           <span><b>使用 Docker 构建缓存（推荐）</b> <span class="muted">复用现有 BuildKit/镜像层和 pip 缓存，通常可显著缩短更新；取消勾选才会执行 --no-cache 全量重建。</span></span>
@@ -75,7 +75,7 @@
       <ul class="muted">
         <li>网页只能创建固定格式的更新请求，不能提交任意 Shell 命令。</li>
         <li>宿主机更新助手固定更新 <code>/opt/chat2api</code> 的 <code>origin/main</code>，并在更新前检查 tracked 工作区是否干净。</li>
-        <li>先构建新 Docker 镜像，构建成功后才切换容器；健康检查失败时自动回滚到更新前提交并重新构建。</li>
+        <li>GPTAuto 按精确 Git SHA 自动分类：允许的运行时代码采用有证据的热修复，依赖或 Worker 变更采用完整镜像构建。</li><li>仅管理员点击后执行部署；热修复前验证 CI、容器源文件与 SHA256，失败按原事务回滚，绝不并行启动第二个更新器。</li>
         <li><code>.env</code> 与 <code>data/</code> 在更新过程中保留，更新状态与日志写入持久化 <code>data/</code>。</li>
         <li>GitHub main 优先通过 Git Smart HTTP 检查，不消耗 GitHub REST API 未认证配额；Git 拉取仍强制 HTTP/1.1 并带重试。</li>
       </ul>
@@ -93,6 +93,9 @@
     fetch: "拉取 GitHub main",
     checkout: "切换代码",
     build: "构建 Docker 镜像",
+    hotfix: "智能运行时热修复",
+    strategy: "选择智能更新策略",
+    verify: "更新证据校验",
     deploy: "启动新容器",
     health: "健康检查",
     rollback: "自动回滚",
@@ -145,7 +148,7 @@
     const log = $("updLogs");
     if (log) log.scrollTop = log.scrollHeight;
     $("updStart").disabled = running || !data.updater_installed;
-    $("updStart").textContent = running ? "服务端正在更新…" : "从 GitHub 更新服务端";
+    $("updStart").textContent = running ? "服务端正在更新…" : "检查并智能更新";
     $("updUseBuildCache").disabled = running;
     lastState = state;
   }
@@ -154,6 +157,9 @@
     setText("updRuntime", `v${data.server_runtime_version || "-"}`);
     setText("updBundle", `v${data.chrome_bundle_version || "-"}`);
     setText("updLocalCommit", data.deployed_short_commit || "未记录");
+    if (data.runtime_drift && data.deployment?.update_mode !== "checks-only") {
+      setText("updHeadline", "注意：运行代码与更新记录存在版本差异");
+    }
     setText("updRemoteCommit", data.remote?.short_sha || "获取失败");
 
     const installed = Boolean(data.updater?.installed);
@@ -172,7 +178,7 @@
       );
     } else if (data.update_available) {
       setText("updHeadline", "发现新的 GitHub main 提交");
-      setText("updSummary", `当前 ${(data.deployed_commit || "").slice(0, 12)} → 最新 ${(data.remote.sha || "").slice(0, 12)}。点击更新后会自动拉取、构建、切换并健康检查。`);
+      setText("updSummary", `当前 ${(data.deployed_commit || "").slice(0, 12)} → 最新 ${(data.remote.sha || "").slice(0, 12)}。点击后会自动选择热修复或正式构建，并执行健康检查。`);
     } else {
       setText("updHeadline", "当前服务端已经是 GitHub main 最新提交");
       setText("updSummary", `当前提交 ${(data.deployed_commit || "").slice(0, 12)} 与 GitHub main 一致。`);
