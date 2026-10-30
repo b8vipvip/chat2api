@@ -16,7 +16,8 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
-POOL_VERSION = "abcd-one-shot-v198"
+POOL_VERSION = "abcd-new-real-scenes-v4"
+from .playground_abcd_v4_cases import build_v4_case
 
 # Separate creative topics, not a fixed prompt with a random diagnostic marker.
 A_TOPICS = (
@@ -127,6 +128,7 @@ class OneShotPool:
         with self.connection() as db:
             db.execute("CREATE TABLE IF NOT EXISTS abcd_counter (scene TEXT PRIMARY KEY, serial INTEGER NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS abcd_claim (claim_id TEXT PRIMARY KEY, scene TEXT NOT NULL, case_json TEXT NOT NULL, claimed_at TEXT NOT NULL)")
+            db.execute("CREATE TABLE IF NOT EXISTS abcd_v4_consumed (scene TEXT PRIMARY KEY, claim_id TEXT NOT NULL)")
             db.commit()
 
     @contextmanager
@@ -142,7 +144,9 @@ class OneShotPool:
             raise ValueError("Invalid scene")
         with self.connection() as db:
             row = db.execute("SELECT serial FROM abcd_counter WHERE scene=?", (scene,)).fetchone()
-        item = build_case(scene, row[0] if row else 0)
+            used = db.execute("SELECT claim_id FROM abcd_v4_consumed WHERE scene=?", (scene,)).fetchone()
+        item = (build_case(scene, row[0] if row else 0) if used else
+                build_v4_case(scene, row[0] if row else 0))
         return {"scene": scene, "title": item["title"], "serial": item["serial"],
                 "prompt_preview": item["prompts"][0][:260]}
 
@@ -158,7 +162,10 @@ class OneShotPool:
             else:
                 row = db.execute("SELECT serial FROM abcd_counter WHERE scene=?", (scene,)).fetchone()
                 serial = row[0] if row else 0
-                item = build_case(scene, serial)
+                used = db.execute("SELECT claim_id FROM abcd_v4_consumed WHERE scene=?", (scene,)).fetchone()
+                item = build_case(scene, serial) if used else build_v4_case(scene, serial)
+                if not used:
+                    db.execute("INSERT INTO abcd_v4_consumed(scene,claim_id) VALUES (?,?)", (scene,claim_id))
                 db.execute("INSERT INTO abcd_counter(scene,serial) VALUES (?,?) ON CONFLICT(scene) DO UPDATE SET serial=excluded.serial",
                            (scene, serial+1))
                 db.execute("INSERT INTO abcd_claim(claim_id,scene,case_json,claimed_at) VALUES (?,?,?,?)",
