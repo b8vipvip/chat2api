@@ -18,9 +18,9 @@ def test_v02290_v0839_route_recovery_release_contract() -> None:
     recovery = read("chrome_extension/conversation_route_recovery_v136.js")
     payload = version_contract_payload(FastAPI(version=SERVER_RUNTIME_VERSION))
 
-    assert SERVER_RUNTIME_VERSION == "0.22.254"
-    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.254"
-    assert manifest["version"] == "0.22.254"
+    assert SERVER_RUNTIME_VERSION == "0.22.255"
+    assert CHROME_BRIDGE_BUNDLE_VERSION == "0.22.255"
+    assert manifest["version"] == "0.22.255"
     assert "qnbot-orphan-owner-recovery-v140-release-v02290" in payload["server"]["feature_revision"]
     assert "qnbot-orphan-owner-recovery-v140-release-v0839" in payload["chrome_bridge"]["build_revision"]
     assert payload["chrome_bridge"]["route_recovery_revision"] == 141
