@@ -44,14 +44,21 @@
       || candidate;
     if (reply.matches?.("[data-message-author-role='user']") || reply.closest?.("nav,aside")) return null;
     let nodes = 0, chars = 0, images = 0;
+    let truncated = false;
     const textBudget = 48000;
     const ignore = element => element.matches?.(banned) || !!element.closest?.("nav,aside,footer");
     const build = (element, depth) => {
-      if (depth > 14 || nodes >= 420) return null;
+      if (depth > 14 || nodes >= 420) {
+        truncated = true;
+        return null;
+      }
       if (element.nodeType === Node.TEXT_NODE) {
         const raw = String(element.nodeValue || "");
         if (!raw.trim()) return null;
-        if (chars + raw.length > textBudget) return null;
+        if (chars + raw.length > textBudget) {
+          truncated = true;
+          return null;
+        }
         chars += raw.length; nodes += 1;
         return {tag:"span",text:raw};
       }
@@ -62,13 +69,20 @@
       const tag = element.tagName.toLowerCase();
       let mapped = tags.has(tag) ? tag : "div";
       if (tag === "img") {
-        if (!rect || rect.width < 40 || rect.height < 40 || images >= 40) return null;
+        if (!rect || rect.width < 40 || rect.height < 40) return null;
+        if (images >= 40) {
+          truncated = true;
+          return null;
+        }
         nodes += 1;
         return {tag:"img",media_index:images++,style:safeStyle(element)};
       }
       const children = [];
       for (const child of element.childNodes) {
-        if (nodes >= 420 || children.length >= 80) break;
+        if (nodes >= 420 || children.length >= 80) {
+          truncated = true;
+          break;
+        }
         const value = build(child, depth + 1);
         if (value) children.push(value);
       }
@@ -79,7 +93,10 @@
       return result;
     };
     const root = build(reply, 0);
-    if (!root) return null;
+    // A partially serialized tree would silently replace the complete
+    // canonical Markdown in MV3C. Reject it rather than publish a lie.
+    // The standard OpenAI response continues unaffected.
+    if (!root || truncated) return null;
     return {version:1,revision:(active.nativeRevision || 0) + 1,root};
   }
 
