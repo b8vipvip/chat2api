@@ -376,7 +376,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         for media in (row.get("response_media") or [])[:40]:
             if not isinstance(media, dict):
                 continue
-            uri = str(media.get("url") or "")
+            uri = str(media.get("url") or media.get("owned_url") or "")
             if re.fullmatch(
                 r"https://[^/?#]+(?::[0-9]{1,5})?/api/media/[a-zA-Z0-9_-]{6,100}/[a-zA-Z0-9_-]{8,150}",
                 uri,
@@ -1823,6 +1823,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "diagnostics": dict(state.diagnostics), "error": None,
                 }
             )
+            # The standalone Images API already archived verified bytes.
+            # Reuse those exact records; do not capture or upload images twice.
+            if owned_media:
+                try:
+                    native_content.publish(request_id, principal.key_id, {
+                        "version": 1, "revision": 1,
+                        "root": {"tag": "div", "style": {
+                            "display": "flex", "flexWrap": "wrap", "gap": "8px",
+                        }, "children": [
+                            {"tag": "img", "media_index": index}
+                            for index in range(min(40, len(owned_media)))
+                        ]},
+                    })
+                    native_content.persist(request_id, principal.key_id)
+                except (ValueError, TypeError):
+                    pass
             return {
                 "created": int(time.time()),
                 "model": "gpt-image",
@@ -1836,6 +1852,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "token_usage": token_meta,
                     "media_files": archived_media,
                     "owned_media": owned_media,
+                    **({"native_content": {
+                        "version": 1,
+                        "url": f"/v1/native-content/{request_id}",
+                        "events_url": f"/v1/native-content/{request_id}/events",
+                    }} if owned_media else {}),
                 },
             }
         except asyncio.TimeoutError as error:
