@@ -70,3 +70,35 @@ def test_media_ready_updates_same_native_revision():
     assert summary["images"] == 1 and summary["grid"] == 1
     assert summary["media_mapping_complete"] is False
     assert "assetTOKEN" not in str(summary)
+
+
+def test_privileged_native_layout_evidence_does_not_expose_asset_tokens(tmp_path: Path):
+    app = create_app(Settings(CHAT2API_API_KEY="test-key",
+        CHAT2API_PAIRING_CODE="test-pair", CHAT2API_DATA_DIR=tmp_path))
+    with TestClient(app) as client:
+        rid = "req_layout12345678"
+        async def record():
+            await app.state.telemetry.upsert({
+                "request_id": rid, "api_key_id": "master", "status": "completed",
+                "response_media": [{
+                    "id": "med_12345678", "mime": "image/png",
+                    "width": 512, "height": 512,
+                    "url": "https://media.example.com/api/media/med_12345678/secretToken1234567",
+                }],
+            })
+        asyncio.run(record())
+        app.state.native_content.publish(rid, "master", {
+            "version": 1, "revision": 5,
+            "root": {"tag": "div", "style": {"display": "grid"},
+                     "children": [{"tag": "img", "media_index": 0}]},
+        })
+        route = f"/api/admin/requests/{rid}/native-content"
+        assert client.get(route).status_code == 401
+        out = client.get(route, headers={"Authorization": "Bearer test-key"})
+        assert out.status_code == 200
+        payload = out.json()
+        assert payload["layout_summary"]["media_mapping_complete"] is True
+        assert payload["snapshot"]["root"]["children"][0]["media_index"] == 0
+        assert payload["media_metadata"][0]["width"] == 512
+        assert "secretToken" not in out.text
+        assert out.headers["cache-control"] == "private, no-store"
