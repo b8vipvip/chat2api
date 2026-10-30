@@ -44,3 +44,10 @@ def test_private_snapshot_permissions(tmp_path):
     assert store.persist(rid, "private_key")
     assert os.stat(store.root).st_mode & 0o777 == 0o700
     assert os.stat(store.root / (rid + ".json")).st_mode & 0o777 == 0o600
+
+def test_native_worker_observer_node_regression():
+    import subprocess
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    subprocess.run(["node", "--test", "tests/native_content_v1.mjs"],
+                   cwd=root, check=True, timeout=20)
