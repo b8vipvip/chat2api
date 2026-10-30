@@ -55,6 +55,32 @@ def parse_request_since(raw: str | None) -> datetime | None:
         raise ValueError("Invalid since timestamp or timezone") from exc
 
 
+def current_deployment_start(data_dir: Path, expected_sha: str) -> datetime | None:
+    """Limit current-version results to the successful deployment instance.
+
+    The same SHA may be deployed again. The completion time of the currently
+    active successful deployment is an additional inclusive lower bound.
+    """
+    try:
+        state = json.loads((data_dir / "admin-update-status.json").read_text(encoding="utf-8"))
+        if state.get("status") not in ("succeeded", "success") or state.get("deployed_commit") != expected_sha:
+            return None
+        completed = datetime.fromisoformat(str(state["completed_at"]).replace("Z", "+00:00"))
+        return completed.astimezone(timezone.utc) if completed.tzinfo else None
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def request_record_created_before(row: dict[str, Any], ceiling: datetime) -> bool:
+    try:
+        recorded = datetime.fromisoformat(str(row.get("recorded_at") or "").replace("Z", "+00:00"))
+        if recorded.tzinfo is None:
+            recorded = recorded.replace(tzinfo=timezone(timedelta(hours=8)))
+        return recorded.astimezone(timezone.utc) <= ceiling
+    except (ValueError, OverflowError, TypeError):
+        return False
+
+
 def request_record_created_after(row: dict[str, Any], cutoff: datetime) -> bool:
     try:
         recorded = datetime.fromisoformat(str(row.get("recorded_at") or "").replace("Z", "+00:00"))
@@ -182,6 +208,8 @@ class TelemetryStore:
         # so list-only redaction (final_prompt/response_text) can never mutate the
         # authoritative in-memory detail record used by /api/admin/requests/{id}.
         rows = [dict(row) for row in reversed(self.items)]
+        query_ends_at = datetime.now(timezone.utc)
+        deployment_start = current_deployment_start(self.path.parent, server_commit or '') if current_version_only else None
         status_value = (status or "").strip().lower()
         model_value = (model or "").strip().lower()
         key_value = (key_id or "").strip()
@@ -193,7 +221,11 @@ class TelemetryStore:
                 or str(row.get("request_server_commit") or "") != server_commit
             ):
                 return False
+            if deployment_start is not None and not request_record_created_after(row, deployment_start):
+                return False
             if since is not None and not request_record_created_after(row, since):
+                return False
+            if not request_record_created_before(row, query_ends_at):
                 return False
             if status_value and str(row.get("status") or "").lower() != status_value:
                 return False
