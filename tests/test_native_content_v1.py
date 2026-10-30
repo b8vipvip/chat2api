@@ -91,3 +91,29 @@ def test_periodic_cleanup_covers_images_responses_and_chat_requests(tmp_path):
         assert store.persist(rid, "key_a")
     for rid in stale:
         assert not (store.root / (rid + ".json")).exists()
+
+
+@pytest.mark.parametrize("columns", [
+    "348.5px 348.25px 1024px",
+    "minmax(0px, 1fr) 348.25px",
+    "33.33% 33.33% 33.34%",
+])
+def test_fractional_computed_grid_columns_survive_safe_contract(columns):
+    source = {"version": 1, "revision": 9, "root": {
+        "tag": "div", "style": {"display": "grid", "gridTemplateColumns": columns},
+        "children": [{"tag": "p", "text": "safe layout"}],
+    }}
+    assert validate_native_snapshot(source) == source
+
+
+@pytest.mark.parametrize("columns", [
+    "url(https://evil.example/x)",
+    "348.5px;position:fixed",
+    "100000px 100px",
+    "repeat(3, auto)",
+])
+def test_fractional_grid_columns_still_reject_unsafe_css(columns):
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 9, "root": {
+            "tag": "div", "style": {"gridTemplateColumns": columns},
+        }})
