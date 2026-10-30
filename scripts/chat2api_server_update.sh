@@ -491,6 +491,26 @@ PY
   exit 0
 fi
 
+# A live container can be hotpatched only when its *effective* source revision
+# is proven. Unknown legacy images upgrade automatically via the existing
+# verified Docker build, rather than failing an ordinary admin update.
+if [[ "$SMART_UPDATE_MODE" == "runtime-hotfix" && -f "$SMART_APPLY_TOOL" ]]; then
+  baseline_cid="$(docker compose -f "$APP_DIR/docker-compose.yml" ps -q chat2api || true)"
+  if [[ -n "$baseline_cid" ]]; then
+    baseline_json="$(python3 "$SMART_APPLY_TOOL" --baseline-only \
+      --repo chat2api --worktree "$APP_DIR" \
+      --from-sha "$FROM_COMMIT" --target-sha "$TARGET_COMMIT" \
+      --container "$baseline_cid" \
+      --state-file "$DATA_DIR/smart-update-runtime.json" \
+      --health-url "http://127.0.0.1:$(health_port)/version")"
+    SMART_UPDATE_MODE="$(python3 -c 'import json,sys;print(json.load(sys.stdin)["mode"])' <<<"$baseline_json")"
+    log "GPTAuto running-container baseline selection: $SMART_UPDATE_MODE"
+  else
+    SMART_UPDATE_MODE="verified-image"
+    log "No existing container to patch; use verified Docker image build"
+  fi
+fi
+
 if [[ "$SMART_UPDATE_MODE" == "runtime-hotfix" && -f "$SMART_APPLY_TOOL" ]]; then
   SMART_HOTFIX_ATTEMPTED="true"
   port="$(health_port)"
