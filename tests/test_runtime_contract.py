@@ -343,3 +343,14 @@ def test_v255_native_zip_fallback_selects_only_verified_original_file_types():
     assert '["xlsx","pptx","json"].every(ext=>Boolean(byExt[ext]?.data_url))' in source
     assert 'synthesized_zip:session.synthesizedZip===true' in source
     assert 'type: "chat.completed"' not in source
+
+
+def test_v253_probe_topology_has_server_ingress_contract():
+    browser = (ROOT / "chrome_extension" / "content_probe_supervisor_v1.js").read_text("utf-8")
+    server = (ROOT / "app" / "worker_probe_store.py").read_text("utf-8")
+    for key in (
+        "scene_uncovered_between_heading_toolbar_count",
+        "scene_uncovered_shared_bounded_ancestor_count",
+        "scene_uncovered_outside_candidate_ancestry_count",
+    ):
+        assert key in browser and key in server
