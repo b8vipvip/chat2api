@@ -1348,18 +1348,42 @@
     let composer = await ensureComposer();
     const target = normalize(prompt);
     for (let attempt = 1; attempt <= 3; attempt += 1) {
-      await setComposerTextBatched(active, composer, prompt);
+      const native = await setComposerTextBatched(active, composer, prompt);
+      // The batch writer verified the editor, but Lexical hydration may
+      // temporarily expose a different composer. Don't insert 34K twice.
+      const longDraft = prompt.length >= 8192;
       const retained = await waitFor(() => {
         for (const current of composerCandidates(active)) {
           const text = composerText(current);
-          if (text === target || (target.length > 6 && text.includes(target))) return { composer: current, text };
+          if (current.isConnected !== false && promptMatchesComposer(current, active))
+            return { composer: current, text };
         }
         return null;
-      }, 3500, 100);
+      }, longDraft ? 11000 : 3500, 120);
       if (retained) {
         active.promptComposer = retained.composer;
-        await diagnostic(active, "prompt-ready", { prompt_write_attempts: attempt, composer_chars: retained.text.length });
+        await diagnostic(active, "prompt-ready", {
+          prompt_write_attempts: attempt, composer_chars: retained.text.length,
+          prompt_binding_revision: 254,
+          prompt_editor_rebound: retained.composer !== composer,
+        });
         return retained;
+      }
+      if (longDraft) {
+        await diagnostic(active, "prompt-native-verified-but-unbound", {
+          prompt_binding_revision: 254,
+          prompt_native_write_attempts: attempt,
+          prompt_native_chunks: Number(native?.chunks || 0),
+          prompt_expected_chars: target.length,
+          prompt_original_editor_connected: composer?.isConnected !== false,
+          prompt_original_editor_chars: composerText(composer).length,
+          prompt_current_editor_chars: composerText(findComposer()).length,
+          prompt_current_editor_matches: promptMatchesComposer(findComposer(), active),
+          prompt_reinsert_skipped: true,
+        });
+        // Never overwrite an already populated draft with another expensive
+        // insertion. Explicitly fail closed rather than claim a send.
+        throw new Error("Long prompt verified but not bound to active ChatGPT composer");
       }
       composer = await ensureComposer(5000);
       await delay(180);
@@ -1581,7 +1605,23 @@
       // writePrompt verified this *same editor* before submission. If its
       // framework silently alters a few characters while hydrating, recover
       // only that original draft, once, before any click or network evidence.
-      if (!ready && attempts === 1 && !promptRepairAttempts && !isGenerating()) {
+      if (!ready && attempts === 1 && active.prompt.length >= 8192
+          && !isGenerating()) {
+        // A verified long draft may need another hydration epoch. Passive
+        // revalidation is safe; clearing and replaying 17 chunks is not.
+        await diagnostic(active, "long-prompt-send-revalidation", {
+          send_revalidation_revision: 254,
+          send_first_probe_button_found: Boolean(sendButton(active.promptComposer)),
+          send_first_probe_button_disabled: Boolean(sendButton(active.promptComposer)?.disabled),
+          send_first_probe_draft_matches: promptMatchesComposer(active.promptComposer,active),
+          send_original_editor_connected: active.promptComposer?.isConnected !== false,
+          send_current_editor_matches: promptMatchesComposer(findComposer(),active),
+          send_expected_chars: String(active.promptNormalized || "").length,
+        });
+        ready = await waitFor(probe, 8500, 150);
+      }
+      if (!ready && attempts === 1 && !promptRepairAttempts && !isGenerating()
+          && active.prompt.length < 8192) {
         const current = active.promptComposer;
         const observed = composerText(current);
         const intended = String(active.promptNormalized || "");
@@ -1622,6 +1662,9 @@
           send_button_type: String(button?.type || ""),
           send_button_aria_label: String(button?.getAttribute?.("aria-label") || "").slice(0, 72),
           send_prompt_repair_attempts: promptRepairAttempts,
+          send_long_prompt_rewrite_blocked: active.prompt.length >= 8192,
+          send_original_editor_connected: active.promptComposer?.isConnected !== false,
+          send_current_editor_matches: promptMatchesComposer(findComposer(),active),
           send_generating_observed: isGenerating(),
           prompt_native_editor_required: active.prompt.length >= 2048,
           send_readiness_wait_ms: Math.round((performance.now() - readyStarted) * 10) / 10,
