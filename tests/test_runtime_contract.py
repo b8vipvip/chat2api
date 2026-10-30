@@ -317,3 +317,12 @@ def test_file_type_evidence_is_observational_under_only_request_v6_terminal_owne
     assert "media_file_handoff_verified_types: fileHandoffInventory.verified" in content
     assert "media_native_file_unresolved_failures: nativeUnresolvedFailedTypes" in content
     assert "function abortedReplyStableThreshold(rendered)" in content
+
+
+def test_ec46_long_prompt_rebind_is_single_write_owner():
+    source = (ROOT / "chrome_extension" / "content_request_v6.js").read_text("utf-8")
+    assert "prompt-native-verified-but-unbound" in source
+    assert "Long prompt verified but not bound to active ChatGPT composer" in source
+    assert "send_revalidation_revision: 254" in source
+    assert "send_long_prompt_rewrite_blocked:" in source
+    assert "&& active.prompt.length < 8192" in source
