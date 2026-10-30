@@ -18,6 +18,8 @@ CURRENT_PERCENT="2"
 CURRENT_MESSAGE="正在启动更新任务"
 REQUEST_ID=""
 USE_BUILD_CACHE="true"
+SMART_UPDATE_MODE="verified-image"
+SMART_HOTFIX_ATTEMPTED="false"
 FROM_COMMIT=""
 TARGET_COMMIT=""
 ROLLBACK_COMMIT=""
@@ -271,10 +273,10 @@ build_new_image() {
   docker compose config -q
   if [[ "$USE_BUILD_CACHE" == "false" ]]; then
     log "building Docker image without cache by administrator request"
-    DOCKER_BUILDKIT=1 docker compose build --no-cache
+    DOCKER_BUILDKIT=1 docker compose build --no-cache --build-arg "CHAT2API_BUILD_COMMIT=$TARGET_COMMIT"
   else
     log "building Docker image with existing BuildKit/layer cache"
-    DOCKER_BUILDKIT=1 docker compose build
+    DOCKER_BUILDKIT=1 docker compose build --build-arg "CHAT2API_BUILD_COMMIT=$TARGET_COMMIT"
   fi
 }
 
@@ -330,6 +332,14 @@ replace_chat2api_container() {
 
 rollback() {
   [[ "$CODE_SWITCHED" == "true" ]] || return 0
+  if [[ "$SMART_HOTFIX_ATTEMPTED" == "true" ]]; then
+    # The shared hotfix helper already owns file restoration. Never rebuild
+    # a different image as a second rollback controller.
+    git -C "$APP_DIR" reset --hard "$FROM_COMMIT" || true
+    restore_env
+    log "hotfix helper attempted container rollback; inspect its evidence before retry"
+    return 0
+  fi
   [[ -n "$FROM_COMMIT" ]] || return 0
   ROLLBACK_COMMIT="$FROM_COMMIT"
   write_status "running" "rollback" "92" "新版本未通过验证，正在自动回滚到 ${FROM_COMMIT:0:12}"
@@ -340,7 +350,7 @@ rollback() {
   restore_env
   if (( git_rc == 0 )); then
     # Recovery prioritizes speed/availability; always reuse safe local cache.
-    (cd "$APP_DIR" && DOCKER_BUILDKIT=1 docker compose build)
+    (cd "$APP_DIR" && DOCKER_BUILDKIT=1 docker compose build --build-arg "CHAT2API_BUILD_COMMIT=$FROM_COMMIT")
     local build_rc=$?
     if (( build_rc == 0 )); then
       replace_chat2api_container "rollback"
@@ -452,6 +462,59 @@ git -C "$APP_DIR" reset --hard "$TARGET_COMMIT"
 CODE_SWITCHED="true"
 restore_env
 
+# GPTAuto is the only change classifier. The existing host updater retains
+# exclusive Docker deployment ownership and its systemd flock.
+SMART_PLAN_TOOL="$APP_DIR/.github/gptauto/smart_update.py"
+SMART_APPLY_TOOL="$APP_DIR/.github/gptauto/runtime_hotfix.py"
+if [[ -f "$SMART_PLAN_TOOL" ]]; then
+  if smart_plan="$(python3 "$SMART_PLAN_TOOL" --repo chat2api       --worktree "$APP_DIR" --from-sha "$FROM_COMMIT" --target-sha "$TARGET_COMMIT")"; then
+    SMART_UPDATE_MODE="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["mode"])' <<<"$smart_plan")"
+    log "GPTAuto exact-SHA smart update: $SMART_UPDATE_MODE; $smart_plan"
+  else
+    log "GPTAuto smart plan invalid; full image verification is required"
+    SMART_UPDATE_MODE="verified-image"
+  fi
+fi
+
+if [[ "$SMART_UPDATE_MODE" == "checks-only" ]]; then
+  write_status "running" "verify" "85" "智能判断：只修改文档/测试，跳过 Docker 构建和容器重启"
+  python3 - "$DEPLOYMENT_FILE" "$TARGET_COMMIT" "$FROM_COMMIT" <<'PY'
+import json, os, sys
+from pathlib import Path
+p=Path(sys.argv[1]); record={"commit":sys.argv[2],"previous_commit":sys.argv[3],
+"repository":"b8vipvip/chat2api","update_mode":"checks-only"}
+temp=p.with_suffix(".tmp");temp.write_text(json.dumps(record),encoding="utf-8");os.replace(temp,p)
+PY
+  write_status "succeeded" "completed" "100" "GPTAuto 智能更新：无运行时代码变更，跳过构建"
+  trap - EXIT
+  cleanup
+  exit 0
+fi
+
+if [[ "$SMART_UPDATE_MODE" == "runtime-hotfix" && -f "$SMART_APPLY_TOOL" ]]; then
+  SMART_HOTFIX_ATTEMPTED="true"
+  port="$(health_port)"
+  write_status "running" "hotfix" "60" "GPTAuto 智能热更新：校验精确 CI、运行镜像和文件 SHA256"
+  cid="$(docker compose -f "$APP_DIR/docker-compose.yml" ps -q chat2api)"
+  [[ -n "$cid" ]] || { log "No running chat2api service for hotfix"; exit 9; }
+  if ! python3 "$SMART_APPLY_TOOL"       --repo chat2api --worktree "$APP_DIR"       --from-sha "$FROM_COMMIT" --target-sha "$TARGET_COMMIT"       --container "$cid"       --state-file "$DATA_DIR/smart-update-runtime.json"       --health-url "http://127.0.0.1:${port}/version"; then
+    log "GPTAuto guarded runtime update failed; no unverified image will be deployed"
+    exit 9
+  fi
+  python3 - "$DEPLOYMENT_FILE" "$TARGET_COMMIT" "$FROM_COMMIT" <<'PY'
+import json, os, sys
+from pathlib import Path
+p=Path(sys.argv[1]); record={"commit":sys.argv[2],"previous_commit":sys.argv[3],
+"repository":"b8vipvip/chat2api","update_mode":"runtime-hotfix"}
+temp=p.with_suffix(".tmp");temp.write_text(json.dumps(record),encoding="utf-8");os.replace(temp,p)
+PY
+  write_status "succeeded" "completed" "100" "GPTAuto 智能热修复成功：精确 CI、文件校验和健康检查通过"
+  trap - EXIT
+  cleanup
+  exit 0
+fi
+
+write_status "running" "strategy" "50" "智能判断：需要经验证的 Docker 镜像，按原正式构建路径执行"
 if [[ "$USE_BUILD_CACHE" == "false" ]]; then
   write_status "running" "build" "55" "正在校验 Compose 并无缓存构建新 Docker 镜像"
 else
