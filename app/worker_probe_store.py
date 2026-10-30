@@ -88,6 +88,16 @@ ALLOWED_FACTS = frozenset([
     "scene_current_branch", "scene_new_action_count", "scene_new_actions_after_candidate",
     "scene_new_actions_after_all", "scene_new_actions_same_branch",
     "scene_changed_block_branches", "scene_reply_topology",
+    # #573 read-only topology counters were dropped at server ingress in
+    # v0.22.251 because this exact allowlist did not yet permit them.
+    "scene_roleless_fresh_assistant_heading_count",
+    "scene_uncovered_connected_count",
+    "scene_uncovered_after_assistant_heading_count",
+    "scene_uncovered_before_last_toolbar_count",
+    "scene_uncovered_between_heading_toolbar_count",
+    "scene_uncovered_after_last_toolbar_count",
+    "scene_uncovered_shared_bounded_ancestor_count",
+    "scene_uncovered_outside_candidate_ancestry_count",
     "scene_image_count", "scene_image_large_count", "scene_picture_count",
     "scene_canvas_count", "scene_file_card_count", "scene_file_input_count",
     "scene_file_pdf_count", "scene_file_xlsx_count", "scene_file_pptx_count",
