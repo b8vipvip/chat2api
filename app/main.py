@@ -1586,6 +1586,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 attachments_count=len(attachments), media_items=archived_media,
             )
             meta = chat2api_meta(state, token_meta, principal)
+            if native_content.get(request_id, principal.key_id):
+                meta["native_content"] = {
+                    "version": 1,
+                    "url": f"/v1/native-content/{request_id}",
+                    "events_url": f"/v1/native-content/{request_id}/events",
+                }
             if archived_media:
                 meta['media_files'] = archived_media
             if archived_files:

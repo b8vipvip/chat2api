@@ -43,3 +43,16 @@ def test_runtime_contract_exposes_request_v6_plus_network_evidence():
     assert 'network_stream_recovery_v55' in contract
     assert 'semanticHelper?.timer == null' in contract
     assert 'bundle: "0.22.253"' in marker
+
+def test_native_rich_sidecar_does_not_replace_request_v6_terminal():
+    manifest = json.loads((EXT / "manifest.json").read_text(encoding="utf-8"))
+    scripts = manifest["content_scripts"][1]["js"]
+    assert scripts.index("content_rich_response_v69.js") < scripts.index("content_native_content_v1.js")
+    assert scripts.index("content_native_content_v1.js") < scripts.index("content_request_v6.js")
+    worker = (EXT / "content_request_v6.js").read_text(encoding="utf-8")
+    sidecar = (EXT / "content_native_content_v1.js").read_text(encoding="utf-8")
+    assert 'native?.capture?.(active, false)' in worker
+    assert 'native?.capture?.(active, true)' in worker
+    assert 'type:"chat.native.snapshot"' in sidecar
+    assert 'type:"chat.completed"' not in sidecar
+    assert 'type:"chat.error"' not in sidecar
