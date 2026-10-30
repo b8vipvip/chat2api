@@ -102,3 +102,35 @@ def test_privileged_native_layout_evidence_does_not_expose_asset_tokens(tmp_path
         assert payload["media_metadata"][0]["width"] == 512
         assert "secretToken" not in out.text
         assert out.headers["cache-control"] == "private, no-store"
+
+
+def test_probe_zip_includes_safe_full_native_layout_snapshot(tmp_path: Path):
+    import io
+    import json
+    import zipfile
+    app = create_app(Settings(CHAT2API_API_KEY="test-key",
+        CHAT2API_PAIRING_CODE="test-pair", CHAT2API_DATA_DIR=tmp_path))
+    with TestClient(app) as client:
+        rid = "req_ziprich12345678"
+        async def record():
+            await app.state.telemetry.upsert({
+                "request_id": rid, "api_key_id": "master", "status": "completed",
+            })
+        asyncio.run(record())
+        assert app.state.native_content.publish(rid, "master", {
+            "version": 1, "revision": 2,
+            "root": {"tag": "div", "style": {"display": "grid",
+                     "gridTemplateColumns": "1fr 1fr 1fr"},
+                     "children": [{"tag": "p", "text": "用户内容"}]},
+        })
+        url = f"/api/admin/requests/{rid}/probes/download"
+        assert client.get(url).status_code == 401
+        response = client.get(url, headers={"Authorization": "Bearer test-key"})
+        assert response.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+            assert "native-rich/layout-snapshot.json" in archive.namelist()
+            snapshot = json.loads(archive.read("native-rich/layout-snapshot.json"))
+            assert snapshot["root"]["style"]["gridTemplateColumns"] == "1fr 1fr 1fr"
+            assert snapshot["root"]["children"][0]["text"] == "用户内容"
+            assert "assets" not in snapshot
+            assert "checksums.sha256" in archive.namelist()

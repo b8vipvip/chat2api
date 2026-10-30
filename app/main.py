@@ -517,7 +517,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not row:
             raise HTTPException(status_code=404, detail="Unknown request")
         try:
-            archive = worker_probes.archive(request_id, row)
+            archive = worker_probes.archive(
+                request_id, row,
+                native_snapshot=native_content.get(request_id, str(row.get("api_key_id") or "")),
+            )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
         return Response(content=archive, media_type="application/zip", headers={

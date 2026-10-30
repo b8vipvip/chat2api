@@ -357,7 +357,8 @@ class WorkerProbeStore:
                        key=lambda path: path.stat().st_mtime, reverse=True)
         return [self.summary(path.stem) for path in paths[:max(1, min(limit, 100))]]
 
-    def archive(self, request_id: str, request_summary: dict[str, Any] | None = None) -> bytes:
+    def archive(self, request_id: str, request_summary: dict[str, Any] | None = None,
+                native_snapshot: dict[str, Any] | None = None) -> bytes:
         summary = self.summary(request_id)
         events = self.events(request_id)
         artifacts: dict[str, bytes] = {
@@ -372,6 +373,18 @@ class WorkerProbeStore:
             artifacts["request-summary.json"] = json.dumps(
                 {key: request_summary.get(key) for key in allowed},
                 ensure_ascii=False, indent=2,
+            ).encode()
+        if native_snapshot:
+            # Admin-export-only, validated v1 presentation. Keep the entire
+            # allowlisted DOM tree/style for visual comparisons, but never
+            # include bearer-capability media URLs or original browser markup.
+            safe = {
+                "version": native_snapshot.get("version"),
+                "revision": native_snapshot.get("revision"),
+                "root": native_snapshot.get("root"),
+            }
+            artifacts["native-rich/layout-snapshot.json"] = json.dumps(
+                safe, ensure_ascii=False, indent=2,
             ).encode()
         tool_files = {
             "media_delivery_v1": "media-delivery",
