@@ -50,7 +50,7 @@ def test_five_distinct_native_files_archive_without_changing_byte_limits(tmp_pat
     for record in records:
         details = archive.describe(record["id"], "owner")
         raw, mime, filename = archive.read(record["id"], details["token"])
-        assert len(raw) == record["size"] and filename == record["filename"]
+        assert len(raw) == details["size"] and filename == record["filename"]
 
 
 def test_five_distinct_files_can_be_deferred_and_reach_ready(tmp_path):
