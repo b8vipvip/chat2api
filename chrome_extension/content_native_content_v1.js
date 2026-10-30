@@ -45,10 +45,10 @@
     if (reply.matches?.("[data-message-author-role='user']") || reply.closest?.("nav,aside")) return null;
     let nodes = 0, chars = 0, images = 0;
     let truncated = false;
-    const textBudget = 48000;
+    const textBudget = 96000;
     const ignore = element => element.matches?.(banned) || !!element.closest?.("nav,aside,footer");
     const build = (element, depth) => {
-      if (depth > 14 || nodes >= 420) {
+      if (depth > 14 || nodes >= 1200) {
         truncated = true;
         return null;
       }
@@ -79,7 +79,7 @@
       }
       const children = [];
       for (const child of element.childNodes) {
-        if (nodes >= 420 || children.length >= 80) {
+        if (nodes >= 1200 || children.length >= 80) {
           truncated = true;
           break;
         }
@@ -110,7 +110,7 @@
       if (!tree) return;
       const hash = JSON.stringify(tree.root);
       if (!final && hash === active.nativeLastHash) return;
-      if (hash.length > 57000) return;
+      if (hash.length > 250000) return;
       active.nativeLastHash = hash;
       active.nativeRevision = tree.revision;
       const send = chrome.runtime.sendMessage({type:"chat2api.event",event:{
