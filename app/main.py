@@ -30,7 +30,7 @@ from .generated_files_v196 import GeneratedFileArchive
 from .generated_file_staging_v238 import GeneratedFileStaging
 from .generated_file_deferred_v247 import DeferredGeneratedFiles, FileStillProcessing, FileTransferFailed
 from .rich_content_v196 import manifest as rich_content_manifest
-from .native_content_v1 import NativeContentStore
+from .native_content_v1 import NativeContentStore, native_delivery_fingerprint, native_layout_summary
 from .media_public_origin_v187 import media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
 from .responses_multimodal_input_v183 import attachment_specs as canonical_attachment_specs
@@ -376,12 +376,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         for media in (row.get("response_media") or [])[:40]:
             if not isinstance(media, dict):
                 continue
-            uri = str(media.get("url") or media.get("owned_url") or "")
-            if re.fullmatch(
-                r"https://[^/?#]+(?::[0-9]{1,5})?/api/media/[a-zA-Z0-9_-]{6,100}/[a-zA-Z0-9_-]{8,150}",
-                uri,
-            ):
-                assets.append(uri)
+            # Standalone image generation may retain an upstream source URL
+            # in "url"; the verified, owned MediaArchive URL wins.
+            for raw in (media.get("owned_url"), media.get("url")):
+                uri = raw if isinstance(raw, str) else ""
+                if re.fullmatch(
+                    r"https://[^/?#]+(?::[0-9]{1,5})?/api/media/[a-zA-Z0-9_-]{6,100}/[a-zA-Z0-9_-]{8,150}",
+                    uri,
+                ):
+                    assets.append(uri)
+                    break
         return {**snapshot, "assets": assets}
 
     @app.get("/v1/native-content/{request_id}")
@@ -406,14 +410,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         owner = native_owner(request_id, principal)
 
         async def changes() -> AsyncIterator[str]:
-            last = 0
+            last = None
             # The sidecar may arrive after the client subscribes. No terminal
             # authority or worker lease is owned by this stream.
             for tick in range(3600):
                 try:
                     current = native_response_snapshot(request_id, owner)
-                    if current and current["revision"] > last:
-                        last = current["revision"]
+                    # Archival can finish *after* the last DOM revision. The
+                    # newly verified media URLs must be delivered even when the
+                    # Worker produced no further layout mutation.
+                    signature = native_delivery_fingerprint(current)
+                    if signature is not None and signature != last:
+                        last = signature
                         yield "event: native.snapshot\n" + "data: " + json.dumps(current, ensure_ascii=False) + "\n\n"
                     row = telemetry.get(request_id) or {}
                     if row.get("status") in {"completed", "error", "cancelled", "stalled"}:
@@ -912,6 +920,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> tuple[dict[str, int], dict[str, object]]:
         usage, token_meta = standard_usage(prompt, final_text)
         state.diagnostics["server_finalization_stage"] = "request-row-finalized"
+        # Diagnostics only: bounded structural evidence for A/B/C/D visual
+        # comparisons. Do not export DOM HTML, CSS text, URLs or image bytes.
+        native = native_content.get(state.request_id, principal.key_id)
+        if native:
+            state.diagnostics["native_layout_summary"] = native_layout_summary(
+                native, len(media_items or []),
+            )
         await telemetry.upsert(
             {
                 "request_id": state.request_id,

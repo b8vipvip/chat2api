@@ -32,3 +32,41 @@ def test_native_sidecar_is_authenticated_and_independent_of_terminal(tmp_path: P
         assert "event: native.snapshot" in stream.text
         assert "event: native.end" in stream.text
         assert app.state.telemetry.get(rid)["status"] == "completed"
+
+
+def test_verified_owned_url_takes_priority_over_original_source(tmp_path: Path):
+    app = create_app(Settings(CHAT2API_API_KEY="test-key",
+        CHAT2API_PAIRING_CODE="test-pair", CHAT2API_DATA_DIR=tmp_path))
+    with TestClient(app) as client:
+        rid = "req_ownedmedia12345"
+        async def record():
+            await app.state.telemetry.upsert({
+                "request_id": rid, "api_key_id": "master", "status": "completed",
+                "response_media": [{
+                    "url": "https://chatgpt.com/upstream-internal-image",
+                    "owned_url": "https://media.example.com/api/media/med_owned12345/assetTOKEN1234567",
+                }],
+            })
+        asyncio.run(record())
+        app.state.native_content.publish(rid, "master", {
+            "version": 1, "revision": 3, "root": {"tag": "img", "media_index": 0},
+        })
+        response = client.get(f"/v1/native-content/{rid}",
+                              headers={"Authorization": "Bearer test-key"})
+        assert response.status_code == 200
+        assert response.json()["assets"] == [
+            "https://media.example.com/api/media/med_owned12345/assetTOKEN1234567"]
+
+
+def test_media_ready_updates_same_native_revision():
+    from app.native_content_v1 import native_delivery_fingerprint, native_layout_summary
+    early = {"version": 1, "revision": 4,
+             "root": {"tag": "div", "style": {"display": "grid"},
+                      "children": [{"tag": "img", "media_index": 0}]}, "assets": []}
+    ready = {**early, "assets": ["https://media.example.com/api/media/med_12345678/assetTOKEN1234567"]}
+    assert native_delivery_fingerprint(early) != native_delivery_fingerprint(ready)
+    assert native_delivery_fingerprint(ready) == native_delivery_fingerprint(ready.copy())
+    summary = native_layout_summary(early, 0)
+    assert summary["images"] == 1 and summary["grid"] == 1
+    assert summary["media_mapping_complete"] is False
+    assert "assetTOKEN" not in str(summary)

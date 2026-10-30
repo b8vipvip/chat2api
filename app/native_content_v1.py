@@ -189,3 +189,37 @@ class NativeContentStore:
             return True
         except OSError:
             return False
+
+
+def native_delivery_fingerprint(snapshot: dict | None) -> tuple | None:
+    """An asset becoming ready is a new SSE state even at the same DOM revision."""
+    if not snapshot:
+        return None
+    return snapshot["revision"], tuple(snapshot.get("assets") or ())
+
+
+def native_layout_summary(snapshot: dict, archived_assets: int) -> dict:
+    """Structure-only request diagnostics; no user text, URLs, or raw HTML."""
+    pending = [snapshot.get("root")]
+    counts = {"nodes": 0, "images": 0, "grid": 0, "flex": 0,
+              "tables": 0, "archived_assets": archived_assets}
+    while pending and counts["nodes"] < MAX_NODES:
+        node = pending.pop()
+        if not isinstance(node, dict):
+            continue
+        counts["nodes"] += 1
+        tag = node.get("tag")
+        if tag == "img":
+            counts["images"] += 1
+        if tag == "table":
+            counts["tables"] += 1
+        mode = (node.get("style") or {}).get("display")
+        if mode == "grid":
+            counts["grid"] += 1
+        elif mode in {"flex", "inline-flex"}:
+            counts["flex"] += 1
+        pending.extend(node.get("children") or ())
+    counts["media_mapping_complete"] = counts["images"] == archived_assets
+    counts["revision"] = snapshot.get("revision")
+    counts["layout_schema"] = snapshot.get("version")
+    return counts
