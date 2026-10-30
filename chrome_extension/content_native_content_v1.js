@@ -21,7 +21,7 @@
   const allowedLength = new Set(["gap","padding","marginTop","marginBottom","width","maxWidth","height","borderRadius","fontSize","lineHeight"]);
   const length = /^(?:0|\d{1,4}(?:\.\d{1,2})?(?:px|rem|%))$/;
   const color = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s]+\))$/i;
-  const grid = /^(?:\d{1,3}(?:px|%)|minmax\(\d{1,3}px,\s*1fr\)|1fr)(?:\s+(?:\d{1,3}(?:px|%)|minmax\(\d{1,3}px,\s*1fr\)|1fr)){0,5}$/;
+  const grid = /^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$/;
   const cssList = [...Object.keys(styleKeys),...allowedLength,"color","backgroundColor","gridTemplateColumns"];
   function safeStyle(element) {
     const css = getComputedStyle(element), obj = {};
