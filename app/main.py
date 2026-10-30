@@ -408,8 +408,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if (status not in {"processing", "archived", "ready"}
                 or type(size) is not int or not 0 <= size <= 24 * 1024 * 1024):
                 continue
+            # File descriptors are immutable after the OpenAI terminal, but
+            # the deferred archive continues running. Resolve the real state
+            # from its durable SQLite manifest on each authenticated read.
+            if status == "processing" and "/pending/" in url:
+                pending_id, pending_token = url.rsplit("/", 2)[-2:]
+                try:
+                    pending_state = deferred_generated_files.status(
+                        pending_id, pending_token,
+                    ).get("status")
+                    if pending_state == "ready":
+                        status = "ready"
+                    elif pending_state == "failed":
+                        status = "failed"
+                except (KeyError, OSError):
+                    # An unavailable manifest is never proof of ready bytes.
+                    pass
             files.append({"filename": name, "url": url, "bytes": size,
-                          "status": "processing" if status == "processing" else "ready"})
+                          "status": status if status in {"ready", "failed"} else "processing"})
         return {**snapshot, "assets": assets, "files": files}
 
     @app.get("/v1/native-content/{request_id}")
