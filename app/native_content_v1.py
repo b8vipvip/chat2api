@@ -19,6 +19,8 @@ MAX_NODES = 420
 MAX_DEPTH = 14
 MAX_TEXT = 48000
 MAX_ACTIVE = 128
+MAX_AGE_SECONDS = 90 * 86400
+SNAPSHOT_FILENAME = re.compile(r"(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}\\.json")
 SAFE_TAGS = {"div", "p", "span", "strong", "em", "h1", "h2", "h3", "h4",
              "ul", "ol", "li", "blockquote", "pre", "code", "table", "thead",
              "tbody", "tr", "td", "th", "figure", "figcaption", "img", "hr", "br"}
@@ -122,7 +124,7 @@ class NativeContentStore:
         self.root.chmod(0o700)
         self._persist_count = 0
         self._lock = threading.Lock()
-        self._live: OrderedDict[str, tuple[str, dict]] = OrderedDict()
+        self._live: OrderedDict[str, tuple[str, dict, float]] = OrderedDict()
 
     @staticmethod
     def _valid_id(request_id: str) -> str:
@@ -141,7 +143,7 @@ class NativeContentStore:
                 return False
             if previous and previous[1]["revision"] >= snapshot["revision"]:
                 return False
-            self._live[request_id] = (owner, snapshot)
+            self._live[request_id] = (owner, snapshot, time.time())
             self._live.move_to_end(request_id)
             while len(self._live) > MAX_ACTIVE:
                 self._live.popitem(last=False)
@@ -151,10 +153,16 @@ class NativeContentStore:
         self._valid_id(request_id)
         with self._lock:
             record = self._live.get(request_id)
+            if record and time.time() - record[2] >= MAX_AGE_SECONDS:
+                self._live.pop(request_id, None)
+                record = None
             if record and record[0] == owner:
                 return record[1]
         path = self.root / (request_id + ".json")
         try:
+            if time.time() - path.stat().st_mtime >= MAX_AGE_SECONDS:
+                path.unlink(missing_ok=True)
+                return None
             saved = json.loads(path.read_text(encoding="utf-8"))
             if saved.get("owner") == owner:
                 return validate_native_snapshot(saved["snapshot"])
@@ -180,9 +188,11 @@ class NativeContentStore:
             # Bounded on-disk cache, independent of request_history.jsonl and
             # existing MediaArchive retention. Max 1000 snapshots / 90 days.
             if self._persist_count % 32 == 0:
-                saved = sorted(self.root.glob("req_*.json"),
-                               key=lambda p: p.stat().st_mtime, reverse=True)
-                cutoff = time.time() - 90 * 86400
+                saved = sorted(
+                    (p for p in self.root.glob("*.json") if SNAPSHOT_FILENAME.fullmatch(p.name)),
+                    key=lambda p: p.stat().st_mtime, reverse=True,
+                )
+                cutoff = time.time() - MAX_AGE_SECONDS
                 for index, candidate in enumerate(saved):
                     if index >= 1000 or candidate.stat().st_mtime < cutoff:
                         candidate.unlink(missing_ok=True)
