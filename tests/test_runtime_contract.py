@@ -326,3 +326,12 @@ def test_ec46_long_prompt_rebind_is_single_write_owner():
     assert "send_revalidation_revision: 254" in source
     assert "send_long_prompt_rewrite_blocked:" in source
     assert "&& active.prompt.length < 8192" in source
+
+
+def test_compact_reply_serializer_recovery_preserves_single_v6_terminal_owner():
+    source = (ROOT / "chrome_extension" / "content_request_v6.js").read_text("utf-8")
+    assert "response_recovery_compact_plain_fallback:" in source
+    assert "rendered.reason === \"fresh-roleless-compact-div-v248\"" in source
+    assert "compact && !shortRolelessSourceOverlap(raw,active.networkObservedText)" in source
+    assert "coverage.independent_chars>60" in source
+    assert "function abortedReplyStableThreshold(rendered)" in source
