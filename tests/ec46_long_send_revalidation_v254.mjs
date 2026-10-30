@@ -13,6 +13,7 @@ function harness({candidate=true,rebound=false}={}) {
  const ctx={
   normalize:x=>String(x||"").trim(),
   ensureComposer:async()=>editor,
+  findComposer:()=>editor,
   composerCandidates:()=>candidate?[rebound?newEditor:editor]:[],
   composerText:e=>e?.textContent||"",
   promptMatchesComposer:(e,active)=>e?.textContent===active.promptNormalized,
