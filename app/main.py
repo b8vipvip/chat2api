@@ -386,7 +386,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ):
                     assets.append(uri)
                     break
-        return {**snapshot, "assets": assets}
+        # Files are derived only from this request's archived final reply.
+        # Never forward unverified model-provided or upstream temporary URLs.
+        files = []
+        final_text = str(row.get("response_text") or "")
+        for item in (row.get("response_generated_files") or [])[:10]:
+            if not isinstance(item, dict):
+                continue
+            url, name = item.get("url"), item.get("filename")
+            if (not isinstance(url, str) or not isinstance(name, str)
+                or not 1 <= len(name) <= 180 or not 1 <= len(url) <= 500
+                or url not in final_text
+                or not re.fullmatch(
+                    r"https://[^/?#]+(?::[0-9]{1,5})?/api/generated-files/"
+                    r"(?:pending/pgen_[a-f0-9]{32}/[a-zA-Z0-9_-]{16,150}"
+                    r"|[a-zA-Z0-9_-]{6,100}/[a-zA-Z0-9_-]{8,150})", url
+                )):
+                continue
+            status = str(item.get("status") or "")
+            size = item.get("bytes", item.get("size"))
+            if (status not in {"processing", "archived", "ready"}
+                or type(size) is not int or not 0 <= size <= 24 * 1024 * 1024):
+                continue
+            files.append({"filename": name, "url": url, "bytes": size,
+                          "status": "processing" if status == "processing" else "ready"})
+        return {**snapshot, "assets": assets, "files": files}
 
     @app.get("/v1/native-content/{request_id}")
     async def read_native_content(
@@ -946,6 +970,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         request_type: str = "text",
         attachments_count: int = 0,
         media_items: list[dict[str, object]] | None = None,
+        file_items: list[dict[str, object]] | None = None,
     ) -> tuple[dict[str, int], dict[str, object]]:
         usage, token_meta = standard_usage(prompt, final_text)
         state.diagnostics["server_finalization_stage"] = "request-row-finalized"
@@ -973,6 +998,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "completion_chars": len(final_text),
                 "response_media": media_items or [],
                 "response_media_count": len(media_items or []),
+                "response_generated_files": file_items or [],
                 # Persist only the final post-archive owned-media URL, never the
                 # browser's several-megabyte raw Base64 transport payload.
                 **({"response_text": history_safe_response_text(final_text),
@@ -1340,6 +1366,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         state, model, prompt, "completed", principal, stream=True, prompt_mode=prompt_mode,
                         response_id=response_id, final_text=final_text, request_type=request_type,
                         attachments_count=attachments_count, media_items=archived_media,
+                        file_items=archived_files,
                     )
                     recorded = True
                     state.diagnostics["server_stream_terminal_stage"] = "persisted-before-sse"
@@ -1428,10 +1455,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         state, terminal, error_message or ""
                     )
                     final_text = state.text if is_success else ""
-                    archived_media = []
+                    archived_media, archived_files = [], []
                     if is_success:
                         try:
-                            final_text, archived_media, _ = await archive_verified_terminal(
+                            final_text, archived_media, archived_files = await archive_verified_terminal(
                                 state, final_text, principal.key_id, state.request_id,
                                 media_base_for_request(request),
                             )
@@ -1446,6 +1473,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         error=error_message,
                         request_type=request_type, attachments_count=attachments_count,
                         media_items=archived_media,
+                        file_items=archived_files if final_status == "completed" else [],
                     )
 
                 async def release_broker_after_terminal() -> None:
@@ -1628,6 +1656,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 state, body.model, prompt, "completed", principal, stream=False, prompt_mode=body.prompt_mode,
                 response_id=response_id, final_text=text, request_type=request_type,
                 attachments_count=len(attachments), media_items=archived_media,
+                    file_items=archived_files,
             )
             meta = chat2api_meta(state, token_meta, principal)
             if native_content.get(request_id, principal.key_id):
@@ -1662,10 +1691,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 error_message = None if is_success else (
                     terminal_error or "Worker terminal: " + (terminal or "missing")
                 )
-                final_text, archived_media = "", []
+                final_text, archived_media, archived_files = "", [], []
                 if is_success:
                     try:
-                        final_text, archived_media, _ = await archive_verified_terminal(
+                        final_text, archived_media, archived_files = await archive_verified_terminal(
                             state, state.text, principal.key_id, request_id,
                             media_base_for_request(request),
                         )
@@ -1679,6 +1708,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     final_text=final_text if status_value == "completed" else "",
                     error=error_message, request_type=request_type,
                     attachments_count=len(attachments), media_items=archived_media,
+                    file_items=archived_files,
                 )
 
             async def release_detached_nonstream() -> None:
