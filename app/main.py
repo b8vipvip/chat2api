@@ -563,7 +563,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             server_commit=active_commit,
         )
         return {**result, "summary": telemetry.summary(),
-                "current_version_commit": active_commit if current_version_only else None}
+                "current_version_commit": active_commit if current_version_only else None,
+                # Echo the *applied*, normalized UTC cutoff so the UI can
+                # reject stale/unfiltered responses, not silently show old rows.
+                "applied_filters": {
+                    "since": cutoff.isoformat() if cutoff is not None else None,
+                    "current_version_only": current_version_only,
+                    "q": q, "status": status_filter, "model": model,
+                }}
 
     @app.get("/api/admin/requests/{request_id}", dependencies=[Depends(require_admin_key)])
     async def admin_request_detail(request_id: str) -> dict[str, object]:

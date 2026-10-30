@@ -212,6 +212,9 @@ function requestHistoryFilterParams(){
   if(model)query.set('model',model);
   if(document.getElementById('rqBatchExportCurrentVersion')?.checked)
     query.set('current_version_only','true');
+  const raw=document.getElementById('rqBatchExportSince')?.value.trim()||'';
+  const instant=raw?requestHistoryParseExportSince(raw):null;
+  if(instant)query.set('since',instant.iso);
   return query;
 }
 function requestHistoryEnsureControls(){
@@ -231,15 +234,15 @@ function requestHistoryEnsureControls(){
     since.style.cssText='width:258px;max-width:calc(100vw - 48px);box-sizing:border-box;padding:7px 8px;font-variant-numeric:tabular-nums';
     const versionLabel=document.createElement('label');
     versionLabel.style.cssText='display:inline-flex;align-items:center;gap:5px;cursor:pointer;white-space:nowrap';
-    // Keep text paste/offset support while a native date-time picker opens
-    // when the input is clicked. The picker uses Beijing wall-clock time.
+    // Keep the input focusable and pasteable. The calendar is an explicit
+    // button; clicking text never opens the picker or steals Ctrl+V focus.
     const timeBox=document.createElement('span');
     timeBox.style.cssText='position:relative;display:inline-flex;align-items:center';
     const picker=document.createElement('input');
     picker.type='datetime-local';picker.step='1';
     picker.setAttribute('aria-label','选择起始日期和时间（北京时间）');
     picker.title='选择北京时间；也可直接在左侧输入框粘贴带时区的时间';
-    picker.style.cssText='position:absolute;right:4px;top:calc(50% - 10px);width:20px;height:20px;opacity:0.02;cursor:pointer';
+    picker.style.cssText='position:absolute;right:2px;bottom:2px;width:28px;height:28px;opacity:0;pointer-events:none';
     const openPicker=()=>{
       const parsed=requestHistoryParseExportSince(since.value);
       if(parsed){
@@ -248,11 +251,19 @@ function requestHistoryEnsureControls(){
       }
       try{picker.showPicker?.();}catch(_){}
     };
-    since.addEventListener('click',openPicker);
+    const calendar=document.createElement('button');
+    calendar.type='button';calendar.textContent='📅';
+    calendar.title='选择北京时间日期时间；左侧输入框可自由粘贴时间';
+    calendar.setAttribute('aria-label','打开起始时间日历');
+    calendar.style.cssText='margin-left:4px;padding:6px 8px;cursor:pointer';
+    calendar.addEventListener('click',openPicker);
     picker.addEventListener('change',()=>{
-      if(picker.value)since.value=picker.value.replace('T',' ');
+      if(picker.value){
+        since.value=picker.value.replace('T',' ');
+        since.dispatchEvent(new Event('input',{bubbles:true}));
+      }
     });
-    timeBox.append(since,picker);
+    timeBox.append(since,calendar,picker);
     const versionOnly=document.createElement('input');
     versionOnly.id='rqBatchExportCurrentVersion';
     versionOnly.type='checkbox';
@@ -299,7 +310,9 @@ function requestHistoryEnsureControls(){
     section.appendChild(hint);
   }
 }
+let requestHistoryLatestLoad=0;
 async function loadRequests(){
+  const sequence=++requestHistoryLatestLoad;
   const body=$('rqBody');
   if(!body)return;
   requestHistoryEnsureControls();
@@ -325,7 +338,18 @@ async function loadRequests(){
   loading.appendChild(loadingCell);body.appendChild(loading);
   try{
     const d=await api('/api/admin/requests?'+qs);
+    // A slow previous fetch cannot overwrite the current filter results.
+    if(sequence!==requestHistoryLatestLoad)return;
+    if(parsed){
+      const echoed=Date.parse(d?.applied_filters?.since||'');
+      if(!Number.isFinite(echoed)||echoed!==Date.parse(parsed.iso))
+        throw new Error('服务端没有确认起始时间筛选，拒绝展示旧记录');
+    }
     const rows=Array.isArray(d?.data)?d.data:[];
+    if(parsed && rows.some(row=>{
+      const time=Date.parse(row?.recorded_at||'');
+      return !Number.isFinite(time) || time<Date.parse(parsed.iso);
+    }))throw new Error('服务端返回了早于起始时间的记录，请检查版本或刷新页面');
     const fragment=document.createDocumentFragment();
     for(const r of rows){
       const tr=document.createElement('tr');
@@ -371,6 +395,7 @@ async function loadRequests(){
       empty.appendChild(cell);body.appendChild(empty);
     }
   }catch(error){
+    if(sequence!==requestHistoryLatestLoad)return;
     body.replaceChildren();
     const failed=document.createElement('tr'),cell=document.createElement('td');
     cell.colSpan=13;cell.className='bad';cell.textContent=`请求记录加载失败：${String(error?.message||error)}`;

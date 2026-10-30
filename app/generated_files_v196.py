@@ -33,7 +33,9 @@ STAGED_MARKER = re.compile(
     r"!\[📎 ([^\]\r\n]{1,180})\]\(chat2api-staged:([a-f0-9]{32})\)",
     re.IGNORECASE,
 )
-MAX_FILES_PER_RESPONSE = 4
+# Five-file native replies (XLSX/PPTX/JSON/MD/ZIP) are valid.
+# Retain the existing 24 MiB aggregate limit and per-file checks.
+MAX_FILES_PER_RESPONSE = 8
 
 # Downloads only, never serve as inline HTML or script.
 FILE_MIMES = {
