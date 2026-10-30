@@ -485,6 +485,32 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
 
+    @app.get("/api/admin/requests/{request_id}/native-content", dependencies=[Depends(require_admin_key)])
+    async def admin_native_content_evidence(request_id: str) -> Response:
+        # Privileged visual evidence for a specific request. The tree is already
+        # schema-validated and bounded; never expose credential-bearing asset
+        # URLs in an exported layout diagnostic.
+        row = telemetry.get(request_id)
+        if not row or not row.get("api_key_id"):
+            raise HTTPException(status_code=404, detail="Unknown request")
+        try:
+            snapshot = native_content.get(request_id, str(row["api_key_id"]))
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="No native layout evidence")
+        archived = row.get("response_media") or []
+        details = [
+            {key: media[key] for key in ("id", "mime", "width", "height") if key in media}
+            for media in archived[:40] if isinstance(media, dict)
+        ]
+        return JSONResponse(
+            {"request_id": request_id, "version": 1, "snapshot": snapshot,
+             "layout_summary": native_layout_summary(snapshot, len(details)),
+             "media_metadata": details},
+            headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+        )
+
     @app.get("/api/admin/requests/{request_id}/probes/download", dependencies=[Depends(require_admin_key)])
     async def request_probe_download(request_id: str) -> Response:
         row = telemetry.get(request_id)
