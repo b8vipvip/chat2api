@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse, Response
 
 from .admin_auth import SESSION_COOKIE
 from .runtime_contract import CHROME_BRIDGE_BUNDLE_VERSION, CHROME_BRIDGE_VERSION, SERVER_RUNTIME_VERSION
+from .runtime_code_identity import runtime_code_sha as active_runtime_code_sha
 
 
 ASSET_PATH = "/assets/chat2api-server-update.js"
@@ -218,15 +219,9 @@ def install_server_update_patch(app: FastAPI) -> FastAPI:
         marker = _read_json(data_dir / UPDATER_MARKER_NAME)
         deployment = _read_json(data_dir / DEPLOYMENT_NAME)
         remote = await _remote_main(app, refresh=bool(refresh))
-        # Prefer the marker inside the *running* container. The host's Git
-        # checkout is not proof that Docker actually loaded that revision.
-        runtime_marker = Path("/app/.gptauto-runtime-sha")
-        runtime_code_sha = (
-            runtime_marker.read_text(encoding="ascii").strip()
-            if runtime_marker.is_file() else
-            os.environ.get("CHAT2API_BUILD_COMMIT", "")
-        )
-        runtime_code_sha = runtime_code_sha if re.fullmatch(r"[0-9a-f]{40}", runtime_code_sha) else ""
+        # Share the same container-authoritative revision resolver used
+        # when creating and filtering per-request provenance.
+        runtime_code_sha = active_runtime_code_sha()
         deployed_commit = str(deployment.get("commit") or "") or runtime_code_sha
         remote_sha = str(remote.get("sha") or "")
         return {
