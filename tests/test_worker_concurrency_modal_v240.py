@@ -24,7 +24,7 @@ def test_v240_admin_script_urls_refresh_after_old_browser_cache():
     runtime = (ROOT / "app/runtime_contract.py").read_text(encoding="utf-8")
     limits = (ROOT / "app/worker_limits_clipboard_v121_patch.py").read_text(encoding="utf-8")
     unified = (ROOT / "app/worker_auto_login_v153_patch.py").read_text(encoding="utf-8")
-    assert '?v=0.22.252' in runtime
-    assert 'ASSET_RELEASE = "0.22.252"' in limits
-    assert '?v=0.22.252' in unified
+    assert '?v=0.22.253' in runtime
+    assert 'ASSET_RELEASE = "0.22.253"' in limits
+    assert '?v=0.22.253' in unified
     assert "data-v121-windows" not in (ROOT / "app/admin_extension_columns.js").read_text(encoding="utf-8")
