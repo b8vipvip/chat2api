@@ -35,3 +35,33 @@ assert.ok(!JSON.stringify(payload).includes("secret.example"));
 await capture.capture(active,false);
 assert.equal(sent.length,1);
 console.log("Native rich observer: bounded capture, no DOM URLs, independent request status");
+
+function candidateFor(children) {
+  return {requestId:"req_boundedtest1234",submitStartedAt:Date.now(),
+    lastCandidateNode:new Element("DIV",children)};
+}
+// Native snapshots must not silently omit trailing content. The canonical
+// Markdown path remains the sole complete answer when DOM caps are reached.
+const overNodes=candidateFor(Array.from({length:421},(_,i)=>({
+  nodeType:3,nodeValue:"paragraph "+i,
+})));
+assert.equal(capture.snapshot(overNodes),null,"over 420 nodes must fail closed");
+await capture.capture(overNodes,true);
+assert.equal(sent.length,1,"truncated content must never be published");
+
+const overText=candidateFor([{nodeType:3,nodeValue:"A".repeat(48001)}]);
+assert.equal(capture.snapshot(overText),null,"over 48K text must fail closed");
+await capture.capture(overText,true);
+assert.equal(sent.length,1);
+
+let nested=new Element("P",[{nodeType:3,nodeValue:"deep"}]);
+for(let i=0;i<15;i++)nested=new Element("DIV",[nested]);
+assert.equal(capture.snapshot(candidateFor([nested])),null,"over-depth text must fail closed");
+
+const overChildren=candidateFor(Array.from({length:81},(_,i)=>({
+  nodeType:3,nodeValue:"chunk "+i,
+})));
+assert.equal(capture.snapshot(overChildren),null,"over 80 children must fail closed");
+
+const overImages=candidateFor(Array.from({length:41},()=>new Element("IMG")));
+assert.equal(capture.snapshot(overImages),null,"over 40 images must fail closed");
