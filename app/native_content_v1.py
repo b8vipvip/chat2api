@@ -14,10 +14,10 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-MAX_BYTES = 64 * 1024
-MAX_NODES = 420
+MAX_BYTES = 384 * 1024
+MAX_NODES = 1200
 MAX_DEPTH = 14
-MAX_TEXT = 48000
+MAX_TEXT = 96000
 MAX_ACTIVE = 128
 MAX_AGE_SECONDS = 90 * 86400
 SNAPSHOT_FILENAME = re.compile(r"(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}\.json")
