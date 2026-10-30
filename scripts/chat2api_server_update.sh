@@ -438,7 +438,20 @@ fi
 TARGET_COMMIT="$(git -C "$APP_DIR" rev-parse "origin/${BRANCH}")"
 write_status "running" "fetch" "32" "GitHub main=${TARGET_COMMIT:0:12}；通道=${FETCH_TRANSPORT}；耗时=${FETCH_ELAPSED_MS}ms；尝试=${FETCH_ATTEMPTS}"
 
-if [[ "$TARGET_COMMIT" == "$FROM_COMMIT" ]]; then
+# Git checkout != Docker runtime. Verify the actual running source SHA first.
+RUNTIME_SHA=""
+RUNTIME_CONTAINER="$(docker compose -f "$APP_DIR/docker-compose.yml" ps -q chat2api || true)"
+if [[ -n "$RUNTIME_CONTAINER" ]]; then
+  RUNTIME_SHA="$(docker exec "$RUNTIME_CONTAINER" cat /app/.gptauto-runtime-sha 2>/dev/null || true)"
+  if [[ ! "$RUNTIME_SHA" =~ ^[a-f0-9]{40}$ ]]; then
+    RUNTIME_SHA="$(docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$RUNTIME_CONTAINER" 2>/dev/null |
+      sed -n 's/^CHAT2API_BUILD_COMMIT=//p' | head -1 || true)"
+  fi
+fi
+if [[ "$TARGET_COMMIT" == "$FROM_COMMIT" && "$RUNTIME_SHA" != "$TARGET_COMMIT" ]]; then
+  log "Git already current but running container is unverified/old: ${RUNTIME_SHA:-unknown}; rebuilding"
+fi
+if [[ "$TARGET_COMMIT" == "$FROM_COMMIT" && "$RUNTIME_SHA" == "$TARGET_COMMIT" ]]; then
   write_status "succeeded" "completed" "100" "当前已经是 GitHub main 最新提交 ${TARGET_COMMIT:0:12}"
   python3 - "$DEPLOYMENT_FILE" "$TARGET_COMMIT" <<'PY'
 import json, os, sys, tempfile
