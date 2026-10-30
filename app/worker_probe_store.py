@@ -151,7 +151,7 @@ def _sanitize_facts(value: Any) -> dict[str, str | bool | int | float | None]:
         elif key == "scene_layout_geometry" and isinstance(fact, str):
             # Image/structure tag plus bounded integer rectangles; no URLs,
             # text, stylesheets, attributes, markup, classes, or private data.
-            part = r"(?:I(?::-?\\d{1,5}){9}|[HTCFL](?::-?\\d{1,5}){5}|G(?::-?\\d{1,5}){8})"
+            part = r"(?:I(?::-?\d{1,5}){9}|[HTCFL](?::-?\d{1,5}){5}|G(?::-?\d{1,5}){8})"
             if len(fact) <= 4400 and re.fullmatch(rf"{part}(?:;{part})*", fact):
                 result[key] = fact
         elif key == "scene_reply_topology" and isinstance(fact, str):
