@@ -365,7 +365,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown request")
         return owner
 
-    def native_response_snapshot(request_id: str, owner: str) -> dict | None:
+    async def native_response_snapshot(request_id: str, owner: str) -> dict | None:
         snapshot = native_content.get(request_id, owner)
         if not snapshot:
             return None
@@ -414,9 +414,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if status == "processing" and "/pending/" in url:
                 pending_id, pending_token = url.rsplit("/", 2)[-2:]
                 try:
-                    pending_state = deferred_generated_files.status(
-                        pending_id, pending_token,
-                    ).get("status")
+                    # SQLite can wait for a concurrent archive writer. Do
+                    # not block unrelated API requests or SSE heartbeats on
+                    # the event loop while reading the durable file state.
+                    pending_state = (await asyncio.to_thread(
+                        deferred_generated_files.status, pending_id, pending_token,
+                    )).get("status")
                     if pending_state == "ready":
                         status = "ready"
                     elif pending_state == "failed":
@@ -434,7 +437,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     ) -> Response:
         owner = native_owner(request_id, principal)
         try:
-            snapshot = native_response_snapshot(request_id, owner)
+            snapshot = await native_response_snapshot(request_id, owner)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         if snapshot is None:
@@ -455,7 +458,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # authority or worker lease is owned by this stream.
             for tick in range(3600):
                 try:
-                    current = native_response_snapshot(request_id, owner)
+                    current = await native_response_snapshot(request_id, owner)
                     # Archival can finish *after* the last DOM revision. The
                     # newly verified media URLs must be delivered even when the
                     # Worker produced no further layout mutation.
