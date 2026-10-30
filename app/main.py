@@ -30,6 +30,7 @@ from .generated_files_v196 import GeneratedFileArchive
 from .generated_file_staging_v238 import GeneratedFileStaging
 from .generated_file_deferred_v247 import DeferredGeneratedFiles, FileStillProcessing, FileTransferFailed
 from .rich_content_v196 import manifest as rich_content_manifest
+from .native_content_v1 import NativeContentStore
 from .media_public_origin_v187 import media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
 from .responses_multimodal_input_v183 import attachment_specs as canonical_attachment_specs
@@ -68,6 +69,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     registry.request_broker = broker
     telemetry = TelemetryStore(config.data_dir)
     worker_probes = WorkerProbeStore(config.data_dir)
+    native_content = NativeContentStore(config.data_dir)
     api_keys = ApiKeyStore(config.data_dir, config.api_key)
     telemetry.usage_accounting = api_keys.account_completed_usage
     file_store = FileStore(config.data_dir)
@@ -105,6 +107,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.broker = broker
     app.state.telemetry = telemetry
     app.state.worker_probes = worker_probes
+    app.state.native_content = native_content
     app.state.api_keys = api_keys
     app.state.file_store = file_store
     app.state.media_archive = media_archive
@@ -347,6 +350,83 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "Content-Security-Policy": "sandbox",
             "Cache-Control": "private, max-age=86400",
             "X-Chat2API-File-MIME": mime,
+        })
+
+    # Native rich content is an independent, authenticated presentation sidecar.
+    # Standard /v1/chat/completions and Responses SSE events are never replaced.
+    def native_owner(request_id: str, principal: ApiPrincipal) -> str:
+        if principal.kind != "master" and "chat" not in principal.scopes:
+            raise HTTPException(status_code=403, detail="API key lacks chat permission")
+        row = telemetry.get(request_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Unknown request")
+        owner = str(row.get("api_key_id") or "")
+        if not owner or (principal.kind != "master" and owner != principal.key_id):
+            raise HTTPException(status_code=404, detail="Unknown request")
+        return owner
+
+    def native_response_snapshot(request_id: str, owner: str) -> dict | None:
+        snapshot = native_content.get(request_id, owner)
+        if not snapshot:
+            return None
+        row = telemetry.get(request_id) or {}
+        # Reuse the *same* archived media records as the canonical Markdown.
+        # Never return a ChatGPT blob URL or a model-generated remote URL.
+        assets = []
+        for media in (row.get("response_media") or [])[:40]:
+            if not isinstance(media, dict):
+                continue
+            uri = str(media.get("url") or "")
+            if re.fullmatch(
+                r"https://[^/?#]+(?::[0-9]{1,5})?/api/media/[a-zA-Z0-9_-]{6,100}/[a-zA-Z0-9_-]{8,150}",
+                uri,
+            ):
+                assets.append(uri)
+        return {**snapshot, "assets": assets}
+
+    @app.get("/v1/native-content/{request_id}")
+    async def read_native_content(
+        request_id: str, principal: ApiPrincipal = Depends(require_api_key),
+    ) -> Response:
+        owner = native_owner(request_id, principal)
+        try:
+            snapshot = native_response_snapshot(request_id, owner)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if snapshot is None:
+            raise HTTPException(status_code=404, detail="No native snapshot")
+        return JSONResponse(snapshot, headers={
+            "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+        })
+
+    @app.get("/v1/native-content/{request_id}/events")
+    async def stream_native_content(
+        request_id: str, principal: ApiPrincipal = Depends(require_api_key),
+    ) -> StreamingResponse:
+        owner = native_owner(request_id, principal)
+
+        async def changes() -> AsyncIterator[str]:
+            last = 0
+            # The sidecar may arrive after the client subscribes. No terminal
+            # authority or worker lease is owned by this stream.
+            for tick in range(3600):
+                try:
+                    current = native_response_snapshot(request_id, owner)
+                    if current and current["revision"] > last:
+                        last = current["revision"]
+                        yield "event: native.snapshot\n" + "data: " + json.dumps(current, ensure_ascii=False) + "\n\n"
+                    row = telemetry.get(request_id) or {}
+                    if row.get("status") in {"completed", "error", "cancelled", "stalled"}:
+                        yield "event: native.end\ndata: {}\n\n"
+                        return
+                except ValueError:
+                    return
+                if tick % 40 == 0:
+                    yield ": native keepalive\n\n"
+                await asyncio.sleep(0.25)
+        return StreamingResponse(changes(), media_type="text/event-stream", headers={
+            "Cache-Control": "no-cache, no-store", "X-Accel-Buffering": "no",
+            "X-Content-Type-Options": "nosniff",
         })
 
     @app.get("/api/admin/worker-tools/catalog", dependencies=[Depends(require_admin_key)])
@@ -1230,6 +1310,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             ensure_ascii=False,
                         ) + "\n\n"
                     meta = chat2api_meta(state, token_meta, principal)
+            if native_content.get(request_id, principal.key_id):
+                meta["native_content"] = {
+                    "version": 1,
+                    "url": f"/v1/native-content/{request_id}",
+                    "events_url": f"/v1/native-content/{request_id}/events",
+                }
+                    if native_content.get(state.request_id, principal.key_id):
+                        meta["native_content"] = {
+                            "version": 1,
+                            "url": f"/v1/native-content/{state.request_id}",
+                            "events_url": f"/v1/native-content/{state.request_id}/events",
+                        }
                     if archived_media:
                         meta["media_files"] = archived_media
                     if archived_files:
@@ -1873,6 +1965,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "error": reason,
                     })
                     continue
+                if message_type == "chat.native.snapshot" and request_id:
+                    # Read-only observer from the authenticated current Worker.
+                    # Never broker.publish, never set a terminal, never log the tree.
+                    active_state = broker.requests.get(request_id)
+                    row = telemetry.get(request_id) or {}
+                    owner = str(row.get("api_key_id") or "")
+                    if (active_state and active_state.client_id == client_id
+                            and registry.sockets.get(client_id) is websocket and owner):
+                        try:
+                            native_content.publish(request_id, owner, message.get("snapshot"))
+                        except (ValueError, TypeError):
+                            pass
+                    continue
                 if message_type == "probe.event" and request_id:
                     # Existing authenticated socket and broker are the sole
                     # request-to-Worker authority; probe events never reach the
@@ -1911,6 +2016,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         active_state.diagnostics["terminal_transport_server_received_at"] = time.time()
                         active_state.diagnostics["terminal_transport_payload_chars"] = len(str(message.get("text") or ""))
                     accepted = await broker.publish(request_id, message)
+                    if accepted and message_type == "chat.completed" and active_state:
+                        row = telemetry.get(request_id) or {}
+                        owner = str(row.get("api_key_id") or "")
+                        if owner:
+                            native_content.persist(request_id, owner)
                     if terminal_message:
                         if active_state and active_state.client_id == client_id:
                             active_state.diagnostics["terminal_transport_broker_accepted"] = bool(accepted)
