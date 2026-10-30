@@ -3,10 +3,10 @@
 const host=document.getElementById("playgroundChatPanel");
 if(!host||document.getElementById("pgABCD"))return;
 // Task content lives in the persistent server-side one-shot pool, never in the JS bundle.
-const cases={A:{title:"长篇图文与公式",prompts:[]},B:{title:"三幅独立插画",prompts:[]},C:{title:"四份实际交付文件",prompts:[]},D:{title:"连续两轮互动剧情",prompts:[]}};
+const cases={A:{title:"旧住宅节能改造",prompts:[]},B:{title:"模块化收纳盒产品摄影",prompts:[]},C:{title:"社区屋顶菜园资料包",prompts:[]},D:{title:"图书馆离线预约网页",prompts:[]}};
 const byId=id=>document.getElementById(id),note=s=>{byId("pgABCDNote").textContent=s};
 const el=document.createElement("section");el.className="panel";el.id="pgABCD";el.style.margin="12px 0";
-el.innerHTML='<h3>ABCD 真实场景验收</h3><p class="muted">通过已选业务Key和文本模型实际发起API流式请求。A检验全文结构、B检验3张图片、C检验4份文件、D连续两轮上下文。每次运行将当前题目立即从持久化队列移除，自动换成全新主题；API SSE 完成不代表上游 ChatGPT 终态已验证。</p><div style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0"><select id="pgABCDSelect"></select><button class="action good" id="pgABCDRun">运行场景</button></div><p id="pgABCDNote" role="status" style="white-space:pre-wrap;line-height:1.6">尚未执行</p>';
+el.innerHTML='<h3>ABCD 真实场景验收</h3><p class="muted">通过已选业务Key和文本模型实际发起API流式请求。A检验全文结构、B检验3张图片、C检验4份文件、D检验可运行HTML与业务逻辑。每次运行将当前题目立即从持久化队列移除，自动换成全新主题；API SSE 完成不代表上游 ChatGPT 终态已验证。</p><div style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0"><select id="pgABCDSelect"></select><button class="action good" id="pgABCDRun">运行场景</button></div><p id="pgABCDNote" role="status" style="white-space:pre-wrap;line-height:1.6">尚未执行</p>';
 host.querySelector(".pgChatMode")?.after(el);
 byId("pgABCDSelect").innerHTML=Object.entries(cases).map(([id,s])=>'<option value="'+id+'">'+id+' · '+s.title+'</option>').join("");
 let working=false,report=null;
@@ -149,7 +149,16 @@ if(f)assets.push(await verifyAsset(f,false));
 }
 check(assets.length===4,"全部四种文件真实下载");
 }
-if(id==="D"){
+if(id==="D" && task.kind==="web_app"){
+check(turns.length===1,"完成完整的离线网页开发请求");
+check(turns[0]?.text?.length>=2000,"具有足够完整的实现说明和代码");
+const html=files(turns[0]?.text||"").find(x=>x.name.toLowerCase().endsWith(".html"));
+check(Boolean(html),"交付可下载的HTML文件");
+if(html)assets.push(await verifyAsset(html,false));
+check(/localStorage|本地存储/.test(text),"包含本地数据持久化机制");
+check(/库存|预约/.test(text),"包含库存和预约业务规则");
+}
+if(id==="D" && task.kind!=="web_app"){
 check(turns.length===2,"完成两轮请求");
 check(turns.every(x=>x.text.length>=450),"两轮都有完整内容");
 check((task.keywords||[]).some(word=>(turns[1]?.text||"").includes(word)),"第二轮延续当前题目的关键设定");
@@ -164,7 +173,7 @@ if(working)return;
 working=true;byId("pgABCDRun").disabled=true;
 const sceneId=byId("pgABCDSelect").value,model=byId("pgChatModel").value;
 let scene=null;
-report={scene:sceneId,model,started_at:new Date().toISOString(),turns:[],checks:[],assets:[],warnings:[],status:"running",pool_version:"abcd-one-shot-v198"};
+report={scene:sceneId,model,started_at:new Date().toISOString(),turns:[],checks:[],assets:[],warnings:[],status:"running",pool_version:"abcd-new-real-scenes-v4"};
 let auth=null;
 try{
 if(!model)throw Error("请选择在线Worker支持的模型");
