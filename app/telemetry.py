@@ -225,7 +225,13 @@ class TelemetryStore:
                 return False
             if since is not None and not request_record_created_after(row, since):
                 return False
-            if not request_record_created_before(row, query_ends_at):
+            # Legacy undated records remain visible without a time predicate.
+            # When a time/version window is selected, a missing creation time
+            # cannot be proven to fall inside the requested interval.
+            if row.get('recorded_at'):
+                if not request_record_created_before(row, query_ends_at):
+                    return False
+            elif since is not None or current_version_only:
                 return False
             if status_value and str(row.get("status") or "").lower() != status_value:
                 return False
