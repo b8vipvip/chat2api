@@ -122,6 +122,7 @@
   }
 
   async function diagnostics(row, detail) {
+    const active = activeRequest();
     state.diagnostics += 1;
     await emit({
       type: "chat.diagnostics",
@@ -157,7 +158,15 @@
         network_stream_response_body_used: detail.response_body_used === true,
         network_stream_response_body_locked: detail.response_body_locked === true,
         network_stream_parser_assistant_role_seen: detail.assistant_role_seen === true,
-        network_stream_terminal_proof: detail.completion_hint === true,
+        // An upstream end_turn / [DONE] marker is provisional until THIS stream
+        // has ended cleanly. An aborted clone can carry a marker without
+        // transport EOF, as seen in real 600s/900s timeout diagnostics.
+        network_stream_terminal_marker_seen: detail.completion_hint === true,
+        network_stream_terminal_proof: Boolean(
+          active?.networkTerminalTransportDoneAt &&
+          active.networkTerminalTransportStreamId === row.streamId &&
+          !active.networkTerminalTransportErrorAt
+        ),
         generation_progress: `${row.streamId}:${Number(detail.sequence || 0)}:${Number(detail.bytes ?? row.bytes ?? 0)}`,
         generating_observed: !/^(?:done|error)(?:$|-)/.test(String(detail.phase || "")),
       },
