@@ -1063,12 +1063,24 @@
   // proves that there are no substantial un-attributed answer blocks nearby.
   // A be17-style 255 uncovered block page must NEVER satisfy this path.
   function verifiedPlainRolelessCaptureFallback(active, rendered, captured) {
-    if(!rendered?.rolelessRichVerified || rendered.shortTextVerified
+    if(!rendered?.rolelessRichVerified
         || !rendered.node?.isConnected || !rendered.replyScope?.isConnected
         || !active?.baselineRenderedText) return null;
+    // #554 v0.22.251 7da9: a 218-character current reply was serialized
+    // as 226 chars and could not pass the <=220 compact output gate. Recover
+    // the exact browser DIV only for an independently verified compact reply
+    // and exact same-request network substring overlap. Never authorize a
+    // partial rich/media document or a generic 26-char status message.
+    const compact = Boolean(rendered.shortTextVerified
+      && rendered.rolelessHeaderVerified
+      && rendered.reason === "fresh-roleless-compact-div-v248");
+    if (rendered.shortTextVerified && !compact) return null;
     const node=rendered.node;
     const raw=normalize(node.innerText || node.textContent || "");
-    if(raw.length<240 || raw.length>12000 || raw!==normalize(rendered.text)
+    if(raw.length < (compact ? 80 : 240)
+        || raw.length > (compact ? 220 : 12000)
+        || raw !== normalize(rendered.text)
+        || (compact && !shortRolelessSourceOverlap(raw,active.networkObservedText))
         || transientText(raw) || internalToolPayload(raw)
         || node.querySelector?.("img,picture,canvas,video,svg,table,pre,code,math,.katex,a[href],iframe,[role='table']"))
       return null;
@@ -2538,6 +2550,7 @@
               response_recovery_rich_tail_complete: rendered.rolelessRichVerified
                 ? rolelessRichCaptureComplete(rendered.node, finalText) : null,
               response_recovery_plain_roleless_fallback: Boolean(plainFallback),
+              response_recovery_compact_plain_fallback: Boolean(plainFallback && rendered.shortTextVerified),
               response_recovery_capture_pending: false,
               response_recovery_threshold_ms: abortedReplyStableThreshold(rendered),
             };
