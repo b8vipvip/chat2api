@@ -184,3 +184,57 @@ def test_file_manifest_changes_are_new_sse_state_without_dom_revision():
     }]}
     assert native_delivery_fingerprint(original) != native_delivery_fingerprint(ready)
     assert native_delivery_fingerprint(ready) == native_delivery_fingerprint(dict(ready))
+
+
+def test_native_file_status_follows_deferred_archive_after_openai_completed(tmp_path: Path):
+    import sqlite3
+    app = create_app(Settings(CHAT2API_API_KEY="test-key",
+        CHAT2API_PAIRING_CODE="test-pair", CHAT2API_DATA_DIR=tmp_path))
+    with TestClient(app) as client:
+        rid = "req_filelifecycle1234"
+        pending_id = "pgen_" + "a" * 32
+        token = "Z" * 24
+        url = f"https://files.example.com/api/generated-files/pending/{pending_id}/{token}"
+        async def record():
+            await app.state.telemetry.upsert({
+                "request_id": rid, "api_key_id": "master", "status": "completed",
+                "response_text": f"[📎 plan.xlsx]({url})",
+                "response_generated_files": [{
+                    "filename": "plan.xlsx", "url": url, "bytes": 1234,
+                    "status": "processing",
+                }],
+            })
+        asyncio.run(record())
+        assert app.state.native_content.publish(rid, "master", {
+            "version": 1, "revision": 7,
+            "root": {"tag": "p", "text": "Your plan"},
+        })
+        # The durable pending manifest is the source of truth after the
+        # request-history row is frozen as completed.
+        with sqlite3.connect(app.state.generated_files.db_path) as conn:
+            conn.execute("""INSERT INTO deferred_generated_files
+                (id,token,owner,request_id,filename,mime,size,sha256,
+                 state,file_id,file_token,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (pending_id, token, "master", rid, "plan.xlsx",
+                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                 1234, "a" * 64, "processing", None, None,
+                 "2026-10-30T00:00:00+00:00", "2026-10-30T00:00:00+00:00"))
+        auth = {"Authorization": "Bearer test-key"}
+        route = f"/v1/native-content/{rid}"
+        first = client.get(route, headers=auth)
+        assert first.status_code == 200
+        assert first.json()["files"][0]["status"] == "processing"
+        from app.native_content_v1 import native_delivery_fingerprint
+        with sqlite3.connect(app.state.generated_files.db_path) as conn:
+            conn.execute("UPDATE deferred_generated_files SET state='ready' WHERE id=?", (pending_id,))
+        second = client.get(route, headers=auth)
+        assert second.status_code == 200
+        assert second.json()["files"][0]["status"] == "ready"
+        assert native_delivery_fingerprint(first.json()) != native_delivery_fingerprint(second.json())
+        with sqlite3.connect(app.state.generated_files.db_path) as conn:
+            conn.execute("UPDATE deferred_generated_files SET state='failed' WHERE id=?", (pending_id,))
+        third = client.get(route, headers=auth)
+        assert third.json()["files"][0]["status"] == "failed"
+        assert native_delivery_fingerprint(second.json()) != native_delivery_fingerprint(third.json())
+        assert client.get(route).status_code == 401
