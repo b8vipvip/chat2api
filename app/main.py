@@ -1310,12 +1310,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             ensure_ascii=False,
                         ) + "\n\n"
                     meta = chat2api_meta(state, token_meta, principal)
-            if native_content.get(request_id, principal.key_id):
-                meta["native_content"] = {
-                    "version": 1,
-                    "url": f"/v1/native-content/{request_id}",
-                    "events_url": f"/v1/native-content/{request_id}/events",
-                }
                     if native_content.get(state.request_id, principal.key_id):
                         meta["native_content"] = {
                             "version": 1,
