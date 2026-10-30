@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import secrets
+import sqlite3
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -424,8 +425,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         status = "ready"
                     elif pending_state == "failed":
                         status = "failed"
-                except (KeyError, OSError):
-                    # An unavailable manifest is never proof of ready bytes.
+                except (KeyError, OSError, sqlite3.Error):
+                    # SQLite can raise OperationalError on locked/unavailable
+                    # storage. A failed optional sidecar status read must not
+                    # turn a completed OpenAI request into an HTTP 500 or
+                    # terminate native SSE. Never invent a ready file.
                     pass
             files.append({"filename": name, "url": url, "bytes": size,
                           "status": status if status in {"ready", "failed"} else "processing"})

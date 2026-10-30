@@ -294,3 +294,50 @@ def test_slow_deferred_file_status_does_not_block_http_event_loop(tmp_path: Path
             completed = result.result(timeout=5)
             assert completed.status_code == 200
             assert completed.json()["files"][0]["status"] == "processing"
+
+
+def test_native_file_sqlite_failure_stays_processing_without_http_500(tmp_path: Path, monkeypatch):
+    import sqlite3
+    from app.generated_file_deferred_v247 import DeferredGeneratedFiles
+
+    app = create_app(Settings(CHAT2API_API_KEY="test-key",
+        CHAT2API_PAIRING_CODE="test-pair", CHAT2API_DATA_DIR=tmp_path))
+    with TestClient(app) as client:
+        rid = "req_sqlitefallback123"
+        file_id = "pgen_" + "c" * 32
+        token = "D" * 24
+        url = f"https://files.example.com/api/generated-files/pending/{file_id}/{token}"
+
+        async def record():
+            await app.state.telemetry.upsert({
+                "request_id": rid, "api_key_id": "master", "status": "completed",
+                "response_text": f"[📎 report.xlsx]({url})",
+                "response_generated_files": [{
+                    "filename": "report.xlsx", "url": url,
+                    "bytes": 1234, "status": "processing",
+                }],
+            })
+        asyncio.run(record())
+        assert app.state.native_content.publish(rid, "master", {
+            "version": 1, "revision": 2,
+            "root": {"tag": "p", "text": "Your spreadsheet"},
+        })
+
+        def failed_status(self, pending_id, access_token):
+            assert pending_id == file_id and access_token == token
+            raise sqlite3.OperationalError("database is locked")
+
+        monkeypatch.setattr(DeferredGeneratedFiles, "status", failed_status)
+        auth = {"Authorization": "Bearer test-key"}
+        response = client.get(f"/v1/native-content/{rid}", headers=auth)
+        assert response.status_code == 200
+        assert response.json()["files"] == [{
+            "filename": "report.xlsx", "url": url,
+            "bytes": 1234, "status": "processing",
+        }]
+        streamed = client.get(f"/v1/native-content/{rid}/events", headers=auth)
+        assert streamed.status_code == 200
+        assert "event: native.snapshot" in streamed.text
+        assert "event: native.end" in streamed.text
+        assert "database is locked" not in streamed.text
+        assert app.state.telemetry.get(rid)["status"] == "completed"
