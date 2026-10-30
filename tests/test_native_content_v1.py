@@ -36,6 +36,26 @@ def test_disallowed_native_content_is_rejected(payload):
 def test_safe_layout_is_preserved():
     assert validate_native_snapshot(snapshot()) == snapshot()
 
+def test_large_safe_native_tree_is_preserved_without_silent_truncation():
+    # This many blocks exceeded the earlier 420-node cutoff, causing MV3C
+    # to quietly revert to Markdown even though the original answer was ready.
+    rich = {"version": 1, "revision": 7, "root": {
+        "tag": "div", "children": [
+            {"tag": "div", "children": [{"tag": "p", "text": f"block {g}-{i}"}
+                for i in range(60)]}
+            for g in range(12)
+        ],
+    }}
+    assert validate_native_snapshot(rich) == rich
+    # Keep a hard, deterministic limit; never publish a truncated tree.
+    rich["root"]["children"].extend([
+        {"tag": "div", "children": [{"tag": "p", "text": f"extra {g}-{i}"}
+            for i in range(60)]} for g in range(12)
+    ])
+    with pytest.raises(ValueError, match="exceeds limit"):
+        validate_native_snapshot(rich)
+
+
 def test_private_snapshot_permissions(tmp_path):
     import os
     store = NativeContentStore(tmp_path)
