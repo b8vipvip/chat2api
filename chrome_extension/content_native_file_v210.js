@@ -192,15 +192,17 @@
     return output;
   }
   function fallbackZip(session) {
-    if(session.files.size!==3 || session.files.has("chat2api-artifacts.zip")
-      || [...session.files.values()].some(file=>!file.data_url))return null;
+    // Only three verified originals are packaged. Unrelated TXT/MD source
+    // cards must not suppress ZIP delivery, but neither may they be silently
+    // substituted for an XLSX, PPTX or JSON original.
+    if (session.files.has("chat2api-artifacts.zip")) return null;
     const byExt={};
     for(const file of session.files.values()) {
       const ext=file.filename.split(".").pop().toLowerCase();
       if(byExt[ext])return null;
       byExt[ext]=file;
     }
-    if(!["xlsx","pptx","json"].every(ext=>Boolean(byExt[ext])))return null;
+    if(!["xlsx","pptx","json"].every(ext=>Boolean(byExt[ext]?.data_url)))return null;
     const originals=["xlsx","pptx","json"].map(ext=>{
       const file=byExt[ext],base64=file.data_url.split("base64,")[1];
       if(!base64)return null;
@@ -209,8 +211,8 @@
     });
     if(originals.some(item=>!item))return null;
     const readme=new TextEncoder().encode(
-      "高校机器人公开赛交付文件\n"+
-      "本 ZIP 由 chat2api 将本轮 ChatGPT 已生成并验证的 XLSX、PPTX、JSON 文件原样打包。\n"+
+      "chat2api 本轮文件交付归档\n"+
+      "本 ZIP 包含当前请求已经验证的 XLSX、PPTX、JSON 原始文件。\n"+
       "请先解压，再用对应的办公软件和 JSON 解析器打开；打包不改变原始文件内容。\n"
     );
     const bytes=binaryArchive([...originals,{filename:"README.txt",bytes:readme}]);
