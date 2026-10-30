@@ -335,3 +335,11 @@ def test_compact_reply_serializer_recovery_preserves_single_v6_terminal_owner():
     assert "compact && !shortRolelessSourceOverlap(raw,active.networkObservedText)" in source
     assert "coverage.independent_chars>60" in source
     assert "function abortedReplyStableThreshold(rendered)" in source
+
+
+def test_v255_native_zip_fallback_selects_only_verified_original_file_types():
+    source = (ROOT / "chrome_extension" / "content_native_file_v210.js").read_text("utf-8")
+    assert 'session.files.has("chat2api-artifacts.zip")' in source
+    assert '["xlsx","pptx","json"].every(ext=>Boolean(byExt[ext]?.data_url))' in source
+    assert 'synthesized_zip:session.synthesizedZip===true' in source
+    assert 'type: "chat.completed"' not in source

@@ -27,6 +27,7 @@ async function harness(extensions=["xlsx","pptx","json"]) {
   const buttons=extensions.map(ext=>{
     const filename="Project."+ext;
     const bytes=ext==="json"?new TextEncoder().encode('{"schedule":[]}'):
+      ext==="md"?new TextEncoder().encode("# Verified project notes"):
       new Uint8Array([80,75,3,4,0,1,2,3]);
     return {
       disabled:false,getAttribute(name){return name==="aria-label"?"Download":"";},
@@ -80,4 +81,24 @@ test("incomplete originals never yield an invented ZIP",async()=>{
   const result=await h.capture();
   assert.equal(result.count,2);
   assert.equal(result.synthesized_zip,false);
+});
+
+test("extra verified Markdown card must not block ZIP of XLSX PPTX JSON",async()=>{
+  const h=await harness(["xlsx","pptx","json","md"]);
+  const first=await h.capture();
+  assert.equal(first.count,4);
+  assert.equal(first.synthesized_zip,false);
+  h.advance(31000);
+  const final=await h.capture();
+  assert.equal(final.count,5);
+  assert.equal(final.synthesized_zip,true);
+  assert.ok(final.captured_types.includes("md"));
+  assert.ok(final.captured_types.includes("zip"));
+  const match=final.text.match(/!\[📎 chat2api-artifacts\.zip\]\(data:application\/zip;base64,([A-Za-z0-9+/=]+)\)/);
+  assert.ok(match);
+  const originalFiles=Buffer.from(match[1],"base64").toString("utf8");
+  assert.ok(originalFiles.includes("Project.xlsx"));
+  assert.ok(originalFiles.includes("Project.pptx"));
+  assert.ok(originalFiles.includes("Project.json"));
+  assert.ok(!originalFiles.includes("Project.md"));
 });
