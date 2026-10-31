@@ -45,10 +45,10 @@
     if (reply.matches?.("[data-message-author-role='user']") || reply.closest?.("nav,aside")) return null;
     let nodes = 0, chars = 0, images = 0;
     let truncated = false;
-    const textBudget = 96000;
+    const textBudget = 192000;
     const ignore = element => element.matches?.(banned) || !!element.closest?.("nav,aside,footer");
     const build = (element, depth) => {
-      if (depth > 24 || nodes >= 1200) {
+      if (depth > 24 || nodes >= 3200) {
         truncated = true;
         return null;
       }
@@ -79,7 +79,7 @@
       }
       const children = [];
       for (const child of element.childNodes) {
-        if (nodes >= 1200 || children.length >= 80) {
+        if (nodes >= 3200 || children.length >= 80) {
           truncated = true;
           break;
         }
@@ -124,14 +124,15 @@
   async function capture(active, final = false) {
     if (!active?.requestId || !active.submitStartedAt) return;
     const now = Date.now();
-    if (!final && now - Number(active.nativeLastAt || 0) < 900) return;
+    if (!final && now - Number(active.nativeLastAt || 0) < (active.nativeHeavySnapshot ? 3000 : 900)) return;
     active.nativeLastAt = now;
     try {
       const tree = snapshot(active);
       if (!tree) return;
       const hash = JSON.stringify(tree.root);
       if (!final && hash === active.nativeLastHash) return;
-      if (hash.length > 250000) return;
+      if (hash.length > 900000) return;
+      active.nativeHeavySnapshot = hash.length > 320000;
       active.nativeLastHash = hash;
       active.nativeRevision = tree.revision;
       const send = chrome.runtime.sendMessage({type:"chat2api.event",event:{

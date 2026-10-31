@@ -84,13 +84,23 @@ function candidateFor(children) {
 }
 // Native snapshots must not silently omit trailing content. The canonical
 // Markdown path remains the sole complete answer when DOM caps are reached.
-const overNodes=candidateFor(Array.from({length:20},(_,group)=>
+const overNodes=candidateFor(Array.from({length:50},(_,group)=>
   new Element("DIV",Array.from({length:80},(_,i)=>({
     nodeType:3,nodeValue:"paragraph "+group+"-"+i,
   })))));
-assert.equal(capture.snapshot(overNodes),null,"over 1200 nodes must fail closed");
+assert.equal(capture.snapshot(overNodes),null,"over 3200 nodes must fail closed");
 await capture.capture(overNodes,true);
 assert.equal(sent.length,1,"truncated content must never be published");
+
+// Production 062f needed >1400 safe text/layout nodes and 19 images.
+// 24 groups × 80 text nodes is now admitted without cutting off later cards.
+const bigOriginal=candidateFor(Array.from({length:24},(_,group)=>
+  new Element("DIV",Array.from({length:80},(_,i)=>({
+    nodeType:3,nodeValue:"big block "+group+"-"+i,
+  })))));
+const bigSnapshot=capture.snapshot(bigOriginal);
+assert.ok(bigSnapshot && bigSnapshot.root.children.length===24,
+  "1920+ nodes must be preserved as one complete native snapshot");
 
 // A complex reply that previously exceeded 420 nodes is still bounded but
 // must now retain every safe text block instead of falling back prematurely.
@@ -102,8 +112,8 @@ const expanded=capture.snapshot(largeValid);
 assert.ok(expanded && expanded.root.children.length === 10,
   "600+ node rich page must be representable");
 
-const overText=candidateFor([{nodeType:3,nodeValue:"A".repeat(96001)}]);
-assert.equal(capture.snapshot(overText),null,"over 96K text must fail closed");
+const overText=candidateFor([{nodeType:3,nodeValue:"A".repeat(192001)}]);
+assert.equal(capture.snapshot(overText),null,"over 192K text must fail closed");
 await capture.capture(overText,true);
 assert.equal(sent.length,1);
 

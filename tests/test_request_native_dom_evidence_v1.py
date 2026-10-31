@@ -33,7 +33,7 @@ def test_admin_evidence_is_saved_per_owner_with_private_file_mode(tmp_path):
     lambda x:x["root"]["children"][0].update({"href":"https://secret.example/token"}),
     lambda x:x["root"]["children"][0]["layout"].update({"columns":"url(https://evil)"}),
     lambda x:x["root"]["children"][0].update({"tag":"iframe"}),
-    lambda x:x["root"]["children"][0]["children"][0].update({"text":"x"*120001}),
+    lambda x:x["root"]["children"][0]["children"][0].update({"text":"x"*192001}),
 ])
 def test_malformed_or_private_html_fields_rejected(mutate):
     value=example()

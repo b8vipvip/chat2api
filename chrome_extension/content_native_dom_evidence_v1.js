@@ -7,7 +7,7 @@
   "use strict";
   const KEY = "__CHAT2API_NATIVE_DOM_EVIDENCE_V1__";
   if (globalThis[KEY]) return;
-  const MAX_NODES = 1400, MAX_TEXT = 120000, MAX_BYTES = 300000;
+  const MAX_NODES = 3200, MAX_TEXT = 192000, MAX_BYTES = 900000;
   const blocked = "script,style,form,nav,aside,header,footer,textarea,input,select,button,[contenteditable='true'],[role='dialog'],[role='menu'],[data-message-author-role='user']";
   const allowed = new Set("div section article p span h1 h2 h3 h4 h5 h6 strong em ul ol li table thead tbody tr td th pre code figure figcaption img blockquote a hr br".split(" "));
   const n = v => Math.max(-100000, Math.min(100000, Math.round(Number(v) || 0)));

@@ -14,10 +14,10 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-MAX_BYTES = 384 * 1024
-MAX_NODES = 1200
+MAX_BYTES = 1024 * 1024
+MAX_NODES = 3200
 MAX_DEPTH = 24
-MAX_TEXT = 96000
+MAX_TEXT = 192000
 MAX_ACTIVE = 128
 MAX_AGE_SECONDS = 90 * 86400
 SNAPSHOT_FILENAME = re.compile(r"(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}\.json")
@@ -186,7 +186,7 @@ class NativeContentStore:
             os.replace(temp, path)
             self._persist_count += 1
             # Bounded on-disk cache, independent of request_history.jsonl and
-            # existing MediaArchive retention. Max 1000 snapshots / 90 days.
+            # existing MediaArchive retention. Max 256 snapshots / 90 days.
             if self._persist_count % 32 == 0:
                 saved = sorted(
                     (p for p in self.root.glob("*.json") if SNAPSHOT_FILENAME.fullmatch(p.name)),
@@ -194,7 +194,7 @@ class NativeContentStore:
                 )
                 cutoff = time.time() - MAX_AGE_SECONDS
                 for index, candidate in enumerate(saved):
-                    if index >= 1000 or candidate.stat().st_mtime < cutoff:
+                    if index >= 256 or candidate.stat().st_mtime < cutoff:
                         candidate.unlink(missing_ok=True)
             return True
         except OSError:

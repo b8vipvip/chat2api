@@ -14,9 +14,9 @@ from pathlib import Path
 ID = re.compile(r"^(?:req|imgreq|resp)_[A-Za-z0-9_-]{6,100}$")
 TAGS = set("reply #text div section article p span h1 h2 h3 h4 h5 h6 strong em ul ol li table thead tbody tr td th pre code figure figcaption img blockquote a hr br".split())
 SOURCE_TYPES = {"blob", "data", "https", "other"}
-MAX_JSON_BYTES = 350_000
-MAX_NODES = 1400
-MAX_CHARS = 120_000
+MAX_JSON_BYTES = 1024 * 1024
+MAX_NODES = 3200
+MAX_CHARS = 192_000
 RETENTION = 7 * 86400
 
 
@@ -93,7 +93,7 @@ def validate_evidence(value: object, expected_request_id: str) -> dict:
         if "link" in node and (tag!="a" or node["link"] is not True):
             raise ValueError("Invalid link facts")
         children=node.get("children",[])
-        if not isinstance(children,list) or len(children)>1400 or (tag=="img" and children):
+        if not isinstance(children,list) or len(children)>3200 or (tag=="img" and children):
             raise ValueError("Invalid children")
         for child in children:
             if not check(child,depth+1):raise ValueError("Text budget")
@@ -121,7 +121,7 @@ class NativeDomEvidenceStore:
             except OSError:
                 pass
         files=sorted(self.root.glob("*.json"),key=lambda p:p.stat().st_mtime)
-        for file in files[:-512]:
+        for file in files[:-128]:
             file.unlink(missing_ok=True)
 
     def _path(self,request_id):
