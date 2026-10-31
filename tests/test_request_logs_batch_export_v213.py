@@ -139,7 +139,7 @@ def test_request_history_exposes_only_pasteable_start_time_control():
     assert "rqBatchExportLogs" in source
     assert "rqBatchExportSince" in source
     assert "rqBatchExportCurrentVersion" in source
-    assert "仅合并打包导出当前版本的请求日志" in source
+    assert "自动筛选并仅导出当前版本请求日志" in source
     assert "query.set('current_version_only','true')" in source
     assert "requestHistoryParseExportSince(value)" in source
     assert "since.type='text'" in source
