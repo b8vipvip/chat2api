@@ -194,6 +194,49 @@ async function requestHistoryLoadNativePreview(requestId,row,sequence){
     }
   }
 }
+// Archive state belongs to the deferred file queue, not the request terminal.
+// A completed response may still contain independently processing downloads.
+function requestHistoryGeneratedFileStatusLabel(files){
+  if(!files.length)return '本次请求未记录生成文件。';
+  const inProgress=files.filter(f=>f?.status==='processing'||f?.status==='pending').length;
+  const ready=files.filter(f=>f?.status==='ready').length;
+  const failed=files.filter(f=>f?.status==='failed'||f?.status==='unavailable').length;
+  const unknown=Math.max(0,files.length-inProgress-ready-failed);
+  return '文件实时状态：'+ready+' 已就绪 / '+inProgress+' 处理中 / '
+    +failed+' 失败或不可用'+(unknown?' / '+unknown+' 状态未知':'')
+    +'。附件链接存在不代表字节已就绪。';
+}
+async function requestHistoryMonitorGeneratedFiles(requestId,initialFiles,sequence){
+  const label=document.getElementById('requestConversationFileStatus');
+  const modal=document.getElementById('requestConversationModal');
+  let files=initialFiles;
+  let errors=0;
+  // At most one monitor per open dialog. Closing or opening another request
+  // invalidates its sequence; a bounded 4-second poll never owns chat terminal.
+  for(let attempt=0;attempt<45;attempt++){
+    if(sequence!==requestHistoryMediaSequence||modal?.style.display==='none')return;
+    label.textContent=requestHistoryGeneratedFileStatusLabel(files);
+    if(!files.some(f=>f?.status==='pending'||f?.status==='processing'))return;
+    await new Promise(resolve=>setTimeout(resolve,4000));
+    if(sequence!==requestHistoryMediaSequence||modal?.style.display==='none')return;
+    try{
+      const row=await api('/api/admin/requests/'+encodeURIComponent(requestId));
+      if(sequence!==requestHistoryMediaSequence||modal?.style.display==='none')return;
+      if(row?.response_generated_files_live_checked!==true)throw new Error('Live status unavailable');
+      files=Array.isArray(row.response_generated_files)?row.response_generated_files:[];
+      errors=0;
+    }catch(_){
+      if(++errors>=3){
+        label.textContent=requestHistoryGeneratedFileStatusLabel(files)
+          +'实时状态连续检查失败；重新打开对话可重试。';
+        return;
+      }
+    }
+  }
+  if(sequence===requestHistoryMediaSequence&&modal?.style.display!=='none')
+    label.textContent=requestHistoryGeneratedFileStatusLabel(files)
+      +'已停止自动轮询；重新打开对话可继续查询。';
+}
 async function requestHistoryShowConversation(requestId){
   requestHistoryEnsureConversationModal();
   const modal=document.getElementById('requestConversationModal');
@@ -228,13 +271,7 @@ async function requestHistoryShowConversation(requestId){
     const refs=Array.isArray(row?.response_media)?row.response_media.slice(0,40):[];
     void requestHistoryLoadNativePreview(requestId,row,sequence);
     const files=Array.isArray(row?.response_generated_files)?row.response_generated_files:[];
-    const stillProcessing=files.filter(f=>f?.status==='processing').length;
-    const readyFiles=files.filter(f=>f?.status==='ready').length;
-    const badFiles=files.filter(f=>f?.status==='failed'||f?.status==='unavailable').length;
-    document.getElementById('requestConversationFileStatus').textContent=files.length
-      ?'文件实时状态：'+readyFiles+' 已就绪 / '+stillProcessing+' 处理中 / '
-        +badFiles+' 失败或不可用。附件链接存在不代表字节已就绪。'
-      :'本次请求未记录生成文件。';
+    void requestHistoryMonitorGeneratedFiles(requestId,files,sequence);
     meta.textContent=`请求 …${shortId} · 提示词 ${Number(row?.final_prompt_chars??promptText.length)} 字符 · 回复 ${Number(row?.completion_chars??replyText.length)} 字符 · 已归档图片 ${refs.length} 张`;
     const proof=row?.diagnostics||{};
     if(proof.response_terminal_source==='verified-request-media-dom-v176'
