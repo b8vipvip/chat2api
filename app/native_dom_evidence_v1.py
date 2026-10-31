@@ -141,7 +141,12 @@ class NativeDomEvidenceStore:
         except (OSError, ValueError, TypeError, KeyError):
             return None
     def summary(self,request_id,owner):
-        value=self.get(request_id,owner)
+        # Older retained request rows and fixtures can have noncanonical IDs.
+        # Reporting absence must not break request list/ZIP export.
+        try:
+            value=self.get(request_id,owner)
+        except (ValueError,TypeError):
+            value=None
         return {"available":bool(value),"scope":value.get("scope") if value else None,
                 "complete":value.get("complete") if value else False,
                 "counts":value.get("counts") if value else None,
