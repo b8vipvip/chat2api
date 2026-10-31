@@ -21,7 +21,7 @@ def test_unmapped_images_fail_closed_to_canonical_markdown():
 
 def test_archived_media_list_is_not_capped_at_four_and_supports_med_id():
     assert "row.response_media.slice(0,40)" in SOURCE
-    assert "row?.response_media.slice(0,40)" in SOURCE
+    assert "row?.response_media)?row.response_media.slice(0,40)" in SOURCE
     assert "response_media.slice(0,4)" not in SOURCE
     assert "requestHistoryOwnedImageUrl(item?.owned_url||item?.url)" in SOURCE
     assert "requestHistoryMediaUrls.push(imageUrl)" in SOURCE
