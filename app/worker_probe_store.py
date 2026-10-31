@@ -358,7 +358,8 @@ class WorkerProbeStore:
         return [self.summary(path.stem) for path in paths[:max(1, min(limit, 100))]]
 
     def archive(self, request_id: str, request_summary: dict[str, Any] | None = None,
-                native_snapshot: dict[str, Any] | None = None) -> bytes:
+                native_snapshot: dict[str, Any] | None = None,
+                native_dom_evidence: dict[str, Any] | None = None) -> bytes:
         summary = self.summary(request_id)
         events = self.events(request_id)
         artifacts: dict[str, bytes] = {
@@ -385,6 +386,12 @@ class WorkerProbeStore:
             }
             artifacts["native-rich/layout-snapshot.json"] = json.dumps(
                 safe, ensure_ascii=False, indent=2,
+            ).encode()
+        if native_dom_evidence:
+            # Requested administrator-only full *sanitized reply* evidence:
+            # no URLs/credentials/browser HTML/other chat turns or pixels.
+            artifacts["native-rich/request-dom-layout-evidence.json"] = json.dumps(
+                native_dom_evidence, ensure_ascii=False, indent=2,
             ).encode()
         tool_files = {
             "media_delivery_v1": "media-delivery",
