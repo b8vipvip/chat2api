@@ -373,3 +373,15 @@ def test_native_dom_evidence_migration_has_one_scoped_owner_without_terminal_aut
     server=(ROOT / "app" / "main.py").read_text("utf-8")
     assert 'message_type == "chat.native.dom_evidence"' in server
     assert "native_dom_evidence.save(request_id,owner,message.get(" in server
+
+
+def test_f7c8_media_handoff_does_not_complete_while_page_is_generating():
+    source=(ROOT/"chrome_extension"/"content_request_v6.js").read_text("utf-8")
+    assert 'function mediaHandoffTerminalReady(active, generating, pageWorking' in source
+    assert 'if (generating || pageWorking) return false;' in source
+    assert 'mediaHandoffTerminalReady(active, generating, pageWorking)' in source
+    assert 'media-handoff-await-page-terminal' in source
+    # Keep existing request-v6 as the only authority for completion, rather
+    # than permitting Worker probes or image archive callbacks to terminate.
+    assert source.count('response_terminal_source: "verified-request-media-dom-v176"') == 1
+    assert 'globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.capture?.(' in source
