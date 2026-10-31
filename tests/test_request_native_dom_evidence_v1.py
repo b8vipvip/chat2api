@@ -73,3 +73,17 @@ def test_worker_capture_is_read_only_and_registered():
     assert "innerHTML" not in source and "document.cookie" not in source
     assert "type:\"chat.completed\"" not in source
     assert "type:\"chat.error\"" not in source
+
+
+def test_stale_native_dom_evidence_pruned_on_bounded_write_cadence(tmp_path):
+    store=NativeDomEvidenceStore(tmp_path)
+    first="req_event00000001"
+    for i in range(16):
+        rid=f"req_event{i+1:08d}"
+        report=example();report["request_id"]=rid
+        assert store.save(rid,"owner",report)
+        if i==0:
+            import time
+            stale=time.time()-8*86400
+            os.utime(store.root/(first+".json"),(stale,stale))
+    assert not (store.root/(first+".json")).exists(), "stale data cannot accumulate without admin export"
