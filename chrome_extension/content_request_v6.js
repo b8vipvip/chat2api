@@ -2620,6 +2620,13 @@
                   ))) {
                 responseStarted = await ensureResponseStarted(active, responseStarted,
                   "verified-aborted-stream-rendered-dom-v200");
+                // Positive request-local reply container evidence from the
+                // one terminal owner, offered only to read-only DOM capture.
+                // Do not promote an entire roleless main/chat root.
+                if (!rendered.rolelessRichVerified && !rendered.rolelessHeaderVerified &&
+                    rendered.replyScope?.isConnected) {
+                  active.nativeVerifiedReplyScope = rendered.replyScope;
+                }
                 await emit({
                   type: "chat.completed", request_id: active.requestId, text: finalText,
                   diagnostics: {
