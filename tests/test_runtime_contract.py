@@ -383,3 +383,15 @@ def test_native_verified_reply_container_sidecar_is_not_diagnostic_only():
     assert 'replyRegion.roots' in native
     # Still reject partial/unsafe scopes, never serialize the whole page.
     assert 'scopedRoots' in native and 'build(reply, 0)' in native
+
+
+def test_f7c8_media_handoff_does_not_complete_while_page_is_generating():
+    source=(ROOT/"chrome_extension"/"content_request_v6.js").read_text("utf-8")
+    assert 'function mediaHandoffTerminalReady(active, generating, pageWorking' in source
+    assert 'if (generating || pageWorking) return false;' in source
+    assert 'mediaHandoffTerminalReady(active, generating, pageWorking)' in source
+    assert 'media-handoff-await-page-terminal' in source
+    # Keep existing request-v6 as the only authority for completion, rather
+    # than permitting Worker probes or image archive callbacks to terminate.
+    assert source.count('response_terminal_source: "verified-request-media-dom-v176"') == 1
+    assert 'globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.capture?.(' in source
