@@ -198,3 +198,32 @@ def test_native_image_mapping_detects_duplicate_missing_and_reordered_indices():
     assert native_layout_summary(rich(1, 0), archived_assets=2)["media_mapping_complete"] is True
     assert native_layout_summary(rich(0, 1), archived_assets=3)["media_mapping_complete"] is False
     assert native_layout_summary(rich(), archived_assets=0)["media_mapping_complete"] is True
+
+
+def test_33da_wide_assistant_reply_111_siblings_preserved_in_safe_snapshot():
+    # 33da was completed, but evidence captured 2921 elements and a single
+    # 111-child top-level body. Old 80-child validator left a stale snapshot.
+    children = [
+        {"tag": "div", "children": [
+            {"tag": "p", "text": f"ceramics plan {i} section {j}"}
+            for j in range(19)
+        ]} for i in range(102)
+    ] + [{"tag": "img", "media_index": i} for i in range(9)]
+    payload = {"version": 1, "revision": 27,
+               "root": {"tag": "div", "children": [
+                   {"tag": "div", "children": children},
+               ]}}
+    accepted = validate_native_snapshot(payload)
+    assert len(accepted["root"]["children"][0]["children"]) == 111
+    from app.native_content_v1 import native_layout_summary
+    stats = native_layout_summary(accepted, archived_assets=10)
+    assert stats["nodes"] > 2000
+    assert stats["images"] == 9
+    # Asset mapping remains incomplete for this request (9 DOM images vs 10
+    # archived assets). Never call it a verified pixel-for-pixel rendering.
+    assert stats["media_mapping_complete"] is False
+    payload["root"]["children"][0]["children"].extend(
+        [{"tag": "p", "text": "overflow"} for _ in range(50)]
+    )
+    with pytest.raises(ValueError, match="Invalid children"):
+        validate_native_snapshot(payload)

@@ -161,7 +161,7 @@ function requestHistoryNativeNode(value,assets,budget,depth=0){
     node.style[key]=raw;
   }
   const children=Array.isArray(value.children)?value.children:[];
-  if(children.length>80)throw new Error('原生快照子节点超限');
+  if(children.length>160)throw new Error('原生快照子节点超限');
   for(const child of children)node.appendChild(requestHistoryNativeNode(child,assets,budget,depth+1));
   return node;
 }
