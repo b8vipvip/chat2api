@@ -18,6 +18,17 @@
     if (!(candidate instanceof Element) || !candidate.isConnected) return null;
     const page = candidate.closest("main,[role='main'],#thread");
     if (!page) return null;
+    // request-v6 can positively bind the final reply to a fresh completion
+    // toolbar without an explicit "ChatGPT said" header. Prefer that exact
+    // already-verified non-page scope rather than a partial paragraph.
+    const verified = active.nativeVerifiedReplyScope;
+    if (verified instanceof Element && verified.isConnected &&
+        verified !== page && verified.contains(candidate) &&
+        !verified.matches("main,[role='main'],#thread,[data-testid='conversation-turns']") &&
+        !verified.querySelector("[data-message-author-role='user'],[data-testid='user-message']")) {
+      return {roots:[verified],scope:"verified_reply_container",
+        boundary:"same_request_verified_finish_action"};
+    }
     const normalize = el => String(el?.innerText || el?.textContent || "").replace(/\s+/g," ").trim();
     const visible = el => {
       try { const r=el.getBoundingClientRect(),s=getComputedStyle(el);
@@ -109,7 +120,7 @@
     const report={
       schema:"request-native-dom-evidence-v1",request_id:active.requestId,
       captured_at:new Date().toISOString(),scope,boundary,
-      complete:!truncated && scope==="roleless_reply_siblings",
+      complete:!truncated && (scope==="roleless_reply_siblings" || scope==="verified_reply_container"),
       counts,root:{tag:"reply",children:rootChildren},
     };
     const encoded=JSON.stringify(report);
