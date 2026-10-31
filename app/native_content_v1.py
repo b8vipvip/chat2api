@@ -186,7 +186,7 @@ class NativeContentStore:
             os.replace(temp, path)
             self._persist_count += 1
             # Bounded on-disk cache, independent of request_history.jsonl and
-            # existing MediaArchive retention. Max 1000 snapshots / 90 days.
+            # existing MediaArchive retention. Max 256 snapshots / 90 days.
             if self._persist_count % 32 == 0:
                 saved = sorted(
                     (p for p in self.root.glob("*.json") if SNAPSHOT_FILENAME.fullmatch(p.name)),
