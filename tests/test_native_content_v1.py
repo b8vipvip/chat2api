@@ -251,3 +251,10 @@ def test_33da_subset_has_unique_dimension_candidates_but_no_identity_proof():
     with pytest.raises(ValueError,match="Incomplete image dimensions"):
         validate_native_snapshot({"version":1,"revision":1,"root":{
             "tag":"img","media_index":0,"intrinsic_width":900}})
+
+
+def test_intrinsic_image_metadata_is_rejected_on_non_image_nodes():
+    with pytest.raises(ValueError, match="Image reference"):
+        validate_native_snapshot({"version":1,"revision":1,
+                                  "root":{"tag":"div","intrinsic_width":900,
+                                          "intrinsic_height":900}})
