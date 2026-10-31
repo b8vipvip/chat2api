@@ -95,6 +95,30 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
         except (ValueError, OSError, json.JSONDecodeError):
             return {"capture_status": "unavailable", "event_count": 0, "events": []}
 
+    def generated_file_live_status(row: dict[str, Any]) -> dict[str, Any]:
+        """One read-only, owner-bound snapshot at diagnostic export time.
+
+        The historical 'request' payload intentionally remains unchanged.
+        A ready archive is NOT evidence that HTTP/SSE reached the client.
+        """
+        files = row.get("response_generated_files") or []
+        if not isinstance(files, list) or not files:
+            return {"state": "not_applicable", "files": []}
+        owner = str(row.get("api_key_id") or "")
+        store = getattr(app.state, "deferred_generated_files", None)
+        if not owner or store is None:
+            return {"state": "unavailable", "files": []}
+        try:
+            found = store.list_for_request(str(row.get("request_id") or ""), owner)
+        except (OSError, ValueError, RuntimeError):
+            return {"state": "unavailable", "files": []}
+        return {
+            "state": "checked",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "files": found,
+            "note": "Storage manifest state only; actual download and client delivery need separate verification",
+        }
+
     def request_log_report(
         request_id: str, *, row_override: dict[str, Any] | None = None,
         test_index: dict[str, Any] | None = None,
@@ -121,6 +145,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "server_version": SERVER_RUNTIME_VERSION,
             "request": row,
+            "generated_file_live_status": generated_file_live_status(row),
             "http_trace": diagnostic_store.by_trace(trace_id) if trace_id else [],
             "worker_probe_evidence": request_probe_evidence(request_id),
             "worker_native_dom_evidence": (
