@@ -117,6 +117,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.media_archive = media_archive
     app.state.generated_files = generated_files
     app.state.generated_staging = generated_staging
+    app.state.deferred_generated_files = deferred_generated_files
     app.state.test_runs = test_runs
     # Keep detached-stream supervisors alive until their Broker terminal is persisted.
     app.state.detached_sse_tasks = set()
