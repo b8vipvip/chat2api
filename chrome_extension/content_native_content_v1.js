@@ -96,7 +96,8 @@
     // in the newly rendered rich ChatGPT card. Reuse only a verified fresh
     // assistant-heading sibling scope, never a whole main/history container.
     const replyRegion = globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
-    const scopedRoots = replyRegion?.scope === "roleless_reply_siblings"
+    const scopedRoots = (replyRegion?.scope === "roleless_reply_siblings"
+      || replyRegion?.scope === "verified_reply_container")
       ? replyRegion.roots : null;
     let root = null;
     if (scopedRoots?.length) {

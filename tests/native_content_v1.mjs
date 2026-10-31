@@ -55,6 +55,25 @@ const scopedRoot=scopedSent[0].event.snapshot.root;
 assert.equal(scopedRoot.children[0].children.length,3,
   "sibling groups and images cannot be omitted just because the candidate is a nested paragraph");
 assert.equal(scopedRoot.children[0].children[1].media_index,0);
+// Modern ChatGPT layout may have no "ChatGPT said" H4. request-v6 can
+// positively verify this request's own container by its finish toolbar.
+// The visual sidecar must use exactly the same trusted scope as the DOM
+// evidence recorder, otherwise the latter sees images but MV3C gets none.
+const verifiedSent=[];
+const verifiedCtx={...ctx,__CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{
+  replyRoots:()=>({scope:"verified_reply_container",
+    roots:[scopeNode],boundary:"same_request_verified_finish_action"}),
+},chrome:{runtime:{sendMessage:async msg=>{verifiedSent.push(msg);return {ok:true}}}}};
+delete verifiedCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,verifiedCtx);
+await verifiedCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture({
+  requestId:"req_verifiedrich12345",submitStartedAt:Date.now(),
+  lastCandidateNode:scopeNode.childNodes[0],
+},true);
+assert.equal(verifiedSent.length,1);
+assert.equal(verifiedSent[0].event.snapshot.root.children[0].children.length,3);
+assert.equal(verifiedSent[0].event.snapshot.root.children[0].children[1].media_index,0);
+
 await capture.capture(active,false);
 assert.equal(sent.length,1);
 console.log("Native rich observer: bounded capture, no DOM URLs, independent request status");
