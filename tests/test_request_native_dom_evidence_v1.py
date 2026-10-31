@@ -87,3 +87,10 @@ def test_stale_native_dom_evidence_pruned_on_bounded_write_cadence(tmp_path):
             stale=time.time()-8*86400
             os.utime(store.root/(first+".json"),(stale,stale))
     assert not (store.root/(first+".json")).exists(), "stale data cannot accumulate without admin export"
+
+
+def test_normal_request_log_exports_also_include_full_bounded_evidence():
+    src=(Path(__file__).resolve().parents[1]/"app"/"v8_patch.py").read_text()
+    assert '"worker_native_dom_reply_tree": native_dom_reply' in src
+    assert '"worker_native_dom_evidence"' in src
+    assert 'native_dom_evidence.get(request_id' in src
