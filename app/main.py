@@ -372,7 +372,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="Unknown request")
         return owner
 
-    async def native_response_snapshot(request_id: str, owner: str) -> dict | None:
+    async def native_response_snapshot(request_id: str, owner: str,
+                                       *, watch_pending_archive: bool = False) -> dict | None:
         snapshot = native_content.get(request_id, owner)
         if not snapshot:
             return None
@@ -399,6 +400,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Files are derived only from this request's archived final reply.
         # Never forward unverified model-provided or upstream temporary URLs.
         files = []
+        pending_archive_pollable = False
         final_text = str(row.get("response_text") or "")
         for item in (row.get("response_generated_files") or [])[:10]:
             if not isinstance(item, dict):
@@ -434,6 +436,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         status = "ready"
                     elif pending_state == "failed":
                         status = "failed"
+                    elif pending_state in {"processing", "pending"}:
+                        # Only a successfully checked durable manifest may
+                        # extend the non-authoritative sidecar lifecycle.
+                        # Missing/locked SQLite must not keep a socket open.
+                        pending_archive_pollable = True
                 except (KeyError, OSError, sqlite3.Error):
                     # SQLite can raise OperationalError on locked/unavailable
                     # storage. A failed optional sidecar status read must not
@@ -456,9 +463,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             visible_assets = [assets[index] for index in candidates["indices"]]
         else:
             visible_assets = []
-        return {**snapshot, "root": native_public_v1_tree(snapshot["root"]),
-                "assets": visible_assets, "files": files,
-                "image_asset_candidates": candidates}
+        result = {**snapshot, "root": native_public_v1_tree(snapshot["root"]),
+                  "assets": visible_assets, "files": files,
+                  "image_asset_candidates": candidates}
+        # Internal loop-only flag; do not change strict public native v1
+        # schema or expose file transport internals to external clients.
+        if watch_pending_archive:
+            result["_pending_archive_pollable"] = pending_archive_pollable
+        return result
 
     @app.get("/v1/native-content/{request_id}")
     async def read_native_content(
@@ -487,7 +499,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # authority or worker lease is owned by this stream.
             for tick in range(3600):
                 try:
-                    current = await native_response_snapshot(request_id, owner)
+                    current = await native_response_snapshot(
+                        request_id, owner, watch_pending_archive=True)
+                    pending_archive_pollable = bool(
+                        current and current.pop("_pending_archive_pollable", False))
                     # Archival can finish *after* the last DOM revision. The
                     # newly verified media URLs must be delivered even when the
                     # Worker produced no further layout mutation.
@@ -496,9 +511,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         last = signature
                         yield "event: native.snapshot\n" + "data: " + json.dumps(current, ensure_ascii=False) + "\n\n"
                     row = telemetry.get(request_id) or {}
-                    if row.get("status") in {"completed", "error", "cancelled", "stalled"}:
-                        yield "event: native.end\ndata: {}\n\n"
-                        return
+                    status = row.get("status")
+                    if status in {"completed", "error", "cancelled", "stalled"}:
+                        # Broker completion does NOT imply async generated-file
+                        # archive is ready. A verified 'processing' manifest
+                        # keeps only this presentation SSE alive (max 3min),
+                        # allowing same-revision ready/failed updates. A
+                        # manifest query failure or non-completed terminal
+                        # closes immediately, preserving previous behavior.
+                        if not (status == "completed" and pending_archive_pollable
+                                and tick < 720):
+                            yield "event: native.end\ndata: {}\n\n"
+                            return
                 except ValueError:
                     return
                 if tick % 40 == 0:
