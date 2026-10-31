@@ -373,3 +373,13 @@ def test_native_dom_evidence_migration_has_one_scoped_owner_without_terminal_aut
     server=(ROOT / "app" / "main.py").read_text("utf-8")
     assert 'message_type == "chat.native.dom_evidence"' in server
     assert "native_dom_evidence.save(request_id,owner,message.get(" in server
+
+
+def test_native_verified_reply_container_sidecar_is_not_diagnostic_only():
+    native=(ROOT/"chrome_extension"/"content_native_content_v1.js").read_text("utf-8")
+    evidence=(ROOT/"chrome_extension"/"content_native_dom_evidence_v1.js").read_text("utf-8")
+    assert 'replyRegion?.scope === "verified_reply_container"' in native
+    assert 'scope:"verified_reply_container"' in evidence
+    assert 'replyRegion.roots' in native
+    # Still reject partial/unsafe scopes, never serialize the whole page.
+    assert 'scopedRoots' in native and 'build(reply, 0)' in native
