@@ -760,7 +760,35 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         row = telemetry.get(request_id)
         if not row:
             raise HTTPException(status_code=404, detail="Request record not found")
-        return row
+        # Terminal records snapshot file processing. A later admin view must
+        # query the owner-token-bound status, not assume the old state is live.
+        current = dict(row)
+        files = row.get("response_generated_files")
+        if isinstance(files, list):
+            live = []
+            for item in files[:10]:
+                if not isinstance(item, dict):
+                    continue
+                updated = dict(item)
+                url = str(updated.get("url") or "")
+                matched = re.search(
+                    r"/api/generated-files/pending/(pgen_[a-f0-9]{32})/([A-Za-z0-9_-]{16,150})$",
+                    url,
+                )
+                if matched:
+                    try:
+                        actual = await asyncio.to_thread(
+                            deferred_generated_files.status, matched.group(1), matched.group(2),
+                        )
+                        status = actual.get("status")
+                        if status in {"ready", "processing", "failed"}:
+                            updated["status"] = status
+                    except (KeyError, ValueError, OSError):
+                        updated["status"] = "unavailable"
+                live.append(updated)
+            current["response_generated_files"] = live
+            current["response_generated_files_live_checked"] = True
+        return current
 
     @app.get("/api/admin/tests", dependencies=[Depends(require_admin_key)])
     async def admin_tests(limit: int = Query(default=50, ge=1, le=200)) -> dict[str, object]:

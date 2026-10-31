@@ -109,12 +109,90 @@ function requestHistoryEnsureConversationModal(){
       <div id="requestConversationMeta" class="muted"></div>
       <div style="overflow:auto;display:grid;gap:12px;padding-right:2px">
         <div><div style="font-weight:700;margin-bottom:6px">提示词</div><pre id="requestConversationPrompt" style="margin:0;white-space:pre-wrap;word-break:break-word;max-height:34vh;overflow:auto;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)"></pre></div>
-        <div><div style="font-weight:700;margin-bottom:6px">生成回复（文字与图片）</div><div id="requestConversationReply" style="white-space:pre-wrap;word-break:break-word;max-height:40vh;overflow:auto;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)"></div><div id="requestConversationMedia" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:10px"></div></div>
+        <div><div style="font-weight:700;margin-bottom:6px">生成回复（文字与图片）</div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 8px">
+          <button type="button" class="action" id="requestConversationMarkdownMode">API 交付正文</button>
+          <button type="button" class="action" id="requestConversationNativeMode" disabled>原生结构预览</button>
+          <span class="muted" id="requestConversationNativeStatus" style="font-size:12px">原生结构快照尚未检查</span>
+        </div>
+        <div id="requestConversationNative" style="display:none;white-space:normal;overflow:auto;max-height:40vh;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)"></div>
+        <div id="requestConversationReply" style="white-space:pre-wrap;word-break:break-word;max-height:40vh;overflow:auto;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)"></div><div id="requestConversationFileStatus" class="muted" style="margin-top:8px;font-size:12px"></div><div id="requestConversationMedia" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:10px"></div></div>
       </div>
     </div>`;
   document.body.appendChild(wrap);
   document.getElementById('requestConversationClose').onclick=()=>{requestHistoryMediaSequence++;requestHistoryRevokeMedia();wrap.style.display='none';};
   wrap.addEventListener('click',event=>{if(event.target===wrap){requestHistoryMediaSequence++;requestHistoryRevokeMedia();wrap.style.display='none';}});
+}
+// The canonical OpenAI-compatible reply is Markdown; the authenticated
+// native sidecar is a separate optional layout preview, NOT the API body.
+// This renderer creates safe DOM nodes only. Never insert upstream HTML.
+const requestHistoryNativeTags=new Set(
+  'div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br'.split(' ')
+);
+const requestHistoryNativeStyles=new Set(
+  'display flexDirection flexWrap justifyContent alignItems objectFit textAlign fontWeight gap padding marginTop marginBottom width maxWidth height borderRadius fontSize lineHeight color backgroundColor gridTemplateColumns'.split(' ')
+);
+function requestHistoryOwnedImageUrl(value){
+  try{
+    const url=new URL(String(value||''),location.href);
+    if(url.origin!==location.origin||url.username||url.password||url.search||url.hash)return '';
+    if(!/^\/api\/media\/med_[A-Za-z0-9]+\/[A-Za-z0-9_-]+(?:\/(?:thumbnail|original))?$/.test(url.pathname))return '';
+    return url.href;
+  }catch(_){return '';}
+}
+function requestHistoryNativeNode(value,assets,budget,depth=0){
+  if(!value||typeof value!=='object'||depth>24||++budget.count>1200
+      ||!requestHistoryNativeTags.has(value.tag))throw new Error('原生快照结构无效');
+  const node=document.createElement(value.tag);
+  if(value.tag==='img'){
+    const index=value.media_index;
+    if(!Number.isInteger(index)||index<0||index>=assets.length||index>=40)
+      throw new Error('原生图片与归档资产无法匹配');
+    node.src=assets[index];node.alt='原生回复归档图片';node.loading='lazy';
+    node.style.maxWidth='100%';
+    node.style.height='auto';
+    return node;
+  }
+  if(typeof value.text==='string')node.textContent=value.text;
+  const style=value.style||{};
+  for(const [key,raw] of Object.entries(style)){
+    if(!requestHistoryNativeStyles.has(key)||typeof raw!=='string'
+        ||raw.length>120||/url\s*\(|var\s*\(|[;{}<>]/i.test(raw))continue;
+    node.style[key]=raw;
+  }
+  const children=Array.isArray(value.children)?value.children:[];
+  if(children.length>80)throw new Error('原生快照子节点超限');
+  for(const child of children)node.appendChild(requestHistoryNativeNode(child,assets,budget,depth+1));
+  return node;
+}
+async function requestHistoryLoadNativePreview(requestId,row,sequence){
+  const preview=document.getElementById('requestConversationNative');
+  const status=document.getElementById('requestConversationNativeStatus');
+  const nativeButton=document.getElementById('requestConversationNativeMode');
+  preview.replaceChildren();nativeButton.disabled=true;
+  status.textContent='正在确认原生结构快照…';
+  try{
+    const data=await api('/api/admin/requests/'+encodeURIComponent(requestId)+'/native-content');
+    if(sequence!==requestHistoryMediaSequence)return;
+    const snapshot=data?.snapshot;
+    const summary=data?.layout_summary||{};
+    const media=Array.isArray(row?.response_media)?row.response_media.slice(0,40):[];
+    const assets=media.map(item=>requestHistoryOwnedImageUrl(item?.owned_url||item?.url));
+    if(!snapshot?.root||snapshot.version!==1||summary.media_mapping_complete!==true
+        ||Number(summary.images)!==media.length
+        ||assets.some(u=>!u))
+      throw new Error('原生快照与已归档图片未完整对应，暂时只能显示标准 API 正文');
+    const tree=requestHistoryNativeNode(snapshot.root,assets,{count:0});
+    preview.appendChild(tree);
+    nativeButton.disabled=false;
+    status.textContent='已取得原生结构预览（'+summary.nodes+' 节点 / '
+      +summary.images+' 图片 / '+summary.grid+' Grid）。预览不等于像素级 1:1 验收。';
+  }catch(error){
+    if(sequence===requestHistoryMediaSequence){
+      status.textContent='原生结构预览不可用：'+String(error?.message||error);
+      nativeButton.disabled=true;
+    }
+  }
 }
 async function requestHistoryShowConversation(requestId){
   requestHistoryEnsureConversationModal();
@@ -123,6 +201,15 @@ async function requestHistoryShowConversation(requestId){
   const prompt=document.getElementById('requestConversationPrompt');
   const reply=document.getElementById('requestConversationReply');
   const media=document.getElementById('requestConversationMedia');
+  const nativePreview=document.getElementById('requestConversationNative');
+  const markdownButton=document.getElementById('requestConversationMarkdownMode');
+  const nativeButton=document.getElementById('requestConversationNativeMode');
+  markdownButton.onclick=()=>{reply.style.display='block';nativePreview.style.display='none';};
+  nativeButton.onclick=()=>{if(nativeButton.disabled)return;reply.style.display='none';nativePreview.style.display='block';};
+  nativePreview.replaceChildren();nativePreview.style.display='none';reply.style.display='block';
+  nativeButton.disabled=true;
+  document.getElementById('requestConversationNativeStatus').textContent='等待结构检查…';
+
   const sequence=++requestHistoryMediaSequence;
   requestHistoryRevokeMedia();
   media.replaceChildren();
@@ -138,33 +225,50 @@ async function requestHistoryShowConversation(requestId){
     const rich=globalThis.__CHAT2API_PLAYGROUND_CHAT_V69__;
     if(typeof rich?.renderMarkdown==='function')reply.innerHTML=rich.renderMarkdown(actualReply);
     else reply.textContent=actualReply;
-    const refs=Array.isArray(row?.response_media)?row.response_media.slice(0,4):[];
+    const refs=Array.isArray(row?.response_media)?row.response_media.slice(0,40):[];
+    void requestHistoryLoadNativePreview(requestId,row,sequence);
+    const files=Array.isArray(row?.response_generated_files)?row.response_generated_files:[];
+    const stillProcessing=files.filter(f=>f?.status==='processing').length;
+    const readyFiles=files.filter(f=>f?.status==='ready').length;
+    const badFiles=files.filter(f=>f?.status==='failed'||f?.status==='unavailable').length;
+    document.getElementById('requestConversationFileStatus').textContent=files.length
+      ?'文件实时状态：'+readyFiles+' 已就绪 / '+stillProcessing+' 处理中 / '
+        +badFiles+' 失败或不可用。附件链接存在不代表字节已就绪。'
+      :'本次请求未记录生成文件。';
     meta.textContent=`请求 …${shortId} · 提示词 ${Number(row?.final_prompt_chars??promptText.length)} 字符 · 回复 ${Number(row?.completion_chars??replyText.length)} 字符 · 已归档图片 ${refs.length} 张`;
+    const proof=row?.diagnostics||{};
+    if(proof.response_terminal_source==='verified-request-media-dom-v176'
+        && proof.network_stream_terminal_proof!==true){
+      meta.textContent+=' · 尚无可靠网络完整终态证明；completed 不等于原生内容验收通过';
+    }
     for(const item of refs){
+      if(sequence!==requestHistoryMediaSequence)return;
       const fileId=String(item?.file_id||'');
-      if(!/^file_[A-Za-z0-9]{8,60}$/.test(fileId))continue;
+      let imageUrl=requestHistoryOwnedImageUrl(item?.owned_url||item?.url);
       try{
-        const res=await fetch(`/api/admin/requests/${encodeURIComponent(requestId)}/media/${encodeURIComponent(fileId)}`,{
-          headers:{Authorization:`Bearer ${key()}`},cache:'no-store'
-        });
-        if(!res.ok)throw new Error(`HTTP ${res.status}`);
-        const blob=await res.blob();
-        if(!['image/png','image/jpeg','image/webp','image/gif'].includes(blob.type)||blob.size>20*1024*1024)
-          throw new Error('不支持的图片格式或大小');
-        if(sequence!==requestHistoryMediaSequence)return;
-        const url=URL.createObjectURL(blob);
-        requestHistoryMediaUrls.push(url);
-        const link=document.createElement('a');
-        const ext={'image/png':'png','image/jpeg':'jpg','image/webp':'webp','image/gif':'gif'}[blob.type]||'png';
-        link.href=url;link.download=`chat2api-${requestId}.${ext}`;
+        if(/^file_[A-Za-z0-9]{8,60}$/.test(fileId)){
+          const res=await fetch('/api/admin/requests/'+encodeURIComponent(requestId)
+            +'/media/'+encodeURIComponent(fileId),{
+              headers:{Authorization:'Bearer '+key()},cache:'no-store'
+            });
+          if(!res.ok)throw new Error('HTTP '+res.status);
+          const blob=await res.blob();
+          if(!['image/png','image/jpeg','image/webp','image/gif'].includes(blob.type)
+              ||blob.size>20*1024*1024)throw new Error('不支持的图片格式或大小');
+          if(sequence!==requestHistoryMediaSequence)return;
+          imageUrl=URL.createObjectURL(blob);requestHistoryMediaUrls.push(imageUrl);
+        }
+        if(!imageUrl)throw new Error('该归档图片没有可用的安全地址');
         const img=document.createElement('img');
-        img.src=url;img.alt='请求生成的图片';img.loading='lazy';
-        img.style.cssText='display:block;max-width:min(100%,420px);max-height:420px;object-fit:contain;border:1px solid var(--line);border-radius:10px';
-        link.appendChild(img);media.appendChild(link);
+        img.src=imageUrl;img.alt='已归档图片';img.loading='lazy';
+        img.style.cssText='display:block;max-width:min(100%,260px);max-height:260px;object-fit:contain;border:1px solid var(--line);border-radius:10px';
+        const holder=document.createElement('div');holder.appendChild(img);
+        media.appendChild(holder);
       }catch(error){
         if(sequence!==requestHistoryMediaSequence)return;
         const warning=document.createElement('span');warning.className='muted';
-        warning.textContent=`图片归档读取失败：${String(error?.message||error)}`;media.appendChild(warning);
+        warning.textContent='图片归档读取失败：'+String(error?.message||error);
+        media.appendChild(warning);
       }
     }
   }catch(error){
