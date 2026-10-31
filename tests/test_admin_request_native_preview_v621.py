@@ -70,3 +70,12 @@ def test_pending_generated_files_refresh_without_changing_request_terminal():
 def test_33da_admin_native_preview_supports_111_siblings():
     assert "if(children.length>160)throw new Error('原生快照子节点超限');" in SOURCE
     assert "if(children.length>80)throw new Error('原生快照子节点超限');" not in SOURCE
+
+
+def test_unique_dimension_preview_is_explicitly_unverified_and_fail_closed():
+    assert "data?.image_asset_candidates" in SOURCE
+    assert "unique-dimensions-unverified" in SOURCE
+    assert "new Set(candidate.indices).size===candidate.indices.length" in SOURCE
+    assert "未验证内容哈希" in SOURCE
+    assert "previewAssets=completeOrdinal?assets:candidate.indices.map(i=>assets[i])" in SOURCE
+    assert "native_unique_dimension_candidates(" in SERVER
