@@ -155,3 +155,11 @@ assert.equal(capture.snapshot(overChildren),null,"over 160 children must fail cl
 
 const overImages=candidateFor(Array.from({length:41},()=>new Element("IMG")));
 assert.equal(capture.snapshot(overImages),null,"over 40 images must fail closed");
+
+// Optional intrinsic dimensions are a bounded numerical hint only.
+// No upstream URL or image bytes are serialized by the DOM observer.
+const dimensionImage=new Element("IMG");
+dimensionImage.naturalWidth=900;dimensionImage.naturalHeight=900;
+const dimensionSnapshot=capture.snapshot(candidateFor([dimensionImage]));
+assert.equal(dimensionSnapshot.root.children[0].intrinsic_width,900);
+assert.equal(dimensionSnapshot.root.children[0].intrinsic_height,900);
