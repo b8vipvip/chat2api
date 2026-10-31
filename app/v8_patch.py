@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import secrets
+import sqlite3
 import re
 import tempfile
 import zipfile
@@ -110,7 +111,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             return {"state": "unavailable", "files": []}
         try:
             found = store.list_for_request(str(row.get("request_id") or ""), owner)
-        except (OSError, ValueError, RuntimeError):
+        except (OSError, ValueError, RuntimeError, sqlite3.Error):
             return {"state": "unavailable", "files": []}
         return {
             "state": "checked",
