@@ -116,7 +116,7 @@ function requestHistoryEnsureConversationModal(){
           <span class="muted" id="requestConversationNativeStatus" style="font-size:12px">原生结构快照尚未检查</span>
         </div>
         <div id="requestConversationNative" style="display:none;white-space:normal;overflow:auto;max-height:40vh;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)"></div>
-        <div id="requestConversationReply" style="white-space:pre-wrap;word-break:break-word;max-height:40vh;overflow:auto;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)"></div><div id="requestConversationMedia" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:10px"></div></div>
+        <div id="requestConversationReply" style="white-space:pre-wrap;word-break:break-word;max-height:40vh;overflow:auto;padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel2)"></div><div id="requestConversationFileStatus" class="muted" style="margin-top:8px;font-size:12px"></div><div id="requestConversationMedia" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:10px"></div></div>
       </div>
     </div>`;
   document.body.appendChild(wrap);
@@ -229,9 +229,18 @@ async function requestHistoryShowConversation(requestId){
     void requestHistoryLoadNativePreview(requestId,row,sequence);
     const files=Array.isArray(row?.response_generated_files)?row.response_generated_files:[];
     const stillProcessing=files.filter(f=>f?.status==='processing').length;
-    if(stillProcessing)document.getElementById('requestConversationNativeStatus').textContent=
-      '文件归档仍有 '+stillProcessing+' 项在处理，出现下载链接并不等于文件字节已经就绪';
+    const readyFiles=files.filter(f=>f?.status==='ready').length;
+    const badFiles=files.filter(f=>f?.status==='failed'||f?.status==='unavailable').length;
+    document.getElementById('requestConversationFileStatus').textContent=files.length
+      ?'文件实时状态：'+readyFiles+' 已就绪 / '+stillProcessing+' 处理中 / '
+        +badFiles+' 失败或不可用。附件链接存在不代表字节已就绪。'
+      :'本次请求未记录生成文件。';
     meta.textContent=`请求 …${shortId} · 提示词 ${Number(row?.final_prompt_chars??promptText.length)} 字符 · 回复 ${Number(row?.completion_chars??replyText.length)} 字符 · 已归档图片 ${refs.length} 张`;
+    const proof=row?.diagnostics||{};
+    if(proof.response_terminal_source==='verified-request-media-dom-v176'
+        && proof.network_stream_terminal_proof!==true){
+      meta.textContent+=' · 尚无可靠网络完整终态证明；completed 不等于原生内容验收通过';
+    }
     for(const item of refs){
       if(sequence!==requestHistoryMediaSequence)return;
       const fileId=String(item?.file_id||'');
