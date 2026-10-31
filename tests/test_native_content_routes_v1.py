@@ -369,3 +369,51 @@ def test_public_native_v1_remains_compatible_with_strict_legacy_image_nodes(tmp_
         private=client.get(f"/api/admin/requests/{rid}/native-content",headers=auth)
         assert private.status_code==200
         assert private.json()["snapshot"]["root"]["intrinsic_width"]==900
+
+
+def test_native_v1_reorders_only_unique_owned_dimension_subset(tmp_path):
+    """Legacy clients consume assets[N] and MUST not get wrong archived order."""
+    app=create_app(Settings(CHAT2API_API_KEY="test-key",
+        CHAT2API_PAIRING_CODE="test-pair", CHAT2API_DATA_DIR=tmp_path))
+    rid="req_subsetownership123456"
+    raw=[(320,240),(900,900),(400,300),(1200,687)]
+    urls=[f"https://media.example.com/api/media/med_subset{i:06d}/assetTOKEN1234567"
+          for i in range(len(raw))]
+    async def record():
+        await app.state.telemetry.upsert({
+            "request_id":rid,"api_key_id":"master","status":"completed",
+            "response_media":[{"owned_url":url,"width":w,"height":h}
+                              for url,(w,h) in zip(urls,raw)],
+        })
+    with TestClient(app) as client:
+        asyncio.run(record())
+        assert app.state.native_content.publish(rid,"master",{
+            "version":1,"revision":5,"root":{"tag":"div","children":[
+                {"tag":"img","media_index":0,"intrinsic_width":1200,"intrinsic_height":687},
+                {"tag":"img","media_index":1,"intrinsic_width":900,"intrinsic_height":900},
+            ]},
+        })
+        headers={"Authorization":"Bearer test-key"}
+        reply=client.get(f"/v1/native-content/{rid}",headers=headers)
+        assert reply.status_code==200
+        assert reply.json()["assets"] == [urls[3],urls[1]]
+        assert reply.json()["root"]["children"]==[
+            {"tag":"img","media_index":0},{"tag":"img","media_index":1}]
+        assert reply.json()["image_asset_candidates"]=={
+            "status":"unique-dimensions-unverified","indices":[3,1]}
+        # Events feed the same correctly ordered assets, not the full list.
+        streamed=client.get(f"/v1/native-content/{rid}/events",headers=headers)
+        assert streamed.status_code==200
+        assert 'event: native.snapshot' in streamed.text
+        assert urls[3] in streamed.text and urls[1] in streamed.text
+        assert urls[0] not in streamed.text and urls[2] not in streamed.text
+        # Same valid owner and request, but an ambiguous dimension must fail
+        # closed instead of returning an ordinal guess.
+        row=app.state.telemetry.get(rid)
+        row["response_media"][0]["width"]=900
+        row["response_media"][0]["height"]=900
+        asyncio.run(app.state.telemetry.upsert(row))
+        failed=client.get(f"/v1/native-content/{rid}",headers=headers)
+        assert failed.status_code==200
+        assert failed.json()["assets"]==[]
+        assert failed.json()["image_asset_candidates"]["status"]=="unavailable"
