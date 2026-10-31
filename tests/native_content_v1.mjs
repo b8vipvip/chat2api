@@ -135,10 +135,23 @@ for(let i=0;i<26;i++)overDeep=new Element("DIV",[overDeep]);
 assert.equal(capture.snapshot(candidateFor([overDeep])),null,
   "more than 24 nested levels must still fail closed");
 
-const overChildren=candidateFor(Array.from({length:81},(_,i)=>({
+// Production 33da: the 24-month ceramics plan had one 111-child
+// assistant reply container. The previous 80-child cap abandoned the
+// completed ~2921-node source and left only an earlier 880-node snapshot.
+const wide33da=candidateFor([new Element("DIV",Array.from({length:111},(_,i)=>
+  i<9?new Element("IMG"):new Element("DIV",Array.from({length:20},(_,j)=>({
+    nodeType:3,nodeValue:"section "+i+" line "+j,
+  })))
+))]);
+const wide33daSnapshot=capture.snapshot(wide33da);
+assert.ok(wide33daSnapshot,"111-child assistant block must not leave stale partial snapshot");
+assert.equal(wide33daSnapshot.root.children[0].children.length,111,
+  "last assistant sections must be kept in the same tree");
+assert.equal(findImgs(wide33daSnapshot.root),9);
+const overChildren=candidateFor(Array.from({length:161},(_,i)=>({
   nodeType:3,nodeValue:"chunk "+i,
 })));
-assert.equal(capture.snapshot(overChildren),null,"over 80 children must fail closed");
+assert.equal(capture.snapshot(overChildren),null,"over 160 children must fail closed");
 
 const overImages=candidateFor(Array.from({length:41},()=>new Element("IMG")));
 assert.equal(capture.snapshot(overImages),null,"over 40 images must fail closed");
