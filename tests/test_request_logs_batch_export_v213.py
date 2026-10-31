@@ -406,3 +406,34 @@ def test_effective_container_hotfix_marker_beats_image_sha_and_fails_closed(tmp_
     assert runtime_code_identity.runtime_code_sha() == ""
     marker.write_text("B" * 40, encoding="ascii")
     assert runtime_code_identity.runtime_code_sha() == ""
+
+
+def test_request_logs_separate_terminal_file_snapshot_from_live_archive_status(tmp_path):
+    with TestClient(app_v8(tmp_path)) as client:
+        class Archive:
+            def list_for_request(self, request_id, owner):
+                assert request_id == "req_live_files_001"
+                assert owner == "key-A"
+                return [{"pending_id": "pgen_test", "filename": "result.json",
+                         "bytes": 14, "sha256": "a" * 64, "status": "ready"}]
+        client.app.state.deferred_generated_files = Archive()
+        store = client.app.state.telemetry
+        asyncio.run(store.upsert({
+            "request_id": "req_live_files_001",
+            "api_key_id": "key-A", "status": "completed",
+            "response_generated_files": [{"filename": "result.json", "status": "processing"}],
+        }))
+        single = client.get("/api/admin/requests/req_live_files_001/log", headers=headers())
+        assert single.status_code == 200
+        report = single.json()
+        assert report["request"]["response_generated_files"][0]["status"] == "processing"
+        assert report["generated_file_live_status"]["state"] == "checked"
+        assert report["generated_file_live_status"]["files"][0]["status"] == "ready"
+        assert "token" not in str(report["generated_file_live_status"])
+        bulk = client.get("/api/admin/requests/logs/batch", headers=headers())
+        assert bulk.status_code == 200
+        with zipfile.ZipFile(io.BytesIO(bulk.content)) as bundle:
+            index = json.loads(bundle.read("index.json"))
+            exported = json.loads(bundle.read(index["requests"][0]["filename"]))
+            assert exported["generated_file_live_status"]["files"][0]["status"] == "ready"
+            assert exported["request"]["response_generated_files"][0]["status"] == "processing"
