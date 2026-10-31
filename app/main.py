@@ -32,7 +32,8 @@ from .generated_file_staging_v238 import GeneratedFileStaging
 from .generated_file_deferred_v247 import DeferredGeneratedFiles, FileStillProcessing, FileTransferFailed
 from .rich_content_v196 import manifest as rich_content_manifest
 from .native_content_v1 import (NativeContentStore, native_delivery_fingerprint,
-                                native_layout_summary, native_unique_dimension_candidates)
+                                native_layout_summary, native_unique_dimension_candidates,
+                                native_public_v1_tree)
 from .native_dom_evidence_v1 import NativeDomEvidenceStore
 from .media_public_origin_v187 import media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
@@ -441,7 +442,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     pass
             files.append({"filename": name, "url": url, "bytes": size,
                           "status": status if status in {"ready", "failed"} else "processing"})
-        return {**snapshot, "assets": assets, "files": files,
+        return {**snapshot, "root": native_public_v1_tree(snapshot["root"]),
+                "assets": assets, "files": files,
                 "image_asset_candidates": native_unique_dimension_candidates(
                     snapshot, asset_metadata)}
 
