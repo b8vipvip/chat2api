@@ -32,6 +32,28 @@ assert.equal(payload.type,"chat.native.snapshot");
 assert.equal(payload.snapshot.root.children[0].text,"Hello safe rich text");
 assert.equal(payload.snapshot.root.children[1].media_index,0);
 assert.ok(!JSON.stringify(payload).includes("secret.example"));
+// The full reply can consist of several sibling cards while the request-v6
+// candidate points only at a paragraph in the first card. A verified fresh
+// assistant heading scope must include all sibling cards and their images.
+const scopedSent=[];
+const scopeNode=new Element("DIV",[
+  new Element("DIV",[{nodeType:3,nodeValue:"GameFlow category card"}]),
+  new Element("IMG"),
+  new Element("DIV",[{nodeType:3,nodeValue:"Second game example"}]),
+]);
+const scopedCtx={...ctx,__CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{
+  replyRoots:()=>({scope:"roleless_reply_siblings",roots:[scopeNode],boundary:"end_of_reply_parent"})
+},chrome:{runtime:{sendMessage:async m=>{scopedSent.push(m);return {ok:true};}}}};
+runInNewContext(code,scopedCtx);
+const scopedCandidate=scopeNode.childNodes[0];
+await scopedCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture({
+  requestId:"req_scopedrich12345",submitStartedAt:Date.now(),lastCandidateNode:scopedCandidate
+},true);
+assert.equal(scopedSent.length,1);
+const scopedRoot=scopedSent[0].event.snapshot.root;
+assert.equal(scopedRoot.children[0].children.length,3,
+  "sibling groups and images cannot be omitted just because the candidate is a nested paragraph");
+assert.equal(scopedRoot.children[0].children[1].media_index,0);
 await capture.capture(active,false);
 assert.equal(sent.length,1);
 console.log("Native rich observer: bounded capture, no DOM URLs, independent request status");
