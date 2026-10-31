@@ -30,9 +30,9 @@ def validate_evidence(value: object, expected_request_id: str) -> dict:
         raise ValueError("Unknown evidence fields")
     if value.get("schema") != "request-native-dom-evidence-v1" or value.get("request_id") != expected_request_id:
         raise ValueError("Mismatched evidence request")
-    if value.get("scope") not in ("roleless_reply_siblings", "candidate_only"):
+    if value.get("scope") not in ("roleless_reply_siblings", "verified_reply_container", "candidate_only"):
         raise ValueError("Unknown reply scope")
-    if value.get("complete") is True and value.get("scope") != "roleless_reply_siblings":
+    if value.get("complete") is True and value.get("scope") not in ("roleless_reply_siblings", "verified_reply_container"):
         raise ValueError("Partial candidate claimed complete")
     if type(value.get("complete")) is not bool or not isinstance(value.get("boundary"), str) or len(value["boundary"]) > 100:
         raise ValueError("Invalid evidence status")
