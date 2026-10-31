@@ -107,6 +107,14 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
         if test_index is None:
             test_index = request_test_index(getattr(app.state, "test_runs", None))
         test_run = test_index.get(request_id)
+        try:
+            native_dom_reply = (
+                app.state.native_dom_evidence.get(request_id, str(row.get("api_key_id") or ""))
+                if getattr(app.state, "native_dom_evidence", None) else None
+            )
+        except (ValueError, TypeError):
+            # Historical shortened IDs remain supported by the log exporter.
+            native_dom_reply = None
         return {
             "report_type": "chat2api-request-diagnostic",
             "report_version": 1,
@@ -124,12 +132,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             # authenticated single-request report. Combined ZIP exports reuse
             # this report, so one familiar download now carries the evidence
             # needed for paired original-vs-MV3C comparison.
-            "worker_native_dom_reply_tree": (
-                app.state.native_dom_evidence.get(request_id, str(row.get("api_key_id") or ""))
-                if getattr(app.state, "native_dom_evidence", None)
-                and str(request_id).startswith(("req_", "resp_", "imgreq_"))
-                else None
-            ),
+            "worker_native_dom_reply_tree": native_dom_reply,
             "playground_diagnostics": playground_diagnostics(test_run),
             "extension_snapshot": extension_snapshot if extension_snapshot is not None else _safe_client_rows(registry),
             "notes": [
