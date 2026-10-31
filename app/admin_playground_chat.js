@@ -288,8 +288,10 @@
               assistantText += content;
               pendingBubble.className = "pgChatBubble";
               pendingBubble.textContent = assistantText;
+              // The console can replace this panel while the request is
+              // streaming. An absent progress view must not abort HTTP/SSE.
               const box = $chat("pgChatMessages");
-              box.scrollTop = box.scrollHeight;
+              if (box) box.scrollTop = box.scrollHeight;
             }
             if (event.chat2api) diagnostics = event.chat2api;
           }
