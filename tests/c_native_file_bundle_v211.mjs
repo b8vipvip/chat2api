@@ -102,3 +102,34 @@ test("extra verified Markdown card must not block ZIP of XLSX PPTX JSON",async()
   assert.ok(originalFiles.includes("Project.json"));
   assert.ok(!originalFiles.includes("Project.md"));
 });
+
+
+test("1c7: verified originals create ZIP after five seconds, not another 30-second lease",async()=>{
+  const h=await harness();
+  const first=await h.capture();
+  assert.equal(first.count,3);
+  assert.equal(first.zip_fallback_state,"waiting-native-zip");
+  h.advance(4900);
+  const stillWaiting=await h.capture();
+  assert.equal(stillWaiting.count,3);
+  h.advance(200);
+  const resolved=await h.capture();
+  assert.equal(resolved.count,4);
+  assert.equal(resolved.synthesized_zip,true);
+  assert.equal(resolved.zip_fallback_state,"verified-originals-packaged");
+  assert.equal(resolved.captured_types.filter(x=>x==="zip").length,1);
+});
+
+test("real ZIP after an unrelated Markdown card is captured instead of supplanted",async()=>{
+  const h=await harness(["xlsx","pptx","json","md","zip"]);
+  const result=await h.capture();
+  assert.equal(result.count,5);
+  assert.equal(result.synthesized_zip,false);
+  assert.equal(result.zip_fallback_state,"native-zip-captured");
+  assert.ok(result.captured_types.includes("zip"));
+  h.advance(31000);
+  const later=await h.capture();
+  assert.equal(later.count,5);
+  assert.equal(later.synthesized_zip,false);
+  assert.equal(later.captured_types.filter(x=>x==="zip").length,1);
+});
