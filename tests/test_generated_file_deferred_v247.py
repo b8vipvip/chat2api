@@ -105,3 +105,27 @@ def test_v247_malformed_handoff_rejected_without_public_pending_link(tmp_path):
     with sqlite3.connect(archive.db_path) as conn:
         assert conn.execute("SELECT count(*) FROM deferred_generated_files").fetchone()[0] == 0
     deferred.pool.shutdown(wait=True)
+
+
+def test_deferred_manifest_status_is_owner_scoped_without_exposing_tokens(tmp_path):
+    gate = threading.Event()
+    archive = FakeArchive(tmp_path, gate)
+    deferred = DeferredGeneratedFiles(archive)
+    raw = b'{"manifest":true}'
+    _, files = deferred.rewrite(_marker(raw), "key-A", "req-A", "https://example.test")
+    original = files[0]
+    status = deferred.list_for_request("req-A", "key-A")
+    assert len(status) == 1
+    assert status[0]["pending_id"] == original["id"]
+    assert status[0]["bytes"] == len(raw)
+    assert len(status[0]["sha256"]) == 64
+    assert status[0]["status"] in {"pending", "processing"}
+    assert deferred.list_for_request("req-A", "key-B") == []
+    assert deferred.list_for_request("req-B", "key-A") == []
+    assert "token" not in str(status)
+    assert "url" not in str(status)
+    gate.set()
+    for thread in list(deferred.pool._threads):
+        thread.join(timeout=5)
+    assert deferred.list_for_request("req-A", "key-A")[0]["status"] == "ready"
+    deferred.pool.shutdown(wait=True)
