@@ -36,3 +36,12 @@ def test_native_preview_builds_dom_from_approved_elements_without_raw_html():
     assert "node.style[key]=raw" in SOURCE
     assert "node.innerHTML" not in SOURCE
     assert "node.style.cssText=raw" not in SOURCE
+
+
+def test_request_detail_refreshes_deferred_files_without_overwriting_terminal_history():
+    assert "current = dict(row)" in SERVER
+    assert 'row.get("response_generated_files")' in SERVER
+    assert "await asyncio.to_thread(" in SERVER
+    assert "deferred_generated_files.status, matched.group(1), matched.group(2)" in SERVER
+    assert 'current["response_generated_files_live_checked"] = True' in SERVER
+    assert "current[\"response_generated_files\"] = live" in SERVER
