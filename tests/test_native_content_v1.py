@@ -50,7 +50,7 @@ def test_large_safe_native_tree_is_preserved_without_silent_truncation():
     # Keep a hard, deterministic limit; never publish a truncated tree.
     rich["root"]["children"].extend([
         {"tag": "div", "children": [{"tag": "p", "text": f"extra {g}-{i}"}
-            for i in range(60)]} for g in range(12)
+            for i in range(60)]} for g in range(50)
     ])
     with pytest.raises(ValueError, match="exceeds limit"):
         validate_native_snapshot(rich)
