@@ -182,6 +182,30 @@ class DeferredGeneratedFiles:
             raise FileTransferFailed("Generated file transfer could not be completed")
         return self.archive.read(row["file_id"],row["file_token"])
 
+    def list_for_request(self, request_id: str, owner: str):
+        """Private diagnostics snapshot: no bearer URLs or transfer tokens.
+
+        File archival state is separate from the original request terminal.
+        Queries are bounded and owner-scoped so log exports never confuse an
+        old 'processing' terminal snapshot with current storage readiness.
+        """
+        if not request_id or not owner:
+            return []
+        with self._db() as conn:
+            rows = conn.execute(
+                """SELECT id, filename, mime, size, sha256, state, updated_at
+                   FROM deferred_generated_files
+                   WHERE request_id=? AND owner=?
+                   ORDER BY created_at, id LIMIT 10""",
+                (request_id, owner),
+            ).fetchall()
+        return [{
+            "pending_id": row["id"], "filename": row["filename"],
+            "mime_type": row["mime"], "bytes": row["size"],
+            "sha256": row["sha256"], "status": row["state"],
+            "updated_at": row["updated_at"],
+        } for row in rows]
+
     def status(self, pending_id: str, token: str):
         with self._db() as conn:
             row=conn.execute("SELECT state,filename FROM deferred_generated_files WHERE id=? AND token=?",
