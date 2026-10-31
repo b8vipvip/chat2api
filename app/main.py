@@ -442,10 +442,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     pass
             files.append({"filename": name, "url": url, "bytes": size,
                           "status": status if status in {"ready", "failed"} else "processing"})
+        # Legacy native v1 clients index assets directly by img.media_index.
+        # A candidate report alone is insufficient: extra archived images
+        # would otherwise make them draw the WRONG picture at each position.
+        # Return a request-owned, presentation-ordered subset only when all
+        # layout images have one unique dimension match. With no safe mapping,
+        # supply zero image URLs and let the consumer fall back to Markdown.
+        candidates = native_unique_dimension_candidates(snapshot, asset_metadata)
+        ordinal = native_layout_summary(snapshot, len(assets))["media_mapping_complete"]
+        if ordinal:
+            visible_assets = assets
+        elif candidates["status"] == "unique-dimensions-unverified":
+            visible_assets = [assets[index] for index in candidates["indices"]]
+        else:
+            visible_assets = []
         return {**snapshot, "root": native_public_v1_tree(snapshot["root"]),
-                "assets": assets, "files": files,
-                "image_asset_candidates": native_unique_dimension_candidates(
-                    snapshot, asset_metadata)}
+                "assets": visible_assets, "files": files,
+                "image_asset_candidates": candidates}
 
     @app.get("/v1/native-content/{request_id}")
     async def read_native_content(

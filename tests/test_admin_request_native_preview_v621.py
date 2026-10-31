@@ -13,10 +13,10 @@ def test_request_dialog_has_explicit_native_preview_switch():
     assert '@app.get("/api/admin/requests/{request_id}/native-content", dependencies=[Depends(require_admin_key)])' in SERVER
 
 def test_unmapped_images_fail_closed_to_canonical_markdown():
-    assert 'summary.media_mapping_complete!==true' in SOURCE
-    assert 'Number(summary.images)!==media.length' in SOURCE
+    assert '(!completeOrdinal && !dimensionHint)' in SOURCE
+    assert 'previewAssets.length!==imageCount' in SOURCE
     assert 'requestHistoryNativeNode(snapshot.root,previewAssets,{count:0})' in SOURCE
-    assert "summary.media_mapping_complete!==true && !dimensionHint" in SOURCE
+    assert "completeOrdinal=summary.media_mapping_complete===true" in SOURCE
     assert "candidate?.status==='unique-dimensions-unverified'" in SOURCE
     assert "nativeButton.disabled=true" in SOURCE
     assert "预览不等于像素级 1:1 验收" in SOURCE
@@ -79,5 +79,13 @@ def test_unique_dimension_preview_is_explicitly_unverified_and_fail_closed():
     assert "unique-dimensions-unverified" in SOURCE
     assert "new Set(candidate.indices).size===candidate.indices.length" in SOURCE
     assert "未验证内容哈希" in SOURCE
-    assert "previewAssets=completeOrdinal?assets:candidate.indices.map(i=>assets[i])" in SOURCE
+    assert "const previewAssets=completeOrdinal?assets" in SOURCE
+    assert "candidate.indices.map(i=>assets[i])" in SOURCE
     assert "native_unique_dimension_candidates(" in SERVER
+
+
+def test_only_selected_native_image_assets_must_be_valid():
+    # Extra archived assets are not rendered and do not control selected URLs.
+    assert "previewAssets.some(u=>!u)" in SOURCE
+    assert "assets.some(u=>!u)" not in SOURCE
+    assert "previewAssets.length!==imageCount" in SOURCE
