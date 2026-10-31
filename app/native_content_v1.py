@@ -61,7 +61,8 @@ def validate_native_snapshot(payload: object) -> dict:
         tag = value.get("tag")
         if tag not in SAFE_TAGS or not isinstance(tag, str):
             raise ValueError("Unsupported native element")
-        if set(value) - {"tag", "text", "children", "style", "media_index"}:
+        if set(value) - {"tag", "text", "children", "style", "media_index",
+                          "intrinsic_width", "intrinsic_height"}:
             raise ValueError("Native element has unsafe attributes")
         result = {"tag": tag}
         if tag == "img":
@@ -83,7 +84,7 @@ def validate_native_snapshot(payload: object) -> dict:
                     raise ValueError("Invalid intrinsic image dimensions")
                 result["intrinsic_width"] = width
                 result["intrinsic_height"] = height
-        elif "media_index" in value:
+        elif any(k in value for k in ("media_index", "intrinsic_width", "intrinsic_height")):
             raise ValueError("Image reference on non-image element")
         if "text" in value:
             content = value["text"]
