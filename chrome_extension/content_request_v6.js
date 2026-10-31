@@ -450,6 +450,15 @@
     if (event?.type === "chat.completed" && active) {
       try { await native?.capture?.(active, true); } catch (_) {}
     }
+    // This separate, request-only DOM capture cannot change completion
+    // authority and is delivered through the same authenticated Worker socket.
+    if (["chat.completed","chat.error","chat.cancelled"].includes(event?.type)
+        && state.active?.requestId === event.request_id) {
+      try {
+        await globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.capture?.(
+          state.active, "before_terminal");
+      } catch (_) {}
+    }
     // Flush read-only evidence before a real request terminal event is sent.
     // This never changes the sole terminal decision of request-v6.
     if (["chat.completed", "chat.error", "chat.cancelled"].includes(event?.type)
