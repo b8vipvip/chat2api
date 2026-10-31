@@ -104,7 +104,7 @@ def validate_native_snapshot(payload: object) -> dict:
                 result["style"] = styles
         if "children" in value:
             children = value["children"]
-            if tag in {"img", "hr", "br"} or not isinstance(children, list) or len(children) > 80:
+            if tag in {"img", "hr", "br"} or not isinstance(children, list) or len(children) > 160:
                 raise ValueError("Invalid children")
             result["children"] = [node(child, depth + 1) for child in children]
         return result
