@@ -300,3 +300,16 @@ def native_unique_dimension_candidates(snapshot: dict, archived_media: list[dict
         found.append(candidates[0])
         used.add(candidates[0])
     return {"status":"unique-dimensions-unverified","indices":found}
+
+
+def native_public_v1_tree(root: dict) -> dict:
+    """Strip new optional dimension hints for existing strict v1 consumers.
+
+    Private admin layout evidence retains dimension hints for candidate
+    display; old MV3C clients accept only the original five safe node keys.
+    """
+    result = {key: value for key,value in root.items()
+              if key not in ("intrinsic_width", "intrinsic_height", "children")}
+    if "children" in root:
+        result["children"] = [native_public_v1_tree(child) for child in root["children"]]
+    return result
