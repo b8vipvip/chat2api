@@ -120,6 +120,16 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                 if getattr(app.state, "native_dom_evidence", None) else {"available": False}
             ),
             "worker_native_dom_evidence_download": f"/api/admin/requests/{request_id}/native-dom-evidence",
+            # Include the private bounded reply tree inside the already
+            # authenticated single-request report. Combined ZIP exports reuse
+            # this report, so one familiar download now carries the evidence
+            # needed for paired original-vs-MV3C comparison.
+            "worker_native_dom_reply_tree": (
+                app.state.native_dom_evidence.get(request_id, str(row.get("api_key_id") or ""))
+                if getattr(app.state, "native_dom_evidence", None)
+                and str(request_id).startswith(("req_", "resp_", "imgreq_"))
+                else None
+            ),
             "playground_diagnostics": playground_diagnostics(test_run),
             "extension_snapshot": extension_snapshot if extension_snapshot is not None else _safe_client_rows(registry),
             "notes": [
