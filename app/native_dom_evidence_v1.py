@@ -112,7 +112,7 @@ class NativeDomEvidenceStore:
     def _prune(self):
         # Bounded retention: old evidence must not consume the Worker's disk
         # indefinitely when no administrator manually exports past requests.
-        paths=sorted(self.root.glob("req_*.json"),key=lambda p:p.stat().st_mtime)
+        paths=sorted(self.root.glob("*.json"),key=lambda p:p.stat().st_mtime)
         now=time.time()
         for file in paths:
             try:
@@ -120,7 +120,7 @@ class NativeDomEvidenceStore:
                     file.unlink(missing_ok=True)
             except OSError:
                 pass
-        files=sorted(self.root.glob("req_*.json"),key=lambda p:p.stat().st_mtime)
+        files=sorted(self.root.glob("*.json"),key=lambda p:p.stat().st_mtime)
         for file in files[:-512]:
             file.unlink(missing_ok=True)
 
