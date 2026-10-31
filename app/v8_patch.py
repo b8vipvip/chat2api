@@ -115,6 +115,11 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             "request": row,
             "http_trace": diagnostic_store.by_trace(trace_id) if trace_id else [],
             "worker_probe_evidence": request_probe_evidence(request_id),
+            "worker_native_dom_evidence": (
+                app.state.native_dom_evidence.summary(request_id, str(row.get("api_key_id") or ""))
+                if getattr(app.state, "native_dom_evidence", None) else {"available": False}
+            ),
+            "worker_native_dom_evidence_download": f"/api/admin/requests/{request_id}/native-dom-evidence",
             "playground_diagnostics": playground_diagnostics(test_run),
             "extension_snapshot": extension_snapshot if extension_snapshot is not None else _safe_client_rows(registry),
             "notes": [
