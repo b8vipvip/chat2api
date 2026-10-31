@@ -31,7 +31,9 @@ from .generated_files_v196 import GeneratedFileArchive
 from .generated_file_staging_v238 import GeneratedFileStaging
 from .generated_file_deferred_v247 import DeferredGeneratedFiles, FileStillProcessing, FileTransferFailed
 from .rich_content_v196 import manifest as rich_content_manifest
-from .native_content_v1 import NativeContentStore, native_delivery_fingerprint, native_layout_summary
+from .native_content_v1 import (NativeContentStore, native_delivery_fingerprint,
+                                native_layout_summary, native_unique_dimension_candidates,
+                                native_public_v1_tree)
 from .native_dom_evidence_v1 import NativeDomEvidenceStore
 from .media_public_origin_v187 import media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
@@ -378,6 +380,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Reuse the *same* archived media records as the canonical Markdown.
         # Never return a ChatGPT blob URL or a model-generated remote URL.
         assets = []
+        asset_metadata = []
         for media in (row.get("response_media") or [])[:40]:
             if not isinstance(media, dict):
                 continue
@@ -390,6 +393,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     uri,
                 ):
                     assets.append(uri)
+                    asset_metadata.append({"width":media.get("width"),
+                                           "height":media.get("height")})
                     break
         # Files are derived only from this request's archived final reply.
         # Never forward unverified model-provided or upstream temporary URLs.
@@ -437,7 +442,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     pass
             files.append({"filename": name, "url": url, "bytes": size,
                           "status": status if status in {"ready", "failed"} else "processing"})
-        return {**snapshot, "assets": assets, "files": files}
+        return {**snapshot, "root": native_public_v1_tree(snapshot["root"]),
+                "assets": assets, "files": files,
+                "image_asset_candidates": native_unique_dimension_candidates(
+                    snapshot, asset_metadata)}
 
     @app.get("/v1/native-content/{request_id}")
     async def read_native_content(
@@ -558,7 +566,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return JSONResponse(
             {"request_id": request_id, "version": 1, "snapshot": snapshot,
              "layout_summary": native_layout_summary(snapshot, len(details)),
-             "media_metadata": details},
+             "media_metadata": details,
+             "image_asset_candidates": native_unique_dimension_candidates(
+                 snapshot, details)},
             headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
         )
 

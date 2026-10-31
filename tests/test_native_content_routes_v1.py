@@ -341,3 +341,31 @@ def test_native_file_sqlite_failure_stays_processing_without_http_500(tmp_path: 
         assert "event: native.end" in streamed.text
         assert "database is locked" not in streamed.text
         assert app.state.telemetry.get(rid)["status"] == "completed"
+
+
+def test_public_native_v1_remains_compatible_with_strict_legacy_image_nodes(tmp_path):
+    app=create_app(Settings(CHAT2API_API_KEY="test-key",
+        CHAT2API_PAIRING_CODE="test-pair", CHAT2API_DATA_DIR=tmp_path))
+    rid="req_compatdimensions001"
+    async def record():
+        await app.state.telemetry.upsert({
+            "request_id":rid,"api_key_id":"master","status":"completed",
+            "response_media":[{"url":"https://media.example.com/api/media/med_12345678/tokenABC12345678",
+                               "width":900,"height":900}],
+        })
+    with TestClient(app) as client:
+        asyncio.run(record())
+        assert app.state.native_content.publish(rid,"master",{
+            "version":1,"revision":1,
+            "root":{"tag":"img","media_index":0,
+                    "intrinsic_width":900,"intrinsic_height":900},
+        })
+        auth={"Authorization":"Bearer test-key"}
+        public=client.get(f"/v1/native-content/{rid}",headers=auth)
+        assert public.status_code==200
+        assert public.json()["root"]=={"tag":"img","media_index":0}
+        assert public.json()["image_asset_candidates"]=={
+            "status":"unique-dimensions-unverified","indices":[0]}
+        private=client.get(f"/api/admin/requests/{rid}/native-content",headers=auth)
+        assert private.status_code==200
+        assert private.json()["snapshot"]["root"]["intrinsic_width"]==900
