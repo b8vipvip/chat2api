@@ -94,3 +94,19 @@ def test_normal_request_log_exports_also_include_full_bounded_evidence():
     assert '"worker_native_dom_reply_tree": native_dom_reply' in src
     assert '"worker_native_dom_evidence"' in src
     assert 'native_dom_evidence.get(request_id' in src
+
+
+def test_browser_dom_capture_vm_includes_all_verified_sibling_cards():
+    import subprocess
+    root=Path(__file__).resolve().parents[1]
+    subprocess.run(
+        ["node", "tests/native_dom_evidence_v1.mjs"],
+        cwd=root, capture_output=True, check=True, timeout=15,
+    )
+
+
+def test_verified_container_evidence_is_allowed_with_strict_owner_binding():
+    evidence=example()
+    evidence["scope"]="verified_reply_container"
+    evidence["boundary"]="same_request_verified_finish_action"
+    assert validate_evidence(evidence,RID)["complete"] is True
