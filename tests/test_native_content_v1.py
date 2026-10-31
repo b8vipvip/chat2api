@@ -183,3 +183,18 @@ def test_062f_19_archived_images_and_1800_rich_nodes_fit_complete_safe_tree():
     with pytest.raises(ValueError,match="exceeds limit"):
         validate_native_snapshot({"version":1,"revision":31,
                                   "root":{"tag":"div","children":larger}})
+
+
+def test_native_image_mapping_detects_duplicate_missing_and_reordered_indices():
+    from app.native_content_v1 import native_layout_summary
+    def rich(*indices):
+        return validate_native_snapshot({"version": 1, "revision": 40,
+            "root": {"tag": "div", "children": [
+                {"tag": "img", "media_index": i} for i in indices]}})
+    # Previously both cases were falsely flagged complete because 2==2.
+    assert native_layout_summary(rich(0, 0), archived_assets=2)["media_mapping_complete"] is False
+    assert native_layout_summary(rich(0, 2), archived_assets=2)["media_mapping_complete"] is False
+    # Rendering order is allowed to differ, provided each asset is unique.
+    assert native_layout_summary(rich(1, 0), archived_assets=2)["media_mapping_complete"] is True
+    assert native_layout_summary(rich(0, 1), archived_assets=3)["media_mapping_complete"] is False
+    assert native_layout_summary(rich(), archived_assets=0)["media_mapping_complete"] is True
