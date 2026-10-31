@@ -227,3 +227,27 @@ def test_33da_wide_assistant_reply_111_siblings_preserved_in_safe_snapshot():
     )
     with pytest.raises(ValueError, match="Invalid children"):
         validate_native_snapshot(payload)
+
+
+def test_33da_subset_has_unique_dimension_candidates_but_no_identity_proof():
+    from app.native_content_v1 import native_unique_dimension_candidates
+    originals=[(900,900),(1292,860),(1290,860),(1303,860),(1200,687),(1289,860)]
+    extra=[(337,450),(1290,860),(1075,860),(1024,1024)]
+    # Canonical archive also includes six actual native card sizes.
+    archived=[{"width":width,"height":height} for width,height in
+              [extra[0],extra[2],extra[3],*originals]]
+    payload={"version":1,"revision":30,"root":{"tag":"div","children":[
+        {"tag":"img","media_index":i,"intrinsic_width":w,"intrinsic_height":h}
+        for i,(w,h) in enumerate(originals)]}}
+    saved=validate_native_snapshot(payload)
+    matched=native_unique_dimension_candidates(saved,archived)
+    assert matched=={"status":"unique-dimensions-unverified","indices":[3,4,5,6,7,8]}
+    # A duplicate intrinsic size is ambiguous: refuse rather than guess.
+    archived.append({"width":1292,"height":860})
+    assert native_unique_dimension_candidates(saved,archived)["status"]=="unavailable"
+    archived.pop()
+    archived[4]["height"]=900
+    assert native_unique_dimension_candidates(saved,archived)["status"]=="unavailable"
+    with pytest.raises(ValueError,match="Incomplete image dimensions"):
+        validate_native_snapshot({"version":1,"revision":1,"root":{
+            "tag":"img","media_index":0,"intrinsic_width":900}})
