@@ -44,6 +44,7 @@ const scopeNode=new Element("DIV",[
 const scopedCtx={...ctx,__CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{
   replyRoots:()=>({scope:"roleless_reply_siblings",roots:[scopeNode],boundary:"end_of_reply_parent"})
 },chrome:{runtime:{sendMessage:async m=>{scopedSent.push(m);return {ok:true};}}}};
+delete scopedCtx.__CHAT2API_NATIVE_CONTENT_V1__;
 runInNewContext(code,scopedCtx);
 const scopedCandidate=scopeNode.childNodes[0];
 await scopedCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture({
