@@ -367,7 +367,7 @@ def test_native_dom_evidence_migration_has_one_scoped_owner_without_terminal_aut
     source=(ROOT / "chrome_extension" / "content_native_content_v1.js").read_text("utf-8")
     assert '__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.capture?.(' in request
     assert 'type:"chat.native.dom_evidence"' in evidence
-    assert 'replyRoots(active)' in source
+    assert '__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active)' in source
     for forbidden in ('chat.completed', 'chat.error', 'chat.cancelled', 'request-v6 terminal'):
         assert forbidden not in evidence
     server=(ROOT / "app" / "main.py").read_text("utf-8")
