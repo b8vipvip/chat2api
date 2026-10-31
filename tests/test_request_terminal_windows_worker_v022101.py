@@ -38,7 +38,8 @@ def test_network_terminal_evidence_keeps_request_v6_as_single_terminal_owner() -
     assert "networkTerminalAt && networkTerminalText && !captureMedia" in request
     assert "isLocalImageBuildCommand(networkTerminalText)" in request
     assert "!promptStillPresent(active)" in request
-    assert "captureMedia && (mediaReplyRoot || sourceMedia.length) && sourceStable && !generating" in request
+    assert "captureMedia && (mediaReplyRoot || sourceMedia.length) && sourceStable" in request
+    assert "mediaHandoffTerminalReady(active, generating, pageWorking)" in request
 
 
 def test_submission_confirmation_never_treats_generating_control_as_sufficient() -> None:
