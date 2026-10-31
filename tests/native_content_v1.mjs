@@ -88,9 +88,23 @@ assert.equal(capture.snapshot(overText),null,"over 96K text must fail closed");
 await capture.capture(overText,true);
 assert.equal(sent.length,1);
 
-let nested=new Element("P",[{nodeType:3,nodeValue:"deep"}]);
-for(let i=0;i<15;i++)nested=new Element("DIV",[nested]);
-assert.equal(capture.snapshot(candidateFor([nested])),null,"over-depth text must fail closed");
+// Production f7c8: full source DOM has 16+ nested presentation levels,
+ // 4 images, a table and grid wrappers. Previously 14-depth rejected the
+ // complete final reply and left an older 90-node/zero-image sidecar.
+let nested=new Element("DIV",[new Element("IMG"),new Element("P",[
+  {nodeType:3,nodeValue:"deep card text"},
+])]);
+for(let i=0;i<17;i++)nested=new Element("DIV",[nested]);
+const deepReply=capture.snapshot(candidateFor([nested]));
+assert.ok(deepReply,"bounded 17-deep visual cards must be serialized");
+function findImgs(node) {
+  return (node.tag==="img"?1:0)+(node.children||[]).reduce((n,child)=>n+findImgs(child),0);
+}
+assert.equal(findImgs(deepReply.root),1,"deep image ordinal must remain in final tree");
+let overDeep=new Element("P",[{nodeType:3,nodeValue:"over-depth"}]);
+for(let i=0;i<26;i++)overDeep=new Element("DIV",[overDeep]);
+assert.equal(capture.snapshot(candidateFor([overDeep])),null,
+  "more than 24 nested levels must still fail closed");
 
 const overChildren=candidateFor(Array.from({length:81},(_,i)=>({
   nodeType:3,nodeValue:"chunk "+i,

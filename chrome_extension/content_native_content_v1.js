@@ -48,7 +48,7 @@
     const textBudget = 96000;
     const ignore = element => element.matches?.(banned) || !!element.closest?.("nav,aside,footer");
     const build = (element, depth) => {
-      if (depth > 14 || nodes >= 1200) {
+      if (depth > 24 || nodes >= 1200) {
         truncated = true;
         return null;
       }

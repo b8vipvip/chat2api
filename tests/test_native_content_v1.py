@@ -137,3 +137,23 @@ def test_fractional_grid_columns_still_reject_unsafe_css(columns):
         validate_native_snapshot({"version": 1, "revision": 9, "root": {
             "tag": "div", "style": {"gridTemplateColumns": columns},
         }})
+
+
+def test_f7c8_deep_game_asset_gallery_retains_media_and_grid():
+    # 2026-10-31 req_*f7c8: 594 original nodes, 4 image assets,
+    # max source DOM depth 16; the old MAX_DEPTH=14 lost the complete tree.
+    root = {"tag": "div", "style": {"display": "grid", "gridTemplateColumns": "1fr 1fr"},
+            "children": [{"tag": "img", "media_index": i} for i in range(4)]}
+    for _ in range(17):
+        root = {"tag": "div", "children": [root]}
+    data = {"version": 1, "revision": 11, "root": root}
+    validated = validate_native_snapshot(data)
+    from app.native_content_v1 import native_layout_summary
+    stats = native_layout_summary(validated, archived_assets=4)
+    assert stats["images"] == 4
+    assert stats["grid"] == 1
+    assert stats["media_mapping_complete"] is True
+    for _ in range(10):
+        root = {"tag": "div", "children": [root]}
+    with pytest.raises(ValueError, match="exceeds limit"):
+        validate_native_snapshot({"version": 1, "revision": 12, "root": root})
