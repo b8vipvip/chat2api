@@ -4,7 +4,15 @@ const host=document.getElementById("playgroundChatPanel");
 if(!host||document.getElementById("pgABCD"))return;
 // Task content lives in the persistent server-side one-shot pool, never in the JS bundle.
 const cases={A:{title:"旧住宅节能改造",prompts:[]},B:{title:"模块化收纳盒产品摄影",prompts:[]},C:{title:"社区屋顶菜园资料包",prompts:[]},D:{title:"图书馆离线预约网页",prompts:[]}};
-const byId=id=>document.getElementById(id),note=s=>{byId("pgABCDNote").textContent=s};
+const byId=id=>document.getElementById(id),note=s=>{
+  const panel=byId("pgABCDNote");
+  if(panel)panel.textContent=s;
+};
+// UI widgets can be unmounted by admin navigation while an SSE connection
+// remains active. A progress display error is not a transport cancellation.
+function safeProgress(update,chars,frames,status){
+  try { update(chars,frames,status); } catch (_) { /* detached view */ }
+}
 const el=document.createElement("section");el.className="panel";el.id="pgABCD";el.style.margin="12px 0";
 el.innerHTML='<h3>ABCD 真实场景验收</h3><p class="muted">通过已选业务Key和文本模型实际发起API流式请求。A检验全文结构、B检验3张图片、C检验4份文件、D检验可运行HTML与业务逻辑。每次运行将当前题目立即从持久化队列移除，自动换成全新主题；API SSE 完成不代表上游 ChatGPT 终态已验证。</p><div style="display:flex;flex-wrap:wrap;gap:8px;margin:10px 0"><select id="pgABCDSelect"></select><button class="action good" id="pgABCDRun">运行场景</button></div><p id="pgABCDNote" role="status" style="white-space:pre-wrap;line-height:1.6">尚未执行</p>';
 host.querySelector(".pgChatMode")?.after(el);
@@ -51,7 +59,7 @@ async function recoverDisconnectedStream(requestId, update) {
         }
         if(!["running","queued","pending"].includes(status))
           throw Error("请求实际终态："+status+"；"+String(last.error||""));
-        if(i===0 || i%8===0) update(0,0,
+        if(i===0 || i%8===0) safeProgress(update,0,0,
           "SSE 连接已断开，服务端仍在运行；按相同请求 ID 恢复中");
       }else if(++missed>=4 && !observed)return null;
     }catch(error){
@@ -91,7 +99,7 @@ if(typeof c.delta?.content==="string")answer+=c.delta.content;
 if(typeof c.delta?.chat2api_status?.text==="string")lastStatus=c.delta.chat2api_status.text.slice(0,160);
 if(c.finish_reason==="stop")stopped=true;
 }
-update(answer.length,frames,lastStatus);
+safeProgress(update,answer.length,frames,lastStatus);
 }
 }
 }catch(error){streamError=error;}
