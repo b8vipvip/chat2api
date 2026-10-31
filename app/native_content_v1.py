@@ -65,12 +65,24 @@ def validate_native_snapshot(payload: object) -> dict:
             raise ValueError("Native element has unsafe attributes")
         result = {"tag": tag}
         if tag == "img":
-            if set(value) - {"tag", "media_index", "style"}:
+            if set(value) - {"tag", "media_index", "style",
+                             "intrinsic_width", "intrinsic_height"}:
                 raise ValueError("Image attributes must be asset references")
             idx = value.get("media_index")
             if type(idx) is not int or idx < 0 or idx >= 40:
                 raise ValueError("Invalid media index")
             result["media_index"] = idx
+            has_width = "intrinsic_width" in value
+            has_height = "intrinsic_height" in value
+            if has_width != has_height:
+                raise ValueError("Incomplete image dimensions")
+            if has_width:
+                width, height = value["intrinsic_width"], value["intrinsic_height"]
+                if (type(width) is not int or type(height) is not int
+                    or not 1 <= width <= 16384 or not 1 <= height <= 16384):
+                    raise ValueError("Invalid intrinsic image dimensions")
+                result["intrinsic_width"] = width
+                result["intrinsic_height"] = height
         elif "media_index" in value:
             raise ValueError("Image reference on non-image element")
         if "text" in value:
@@ -249,3 +261,41 @@ def native_layout_summary(snapshot: dict, archived_assets: int) -> dict:
     counts["revision"] = snapshot.get("revision")
     counts["layout_schema"] = snapshot.get("version")
     return counts
+
+
+def native_unique_dimension_candidates(snapshot: dict, archived_media: list[dict]) -> dict:
+    """Best-effort *unverified* visual preview mapping, never proof of identity.
+
+    Some requests archive extra raster assets not present in the final DOM.
+    Match only if each visible image has one uniquely sized owned asset.
+    This does not match pixels or SHA256; callers MUST label accordingly.
+    """
+    images=[]
+    pending=[snapshot.get("root")]
+    while pending and len(images)<=40:
+        node=pending.pop()
+        if not isinstance(node,dict):
+            continue
+        if node.get("tag")=="img":
+            images.append(node)
+        else:
+            pending.extend(reversed(node.get("children") or ()))
+    if not images or len(images)>40 or len(archived_media)>40:
+        return {"status":"unavailable","indices":[]}
+    found=[]
+    used=set()
+    for expected,node in enumerate(images):
+        if node.get("media_index")!=expected:
+            return {"status":"unavailable","indices":[]}
+        width=node.get("intrinsic_width")
+        height=node.get("intrinsic_height")
+        if type(width) is not int or type(height) is not int:
+            return {"status":"unavailable","indices":[]}
+        candidates=[index for index,item in enumerate(archived_media)
+                    if isinstance(item,dict)
+                    and item.get("width")==width and item.get("height")==height]
+        if len(candidates)!=1 or candidates[0] in used:
+            return {"status":"unavailable","indices":[]}
+        found.append(candidates[0])
+        used.add(candidates[0])
+    return {"status":"unique-dimensions-unverified","indices":found}
