@@ -15,7 +15,9 @@ def test_request_dialog_has_explicit_native_preview_switch():
 def test_unmapped_images_fail_closed_to_canonical_markdown():
     assert 'summary.media_mapping_complete!==true' in SOURCE
     assert 'Number(summary.images)!==media.length' in SOURCE
-    assert 'requestHistoryNativeNode(snapshot.root,assets,{count:0})' in SOURCE
+    assert 'requestHistoryNativeNode(snapshot.root,previewAssets,{count:0})' in SOURCE
+    assert "summary.media_mapping_complete!==true && !dimensionHint" in SOURCE
+    assert "candidate?.status==='unique-dimensions-unverified'" in SOURCE
     assert "nativeButton.disabled=true" in SOURCE
     assert "预览不等于像素级 1:1 验收" in SOURCE
 
