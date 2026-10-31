@@ -170,6 +170,22 @@
     } catch (_) { return false; }
   }
 
+  // f7c8: four archived web images appeared while ChatGPT was still actively
+  // writing code and explanation. A stable image source is proof of media
+  // transfer, NEVER proof of completion of the accompanying text response.
+  // Keep this check separate from the single request-v6 terminal authority.
+  function mediaHandoffTerminalReady(active, generating, pageWorking, now = Date.now()) {
+    if (generating || pageWorking) return false;
+    // When network evidence has begun but has not reached a verified clean EOF,
+    // allow a DOM-complete media reply only after a sustained network quiet
+    // period. Never interpret the absence of a finish marker as clean EOF.
+    if (active?.networkStreamSeen && !confirmedTransportTerminal(active)) {
+      const at = Number(active.networkObservedAt || 0);
+      if (!at || now - at < 7500) return false;
+    }
+    return true;
+  }
+
 
   function conversationTurns() {
     const result = [];
@@ -2229,7 +2245,23 @@
       // {"skipped_mainline":true} while the actual image is rendered later.
       // Only request-v6 can complete this request; harvest same-turn media,
       // never send the internal marker as the user-visible answer.
-      if (captureMedia && (mediaReplyRoot || sourceMedia.length) && sourceStable && !generating
+      const pageWorking = captureMedia && upstreamStillWorking();
+      if (captureMedia && (mediaReplyRoot || sourceMedia.length) && sourceStable
+          && !mediaHandoffTerminalReady(active, generating, pageWorking)
+          && (!active.mediaHandoffBlockedAt || Date.now() - active.mediaHandoffBlockedAt >= 8000)) {
+        active.mediaHandoffBlockedAt = Date.now();
+        await diagnostic(active, "media-handoff-await-page-terminal", {
+          media_terminal_blocked_by_generating: Boolean(generating),
+          media_terminal_blocked_by_page_liveness: Boolean(pageWorking),
+          media_terminal_network_clean: confirmedTransportTerminal(active),
+          media_terminal_network_last_age_ms: Number(active.networkObservedAt || 0)
+            ? Date.now() - Number(active.networkObservedAt) : null,
+          media_terminal_source_stable: Boolean(sourceStable),
+          media_terminal_delivery_ready_only: true,
+        });
+      }
+      if (captureMedia && (mediaReplyRoot || sourceMedia.length) && sourceStable
+          && mediaHandoffTerminalReady(active, generating, pageWorking)
           && Date.now() - imageCaptureAt >= 1000) {
         imageCaptureAt = Date.now();
         // Prefer the validated current assistant turn, but permit a strictly
@@ -2932,6 +2964,7 @@
     isGenerating,
     isImageCreationRequest,
     isLocalImageBuildCommand,
+    mediaHandoffTerminalReady,
   });
 
   const listener = (message, sender, sendResponse) => {
