@@ -157,3 +157,29 @@ def test_f7c8_deep_game_asset_gallery_retains_media_and_grid():
         root = {"tag": "div", "children": [root]}
     with pytest.raises(ValueError, match="exceeds limit"):
         validate_native_snapshot({"version": 1, "revision": 12, "root": root})
+
+
+def test_062f_19_archived_images_and_1800_rich_nodes_fit_complete_safe_tree():
+    from app.native_content_v1 import validate_native_snapshot, native_layout_summary
+    sections=[]
+    for group in range(26):
+        children=[{"tag":"p","text":f"GameFlow category {group} section {index}"}
+                  for index in range(68)]
+        if group<19:
+            children.append({"tag":"img","media_index":group})
+        sections.append({"tag":"div","style":{"display":"grid","gridTemplateColumns":"1fr 1fr"},
+                         "children":children})
+    payload={"version":1,"revision":30,"root":{"tag":"div","children":sections}}
+    accepted=validate_native_snapshot(payload)
+    summary=native_layout_summary(accepted,archived_assets=19)
+    assert summary["nodes"]>1800
+    assert summary["images"]==19
+    assert summary["grid"]==26
+    assert summary["media_mapping_complete"] is True
+    # Raising the limit never permits silent partial tree acceptance.
+    larger=[]
+    for group in range(60):
+        larger.append({"tag":"div","children":[{"tag":"p","text":"x"} for _ in range(60)]})
+    with pytest.raises(ValueError,match="exceeds limit"):
+        validate_native_snapshot({"version":1,"revision":31,
+                                  "root":{"tag":"div","children":larger}})
