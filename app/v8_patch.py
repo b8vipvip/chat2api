@@ -107,6 +107,14 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
         if test_index is None:
             test_index = request_test_index(getattr(app.state, "test_runs", None))
         test_run = test_index.get(request_id)
+        try:
+            native_dom_reply = (
+                app.state.native_dom_evidence.get(request_id, str(row.get("api_key_id") or ""))
+                if getattr(app.state, "native_dom_evidence", None) else None
+            )
+        except (ValueError, TypeError):
+            # Historical shortened IDs remain supported by the log exporter.
+            native_dom_reply = None
         return {
             "report_type": "chat2api-request-diagnostic",
             "report_version": 1,
@@ -115,6 +123,16 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             "request": row,
             "http_trace": diagnostic_store.by_trace(trace_id) if trace_id else [],
             "worker_probe_evidence": request_probe_evidence(request_id),
+            "worker_native_dom_evidence": (
+                app.state.native_dom_evidence.summary(request_id, str(row.get("api_key_id") or ""))
+                if getattr(app.state, "native_dom_evidence", None) else {"available": False}
+            ),
+            "worker_native_dom_evidence_download": f"/api/admin/requests/{request_id}/native-dom-evidence",
+            # Include the private bounded reply tree inside the already
+            # authenticated single-request report. Combined ZIP exports reuse
+            # this report, so one familiar download now carries the evidence
+            # needed for paired original-vs-MV3C comparison.
+            "worker_native_dom_reply_tree": native_dom_reply,
             "playground_diagnostics": playground_diagnostics(test_run),
             "extension_snapshot": extension_snapshot if extension_snapshot is not None else _safe_client_rows(registry),
             "notes": [

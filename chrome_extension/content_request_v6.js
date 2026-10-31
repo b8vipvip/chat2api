@@ -450,6 +450,15 @@
     if (event?.type === "chat.completed" && active) {
       try { await native?.capture?.(active, true); } catch (_) {}
     }
+    // This separate, request-only DOM capture cannot change completion
+    // authority and is delivered through the same authenticated Worker socket.
+    if (["chat.completed","chat.error","chat.cancelled"].includes(event?.type)
+        && state.active?.requestId === event.request_id) {
+      try {
+        await globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.capture?.(
+          state.active, "before_terminal");
+      } catch (_) {}
+    }
     // Flush read-only evidence before a real request terminal event is sent.
     // This never changes the sole terminal decision of request-v6.
     if (["chat.completed", "chat.error", "chat.cancelled"].includes(event?.type)
@@ -2611,6 +2620,13 @@
                   ))) {
                 responseStarted = await ensureResponseStarted(active, responseStarted,
                   "verified-aborted-stream-rendered-dom-v200");
+                // Positive request-local reply container evidence from the
+                // one terminal owner, offered only to read-only DOM capture.
+                // Do not promote an entire roleless main/chat root.
+                if (!rendered.rolelessRichVerified && !rendered.rolelessHeaderVerified &&
+                    rendered.replyScope?.isConnected) {
+                  active.nativeVerifiedReplyScope = rendered.replyScope;
+                }
                 await emit({
                   type: "chat.completed", request_id: active.requestId, text: finalText,
                   diagnostics: {

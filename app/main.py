@@ -32,6 +32,7 @@ from .generated_file_staging_v238 import GeneratedFileStaging
 from .generated_file_deferred_v247 import DeferredGeneratedFiles, FileStillProcessing, FileTransferFailed
 from .rich_content_v196 import manifest as rich_content_manifest
 from .native_content_v1 import NativeContentStore, native_delivery_fingerprint, native_layout_summary
+from .native_dom_evidence_v1 import NativeDomEvidenceStore
 from .media_public_origin_v187 import media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
 from .responses_multimodal_input_v183 import attachment_specs as canonical_attachment_specs
@@ -70,6 +71,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     registry.request_broker = broker
     telemetry = TelemetryStore(config.data_dir)
     worker_probes = WorkerProbeStore(config.data_dir)
+    native_dom_evidence = NativeDomEvidenceStore(config.data_dir)
     native_content = NativeContentStore(config.data_dir)
     api_keys = ApiKeyStore(config.data_dir, config.api_key)
     telemetry.usage_accounting = api_keys.account_completed_usage
@@ -108,6 +110,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.broker = broker
     app.state.telemetry = telemetry
     app.state.worker_probes = worker_probes
+    app.state.native_dom_evidence = native_dom_evidence
     app.state.native_content = native_content
     app.state.api_keys = api_keys
     app.state.file_store = file_store
@@ -558,6 +561,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
         )
 
+    @app.get("/api/admin/requests/{request_id}/native-dom-evidence", dependencies=[Depends(require_admin_key)])
+    async def admin_request_native_dom_evidence(request_id: str) -> Response:
+        row=telemetry.get(request_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Unknown request")
+        try:
+            evidence=native_dom_evidence.get(request_id,str(row.get("api_key_id") or ""))
+        except ValueError:
+            raise HTTPException(status_code=422, detail="Invalid request ID") from None
+        if evidence is None:
+            raise HTTPException(status_code=404, detail="Native DOM evidence unavailable")
+        return JSONResponse({"request_id":request_id,"native_dom_evidence":evidence},
+                            headers={"Cache-Control":"private, no-store",
+                                     "X-Content-Type-Options":"nosniff"})
+
     @app.get("/api/admin/requests/{request_id}/probes/download", dependencies=[Depends(require_admin_key)])
     async def request_probe_download(request_id: str) -> Response:
         row = telemetry.get(request_id)
@@ -567,6 +585,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             archive = worker_probes.archive(
                 request_id, row,
                 native_snapshot=native_content.get(request_id, str(row.get("api_key_id") or "")),
+                native_dom_evidence=native_dom_evidence.get(request_id, str(row.get("api_key_id") or "")),
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from error
@@ -2082,6 +2101,20 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         "ok": accepted,
                         "error": reason,
                     })
+                    continue
+                if message_type == "chat.native.dom_evidence" and request_id:
+                    # A standalone authenticated read-only event: never alters
+                    # request-v6 status, terminal, streaming or routing.
+                    active_state=broker.requests.get(request_id)
+                    row=telemetry.get(request_id) or {}
+                    owner=str(row.get("api_key_id") or "")
+                    if (active_state and active_state.client_id == client_id and owner
+                            and registry.sockets.get(client_id) is websocket
+                            and message.get("phase")=="before_terminal"):
+                        try:
+                            native_dom_evidence.save(request_id,owner,message.get("report"))
+                        except (ValueError, TypeError, OSError):
+                            logger.info("Worker native DOM evidence rejected request=%s", request_id)
                     continue
                 if message_type == "chat.native.snapshot" and request_id:
                     # Read-only observer from the authenticated current Worker.

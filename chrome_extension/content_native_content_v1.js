@@ -92,7 +92,27 @@
       if (children.length) result.children = children;
       return result;
     };
-    const root = build(reply, 0);
+    // v1 evidence bridge: the ordinary candidate is often a nested paragraph
+    // in the newly rendered rich ChatGPT card. Reuse only a verified fresh
+    // assistant-heading sibling scope, never a whole main/history container.
+    const replyRegion = globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
+    const scopedRoots = replyRegion?.scope === "roleless_reply_siblings"
+      ? replyRegion.roots : null;
+    let root = null;
+    if (scopedRoots?.length) {
+      const children = [];
+      for (const scopeNode of scopedRoots) {
+        const mapped = build(scopeNode, 1);
+        if (mapped) children.push(mapped);
+        if (truncated) break;
+      }
+      if (children.length && !truncated) {
+        nodes += 1;
+        root = {tag:"div",children};
+      }
+    } else {
+      root = build(reply, 0);
+    }
     // A partially serialized tree would silently replace the complete
     // canonical Markdown in MV3C. Reject it rather than publish a lie.
     // The standard OpenAI response continues unaffected.

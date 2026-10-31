@@ -87,6 +87,7 @@
         "content_request_v5.js",
         "content_rich_response_v69.js",
         "content_native_content_v1.js",
+        "content_native_dom_evidence_v1.js",
         "content_native_file_v210.js",
         "content_probe_supervisor_v1.js",
         "content_request_v6.js",
