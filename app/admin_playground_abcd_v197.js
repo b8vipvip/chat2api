@@ -59,8 +59,13 @@ async function recoverDisconnectedStream(requestId, update) {
         }
         if(!["running","queued","pending"].includes(status))
           throw Error("请求实际终态："+status+"；"+String(last.error||""));
-        if(i===0 || i%8===0) safeProgress(update,0,0,
-          "SSE 连接已断开，服务端仍在运行；按相同请求 ID 恢复中");
+        if(i===0 || i%8===0) {
+          // Standalone recovery also runs in isolation in the regression
+          // harness. A detached UI callback cannot alter Broker status.
+          try { update(0,0,
+            "SSE 连接已断开，服务端仍在运行；按相同请求 ID 恢复中"); }
+          catch (_) { /* display-only failure */ }
+        }
       }else if(++missed>=4 && !observed)return null;
     }catch(error){
       // An observed error/failure terminal must propagate, not become an
