@@ -81,3 +81,10 @@ def test_unique_dimension_preview_is_explicitly_unverified_and_fail_closed():
     assert "未验证内容哈希" in SOURCE
     assert "previewAssets=completeOrdinal?assets:candidate.indices.map(i=>assets[i])" in SOURCE
     assert "native_unique_dimension_candidates(" in SERVER
+
+
+def test_only_selected_native_image_assets_must_be_valid():
+    # Extra archived assets are not rendered and do not control selected URLs.
+    assert "previewAssets.some(u=>!u)" in SOURCE
+    assert "assets.some(u=>!u)" not in SOURCE
+    assert "previewAssets.length!==imageCount" in SOURCE
