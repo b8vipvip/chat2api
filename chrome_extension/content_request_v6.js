@@ -183,6 +183,29 @@
       const at = Number(active.networkObservedAt || 0);
       if (!at || now - at < 7500) return false;
     }
+    // 062f: browser controls looked idle and SSE had been quiet for 68s,
+    // but the assistant output still ended mid-sentence. The same-request
+    // scene observer found 247 uncovered blocks and NO new finish toolbar
+    // after the last block. Silence alone must not promote media to terminal.
+    if (active) {
+      if (!active.mediaTerminalSceneAt || now - active.mediaTerminalSceneAt >= 1200) {
+        active.mediaTerminalSceneAt = now;
+        try {
+          const facts = globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.snapshot?.(active);
+          active.mediaTerminalSceneFacts = facts && typeof facts === "object" ? {
+            changed: Number(facts.scene_changed_block_count || 0),
+            uncovered: Number(facts.scene_uncovered_block_count || 0),
+            uncoveredChars: Number(facts.scene_uncovered_block_chars || 0),
+            finishedAfterAll: facts.scene_finish_after_all_blocks === true,
+            completionEvidencePresent: typeof facts.scene_finish_after_all_blocks === "boolean",
+          } : null;
+        } catch (_) { active.mediaTerminalSceneFacts = null; }
+      }
+      const scene = active.mediaTerminalSceneFacts;
+      if (scene?.completionEvidencePresent && !scene.finishedAfterAll
+          && scene.changed >= 10 && scene.uncovered >= 8
+          && scene.uncoveredChars >= 128) return false;
+    }
     return true;
   }
 
@@ -2257,6 +2280,9 @@
           media_terminal_network_last_age_ms: Number(active.networkObservedAt || 0)
             ? Date.now() - Number(active.networkObservedAt) : null,
           media_terminal_source_stable: Boolean(sourceStable),
+          media_terminal_scene_uncovered_blocks: Number(active.mediaTerminalSceneFacts?.uncovered || 0),
+          media_terminal_scene_uncovered_chars: Number(active.mediaTerminalSceneFacts?.uncoveredChars || 0),
+          media_terminal_scene_finish_after_all: active.mediaTerminalSceneFacts?.finishedAfterAll ?? null,
           media_terminal_delivery_ready_only: true,
         });
       }
