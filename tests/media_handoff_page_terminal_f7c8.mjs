@@ -48,4 +48,29 @@ assert.ok(code.includes('media_terminal_blocked_by_page_liveness'),
   'diagnostics must name exact blocked-by-liveness reason');
 assert.ok(!/if \(captureMedia && \(mediaReplyRoot \|\| sourceMedia\.length\) && sourceStable && !generating/.test(code),
   'old media-only completion bypass must be removed');
+// Production 062f: SSE was silent ~68s, image URLs were stable, browser
+// Stop button was absent; 247 separate rich blocks remained outside the
+// final candidate and the newest finish toolbar was not after all blocks.
+ctx.__CHAT2API_PROBE_SUPERVISOR_V1__ = {snapshot:()=>({
+  scene_changed_block_count:569,
+  scene_uncovered_block_count:247,
+  scene_uncovered_block_chars:8268,
+  scene_finish_after_all_blocks:false,
+})};
+const richPending={...pending,networkObservedAt:now-68662};
+assert.equal(terminal(richPending,false,false,now),false,
+  'a quiet SSE is not completion while large source reply remains uncovered');
+assert.equal(richPending.mediaTerminalSceneFacts?.uncovered,247);
+ctx.__CHAT2API_PROBE_SUPERVISOR_V1__ = {snapshot:()=>({
+  scene_changed_block_count:569,scene_uncovered_block_count:0,
+  scene_uncovered_block_chars:0,scene_finish_after_all_blocks:true,
+})};
+assert.equal(terminal(richPending,false,false,now+1500),true,
+  'a new verified finish toolbar after all blocks permits completion');
+ctx.__CHAT2API_PROBE_SUPERVISOR_V1__ = {snapshot:()=>({
+  scene_changed_block_count:5,scene_uncovered_block_count:2,
+  scene_uncovered_block_chars:24,scene_finish_after_all_blocks:false,
+})};
+assert.equal(terminal({...pending,networkObservedAt:now-9000},false,false,now+3000),true,
+  'short independent image-only replies cannot be indefinitely held by a tiny uncovered footer');
 console.log('f7c8 terminal guard: working page and active SSE cannot be completed by static web images');
