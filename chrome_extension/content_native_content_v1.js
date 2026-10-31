@@ -75,7 +75,15 @@
           return null;
         }
         nodes += 1;
-        return {tag:"img",media_index:images++,style:safeStyle(element)};
+        const result={tag:"img",media_index:images++,style:safeStyle(element)};
+        // Numeric intrinsic dimensions only. No DOM src, URL, pixel bytes or
+        // signed tokens enter this optional matching hint.
+        const nw=Number(element.naturalWidth),nh=Number(element.naturalHeight);
+        if(Number.isInteger(nw)&&Number.isInteger(nh)
+          && nw>0&&nw<=16384&&nh>0&&nh<=16384){
+          result.intrinsic_width=nw;result.intrinsic_height=nh;
+        }
+        return result;
       }
       const children = [];
       for (const child of element.childNodes) {
