@@ -13,8 +13,7 @@
   const n = v => Math.max(-100000, Math.min(100000, Math.round(Number(v) || 0)));
   const clean = s => String(s || "").replace(/[\u0000-\u001f\u007f]/g," ").slice(0,400);
   const display = s => ["block","inline","inline-block","flex","inline-flex","grid","inline-grid","table","table-row","table-cell","list-item"].includes(s) ? s : "other";
-  function captureData(active) {
-    if (!active?.requestId || !active.submitStartedAt || typeof Element === "undefined") return null;
+  function replyRoots(active) {
     const candidate = active.lastCandidateNode;
     if (!(candidate instanceof Element) || !candidate.isConnected) return null;
     const page = candidate.closest("main,[role='main'],#thread");
@@ -54,6 +53,12 @@
       // selected descendant is the whole assistant response.
       roots=[candidate]; scope="candidate_only"; boundary="candidate_partial_unverified";
     }
+    return {roots,scope,boundary};
+  }
+  function captureData(active) {
+    const boundaryInfo=replyRoots(active);
+    if(!boundaryInfo)return null;
+    const {roots,scope,boundary}=boundaryInfo;
     const origin=roots[0].getBoundingClientRect();
     const counts={nodes:0,text_chars:0,images:0,grids:0,flex:0,tables:0,headings:0,links:0};
     let truncated=false;
@@ -125,5 +130,5 @@
       await Promise.race([response.catch(()=>{}),new Promise(r=>setTimeout(r,240))]);
     } catch (_) { /* diagnostic observer must not delay terminal */ }
   }
-  globalThis[KEY]=Object.freeze({capture,captureData});
+  globalThis[KEY]=Object.freeze({capture,captureData,replyRoots});
 })();
