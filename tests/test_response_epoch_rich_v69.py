@@ -52,7 +52,9 @@ def test_generated_media_handoff_keeps_single_request_terminal_authority():
     rich = read("chrome_extension/content_rich_response_v69.js")
     assert 'function isInternalMediaHandoff(value)' in source
     assert 'function hasTransferableImage(value)' in source
-    assert 'captureMedia && (mediaReplyRoot || sourceMedia.length) && sourceStable && !generating' in source
+    assert 'captureMedia && (mediaReplyRoot || sourceMedia.length) && sourceStable' in source
+    assert 'mediaHandoffTerminalReady(active, generating, pageWorking)' in source
+    assert 'if (generating || pageWorking) return false;' in source
     assert 'active.baselineUserTurns = new Set' in source
     assert 'response_terminal_source: "verified-request-media-dom-v176"' in source
     assert 'networkTerminalText && !captureMedia' in source
