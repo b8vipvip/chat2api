@@ -45,3 +45,10 @@ def test_request_detail_refreshes_deferred_files_without_overwriting_terminal_hi
     assert "deferred_generated_files.status, matched.group(1), matched.group(2)" in SERVER
     assert 'current["response_generated_files_live_checked"] = True' in SERVER
     assert "current[\"response_generated_files\"] = live" in SERVER
+
+
+def test_native_preview_renderer_matches_current_3200_node_capture_limit():
+    # 49070880: Worker successfully captured 1311 native nodes but the old
+    # admin renderer threw once its local counter exceeded 1200.
+    assert "++budget.count>3200" in SOURCE
+    assert "++budget.count>1200" not in SOURCE
