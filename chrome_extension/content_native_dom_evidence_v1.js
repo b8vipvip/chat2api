@@ -13,6 +13,12 @@
   const n = v => Math.max(-100000, Math.min(100000, Math.round(Number(v) || 0)));
   const clean = s => String(s || "").replace(/[\u0000-\u001f\u007f]/g," ").slice(0,400);
   const display = s => ["block","inline","inline-block","flex","inline-flex","grid","inline-grid","table","table-row","table-cell","list-item"].includes(s) ? s : "other";
+  function visible(el) {
+    try {
+      const r=el.getBoundingClientRect(),s=getComputedStyle(el);
+      return r.width>0 && r.height>0 && s.display!=="none" && s.visibility!=="hidden";
+    } catch { return false; }
+  }
   function replyRoots(active) {
     const candidate = active.lastCandidateNode;
     if (!(candidate instanceof Element) || !candidate.isConnected) return null;
@@ -30,11 +36,6 @@
         boundary:"same_request_verified_finish_action"};
     }
     const normalize = el => String(el?.innerText || el?.textContent || "").replace(/\s+/g," ").trim();
-    const visible = el => {
-      try { const r=el.getBoundingClientRect(),s=getComputedStyle(el);
-        return r.width>0 && r.height>0 && s.display!=="none" && s.visibility!=="hidden";
-      } catch { return false; }
-    };
     // Require a freshly created ChatGPT assistant heading from the same
     // request when the role-less desktop UI is used.
     const headings = [...page.querySelectorAll("h4")].filter(h =>
