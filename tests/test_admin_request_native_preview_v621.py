@@ -52,3 +52,16 @@ def test_native_preview_renderer_matches_current_3200_node_capture_limit():
     # admin renderer threw once its local counter exceeded 1200.
     assert "++budget.count>3200" in SOURCE
     assert "++budget.count>1200" not in SOURCE
+
+
+def test_pending_generated_files_refresh_without_changing_request_terminal():
+    # req_49070880 exported four processing files; a one-shot read remains stale.
+    assert "async function requestHistoryMonitorGeneratedFiles(requestId,initialFiles,sequence)" in SOURCE
+    assert "void requestHistoryMonitorGeneratedFiles(requestId,files,sequence);" in SOURCE
+    assert "row?.response_generated_files_live_checked!==true" in SOURCE
+    assert "f?.status==='processing'||f?.status==='pending'" in SOURCE
+    assert "sequence!==requestHistoryMediaSequence" in SOURCE
+    assert "setTimeout(resolve,4000)" in SOURCE
+    assert "attempt<45" in SOURCE
+    assert "if(++errors>=3)" in SOURCE
+    assert "requestHistoryGeneratedFileStatusLabel(files)" in SOURCE
