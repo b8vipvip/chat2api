@@ -79,7 +79,7 @@
       }
       const children = [];
       for (const child of element.childNodes) {
-        if (nodes >= 3200 || children.length >= 80) {
+        if (nodes >= 3200 || children.length >= 160) {
           truncated = true;
           break;
         }
