@@ -178,15 +178,27 @@ async function requestHistoryLoadNativePreview(requestId,row,sequence){
     const summary=data?.layout_summary||{};
     const media=Array.isArray(row?.response_media)?row.response_media.slice(0,40):[];
     const assets=media.map(item=>requestHistoryOwnedImageUrl(item?.owned_url||item?.url));
-    if(!snapshot?.root||snapshot.version!==1||summary.media_mapping_complete!==true
-        ||Number(summary.images)!==media.length
+    const candidate=data?.image_asset_candidates;
+    const imageCount=Number(summary.images);
+    const dimensionHint=candidate?.status==='unique-dimensions-unverified'
+      && Array.isArray(candidate.indices) && candidate.indices.length===imageCount
+      && candidate.indices.every(i=>Number.isInteger(i)&&i>=0&&i<assets.length)
+      && new Set(candidate.indices).size===candidate.indices.length;
+    const completeOrdinal=summary.media_mapping_complete===true
+      && imageCount===media.length;
+    if(!snapshot?.root||snapshot.version!==1
+        ||(summary.media_mapping_complete!==true && !dimensionHint)
+        ||(Number(summary.images)!==media.length && !dimensionHint)
         ||assets.some(u=>!u))
       throw new Error('原生快照与已归档图片未完整对应，暂时只能显示标准 API 正文');
-    const tree=requestHistoryNativeNode(snapshot.root,assets,{count:0});
+    const previewAssets=completeOrdinal?assets:candidate.indices.map(i=>assets[i]);
+    const tree=requestHistoryNativeNode(snapshot.root,previewAssets,{count:0});
     preview.appendChild(tree);
     nativeButton.disabled=false;
     status.textContent='已取得原生结构预览（'+summary.nodes+' 节点 / '
-      +summary.images+' 图片 / '+summary.grid+' Grid）。预览不等于像素级 1:1 验收。';
+      +summary.images+' 图片 / '+summary.grid+' Grid）。'
+      +(completeOrdinal?'图片按完整归档顺序展示。':'图片仅按唯一天然尺寸匹配，未验证内容哈希。')
+      +'预览不等于像素级 1:1 验收。';
   }catch(error){
     if(sequence===requestHistoryMediaSequence){
       status.textContent='原生结构预览不可用：'+String(error?.message||error);
