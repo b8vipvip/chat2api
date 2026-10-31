@@ -219,6 +219,7 @@ def native_layout_summary(snapshot: dict, archived_assets: int) -> dict:
     pending = [snapshot.get("root")]
     counts = {"nodes": 0, "images": 0, "grid": 0, "flex": 0,
               "tables": 0, "archived_assets": archived_assets}
+    media_indices = []
     while pending and counts["nodes"] < MAX_NODES:
         node = pending.pop()
         if not isinstance(node, dict):
@@ -227,6 +228,7 @@ def native_layout_summary(snapshot: dict, archived_assets: int) -> dict:
         tag = node.get("tag")
         if tag == "img":
             counts["images"] += 1
+            media_indices.append(node.get("media_index"))
         if tag == "table":
             counts["tables"] += 1
         mode = (node.get("style") or {}).get("display")
@@ -235,7 +237,15 @@ def native_layout_summary(snapshot: dict, archived_assets: int) -> dict:
         elif mode in {"flex", "inline-flex"}:
             counts["flex"] += 1
         pending.extend(node.get("children") or ())
-    counts["media_mapping_complete"] = counts["images"] == archived_assets
+    # Equal image counts alone cannot establish correct asset ownership:
+    # duplicated/skipped indices can show the wrong archived picture in a card.
+    # Preserve native preview only when every archived asset is referenced once.
+    counts["media_mapping_complete"] = (
+        type(archived_assets) is int
+        and 0 <= archived_assets <= 40
+        and counts["images"] == archived_assets
+        and sorted(media_indices) == list(range(archived_assets))
+    )
     counts["revision"] = snapshot.get("revision")
     counts["layout_schema"] = snapshot.get("version")
     return counts
