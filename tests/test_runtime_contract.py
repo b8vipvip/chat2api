@@ -395,3 +395,13 @@ def test_f7c8_media_handoff_does_not_complete_while_page_is_generating():
     # than permitting Worker probes or image archive callbacks to terminate.
     assert source.count('response_terminal_source: "verified-request-media-dom-v176"') == 1
     assert 'globalThis.__CHAT2API_PROBE_SUPERVISOR_V1__?.capture?.(' in source
+
+
+def test_062f_media_terminal_requires_source_structure_coverage():
+    request=(ROOT/"chrome_extension"/"content_request_v6.js").read_text("utf-8")
+    assert 'scene_finish_after_all_blocks === true' in request
+    assert 'scene_uncovered_block_count' in request
+    assert 'scene_uncovered_block_chars' in request
+    assert 'scene.changed >= 10 && scene.uncovered >= 8' in request
+    assert 'media_terminal_scene_uncovered_blocks' in request
+    assert 'mediaHandoffTerminalReady(active, generating, pageWorking)' in request
