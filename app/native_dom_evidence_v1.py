@@ -107,6 +107,23 @@ class NativeDomEvidenceStore:
         self.root=Path(data_dir)/"native_dom_evidence"
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         os.chmod(self.root,0o700)
+        self._write_count=0
+
+    def _prune(self):
+        # Bounded retention: old evidence must not consume the Worker's disk
+        # indefinitely when no administrator manually exports past requests.
+        paths=sorted(self.root.glob("req_*.json"),key=lambda p:p.stat().st_mtime)
+        now=time.time()
+        for file in paths:
+            try:
+                if now-file.stat().st_mtime>RETENTION:
+                    file.unlink(missing_ok=True)
+            except OSError:
+                pass
+        files=sorted(self.root.glob("req_*.json"),key=lambda p:p.stat().st_mtime)
+        for file in files[:-512]:
+            file.unlink(missing_ok=True)
+
     def _path(self,request_id):
         if not ID.fullmatch(request_id):raise ValueError("Invalid request ID")
         return self.root/(request_id+".json")
@@ -129,6 +146,12 @@ class NativeDomEvidenceStore:
             os.replace(tmp,path)
         finally:
             tmp.unlink(missing_ok=True)
+        self._write_count+=1
+        if self._write_count%16==0:
+            try:
+                self._prune()
+            except OSError:
+                pass
         return True
     def get(self,request_id,owner):
         path=self._path(request_id)
