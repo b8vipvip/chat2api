@@ -292,7 +292,10 @@
     const candidates=candidateButtons(scope).slice(0,12);
     let total=[...session.files.values()].reduce((sum,file)=>sum+file.bytes,0);
     for(const item of candidates) {
-      if(session.files.size>=4 || total>=MAX_TOTAL)break;
+      // Four is not a valid cap: a fourth Markdown/text card could occupy
+      // the last slot and prevent capture of a genuine ZIP displayed later.
+      // Archive accepts up to 8 files; reserve the eighth for ZIP fallback.
+      if(session.files.size>=7 || total>=MAX_TOTAL)break;
       if(session.files.has(item.filename))continue;
       const attempts=session.attempts.get(item.filename)||0;
       // A file preview may become downloadable well after the first finished
@@ -330,8 +333,15 @@
     // files are still being captured. A real ZIP always takes precedence.
     const three=[...session.files.keys()].filter(name=>/\.(?:xlsx|pptx|json)$/i.test(name));
     if(three.length===3 && !session.firstThreeAt) session.firstThreeAt=Date.now();
-    if(session.firstThreeAt && Date.now()-session.firstThreeAt>=30000
-        && ![...session.files.keys()].some(name=>/\.zip$/i.test(name))) {
+    // A 30-second wait starts only when the THIRD original is captured,
+    // not when ChatGPT finished generating. On 1c7 the authoritative reply
+    // reached its file handoff boundary already late in the request lease.
+    // Offer the real ZIP a bounded 5-second head start, then package ONLY
+    // three original verified binary bytes. Still never infer bytes from
+    // a preview card, title or model-written file path.
+    const zipReady = [...session.files.keys()].some(name=>/\.zip$/i.test(name));
+    const zipElapsed = session.firstThreeAt ? Math.max(0,Date.now()-session.firstThreeAt) : 0;
+    if(session.firstThreeAt && zipElapsed>=5000 && !zipReady) {
       const packed=fallbackZip(session);
       if(packed?.data_url && total+packed.bytes<=MAX_TOTAL) {
         session.files.set(packed.filename,packed);
@@ -354,6 +364,12 @@
       failed_types:[...session.failures.keys()],
       failure_stages:Object.fromEntries(session.failureStages),
       synthesized_zip:session.synthesizedZip===true,
+      zip_fallback_state: session.synthesizedZip===true ? "verified-originals-packaged"
+        : zipReady ? "native-zip-captured"
+        : !session.firstThreeAt ? "originals-incomplete"
+        : zipElapsed<5000 ? "waiting-native-zip"
+        : "verified-zip-fallback-unavailable",
+      zip_fallback_elapsed_ms:zipElapsed,
     };
   }
   function stats(requestId) {
