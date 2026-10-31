@@ -139,7 +139,7 @@ def test_request_history_exposes_only_pasteable_start_time_control():
     assert "rqBatchExportLogs" in source
     assert "rqBatchExportSince" in source
     assert "rqBatchExportCurrentVersion" in source
-    assert "仅合并打包导出当前版本的请求日志" in source
+    assert "自动筛选并仅导出当前版本请求日志" in source
     assert "query.set('current_version_only','true')" in source
     assert "requestHistoryParseExportSince(value)" in source
     assert "since.type='text'" in source
@@ -437,3 +437,55 @@ def test_request_logs_separate_terminal_file_snapshot_from_live_archive_status(t
             exported = json.loads(bundle.read(index["requests"][0]["filename"]))
             assert exported["generated_file_live_status"]["files"][0]["status"] == "ready"
             assert exported["request"]["response_generated_files"][0]["status"] == "processing"
+
+
+def test_current_version_checkbox_applies_table_filter_and_export_uses_applied_results():
+    source = (Path(__file__).resolve().parents[1] / "app" /
+              "request_history_v94_patch.py").read_text("utf-8")
+    # Changing only the checkbox must update the table immediately.
+    assert "versionOnly.addEventListener('change',()=>{void loadRequests();});" in source
+    assert "query.set('current_version_only','true')" in source
+    # Search/status/model/time/version share one applied predicate.
+    assert "const query=requestHistoryFilterParams();" in source
+    assert "requestHistoryAppliedFilterQuery=withoutLimit.toString()" in source
+    assert "requestHistoryAppliedFilterTotal=Number(d?.total)||0" in source
+    assert "if(requestHistoryAppliedFilterQuery!==query.toString())" in source
+    assert "const loaded=await loadRequests();" in source
+    assert "if(!loaded)throw new Error('当前筛选未成功应用，已停止导出');" in source
+    assert "'/api/admin/requests/logs/batch?'+requestHistoryAppliedFilterQuery" in source
+    assert "requestHistoryAppliedFilterTotal<1" in source
+    assert "qs.set('limit','100')" in source
+    assert "withoutLimit.delete('limit')" in source
+    assert "requestHistoryAppliedFilterQuery=null" in source
+    # Explicit display of server success versus disconnected SSE client.
+    assert "api_stream_closed_before_delivery===true" in source
+    assert "客户端断连" in source
+
+
+def test_export_api_excludes_nonmatching_search_status_model_and_sha(tmp_path: Path, monkeypatch):
+    sha = "a" * 40
+    monkeypatch.setenv("CHAT2API_BUILD_COMMIT", sha)
+    with TestClient(app_v8(tmp_path)) as client:
+        store = client.app.state.telemetry
+        for rid, name, state, model in (
+            ("req_33da", "howhub", "completed", "gpt-5.6-sol"),
+            ("req_mismatch_name", "another", "completed", "gpt-5.6-sol"),
+            ("req_mismatch_state", "howhub", "error", "gpt-5.6-sol"),
+            ("req_mismatch_model", "howhub", "completed", "gpt-6"),
+        ):
+            asyncio.run(store.upsert({"request_id":rid, "api_key_name":name,
+                "status":state, "requested_model":model,
+                "recorded_at":"2026-10-31T19:47:39+08:00"}))
+        filters={"q":"howhub", "status":"completed", "model":"gpt-5.6-sol",
+                 "since":"2026-10-31 19:47:39", "current_version_only":"true"}
+        listed=client.get("/api/admin/requests",params=filters,headers=headers())
+        assert listed.status_code==200
+        assert [r["request_id"] for r in listed.json()["data"]]==["req_33da"]
+        zipped=client.get("/api/admin/requests/logs/batch",params=filters,
+                          headers=headers())
+        assert zipped.status_code==200,zipped.text
+        with zipfile.ZipFile(io.BytesIO(zipped.content)) as archive:
+            manifest=json.loads(archive.read("index.json"))
+            assert [item["request_id"] for item in manifest["requests"]]==["req_33da"]
+            assert manifest["exported_count"]==1
+            assert manifest["selected_server_commit"]==sha

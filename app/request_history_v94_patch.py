@@ -59,13 +59,21 @@ function requestHistoryCell(tr,value,className=''){
   tr.appendChild(td);
   return td;
 }
-function requestHistoryStatusCell(tr,value,stage=''){
+function requestHistoryStatusCell(tr,value,stage='',diagnostics={}){
   const td=document.createElement('td'),span=document.createElement('span');
   const text=requestHistoryText(value);
   span.className='pill '+(text==='completed'?'ok':text==='error'?'bad':(text==='running'||text==='queued')?'warn':'');
   span.textContent=text==='queued'?'排队中':text;
   if(text==='queued')span.title=stage==='waiting-capacity'?'已选中 Worker，正在等待容量释放':'正在选择可用 Worker';
-  td.appendChild(span);tr.appendChild(td);return td;
+  td.appendChild(span);
+  if(text==='completed' && (diagnostics?.api_stream_closed_before_delivery===true
+      ||diagnostics?.api_delivery_state==='disconnected')){
+    const warning=document.createElement('small');
+    warning.textContent=' · 客户端断连';warning.className='warn';
+    warning.title='Worker 生成成功，但 HTTP/SSE 客户端在最终交付之前断开；未确认完整接收';
+    td.appendChild(warning);
+  }
+  tr.appendChild(td);return td;
 }
 function requestHistoryButton(tr,label,title,handler,enabled=true){
   const td=document.createElement('td');
@@ -422,7 +430,8 @@ function requestHistoryEnsureControls(){
     versionOnly.type='checkbox';
     versionOnly.checked=false;
     versionOnly.style.cssText='width:16px;height:16px;min-width:16px;padding:0;margin:0;cursor:pointer;accent-color:var(--accent)';
-    versionOnly.setAttribute('aria-label','仅合并打包导出当前版本的请求日志');
+    versionOnly.setAttribute('aria-label','自动筛选并仅导出当前版本请求日志');
+    versionOnly.addEventListener('change',()=>{void loadRequests();});
     versionOnly.title='按当前容器实际运行代码的 Git SHA 筛选；正式版本号相同但 SHA 不同的请求不混合';
     versionLabel.title=versionOnly.title;
     versionLabel.append(versionOnly,document.createTextNode('当前版本（Git SHA）'));
@@ -430,7 +439,7 @@ function requestHistoryEnsureControls(){
     // a provided time merely because the version checkbox is checked.
     const button=document.createElement('button');button.type='button';
     button.className='action';button.textContent='合并打包导出请求日志';
-    button.title='勾选当前版本仅导出当前运行 Git SHA 创建的留存请求；不勾选时使用其它筛选条件（最多 500 条）';
+    button.title='只导出列表筛选条件命中的全部留存请求：搜索、状态、模型、时间及当前版本 Git SHA';
     button.addEventListener('click',async()=>{
       const hasTime=Boolean(since.value.trim());
       const parsed=hasTime?requestHistoryParseExportSince(since.value):null;
@@ -442,11 +451,21 @@ function requestHistoryEnsureControls(){
       if(parsed)query.set('since',parsed.iso);
       button.disabled=true;const oldLabel=button.textContent;button.textContent='正在打包…';
       try{
-        status('正在打包当前筛选条件下的全部留存请求日志…');
+        // A ZIP must correspond to the last successful table filter. If an
+        // input changed since the last filter, reapply it before exporting.
+        if(requestHistoryAppliedFilterQuery!==query.toString()){
+          const loaded=await loadRequests();
+          if(!loaded)throw new Error('当前筛选未成功应用，已停止导出');
+        }
+        if(requestHistoryAppliedFilterQuery!==query.toString())
+          throw new Error('筛选条件在导出时已变化，请重新筛选');
+        if(requestHistoryAppliedFilterTotal<1)
+          throw new Error('当前筛选结果为空，没有可导出的请求日志');
+        status('正在打包已筛选出的 '+requestHistoryAppliedFilterTotal+' 条留存请求日志…');
         await requestHistoryDownload(
-          '/api/admin/requests/logs/batch?'+query.toString(),
-          'chat2api-request-logs-since.zip');
-        status('合并请求日志 ZIP 已下载','ok');
+          '/api/admin/requests/logs/batch?'+requestHistoryAppliedFilterQuery,
+          'chat2api-request-logs-filtered.zip');
+        status('仅包含当前筛选结果的日志 ZIP 已下载','ok');
       }catch(error){status(String(error?.message||error),'bad');}
       finally{button.disabled=false;button.textContent=oldLabel;}
     });
@@ -459,15 +478,19 @@ function requestHistoryEnsureControls(){
   }
   if(section&&!section.querySelector('[data-request-history-diagnostic-hint]')){
     const hint=document.createElement('div');hint.dataset.requestHistoryDiagnosticHint='1';hint.className='footer';
-    hint.textContent='「当前版本」按实际运行代码的完整 Git SHA 筛选，不按 v0.x 正式版本号；无可靠创建 SHA 的旧请求不会混入。列表与 ZIP 导出共用相同筛选；填写起始时间时取交集。只包含仍留存的记录，分享前请脱敏。';
+    hint.textContent='「当前版本」勾选时自动筛选实际运行 Git SHA；搜索、状态、模型、起始时间和版本条件取交集。ZIP 只打包筛选命中的全部留存请求（列表前100条，最多留存500条），不导出其它请求；分享前请脱敏。';
     section.appendChild(hint);
   }
 }
 let requestHistoryLatestLoad=0;
+let requestHistoryAppliedFilterQuery=null;
+let requestHistoryAppliedFilterTotal=0;
 async function loadRequests(){
   const sequence=++requestHistoryLatestLoad;
+  requestHistoryAppliedFilterQuery=null;
+  requestHistoryAppliedFilterTotal=0;
   const body=$('rqBody');
-  if(!body)return;
+  if(!body)return false;
   requestHistoryEnsureControls();
   // Queue is a real, persisted pre-dispatch stage and must be filterable.
   const statusFilter=$('rqStatus');
@@ -481,7 +504,7 @@ async function loadRequests(){
   const parsed=timeText?requestHistoryParseExportSince(timeText):null;
   if(timeText&&!parsed){
     status('起始时间无效：请使用 2026-10-29 10:39:31 或带时区的 ISO 格式','bad');
-    return;
+    return false;
   }
   if(parsed)qs.set('since',parsed.iso);
   qs.set('limit','100');
@@ -492,7 +515,10 @@ async function loadRequests(){
   try{
     const d=await api('/api/admin/requests?'+qs);
     // A slow previous fetch cannot overwrite the current filter results.
-    if(sequence!==requestHistoryLatestLoad)return;
+    if(sequence!==requestHistoryLatestLoad)return false;
+    const applied=d?.applied_filters||{};
+    if(Boolean(applied.current_version_only)!==(qs.get('current_version_only')==='true'))
+      throw new Error('服务端未确认当前版本筛选，拒绝导出');
     if(parsed){
       const echoed=Date.parse(d?.applied_filters?.since||'');
       if(!Number.isFinite(echoed)||echoed!==Date.parse(parsed.iso))
@@ -503,6 +529,10 @@ async function loadRequests(){
       const time=Date.parse(row?.recorded_at||'');
       return !Number.isFinite(time) || time<Date.parse(parsed.iso);
     }))throw new Error('服务端返回了早于起始时间的记录，请检查版本或刷新页面');
+    const withoutLimit=new URLSearchParams(qs);
+    withoutLimit.delete('limit');
+    requestHistoryAppliedFilterQuery=withoutLimit.toString();
+    requestHistoryAppliedFilterTotal=Number(d?.total)||0;
     const fragment=document.createDocumentFragment();
     for(const r of rows){
       const tr=document.createElement('tr');
@@ -523,7 +553,7 @@ async function loadRequests(){
       // Label legacy absence explicitly; do not fabricate an API Key or
       // claim a browser completion meant a protocol-valid success.
       requestHistoryCell(tr,r?.request_type||r?.type||(historicalRepair?'responses-repair':'-'));
-      requestHistoryStatusCell(tr,r?.status||(historicalRepair?'历史未记录':'-'),r?.diagnostics?.request_admission_stage||'');
+      requestHistoryStatusCell(tr,r?.status||(historicalRepair?'历史未记录':'-'),r?.diagnostics?.request_admission_stage||'',r?.diagnostics||{});
       requestHistoryCell(tr,r?.api_key_name||r?.key_name||(historicalRepair?'历史未记录':'-'));
       const clientId=requestHistoryText(r?.worker_client_id||r?.client_id,'');
       requestHistoryCell(tr,r?.device_name||(clientId?`未绑定 · ${clientId}`:'-'));
@@ -547,12 +577,16 @@ async function loadRequests(){
       cell.colSpan=13;cell.className='muted';cell.textContent='当前筛选条件下没有请求记录。';
       empty.appendChild(cell);body.appendChild(empty);
     }
+    return true;
   }catch(error){
-    if(sequence!==requestHistoryLatestLoad)return;
+    if(sequence!==requestHistoryLatestLoad)return false;
+    requestHistoryAppliedFilterQuery=null;
+    requestHistoryAppliedFilterTotal=0;
     body.replaceChildren();
     const failed=document.createElement('tr'),cell=document.createElement('td');
     cell.colSpan=13;cell.className='bad';cell.textContent=`请求记录加载失败：${String(error?.message||error)}`;
     failed.appendChild(cell);body.appendChild(failed);
+    return false;
   }
 }
 requestHistoryEnsureControls();
