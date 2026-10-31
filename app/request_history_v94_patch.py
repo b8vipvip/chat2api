@@ -186,12 +186,12 @@ async function requestHistoryLoadNativePreview(requestId,row,sequence){
       && new Set(candidate.indices).size===candidate.indices.length;
     const completeOrdinal=summary.media_mapping_complete===true
       && imageCount===media.length;
+    const previewAssets=completeOrdinal?assets
+      :(dimensionHint?candidate.indices.map(i=>assets[i]):[]);
     if(!snapshot?.root||snapshot.version!==1
-        ||(summary.media_mapping_complete!==true && !dimensionHint)
-        ||(Number(summary.images)!==media.length && !dimensionHint)
-        ||assets.some(u=>!u))
+        ||(!completeOrdinal && !dimensionHint)
+        ||previewAssets.length!==imageCount||previewAssets.some(u=>!u))
       throw new Error('原生快照与已归档图片未完整对应，暂时只能显示标准 API 正文');
-    const previewAssets=completeOrdinal?assets:candidate.indices.map(i=>assets[i]);
     const tree=requestHistoryNativeNode(snapshot.root,previewAssets,{count:0});
     preview.appendChild(tree);
     nativeButton.disabled=false;
