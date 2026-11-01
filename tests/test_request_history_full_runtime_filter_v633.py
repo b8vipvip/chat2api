@@ -12,9 +12,10 @@ import json
 from fastapi.testclient import TestClient
 from app.entry import app
 with TestClient(app) as client:
-    headers={"Authorization": "Bearer runtime-filter-master"}
+    login=client.post("/api/admin/auth/login", json={"username":"admin","password":"testFilterAdminStrong99!"})
+    assert login.status_code==200,login.text
     path="/api/admin/requests?since=2026-11-01T03%3A00%3A38Z&current_version_only=true&limit=100"
-    response=client.get(path,headers=headers)
+    response=client.get(path)
     payload=response.json()
     print(json.dumps({"status":response.status_code,
         "applied_filters":payload.get("applied_filters"),
@@ -27,6 +28,7 @@ with TestClient(app) as client:
         "CHAT2API_API_KEY": "runtime-filter-master",
         "CHAT2API_PAIRING_CODE": "runtime-filter-pair",
         "CHAT2API_BUILD_COMMIT": "a"*40,
+        "CHAT2API_ADMIN_PASSWORD": "testFilterAdminStrong99!",
         "CHAT2API_DATA_DIR": tempfile.mkdtemp(prefix="chat2api-filter-entry-"),
     })
     result=subprocess.run([sys.executable,"-c",code],cwd=Path(__file__).resolve().parents[1],
