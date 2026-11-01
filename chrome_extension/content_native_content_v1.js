@@ -74,11 +74,36 @@
         chars += raw.length; nodes += 1;
         return {tag:"span",text:raw};
       }
-      if (!(element instanceof Element) || ignore(element)) return null;
+      if (!(element instanceof Element)) return null;
+      const tag = element.tagName.toLowerCase();
+      // Generated-image cards are often rendered INSIDE inert-looking
+      // <button> wrappers. Discard their click action and control text, but
+      // preserve only the visible raster descendants inside this request's
+      // already-verified assistant reply scope.
+      if (tag === "button") {
+        if (element.closest?.("nav,aside,footer,header,form,[role='menu'],[role='dialog']"))
+          return null;
+        const rasters = [...(element.querySelectorAll?.("img") || [])]
+          .filter(img => {
+            const box=img.getBoundingClientRect?.();
+            return box && box.width>=40 && box.height>=40
+              && !img.closest?.("nav,aside,footer,[data-message-author-role='user']");
+          });
+        if (!rasters.length) return null;
+        const children=[];
+        for(const img of rasters.slice(0,40)){
+          const mapped=build(img,depth+1);
+          if(mapped)children.push(mapped);
+          if(truncated)break;
+        }
+        if(!children.length || truncated)return null;
+        nodes+=1;
+        return {tag:"figure",children};
+      }
+      if (ignore(element)) return null;
       const rect = element.getBoundingClientRect?.();
       const computed = getComputedStyle(element);
       if (computed.display === "none" || computed.visibility === "hidden") return null;
-      const tag = element.tagName.toLowerCase();
       let mapped = tags.has(tag) ? tag : "div";
       if (tag === "img") {
         if (!rect || rect.width < 40 || rect.height < 40) return null;
