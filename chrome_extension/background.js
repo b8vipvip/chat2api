@@ -120,6 +120,51 @@ function awaitFileChunkAck(event) {
     }
   });
 }
+// Native-rich transport is optional presentation, but must never mistake a
+// successful local WebSocket enqueue for server-side snapshot publication.
+// The ACK is tied to the original socket and the exact request/revision/chunk.
+const pendingNativeAcks = new Map();
+const nativeAckKey = event => [
+  event?.request_id, event?.revision,
+  event?.type === "chat.native.snapshot" || event?.kind === "snapshot" ? "snapshot" : "chunk",
+  event?.type === "chat.native.snapshot" || event?.kind === "snapshot" ? -1 : event?.index,
+].join(":");
+function rejectPendingNativeAcks(reason) {
+  for (const [key, row] of pendingNativeAcks) {
+    clearTimeout(row.timer);
+    pendingNativeAcks.delete(key);
+    row.resolve({ok:false,committed:false,error:reason});
+  }
+}
+function awaitNativeAck(event) {
+  if (!socketReady()) return Promise.resolve({ok:false,committed:false,error:"socket-disconnected"});
+  if (!["chat.native.snapshot","chat.native.chunk"].includes(event?.type)
+      || !String(event?.request_id || "").startsWith("req_")
+      || !Number.isInteger(event?.revision) || event.revision < 1
+      || (event.type === "chat.native.chunk"
+          && (!Number.isInteger(event.index) || event.index < 0)))
+    return Promise.resolve({ok:false,committed:false,error:"invalid-native-envelope"});
+  const key = nativeAckKey(event);
+  if (pendingNativeAcks.has(key))
+    return Promise.resolve({ok:false,committed:false,error:"native-ack-pending"});
+  const sentOn = socket;
+  return new Promise(resolve => {
+    const timer = setTimeout(() => {
+      pendingNativeAcks.delete(key);
+      resolve({ok:false,committed:false,error:"native-server-ack-timeout"});
+    }, 12000);
+    pendingNativeAcks.set(key,{resolve,timer,socket:sentOn});
+    if (sentOn !== socket || !socketReady()) {
+      clearTimeout(timer);pendingNativeAcks.delete(key);
+      resolve({ok:false,committed:false,error:"native-socket-replaced"});return;
+    }
+    try { sentOn.send(JSON.stringify(event)); }
+    catch (_) {
+      clearTimeout(timer);pendingNativeAcks.delete(key);
+      resolve({ok:false,committed:false,error:"native-send-failed"});
+    }
+  });
+}
 function socketReady() { return Boolean(socket && socket.readyState === WebSocket.OPEN); }
 async function sendSocket(payload) {
   if (!socketReady()) throw new Error("Server WebSocket is not connected");
@@ -324,6 +369,16 @@ async function connectSocket() {
   socket.onmessage = event => {
     try {
       const message = JSON.parse(event.data);
+      if (message?.type === "chat.native.ack") {
+        const key = nativeAckKey(message);
+        const pending = pendingNativeAcks.get(key);
+        if (!pending || pending.socket !== event.target) return;
+        clearTimeout(pending.timer);
+        pendingNativeAcks.delete(key);
+        pending.resolve({ok:message.ok===true,committed:message.committed===true,
+          error:String(message.error || "").slice(0,80)});
+        return;
+      }
       if (message?.type === "chat.file.chunk.ack") {
         const key = fileChunkKey(message);
         const pending = pendingFileChunkAcks.get(key);
@@ -339,6 +394,7 @@ async function connectSocket() {
   socket.onerror = () => updateState("error", "WebSocket connection error");
   socket.onclose = event => {
     rejectPendingFileChunks("socket-closed-before-server-ack");
+    rejectPendingNativeAcks("socket-closed-before-native-ack");
     clearInterval(keepAliveTimer);
     updateState("disconnected", event.reason || `WebSocket closed (${event.code})`);
     scheduleReconnect();
@@ -370,6 +426,11 @@ async function fetchAttachment(fileId) {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message.type === "chat2api.native.ack") {
+    awaitNativeAck(message.event).then(sendResponse)
+      .catch(error=>sendResponse({ok:false,committed:false,error:String(error?.message || error)}));
+    return true;
+  }
   if (message.type === "chat2api.file.chunk") {
     awaitFileChunkAck(message.event).then(sendResponse)
       .catch(error=>sendResponse({ok:false,error:String(error?.message || error)}));
