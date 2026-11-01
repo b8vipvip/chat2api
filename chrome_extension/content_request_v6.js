@@ -210,6 +210,36 @@
   }
 
 
+  // A 672KiB image handoff in fd11d1 reached chat.completed with one broken
+  // inline/staged media marker. The server correctly rejected it as unsafe,
+  // but the Worker should not declare it a verified terminal in the first
+  // place. Match the server's v173/v196 markdown marker grammar at the
+  // transaction boundary, without decoding or logging any media bytes.
+  function mediaTerminalPayloadIntegrity(text) {
+    const value = String(text || "");
+    const imageStarts = [...value.matchAll(/data:image\//gi)].map(m => m.index);
+    const imageRecognized = [...value.matchAll(
+      /!\[[^\]\r\n]{0,200}\]\((data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+)\)/gi
+    )].map(m => m.index + m[0].indexOf("data:image/"));
+    const fileStarts = [...value.matchAll(/!\[📎 /g)].map(m => m.index);
+    const fileRecognized = [...value.matchAll(
+      /!\[📎 ([^\]\r\n]{1,180})\]\((?:data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+|chat2api-staged:[a-f0-9]{32})\)/gi
+    )].map(m => m.index);
+    const imagesComplete = imageStarts.length === imageRecognized.length
+      && imageStarts.every((pos,i) => pos === imageRecognized[i]);
+    const filesComplete = fileStarts.length === fileRecognized.length
+      && fileStarts.every((pos,i) => pos === fileRecognized[i]);
+    return {
+      ok: imagesComplete && filesComplete,
+      reason: !imagesComplete ? "incomplete-image-marker"
+        : !filesComplete ? "incomplete-file-marker" : "",
+      imageMarkers: imageStarts.length,
+      validImageMarkers: imageRecognized.length,
+      fileMarkers: fileStarts.length,
+      validFileMarkers: fileRecognized.length,
+    };
+  }
+
   function conversationTurns() {
     const result = [];
     const seen = new Set();
@@ -488,6 +518,16 @@
     }
     if (event?.type === "chat.completed" && active) {
       try { await native?.capture?.(active, true); } catch (_) {}
+      // Native delivery and image identity are independent of the OpenAI
+      // terminal. Include only bounded counters/reasons in the terminal
+      // diagnostics so a single-request ZIP can explain missing snapshots.
+      event.diagnostics = {...(event.diagnostics || {}),
+        native_capture_failure:String(active.nativeCaptureFailure || "").slice(0,80),
+        native_capture_revision:Number(active.nativeRevision || 0),
+        native_chunk_complete:active.nativeChunkComplete === true,
+        native_identity_candidate_count:Number(active.nativeIdentityCandidateCount || 0),
+        native_identity_verified_count:Number(active.nativeIdentityVerifiedCount || 0),
+      };
     }
     // This separate, request-only DOM capture cannot change completion
     // authority and is delivered through the same authenticated Worker socket.
@@ -2347,6 +2387,28 @@
             imageCandidate = captured;
             imageCandidateSince = Date.now();
           } else if (Date.now() - imageCandidateSince >= 2400) {
+            const payloadIntegrity=mediaTerminalPayloadIntegrity(captured);
+            if (!payloadIntegrity.ok) {
+              // The only terminal authority stays request-v6. Leave this
+              // request running while the real page can still repair its
+              // pending media, rather than passing an unarchivable "complete".
+              if (!active.mediaIntegrityLastReportAt
+                  || Date.now()-active.mediaIntegrityLastReportAt>=8000) {
+                active.mediaIntegrityLastReportAt=Date.now();
+                await diagnostic(active,"media-terminal-payload-incomplete",{
+                  media_terminal_integrity:"retry",
+                  media_terminal_integrity_reason:payloadIntegrity.reason,
+                  media_terminal_image_markers:payloadIntegrity.imageMarkers,
+                  media_terminal_valid_image_markers:payloadIntegrity.validImageMarkers,
+                  media_terminal_file_markers:payloadIntegrity.fileMarkers,
+                  media_terminal_valid_file_markers:payloadIntegrity.validFileMarkers,
+                  // No image strings, bearer URLs, Base64 or raw DOM evidence.
+                });
+              }
+              imageCandidate="";
+              imageCandidateSince=0;
+              continue;
+            }
             responseStarted = await ensureResponseStarted(active, responseStarted, "verified-media-dom-v176");
             await emit({
               type: "chat.completed",
