@@ -40,7 +40,23 @@ def _install_request_route_stability(app: FastAPI, telemetry: Any) -> None:
             # Keep its original FastAPI dependency bindings and query contract.
             original_requests = route.dependant.call
             async def stable_admin_requests(**kwargs: Any) -> dict[str, Any]:
-                result = await _maybe_await(original_requests(**kwargs))
+                if inspect.iscoroutinefunction(telemetry.query):
+                    # Historical v92 still supports an async TelemetryStore
+                    # paired with an old sync-unpacking route. Avoid invoking
+                    # that broken legacy endpoint; the modern production query
+                    # is synchronous and always uses the complete canonical
+                    # endpoint instead, including since + Git SHA scope.
+                    raw = await telemetry.query(
+                        limit=int(kwargs.get("limit", 50)),
+                        offset=int(kwargs.get("offset", 0)),
+                        status=kwargs.get("status_filter"),
+                        model=kwargs.get("model"),
+                        key_id=kwargs.get("key_id"), q=kwargs.get("q"),
+                    )
+                    summary = await _maybe_await(telemetry.summary())
+                    result = {**raw, "summary": summary}
+                else:
+                    result = await _maybe_await(original_requests(**kwargs))
                 if not isinstance(result, dict):
                     raise HTTPException(status_code=500, detail="Request history query returned an invalid result")
                 return result
@@ -54,7 +70,12 @@ def _install_request_route_stability(app: FastAPI, telemetry: Any) -> None:
             # status checks (processing/ready/failed), not just its stored row.
             original_detail = route.dependant.call
             async def stable_admin_request_detail(**kwargs: Any) -> dict[str, Any]:
-                row = await _maybe_await(original_detail(**kwargs))
+                if inspect.iscoroutinefunction(telemetry.get):
+                    row = await telemetry.get(str(kwargs.get("request_id") or ""))
+                else:
+                    row = await _maybe_await(original_detail(**kwargs))
+                if not row:
+                    raise HTTPException(status_code=404, detail="Request record not found")
                 if not isinstance(row, dict):
                     raise HTTPException(status_code=500, detail="Request history detail returned an invalid result")
                 return row
