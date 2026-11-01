@@ -523,6 +523,8 @@
       // diagnostics so a single-request ZIP can explain missing snapshots.
       event.diagnostics = {...(event.diagnostics || {}),
         native_capture_failure:String(active.nativeCaptureFailure || "").slice(0,80),
+        native_transport_ack_error:String(active.nativeTransportAckError || "").slice(0,80),
+        native_structural_failure:String(active.nativeStructuralFailure || "").slice(0,60),
         native_capture_revision:Number(active.nativeRevision || 0),
         native_chunk_complete:active.nativeChunkComplete === true,
         native_identity_candidate_count:Number(active.nativeIdentityCandidateCount || 0),

@@ -32,7 +32,7 @@ const node=new Element("DIV",[text,img]);
 const ctx={Element,Node:{TEXT_NODE:3},Date,setTimeout,clearTimeout,TextEncoder,
  getComputedStyle:()=>({display:"flex",visibility:"visible",flexDirection:"row",
     gap:"8px",color:"rgb(0, 0, 0)",backgroundImage:"url(https://secret.example/token)"}),
- chrome:{runtime:{sendMessage:async m=>{sent.push(m);return {ok:true}}}},
+ chrome:{runtime:{sendMessage:async m=>{sent.push(m);return {ok:true,committed:true}}}},
 };
 runInNewContext(code,ctx);
 const capture=ctx.__CHAT2API_NATIVE_CONTENT_V1__;
@@ -56,7 +56,7 @@ const scopeNode=new Element("DIV",[
 ]);
 const scopedCtx={...ctx,__CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{
   replyRoots:()=>({scope:"roleless_reply_siblings",roots:[scopeNode],boundary:"end_of_reply_parent"})
-},chrome:{runtime:{sendMessage:async m=>{scopedSent.push(m);return {ok:true};}}}};
+},chrome:{runtime:{sendMessage:async m=>{scopedSent.push(m);return {ok:true,committed:true};}}}};
 delete scopedCtx.__CHAT2API_NATIVE_CONTENT_V1__;
 runInNewContext(code,scopedCtx);
 const scopedCandidate=scopeNode.childNodes[0];
@@ -76,7 +76,7 @@ const verifiedSent=[];
 const verifiedCtx={...ctx,__CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{
   replyRoots:()=>({scope:"verified_reply_container",
     roots:[scopeNode],boundary:"same_request_verified_finish_action"}),
-},chrome:{runtime:{sendMessage:async msg=>{verifiedSent.push(msg);return {ok:true}}}}};
+},chrome:{runtime:{sendMessage:async msg=>{verifiedSent.push(msg);return {ok:true,committed:true}}}}};
 delete verifiedCtx.__CHAT2API_NATIVE_CONTENT_V1__;
 runInNewContext(code,verifiedCtx);
 await verifiedCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture({
@@ -86,6 +86,44 @@ await verifiedCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture({
 assert.equal(verifiedSent.length,1);
 assert.equal(verifiedSent[0].event.snapshot.root.children[0].children.length,3);
 assert.equal(verifiedSent[0].event.snapshot.root.children[0].children[1].media_index,0);
+
+// Browser computed styles may pass more than the server's 32-key safe limit.
+// Preserve color/grid first and ensure a safe snapshot is still published.
+const styleCtx={...ctx,getComputedStyle:()=>({
+  display:"grid",gridTemplateColumns:"1fr 1fr",flexDirection:"row",
+  flexWrap:"nowrap",justifyContent:"start",alignItems:"center",
+  objectFit:"cover",textAlign:"center",fontWeight:"700",whiteSpace:"pre-wrap",
+  wordBreak:"break-word",overflowWrap:"anywhere",verticalAlign:"middle",
+  textDecorationLine:"underline",borderStyle:"solid",alignSelf:"auto",
+  justifySelf:"auto",color:"#123456",backgroundColor:"#abcdef",
+  borderColor:"#654321",gap:"8px",rowGap:"8px",columnGap:"8px",
+  padding:"8px",marginTop:"8px",marginBottom:"8px",marginLeft:"8px",
+  marginRight:"8px",width:"120px",minWidth:"10px",maxWidth:"200px",
+  height:"90px",minHeight:"10px",maxHeight:"190px",borderRadius:"4px",
+  borderWidth:"1px",letterSpacing:"1px",fontSize:"16px",lineHeight:"20px",
+})};
+delete styleCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,styleCtx);
+const styleTree=styleCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_stylebudget12345",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[{nodeType:3,nodeValue:"styled"}]),
+});
+assert.ok(styleTree);
+assert.ok(Object.keys(styleTree.root.style).length<=32);
+assert.equal(styleTree.root.style.color,"#123456");
+assert.equal(styleTree.root.style.backgroundColor,"#abcdef");
+assert.equal(styleTree.root.style.gridTemplateColumns,"1fr 1fr");
+
+// Enqueue-only ACK must NOT claim that a native snapshot is durable.
+const pendingCtx={...ctx,chrome:{runtime:{sendMessage:async()=>({ok:true})}}};
+delete pendingCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,pendingCtx);
+const pendingActive={requestId:"req_ackmissing123456",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[{nodeType:3,nodeValue:"safe text"}])};
+await pendingCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture(pendingActive,true);
+assert.equal(pendingActive.nativeCaptureFailure,"native-transport-incomplete");
+assert.equal(pendingActive.nativeRevision,undefined);
+assert.equal(pendingActive.nativeChunkComplete,false);
 
 await capture.capture(active,false);
 assert.equal(sent.length,1);

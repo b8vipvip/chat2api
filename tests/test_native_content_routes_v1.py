@@ -25,8 +25,7 @@ def test_native_sidecar_is_authenticated_and_independent_of_terminal(tmp_path: P
         out = client.get(f"/v1/native-content/{rid}", headers=auth)
         assert out.status_code == 200
         assert out.json()["root"]["children"][1] == {"tag": "img", "media_index": 0}
-        assert out.json()["assets"] == [
-            "https://media.example.com/api/media/med_12345678/tokenABC12345678"]
+        assert out.json()["assets"] == []  # No source SHA; cannot claim identity.
         stream = client.get(f"/v1/native-content/{rid}/events", headers=auth)
         assert stream.status_code == 200
         assert "event: native.snapshot" in stream.text
@@ -54,8 +53,7 @@ def test_verified_owned_url_takes_priority_over_original_source(tmp_path: Path):
         response = client.get(f"/v1/native-content/{rid}",
                               headers={"Authorization": "Bearer test-key"})
         assert response.status_code == 200
-        assert response.json()["assets"] == [
-            "https://media.example.com/api/media/med_owned12345/assetTOKEN1234567"]
+        assert response.json()["assets"] == []  # Owning the URL alone does not prove DOM image identity.
 
 
 def test_media_ready_updates_same_native_revision():
@@ -396,7 +394,7 @@ def test_native_v1_reorders_only_unique_owned_dimension_subset(tmp_path):
         headers={"Authorization":"Bearer test-key"}
         reply=client.get(f"/v1/native-content/{rid}",headers=headers)
         assert reply.status_code==200
-        assert reply.json()["assets"] == [urls[3],urls[1]]
+        assert reply.json()["assets"] == []  # Unique dimensions are still not pixel identity.
         assert reply.json()["root"]["children"]==[
             {"tag":"img","media_index":0},{"tag":"img","media_index":1}]
         assert reply.json()["image_asset_candidates"]=={
@@ -405,8 +403,7 @@ def test_native_v1_reorders_only_unique_owned_dimension_subset(tmp_path):
         streamed=client.get(f"/v1/native-content/{rid}/events",headers=headers)
         assert streamed.status_code==200
         assert 'event: native.snapshot' in streamed.text
-        assert urls[3] in streamed.text and urls[1] in streamed.text
-        assert urls[0] not in streamed.text and urls[2] not in streamed.text
+        assert all(url not in streamed.text for url in urls)
         # Same valid owner and request, but an ambiguous dimension must fail
         # closed instead of returning an ordinal guess.
         row=app.state.telemetry.get(rid)

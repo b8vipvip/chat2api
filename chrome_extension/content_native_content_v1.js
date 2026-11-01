@@ -32,10 +32,22 @@
   const length = /^(?:0|\d{1,4}(?:\.\d{1,2})?(?:px|rem|%))$/;
   const color = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s]+\))$/i;
   const grid = /^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$/;
-  const cssList = [...Object.keys(styleKeys),...allowedLength,"color","backgroundColor","borderColor","gridTemplateColumns"];
+  // Server validates at most 32 style keys per element. Chromium may emit
+  // more, so prioritize actual visual styling before optional dimensions.
+  const cssList = [...new Set([
+    "display","gridTemplateColumns","flexDirection","flexWrap",
+    "justifyContent","alignItems","objectFit","textAlign",
+    "color","backgroundColor","borderColor","fontWeight",
+    "fontSize","lineHeight","whiteSpace","wordBreak","overflowWrap",
+    "gap","rowGap","columnGap","padding","marginTop","marginBottom",
+    "marginLeft","marginRight","width","minWidth","maxWidth",
+    "height","minHeight","maxHeight","borderRadius","borderWidth",
+    ...Object.keys(styleKeys),...allowedLength,
+  ])];
   function safeStyle(element) {
     const css = getComputedStyle(element), obj = {};
     for (const key of cssList) {
+      if (Object.keys(obj).length >= 32) break;
       const value = String(css[key] || "").trim();
       if (styleKeys[key]?.includes(value) ||
           allowedLength.has(key) && value.length <= 16 && length.test(value) ||
@@ -47,9 +59,13 @@
     return obj;
   }
   function snapshot(active) {
+    if (active) active.nativeStructuralFailure = "";
     if (!active?.submitStartedAt || typeof Element === "undefined") return null;
     const candidate = active.lastCandidateNode;
-    if (!(candidate instanceof Element) || !candidate.isConnected) return null;
+    if (!(candidate instanceof Element) || !candidate.isConnected) {
+      active.nativeStructuralFailure = "reply-candidate-unavailable";
+      return null;
+    }
     const reply = candidate.closest?.("[data-message-author-role='assistant'],[data-testid^='conversation-turn']")
       || candidate;
     if (reply.matches?.("[data-message-author-role='user']") || reply.closest?.("nav,aside")) return null;
@@ -61,6 +77,7 @@
     const ignore = element => element.matches?.(banned) || !!element.closest?.("nav,aside,footer");
     const build = (element, depth) => {
       if (depth > 24 || nodes >= 30000) {
+        active.nativeStructuralFailure = depth > 24 ? "max-depth" : "max-nodes";
         truncated = true;
         return null;
       }
@@ -68,6 +85,7 @@
         const raw = String(element.nodeValue || "");
         if (!raw.trim()) return null;
         if (chars + raw.length > textBudget) {
+          active.nativeStructuralFailure = "max-text";
           truncated = true;
           return null;
         }
@@ -108,6 +126,7 @@
       if (tag === "img") {
         if (!rect || rect.width < 40 || rect.height < 40) return null;
         if (images >= 40) {
+          active.nativeStructuralFailure = "max-images";
           truncated = true;
           return null;
         }
@@ -127,6 +146,7 @@
       const children = [];
       for (const child of element.childNodes) {
         if (nodes >= 30000 || children.length >= 160) {
+          active.nativeStructuralFailure = nodes >= 30000 ? "max-nodes" : "max-children";
           truncated = true;
           break;
         }
@@ -164,14 +184,18 @@
     // A partially serialized tree would silently replace the complete
     // canonical Markdown in MV3C. Reject it rather than publish a lie.
     // The standard OpenAI response continues unaffected.
-    if (!root || truncated) return null;
+    if (!root || truncated) {
+      if (!active.nativeStructuralFailure)
+        active.nativeStructuralFailure = "no-safe-complete-reply-root";
+      return null;
+    }
     return {version:1,revision:(active.nativeRevision || 0) + 1,root};
   }
 
   const MAX_RAW_BYTES = 6 * 1024 * 1024;
   const CHUNK_BYTES = 64 * 1024;
-  // Every content chunk is independently bounded; the server commits only
-  // after all chunks from one request/revision/hash have been verified.
+  // Every chunk must receive the server's own ACK, not just a local socket
+  // enqueue. The final ACK must also confirm a committed, validated tree.
   async function deliverChunks(active, tree, bytes, final) {
     if (!globalThis.crypto?.subtle || !globalThis.btoa) return false;
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
@@ -181,15 +205,18 @@
     for (let index = 0; index < count; index++) {
       const slice = bytes.subarray(index * CHUNK_BYTES,(index + 1) * CHUNK_BYTES);
       const data = btoa(String.fromCharCode(...slice));
-      const reply = await chrome.runtime.sendMessage({type:"chat2api.event",event:{
+      const reply = await chrome.runtime.sendMessage({type:"chat2api.native.ack",event:{
         type:"chat.native.chunk",request_id:active.requestId,revision:tree.revision,
         index,count,byte_length:bytes.length,sha256,data,
       }});
-      if (reply?.ok !== true) return false;
+      if (reply?.ok !== true || (index === count - 1 && reply?.committed !== true)) {
+        active.nativeTransportAckError = String(reply?.error || "native-chunk-not-committed").slice(0,80);
+        return false;
+      }
       // Do not let the page's old reply be replaced by a partial generation.
       if (active.requestId !== tree.requestId && tree.requestId) return false;
     }
-    active.nativeChunkComplete = true;
+    active.nativeChunkComplete = true; // Last chunk was validated and published by server.
     return true;
   }
 
@@ -288,11 +315,15 @@
           (active.nativeHeavySnapshot ? 6500 : 900)) return;
     active.nativeTransferInFlight = true;
     active.nativeLastAt = now;
+    // An earlier incremental revision is not proof that the final DOM tree
+    // was committed. Avoid exporting stale true when final capture fails.
+    if (final) active.nativeChunkComplete = false;
     try {
       if (final) await resolveImageIdentities(active);
       const tree = snapshot(active);
       if (!tree) {
-        active.nativeCaptureFailure = "structural-limit-or-no-verified-reply";
+        active.nativeCaptureFailure = "structural-" +
+          String(active.nativeStructuralFailure || "unavailable").slice(0,60);
         return;
       }
       const hash = JSON.stringify(tree.root);
@@ -304,12 +335,19 @@
         return;
       }
       active.nativeHeavySnapshot = bytes.byteLength > 640000;
+      active.nativeChunkComplete = false;
+      active.nativeTransportAckError = "";
       const transmit = async () => {
         if (bytes.byteLength <= 900000) {
-          const reply = await chrome.runtime.sendMessage({type:"chat2api.event",event:{
+          const reply = await chrome.runtime.sendMessage({type:"chat2api.native.ack",event:{
             type:"chat.native.snapshot",request_id:active.requestId,snapshot:tree,
           }});
-          return reply?.ok === true;
+          if (reply?.ok === true && reply?.committed === true) {
+            active.nativeChunkComplete = true;
+            return true;
+          }
+          active.nativeTransportAckError = String(reply?.error || "native-snapshot-not-committed").slice(0,80);
+          return false;
         }
         return deliverChunks(active,tree,bytes,final);
       };
@@ -318,6 +356,7 @@
         active.nativeLastHash = hash;
         active.nativeRevision = tree.revision;
         active.nativeCaptureFailure = "";
+        active.nativeTransportAckError = "";
       } else {
         active.nativeCaptureFailure = "native-transport-incomplete";
       }
