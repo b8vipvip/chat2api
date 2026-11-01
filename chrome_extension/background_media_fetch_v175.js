@@ -93,6 +93,43 @@
     return true;
   });
 
+  // P2 identity proof: a ChatGPT page can ask for the digest of a trusted
+  // raster it is actually displaying. Never return bytes or source URLs;
+  // never follow redirects or send cookies/credentials.
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type !== "chat2api.media.hash-v2") return false;
+    let senderHost = "";
+    try { senderHost = new URL(String(sender?.url || "")).hostname.toLowerCase(); }
+    catch (_) {}
+    const url = trustedUrl(message.url);
+    if (!SOURCE_HOSTS.has(senderHost) || !sender?.tab?.id || !url) {
+      sendResponse({ok:false,error:"untrusted-image-identity-source"});
+      return false;
+    }
+    (async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6500);
+      try {
+        const response = await fetch(url.toString(), {
+          method:"GET", credentials:"omit", redirect:"error", signal:controller.signal,
+        });
+        const size = Number(response.headers.get("content-length") || 0);
+        const mime = String(response.headers.get("content-type") || "")
+          .split(";")[0].trim().toLowerCase();
+        if (!response.ok || !SAFE_TYPES.has(mime) || size > MAX_BYTES)
+          throw new Error("unusable-raster");
+        const bytes = await response.arrayBuffer();
+        if (!bytes.byteLength || bytes.byteLength > MAX_BYTES)
+          throw new Error("raster-size-limit");
+        const digest = new Uint8Array(await crypto.subtle.digest("SHA-256",bytes));
+        sendResponse({ok:true,sha256:[...digest].map(x=>x.toString(16).padStart(2,"0")).join(""),
+                      bytes:bytes.byteLength});
+      } catch (_) { sendResponse({ok:false,error:"identity-bytes-unavailable"}); }
+      finally { clearTimeout(timer); }
+    })();
+    return true;
+  });
+
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type !== "chat2api.media.fetch-v175") return false;
     // This is a narrow, read-only media transport, not a general URL proxy.
@@ -143,4 +180,5 @@
     })();
     return true;
   });
+
 })();

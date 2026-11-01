@@ -13,7 +13,7 @@ def test_request_dialog_has_explicit_native_preview_switch():
     assert '@app.get("/api/admin/requests/{request_id}/native-content", dependencies=[Depends(require_admin_key)])' in SERVER
 
 def test_unmapped_images_fail_closed_to_canonical_markdown():
-    assert '(!completeOrdinal && !dimensionHint)' in SOURCE
+    assert '(!verifiedHash && !completeOrdinal && !dimensionHint)' in SOURCE
     assert 'previewAssets.length!==imageCount' in SOURCE
     assert 'requestHistoryNativeNode(snapshot.root,previewAssets,{count:0})' in SOURCE
     assert "completeOrdinal=summary.media_mapping_complete===true" in SOURCE
@@ -80,9 +80,9 @@ def test_unique_dimension_preview_is_explicitly_unverified_and_fail_closed():
     assert "unique-dimensions-unverified" in SOURCE
     assert "new Set(candidate.indices).size===candidate.indices.length" in SOURCE
     assert "未验证内容哈希" in SOURCE
-    assert "const previewAssets=completeOrdinal?assets" in SOURCE
+    assert "const previewAssets=verifiedHash?candidate.indices.map(i=>assets[i])" in SOURCE
     assert "candidate.indices.map(i=>assets[i])" in SOURCE
-    assert "native_unique_dimension_candidates(" in SERVER
+    assert "native_image_identity_candidates(" in SERVER
 
 
 def test_only_selected_native_image_assets_must_be_valid():
@@ -135,3 +135,11 @@ def test_17b4_admin_renderer_accepts_4000_nodes_but_not_30001():
         ["node", "-e", js], cwd=ROOT, capture_output=True, text=True, timeout=20
     )
     assert result.returncode==0,result.stderr+result.stdout
+
+
+def test_sha256_verified_images_take_priority_over_ordinal_and_dimensions():
+    assert "candidate?.status==='verified-sha256'" in SOURCE
+    assert "candidate?.status==='identity-incomplete'" in SOURCE
+    assert "图片与归档原始字节 SHA256 已逐张一致" in SOURCE
+    assert "图片按归档顺序展示，身份尚未全部验证" in SOURCE
+    assert "source_sha256" in (ROOT/"app"/"native_content_v1.py").read_text("utf-8")
