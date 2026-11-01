@@ -33,22 +33,28 @@ def _install_request_route_stability(app: FastAPI, telemetry: Any) -> None:
         if route.path == "/api/admin/requests":
             if getattr(route.dependant.call, "__chat2api_request_stability_v92__", False):
                 continue
+            # Delegate to the authoritative route; the underlying Telemetry
+            # Store is already decorated with device identities. A previous
+            # stability wrapper reimplemented the query and silently DROPPED
+            # since/current_version_only and their applied-filter echoes.
+            # Keep its original FastAPI dependency bindings and query contract.
+            original_requests = route.dependant.call
             async def stable_admin_requests(**kwargs: Any) -> dict[str, Any]:
-                result = await _maybe_await(telemetry.query(limit=int(kwargs.get("limit", 50)), offset=int(kwargs.get("offset", 0)), status=kwargs.get("status_filter"), model=kwargs.get("model"), key_id=kwargs.get("key_id"), q=kwargs.get("q")))
+                result = await _maybe_await(original_requests(**kwargs))
                 if not isinstance(result, dict):
                     raise HTTPException(status_code=500, detail="Request history query returned an invalid result")
-                summary = await _maybe_await(telemetry.summary())
-                return {**result, "summary": summary if isinstance(summary, dict) else {}}
+                return result
             stable_admin_requests.__chat2api_request_stability_v92__ = True
             route.dependant.call = stable_admin_requests
             route.endpoint = stable_admin_requests
         elif route.path == "/api/admin/requests/{request_id}":
             if getattr(route.dependant.call, "__chat2api_request_stability_v92__", False):
                 continue
+            # Preserve the original detail endpoint's live generated-file
+            # status checks (processing/ready/failed), not just its stored row.
+            original_detail = route.dependant.call
             async def stable_admin_request_detail(**kwargs: Any) -> dict[str, Any]:
-                row = await _maybe_await(telemetry.get(str(kwargs.get("request_id") or "")))
-                if not row:
-                    raise HTTPException(status_code=404, detail="Request record not found")
+                row = await _maybe_await(original_detail(**kwargs))
                 if not isinstance(row, dict):
                     raise HTTPException(status_code=500, detail="Request history detail returned an invalid result")
                 return row
