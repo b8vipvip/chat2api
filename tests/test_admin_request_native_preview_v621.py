@@ -90,3 +90,46 @@ def test_only_selected_native_image_assets_must_be_valid():
     assert "previewAssets.some(u=>!u)" in SOURCE
     assert "assets.some(u=>!u)" not in SOURCE
     assert "previewAssets.length!==imageCount" in SOURCE
+
+
+def test_17b4_admin_renderer_accepts_4000_nodes_but_not_6401():
+    """Run the exact served renderer in Node, not a separately mocked limit."""
+    import subprocess
+    import json
+    renderer = SOURCE.split("function requestHistoryNativeNode(", 1)[1].split(
+        "async function requestHistoryLoadNativePreview(", 1
+    )[0]
+    js = """
+    const assert=require('node:assert/strict');
+    const requestHistoryNativeTags=new Set('div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br'.split(' '));
+    const requestHistoryNativeStyles=new Set('display flexDirection flexWrap justifyContent alignItems objectFit textAlign fontWeight gap padding marginTop marginBottom width maxWidth height borderRadius fontSize lineHeight color backgroundColor gridTemplateColumns'.split(' '));
+    const document={createElement(tag){return {tag,children:[],style:{},
+       appendChild(c){this.children.push(c)}};}};
+    function requestHistoryNativeNode("""
+    js += renderer
+    js += """
+    const safe={
+      tag:'div',
+      children:Array.from({length:50},(_,g)=>({
+        tag:'div',children:Array.from({length:80},(_,n)=>({tag:'span',text:g+'-'+n}))
+      }))
+    };
+    const budget={count:0};
+    const rendered=requestHistoryNativeNode(safe,[],budget);
+    assert.ok(budget.count>3200 && budget.count<6400,budget.count);
+    assert.equal(rendered.children.length,50);
+    assert.equal(rendered.children[49].children[79].textContent,'49-79');
+
+    const overflow={
+      tag:'div',
+      children:Array.from({length:82},()=>({
+        tag:'div',children:Array.from({length:80},()=>({tag:'span',text:'x'}))
+      }))
+    };
+    assert.throws(()=>requestHistoryNativeNode(overflow,[],{count:0}),/原生快照结构无效/);
+    console.log('Admin native renderer: 4k accepted, >6400 rejected');
+    """
+    result=subprocess.run(
+        ["node", "-e", js], cwd=ROOT, capture_output=True, text=True, timeout=20
+    )
+    assert result.returncode==0,result.stderr+result.stdout
