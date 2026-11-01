@@ -459,18 +459,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # layout images have one unique dimension match. With no safe mapping,
         # supply zero image URLs and let the consumer fall back to Markdown.
         candidates = native_image_identity_candidates(snapshot, asset_metadata)
-        ordinal = native_layout_summary(snapshot, len(assets))["media_mapping_complete"]
         if candidates["status"] == "verified-sha256":
             visible_assets = [assets[index] for index in candidates["indices"]]
         elif candidates["status"] == "identity-incomplete":
             # A partial/contradictory byte proof cannot be replaced by a
             # dimension or ordinal guess, even when counts happen to match.
             visible_assets = []
-        elif ordinal:
-            visible_assets = assets
-        elif candidates["status"] == "unique-dimensions-unverified":
-            visible_assets = [assets[index] for index in candidates["indices"]]
         else:
+            # Ordinal/dimension equality cannot prove original image byte
+            # identity. Never inject a potentially wrong asset into the v1
+            # layout; retain canonical Markdown until every raster is proven.
             visible_assets = []
         result = {**snapshot, "root": native_public_v1_tree(snapshot["root"]),
                   "assets": visible_assets, "files": files,
@@ -2220,36 +2218,57 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         except (ValueError, TypeError, OSError):
                             logger.info("Worker native DOM evidence rejected request=%s", request_id)
                     continue
-                if message_type == "chat.native.chunk" and request_id:
-                    # The authenticated request owner + exact socket and
-                    # assembler SHA gate are all mandatory. Only an entire
-                    # validated tree becomes visible via native_content.
+                if message_type in {"chat.native.chunk", "chat.native.snapshot"} and request_id:
+                    # Sidecar-only transport ACK: a local socket.send never
+                    # proves that the server authenticated, validated or
+                    # published this revision. No new Broker terminal owner.
                     active_state = broker.requests.get(request_id)
                     row = telemetry.get(request_id) or {}
                     owner = str(row.get("api_key_id") or "")
-                    if (active_state and active_state.client_id == client_id
-                            and registry.sockets.get(client_id) is websocket and owner):
+                    accepted, committed = False, False
+                    reason = "request-or-socket-not-active"
+                    authorized = (
+                        active_state is not None
+                        and active_state.client_id == client_id
+                        and registry.sockets.get(client_id) is websocket
+                        and bool(owner)
+                    )
+                    if authorized:
                         try:
-                            payload = {key: message.get(key) for key in
-                                       ("revision", "index", "count",
-                                        "byte_length", "sha256", "data")}
-                            native_chunks.ingest(request_id, owner, payload)
+                            if message_type == "chat.native.chunk":
+                                payload = {key: message.get(key) for key in (
+                                    "revision", "index", "count", "byte_length",
+                                    "sha256", "data")}
+                                committed = native_chunks.ingest(request_id, owner, payload)
+                            else:
+                                committed = native_content.publish(
+                                    request_id, owner, message.get("snapshot"))
+                            accepted = True
+                            reason = ""
+                            if committed:
+                                active_state.diagnostics["native_snapshot_received_revision"] = (
+                                    message.get("revision") if message_type == "chat.native.chunk"
+                                    else (message.get("snapshot") or {}).get("revision")
+                                )
+                                active_state.diagnostics["native_snapshot_server_committed"] = True
                         except (ValueError, TypeError) as error:
-                            logger.info("Native chunk rejected request=%s reason=%s",
-                                        request_id, type(error).__name__)
-                    continue
-                if message_type == "chat.native.snapshot" and request_id:
-                    # Read-only observer from the authenticated current Worker.
-                    # Never broker.publish, never set a terminal, never log the tree.
-                    active_state = broker.requests.get(request_id)
-                    row = telemetry.get(request_id) or {}
-                    owner = str(row.get("api_key_id") or "")
-                    if (active_state and active_state.client_id == client_id
-                            and registry.sockets.get(client_id) is websocket and owner):
-                        try:
-                            native_content.publish(request_id, owner, message.get("snapshot"))
-                        except (ValueError, TypeError):
-                            pass
+                            # Do not send exception details or raw DOM/media.
+                            reason = "native-validation-rejected"
+                            active_state.diagnostics["native_sidecar_rejection"] = type(error).__name__
+                            logger.info("Native sidecar rejected request=%s kind=%s reason=%s",
+                                        request_id, message_type, type(error).__name__)
+                    await websocket.send_json({
+                        "type": "chat.native.ack",
+                        "kind": "chunk" if message_type == "chat.native.chunk" else "snapshot",
+                        "request_id": request_id,
+                        "revision": message.get("revision") if message_type == "chat.native.chunk"
+                                    else (message.get("snapshot") or {}).get("revision")
+                                         if isinstance(message.get("snapshot"), dict) else None,
+                        "index": message.get("index") if message_type == "chat.native.chunk" else -1,
+                        "ok": accepted,
+                        "committed": bool(committed),
+                        "error": reason,
+                    })
                     continue
                 if message_type == "probe.event" and request_id:
                     # Existing authenticated socket and broker are the sole
