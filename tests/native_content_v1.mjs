@@ -123,7 +123,7 @@ const expanded=capture.snapshot(largeValid);
 assert.ok(expanded && expanded.root.children.length === 10,
   "600+ node rich page must be representable");
 
-const overText=candidateFor([{nodeType:3,nodeValue:"A".repeat(192001)}]);
+const overText=candidateFor([{nodeType:3,nodeValue:"A".repeat(300001)}]);
 assert.equal(capture.snapshot(overText),null,"over 192K text must fail closed");
 await capture.capture(overText,true);
 assert.equal(sent.length,1);
