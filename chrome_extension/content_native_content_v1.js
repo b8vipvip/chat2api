@@ -32,10 +32,22 @@
   const length = /^(?:0|\d{1,4}(?:\.\d{1,2})?(?:px|rem|%))$/;
   const color = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s]+\))$/i;
   const grid = /^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$/;
-  const cssList = [...Object.keys(styleKeys),...allowedLength,"color","backgroundColor","borderColor","gridTemplateColumns"];
+  // Server validates at most 32 style keys per element. Chromium may emit
+  // more, so prioritize actual visual styling before optional dimensions.
+  const cssList = [...new Set([
+    "display","gridTemplateColumns","flexDirection","flexWrap",
+    "justifyContent","alignItems","objectFit","textAlign",
+    "color","backgroundColor","borderColor","fontWeight",
+    "fontSize","lineHeight","whiteSpace","wordBreak","overflowWrap",
+    "gap","rowGap","columnGap","padding","marginTop","marginBottom",
+    "marginLeft","marginRight","width","minWidth","maxWidth",
+    "height","minHeight","maxHeight","borderRadius","borderWidth",
+    ...Object.keys(styleKeys),...allowedLength,
+  ])];
   function safeStyle(element) {
     const css = getComputedStyle(element), obj = {};
     for (const key of cssList) {
+      if (Object.keys(obj).length >= 32) break;
       const value = String(css[key] || "").trim();
       if (styleKeys[key]?.includes(value) ||
           allowedLength.has(key) && value.length <= 16 && length.test(value) ||
