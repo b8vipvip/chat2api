@@ -516,15 +516,28 @@ async function loadRequests(){
     const d=await api('/api/admin/requests?'+qs);
     // A slow previous fetch cannot overwrite the current filter results.
     if(sequence!==requestHistoryLatestLoad)return false;
-    const applied=d?.applied_filters||{};
-    if(Boolean(applied.current_version_only)!==(qs.get('current_version_only')==='true'))
-      throw new Error('服务端未确认当前版本筛选，拒绝导出');
-    if(parsed){
-      const echoed=Date.parse(d?.applied_filters?.since||'');
-      if(!Number.isFinite(echoed)||echoed!==Date.parse(parsed.iso))
-        throw new Error('服务端没有确认起始时间筛选，拒绝展示旧记录');
-    }
+    const applied=d?.applied_filters;
+    const versionRequested=qs.get('current_version_only')==='true';
     const rows=Array.isArray(d?.data)?d.data:[];
+    // "applied_filters" is additive metadata: some production wrappers omit
+    // the echo even while the underlying telemetry.query really filtered.
+    // An absent echo must not turn a correctly filtered table into an error.
+    // Explicit contradictory metadata or mismatched returned rows still fail.
+    if(applied && Object.hasOwn(applied,'current_version_only') &&
+        applied.current_version_only!==versionRequested)
+      throw new Error('服务端返回了不一致的当前版本条件');
+    if(versionRequested){
+      const sha=String(d?.current_version_commit||'');
+      if(!/^[a-f0-9]{40}$/i.test(sha))
+        throw new Error('服务端未提供可核验的当前版本 Git SHA');
+      if(rows.some(row=>String(row?.request_server_commit||'')!==sha))
+        throw new Error('服务端返回了非当前版本的记录，已拒绝展示和导出');
+    }
+    if(parsed && applied?.since){
+      const echoed=Date.parse(applied.since);
+      if(!Number.isFinite(echoed)||echoed!==Date.parse(parsed.iso))
+        throw new Error('服务端返回了不一致的起始时间条件');
+    }
     if(parsed && rows.some(row=>{
       const time=Date.parse(row?.recorded_at||'');
       return !Number.isFinite(time) || time<Date.parse(parsed.iso);
