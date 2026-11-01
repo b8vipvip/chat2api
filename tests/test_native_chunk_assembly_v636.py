@@ -83,3 +83,12 @@ def test_chunked_tree_does_not_accept_unsafe_html_or_url(tmp_path):
         else:
             assembler.ingest("req_untrustedlarge123","owner",part)
     assert store.get("req_untrustedlarge123","owner") is None
+
+
+def test_worker_chunked_capture_node_regression():
+    import subprocess
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    result=subprocess.run(["node","tests/native_content_chunked_v636.mjs"],
+                          cwd=root,capture_output=True,text=True,timeout=45)
+    assert result.returncode==0,result.stdout+"\n"+result.stderr
