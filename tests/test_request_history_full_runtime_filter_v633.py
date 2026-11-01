@@ -43,3 +43,5 @@ with TestClient(app) as client:
     assert data["applied_filters"]["current_version_only"] is True,data
     assert data["applied_filters"]["since"]=="2026-11-01T03:00:38+00:00",data
     assert data["current_version_commit"]=="a"*40,data
+    assert len(data["routes"])==1,data
+    assert data["routes"][0]["module"]=="app.request_device_identity_patch",data
