@@ -45,10 +45,12 @@
     if (reply.matches?.("[data-message-author-role='user']") || reply.closest?.("nav,aside")) return null;
     let nodes = 0, chars = 0, images = 0;
     let truncated = false;
+    // 17b4 exceeded the previous 3,200-node budget while the rich reply
+    // was still growing; the hard byte/depth/text budgets remain unchanged.
     const textBudget = 192000;
     const ignore = element => element.matches?.(banned) || !!element.closest?.("nav,aside,footer");
     const build = (element, depth) => {
-      if (depth > 24 || nodes >= 3200) {
+      if (depth > 24 || nodes >= 6400) {
         truncated = true;
         return null;
       }
@@ -87,7 +89,7 @@
       }
       const children = [];
       for (const child of element.childNodes) {
-        if (nodes >= 3200 || children.length >= 160) {
+        if (nodes >= 6400 || children.length >= 160) {
           truncated = true;
           break;
         }
@@ -140,7 +142,7 @@
       const hash = JSON.stringify(tree.root);
       if (!final && hash === active.nativeLastHash) return;
       if (hash.length > 900000) return;
-      active.nativeHeavySnapshot = hash.length > 320000;
+      active.nativeHeavySnapshot = hash.length > 640000;
       active.nativeLastHash = hash;
       active.nativeRevision = tree.revision;
       const send = chrome.runtime.sendMessage({type:"chat2api.event",event:{
