@@ -159,9 +159,20 @@
   async function capture(active, final = false) {
     if (!active?.requestId || !active.submitStartedAt) return;
     const now = Date.now();
-    if (!final && (active.nativeTransferInFlight
-        || now - Number(active.nativeLastAt || 0) <
-          (active.nativeHeavySnapshot ? 6500 : 900))) return;
+    if (final && active.nativeTransferInFlight) {
+      // A prior live incremental transfer must not interleave chunks with
+      // the terminal snapshot under the same revision. Keep a hard bound.
+      const deadline=Date.now()+30000;
+      while (active.nativeTransferInFlight && Date.now()<deadline)
+        await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    if (active.nativeTransferInFlight) {
+      active.nativeCaptureFailure="earlier-chunk-transfer-not-finished";
+      return;
+    }
+    if (!final && now - Number(active.nativeLastAt || 0) <
+          (active.nativeHeavySnapshot ? 6500 : 900)) return;
+    active.nativeTransferInFlight = true;
     active.nativeLastAt = now;
     try {
       const tree = snapshot(active);
@@ -178,7 +189,6 @@
         return;
       }
       active.nativeHeavySnapshot = bytes.byteLength > 640000;
-      active.nativeTransferInFlight = true;
       const transmit = async () => {
         if (bytes.byteLength <= 900000) {
           const reply = await chrome.runtime.sendMessage({type:"chat2api.event",event:{
