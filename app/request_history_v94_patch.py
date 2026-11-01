@@ -152,22 +152,25 @@ function requestHistoryNativeNode(value,assets,budget,depth=0){
   if(!value||typeof value!=='object'||depth>24||++budget.count>30000
       ||!requestHistoryNativeTags.has(value.tag))throw new Error('原生快照结构无效');
   const node=document.createElement(value.tag);
-  if(value.tag==='img'){
-    const index=value.media_index;
-    if(!Number.isInteger(index)||index<0||index>=assets.length||index>=40)
-      throw new Error('原生图片与归档资产无法匹配');
-    node.src=assets[index];node.alt='原生回复归档图片';node.loading='lazy';
-    node.style.maxWidth='100%';
-    node.style.height='auto';
-    return node;
-  }
-  if(typeof value.text==='string')node.textContent=value.text;
+  // Images must follow the same validated, bounded style tree as text/cards.
+  // The old early return silently discarded original objectFit, borderRadius,
+  // width, grid layout and spacing, even for hash-verified image assets.
   const style=value.style||{};
   for(const [key,raw] of Object.entries(style)){
     if(!requestHistoryNativeStyles.has(key)||typeof raw!=='string'
         ||raw.length>120||/url\s*\(|var\s*\(|[;{}<>]/i.test(raw))continue;
     node.style[key]=raw;
   }
+  if(value.tag==='img'){
+    const index=value.media_index;
+    if(!Number.isInteger(index)||index<0||index>=assets.length||index>=40)
+      throw new Error('原生图片与归档资产无法匹配');
+    node.src=assets[index];node.alt='原生回复归档图片';node.loading='lazy';
+    if(!style.maxWidth)node.style.maxWidth='100%';
+    if(!style.height)node.style.height='auto';
+    return node;
+  }
+  if(typeof value.text==='string')node.textContent=value.text;
   const children=Array.isArray(value.children)?value.children:[];
   if(children.length>160)throw new Error('原生快照子节点超限');
   for(const child of children)node.appendChild(requestHistoryNativeNode(child,assets,budget,depth+1));
