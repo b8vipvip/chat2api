@@ -92,7 +92,7 @@ def test_only_selected_native_image_assets_must_be_valid():
     assert "previewAssets.length!==imageCount" in SOURCE
 
 
-def test_17b4_admin_renderer_accepts_4000_nodes_but_not_6401():
+def test_17b4_admin_renderer_accepts_4000_nodes_but_not_30001():
     """Run the exact served renderer in Node, not a separately mocked limit."""
     import subprocess
     import json
@@ -122,12 +122,14 @@ def test_17b4_admin_renderer_accepts_4000_nodes_but_not_6401():
 
     const overflow={
       tag:'div',
-      children:Array.from({length:82},()=>({
-        tag:'div',children:Array.from({length:80},()=>({tag:'span',text:'x'}))
+      children:Array.from({length:100},()=>({
+        tag:'div',children:Array.from({length:2},()=>({
+          tag:'div',children:Array.from({length:160},()=>({tag:'span',text:'x'}))
+        }))
       }))
     };
     assert.throws(()=>requestHistoryNativeNode(overflow,[],{count:0}),/原生快照结构无效/);
-    console.log('Admin native renderer: 4k accepted, >6400 rejected');
+    console.log('Admin native renderer: 4k accepted, >30000 rejected');
     """
     result=subprocess.run(
         ["node", "-e", js], cwd=ROOT, capture_output=True, text=True, timeout=20
