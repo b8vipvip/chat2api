@@ -13,6 +13,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import sys
 import time
 import urllib.request
 from pathlib import Path
@@ -61,6 +62,37 @@ def github_ci_succeeded(repo: str, sha: str, checks: tuple[str, ...]) -> bool:
                    for item in runs):
             return False
     return True
+
+
+def wait_for_github_ci(repo: str, sha: str, checks: tuple[str, ...],
+                       *, max_wait_seconds: int = 420,
+                       poll_seconds: int = 20) -> bool:
+    """Wait for *the exact target SHA*, not a PR SHA or an older green build.
+
+    GitHub starts push CI asynchronously after a squash merge. The previous
+    one-shot check treated a still-running workflow as failed and rolled the
+    updater back before CI could finish. Polling is bounded and fail-closed:
+    missing, pending, failed, cancelled, or unreachable CI can NEVER deploy.
+    """
+    if not SHA.fullmatch(sha) or repo not in PROVIDER or not checks:
+        return False
+    if not 0 <= max_wait_seconds <= 900 or not 1 <= poll_seconds <= 60:
+        raise ValueError("Invalid CI wait budget")
+    deadline = time.monotonic() + max_wait_seconds
+    while True:
+        # github_ci_succeeded verifies every required workflow's completed
+        # success for the same 40-character head SHA with push/dispatch event.
+        if github_ci_succeeded(repo, sha, checks):
+            return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        # stderr is captured by the existing updater log, not its JSON result.
+        print("GPTAuto exact-SHA CI not yet verified: "
+              + sha[:12] + "; retrying in "
+              + str(min(poll_seconds, int(remaining))) + "s", file=sys.stderr,
+              flush=True)
+        time.sleep(min(poll_seconds, remaining))
 
 
 def file_sha(path: Path) -> str:
@@ -122,8 +154,9 @@ def apply_hotfix(repo: str, checkout: Path, from_sha: str, target_sha: str,
     plan = plan_for_git(checkout, repo, from_sha, target_sha)
     if plan.mode != "runtime-hotfix":
         raise HotfixError("Change requires a different deployment mode: " + plan.mode)
-    if not github_ci_succeeded(repo, target_sha, plan.required_checks):
-        raise HotfixError("Required GitHub CI is not successful for exact target SHA")
+    if not wait_for_github_ci(repo, target_sha, plan.required_checks):
+        raise HotfixError("Required GitHub CI not verified for exact target SHA "
+                          "within the bounded wait; no unverified deployment")
 
     info = json.loads(run("docker", "inspect", container_name))[0]
     cid = info["Id"]
