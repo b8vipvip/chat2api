@@ -220,11 +220,25 @@
       if (images.length===40) break;
     }
     const digests=new Map();
-    // Bound the identity probes. Missing proof is safer than guessing.
-    for (let start=0;start<images.length;start+=4) {
+    // The request-v6 controller awaits final native.capture before emitting
+    // the terminal. Never make a stalled CDN or blob fetch delay OpenAI
+    // completion for 40 * 6.5 seconds. At most 3.5 seconds total, four
+    // concurrent fetches; unverified positions remain explicitly unmatched.
+    const deadline=Date.now()+3500;
+    for (let start=0;start<images.length && Date.now()<deadline;start+=4) {
       const batch=images.slice(start,start+4);
-      const result=await Promise.all(batch.map(hashVisibleRaster));
-      batch.forEach((img,index)=>{if (HASH_HEX.test(result[index]))digests.set(img,result[index]);});
+      let timer;
+      try {
+        const remaining=Math.max(1,deadline-Date.now());
+        const result=await Promise.race([
+          Promise.all(batch.map(hashVisibleRaster)),
+          new Promise(resolve=>{timer=setTimeout(()=>resolve(null),remaining);}),
+        ]);
+        if (!result) break;
+        batch.forEach((img,index)=>{
+          if (HASH_HEX.test(result[index])) digests.set(img,result[index]);
+        });
+      } finally {if(timer)clearTimeout(timer);}
     }
     active.nativeImageDigests=digests;
     active.nativeIdentityVerifiedCount=digests.size;
