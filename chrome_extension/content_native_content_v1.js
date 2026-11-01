@@ -315,6 +315,9 @@
           (active.nativeHeavySnapshot ? 6500 : 900)) return;
     active.nativeTransferInFlight = true;
     active.nativeLastAt = now;
+    // An earlier incremental revision is not proof that the final DOM tree
+    // was committed. Avoid exporting stale true when final capture fails.
+    if (final) active.nativeChunkComplete = false;
     try {
       if (final) await resolveImageIdentities(active);
       const tree = snapshot(active);
