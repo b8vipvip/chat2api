@@ -7,6 +7,9 @@ No HTML, CSS text, media URLs, file bytes, tokens or JS are accepted.
 from __future__ import annotations
 
 import json
+import base64
+import hashlib
+import math
 import os
 import re
 import threading
@@ -14,10 +17,10 @@ import time
 from collections import OrderedDict
 from pathlib import Path
 
-MAX_BYTES = 1024 * 1024
-MAX_NODES = 6400
+MAX_BYTES = 6 * 1024 * 1024
+MAX_NODES = 30000
 MAX_DEPTH = 24
-MAX_TEXT = 192000
+MAX_TEXT = 300000
 MAX_ACTIVE = 128
 MAX_AGE_SECONDS = 90 * 86400
 SNAPSHOT_FILENAME = re.compile(r"(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}\.json")
@@ -127,6 +130,93 @@ def validate_native_snapshot(payload: object) -> dict:
     if len(json.dumps(output, ensure_ascii=False).encode("utf-8")) > MAX_BYTES:
         raise ValueError("Native snapshot byte cap")
     return output
+
+
+class NativeChunkAssembler:
+    """Authenticated Worker-only in-memory reassembly; partial trees are never published.
+
+    Byte count, SHA256, ordered chunks, owner identity and validated full tree
+    must all agree. Chunks are not durable and never own request terminals.
+    """
+    MAX_CHUNKS = 96
+    CHUNK_BYTES = 64 * 1024
+    MAX_SESSIONS = 16
+    TTL = 120.0
+
+    def __init__(self, store: "NativeContentStore"):
+        self.store = store
+        self._lock = threading.Lock()
+        self._sessions: OrderedDict[str, dict] = OrderedDict()
+
+    def ingest(self, request_id: str, owner: str, value: object) -> bool:
+        self.store._valid_id(request_id)
+        if not owner or not isinstance(value, dict) or set(value) != {
+            "revision", "index", "count", "byte_length", "sha256", "data"
+        }:
+            raise ValueError("Invalid native chunk envelope")
+        revision, index = value["revision"], value["index"]
+        count, size = value["count"], value["byte_length"]
+        digest = value["sha256"]
+        if (type(revision) is not int or not 1 <= revision <= 1000000
+            or type(index) is not int or type(count) is not int
+            or type(size) is not int or not 1 <= count <= self.MAX_CHUNKS
+            or not 0 <= index < count or not 1 <= size <= MAX_BYTES
+            or math.ceil(size / self.CHUNK_BYTES) != count
+            or not isinstance(digest, str)
+            or not re.fullmatch("[0-9a-f]{64}", digest)
+            or not isinstance(value["data"], str)
+            or len(value["data"]) > 4 * math.ceil(self.CHUNK_BYTES / 3) + 4):
+            raise ValueError("Invalid native chunk bounds")
+        try:
+            chunk = base64.b64decode(value["data"], validate=True)
+        except (ValueError, base64.binascii.Error) as exc:
+            raise ValueError("Invalid native chunk encoding") from exc
+        expected = min(self.CHUNK_BYTES, size - index * self.CHUNK_BYTES)
+        if len(chunk) != expected:
+            raise ValueError("Invalid native chunk length")
+        now = time.monotonic()
+        key = request_id
+        with self._lock:
+            for old, state in list(self._sessions.items()):
+                if now - state["at"] > self.TTL:
+                    del self._sessions[old]
+            state = self._sessions.get(key)
+            identity = (owner, revision, size, count, digest)
+            if state and state["identity"] != identity:
+                # Newer revisions can supersede incomplete older ones, but
+                # neither a different key-owner nor an older revision may do so.
+                old_owner, old_revision, *_ = state["identity"]
+                if old_owner != owner or revision < old_revision:
+                    raise ValueError("Native chunk owner/revision conflict")
+                del self._sessions[key]
+                state = None
+            if state is None:
+                state = {"identity": identity, "at": now, "parts": {}}
+                self._sessions[key] = state
+                self._sessions.move_to_end(key)
+                while len(self._sessions) > self.MAX_SESSIONS:
+                    self._sessions.popitem(last=False)
+            previous = state["parts"].get(index)
+            if previous is not None and previous != chunk:
+                del self._sessions[key]
+                raise ValueError("Conflicting native chunk")
+            state["parts"][index] = chunk
+            state["at"] = now
+            if len(state["parts"]) != count:
+                return False
+            raw = b"".join(state["parts"][i] for i in range(count))
+            del self._sessions[key]
+        if len(raw) != size or hashlib.sha256(raw).hexdigest() != digest:
+            raise ValueError("Native snapshot SHA256 mismatch")
+        try:
+            decoded = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeError) as exc:
+            raise ValueError("Invalid native snapshot serialization") from exc
+        if not isinstance(decoded, dict) or decoded.get("revision") != revision:
+            raise ValueError("Native chunk revision mismatch")
+        # publish invokes the full safe-node and allowed-style validator.
+        # No partial data ever replaces the preceding complete snapshot.
+        return self.store.publish(request_id, owner, decoded)
 
 
 class NativeContentStore:

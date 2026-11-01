@@ -49,10 +49,11 @@ def test_large_safe_native_tree_is_preserved_without_silent_truncation():
     assert validate_native_snapshot(rich) == rich
     # Keep a hard, deterministic limit; never publish a truncated tree.
     rich["root"]["children"].extend([
-        {"tag": "div", "children": [{"tag": "p", "text": f"extra {g}-{i}"}
-            for i in range(60)]} for g in range(110)
+        {"tag": "div", "children": [
+            {"tag": "div", "children": [{"tag": "p", "text": f"extra {g}-{part}-{i}"}
+                for i in range(140)]} for part in range(2)]} for g in range(110)
     ])
-    with pytest.raises(ValueError, match="exceeds limit"):
+    with pytest.raises(ValueError, match="exceeds limit|too large"):
         validate_native_snapshot(rich)
 
 
@@ -179,7 +180,7 @@ def test_062f_19_archived_images_and_1800_rich_nodes_fit_complete_safe_tree():
     # Raising the limit never permits silent partial tree acceptance.
     larger=[]
     for group in range(120):
-        larger.append({"tag":"div","children":[{"tag":"p","text":"x"} for _ in range(60)]})
+        larger.append({"tag":"div","children":[{"tag":"div","children":[{"tag":"p","text":"x"} for _ in range(140)]} for part in range(2)]})
     with pytest.raises(ValueError,match="exceeds limit"):
         validate_native_snapshot({"version":1,"revision":31,
                                   "root":{"tag":"div","children":larger}})

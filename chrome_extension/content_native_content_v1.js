@@ -47,10 +47,10 @@
     let truncated = false;
     // 17b4 exceeded the previous 3,200-node budget while the rich reply
     // was still growing; the hard byte/depth/text budgets remain unchanged.
-    const textBudget = 192000;
+    const textBudget = 300000;
     const ignore = element => element.matches?.(banned) || !!element.closest?.("nav,aside,footer");
     const build = (element, depth) => {
-      if (depth > 24 || nodes >= 6400) {
+      if (depth > 24 || nodes >= 30000) {
         truncated = true;
         return null;
       }
@@ -89,7 +89,7 @@
       }
       const children = [];
       for (const child of element.childNodes) {
-        if (nodes >= 6400 || children.length >= 160) {
+        if (nodes >= 30000 || children.length >= 160) {
           truncated = true;
           break;
         }
@@ -131,26 +131,86 @@
     return {version:1,revision:(active.nativeRevision || 0) + 1,root};
   }
 
+  const MAX_RAW_BYTES = 6 * 1024 * 1024;
+  const CHUNK_BYTES = 64 * 1024;
+  // Every content chunk is independently bounded; the server commits only
+  // after all chunks from one request/revision/hash have been verified.
+  async function deliverChunks(active, tree, bytes, final) {
+    if (!globalThis.crypto?.subtle || !globalThis.btoa) return false;
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+    const sha256 = [...digest].map(x=>x.toString(16).padStart(2,"0")).join("");
+    const count = Math.ceil(bytes.length / CHUNK_BYTES);
+    if (count < 1 || count > 96) return false;
+    for (let index = 0; index < count; index++) {
+      const slice = bytes.subarray(index * CHUNK_BYTES,(index + 1) * CHUNK_BYTES);
+      const data = btoa(String.fromCharCode(...slice));
+      const reply = await chrome.runtime.sendMessage({type:"chat2api.event",event:{
+        type:"chat.native.chunk",request_id:active.requestId,revision:tree.revision,
+        index,count,byte_length:bytes.length,sha256,data,
+      }});
+      if (reply?.ok !== true) return false;
+      // Do not let the page's old reply be replaced by a partial generation.
+      if (active.requestId !== tree.requestId && tree.requestId) return false;
+    }
+    active.nativeChunkComplete = true;
+    return true;
+  }
+
   async function capture(active, final = false) {
     if (!active?.requestId || !active.submitStartedAt) return;
     const now = Date.now();
-    if (!final && now - Number(active.nativeLastAt || 0) < (active.nativeHeavySnapshot ? 3000 : 900)) return;
+    if (final && active.nativeTransferInFlight) {
+      // A prior live incremental transfer must not interleave chunks with
+      // the terminal snapshot under the same revision. Keep a hard bound.
+      const deadline=Date.now()+30000;
+      while (active.nativeTransferInFlight && Date.now()<deadline)
+        await new Promise(resolve=>setTimeout(resolve,100));
+    }
+    if (active.nativeTransferInFlight) {
+      active.nativeCaptureFailure="earlier-chunk-transfer-not-finished";
+      return;
+    }
+    if (!final && now - Number(active.nativeLastAt || 0) <
+          (active.nativeHeavySnapshot ? 6500 : 900)) return;
+    active.nativeTransferInFlight = true;
     active.nativeLastAt = now;
     try {
       const tree = snapshot(active);
-      if (!tree) return;
+      if (!tree) {
+        active.nativeCaptureFailure = "structural-limit-or-no-verified-reply";
+        return;
+      }
       const hash = JSON.stringify(tree.root);
       if (!final && hash === active.nativeLastHash) return;
-      if (hash.length > 900000) return;
-      active.nativeHeavySnapshot = hash.length > 640000;
-      active.nativeLastHash = hash;
-      active.nativeRevision = tree.revision;
-      const send = chrome.runtime.sendMessage({type:"chat2api.event",event:{
-        type:"chat.native.snapshot",request_id:active.requestId,snapshot:tree,
-      }});
-      if (final) await Promise.race([send.catch(() => {}),new Promise(r=>setTimeout(r,240))]);
-      else void send.catch(()=>{});
-    } catch (_) { /* never alter request termination */ }
+      const json = JSON.stringify(tree);
+      const bytes = new TextEncoder().encode(json);
+      if (bytes.byteLength > MAX_RAW_BYTES) {
+        active.nativeCaptureFailure = "native-chunk-total-byte-cap";
+        return;
+      }
+      active.nativeHeavySnapshot = bytes.byteLength > 640000;
+      const transmit = async () => {
+        if (bytes.byteLength <= 900000) {
+          const reply = await chrome.runtime.sendMessage({type:"chat2api.event",event:{
+            type:"chat.native.snapshot",request_id:active.requestId,snapshot:tree,
+          }});
+          return reply?.ok === true;
+        }
+        return deliverChunks(active,tree,bytes,final);
+      };
+      const result = await transmit();
+      if (result) {
+        active.nativeLastHash = hash;
+        active.nativeRevision = tree.revision;
+        active.nativeCaptureFailure = "";
+      } else {
+        active.nativeCaptureFailure = "native-transport-incomplete";
+      }
+    } catch (_) {
+      active.nativeCaptureFailure = "native-transport-failed";
+    } finally {
+      active.nativeTransferInFlight = false;
+    }
   }
   globalThis[KEY] = Object.freeze({capture,snapshot});
 })();
