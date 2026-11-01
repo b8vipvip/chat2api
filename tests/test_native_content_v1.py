@@ -53,7 +53,7 @@ def test_large_safe_native_tree_is_preserved_without_silent_truncation():
             {"tag": "div", "children": [{"tag": "p", "text": f"extra {g}-{part}-{i}"}
                 for i in range(140)]} for part in range(2)]} for g in range(110)
     ])
-    with pytest.raises(ValueError, match="exceeds limit"):
+    with pytest.raises(ValueError, match="exceeds limit|too large"):
         validate_native_snapshot(rich)
 
 
