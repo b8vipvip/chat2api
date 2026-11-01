@@ -248,3 +248,34 @@ def test_worker_completed_after_sse_disconnection_is_delivery_warning(tmp_path: 
         assert "HTTP" in result["results"][0]["message"]
         assert result["results"][0]["authoritative_request_status"] == "completed"
         assert app.state.telemetry.get(rid)["status"] == "completed"
+
+
+
+def test_8fc3_c_group_warning_survives_reconciliation_even_when_files_ready(tmp_path: Path):
+    app = _app(tmp_path)
+    rid = "req_8fc3filesready000001"
+    run_id = _chat_run_id(rid)
+    with TestClient(app) as client:
+        async def seed():
+            await app.state.test_runs.upsert({
+                "run_id": run_id, "request_id": rid, "request_ids": [rid],
+                "test_type": "chat", "status": "passed",
+                "quality": {"source": "manual-playground-chat"},
+                "abcd_report": {"scene": "C", "passed": True, "status": "warning",
+                    "warnings": ["upstream ChatGPT terminal proof missing"],
+                    "checks": [{"label": "four ready archived files", "passed": True}]},
+                "results": [{"kind": "chat", "request_id": rid, "status": "passed"}],
+            })
+            await app.state.telemetry.upsert({
+                "request_id": rid, "status": "completed", "request_type": "text",
+                "response_generated_files": [{"filename": "plan.xlsx",
+                    "status": "ready"}], "completion_chars": 3989,
+                "diagnostics": {"network_stream_terminal_proof": False},
+            })
+        asyncio.run(seed())
+        result = client.get("/api/admin/tests/" + run_id,
+            headers={"Authorization": "Bearer test-key"}).json()
+        assert result["status"] == "warning"
+        assert result["results"][0]["status"] == "warning"
+        assert result["results"][0]["authoritative_request_status"] == "completed"
+        assert app.state.telemetry.get(rid)["status"] == "completed"

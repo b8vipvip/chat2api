@@ -50,7 +50,7 @@ def test_large_safe_native_tree_is_preserved_without_silent_truncation():
     # Keep a hard, deterministic limit; never publish a truncated tree.
     rich["root"]["children"].extend([
         {"tag": "div", "children": [{"tag": "p", "text": f"extra {g}-{i}"}
-            for i in range(60)]} for g in range(50)
+            for i in range(60)]} for g in range(110)
     ])
     with pytest.raises(ValueError, match="exceeds limit"):
         validate_native_snapshot(rich)
@@ -178,7 +178,7 @@ def test_062f_19_archived_images_and_1800_rich_nodes_fit_complete_safe_tree():
     assert summary["media_mapping_complete"] is True
     # Raising the limit never permits silent partial tree acceptance.
     larger=[]
-    for group in range(60):
+    for group in range(120):
         larger.append({"tag":"div","children":[{"tag":"p","text":"x"} for _ in range(60)]})
     with pytest.raises(ValueError,match="exceeds limit"):
         validate_native_snapshot({"version":1,"revision":31,
@@ -258,3 +258,16 @@ def test_intrinsic_image_metadata_is_rejected_on_non_image_nodes():
         validate_native_snapshot({"version":1,"revision":1,
                                   "root":{"tag":"div","intrinsic_width":900,
                                           "intrinsic_height":900}})
+
+
+def test_17b4_more_than_3200_nodes_preserves_entire_bounded_native_tree():
+    from app.native_content_v1 import validate_native_snapshot, native_layout_summary
+    children=[{"tag":"div","children":[{"tag":"span","text":f"plant section {group} item {i}"}
+             for i in range(80)]} for group in range(46)]
+    snapshot=validate_native_snapshot({"version":1,"revision":5,
+                                        "root":{"tag":"div","children":children}})
+    summary=native_layout_summary(snapshot, archived_assets=0)
+    assert summary["nodes"] > 3200
+    assert summary["nodes"] < 6400
+    assert len(snapshot["root"]["children"]) == 46
+    assert snapshot["root"]["children"][-1]["children"][-1]["text"].startswith("plant section 45")

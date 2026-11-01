@@ -31,6 +31,6 @@ assert.match(source,/calendar\.addEventListener\('click',openPicker\)/);
 assert.match(source,/since\.type='text'/);
 assert.match(source,/let requestHistoryLatestLoad=0/);
 assert.match(source,/if\(sequence!==requestHistoryLatestLoad\)return/);
-assert.match(source,/d\?\.applied_filters\?\.since/);
+assert.match(source,/if\(parsed && applied\?\.since\)/);
 assert.match(source,/time<Date\.parse\(parsed\.iso\)/);
 console.log("Admin time paste, explicit picker, shared list/ZIP predicate and stale-query guard passed");

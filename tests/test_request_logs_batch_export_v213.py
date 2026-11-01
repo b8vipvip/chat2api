@@ -489,3 +489,17 @@ def test_export_api_excludes_nonmatching_search_status_model_and_sha(tmp_path: P
             assert [item["request_id"] for item in manifest["requests"]]==["req_33da"]
             assert manifest["exported_count"]==1
             assert manifest["selected_server_commit"]==sha
+
+
+def test_request_history_filter_ack_is_optional_but_row_and_sha_validation_is_not():
+    source=(Path(__file__).resolve().parents[1]/"app"/
+            "request_history_v94_patch.py").read_text("utf-8")
+    # A legacy/admin middleware can omit the optional echo. Never hide a
+    # valid list just because this redundant metadata was absent.
+    assert "const applied=d?.applied_filters;" in source
+    assert "if(parsed && applied?.since)" in source
+    assert "String(d?.current_version_commit||'')" in source
+    assert "row?.request_server_commit" in source
+    assert "row?.recorded_at" in source
+    assert "服务端返回了非当前版本的记录" in source
+    assert "服务端返回了早于起始时间的记录" in source
