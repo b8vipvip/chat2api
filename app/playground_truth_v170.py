@@ -71,6 +71,10 @@ async def reconcile_playground_runs(test_runs: Any, telemetry: Any, limit: int =
         abcd_failed = isinstance(abcd, dict) and (
             abcd.get("status") == "failed" or abcd.get("passed") is False
         )
+        # The visual/file C-group can have all four ready archives while the
+        # upstream ChatGPT stream lacks trusted terminal proof. Such a run is
+        # NOT a full end-to-end pass, even if the broker row is completed.
+        abcd_warning = isinstance(abcd, dict) and abcd.get("status") == "warning"
         statuses: list[str] = []
         changed = False
         for entry in result_rows:
@@ -97,6 +101,8 @@ async def reconcile_playground_runs(test_runs: Any, telemetry: Any, limit: int =
                 status = "warning"
             if status == "passed" and abcd_failed:
                 status = "failed"
+            elif status == "passed" and abcd_warning:
+                status = "warning"
             statuses.append(status)
             if entry.get("status") != status or entry.get("authoritative_request_status") != row["status"]:
                 entry.update({
