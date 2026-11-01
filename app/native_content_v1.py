@@ -15,7 +15,7 @@ from collections import OrderedDict
 from pathlib import Path
 
 MAX_BYTES = 1024 * 1024
-MAX_NODES = 3200
+MAX_NODES = 6400
 MAX_DEPTH = 24
 MAX_TEXT = 192000
 MAX_ACTIVE = 128
