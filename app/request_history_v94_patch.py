@@ -149,7 +149,7 @@ function requestHistoryOwnedImageUrl(value){
   }catch(_){return '';}
 }
 function requestHistoryNativeNode(value,assets,budget,depth=0){
-  if(!value||typeof value!=='object'||depth>24||++budget.count>3200
+  if(!value||typeof value!=='object'||depth>24||++budget.count>6400
       ||!requestHistoryNativeTags.has(value.tag))throw new Error('原生快照结构无效');
   const node=document.createElement(value.tag);
   if(value.tag==='img'){
