@@ -12,6 +12,19 @@ class Element {
   getBoundingClientRect(){return {width:100,height:100};}
   matches(s){return false;}
   closest(s){return null;}
+  querySelectorAll(selector){
+    const out=[];
+    const walk=node=>{
+      for(const child of node.childNodes||[]){
+        if(child instanceof Element){
+          if(selector==="img" && child.tagName==="IMG")out.push(child);
+          walk(child);
+        }
+      }
+    };
+    walk(this);
+    return out;
+  }
 }
 const text={nodeType:3,nodeValue:"Hello safe rich text"};
 const img=new Element("IMG");
@@ -163,6 +176,25 @@ const overChildren=candidateFor(Array.from({length:161},(_,i)=>({
   nodeType:3,nodeValue:"chunk "+i,
 })));
 assert.equal(capture.snapshot(overChildren),null,"over 160 children must fail closed");
+
+// A generated raster may be wrapped by a ChatGPT preview <button>. Preserve
+// only the raster in a safe inert figure, never copy click targets/toolbar text.
+const buttonCard=new Element("BUTTON",[
+  new Element("IMG"),{nodeType:3,nodeValue:"Download or delete"}
+]);
+const buttonPreview=capture.snapshot(candidateFor([buttonCard]));
+assert.ok(buttonPreview, "button-hosted raster must not disappear");
+assert.equal(buttonPreview.root.children[0].tag,"figure");
+assert.equal(buttonPreview.root.children[0].children[0].tag,"img");
+assert.equal(findImgs(buttonPreview.root),1);
+assert.ok(!JSON.stringify(buttonPreview).includes("Download or delete"),
+  "button action text must not leak into assistant rich content");
+const actionOnly=capture.snapshot(candidateFor([
+  new Element("BUTTON",[{nodeType:3,nodeValue:"Copy"}]),
+  new Element("P",[{nodeType:3,nodeValue:"safe answer"}]),
+]));
+assert.ok(actionOnly && findImgs(actionOnly.root)===0);
+assert.ok(!JSON.stringify(actionOnly).includes("Copy"));
 
 const overImages=candidateFor(Array.from({length:41},()=>new Element("IMG")));
 assert.equal(capture.snapshot(overImages),null,"over 40 images must fail closed");
