@@ -2311,8 +2311,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if accepted and message_type == "chat.completed" and active_state:
                         row = telemetry.get(request_id) or {}
                         owner = str(row.get("api_key_id") or "")
-                        if owner:
-                            native_content.persist(request_id, owner)
+                        # This is the actual disk-persistence proof; the
+                        # earlier per-chunk ACK establishes only validated,
+                        # in-memory publication. Neither result owns terminal.
+                        active_state.diagnostics["native_snapshot_persisted"] = bool(
+                            owner and native_content.persist(request_id, owner)
+                        )
                     if terminal_message:
                         if active_state and active_state.client_id == client_id:
                             active_state.diagnostics["terminal_transport_broker_accepted"] = bool(accepted)
