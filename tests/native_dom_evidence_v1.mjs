@@ -71,6 +71,19 @@ assert.equal(events.length,1);
 assert.equal(events[0].event.type,'chat.native.dom_evidence');
 assert.equal(events[0].event.report.scope,'verified_reply_container');
 
+// 17b4 captured exactly 3,200 nodes then lost the private evidence tree.
+// A still request-scoped 3,600-node answer must be complete under the new
+// bounded cap; exceeding 6,400 nodes is still rejected rather than trimmed.
+const manySections=new Element('DIV',Array.from({length:1800},(_,i)=>
+  new Element('P',[{nodeType:TEXT,nodeValue:'plant detail '+i}])));
+const largeVerified=new Element('DIV',[manySections]);
+const largeMain=new Element('MAIN',[largeVerified]);
+const full=probe.captureData({...active,lastCandidateNode:manySections,
+  nativeVerifiedReplyScope:largeVerified});
+assert.equal(full.complete,true,'bounded 3,600-node reply must be complete');
+assert.ok(full.counts.nodes>3200);
+assert.equal(full.root.children[0].children[0].children.length,1800);
+
 // Untrusted page-wide or cross-user scope cannot be promoted.
 const mainScope=probe.captureData({...active,nativeVerifiedReplyScope:main});
 assert.equal(mainScope.complete,false);
