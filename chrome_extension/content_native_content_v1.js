@@ -47,9 +47,13 @@
     return obj;
   }
   function snapshot(active) {
+    if (active) active.nativeStructuralFailure = "";
     if (!active?.submitStartedAt || typeof Element === "undefined") return null;
     const candidate = active.lastCandidateNode;
-    if (!(candidate instanceof Element) || !candidate.isConnected) return null;
+    if (!(candidate instanceof Element) || !candidate.isConnected) {
+      active.nativeStructuralFailure = "reply-candidate-unavailable";
+      return null;
+    }
     const reply = candidate.closest?.("[data-message-author-role='assistant'],[data-testid^='conversation-turn']")
       || candidate;
     if (reply.matches?.("[data-message-author-role='user']") || reply.closest?.("nav,aside")) return null;
@@ -61,6 +65,7 @@
     const ignore = element => element.matches?.(banned) || !!element.closest?.("nav,aside,footer");
     const build = (element, depth) => {
       if (depth > 24 || nodes >= 30000) {
+        active.nativeStructuralFailure = depth > 24 ? "max-depth" : "max-nodes";
         truncated = true;
         return null;
       }
@@ -68,6 +73,7 @@
         const raw = String(element.nodeValue || "");
         if (!raw.trim()) return null;
         if (chars + raw.length > textBudget) {
+          active.nativeStructuralFailure = "max-text";
           truncated = true;
           return null;
         }
@@ -108,6 +114,7 @@
       if (tag === "img") {
         if (!rect || rect.width < 40 || rect.height < 40) return null;
         if (images >= 40) {
+          active.nativeStructuralFailure = "max-images";
           truncated = true;
           return null;
         }
@@ -127,6 +134,7 @@
       const children = [];
       for (const child of element.childNodes) {
         if (nodes >= 30000 || children.length >= 160) {
+          active.nativeStructuralFailure = nodes >= 30000 ? "max-nodes" : "max-children";
           truncated = true;
           break;
         }
@@ -164,7 +172,11 @@
     // A partially serialized tree would silently replace the complete
     // canonical Markdown in MV3C. Reject it rather than publish a lie.
     // The standard OpenAI response continues unaffected.
-    if (!root || truncated) return null;
+    if (!root || truncated) {
+      if (!active.nativeStructuralFailure)
+        active.nativeStructuralFailure = "no-safe-complete-reply-root";
+      return null;
+    }
     return {version:1,revision:(active.nativeRevision || 0) + 1,root};
   }
 
@@ -185,8 +197,10 @@
         type:"chat.native.chunk",request_id:active.requestId,revision:tree.revision,
         index,count,byte_length:bytes.length,sha256,data,
       }});
-      if (reply?.ok !== true || (index === count - 1 && reply?.committed !== true))
+      if (reply?.ok !== true || (index === count - 1 && reply?.committed !== true)) {
+        active.nativeTransportAckError = String(reply?.error || "native-chunk-not-committed").slice(0,80);
         return false;
+      }
       // Do not let the page's old reply be replaced by a partial generation.
       if (active.requestId !== tree.requestId && tree.requestId) return false;
     }
@@ -293,7 +307,8 @@
       if (final) await resolveImageIdentities(active);
       const tree = snapshot(active);
       if (!tree) {
-        active.nativeCaptureFailure = "structural-limit-or-no-verified-reply";
+        active.nativeCaptureFailure = "structural-" +
+          String(active.nativeStructuralFailure || "unavailable").slice(0,60);
         return;
       }
       const hash = JSON.stringify(tree.root);
@@ -306,6 +321,7 @@
       }
       active.nativeHeavySnapshot = bytes.byteLength > 640000;
       active.nativeChunkComplete = false;
+      active.nativeTransportAckError = "";
       const transmit = async () => {
         if (bytes.byteLength <= 900000) {
           const reply = await chrome.runtime.sendMessage({type:"chat2api.native.ack",event:{
@@ -315,6 +331,7 @@
             active.nativeChunkComplete = true;
             return true;
           }
+          active.nativeTransportAckError = String(reply?.error || "native-snapshot-not-committed").slice(0,80);
           return false;
         }
         return deliverChunks(active,tree,bytes,final);
@@ -324,6 +341,7 @@
         active.nativeLastHash = hash;
         active.nativeRevision = tree.revision;
         active.nativeCaptureFailure = "";
+        active.nativeTransportAckError = "";
       } else {
         active.nativeCaptureFailure = "native-transport-incomplete";
       }
