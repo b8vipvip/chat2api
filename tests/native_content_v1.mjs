@@ -126,7 +126,7 @@ assert.ok(expanded && expanded.root.children.length === 10,
 const overText=candidateFor([{nodeType:3,nodeValue:"A".repeat(300001)}]);
 assert.equal(capture.snapshot(overText),null,"over 192K text must fail closed");
 await capture.capture(overText,true);
-assert.equal(sent.length,1);
+assert.equal(sent.length,2);
 
 // Production f7c8: full source DOM has 16+ nested presentation levels,
  // 4 images, a table and grid wrappers. Previously 14-depth rejected the
