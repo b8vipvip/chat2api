@@ -129,7 +129,23 @@ def test_17b4_admin_renderer_accepts_4000_nodes_but_not_30001():
       }))
     };
     assert.throws(()=>requestHistoryNativeNode(overflow,[],{count:0}),/原生快照结构无效/);
-    console.log('Admin native renderer: 4k accepted, >30000 rejected');
+    const img=requestHistoryNativeNode({
+      tag:'img', media_index:0,
+      style:{objectFit:'cover',borderRadius:'12px',width:'320px',height:'180px'}
+    },['/api/media/med_valid/asset-token'],{count:0});
+    assert.equal(img.src,'/api/media/med_valid/asset-token');
+    assert.equal(img.style.objectFit,'cover');
+    assert.equal(img.style.borderRadius,'12px');
+    assert.equal(img.style.width,'320px');
+    assert.equal(img.style.height,'180px');
+    // Do not execute URL/CSS injection even in an image node.
+    const injected=requestHistoryNativeNode({
+      tag:'img',media_index:0,
+      style:{borderRadius:'12px;position:fixed',backgroundColor:'url(https://bad)'}
+    },['/api/media/med_valid/asset-token'],{count:0});
+    assert.notEqual(injected.style.borderRadius,'12px;position:fixed');
+    assert.equal(injected.style.backgroundColor,undefined);
+    console.log('Admin native renderer: 4k accepted, >30000 rejected; image style preserved');
     """
     result=subprocess.run(
         ["node", "-e", js], cwd=ROOT, capture_output=True, text=True, timeout=20
@@ -143,3 +159,10 @@ def test_sha256_verified_images_take_priority_over_ordinal_and_dimensions():
     assert "图片与归档原始字节 SHA256 已逐张一致" in SOURCE
     assert "图片按归档顺序展示，身份尚未全部验证" in SOURCE
     assert "source_sha256" in (ROOT/"app"/"native_content_v1.py").read_text("utf-8")
+
+
+def test_image_identity_fetch_does_not_block_request_terminal_unboundedly():
+    worker=(ROOT/"chrome_extension"/"content_native_content_v1.js").read_text("utf-8")
+    assert "const deadline=Date.now()+3500" in worker
+    assert "Promise.race([" in worker
+    assert "active.nativeIdentityVerifiedCount=digests.size" in worker
