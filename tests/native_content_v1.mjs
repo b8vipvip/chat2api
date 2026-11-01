@@ -32,7 +32,7 @@ const node=new Element("DIV",[text,img]);
 const ctx={Element,Node:{TEXT_NODE:3},Date,setTimeout,clearTimeout,TextEncoder,
  getComputedStyle:()=>({display:"flex",visibility:"visible",flexDirection:"row",
     gap:"8px",color:"rgb(0, 0, 0)",backgroundImage:"url(https://secret.example/token)"}),
- chrome:{runtime:{sendMessage:async m=>{sent.push(m);return {ok:true}}}},
+ chrome:{runtime:{sendMessage:async m=>{sent.push(m);return {ok:true,committed:true}}}},
 };
 runInNewContext(code,ctx);
 const capture=ctx.__CHAT2API_NATIVE_CONTENT_V1__;
@@ -56,7 +56,7 @@ const scopeNode=new Element("DIV",[
 ]);
 const scopedCtx={...ctx,__CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{
   replyRoots:()=>({scope:"roleless_reply_siblings",roots:[scopeNode],boundary:"end_of_reply_parent"})
-},chrome:{runtime:{sendMessage:async m=>{scopedSent.push(m);return {ok:true};}}}};
+},chrome:{runtime:{sendMessage:async m=>{scopedSent.push(m);return {ok:true,committed:true};}}}};
 delete scopedCtx.__CHAT2API_NATIVE_CONTENT_V1__;
 runInNewContext(code,scopedCtx);
 const scopedCandidate=scopeNode.childNodes[0];
@@ -76,7 +76,7 @@ const verifiedSent=[];
 const verifiedCtx={...ctx,__CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{
   replyRoots:()=>({scope:"verified_reply_container",
     roots:[scopeNode],boundary:"same_request_verified_finish_action"}),
-},chrome:{runtime:{sendMessage:async msg=>{verifiedSent.push(msg);return {ok:true}}}}};
+},chrome:{runtime:{sendMessage:async msg=>{verifiedSent.push(msg);return {ok:true,committed:true}}}}};
 delete verifiedCtx.__CHAT2API_NATIVE_CONTENT_V1__;
 runInNewContext(code,verifiedCtx);
 await verifiedCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture({
