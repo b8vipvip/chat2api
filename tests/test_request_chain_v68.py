@@ -188,6 +188,12 @@ def test_v639_native_sidecar_requires_committed_server_ack_without_terminal_auth
 
 def test_v639_never_returns_ordinal_or_dimension_guessed_image_assets():
     backend = read("app/main.py")
+    # SHA-verified mapping legitimately uses the same list comprehension;
+    # only *unverified* dimensions/ordinals must be excluded.
     assert 'if candidates["status"] == "verified-sha256":' in backend
-    assert 'elif ordinal:' not in backend
-    assert 'visible_assets = [assets[index] for index in candidates["indices"]]' not in backend
+    mapping = backend.split('if candidates["status"] == "verified-sha256":', 1)[1].split(
+        'result = {**snapshot', 1)[0]
+    assert 'visible_assets = [assets[index] for index in candidates["indices"]]' in mapping
+    assert 'elif ordinal:' not in mapping
+    assert 'elif candidates["status"] == "unique-dimensions-unverified":' not in mapping
+    assert mapping.count('visible_assets = []') == 2
