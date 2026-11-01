@@ -23,7 +23,7 @@ const ctx={Element,Node:{TEXT_NODE:3},Date,setTimeout,TextEncoder,crypto:webcryp
 runInNewContext(code,ctx);
 const groups=Array.from({length:125},(_,g)=>new Element("DIV",
   Array.from({length:140},(_,i)=>({
-    nodeType:3,nodeValue:"large section "+g+" line "+i,
+    nodeType:3,nodeValue:"p"+g+"-"+i,
   }))));
 const root=new Element("DIV",groups);
 const active={requestId:"req_chunkedv2transport",submitStartedAt:Date.now(),
@@ -44,7 +44,7 @@ const raw=Buffer.concat(bytes);
 assert.equal(raw.byteLength,chunked[0].byte_length);
 const restored=JSON.parse(raw.toString("utf8"));
 assert.equal(restored.root.children.length,125);
-assert.equal(restored.root.children[124].children[139].text,"large section 124 line 139");
+assert.equal(restored.root.children[124].children[139].text,"p124-139");
 const hash=await webcrypto.subtle.digest("SHA-256",raw);
 assert.equal(Buffer.from(hash).toString("hex"),chunked[0].sha256);
 console.log("Large assistant reply: "+raw.length+" bytes / "+chunked.length+" authenticated chunks");
