@@ -17,7 +17,7 @@ const ctx={Element,Node:{TEXT_NODE:3},Date,setTimeout,TextEncoder,crypto:webcryp
   getComputedStyle:()=>({display:"flex",visibility:"visible",
     fontSize:"16px",color:"#123456",lineHeight:"24px",marginBottom:"12px"}),
   chrome:{runtime:{sendMessage:async message=>{
-    chunked.push(message.event);return {ok:true};
+    chunked.push(message.event);return {ok:true,committed:true};
   }}},
 };
 runInNewContext(code,ctx);
