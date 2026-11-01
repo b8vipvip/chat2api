@@ -84,11 +84,11 @@ function candidateFor(children) {
 }
 // Native snapshots must not silently omit trailing content. The canonical
 // Markdown path remains the sole complete answer when DOM caps are reached.
-const overNodes=candidateFor(Array.from({length:50},(_,group)=>
+const overNodes=candidateFor(Array.from({length:90},(_,group)=>
   new Element("DIV",Array.from({length:80},(_,i)=>({
     nodeType:3,nodeValue:"paragraph "+group+"-"+i,
   })))));
-assert.equal(capture.snapshot(overNodes),null,"over 3200 nodes must fail closed");
+assert.equal(capture.snapshot(overNodes),null,"over 6400 nodes must fail closed");
 await capture.capture(overNodes,true);
 assert.equal(sent.length,1,"truncated content must never be published");
 
@@ -101,6 +101,17 @@ const bigOriginal=candidateFor(Array.from({length:24},(_,group)=>
 const bigSnapshot=capture.snapshot(bigOriginal);
 assert.ok(bigSnapshot && bigSnapshot.root.children.length===24,
   "1920+ nodes must be preserved as one complete native snapshot");
+
+// 17b4 exceeded the former 3,200-node capture budget before the last
+// tables and images had rendered. More than 3,200 real safe descendants now
+// serialize fully; a 6,400+ result still fails closed without truncation.
+const expanded17b4=candidateFor(Array.from({length:46},(_,group)=>
+  new Element("DIV",Array.from({length:80},(_,i)=>({
+    nodeType:3,nodeValue:"plant section "+group+"-"+i,
+  })))));
+const snapshot17b4=capture.snapshot(expanded17b4);
+assert.ok(snapshot17b4 && snapshot17b4.root.children.length===46,
+  "3,680-plus rich nodes must not fall back to the stale early revision");
 
 // A complex reply that previously exceeded 420 nodes is still bounded but
 // must now retain every safe text block instead of falling back prematurely.
