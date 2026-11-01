@@ -87,6 +87,17 @@ assert.equal(verifiedSent.length,1);
 assert.equal(verifiedSent[0].event.snapshot.root.children[0].children.length,3);
 assert.equal(verifiedSent[0].event.snapshot.root.children[0].children[1].media_index,0);
 
+// Enqueue-only ACK must NOT claim that a native snapshot is durable.
+const pendingCtx={...ctx,chrome:{runtime:{sendMessage:async()=>({ok:true})}}};
+delete pendingCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,pendingCtx);
+const pendingActive={requestId:"req_ackmissing123456",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[{nodeType:3,nodeValue:"safe text"}])};
+await pendingCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture(pendingActive,true);
+assert.equal(pendingActive.nativeCaptureFailure,"native-transport-incomplete");
+assert.equal(pendingActive.nativeRevision,undefined);
+assert.equal(pendingActive.nativeChunkComplete,false);
+
 await capture.capture(active,false);
 assert.equal(sent.length,1);
 console.log("Native rich observer: bounded capture, no DOM URLs, independent request status");
