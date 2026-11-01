@@ -169,8 +169,9 @@
         active.nativeCaptureFailure = "structural-limit-or-no-verified-reply";
         return;
       }
+      const hash = JSON.stringify(tree.root);
+      if (!final && hash === active.nativeLastHash) return;
       const json = JSON.stringify(tree);
-      if (!final && json === active.nativeLastHash) return;
       const bytes = new TextEncoder().encode(json);
       if (bytes.byteLength > MAX_RAW_BYTES) {
         active.nativeCaptureFailure = "native-chunk-total-byte-cap";
@@ -189,7 +190,7 @@
       };
       const result = await transmit();
       if (result) {
-        active.nativeLastHash = json;
+        active.nativeLastHash = hash;
         active.nativeRevision = tree.revision;
         active.nativeCaptureFailure = "";
       } else {
