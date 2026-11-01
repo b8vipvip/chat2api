@@ -29,7 +29,7 @@ class Element {
 const text={nodeType:3,nodeValue:"Hello safe rich text"};
 const img=new Element("IMG");
 const node=new Element("DIV",[text,img]);
-const ctx={Element,Node:{TEXT_NODE:3},Date,setTimeout,TextEncoder,
+const ctx={Element,Node:{TEXT_NODE:3},Date,setTimeout,clearTimeout,TextEncoder,
  getComputedStyle:()=>({display:"flex",visibility:"visible",flexDirection:"row",
     gap:"8px",color:"rgb(0, 0, 0)",backgroundImage:"url(https://secret.example/token)"}),
  chrome:{runtime:{sendMessage:async m=>{sent.push(m);return {ok:true}}}},
