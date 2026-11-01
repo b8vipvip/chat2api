@@ -21,10 +21,10 @@ const ctx={Element,Node:{TEXT_NODE:3},Date,setTimeout,TextEncoder,crypto:webcryp
   }}},
 };
 runInNewContext(code,ctx);
-const groups=Array.from({length:125},(_,g)=>new Element("DIV",
-  Array.from({length:140},(_,i)=>({
+const groups=Array.from({length:110},(_,g)=>new Element("DIV",
+  Array.from({length:130},(_,i)=>new Element("P",[{
     nodeType:3,nodeValue:"p"+g+"-"+i,
-  }))));
+  }]))));
 const root=new Element("DIV",groups);
 const active={requestId:"req_chunkedv2transport",submitStartedAt:Date.now(),
   lastCandidateNode:root};
@@ -43,8 +43,8 @@ for(let i=0;i<chunked.length;i++){
 const raw=Buffer.concat(bytes);
 assert.equal(raw.byteLength,chunked[0].byte_length);
 const restored=JSON.parse(raw.toString("utf8"));
-assert.equal(restored.root.children.length,125);
-assert.equal(restored.root.children[124].children[139].text,"p124-139");
+assert.equal(restored.root.children.length,110);
+assert.equal(restored.root.children[109].children[129].children[0].text,"p109-129");
 const hash=await webcrypto.subtle.digest("SHA-256",raw);
 assert.equal(Buffer.from(hash).toString("hex"),chunked[0].sha256);
 console.log("Large assistant reply: "+raw.length+" bytes / "+chunked.length+" authenticated chunks");
