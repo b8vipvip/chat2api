@@ -165,3 +165,29 @@ def test_v638_media_terminal_integrity_does_not_create_a_second_terminal_owner()
     assert source.count('response_terminal_source: "verified-request-media-dom-v176"') == 1
     assert manifest.index('"content_native_content_v1.js"') < manifest.index('"content_request_v6.js"')
     assert "native_capture_failure:String(active.nativeCaptureFailure || \"\")" in source
+
+
+def test_v639_native_sidecar_requires_committed_server_ack_without_terminal_authority():
+    background = read("chrome_extension/background.js")
+    observer = read("chrome_extension/content_native_content_v1.js")
+    backend = read("app/main.py")
+    controller = read("chrome_extension/content_request_v6.js")
+    assert "chat2api.native.ack" in background
+    assert "chat.native.ack" in background
+    assert "chat.native.ack" in backend
+    assert 'message_type in {"chat.native.chunk", "chat.native.snapshot"}' in backend
+    assert 'type:"chat2api.native.ack"' in observer
+    assert "reply?.committed === true" in observer
+    assert "reply?.committed !== true" in observer
+    assert "native_snapshot_server_committed" in backend
+    assert "native_transport_ack_error" in controller
+    assert 'response_terminal_source: "verified-request-media-dom-v176"' in controller
+    # This observer can neither emit a terminal nor manufacture media URLs.
+    assert 'type:"chat.completed"' not in observer
+    assert '"data:image/' not in observer
+
+def test_v639_never_returns_ordinal_or_dimension_guessed_image_assets():
+    backend = read("app/main.py")
+    assert 'if candidates["status"] == "verified-sha256":' in backend
+    assert 'elif ordinal:' not in backend
+    assert 'visible_assets = [assets[index] for index in candidates["indices"]]' not in backend
