@@ -21,7 +21,10 @@ with TestClient(app) as client:
         "applied_filters":payload.get("applied_filters"),
         "current_version_commit":payload.get("current_version_commit"),
         "total":payload.get("total"),
-        "keys":sorted(payload.keys())},ensure_ascii=False))
+        "keys":sorted(payload.keys()),
+        "routes":[{"name":getattr(route,"name",""),"module":getattr(getattr(route,"endpoint",None),"__module__",""),
+                   "endpoint":getattr(getattr(route,"endpoint",None),"__qualname__","")}
+                  for route in app.routes if getattr(route,"path","")=="/api/admin/requests"]},ensure_ascii=False))
 '''
     env=os.environ.copy()
     env.update({
@@ -36,7 +39,7 @@ with TestClient(app) as client:
     assert result.returncode==0,result.stdout+"\n"+result.stderr
     data=json.loads(result.stdout.strip().splitlines()[-1])
     assert data["status"]==200,data
-    assert data["applied_filters"] is not None,data
+    assert data["applied_filters"] is not None, json.dumps(data,ensure_ascii=False)
     assert data["applied_filters"]["current_version_only"] is True,data
     assert data["applied_filters"]["since"]=="2026-11-01T03:00:38+00:00",data
     assert data["current_version_commit"]=="a"*40,data
