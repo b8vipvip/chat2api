@@ -170,8 +170,8 @@
 
   const MAX_RAW_BYTES = 6 * 1024 * 1024;
   const CHUNK_BYTES = 64 * 1024;
-  // Every content chunk is independently bounded; the server commits only
-  // after all chunks from one request/revision/hash have been verified.
+  // Every chunk must receive the server's own ACK, not just a local socket
+  // enqueue. The final ACK must also confirm a committed, validated tree.
   async function deliverChunks(active, tree, bytes, final) {
     if (!globalThis.crypto?.subtle || !globalThis.btoa) return false;
     const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
@@ -181,15 +181,16 @@
     for (let index = 0; index < count; index++) {
       const slice = bytes.subarray(index * CHUNK_BYTES,(index + 1) * CHUNK_BYTES);
       const data = btoa(String.fromCharCode(...slice));
-      const reply = await chrome.runtime.sendMessage({type:"chat2api.event",event:{
+      const reply = await chrome.runtime.sendMessage({type:"chat2api.native.ack",event:{
         type:"chat.native.chunk",request_id:active.requestId,revision:tree.revision,
         index,count,byte_length:bytes.length,sha256,data,
       }});
-      if (reply?.ok !== true) return false;
+      if (reply?.ok !== true || (index === count - 1 && reply?.committed !== true))
+        return false;
       // Do not let the page's old reply be replaced by a partial generation.
       if (active.requestId !== tree.requestId && tree.requestId) return false;
     }
-    active.nativeChunkComplete = true;
+    active.nativeChunkComplete = true; // Last chunk was validated and published by server.
     return true;
   }
 
@@ -304,12 +305,17 @@
         return;
       }
       active.nativeHeavySnapshot = bytes.byteLength > 640000;
+      active.nativeChunkComplete = false;
       const transmit = async () => {
         if (bytes.byteLength <= 900000) {
-          const reply = await chrome.runtime.sendMessage({type:"chat2api.event",event:{
+          const reply = await chrome.runtime.sendMessage({type:"chat2api.native.ack",event:{
             type:"chat.native.snapshot",request_id:active.requestId,snapshot:tree,
           }});
-          return reply?.ok === true;
+          if (reply?.ok === true && reply?.committed === true) {
+            active.nativeChunkComplete = true;
+            return true;
+          }
+          return false;
         }
         return deliverChunks(active,tree,bytes,final);
       };
