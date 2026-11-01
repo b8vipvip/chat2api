@@ -31,7 +31,7 @@ from .generated_files_v196 import GeneratedFileArchive
 from .generated_file_staging_v238 import GeneratedFileStaging
 from .generated_file_deferred_v247 import DeferredGeneratedFiles, FileStillProcessing, FileTransferFailed
 from .rich_content_v196 import manifest as rich_content_manifest
-from .native_content_v1 import (NativeContentStore, native_delivery_fingerprint,
+from .native_content_v1 import (NativeContentStore, NativeChunkAssembler, native_delivery_fingerprint,
                                 native_layout_summary, native_unique_dimension_candidates,
                                 native_public_v1_tree)
 from .native_dom_evidence_v1 import NativeDomEvidenceStore
@@ -75,6 +75,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     worker_probes = WorkerProbeStore(config.data_dir)
     native_dom_evidence = NativeDomEvidenceStore(config.data_dir)
     native_content = NativeContentStore(config.data_dir)
+    native_chunks = NativeChunkAssembler(native_content)
     api_keys = ApiKeyStore(config.data_dir, config.api_key)
     telemetry.usage_accounting = api_keys.account_completed_usage
     file_store = FileStore(config.data_dir)
@@ -2191,6 +2192,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             native_dom_evidence.save(request_id,owner,message.get("report"))
                         except (ValueError, TypeError, OSError):
                             logger.info("Worker native DOM evidence rejected request=%s", request_id)
+                    continue
+                if message_type == "chat.native.chunk" and request_id:
+                    # The authenticated request owner + exact socket and
+                    # assembler SHA gate are all mandatory. Only an entire
+                    # validated tree becomes visible via native_content.
+                    active_state = broker.requests.get(request_id)
+                    row = telemetry.get(request_id) or {}
+                    owner = str(row.get("api_key_id") or "")
+                    if (active_state and active_state.client_id == client_id
+                            and registry.sockets.get(client_id) is websocket and owner):
+                        try:
+                            payload = {key: message.get(key) for key in
+                                       ("revision", "index", "count",
+                                        "byte_length", "sha256", "data")}
+                            native_chunks.ingest(request_id, owner, payload)
+                        except (ValueError, TypeError) as error:
+                            logger.info("Native chunk rejected request=%s reason=%s",
+                                        request_id, type(error).__name__)
                     continue
                 if message_type == "chat.native.snapshot" and request_id:
                     # Read-only observer from the authenticated current Worker.
