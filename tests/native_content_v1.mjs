@@ -16,7 +16,7 @@ class Element {
 const text={nodeType:3,nodeValue:"Hello safe rich text"};
 const img=new Element("IMG");
 const node=new Element("DIV",[text,img]);
-const ctx={Element,Node:{TEXT_NODE:3},Date,setTimeout,
+const ctx={Element,Node:{TEXT_NODE:3},Date,setTimeout,TextEncoder,
  getComputedStyle:()=>({display:"flex",visibility:"visible",flexDirection:"row",
     gap:"8px",color:"rgb(0, 0, 0)",backgroundImage:"url(https://secret.example/token)"}),
  chrome:{runtime:{sendMessage:async m=>{sent.push(m);return {ok:true}}}},
@@ -88,9 +88,9 @@ const overNodes=candidateFor(Array.from({length:90},(_,group)=>
   new Element("DIV",Array.from({length:80},(_,i)=>({
     nodeType:3,nodeValue:"paragraph "+group+"-"+i,
   })))));
-assert.equal(capture.snapshot(overNodes),null,"over 6400 nodes must fail closed");
+assert.ok(capture.snapshot(overNodes),"7k-node reply must now be captured without truncation");
 await capture.capture(overNodes,true);
-assert.equal(sent.length,1,"truncated content must never be published");
+assert.equal(sent.length,2,"7k-node reply should be emitted");
 
 // Production 062f needed >1400 safe text/layout nodes and 19 images.
 // 24 groups × 80 text nodes is now admitted without cutting off later cards.
