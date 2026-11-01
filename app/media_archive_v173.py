@@ -218,7 +218,8 @@ class MediaArchive:
                 media_id, token, owner, request_id, mime, len(raw), width, height,
                 cfg["backend"], full_key, thumb_key, datetime.now(timezone.utc).isoformat()))
         return {"id": media_id, "token": token, "mime": mime, "bytes": len(raw),
-                "width": width, "height": height, "backend": cfg["backend"]}
+                "width": width, "height": height, "backend": cfg["backend"],
+                "sha256": hashlib.sha256(raw).hexdigest()}
 
     def rewrite_markdown(self, source: str, owner: str, request_id: str, base_url: str):
         output = []
@@ -265,7 +266,7 @@ class MediaArchive:
             # playground can derive /thumbnail for lightweight preview without
             # replacing the original download URL in the assistant response.
             output.append(f"![{match.group(1) or '生成图片'}]({asset})")
-            rows.append({**{k: record[k] for k in ("id", "mime", "bytes", "width", "height", "backend")},
+            rows.append({**{k: record[k] for k in ("id", "mime", "bytes", "width", "height", "backend", "sha256")},
                          "url": asset, "thumbnail_url": asset + "/thumbnail"})
             last = match.end()
         output.append(source[last:])

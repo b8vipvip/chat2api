@@ -33,6 +33,7 @@ from .generated_file_deferred_v247 import DeferredGeneratedFiles, FileStillProce
 from .rich_content_v196 import manifest as rich_content_manifest
 from .native_content_v1 import (NativeContentStore, NativeChunkAssembler, native_delivery_fingerprint,
                                 native_layout_summary, native_unique_dimension_candidates,
+                                native_image_identity_candidates,
                                 native_public_v1_tree)
 from .native_dom_evidence_v1 import NativeDomEvidenceStore
 from .media_public_origin_v187 import media_base_for_request
@@ -396,7 +397,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ):
                     assets.append(uri)
                     asset_metadata.append({"width":media.get("width"),
-                                           "height":media.get("height")})
+                                           "height":media.get("height"),
+                                           "sha256":media.get("sha256")})
                     break
         # Files are derived only from this request's archived final reply.
         # Never forward unverified model-provided or upstream temporary URLs.
@@ -456,9 +458,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Return a request-owned, presentation-ordered subset only when all
         # layout images have one unique dimension match. With no safe mapping,
         # supply zero image URLs and let the consumer fall back to Markdown.
-        candidates = native_unique_dimension_candidates(snapshot, asset_metadata)
+        candidates = native_image_identity_candidates(snapshot, asset_metadata)
         ordinal = native_layout_summary(snapshot, len(assets))["media_mapping_complete"]
-        if ordinal:
+        if candidates["status"] == "verified-sha256":
+            visible_assets = [assets[index] for index in candidates["indices"]]
+        elif candidates["status"] == "identity-incomplete":
+            # A partial/contradictory byte proof cannot be replaced by a
+            # dimension or ordinal guess, even when counts happen to match.
+            visible_assets = []
+        elif ordinal:
             visible_assets = assets
         elif candidates["status"] == "unique-dimensions-unverified":
             visible_assets = [assets[index] for index in candidates["indices"]]
@@ -598,14 +606,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="No native layout evidence")
         archived = row.get("response_media") or []
         details = [
-            {key: media[key] for key in ("id", "mime", "width", "height") if key in media}
+            {key: media[key] for key in ("id", "mime", "width", "height", "sha256") if key in media}
             for media in archived[:40] if isinstance(media, dict)
         ]
         return JSONResponse(
             {"request_id": request_id, "version": 1, "snapshot": snapshot,
              "layout_summary": native_layout_summary(snapshot, len(details)),
              "media_metadata": details,
-             "image_asset_candidates": native_unique_dimension_candidates(
+             "image_asset_candidates": native_image_identity_candidates(
                  snapshot, details)},
             headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
         )

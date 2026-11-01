@@ -17,19 +17,29 @@
     objectFit: ["contain","cover","fill","none"],
     textAlign: ["left","center","right","justify","start","end"],
     fontWeight: ["400","500","600","700"],
+    whiteSpace: ["normal","nowrap","pre","pre-wrap","pre-line","break-spaces"],
+    wordBreak: ["normal","break-all","keep-all","break-word"],
+    overflowWrap: ["normal","break-word","anywhere"],
+    verticalAlign: ["baseline","middle","top","bottom","sub","super"],
+    textDecorationLine: ["none","underline","line-through","overline"],
+    borderStyle: ["none","solid","dashed","dotted","double"],
+    alignSelf: ["auto","start","center","end","stretch","baseline"],
+    justifySelf: ["auto","start","center","end","stretch"],
   };
-  const allowedLength = new Set(["gap","padding","marginTop","marginBottom","width","maxWidth","height","borderRadius","fontSize","lineHeight"]);
+  const allowedLength = new Set(["gap","rowGap","columnGap","padding","marginTop","marginBottom",
+    "marginLeft","marginRight","width","minWidth","maxWidth","height","minHeight",
+    "maxHeight","borderRadius","borderWidth","letterSpacing","fontSize","lineHeight"]);
   const length = /^(?:0|\d{1,4}(?:\.\d{1,2})?(?:px|rem|%))$/;
   const color = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s]+\))$/i;
   const grid = /^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$/;
-  const cssList = [...Object.keys(styleKeys),...allowedLength,"color","backgroundColor","gridTemplateColumns"];
+  const cssList = [...Object.keys(styleKeys),...allowedLength,"color","backgroundColor","borderColor","gridTemplateColumns"];
   function safeStyle(element) {
     const css = getComputedStyle(element), obj = {};
     for (const key of cssList) {
       const value = String(css[key] || "").trim();
       if (styleKeys[key]?.includes(value) ||
           allowedLength.has(key) && value.length <= 16 && length.test(value) ||
-          ["color","backgroundColor"].includes(key) && value.length <= 48 && color.test(value) ||
+          ["color","backgroundColor","borderColor"].includes(key) && value.length <= 48 && color.test(value) ||
           key === "gridTemplateColumns" && value.length <= 120 && grid.test(value)) {
         obj[key] = value;
       }
@@ -64,11 +74,36 @@
         chars += raw.length; nodes += 1;
         return {tag:"span",text:raw};
       }
-      if (!(element instanceof Element) || ignore(element)) return null;
+      if (!(element instanceof Element)) return null;
+      const tag = element.tagName.toLowerCase();
+      // Generated-image cards are often rendered INSIDE inert-looking
+      // <button> wrappers. Discard their click action and control text, but
+      // preserve only the visible raster descendants inside this request's
+      // already-verified assistant reply scope.
+      if (tag === "button") {
+        if (element.closest?.("nav,aside,footer,header,form,[role='menu'],[role='dialog']"))
+          return null;
+        const rasters = [...(element.querySelectorAll?.("img") || [])]
+          .filter(img => {
+            const box=img.getBoundingClientRect?.();
+            return box && box.width>=40 && box.height>=40
+              && !img.closest?.("nav,aside,footer,[data-message-author-role='user']");
+          });
+        if (!rasters.length) return null;
+        const children=[];
+        for(const img of rasters.slice(0,40)){
+          const mapped=build(img,depth+1);
+          if(mapped)children.push(mapped);
+          if(truncated)break;
+        }
+        if(!children.length || truncated)return null;
+        nodes+=1;
+        return {tag:"figure",children};
+      }
+      if (ignore(element)) return null;
       const rect = element.getBoundingClientRect?.();
       const computed = getComputedStyle(element);
       if (computed.display === "none" || computed.visibility === "hidden") return null;
-      const tag = element.tagName.toLowerCase();
       let mapped = tags.has(tag) ? tag : "div";
       if (tag === "img") {
         if (!rect || rect.width < 40 || rect.height < 40) return null;
@@ -78,6 +113,8 @@
         }
         nodes += 1;
         const result={tag:"img",media_index:images++,style:safeStyle(element)};
+        const sourceHash = active.nativeImageDigests?.get(element);
+        if (/^[a-f0-9]{64}$/.test(sourceHash || "")) result.source_sha256 = sourceHash;
         // Numeric intrinsic dimensions only. No DOM src, URL, pixel bytes or
         // signed tokens enter this optional matching hint.
         const nw=Number(element.naturalWidth),nh=Number(element.naturalHeight);
@@ -156,6 +193,83 @@
     return true;
   }
 
+
+  const IDENTITY_MIMES = new Set(["image/jpeg","image/png","image/webp","image/gif"]);
+  const MAX_IDENTITY_BYTES = 4 * 1024 * 1024;
+  const HASH_HEX = /^[a-f0-9]{64}$/;
+  async function hashVisibleRaster(img) {
+    const url=String(img.currentSrc || img.getAttribute?.("src") || "");
+    if (!url || !globalThis.crypto?.subtle) return "";
+    try {
+      if (/^https:\/\//i.test(url)) {
+        // Existing background allowlist enforces sender/tab and trusted
+        // OpenAI/CDN hosts. It never returns image bytes to this observer.
+        const result=await chrome.runtime.sendMessage({
+          type:"chat2api.media.hash-v2",url,
+        });
+        return result?.ok && HASH_HEX.test(result.sha256) ? result.sha256 : "";
+      }
+      if (!/^(blob:|data:image\/)/i.test(url)) return "";
+      // Blob/data are resolved only in this already-authorized ChatGPT tab.
+      // No original URL, pixel byte buffer or token is sent to telemetry.
+      const response=await fetch(url,{credentials:"omit",redirect:"error"});
+      const size=Number(response.headers.get("content-length") || 0);
+      if (!response.ok || size > MAX_IDENTITY_BYTES) return "";
+      const blob=await response.blob();
+      if (!IDENTITY_MIMES.has(blob.type.toLowerCase())
+          || !blob.size || blob.size>MAX_IDENTITY_BYTES) return "";
+      const digest=new Uint8Array(await crypto.subtle.digest(
+        "SHA-256",await blob.arrayBuffer()));
+      return [...digest].map(x=>x.toString(16).padStart(2,"0")).join("");
+    } catch (_) { return ""; }
+  }
+  async function resolveImageIdentities(active) {
+    const candidate=active.lastCandidateNode;
+    const scoped=globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
+    const roots=(scoped?.scope==="roleless_reply_siblings"
+       || scoped?.scope==="verified_reply_container") && scoped.roots?.length
+      ? scoped.roots : [candidate];
+    const images=[];
+    for (const root of roots) {
+      if (!(root instanceof Element) || !root.isConnected) continue;
+      const candidates=root.tagName?.toLowerCase()==="img"
+        ? [root] : [...(root.querySelectorAll?.("img") || [])];
+      for (const img of candidates) {
+        if (!(img instanceof Element) || images.includes(img)) continue;
+        const box=img.getBoundingClientRect?.();
+        if (!box || box.width<40 || box.height<40) continue;
+        if (img.closest?.("aside,nav,footer,[data-message-author-role='user']")) continue;
+        images.push(img);
+        if (images.length===40) break;
+      }
+      if (images.length===40) break;
+    }
+    const digests=new Map();
+    // The request-v6 controller awaits final native.capture before emitting
+    // the terminal. Never make a stalled CDN or blob fetch delay OpenAI
+    // completion for 40 * 6.5 seconds. At most 3.5 seconds total, four
+    // concurrent fetches; unverified positions remain explicitly unmatched.
+    const deadline=Date.now()+3500;
+    for (let start=0;start<images.length && Date.now()<deadline;start+=4) {
+      const batch=images.slice(start,start+4);
+      let timer;
+      try {
+        const remaining=Math.max(1,deadline-Date.now());
+        const result=await Promise.race([
+          Promise.all(batch.map(hashVisibleRaster)),
+          new Promise(resolve=>{timer=setTimeout(()=>resolve(null),remaining);}),
+        ]);
+        if (!result) break;
+        batch.forEach((img,index)=>{
+          if (HASH_HEX.test(result[index])) digests.set(img,result[index]);
+        });
+      } finally {if(timer)clearTimeout(timer);}
+    }
+    active.nativeImageDigests=digests;
+    active.nativeIdentityVerifiedCount=digests.size;
+    active.nativeIdentityCandidateCount=images.length;
+  }
+
   async function capture(active, final = false) {
     if (!active?.requestId || !active.submitStartedAt) return;
     const now = Date.now();
@@ -175,6 +289,7 @@
     active.nativeTransferInFlight = true;
     active.nativeLastAt = now;
     try {
+      if (final) await resolveImageIdentities(active);
       const tree = snapshot(active);
       if (!tree) {
         active.nativeCaptureFailure = "structural-limit-or-no-verified-reply";

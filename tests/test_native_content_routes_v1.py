@@ -417,3 +417,43 @@ def test_native_v1_reorders_only_unique_owned_dimension_subset(tmp_path):
         assert failed.status_code==200
         assert failed.json()["assets"]==[]
         assert failed.json()["image_asset_candidates"]["status"]=="unavailable"
+
+
+def test_verified_image_hash_reorders_public_and_admin_assets_even_same_size(tmp_path: Path):
+    app=create_app(Settings(CHAT2API_API_KEY="test-key",
+        CHAT2API_PAIRING_CODE="test-pair", CHAT2API_DATA_DIR=tmp_path))
+    rid="req_identityproof001122"
+    a,b="a"*64,"b"*64
+    assets=[
+        "https://media.example.com/api/media/med_hasha123/assetTOKEN1234567",
+        "https://media.example.com/api/media/med_hashb123/assetTOKEN1234567",
+    ]
+    with TestClient(app) as client:
+        async def record():
+            await app.state.telemetry.upsert({
+                "request_id":rid,"api_key_id":"master","status":"completed",
+                "response_media":[
+                    {"url":assets[0],"owned_url":assets[0],"width":1290,
+                     "height":860,"sha256":a,"id":"med_hasha123"},
+                    {"url":assets[1],"owned_url":assets[1],"width":1290,
+                     "height":860,"sha256":b,"id":"med_hashb123"}],
+            })
+        asyncio.run(record())
+        app.state.native_content.publish(rid,"master",{
+            "version":1,"revision":12,"root":{"tag":"div","children":[
+                {"tag":"img","media_index":0,"source_sha256":b,
+                 "intrinsic_width":1290,"intrinsic_height":860},
+                {"tag":"img","media_index":1,"source_sha256":a,
+                 "intrinsic_width":1290,"intrinsic_height":860}]},
+        })
+        auth={"Authorization":"Bearer test-key"}
+        public=client.get(f"/v1/native-content/{rid}",headers=auth)
+        assert public.status_code==200,public.text
+        assert public.json()["image_asset_candidates"]=={
+            "status":"verified-sha256","indices":[1,0]}
+        assert public.json()["assets"]==[assets[1],assets[0]]
+        assert "source_sha256" not in str(public.json()["root"])
+        private=client.get(f"/api/admin/requests/{rid}/native-content",headers=auth)
+        assert private.status_code==200
+        assert private.json()["image_asset_candidates"]["status"]=="verified-sha256"
+        assert private.json()["media_metadata"][0]["sha256"]==a

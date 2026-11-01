@@ -138,7 +138,7 @@ const requestHistoryNativeTags=new Set(
   'div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br'.split(' ')
 );
 const requestHistoryNativeStyles=new Set(
-  'display flexDirection flexWrap justifyContent alignItems objectFit textAlign fontWeight gap padding marginTop marginBottom width maxWidth height borderRadius fontSize lineHeight color backgroundColor gridTemplateColumns'.split(' ')
+  'display flexDirection flexWrap justifyContent alignItems objectFit textAlign fontWeight whiteSpace wordBreak overflowWrap verticalAlign textDecorationLine borderStyle alignSelf justifySelf gap rowGap columnGap padding marginTop marginBottom marginLeft marginRight width minWidth maxWidth height minHeight maxHeight borderRadius borderWidth letterSpacing fontSize lineHeight color backgroundColor borderColor gridTemplateColumns'.split(' ')
 );
 function requestHistoryOwnedImageUrl(value){
   try{
@@ -152,22 +152,25 @@ function requestHistoryNativeNode(value,assets,budget,depth=0){
   if(!value||typeof value!=='object'||depth>24||++budget.count>30000
       ||!requestHistoryNativeTags.has(value.tag))throw new Error('原生快照结构无效');
   const node=document.createElement(value.tag);
-  if(value.tag==='img'){
-    const index=value.media_index;
-    if(!Number.isInteger(index)||index<0||index>=assets.length||index>=40)
-      throw new Error('原生图片与归档资产无法匹配');
-    node.src=assets[index];node.alt='原生回复归档图片';node.loading='lazy';
-    node.style.maxWidth='100%';
-    node.style.height='auto';
-    return node;
-  }
-  if(typeof value.text==='string')node.textContent=value.text;
+  // Images must follow the same validated, bounded style tree as text/cards.
+  // The old early return silently discarded original objectFit, borderRadius,
+  // width, grid layout and spacing, even for hash-verified image assets.
   const style=value.style||{};
   for(const [key,raw] of Object.entries(style)){
     if(!requestHistoryNativeStyles.has(key)||typeof raw!=='string'
         ||raw.length>120||/url\s*\(|var\s*\(|[;{}<>]/i.test(raw))continue;
     node.style[key]=raw;
   }
+  if(value.tag==='img'){
+    const index=value.media_index;
+    if(!Number.isInteger(index)||index<0||index>=assets.length||index>=40)
+      throw new Error('原生图片与归档资产无法匹配');
+    node.src=assets[index];node.alt='原生回复归档图片';node.loading='lazy';
+    if(!style.maxWidth)node.style.maxWidth='100%';
+    if(!style.height)node.style.height='auto';
+    return node;
+  }
+  if(typeof value.text==='string')node.textContent=value.text;
   const children=Array.isArray(value.children)?value.children:[];
   if(children.length>160)throw new Error('原生快照子节点超限');
   for(const child of children)node.appendChild(requestHistoryNativeNode(child,assets,budget,depth+1));
@@ -192,20 +195,25 @@ async function requestHistoryLoadNativePreview(requestId,row,sequence){
       && Array.isArray(candidate.indices) && candidate.indices.length===imageCount
       && candidate.indices.every(i=>Number.isInteger(i)&&i>=0&&i<assets.length)
       && new Set(candidate.indices).size===candidate.indices.length;
+    const verifiedHash=candidate?.status==='verified-sha256'
+      && Array.isArray(candidate.indices) && candidate.indices.length===imageCount
+      && candidate.indices.every(i=>Number.isInteger(i)&&i>=0&&i<assets.length);
     const completeOrdinal=summary.media_mapping_complete===true
-      && imageCount===media.length;
-    const previewAssets=completeOrdinal?assets
-      :(dimensionHint?candidate.indices.map(i=>assets[i]):[]);
+      && imageCount===media.length && candidate?.status!=='identity-incomplete';
+    // Image SHA256 has higher authority than ordinal or natural dimensions.
+    const previewAssets=verifiedHash?candidate.indices.map(i=>assets[i])
+      :(completeOrdinal?assets:(dimensionHint?candidate.indices.map(i=>assets[i]):[]));
     if(!snapshot?.root||snapshot.version!==1
-        ||(!completeOrdinal && !dimensionHint)
+        ||(!verifiedHash && !completeOrdinal && !dimensionHint)
+        ||candidate?.status==='identity-incomplete'
         ||previewAssets.length!==imageCount||previewAssets.some(u=>!u))
-      throw new Error('原生快照与已归档图片未完整对应，暂时只能显示标准 API 正文');
+      throw new Error('原生图片字节身份未完整验证，已拒绝错位预览；标准 API 正文仍可用');
     const tree=requestHistoryNativeNode(snapshot.root,previewAssets,{count:0});
     preview.appendChild(tree);
     nativeButton.disabled=false;
     status.textContent='已取得原生结构预览（'+summary.nodes+' 节点 / '
       +summary.images+' 图片 / '+summary.grid+' Grid）。'
-      +(completeOrdinal?'图片按完整归档顺序展示。':'图片仅按唯一天然尺寸匹配，未验证内容哈希。')
+      +(verifiedHash?'图片与归档原始字节 SHA256 已逐张一致。':completeOrdinal?'图片按归档顺序展示，身份尚未全部验证。':'图片仅按唯一天然尺寸匹配，未验证内容哈希。')
       +'预览不等于像素级 1:1 验收。';
   }catch(error){
     if(sequence===requestHistoryMediaSequence){

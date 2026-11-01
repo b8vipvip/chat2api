@@ -36,10 +36,20 @@ SAFE_STYLES = {
     "objectFit": {"contain", "cover", "fill", "none"},
     "textAlign": {"left", "center", "right", "justify", "start", "end"},
     "fontWeight": {"400", "500", "600", "700"},
+    "whiteSpace": {"normal", "nowrap", "pre", "pre-wrap", "pre-line", "break-spaces"},
+    "wordBreak": {"normal", "break-all", "keep-all", "break-word"},
+    "overflowWrap": {"normal", "break-word", "anywhere"},
+    "verticalAlign": {"baseline", "middle", "top", "bottom", "sub", "super"},
+    "textDecorationLine": {"none", "underline", "line-through", "overline"},
+    "borderStyle": {"none", "solid", "dashed", "dotted", "double"},
+    "alignSelf": {"auto", "start", "center", "end", "stretch", "baseline"},
+    "justifySelf": {"auto", "start", "center", "end", "stretch"},
 }
-LENGTH_STYLES = {"gap", "padding", "marginTop", "marginBottom",
-                 "width", "maxWidth", "height", "borderRadius", "fontSize", "lineHeight"}
-COLOR_STYLES = {"color", "backgroundColor"}
+LENGTH_STYLES = {"gap", "rowGap", "columnGap", "padding", "marginTop", "marginBottom",
+                 "marginLeft", "marginRight", "width", "minWidth", "maxWidth", "height",
+                 "minHeight", "maxHeight", "borderRadius", "borderWidth",
+                 "letterSpacing", "fontSize", "lineHeight"}
+COLOR_STYLES = {"color", "backgroundColor", "borderColor"}
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{3,8}$")
 RGB_COLOR = re.compile(r"^rgba?\([0-9.,\s]+\)$")
 LENGTH = re.compile(r"^(?:0|(?:\d{1,4}(?:\.\d{1,2})?)(?:px|rem|%))$")
@@ -65,12 +75,12 @@ def validate_native_snapshot(payload: object) -> dict:
         if tag not in SAFE_TAGS or not isinstance(tag, str):
             raise ValueError("Unsupported native element")
         if set(value) - {"tag", "text", "children", "style", "media_index",
-                          "intrinsic_width", "intrinsic_height"}:
+                          "intrinsic_width", "intrinsic_height", "source_sha256"}:
             raise ValueError("Native element has unsafe attributes")
         result = {"tag": tag}
         if tag == "img":
             if set(value) - {"tag", "media_index", "style",
-                             "intrinsic_width", "intrinsic_height"}:
+                             "intrinsic_width", "intrinsic_height", "source_sha256"}:
                 raise ValueError("Image attributes must be asset references")
             idx = value.get("media_index")
             if type(idx) is not int or idx < 0 or idx >= 40:
@@ -87,7 +97,13 @@ def validate_native_snapshot(payload: object) -> dict:
                     raise ValueError("Invalid intrinsic image dimensions")
                 result["intrinsic_width"] = width
                 result["intrinsic_height"] = height
-        elif any(k in value for k in ("media_index", "intrinsic_width", "intrinsic_height")):
+            if "source_sha256" in value:
+                digest = value["source_sha256"]
+                if not isinstance(digest, str) or not re.fullmatch("[a-f0-9]{64}", digest):
+                    raise ValueError("Invalid image byte identity")
+                result["source_sha256"] = digest
+        elif any(k in value for k in ("media_index", "intrinsic_width",
+                                       "intrinsic_height", "source_sha256")):
             raise ValueError("Image reference on non-image element")
         if "text" in value:
             content = value["text"]
@@ -99,7 +115,7 @@ def validate_native_snapshot(payload: object) -> dict:
             result["text"] = content
         if "style" in value:
             raw = value["style"]
-            if not isinstance(raw, dict) or len(raw) > 18:
+            if not isinstance(raw, dict) or len(raw) > 32:
                 raise ValueError("Unsafe CSS")
             styles = {}
             for key, item in raw.items():
@@ -392,6 +408,46 @@ def native_unique_dimension_candidates(snapshot: dict, archived_media: list[dict
     return {"status":"unique-dimensions-unverified","indices":found}
 
 
+
+def native_image_identity_candidates(snapshot: dict, archived_media: list[dict]) -> dict:
+    """Map exact original bytes when proven; otherwise show explicit uncertainty.
+
+    Crops/re-encodes/dimension similarity NEVER count as byte identity. Identical
+    hashes may legitimately appear at multiple DOM positions. Every asset must
+    belong to the same request via the caller's verified archive inventory.
+    """
+    images=[]
+    pending=[snapshot.get("root")]
+    while pending and len(images) <= 40:
+        node=pending.pop()
+        if not isinstance(node,dict):
+            continue
+        if node.get("tag")=="img":
+            images.append(node)
+        else:
+            pending.extend(reversed(node.get("children") or ()))
+    if not images or len(images)>40 or len(archived_media)>40:
+        return {"status":"unavailable","indices":[]}
+    proofs=[node.get("source_sha256") for node in images]
+    if not any(proofs):
+        return native_unique_dimension_candidates(snapshot,archived_media)
+    if not all(isinstance(p,str) and re.fullmatch("[0-9a-f]{64}",p) for p in proofs):
+        return {"status":"identity-incomplete","indices":[]}
+    table={}
+    for index,media in enumerate(archived_media):
+        if not isinstance(media,dict):
+            continue
+        digest=media.get("sha256")
+        if isinstance(digest,str) and re.fullmatch("[0-9a-f]{64}",digest):
+            table.setdefault(digest,index)
+    result=[]
+    for index,proof in enumerate(proofs):
+        if images[index].get("media_index") != index or proof not in table:
+            return {"status":"identity-incomplete","indices":[]}
+        result.append(table[proof])
+    return {"status":"verified-sha256","indices":result}
+
+
 def native_public_v1_tree(root: dict) -> dict:
     """Strip new optional dimension hints for existing strict v1 consumers.
 
@@ -399,7 +455,7 @@ def native_public_v1_tree(root: dict) -> dict:
     display; old MV3C clients accept only the original five safe node keys.
     """
     result = {key: value for key,value in root.items()
-              if key not in ("intrinsic_width", "intrinsic_height", "children")}
+              if key not in ("intrinsic_width", "intrinsic_height", "source_sha256", "children")}
     if "children" in root:
         result["children"] = [native_public_v1_tree(child) for child in root["children"]]
     return result
