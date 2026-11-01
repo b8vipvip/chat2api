@@ -164,6 +164,23 @@ class NativeChunkAssembler:
         self._lock = threading.Lock()
         self._sessions: OrderedDict[str, dict] = OrderedDict()
 
+    def progress(self, request_id: str, owner: str) -> dict:
+        """Safe transport state only: never emit chunk bytes or source SHA."""
+        self.store._valid_id(request_id)
+        with self._lock:
+            state = self._sessions.get(request_id)
+            if not state or state["identity"][0] != owner:
+                return {"state": "none"}
+            _owner, revision, size, count, _digest = state["identity"]
+            return {
+                "state": "incomplete",
+                "revision": revision,
+                "received_chunks": len(state["parts"]),
+                "expected_chunks": count,
+                "total_bytes": size,
+                "age_seconds": round(max(0.0, time.monotonic() - state["at"]), 2),
+            }
+
     def ingest(self, request_id: str, owner: str, value: object) -> bool:
         self.store._valid_id(request_id)
         if not owner or not isinstance(value, dict) or set(value) != {

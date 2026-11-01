@@ -1104,10 +1104,29 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Diagnostics only: bounded structural evidence for A/B/C/D visual
         # comparisons. Do not export DOM HTML, CSS text, URLs or image bytes.
         native = native_content.get(state.request_id, principal.key_id)
+        # The old request ZIP reported 960 private DOM nodes / 4 archived
+        # images yet *no* native layout summary. Preserve that distinction:
+        # a complete independent DOM probe does not imply a published
+        # native-rich snapshot, let alone verified raster identity.
+        state.diagnostics["native_snapshot_state"] = (
+            "published" if native else "missing"
+        )
+        state.diagnostics["native_chunk_assembly"] = native_chunks.progress(
+            state.request_id, principal.key_id
+        )
         if native:
-            state.diagnostics["native_layout_summary"] = native_layout_summary(
-                native, len(media_items or []),
+            items = [item for item in (media_items or [])[:40]
+                     if isinstance(item, dict)]
+            summary = native_layout_summary(native, len(items))
+            identity = native_image_identity_candidates(native, items)
+            state.diagnostics["native_layout_summary"] = summary
+            state.diagnostics["native_image_identity_status"] = identity["status"]
+            state.diagnostics["native_identity_matched_count"] = (
+                len(identity.get("indices") or [])
+                if identity.get("status") == "verified-sha256" else 0
             )
+            state.diagnostics["native_identity_archived_count"] = len(items)
+            state.diagnostics["native_identity_dom_image_count"] = summary["images"]
         await telemetry.upsert(
             {
                 "request_id": state.request_id,

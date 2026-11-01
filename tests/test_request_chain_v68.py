@@ -148,3 +148,20 @@ def test_entry_installs_api_key_console_after_worker_presentation():
     entry = read("app/entry.py")
     assert "install_api_key_console_v68_patch(app)" in entry
     assert entry.index("install_worker_presentation_v64_patch(app)") < entry.index("install_api_key_console_v68_patch(app)")
+
+
+
+def test_v638_media_terminal_integrity_does_not_create_a_second_terminal_owner():
+    source = read("chrome_extension/content_request_v6.js")
+    manifest = read("chrome_extension/manifest.json")
+    assert 'function mediaTerminalPayloadIntegrity(text)' in source
+    assert "mediaTerminalPayloadIntegrity(captured)" in source
+    assert source.index("mediaTerminalPayloadIntegrity(captured)") < source.index(
+        'responseStarted = await ensureResponseStarted(active, responseStarted, "verified-media-dom-v176")'
+    )
+    assert 'media_terminal_integrity:"retry"' in source
+    assert 'imageCandidate=""' in source
+    assert 'await emit({\n              type: "chat.completed"' in source
+    assert source.count('response_terminal_source: "verified-request-media-dom-v176"') == 1
+    assert manifest.index('"content_native_content_v1.js"') < manifest.index('"content_request_v6.js"')
+    assert "native_capture_failure:String(active.nativeCaptureFailure || \"\")" in source

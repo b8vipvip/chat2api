@@ -92,3 +92,32 @@ def test_worker_chunked_capture_node_regression():
     result=subprocess.run(["node","tests/native_content_chunked_v636.mjs"],
                           cwd=root,capture_output=True,text=True,timeout=45)
     assert result.returncode==0,result.stdout+"\n"+result.stderr
+
+
+def test_pending_native_chunk_progress_contains_only_safe_counts(tmp_path):
+    store=NativeContentStore(tmp_path)
+    assembler=NativeChunkAssembler(store)
+    req="req_chunkprogress0001"
+    items=packets(large_snapshot())
+    assert assembler.progress(req,"owner")=={"state":"none"}
+    assert not assembler.ingest(req,"owner",items[0])
+    progress=assembler.progress(req,"owner")
+    assert progress["state"]=="incomplete"
+    assert progress["received_chunks"]==1
+    assert progress["expected_chunks"]==len(items)
+    assert progress["total_bytes"]==items[0]["byte_length"]
+    assert "sha256" not in str(progress)
+    assert "data" not in progress
+    assert assembler.progress(req,"other")=={"state":"none"}
+    for item in items[1:]:
+        assembler.ingest(req,"owner",item)
+    assert assembler.progress(req,"owner")=={"state":"none"}
+
+
+def test_media_terminal_integrity_node_regression():
+    import subprocess
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    proc=subprocess.run(["node","tests/media_terminal_payload_integrity_v638.mjs"],
+                        cwd=root,capture_output=True,text=True,timeout=20)
+    assert proc.returncode==0,proc.stdout+"\n"+proc.stderr
