@@ -41,6 +41,8 @@ _WORKER_PATH_PREFIXES = (
 _WORKER_PATH_EXACT = frozenset(
     {
         "scripts/bootstrap_linux_worker.sh",
+        "scripts/native_page_diagnostic_v1.py",
+        "scripts/native_page_tool_control.py",
         "app/linux_worker_patch.py",
         "app/linux_worker_install_patch.py",
         "app/linux_worker_xray_patch.py",
