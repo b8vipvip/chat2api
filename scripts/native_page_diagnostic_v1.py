@@ -30,17 +30,17 @@ CAPTURE = r"""(function(expected){
 const allowed=new Set('div section article p span strong em b i h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a sup sub'.split(' '));
 const forbidden='script,style,form,nav,aside,header,footer,input,textarea,iframe,canvas,svg,[role="menu"],[role="dialog"],[contenteditable="true"],[data-message-author-role="user"],[data-testid="user-message"]';
 const visible=e=>{try{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';}catch(_){return false;}};
-const norm=s=>String(s||'').replace(/\\s+/g,' ').trim();
+const norm=s=>String(s||'').replace(/\s+/g,' ').trim();
 const hasUser=e=>!!e.querySelector('[data-message-author-role="user"],[data-testid="user-message"]');
 let scope='',roots=[];
 const assistant=[...document.querySelectorAll('[data-message-author-role="assistant"]')].filter(e=>e.isConnected&&visible(e)&&!hasUser(e)&&!e.parentElement?.closest('[data-message-author-role="assistant"]'));
 if(assistant.length){scope='assistant-role';roots=[assistant[assistant.length-1]];}
 else {
- const h=[...document.querySelectorAll('main h4,[role="main"] h4,#thread h4')].filter(e=>e.isConnected&&visible(e)&&/^ChatGPT said\\s*[:：]?$/.test(norm(e.textContent)));
+ const h=[...document.querySelectorAll('main h4,[role="main"] h4,#thread h4')].filter(e=>e.isConnected&&visible(e)&&/^ChatGPT said\s*[:：]?$/.test(norm(e.textContent)));
  if(!h.length)return {ok:false,error:'no-verified-assistant-boundary'};
  const heading=h[h.length-1];let at=heading.nextElementSibling;scope='roleless-heading';
  while(at&&roots.length<4096){
-   if(at.matches(forbidden)||at.tagName==='H4'&&/^(You said|ChatGPT said)\\s*[:：]?$/.test(norm(at.textContent))||hasUser(at))break;
+   if(at.matches(forbidden)||at.tagName==='H4'&&/^(You said|ChatGPT said)\s*[:：]?$/.test(norm(at.textContent))||hasUser(at))break;
    roots.push(at);at=at.nextElementSibling;
  }
  if(at&&roots.length>=4096)return {ok:false,error:'reply-sibling-limit'};
@@ -67,7 +67,7 @@ function walk(node,depth){
  const rect={x:Math.round(box.left+scrollX),y:Math.round(box.top+scrollY),w:Math.round(box.width),h:Math.round(box.height)};
  const style={};
  for(const prop of ['display','gridTemplateColumns','flexDirection','flexWrap','justifyContent','alignItems','gap','padding','marginTop','marginBottom','width','maxWidth','fontSize','fontWeight','lineHeight','color','backgroundColor','borderColor','borderRadius','textAlign','whiteSpace','objectFit']){
-    const val=String(css[prop]||'').trim();if(val.length>0&&val.length<=100&&!/url\\s*\\(|var\\s*\\(|[;{}<>]/i.test(val))style[prop]=val;
+    const val=String(css[prop]||'').trim();if(val.length>0&&val.length<=100&&!/url\s*\(|var\s*\(|[;{}<>]/i.test(val))style[prop]=val;
  }
  const out={tag:allowed.has(tag)?tag:'div',rect,style};counters.nodes++;
  if(tag==='table')counters.tables++;
