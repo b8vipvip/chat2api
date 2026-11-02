@@ -27,16 +27,16 @@ def _archive(request_id, worker_id):
     buffer=io.BytesIO()
     with ZipFile(buffer,"w") as archive:
         archive.writestr("assistant_dom.json","{}")
-        archive.writestr("diagnostic.log","tool_version=1.2.1")
+        archive.writestr("diagnostic.log","tool_version=1.2.2")
         archive.writestr("manifest.json",json.dumps({
-            "request_id":request_id,"worker_id":worker_id,"version":"1.2.1",
+            "request_id":request_id,"worker_id":worker_id,"version":"1.2.2",
             "request_binding":"manual-conversation-url-unverified-turn"}))
     return buffer.getvalue()
 
 
 def test_browser_collector_is_versioned_parseable_and_cdp_loopback_only():
     source=(ROOT/"scripts/native_page_diagnostic_v1.py").read_text()
-    assert 'VERSION = "1.2.1"' in source
+    assert 'VERSION = "1.2.2"' in source
     assert 'const forbidden=' in source
     assert 'document.cookie' not in source
     assert "localStorage" not in source
@@ -46,7 +46,7 @@ def test_browser_collector_is_versioned_parseable_and_cdp_loopback_only():
     proc=subprocess.run([sys.executable,"scripts/native_page_diagnostic_v1.py","--version"],
         cwd=ROOT,capture_output=True,text=True,timeout=10)
     assert proc.returncode == 0,proc.stderr
-    assert proc.stdout.strip()=="1.2.1"
+    assert proc.stdout.strip()=="1.2.2"
     match=re.search(r'CAPTURE = r"""(.*?)"""',source,re.S)
     assert match
     js=match.group(1)+"('req_example123456');"
@@ -60,7 +60,7 @@ def test_controller_uses_only_fixed_commands_and_worker_id(monkeypatch,tmp_path)
     monkeypatch.setattr(control,"INSTALLED",tmp_path/"overridden-tool.py")
     worker="wrk_abc123456"
     v=control.execute("native_page_version",{},worker,1,"https://example.test")
-    assert v["ok"] and v["installed"] is True and v["version"]=="1.2.1"
+    assert v["ok"] and v["installed"] is True and v["version"]=="1.2.2"
     assert control.execute("unknown_tool_command",{},worker,1,"https://example.test")["ok"] is False
     assert control.execute("native_page_start",{"job_id":"../../../bad",
         "request_id":"req_abc123456"},worker,1,"https://example.test")["ok"] is False
@@ -110,19 +110,19 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
                     z.writestr("assistant_dom.json","{}")
                     z.writestr("manifest.json",json.dumps({
                         "request_id":args["request_id"],"worker_id":worker,
-                        "version":"1.2.1","request_binding":"url-only-unbound"}))
+                        "version":"1.2.2","request_binding":"url-only-unbound"}))
                 raw=buf.getvalue()
-            return {"result":{"ok":True,"tool_version":"1.2.1"}}
+            return {"result":{"ok":True,"tool_version":"1.2.2"}}
         if command=="native_page_status":
             if fail_status["enabled"]:
                 return {"result":{"ok":True,"status":"failed","stage":"page-unavailable",
-                    "percent":100,"tool_version":"1.2.1",
+                    "percent":100,"tool_version":"1.2.2",
                     "error":"history_assistant_boundary_not_found",
                     "page_probe":probe}}
             return {"result":{"ok":True,"status":"completed",
                 "stage":"complete","percent":100,"size":len(raw),
                 "sha256":hashlib.sha256(raw).hexdigest(),
-                "tool_version":"1.2.1","counts":{"tables":3,"images":2}}}
+                "tool_version":"1.2.2","counts":{"tables":3,"images":2}}}
         if command=="native_page_chunk":
             i=args["index"];slice_=raw[i*65536:(i+1)*65536]
             import base64
@@ -156,12 +156,12 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
             if result.json()["job"]["status"]=="completed":break
             time.sleep(0.03)
         assert result.json()["job"]["status"]=="completed",result.text
-        assert result.json()["job"]["tool_version"]=="1.2.1"
+        assert result.json()["job"]["tool_version"]=="1.2.2"
         assert client.get("/api/admin/worker-tools/native-page/jobs/"+job+"/download").status_code==401
         download=client.get("/api/admin/worker-tools/native-page/jobs/"+job+"/download",headers=auth)
         assert download.status_code==200
         assert download.content==raw
-        assert "v1.2.1.zip" in download.headers["content-disposition"]
+        assert "v1.2.2.zip" in download.headers["content-disposition"]
         record=client.get("/api/admin/worker-tools/native-page/jobs",headers=auth).json()
         assert record["data"][0]["request_id"]==request_id
         # A standalone valid history URL is diagnosable with only an owner
@@ -317,3 +317,80 @@ def test_cdp_isolated_content_world_has_visible_request_dom_marker():
     assert "tagged?expected:null" in source
     assert 'assistantNode.setAttribute(' in content
     assert 'native_chatgpt_conversation_url' in content
+
+
+
+def test_url_only_creates_fresh_worker_tab_even_when_old_tab_matches(monkeypatch,tmp_path):
+    from scripts import native_page_diagnostic_v1 as module
+    import websockets
+    url="https://chatgpt.com/c/6ae7dac6-8328-83e8-878d-fc3599d7b10b"
+    tab="0123456789abcdef0123456789abcdef"
+    existing={"type":"page","id":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+              "url":url,
+              "webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/eeee"}
+    opened={**existing,"id":tab,
+            "webSocketDebuggerUrl":"ws://127.0.0.1:9222/devtools/page/"+tab}
+    calls=[]
+    def fake_json_get(port,path):
+        assert port==9222 and path=="/json/list"
+        return [existing,opened]
+    class AsyncConnection:
+        async def __aenter__(self):return object()
+        async def __aexit__(self,*args):return False
+    class FakeCDP:
+        def __init__(self,ws):pass
+        async def call(self,method,params=None,timeout=35):
+            if method=="Runtime.evaluate":
+                if params["expression"].startswith(module.CAPTURE):
+                    return {"result":{"value":{
+                        "ok":True,"root":{"tag":"assistant-reply",
+                            "children":[{"tag":"p","children":[
+                                {"tag":"#text","text":"existing reply"}]}]},
+                        "counts":{"nodes":3,"images":0,"tables":0},
+                        "rect":{"x":0,"y":0,"w":8,"h":8},
+                        "scope":"verified-roleless-turn",
+                        "generating":False}}}
+                return {"result":{"value":{"ready_state":"complete",
+                    "route":"conversation","assistant_roles":1,
+                    "loading_skeletons":False}}}
+            if method=="Page.captureScreenshot":
+                return {"data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jfV8AAAAASUVORK5CYII="}
+            return {}
+    def fake_urlopen(request,timeout):
+        calls.append((request.full_url,request.get_method()))
+        return io.BytesIO(json.dumps({"id":tab}).encode())
+    monkeypatch.setattr(module,"json_get",fake_json_get)
+    monkeypatch.setattr(module,"urlopen",fake_urlopen)
+    monkeypatch.setattr(module,"CDP",FakeCDP)
+    monkeypatch.setattr(websockets,"connect",lambda *args,**kwargs:AsyncConnection())
+    args=SimpleNamespace(output=str(tmp_path/"new"),conversation_url=url,
+        request_id="req_diag_"+"a"*32,
+        worker_id="wrk_abc123456",cdp_port=9222)
+    asyncio.run(module.capture(args))
+    assert len(calls)==1,"Existing ChatGPT tab must NOT be reused"
+    assert calls[0][1]=="PUT"
+    assert "/json/new?" in calls[0][0]
+    assert "chatgpt.com%2Fc%2F" in calls[0][0]
+    status=json.loads((tmp_path/"new"/"status.json").read_text())
+    assert status["status"]=="completed"
+    with ZipFile(tmp_path/"new"/"native-page-evidence.zip") as z:
+        manifest=json.loads(z.read("manifest.json"))
+        assert manifest["request_binding"]=="url-only-unbound"
+        assert manifest["version"]=="1.2.2"
+
+
+def test_navigation_failure_reasons_are_distinct_and_safe():
+    from scripts.native_page_diagnostic_v1 import failure_reason
+    for route,reason in (
+        ("access-gate","history_access_gate_detected"),
+        ("navigation-error","history_browser_navigation_failed"),
+        ("unexpected-redirect","history_unexpected_redirect"),
+        ("target-not-visible","history_diagnostic_tab_missing"),
+    ):
+        assert failure_reason({"navigation_route":route})==reason
+    assert failure_reason({"route":"conversation","ready_state":"loading"})=="history_page_still_loading"
+    source=(ROOT/"scripts/native_page_diagnostic_v1.py").read_text()
+    assert 'for t in (targets[:60] if not target_url else []):' in source
+    assert 'method="PUT"' in source
+    assert 'tab_created=True' in source
+    assert 'document.cookie' not in source

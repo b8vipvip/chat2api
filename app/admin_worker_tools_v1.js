@@ -260,6 +260,12 @@
         ? "Worker 浏览器遇到登录或访问验证页面"
         : /history_page_still_loading/.test(issue)
         ? "ChatGPT 历史页面尚未加载完成"
+        : /history_browser_navigation_failed/.test(issue)
+        ? "新标签页导航失败，请查看 Worker Chrome 页面状态"
+        : /history_diagnostic_tab_missing/.test(issue)
+        ? "新打开的诊断标签页在 Chrome 调试目标中消失"
+        : /history_unexpected_redirect/.test(issue)
+        ? "历史页面导航到非 ChatGPT 地址；已停止采集"
         : /history_capture_runtime_failed/.test(issue)
         ? "CDP 页面脚本执行异常，请导出页面探针日志"
         : /history_assistant_capture_rejected/.test(issue)
@@ -356,8 +362,8 @@
       method: "POST", body: {worker_id, target},
     });
     nativePageMessage("诊断任务 " + response.job.job_id.slice(0,12) +
-      (isHistory ? " 已创建（历史链接独立诊断，未关联 API 请求）。" :
-        " 已创建，正在定位该请求的原生页面。"));
+      (isHistory ? " 已创建：将在所选 Worker 的 Chrome 中新开标签页，直接访问历史链接（不执行登录），独立于 API 请求。" :
+        " 已创建：优先核对原请求页面；需打开历史链接时将在 Worker Chrome 中使用独立标签页。"));
     await nativePageRecords();
   }
   async function nativePageToolAction(action) {
