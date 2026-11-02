@@ -7,7 +7,10 @@
   "use strict";
   const KEY = "__CHAT2API_NATIVE_DOM_EVIDENCE_V1__";
   if (globalThis[KEY]) return;
-  const MAX_NODES = 6400, MAX_TEXT = 192000, MAX_BYTES = 900000;
+  // 3a882b exceeded the old 6,400-node forensic limit before reaching
+  // its last tables/images. Keep bounded private evidence, without exporting
+  // source URLs or unrelated turns.
+  const MAX_NODES = 30000, MAX_TEXT = 192000, MAX_BYTES = 3 * 1024 * 1024;
   const blocked = "script,style,form,nav,aside,header,footer,textarea,input,select,button,[contenteditable='true'],[role='dialog'],[role='menu'],[data-message-author-role='user']";
   const allowed = new Set("div section article p span h1 h2 h3 h4 h5 h6 strong em ul ol li table thead tbody tr td th pre code figure figcaption img blockquote a hr br".split(" "));
   const n = v => Math.max(-100000, Math.min(100000, Math.round(Number(v) || 0)));
@@ -47,13 +50,18 @@
     if (heading?.parentElement) {
       const siblings=[], parent=heading.parentElement;
       let cursor=heading.nextElementSibling;
-      while(cursor && siblings.length<80) {
+      // The old 80-sibling loop silently promoted a clipped assistant turn.
+      // Keep a strict bounded scan, and mark overflow unverified instead.
+      while(cursor && siblings.length<4096) {
         if (cursor.matches(blocked) || cursor.querySelector("h4")?.textContent?.match(/^You said\s*[:：]?$/i)) break;
         if (cursor.tagName==="H4" && /said\s*[:：]?$/i.test(normalize(cursor))) break;
         if (cursor.contains(candidate) || cursor===candidate || normalize(cursor).length>=2 || cursor.querySelector("img")) {
           siblings.push(cursor);
         }
         cursor=cursor.nextElementSibling;
+      }
+      if (siblings.length>=4096 && cursor) {
+        return {roots:[candidate],scope:"candidate_only",boundary:"reply-sibling-cap-reached"};
       }
       if (siblings.length && siblings.some(s => s===candidate || s.contains(candidate) || candidate.contains(s))) {
         roots=siblings; scope="roleless_reply_siblings";
@@ -83,7 +91,9 @@
         counts.text_chars+=raw.length;counts.nodes++;
         return {tag:"#text",text:raw};
       }
-      if (!(node instanceof Element) || node.matches(blocked) || node.closest("form,[contenteditable='true'],[data-message-author-role='user']")) return null;
+      if (!(node instanceof Element) ||
+          (node.tagName !== "BUTTON" && node.matches(blocked)) ||
+          node.closest("form,[contenteditable='true'],[data-message-author-role='user']")) return null;
       if (!visible(node)) return null;
       const name=node.tagName.toLowerCase(),tag=allowed.has(name)?name:"div";
       const style=getComputedStyle(node),rect=node.getBoundingClientRect();
@@ -95,6 +105,27 @@
         gap:n(parseFloat(style.gap)),font:n(parseFloat(style.fontSize)),
         weight:n(style.fontWeight),align:clean(style.textAlign).slice(0,16),
       };
+      if (name === "button") {
+        // ChatGPT image previews often live inside a <button>. Match the
+        // native delivery observer: preserve raster geometry only, never the
+        // button label, action text, event handler or source URL.
+        if (node.closest("nav,aside,footer,header,form,[role='menu'],[role='dialog']")) return null;
+        const raster=[...(node.querySelectorAll?.("img") || [])].filter(img => {
+          const box=img.getBoundingClientRect?.();
+          return box && box.width>=40 && box.height>=40 && visible(img) &&
+            !img.closest("nav,aside,footer,[data-message-author-role='user']");
+        });
+        if (raster.length > 40) { truncated=true;return null; }
+        const children=[];
+        for (const img of raster) {
+          const entry=convert(img,depth+1);
+          if (entry) children.push(entry);
+          if (truncated) break;
+        }
+        if (!children.length || truncated) return null;
+        counts.nodes++;
+        return {tag:"figure",layout,children};
+      }
       counts.nodes++;if(layout.display.includes("grid"))counts.grids++;
       if(layout.display.includes("flex"))counts.flex++;
       if(tag==="table")counts.tables++;
