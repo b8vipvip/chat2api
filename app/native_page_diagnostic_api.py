@@ -22,6 +22,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 
 from .admin_auth import SESSION_COOKIE
+from .native_page_tool_release import (
+    DiagnosticReleaseSource, DiagnosticReleaseUnavailable,
+    RELEASE_BRANCH,
+)
 
 REQUEST_ID = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
 JOB_ID = re.compile(r"^[0-9a-f]{32}$")
@@ -37,6 +41,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     root.chmod(0o700)
     jobs:dict[str,asyncio.Task]={}
     locks:dict[str,str]={}
+    releases = DiagnosticReleaseSource()
 
     def authorize(request:Request):
         token=str(request.headers.get("authorization") or "")
@@ -205,19 +210,33 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             locks.pop(worker,None)
             jobs.pop(job_id,None)
 
+    async def latest_release():
+        try:
+            return await releases.load()
+        except DiagnosticReleaseUnavailable as exc:
+            # Never pretend an obsolete image-bundled script is the latest
+            # independent release, and never run an arbitrary fallback URL.
+            raise HTTPException(503, str(exc)) from None
+
     @app.get("/bootstrap/native-page-diagnostic.py",include_in_schema=False)
-    async def tool_source():
-        file=Path(__file__).parents[1]/"scripts"/"native_page_diagnostic_v1.py"
-        return Response(file.read_bytes(),media_type="text/x-python",
-                        headers={"Cache-Control":"no-store"})
+    async def tool_source(sha256:str=""):
+        data, manifest = await latest_release()
+        if sha256 and sha256 != manifest["sha256"]:
+            raise HTTPException(409, "diagnostic_release_changed_retry")
+        return Response(data,media_type="text/x-python",
+                        headers={"Cache-Control":"no-store",
+                                 "X-Content-SHA256": manifest["sha256"]})
 
     @app.get("/bootstrap/native-page-diagnostic.json",include_in_schema=False)
     async def tool_manifest():
-        data=(Path(__file__).parents[1]/"scripts"/"native_page_diagnostic_v1.py").read_bytes()
-        match=re.search(rb'(?m)^VERSION\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"',data)
-        if not match:raise HTTPException(503,"Native page diagnostic tool version missing")
-        return {"version":match.group(1).decode("ascii"),
-            "sha256":hashlib.sha256(data).hexdigest(),"bytes":len(data)}
+        _, manifest = await latest_release()
+        return manifest
+
+    @app.get("/api/admin/worker-tools/native-page/latest")
+    async def latest_version(request:Request):
+        authorize(request)
+        _,manifest=await latest_release()
+        return {"tool":manifest}
 
     @app.get("/api/admin/worker-tools/native-page/jobs")
     async def list_jobs(request:Request,limit:int=40):
@@ -365,12 +384,20 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     @app.post("/api/admin/worker-tools/native-page/workers/{worker_id}/update")
     async def update(worker_id:str,request:Request):
         authorize(request);check_worker(worker_id)
+        _,manifest=await latest_release()
         result=await command(worker_id,"native_page_update",{},timeout=60)
-        return {"worker_id":worker_id,"tool":result}
+        if result.get("sha256")!=manifest["sha256"]:
+            raise HTTPException(409,"worker_installed_release_sha_mismatch_retry")
+        return {"worker_id":worker_id,"tool":result,"latest":manifest}
 
     @app.get("/api/admin/worker-tools/native-page/workers/{worker_id}/version")
     async def version(worker_id:str,request:Request):
         authorize(request);check_worker(worker_id)
         result=await command(worker_id,"native_page_version",{},timeout=15)
-        return {"worker_id":worker_id,"tool":result}
+        try:
+            _,manifest=await latest_release()
+            return {"worker_id":worker_id,"tool":result,"latest":manifest}
+        except HTTPException as exc:
+            return {"worker_id":worker_id,"tool":result,
+                    "latest_error":str(exc.detail)[:100]}
     return app

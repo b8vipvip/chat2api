@@ -55,10 +55,42 @@ def execute(command,arguments,worker_id,slot,server):
             origin=urlsplit(server)
             if origin.scheme!="https" and not (origin.scheme=="http" and origin.hostname in ("127.0.0.1","localhost")):
                 return {"ok":False,"error":"insecure_tool_origin"}
-            manifest=json.load(urlopen(server.rstrip("/")+"/bootstrap/native-page-diagnostic.json",timeout=15))
-            data=urlopen(server.rstrip("/")+"/bootstrap/native-page-diagnostic.py",timeout=25).read(250000)
+            manifest=json.load(urlopen(server.rstrip("/")+
+                "/bootstrap/native-page-diagnostic.json",timeout=15))
+            version=str(manifest.get("version") or "")
+            sha=str(manifest.get("sha256") or "")
+            if (manifest.get("source")!="github-dedicated-release-branch"
+                or manifest.get("repository")!="b8vipvip/chat2api"
+                or manifest.get("release_branch")!="native-page-diagnostic-releases"
+                or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+",version)
+                or not re.fullmatch(r"[a-f0-9]{64}",sha)
+                or type(manifest.get("bytes")) is not int
+                or not 0<manifest["bytes"]<=200000):
+                raise ValueError("invalid_release_manifest")
+            # Bind download bytes to the previously observed manifest hash.
+            data=urlopen(server.rstrip("/")+
+                "/bootstrap/native-page-diagnostic.py?sha256="+sha,
+                timeout=25).read(200001)
             digest=hashlib.sha256(data).hexdigest()
-            if len(data)>200000 or digest!=manifest.get("sha256"):raise ValueError("tool_sha256_mismatch")
+            if len(data)!=manifest["bytes"] or digest!=sha:
+                raise ValueError("tool_sha256_mismatch")
+            if not re.search(rb'(?m)^VERSION\s*=\s*"' +
+                    version.encode("ascii").replace(b".",b"\.") + rb'"',data):
+                raise ValueError("tool_version_mismatch")
+            # Reject syntactically invalid scripts before replacing the
+            # installed executable. Nothing is evaluated in this step.
+            compile(data.decode("utf-8"),"native_page_diagnostic_v1.py","exec")
+            installed=_version()
+            if INSTALLED.is_file() and installed.get("installed"):
+                old=str(installed.get("version") or "")
+                if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+",old):
+                    if tuple(map(int,version.split("."))) < tuple(map(int,old.split("."))):
+                        raise ValueError("tool_downgrade_refused")
+                    if old==version and installed.get("sha256")!=sha:
+                        raise ValueError("release_version_must_increment")
+                if installed.get("sha256")==sha:
+                    return {"ok":True,**installed,"updated":False,
+                            "source":"github-dedicated-release-branch"}
             ROOT.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
             fd,name=tempfile.mkstemp(prefix=".native-",dir=ROOT.parent)
             try:
@@ -67,7 +99,8 @@ def execute(command,arguments,worker_id,slot,server):
             finally:
                 if fd!=-1:os.close(fd)
                 if os.path.exists(name):os.unlink(name)
-            return {"ok":True,**_version(),"updated":True}
+            return {"ok":True,**_version(),"updated":True,
+                    "source":"github-dedicated-release-branch"}
         except Exception:
             return {"ok":False,"error":"verified_tool_update_failed"}
     try:

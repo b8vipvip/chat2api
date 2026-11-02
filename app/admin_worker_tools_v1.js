@@ -374,10 +374,18 @@
     nativePageMessage(action === "update" ? "正在更新工具，并验证代码 SHA-256…" : "正在检查工具版本…");
     const result = await json(path,action === "update" ? {method:"POST"} : undefined);
     const tool = result.tool || {};
-    nativePageMessage("Worker " + worker + " · 原生页面诊断版本 " +
-      (tool.version || "不可用") + " · " +
-      (tool.installed ? "已安装" : "未安装") +
-      (action === "update" ? " · 更新完成" : ""));
+    const latest = result.latest || {};
+    const local = String(tool.version || "不可用");
+    const remote = String(latest.version || "未知");
+    const same = Boolean(tool.sha256 && tool.sha256 === latest.sha256);
+    const updateState = action === "update"
+      ? tool.updated === false ? " · 已是最新，无需重复安装" : " · 安装完成并通过 SHA-256 校验"
+      : same ? " · 当前已是最新" : latest.version ? " · 有独立工具更新可用" : "";
+    nativePageMessage("Worker " + worker + " · 已安装 v" + local +
+      " · 发布分支最新 v" + remote + " · " +
+      (result.latest_error ? "查询失败：" + result.latest_error
+        : tool.installed ? "已安装" : "未安装") + updateState,
+      Boolean(result.latest_error));
   }
   let nativeWorkerLookup = 0;
   $("nativePageRequestId")?.addEventListener("change", async () => {

@@ -35,12 +35,14 @@ PANEL = r'''
     <label for="nativePageRequestId">请求 ID / 历史链接</label>
     <input id="nativePageRequestId" style="flex:1 1 390px;min-width:240px" placeholder="粘贴完整 req_... 或 https://chatgpt.com/c/...">
     <button class="action good" id="nativePageStart">开始诊断</button>
-    <button class="action" id="nativePageVersion">检查版本</button>
-    <button class="action" id="nativePageUpdate">更新诊断工具</button>
   </div>
   <div class="native-tool-bar">
+    <div class="native-tool-release-actions" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap">
+      <button class="action" id="nativePageUpdate">更新诊断工具</button>
+      <button class="action" id="nativePageVersion">检查版本</button>
+    </div>
     <button class="action" id="nativePageReload">刷新记录</button>
-    <span class="muted">输入请求 ID 自动定位 Worker；直接输入历史链接时以所选 Worker 的账号打开，仅诊断该会话最后一条助手回复。</span>
+    <span class="muted">工具独立发布：首次升级更新机制后，后续直接点击「更新诊断工具」，不再部署服务端。</span>
   </div>
   <p id="nativePageStatus" class="muted">输入完整请求 ID 或原生 ChatGPT /c/ 历史链接后即可执行；不发起新生成请求。</p>
   <div class="scroll native-tool-table"><table><thead><tr>
