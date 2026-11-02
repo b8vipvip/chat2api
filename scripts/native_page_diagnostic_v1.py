@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.6"
+VERSION = "1.2.7"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -245,6 +245,12 @@ return {ready_state:String(document.readyState||'unknown').slice(0,16),
   main_landmarks:document.querySelectorAll('main,[role="main"]').length,
   main_child_elements:main?main.children.length:0,
   main_element_count:main?Math.min(main.querySelectorAll('*').length,100000):0,
+  // Only aggregate lengths/counts. Never export message text or resource URL.
+  main_text_chars:main?Math.min(String(main.textContent||'').length,500000):0,
+  body_text_chars:document.body?Math.min(String(document.body.textContent||'').length,500000):0,
+  main_markdown_blocks:document.querySelectorAll('main .markdown,main .prose,#thread .markdown').length,
+  iframe_count:document.querySelectorAll('iframe').length,
+  shadow_root_count:[...document.querySelectorAll('*')].slice(0,5000).filter(e=>!!e.shadowRoot).length,
   app_roots:document.querySelectorAll('#__next,#root,[data-nextjs-root]').length,
   skeleton_count:document.querySelectorAll('[data-testid*="skeleton"]').length,
   aria_busy_count:document.querySelectorAll('[aria-busy="true"]').length,
@@ -363,7 +369,9 @@ _PROBE_KEYS = {"ready_state", "route", "visibility_state", "has_focus",
     "online_hint", "assistant_roles", "user_roles", "conversation_turns",
     "numbered_conversation_turns", "agent_turns", "agent_markdown_blocks",
     "assistant_testids", "verified_roleless_headings", "main_landmarks",
-    "main_child_elements", "main_element_count", "app_roots",
+    "main_child_elements", "main_element_count", "main_text_chars",
+    "body_text_chars", "main_markdown_blocks", "iframe_count",
+    "shadow_root_count", "app_roots",
     "skeleton_count", "aria_busy_count", "last_finished_age_ms",
     "password_fields", "challenge_frames", "loading_skeletons",
     "fetch_total", "fetch_http_2xx",
@@ -509,7 +517,61 @@ async def capture(args):
             if not target_url and value.get("request_marker")!=args.request_id:continue
             picked=t;report=value;break
     binding="live-request-marker"
+    tab_origin="dedicated-worker-tab"
     hints=recovery_hints()
+
+    async def read_existing_history_tab(url,diagnostic_tab_id):
+        """Read-only exact-conversation fallback; never navigate an existing tab.
+
+        Only uniquely verified, non-generating reply boundaries can be used.
+        The caller supplied the exact history URL; binding stays unverified.
+        """
+        nonlocal tab_origin
+        matches=[]
+        try:
+            for tab in json_get(args.cdp_port,"/json/list"):
+                if (tab.get("type")!="page"
+                    or str(tab.get("id") or "")==diagnostic_tab_id
+                    or not tab.get("webSocketDebuggerUrl")):
+                    continue
+                actual=urlsplit(str(tab.get("url") or ""))
+                expected=urlsplit(url)
+                if (actual.scheme,actual.hostname,actual.port,actual.path)!=(
+                    "https",expected.hostname,expected.port,expected.path):
+                    continue
+                if actual.username or actual.password or actual.hostname not in HOSTS:
+                    continue
+                matches.append(tab)
+                if len(matches)>=8:break
+        except (OSError,ValueError,TypeError):
+            pass
+        verified=[]
+        max_text_chars=0
+        for tab in matches:
+            try:
+                endpoint=ws_endpoint(tab["webSocketDebuggerUrl"],args.cdp_port)
+                async with websockets.connect(endpoint,open_timeout=5,
+                        max_size=24*1024*1024) as connection:
+                    cdp=CDP(connection)
+                    await cdp.call("Runtime.enable")
+                    result,probe=await inspect_page(cdp,args.request_id)
+                    max_text_chars=max(max_text_chars,int(probe.get("main_text_chars") or 0))
+                    if (result and result.get("ok")
+                        and result.get("root",{}).get("children")
+                        and not result.get("generating")):
+                        verified.append((tab,result))
+            except Exception:
+                continue
+        evidence={"existing_tab_readonly_checked":True,
+            "existing_tab_candidates":len(matches),
+            "existing_tab_verified":len(verified),
+            "existing_tab_max_main_text_chars":max_text_chars,
+            "existing_tab_ambiguous":len(verified)>1}
+        if len(verified)==1:
+            tab_origin="existing-history-tab-readonly"
+            return verified[0][0],verified[0][1],evidence
+        return None,None,evidence
+
     async def open_history_page(url):
         """Always open a dedicated tab in the selected Worker's existing Chrome.
 
@@ -536,6 +598,7 @@ async def capture(args):
         post_reload_at=-1
         suspicious_redirect_streak=0
         transient_redirect_count=0
+        existing_evidence={}
         for i in range(62):
             await asyncio.sleep(1 if i else 0.4)
             # Do not discard a redirected tab just because it moved to
@@ -599,6 +662,16 @@ async def capture(args):
                                         "reload_result":reload_result}
                             if obj and obj.get("root",{}).get("children"):
                                 return page,obj,tab_id
+                            # A dedicated tab may be skeleton-only while an
+                            # operator-visible tab with this exact history URL
+                            # has fully rendered the assistant reply. Inspect
+                            # the latter read-only (no reload or injection).
+                            if target_url and i in (9,32):
+                                alternate,reply,evidence=await read_existing_history_tab(
+                                    url,tab_id)
+                                existing_evidence.update(evidence)
+                                if alternate and reply:
+                                    return alternate,reply,tab_id
                             # A single, non-destructive recovery attempt:
                             # only reload OUR diagnostic tab when its own
                             # page is complete, visible, skeleton-only and
@@ -651,7 +724,7 @@ async def capture(args):
                 else:
                     last_probe={"navigation_route":kind,
                         "capture_error":"cdp-endpoint-unavailable","attempt":i+1}
-            last_probe={**last_probe,
+            last_probe={**last_probe,**existing_evidence,
                 "reload_attempted":reload_attempted,
                 "reload_result":reload_result,
                 "transient_redirect_count":transient_redirect_count,
@@ -736,7 +809,8 @@ async def capture(args):
                 "scope":report["scope"],"counts":report["counts"],
                 "screenshot_count":screens,"truncated":bool(report.get("reason")),
                 "source":"existing-chatgpt-page","conversation_url_included":False,
-                "request_binding":verification},ensure_ascii=False))
+                "request_binding":verification,
+                 "capture_origin":tab_origin},ensure_ascii=False))
             if (folder/"diagnostic.log").is_file():
                 archive.write(folder/"diagnostic.log","diagnostic.log")
     if path.stat().st_size>MAX_ZIP:raise RuntimeError("evidence_zip_size_limit")
