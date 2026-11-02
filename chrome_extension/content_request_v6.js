@@ -532,7 +532,19 @@
       // Native delivery and image identity are independent of the OpenAI
       // terminal. Include only bounded counters/reasons in the terminal
       // diagnostics so a single-request ZIP can explain missing snapshots.
+      // Save only the plain same-origin ChatGPT conversation permalink, not
+      // query/fragment/signed resources. A past Worker tab may close 5 s later,
+      // but this safe pointer lets the independent tool reopen its history.
+      const pageLocation = globalThis.location;
+      const conversationPath = String(pageLocation?.pathname || "");
+      const nativeConversationUrl = (
+        pageLocation?.protocol === "https:" &&
+        ["chatgpt.com","www.chatgpt.com","chat.openai.com"].includes(
+          String(pageLocation?.hostname || "").toLowerCase()) &&
+        /^\\/c\\/[A-Za-z0-9-]{12,90}\\/?$/.test(conversationPath))
+        ? String(pageLocation.origin) + conversationPath : "";
       event.diagnostics = {...(event.diagnostics || {}),
+        native_chatgpt_conversation_url:nativeConversationUrl,
         native_observer_loaded:active.nativeObserverLoaded === true,
         native_capture_attempted:active.nativeCaptureAttempted === true,
         native_capture_failure:String(active.nativeCaptureFailure || "").slice(0,80),
