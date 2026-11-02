@@ -593,6 +593,15 @@
         native_identity_verified_count:Number(active.nativeIdentityVerifiedCount || 0),
       };
     }
+    // Persist the same sanitized historical URL for failed/cancelled
+    // requests too, when ChatGPT had already allocated a conversation.
+    if (["chat.error","chat.cancelled"].includes(event?.type) && active) {
+      const nativeConversationUrl = rememberNativeConversationUrl(active);
+      if (nativeConversationUrl) event.diagnostics = {
+        ...(event.diagnostics || {}),
+        native_chatgpt_conversation_url:nativeConversationUrl,
+      };
+    }
     // This separate, request-only DOM capture cannot change completion
     // authority and is delivered through the same authenticated Worker socket.
     if (["chat.completed","chat.error","chat.cancelled"].includes(event?.type)
