@@ -539,6 +539,10 @@
         native_transport_ack_error:String(active.nativeTransportAckError || "").slice(0,80),
         native_structural_failure:String(active.nativeStructuralFailure || "").slice(0,60),
         native_capture_revision:Number(active.nativeRevision || 0),
+        native_structural_max_children:Number(active.nativeStructuralMaxChildren || 0),
+        // Previous snapshots can be published while final rich content fails.
+        // Only the final capture's ACK proves the final requested revision.
+        native_final_capture_committed:active.nativeFinalCaptureCommitted === true,
         native_chunk_complete:active.nativeChunkComplete === true,
         native_identity_candidate_count:Number(active.nativeIdentityCandidateCount || 0),
         native_identity_verified_count:Number(active.nativeIdentityVerifiedCount || 0),
