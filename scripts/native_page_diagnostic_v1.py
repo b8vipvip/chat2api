@@ -350,8 +350,9 @@ async def capture(args):
         return t.get("type")=="page" and u.hostname in HOSTS and u.scheme=="https" and t.get("webSocketDebuggerUrl")
     targets=[t for t in targets if target(t)]
     picked=None;report=None;ws=None;last_probe={}
-    for t in targets[:60]:
-        if target_url and str(t.get("url") or "").split("?")[0]!=target_url:continue
+    # URL-targeted diagnosis always uses its OWN fresh tab, even when an
+    # identical history page is already open in a live request's tab.
+    for t in (targets[:60] if not target_url else []):
         endpoint=ws_endpoint(t["webSocketDebuggerUrl"],args.cdp_port)
         async with websockets.connect(endpoint,open_timeout=5,max_size=24*1024*1024) as conn:
             cdp=CDP(conn)
