@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import fcntl
 import hashlib
 import json
 import os
@@ -20,7 +21,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.9"
+VERSION = "1.2.10"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -264,6 +265,9 @@ return {ready_state:String(document.readyState||'unknown').slice(0,16),
   main_element_count:main?Math.min(main.querySelectorAll('*').length,100000):0,
   // Only aggregate lengths/counts. Never export message text or resource URL.
   main_text_chars:main?Math.min(String(main.textContent||'').length,500000):0,
+  // innerText count is visible/rendered text only; never export its contents.
+  main_visible_text_chars:main?Math.min(String(main.innerText||'').length,500000):0,
+  main_thread_candidates:main?main.querySelectorAll('#thread,[data-testid="conversation-turns"],[data-testid="conversation-panel"],[role="log"]').length:0,
   body_text_chars:document.body?Math.min(String(document.body.textContent||'').length,500000):0,
   main_markdown_blocks:document.querySelectorAll('main .markdown,main .prose,#thread .markdown').length,
   main_article_count:main?main.querySelectorAll('article,[role="article"]').length:0,
@@ -391,6 +395,7 @@ _PROBE_KEYS = {"ready_state", "route", "visibility_state", "has_focus",
     "numbered_conversation_turns", "agent_turns", "agent_markdown_blocks",
     "assistant_testids", "verified_roleless_headings", "main_landmarks",
     "main_child_elements", "main_element_count", "main_text_chars",
+    "main_visible_text_chars", "main_thread_candidates",
     "body_text_chars", "main_markdown_blocks", "main_article_count",
     "main_message_like_count", "main_editable_count", "main_button_count",
     "iframe_count",
@@ -484,9 +489,12 @@ def failure_reason(probe):
             return "history_conversation_recent_conversation_api_429"
         if probe.get("fetch_http_recent_429"):
             return "history_conversation_recent_other_http_429"
-        if (probe.get("conversation_api_429") or probe.get("fetch_http_429")
-            or probe.get("existing_tab_historical_429")):
-            return "history_conversation_stalled_with_historical_429"
+        # Old HTTP 429 in a *different* old tab is contextual evidence,
+        # not the proximate failure reason in a currently healthy page.
+        if probe.get("recovery_fresh_attempted"):
+            return "history_fresh_navigation_hydration_stalled"
+        if probe.get("recovery_cooldown_remaining_sec"):
+            return "history_hydration_stalled_recovery_cooldown"
         if (probe.get("fetch_http_401_403")
             or probe.get("fetch_http_other_4xx")):
             return "history_conversation_stalled_with_http_4xx"
@@ -530,6 +538,35 @@ def status(folder,stage,percent,error=None,**meta):
                 "tool_version","status","stage","percent","updated_at","error",
                 "screenshots")},ensure_ascii=False)+"\n")
     except OSError: pass
+
+def fresh_navigation_gate(folder, worker_id, cdp_port, url, cooldown=600):
+    """Rate-limit extra diagnostic navigations across independent jobs.
+
+    The marker stores only the attempt timestamp and its filename is a digest
+    of the Worker, CDP slot, and exact history URL; no raw URL or messages.
+    Fail closed if the local marker cannot be safely read or locked.
+    """
+    digest=hashlib.sha256((worker_id+"|"+str(cdp_port)+"|"+url).encode()).hexdigest()
+    gate=folder.parent/(".history-recovery-"+digest[:32])
+    flags=os.O_RDWR|os.O_CREAT|getattr(os,"O_NOFOLLOW",0)
+    try:
+        fd=os.open(gate,flags,0o600)
+        with os.fdopen(fd,"r+",encoding="ascii") as stream:
+            fcntl.flock(stream.fileno(),fcntl.LOCK_EX)
+            raw=stream.read(32).strip()
+            previous=int(raw) if raw.isdecimal() else 0
+            now=int(time.time())
+            if previous and 0<=now-previous<cooldown:
+                return False,cooldown-(now-previous),"cooldown"
+            stream.seek(0)
+            stream.truncate()
+            stream.write(str(now))
+            stream.flush()
+            os.fsync(stream.fileno())
+            return True,0,"granted"
+    except (OSError,ValueError,UnicodeError):
+        return False,cooldown,"gate-unavailable"
+
 
 async def capture(args):
     """Always close only the CDP tabs this tool created, including on failure."""
@@ -675,7 +712,7 @@ async def _capture_inner(args,owned_tabs):
             return verified[0][0],verified[0][1],evidence
         return None,None,evidence
 
-    async def open_history_page(url):
+    async def open_history_page(url,allow_reload=True):
         """Always open a dedicated tab in the selected Worker's existing Chrome.
 
         Never reuse/navigate a tab owned by an API request or another
@@ -793,7 +830,7 @@ async def _capture_inner(args,owned_tabs):
                             # has no assistant/user turns after ~25 seconds.
                             # This never navigates another Worker/API tab,
                             # enters credentials or sends model prompts.
-                            if (i>=24 and not reload_attempted
+                            if (allow_reload and i>=24 and not reload_attempted
                                 and kind=="conversation"
                                 and probe.get("ready_state")=="complete"
                                 and probe.get("visibility_state")=="visible"
@@ -883,10 +920,51 @@ async def _capture_inner(args,owned_tabs):
         if existing and found:
             picked,report=existing,found
         elif evidence["existing_tab_candidates"]:
+            # v1.2.9 could not progress: four long-stalled identical shell
+            # tabs prevented a fresh history navigation forever. Recover only
+            # when ALL inspected tabs are empty, structurally identical,
+            # and no recent 429 or access gate was observed.
+            shell_only=(
+                evidence["existing_tab_inspected"]>0
+                and evidence["existing_tab_inspected"]==evidence["existing_tab_candidates"]
+                and evidence["existing_tab_busy"]==evidence["existing_tab_candidates"]
+                and evidence["existing_tab_distinct_structures"]==1
+                and evidence["existing_tab_max_articles"]==0
+                and evidence["existing_tab_max_message_like"]==0
+                and evidence["existing_tab_max_markdown_blocks"]==0
+                and evidence["existing_tab_recent_429"]==0
+                and not last_probe.get("password_fields")
+                and not last_probe.get("challenge_frames")
+                and not last_probe.get("fetch_http_401_403")
+                and not last_probe.get("fetch_http_5xx"))
             last_probe={**last_probe,**evidence,
-                "navigation_route":"conversation"}
-            status(folder,"page-unavailable",44,page_probe=last_probe)
-            raise RuntimeError(failure_reason(last_probe))
+                "navigation_route":"conversation",
+                "recovery_shell_only":shell_only,
+                "recovery_fresh_attempted":False}
+            if shell_only:
+                granted,remaining,gate_reason=fresh_navigation_gate(
+                    folder,args.worker_id,args.cdp_port,target_url)
+                last_probe={**last_probe,
+                    "recovery_cooldown_remaining_sec":remaining,
+                    "recovery_gate":gate_reason}
+                if granted:
+                    last_probe["recovery_fresh_attempted"]=True
+                    status(folder,"recovering-stalled-history",28,
+                           page_probe=last_probe)
+                    # A single newly owned tab, never reloading any old tab.
+                    # Disable automatic reload on this recovery path.
+                    recovered,recovered_reply,_=await open_history_page(
+                        target_url,allow_reload=False)
+                    last_probe={**last_probe,**evidence,
+                        "recovery_shell_only":True,
+                        "recovery_fresh_attempted":True,
+                        "recovery_gate":"granted",
+                        "recovery_cooldown_remaining_sec":0}
+                    if recovered and recovered_reply:
+                        picked,report=recovered,recovered_reply
+            if not picked:
+                status(folder,"page-unavailable",44,page_probe=last_probe)
+                raise RuntimeError(failure_reason(last_probe))
         else:
             status(folder,"opening-history",18)
             picked,report,_=await open_history_page(target_url)
