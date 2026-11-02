@@ -133,7 +133,7 @@ def status(folder,stage,percent,error=None,**meta):
         with (folder/"diagnostic.log").open("a",encoding="utf8") as stream:
             stream.write(json.dumps({key:data.get(key) for key in (
                 "tool_version","status","stage","percent","updated_at","error",
-                "screenshots")},ensure_ascii=False)+"\\n")
+                "screenshots")},ensure_ascii=False)+"\n")
     except OSError: pass
 
 async def capture(args):
@@ -216,6 +216,9 @@ async def capture(args):
            screenshots=screens,counts=report["counts"],tool_version=VERSION)
     data=json.loads((folder/"status.json").read_text());data["status"]="completed"
     (folder/"status.json").write_text(json.dumps(data))
+    with (folder/"diagnostic.log").open("a",encoding="utf8") as stream:
+        stream.write(json.dumps({"tool_version":VERSION,"status":"completed",
+            "stage":"complete","percent":100,"updated_at":int(time.time())})+"\n")
 
 def main():
     parser=argparse.ArgumentParser()
