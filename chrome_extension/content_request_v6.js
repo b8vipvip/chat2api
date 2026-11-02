@@ -529,6 +529,19 @@
         // No exception text from the page is ever persisted.
         active.nativeCaptureFailure = "native-capture-exception";
       }
+      // DevTools Runtime.evaluate executes in the page's main world, while
+      // our extension state is isolated. Attach a bounded, inert DOM identity
+      // marker only to the assistant node already correlated by request-v6.
+      // This makes a still-open finished reply diagnosable after active=null.
+      const correlated=active.lastCandidateNode;
+      const assistantNode=correlated?.closest?.('[data-message-author-role="assistant"]')
+        || (correlated?.isConnected && !correlated.closest?.(
+          '[data-message-author-role="user"],[data-testid="user-message"]')
+          ? correlated : null);
+      if (assistantNode?.isConnected &&
+          !assistantNode.matches?.('[data-message-author-role="user"]')) {
+        assistantNode.setAttribute('data-chat2api-native-request-id',active.requestId);
+      }
       // Native delivery and image identity are independent of the OpenAI
       // terminal. Include only bounded counters/reasons in the terminal
       // diagnostics so a single-request ZIP can explain missing snapshots.
