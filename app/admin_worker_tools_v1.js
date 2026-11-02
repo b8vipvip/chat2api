@@ -319,6 +319,22 @@
       (tool.installed ? "已安装" : "未安装") +
       (action === "update" ? " · 更新完成" : ""));
   }
+  let nativeWorkerLookup = 0;
+  $("nativePageRequestId")?.addEventListener("change", async () => {
+    const id = $("nativePageRequestId")?.value.trim() || "";
+    if (!/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(id)) return;
+    const current = ++nativeWorkerLookup;
+    try {
+      const found = await json("/api/admin/worker-tools/native-page/request-worker/" +
+        encodeURIComponent(id));
+      if (current !== nativeWorkerLookup) return;
+      if (found.worker_id && [...$("nativePageWorker").options].some(x => x.value === found.worker_id)) {
+        $("nativePageWorker").value = found.worker_id;
+        nativePageMessage("已从请求记录定位执行 Worker：" + found.worker_id +
+          "。旧版请求没有保存历史聊天地址时，可补填 ChatGPT /c/ 链接。");
+      }
+    } catch (error) { nativePageMessage(error.message, true); }
+  });
   $("nativePageStart")?.addEventListener("click", () => nativePageStart().catch(
     error => nativePageMessage(error.message, true)));
   $("nativePageVersion")?.addEventListener("click", () => nativePageToolAction("version").catch(
