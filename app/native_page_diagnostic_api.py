@@ -33,6 +33,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     app.state.native_page_diagnostics_installed=True
     root=Path(app.state.settings.data_dir)/"native_page_diagnostics"
     root.mkdir(parents=True,exist_ok=True,mode=0o700)
+    root.chmod(0o700)
     jobs:dict[str,asyncio.Task]={}
     locks:dict[str,str]={}
 
@@ -163,7 +164,17 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         authorize(request)
         records=[]
         for p in sorted(root.glob("*.json"),key=lambda p:p.stat().st_mtime,reverse=True)[:min(100,max(1,limit))]:
-            try:records.append(public(json.loads(p.read_text(encoding="utf8"))))
+            try:
+                item=json.loads(p.read_text(encoding="utf8"))
+                # A server restart cancels in-process pollers. Do not leave
+                # stale tasks eternally appearing as running.
+                if (item.get("status")=="running" and item.get("job_id") not in jobs
+                    and time.time()-int(item.get("updated_at") or 0)>60):
+                    item.update({"status":"interrupted","stage":"server-restarted",
+                        "error":"diagnosis_poll_interrupted_restart",
+                        "updated_at":int(time.time())})
+                    write(item)
+                records.append(public(item))
             except (ValueError,OSError,KeyError):pass
         return {"data":records,"tool":"native-page-diagnostic","version":"1.0.0"}
 
@@ -194,7 +205,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         if url:
             parsed=urlsplit(url)
             if parsed.scheme!="https" or parsed.hostname not in (
-                "chatgpt.com","www.chatgpt.com","chat.openai.com") or parsed.query or parsed.fragment or not re.fullmatch(r"/c/[A-Za-z0-9-]{12,90}/?",parsed.path):
+                "chatgpt.com","www.chatgpt.com","chat.openai.com") or parsed.port not in (None,443) or parsed.username or parsed.password or parsed.query or parsed.fragment or not re.fullmatch(r"/c/[A-Za-z0-9-]{12,90}/?",parsed.path):
                 raise HTTPException(422,"Only exact ChatGPT /c/ conversation URLs allowed")
         if worker in locks:raise HTTPException(409,"This Worker already has a diagnosis running")
         if worker not in app.state.worker_sockets and not any(
