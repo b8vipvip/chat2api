@@ -160,3 +160,17 @@ def test_worker_toolbar_groups_version_check_beside_tool_update():
     assert 'DiagnosticReleaseSource()' in backend
     assert 'await latest_release()' in backend
     assert 'sha256:str=""' in backend
+
+
+def test_native_page_results_show_compact_status_without_raw_error():
+    """The result table is a summary; the exported JSON retains full evidence."""
+    root=Path(__file__).resolve().parents[1]
+    js=(root/"app"/"admin_worker_tools_v1.js").read_text()
+    ui=(root/"app"/"worker_probe_ui_patch.py").read_text()
+    assert '<th>状态/结果</th>' in ui
+    assert '<th>状态/阶段</th>' not in ui
+    assert 'stateLabel + " · " + resultLabel' in js
+    assert '证据已生成' in js and '未获取回复' in js
+    assert 'stateCell.title=issue' not in js
+    assert 'stateLabel + stageLabel' not in js
+    assert '"/log"' in js or '"+ "/log"' in js or '"/log");' in js
