@@ -5,6 +5,7 @@ diagnosis has independent lifecycle and cannot mutate chat2api request status.
 """
 from __future__ import annotations
 import asyncio
+from datetime import datetime, timezone
 import base64
 import hashlib
 import io
@@ -80,13 +81,42 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             raise RuntimeError("worker_"+str(item.get("error") or "command_failed")[:90])
         return item
 
-    async def run(job_id,url):
+    def history_match_hints(row):
+        """Only hashes of generated assistant text, never the prompt or raw text."""
+        raw=str(row.get("response_text") or "")
+        compact="".join(ch.lower() for ch in raw if ch.isalnum())[:200000]
+        digests=[]
+        if len(compact)>=240:
+            for frac in (0.07,0.23,0.41,0.59,0.77,0.91):
+                at=min(len(compact)-48,int(len(compact)*frac))
+                sha=hashlib.sha256(compact[at:at+48].encode()).hexdigest()
+                if sha not in digests:digests.append(sha)
+        stamps=[]
+        for field in ("created_at","recorded_at","updated_at"):
+            value=str(row.get(field) or "")
+            try:
+                epoch=datetime.fromisoformat(value.replace("Z","+00:00")).timestamp()
+                if epoch>1600000000 and epoch<time.time()+86400:stamps.append(epoch)
+            except ValueError:pass
+        duration=float((row.get("timings") or {}).get("total_ms") or 0)/1000
+        if not stamps:return {"reference_hashes":digests,"history_start":0,"history_end":0}
+        earliest=min(stamps)
+        # Older records often stamp the terminal, not request admission.
+        # Permit its recorded total duration plus a small clock-skew margin.
+        start=int(earliest-max(duration,0)-180)
+        end=int(max(stamps)+120)
+        if end-start>7200:
+            start=end-7200
+        return {"reference_hashes":digests,"history_start":start,"history_end":end}
+
+    async def run(job_id,url,hints=None):
         record=read(job_id)
         worker=record["worker_id"]
         try:
             result=await command(worker,"native_page_start",{
                 "job_id":job_id,"request_id":record["request_id"],
                 "conversation_url":url,
+                **(hints or {}),
             },timeout=20)
             record["tool_version"]=result.get("tool_version")
             write(record)
@@ -258,7 +288,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 "status":"running","stage":"queued","percent":0,
                 "tool_version":None,"created_at":int(time.time()),"updated_at":int(time.time())}
         write(record);locks[worker]=job_id
-        jobs[job_id]=asyncio.create_task(run(job_id,url))
+        jobs[job_id]=asyncio.create_task(run(job_id,url,history_match_hints(row)))
         return {"job":public(record)}
 
     @app.get("/api/admin/worker-tools/native-page/jobs/{job_id}")
