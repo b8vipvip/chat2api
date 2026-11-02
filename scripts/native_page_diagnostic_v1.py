@@ -127,6 +127,14 @@ def status(folder,stage,percent,error=None,**meta):
     data={"tool_version":VERSION,"status":"failed" if error else "running","stage":stage,
       "percent":percent,"updated_at":int(time.time()),"error":error,**meta}
     tmp=folder/"status.tmp";tmp.write_text(json.dumps(data));tmp.replace(folder/"status.json")
+    # A bounded, versioned operational timeline travels with the diagnostic ZIP.
+    # Never append page URLs, Chrome credentials, request text or image bytes.
+    try:
+        with (folder/"diagnostic.log").open("a",encoding="utf8") as stream:
+            stream.write(json.dumps({key:data.get(key) for key in (
+                "tool_version","status","stage","percent","updated_at","error",
+                "screenshots")},ensure_ascii=False)+"\\n")
+    except OSError: pass
 
 async def capture(args):
     import websockets
@@ -174,6 +182,7 @@ async def capture(args):
         raise RuntimeError("matching_page_unavailable; supply exact ChatGPT history URL when prior tab is closed")
     if report.get("generating"):raise RuntimeError("reply_still_generating")
     if not report.get("root",{}).get("children"):raise RuntimeError("no_assistant_reply_evidence")
+    verification="live-request-marker" if report.get("request_marker")==args.request_id else "manual-conversation-url-unverified-turn"
     status(folder,"capturing-screenshots",45,counts=report["counts"])
     path=folder/"native-page-evidence.zip"
     async with websockets.connect(ws_endpoint(picked["webSocketDebuggerUrl"],args.cdp_port),open_timeout=5,max_size=24*1024*1024) as conn:
@@ -197,7 +206,10 @@ async def capture(args):
                 "version":VERSION,"request_id":args.request_id,"worker_id":args.worker_id,
                 "scope":report["scope"],"counts":report["counts"],
                 "screenshot_count":screens,"truncated":bool(report.get("reason")),
-                "source":"existing-chatgpt-page","conversation_url_included":False},ensure_ascii=False))
+                "source":"existing-chatgpt-page","conversation_url_included":False,
+                "request_binding":verification},ensure_ascii=False))
+            if (folder/"diagnostic.log").is_file():
+                archive.write(folder/"diagnostic.log","diagnostic.log")
     if path.stat().st_size>MAX_ZIP:raise RuntimeError("evidence_zip_size_limit")
     digest=hashlib.sha256(path.read_bytes()).hexdigest()
     status(folder,"complete",100,size=path.stat().st_size,sha256=digest,
