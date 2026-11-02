@@ -70,3 +70,17 @@ v1.0.0 在 CDP 页面主世界读取扩展隔离世界的 `globalThis` 状态，
 - 服务端更新清单的版本号自动从 Python 工具源码读取，保持独立诊断版本及 SHA256 一致。未来变更采集脚本可从后台单独“更新诊断工具”到新版本，不必反复修改服务端清单常量。
 
 验收：代码 CI 和模拟历史回复 DOM 测试不代表 Worker 登录状态实际可用。部署后对同一条历史链接诊断，失败时直接导出 JSON 并观察新增 `page_probe`；应能区分访问门槛、DOM 边界和 JS 运行异常，从而再实施有确切实机证据的下一步修复。
+
+
+## v1.2.2：直接打开独立 Worker Chrome 标签页，不尝试登录
+
+2026-11-02 的 URL-only 实机日志 `fdb56dab367f4591a694bfae681b59b7`，工具 1.2.1，原地址 `https://chatgpt.com/c/6ae7dac6-8328-83e8-878d-fc3599d7b10b`，在 29 秒后失败：`history_page_still_loading`，但 `page_probe=null`。现有日志**不能证明**是浏览器需要认证，不能直接要求用户登录。
+
+此次 v1.2.2 修改页面定位方式：
+- 输入精确 /c/ 历史链接时，**总是**在所选 Linux Worker 的现有 Chrome 浏览器配置中通过 localhost CDP `PUT /json/new?<encoded URL>` 创建一个专用新标签页，即使同样的历史链接已经在别的 Worker 标签页中打开也不复用、不干扰。
+- 工具不会执行登录或提供凭据，也不会向 ChatGPT 发送新生成请求。如果当前 Chrome 已有可访问会话，新页面直接显示历史内容；如果 ChatGPT 自行转向身份验证页面，日志只记录 `navigation_route=access-gate` 而不读取页面私密信息或尝试绕过认证。
+- 用本次诊断创建的 Chrome tab id 定位页面，保持对 `about:blank`、网页跳转和临时导航错误的感知，最多等待 45 次页面观察；只有可信助手回复真实存在才开始 DOM/截图采集。分类导航错误 `history_browser_navigation_failed`、`history_unexpected_redirect`、`history_diagnostic_tab_missing`。
+- 失败时除了状态 JSON 中的只读结构化 `page_probe`，错误文本也附带有限安全摘要（页面路由类别/readyState/固定采集状态/助手节点数），防止较旧 Controller 没转发探针时再丢失全部原因。服务端也禁止使用新轮询中的 null 覆盖上一次合法探针。
+- 旧版未关闭的会话页仍可由请求 ID + 精确请求标记匹配；有历史 URL 时优先专用新页。独立工具还是只读观察，不干扰 request-v6 唯一终态、窗口池或原请求媒体交付。
+
+验证：新增模拟 Chrome CDP/new-tab 的回归测试，确保同 URL 已存在时仍单独发起且仅发起一次 PUT，新标签页能够完成证据 ZIP，不需要重新生成请求。**部署后仍需复测真实 ChatGPT 历史页面，不能把 CI 通过误写成实际 1:1 成功。**
