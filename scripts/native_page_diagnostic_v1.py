@@ -34,8 +34,13 @@ const visible=e=>{try{const r=e.getBoundingClientRect(),s=getComputedStyle(e);re
 const norm=s=>String(s||'').replace(/\s+/g,' ').trim();
 const hasUser=e=>!!e.querySelector('[data-message-author-role="user"],[data-testid="user-message"]');
 let scope='',roots=[];
+const tagged=document.querySelector('[data-chat2api-native-request-id="'+expected+'"]');
 const assistant=[...document.querySelectorAll('[data-message-author-role="assistant"]')].filter(e=>e.isConnected&&visible(e)&&!hasUser(e)&&!e.parentElement?.closest('[data-message-author-role="assistant"]'));
-if(assistant.length){scope='assistant-role';roots=[assistant[assistant.length-1]];}
+if(assistant.length){
+  scope='assistant-role';
+  const root=tagged?.closest('[data-message-author-role="assistant"]');
+  roots=[root&&visible(root)&&!hasUser(root)?root:assistant[assistant.length-1]];
+}
 else {
  const h=[...document.querySelectorAll('main h4,[role="main"] h4,#thread h4')].filter(e=>e.isConnected&&visible(e)&&/^ChatGPT said\s*[:：]?$/.test(norm(e.textContent)));
  if(!h.length)return {ok:false,error:'no-verified-assistant-boundary'};
@@ -92,7 +97,6 @@ const children=[];for(const e of roots){const n=walk(e,0);if(n)children.push(n);
 // A content script runs in an isolated Chrome world, invisible to the
 // default DevTools Runtime.evaluate context. Trust only the DOM marker placed
 // by request-v6 for the exact request. Never infer it from page similarity.
-const tagged=document.querySelector('[data-chat2api-native-request-id="'+expected+'"]');
 return {ok:!reason,reason,version:1,scope,request_marker:tagged?expected:null,
  counts:counters,rect:{x:Math.max(0,Math.floor(left)),y:Math.max(0,Math.floor(top)),w:Math.ceil(right-left),h:Math.ceil(bottom-top)},
  image_rects:imageRects,root:{tag:'assistant-reply',children},
