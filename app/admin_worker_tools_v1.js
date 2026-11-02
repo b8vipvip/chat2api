@@ -249,12 +249,22 @@
       const state = String(item.status || "");
       const progress = Math.min(100, Math.max(0, Number(item.percent || 0)));
       active ||= state === "running";
+      const issue = String(item.error || "");
+      const translated = /matching_page_unavailable|historical_request_page_not_recovered|history_multiple_candidates/.test(issue)
+        ? "无法唯一恢复原生历史页面；可补填 ChatGPT /c/ 链接，或检查 Worker 浏览器历史记录"
+        : /history_reply_unavailable/.test(issue)
+        ? "原生会话已定位，但页面未加载可验证的助手回复"
+        : issue;
+      const stateLabel = state === "completed" ? "已完成"
+        : state === "failed" ? "失败" : state === "running" ? "运行中" : state || "-";
+      const stageLabel = state === "failed" ? "" : " · " + (item.stage || "-");
+      const stateCell = elem("td", stateLabel + stageLabel +
+        (translated ? " · " + translated : ""));
+      stateCell.title = issue;
       row.append(elem("td", String(item.job_id || "").slice(0,12)),
         elem("td", item.request_id || "-", "native-id"),
         elem("td", item.worker_id || "-", "native-id"),
-        elem("td", item.tool_version || "未报告"),
-        elem("td", (state || "-") + " · " + (item.stage || "-") +
-          (item.error ? " · " + item.error : "")));
+        elem("td", item.tool_version || "未报告"), stateCell);
       const pct = elem("td");
       const bar = elem("progress");
       bar.max = 100; bar.value = progress;
