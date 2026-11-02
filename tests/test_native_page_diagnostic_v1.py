@@ -260,6 +260,12 @@ def test_native_probe_is_structural_and_kept_on_failure(tmp_path):
     assert native.failure_reason({"capture_error":"capture-js-exception"})=="history_capture_runtime_failed"
 
 
+def test_native_page_roleless_capture_vm_and_page_probe():
+    result=subprocess.run(["node","tests/native_page_roleless_probe_v121.mjs"],
+        cwd=ROOT,capture_output=True,text=True,timeout=15)
+    assert result.returncode==0,result.stdout+"\\n"+result.stderr
+
+
 def test_native_page_probe_vm_syntax_and_no_text_or_media_exfiltration():
     source=(ROOT/"scripts/native_page_diagnostic_v1.py").read_text()
     extracted=re.search(r'PAGE_PROBE = r"""(.*?)"""',source,re.S)
