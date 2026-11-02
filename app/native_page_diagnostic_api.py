@@ -187,7 +187,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     @app.get("/bootstrap/native-page-diagnostic.json",include_in_schema=False)
     async def tool_manifest():
         data=(Path(__file__).parents[1]/"scripts"/"native_page_diagnostic_v1.py").read_bytes()
-        return {"version":"1.0.0","sha256":hashlib.sha256(data).hexdigest(),"bytes":len(data)}
+        return {"version":"1.1.0","sha256":hashlib.sha256(data).hexdigest(),"bytes":len(data)}
 
     @app.get("/api/admin/worker-tools/native-page/jobs")
     async def list_jobs(request:Request,limit:int=40):
@@ -206,7 +206,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                     write(item)
                 records.append(public(item))
             except (ValueError,OSError,KeyError):pass
-        return {"data":records,"tool":"native-page-diagnostic","version":"1.0.0"}
+        return {"data":records,"tool":"native-page-diagnostic","version":"1.1.0"}
 
     @app.get("/api/admin/worker-tools/native-page/workers")
     async def eligible_workers(request:Request):
