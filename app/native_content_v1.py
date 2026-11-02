@@ -19,6 +19,9 @@ from pathlib import Path
 
 MAX_BYTES = 6 * 1024 * 1024
 MAX_NODES = 30000
+# Large roleless ChatGPT responses can place thousands of blocks under one
+# flex/grid parent. Byte/node caps still prevent unbounded trees.
+MAX_CHILDREN = 8192
 MAX_DEPTH = 24
 MAX_TEXT = 300000
 MAX_ACTIVE = 128
@@ -136,7 +139,7 @@ def validate_native_snapshot(payload: object) -> dict:
                 result["style"] = styles
         if "children" in value:
             children = value["children"]
-            if tag in {"img", "hr", "br"} or not isinstance(children, list) or len(children) > 160:
+            if tag in {"img", "hr", "br"} or not isinstance(children, list) or len(children) > MAX_CHILDREN:
                 raise ValueError("Invalid children")
             result["children"] = [node(child, depth + 1) for child in children]
         return result
