@@ -304,11 +304,21 @@
     }
   }
   async function nativePageStart() {
-    const worker_id = $("nativePageWorker")?.value || "";
     const request_id = $("nativePageRequestId")?.value.trim() || "";
-    const conversation_url = $("nativePageConversationUrl")?.value.trim() || "";
-    if (!worker_id || !/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(request_id))
-      throw new Error("请先选择 Worker 并输入完整的原请求 ID");
+    if (!/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(request_id))
+      throw new Error("请输入完整的原请求 ID");
+    const found = await json("/api/admin/worker-tools/native-page/request-worker/" +
+      encodeURIComponent(request_id));
+    const owner = String(found.worker_id || "");
+    const chosen = $("nativePageWorker")?.value || "";
+    if (chosen && owner && chosen !== owner)
+      throw new Error("该请求属于 " + owner + "，不能指定其他 Worker 采集");
+    const worker_id = owner || chosen;
+    if (!worker_id) throw new Error("请求记录没有可识别的 Linux Worker");
+    if ([...$("nativePageWorker").options].some(x => x.value === worker_id))
+      $("nativePageWorker").value = worker_id;
+    const conversation_url = $("nativePageConversationUrl")?.value.trim() ||
+      String(found.conversation_url || "");
     if (conversation_url && !/^https:\/\/(?:chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)\/c\/[a-zA-Z0-9-]{12,90}\/?$/.test(conversation_url))
       throw new Error("历史页面地址应为完整的 ChatGPT /c/ 链接");
     const response = await json("/api/admin/worker-tools/native-page/jobs",{
