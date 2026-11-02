@@ -533,14 +533,22 @@
       // our extension state is isolated. Attach a bounded, inert DOM identity
       // marker only to the assistant node already correlated by request-v6.
       // This makes a still-open finished reply diagnosable after active=null.
-      const correlated=active.lastCandidateNode;
-      const assistantNode=correlated?.closest?.('[data-message-author-role="assistant"]')
-        || (correlated?.isConnected && !correlated.closest?.(
-          '[data-message-author-role="user"],[data-testid="user-message"]')
-          ? correlated : null);
-      if (assistantNode?.isConnected &&
-          !assistantNode.matches?.('[data-message-author-role="user"]')) {
-        assistantNode.setAttribute('data-chat2api-native-request-id',active.requestId);
+      try {
+        const correlated=active.lastCandidateNode;
+        const assistantNode=correlated?.nodeType === 1
+          ? (correlated.closest?.('[data-message-author-role="assistant"]')
+            || (!correlated.closest?.(
+                '[data-message-author-role="user"],[data-testid="user-message"]')
+                ? correlated : null))
+          : null;
+        if (assistantNode?.isConnected &&
+            typeof assistantNode.setAttribute === "function" &&
+            !assistantNode.matches?.('[data-message-author-role="user"]')) {
+          assistantNode.setAttribute('data-chat2api-native-request-id',active.requestId);
+        }
+      } catch (_) {
+        // Diagnosis is an optional observer: never interfere with the sole
+        // request-v6 completed/error terminal.
       }
       // Native delivery and image identity are independent of the OpenAI
       // terminal. Include only bounded counters/reasons in the terminal
