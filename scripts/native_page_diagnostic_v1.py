@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.2"
+VERSION = "1.2.3"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -125,23 +125,51 @@ return {ok:!reason,reason,version:1,scope,request_marker:tagged?expected:null,
 
 PAGE_PROBE = r"""(function(){
 'use strict';
-// Fixed structural signals only. No body text, page title, URLs, prompts,
-// account identifiers, cookies, storage or screenshots of auth pages.
-const heading=[...document.querySelectorAll('main h4,main h5,main h6,[role="main"] h4,[role="main"] h5,[role="main"] h6,#thread h4,#thread h5')]
- .filter(e=>/^ChatGPT said\s*[:：]?$/.test(String(e.textContent||'').replace(/\s+/g,' ').trim())).length;
+// Structural signals and numeric HTTP response classes ONLY.
+// Do not read resource names/URLs, body text, titles, cookies, headers,
+// account identifiers, request payloads or page storage.
+const headings=[...document.querySelectorAll('main h4,main h5,main h6,[role="main"] h4,[role="main"] h5,[role="main"] h6,#thread h4,#thread h5')];
+const heading=headings.filter(e=>/^ChatGPT said\s*[:：]?$/.test(
+ String(e.textContent||'').replace(/\s+/g,' ').trim())).length;
 const path=String(location.pathname||'');
 const route=/^\/c\/[A-Za-z0-9-]{12,90}\/?$/.test(path)?'conversation':
  /login|auth|signin|challenge|captcha|error/i.test(path)?'access-gate':'other';
+const perf={fetch_total:0,fetch_http_2xx:0,fetch_http_401_403:0,
+ fetch_http_404:0,fetch_http_429:0,fetch_http_other_4xx:0,
+ fetch_http_5xx:0,fetch_status_unavailable:0};
+try {
+ const items=performance.getEntriesByType('resource').slice(-300);
+ for(const entry of items){
+  if(entry.initiatorType!=='fetch'&&entry.initiatorType!=='xmlhttprequest')continue;
+  perf.fetch_total++;
+  // responseStatus may be 0 or unavailable when timing is restricted.
+  const code=Number(entry.responseStatus||0);
+  if(code>=200&&code<300)perf.fetch_http_2xx++;
+  else if(code===401||code===403)perf.fetch_http_401_403++;
+  else if(code===404)perf.fetch_http_404++;
+  else if(code===429)perf.fetch_http_429++;
+  else if(code>=400&&code<500)perf.fetch_http_other_4xx++;
+  else if(code>=500&&code<600)perf.fetch_http_5xx++;
+  else perf.fetch_status_unavailable++;
+ }
+}catch(_){}
+const main=document.querySelector('main,[role="main"]');
 return {ready_state:String(document.readyState||'unknown').slice(0,16),
-  route, assistant_roles:document.querySelectorAll('[data-message-author-role="assistant"]').length,
+  route, visibility_state:String(document.visibilityState||'unknown').slice(0,16),
+  has_focus:typeof document.hasFocus==='function'?Boolean(document.hasFocus()):false,
+  online_hint:typeof navigator!=='undefined' ? Boolean(navigator.onLine) : null,
+  assistant_roles:document.querySelectorAll('[data-message-author-role="assistant"]').length,
   user_roles:document.querySelectorAll('[data-message-author-role="user"]').length,
   conversation_turns:document.querySelectorAll('[data-testid="conversation-turn"]').length,
   assistant_testids:document.querySelectorAll('[data-testid="assistant-message"],[data-testid="assistant-turn"]').length,
   verified_roleless_headings:heading,
   main_landmarks:document.querySelectorAll('main,[role="main"]').length,
+  main_child_elements:main?main.children.length:0,
+  app_roots:document.querySelectorAll('#__next,#root,[data-nextjs-root]').length,
   password_fields:document.querySelectorAll('input[type="password"]').length>0,
   challenge_frames:document.querySelectorAll('iframe[src*="challenge"],iframe[src*="captcha"]').length>0,
-  loading_skeletons:document.querySelectorAll('[data-testid*="skeleton"],[aria-busy="true"]').length>0};
+  loading_skeletons:document.querySelectorAll('[data-testid*="skeleton"],[aria-busy="true"]').length>0,
+  ...perf};
 })()"""
 
 def json_get(port, path):
@@ -245,9 +273,13 @@ class CDP:
             if obj.get("error"):raise RuntimeError("cdp_"+method.replace(".","_")+"_failed")
             return obj.get("result") or {}
 
-_PROBE_KEYS = {"ready_state", "route", "assistant_roles", "user_roles",
-    "conversation_turns", "assistant_testids", "verified_roleless_headings", "main_landmarks",
-    "password_fields", "challenge_frames", "loading_skeletons",
+_PROBE_KEYS = {"ready_state", "route", "visibility_state", "has_focus",
+    "online_hint", "assistant_roles", "user_roles", "conversation_turns",
+    "assistant_testids", "verified_roleless_headings", "main_landmarks",
+    "main_child_elements", "app_roots", "password_fields", "challenge_frames",
+    "loading_skeletons", "fetch_total", "fetch_http_2xx",
+    "fetch_http_401_403", "fetch_http_404", "fetch_http_429",
+    "fetch_http_other_4xx", "fetch_http_5xx", "fetch_status_unavailable",
     "capture_error"}
 
 async def inspect_page(cdp, request_id):
@@ -287,7 +319,7 @@ async def inspect_page(cdp, request_id):
                     val=raw.get(key)
                     if isinstance(val,bool):probe[key]=val
                     elif isinstance(val,int):probe[key]=min(max(val,0),100000)
-                    elif isinstance(val,str) and key in ("ready_state","route"):
+                    elif isinstance(val,str) and key in ("ready_state","route","visibility_state"):
                         probe[key]=val[:24]
     except Exception:
         pass
@@ -308,6 +340,22 @@ def failure_reason(probe):
     if probe.get("challenge_frames"):return "history_challenge_detected"
     if probe.get("password_fields") or probe.get("route")=="access-gate":
         return "history_access_gate_detected"
+    # A document whose load event finished but whose conversation remains
+    # skeleton-only is NOT evidence that browser navigation is still loading.
+    if (probe.get("route")=="conversation"
+        and probe.get("ready_state")=="complete"
+        and probe.get("loading_skeletons")
+        and not (probe.get("assistant_roles") or probe.get("assistant_testids")
+                 or probe.get("conversation_turns") or probe.get("user_roles")
+                 or probe.get("verified_roleless_headings"))):
+        if (probe.get("fetch_http_401_403") or probe.get("fetch_http_429")
+            or probe.get("fetch_http_other_4xx")):
+            return "history_conversation_stalled_with_http_4xx"
+        if probe.get("fetch_http_5xx"):
+            return "history_conversation_stalled_with_http_5xx"
+        if probe.get("visibility_state")=="hidden":
+            return "history_conversation_stalled_background_tab"
+        return "history_conversation_hydration_stalled"
     if probe.get("ready_state")=="loading" or probe.get("loading_skeletons"):
         return "history_page_still_loading"
     if probe.get("capture_error") in (
@@ -552,6 +600,12 @@ def main():
             bits=[str(probe.get(key) or "-")[:22] for key in (
                 "navigation_route","ready_state","capture_error")]
             bits.append("a="+str(int(probe.get("assistant_roles") or 0)))
+            bits.append("v="+str(probe.get("visibility_state") or "-")[:8])
+            bits.append("f="+str(int(probe.get("fetch_total") or 0)))
+            bits.append("4="+str(sum(int(probe.get(k) or 0) for k in (
+                "fetch_http_401_403","fetch_http_404","fetch_http_429",
+                "fetch_http_other_4xx"))))
+            bits.append("5="+str(int(probe.get("fetch_http_5xx") or 0)))
             error=(error+" ["+";".join(bits)+"]")[:180]
         status(folder,"failed",100,error=error)
         raise SystemExit(1)
