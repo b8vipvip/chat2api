@@ -22,7 +22,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.13"
+VERSION = "1.2.14"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -312,6 +312,43 @@ const middle=document.elementFromPoint(Math.floor(innerWidth*0.66),
  Math.floor(innerHeight*0.5));
 const allBodyArticles=document.querySelectorAll('article,[role="article"]');
 const allBodyMarkdown=document.querySelectorAll('.markdown,.prose,[data-testid*="markdown"]');
+// Recover structural ancestry of rendered tables without exporting content.
+// A single shared table ancestor is NOT automatically an assistant boundary.
+const mainTables=visibleTables.filter(e=>main?.contains(e));
+let tableRegion=mainTables[0]?.parentElement||null;
+while(tableRegion&&mainTables.some(e=>!tableRegion.contains(e)))
+ tableRegion=tableRegion.parentElement;
+const scope=tableRegion&&main?.contains(tableRegion)?tableRegion:null;
+const scopeText=scope?String(scope.innerText||''):'';
+let scopeDepth=0,scopeChildIndex=-1,scopeAt=scope;
+while(scopeAt&&scopeAt!==main&&scopeDepth<50){
+ const parent=scopeAt.parentElement;
+ if(parent===main)scopeChildIndex=[...main.children].indexOf(scopeAt);
+ scopeDepth++;scopeAt=parent;
+}
+const scopeRect=scope?.getBoundingClientRect();
+const scopeComposer=scope?scope.querySelectorAll('form,textarea,[contenteditable="true"],[role="textbox"]').length:0;
+const scopeUserMarkers=scope?scope.querySelectorAll('[data-message-author-role="user"],[data-testid="user-message"]').length:0;
+const scopeAssistantMarkers=scope?scope.querySelectorAll('[data-message-author-role="assistant"],[data-testid="assistant-message"]').length:0;
+// Heading/p/section counts, not heading contents, class names or raw DOM.
+const tableScopeStats=scope?{
+  table_scope_tag: ['main','section','article','div'].includes(scope.tagName.toLowerCase())?scope.tagName.toLowerCase():'other',
+  table_scope_depth:scopeDepth,
+  table_scope_main_child_index:scopeChildIndex,
+  table_scope_is_main:scope===main,
+  table_scope_direct_children:scope.children.length,
+  table_scope_visible_text_chars:Math.min(500000,scopeText.length),
+  table_scope_table_count:mainTables.length,
+  table_scope_heading_count:scope.querySelectorAll('h1,h2,h3,h4,h5,h6').length,
+  table_scope_paragraph_count:scope.querySelectorAll('p').length,
+  table_scope_image_count:scope.querySelectorAll('img').length,
+  table_scope_button_count:scope.querySelectorAll('button').length,
+  table_scope_composer_count:scopeComposer,
+  table_scope_user_markers:scopeUserMarkers,
+  table_scope_assistant_markers:scopeAssistantMarkers,
+  table_scope_height_px:scopeRect?Math.min(100000,Math.round(scopeRect.height)):0,
+  table_scope_top_y_px:scopeRect?Math.max(-100000,Math.min(100000,Math.round(scopeRect.top+scrollY))):0
+}:{table_scope_tag:'none'};
 return {ready_state:String(document.readyState||'unknown').slice(0,16),
   route, visibility_state:String(document.visibilityState||'unknown').slice(0,16),
   has_focus:typeof document.hasFocus==='function'?Boolean(document.hasFocus()):false,
@@ -340,6 +377,8 @@ return {ready_state:String(document.readyState||'unknown').slice(0,16),
   body_article_count:allBodyArticles.length,
   body_markdown_blocks:allBodyMarkdown.length,
   body_visible_tables:visibleTables.length,
+  main_visible_tables:mainTables.length,
+  ...tableScopeStats,
   body_visible_table_rows:Math.min(100000,visibleTables.reduce((n,e)=>
    n+e.querySelectorAll('tr,[role="row"]').length,0)),
   body_visible_tables_outside_main:visibleTables.filter(e=>!e.closest('main,[role="main"]')).length,
@@ -476,7 +515,15 @@ _PROBE_KEYS = {"ready_state", "route", "visibility_state", "has_focus",
     "main_busy_regions", "page_busy_regions", "main_visible_images",
     "body_text_chars", "body_visible_text_chars",
     "body_article_count", "body_markdown_blocks",
-    "body_visible_tables", "body_visible_table_rows",
+    "body_visible_tables", "main_visible_tables", "body_visible_table_rows",
+    "table_scope_tag", "table_scope_depth", "table_scope_main_child_index",
+    "table_scope_is_main", "table_scope_direct_children",
+    "table_scope_visible_text_chars", "table_scope_table_count",
+    "table_scope_heading_count", "table_scope_paragraph_count",
+    "table_scope_image_count", "table_scope_button_count",
+    "table_scope_composer_count", "table_scope_user_markers",
+    "table_scope_assistant_markers", "table_scope_height_px",
+    "table_scope_top_y_px",
     "body_visible_tables_outside_main", "viewport_center_in_main",
     "viewport_center_in_table", "viewport_center_in_article",
     "main_markdown_blocks", "main_article_count",
@@ -548,8 +595,11 @@ async def inspect_page(cdp, request_id):
                             3600000 if key in ("conversation_api_last_429_age_ms",
                             "last_finished_age_ms") else 100000)
                         probe[key]=min(max(val,0),limit)
-                    elif isinstance(val,str) and key in ("ready_state","route","visibility_state"):
-                        probe[key]=val[:24]
+                    elif isinstance(val,str) and key in (
+                        "ready_state","route","visibility_state","table_scope_tag"):
+                        if key!="table_scope_tag" or val in (
+                            "none","main","section","article","div","other"):
+                            probe[key]=val[:24]
     except Exception:
         pass
     probe["capture_error"]=capture_error
@@ -675,10 +725,21 @@ def desktop_chrome_affinity(cdp_port):
     """
     evidence={"desktop_affinity_checked":False,
         "desktop_chrome_windows":0,"desktop_chrome_cdp_port_matches":0,
-        "desktop_chrome_other_ports":0,"desktop_chrome_port_unknown":0}
+        "desktop_chrome_other_ports":0,"desktop_chrome_port_unknown":0,
+        "desktop_x11_query_responded":False,
+        "desktop_x11_visible_window_candidates":0}
     env=dict(os.environ)
     env["DISPLAY"]=":"+str(int(cdp_port)-9123)
     try:
+        # Broader X11 census distinguishes "no Chrome window matched"
+        # from "DISPLAY is unavailable". Never export titles/IDs.
+        census=subprocess.run(
+            ["xdotool","search","--onlyvisible","--name",".*"],
+            capture_output=True,text=True,timeout=3,check=False,env=env)
+        evidence["desktop_x11_query_responded"]=census.returncode in (0,1)
+        if evidence["desktop_x11_query_responded"]:
+            evidence["desktop_x11_visible_window_candidates"]=min(1000,
+                sum(1 for w in census.stdout.splitlines() if w.isdecimal()))
         found=subprocess.run(
             ["xdotool","search","--onlyvisible","--class",".*[Cc]hrome.*"],
             capture_output=True,text=True,timeout=3,check=False,env=env)
@@ -793,6 +854,13 @@ async def _capture_inner(args,owned_tabs):
         max_body_tables=0
         max_body_rows=0
         max_body_markdown=0
+        max_table_scope_text=0
+        max_table_scope_headings=0
+        max_table_scope_paragraphs=0
+        max_table_scope_composers=0
+        max_table_scope_user_markers=0
+        min_table_scope_depth=100000
+        table_scopes_main=0
         max_visible_text=0
         focused_tabs=0
         visible_content_candidates=0
@@ -823,6 +891,19 @@ async def _capture_inner(args,owned_tabs):
                         int(probe.get("body_markdown_blocks") or 0),
                         int(probe.get("aria_busy_count") or 0)))
                     max_body_tables=max(max_body_tables,int(probe.get("body_visible_tables") or 0))
+                    max_table_scope_text=max(max_table_scope_text,
+                        int(probe.get("table_scope_visible_text_chars") or 0))
+                    max_table_scope_headings=max(max_table_scope_headings,
+                        int(probe.get("table_scope_heading_count") or 0))
+                    max_table_scope_paragraphs=max(max_table_scope_paragraphs,
+                        int(probe.get("table_scope_paragraph_count") or 0))
+                    max_table_scope_composers=max(max_table_scope_composers,
+                        int(probe.get("table_scope_composer_count") or 0))
+                    max_table_scope_user_markers=max(max_table_scope_user_markers,
+                        int(probe.get("table_scope_user_markers") or 0))
+                    min_table_scope_depth=min(min_table_scope_depth,
+                        int(probe.get("table_scope_depth") or 0))
+                    table_scopes_main+=int(bool(probe.get("table_scope_is_main")))
                     max_body_rows=max(max_body_rows,int(probe.get("body_visible_table_rows") or 0))
                     max_body_markdown=max(max_body_markdown,int(probe.get("body_markdown_blocks") or 0))
                     max_visible_text=max(max_visible_text,int(probe.get("body_visible_text_chars") or 0))
@@ -863,6 +944,13 @@ async def _capture_inner(args,owned_tabs):
             "existing_tab_historical_429":historical_429_tabs,
             "existing_tab_distinct_structures":len(structural_fingerprints),
             "existing_tab_max_body_tables":max_body_tables,
+            "existing_tab_max_table_scope_visible_text_chars":max_table_scope_text,
+            "existing_tab_max_table_scope_headings":max_table_scope_headings,
+            "existing_tab_max_table_scope_paragraphs":max_table_scope_paragraphs,
+            "existing_tab_max_table_scope_composers":max_table_scope_composers,
+            "existing_tab_max_table_scope_user_markers":max_table_scope_user_markers,
+            "existing_tab_min_table_scope_depth":min_table_scope_depth if inspected_tabs else 0,
+            "existing_tab_table_scope_is_main_count":table_scopes_main,
             "existing_tab_max_body_table_rows":max_body_rows,
             "existing_tab_max_body_markdown_blocks":max_body_markdown,
             "existing_tab_max_body_visible_text_chars":max_visible_text,
