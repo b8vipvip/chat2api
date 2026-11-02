@@ -310,7 +310,9 @@ def failure_reason(probe):
         return "history_access_gate_detected"
     if probe.get("ready_state")=="loading" or probe.get("loading_skeletons"):
         return "history_page_still_loading"
-    if probe.get("capture_error") in ("capture-js-exception","capture-cdp-error"):
+    if probe.get("capture_error") in (
+        "capture-js-exception","capture-cdp-error",
+        "cdp-tab-connection-error","cdp-endpoint-unavailable"):
         return "history_capture_runtime_failed"
     if (not probe.get("assistant_roles") and not probe.get("assistant_testids")
         and not probe.get("verified_roleless_headings")):
