@@ -262,6 +262,19 @@
       pct.append(bar, document.createTextNode(" " + progress + "%"));
       row.append(pct);
       const cell = elem("td");
+      const log = elem("button", "导出日志", "action");
+      log.onclick = async () => {
+        try {
+          const response = await apiRequest("/api/admin/worker-tools/native-page/jobs/" +
+            encodeURIComponent(item.job_id) + "/log");
+          const url = URL.createObjectURL(await response.blob());
+          const link = elem("a");
+          link.href = url; link.download = "native-page-" + item.job_id.slice(0,8) + "-diagnostic.json";
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 3000);
+        } catch (error) { nativePageMessage(error.message, true); }
+      };
+      cell.append(log);
       if (state === "completed") {
         const action = elem("button", "导出诊断 ZIP", "action");
         action.onclick = async () => {
