@@ -224,6 +224,20 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             headers={"Cache-Control":"no-store","Content-Disposition":
                 f'attachment; filename="native-page-{job["request_id"]}-{job_id[:8]}-v{job["tool_version"]}.zip"'})
 
+    @app.get("/api/admin/worker-tools/native-page/jobs/{job_id}/log")
+    async def download_log(job_id:str,request:Request):
+        authorize(request)
+        record=read(job_id)
+        safe={key:record.get(key) for key in (
+            "job_id","request_id","worker_id","status","stage","percent",
+            "error","tool_version","counts","screenshots","size",
+            "created_at","updated_at")}
+        return Response(json.dumps({"schema":"chat2api-native-page-diagnostic-log-v1",
+            "record":safe},ensure_ascii=False,indent=2),
+            media_type="application/json",
+            headers={"Cache-Control":"no-store","Content-Disposition":
+                f'attachment; filename="native-page-{job_id[:8]}-diagnostic.json"'})
+
     @app.post("/api/admin/worker-tools/native-page/workers/{worker_id}/update")
     async def update(worker_id:str,request:Request):
         authorize(request);check_worker(worker_id)
