@@ -41,6 +41,14 @@ if(assistant.length){
   const root=tagged?.closest('[data-message-author-role="assistant"]');
   roots=[root&&visible(root)&&!hasUser(root)?root:assistant[assistant.length-1]];
 }
+else if(([...document.querySelectorAll(
+  'main [data-testid="assistant-message"],main [data-testid="assistant-turn"],[role="main"] [data-testid="assistant-message"]'
+)].filter(e=>e.isConnected&&visible(e)&&!hasUser(e))).length){
+  scope='verified-assistant-testid';
+  roots=[...document.querySelectorAll(
+    'main [data-testid="assistant-message"],main [data-testid="assistant-turn"],[role="main"] [data-testid="assistant-message"]'
+  )].filter(e=>e.isConnected&&visible(e)&&!hasUser(e)).slice(-1);
+}
 else {
  // For historical ChatGPT replies, a roleless "ChatGPT said" heading may
  // live INSIDE a verified turn container, not beside the answer body.
@@ -128,6 +136,7 @@ return {ready_state:String(document.readyState||'unknown').slice(0,16),
   route, assistant_roles:document.querySelectorAll('[data-message-author-role="assistant"]').length,
   user_roles:document.querySelectorAll('[data-message-author-role="user"]').length,
   conversation_turns:document.querySelectorAll('[data-testid="conversation-turn"]').length,
+  assistant_testids:document.querySelectorAll('[data-testid="assistant-message"],[data-testid="assistant-turn"]').length,
   verified_roleless_headings:heading,
   main_landmarks:document.querySelectorAll('main,[role="main"]').length,
   password_fields:document.querySelectorAll('input[type="password"]').length>0,
@@ -237,7 +246,7 @@ class CDP:
             return obj.get("result") or {}
 
 _PROBE_KEYS = {"ready_state", "route", "assistant_roles", "user_roles",
-    "conversation_turns", "verified_roleless_headings", "main_landmarks",
+    "conversation_turns", "assistant_testids", "verified_roleless_headings", "main_landmarks",
     "password_fields", "challenge_frames", "loading_skeletons",
     "capture_error"}
 
@@ -295,7 +304,8 @@ def failure_reason(probe):
         return "history_page_still_loading"
     if probe.get("capture_error") in ("capture-js-exception","capture-cdp-error"):
         return "history_capture_runtime_failed"
-    if not probe.get("assistant_roles") and not probe.get("verified_roleless_headings"):
+    if (not probe.get("assistant_roles") and not probe.get("assistant_testids")
+        and not probe.get("verified_roleless_headings")):
         return "history_assistant_boundary_not_found"
     return "history_assistant_capture_rejected"
 
