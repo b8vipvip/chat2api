@@ -21,7 +21,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.11"
+VERSION = "1.2.12"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -144,12 +144,41 @@ NEW_DOCUMENT_ERRORS = r"""(function(){
 'use strict';
 if(window.__chat2apiNativeDiagCounts)return;
 const counts={js_exception_count:0,unhandled_rejection_count:0,
- resource_error_count:0};
+ resource_error_count:0,js_type_error_count:0,js_reference_error_count:0,
+ js_syntax_error_count:0,js_range_error_count:0,
+ js_other_typed_error_count:0,js_unclassified_error_count:0,
+ js_error_before_complete_count:0,js_error_after_complete_count:0,
+ js_first_party_error_count:0,js_other_origin_error_count:0,
+ js_origin_unknown_error_count:0};
 Object.defineProperty(window,'__chat2apiNativeDiagCounts',{
  value:counts,configurable:false,enumerable:false});
 window.addEventListener('error',function(event){
- const key=event.target===window?'js_exception_count':'resource_error_count';
+ const ownWindow=event.target===window;
+ const key=ownWindow?'js_exception_count':'resource_error_count';
  counts[key]=Math.min(9999,counts[key]+1);
+ if(!ownWindow)return;
+ // Emit only predefined counters. Never export message, stack, filename,
+ // URL, response contents, user prompt or browser credentials.
+ let type='';
+ try{type=String(event.error?.name||'');}catch(_){}
+ const bucket=type==='TypeError'?'js_type_error_count':
+   type==='ReferenceError'?'js_reference_error_count':
+   type==='SyntaxError'?'js_syntax_error_count':
+   type==='RangeError'?'js_range_error_count':
+   type?'js_other_typed_error_count':'js_unclassified_error_count';
+ counts[bucket]=Math.min(9999,counts[bucket]+1);
+ const phase=document.readyState==='complete'?
+   'js_error_after_complete_count':'js_error_before_complete_count';
+ counts[phase]=Math.min(9999,counts[phase]+1);
+ let originType='js_origin_unknown_error_count';
+ try{
+   const file=String(event.filename||'');
+   if(file.startsWith(location.origin+'/'))
+     originType='js_first_party_error_count';
+   else if(/^https?:\/\//i.test(file))
+     originType='js_other_origin_error_count';
+ }catch(_){}
+ counts[originType]=Math.min(9999,counts[originType]+1);
 },true);
 window.addEventListener('unhandledrejection',function(){
  counts.unhandled_rejection_count=Math.min(9999,counts.unhandled_rejection_count+1);
@@ -251,15 +280,22 @@ try {
    Math.min(3600000,Math.round(performance.now()-end)));
  }
 }catch(_){}
-let jsErrors={js_exception_count:0,unhandled_rejection_count:0,
- resource_error_count:0,error_hooks_installed:false};
+let jsErrors={error_hooks_installed:false};
 try{
  const observed=window.__chat2apiNativeDiagCounts;
  if(observed){
-  jsErrors={js_exception_count:Number(observed.js_exception_count||0),
-   unhandled_rejection_count:Number(observed.unhandled_rejection_count||0),
-   resource_error_count:Number(observed.resource_error_count||0),
-   error_hooks_installed:true};
+  // Only whitelisted numeric counters cross the CDP boundary.
+  for(const key of [
+    'js_exception_count','unhandled_rejection_count','resource_error_count',
+    'js_type_error_count','js_reference_error_count','js_syntax_error_count',
+    'js_range_error_count','js_other_typed_error_count',
+    'js_unclassified_error_count','js_error_before_complete_count',
+    'js_error_after_complete_count','js_first_party_error_count',
+    'js_other_origin_error_count','js_origin_unknown_error_count']){
+     const v=Number(observed[key]||0);
+     jsErrors[key]=Number.isFinite(v)?Math.min(9999,Math.max(0,Math.floor(v))):0;
+  }
+  jsErrors.error_hooks_installed=true;
  }
 }catch(_){}
 const main=document.querySelector('main,[role="main"]');
@@ -433,6 +469,12 @@ _PROBE_KEYS = {"ready_state", "route", "visibility_state", "has_focus",
     "conversation_api_decoded_nonzero", "conversation_api_size_unavailable",
     "other_api_observed", "service_worker_controller",
     "js_exception_count", "unhandled_rejection_count", "resource_error_count",
+    "js_type_error_count", "js_reference_error_count",
+    "js_syntax_error_count", "js_range_error_count",
+    "js_other_typed_error_count", "js_unclassified_error_count",
+    "js_error_before_complete_count", "js_error_after_complete_count",
+    "js_first_party_error_count", "js_other_origin_error_count",
+    "js_origin_unknown_error_count",
     "error_hooks_installed", "alert_count", "error_testid_count",
     "capture_error"}
 
