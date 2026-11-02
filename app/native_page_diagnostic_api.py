@@ -64,7 +64,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     def public(job):
         visible={key:job.get(key) for key in ("job_id","worker_id","target_type",
             "target_label","status","stage","percent","error","tool_version",
-            "counts","screenshots","size","created_at","updated_at")}
+            "counts","screenshots","size","created_at","updated_at","page_probe")}
         # URL-only tasks use a private internal request key for authenticated
         # Worker ZIP ownership. Never present it as a real API request ID.
         visible["request_id"]=job.get("original_request_id",
@@ -144,7 +144,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 state=await command(worker,"native_page_status",{"job_id":job_id},timeout=20)
                 record.update({key:state.get(key) for key in (
                     "stage","percent","error","tool_version","counts",
-                    "screenshots","size") if key in state})
+                    "screenshots","size","page_probe") if key in state})
                 record["updated_at"]=int(time.time())
                 if state.get("status")=="failed":
                     raise RuntimeError(str(state.get("error") or "capture_failed")[:170])
@@ -209,7 +209,10 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     @app.get("/bootstrap/native-page-diagnostic.json",include_in_schema=False)
     async def tool_manifest():
         data=(Path(__file__).parents[1]/"scripts"/"native_page_diagnostic_v1.py").read_bytes()
-        return {"version":"1.2.0","sha256":hashlib.sha256(data).hexdigest(),"bytes":len(data)}
+        match=re.search(rb'(?m)^VERSION\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"',data)
+        if not match:raise HTTPException(503,"Native page diagnostic tool version missing")
+        return {"version":match.group(1).decode("ascii"),
+            "sha256":hashlib.sha256(data).hexdigest(),"bytes":len(data)}
 
     @app.get("/api/admin/worker-tools/native-page/jobs")
     async def list_jobs(request:Request,limit:int=40):
@@ -228,7 +231,10 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                     write(item)
                 records.append(public(item))
             except (ValueError,OSError,KeyError):pass
-        return {"data":records,"tool":"native-page-diagnostic","version":"1.2.0"}
+        data=(Path(__file__).parents[1]/"scripts"/"native_page_diagnostic_v1.py").read_bytes()
+        match=re.search(rb'(?m)^VERSION\s*=\s*"([0-9]+\.[0-9]+\.[0-9]+)"',data)
+        version=match.group(1).decode("ascii") if match else "unknown"
+        return {"data":records,"tool":"native-page-diagnostic","version":version}
 
     @app.get("/api/admin/worker-tools/native-page/workers")
     async def eligible_workers(request:Request):
@@ -344,7 +350,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         safe={key:record.get(key) for key in (
             "job_id","original_request_id","target_type","target_label","worker_id","status","stage","percent",
             "error","tool_version","counts","screenshots","size",
-            "created_at","updated_at")}
+            "created_at","updated_at","page_probe")}
         return Response(json.dumps({"schema":"chat2api-native-page-diagnostic-log-v1",
             "record":safe},ensure_ascii=False,indent=2),
             media_type="application/json",
