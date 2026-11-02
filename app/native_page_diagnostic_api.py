@@ -184,9 +184,22 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         if not REQUEST_ID.fullmatch(request_id):raise HTTPException(422,"Invalid request ID")
         row=app.state.telemetry.get(request_id)
         if not row:raise HTTPException(404,"Request not found in server records")
+        # The only eligible historical URL was sanitized at the Worker
+        # terminal. Never expose query strings, tokens or arbitrary origin.
+        saved=str((row.get("diagnostics") or {}).get("native_chatgpt_conversation_url") or "")
+        try:
+            p=urlsplit(saved)
+            if (p.scheme!="https" or p.hostname not in (
+                "chatgpt.com","www.chatgpt.com","chat.openai.com") or
+                p.port not in (None,443) or p.username or p.password or
+                p.query or p.fragment or not re.fullmatch(
+                    r"/c/[A-Za-z0-9-]{12,90}/?",p.path)):
+                saved=""
+        except ValueError:saved=""
         return {"request_id":request_id,"worker_id":str(row.get("linux_worker_id") or ""),
                 "worker_slot":row.get("worker_slot"),
-                "conversation_link_saved":bool((row.get("diagnostics") or {}).get("conversation_url"))}
+                "conversation_url":saved,
+                "conversation_link_saved":bool(saved)}
 
     @app.post("/api/admin/worker-tools/native-page/jobs")
     async def create(request:Request):
@@ -197,6 +210,18 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         if not REQUEST_ID.fullmatch(request_id):raise HTTPException(422,"Invalid request ID")
         row=app.state.telemetry.get(request_id)
         if not row:raise HTTPException(404,"Request not found in server records")
+        if not url:
+            saved=str((row.get("diagnostics") or {}).get("native_chatgpt_conversation_url") or "")
+            try:
+                parsed_saved=urlsplit(saved)
+                if (parsed_saved.scheme=="https" and parsed_saved.hostname in (
+                    "chatgpt.com","www.chatgpt.com","chat.openai.com") and
+                    parsed_saved.port in (None,443) and not parsed_saved.username and
+                    not parsed_saved.password and not parsed_saved.query and
+                    not parsed_saved.fragment and re.fullmatch(
+                        r"/c/[A-Za-z0-9-]{12,90}/?",parsed_saved.path)):
+                    url=saved
+            except ValueError:pass
         original_worker=str(row.get("linux_worker_id") or "")
         worker=str(body.get("worker_id") or original_worker).strip()
         if original_worker and worker!=original_worker:
