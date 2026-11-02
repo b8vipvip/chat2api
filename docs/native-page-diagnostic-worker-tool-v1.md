@@ -57,3 +57,16 @@ v1.0.0 在 CDP 页面主世界读取扩展隔离世界的 `globalThis` 状态，
 - 以后新产生的请求：request-v6 在生成过程持续捕获当前 ChatGPT 页面经过校验的 `https://chatgpt.com/c/...` 地址，并在 completed/error/cancelled 的请求终态诊断里保存 `native_chatgpt_conversation_url`。不保存 Cookie、原始查询参数、媒体 URL 或浏览器历史；Broker 服务端再次验证主机名/协议/路径，避免无效 URL 进入请求日志。
 - 「请求记录」请求 ID 单元格右键菜单现在有 **复制完整请求 ID**、**复制原生 ChatGPT 地址** 两项。后者从已有请求详情里的 URL 复制，未留存的历史请求明确提示缺失，不会猜造地址。
 - 如果 ChatGPT 没分配标准 /c/ 会话地址（如临时会话、账号中断、提交前报错），字段可能仍为空；v1.2.0 只能保证**存在并曾观察到安全的 URL 时予以保存**，不承诺所有请求都有可重新打开的链接。
+
+
+## v1.2.1：独立页面诊断失败证据与真实历史页面结构兼容
+
+2026-11-02 用户的 URL-only 诊断任务 `75bbd367af6e40a0aff8fa7948ffcea1`：工具 v1.2.0，Worker `wrk_58e403d5e5f85ac18e83b861`，从 13:25:06 到 13:25:35（UTC+8）约 29 秒，`history_reply_unavailable`。日志只提供统一错误，未给出登录状态、真实页面的助手区域是否存在、JS 是否抛异常，**不能从现有日志认定它一定是登录问题**。
+
+修复：
+- 独立 Python 页面采集器升级 **v1.2.1**：在现有安全范围内支持历史页 `article/[data-testid=conversation-turn]` 内嵌的 `ChatGPT said` 标题，以及显式 `assistant-message/assistant-turn` 标记，不依赖仅有的同级标题后兄弟节点。仍拒绝包含用户消息的候选节点。
+- 页面加载期间只采集有限的结构证据：document.readyState、路径**类别**（不含实际 URL）、main/assistant/user/turn/标题标记数量、密码框/挑战 iframe/加载 skeleton 存在性，以及固定种类的 CDP JS 结果。**不读取页面标题、个人资料、聊天正文、Cookie、LocalStorage、凭据或页面原始 URL**。不发送生成请求、不改变 `chat.completed` 权限。
+- 将原有模糊错误细分为 `history_access_gate_detected`、`history_challenge_detected`、`history_page_still_loading`、`history_assistant_boundary_not_found`、`history_capture_runtime_failed`、`history_assistant_capture_rejected`；最终失败时 `page_probe` 会保留到 Worker status、服务端记录及可导出的日志 JSON，**失败也可见证据**。
+- 服务端更新清单的版本号自动从 Python 工具源码读取，保持独立诊断版本及 SHA256 一致。未来变更采集脚本可从后台单独“更新诊断工具”到新版本，不必反复修改服务端清单常量。
+
+验收：代码 CI 和模拟历史回复 DOM 测试不代表 Worker 登录状态实际可用。部署后对同一条历史链接诊断，失败时直接导出 JSON 并观察新增 `page_probe`；应能区分访问门槛、DOM 边界和 JS 运行异常，从而再实施有确切实机证据的下一步修复。

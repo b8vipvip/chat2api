@@ -27,16 +27,16 @@ def _archive(request_id, worker_id):
     buffer=io.BytesIO()
     with ZipFile(buffer,"w") as archive:
         archive.writestr("assistant_dom.json","{}")
-        archive.writestr("diagnostic.log","tool_version=1.2.0")
+        archive.writestr("diagnostic.log","tool_version=1.2.1")
         archive.writestr("manifest.json",json.dumps({
-            "request_id":request_id,"worker_id":worker_id,"version":"1.2.0",
+            "request_id":request_id,"worker_id":worker_id,"version":"1.2.1",
             "request_binding":"manual-conversation-url-unverified-turn"}))
     return buffer.getvalue()
 
 
 def test_browser_collector_is_versioned_parseable_and_cdp_loopback_only():
     source=(ROOT/"scripts/native_page_diagnostic_v1.py").read_text()
-    assert 'VERSION = "1.2.0"' in source
+    assert 'VERSION = "1.2.1"' in source
     assert 'const forbidden=' in source
     assert 'document.cookie' not in source
     assert "localStorage" not in source
@@ -46,7 +46,7 @@ def test_browser_collector_is_versioned_parseable_and_cdp_loopback_only():
     proc=subprocess.run([sys.executable,"scripts/native_page_diagnostic_v1.py","--version"],
         cwd=ROOT,capture_output=True,text=True,timeout=10)
     assert proc.returncode == 0,proc.stderr
-    assert proc.stdout.strip()=="1.2.0"
+    assert proc.stdout.strip()=="1.2.1"
     match=re.search(r'CAPTURE = r"""(.*?)"""',source,re.S)
     assert match
     js=match.group(1)+"('req_example123456');"
@@ -60,7 +60,7 @@ def test_controller_uses_only_fixed_commands_and_worker_id(monkeypatch,tmp_path)
     monkeypatch.setattr(control,"INSTALLED",tmp_path/"overridden-tool.py")
     worker="wrk_abc123456"
     v=control.execute("native_page_version",{},worker,1,"https://example.test")
-    assert v["ok"] and v["installed"] is True and v["version"]=="1.2.0"
+    assert v["ok"] and v["installed"] is True and v["version"]=="1.2.1"
     assert control.execute("unknown_tool_command",{},worker,1,"https://example.test")["ok"] is False
     assert control.execute("native_page_start",{"job_id":"../../../bad",
         "request_id":"req_abc123456"},worker,1,"https://example.test")["ok"] is False
@@ -91,6 +91,10 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
     app.state.worker_sockets={worker:object()}
     raw=_archive(request_id,worker)
     seen=[]
+    fail_status={"enabled":False}
+    probe={"route":"conversation","assistant_roles":0,"assistant_testids":0,
+           "verified_roleless_headings":0,"ready_state":"complete",
+           "capture_error":"no-verified-assistant-boundary"}
     async def send(worker_id,command,args,wait,timeout):
         assert worker_id==worker
         if command=="native_page_start":
@@ -106,14 +110,19 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
                     z.writestr("assistant_dom.json","{}")
                     z.writestr("manifest.json",json.dumps({
                         "request_id":args["request_id"],"worker_id":worker,
-                        "version":"1.2.0","request_binding":"url-only-unbound"}))
+                        "version":"1.2.1","request_binding":"url-only-unbound"}))
                 raw=buf.getvalue()
-            return {"result":{"ok":True,"tool_version":"1.2.0"}}
+            return {"result":{"ok":True,"tool_version":"1.2.1"}}
         if command=="native_page_status":
+            if fail_status["enabled"]:
+                return {"result":{"ok":True,"status":"failed","stage":"page-unavailable",
+                    "percent":100,"tool_version":"1.2.1",
+                    "error":"history_assistant_boundary_not_found",
+                    "page_probe":probe}}
             return {"result":{"ok":True,"status":"completed",
                 "stage":"complete","percent":100,"size":len(raw),
                 "sha256":hashlib.sha256(raw).hexdigest(),
-                "tool_version":"1.2.0","counts":{"tables":3,"images":2}}}
+                "tool_version":"1.2.1","counts":{"tables":3,"images":2}}}
         if command=="native_page_chunk":
             i=args["index"];slice_=raw[i*65536:(i+1)*65536]
             import base64
@@ -147,12 +156,12 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
             if result.json()["job"]["status"]=="completed":break
             time.sleep(0.03)
         assert result.json()["job"]["status"]=="completed",result.text
-        assert result.json()["job"]["tool_version"]=="1.2.0"
+        assert result.json()["job"]["tool_version"]=="1.2.1"
         assert client.get("/api/admin/worker-tools/native-page/jobs/"+job+"/download").status_code==401
         download=client.get("/api/admin/worker-tools/native-page/jobs/"+job+"/download",headers=auth)
         assert download.status_code==200
         assert download.content==raw
-        assert "v1.2.0.zip" in download.headers["content-disposition"]
+        assert "v1.2.1.zip" in download.headers["content-disposition"]
         record=client.get("/api/admin/worker-tools/native-page/jobs",headers=auth).json()
         assert record["data"][0]["request_id"]==request_id
         # A standalone valid history URL is diagnosable with only an owner
@@ -188,6 +197,23 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
         assert "history-url" in zip_resp.headers["content-disposition"]
         assert client.get("/api/admin/worker-tools/native-page/jobs/"+second+"/log",
             headers=auth).json()["record"]["target_type"]=="conversation_url"
+        fail_status["enabled"]=True
+        third=client.post("/api/admin/worker-tools/native-page/jobs",
+            headers=auth,json={"target":history,"worker_id":worker})
+        assert third.status_code==200,third.text
+        failed_id=third.json()["job"]["job_id"]
+        for _ in range(70):
+            info=client.get("/api/admin/worker-tools/native-page/jobs/"+failed_id,headers=auth)
+            if info.json()["job"]["status"]=="failed":break
+            time.sleep(0.03)
+        assert info.json()["job"]["status"]=="failed",info.text
+        assert info.json()["job"]["page_probe"]==probe
+        exported=client.get("/api/admin/worker-tools/native-page/jobs/"+failed_id+"/log",
+            headers=auth)
+        assert exported.status_code==200
+        assert exported.json()["record"]["page_probe"]==probe
+        assert client.get("/api/admin/worker-tools/native-page/jobs/"+failed_id+"/download",
+            headers=auth).status_code==409
 
 
 def test_native_page_history_recovery_uses_time_filter_and_content_sha(tmp_path):
@@ -221,6 +247,66 @@ def test_native_page_history_recovery_uses_time_filter_and_content_sha(tmp_path)
         "children":[{"tag":"#text","text":"Unrelated assistant response"}]}},digests)==0
     assert chrome_history_candidates(9222,{"start":epoch-120,
         "end":epoch+120,"hashes":[]},history_file=path)==[]
+
+
+def test_native_probe_is_structural_and_kept_on_failure(tmp_path):
+    import asyncio
+    from scripts import native_page_diagnostic_v1 as native
+    folder=tmp_path/"sample"
+    folder.mkdir()
+    page={"ready_state":"complete","route":"conversation",
+          "assistant_roles":0,"user_roles":4,
+          "conversation_turns":5,"verified_roleless_headings":0,
+          "main_landmarks":1,"password_fields":False,
+          "challenge_frames":False,"loading_skeletons":False,
+          "capture_error":"no-verified-assistant-boundary"}
+    class FakeCDP:
+        async def call(self, method, params):
+            assert method=="Runtime.evaluate"
+            if "CAPTURE" not in params["expression"] and "expected" in params["expression"]:
+                return {"result":{"value":{"ok":False,
+                    "error":"no-verified-assistant-boundary"}}}
+            return {"result":{"value":page}}
+    async def run():
+        capture,probe=await native.inspect_page(FakeCDP(),"req_test123456")
+        assert capture is None
+        assert probe["route"]=="conversation"
+        assert probe["assistant_roles"]==0
+        assert probe["capture_error"]=="no-verified-assistant-boundary"
+        assert native.failure_reason(probe)=="history_assistant_boundary_not_found"
+    asyncio.run(run())
+    native.status(folder,"awaiting-assistant",36,page_probe=page)
+    native.status(folder,"failed",100,error="history_assistant_boundary_not_found")
+    recorded=json.loads((folder/"status.json").read_text())
+    assert recorded["page_probe"]==page
+    assert recorded["error"]=="history_assistant_boundary_not_found"
+    assert "account_email" not in json.dumps(recorded)
+    assert "chat_text" not in json.dumps(recorded)
+    assert native.failure_reason({"route":"access-gate"})=="history_access_gate_detected"
+    assert native.failure_reason({"capture_error":"capture-js-exception"})=="history_capture_runtime_failed"
+
+
+def test_native_page_roleless_capture_vm_and_page_probe():
+    result=subprocess.run(["node","tests/native_page_roleless_probe_v121.mjs"],
+        cwd=ROOT,capture_output=True,text=True,timeout=15)
+    assert result.returncode==0,result.stdout+"\\n"+result.stderr
+
+
+def test_native_page_probe_vm_syntax_and_no_text_or_media_exfiltration():
+    source=(ROOT/"scripts/native_page_diagnostic_v1.py").read_text()
+    extracted=re.search(r'PAGE_PROBE = r"""(.*?)"""',source,re.S)
+    assert extracted
+    js=extracted.group(1)
+    check=subprocess.run(["node","--check"],cwd=ROOT,input=js,
+                         capture_output=True,text=True,timeout=10)
+    assert check.returncode==0,check.stderr
+    for forbidden in ["document.cookie","localStorage","document.body.innerText",
+                      "document.documentElement.outerHTML","Page.navigate",
+                      "Page.captureScreenshot"]:
+        assert forbidden not in js
+    assert "verified-roleless-turn" in source
+    assert "heading.closest(" in source
+    assert "scope='roleless-heading-siblings'" in source
 
 
 def test_cdp_isolated_content_world_has_visible_request_dom_marker():

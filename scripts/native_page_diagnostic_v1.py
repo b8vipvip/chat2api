@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -41,15 +41,35 @@ if(assistant.length){
   const root=tagged?.closest('[data-message-author-role="assistant"]');
   roots=[root&&visible(root)&&!hasUser(root)?root:assistant[assistant.length-1]];
 }
+else if(([...document.querySelectorAll(
+  'main [data-testid="assistant-message"],main [data-testid="assistant-turn"],[role="main"] [data-testid="assistant-message"]'
+)].filter(e=>e.isConnected&&visible(e)&&!hasUser(e))).length){
+  scope='verified-assistant-testid';
+  roots=[...document.querySelectorAll(
+    'main [data-testid="assistant-message"],main [data-testid="assistant-turn"],[role="main"] [data-testid="assistant-message"]'
+  )].filter(e=>e.isConnected&&visible(e)&&!hasUser(e)).slice(-1);
+}
 else {
- const h=[...document.querySelectorAll('main h4,[role="main"] h4,#thread h4')].filter(e=>e.isConnected&&visible(e)&&/^ChatGPT said\s*[:：]?$/.test(norm(e.textContent)));
+ // For historical ChatGPT replies, a roleless "ChatGPT said" heading may
+ // live INSIDE a verified turn container, not beside the answer body.
+ const h=[...document.querySelectorAll('main h4,main h5,main h6,[role="main"] h4,[role="main"] h5,[role="main"] h6,#thread h4,#thread h5')].filter(e=>e.isConnected&&/^ChatGPT said\s*[:：]?$/.test(norm(e.textContent)));
  if(!h.length)return {ok:false,error:'no-verified-assistant-boundary'};
- const heading=h[h.length-1];let at=heading.nextElementSibling;scope='roleless-heading';
- while(at&&roots.length<4096){
-   if(at.matches(forbidden)||at.tagName==='H4'&&/^(You said|ChatGPT said)\s*[:：]?$/.test(norm(at.textContent))||hasUser(at))break;
-   roots.push(at);at=at.nextElementSibling;
+ const heading=h[h.length-1];
+ const turn=heading.closest('[data-testid="conversation-turn"],article,[data-testid="assistant-message"]');
+ if(turn&&visible(turn)&&!hasUser(turn)&&
+    ![...turn.querySelectorAll('h4,h5,h6')].some(e=>/^You said\s*[:：]?$/.test(norm(e.textContent)))){
+   roots=[turn];scope='verified-roleless-turn';
+ }else{
+   scope='roleless-heading-siblings';
+   let at=heading.nextElementSibling;
+   if(!at && heading.parentElement && !hasUser(heading.parentElement))
+     at=heading.parentElement.nextElementSibling;
+   while(at&&roots.length<4096){
+     if(at.matches(forbidden)||/^(You said|ChatGPT said)\s*[:：]?$/.test(norm(at.textContent))&&/^H[456]$/.test(at.tagName)||hasUser(at))break;
+     roots.push(at);at=at.nextElementSibling;
+   }
+   if(at&&roots.length>=4096)return {ok:false,error:'reply-sibling-limit'};
  }
- if(at&&roots.length>=4096)return {ok:false,error:'reply-sibling-limit'};
 }
 if(!roots.length)return {ok:false,error:'empty-verified-reply'};
 const counters={nodes:0,text_chars:0,tables:0,images:0,max_children:0,headings:0,grids:0,flex:0};
@@ -102,6 +122,27 @@ return {ok:!reason,reason,version:1,scope,request_marker:tagged?expected:null,
  image_rects:imageRects,root:{tag:'assistant-reply',children},
  generating:!!document.querySelector('button[aria-label*="Stop generating"],button[aria-label*="Stop response"]')};
 })"""
+
+PAGE_PROBE = r"""(function(){
+'use strict';
+// Fixed structural signals only. No body text, page title, URLs, prompts,
+// account identifiers, cookies, storage or screenshots of auth pages.
+const heading=[...document.querySelectorAll('main h4,main h5,main h6,[role="main"] h4,[role="main"] h5,[role="main"] h6,#thread h4,#thread h5')]
+ .filter(e=>/^ChatGPT said\s*[:：]?$/.test(String(e.textContent||'').replace(/\s+/g,' ').trim())).length;
+const path=String(location.pathname||'');
+const route=/^\/c\/[A-Za-z0-9-]{12,90}\/?$/.test(path)?'conversation':
+ /login|auth|signin|challenge|captcha|error/i.test(path)?'access-gate':'other';
+return {ready_state:String(document.readyState||'unknown').slice(0,16),
+  route, assistant_roles:document.querySelectorAll('[data-message-author-role="assistant"]').length,
+  user_roles:document.querySelectorAll('[data-message-author-role="user"]').length,
+  conversation_turns:document.querySelectorAll('[data-testid="conversation-turn"]').length,
+  assistant_testids:document.querySelectorAll('[data-testid="assistant-message"],[data-testid="assistant-turn"]').length,
+  verified_roleless_headings:heading,
+  main_landmarks:document.querySelectorAll('main,[role="main"]').length,
+  password_fields:document.querySelectorAll('input[type="password"]').length>0,
+  challenge_frames:document.querySelectorAll('iframe[src*="challenge"],iframe[src*="captcha"]').length>0,
+  loading_skeletons:document.querySelectorAll('[data-testid*="skeleton"],[aria-busy="true"]').length>0};
+})()"""
 
 def json_get(port, path):
     with urlopen(f"http://127.0.0.1:{port}{path}",timeout=3) as f:
@@ -204,9 +245,82 @@ class CDP:
             if obj.get("error"):raise RuntimeError("cdp_"+method.replace(".","_")+"_failed")
             return obj.get("result") or {}
 
+_PROBE_KEYS = {"ready_state", "route", "assistant_roles", "user_roles",
+    "conversation_turns", "assistant_testids", "verified_roleless_headings", "main_landmarks",
+    "password_fields", "challenge_frames", "loading_skeletons",
+    "capture_error"}
+
+async def inspect_page(cdp, request_id):
+    """Evaluate assistant DOM and a separate privacy-filtered status probe.
+
+    An exception in one evaluator must not prevent gathering evidence from
+    the other. Do not export exception text/stack, page contents or URLs.
+    """
+    report=None
+    capture_error="none"
+    try:
+        result=await cdp.call("Runtime.evaluate",{
+            "expression":CAPTURE+"("+json.dumps(request_id)+")",
+            "returnByValue":True,"silent":True})
+        if result.get("exceptionDetails"):
+            capture_error="capture-js-exception"
+        else:
+            candidate=(result.get("result") or {}).get("value")
+            if isinstance(candidate,dict):
+                if candidate.get("ok"):report=candidate
+                else:
+                    code=str(candidate.get("error") or "capture-rejected")
+                    capture_error=code if code in (
+                        "no-verified-assistant-boundary","reply-sibling-limit",
+                        "empty-verified-reply","capture-rejected") else "capture-rejected"
+            else:capture_error="capture-empty-result"
+    except Exception:
+        capture_error="capture-cdp-error"
+    probe={}
+    try:
+        result=await cdp.call("Runtime.evaluate",{
+            "expression":PAGE_PROBE,"returnByValue":True,"silent":True})
+        if not result.get("exceptionDetails"):
+            raw=(result.get("result") or {}).get("value")
+            if isinstance(raw,dict):
+                for key in _PROBE_KEYS-{"capture_error"}:
+                    val=raw.get(key)
+                    if isinstance(val,bool):probe[key]=val
+                    elif isinstance(val,int):probe[key]=min(max(val,0),100000)
+                    elif isinstance(val,str) and key in ("ready_state","route"):
+                        probe[key]=val[:24]
+    except Exception:
+        pass
+    probe["capture_error"]=capture_error
+    return report,probe
+
+
+def failure_reason(probe):
+    """Fixed error code, never based on raw page text or exception messages."""
+    if probe.get("challenge_frames"):return "history_challenge_detected"
+    if probe.get("password_fields") or probe.get("route")=="access-gate":
+        return "history_access_gate_detected"
+    if probe.get("ready_state")=="loading" or probe.get("loading_skeletons"):
+        return "history_page_still_loading"
+    if probe.get("capture_error") in ("capture-js-exception","capture-cdp-error"):
+        return "history_capture_runtime_failed"
+    if (not probe.get("assistant_roles") and not probe.get("assistant_testids")
+        and not probe.get("verified_roleless_headings")):
+        return "history_assistant_boundary_not_found"
+    return "history_assistant_capture_rejected"
+
+
 def status(folder,stage,percent,error=None,**meta):
     data={"tool_version":VERSION,"status":"failed" if error else "running","stage":stage,
       "percent":percent,"updated_at":int(time.time()),"error":error,**meta}
+    # Preserve the last harmless structural page probe even if the error
+    # handler subsequently changes the stage to failed.
+    if "page_probe" not in data:
+        try:
+            previous=json.loads((folder/"status.json").read_text())
+            if isinstance(previous.get("page_probe"),dict):
+                data["page_probe"]=previous["page_probe"]
+        except (ValueError,OSError,TypeError):pass
     tmp=folder/"status.tmp";tmp.write_text(json.dumps(data));tmp.replace(folder/"status.json")
     # A bounded, versioned operational timeline travels with the diagnostic ZIP.
     # Never append page URLs, Chrome credentials, request text or image bytes.
@@ -227,22 +341,22 @@ async def capture(args):
         u=urlsplit(str(t.get("url") or ""))
         return t.get("type")=="page" and u.hostname in HOSTS and u.scheme=="https" and t.get("webSocketDebuggerUrl")
     targets=[t for t in targets if target(t)]
-    picked=None;report=None;ws=None
+    picked=None;report=None;ws=None;last_probe={}
     for t in targets[:60]:
         if target_url and str(t.get("url") or "").split("?")[0]!=target_url:continue
         endpoint=ws_endpoint(t["webSocketDebuggerUrl"],args.cdp_port)
         async with websockets.connect(endpoint,open_timeout=5,max_size=24*1024*1024) as conn:
             cdp=CDP(conn)
             await cdp.call("Runtime.enable")
-            result=await cdp.call("Runtime.evaluate",{"expression":CAPTURE+"("+json.dumps(args.request_id)+")","returnByValue":True,"silent":True})
-            value=(result.get("result") or {}).get("value")
-            if not isinstance(value,dict) or not value.get("ok"):continue
+            value,last_probe=await inspect_page(cdp,args.request_id)
+            if not value:continue
             if not target_url and value.get("request_marker")!=args.request_id:continue
             picked=t;report=value;break
     binding="live-request-marker"
     hints=recovery_hints()
     async def open_history_page(url):
         """Open a new diagnostic-only tab, never touch the active request tab."""
+        nonlocal last_probe
         response=json_get(args.cdp_port,"/json/list")
         existing=next((t for t in response if target(t) and
             str(t.get("url") or "").split("?",1)[0]==url),None)
@@ -269,12 +383,13 @@ async def capture(args):
                 endpoint=ws_endpoint(page["webSocketDebuggerUrl"],args.cdp_port)
                 async with websockets.connect(endpoint,open_timeout=5,max_size=24*1024*1024) as conn:
                     cdp=CDP(conn);await cdp.call("Runtime.enable")
-                    result=await cdp.call("Runtime.evaluate",{
-                        "expression":CAPTURE+"("+json.dumps(args.request_id)+")",
-                        "returnByValue":True,"silent":True})
-                    obj=(result.get("result") or {}).get("value")
-                    if isinstance(obj,dict) and obj.get("ok") and obj.get("root",{}).get("children"):
+                    obj,last_probe=await inspect_page(cdp,args.request_id)
+                    if obj and obj.get("root",{}).get("children"):
                         return page,obj,tab_id
+                    if i==0 or (i+1)%4==0 or i==23:
+                        status(folder,"awaiting-assistant",min(42,20+i),
+                               page_probe=last_probe,
+                               inspected_pages=1,attempt=i+1)
         except Exception:
             if not made:raise
         return None,None,tab_id
@@ -309,7 +424,9 @@ async def capture(args):
         if not picked:
             raise RuntimeError("historical_request_page_not_recovered; no unique content-verified history match; supply ChatGPT /c/ URL")
     if not picked or not report or not report.get("ok"):
-        raise RuntimeError("history_reply_unavailable; verify ChatGPT sign-in and conversation URL")
+        if last_probe:
+            status(folder,"page-unavailable",44,page_probe=last_probe)
+        raise RuntimeError(failure_reason(last_probe))
     if not target_url and binding=="live-request-marker" and report.get("request_marker")!=args.request_id:
         raise RuntimeError("request_marker_unverified")
     if report.get("generating"):raise RuntimeError("reply_still_generating")
