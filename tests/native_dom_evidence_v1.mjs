@@ -31,7 +31,18 @@ class Element {
     if (!selector.includes('user')) return null;
     return this.childNodes.find(c => c instanceof Element && c.tagName === 'USER') ?? null;
   }
-  querySelectorAll() { return []; }
+  querySelectorAll(selector) {
+    const found=[];
+    const search=root=>{
+      for(const child of root.childNodes){
+        if(!(child instanceof Element))continue;
+        if(selector==="img" && child.tagName==="IMG")found.push(child);
+        search(child);
+      }
+    };
+    search(this);
+    return found;
+  }
   getBoundingClientRect() { return { left: 20, top: 20, width: 260, height: 80 }; }
 }
 const word = {nodeType: TEXT, nodeValue:'One card paragraph'};
@@ -83,6 +94,36 @@ const full=probe.captureData({...active,lastCandidateNode:manySections,
 assert.equal(full.complete,true,'bounded 3,600-node reply must be complete');
 assert.ok(full.counts.nodes>3200);
 assert.equal(full.root.children[0].children[0].children.length,1800);
+
+// 3a882b: old probe stopped at 6,400 nodes and discarded private tree.
+// A bounded 8,000+ node reply must keep its last original table and image.
+const manyDeep=new Element('DIV',Array.from({length:4000},(_,i)=>
+  new Element('P',[{nodeType:TEXT,nodeValue:'section '+i}])));
+const bigEvidence=new Element('DIV',[manyDeep,new Element('TABLE',[
+  new Element('TR',[new Element('TD',[{nodeType:TEXT,nodeValue:'last row'}])]),
+]),new Element('IMG')]);
+const bigPage=new Element('MAIN',[bigEvidence]);
+const bigger=probe.captureData({...active,lastCandidateNode:manyDeep,
+  nativeVerifiedReplyScope:bigEvidence});
+assert.equal(bigger.complete,true,"8,000 nodes should not be clipped at 6,400");
+assert.ok(bigger.counts.nodes>8000);
+assert.equal(bigger.counts.tables,1);
+assert.equal(bigger.counts.images,1);
+
+// 9d090b: image previews are wrapped in <button>. They are request-scoped
+// raster evidence, not UI control text. Never export click action labels.
+const btnImg=new Element('IMG');btnImg.naturalWidth=900;btnImg.naturalHeight=600;
+btnImg.complete=true;btnImg.src="https://secret.example/cdn?token=private";
+const btn=new Element('BUTTON',[btnImg,{nodeType:TEXT,nodeValue:'Download secret control'}]);
+const btnVerified=new Element('DIV',[btn,new Element('P',[{nodeType:TEXT,nodeValue:'safe reply'}])]);
+const btnPage=new Element('MAIN',[btnVerified]);
+const buttons=probe.captureData({...active,lastCandidateNode:btnVerified.childNodes[1],
+  nativeVerifiedReplyScope:btnVerified});
+assert.equal(buttons.complete,true);
+assert.equal(buttons.counts.images,1,"button-hosted raster should be visible to both probes");
+assert.equal(buttons.root.children[0].children[0].tag,"figure");
+assert.ok(!JSON.stringify(buttons).includes("Download secret control"));
+assert.ok(!JSON.stringify(buttons).includes("secret.example"));
 
 // Untrusted page-wide or cross-user scope cannot be promoted.
 const mainScope=probe.captureData({...active,nativeVerifiedReplyScope:main});
