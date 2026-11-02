@@ -210,10 +210,20 @@ assert.ok(wide33daSnapshot,"111-child assistant block must not leave stale parti
 assert.equal(wide33daSnapshot.root.children[0].children.length,111,
   "last assistant sections must be kept in the same tree");
 assert.equal(findImgs(wide33daSnapshot.root),9);
-const overChildren=candidateFor(Array.from({length:161},(_,i)=>({
+// 3a882b: a final ChatGPT reply can have thousands of direct siblings. Old
+// 160-child handling failed the final capture while earlier rev 12 persisted.
+const wideFinal=candidateFor(Array.from({length:1800},(_,i)=>
+  new Element("P",[{nodeType:3,nodeValue:"section "+i}])));
+const fullWide=capture.snapshot(wideFinal);
+assert.ok(fullWide && fullWide.root.children.length===1800,
+  "every ordered sibling must survive as a single native reply tree");
+assert.equal(fullWide.root.children.at(-1).children[0].text,"section 1799");
+assert.ok(wideFinal.nativeStructuralMaxChildren>=1800);
+const overChildren=candidateFor(Array.from({length:8193},(_,i)=>({
   nodeType:3,nodeValue:"chunk "+i,
 })));
-assert.equal(capture.snapshot(overChildren),null,"over 160 children must fail closed");
+assert.equal(capture.snapshot(overChildren),null,"over 8,192 children must fail closed");
+assert.equal(overChildren.nativeStructuralFailure,"max-children");
 
 // A generated raster may be wrapped by a ChatGPT preview <button>. Preserve
 // only the raster in a safe inert figure, never copy click targets/toolbar text.
@@ -227,6 +237,17 @@ assert.equal(buttonPreview.root.children[0].children[0].tag,"img");
 assert.equal(findImgs(buttonPreview.root),1);
 assert.ok(!JSON.stringify(buttonPreview).includes("Download or delete"),
   "button action text must not leak into assistant rich content");
+// Explicitly unverified paragraph-only reply scopes may never be promoted
+// as if they were the whole assistant turn.
+const unverifiedCtx={...ctx,__CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{
+  replyRoots:()=>({scope:"candidate_only",roots:[node],boundary:"reply-sibling-cap-reached"})
+}};
+delete unverifiedCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,unverifiedCtx);
+const unverified=candidateFor([new Element("P",[{nodeType:3,nodeValue:"partial"}])]);
+assert.equal(unverifiedCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot(unverified),null);
+assert.equal(unverified.nativeStructuralFailure,"reply-scope-unverified");
+
 const actionOnly=capture.snapshot(candidateFor([
   new Element("BUTTON",[{nodeType:3,nodeValue:"Copy"}]),
   new Element("P",[{nodeType:3,nodeValue:"safe answer"}]),
