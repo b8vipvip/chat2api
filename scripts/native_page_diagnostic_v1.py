@@ -614,6 +614,12 @@ async def capture(args):
                 if actual.scheme=="https" and actual.hostname in HOSTS:
                     kind=("conversation" if CONVERSATION.fullmatch(actual.path)
                           else "other-chatgpt-route")
+                    # A redirect to a different /c/ URL is not the
+                    # operator's explicitly requested conversation.
+                    if (kind=="conversation" and
+                        (actual.hostname,actual.path)!=
+                        (urlsplit(url).hostname,urlsplit(url).path)):
+                        kind="unexpected-redirect"
                 elif (actual.scheme=="https" and actual.hostname in
                       {"auth.openai.com","auth.chatgpt.com","login.openai.com"}):
                     kind="access-gate"
