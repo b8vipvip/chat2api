@@ -22,7 +22,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.15"
+VERSION = "1.2.16"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -1336,6 +1336,15 @@ async def _capture_inner(args,owned_tabs):
             dom_filename=("assistant_dom.json" if boundary_verified
                 else "unverified_rich_candidate_dom.json")
             archive.writestr(dom_filename,json.dumps(report,ensure_ascii=False))
+            if not boundary_verified:
+                # The currently deployed server ZIP receiver requires the
+                # assistant_dom.json name. Supply a *non-content* compatibility
+                # stub, never mislabel the candidate as an assistant reply.
+                archive.writestr("assistant_dom.json",json.dumps({
+                    "schema":"native-page-boundary-unverified-v1",
+                    "ok":False,"boundary_verified":False,
+                    "artifact_kind":"unverified-rich-candidate",
+                    "candidate_file":dom_filename},ensure_ascii=False))
             rect=report["rect"];screens=0
             # Bounded screenshot strips of assistant reply, no sidebar or user prompt.
             if rect["w"]>0 and rect["h"]>0:
