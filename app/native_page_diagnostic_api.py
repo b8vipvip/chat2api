@@ -178,6 +178,22 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             except (ValueError,OSError,KeyError):pass
         return {"data":records,"tool":"native-page-diagnostic","version":"1.0.0"}
 
+    @app.get("/api/admin/worker-tools/native-page/workers")
+    async def eligible_workers(request:Request):
+        authorize(request)
+        rows=[]
+        for item in app.state.linux_workers.list_public():
+            if item.get("revoked_at"): continue
+            wid=str(item.get("worker_id") or "")
+            if not WORKER_ID.fullmatch(wid): continue
+            controller=str((item.get("metadata") or {}).get("controller_worker_id") or wid)
+            rows.append({"worker_id":wid,
+                         "name":str(item.get("name") or "")[:80],
+                         "online":controller in app.state.worker_sockets,
+                         "status":str(item.get("status") or "")[:32],
+                         "worker_slot":(item.get("metadata") or {}).get("worker_slot")})
+        return {"data":rows}
+
     @app.get("/api/admin/worker-tools/native-page/request-worker/{request_id}")
     async def request_worker(request_id:str,request:Request):
         authorize(request)
