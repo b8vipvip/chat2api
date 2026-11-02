@@ -115,7 +115,7 @@ def execute(command,arguments,worker_id,slot,server):
             if command=="native_page_status":
                 return {"ok":True,"job_id":job,**{k:state.get(k) for k in (
                    "status","stage","percent","error","tool_version","updated_at",
-                   "size","sha256","counts","screenshots")}}
+                   "size","sha256","counts","screenshots","page_probe")}}
             if state.get("status")!="completed":return {"ok":False,"error":"not_completed"}
             archive=folder/"native-page-evidence.zip"
             length=archive.stat().st_size
