@@ -384,8 +384,11 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     @app.post("/api/admin/worker-tools/native-page/workers/{worker_id}/update")
     async def update(worker_id:str,request:Request):
         authorize(request);check_worker(worker_id)
+        _,manifest=await latest_release()
         result=await command(worker_id,"native_page_update",{},timeout=60)
-        return {"worker_id":worker_id,"tool":result}
+        if result.get("sha256")!=manifest["sha256"]:
+            raise HTTPException(409,"worker_installed_release_sha_mismatch_retry")
+        return {"worker_id":worker_id,"tool":result,"latest":manifest}
 
     @app.get("/api/admin/worker-tools/native-page/workers/{worker_id}/version")
     async def version(worker_id:str,request:Request):
