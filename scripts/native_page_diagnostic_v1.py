@@ -13,13 +13,14 @@ import json
 import os
 from pathlib import Path
 import re
+import sqlite3
 import sys
 import time
 from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -88,8 +89,11 @@ function walk(node,depth){
  return out;
 }
 const children=[];for(const e of roots){const n=walk(e,0);if(n)children.push(n);if(reason)break;}
-const active=String(globalThis.__CHAT2API_REQUEST_CONTENT_V6__?.active?.requestId||'');
-return {ok:!reason,reason,version:1,scope,request_marker:active===expected?expected:null,
+// A content script runs in an isolated Chrome world, invisible to the
+// default DevTools Runtime.evaluate context. Trust only the DOM marker placed
+// by request-v6 for the exact request. Never infer it from page similarity.
+const tagged=document.querySelector('[data-chat2api-native-request-id="'+expected+'"]');
+return {ok:!reason,reason,version:1,scope,request_marker:tagged?expected:null,
  counts:counters,rect:{x:Math.max(0,Math.floor(left)),y:Math.max(0,Math.floor(top)),w:Math.ceil(right-left),h:Math.ceil(bottom-top)},
  image_rects:imageRects,root:{tag:'assistant-reply',children},
  generating:!!document.querySelector('button[aria-label*="Stop generating"],button[aria-label*="Stop response"]')};
@@ -105,6 +109,78 @@ def safe_url(raw):
     if p.scheme!="https" or p.hostname not in HOSTS or p.port not in (None,443) or not CONVERSATION.fullmatch(p.path) or p.username or p.password or p.query or p.fragment:
         raise ValueError("conversation_url_invalid")
     return f"https://{p.hostname}{p.path}"
+
+def recovery_hints():
+    """Read only time + SHA digests from the authenticated Worker command."""
+    try: obj=json.loads(os.environ.get("CHAT2API_NATIVE_RECOVERY_HINTS","{}"))
+    except (TypeError,ValueError):obj={}
+    hashes=obj.get("hashes") or []
+    if not isinstance(hashes,list): hashes=[]
+    hashes=[x for x in hashes[:8] if isinstance(x,str)
+            and re.fullmatch(r"[a-f0-9]{64}",x)]
+    start=obj.get("start") if type(obj.get("start")) is int else 0
+    end=obj.get("end") if type(obj.get("end")) is int else 0
+    if not start or end<=start or end-start>7200:
+        start=end=0
+    return {"hashes":hashes,"start":start,"end":end}
+
+
+def chrome_history_candidates(port,hints):
+    """Read only ChatGPT conversation visits in this request's time window.
+
+    SQL never selects unrelated URLs. It does not read cookies, message text
+    or any visit outside the bounded time interval. A candidate MUST pass
+    independent generated-reply content matching before use.
+    """
+    if not hints["start"] or len(hints["hashes"])<2:return []
+    slot=port-9221
+    path=Path(f"/home/chat2api/.config/chat2api-chrome-worker-{slot:02d}/Default/History")
+    if not path.is_file():return []
+    origin=11644473600
+    lower=int((hints["start"]+origin)*1000000)
+    upper=int((hints["end"]+origin)*1000000)
+    candidates=[]
+    try:
+        with sqlite3.connect(f"file:{path}?mode=ro",uri=True,timeout=2) as db:
+            rows=db.execute("""
+                SELECT urls.url,visits.visit_time
+                FROM visits JOIN urls ON visits.url=urls.id
+                WHERE visits.visit_time BETWEEN ? AND ?
+                  AND (urls.url LIKE 'https://chatgpt.com/c/%'
+                    OR urls.url LIKE 'https://www.chatgpt.com/c/%'
+                    OR urls.url LIKE 'https://chat.openai.com/c/%')
+                ORDER BY visits.visit_time DESC LIMIT 160
+            """,(lower,upper)).fetchall()
+        for raw,_ in rows:
+            try:url=safe_url(str(raw).split("?",1)[0].split("#",1)[0])
+            except (ValueError,TypeError):continue
+            if url not in candidates:candidates.append(url)
+            if len(candidates)>6:break
+    except (sqlite3.Error,OSError):return []
+    return candidates
+
+
+def reference_matches(report,hashes):
+    """Compare assistant-only normalized text by digest; export no snippets."""
+    if not isinstance(report,dict) or not report.get("ok") or len(hashes)<2:return 0
+    pieces=[]
+    def visit(value):
+        if isinstance(value,dict):
+            if value.get("tag")=="#text":
+                pieces.append(str(value.get("text") or ""))
+            else:
+                for item in value.get("children") or []:visit(item)
+    visit(report.get("root") or {})
+    text="".join(ch.lower() for ch in "".join(pieces) if ch.isalnum())[:600000]
+    if len(text)<48:return 0
+    requested=set(hashes)
+    found=set()
+    for i in range(len(text)-47):
+        if hashlib.sha256(text[i:i+48].encode()).hexdigest() in requested:
+            found.add(hashlib.sha256(text[i:i+48].encode()).hexdigest())
+            if len(found)>=len(requested):break
+    return len(found)
+
 
 def ws_endpoint(raw,port):
     u=urlsplit(raw)
@@ -158,31 +234,82 @@ async def capture(args):
             if not isinstance(value,dict) or not value.get("ok"):continue
             if not target_url and value.get("request_marker")!=args.request_id:continue
             picked=t;report=value;break
+    binding="live-request-marker"
+    hints=recovery_hints()
+    async def open_history_page(url):
+        """Open a new diagnostic-only tab, never touch the active request tab."""
+        response=json_get(args.cdp_port,"/json/list")
+        existing=next((t for t in response if target(t) and
+            str(t.get("url") or "").split("?",1)[0]==url),None)
+        made=False
+        if existing is None:
+            with urlopen(Request(f"http://127.0.0.1:{args.cdp_port}/json/new?"+
+                    quote(url,safe=""),method="PUT"),timeout=8) as response:
+                existing=json.load(response)
+            made=True
+        tab_id=str(existing.get("id") or "") if made else ""
+        page=existing
+        try:
+            # The ChatGPT history app may initialize slowly; do not declare
+            # missing reply based on one early empty DOM.
+            for i in range(24):
+                await asyncio.sleep(1 if i else 0.3)
+                targets=[t for t in json_get(args.cdp_port,"/json/list") if target(t)]
+                if made:
+                    page=next((t for t in targets if t.get("id")==tab_id),None)
+                else:
+                    page=next((t for t in targets if
+                         str(t.get("url") or "").split("?",1)[0]==url),None)
+                if not page:continue
+                endpoint=ws_endpoint(page["webSocketDebuggerUrl"],args.cdp_port)
+                async with websockets.connect(endpoint,open_timeout=5,max_size=24*1024*1024) as conn:
+                    cdp=CDP(conn);await cdp.call("Runtime.enable")
+                    result=await cdp.call("Runtime.evaluate",{
+                        "expression":CAPTURE+"("+json.dumps(args.request_id)+")",
+                        "returnByValue":True,"silent":True})
+                    obj=(result.get("result") or {}).get("value")
+                    if isinstance(obj,dict) and obj.get("ok") and obj.get("root",{}).get("children"):
+                        return page,obj,tab_id
+        except Exception:
+            if not made:raise
+        return None,None,tab_id
+
     if not picked and target_url:
         status(folder,"opening-history",18)
-        # The caller supplied a strict chatgpt.com/c/UUID URL. Creates a
-        # separate tab only; never navigates an active Worker request tab.
-        from urllib.request import urlopen as _open
-        _open(Request(f"http://127.0.0.1:{args.cdp_port}/json/new?"+quote(target_url,safe=""),method="PUT"),timeout=5).close()
-        for attempt in range(8):
-            await asyncio.sleep(1)
-            targets=[t for t in json_get(args.cdp_port,"/json/list") if target(t)]
-            picked=next((t for t in targets if str(t.get("url") or "").split("?")[0]==target_url),None)
-            if picked:break
-        if picked:
-            endpoint=ws_endpoint(picked["webSocketDebuggerUrl"],args.cdp_port)
-            async with websockets.connect(endpoint,open_timeout=5,max_size=24*1024*1024) as conn:
-                cdp=CDP(conn);await cdp.call("Runtime.enable")
-                for attempt in range(10):
-                    result=await cdp.call("Runtime.evaluate",{"expression":CAPTURE+"("+json.dumps(args.request_id)+")","returnByValue":True,"silent":True})
-                    report=(result.get("result") or {}).get("value")
-                    if isinstance(report,dict) and report.get("ok"):break
-                    await asyncio.sleep(1)
+        picked,report,_=await open_history_page(target_url)
+        binding="saved-or-manual-conversation-url-unverified-turn"
+    if not picked and not target_url:
+        candidates=chrome_history_candidates(args.cdp_port,hints)
+        status(folder,"searching-chrome-history",16,
+               history_candidate_count=len(candidates),open_page_count=len(targets))
+        if len(candidates)>6:
+            raise RuntimeError("history_multiple_candidates; supply exact ChatGPT conversation URL")
+        if candidates and len(hints["hashes"])>=2:
+            for idx,candidate in enumerate(candidates):
+                status(folder,"verifying-history-content",
+                       20+int(20*(idx+1)/len(candidates)),
+                       history_candidate_count=len(candidates))
+                page,probe,owned_tab=await open_history_page(candidate)
+                if page and reference_matches(probe,hints["hashes"])>=2:
+                    picked,report=page,probe
+                    binding="chrome-history-content-sha256-verified"
+                    break
+                # Close only a tab created by this diagnosis, not any tab
+                # belonging to active requests or remote administration.
+                if owned_tab:
+                    try:
+                        with urlopen(f"http://127.0.0.1:{args.cdp_port}/json/close/"+
+                             quote(owned_tab,safe=""),timeout=3):pass
+                    except OSError:pass
+        if not picked:
+            raise RuntimeError("historical_request_page_not_recovered; no unique content-verified history match; supply ChatGPT /c/ URL")
     if not picked or not report or not report.get("ok"):
-        raise RuntimeError("matching_page_unavailable; supply exact ChatGPT history URL when prior tab is closed")
+        raise RuntimeError("history_reply_unavailable; verify ChatGPT sign-in and conversation URL")
+    if not target_url and binding=="live-request-marker" and report.get("request_marker")!=args.request_id:
+        raise RuntimeError("request_marker_unverified")
     if report.get("generating"):raise RuntimeError("reply_still_generating")
     if not report.get("root",{}).get("children"):raise RuntimeError("no_assistant_reply_evidence")
-    verification="live-request-marker" if report.get("request_marker")==args.request_id else "manual-conversation-url-unverified-turn"
+    verification="live-request-marker" if report.get("request_marker")==args.request_id else binding
     status(folder,"capturing-screenshots",45,counts=report["counts"])
     path=folder/"native-page-evidence.zip"
     async with websockets.connect(ws_endpoint(picked["webSocketDebuggerUrl"],args.cdp_port),open_timeout=5,max_size=24*1024*1024) as conn:
