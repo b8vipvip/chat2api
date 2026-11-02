@@ -15,13 +15,14 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import subprocess
 import sys
 import time
 from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.12"
+VERSION = "1.2.13"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -299,6 +300,18 @@ try{
  }
 }catch(_){}
 const main=document.querySelector('main,[role="main"]');
+// Main may be a shell while the actual reply is rendered elsewhere. Export
+// structure only, never the text or the outerHTML of any element.
+const visible=e=>{try{
+ const r=e.getBoundingClientRect(),cs=getComputedStyle(e);
+ return r.width>8&&r.height>8&&cs.display!=='none'&&cs.visibility!=='hidden';
+}catch(_){return false;}};
+const allTables=[...document.querySelectorAll('table,[role="table"]')].slice(0,500);
+const visibleTables=allTables.filter(visible);
+const middle=document.elementFromPoint(Math.floor(innerWidth*0.66),
+ Math.floor(innerHeight*0.5));
+const allBodyArticles=document.querySelectorAll('article,[role="article"]');
+const allBodyMarkdown=document.querySelectorAll('.markdown,.prose,[data-testid*="markdown"]');
 return {ready_state:String(document.readyState||'unknown').slice(0,16),
   route, visibility_state:String(document.visibilityState||'unknown').slice(0,16),
   has_focus:typeof document.hasFocus==='function'?Boolean(document.hasFocus()):false,
@@ -323,6 +336,16 @@ return {ready_state:String(document.readyState||'unknown').slice(0,16),
   page_busy_regions:document.querySelectorAll('[aria-busy="true"]').length,
   main_visible_images:main?[...main.querySelectorAll('img')].filter(e=>e.getBoundingClientRect().width>100&&e.getBoundingClientRect().height>100).length:0,
   body_text_chars:document.body?Math.min(String(document.body.textContent||'').length,500000):0,
+  body_visible_text_chars:document.body?Math.min(String(document.body.innerText||'').length,500000):0,
+  body_article_count:allBodyArticles.length,
+  body_markdown_blocks:allBodyMarkdown.length,
+  body_visible_tables:visibleTables.length,
+  body_visible_table_rows:Math.min(100000,visibleTables.reduce((n,e)=>
+   n+e.querySelectorAll('tr,[role="row"]').length,0)),
+  body_visible_tables_outside_main:visibleTables.filter(e=>!e.closest('main,[role="main"]')).length,
+  viewport_center_in_main:!!middle?.closest('main,[role="main"]'),
+  viewport_center_in_table:!!middle?.closest('table,[role="table"]'),
+  viewport_center_in_article:!!middle?.closest('article,[role="article"]'),
   main_markdown_blocks:document.querySelectorAll('main .markdown,main .prose,#thread .markdown').length,
   main_article_count:main?main.querySelectorAll('article,[role="article"]').length:0,
   main_message_like_count:main?main.querySelectorAll('[data-testid*="message"],[data-testid*="turn"],[data-message-id],[data-turn-id]').length:0,
@@ -451,7 +474,12 @@ _PROBE_KEYS = {"ready_state", "route", "visibility_state", "has_focus",
     "main_child_elements", "main_element_count", "main_text_chars",
     "main_visible_text_chars", "main_thread_candidates",
     "main_busy_regions", "page_busy_regions", "main_visible_images",
-    "body_text_chars", "main_markdown_blocks", "main_article_count",
+    "body_text_chars", "body_visible_text_chars",
+    "body_article_count", "body_markdown_blocks",
+    "body_visible_tables", "body_visible_table_rows",
+    "body_visible_tables_outside_main", "viewport_center_in_main",
+    "viewport_center_in_table", "viewport_center_in_article",
+    "main_markdown_blocks", "main_article_count",
     "main_message_like_count", "main_editable_count", "main_button_count",
     "iframe_count",
     "shadow_root_count", "app_roots",
@@ -530,6 +558,11 @@ async def inspect_page(cdp, request_id):
 
 def failure_reason(probe):
     """Fixed error code, never based on raw page text or exception messages."""
+    if (probe.get("body_visible_tables") or
+        probe.get("body_markdown_blocks") or
+        probe.get("existing_tab_visible_content_candidates")) and not (
+        probe.get("assistant_roles") or probe.get("conversation_turns")):
+        return "history_visible_content_unrecognized_by_assistant_selectors"
     if probe.get("navigation_route")=="navigation-error":
         return "history_browser_navigation_failed"
     if probe.get("navigation_route")=="unexpected-redirect":
@@ -633,6 +666,51 @@ def fresh_navigation_gate(folder, worker_id, cdp_port, url, cooldown=600):
         return False,cooldown,"gate-unavailable"
 
 
+def desktop_chrome_affinity(cdp_port):
+    """Compare X11 visible Chrome PIDs with the selected CDP debug port.
+
+    Controller slot 1: DISPLAY :99, CDP 9222; slot N uses :98+N
+    and CDP 9221+N. Never export PIDs, process args or desktop titles.
+    A zero match is inconclusive if command lines were unreadable.
+    """
+    evidence={"desktop_affinity_checked":False,
+        "desktop_chrome_windows":0,"desktop_chrome_cdp_port_matches":0,
+        "desktop_chrome_other_ports":0,"desktop_chrome_port_unknown":0}
+    env=dict(os.environ)
+    env["DISPLAY"]=":"+str(int(cdp_port)-9123)
+    try:
+        found=subprocess.run(
+            ["xdotool","search","--onlyvisible","--class",".*[Cc]hrome.*"],
+            capture_output=True,text=True,timeout=3,check=False,env=env)
+        if found.returncode not in (0,1):return evidence
+        window_ids=[w for w in found.stdout.splitlines() if w.isdecimal()][:12]
+        evidence["desktop_affinity_checked"]=True
+        evidence["desktop_chrome_windows"]=len(window_ids)
+        port_flag=("--remote-debugging-port="+str(int(cdp_port))).encode()
+        for window in window_ids:
+            try:
+                pid_result=subprocess.run(
+                    ["xdotool","getwindowpid",window],
+                    capture_output=True,text=True,timeout=2,check=False,env=env)
+                raw_pid=pid_result.stdout.strip()
+                if pid_result.returncode!=0 or not raw_pid.isdecimal():
+                    evidence["desktop_chrome_port_unknown"]+=1
+                    continue
+                args=(Path("/proc")/raw_pid/"cmdline").read_bytes().split(b"\0")
+                if port_flag in args:
+                    evidence["desktop_chrome_cdp_port_matches"]+=1
+                elif any(part.startswith(b"--remote-debugging-port=")
+                         for part in args):
+                    evidence["desktop_chrome_other_ports"]+=1
+                else:
+                    evidence["desktop_chrome_port_unknown"]+=1
+            except (OSError,subprocess.TimeoutExpired,ValueError):
+                evidence["desktop_chrome_port_unknown"]+=1
+    except (OSError,subprocess.TimeoutExpired,ValueError):
+        pass
+    return evidence
+
+
 async def capture(args):
     """Always close only the CDP tabs this tool created, including on failure."""
     owned_tabs=[]
@@ -651,6 +729,7 @@ async def _capture_inner(args,owned_tabs):
     folder=Path(args.output);folder.mkdir(parents=True,exist_ok=True,mode=0o700)
     status(folder,"discovering",8)
     target_url=safe_url(args.conversation_url)
+    desktop_evidence=desktop_chrome_affinity(args.cdp_port)
     targets=json_get(args.cdp_port,"/json/list")
     def target(t):
         u=urlsplit(str(t.get("url") or ""))
@@ -709,8 +788,14 @@ async def _capture_inner(args,owned_tabs):
         inspected_tabs=0
         captured_errors=0
         sample_probe=None
-        sample_rank=(-1,-1,-1,-1,-1)
+        sample_rank=(-1,-1,-1,-1,-1,-1,-1)
         structural_fingerprints=set()
+        max_body_tables=0
+        max_body_rows=0
+        max_body_markdown=0
+        max_visible_text=0
+        focused_tabs=0
+        visible_content_candidates=0
         for tab in matches:
             try:
                 endpoint=ws_endpoint(tab["webSocketDebuggerUrl"],args.cdp_port)
@@ -722,6 +807,8 @@ async def _capture_inner(args,owned_tabs):
                     inspected_tabs+=1
                     chars=int(probe.get("main_text_chars") or 0)
                     rank=(int(probe.get("assistant_roles") or 0),
+                          int(probe.get("body_visible_tables") or 0),
+                          int(probe.get("body_markdown_blocks") or 0),
                           int(probe.get("main_message_like_count") or 0),
                           int(probe.get("main_article_count") or 0),
                           int(probe.get("main_markdown_blocks") or 0),chars)
@@ -732,7 +819,17 @@ async def _capture_inner(args,owned_tabs):
                         int(probe.get("main_element_count") or 0),chars,
                         int(probe.get("main_article_count") or 0),
                         int(probe.get("main_message_like_count") or 0),
+                        int(probe.get("body_visible_tables") or 0),
+                        int(probe.get("body_markdown_blocks") or 0),
                         int(probe.get("aria_busy_count") or 0)))
+                    max_body_tables=max(max_body_tables,int(probe.get("body_visible_tables") or 0))
+                    max_body_rows=max(max_body_rows,int(probe.get("body_visible_table_rows") or 0))
+                    max_body_markdown=max(max_body_markdown,int(probe.get("body_markdown_blocks") or 0))
+                    max_visible_text=max(max_visible_text,int(probe.get("body_visible_text_chars") or 0))
+                    focused_tabs+=int(bool(probe.get("has_focus")))
+                    visible_content_candidates+=int(bool(
+                        probe.get("body_visible_tables") or
+                        probe.get("body_markdown_blocks")))
                     max_text_chars=max(max_text_chars,chars)
                     max_markdown=max(max_markdown,int(probe.get("main_markdown_blocks") or 0))
                     max_articles=max(max_articles,int(probe.get("main_article_count") or 0))
@@ -765,13 +862,19 @@ async def _capture_inner(args,owned_tabs):
             "existing_tab_recent_429":recent_429_tabs,
             "existing_tab_historical_429":historical_429_tabs,
             "existing_tab_distinct_structures":len(structural_fingerprints),
+            "existing_tab_max_body_tables":max_body_tables,
+            "existing_tab_max_body_table_rows":max_body_rows,
+            "existing_tab_max_body_markdown_blocks":max_body_markdown,
+            "existing_tab_max_body_visible_text_chars":max_visible_text,
+            "existing_tab_focused":focused_tabs,
+            "existing_tab_visible_content_candidates":visible_content_candidates,
             "existing_tab_max_markdown_blocks":max_markdown,
             "existing_tab_max_articles":max_articles,
             "existing_tab_max_message_like":max_message_like,
             "existing_tab_capture_errors":captured_errors}
         if sample_probe:
-            last_probe={**sample_probe,"navigation_route":"conversation",
-                **evidence}
+            last_probe={**desktop_evidence,**sample_probe,
+                "navigation_route":"conversation",**evidence}
         if len(verified)==1:
             tab_origin="existing-history-tab-readonly"
             return verified[0][0],verified[0][1],evidence
@@ -1010,7 +1113,7 @@ async def _capture_inner(args,owned_tabs):
                 if found or not evidence["existing_tab_candidates"]:
                     break
         evidence["existing_tab_observation_rounds"]=observation_rounds
-        last_probe={**last_probe,**evidence}
+        last_probe={**desktop_evidence,**last_probe,**evidence}
         if existing and found:
             picked,report=existing,found
         elif evidence["existing_tab_candidates"]:
@@ -1026,6 +1129,7 @@ async def _capture_inner(args,owned_tabs):
                 and evidence["existing_tab_max_articles"]==0
                 and evidence["existing_tab_max_message_like"]==0
                 and evidence["existing_tab_max_markdown_blocks"]==0
+                and evidence["existing_tab_visible_content_candidates"]==0
                 and evidence["existing_tab_recent_429"]==0
                 and not last_probe.get("password_fields")
                 and not last_probe.get("challenge_frames")
