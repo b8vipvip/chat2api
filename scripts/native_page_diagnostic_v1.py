@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.4"
+VERSION = "1.2.5"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -123,6 +123,25 @@ return {ok:!reason,reason,version:1,scope,request_marker:tagged?expected:null,
  generating:!!document.querySelector('button[aria-label*="Stop generating"],button[aria-label*="Stop response"]')};
 })"""
 
+# Installed only in the dedicated diagnostic tab before its single reload.
+# Records counts of browser failures without reading messages, stacks, URLs,
+# HTTP contents, cookies, storage, headers or user data.
+NEW_DOCUMENT_ERRORS = r"""(function(){
+'use strict';
+if(window.__chat2apiNativeDiagCounts)return;
+const counts={js_exception_count:0,unhandled_rejection_count:0,
+ resource_error_count:0};
+Object.defineProperty(window,'__chat2apiNativeDiagCounts',{
+ value:counts,configurable:false,enumerable:false});
+window.addEventListener('error',function(event){
+ const key=event.target===window?'js_exception_count':'resource_error_count';
+ counts[key]=Math.min(9999,counts[key]+1);
+},true);
+window.addEventListener('unhandledrejection',function(){
+ counts.unhandled_rejection_count=Math.min(9999,counts.unhandled_rejection_count+1);
+},true);
+})()"""
+
 PAGE_PROBE = r"""(function(){
 'use strict';
 // Structural signals and numeric HTTP response classes ONLY.
@@ -136,7 +155,11 @@ const route=/^\/c\/[A-Za-z0-9-]{12,90}\/?$/.test(path)?'conversation':
  /login|auth|signin|challenge|captcha|error/i.test(path)?'access-gate':'other';
 const perf={fetch_total:0,fetch_http_2xx:0,fetch_http_401_403:0,
  fetch_http_404:0,fetch_http_429:0,fetch_http_other_4xx:0,
- fetch_http_5xx:0,fetch_status_unavailable:0};
+ fetch_http_5xx:0,fetch_status_unavailable:0,
+ conversation_api_observed:0,conversation_api_2xx:0,
+ conversation_api_4xx:0,conversation_api_5xx:0,
+ conversation_api_unknown_status:0,other_api_observed:0,
+ service_worker_controller:0};
 try {
  const items=performance.getEntriesByType('resource').slice(-300);
  for(const entry of items){
@@ -151,8 +174,27 @@ try {
   else if(code>=400&&code<500)perf.fetch_http_other_4xx++;
   else if(code>=500&&code<600)perf.fetch_http_5xx++;
   else perf.fetch_status_unavailable++;
+  // Exact resource names are NEVER emitted or stored. Classify paths in
+  // page memory only, then retain aggregate counts and HTTP status class.
+  let routeType='other';
+  try {
+    const u=new URL(entry.name,location.origin);
+    if(u.origin===location.origin){
+      if(/\/(?:backend-api|api)\/(?:conversation|conversations)(?:\/|$)/i.test(u.pathname)
+        || /\/api\/chat(?:\/|$)/i.test(u.pathname))routeType='conversation';
+      else if(/\/(?:backend-api|api)\//i.test(u.pathname))routeType='other-api';
+    }
+  }catch(_){}
+  if(routeType==='conversation'){
+    perf.conversation_api_observed++;
+    if(code>=200&&code<300)perf.conversation_api_2xx++;
+    else if(code>=400&&code<500)perf.conversation_api_4xx++;
+    else if(code>=500&&code<600)perf.conversation_api_5xx++;
+    else perf.conversation_api_unknown_status++;
+  }else if(routeType==='other-api')perf.other_api_observed++;
  }
 }catch(_){}
+try{perf.service_worker_controller=navigator.serviceWorker?.controller?1:0;}catch(_){}
 let last_finished_age_ms=-1;
 try {
  const entries=performance.getEntriesByType('resource');
@@ -161,6 +203,17 @@ try {
   const end=Number(latest.responseEnd || 0);
   if(end>0)last_finished_age_ms=Math.max(0,
    Math.min(3600000,Math.round(performance.now()-end)));
+ }
+}catch(_){}
+let jsErrors={js_exception_count:0,unhandled_rejection_count:0,
+ resource_error_count:0,error_hooks_installed:false};
+try{
+ const observed=window.__chat2apiNativeDiagCounts;
+ if(observed){
+  jsErrors={js_exception_count:Number(observed.js_exception_count||0),
+   unhandled_rejection_count:Number(observed.unhandled_rejection_count||0),
+   resource_error_count:Number(observed.resource_error_count||0),
+   error_hooks_installed:true};
  }
 }catch(_){}
 const main=document.querySelector('main,[role="main"]');
@@ -180,6 +233,9 @@ return {ready_state:String(document.readyState||'unknown').slice(0,16),
   skeleton_count:document.querySelectorAll('[data-testid*="skeleton"]').length,
   aria_busy_count:document.querySelectorAll('[aria-busy="true"]').length,
   last_finished_age_ms,
+  alert_count:document.querySelectorAll('[role="alert"],[aria-live="assertive"]').length,
+  error_testid_count:document.querySelectorAll('[data-testid*="error"],[data-testid*="failed"]').length,
+  ...jsErrors,
   password_fields:document.querySelectorAll('input[type="password"]').length>0,
   challenge_frames:document.querySelectorAll('iframe[src*="challenge"],iframe[src*="captcha"]').length>0,
   loading_skeletons:document.querySelectorAll('[data-testid*="skeleton"],[aria-busy="true"]').length>0,
@@ -296,6 +352,11 @@ _PROBE_KEYS = {"ready_state", "route", "visibility_state", "has_focus",
     "fetch_total", "fetch_http_2xx",
     "fetch_http_401_403", "fetch_http_404", "fetch_http_429",
     "fetch_http_other_4xx", "fetch_http_5xx", "fetch_status_unavailable",
+    "conversation_api_observed", "conversation_api_2xx", "conversation_api_4xx",
+    "conversation_api_5xx", "conversation_api_unknown_status",
+    "other_api_observed", "service_worker_controller",
+    "js_exception_count", "unhandled_rejection_count", "resource_error_count",
+    "error_hooks_installed", "alert_count", "error_testid_count",
     "capture_error"}
 
 async def inspect_page(cdp, request_id):
@@ -531,9 +592,18 @@ async def capture(args):
                                        retry_count=1,attempt=i+1)
                                 try:
                                     await cdp.call("Page.enable")
+                                    # This script is registered on OUR new
+                                    # tab only and sees no error message/body.
+                                    try:
+                                        await cdp.call("Page.addScriptToEvaluateOnNewDocument",
+                                            {"source":NEW_DOCUMENT_ERRORS},timeout=5)
+                                        instrumented=True
+                                    except Exception:
+                                        instrumented=False
                                     await cdp.call("Page.reload",{"ignoreCache":False},
                                                    timeout=10)
-                                    reload_result="issued"
+                                    reload_result=("issued-instrumented"
+                                        if instrumented else "issued-uninstrumented")
                                 except Exception:
                                     reload_result="cdp-reload-failed"
                                 last_probe={**last_probe,
@@ -668,6 +738,9 @@ def main():
             bits.append("5="+str(int(probe.get("fetch_http_5xx") or 0)))
             bits.append("r="+str(int(bool(probe.get("reload_attempted")))))
             bits.append("s="+str(int(probe.get("skeleton_count") or 0)))
+            bits.append("c="+str(int(probe.get("conversation_api_observed") or 0)))
+            bits.append("j="+str(int(probe.get("js_exception_count") or 0)))
+            bits.append("u="+str(int(probe.get("unhandled_rejection_count") or 0)))
             error=(error+" ["+";".join(bits)+"]")[:180]
         status(folder,"failed",100,error=error)
         raise SystemExit(1)
