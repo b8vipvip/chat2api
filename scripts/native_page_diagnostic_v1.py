@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.8"
+VERSION = "1.2.9"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -167,12 +167,13 @@ const path=String(location.pathname||'');
 const route=/^\/c\/[A-Za-z0-9-]{12,90}\/?$/.test(path)?'conversation':
  /login|auth|signin|challenge|captcha|error/i.test(path)?'access-gate':'other';
 const perf={fetch_total:0,fetch_http_2xx:0,fetch_http_401_403:0,
- fetch_http_404:0,fetch_http_429:0,fetch_http_other_4xx:0,
+ fetch_http_404:0,fetch_http_429:0,fetch_http_recent_429:0,
+ fetch_http_429_age_unknown:0,fetch_http_other_4xx:0,
  fetch_http_5xx:0,fetch_status_unavailable:0,
  conversation_api_observed:0,conversation_api_2xx:0,
  conversation_api_4xx:0,conversation_api_5xx:0,
  conversation_api_unknown_status:0,conversation_api_429:0,
- conversation_api_last_429_age_ms:0,other_api_observed:0,
+ conversation_api_recent_429:0,conversation_api_last_429_age_ms:0,other_api_observed:0,
  service_worker_controller:0};
 try {
  const items=performance.getEntriesByType('resource').slice(-300);
@@ -181,6 +182,15 @@ try {
   perf.fetch_total++;
   // responseStatus may be 0 or unavailable when timing is restricted.
   const code=Number(entry.responseStatus||0);
+  // Resource Timing records the full page history. A stale HTTP 429 must
+  // not be mistaken for a rate limit active during this diagnostic job.
+  const end=Number(entry.responseEnd||0);
+  const age=(end>0&&end<=performance.now())?
+      Math.max(0,Math.round(performance.now()-end)):-1;
+  if(code===429){
+    if(age>=0&&age<=60000)perf.fetch_http_recent_429++;
+    if(age<0)perf.fetch_http_429_age_unknown++;
+  }
   if(code>=200&&code<300)perf.fetch_http_2xx++;
   else if(code===401||code===403)perf.fetch_http_401_403++;
   else if(code===404)perf.fetch_http_404++;
@@ -204,13 +214,13 @@ try {
     if(code>=200&&code<300)perf.conversation_api_2xx++;
     else if(code>=400&&code<500)perf.conversation_api_4xx++;
     else if(code>=500&&code<600)perf.conversation_api_5xx++;
+    else perf.conversation_api_unknown_status++;
+    // The 429 subset is orthogonal to the 4xx status-class counter.
     if(code===429){
       perf.conversation_api_429++;
-      const end=Number(entry.responseEnd||0);
-      if(end>0)perf.conversation_api_last_429_age_ms=Math.min(100000,
-        Math.max(0,Math.round(performance.now()-end)));
+      if(age>=0&&age<=60000)perf.conversation_api_recent_429++;
+      if(age>=0)perf.conversation_api_last_429_age_ms=Math.min(3600000,age);
     }
-    else perf.conversation_api_unknown_status++;
   }else if(routeType==='other-api')perf.other_api_observed++;
  }
 }catch(_){}
@@ -389,10 +399,12 @@ _PROBE_KEYS = {"ready_state", "route", "visibility_state", "has_focus",
     "password_fields", "challenge_frames", "loading_skeletons",
     "fetch_total", "fetch_http_2xx",
     "fetch_http_401_403", "fetch_http_404", "fetch_http_429",
+    "fetch_http_recent_429", "fetch_http_429_age_unknown",
     "fetch_http_other_4xx", "fetch_http_5xx", "fetch_status_unavailable",
     "conversation_api_observed", "conversation_api_2xx", "conversation_api_4xx",
     "conversation_api_5xx", "conversation_api_unknown_status",
-    "conversation_api_429", "conversation_api_last_429_age_ms",
+    "conversation_api_429", "conversation_api_recent_429",
+    "conversation_api_last_429_age_ms",
     "other_api_observed", "service_worker_controller",
     "js_exception_count", "unhandled_rejection_count", "resource_error_count",
     "error_hooks_installed", "alert_count", "error_testid_count",
@@ -434,7 +446,10 @@ async def inspect_page(cdp, request_id):
                 for key in _PROBE_KEYS-{"capture_error"}:
                     val=raw.get(key)
                     if isinstance(val,bool):probe[key]=val
-                    elif isinstance(val,int):probe[key]=min(max(val,0),100000)
+                    elif isinstance(val,int):
+                        limit=3600000 if key in ("conversation_api_last_429_age_ms",
+                            "last_finished_age_ms") else 100000
+                        probe[key]=min(max(val,0),limit)
                     elif isinstance(val,str) and key in ("ready_state","route","visibility_state"):
                         probe[key]=val[:24]
     except Exception:
@@ -464,9 +479,14 @@ def failure_reason(probe):
         and not (probe.get("assistant_roles") or probe.get("assistant_testids")
                  or probe.get("conversation_turns") or probe.get("user_roles")
                  or probe.get("verified_roleless_headings"))):
-        if (probe.get("fetch_http_429") or probe.get("conversation_api_429")
-            or probe.get("existing_tab_rate_limited")):
-            return "history_conversation_rate_limited_http_429"
+        if (probe.get("conversation_api_recent_429")
+            or probe.get("existing_tab_recent_429")):
+            return "history_conversation_recent_conversation_api_429"
+        if probe.get("fetch_http_recent_429"):
+            return "history_conversation_recent_other_http_429"
+        if (probe.get("conversation_api_429") or probe.get("fetch_http_429")
+            or probe.get("existing_tab_historical_429")):
+            return "history_conversation_stalled_with_historical_429"
         if (probe.get("fetch_http_401_403")
             or probe.get("fetch_http_other_4xx")):
             return "history_conversation_stalled_with_http_4xx"
@@ -582,9 +602,13 @@ async def _capture_inner(args,owned_tabs):
         max_message_like=0
         busy_tabs=0
         rate_limited_tabs=0
+        recent_429_tabs=0
+        historical_429_tabs=0
         inspected_tabs=0
         captured_errors=0
         sample_probe=None
+        sample_rank=(-1,-1,-1,-1,-1)
+        structural_fingerprints=set()
         for tab in matches:
             try:
                 endpoint=ws_endpoint(tab["webSocketDebuggerUrl"],args.cdp_port)
@@ -595,8 +619,18 @@ async def _capture_inner(args,owned_tabs):
                     result,probe=await inspect_page(cdp,args.request_id)
                     inspected_tabs+=1
                     chars=int(probe.get("main_text_chars") or 0)
-                    if sample_probe is None or chars>max_text_chars:
+                    rank=(int(probe.get("assistant_roles") or 0),
+                          int(probe.get("main_message_like_count") or 0),
+                          int(probe.get("main_article_count") or 0),
+                          int(probe.get("main_markdown_blocks") or 0),chars)
+                    if rank>sample_rank:
                         sample_probe=probe
+                        sample_rank=rank
+                    structural_fingerprints.add((
+                        int(probe.get("main_element_count") or 0),chars,
+                        int(probe.get("main_article_count") or 0),
+                        int(probe.get("main_message_like_count") or 0),
+                        int(probe.get("aria_busy_count") or 0)))
                     max_text_chars=max(max_text_chars,chars)
                     max_markdown=max(max_markdown,int(probe.get("main_markdown_blocks") or 0))
                     max_articles=max(max_articles,int(probe.get("main_article_count") or 0))
@@ -604,6 +638,12 @@ async def _capture_inner(args,owned_tabs):
                     busy_tabs+=int(bool(probe.get("loading_skeletons")))
                     rate_limited_tabs+=int(bool(probe.get("fetch_http_429") or
                         probe.get("conversation_api_429")))
+                    recent_429_tabs+=int(bool(probe.get("fetch_http_recent_429") or
+                        probe.get("conversation_api_recent_429")))
+                    historical_429_tabs+=int(bool(
+                        (probe.get("fetch_http_429") or probe.get("conversation_api_429"))
+                        and not (probe.get("fetch_http_recent_429")
+                            or probe.get("conversation_api_recent_429"))))
                     captured_errors+=int(probe.get("capture_error") not in
                         ("none","no-verified-assistant-boundary"))
                     if (result and result.get("ok")
@@ -620,6 +660,9 @@ async def _capture_inner(args,owned_tabs):
             "existing_tab_inspected":inspected_tabs,
             "existing_tab_busy":busy_tabs,
             "existing_tab_rate_limited":rate_limited_tabs,
+            "existing_tab_recent_429":recent_429_tabs,
+            "existing_tab_historical_429":historical_429_tabs,
+            "existing_tab_distinct_structures":len(structural_fingerprints),
             "existing_tab_max_markdown_blocks":max_markdown,
             "existing_tab_max_articles":max_articles,
             "existing_tab_max_message_like":max_message_like,
@@ -731,7 +774,7 @@ async def _capture_inner(args,owned_tabs):
                                 return page,obj,tab_id
                             # 429 may be caused by historical page traffic or
                             # this diagnostic. Avoid automatic reload/extra fetch.
-                            if probe.get("fetch_http_429") or probe.get("conversation_api_429"):
+                            if probe.get("fetch_http_recent_429") or probe.get("conversation_api_recent_429"):
                                 last_probe["rate_limit_detected"]=True
                                 break
                             # A dedicated tab may be skeleton-only while an
@@ -762,7 +805,7 @@ async def _capture_inner(args,owned_tabs):
                                 and not probe.get("password_fields")
                                 and not probe.get("challenge_frames")
                                 and not (probe.get("fetch_http_401_403")
-                                    or probe.get("fetch_http_429")
+                                    or probe.get("fetch_http_recent_429")
                                     or probe.get("fetch_http_5xx"))):
                                 reload_attempted=True
                                 post_reload_at=i
@@ -822,6 +865,21 @@ async def _capture_inner(args,owned_tabs):
         # than repeatedly creating/reloading more copies of the same page.
         # If they have no verified answer, stop with their structural evidence.
         existing,found,evidence=await read_existing_history_tab(target_url,"")
+        observation_rounds=1
+        # Poll only existing DOM state. Never reload or request conversation
+        # again. An old Resource Timing 429 does not abort this observation.
+        if not found and evidence["existing_tab_candidates"]:
+            for _ in range(2):
+                if evidence.get("existing_tab_recent_429"):
+                    break
+                await asyncio.sleep(3)
+                existing,found,evidence=await read_existing_history_tab(
+                    target_url,"")
+                observation_rounds+=1
+                if found or not evidence["existing_tab_candidates"]:
+                    break
+        evidence["existing_tab_observation_rounds"]=observation_rounds
+        last_probe={**last_probe,**evidence}
         if existing and found:
             picked,report=existing,found
         elif evidence["existing_tab_candidates"]:
