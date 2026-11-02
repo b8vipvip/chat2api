@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -42,14 +42,26 @@ if(assistant.length){
   roots=[root&&visible(root)&&!hasUser(root)?root:assistant[assistant.length-1]];
 }
 else {
- const h=[...document.querySelectorAll('main h4,[role="main"] h4,#thread h4')].filter(e=>e.isConnected&&visible(e)&&/^ChatGPT said\s*[:：]?$/.test(norm(e.textContent)));
+ // For historical ChatGPT replies, a roleless "ChatGPT said" heading may
+ // live INSIDE a verified turn container, not beside the answer body.
+ const h=[...document.querySelectorAll('main h4,main h5,main h6,[role="main"] h4,[role="main"] h5,[role="main"] h6,#thread h4,#thread h5')].filter(e=>e.isConnected&&/^ChatGPT said\s*[:：]?$/.test(norm(e.textContent)));
  if(!h.length)return {ok:false,error:'no-verified-assistant-boundary'};
- const heading=h[h.length-1];let at=heading.nextElementSibling;scope='roleless-heading';
- while(at&&roots.length<4096){
-   if(at.matches(forbidden)||at.tagName==='H4'&&/^(You said|ChatGPT said)\s*[:：]?$/.test(norm(at.textContent))||hasUser(at))break;
-   roots.push(at);at=at.nextElementSibling;
+ const heading=h[h.length-1];
+ const turn=heading.closest('[data-testid="conversation-turn"],article,[data-testid="assistant-message"]');
+ if(turn&&visible(turn)&&!hasUser(turn)&&
+    ![...turn.querySelectorAll('h4,h5,h6')].some(e=>/^You said\s*[:：]?$/.test(norm(e.textContent)))){
+   roots=[turn];scope='verified-roleless-turn';
+ }else{
+   scope='roleless-heading-siblings';
+   let at=heading.nextElementSibling;
+   if(!at && heading.parentElement && !hasUser(heading.parentElement))
+     at=heading.parentElement.nextElementSibling;
+   while(at&&roots.length<4096){
+     if(at.matches(forbidden)||/^(You said|ChatGPT said)\s*[:：]?$/.test(norm(at.textContent))&&/^H[456]$/.test(at.tagName)||hasUser(at))break;
+     roots.push(at);at=at.nextElementSibling;
+   }
+   if(at&&roots.length>=4096)return {ok:false,error:'reply-sibling-limit'};
  }
- if(at&&roots.length>=4096)return {ok:false,error:'reply-sibling-limit'};
 }
 if(!roots.length)return {ok:false,error:'empty-verified-reply'};
 const counters={nodes:0,text_chars:0,tables:0,images:0,max_children:0,headings:0,grids:0,flex:0};
@@ -102,6 +114,26 @@ return {ok:!reason,reason,version:1,scope,request_marker:tagged?expected:null,
  image_rects:imageRects,root:{tag:'assistant-reply',children},
  generating:!!document.querySelector('button[aria-label*="Stop generating"],button[aria-label*="Stop response"]')};
 })"""
+
+PAGE_PROBE = r"""(function(){
+'use strict';
+// Fixed structural signals only. No body text, page title, URLs, prompts,
+// account identifiers, cookies, storage or screenshots of auth pages.
+const heading=[...document.querySelectorAll('main h4,main h5,main h6,[role="main"] h4,[role="main"] h5,[role="main"] h6,#thread h4,#thread h5')]
+ .filter(e=>/^ChatGPT said\\s*[:：]?$/.test(String(e.textContent||'').replace(/\\s+/g,' ').trim())).length;
+const path=String(location.pathname||'');
+const route=/^\\/c\\/[A-Za-z0-9-]{12,90}\\/?$/.test(path)?'conversation':
+ /login|auth|signin|challenge|captcha|error/i.test(path)?'access-gate':'other';
+return {ready_state:String(document.readyState||'unknown').slice(0,16),
+  route, assistant_roles:document.querySelectorAll('[data-message-author-role="assistant"]').length,
+  user_roles:document.querySelectorAll('[data-message-author-role="user"]').length,
+  conversation_turns:document.querySelectorAll('[data-testid="conversation-turn"]').length,
+  verified_roleless_headings:heading,
+  main_landmarks:document.querySelectorAll('main,[role="main"]').length,
+  password_fields:document.querySelectorAll('input[type="password"]').length>0,
+  challenge_frames:document.querySelectorAll('iframe[src*="challenge"],iframe[src*="captcha"]').length>0,
+  loading_skeletons:document.querySelectorAll('[data-testid*="skeleton"],[aria-busy="true"]').length>0};
+})()"""
 
 def json_get(port, path):
     with urlopen(f"http://127.0.0.1:{port}{path}",timeout=3) as f:
