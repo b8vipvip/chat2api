@@ -254,13 +254,28 @@
         ? "无法唯一恢复原生历史页面；可补填 ChatGPT /c/ 链接，或检查 Worker 浏览器历史记录"
         : /history_reply_unavailable/.test(issue)
         ? "原生会话已定位，但页面未加载可验证的助手回复"
+        : /history_assistant_boundary_not_found/.test(issue)
+        ? "历史页面未找到可信助手回复区域，导出日志查看 DOM 结构证据"
+        : /history_access_gate_detected|history_challenge_detected/.test(issue)
+        ? "Worker 浏览器遇到登录或访问验证页面"
+        : /history_page_still_loading/.test(issue)
+        ? "ChatGPT 历史页面尚未加载完成"
+        : /history_capture_runtime_failed/.test(issue)
+        ? "CDP 页面脚本执行异常，请导出页面探针日志"
+        : /history_assistant_capture_rejected/.test(issue)
+        ? "已发现助手标识，但结构化回复采集未通过"
         : issue;
       const stateLabel = state === "completed" ? "已完成"
         : state === "failed" ? "失败" : state === "running" ? "运行中" : state || "-";
       const stageLabel = state === "failed" ? "" : " · " + (item.stage || "-");
       const stateCell = elem("td", stateLabel + stageLabel +
         (translated ? " · " + translated : ""));
-      stateCell.title = issue;
+      const probe=item.page_probe || {};
+      stateCell.title=issue + (probe.capture_error ?
+        " · capture="+probe.capture_error+
+        " · route="+(probe.route||"unknown")+
+        " · assistant="+Number(probe.assistant_roles||0)+
+        " · roleless="+Number(probe.verified_roleless_headings||0) : "");
       row.append(elem("td", String(item.job_id || "").slice(0,12)),
         elem("td", item.target_label || item.request_id || "-", "native-id"),
         elem("td", item.worker_id || "-", "native-id"),
