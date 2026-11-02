@@ -52,3 +52,26 @@ def test_native_diagnostics_survive_authoritative_completed_terminal():
         assert state.diagnostics["native_transport_ack_error"]=="invalid-native-envelope"
         await broker.release(state.request_id)
     asyncio.run(exercise())
+
+
+
+def test_native_conversation_url_saved_only_for_real_chatgpt_history():
+    good="https://chatgpt.com/c/6ae7dac6-8328-83e8-878d-fc3599d7b10b"
+    payload={"diagnostics":{"native_chatgpt_conversation_url":good}}
+    assert _terminal_provenance(payload)["native_chatgpt_conversation_url"]==good
+    for bad in (
+        good+"?token=hidden",good+"#anchor",
+        "http://chatgpt.com/c/6ae7dac6-8328-83e8-878d-fc3599d7b10b",
+        "https://evil.example/c/6ae7dac6-8328-83e8-878d-fc3599d7b10b",
+        "https://chatgpt.com.evil.example/c/6ae7dac6-8328-83e8-878d-fc3599d7b10b",
+        "https://chatgpt.com/",
+        "https://user:password@chatgpt.com/c/6ae7dac6-8328-83e8-878d-fc3599d7b10b",
+    ):
+        assert "native_chatgpt_conversation_url" not in _terminal_provenance({
+            "diagnostics":{"native_chatgpt_conversation_url":bad}})
+    from pathlib import Path
+    js=(ROOT/"chrome_extension/content_request_v6.js").read_text()
+    assert "rememberNativeConversationUrl(active);" in js
+    assert "active.nativeChatgptConversationUrl" in js
+    assert "native_chatgpt_conversation_url:nativeConversationUrl" in js
+    assert "chat.error" in js and "chat.cancelled" in js
