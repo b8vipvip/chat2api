@@ -224,7 +224,12 @@ def test_33da_wide_assistant_reply_111_siblings_preserved_in_safe_snapshot():
     # archived assets). Never call it a verified pixel-for-pixel rendering.
     assert stats["media_mapping_complete"] is False
     payload["root"]["children"][0]["children"].extend(
-        [{"tag": "p", "text": "overflow"} for _ in range(50)]
+        [{"tag": "p", "text": "additional section"} for _ in range(50)]
+    )
+    assert len(validate_native_snapshot(payload)["root"]["children"][0]["children"]) == 161
+    # Genuine overflow remains hard-rejected, not silently cut off.
+    payload["root"]["children"][0]["children"].extend(
+        [{"tag": "p", "text": "overflow"} for _ in range(8193 - 161)]
     )
     with pytest.raises(ValueError, match="Invalid children"):
         validate_native_snapshot(payload)
