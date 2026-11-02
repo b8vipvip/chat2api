@@ -304,6 +304,13 @@ install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_initialize.sh" 
 install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_diagnostics.sh" /usr/local/sbin/chat2api-worker-diagnostics
 install -o root -g root -m 755 "$WORKER_DIR/scripts/linux_worker_device_controller_helper.sh" /usr/local/sbin/chat2api-device-controller
 install -d -o chat2api -g chat2api -m 700 /var/lib/chat2api-worker/controller
+# Bundled v1 is installed on first deployment and refreshed with a normal
+# Worker upgrade. Later tool-only updates use the same atomic destination.
+if [[ -f "$WORKER_DIR/scripts/native_page_diagnostic_v1.py" ]]; then
+  tool_tmp="$(mktemp /var/lib/chat2api-worker/controller/.native-page-XXXXXX)"
+  install -o chat2api -g chat2api -m 600 "$WORKER_DIR/scripts/native_page_diagnostic_v1.py" "$tool_tmp"
+  mv -f "$tool_tmp" /var/lib/chat2api-worker/controller/native_page_diagnostic_v1.py
+fi
 cat >/etc/default/chat2api-worker-controller <<ENV
 WORKER_DIR=$WORKER_DIR
 WORKER_USER=chat2api
