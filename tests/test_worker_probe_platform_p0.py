@@ -146,7 +146,10 @@ def test_disabled_worker_reports_no_fabricated_evidence(tmp_path: Path) -> None:
 def test_request_probe_ui_source_is_single_owner_and_no_arbitrary_js() -> None:
     root = Path(__file__).resolve().parents[1]
     page = (root / "app" / "worker_probe_ui_patch.py").read_text(encoding="utf-8")
-    assert "workerToolsCatalog" in page and 'data-view="worker-tools"' in page
+    assert "workerToolsPolicyRows" in page and 'data-view="worker-tools"' in page
+    assert "workerProbePolicyDetails" in page
+    assert "nativePageToolPanel" in page
+    assert "workerToolsCatalog" not in page, "catalog is merged into the policy table"
     assert "admin_module.ADMIN_HTML = html" in page
     store = (root / "app" / "worker_probe_store.py").read_text(encoding="utf-8")
     assert "Unexpected probe policy fields" in store

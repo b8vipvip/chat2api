@@ -40,25 +40,21 @@
   };
 
   function renderCatalog() {
-    const target = $("workerToolsCatalog");
-    target.replaceChildren();
-    for (const tool of catalog) {
-      const row = elem("tr");
-      row.append(elem("td", tool.name), elem("td", tool.id),
-        elem("td", tool.version), elem("td", tool.phase),
-        elem("td", tool.available ? "可配置" : "尚未实现"));
-      target.append(row);
-    }
+    // Catalog and effective policy deliberately share one compact table.
+    renderPolicy();
   }
 
   function renderPolicy() {
     const target = $("workerToolsPolicyRows");
+    if (!target) return;
     target.replaceChildren();
     const scope = $("workerToolsScope").value;
     const configured = chosenPolicy?.tools || {};
     for (const tool of catalog) {
       const row = elem("tr");
-      row.append(elem("td", tool.name), elem("td", tool.phase));
+      row.append(elem("td", tool.name), elem("td", tool.id),
+        elem("td", tool.version), elem("td", tool.phase),
+        elem("td", tool.available ? "可配置" : "尚未实现"));
       const control = elem("td");
       const select = elem("select");
       select.dataset.probe = tool.id;
@@ -66,8 +62,8 @@
       const values = scope === "global"
         ? [["", "未配置（默认关闭）"], ["on", "开启"], ["off", "关闭"]]
         : [["", "继承全局"], ["on", "显式开启"], ["off", "显式关闭"]];
-      for (const [value, text] of values) {
-        const item = elem("option", text); item.value = value; select.append(item);
+      for (const [value, label] of values) {
+        const item = elem("option", label); item.value = value; select.append(item);
       }
       const override = configured[tool.id];
       select.value = override?.enabled === true ? "on"
@@ -172,7 +168,7 @@
   }
 
   async function load() {
-    if (!$("workerToolsCatalog")) return;
+    if (!$("workerToolsPolicyRows")) return;
     try {
       const [c, p] = await Promise.all([
         json("/api/admin/worker-tools/catalog"),
@@ -180,7 +176,6 @@
       ]);
       catalog = c.tools || [];
       workers = p.workers || [];
-      renderCatalog();
       const picker = $("workerToolsScope");
       const old = picker.value || "global";
       picker.replaceChildren();
@@ -198,7 +193,7 @@
       if ([...picker.options].some(option => option.value === old)) picker.value = old;
       await loadPolicy();
       await refreshRuns();
-      nativePageWorkers();
+      await nativePageWorkers();
       await nativePageRecords();
     } catch (error) { status(error.message, true); }
   }
@@ -219,21 +214,25 @@
     el.textContent = String(message);
     el.style.color = bad ? "#ef9d9d" : "#9cb5d4";
   }
-  function nativePageWorkers() {
+  async function nativePageWorkers() {
     const target = $("nativePageWorker");
     if (!target) return;
+    // The standard probe catalog contains Browser/extension pseudo-Workers
+    // which have no Linux device-controller CDP executor. Only use canonical
+    // entries from Worker management, with exactly one full worker_id.
+    const response = await json("/api/admin/worker-tools/native-page/workers");
     const old = target.value;
     target.replaceChildren();
-    const none = elem("option", "请选择执行 Worker");
+    const none = elem("option", "请选择 Linux Worker");
     none.value = "";
     target.append(none);
-    const seen = new Set();
-    for (const worker of workers) {
-      if (!worker.worker_id || seen.has(worker.worker_id)) continue;
-      seen.add(worker.worker_id);
-      const option = elem("option", (worker.name || worker.worker_id) +
-        " · " + worker.worker_id + (worker.online ? " · 在线" : " · 离线"));
-      option.value = worker.worker_id;
+    for (const worker of response.data || []) {
+      const wid = String(worker.worker_id || "");
+      if (!/^wrk_[a-zA-Z0-9_-]{6,100}$/.test(wid)) continue;
+      const label = wid + (worker.name && worker.name !== wid
+        ? " · " + worker.name : "") + (worker.online ? " · 在线" : " · 离线");
+      const option = elem("option", label);
+      option.value = wid;
       target.append(option);
     }
     if ([...target.options].some(item => item.value === old)) target.value = old;
@@ -250,12 +249,22 @@
       const state = String(item.status || "");
       const progress = Math.min(100, Math.max(0, Number(item.percent || 0)));
       active ||= state === "running";
+      const issue = String(item.error || "");
+      const translated = /matching_page_unavailable|historical_request_page_not_recovered|history_multiple_candidates/.test(issue)
+        ? "无法唯一恢复原生历史页面；可补填 ChatGPT /c/ 链接，或检查 Worker 浏览器历史记录"
+        : /history_reply_unavailable/.test(issue)
+        ? "原生会话已定位，但页面未加载可验证的助手回复"
+        : issue;
+      const stateLabel = state === "completed" ? "已完成"
+        : state === "failed" ? "失败" : state === "running" ? "运行中" : state || "-";
+      const stageLabel = state === "failed" ? "" : " · " + (item.stage || "-");
+      const stateCell = elem("td", stateLabel + stageLabel +
+        (translated ? " · " + translated : ""));
+      stateCell.title = issue;
       row.append(elem("td", String(item.job_id || "").slice(0,12)),
-        elem("td", item.request_id || "-"),
-        elem("td", item.worker_id || "-"),
-        elem("td", item.tool_version || "未报告"),
-        elem("td", (state || "-") + " · " + (item.stage || "-") +
-          (item.error ? " · " + item.error : "")));
+        elem("td", item.request_id || "-", "native-id"),
+        elem("td", item.worker_id || "-", "native-id"),
+        elem("td", item.tool_version || "未报告"), stateCell);
       const pct = elem("td");
       const bar = elem("progress");
       bar.max = 100; bar.value = progress;
@@ -305,11 +314,21 @@
     }
   }
   async function nativePageStart() {
-    const worker_id = $("nativePageWorker")?.value || "";
     const request_id = $("nativePageRequestId")?.value.trim() || "";
-    const conversation_url = $("nativePageConversationUrl")?.value.trim() || "";
-    if (!worker_id || !/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(request_id))
-      throw new Error("请先选择 Worker 并输入完整的原请求 ID");
+    if (!/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(request_id))
+      throw new Error("请输入完整的原请求 ID");
+    const found = await json("/api/admin/worker-tools/native-page/request-worker/" +
+      encodeURIComponent(request_id));
+    const owner = String(found.worker_id || "");
+    const chosen = $("nativePageWorker")?.value || "";
+    if (chosen && owner && chosen !== owner)
+      throw new Error("该请求属于 " + owner + "，不能指定其他 Worker 采集");
+    const worker_id = owner || chosen;
+    if (!worker_id) throw new Error("请求记录没有可识别的 Linux Worker");
+    if ([...$("nativePageWorker").options].some(x => x.value === worker_id))
+      $("nativePageWorker").value = worker_id;
+    const conversation_url = $("nativePageConversationUrl")?.value.trim() ||
+      String(found.conversation_url || "");
     if (conversation_url && !/^https:\/\/(?:chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)\/c\/[a-zA-Z0-9-]{12,90}\/?$/.test(conversation_url))
       throw new Error("历史页面地址应为完整的 ChatGPT /c/ 链接");
     const response = await json("/api/admin/worker-tools/native-page/jobs",{

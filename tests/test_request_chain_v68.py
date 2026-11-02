@@ -251,3 +251,24 @@ def test_v642_native_page_locator_is_bounded_metadata_and_not_second_terminal():
     assert source.count('response_terminal_source: "verified-request-media-dom-v176"') == 1
     # The original request-v6 emit() still solely owns business completion.
     assert 'if (event?.type === "chat.completed" && active)' in source
+
+
+def test_v643_native_history_tool_never_changes_business_terminal_and_has_strict_origin():
+    request = read("chrome_extension/content_request_v6.js")
+    script = read("scripts/native_page_diagnostic_v1.py")
+    server = read("app/native_page_diagnostic_api.py")
+    policy = read("app/worker_probe_ui_patch.py")
+    history = read("app/request_history_v94_patch.py")
+    assert "data-chat2api-native-request-id" in request
+    assert "native_chatgpt_conversation_url" in request
+    assert "Page.navigate" not in script
+    assert "chrome_history_candidates" in script
+    assert "reference_matches" in script
+    assert "history_candidate_count" in script
+    assert "native_page_start" in server
+    assert "app.state.telemetry.get(request_id)" in server
+    assert "workerProbePolicyDetails" in policy
+    assert "workerToolsPolicyRows" in policy
+    assert "requestHistoryContextCopy(event,requestId)" in history
+    assert "chat.completed" not in script
+    assert request.count('response_terminal_source: "verified-request-media-dom-v176"') == 1
