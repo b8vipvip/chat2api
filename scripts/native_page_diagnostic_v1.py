@@ -331,22 +331,22 @@ async def capture(args):
         u=urlsplit(str(t.get("url") or ""))
         return t.get("type")=="page" and u.hostname in HOSTS and u.scheme=="https" and t.get("webSocketDebuggerUrl")
     targets=[t for t in targets if target(t)]
-    picked=None;report=None;ws=None
+    picked=None;report=None;ws=None;last_probe={}
     for t in targets[:60]:
         if target_url and str(t.get("url") or "").split("?")[0]!=target_url:continue
         endpoint=ws_endpoint(t["webSocketDebuggerUrl"],args.cdp_port)
         async with websockets.connect(endpoint,open_timeout=5,max_size=24*1024*1024) as conn:
             cdp=CDP(conn)
             await cdp.call("Runtime.enable")
-            result=await cdp.call("Runtime.evaluate",{"expression":CAPTURE+"("+json.dumps(args.request_id)+")","returnByValue":True,"silent":True})
-            value=(result.get("result") or {}).get("value")
-            if not isinstance(value,dict) or not value.get("ok"):continue
+            value,last_probe=await inspect_page(cdp,args.request_id)
+            if not value:continue
             if not target_url and value.get("request_marker")!=args.request_id:continue
             picked=t;report=value;break
     binding="live-request-marker"
     hints=recovery_hints()
     async def open_history_page(url):
         """Open a new diagnostic-only tab, never touch the active request tab."""
+        nonlocal last_probe
         response=json_get(args.cdp_port,"/json/list")
         existing=next((t for t in response if target(t) and
             str(t.get("url") or "").split("?",1)[0]==url),None)
@@ -373,12 +373,13 @@ async def capture(args):
                 endpoint=ws_endpoint(page["webSocketDebuggerUrl"],args.cdp_port)
                 async with websockets.connect(endpoint,open_timeout=5,max_size=24*1024*1024) as conn:
                     cdp=CDP(conn);await cdp.call("Runtime.enable")
-                    result=await cdp.call("Runtime.evaluate",{
-                        "expression":CAPTURE+"("+json.dumps(args.request_id)+")",
-                        "returnByValue":True,"silent":True})
-                    obj=(result.get("result") or {}).get("value")
-                    if isinstance(obj,dict) and obj.get("ok") and obj.get("root",{}).get("children"):
+                    obj,last_probe=await inspect_page(cdp,args.request_id)
+                    if obj and obj.get("root",{}).get("children"):
                         return page,obj,tab_id
+                    if i==0 or (i+1)%4==0 or i==23:
+                        status(folder,"awaiting-assistant",min(42,20+i),
+                               page_probe=last_probe,
+                               inspected_pages=1,attempt=i+1)
         except Exception:
             if not made:raise
         return None,None,tab_id
@@ -413,7 +414,9 @@ async def capture(args):
         if not picked:
             raise RuntimeError("historical_request_page_not_recovered; no unique content-verified history match; supply ChatGPT /c/ URL")
     if not picked or not report or not report.get("ok"):
-        raise RuntimeError("history_reply_unavailable; verify ChatGPT sign-in and conversation URL")
+        if last_probe:
+            status(folder,"page-unavailable",44,page_probe=last_probe)
+        raise RuntimeError(failure_reason(last_probe))
     if not target_url and binding=="live-request-marker" and report.get("request_marker")!=args.request_id:
         raise RuntimeError("request_marker_unverified")
     if report.get("generating"):raise RuntimeError("reply_still_generating")
