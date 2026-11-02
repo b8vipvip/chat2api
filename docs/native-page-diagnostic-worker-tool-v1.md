@@ -1,4 +1,4 @@
-# Worker 工具 · 原生页面诊断 v1.0.0
+# Worker 工具 · 原生页面诊断 v1.1.0
 
 ## 目标
 
@@ -35,3 +35,16 @@
 - 取证受到最多 30,000 DOM 节点、500,000 文本字符、24 张页面分段截图、18 MiB ZIP 上限约束。若超出限制，日志应显示失败或截断，不应假报完整。
 - Chrome/Worker 运行时需要正确监听本机 CDP；Windows Worker 不在该 Linux v1 工具范围内。
 - 发布代码和 CI 通过只能证明静态/模拟链路；真实历史 ChatGPT 页面加载、图片命中和 1:1 仍需要 Worker 实机日志核验。
+
+
+## 2026-11-02 v1.1.0 诊断失败复盘与 UI 更新
+
+本轮 `req_3a882bb5690442c48a9df887a0fd7ad9` 的 v1.0.0 诊断报 `matching_page_unavailable`；Worker 诊断确认 CDP 在 localhost:9222 监听。请求原生页面窗口在完成后自动关闭，且旧版完成日志未记录会话 URL。
+
+v1.1.0 新增严格的 Chrome History 找回逻辑：中心服务端从原请求时间和已生成助手正文生成最多六组 SHA-256 字符串指纹，只将时间上下界和哈希传给相同 Worker。工具只读取该 Chrome profile 在这段时间访问的 `chatgpt.com/c/` URL（不扫描其它网站、不访问 Cookie），最多处理 6 个候选。重新打开候选后须至少两组正文指纹匹配才能交付，其他情况明确提示用户提供原生会话链接。自动找回的产物清单标注 `chrome-history-content-sha256-verified`。这不是无条件保证旧记录都可恢复：历史被清除、原生回复文本差异过大或无持久化回复正文时仍需手动定位。
+
+v1.0.0 在 CDP 页面主世界读取扩展隔离世界的 `globalThis` 状态，不能可靠地检查已完成请求。新请求由 request-v6 在相关的助手 DOM 节点上添加 inert `data-chat2api-native-request-id` 标识，诊断脚本读取该标识精确关联。额外的写 DOM 行为被 try/catch 限制，绝不接管请求完成裁决。
+
+后台 Worker 工具调整为：原生页面诊断置顶，Worker 下拉仅显示 Worker 管理登记的真实完整 Linux `wrk_...` ID；工具目录与 Worker 有效配置合成一个表并默认折叠，原有探针证据也默认折叠。请求记录中右键 ID 后点击“复制完整请求 ID”。
+
+**部署顺序：** 这次修改同时涉及服务端、Worker Controller 和 Chrome 扩展，因此第一次升级必须同步更新服务端与 Linux Worker。后续仅更新 `native_page_diagnostic_v1.py` 工具内容时，仍可使用工具中心的独立更新按钮。
