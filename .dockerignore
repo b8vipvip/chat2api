@@ -21,6 +21,8 @@ scripts/*
 !scripts/linux_worker_agent_v43.py
 !scripts/linux_worker_agent_v44.py
 !scripts/linux_worker_device_controller.py
+!scripts/native_page_diagnostic_v1.py
+!scripts/native_page_tool_control.py
 !scripts/linux_worker_extension_pair.py
 !scripts/linux_worker_proxy.py
 !scripts/linux_worker_remote_login.py
