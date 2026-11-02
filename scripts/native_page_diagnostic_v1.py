@@ -236,9 +236,81 @@ class CDP:
             if obj.get("error"):raise RuntimeError("cdp_"+method.replace(".","_")+"_failed")
             return obj.get("result") or {}
 
+_PROBE_KEYS = {"ready_state", "route", "assistant_roles", "user_roles",
+    "conversation_turns", "verified_roleless_headings", "main_landmarks",
+    "password_fields", "challenge_frames", "loading_skeletons",
+    "capture_error"}
+
+async def inspect_page(cdp, request_id):
+    """Evaluate assistant DOM and a separate privacy-filtered status probe.
+
+    An exception in one evaluator must not prevent gathering evidence from
+    the other. Do not export exception text/stack, page contents or URLs.
+    """
+    report=None
+    capture_error="none"
+    try:
+        result=await cdp.call("Runtime.evaluate",{
+            "expression":CAPTURE+"("+json.dumps(request_id)+")",
+            "returnByValue":True,"silent":True})
+        if result.get("exceptionDetails"):
+            capture_error="capture-js-exception"
+        else:
+            candidate=(result.get("result") or {}).get("value")
+            if isinstance(candidate,dict):
+                if candidate.get("ok"):report=candidate
+                else:
+                    code=str(candidate.get("error") or "capture-rejected")
+                    capture_error=code if code in (
+                        "no-verified-assistant-boundary","reply-sibling-limit",
+                        "empty-verified-reply","capture-rejected") else "capture-rejected"
+            else:capture_error="capture-empty-result"
+    except Exception:
+        capture_error="capture-cdp-error"
+    probe={}
+    try:
+        result=await cdp.call("Runtime.evaluate",{
+            "expression":PAGE_PROBE,"returnByValue":True,"silent":True})
+        if not result.get("exceptionDetails"):
+            raw=(result.get("result") or {}).get("value")
+            if isinstance(raw,dict):
+                for key in _PROBE_KEYS-{"capture_error"}:
+                    val=raw.get(key)
+                    if isinstance(val,bool):probe[key]=val
+                    elif isinstance(val,int):probe[key]=min(max(val,0),100000)
+                    elif isinstance(val,str) and key in ("ready_state","route"):
+                        probe[key]=val[:24]
+    except Exception:
+        pass
+    probe["capture_error"]=capture_error
+    return report,probe
+
+
+def failure_reason(probe):
+    """Fixed error code, never based on raw page text or exception messages."""
+    if probe.get("challenge_frames"):return "history_challenge_detected"
+    if probe.get("password_fields") or probe.get("route")=="access-gate":
+        return "history_access_gate_detected"
+    if probe.get("ready_state")=="loading" or probe.get("loading_skeletons"):
+        return "history_page_still_loading"
+    if probe.get("capture_error") in ("capture-js-exception","capture-cdp-error"):
+        return "history_capture_runtime_failed"
+    if not probe.get("assistant_roles") and not probe.get("verified_roleless_headings"):
+        return "history_assistant_boundary_not_found"
+    return "history_assistant_capture_rejected"
+
+
 def status(folder,stage,percent,error=None,**meta):
     data={"tool_version":VERSION,"status":"failed" if error else "running","stage":stage,
       "percent":percent,"updated_at":int(time.time()),"error":error,**meta}
+    # Preserve the last harmless structural page probe even if the error
+    # handler subsequently changes the stage to failed.
+    if "page_probe" not in data:
+        try:
+            previous=json.loads((folder/"status.json").read_text())
+            if isinstance(previous.get("page_probe"),dict):
+                data["page_probe"]=previous["page_probe"]
+        except (ValueError,OSError,TypeError):pass
     tmp=folder/"status.tmp";tmp.write_text(json.dumps(data));tmp.replace(folder/"status.json")
     # A bounded, versioned operational timeline travels with the diagnostic ZIP.
     # Never append page URLs, Chrome credentials, request text or image bytes.
