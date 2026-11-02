@@ -129,7 +129,7 @@ def recovery_hints():
     return {"hashes":hashes,"start":start,"end":end}
 
 
-def chrome_history_candidates(port,hints):
+def chrome_history_candidates(port,hints,history_file=None):
     """Read only ChatGPT conversation visits in this request's time window.
 
     SQL never selects unrelated URLs. It does not read cookies, message text
@@ -138,7 +138,8 @@ def chrome_history_candidates(port,hints):
     """
     if not hints["start"] or len(hints["hashes"])<2:return []
     slot=port-9221
-    path=Path(f"/home/chat2api/.config/chat2api-chrome-worker-{slot:02d}/Default/History")
+    path=Path(history_file) if history_file is not None else Path(
+        f"/home/chat2api/.config/chat2api-chrome-worker-{slot:02d}/Default/History")
     if not path.is_file():return []
     origin=11644473600
     lower=int((hints["start"]+origin)*1000000)
