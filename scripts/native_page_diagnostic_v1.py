@@ -120,9 +120,9 @@ PAGE_PROBE = r"""(function(){
 // Fixed structural signals only. No body text, page title, URLs, prompts,
 // account identifiers, cookies, storage or screenshots of auth pages.
 const heading=[...document.querySelectorAll('main h4,main h5,main h6,[role="main"] h4,[role="main"] h5,[role="main"] h6,#thread h4,#thread h5')]
- .filter(e=>/^ChatGPT said\\s*[:：]?$/.test(String(e.textContent||'').replace(/\\s+/g,' ').trim())).length;
+ .filter(e=>/^ChatGPT said\s*[:：]?$/.test(String(e.textContent||'').replace(/\s+/g,' ').trim())).length;
 const path=String(location.pathname||'');
-const route=/^\\/c\\/[A-Za-z0-9-]{12,90}\\/?$/.test(path)?'conversation':
+const route=/^\/c\/[A-Za-z0-9-]{12,90}\/?$/.test(path)?'conversation':
  /login|auth|signin|challenge|captcha|error/i.test(path)?'access-gate':'other';
 return {ready_state:String(document.readyState||'unknown').slice(0,16),
   route, assistant_roles:document.querySelectorAll('[data-message-author-role="assistant"]').length,
