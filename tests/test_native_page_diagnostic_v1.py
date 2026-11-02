@@ -306,7 +306,7 @@ def test_native_page_probe_vm_syntax_and_no_text_or_media_exfiltration():
         assert forbidden not in js
     assert "verified-roleless-turn" in source
     assert "heading.closest(" in source
-    assert 'scope="roleless-heading-siblings"' in source
+    assert "scope='roleless-heading-siblings'" in source
 
 
 def test_cdp_isolated_content_world_has_visible_request_dom_marker():
