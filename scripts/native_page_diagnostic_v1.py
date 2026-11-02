@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.7"
+VERSION = "1.2.8"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -171,7 +171,8 @@ const perf={fetch_total:0,fetch_http_2xx:0,fetch_http_401_403:0,
  fetch_http_5xx:0,fetch_status_unavailable:0,
  conversation_api_observed:0,conversation_api_2xx:0,
  conversation_api_4xx:0,conversation_api_5xx:0,
- conversation_api_unknown_status:0,other_api_observed:0,
+ conversation_api_unknown_status:0,conversation_api_429:0,
+ conversation_api_last_429_age_ms:0,other_api_observed:0,
  service_worker_controller:0};
 try {
  const items=performance.getEntriesByType('resource').slice(-300);
@@ -203,6 +204,12 @@ try {
     if(code>=200&&code<300)perf.conversation_api_2xx++;
     else if(code>=400&&code<500)perf.conversation_api_4xx++;
     else if(code>=500&&code<600)perf.conversation_api_5xx++;
+    if(code===429){
+      perf.conversation_api_429++;
+      const end=Number(entry.responseEnd||0);
+      if(end>0)perf.conversation_api_last_429_age_ms=Math.min(100000,
+        Math.max(0,Math.round(performance.now()-end)));
+    }
     else perf.conversation_api_unknown_status++;
   }else if(routeType==='other-api')perf.other_api_observed++;
  }
@@ -249,6 +256,10 @@ return {ready_state:String(document.readyState||'unknown').slice(0,16),
   main_text_chars:main?Math.min(String(main.textContent||'').length,500000):0,
   body_text_chars:document.body?Math.min(String(document.body.textContent||'').length,500000):0,
   main_markdown_blocks:document.querySelectorAll('main .markdown,main .prose,#thread .markdown').length,
+  main_article_count:main?main.querySelectorAll('article,[role="article"]').length:0,
+  main_message_like_count:main?main.querySelectorAll('[data-testid*="message"],[data-testid*="turn"],[data-message-id],[data-turn-id]').length:0,
+  main_editable_count:main?main.querySelectorAll('[contenteditable="true"],textarea').length:0,
+  main_button_count:main?main.querySelectorAll('button').length:0,
   iframe_count:document.querySelectorAll('iframe').length,
   shadow_root_count:[...document.querySelectorAll('*')].slice(0,5000).filter(e=>!!e.shadowRoot).length,
   app_roots:document.querySelectorAll('#__next,#root,[data-nextjs-root]').length,
@@ -370,7 +381,9 @@ _PROBE_KEYS = {"ready_state", "route", "visibility_state", "has_focus",
     "numbered_conversation_turns", "agent_turns", "agent_markdown_blocks",
     "assistant_testids", "verified_roleless_headings", "main_landmarks",
     "main_child_elements", "main_element_count", "main_text_chars",
-    "body_text_chars", "main_markdown_blocks", "iframe_count",
+    "body_text_chars", "main_markdown_blocks", "main_article_count",
+    "main_message_like_count", "main_editable_count", "main_button_count",
+    "iframe_count",
     "shadow_root_count", "app_roots",
     "skeleton_count", "aria_busy_count", "last_finished_age_ms",
     "password_fields", "challenge_frames", "loading_skeletons",
@@ -379,6 +392,7 @@ _PROBE_KEYS = {"ready_state", "route", "visibility_state", "has_focus",
     "fetch_http_other_4xx", "fetch_http_5xx", "fetch_status_unavailable",
     "conversation_api_observed", "conversation_api_2xx", "conversation_api_4xx",
     "conversation_api_5xx", "conversation_api_unknown_status",
+    "conversation_api_429", "conversation_api_last_429_age_ms",
     "other_api_observed", "service_worker_controller",
     "js_exception_count", "unhandled_rejection_count", "resource_error_count",
     "error_hooks_installed", "alert_count", "error_testid_count",
@@ -450,7 +464,10 @@ def failure_reason(probe):
         and not (probe.get("assistant_roles") or probe.get("assistant_testids")
                  or probe.get("conversation_turns") or probe.get("user_roles")
                  or probe.get("verified_roleless_headings"))):
-        if (probe.get("fetch_http_401_403") or probe.get("fetch_http_429")
+        if (probe.get("fetch_http_429") or probe.get("conversation_api_429")
+            or probe.get("existing_tab_rate_limited")):
+            return "history_conversation_rate_limited_http_429"
+        if (probe.get("fetch_http_401_403")
             or probe.get("fetch_http_other_4xx")):
             return "history_conversation_stalled_with_http_4xx"
         if probe.get("fetch_http_5xx"):
@@ -495,6 +512,19 @@ def status(folder,stage,percent,error=None,**meta):
     except OSError: pass
 
 async def capture(args):
+    """Always close only the CDP tabs this tool created, including on failure."""
+    owned_tabs=[]
+    try:
+        await _capture_inner(args,owned_tabs)
+    finally:
+        for tab_id in owned_tabs:
+            try:
+                with urlopen(f"http://127.0.0.1:{args.cdp_port}/json/close/"+
+                     quote(tab_id,safe=""),timeout=3):pass
+            except (OSError,ValueError,TimeoutError):
+                pass
+
+async def _capture_inner(args,owned_tabs):
     import websockets
     folder=Path(args.output);folder.mkdir(parents=True,exist_ok=True,mode=0o700)
     status(folder,"discovering",8)
@@ -526,7 +556,7 @@ async def capture(args):
         Only uniquely verified, non-generating reply boundaries can be used.
         The caller supplied the exact history URL; binding stays unverified.
         """
-        nonlocal tab_origin
+        nonlocal tab_origin,last_probe
         matches=[]
         try:
             for tab in json_get(args.cdp_port,"/json/list"):
@@ -547,6 +577,14 @@ async def capture(args):
             pass
         verified=[]
         max_text_chars=0
+        max_markdown=0
+        max_articles=0
+        max_message_like=0
+        busy_tabs=0
+        rate_limited_tabs=0
+        inspected_tabs=0
+        captured_errors=0
+        sample_probe=None
         for tab in matches:
             try:
                 endpoint=ws_endpoint(tab["webSocketDebuggerUrl"],args.cdp_port)
@@ -555,7 +593,19 @@ async def capture(args):
                     cdp=CDP(connection)
                     await cdp.call("Runtime.enable")
                     result,probe=await inspect_page(cdp,args.request_id)
-                    max_text_chars=max(max_text_chars,int(probe.get("main_text_chars") or 0))
+                    inspected_tabs+=1
+                    chars=int(probe.get("main_text_chars") or 0)
+                    if sample_probe is None or chars>max_text_chars:
+                        sample_probe=probe
+                    max_text_chars=max(max_text_chars,chars)
+                    max_markdown=max(max_markdown,int(probe.get("main_markdown_blocks") or 0))
+                    max_articles=max(max_articles,int(probe.get("main_article_count") or 0))
+                    max_message_like=max(max_message_like,int(probe.get("main_message_like_count") or 0))
+                    busy_tabs+=int(bool(probe.get("loading_skeletons")))
+                    rate_limited_tabs+=int(bool(probe.get("fetch_http_429") or
+                        probe.get("conversation_api_429")))
+                    captured_errors+=int(probe.get("capture_error") not in
+                        ("none","no-verified-assistant-boundary"))
                     if (result and result.get("ok")
                         and result.get("root",{}).get("children")
                         and not result.get("generating")):
@@ -566,7 +616,17 @@ async def capture(args):
             "existing_tab_candidates":len(matches),
             "existing_tab_verified":len(verified),
             "existing_tab_max_main_text_chars":max_text_chars,
-            "existing_tab_ambiguous":len(verified)>1}
+            "existing_tab_ambiguous":len(verified)>1,
+            "existing_tab_inspected":inspected_tabs,
+            "existing_tab_busy":busy_tabs,
+            "existing_tab_rate_limited":rate_limited_tabs,
+            "existing_tab_max_markdown_blocks":max_markdown,
+            "existing_tab_max_articles":max_articles,
+            "existing_tab_max_message_like":max_message_like,
+            "existing_tab_capture_errors":captured_errors}
+        if sample_probe:
+            last_probe={**sample_probe,"navigation_route":"conversation",
+                **evidence}
         if len(verified)==1:
             tab_origin="existing-history-tab-readonly"
             return verified[0][0],verified[0][1],evidence
@@ -589,6 +649,7 @@ async def capture(args):
         tab_id=str(created.get("id") or "")
         if not re.fullmatch(r"[a-fA-F0-9]{8,64}",tab_id):
             raise RuntimeError("diagnostic_tab_creation_unconfirmed")
+        owned_tabs.append(tab_id)
         status(folder,"tab-opened",18,open_mode="dedicated-worker-tab",
                tab_created=True)
         page=None
@@ -668,6 +729,11 @@ async def capture(args):
                                         "reload_result":reload_result}
                             if obj and obj.get("root",{}).get("children"):
                                 return page,obj,tab_id
+                            # 429 may be caused by historical page traffic or
+                            # this diagnostic. Avoid automatic reload/extra fetch.
+                            if probe.get("fetch_http_429") or probe.get("conversation_api_429"):
+                                last_probe["rate_limit_detected"]=True
+                                break
                             # A dedicated tab may be skeleton-only while an
                             # operator-visible tab with this exact history URL
                             # has fully rendered the assistant reply. Inspect
@@ -752,8 +818,20 @@ async def capture(args):
         return None,None,tab_id
 
     if not picked and target_url:
-        status(folder,"opening-history",18)
-        picked,report,_=await open_history_page(target_url)
+        # Existing exact-URL tabs are both safer and more diagnostically useful
+        # than repeatedly creating/reloading more copies of the same page.
+        # If they have no verified answer, stop with their structural evidence.
+        existing,found,evidence=await read_existing_history_tab(target_url,"")
+        if existing and found:
+            picked,report=existing,found
+        elif evidence["existing_tab_candidates"]:
+            last_probe={**last_probe,**evidence,
+                "navigation_route":"conversation"}
+            status(folder,"page-unavailable",44,page_probe=last_probe)
+            raise RuntimeError(failure_reason(last_probe))
+        else:
+            status(folder,"opening-history",18)
+            picked,report,_=await open_history_page(target_url)
         binding="saved-or-manual-conversation-url-unverified-turn"
     if not picked and not target_url:
         candidates=chrome_history_candidates(args.cdp_port,hints)
