@@ -541,7 +541,7 @@
         pageLocation?.protocol === "https:" &&
         ["chatgpt.com","www.chatgpt.com","chat.openai.com"].includes(
           String(pageLocation?.hostname || "").toLowerCase()) &&
-        /^\\/c\\/[A-Za-z0-9-]{12,90}\\/?$/.test(conversationPath))
+        /^\/c\/[A-Za-z0-9-]{12,90}\/?$/.test(conversationPath))
         ? String(pageLocation.origin) + conversationPath : "";
       event.diagnostics = {...(event.diagnostics || {}),
         native_chatgpt_conversation_url:nativeConversationUrl,
