@@ -68,11 +68,18 @@ _TERMINAL_PROVENANCE_NUMBERS = {
     "network_stream_sequence", "terminal_integrity_initial_chars",
     "terminal_integrity_final_chars",
     "terminal_worker_send_attempt",
+    # Explicitly bounded request-only native observer diagnostics. These
+    # were sent by v638/v639 but discarded by the terminal allowlist, hiding
+    # invalid-native-envelope and structural capture failures in request ZIPs.
+    "native_capture_revision", "native_identity_candidate_count",
+    "native_identity_verified_count",
 }
 _TERMINAL_PROVENANCE_STRINGS = {
     "response_terminal_source", "network_terminal_evidence_source",
     "terminal_integrity_source",
     "terminal_worker_ack_type",
+    "native_capture_failure", "native_transport_ack_error",
+    "native_structural_failure",
 }
 
 
@@ -89,7 +96,9 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
         value = raw.get(key)
         if isinstance(value, str):
             result[key] = value[:100]
-    for key in ("response_terminal_dom_reconciled", "terminal_integrity_upgraded"):
+    for key in ("response_terminal_dom_reconciled", "terminal_integrity_upgraded",
+                "native_chunk_complete", "native_observer_loaded",
+                "native_capture_attempted"):
         if isinstance(raw.get(key), bool):
             result[key] = raw[key]
     return result
