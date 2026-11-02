@@ -272,3 +272,25 @@ def test_v643_native_history_tool_never_changes_business_terminal_and_has_strict
     assert "requestHistoryContextCopy(event,requestId)" in history
     assert "chat.completed" not in script
     assert request.count('response_terminal_source: "verified-request-media-dom-v176"') == 1
+
+
+
+def test_v644_diagnosis_one_input_and_native_history_context_copy_contract():
+    ui=read("app/worker_probe_ui_patch.py")
+    javascript=read("app/admin_worker_tools_v1.js")
+    history=read("app/request_history_v94_patch.py")
+    server=read("app/native_page_diagnostic_api.py")
+    collector=read("scripts/native_page_diagnostic_v1.py")
+    worker=read("chrome_extension/content_request_v6.js")
+    assert 'id="nativePageRequestId"' in ui
+    assert 'id="nativePageConversationUrl"' not in ui
+    assert 'nativePageUrlPattern.test(target)' in javascript
+    assert 'body: {worker_id, target}' in javascript
+    assert 'target_type' in server and 'url-only-unbound' in server
+    assert '"req_diag_"+job_id' in server
+    assert '"url-only-unbound" if args.request_id.startswith("req_diag_")' in collector
+    assert '复制原生 ChatGPT 地址' in history
+    assert 'requestHistoryCopyNativeUrl(requestId,knownNativeUrl)' in history
+    assert 'native_chatgpt_conversation_url' in history
+    assert 'rememberNativeConversationUrl(active);' in worker
+    assert worker.count('response_terminal_source: "verified-request-media-dom-v176"')==1
