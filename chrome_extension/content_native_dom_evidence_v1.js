@@ -53,7 +53,13 @@
       // The old 80-sibling loop silently promoted a clipped assistant turn.
       // Keep a strict bounded scan, and mark overflow unverified instead.
       while(cursor && siblings.length<4096) {
-        if (cursor.matches(blocked) || cursor.querySelector("h4")?.textContent?.match(/^You said\s*[:：]?$/i)) break;
+        const rasterButton=cursor.tagName==="BUTTON" &&
+          [...(cursor.querySelectorAll?.("img") || [])].some(img => {
+            const r=img.getBoundingClientRect?.();
+            return r && r.width>=40 && r.height>=40 && visible(img);
+          });
+        if ((cursor.matches(blocked) && !rasterButton) ||
+            cursor.querySelector("h4")?.textContent?.match(/^You said\s*[:：]?$/i)) break;
         if (cursor.tagName==="H4" && /said\s*[:：]?$/i.test(normalize(cursor))) break;
         if (cursor.contains(candidate) || cursor===candidate || normalize(cursor).length>=2 || cursor.querySelector("img")) {
           siblings.push(cursor);
