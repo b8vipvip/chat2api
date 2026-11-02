@@ -21,7 +21,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.10"
+VERSION = "1.2.11"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -137,7 +137,7 @@ return {ok:!reason,reason,version:1,scope,request_marker:tagged?expected:null,
  generating:!!document.querySelector('button[aria-label*="Stop generating"],button[aria-label*="Stop response"]')};
 })"""
 
-# Installed only in the dedicated diagnostic tab before its single reload.
+# Installed in the dedicated diagnostic tab before fresh navigation or reload.
 # Records counts of browser failures without reading messages, stacks, URLs,
 # HTTP contents, cookies, storage, headers or user data.
 NEW_DOCUMENT_ERRORS = r"""(function(){
@@ -174,7 +174,10 @@ const perf={fetch_total:0,fetch_http_2xx:0,fetch_http_401_403:0,
  conversation_api_observed:0,conversation_api_2xx:0,
  conversation_api_4xx:0,conversation_api_5xx:0,
  conversation_api_unknown_status:0,conversation_api_429:0,
- conversation_api_recent_429:0,conversation_api_last_429_age_ms:0,other_api_observed:0,
+ conversation_api_recent_429:0,conversation_api_last_429_age_ms:0,
+ conversation_api_decoded_bytes:0,conversation_api_transfer_bytes:0,
+ conversation_api_decoded_nonzero:0,conversation_api_size_unavailable:0,
+ other_api_observed:0,
  service_worker_controller:0};
 try {
  const items=performance.getEntriesByType('resource').slice(-300);
@@ -212,6 +215,18 @@ try {
   }catch(_){}
   if(routeType==='conversation'){
     perf.conversation_api_observed++;
+    // Timing metadata only, never response bodies, URLs or headers.
+    // A zero size may mean cached or hidden by Timing-Allow-Origin.
+    const decoded=Number(entry.decodedBodySize||0);
+    const transferred=Number(entry.transferSize||0);
+    if(decoded>0&&Number.isFinite(decoded)){
+      perf.conversation_api_decoded_nonzero++;
+      perf.conversation_api_decoded_bytes=Math.min(100000000,
+        perf.conversation_api_decoded_bytes+decoded);
+    }else perf.conversation_api_size_unavailable++;
+    if(transferred>0&&Number.isFinite(transferred))
+      perf.conversation_api_transfer_bytes=Math.min(100000000,
+        perf.conversation_api_transfer_bytes+transferred);
     if(code>=200&&code<300)perf.conversation_api_2xx++;
     else if(code>=400&&code<500)perf.conversation_api_4xx++;
     else if(code>=500&&code<600)perf.conversation_api_5xx++;
@@ -268,6 +283,9 @@ return {ready_state:String(document.readyState||'unknown').slice(0,16),
   // innerText count is visible/rendered text only; never export its contents.
   main_visible_text_chars:main?Math.min(String(main.innerText||'').length,500000):0,
   main_thread_candidates:main?main.querySelectorAll('#thread,[data-testid="conversation-turns"],[data-testid="conversation-panel"],[role="log"]').length:0,
+  main_busy_regions:main?main.querySelectorAll('[aria-busy="true"]').length:0,
+  page_busy_regions:document.querySelectorAll('[aria-busy="true"]').length,
+  main_visible_images:main?[...main.querySelectorAll('img')].filter(e=>e.getBoundingClientRect().width>100&&e.getBoundingClientRect().height>100).length:0,
   body_text_chars:document.body?Math.min(String(document.body.textContent||'').length,500000):0,
   main_markdown_blocks:document.querySelectorAll('main .markdown,main .prose,#thread .markdown').length,
   main_article_count:main?main.querySelectorAll('article,[role="article"]').length:0,
@@ -396,6 +414,7 @@ _PROBE_KEYS = {"ready_state", "route", "visibility_state", "has_focus",
     "assistant_testids", "verified_roleless_headings", "main_landmarks",
     "main_child_elements", "main_element_count", "main_text_chars",
     "main_visible_text_chars", "main_thread_candidates",
+    "main_busy_regions", "page_busy_regions", "main_visible_images",
     "body_text_chars", "main_markdown_blocks", "main_article_count",
     "main_message_like_count", "main_editable_count", "main_button_count",
     "iframe_count",
@@ -410,6 +429,8 @@ _PROBE_KEYS = {"ready_state", "route", "visibility_state", "has_focus",
     "conversation_api_5xx", "conversation_api_unknown_status",
     "conversation_api_429", "conversation_api_recent_429",
     "conversation_api_last_429_age_ms",
+    "conversation_api_decoded_bytes", "conversation_api_transfer_bytes",
+    "conversation_api_decoded_nonzero", "conversation_api_size_unavailable",
     "other_api_observed", "service_worker_controller",
     "js_exception_count", "unhandled_rejection_count", "resource_error_count",
     "error_hooks_installed", "alert_count", "error_testid_count",
@@ -452,8 +473,10 @@ async def inspect_page(cdp, request_id):
                     val=raw.get(key)
                     if isinstance(val,bool):probe[key]=val
                     elif isinstance(val,int):
-                        limit=3600000 if key in ("conversation_api_last_429_age_ms",
-                            "last_finished_age_ms") else 100000
+                        limit=100000000 if key in ("conversation_api_decoded_bytes",
+                            "conversation_api_transfer_bytes") else (
+                            3600000 if key in ("conversation_api_last_429_age_ms",
+                            "last_finished_age_ms") else 100000)
                         probe[key]=min(max(val,0),limit)
                     elif isinstance(val,str) and key in ("ready_state","route","visibility_state"):
                         probe[key]=val[:24]
@@ -721,10 +744,12 @@ async def _capture_inner(args,owned_tabs):
         nonlocal last_probe
         safe_url(url)
         status(folder,"opening-new-tab",15,open_mode="dedicated-worker-tab")
-        # The bound Chrome DevTools HTTP endpoint creates a tab in the
-        # existing Worker profile, retaining whatever session it already has.
+        # For one-off recovery create a blank page, instrument before the
+        # first ChatGPT navigation, then navigate only this self-created tab.
+        # The normal path is preserved for backwards compatibility.
+        initial_url=("about:blank" if not allow_reload else url)
         with urlopen(Request(f"http://127.0.0.1:{args.cdp_port}/json/new?"+
-                quote(url,safe=""),method="PUT"),timeout=8) as response:
+                quote(initial_url,safe=""),method="PUT"),timeout=8) as response:
             created=json.load(response)
         tab_id=str(created.get("id") or "")
         if not re.fullmatch(r"[a-fA-F0-9]{8,64}",tab_id):
@@ -732,6 +757,32 @@ async def _capture_inner(args,owned_tabs):
         owned_tabs.append(tab_id)
         status(folder,"tab-opened",18,open_mode="dedicated-worker-tab",
                tab_created=True)
+        if not allow_reload:
+            try:
+                endpoint=ws_endpoint(str(created.get("webSocketDebuggerUrl") or ""),
+                                     args.cdp_port)
+                async with websockets.connect(endpoint,open_timeout=5,
+                        max_size=24*1024*1024) as conn:
+                    cdp=CDP(conn)
+                    await cdp.call("Page.enable",timeout=8)
+                    instrumented=False
+                    try:
+                        await cdp.call("Page.addScriptToEvaluateOnNewDocument",
+                            {"source":NEW_DOCUMENT_ERRORS},timeout=8)
+                        instrumented=True
+                    except Exception:
+                        pass
+                    await cdp.call("Page.navigate",{"url":url},timeout=15)
+                    last_probe={**last_probe,
+                        "fresh_pre_navigation_hook_installed":instrumented,
+                        "fresh_navigation_requested":True}
+            except Exception:
+                last_probe={**last_probe,
+                    "navigation_route":"navigation-error",
+                    "fresh_navigation_requested":False,
+                    "capture_error":"fresh-navigation-cdp-error"}
+                status(folder,"page-unavailable",44,page_probe=last_probe)
+                raise RuntimeError("history_instrumented_navigation_failed")
         page=None
         access_observed=0
         reload_attempted=False
@@ -803,7 +854,8 @@ async def _capture_inner(args,owned_tabs):
                             # Avoid false "still loading" when the app's
                             # incidental skeleton markup stays in the DOM:
                             # a verified assistant reply always wins.
-                            last_probe={**probe,"navigation_route":kind,
+                            last_probe={**last_probe,**probe,
+                                        "navigation_route":kind,
                                         "attempt":i+1,
                                         "reload_attempted":reload_attempted,
                                         "reload_result":reload_result}
