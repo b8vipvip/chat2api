@@ -1109,6 +1109,17 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         state.diagnostics["native_snapshot_state"] = (
             "published" if native else "missing"
         )
+        # Published/persisted can describe an old incremental revision:
+        # 3a882b retained revision 12 (333 nodes) although the final capture
+        # failed max-children. Do not report that as complete final content.
+        state.diagnostics["native_snapshot_terminal_complete"] = bool(
+            native
+            and state.diagnostics.get("native_snapshot_persisted") is True
+            and state.diagnostics.get("native_final_capture_committed") is True
+            and state.diagnostics.get("native_chunk_complete") is True
+            and not state.diagnostics.get("native_capture_failure")
+            and native.get("revision") == state.diagnostics.get("native_capture_revision")
+        )
         state.diagnostics["native_chunk_assembly"] = native_chunks.progress(
             state.request_id, principal.key_id
         )
