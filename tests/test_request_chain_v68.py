@@ -240,8 +240,8 @@ def test_v642_native_page_locator_is_bounded_metadata_and_not_second_terminal():
     tool = read("scripts/native_page_diagnostic_v1.py")
     controller = read("scripts/linux_worker_device_controller.py")
     assert "native_chatgpt_conversation_url:nativeConversationUrl" in source
-    assert "pageLocation?.protocol === \"https:\"" in source
-    assert 'pageLocation.origin) + conversationPath' in source
+    assert 'p?.protocol === "https:"' in source
+    assert 'String(p.origin)+path' in source
     assert '"native_chatgpt_conversation_url"' in broker
     assert 'native_page_tool_control.execute(' in controller
     assert 'Page.captureScreenshot' in tool
@@ -269,7 +269,8 @@ def test_v643_native_history_tool_never_changes_business_terminal_and_has_strict
     assert "app.state.telemetry.get(request_id)" in server
     assert "workerProbePolicyDetails" in policy
     assert "workerToolsPolicyRows" in policy
-    assert "requestHistoryContextCopy(event,requestId)" in history
+    assert "requestHistoryContextCopy(" in history
+    assert "event,requestId,r?.diagnostics?.native_chatgpt_conversation_url" in history
     assert "chat.completed" not in script
     assert request.count('response_terminal_source: "verified-request-media-dom-v176"') == 1
 
