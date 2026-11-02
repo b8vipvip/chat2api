@@ -50,6 +50,8 @@ def test_worker_update_path_distinguishes_worker_payload_from_server_only_change
     assert worker_update_path("scripts/linux_worker_upgrade.sh")
     assert worker_update_path("scripts/linux_extension_autoreload.sh")
     assert worker_update_path("scripts/bootstrap_linux_worker.sh")
+    assert worker_update_path("scripts/native_page_diagnostic_v1.py")
+    assert worker_update_path("scripts/native_page_tool_control.py")
     assert worker_update_path("app/linux_worker_upgrade_patch.py")
     assert not worker_update_path("app/playground_random_prompt_patch.py")
     assert not worker_update_path("app/admin_server_update.js")
