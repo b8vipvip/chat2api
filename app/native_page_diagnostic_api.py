@@ -167,16 +167,29 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             except (ValueError,OSError,KeyError):pass
         return {"data":records,"tool":"native-page-diagnostic","version":"1.0.0"}
 
+    @app.get("/api/admin/worker-tools/native-page/request-worker/{request_id}")
+    async def request_worker(request_id:str,request:Request):
+        authorize(request)
+        if not REQUEST_ID.fullmatch(request_id):raise HTTPException(422,"Invalid request ID")
+        row=app.state.telemetry.get(request_id)
+        if not row:raise HTTPException(404,"Request not found in server records")
+        return {"request_id":request_id,"worker_id":str(row.get("linux_worker_id") or ""),
+                "worker_slot":row.get("worker_slot"),
+                "conversation_link_saved":bool((row.get("diagnostics") or {}).get("conversation_url"))}
+
     @app.post("/api/admin/worker-tools/native-page/jobs")
     async def create(request:Request):
         authorize(request)
         body=await request.json()
         request_id=str(body.get("request_id") or "").strip()
-        worker=str(body.get("worker_id") or "").strip()
         url=str(body.get("conversation_url") or "").strip()
         if not REQUEST_ID.fullmatch(request_id):raise HTTPException(422,"Invalid request ID")
-        if not app.state.telemetry.get(request_id):
-            raise HTTPException(404,"Request not found in server records")
+        row=app.state.telemetry.get(request_id)
+        if not row:raise HTTPException(404,"Request not found in server records")
+        original_worker=str(row.get("linux_worker_id") or "")
+        worker=str(body.get("worker_id") or original_worker).strip()
+        if original_worker and worker!=original_worker:
+            raise HTTPException(409,"Chosen Worker does not own this request")
         check_worker(worker)
         if url:
             parsed=urlsplit(url)
