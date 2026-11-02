@@ -84,3 +84,23 @@ v1.0.0 在 CDP 页面主世界读取扩展隔离世界的 `globalThis` 状态，
 - 旧版未关闭的会话页仍可由请求 ID + 精确请求标记匹配；有历史 URL 时优先专用新页。独立工具还是只读观察，不干扰 request-v6 唯一终态、窗口池或原请求媒体交付。
 
 验证：新增模拟 Chrome CDP/new-tab 的回归测试，确保同 URL 已存在时仍单独发起且仅发起一次 PUT，新标签页能够完成证据 ZIP，不需要重新生成请求。**部署后仍需复测真实 ChatGPT 历史页面，不能把 CI 通过误写成实际 1:1 成功。**
+
+
+## v1.2.2 起的真正独立工具发布通道（2026-11-02）
+
+现有旧接口 `/bootstrap/native-page-diagnostic.py` 原本直接读取部署镜像里的 Python 文件，因此“更新诊断工具”只会重复安装**服务端已经拥有**的版本，若工具源代码发生变化必须先重建/部署 chat2api 服务端。这不符合独立更新需求。
+
+**本次为一次性的服务端更新机制改造。** 安装新版本的服务端和 Worker Controller 后，后续如果仅修改独立采集脚本，不再需要更改或部署 chat2api main 分支。专用 GitHub 发布分支：
+
+`b8vipvip/chat2api` / `native-page-diagnostic-releases`
+
+操作方式：
+1. 在上述固定分支单独修改 `scripts/native_page_diagnostic_v1.py`，每次修改务必增加脚本内独立 `VERSION`（例如 1.2.3、1.2.4）；不推送服务端 main，不重新编译 Docker 镜像，不操作普通 Linux Worker 升级。
+2. 后台的 **「更新诊断工具」** 触发 Worker 既有 `native_page_update` 固定指令；Worker 只向现有 HTTPS 中心服务端拉取清单及 SHA256 绑定的脚本。服务端固定从 GitHub Releases 专用分支（GitHub Contents API）读取工具源码并校验 Git blob SHA1、完整文件 SHA256、大小、Python 可编译性及独立工具版本；缓存不超过 90 秒。远程获取失败返回明确错误，不隐式降级到镜像旧脚本。
+3. Worker 再次校验来源元数据、下载文件大小、SHA256、源代码标称 VERSION 和 Python 语法，并禁止降级或在**同版本**下用不同代码覆盖旧版。原子替换 `/var/lib/chat2api-worker/controller/native_page_diagnostic_v1.py`，没有重启 Worker、Chrome 或 server。再次点击而内容未变则返回 `updated=false`（已是最新）。
+4. **「检查版本」** 与「更新诊断工具」同排：显示此 Worker 实际装好的版本及独立发布分支的最新版本，远程不可达则标识检查失败，不虚报成功。
+5. 主分支与服务端 Git commit 保持不变；未来只改诊断采集脚本时，由**发布分支**的独立提交记录每次版本，不会触发主分支 Server→Worker 全量更新。
+
+安全限制：上游是写死的 GitHub 公共仓库、路径与专用分支；不能通过 UI/Worker 命令指定新源或下载 URL。脚本原本就有执行权限，所以必须只允许管理员手动触发并校验独立版本。依赖服务端访问 `api.github.com` 的 HTTPS 能力及该仓库发布分支正常可用。GitHub 请求失败时已有诊断任务不受影响。
+
+**一次性注意**：此修改包含服务端代理逻辑、工具更新器的安全检查和后台按钮布局。因此**只在这次更新机制改造时**需要更新 chat2api 服务端，并由既有自动同步更新 Linux Worker；之后仅工具脚本发布，不再需要服务端升级。
