@@ -343,8 +343,11 @@
       if (current !== nativeWorkerLookup) return;
       if (found.worker_id && [...$("nativePageWorker").options].some(x => x.value === found.worker_id)) {
         $("nativePageWorker").value = found.worker_id;
-        nativePageMessage("已从请求记录定位执行 Worker：" + found.worker_id +
-          "。旧版请求没有保存历史聊天地址时，可补填 ChatGPT /c/ 链接。");
+        if (found.conversation_url && !$("nativePageConversationUrl").value.trim())
+          $("nativePageConversationUrl").value = found.conversation_url;
+        nativePageMessage("已从请求记录定位 Worker：" + found.worker_id +
+          (found.conversation_link_saved ? "，并找到了可重新打开的原生会话链接。"
+            : "。该历史记录没有保存会话链接，旧窗口关闭时请补填 ChatGPT /c/ 链接。"));
       }
     } catch (error) { nativePageMessage(error.message, true); }
   });
