@@ -9,7 +9,7 @@ function harness(results) {
   const messages=[];
   const active={requestId:"req_terminal_v215",mediaCaptureLastInlined:0,mediaCaptureLastEmbedded:0};
   const context={
-    state:{active}, globalThis:{__CHAT2API_PROBE_SUPERVISOR_V1__:{capture:async()=>({})}},
+    state:{active}, native:{capture:async()=>{}}, globalThis:{__CHAT2API_PROBE_SUPERVISOR_V1__:{capture:async()=>({})}},
     assistantOnlyReplyText:(_,text)=>({text, pending:false,stripped:false}),
     chrome:{runtime:{sendMessage:async payload=>{
       messages.push(payload);
