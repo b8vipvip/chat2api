@@ -262,7 +262,7 @@
         (translated ? " · " + translated : ""));
       stateCell.title = issue;
       row.append(elem("td", String(item.job_id || "").slice(0,12)),
-        elem("td", item.request_id || "-", "native-id"),
+        elem("td", item.target_label || item.request_id || "-", "native-id"),
         elem("td", item.worker_id || "-", "native-id"),
         elem("td", item.tool_version || "未报告"), stateCell);
       const pct = elem("td");
@@ -292,7 +292,8 @@
               encodeURIComponent(item.job_id) + "/download");
             const url = URL.createObjectURL(await response.blob());
             const link = elem("a");
-            link.href = url; link.download = "native-page-" + item.request_id +
+            link.href = url; link.download = "native-page-" +
+              (item.target_type === "conversation_url" ? "history-url" : item.request_id) +
               "-" + item.job_id.slice(0,8) + "-v" + item.tool_version + ".zip";
             link.click();
             setTimeout(() => URL.revokeObjectURL(url), 3000);
@@ -313,29 +314,35 @@
         error => nativePageMessage(error.message, true)), 2200);
     }
   }
+  const nativePageRequestPattern = /^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/;
+  const nativePageUrlPattern = /^https:\/\/(?:chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)\/c\/[a-zA-Z0-9-]{12,90}\/?$/;
   async function nativePageStart() {
-    const request_id = $("nativePageRequestId")?.value.trim() || "";
-    if (!/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(request_id))
-      throw new Error("请输入完整的原请求 ID");
-    const found = await json("/api/admin/worker-tools/native-page/request-worker/" +
-      encodeURIComponent(request_id));
-    const owner = String(found.worker_id || "");
+    const target = $("nativePageRequestId")?.value.trim() || "";
+    const isRequest = nativePageRequestPattern.test(target);
+    const isHistory = nativePageUrlPattern.test(target);
+    if (!isRequest && !isHistory)
+      throw new Error("请填写完整请求 ID，或 https://chatgpt.com/c/... 历史链接");
     const chosen = $("nativePageWorker")?.value || "";
-    if (chosen && owner && chosen !== owner)
-      throw new Error("该请求属于 " + owner + "，不能指定其他 Worker 采集");
-    const worker_id = owner || chosen;
-    if (!worker_id) throw new Error("请求记录没有可识别的 Linux Worker");
-    if ([...$("nativePageWorker").options].some(x => x.value === worker_id))
-      $("nativePageWorker").value = worker_id;
-    const conversation_url = $("nativePageConversationUrl")?.value.trim() ||
-      String(found.conversation_url || "");
-    if (conversation_url && !/^https:\/\/(?:chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)\/c\/[a-zA-Z0-9-]{12,90}\/?$/.test(conversation_url))
-      throw new Error("历史页面地址应为完整的 ChatGPT /c/ 链接");
-    const response = await json("/api/admin/worker-tools/native-page/jobs",{
-      method:"POST",body:{worker_id,request_id,conversation_url},
+    let worker_id = chosen;
+    if (isRequest) {
+      const found = await json("/api/admin/worker-tools/native-page/request-worker/" +
+        encodeURIComponent(target));
+      const owner = String(found.worker_id || "");
+      if (chosen && owner && chosen !== owner)
+        throw new Error("该请求属于 " + owner + "，不能指定其他 Worker 采集");
+      worker_id = owner || chosen;
+      if (!worker_id) throw new Error("请求记录没有可识别的 Linux Worker");
+      if ([...$("nativePageWorker").options].some(x => x.value === worker_id))
+        $("nativePageWorker").value = worker_id;
+    } else if (!worker_id) {
+      throw new Error("通过历史链接诊断时，请选择登录了该 ChatGPT 账号的 Linux Worker");
+    }
+    const response = await json("/api/admin/worker-tools/native-page/jobs", {
+      method: "POST", body: {worker_id, target},
     });
     nativePageMessage("诊断任务 " + response.job.job_id.slice(0,12) +
-      " 已创建。正在连接 Worker 扫描原生回复页面。");
+      (isHistory ? " 已创建（历史链接独立诊断，未关联 API 请求）。" :
+        " 已创建，正在定位该请求的原生页面。"));
     await nativePageRecords();
   }
   async function nativePageToolAction(action) {
@@ -354,7 +361,11 @@
   let nativeWorkerLookup = 0;
   $("nativePageRequestId")?.addEventListener("change", async () => {
     const id = $("nativePageRequestId")?.value.trim() || "";
-    if (!/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(id)) return;
+    if (nativePageUrlPattern.test(id)) {
+      nativePageMessage("已识别原生历史链接，请选择登录该账号的 Worker；无需请求 ID。");
+      return;
+    }
+    if (!nativePageRequestPattern.test(id)) return;
     const current = ++nativeWorkerLookup;
     try {
       const found = await json("/api/admin/worker-tools/native-page/request-worker/" +
@@ -362,11 +373,10 @@
       if (current !== nativeWorkerLookup) return;
       if (found.worker_id && [...$("nativePageWorker").options].some(x => x.value === found.worker_id)) {
         $("nativePageWorker").value = found.worker_id;
-        if (found.conversation_url && !$("nativePageConversationUrl").value.trim())
-          $("nativePageConversationUrl").value = found.conversation_url;
         nativePageMessage("已从请求记录定位 Worker：" + found.worker_id +
-          (found.conversation_link_saved ? "，并找到了可重新打开的原生会话链接。"
-            : "。该历史记录没有保存会话链接，旧窗口关闭时请补填 ChatGPT /c/ 链接。"));
+          (found.conversation_link_saved
+            ? "，并找到了已保存的原生会话链接。无需另外填写。"
+            : "。未保存会话链接时可直接在同一输入框粘贴 ChatGPT /c/ 链接单独诊断。"));
       }
     } catch (error) { nativePageMessage(error.message, true); }
   });

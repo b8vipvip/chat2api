@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -96,7 +98,19 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
     for key in _TERMINAL_PROVENANCE_STRINGS:
         value = raw.get(key)
         if isinstance(value, str):
-            result[key] = value[:160] if key == "native_chatgpt_conversation_url" else value[:100]
+            if key == "native_chatgpt_conversation_url":
+                try:
+                    p=urlsplit(value)
+                    if (p.scheme != "https" or p.hostname not in
+                        {"chatgpt.com", "www.chatgpt.com", "chat.openai.com"} or
+                        p.port not in (None,443) or p.username or p.password or
+                        p.query or p.fragment or not re.fullmatch(
+                            r"/c/[A-Za-z0-9-]{12,90}/?",p.path)):
+                        continue
+                    result[key]="https://"+p.hostname+p.path
+                except ValueError:continue
+            else:
+                result[key] = value[:100]
     for key in ("response_terminal_dom_reconciled", "terminal_integrity_upgraded",
                 "native_chunk_complete", "native_final_capture_committed", "native_observer_loaded",
                 "native_capture_attempted"):

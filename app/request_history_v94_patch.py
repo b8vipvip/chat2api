@@ -86,7 +86,7 @@ function requestHistoryButton(tr,label,title,handler,enabled=true){
   tr.appendChild(td);return td;
 }
 let requestHistoryCopyMenu=null;
-async function requestHistoryCopyFullId(requestId){
+async function requestHistoryCopyFullId(requestId,label='完整请求 ID'){
   let copied=false;
   if(navigator.clipboard?.writeText && window.isSecureContext){
     try{await navigator.clipboard.writeText(requestId);copied=true;}catch(_){}
@@ -99,28 +99,54 @@ async function requestHistoryCopyFullId(requestId){
     try{copied=Boolean(document.execCommand('copy'));}catch(_){}
     input.remove();
   }
-  status(copied?'完整请求 ID 已复制：'+requestId:'复制失败，请手动选择请求 ID',copied?'ok':'bad');
+  status(copied?label+' 已复制：'+requestId:'复制失败，请手动复制 '+label,copied?'ok':'bad');
 }
 function requestHistoryCloseCopyMenu(){
   requestHistoryCopyMenu?.remove();
   requestHistoryCopyMenu=null;
 }
-function requestHistoryContextCopy(event,requestId){
+function requestHistoryValidNativeUrl(raw){
+  const value=String(raw||'').trim();
+  return /^https:\/\/(?:chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)\/c\/[A-Za-z0-9-]{12,90}\/?$/.test(value) ? value : '';
+}
+async function requestHistoryCopyNativeUrl(requestId,known){
+  let url=requestHistoryValidNativeUrl(known);
+  if(!url){
+    try{
+      // List rows may omit diagnostics; fetch the authenticated request detail
+      // rather than guessing a historical ChatGPT URL from its request ID.
+      const record=await api('/api/admin/requests/'+encodeURIComponent(requestId));
+      url=requestHistoryValidNativeUrl(
+        record?.diagnostics?.native_chatgpt_conversation_url ||
+        record?.native_chatgpt_conversation_url);
+    }catch(error){
+      status('无法读取原生聊天地址：'+String(error?.message||error),'bad');return;
+    }
+  }
+  if(!url){status('此请求没有保存可验证的原生 ChatGPT /c/ 聊天地址','bad');return;}
+  await requestHistoryCopyFullId(url,'原生 ChatGPT 地址');
+}
+function requestHistoryContextCopy(event,requestId,knownNativeUrl=''){
   if(!requestId)return;
   event.preventDefault();event.stopPropagation();
   requestHistoryCloseCopyMenu();
-  const button=document.createElement('button');
-  button.type='button';button.className='action';
-  button.textContent='复制完整请求 ID';
-  button.title=requestId;
-  button.style.cssText='position:fixed;z-index:2147483640;padding:8px 14px;border:1px solid #557ca6;background:#152741;color:#fff;border-radius:7px;box-shadow:0 5px 20px #0006;cursor:pointer';
-  button.style.left=Math.max(4,Math.min(event.clientX,innerWidth-180))+'px';
-  button.style.top=Math.max(4,Math.min(event.clientY,innerHeight-52))+'px';
-  button.addEventListener('click',async e=>{
-    e.preventDefault();e.stopPropagation();requestHistoryCloseCopyMenu();
-    await requestHistoryCopyFullId(requestId);
-  });
-  document.body.appendChild(button);requestHistoryCopyMenu=button;
+  const box=document.createElement('div');
+  box.style.cssText='position:fixed;z-index:2147483640;display:grid;gap:3px;padding:5px;border:1px solid #557ca6;background:#152741;border-radius:7px;box-shadow:0 5px 20px #0006';
+  box.style.left=Math.max(4,Math.min(event.clientX,innerWidth-218))+'px';
+  box.style.top=Math.max(4,Math.min(event.clientY,innerHeight-95))+'px';
+  const action=(label,fn)=>{
+    const button=document.createElement('button');
+    button.type='button';button.className='action';button.textContent=label;
+    button.style.cssText='text-align:left;white-space:nowrap;cursor:pointer';
+    button.addEventListener('click',async e=>{
+      e.preventDefault();e.stopPropagation();requestHistoryCloseCopyMenu();
+      await fn();
+    });
+    box.appendChild(button);
+  };
+  action('复制完整请求 ID',()=>requestHistoryCopyFullId(requestId));
+  action('复制原生 ChatGPT 地址',()=>requestHistoryCopyNativeUrl(requestId,knownNativeUrl));
+  document.body.appendChild(box);requestHistoryCopyMenu=box;
 }
 document.addEventListener('click',event=>{
   if(requestHistoryCopyMenu&&!requestHistoryCopyMenu.contains(event.target))requestHistoryCloseCopyMenu();
@@ -614,7 +640,8 @@ async function loadRequests(){
       }
       idCell.title=requestId+(r?.parent_request_id?(' · 来源请求 '+r.parent_request_id):'');
       idCell.style.cursor='context-menu';
-      idCell.addEventListener('contextmenu',event=>requestHistoryContextCopy(event,requestId));
+      idCell.addEventListener('contextmenu',event=>requestHistoryContextCopy(
+        event,requestId,r?.diagnostics?.native_chatgpt_conversation_url));
       // v0.22.154 internal repair rows did not persist type/key/status.
       // Label legacy absence explicitly; do not fabricate an API Key or
       // claim a browser completion meant a protocol-valid success.

@@ -48,3 +48,12 @@ v1.0.0 在 CDP 页面主世界读取扩展隔离世界的 `globalThis` 状态，
 后台 Worker 工具调整为：原生页面诊断置顶，Worker 下拉仅显示 Worker 管理登记的真实完整 Linux `wrk_...` ID；工具目录与 Worker 有效配置合成一个表并默认折叠，原有探针证据也默认折叠。请求记录中右键 ID 后点击“复制完整请求 ID”。
 
 **部署顺序：** 这次修改同时涉及服务端、Worker Controller 和 Chrome 扩展，因此第一次升级必须同步更新服务端与 Linux Worker。后续仅更新 `native_page_diagnostic_v1.py` 工具内容时，仍可使用工具中心的独立更新按钮。
+
+
+## v1.2.0：一个输入框同时支持请求 ID 与原生历史链接
+
+- Worker 工具 →「原生页面诊断」只保留一个目标输入：可粘贴完整 `req_...`，或独立的 `https://chatgpt.com/c/<conversation-id>`。请求 ID 自动使用其归属 Worker 与已保存的安全会话 URL；直接输入 URL 时，管理员需选择已登录该 ChatGPT 账号的真实 Linux Worker。服务端同样进行 URL 域名/协议/路径白名单和 Worker 身份校验。
+- **URL-only** 没有业务请求 ID。服务端在 Worker 内部生成 `req_diag_<jobid>` 以满足原有固定协议和 ZIP 文件所有权校验，但后台记录不将它伪装成原业务请求。ZIP `manifest.json` 标记 `request_binding=url-only-unbound`，不能声称抓取内容属于某条 chat2api API 请求。
+- 以后新产生的请求：request-v6 在生成过程持续捕获当前 ChatGPT 页面经过校验的 `https://chatgpt.com/c/...` 地址，并在 completed/error/cancelled 的请求终态诊断里保存 `native_chatgpt_conversation_url`。不保存 Cookie、原始查询参数、媒体 URL 或浏览器历史；Broker 服务端再次验证主机名/协议/路径，避免无效 URL 进入请求日志。
+- 「请求记录」请求 ID 单元格右键菜单现在有 **复制完整请求 ID**、**复制原生 ChatGPT 地址** 两项。后者从已有请求详情里的 URL 复制，未留存的历史请求明确提示缺失，不会猜造地址。
+- 如果 ChatGPT 没分配标准 /c/ 会话地址（如临时会话、账号中断、提交前报错），字段可能仍为空；v1.2.0 只能保证**存在并曾观察到安全的 URL 时予以保存**，不承诺所有请求都有可重新打开的链接。

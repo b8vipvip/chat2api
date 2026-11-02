@@ -32,20 +32,19 @@ PANEL = r'''
   <div class="native-tool-bar">
     <label for="nativePageWorker">Worker</label>
     <select id="nativePageWorker"><option value="">选择 Worker</option></select>
-    <label for="nativePageRequestId">请求 ID</label>
-    <input id="nativePageRequestId" placeholder="完整 req_...">
+    <label for="nativePageRequestId">请求 ID / 历史链接</label>
+    <input id="nativePageRequestId" style="flex:1 1 390px;min-width:240px" placeholder="粘贴完整 req_... 或 https://chatgpt.com/c/...">
     <button class="action good" id="nativePageStart">开始诊断</button>
     <button class="action" id="nativePageVersion">检查版本</button>
     <button class="action" id="nativePageUpdate">更新诊断工具</button>
   </div>
   <div class="native-tool-bar">
-    <input id="nativePageConversationUrl" placeholder="可选：原 ChatGPT /c/ 历史链接；已有匹配页面时留空">
     <button class="action" id="nativePageReload">刷新记录</button>
+    <span class="muted">输入请求 ID 自动定位 Worker；直接输入历史链接时以所选 Worker 的账号打开，仅诊断该会话最后一条助手回复。</span>
   </div>
-  <p class="muted" style="font-size:12px;margin:3px 0">只读取已生成回复；旧请求窗口关闭且无法自动恢复时，须提供准确的原生会话链接。工具不重新发送生成请求，也不修改请求终态。</p>
-  <p id="nativePageStatus" class="muted">输入请求 ID 后自动定位原 Worker 和已保存的聊天链接。</p>
+  <p id="nativePageStatus" class="muted">输入完整请求 ID 或原生 ChatGPT /c/ 历史链接后即可执行；不发起新生成请求。</p>
   <div class="scroll native-tool-table"><table><thead><tr>
-    <th>诊断任务</th><th>完整请求 ID</th><th>Worker ID</th><th>工具版本</th><th>状态/阶段</th><th>进度</th><th>操作</th>
+    <th>诊断任务</th><th>请求 ID / 历史链接</th><th>Worker ID</th><th>工具版本</th><th>状态/阶段</th><th>进度</th><th>操作</th>
   </tr></thead><tbody id="nativePageRecords"></tbody></table></div>
 </div>
 <div class="panel" style="margin-top:10px">

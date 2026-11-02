@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -314,7 +314,9 @@ async def capture(args):
         raise RuntimeError("request_marker_unverified")
     if report.get("generating"):raise RuntimeError("reply_still_generating")
     if not report.get("root",{}).get("children"):raise RuntimeError("no_assistant_reply_evidence")
-    verification="live-request-marker" if report.get("request_marker")==args.request_id else binding
+    verification=("url-only-unbound" if args.request_id.startswith("req_diag_")
+        else "live-request-marker" if report.get("request_marker")==args.request_id
+        else binding)
     status(folder,"capturing-screenshots",45,counts=report["counts"])
     path=folder/"native-page-evidence.zip"
     async with websockets.connect(ws_endpoint(picked["webSocketDebuggerUrl"],args.cdp_port),open_timeout=5,max_size=24*1024*1024) as conn:

@@ -20,6 +20,25 @@
     .trim()
     .normalize("NFC");
 
+  function rememberNativeConversationUrl(active) {
+    if (!active) return "";
+    try {
+      // Record a conversation permalink as soon as ChatGPT's SPA acquires
+      // /c/<id>, not only once at chat.completed. Never retain ?query/#hash.
+      const p=globalThis.location;
+      const path=String(p?.pathname || "");
+      if (p?.protocol === "https:" &&
+          ["chatgpt.com","www.chatgpt.com","chat.openai.com"].includes(
+            String(p?.hostname || "").toLowerCase()) &&
+          /^\/c\/[A-Za-z0-9-]{12,90}\/?$/.test(path)) {
+        active.nativeChatgptConversationUrl=String(p.origin)+path;
+      }
+    } catch (_) {
+      // The diagnostic sidecar cannot interrupt request processing.
+    }
+    return String(active.nativeChatgptConversationUrl || "").slice(0,160);
+  }
+
   function visible(element) {
     if (!element) return false;
     try {
@@ -556,14 +575,7 @@
       // Save only the plain same-origin ChatGPT conversation permalink, not
       // query/fragment/signed resources. A past Worker tab may close 5 s later,
       // but this safe pointer lets the independent tool reopen its history.
-      const pageLocation = globalThis.location;
-      const conversationPath = String(pageLocation?.pathname || "");
-      const nativeConversationUrl = (
-        pageLocation?.protocol === "https:" &&
-        ["chatgpt.com","www.chatgpt.com","chat.openai.com"].includes(
-          String(pageLocation?.hostname || "").toLowerCase()) &&
-        /^\/c\/[A-Za-z0-9-]{12,90}\/?$/.test(conversationPath))
-        ? String(pageLocation.origin) + conversationPath : "";
+      const nativeConversationUrl = rememberNativeConversationUrl(active);
       event.diagnostics = {...(event.diagnostics || {}),
         native_chatgpt_conversation_url:nativeConversationUrl,
         native_observer_loaded:active.nativeObserverLoaded === true,
@@ -579,6 +591,15 @@
         native_chunk_complete:active.nativeChunkComplete === true,
         native_identity_candidate_count:Number(active.nativeIdentityCandidateCount || 0),
         native_identity_verified_count:Number(active.nativeIdentityVerifiedCount || 0),
+      };
+    }
+    // Persist the same sanitized historical URL for failed/cancelled
+    // requests too, when ChatGPT had already allocated a conversation.
+    if (["chat.error","chat.cancelled"].includes(event?.type) && active) {
+      const nativeConversationUrl = rememberNativeConversationUrl(active);
+      if (nativeConversationUrl) event.diagnostics = {
+        ...(event.diagnostics || {}),
+        native_chatgpt_conversation_url:nativeConversationUrl,
       };
     }
     // This separate, request-only DOM capture cannot change completion
@@ -2217,6 +2238,7 @@
     const fileCreationRequested = isFileCreationRequest(active.prompt);
 
     while (!active.cancelled && Date.now() - startedAt < timeoutMs) {
+      rememberNativeConversationUrl(active);
       const upstreamLimit = upstreamRateLimitFailure(active);
       if (upstreamLimit) throw upstreamLimit;
       const error = pageError();

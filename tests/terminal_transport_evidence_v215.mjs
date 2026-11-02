@@ -11,6 +11,7 @@ function harness(results) {
   const context={
     state:{active}, native:{capture:async()=>{}}, globalThis:{__CHAT2API_PROBE_SUPERVISOR_V1__:{capture:async()=>({})}},
     assistantOnlyReplyText:(_,text)=>({text, pending:false,stripped:false}),
+    rememberNativeConversationUrl:()=>"", // isolated emit VM omits outer page observer
     chrome:{runtime:{sendMessage:async payload=>{
       messages.push(payload);
       return {ok:results.shift()??false};

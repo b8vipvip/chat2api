@@ -62,9 +62,28 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         tmp.replace(path)
 
     def public(job):
-        return {key:job.get(key) for key in ("job_id","request_id","worker_id",
-            "status","stage","percent","error","tool_version","counts",
-            "screenshots","size","created_at","updated_at")}
+        visible={key:job.get(key) for key in ("job_id","worker_id","target_type",
+            "target_label","status","stage","percent","error","tool_version",
+            "counts","screenshots","size","created_at","updated_at")}
+        # URL-only tasks use a private internal request key for authenticated
+        # Worker ZIP ownership. Never present it as a real API request ID.
+        visible["request_id"]=job.get("original_request_id",
+            job.get("request_id") if job.get("target_type") != "conversation_url" else "")
+        return visible
+
+    def sanitized_chatgpt_url(value):
+        raw=str(value or "").strip()
+        if not raw or len(raw)>240:return ""
+        try:
+            parsed=urlsplit(raw)
+            if (parsed.scheme=="https" and parsed.hostname in
+                ("chatgpt.com","www.chatgpt.com","chat.openai.com") and
+                parsed.port in (None,443) and not parsed.username and
+                not parsed.password and not parsed.query and not parsed.fragment and
+                re.fullmatch(r"/c/[A-Za-z0-9-]{12,90}/?",parsed.path)):
+                return "https://"+parsed.hostname+parsed.path
+        except ValueError:pass
+        return ""
 
     def check_worker(worker):
         if not WORKER_ID.fullmatch(worker):raise HTTPException(400,"Invalid Worker")
@@ -165,6 +184,9 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 manifest=json.loads(archive.read("manifest.json"))
                 if manifest.get("request_id")!=record["request_id"] or manifest.get("worker_id")!=worker:
                     raise RuntimeError("evidence_archive_owner_mismatch")
+                if (record.get("target_type")=="conversation_url" and
+                    manifest.get("request_binding")!="url-only-unbound"):
+                    raise RuntimeError("url_only_evidence_provenance_invalid")
             out=root/(job_id+".zip")
             out.write_bytes(data);out.chmod(0o600)
             record.update({"status":"completed","stage":"complete","percent":100,
@@ -187,7 +209,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     @app.get("/bootstrap/native-page-diagnostic.json",include_in_schema=False)
     async def tool_manifest():
         data=(Path(__file__).parents[1]/"scripts"/"native_page_diagnostic_v1.py").read_bytes()
-        return {"version":"1.1.0","sha256":hashlib.sha256(data).hexdigest(),"bytes":len(data)}
+        return {"version":"1.2.0","sha256":hashlib.sha256(data).hexdigest(),"bytes":len(data)}
 
     @app.get("/api/admin/worker-tools/native-page/jobs")
     async def list_jobs(request:Request,limit:int=40):
@@ -206,7 +228,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                     write(item)
                 records.append(public(item))
             except (ValueError,OSError,KeyError):pass
-        return {"data":records,"tool":"native-page-diagnostic","version":"1.1.0"}
+        return {"data":records,"tool":"native-page-diagnostic","version":"1.2.0"}
 
     @app.get("/api/admin/worker-tools/native-page/workers")
     async def eligible_workers(request:Request):
@@ -251,44 +273,53 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     async def create(request:Request):
         authorize(request)
         body=await request.json()
-        request_id=str(body.get("request_id") or "").strip()
-        url=str(body.get("conversation_url") or "").strip()
-        if not REQUEST_ID.fullmatch(request_id):raise HTTPException(422,"Invalid request ID")
-        row=app.state.telemetry.get(request_id)
-        if not row:raise HTTPException(404,"Request not found in server records")
-        if not url:
-            saved=str((row.get("diagnostics") or {}).get("native_chatgpt_conversation_url") or "")
-            try:
-                parsed_saved=urlsplit(saved)
-                if (parsed_saved.scheme=="https" and parsed_saved.hostname in (
-                    "chatgpt.com","www.chatgpt.com","chat.openai.com") and
-                    parsed_saved.port in (None,443) and not parsed_saved.username and
-                    not parsed_saved.password and not parsed_saved.query and
-                    not parsed_saved.fragment and re.fullmatch(
-                        r"/c/[A-Za-z0-9-]{12,90}/?",parsed_saved.path)):
-                    url=saved
-            except ValueError:pass
-        original_worker=str(row.get("linux_worker_id") or "")
-        worker=str(body.get("worker_id") or original_worker).strip()
-        if original_worker and worker!=original_worker:
-            raise HTTPException(409,"Chosen Worker does not own this request")
+        # New UI sends one input (target). Old API clients can still provide
+        # request_id plus optional conversation_url for compatibility.
+        target=str(body.get("target") or body.get("request_id") or "").strip()
+        explicit=str(body.get("conversation_url") or "").strip()
+        is_url=target.startswith(("https://","http://"))
+        if is_url:
+            url=sanitized_chatgpt_url(target)
+            if not url or explicit:
+                raise HTTPException(422,"Only exact HTTPS ChatGPT /c/ URLs allowed")
+            row=None
+            original_request_id=""
+            worker=str(body.get("worker_id") or "").strip()
+        else:
+            if not REQUEST_ID.fullmatch(target):
+                raise HTTPException(422,"Enter a complete request ID or ChatGPT history URL")
+            row=app.state.telemetry.get(target)
+            if not row:raise HTTPException(404,"Request not found in server records")
+            original_request_id=target
+            saved=sanitized_chatgpt_url(
+                (row.get("diagnostics") or {}).get("native_chatgpt_conversation_url"))
+            if explicit and not sanitized_chatgpt_url(explicit):
+                raise HTTPException(422,"Only exact HTTPS ChatGPT /c/ URLs allowed")
+            url=sanitized_chatgpt_url(explicit) if explicit else saved
+            original_worker=str(row.get("linux_worker_id") or "")
+            worker=str(body.get("worker_id") or original_worker).strip()
+            if original_worker and worker!=original_worker:
+                raise HTTPException(409,"Chosen Worker does not own this request")
         check_worker(worker)
-        if url:
-            parsed=urlsplit(url)
-            if parsed.scheme!="https" or parsed.hostname not in (
-                "chatgpt.com","www.chatgpt.com","chat.openai.com") or parsed.port not in (None,443) or parsed.username or parsed.password or parsed.query or parsed.fragment or not re.fullmatch(r"/c/[A-Za-z0-9-]{12,90}/?",parsed.path):
-                raise HTTPException(422,"Only exact ChatGPT /c/ conversation URLs allowed")
         if worker in locks:raise HTTPException(409,"This Worker already has a diagnosis running")
         if worker not in app.state.worker_sockets and not any(
             str((v.get("metadata") or {}).get("controller_worker_id")) in app.state.worker_sockets
             for k,v in app.state.linux_workers.data["workers"].items() if k==worker):
             raise HTTPException(409,"Worker device controller is offline")
         job_id=uuid.uuid4().hex
-        record={"job_id":job_id,"request_id":request_id,"worker_id":worker,
-                "status":"running","stage":"queued","percent":0,
-                "tool_version":None,"created_at":int(time.time()),"updated_at":int(time.time())}
+        # Required by the existing fixed-schema Worker command and ZIP owner
+        # validator. The synthetic key is never claimed as a real request.
+        internal_request_id=original_request_id or ("req_diag_"+job_id)
+        record={"job_id":job_id,"request_id":internal_request_id,
+                "original_request_id":original_request_id,
+                "target_type":"conversation_url" if is_url else "request_id",
+                "target_label":url if is_url else original_request_id,
+                "worker_id":worker,"status":"running","stage":"queued",
+                "percent":0,"tool_version":None,
+                "created_at":int(time.time()),"updated_at":int(time.time())}
         write(record);locks[worker]=job_id
-        jobs[job_id]=asyncio.create_task(run(job_id,url,history_match_hints(row)))
+        jobs[job_id]=asyncio.create_task(run(
+            job_id,url,history_match_hints(row) if row else None))
         return {"job":public(record)}
 
     @app.get("/api/admin/worker-tools/native-page/jobs/{job_id}")
@@ -304,14 +335,14 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             raise HTTPException(409,"Diagnosis archive not ready")
         return Response(path.read_bytes(),media_type="application/zip",
             headers={"Cache-Control":"no-store","Content-Disposition":
-                f'attachment; filename="native-page-{job["request_id"]}-{job_id[:8]}-v{job["tool_version"]}.zip"'})
+                f'attachment; filename="native-page-{job.get("original_request_id") or "history-url"}-{job_id[:8]}-v{job["tool_version"]}.zip"'})
 
     @app.get("/api/admin/worker-tools/native-page/jobs/{job_id}/log")
     async def download_log(job_id:str,request:Request):
         authorize(request)
         record=read(job_id)
         safe={key:record.get(key) for key in (
-            "job_id","request_id","worker_id","status","stage","percent",
+            "job_id","original_request_id","target_type","target_label","worker_id","status","stage","percent",
             "error","tool_version","counts","screenshots","size",
             "created_at","updated_at")}
         return Response(json.dumps({"schema":"chat2api-native-page-diagnostic-log-v1",
