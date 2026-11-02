@@ -224,7 +224,12 @@ def test_33da_wide_assistant_reply_111_siblings_preserved_in_safe_snapshot():
     # archived assets). Never call it a verified pixel-for-pixel rendering.
     assert stats["media_mapping_complete"] is False
     payload["root"]["children"][0]["children"].extend(
-        [{"tag": "p", "text": "overflow"} for _ in range(50)]
+        [{"tag": "p", "text": "additional section"} for _ in range(50)]
+    )
+    assert len(validate_native_snapshot(payload)["root"]["children"][0]["children"]) == 161
+    # Genuine overflow remains hard-rejected, not silently cut off.
+    payload["root"]["children"][0]["children"].extend(
+        [{"tag": "p", "text": "overflow"} for _ in range(8193 - 161)]
     )
     with pytest.raises(ValueError, match="Invalid children"):
         validate_native_snapshot(payload)
@@ -272,3 +277,41 @@ def test_17b4_more_than_3200_nodes_preserves_entire_bounded_native_tree():
     assert summary["nodes"] < 6400
     assert len(snapshot["root"]["children"]) == 46
     assert snapshot["root"]["children"][-1]["children"][-1]["text"].startswith("plant section 45")
+
+
+def test_3a882b_final_large_dom_fanout_keeps_order_without_synthetic_wrappers():
+    from app.native_content_v1 import native_layout_summary
+    # Multiple tables and raster cards under one original ChatGPT layout.
+    children = [{"tag": "table", "children": [
+        {"tag": "tbody", "children": [{"tag": "tr", "children": [
+            {"tag": "td", "text": f"table {i}"}]}]}
+    ]} for i in range(27)]
+    children.extend({"tag": "img", "media_index": i} for i in range(9))
+    children.extend({"tag": "p", "text": f"section {i}"} for i in range(1800))
+    payload = {"version": 1, "revision": 13,
+        "root": {"tag": "div", "style": {"display": "flex",
+                   "flexDirection": "column"}, "children": children}}
+    accepted = validate_native_snapshot(payload)
+    assert accepted == payload
+    assert len(accepted["root"]["children"]) == 1836
+    assert accepted["root"]["children"][-1]["text"] == "section 1799"
+    counts = native_layout_summary(accepted, 9)
+    assert (counts["tables"], counts["images"], counts["media_mapping_complete"]) == (27, 9, True)
+    # Still refuse oversized trees instead of silently trimming trailing rows.
+    payload["root"]["children"].extend({"tag": "p", "text": "x"} for _ in range(8192 - 1836 + 1))
+    with pytest.raises(ValueError, match="Invalid children"):
+        validate_native_snapshot(payload)
+
+
+def test_3a882b_terminal_diagnostics_never_equate_prior_revision_with_final():
+    from app.broker import _terminal_provenance
+    observed = _terminal_provenance({"diagnostics": {
+        "native_capture_revision": 12,
+        "native_final_capture_committed": False,
+        "native_capture_failure": "structural-max-children",
+        "native_structural_max_children": 1800,
+    }})
+    assert observed["native_capture_revision"] == 12
+    assert observed["native_final_capture_committed"] is False
+    assert observed["native_structural_max_children"] == 1800
+    assert observed["native_capture_failure"] == "structural-max-children"

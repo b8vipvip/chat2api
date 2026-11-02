@@ -111,3 +111,31 @@ def test_verified_container_evidence_is_allowed_with_strict_owner_binding():
     evidence["scope"]="verified_reply_container"
     evidence["boundary"]="same_request_verified_finish_action"
     assert validate_evidence(evidence,RID)["complete"] is True
+
+
+
+def test_3a882b_private_evidence_accepts_8000_nodes_without_urls():
+    from app.native_dom_evidence_v1 import MAX_NODES
+    assert MAX_NODES == 30000
+    evidence=example()
+    cell=evidence["root"]["children"][0]
+    evidence["root"]["children"]=[dict(cell) for _ in range(4000)]
+    evidence["counts"]["nodes"]=8001
+    evidence["counts"]["text_chars"]=20000
+    validated=validate_evidence(evidence,RID)
+    assert validated["complete"] is True
+    assert len(validated["root"]["children"])==4000
+
+
+def test_9d090b_private_button_only_retains_safe_raster_geometry():
+    evidence=example()
+    layout=evidence["root"]["children"][0]["layout"]
+    evidence["root"]["children"]=[{"tag":"figure","layout":layout,"children":[{
+        "tag":"img","layout":layout,"image":{"natural_width":800,
+            "natural_height":600,"loaded":True,"source_type":"https"}}]}]
+    evidence["counts"].update({"nodes":3,"text_chars":0,"images":1})
+    assert validate_evidence(evidence,RID)["counts"]["images"]==1
+    # Any action label, src or event handler is still rejected server-side.
+    evidence["root"]["children"][0]["onclick"]="download()"
+    with pytest.raises(ValueError,match="Unsafe tree node"):
+        validate_evidence(evidence,RID)

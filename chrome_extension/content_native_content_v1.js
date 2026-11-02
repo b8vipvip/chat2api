@@ -58,8 +58,12 @@
     }
     return obj;
   }
+  // Width is bounded by the 30k-node and 6 MiB budgets too. A 160-child
+  // fanout rejected the final 3a882b reply while a stale 333-node snapshot
+  // remained published. Preserve DOM order/layout without synthetic wrappers.
+  const MAX_NATIVE_CHILDREN = 8192;
   function snapshot(active) {
-    if (active) active.nativeStructuralFailure = "";
+    if (active) { active.nativeStructuralFailure = ""; active.nativeStructuralMaxChildren = 0; }
     if (!active?.submitStartedAt || typeof Element === "undefined") return null;
     const candidate = active.lastCandidateNode;
     if (!(candidate instanceof Element) || !candidate.isConnected) {
@@ -144,8 +148,10 @@
         return result;
       }
       const children = [];
+      active.nativeStructuralMaxChildren = Math.max(
+        Number(active.nativeStructuralMaxChildren || 0), element.childNodes.length);
       for (const child of element.childNodes) {
-        if (nodes >= 30000 || children.length >= 160) {
+        if (nodes >= 30000 || children.length >= MAX_NATIVE_CHILDREN) {
           active.nativeStructuralFailure = nodes >= 30000 ? "max-nodes" : "max-children";
           truncated = true;
           break;
@@ -163,6 +169,13 @@
     // in the newly rendered rich ChatGPT card. Reuse only a verified fresh
     // assistant-heading sibling scope, never a whole main/history container.
     const replyRegion = globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
+    // An explicitly unverified or overflowed reply boundary is never
+    // promoted to a complete native answer merely because the paragraph
+    // itself can be serialized. The canonical response remains authoritative.
+    if (replyRegion?.scope === "candidate_only") {
+      active.nativeStructuralFailure = "reply-scope-unverified";
+      return null;
+    }
     const scopedRoots = (replyRegion?.scope === "roleless_reply_siblings"
       || replyRegion?.scope === "verified_reply_container")
       ? replyRegion.roots : null;
@@ -317,7 +330,10 @@
     active.nativeLastAt = now;
     // An earlier incremental revision is not proof that the final DOM tree
     // was committed. Avoid exporting stale true when final capture fails.
-    if (final) active.nativeChunkComplete = false;
+    if (final) {
+      active.nativeChunkComplete = false;
+      active.nativeFinalCaptureCommitted = false;
+    }
     try {
       if (final) await resolveImageIdentities(active);
       const tree = snapshot(active);
@@ -353,6 +369,7 @@
       };
       const result = await transmit();
       if (result) {
+        if (final) active.nativeFinalCaptureCommitted = true;
         active.nativeLastHash = hash;
         active.nativeRevision = tree.revision;
         active.nativeCaptureFailure = "";

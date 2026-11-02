@@ -214,3 +214,20 @@ def test_v640_native_observer_does_not_replace_request_v6_terminal_owner():
     # Native observer status is a sidecar diagnostic, never a competing terminal.
     observer = read("chrome_extension/content_native_content_v1.js")
     assert 'type:"chat.completed"' not in observer
+
+
+
+def test_v641_native_final_sidecar_has_revision_truth_not_second_terminal_owner():
+    controller = read("chrome_extension/content_request_v6.js")
+    observer = read("chrome_extension/content_native_content_v1.js")
+    backend = read("app/main.py")
+    broker = read("app/broker.py")
+    assert "native_final_capture_committed:active.nativeFinalCaptureCommitted === true" in controller
+    assert "active.nativeFinalCaptureCommitted = false;" in observer
+    assert "if (final) active.nativeFinalCaptureCommitted = true;" in observer
+    assert 'state.diagnostics["native_snapshot_terminal_complete"] = bool(' in backend
+    assert 'native.get("revision") == state.diagnostics.get("native_capture_revision")' in backend
+    assert '"native_final_capture_committed"' in broker
+    assert '"native_structural_max_children"' in broker
+    assert 'type:"chat.completed"' not in observer
+    assert controller.count('response_terminal_source: "verified-request-media-dom-v176"') == 1
