@@ -85,6 +85,49 @@ function requestHistoryButton(tr,label,title,handler,enabled=true){
   }else td.textContent='-';
   tr.appendChild(td);return td;
 }
+let requestHistoryCopyMenu=null;
+async function requestHistoryCopyFullId(requestId){
+  let copied=false;
+  if(navigator.clipboard?.writeText && window.isSecureContext){
+    try{await navigator.clipboard.writeText(requestId);copied=true;}catch(_){}
+  }
+  if(!copied){
+    const input=document.createElement('textarea');
+    input.value=requestId;input.readOnly=true;
+    input.style.cssText='position:fixed;left:-9999px;top:0;opacity:0';
+    document.body.appendChild(input);input.focus();input.select();
+    try{copied=Boolean(document.execCommand('copy'));}catch(_){}
+    input.remove();
+  }
+  status(copied?'完整请求 ID 已复制：'+requestId:'复制失败，请手动选择请求 ID',copied?'ok':'bad');
+}
+function requestHistoryCloseCopyMenu(){
+  requestHistoryCopyMenu?.remove();
+  requestHistoryCopyMenu=null;
+}
+function requestHistoryContextCopy(event,requestId){
+  if(!requestId)return;
+  event.preventDefault();event.stopPropagation();
+  requestHistoryCloseCopyMenu();
+  const button=document.createElement('button');
+  button.type='button';button.className='action';
+  button.textContent='复制完整请求 ID';
+  button.title=requestId;
+  button.style.cssText='position:fixed;z-index:2147483640;padding:8px 14px;border:1px solid #557ca6;background:#152741;color:#fff;border-radius:7px;box-shadow:0 5px 20px #0006;cursor:pointer';
+  button.style.left=Math.max(4,Math.min(event.clientX,innerWidth-180))+'px';
+  button.style.top=Math.max(4,Math.min(event.clientY,innerHeight-52))+'px';
+  button.addEventListener('click',async e=>{
+    e.preventDefault();e.stopPropagation();requestHistoryCloseCopyMenu();
+    await requestHistoryCopyFullId(requestId);
+  });
+  document.body.appendChild(button);requestHistoryCopyMenu=button;
+}
+document.addEventListener('click',event=>{
+  if(requestHistoryCopyMenu&&!requestHistoryCopyMenu.contains(event.target))requestHistoryCloseCopyMenu();
+});
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape')requestHistoryCloseCopyMenu();
+});
 async function requestHistoryDownload(path,fallbackName){
   if(!key())throw new Error('请先连接管理员 CHAT2API_API_KEY');
   const response=await fetch(path,{headers:{Authorization:`Bearer ${key()}`},cache:'no-store'});
@@ -570,6 +613,8 @@ async function loadRequests(){
         idCell.appendChild(marker);
       }
       idCell.title=requestId+(r?.parent_request_id?(' · 来源请求 '+r.parent_request_id):'');
+      idCell.style.cursor='context-menu';
+      idCell.addEventListener('contextmenu',event=>requestHistoryContextCopy(event,requestId));
       // v0.22.154 internal repair rows did not persist type/key/status.
       // Label legacy absence explicitly; do not fabricate an API Key or
       // claim a browser completion meant a protocol-valid success.
