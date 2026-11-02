@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.1"
+VERSION = "1.2.2"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -297,6 +297,14 @@ async def inspect_page(cdp, request_id):
 
 def failure_reason(probe):
     """Fixed error code, never based on raw page text or exception messages."""
+    if probe.get("navigation_route")=="navigation-error":
+        return "history_browser_navigation_failed"
+    if probe.get("navigation_route")=="unexpected-redirect":
+        return "history_unexpected_redirect"
+    if probe.get("navigation_route")=="target-not-visible":
+        return "history_diagnostic_tab_missing"
+    if probe.get("navigation_route")=="access-gate":
+        return "history_access_gate_detected"
     if probe.get("challenge_frames"):return "history_challenge_detected"
     if probe.get("password_fields") or probe.get("route")=="access-gate":
         return "history_access_gate_detected"
@@ -355,43 +363,89 @@ async def capture(args):
     binding="live-request-marker"
     hints=recovery_hints()
     async def open_history_page(url):
-        """Open a new diagnostic-only tab, never touch the active request tab."""
+        """Always open a dedicated tab in the selected Worker's existing Chrome.
+
+        Never reuse/navigate a tab owned by an API request or another
+        diagnosis, and never attempt authentication or submit a new prompt.
+        """
         nonlocal last_probe
-        response=json_get(args.cdp_port,"/json/list")
-        existing=next((t for t in response if target(t) and
-            str(t.get("url") or "").split("?",1)[0]==url),None)
-        made=False
-        if existing is None:
-            with urlopen(Request(f"http://127.0.0.1:{args.cdp_port}/json/new?"+
-                    quote(url,safe=""),method="PUT"),timeout=8) as response:
-                existing=json.load(response)
-            made=True
-        tab_id=str(existing.get("id") or "") if made else ""
-        page=existing
-        try:
-            # The ChatGPT history app may initialize slowly; do not declare
-            # missing reply based on one early empty DOM.
-            for i in range(24):
-                await asyncio.sleep(1 if i else 0.3)
-                targets=[t for t in json_get(args.cdp_port,"/json/list") if target(t)]
-                if made:
-                    page=next((t for t in targets if t.get("id")==tab_id),None)
+        safe_url(url)
+        status(folder,"opening-new-tab",15,open_mode="dedicated-worker-tab")
+        # The bound Chrome DevTools HTTP endpoint creates a tab in the
+        # existing Worker profile, retaining whatever session it already has.
+        with urlopen(Request(f"http://127.0.0.1:{args.cdp_port}/json/new?"+
+                quote(url,safe=""),method="PUT"),timeout=8) as response:
+            created=json.load(response)
+        tab_id=str(created.get("id") or "")
+        if not re.fullmatch(r"[a-fA-F0-9]{8,64}",tab_id):
+            raise RuntimeError("diagnostic_tab_creation_unconfirmed")
+        status(folder,"tab-opened",18,open_mode="dedicated-worker-tab",
+               tab_created=True)
+        page=None
+        access_observed=0
+        for i in range(45):
+            await asyncio.sleep(1 if i else 0.4)
+            # Do not discard a redirected tab just because it moved to
+            # about:blank, an error route, or an authentication endpoint.
+            all_tabs=json_get(args.cdp_port,"/json/list")
+            page=next((t for t in all_tabs if t.get("id")==tab_id
+                       and t.get("type")=="page"),None)
+            if not page:
+                last_probe={"navigation_route":"target-not-visible",
+                    "capture_error":"target-not-visible","attempt":i+1}
+            else:
+                actual=urlsplit(str(page.get("url") or ""))
+                if actual.scheme=="https" and actual.hostname in HOSTS:
+                    kind=("conversation" if CONVERSATION.fullmatch(actual.path)
+                          else "other-chatgpt-route")
+                elif (actual.scheme=="https" and actual.hostname in
+                      {"auth.openai.com","auth.chatgpt.com","login.openai.com"}):
+                    kind="access-gate"
+                elif actual.scheme=="about":
+                    kind="navigation-pending"
+                elif actual.scheme=="chrome-error":
+                    kind="navigation-error"
                 else:
-                    page=next((t for t in targets if
-                         str(t.get("url") or "").split("?",1)[0]==url),None)
-                if not page:continue
-                endpoint=ws_endpoint(page["webSocketDebuggerUrl"],args.cdp_port)
-                async with websockets.connect(endpoint,open_timeout=5,max_size=24*1024*1024) as conn:
-                    cdp=CDP(conn);await cdp.call("Runtime.enable")
-                    obj,last_probe=await inspect_page(cdp,args.request_id)
-                    if obj and obj.get("root",{}).get("children"):
-                        return page,obj,tab_id
-                    if i==0 or (i+1)%4==0 or i==23:
-                        status(folder,"awaiting-assistant",min(42,20+i),
-                               page_probe=last_probe,
-                               inspected_pages=1,attempt=i+1)
-        except Exception:
-            if not made:raise
+                    kind="unexpected-redirect"
+                if kind=="access-gate":
+                    access_observed+=1
+                    last_probe={"navigation_route":kind,"route":"access-gate",
+                                "capture_error":"none","attempt":i+1}
+                elif kind in ("navigation-pending","navigation-error",
+                              "unexpected-redirect"):
+                    last_probe={"navigation_route":kind,"capture_error":"none",
+                                "attempt":i+1}
+                elif (page.get("webSocketDebuggerUrl")
+                      and kind in ("conversation","other-chatgpt-route")):
+                    endpoint=ws_endpoint(page["webSocketDebuggerUrl"],args.cdp_port)
+                    try:
+                        async with websockets.connect(endpoint,open_timeout=5,
+                                max_size=24*1024*1024) as conn:
+                            cdp=CDP(conn)
+                            await cdp.call("Runtime.enable")
+                            obj,probe=await inspect_page(cdp,args.request_id)
+                            # Avoid false "still loading" when the app's
+                            # incidental skeleton markup stays in the DOM:
+                            # a verified assistant reply always wins.
+                            last_probe={**probe,"navigation_route":kind,
+                                        "attempt":i+1}
+                            if obj and obj.get("root",{}).get("children"):
+                                return page,obj,tab_id
+                    except Exception:
+                        last_probe={"navigation_route":kind,
+                            "capture_error":"cdp-tab-connection-error",
+                            "attempt":i+1}
+                else:
+                    last_probe={"navigation_route":kind,
+                        "capture_error":"cdp-endpoint-unavailable","attempt":i+1}
+            if i==0 or (i+1)%3==0 or i==44:
+                status(folder,"awaiting-assistant",min(44,19+i//2),
+                       page_probe=last_probe,tab_created=True,
+                       attempt=i+1)
+            # Access gates are evidence of a redirect; do not repeatedly
+            # probe the login page or attempt any sign-in action.
+            if access_observed>=3:break
+            if last_probe.get("navigation_route")=="unexpected-redirect":break
         return None,None,tab_id
 
     if not picked and target_url:
@@ -484,7 +538,19 @@ def main():
     folder=Path(args.output)
     try:asyncio.run(capture(args))
     except Exception as exc:
-        status(folder,"failed",100,error=str(exc)[:180])
+        # Even an older Controller that omits page_probe from its response
+        # can carry this fixed, non-sensitive diagnostic summary as "error".
+        probe={}
+        try:
+            probe=json.loads((folder/"status.json").read_text()).get("page_probe") or {}
+        except (OSError,ValueError,TypeError):pass
+        error=str(exc)[:115]
+        if isinstance(probe,dict) and probe:
+            bits=[str(probe.get(key) or "-")[:22] for key in (
+                "navigation_route","ready_state","capture_error")]
+            bits.append("a="+str(int(probe.get("assistant_roles") or 0)))
+            error=(error+" ["+";".join(bits)+"]")[:180]
+        status(folder,"failed",100,error=error)
         raise SystemExit(1)
 
 if __name__=="__main__":main()
