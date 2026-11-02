@@ -249,39 +249,23 @@
       const state = String(item.status || "");
       const progress = Math.min(100, Math.max(0, Number(item.percent || 0)));
       active ||= state === "running";
+
+      // Keep this table compact. Technical stages, raw error strings and
+      // diagnostic counters belong in the existing "导出日志" action only.
       const issue = String(item.error || "");
-      const translated = /matching_page_unavailable|historical_request_page_not_recovered|history_multiple_candidates/.test(issue)
-        ? "无法唯一恢复原生历史页面；可补填 ChatGPT /c/ 链接，或检查 Worker 浏览器历史记录"
-        : /history_reply_unavailable/.test(issue)
-        ? "原生会话已定位，但页面未加载可验证的助手回复"
-        : /history_assistant_boundary_not_found/.test(issue)
-        ? "历史页面未找到可信助手回复区域，导出日志查看 DOM 结构证据"
-        : /history_access_gate_detected|history_challenge_detected/.test(issue)
-        ? "Worker 浏览器遇到登录或访问验证页面"
-        : /history_page_still_loading/.test(issue)
-        ? "ChatGPT 历史页面尚未加载完成"
-        : /history_browser_navigation_failed/.test(issue)
-        ? "新标签页导航失败，请查看 Worker Chrome 页面状态"
-        : /history_diagnostic_tab_missing/.test(issue)
-        ? "新打开的诊断标签页在 Chrome 调试目标中消失"
-        : /history_unexpected_redirect/.test(issue)
-        ? "历史页面导航到非 ChatGPT 地址；已停止采集"
-        : /history_capture_runtime_failed/.test(issue)
-        ? "CDP 页面脚本执行异常，请导出页面探针日志"
-        : /history_assistant_capture_rejected/.test(issue)
-        ? "已发现助手标识，但结构化回复采集未通过"
-        : issue;
       const stateLabel = state === "completed" ? "已完成"
-        : state === "failed" ? "失败" : state === "running" ? "运行中" : state || "-";
-      const stageLabel = state === "failed" ? "" : " · " + (item.stage || "-");
-      const stateCell = elem("td", stateLabel + stageLabel +
-        (translated ? " · " + translated : ""));
-      const probe=item.page_probe || {};
-      stateCell.title=issue + (probe.capture_error ?
-        " · capture="+probe.capture_error+
-        " · route="+(probe.route||"unknown")+
-        " · assistant="+Number(probe.assistant_roles||0)+
-        " · roleless="+Number(probe.verified_roleless_headings||0) : "");
+        : state === "failed" ? "失败"
+        : state === "running" ? "运行中" : "未知";
+      const resultLabel = state === "completed" ? "证据已生成"
+        : state === "running" ? "诊断中"
+        : /history_.*(?:hydration|stalled)|history_assistant_boundary_not_found/.test(issue)
+          ? "未获取回复"
+        : /(?:429|rate_limit)/.test(issue) ? "加载受限"
+        : /(?:access_gate|challenge)/.test(issue) ? "访问受限"
+        : /(?:navigation|redirect|target_not_visible|tab_missing)/.test(issue)
+          ? "页面不可用"
+        : state === "failed" ? "诊断未通过" : "待处理";
+      const stateCell = elem("td", stateLabel + " · " + resultLabel);
       row.append(elem("td", String(item.job_id || "").slice(0,12)),
         elem("td", item.target_label || item.request_id || "-", "native-id"),
         elem("td", item.worker_id || "-", "native-id"),
@@ -362,7 +346,7 @@
       method: "POST", body: {worker_id, target},
     });
     nativePageMessage("诊断任务 " + response.job.job_id.slice(0,12) +
-      (isHistory ? " 已创建：将在所选 Worker 的 Chrome 中新开标签页，直接访问历史链接（不执行登录），独立于 API 请求。" :
+      (isHistory ? " 已创建：优先只读检查所选 Worker 的现有历史会话标签页，符合安全恢复条件时才打开独立临时页。" :
         " 已创建：优先核对原请求页面；需打开历史链接时将在 Worker Chrome 中使用独立标签页。"));
     await nativePageRecords();
   }
