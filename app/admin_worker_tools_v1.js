@@ -198,6 +198,8 @@
       if ([...picker.options].some(option => option.value === old)) picker.value = old;
       await loadPolicy();
       await refreshRuns();
+      nativePageWorkers();
+      await nativePageRecords();
     } catch (error) { status(error.message, true); }
   }
 
@@ -208,6 +210,156 @@
   $("workerToolsRefreshRuns").addEventListener("click", refreshRuns);
   $("workerToolsInspect").addEventListener("click", () => inspectRequest());
   $("workerToolsDownload").addEventListener("click", () => downloadRequest());
+  // Independent, request-bound, versioned Native Page Diagnosis. This tool
+  // does not take part in request-v6 completion or per-request probe policies.
+  let nativePageTimer = null;
+  function nativePageMessage(message, bad = false) {
+    const el = $("nativePageStatus");
+    if (!el) return;
+    el.textContent = String(message);
+    el.style.color = bad ? "#ef9d9d" : "#9cb5d4";
+  }
+  function nativePageWorkers() {
+    const target = $("nativePageWorker");
+    if (!target) return;
+    const old = target.value;
+    target.replaceChildren();
+    const none = elem("option", "请选择执行 Worker");
+    none.value = "";
+    target.append(none);
+    const seen = new Set();
+    for (const worker of workers) {
+      if (!worker.worker_id || seen.has(worker.worker_id)) continue;
+      seen.add(worker.worker_id);
+      const option = elem("option", (worker.name || worker.worker_id) +
+        " · " + worker.worker_id + (worker.online ? " · 在线" : " · 离线"));
+      option.value = worker.worker_id;
+      target.append(option);
+    }
+    if ([...target.options].some(item => item.value === old)) target.value = old;
+  }
+  async function nativePageRecords() {
+    if (!$("nativePageRecords")) return;
+    const data = await json("/api/admin/worker-tools/native-page/jobs?limit=40");
+    const rows = data.data || [];
+    const target = $("nativePageRecords");
+    target.replaceChildren();
+    let active = false;
+    for (const item of rows) {
+      const row = elem("tr");
+      const state = String(item.status || "");
+      const progress = Math.min(100, Math.max(0, Number(item.percent || 0)));
+      active ||= state === "running";
+      row.append(elem("td", String(item.job_id || "").slice(0,12)),
+        elem("td", item.request_id || "-"),
+        elem("td", item.worker_id || "-"),
+        elem("td", item.tool_version || "未报告"),
+        elem("td", (state || "-") + " · " + (item.stage || "-") +
+          (item.error ? " · " + item.error : "")));
+      const pct = elem("td");
+      const bar = elem("progress");
+      bar.max = 100; bar.value = progress;
+      pct.append(bar, document.createTextNode(" " + progress + "%"));
+      row.append(pct);
+      const cell = elem("td");
+      const log = elem("button", "导出日志", "action");
+      log.onclick = async () => {
+        try {
+          const response = await apiRequest("/api/admin/worker-tools/native-page/jobs/" +
+            encodeURIComponent(item.job_id) + "/log");
+          const url = URL.createObjectURL(await response.blob());
+          const link = elem("a");
+          link.href = url; link.download = "native-page-" + item.job_id.slice(0,8) + "-diagnostic.json";
+          link.click();
+          setTimeout(() => URL.revokeObjectURL(url), 3000);
+        } catch (error) { nativePageMessage(error.message, true); }
+      };
+      cell.append(log);
+      if (state === "completed") {
+        const action = elem("button", "导出诊断 ZIP", "action");
+        action.onclick = async () => {
+          try {
+            const response = await apiRequest("/api/admin/worker-tools/native-page/jobs/" +
+              encodeURIComponent(item.job_id) + "/download");
+            const url = URL.createObjectURL(await response.blob());
+            const link = elem("a");
+            link.href = url; link.download = "native-page-" + item.request_id +
+              "-" + item.job_id.slice(0,8) + "-v" + item.tool_version + ".zip";
+            link.click();
+            setTimeout(() => URL.revokeObjectURL(url), 3000);
+          } catch (error) { nativePageMessage(error.message, true); }
+        };
+        cell.append(action);
+      }
+      row.append(cell); target.append(row);
+    }
+    if (!rows.length) {
+      const empty = elem("tr");
+      const cell = elem("td", "暂无诊断记录");
+      cell.colSpan = 7; empty.append(cell); target.append(empty);
+    }
+    if (nativePageTimer) { clearTimeout(nativePageTimer); nativePageTimer = null; }
+    if (active && $("view-worker-tools").classList.contains("active")) {
+      nativePageTimer = setTimeout(() => nativePageRecords().catch(
+        error => nativePageMessage(error.message, true)), 2200);
+    }
+  }
+  async function nativePageStart() {
+    const worker_id = $("nativePageWorker")?.value || "";
+    const request_id = $("nativePageRequestId")?.value.trim() || "";
+    const conversation_url = $("nativePageConversationUrl")?.value.trim() || "";
+    if (!worker_id || !/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(request_id))
+      throw new Error("请先选择 Worker 并输入完整的原请求 ID");
+    if (conversation_url && !/^https:\/\/(?:chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)\/c\/[a-zA-Z0-9-]{12,90}\/?$/.test(conversation_url))
+      throw new Error("历史页面地址应为完整的 ChatGPT /c/ 链接");
+    const response = await json("/api/admin/worker-tools/native-page/jobs",{
+      method:"POST",body:{worker_id,request_id,conversation_url},
+    });
+    nativePageMessage("诊断任务 " + response.job.job_id.slice(0,12) +
+      " 已创建。正在连接 Worker 扫描原生回复页面。");
+    await nativePageRecords();
+  }
+  async function nativePageToolAction(action) {
+    const worker = $("nativePageWorker")?.value || "";
+    if (!worker) throw new Error("请先选择目标 Worker");
+    const path = "/api/admin/worker-tools/native-page/workers/" +
+      encodeURIComponent(worker) + (action === "update" ? "/update" : "/version");
+    nativePageMessage(action === "update" ? "正在更新工具，并验证代码 SHA-256…" : "正在检查工具版本…");
+    const result = await json(path,action === "update" ? {method:"POST"} : undefined);
+    const tool = result.tool || {};
+    nativePageMessage("Worker " + worker + " · 原生页面诊断版本 " +
+      (tool.version || "不可用") + " · " +
+      (tool.installed ? "已安装" : "未安装") +
+      (action === "update" ? " · 更新完成" : ""));
+  }
+  let nativeWorkerLookup = 0;
+  $("nativePageRequestId")?.addEventListener("change", async () => {
+    const id = $("nativePageRequestId")?.value.trim() || "";
+    if (!/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(id)) return;
+    const current = ++nativeWorkerLookup;
+    try {
+      const found = await json("/api/admin/worker-tools/native-page/request-worker/" +
+        encodeURIComponent(id));
+      if (current !== nativeWorkerLookup) return;
+      if (found.worker_id && [...$("nativePageWorker").options].some(x => x.value === found.worker_id)) {
+        $("nativePageWorker").value = found.worker_id;
+        if (found.conversation_url && !$("nativePageConversationUrl").value.trim())
+          $("nativePageConversationUrl").value = found.conversation_url;
+        nativePageMessage("已从请求记录定位 Worker：" + found.worker_id +
+          (found.conversation_link_saved ? "，并找到了可重新打开的原生会话链接。"
+            : "。该历史记录没有保存会话链接，旧窗口关闭时请补填 ChatGPT /c/ 链接。"));
+      }
+    } catch (error) { nativePageMessage(error.message, true); }
+  });
+  $("nativePageStart")?.addEventListener("click", () => nativePageStart().catch(
+    error => nativePageMessage(error.message, true)));
+  $("nativePageVersion")?.addEventListener("click", () => nativePageToolAction("version").catch(
+    error => nativePageMessage(error.message, true)));
+  $("nativePageUpdate")?.addEventListener("click", () => nativePageToolAction("update").catch(
+    error => nativePageMessage(error.message, true)));
+  $("nativePageReload")?.addEventListener("click", () => nativePageRecords().catch(
+    error => nativePageMessage(error.message, true)));
+
   window.loadWorkerTools = load;
   const navigation = document.querySelector('.nav button[data-view="worker-tools"]');
   navigation?.addEventListener("click", () => { load().catch(error => status(error.message, true)); });

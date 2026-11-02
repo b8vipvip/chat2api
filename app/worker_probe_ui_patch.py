@@ -49,6 +49,27 @@ PANEL = r'''
     <div class="scroll"><table><thead><tr><th>请求 ID</th><th>采集状态</th><th>事件数</th><th>最后阶段</th><th>操作</th></tr></thead>
       <tbody id="workerToolsRuns"></tbody></table></div>
   </div>
+  <div class="panel" style="margin-top:12px" id="nativePageToolPanel">
+    <h3>原生页面诊断 · 独立 Worker 工具</h3>
+    <p class="muted">仅用于已经生成的回复，不重新发送请求。优先根据请求 ID 匹配仍打开的原生页面；如果旧窗口已关闭，可补填该历史聊天的 ChatGPT /c/ 地址，工具将在新标签页打开后采集。不会读取 Cookie、用户问题、浏览器存储或原始下载 URL。</p>
+    <div class="toolbar">
+      <label for="nativePageWorker">执行 Worker</label>
+      <select id="nativePageWorker"><option value="">选择 Worker</option></select>
+      <label for="nativePageRequestId">原请求 ID</label>
+      <input id="nativePageRequestId" placeholder="req_..." style="min-width:230px">
+    </div>
+    <div class="toolbar">
+      <input id="nativePageConversationUrl" placeholder="可选：已关闭页面的 https://chatgpt.com/c/... 地址" style="min-width:380px;flex:1">
+      <button class="action good" id="nativePageStart">开始诊断</button>
+      <button class="action" id="nativePageVersion">检查工具版本</button>
+      <button class="action" id="nativePageUpdate">更新此 Worker 诊断工具</button>
+      <button class="action" id="nativePageReload">刷新记录</button>
+    </div>
+    <p class="muted" id="nativePageStatus">首次安装随 Worker Bundle 部署；后续仅更新该独立工具，无需重新安装全部 Worker。首次使用旧 Worker 前需要先升级一次 Worker 控制器。</p>
+    <div class="scroll"><table><thead><tr>
+      <th>诊断任务</th><th>原请求 ID</th><th>Worker</th><th>工具版本</th><th>状态/阶段</th><th>进度</th><th>操作</th>
+    </tr></thead><tbody id="nativePageRecords"></tbody></table></div>
+  </div>
 </section>
 '''
 

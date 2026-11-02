@@ -89,6 +89,7 @@ from .worker_model_library_v145_patch import install_worker_model_library_v145_p
 from .worker_text_model_management_v146_patch import install_worker_text_model_management_v146_patch
 from .worker_model_tasks_v147_patch import install_manual_worker_text_model_tasks_v147_patch
 from .worker_probe_ui_patch import install_worker_probe_ui_v1
+from .native_page_diagnostic_api import install_native_page_diagnostics
 
 install_voice_patch(app)
 install_live_voice_patch(app)
@@ -299,6 +300,8 @@ install_legacy_mini_default_alias(app)
 # P0 Worker tools mount only their own UI after canonical normalization.
 # Preserve the existing final request-history owner as the final call.
 install_worker_probe_ui_v1(app)
+# Standalone diagnosis has its own audit trail, not the request terminal.
+install_native_page_diagnostics(app)
 # The transport-only SSE guard is the final ASGI middleware installation, after
 # every patch that can register a BaseHTTPMiddleware wrapper. The trailing
 # idempotent request-history call only reasserts its table ownership.

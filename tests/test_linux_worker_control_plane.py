@@ -80,6 +80,8 @@ def test_command_allowlist_has_no_arbitrary_execution():
         "health_check", "restart_chrome", "restart_xray", "restart_xvfb", "reload_extension",
         "test_proxy", "apply_proxy_config", "open_login_session", "open_remote_session", "close_login_session",
         "login_session_frame", "login_session_input", "get_logs", "reconcile_reserve_pool",
+        "native_page_version", "native_page_update", "native_page_start",
+        "native_page_status", "native_page_chunk",
     }
     assert ALLOWED_COMMANDS == required
     assert not {"exec_shell", "run_command", "bash"} & ALLOWED_COMMANDS

@@ -24,6 +24,7 @@ from urllib.request import Request, urlopen
 import websockets
 
 import linux_worker_agent_v44 as legacy
+import native_page_tool_control
 
 AGENT_VERSION = "0.3.10"
 CONFIG = Path(os.environ.get("CHAT2API_WORKER_CONFIG", "/etc/chat2api-worker/worker.json"))
@@ -235,6 +236,11 @@ def _diagnostics(slot: int) -> dict[str, Any]:
 def _execute(config: dict[str, Any], target: dict[str, Any], command: str, arguments: dict[str, Any]) -> dict[str, Any]:
     slot = int(target["worker_slot"])
     primary = slot == 1
+    if command in {"native_page_version", "native_page_update",
+                   "native_page_start", "native_page_status", "native_page_chunk"}:
+        server = _server_from_websocket(str(config.get("websocket_url") or ""))
+        return native_page_tool_control.execute(
+            command, arguments, str(target["worker_id"]), slot, server)
     if command == "health_check":
         return {"ok": True, "health": _health(slot)}
     if command == "provision_worker":

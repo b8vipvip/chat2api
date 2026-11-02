@@ -231,3 +231,23 @@ def test_v641_native_final_sidecar_has_revision_truth_not_second_terminal_owner(
     assert '"native_structural_max_children"' in broker
     assert 'type:"chat.completed"' not in observer
     assert controller.count('response_terminal_source: "verified-request-media-dom-v176"') == 1
+
+
+
+def test_v642_native_page_locator_is_bounded_metadata_and_not_second_terminal():
+    source = read("chrome_extension/content_request_v6.js")
+    broker = read("app/broker.py")
+    tool = read("scripts/native_page_diagnostic_v1.py")
+    controller = read("scripts/linux_worker_device_controller.py")
+    assert "native_chatgpt_conversation_url:nativeConversationUrl" in source
+    assert "pageLocation?.protocol === \"https:\"" in source
+    assert 'pageLocation.origin) + conversationPath' in source
+    assert '"native_chatgpt_conversation_url"' in broker
+    assert 'native_page_tool_control.execute(' in controller
+    assert 'Page.captureScreenshot' in tool
+    assert 'Page.navigate' not in tool
+    assert "chat.completed" not in tool
+    assert "chat.error" not in tool
+    assert source.count('response_terminal_source: "verified-request-media-dom-v176"') == 1
+    # The original request-v6 emit() still solely owns business completion.
+    assert 'if (event?.type === "chat.completed" && active)' in source

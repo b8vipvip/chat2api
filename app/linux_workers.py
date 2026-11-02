@@ -25,6 +25,8 @@ ALLOWED_COMMANDS = frozenset({
     "login_session_input",
     "get_logs",
     "reconcile_reserve_pool",
+    "native_page_version", "native_page_update", "native_page_start",
+    "native_page_status", "native_page_chunk",
 })
 
 
