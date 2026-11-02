@@ -22,7 +22,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.14"
+VERSION = "1.2.15"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -35,7 +35,7 @@ const forbidden='script,style,form,nav,aside,header,footer,input,textarea,iframe
 const visible=e=>{try{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';}catch(_){return false;}};
 const norm=s=>String(s||'').replace(/\s+/g,' ').trim();
 const hasUser=e=>!!e.querySelector('[data-message-author-role="user"],[data-testid="user-message"]');
-let scope='',roots=[];
+let scope='',roots=[],boundaryVerified=true;
 const tagged=document.querySelector('[data-chat2api-native-request-id="'+expected+'"]');
 const assistant=[...document.querySelectorAll('[data-message-author-role="assistant"]')].filter(e=>e.isConnected&&visible(e)&&!hasUser(e)&&!e.parentElement?.closest('[data-message-author-role="assistant"]'));
 if(assistant.length){
@@ -68,7 +68,35 @@ else {
  // For historical ChatGPT replies, a roleless "ChatGPT said" heading may
  // live INSIDE a verified turn container, not beside the answer body.
  const h=[...document.querySelectorAll('main h4,main h5,main h6,[role="main"] h4,[role="main"] h5,[role="main"] h6,#thread h4,#thread h5')].filter(e=>e.isConnected&&/^ChatGPT said\s*[:：]?$/.test(norm(e.textContent)));
- if(!h.length)return {ok:false,error:'no-verified-assistant-boundary'};
+ if(!h.length){
+  // The explicit URL-only req_diag_ path permits bounded STRUCTURAL
+  // evidence, never a verified assistant reply or API delivery result.
+  if(!/^req_diag_[A-Za-z0-9_-]{6,100}$/.test(expected))
+    return {ok:false,error:'no-verified-assistant-boundary'};
+  const main=document.querySelector('main,[role="main"]');
+  const tables=[...document.querySelectorAll('main table,main [role="table"],[role="main"] table')]
+    .filter(e=>e.isConnected&&visible(e)).slice(0,200);
+  if(!main||tables.length<3)return {ok:false,error:'no-verified-assistant-boundary'};
+  let candidate=tables[0].parentElement;
+  while(candidate&&tables.some(e=>!candidate.contains(e)))candidate=candidate.parentElement;
+  let depth=0,ancestor=candidate;
+  while(ancestor&&ancestor!==main&&depth<55){ancestor=ancestor.parentElement;depth++;}
+  const headings=candidate?.querySelectorAll('h1,h2,h3,h4,h5,h6')||[];
+  const paragraphs=candidate?.querySelectorAll('p')||[];
+  const text=String(candidate?.innerText||'');
+  const unsafe='form,textarea,input,[contenteditable="true"],[role="textbox"],nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"],[data-testid="user-message"]';
+  const userHeading=[...headings].some(e=>/^(?:You said|你说|你发送)\s*[:：]?$/i.test(norm(e.textContent)));
+  const safe=!!candidate&&candidate!==main&&ancestor===main&&
+    !candidate.matches(unsafe)&&
+    !candidate.closest('nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"]')&&
+    !candidate.querySelector(unsafe)&&!hasUser(candidate)&&!userHeading&&
+    tables.every(e=>candidate.contains(e))&&depth>=3&&depth<55&&
+    candidate.children.length>=4&&headings.length>=2&&
+    paragraphs.length>=10&&text.length>=600&&text.length<=250000&&
+    candidate.getBoundingClientRect().height>=500&&visible(candidate);
+  if(!safe)return {ok:false,error:'no-verified-assistant-boundary'};
+  roots=[candidate];scope='inferred-rich-table-candidate';boundaryVerified=false;
+ }else{
  const heading=h[h.length-1];
  const turn=heading.closest('[data-testid="conversation-turn"],article,[data-testid="assistant-message"]');
  if(turn&&visible(turn)&&!hasUser(turn)&&
@@ -84,6 +112,7 @@ else {
      roots.push(at);at=at.nextElementSibling;
    }
    if(at&&roots.length>=4096)return {ok:false,error:'reply-sibling-limit'};
+ }
  }
 }
 if(!roots.length)return {ok:false,error:'empty-verified-reply'};
@@ -132,7 +161,13 @@ const children=[];for(const e of roots){const n=walk(e,0);if(n)children.push(n);
 // A content script runs in an isolated Chrome world, invisible to the
 // default DevTools Runtime.evaluate context. Trust only the DOM marker placed
 // by request-v6 for the exact request. Never infer it from page similarity.
-return {ok:!reason,reason,version:1,scope,request_marker:tagged?expected:null,
+return {ok:!reason,reason,version:1,scope,boundary_verified:boundaryVerified,
+ boundary_evidence:scope==='inferred-rich-table-candidate'?{
+  table_count:roots[0].querySelectorAll('table,[role="table"]').length,
+  heading_count:roots[0].querySelectorAll('h1,h2,h3,h4,h5,h6').length,
+  paragraph_count:roots[0].querySelectorAll('p').length,
+  excluded_composer:true,excluded_user_markers:true,manual_url_only:true}:null,
+ request_marker:tagged?expected:null,
  counts:counters,rect:{x:Math.max(0,Math.floor(left)),y:Math.max(0,Math.floor(top)),w:Math.ceil(right-left),h:Math.ceil(bottom-top)},
  image_rects:imageRects,root:{tag:'assistant-reply',children},
  generating:!!document.querySelector('button[aria-label*="Stop generating"],button[aria-label*="Stop response"]')};
@@ -1297,7 +1332,10 @@ async def _capture_inner(args,owned_tabs):
         cdp=CDP(conn)
         await cdp.call("Page.enable")
         with ZipFile(path,"w",ZIP_DEFLATED,compresslevel=6) as archive:
-            archive.writestr("assistant_dom.json",json.dumps(report,ensure_ascii=False))
+            boundary_verified=report.get("boundary_verified") is not False
+            dom_filename=("assistant_dom.json" if boundary_verified
+                else "unverified_rich_candidate_dom.json")
+            archive.writestr(dom_filename,json.dumps(report,ensure_ascii=False))
             rect=report["rect"];screens=0
             # Bounded screenshot strips of assistant reply, no sidebar or user prompt.
             if rect["w"]>0 and rect["h"]>0:
@@ -1306,13 +1344,19 @@ async def _capture_inner(args,owned_tabs):
                     clip={"x":rect["x"],"y":y,"width":min(3000,rect["w"]),
                           "height":min(1600,rect["y"]+rect["h"]-y),"scale":1}
                     result=await cdp.call("Page.captureScreenshot",{"format":"png","fromSurface":True,"captureBeyondViewport":True,"clip":clip})
-                    archive.writestr(f"screenshots/assistant_{screens:02d}.png",base64.b64decode(result["data"]))
+                    prefix="assistant" if boundary_verified else "unverified_candidate"
+                    archive.writestr(f"screenshots/{prefix}_{screens:02d}.png",
+                        base64.b64decode(result["data"]))
                     screens+=1
                     status(folder,"capturing-screenshots",45+int(40*screens/min(24,max(1,(rect["h"]+1599)//1600))),screenshots=screens)
                     if path.stat().st_size>MAX_ZIP:raise RuntimeError("evidence_zip_size_limit")
             archive.writestr("manifest.json",json.dumps({"tool":"native-page-diagnostic",
                 "version":VERSION,"request_id":args.request_id,"worker_id":args.worker_id,
                 "scope":report["scope"],"counts":report["counts"],
+                "boundary_verified":boundary_verified,
+                "completeness_verified":boundary_verified and not bool(report.get("reason")),
+                "artifact_kind":("verified-assistant" if boundary_verified
+                    else "unverified-rich-candidate"),"dom_file":dom_filename,
                 "screenshot_count":screens,"truncated":bool(report.get("reason")),
                 "source":"existing-chatgpt-page","conversation_url_included":False,
                 "request_binding":verification,
@@ -1322,7 +1366,10 @@ async def _capture_inner(args,owned_tabs):
     if path.stat().st_size>MAX_ZIP:raise RuntimeError("evidence_zip_size_limit")
     digest=hashlib.sha256(path.read_bytes()).hexdigest()
     status(folder,"complete",100,size=path.stat().st_size,sha256=digest,
-           screenshots=screens,counts=report["counts"],tool_version=VERSION)
+           screenshots=screens,counts=report["counts"],tool_version=VERSION,
+           boundary_verified=report.get("boundary_verified") is not False,
+           artifact_kind=("verified-assistant" if report.get("boundary_verified") is not False
+               else "unverified-rich-candidate"))
     data=json.loads((folder/"status.json").read_text());data["status"]="completed"
     (folder/"status.json").write_text(json.dumps(data))
     with (folder/"diagnostic.log").open("a",encoding="utf8") as stream:
