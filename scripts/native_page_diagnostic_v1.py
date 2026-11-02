@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.5"
+VERSION = "1.2.6"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -48,6 +48,19 @@ else if(([...document.querySelectorAll(
   roots=[...document.querySelectorAll(
     'main [data-testid="assistant-message"],main [data-testid="assistant-turn"],[role="main"] [data-testid="assistant-message"]'
   )].filter(e=>e.isConnected&&visible(e)&&!hasUser(e)).slice(-1);
+}
+else if(([...document.querySelectorAll(
+ 'main article[data-testid^="conversation-turn-"] .agent-turn,main article .agent-turn,main [data-testid^="conversation-turn-"].agent-turn'
+)].filter(e=>e.isConnected&&visible(e)&&!hasUser(e)&&
+ !e.closest('[data-message-author-role="user"],[data-testid="user-message"]'))).length){
+ // Newer ChatGPT renders the assistant as a turn with .agent-turn and
+ // sometimes no data-message-author-role or "ChatGPT said" heading.
+ // This is an explicit assistant marker, never a generic last article.
+ scope='verified-agent-turn';
+ roots=[...document.querySelectorAll(
+  'main article[data-testid^="conversation-turn-"] .agent-turn,main article .agent-turn,main [data-testid^="conversation-turn-"].agent-turn'
+ )].filter(e=>e.isConnected&&visible(e)&&!hasUser(e)&&
+ !e.closest('[data-message-author-role="user"],[data-testid="user-message"]')).slice(-1);
 }
 else {
  // For historical ChatGPT replies, a roleless "ChatGPT said" heading may
@@ -223,7 +236,10 @@ return {ready_state:String(document.readyState||'unknown').slice(0,16),
   online_hint:typeof navigator!=='undefined' ? Boolean(navigator.onLine) : null,
   assistant_roles:document.querySelectorAll('[data-message-author-role="assistant"]').length,
   user_roles:document.querySelectorAll('[data-message-author-role="user"]').length,
-  conversation_turns:document.querySelectorAll('[data-testid="conversation-turn"]').length,
+  conversation_turns:document.querySelectorAll('[data-testid="conversation-turn"],[data-testid^="conversation-turn-"]').length,
+  numbered_conversation_turns:document.querySelectorAll('[data-testid^="conversation-turn-"]').length,
+  agent_turns:document.querySelectorAll('main article .agent-turn,main [data-testid^="conversation-turn-"].agent-turn').length,
+  agent_markdown_blocks:document.querySelectorAll('main .agent-turn .markdown').length,
   assistant_testids:document.querySelectorAll('[data-testid="assistant-message"],[data-testid="assistant-turn"]').length,
   verified_roleless_headings:heading,
   main_landmarks:document.querySelectorAll('main,[role="main"]').length,
@@ -345,6 +361,7 @@ class CDP:
 
 _PROBE_KEYS = {"ready_state", "route", "visibility_state", "has_focus",
     "online_hint", "assistant_roles", "user_roles", "conversation_turns",
+    "numbered_conversation_turns", "agent_turns", "agent_markdown_blocks",
     "assistant_testids", "verified_roleless_headings", "main_landmarks",
     "main_child_elements", "main_element_count", "app_roots",
     "skeleton_count", "aria_busy_count", "last_finished_age_ms",
@@ -442,6 +459,7 @@ def failure_reason(probe):
         "cdp-tab-connection-error","cdp-endpoint-unavailable"):
         return "history_capture_runtime_failed"
     if (not probe.get("assistant_roles") and not probe.get("assistant_testids")
+        and not probe.get("agent_turns")
         and not probe.get("verified_roleless_headings")):
         return "history_assistant_boundary_not_found"
     return "history_assistant_capture_rejected"
@@ -515,6 +533,9 @@ async def capture(args):
         access_observed=0
         reload_attempted=False
         reload_result="not-attempted"
+        post_reload_at=-1
+        suspicious_redirect_streak=0
+        transient_redirect_count=0
         for i in range(62):
             await asyncio.sleep(1 if i else 0.4)
             # Do not discard a redirected tab just because it moved to
@@ -533,12 +554,25 @@ async def capture(args):
                 elif (actual.scheme=="https" and actual.hostname in
                       {"auth.openai.com","auth.chatgpt.com","login.openai.com"}):
                     kind="access-gate"
-                elif actual.scheme=="about":
+                elif actual.scheme in ("about","chrome","chrome-extension") or not actual.scheme:
                     kind="navigation-pending"
                 elif actual.scheme=="chrome-error":
                     kind="navigation-error"
                 else:
                     kind="unexpected-redirect"
+                # During Page.reload the Chrome target can briefly report
+                # chrome://, blank, or a provisional URL. A single snapshot
+                # of /json/list is not proof that the tab left ChatGPT.
+                # Continue observing only THIS newly created tab id, and
+                # never evaluate arbitrary off-origin document content.
+                if kind=="unexpected-redirect":
+                    suspicious_redirect_streak+=1
+                    if (reload_attempted and post_reload_at>=0
+                        and i-post_reload_at<=15):
+                        transient_redirect_count+=1
+                        kind="navigation-pending"
+                elif kind=="conversation":
+                    suspicious_redirect_streak=0
                 if kind=="access-gate":
                     access_observed+=1
                     last_probe={"navigation_route":kind,"route":"access-gate",
@@ -586,6 +620,7 @@ async def capture(args):
                                     or probe.get("fetch_http_429")
                                     or probe.get("fetch_http_5xx"))):
                                 reload_attempted=True
+                                post_reload_at=i
                                 reload_result="attempted"
                                 status(folder,"retrying-history-render",33,
                                        page_probe=last_probe,
@@ -618,7 +653,9 @@ async def capture(args):
                         "capture_error":"cdp-endpoint-unavailable","attempt":i+1}
             last_probe={**last_probe,
                 "reload_attempted":reload_attempted,
-                "reload_result":reload_result}
+                "reload_result":reload_result,
+                "transient_redirect_count":transient_redirect_count,
+                "suspicious_redirect_streak":suspicious_redirect_streak}
             if i==0 or (i+1)%3==0 or i==61:
                 status(folder,"awaiting-assistant",min(44,19+i//3),
                        page_probe=last_probe,tab_created=True,
@@ -626,7 +663,13 @@ async def capture(args):
             # Access gates are evidence of a redirect; do not repeatedly
             # probe the login page or attempt any sign-in action.
             if access_observed>=3:break
-            if last_probe.get("navigation_route")=="unexpected-redirect":break
+            # Do not fail on a one-poll transient after the diagnostic tab
+            # reload. Persistent untrusted off-origin navigation is different:
+            # stop after the bounded grace and repeated confirmations.
+            if (last_probe.get("navigation_route")=="unexpected-redirect"
+                and suspicious_redirect_streak>=4
+                and (not reload_attempted or
+                     i-post_reload_at>15)):break
         return None,None,tab_id
 
     if not picked and target_url:
@@ -741,6 +784,8 @@ def main():
             bits.append("c="+str(int(probe.get("conversation_api_observed") or 0)))
             bits.append("j="+str(int(probe.get("js_exception_count") or 0)))
             bits.append("u="+str(int(probe.get("unhandled_rejection_count") or 0)))
+            bits.append("t="+str(int(probe.get("transient_redirect_count") or 0)))
+            bits.append("g="+str(int(probe.get("agent_turns") or 0)))
             error=(error+" ["+";".join(bits)+"]")[:180]
         status(folder,"failed",100,error=error)
         raise SystemExit(1)
