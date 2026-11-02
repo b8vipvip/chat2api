@@ -86,11 +86,26 @@ def execute(command,arguments,worker_id,slot,server):
             folder.mkdir(mode=0o700,exist_ok=False)
             (folder/"task.json").write_text(json.dumps({"worker_id":worker_id,"request_id":req}))
             (folder/"status.json").write_text(json.dumps({"status":"running","stage":"queued","percent":1,"tool_version":_version().get("version")}))
+            # Fingerprints contain only SHA-256 digests of already-generated
+            # assistant text. Send through private process environment, not
+            # command-line arguments, status.json, or user-visible ZIP.
+            hints=arguments.get("reference_hashes") or []
+            if not isinstance(hints,list) or len(hints)>8 or any(
+                not isinstance(x,str) or not re.fullmatch(r"[a-f0-9]{64}",x)
+                for x in hints):
+                return {"ok":False,"error":"invalid_reference_hashes"}
+            start=arguments.get("history_start",0)
+            end=arguments.get("history_end",0)
+            if type(start) is not int or type(end) is not int or start<0 or end<0 or end-start>7200:
+                return {"ok":False,"error":"invalid_history_window"}
+            env=dict(os.environ)
+            env["CHAT2API_NATIVE_RECOVERY_HINTS"]=json.dumps({
+                "hashes":hints,"start":start,"end":end})
             with (folder/"collector.log").open("wb") as log:
                 process=subprocess.Popen([sys.executable,str(script),"--output",str(folder),
                     "--worker-id",worker_id,"--request-id",req,"--cdp-port",str(9221+int(slot)),
                     "--conversation-url",url],stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,
-                    start_new_session=True,close_fds=True)
+                    start_new_session=True,close_fds=True,env=env)
             (folder/"pid").write_text(str(process.pid))
             return {"ok":True,"job_id":job,"pid_started":True,"tool_version":_version().get("version")}
         if command in {"native_page_status","native_page_chunk"}:
