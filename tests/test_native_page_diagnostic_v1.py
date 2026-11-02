@@ -91,6 +91,10 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
     app.state.worker_sockets={worker:object()}
     raw=_archive(request_id,worker)
     seen=[]
+    fail_status={"enabled":False}
+    probe={"route":"conversation","assistant_roles":0,"assistant_testids":0,
+           "verified_roleless_headings":0,"ready_state":"complete",
+           "capture_error":"no-verified-assistant-boundary"}
     async def send(worker_id,command,args,wait,timeout):
         assert worker_id==worker
         if command=="native_page_start":
@@ -110,6 +114,11 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
                 raw=buf.getvalue()
             return {"result":{"ok":True,"tool_version":"1.2.1"}}
         if command=="native_page_status":
+            if fail_status["enabled"]:
+                return {"result":{"ok":True,"status":"failed","stage":"page-unavailable",
+                    "percent":100,"tool_version":"1.2.1",
+                    "error":"history_assistant_boundary_not_found",
+                    "page_probe":probe}}
             return {"result":{"ok":True,"status":"completed",
                 "stage":"complete","percent":100,"size":len(raw),
                 "sha256":hashlib.sha256(raw).hexdigest(),
@@ -188,6 +197,23 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
         assert "history-url" in zip_resp.headers["content-disposition"]
         assert client.get("/api/admin/worker-tools/native-page/jobs/"+second+"/log",
             headers=auth).json()["record"]["target_type"]=="conversation_url"
+        fail_status["enabled"]=True
+        third=client.post("/api/admin/worker-tools/native-page/jobs",
+            headers=auth,json={"target":history,"worker_id":worker})
+        assert third.status_code==200,third.text
+        failed_id=third.json()["job"]["job_id"]
+        for _ in range(70):
+            info=client.get("/api/admin/worker-tools/native-page/jobs/"+failed_id,headers=auth)
+            if info.json()["job"]["status"]=="failed":break
+            time.sleep(0.03)
+        assert info.json()["job"]["status"]=="failed",info.text
+        assert info.json()["job"]["page_probe"]==probe
+        exported=client.get("/api/admin/worker-tools/native-page/jobs/"+failed_id+"/log",
+            headers=auth)
+        assert exported.status_code==200
+        assert exported.json()["record"]["page_probe"]==probe
+        assert client.get("/api/admin/worker-tools/native-page/jobs/"+failed_id+"/download",
+            headers=auth).status_code==409
 
 
 def test_native_page_history_recovery_uses_time_filter_and_content_sha(tmp_path):
