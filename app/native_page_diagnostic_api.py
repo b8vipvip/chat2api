@@ -144,7 +144,12 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 state=await command(worker,"native_page_status",{"job_id":job_id},timeout=20)
                 record.update({key:state.get(key) for key in (
                     "stage","percent","error","tool_version","counts",
-                    "screenshots","size","page_probe") if key in state})
+                    "screenshots","size") if key in state})
+                # Older Worker controllers may return page_probe=None even
+                # after a newer collector observed the page. Never erase a
+                # previously valid probe with null during progress polling.
+                if isinstance(state.get("page_probe"),dict):
+                    record["page_probe"]=state["page_probe"]
                 record["updated_at"]=int(time.time())
                 if state.get("status")=="failed":
                     raise RuntimeError(str(state.get("error") or "capture_failed")[:170])
