@@ -62,7 +62,7 @@ def execute(command,arguments,worker_id,slot,server):
             if (manifest.get("source")!="github-dedicated-release-branch"
                 or manifest.get("repository")!="b8vipvip/chat2api"
                 or manifest.get("release_branch")!="native-page-diagnostic-releases"
-                or not re.fullmatch(r"[0-9]+\\.[0-9]+\\.[0-9]+",version)
+                or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+",version)
                 or not re.fullmatch(r"[a-f0-9]{64}",sha)
                 or type(manifest.get("bytes")) is not int
                 or not 0<manifest["bytes"]<=200000):
@@ -74,8 +74,8 @@ def execute(command,arguments,worker_id,slot,server):
             digest=hashlib.sha256(data).hexdigest()
             if len(data)!=manifest["bytes"] or digest!=sha:
                 raise ValueError("tool_sha256_mismatch")
-            if not re.search(rb'(?m)^VERSION\\s*=\\s*"' +
-                    version.encode("ascii").replace(b".",b"\\.") + rb'"',data):
+            if not re.search(rb'(?m)^VERSION\s*=\s*"' +
+                    version.encode("ascii").replace(b".",b"\.") + rb'"',data):
                 raise ValueError("tool_version_mismatch")
             # Reject syntactically invalid scripts before replacing the
             # installed executable. Nothing is evaluated in this step.
@@ -83,7 +83,7 @@ def execute(command,arguments,worker_id,slot,server):
             installed=_version()
             if INSTALLED.is_file() and installed.get("installed"):
                 old=str(installed.get("version") or "")
-                if re.fullmatch(r"[0-9]+\\.[0-9]+\\.[0-9]+",old):
+                if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+",old):
                     if tuple(map(int,version.split("."))) < tuple(map(int,old.split("."))):
                         raise ValueError("tool_downgrade_refused")
                     if old==version and installed.get("sha256")!=sha:
