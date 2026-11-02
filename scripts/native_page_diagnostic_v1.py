@@ -20,7 +20,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.3"
+VERSION = "1.2.4"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -153,6 +153,16 @@ try {
   else perf.fetch_status_unavailable++;
  }
 }catch(_){}
+let last_finished_age_ms=-1;
+try {
+ const entries=performance.getEntriesByType('resource');
+ if(entries.length){
+  const latest=entries[entries.length-1];
+  const end=Number(latest.responseEnd || 0);
+  if(end>0)last_finished_age_ms=Math.max(0,
+   Math.min(3600000,Math.round(performance.now()-end)));
+ }
+}catch(_){}
 const main=document.querySelector('main,[role="main"]');
 return {ready_state:String(document.readyState||'unknown').slice(0,16),
   route, visibility_state:String(document.visibilityState||'unknown').slice(0,16),
@@ -165,7 +175,11 @@ return {ready_state:String(document.readyState||'unknown').slice(0,16),
   verified_roleless_headings:heading,
   main_landmarks:document.querySelectorAll('main,[role="main"]').length,
   main_child_elements:main?main.children.length:0,
+  main_element_count:main?Math.min(main.querySelectorAll('*').length,100000):0,
   app_roots:document.querySelectorAll('#__next,#root,[data-nextjs-root]').length,
+  skeleton_count:document.querySelectorAll('[data-testid*="skeleton"]').length,
+  aria_busy_count:document.querySelectorAll('[aria-busy="true"]').length,
+  last_finished_age_ms,
   password_fields:document.querySelectorAll('input[type="password"]').length>0,
   challenge_frames:document.querySelectorAll('iframe[src*="challenge"],iframe[src*="captcha"]').length>0,
   loading_skeletons:document.querySelectorAll('[data-testid*="skeleton"],[aria-busy="true"]').length>0,
@@ -276,8 +290,10 @@ class CDP:
 _PROBE_KEYS = {"ready_state", "route", "visibility_state", "has_focus",
     "online_hint", "assistant_roles", "user_roles", "conversation_turns",
     "assistant_testids", "verified_roleless_headings", "main_landmarks",
-    "main_child_elements", "app_roots", "password_fields", "challenge_frames",
-    "loading_skeletons", "fetch_total", "fetch_http_2xx",
+    "main_child_elements", "main_element_count", "app_roots",
+    "skeleton_count", "aria_busy_count", "last_finished_age_ms",
+    "password_fields", "challenge_frames", "loading_skeletons",
+    "fetch_total", "fetch_http_2xx",
     "fetch_http_401_403", "fetch_http_404", "fetch_http_429",
     "fetch_http_other_4xx", "fetch_http_5xx", "fetch_status_unavailable",
     "capture_error"}
@@ -355,6 +371,8 @@ def failure_reason(probe):
             return "history_conversation_stalled_with_http_5xx"
         if probe.get("visibility_state")=="hidden":
             return "history_conversation_stalled_background_tab"
+        if probe.get("reload_attempted"):
+            return "history_conversation_hydration_stalled_after_reload"
         return "history_conversation_hydration_stalled"
     if probe.get("ready_state")=="loading" or probe.get("loading_skeletons"):
         return "history_page_still_loading"
@@ -434,7 +452,9 @@ async def capture(args):
                tab_created=True)
         page=None
         access_observed=0
-        for i in range(45):
+        reload_attempted=False
+        reload_result="not-attempted"
+        for i in range(62):
             await asyncio.sleep(1 if i else 0.4)
             # Do not discard a redirected tab just because it moved to
             # about:blank, an error route, or an authentication endpoint.
@@ -479,9 +499,46 @@ async def capture(args):
                             # incidental skeleton markup stays in the DOM:
                             # a verified assistant reply always wins.
                             last_probe={**probe,"navigation_route":kind,
-                                        "attempt":i+1}
+                                        "attempt":i+1,
+                                        "reload_attempted":reload_attempted,
+                                        "reload_result":reload_result}
                             if obj and obj.get("root",{}).get("children"):
                                 return page,obj,tab_id
+                            # A single, non-destructive recovery attempt:
+                            # only reload OUR diagnostic tab when its own
+                            # page is complete, visible, skeleton-only and
+                            # has no assistant/user turns after ~25 seconds.
+                            # This never navigates another Worker/API tab,
+                            # enters credentials or sends model prompts.
+                            if (i>=24 and not reload_attempted
+                                and kind=="conversation"
+                                and probe.get("ready_state")=="complete"
+                                and probe.get("visibility_state")=="visible"
+                                and probe.get("loading_skeletons")
+                                and not any(probe.get(k) for k in (
+                                    "assistant_roles","assistant_testids",
+                                    "user_roles","conversation_turns",
+                                    "verified_roleless_headings"))
+                                and not probe.get("password_fields")
+                                and not probe.get("challenge_frames")
+                                and not (probe.get("fetch_http_401_403")
+                                    or probe.get("fetch_http_429")
+                                    or probe.get("fetch_http_5xx"))):
+                                reload_attempted=True
+                                reload_result="attempted"
+                                status(folder,"retrying-history-render",33,
+                                       page_probe=last_probe,
+                                       retry_count=1,attempt=i+1)
+                                try:
+                                    await cdp.call("Page.enable")
+                                    await cdp.call("Page.reload",{"ignoreCache":False},
+                                                   timeout=10)
+                                    reload_result="issued"
+                                except Exception:
+                                    reload_result="cdp-reload-failed"
+                                last_probe={**last_probe,
+                                    "reload_attempted":True,
+                                    "reload_result":reload_result}
                     except Exception:
                         last_probe={"navigation_route":kind,
                             "capture_error":"cdp-tab-connection-error",
@@ -489,10 +546,13 @@ async def capture(args):
                 else:
                     last_probe={"navigation_route":kind,
                         "capture_error":"cdp-endpoint-unavailable","attempt":i+1}
-            if i==0 or (i+1)%3==0 or i==44:
-                status(folder,"awaiting-assistant",min(44,19+i//2),
+            last_probe={**last_probe,
+                "reload_attempted":reload_attempted,
+                "reload_result":reload_result}
+            if i==0 or (i+1)%3==0 or i==61:
+                status(folder,"awaiting-assistant",min(44,19+i//3),
                        page_probe=last_probe,tab_created=True,
-                       attempt=i+1)
+                       retry_count=int(reload_attempted),attempt=i+1)
             # Access gates are evidence of a redirect; do not repeatedly
             # probe the login page or attempt any sign-in action.
             if access_observed>=3:break
@@ -606,6 +666,8 @@ def main():
                 "fetch_http_401_403","fetch_http_404","fetch_http_429",
                 "fetch_http_other_4xx"))))
             bits.append("5="+str(int(probe.get("fetch_http_5xx") or 0)))
+            bits.append("r="+str(int(bool(probe.get("reload_attempted")))))
+            bits.append("s="+str(int(probe.get("skeleton_count") or 0)))
             error=(error+" ["+";".join(bits)+"]")[:180]
         status(folder,"failed",100,error=error)
         raise SystemExit(1)
