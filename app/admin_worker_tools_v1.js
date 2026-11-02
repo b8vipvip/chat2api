@@ -40,25 +40,21 @@
   };
 
   function renderCatalog() {
-    const target = $("workerToolsCatalog");
-    target.replaceChildren();
-    for (const tool of catalog) {
-      const row = elem("tr");
-      row.append(elem("td", tool.name), elem("td", tool.id),
-        elem("td", tool.version), elem("td", tool.phase),
-        elem("td", tool.available ? "可配置" : "尚未实现"));
-      target.append(row);
-    }
+    // Catalog and effective policy deliberately share one compact table.
+    renderPolicy();
   }
 
   function renderPolicy() {
     const target = $("workerToolsPolicyRows");
+    if (!target) return;
     target.replaceChildren();
     const scope = $("workerToolsScope").value;
     const configured = chosenPolicy?.tools || {};
     for (const tool of catalog) {
       const row = elem("tr");
-      row.append(elem("td", tool.name), elem("td", tool.phase));
+      row.append(elem("td", tool.name), elem("td", tool.id),
+        elem("td", tool.version), elem("td", tool.phase),
+        elem("td", tool.available ? "可配置" : "尚未实现"));
       const control = elem("td");
       const select = elem("select");
       select.dataset.probe = tool.id;
@@ -66,8 +62,8 @@
       const values = scope === "global"
         ? [["", "未配置（默认关闭）"], ["on", "开启"], ["off", "关闭"]]
         : [["", "继承全局"], ["on", "显式开启"], ["off", "显式关闭"]];
-      for (const [value, text] of values) {
-        const item = elem("option", text); item.value = value; select.append(item);
+      for (const [value, label] of values) {
+        const item = elem("option", label); item.value = value; select.append(item);
       }
       const override = configured[tool.id];
       select.value = override?.enabled === true ? "on"
@@ -172,7 +168,7 @@
   }
 
   async function load() {
-    if (!$("workerToolsCatalog")) return;
+    if (!$("workerToolsPolicyRows")) return;
     try {
       const [c, p] = await Promise.all([
         json("/api/admin/worker-tools/catalog"),
@@ -180,7 +176,6 @@
       ]);
       catalog = c.tools || [];
       workers = p.workers || [];
-      renderCatalog();
       const picker = $("workerToolsScope");
       const old = picker.value || "global";
       picker.replaceChildren();
@@ -198,7 +193,7 @@
       if ([...picker.options].some(option => option.value === old)) picker.value = old;
       await loadPolicy();
       await refreshRuns();
-      nativePageWorkers();
+      await nativePageWorkers();
       await nativePageRecords();
     } catch (error) { status(error.message, true); }
   }
@@ -219,21 +214,25 @@
     el.textContent = String(message);
     el.style.color = bad ? "#ef9d9d" : "#9cb5d4";
   }
-  function nativePageWorkers() {
+  async function nativePageWorkers() {
     const target = $("nativePageWorker");
     if (!target) return;
+    // The standard probe catalog contains Browser/extension pseudo-Workers
+    // which have no Linux device-controller CDP executor. Only use canonical
+    // entries from Worker management, with exactly one full worker_id.
+    const response = await json("/api/admin/worker-tools/native-page/workers");
     const old = target.value;
     target.replaceChildren();
-    const none = elem("option", "请选择执行 Worker");
+    const none = elem("option", "请选择 Linux Worker");
     none.value = "";
     target.append(none);
-    const seen = new Set();
-    for (const worker of workers) {
-      if (!worker.worker_id || seen.has(worker.worker_id)) continue;
-      seen.add(worker.worker_id);
-      const option = elem("option", (worker.name || worker.worker_id) +
-        " · " + worker.worker_id + (worker.online ? " · 在线" : " · 离线"));
-      option.value = worker.worker_id;
+    for (const worker of response.data || []) {
+      const wid = String(worker.worker_id || "");
+      if (!/^wrk_[a-zA-Z0-9_-]{6,100}$/.test(wid)) continue;
+      const label = wid + (worker.name && worker.name !== wid
+        ? " · " + worker.name : "") + (worker.online ? " · 在线" : " · 离线");
+      const option = elem("option", label);
+      option.value = wid;
       target.append(option);
     }
     if ([...target.options].some(item => item.value === old)) target.value = old;
@@ -251,8 +250,8 @@
       const progress = Math.min(100, Math.max(0, Number(item.percent || 0)));
       active ||= state === "running";
       row.append(elem("td", String(item.job_id || "").slice(0,12)),
-        elem("td", item.request_id || "-"),
-        elem("td", item.worker_id || "-"),
+        elem("td", item.request_id || "-", "native-id"),
+        elem("td", item.worker_id || "-", "native-id"),
         elem("td", item.tool_version || "未报告"),
         elem("td", (state || "-") + " · " + (item.stage || "-") +
           (item.error ? " · " + item.error : "")));
