@@ -197,3 +197,20 @@ def test_v639_never_returns_ordinal_or_dimension_guessed_image_assets():
     assert 'elif ordinal:' not in mapping
     assert 'elif candidates["status"] == "unique-dimensions-unverified":' not in mapping
     assert mapping.count('visible_assets = []') == 2
+
+
+def test_v640_native_observer_does_not_replace_request_v6_terminal_owner():
+    source = read("chrome_extension/content_request_v6.js")
+    broker = read("app/broker.py")
+    background = read("chrome_extension/background.js")
+    assert 'active.nativeCaptureAttempted = true;' in source
+    assert '"native-observer-not-loaded"' in source
+    assert 'native_observer_loaded:active.nativeObserverLoaded === true' in source
+    assert 'native_capture_failure:String(active.nativeCaptureFailure || "")' in source
+    assert '"native_capture_attempted"' in broker
+    assert '"native_transport_ack_error"' in broker
+    assert 'event?.snapshot?.revision : event?.revision' in background
+    assert source.count('response_terminal_source: "verified-request-media-dom-v176"') == 1
+    # Native observer status is a sidecar diagnostic, never a competing terminal.
+    observer = read("chrome_extension/content_native_content_v1.js")
+    assert 'type:"chat.completed"' not in observer

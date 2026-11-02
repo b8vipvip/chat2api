@@ -517,11 +517,24 @@
       }
     }
     if (event?.type === "chat.completed" && active) {
-      try { await native?.capture?.(active, true); } catch (_) {}
+      active.nativeObserverLoaded = Boolean(native?.capture);
+      active.nativeCaptureAttempted = true;
+      try {
+        if (!native?.capture) {
+          active.nativeCaptureFailure = "native-observer-not-loaded";
+        } else {
+          await native.capture(active, true);
+        }
+      } catch (_) {
+        // No exception text from the page is ever persisted.
+        active.nativeCaptureFailure = "native-capture-exception";
+      }
       // Native delivery and image identity are independent of the OpenAI
       // terminal. Include only bounded counters/reasons in the terminal
       // diagnostics so a single-request ZIP can explain missing snapshots.
       event.diagnostics = {...(event.diagnostics || {}),
+        native_observer_loaded:active.nativeObserverLoaded === true,
+        native_capture_attempted:active.nativeCaptureAttempted === true,
         native_capture_failure:String(active.nativeCaptureFailure || "").slice(0,80),
         native_transport_ack_error:String(active.nativeTransportAckError || "").slice(0,80),
         native_structural_failure:String(active.nativeStructuralFailure || "").slice(0,60),
