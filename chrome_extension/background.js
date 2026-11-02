@@ -124,8 +124,14 @@ function awaitFileChunkAck(event) {
 // successful local WebSocket enqueue for server-side snapshot publication.
 // The ACK is tied to the original socket and the exact request/revision/chunk.
 const pendingNativeAcks = new Map();
+// Snapshot revisions are carried inside snapshot.revision, while chunk
+// revisions (and server ACK revisions) are top-level. A previous v639 check
+// rejected every ordinary snapshot as invalid-native-envelope before send.
+const nativeAckRevision = event =>
+  event?.type === "chat.native.snapshot"
+    ? event?.snapshot?.revision : event?.revision;
 const nativeAckKey = event => [
-  event?.request_id, event?.revision,
+  event?.request_id, nativeAckRevision(event),
   event?.type === "chat.native.snapshot" || event?.kind === "snapshot" ? "snapshot" : "chunk",
   event?.type === "chat.native.snapshot" || event?.kind === "snapshot" ? -1 : event?.index,
 ].join(":");
@@ -140,7 +146,7 @@ function awaitNativeAck(event) {
   if (!socketReady()) return Promise.resolve({ok:false,committed:false,error:"socket-disconnected"});
   if (!["chat.native.snapshot","chat.native.chunk"].includes(event?.type)
       || !/^(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}$/.test(String(event?.request_id || ""))
-      || !Number.isInteger(event?.revision) || event.revision < 1
+      || !Number.isInteger(nativeAckRevision(event)) || nativeAckRevision(event) < 1
       || (event.type === "chat.native.chunk"
           && (!Number.isInteger(event.index) || event.index < 0)))
     return Promise.resolve({ok:false,committed:false,error:"invalid-native-envelope"});
