@@ -188,6 +188,22 @@ assert.equal(denseTable.root.style.marginLeft,"-395px");
 assert.equal(denseTable.root.style.marginRight,"-395px");
 assert.equal(denseTable.root.style.borderWidth,"0px 0px 1px");
 assert.ok(Object.keys(denseTable.root.style).length<=32);
+const offsetCtx={...ctx,getComputedStyle:()=>({
+  display:"block",visibility:"visible",marginTop:"-16.125px",
+  marginBottom:"-2.5px",marginLeft:"-395.25px",marginRight:"-1px",
+  width:"768px",height:"240.125px"
+})};
+delete offsetCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,offsetCtx);
+const negativeOffsets=offsetCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_offset_generic123",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[new Element("P",[{nodeType:3,nodeValue:"generic offsets"}])])
+});
+assert.equal(negativeOffsets.root.style.marginTop,"-16.125px");
+assert.equal(negativeOffsets.root.style.marginBottom,"-2.5px");
+assert.equal(negativeOffsets.root.style.marginLeft,"-395.25px");
+assert.equal(negativeOffsets.root.style.marginRight,"-1px");
+
 console.log("Native dense style: table geometry prioritized under 32 keys");
 
 // Replayed native v1.3.2 example: three thumbnail columns reported as
