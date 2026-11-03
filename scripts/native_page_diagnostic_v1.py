@@ -27,7 +27,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.3.4"
+VERSION = "1.3.5"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -99,10 +99,13 @@ else {
   const text=String(candidate?.innerText||'');
   const unsafe='form,textarea,input,[contenteditable="true"],[role="textbox"],nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"],[data-testid="user-message"]';
   const userHeading=[...headings].some(e=>/^(?:You said|你说|你发送)\s*[:：]?$/i.test(norm(e.textContent)));
+  const editors=candidate?[...candidate.querySelectorAll('form,textarea,input,[contenteditable="true"],[role="textbox"]')]:[];
+  const isolatedEditor=editors.length===1&&!tables.some(t=>t.contains(editors[0]))&&
+    !candidate.querySelector('nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"],[data-testid="user-message"]');
   const safe=!!candidate&&candidate!==main&&ancestor===main&&
     !candidate.matches(unsafe)&&
     !candidate.closest('nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"]')&&
-    !candidate.querySelector(unsafe)&&!hasUser(candidate)&&!userHeading&&
+    (!candidate.querySelector(unsafe)||isolatedEditor)&&!hasUser(candidate)&&!userHeading&&
     tables.every(e=>candidate.contains(e))&&depth>=3&&depth<55&&
     candidate.children.length>=4&&headings.length>=2&&
     paragraphs.length>=10&&text.length>=600&&text.length<=250000&&
@@ -214,8 +217,11 @@ SCREENSHOT_PREP = r"""(async function(expected,offset,limit){
  const unsafe='form,textarea,input,[contenteditable="true"],[role="textbox"],nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"],[data-testid="user-message"]';
  const text=String(candidate?.innerText||'');
  const headingList=candidate?[...candidate.querySelectorAll('h1,h2,h3,h4,h5,h6')]:[];
+ const editors=candidate?[...candidate.querySelectorAll('form,textarea,input,[contenteditable="true"],[role="textbox"]')]:[];
+ const isolatedEditor=editors.length===1&&!tables.some(t=>t.contains(editors[0]))&&
+   !candidate.querySelector('nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"],[data-testid="user-message"]');
  if(!candidate||candidate===main||ancestor!==main||depth<3||depth>=55||
-    candidate.matches(unsafe)||candidate.querySelector(unsafe)||
+    candidate.matches(unsafe)||(!isolatedEditor&&candidate.querySelector(unsafe))||
     candidate.closest('nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"]')||
     headingList.some(e=>/^(?:You said|你说|你发送)\s*[:：]?$/i.test(String(e.textContent||'').trim()))||
     headingList.length<2||candidate.querySelectorAll('p').length<10||
@@ -1178,6 +1184,12 @@ async def inspect_page(cdp, request_id):
 
 def failure_reason(probe):
     """Fixed error code, never based on raw page text or exception messages."""
+    if probe.get("navigation_route")=="target-not-visible":
+        return "history_diagnostic_tab_disappeared"
+    if (probe.get("capture_error")=="no-verified-assistant-boundary"
+        and probe.get("body_visible_tables",0)>=3
+        and probe.get("table_scope_composer_count",0)>0):
+        return "history_rich_content_boundary_overlaps_editor"
     if probe.get("history_load_timeout"):
         return "history_load_stability_timeout_no_complete_evidence"
     if probe.get("history_existing_content_not_stable"):
@@ -1634,6 +1646,7 @@ async def _capture_inner(args,owned_tabs):
         suspicious_redirect_streak=0
         transient_redirect_count=0
         existing_evidence={}
+        missing_polls=0;tab_retried=False
         for i in range(HISTORY_LOAD_MAX_SECONDS//HISTORY_LOAD_POLL_SECONDS):
             await asyncio.sleep(HISTORY_LOAD_POLL_SECONDS if i else 0.4)
             # Do not discard a redirected tab just because it moved to
@@ -1642,9 +1655,25 @@ async def _capture_inner(args,owned_tabs):
             page=next((t for t in all_tabs if t.get("id")==tab_id
                        and t.get("type")=="page"),None)
             if not page:
+                missing_polls+=1
                 last_probe={"navigation_route":"target-not-visible",
                     "capture_error":"target-not-visible","attempt":i+1}
+                if missing_polls>=5:
+                    if not tab_retried:
+                        tab_retried=True
+                        try:
+                            with urlopen(Request(f"http://127.0.0.1:{args.cdp_port}/json/new?"+
+                                    quote(url,safe=""),method="PUT"),timeout=8) as response:
+                                replacement=json.load(response)
+                            new_id=str(replacement.get("id") or "")
+                            if re.fullmatch(r"[a-fA-F0-9]{8,64}",new_id):
+                                owned_tabs.append(new_id);tab_id=new_id
+                                missing_polls=0
+                                continue
+                        except Exception:pass
+                    break
             else:
+                missing_polls=0
                 actual=urlsplit(str(page.get("url") or ""))
                 if actual.scheme=="https" and actual.hostname in HOSTS:
                     kind=("conversation" if CONVERSATION.fullmatch(actual.path)
@@ -1833,7 +1862,8 @@ async def _capture_inner(args,owned_tabs):
                 "reload_attempted":reload_attempted,
                 "reload_result":reload_result,
                 "transient_redirect_count":transient_redirect_count,
-                "suspicious_redirect_streak":suspicious_redirect_streak}
+                "suspicious_redirect_streak":suspicious_redirect_streak,
+                "diagnostic_tab_reopened":tab_retried}
             if i==0 or (i+1)%3==0 or i==HISTORY_LOAD_MAX_SECONDS//HISTORY_LOAD_POLL_SECONDS-1:
                 status(folder,"waiting-history-stable",
                        min(39,19+int(20*(i+1)/
@@ -2470,7 +2500,10 @@ async def validation_eval(cdp, code, context=None, timeout=35):
     params={"expression":code,"returnByValue":True,"awaitPromise":True,"silent":True}
     if context is not None:params["contextId"]=context
     result=await cdp.call("Runtime.evaluate",params,timeout=timeout)
-    if result.get("exceptionDetails"):raise RuntimeError("candidate_javascript_failed")
+    if result.get("exceptionDetails"):
+        if ((result["exceptionDetails"].get("exception") or {}).get("className")
+            =="SyntaxError"):raise SyntaxError("candidate_source_syntax_error")
+        raise RuntimeError("candidate_javascript_failed")
     return (result.get("result") or {}).get("value")
 
 async def validation_world(cdp):
@@ -2774,10 +2807,7 @@ def validation_merge(archive,payload,report):
             if item.filename in special or visual(item.filename):continue
             if used+cost(item)>budget:omitted.append(item.filename);continue
             copy(item)
-        # The old sort saved all reference screenshots first and omitted
-        # every difference heatmap and all six production source files on
-        # 0db39fd4. Preserve complete comparison triples, not half-pairs;
-        # sample uniformly from beginning/end/middle when the budget is tight.
+        # Save complete visual triples, not half-pairs.
         rows=report.get("visual_strips") or []
         order=([0,len(rows)-1] if len(rows)>1 else [0] if rows else [])
         pending=[(1,len(rows)-2)]
