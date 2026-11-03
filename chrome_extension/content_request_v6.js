@@ -803,7 +803,9 @@
         typeof active.baselineFinishActions?.has !== "function" ||
         !active.networkStreamSeen ||
         Number(active.networkObservedAt || 0) < active.submitStartedAt ||
-        active.cancelled) return false;
+        active.cancelled ||
+        active.options?.voice === true ||
+        active.options?.mode === "voice") return false;
     const prior = active.nativeVerifiedReplyScope;
     if (prior?.isConnected &&
         !prior.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']") &&
@@ -830,9 +832,14 @@
           scope.closest?.("nav,aside,header,footer,form,[role='dialog']") ||
           scope.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,input,[contenteditable='true']")) continue;
       const content = normalize(scope.innerText || scope.textContent || "");
-      const prefix = String(active.promptNormalized || "").slice(0,100);
-      const suffix = String(active.promptNormalized || "").slice(-100);
-      if (content.length < 3 || content.length > 300000 ||
+      const submitted = String(active.promptNormalized || "").trim();
+      const prefix = submitted.slice(0,100);
+      const suffix = submitted.slice(-100);
+      const rolelessUserHeading = [...(scope.querySelectorAll?.("h4,h5,h6") || [])]
+        .some(node => /^(?:You said|你说|你发送)\\s*[:：]?$/i.test(
+          normalize(node.innerText || node.textContent || "")));
+      if (rolelessUserHeading || content.length < 3 || content.length > 300000 ||
+          (submitted.length >= 4 && submitted.length <= 100 && content.includes(submitted)) ||
           (prefix.length >= 12 && content.includes(prefix)) ||
           (suffix.length >= 12 && content.includes(suffix))) continue;
       scopes.add(scope);
