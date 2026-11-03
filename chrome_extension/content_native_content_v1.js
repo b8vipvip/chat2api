@@ -192,7 +192,17 @@
       const emptyGridSpacer = mapped === "div" && computed.display === "grid" &&
         rect && rect.width >= 24 && rect.height >= 12 && rect.height <= 2048 &&
         rect.width <= 3000 && children.length === 0;
-      if (!children.length && !["hr","br","td","th"].includes(mapped) && !emptyGridSpacer) return null;
+      // Empty 17px block with 16px top margin after a table in the
+      // fa937767 sample; dropping it shifts all following sections 33px.
+      // Limit this to visible, contentless, bounded blocks within reply scope.
+      const emptyBlockSpacer = mapped === "div" && computed.display === "block" &&
+        rect && rect.width >= 240 && rect.width <= 3000 &&
+        rect.height >= 12 && rect.height <= 48 &&
+        children.length === 0 &&
+        /^\d{1,2}(?:\.\d{1,3})?px$/.test(computed.marginTop) &&
+        parseFloat(computed.marginTop) >= 8;
+      if (!children.length && !["hr","br","td","th"].includes(mapped) &&
+          !emptyGridSpacer && !emptyBlockSpacer) return null;
       nodes += 1;
       const result = {tag:mapped,style:safeStyle(element)};
       if (children.length) result.children = children;
