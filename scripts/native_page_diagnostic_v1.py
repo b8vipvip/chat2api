@@ -23,8 +23,9 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.19"
+VERSION = "1.2.20"
 MAX_ZIP = 18 * 1024 * 1024
+MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
 CONVERSATION = re.compile(r"^/c/[A-Za-z0-9-]{12,90}/?$")
@@ -180,7 +181,7 @@ return {ok:!reason,reason,version:1,scope,boundary_verified:boundaryVerified,
 # It scrolls to the assistant/candidate within the nearest scrollable parent,
 # then returns a viewport-only clip verified by elementFromPoint. Never send
 # text, URLs, outerHTML, cookies or scripts from the page to the worker log.
-SCREENSHOT_PREP = r"""(function(expected,offset,limit){
+SCREENSHOT_PREP = r"""(async function(expected,offset,limit){
  'use strict';
  const fail=(reason)=>({ok:false,reason});
  if(!/^req_diag_[A-Za-z0-9_-]{6,100}$/.test(expected))
@@ -225,6 +226,7 @@ SCREENSHOT_PREP = r"""(function(expected,offset,limit){
  const desired=initialScroll+initial.top-scrollerRect.top+offset-12;
  if(isRoot)window.scrollTo(0,Math.max(0,desired));
  else scroller.scrollTop=Math.max(0,desired);
+ await new Promise(resolve=>setTimeout(resolve,180));
  const r=candidate.getBoundingClientRect();
  const vw=Math.floor(window.innerWidth),vh=Math.floor(window.innerHeight);
  const x=Math.max(0,Math.ceil(r.left)),y=Math.ceil(r.top+offset);
@@ -239,7 +241,27 @@ SCREENSHOT_PREP = r"""(function(expected,offset,limit){
    if(!hit||!(hit===candidate||candidate.contains(hit)))
      return fail('outside-candidate');
  }
- return {ok:true,clip:{x,y,width,height,scale:1},offset,height};
+ // Snapshot only image source *hashes*, never full URLs or request contents.
+ const observedImages=[];
+ const imgs=[...candidate.querySelectorAll('img')].filter(visible).slice(0,40);
+ for(let index=0;index<imgs.length;index++){
+   const img=imgs[index],ir=img.getBoundingClientRect();
+   if(ir.bottom<=y||ir.top>=y+height||ir.right<=x||ir.left>=x+width)
+     continue;
+   if(!img.complete||img.naturalWidth<1||img.naturalHeight<1)continue;
+   let url='';
+   try{url=String(img.currentSrc||img.src||'');}catch(_){}
+   if(!url||url.length>4096||!crypto?.subtle)continue;
+   try {
+     const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(url));
+     const hash=[...new Uint8Array(digest)]
+       .map(v=>v.toString(16).padStart(2,'0')).join('');
+     observedImages.push({index,source_url_sha256:hash,
+       natural_width:img.naturalWidth,natural_height:img.naturalHeight});
+   }catch(_){}
+ }
+ return {ok:true,clip:{x,y,width,height,scale:1},offset,height,
+  observed_images:observedImages};
 })"""
 
 
@@ -1595,6 +1617,8 @@ async def _capture_inner(args,owned_tabs):
                     "candidate_file":dom_filename},ensure_ascii=False))
             rect=report["rect"];screens=0
             screenshot_coverage_px=0
+            screenshot_image_evidence={}
+            screenshot_image_conflicts=0
             screenshot_complete=False
             screenshot_skip_reason="not-attempted"
             # v1.2.16 used a positive document-space clip after clamping a
@@ -1606,14 +1630,16 @@ async def _capture_inner(args,owned_tabs):
                     and str(picked.get("id") or "") in owned_tabs
                     and str(report.get("scope") or "")=="inferred-rich-table-candidate"):
                     screenshot_skip_reason="candidate-viewport-not-verified"
-                    while (screenshot_coverage_px<min(int(rect["h"]),24*640)
-                           and screens<24):
+                    while (screenshot_coverage_px<
+                               min(int(rect["h"]),MAX_SCREENSHOTS*640)
+                           and screens<MAX_SCREENSHOTS):
                         off=screenshot_coverage_px
                         try:
                             evaluate=await cdp.call("Runtime.evaluate",{
                                 "expression":SCREENSHOT_PREP+"("+
                                     json.dumps(args.request_id)+","+
                                     str(off)+",640)",
+                                "awaitPromise":True,
                                 "returnByValue":True,"silent":True},timeout=15)
                             if evaluate.get("exceptionDetails"):break
                             geometry=(evaluate.get("result") or {}).get("value") or {}
@@ -1642,8 +1668,34 @@ async def _capture_inner(args,owned_tabs):
                                 encoded)
                             screens+=1
                             screenshot_coverage_px+=height
+                            for item in (geometry.get("observed_images") or [])[:40]:
+                                if not isinstance(item,dict):
+                                    continue
+                                idx=item.get("index")
+                                if (type(idx) is not int or not 0<=idx<40
+                                    or idx>=int(report.get("counts",{}).get("images") or 0)):
+                                    continue
+                                fact={"image_index":idx,
+                                      "source_url_sha256":item.get("source_url_sha256"),
+                                      "natural_width":item.get("natural_width"),
+                                      "natural_height":item.get("natural_height")}
+                                if (not isinstance(fact["source_url_sha256"],str)
+                                    or not re.fullmatch("[0-9a-f]{64}",
+                                        fact["source_url_sha256"])
+                                    or any(type(fact[k]) is not int or
+                                           not 0<fact[k]<=20000 for k in
+                                           ("natural_width","natural_height"))):
+                                    continue
+                                old=screenshot_image_evidence.get(idx)
+                                if old and old!=fact:
+                                    screenshot_image_conflicts+=1
+                                elif old is None:
+                                    screenshot_image_evidence[idx]=fact
+                            expected_shots=max(1,
+                                (min(int(rect["h"]),MAX_SCREENSHOTS*640)+639)//640)
                             status(folder,"capturing-screenshots",
-                                45+int(40*screens/24),screenshots=screens)
+                                45+int(40*screens/expected_shots),
+                                screenshots=screens)
                             if path.stat().st_size>MAX_ZIP:
                                 raise RuntimeError("evidence_zip_size_limit")
                         except Exception:
@@ -1779,6 +1831,10 @@ async def _capture_inner(args,owned_tabs):
                     image_source_probe_ok=False
             report["rendered_image_evidence"]=rendered_image_evidence
             report["rendered_image_source_consistent"]=image_source_consistent
+            report["screenshot_image_evidence"]=[
+                screenshot_image_evidence[idx]
+                for idx in sorted(screenshot_image_evidence)]
+            report["screenshot_image_conflicts"]=screenshot_image_conflicts
             archive.writestr(dom_filename,json.dumps(report,ensure_ascii=False))
             remaining_px=max(0,int(rect["h"])-screenshot_coverage_px)
             screenshot_near_complete=(screens>0 and remaining_px<=2
@@ -1798,6 +1854,13 @@ async def _capture_inner(args,owned_tabs):
                 "screenshot_near_complete":screenshot_near_complete,
                 "screenshot_uncovered_px":remaining_px,
                 "screenshot_skip_reason":screenshot_skip_reason,
+                "screenshot_max_count":MAX_SCREENSHOTS,
+                "screenshot_image_sources_observed":len(screenshot_image_evidence),
+                "screenshot_image_source_conflicts":screenshot_image_conflicts,
+                "screenshot_image_sources_complete":(
+                    screenshot_image_conflicts==0 and
+                    len(screenshot_image_evidence)==
+                    int(report.get("counts",{}).get("images") or 0)),
                 "loaded_images_before":loaded_images_before,
                 "loaded_images_after":loaded_images_after,
                 "image_source_probe_ok":image_source_probe_ok,
