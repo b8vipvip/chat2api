@@ -27,7 +27,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.3.5"
+VERSION = "1.3.6"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -217,11 +217,12 @@ SCREENSHOT_PREP = r"""(async function(expected,offset,limit){
  const unsafe='form,textarea,input,[contenteditable="true"],[role="textbox"],nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"],[data-testid="user-message"]';
  const text=String(candidate?.innerText||'');
  const headingList=candidate?[...candidate.querySelectorAll('h1,h2,h3,h4,h5,h6')]:[];
- const editors=candidate?[...candidate.querySelectorAll('form,textarea,input,[contenteditable="true"],[role="textbox"]')]:[];
- const isolatedEditor=editors.length===1&&!tables.some(t=>t.contains(editors[0]))&&
-   !candidate.querySelector('nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"],[data-testid="user-message"]');
+ // A composer may be omitted from unverified DOM evidence, but its
+ // browser pixels could reveal an unsent draft. Never screenshot that scope.
+ if(candidate?.querySelector('form,textarea,input,[contenteditable="true"],[role="textbox"]'))
+   return fail('editor-overlap-no-screenshot');
  if(!candidate||candidate===main||ancestor!==main||depth<3||depth>=55||
-    candidate.matches(unsafe)||(!isolatedEditor&&candidate.querySelector(unsafe))||
+    candidate.matches(unsafe)||candidate.querySelector(unsafe)||
     candidate.closest('nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"]')||
     headingList.some(e=>/^(?:You said|你说|你发送)\s*[:：]?$/i.test(String(e.textContent||'').trim()))||
     headingList.length<2||candidate.querySelectorAll('p').length<10||
