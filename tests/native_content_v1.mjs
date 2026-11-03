@@ -7,10 +7,15 @@ const sent = [];
 class Element {
   constructor(tagName, children=[]) { this.tagName=tagName; this.childNodes=children;
     this.isConnected=true; this.parentElement=null;
-    for(const c of children) if(c instanceof Element)c.parentElement=this;
+    let previous=null;
+    for(const c of children) if(c instanceof Element){
+      c.parentElement=this;c.previousElementSibling=previous;
+      if(previous)previous.nextElementSibling=c;
+      previous=c;
+    }
   }
   getBoundingClientRect(){return {width:100,height:100};}
-  matches(s){return false;}
+  matches(s){return s.split(",").some(v=>v.trim().toUpperCase()===this.tagName);}
   closest(s){return null;}
   querySelectorAll(selector){
     const out=[];
