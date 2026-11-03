@@ -27,7 +27,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.3.8"
+VERSION = "1.3.9"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -87,31 +87,43 @@ else {
   if(!/^req_diag_[A-Za-z0-9_-]{6,100}$/.test(expected))
     return {ok:false,error:'no-verified-assistant-boundary'};
   const main=document.querySelector('main,[role="main"]');
-  const tables=[...document.querySelectorAll('main table,main [role="table"],[role="main"] table')]
-    .filter(e=>e.isConnected&&visible(e)).slice(0,200);
-  if(!main||tables.length<3)return {ok:false,error:'no-verified-assistant-boundary'};
-  let candidate=tables[0].parentElement;
-  while(candidate&&tables.some(e=>!candidate.contains(e)))candidate=candidate.parentElement;
-  let depth=0,ancestor=candidate;
-  while(ancestor&&ancestor!==main&&depth<55){ancestor=ancestor.parentElement;depth++;}
-  const headings=candidate?.querySelectorAll('h1,h2,h3,h4,h5,h6')||[];
-  const paragraphs=candidate?.querySelectorAll('p')||[];
-  const text=String(candidate?.innerText||'');
-  const unsafe='form,textarea,input,[contenteditable="true"],[role="textbox"],nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"],[data-testid="user-message"]';
-  const userHeading=[...headings].some(e=>/^(?:You said|你说|你发送)\s*[:：]?$/i.test(norm(e.textContent)));
-  const editors=candidate?[...candidate.querySelectorAll('form,textarea,input,[contenteditable="true"],[role="textbox"]')]:[];
-  const isolatedEditor=editors.length===1&&!tables.some(t=>t.contains(editors[0]))&&
-    !candidate.querySelector('nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"],[data-testid="user-message"]');
-  const safe=!!candidate&&candidate!==main&&ancestor===main&&
-    !candidate.matches(unsafe)&&
-    !candidate.closest('nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"]')&&
-    (!candidate.querySelector(unsafe)||isolatedEditor)&&!hasUser(candidate)&&!userHeading&&
-    tables.every(e=>candidate.contains(e))&&depth>=3&&depth<55&&
-    candidate.children.length>=4&&headings.length>=2&&
-    paragraphs.length>=10&&text.length>=600&&text.length<=250000&&
-    candidate.getBoundingClientRect().height>=500&&visible(candidate);
-  if(!safe)return {ok:false,error:'no-verified-assistant-boundary'};
-  roots=[candidate];scope='inferred-rich-table-candidate';boundaryVerified=false;
+  if(!main)return {ok:false,error:'no-verified-assistant-boundary'};
+
+
+  const sel='p,pre,blockquote,table,[role="table"],figure,img,h1,h2,h3,h4,h5,h6';
+  const seeds=[...main.querySelectorAll(sel)].slice(0,1500);
+  const ancestors=new Set();
+  for(const seed of seeds){
+   if(!visible(seed))continue;
+   let depth=0;
+   for(let e=seed.parentElement;e&&e!==main&&depth++<55;e=e.parentElement)
+    if(/^(DIV|ARTICLE|SECTION)$/.test(e.tagName))ancestors.add(e);
+  }
+  const danger='nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"],[data-testid="user-message"]';
+  const editor='form,textarea,input,[contenteditable="true"],[role="textbox"]';
+  let best=null;
+  for(const el of ancestors){
+   if(!el.isConnected||!visible(el)||el.closest(danger)||el.querySelector(danger))continue;
+   const rect=el.getBoundingClientRect();
+   if(rect.width<100||rect.height<60||rect.height>60000)continue;
+   const editors=el.querySelectorAll(editor).length;
+   if(editors>2)continue;
+   const blocks=el.querySelectorAll(sel);
+   if(blocks.length<2||blocks.length>15000)continue;
+   const p=el.querySelectorAll('p,pre,blockquote').length;
+   const h=el.querySelectorAll('h1,h2,h3,h4,h5,h6').length;
+   const tables=el.querySelectorAll('table,[role="table"]').length;
+   const images=el.querySelectorAll('figure,img').length;
+   const chars=String(el.innerText||'').trim().length;
+   if(chars>250000||chars<200&&images===0)continue;
+   if(p<2&&h<1&&tables<1&&images<1)continue;
+   if([...el.querySelectorAll('h4,h5,h6')].some(n=>/^(You said|你说|你发送)\s*[:：]?$/i.test(norm(n.textContent))))continue;
+   const score=chars+blocks.length*8+h*40+tables*80+Math.min(images,20)*35-editors*300;
+   if(!best||score>best.score||score===best.score&&rect.height<best.height)
+    best={el,score,height:rect.height};
+  }
+  if(!best)return {ok:false,error:'no-verified-assistant-boundary'};
+  roots=[best.el];scope='inferred-rich-content-candidate';boundaryVerified=false;
  }else{
  const heading=h[h.length-1];
  const turn=heading.closest('[data-testid="conversation-turn"],article,[data-testid="assistant-message"]');
@@ -175,10 +187,10 @@ function walk(node,depth){
 }
 const children=[];for(const e of roots){const n=walk(e,0);if(n)children.push(n);if(reason)break;}
 // A content script runs in an isolated Chrome world, invisible to the
-// default DevTools Runtime.evaluate context. Trust only the DOM marker placed
+
 // by request-v6 for the exact request. Never infer it from page similarity.
 return {ok:!reason,reason,version:1,scope,boundary_verified:boundaryVerified,
- boundary_evidence:scope==='inferred-rich-table-candidate'?{
+ boundary_evidence:scope==='inferred-rich-content-candidate'?{
   table_count:roots[0].querySelectorAll('table,[role="table"]').length,
   heading_count:roots[0].querySelectorAll('h1,h2,h3,h4,h5,h6').length,
   paragraph_count:roots[0].querySelectorAll('p').length,
@@ -420,7 +432,7 @@ MEDIA_CROP_PREP = r"""(function(expected,index){
   index,natural_width:img.naturalWidth,natural_height:img.naturalHeight};
 })"""
 
-# Installed in the dedicated diagnostic tab before fresh navigation or reload.
+
 # Records counts of browser failures without reading messages, stacks, URLs,
 # HTTP contents, cookies, storage, headers or user data.
 NEW_DOCUMENT_ERRORS = r"""(function(){
@@ -1265,7 +1277,7 @@ def status(folder,stage,percent,error=None,**meta):
                 data["page_probe"]=previous["page_probe"]
         except (ValueError,OSError,TypeError):pass
     tmp=folder/"status.tmp";tmp.write_text(json.dumps(data));tmp.replace(folder/"status.json")
-    # A bounded, versioned operational timeline travels with the diagnostic ZIP.
+
     # Never append page URLs, Chrome credentials, request text or image bytes.
     try:
         with (folder/"diagnostic.log").open("a",encoding="utf8") as stream:
@@ -1796,7 +1808,7 @@ async def _capture_inner(args,owned_tabs):
                                        attempt=i+1)
                                 return page,obj,tab_id
                             # 429 may be caused by historical page traffic or
-                            # this diagnostic. Avoid automatic reload/extra fetch.
+
                             if probe.get("fetch_http_recent_429") or probe.get("conversation_api_recent_429"):
                                 last_probe["rate_limit_detected"]=True
                                 break
@@ -1836,7 +1848,7 @@ async def _capture_inner(args,owned_tabs):
                                 try:
                                     await cdp.call("Page.enable")
                                     # This script is registered on OUR new
-                                    # tab only and sees no error message/body.
+
                                     try:
                                         await cdp.call("Page.addScriptToEvaluateOnNewDocument",
                                             {"source":NEW_DOCUMENT_ERRORS},timeout=5)
@@ -1890,9 +1902,9 @@ async def _capture_inner(args,owned_tabs):
         return None,None,tab_id
 
     if not picked and target_url:
-        # Existing exact-URL tabs are both safer and more diagnostically useful
+
         # than repeatedly creating/reloading more copies of the same page.
-        # If they have no verified answer, stop with their structural evidence.
+
         existing,found,evidence=await read_existing_history_tab(target_url,"")
         observation_rounds=1
         # Poll only existing DOM state. Never reload or request conversation
@@ -2027,7 +2039,7 @@ async def _capture_inner(args,owned_tabs):
             # verified in-page snapshot can include images loaded meanwhile.
             if not boundary_verified:
                 # The currently deployed server ZIP receiver requires the
-                # assistant_dom.json name. Supply a *non-content* compatibility
+
                 # stub, never mislabel the candidate as an assistant reply.
                 archive.writestr("assistant_dom.json",json.dumps({
                     "schema":"native-page-boundary-unverified-v1",
@@ -2125,7 +2137,7 @@ async def _capture_inner(args,owned_tabs):
                     if screenshot_complete:screenshot_skip_reason="none"
             else:
                 # Existing-tab DOM reads MUST remain read-only; do not scroll
-                # or sample unrelated viewport areas as if they were assistant.
+
                 screenshot_skip_reason="verified-screenshot-needs-safe-viewport"
 
             # A screenshot can show images that were still unloaded during
@@ -2276,7 +2288,7 @@ async def _capture_inner(args,owned_tabs):
                 and screenshot_skip_reason!="dom-changed-during-capture"):
                 screenshot_skip_reason="rounding-tail-1-to-2-px"
             # Independent candidate validation adds replay inputs and reports;
-            # normal diagnosis remains downloadable even when validation fails.
+
             status(folder,"validating-delivery",88,tool_version=VERSION)
             extra_buffer=BytesIO()
             try:
@@ -2544,7 +2556,7 @@ async def validation_originals(cdp,frame,context,fixture,archive):
                 raw=base64.b64decode(rawurl.split(";base64,",1)[1],validate=True)
             elif allowed:
                 # Read the already-loaded image response from THIS page's
-                # cache. No HTTP request, cookies, headers or URL are exported.
+
                 response=await cdp.call("Page.getResourceContent",{"frameId":frame,"url":rawurl},timeout=8)
                 if not response.get("base64Encoded"):raise ValueError("image_cache_not_binary")
                 encoded=response.get("content") or ""
@@ -2594,7 +2606,7 @@ async def validation_native_files(cdp,context,texts,archive,allow_click):
     if main.count('"__CHAT2API_NATIVE_FILE_MAIN_V210__"')!=1 or main.count('"chat2api.native-file.v210"')!=1 or content.count('"chat2api.native-file.v210"')!=1:
         return {"status":"failed","reason":"candidate-file-hook-contract-changed","files":[]}
     # Only the singleton key and private message channel are namespaced. All
-    # capture/filename/MIME/signature logic remains the pinned production code.
+
     main=main.replace('"__CHAT2API_NATIVE_FILE_MAIN_V210__"',json.dumps(channel+".main"),1).replace('"chat2api.native-file.v210"',json.dumps(channel),1)
     content=content.replace('"chat2api.native-file.v210"',json.dumps(channel),1)
     await validation_eval(cdp,main)
@@ -2657,7 +2669,7 @@ async def validation_capture_snapshot(cdp,context,texts):
 def validation_server(texts,snapshot,assets,folder):
     import tempfile
     ns={"__name__":"chat2api_validation_candidate"}
-    # Source was fetched from the fixed trusted repo, or explicit --source-dir.
+
     # Never import any .py/.js that happened to arrive inside the fixture ZIP.
     exec(compile(texts["app/native_content_v1.py"],"candidate/app/native_content_v1.py","exec"),ns)
     validated=ns["validate_native_snapshot"](snapshot)
