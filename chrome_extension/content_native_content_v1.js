@@ -37,9 +37,8 @@
   const length = /^(?:0|\d{1,4}(?:\.\d{1,3})?px|\d{1,4}(?:\.\d{1,2})?(?:rem|%))$/;
   const lengthList = (value, count) => value.length <= 80 &&
     value.split(/\s+/).length <= count && value.split(/\s+/).every(part => length.test(part));
-  // ChatGPT's wide tables use negative horizontal margins to cancel a
-  // matching 395px inner padding. Preserve bounded pixel offsets only.
-  const safeNegativeMargin = value => /^-(?:[1-9]\d{0,3})(?:\.\d{1,2})?px$/.test(value) &&
+  // Preserve bounded computed offsets in any direction, not sample-specific pixel values.
+  const safeNegativeMargin = value => /^-(?:[1-9]\d{0,3})(?:\.\d{1,3})?px$/.test(value) &&
     Math.abs(Number.parseFloat(value)) <= 1024;
   // Computed row borders are often "0px 0px 1px". Discarding this
   // shorthand makes the browser invent a 3px medium border for solid rows.
@@ -75,7 +74,7 @@
           allowedLength.has(key) && value.length <= 16 && length.test(value) ||
           key === "padding" && lengthList(value,4) ||
           key === "borderSpacing" && lengthList(value,2) ||
-          (key === "marginLeft" || key === "marginRight") && safeNegativeMargin(value) ||
+          ["marginTop","marginBottom","marginLeft","marginRight"].includes(key) && safeNegativeMargin(value) ||
           key === "borderWidth" && safeBorderWidths(value) ||
           ["color","backgroundColor","borderColor"].includes(key) && value.length <= 48 && color.test(value) ||
           key === "gridTemplateColumns" && value.length <= 120 && (grid.test(value) || gridTrack.test(value)) ||
@@ -208,7 +207,8 @@
           "p,ol,ul,table,figure,pre,blockquote,h1,h2,h3,h4,h5,h6") &&
         element.nextElementSibling?.matches?.(
           "p,ol,ul,table,figure,pre,blockquote,h1,h2,h3,h4,h5,h6");
-      const emptyLayout=mapped==="div" && element.childNodes.length===0 &&
+      const emptyLayout=mapped==="div" && [...element.childNodes].every(n=>
+          n.nodeType===Node.TEXT_NODE && !String(n.nodeValue||"").trim()) &&
         children.length===0 && rect && Number.isFinite(rect.width) &&
         Number.isFinite(rect.height) && rect.width>=12 && rect.width<=8192 &&
         rect.height>=2 && rect.height<=8192 &&
