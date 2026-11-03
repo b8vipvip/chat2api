@@ -18,6 +18,7 @@
     if (!token) throw new Error("请先输入管理员主密钥并连接");
     const response = await fetch(path, {
       method: options.method || "GET", cache: "no-store",
+      signal: options.signal,
       headers: {
         Authorization: "Bearer " + token,
         ...(options.body !== undefined ? {"Content-Type": "application/json"} : {}),
@@ -214,6 +215,137 @@
     el.textContent = String(message);
     el.style.color = bad ? "#ef9d9d" : "#9cb5d4";
   }
+  const nativePageExports = new Map();
+  const nativePageExportLimit = 18 * 1024 * 1024;
+  const nativePageExportLifetime = 10 * 60 * 1000;
+  function nativePageExportButtons() {
+    for (const button of root.querySelectorAll("button[data-native-export]")) {
+      const entry = nativePageExports.get(button.dataset.nativeExport);
+      button.disabled = entry?.state === "loading";
+      button.textContent = entry?.state === "loading" ? "下载中…"
+        : entry?.state === "ready" ? "再次保存" + button.dataset.exportKind
+        : entry?.state === "failed" ? "重试下载" : button.dataset.exportLabel;
+    }
+  }
+  function nativePageReleaseExport(id) {
+    const entry = nativePageExports.get(id);
+    if (entry?.url) URL.revokeObjectURL(entry.url);
+    if (entry?.timer) clearTimeout(entry.timer);
+    nativePageExports.delete(id);
+  }
+  function nativePageRenderExports() {
+    const panel = $("nativePageDownloads");
+    if (!panel) return;
+    panel.replaceChildren();
+    const mib = bytes => (bytes / 1048576).toFixed(1) + " MiB";
+    for (const entry of nativePageExports.values()) {
+      const row = elem("div", undefined, "native-tool-bar");
+      row.append(elem("span", entry.filename + " · "));
+      if (entry.state === "ready") {
+        const link = elem("a", "保存" + entry.kind, "action");
+        link.href = entry.url; link.download = entry.filename;
+        link.onclick = () => nativePageMessage("已请求浏览器保存文件，请查看浏览器下载列表。");
+        entry.link = link;
+        row.append(elem("span", mib(entry.loaded) + " · 文件已就绪，保存链接保留 10 分钟。"), link);
+      } else if (entry.state === "failed") {
+        row.append(elem("span", entry.error));
+      } else {
+        row.append(elem("span", entry.loaded
+          ? "正在接收 " + mib(entry.loaded) + (entry.total ? " / " + mib(entry.total) : "")
+          : "正在获取文件…"));
+        const cancel = elem("button", "取消", "action");
+        cancel.onclick = () => { entry.cancelled = true; entry.controller.abort(); };
+        row.append(cancel);
+      }
+      panel.append(row);
+    }
+    nativePageExportButtons();
+  }
+  async function nativePageExport(item, format) {
+    const id = item.job_id + ":" + format;
+    const existing = nativePageExports.get(id);
+    if (existing?.state === "loading") return;
+    if (existing?.state === "ready") {
+      nativePageRenderExports();
+      try { existing.link?.click(); } catch (_) { nativePageMessage("请点击下方保存链接，再查看浏览器下载列表。"); }
+      return;
+    }
+    if (!$("nativePageDownloads")) {
+      nativePageMessage("下载界面尚未加载，请刷新页面后重试。", true); return;
+    }
+    const controller = new AbortController();
+    const entry = {state:"loading", loaded:0, total:0, controller,
+      kind:format === "zip" ? " ZIP" : "日志",
+      filename:(format === "zip" ? "native-page-" +
+        (item.target_type === "conversation_url" ? "history-url" : item.request_id) +
+        "-" + item.job_id.slice(0,8) + "-v" + item.tool_version + ".zip"
+        : "native-page-" + item.job_id.slice(0,8) + "-diagnostic.json").replace(/[\\/\x00-\x1f]/g,"_")};
+    nativePageExports.set(id, entry);
+    nativePageRenderExports();
+    nativePageMessage("正在下载" + entry.kind + "，接收进度显示在下方。");
+    const timeout = setTimeout(() => { entry.timedOut = true; controller.abort(); }, 120000);
+    let reader;
+    try {
+      const response = await apiRequest("/api/admin/worker-tools/native-page/jobs/" +
+        encodeURIComponent(item.job_id) + (format === "zip" ? "/download" : "/log"),
+        {signal:controller.signal});
+      const declared = response.headers.get("Content-Length") || "";
+      entry.total = format === "zip" && Number(item.size) > 0 ? Number(item.size)
+        : !response.headers.get("Content-Encoding") && /^\d+$/.test(declared) ? Number(declared) : 0;
+      if (entry.total > nativePageExportLimit) throw new Error("文件超出诊断包大小上限，请重新诊断后重试。");
+      let blob;
+      if (response.body?.getReader) {
+        reader = response.body.getReader();
+        const chunks = [];
+        let reported = 0;
+        while (true) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          entry.loaded += value.byteLength;
+          if (entry.loaded > nativePageExportLimit) throw new Error("文件超出诊断包大小上限。");
+          chunks.push(value);
+          if (entry.loaded - reported >= 262144) { reported = entry.loaded; nativePageRenderExports(); }
+        }
+        blob = new Blob(chunks, {type:format === "zip" ? "application/zip" : "application/json"});
+      } else {
+        blob = await response.blob(); entry.loaded = blob.size;
+      }
+      if (controller.signal.aborted) throw new Error("下载已中断");
+      if (!blob.size || blob.size > nativePageExportLimit || entry.total && blob.size !== entry.total)
+        throw new Error("文件未接收完整，请点击重试下载。");
+      if (format === "zip") {
+        const head = new Uint8Array(await blob.slice(0,4).arrayBuffer());
+        if (head[0] !== 80 || head[1] !== 75 || !((head[2] === 3 && head[3] === 4) || (head[2] === 5 && head[3] === 6)))
+          throw new Error("返回内容不是有效的诊断 ZIP，请重新登录或重试。");
+      }
+      if (controller.signal.aborted) throw new Error("下载已中断");
+      entry.url = URL.createObjectURL(blob); entry.state = "ready";
+      // Bound retained files, while allowing a real user click to retry saving
+      // without another authenticated fetch or an expired user activation.
+      const ready = [...nativePageExports].filter(([,x]) => x.state === "ready");
+      while (ready.length > 3) nativePageReleaseExport(ready.shift()[0]);
+      entry.timer = setTimeout(() => { nativePageReleaseExport(id); nativePageRenderExports(); }, nativePageExportLifetime);
+      nativePageRenderExports();
+      try { entry.link.click(); } catch (_) { /* The visible link remains usable. */ }
+      nativePageMessage("文件已接收，已请求浏览器保存。没有出现下载时，请点击下方“保存" + entry.kind + "”。");
+    } catch (error) {
+      entry.state = "failed";
+      entry.error = entry.cancelled ? "下载已取消，可点击重试下载。"
+        : entry.timedOut ? "下载超时，可点击重试下载。"
+        : error.name === "TypeError" || error.name === "AbortError" ? "网络连接中断，可点击重试下载。"
+        : String(error.message || "下载失败，请重试。");
+      nativePageRenderExports(); nativePageMessage(entry.error, true);
+    } finally {
+      clearTimeout(timeout); controller.abort();
+      if (reader) { try { await reader.cancel(); } catch (_) {} reader.releaseLock(); }
+    }
+  }
+  window.addEventListener("pagehide", () => {
+    for (const [id,entry] of nativePageExports) {
+      entry.controller.abort(); nativePageReleaseExport(id);
+    }
+    nativePageRenderExports();
+  });
   async function nativePageWorkers() {
     const target = $("nativePageWorker");
     if (!target) return;
@@ -277,33 +409,15 @@
       row.append(pct);
       const cell = elem("td");
       const log = elem("button", "导出日志", "action");
-      log.onclick = async () => {
-        try {
-          const response = await apiRequest("/api/admin/worker-tools/native-page/jobs/" +
-            encodeURIComponent(item.job_id) + "/log");
-          const url = URL.createObjectURL(await response.blob());
-          const link = elem("a");
-          link.href = url; link.download = "native-page-" + item.job_id.slice(0,8) + "-diagnostic.json";
-          link.click();
-          setTimeout(() => URL.revokeObjectURL(url), 3000);
-        } catch (error) { nativePageMessage(error.message, true); }
-      };
+      log.dataset.nativeExport = item.job_id + ":log";
+      log.dataset.exportKind = "日志"; log.dataset.exportLabel = "导出日志";
+      log.onclick = () => nativePageExport(item, "log");
       cell.append(log);
       if (state === "completed") {
         const action = elem("button", "导出诊断 ZIP", "action");
-        action.onclick = async () => {
-          try {
-            const response = await apiRequest("/api/admin/worker-tools/native-page/jobs/" +
-              encodeURIComponent(item.job_id) + "/download");
-            const url = URL.createObjectURL(await response.blob());
-            const link = elem("a");
-            link.href = url; link.download = "native-page-" +
-              (item.target_type === "conversation_url" ? "history-url" : item.request_id) +
-              "-" + item.job_id.slice(0,8) + "-v" + item.tool_version + ".zip";
-            link.click();
-            setTimeout(() => URL.revokeObjectURL(url), 3000);
-          } catch (error) { nativePageMessage(error.message, true); }
-        };
+        action.dataset.nativeExport = item.job_id + ":zip";
+        action.dataset.exportKind = " ZIP"; action.dataset.exportLabel = "导出诊断 ZIP";
+        action.onclick = () => nativePageExport(item, "zip");
         cell.append(action);
       }
       row.append(cell); target.append(row);
@@ -313,6 +427,7 @@
       const cell = elem("td", "暂无诊断记录");
       cell.colSpan = 7; empty.append(cell); target.append(empty);
     }
+    nativePageExportButtons();
     if (nativePageTimer) { clearTimeout(nativePageTimer); nativePageTimer = null; }
     if (active && $("view-worker-tools").classList.contains("active")) {
       nativePageTimer = setTimeout(() => nativePageRecords().catch(
