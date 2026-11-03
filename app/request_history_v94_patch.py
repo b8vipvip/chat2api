@@ -207,7 +207,7 @@ const requestHistoryNativeTags=new Set(
   'div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br'.split(' ')
 );
 const requestHistoryNativeStyles=new Set(
-  'display boxSizing borderCollapse borderSpacing flexDirection flexWrap justifyContent alignItems objectFit textAlign fontWeight whiteSpace wordBreak overflowWrap verticalAlign textDecorationLine borderStyle alignSelf justifySelf gap rowGap columnGap padding marginTop marginBottom marginLeft marginRight width minWidth maxWidth height minHeight maxHeight borderRadius borderWidth letterSpacing fontSize lineHeight color backgroundColor borderColor gridTemplateColumns'.split(' ')
+  'display boxSizing borderCollapse borderSpacing flexDirection flexWrap justifyContent alignItems objectFit textAlign fontWeight whiteSpace wordBreak overflowWrap verticalAlign textDecorationLine borderStyle alignSelf justifySelf gap rowGap columnGap padding marginTop marginBottom marginLeft marginRight width minWidth maxWidth height minHeight maxHeight borderRadius borderWidth letterSpacing fontSize lineHeight color backgroundColor borderColor gridTemplateColumns gridTemplateRows'.split(' ')
 );
 function requestHistoryOwnedImageUrl(value){
   try{
