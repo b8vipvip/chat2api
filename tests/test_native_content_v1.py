@@ -36,6 +36,7 @@ def test_disallowed_native_content_is_rejected(payload):
 @pytest.mark.parametrize("styles", [
     {"marginLeft": "-395px", "marginRight": "-395px"},
     {"marginLeft": "-4px"},
+    {"marginTop": "-395px", "marginBottom": "-17.125px"},
     {"borderWidth": "0px 0px 1px"},
     {"borderWidth": "0px 1px 0px 1px"},
 ])
@@ -49,7 +50,8 @@ def test_wide_table_safe_margins_and_row_borders(styles):
     {"marginLeft": "-1025px"}, {"marginRight": "-9999px"},
     {"marginLeft": "-395%"}, {"marginRight": "calc(-395px)"},
     {"marginLeft": "-395px;position:absolute"},
-    {"marginTop": "-395px"}, {"marginRight": "-.5px"},
+    {"marginTop": "-1025px"}, {"marginRight": "-.5px"},
+    {"marginBottom": "-12.1234px"},
     {"borderWidth": "0px 0px 17px"},
     {"borderWidth": "1px 2px 3px 4px 5px"},
     {"borderWidth": "-1px"}, {"borderWidth": "1px solid red"},
