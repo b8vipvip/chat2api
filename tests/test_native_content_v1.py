@@ -33,6 +33,34 @@ def test_disallowed_native_content_is_rejected(payload):
     with pytest.raises(ValueError):
         validate_native_snapshot(payload)
 
+@pytest.mark.parametrize("styles", [
+    {"marginLeft": "-395px", "marginRight": "-395px"},
+    {"marginLeft": "-4px"},
+    {"borderWidth": "0px 0px 1px"},
+    {"borderWidth": "0px 1px 0px 1px"},
+])
+def test_wide_table_safe_margins_and_row_borders(styles):
+    value = {"version": 1, "revision": 1,
+             "root": {"tag": "div", "style": styles}}
+    assert validate_native_snapshot(value) == value
+
+
+@pytest.mark.parametrize("styles", [
+    {"marginLeft": "-1025px"}, {"marginRight": "-9999px"},
+    {"marginLeft": "-395%"}, {"marginRight": "calc(-395px)"},
+    {"marginLeft": "-395px;position:absolute"},
+    {"marginTop": "-395px"}, {"marginRight": "-.5px"},
+    {"borderWidth": "0px 0px 17px"},
+    {"borderWidth": "1px 2px 3px 4px 5px"},
+    {"borderWidth": "-1px"}, {"borderWidth": "1px solid red"},
+    {"borderWidth": "var(--b)"},
+])
+def test_wide_table_margins_and_borders_reject_unsafe_values(styles):
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1,
+                                  "root": {"tag": "div", "style": styles}})
+
+
 def test_safe_layout_is_preserved():
     assert validate_native_snapshot(snapshot()) == snapshot()
 
