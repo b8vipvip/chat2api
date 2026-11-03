@@ -729,6 +729,21 @@ def image_loaded_count(report):
     return count
 
 
+def image_dimensions_sequence(report):
+    """Exact DOM traversal image index and size ordering, no URL exports."""
+    result=[]
+    def walk(node):
+        if not isinstance(node,dict):return
+        image=node.get("image")
+        if isinstance(image,dict):
+            result.append((image.get("index"),
+                image.get("natural_width"),image.get("natural_height")))
+        for child in node.get("children") or ():
+            walk(child)
+    walk(report.get("root") or {})
+    return result
+
+
 def reference_matches(report,hashes):
     """Compare assistant-only normalized text by digest; export no snippets."""
     if not isinstance(report,dict) or not report.get("ok") or len(hashes)<2:return 0
@@ -1672,6 +1687,7 @@ async def _capture_inner(args,owned_tabs):
             # Never export the URL itself or claim to have original bytes.
             rendered_image_evidence=[]
             image_source_probe_ok=False
+            image_source_consistent=False
             if (not boundary_verified and
                 tab_origin=="dedicated-worker-tab" and
                 str(picked.get("id") or "") in owned_tabs and
@@ -1687,6 +1703,11 @@ async def _capture_inner(args,owned_tabs):
                     image_source_probe_ok=bool(
                         images.get("ok") and isinstance(source_rows,list)
                         and len(source_rows)==int(report["counts"]["images"])
+                        and [
+                            (row.get("index"),row.get("natural_width"),
+                             row.get("natural_height"))
+                            for row in source_rows if isinstance(row,dict)
+                        ]==image_dimensions_sequence(report)
                         and all(isinstance(row,dict)
                             and row.get("index")==idx
                             and isinstance(row.get("natural_width"),int)
@@ -1736,9 +1757,28 @@ async def _capture_inner(args,owned_tabs):
                                 "original_bytes_captured":False})
                             if path.stat().st_size>MAX_ZIP:
                                 raise RuntimeError("evidence_zip_size_limit")
+                    if image_source_probe_ok:
+                        after=await cdp.call("Runtime.evaluate",{
+                            "expression":MEDIA_SOURCE_PROBE+"("+
+                                json.dumps(args.request_id)+")",
+                            "awaitPromise":True,"returnByValue":True,
+                            "silent":True},timeout=15)
+                        rows_after=((after.get("result") or {}).get("value")
+                            or {}).get("images") or []
+                        image_source_consistent=bool(
+                            isinstance(rows_after,list)
+                            and len(rows_after)==len(source_rows)
+                            and all(
+                                isinstance(a,dict) and
+                                a.get("index")==b.get("index") and
+                                a.get("source_url_sha256")==b.get("source_url_sha256") and
+                                a.get("natural_width")==b.get("natural_width") and
+                                a.get("natural_height")==b.get("natural_height")
+                                for a,b in zip(rows_after,source_rows)))
                 except Exception:
                     image_source_probe_ok=False
             report["rendered_image_evidence"]=rendered_image_evidence
+            report["rendered_image_source_consistent"]=image_source_consistent
             archive.writestr(dom_filename,json.dumps(report,ensure_ascii=False))
             remaining_px=max(0,int(rect["h"])-screenshot_coverage_px)
             screenshot_near_complete=(screens>0 and remaining_px<=2
@@ -1761,8 +1801,10 @@ async def _capture_inner(args,owned_tabs):
                 "loaded_images_before":loaded_images_before,
                 "loaded_images_after":loaded_images_after,
                 "image_source_probe_ok":image_source_probe_ok,
+                "image_source_consistent":image_source_consistent,
                 "rendered_image_crop_count":len(rendered_image_evidence),
                 "rendered_image_crops_complete":(
+                    image_source_consistent and
                     len(rendered_image_evidence)==
                     int(report.get("counts",{}).get("images") or 0) and
                     len(rendered_image_evidence)>0),
