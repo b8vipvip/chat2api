@@ -58,6 +58,8 @@ COLOR_STYLES = {"color", "backgroundColor", "borderColor"}
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{3,8}$")
 RGB_COLOR = re.compile(r"^rgba?\([0-9.,\s]+\)$")
 LENGTH = re.compile(r"^(?:0|(?:\d{1,4}(?:\.\d{1,2})?)(?:px|rem|%))$")
+NEGATIVE_MARGIN_PX = re.compile(r"^-(?:[1-9]\d{0,3})(?:\.\d{1,2})?px$")
+BORDER_WIDTH_PX = re.compile(r"^(?:0|\d{1,2}(?:\.\d{1,2})?px)$")
 GRID_COLUMNS = re.compile(r"^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$")
 
 
@@ -131,6 +133,16 @@ def validate_native_snapshot(payload: object) -> dict:
                 elif (key in {"padding", "borderSpacing"} and len(item) <= 80
                       and 1 <= len(item.split()) <= (4 if key == "padding" else 2)
                       and all(LENGTH.fullmatch(part) for part in item.split())):
+                    styles[key] = item
+                elif (key in {"marginLeft", "marginRight"} and len(item) <= 16
+                      and NEGATIVE_MARGIN_PX.fullmatch(item)
+                      and abs(float(item[:-2])) <= 1024):
+                    styles[key] = item
+                elif (key == "borderWidth" and len(item) <= 64
+                      and 1 <= len(item.split()) <= 4
+                      and all(BORDER_WIDTH_PX.fullmatch(part)
+                              and float(part.removesuffix("px")) <= 16
+                              for part in item.split())):
                     styles[key] = item
                 elif key in LENGTH_STYLES and LENGTH.fullmatch(item) and len(item) <= 16:
                     styles[key] = item
