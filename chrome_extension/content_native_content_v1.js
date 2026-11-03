@@ -57,12 +57,12 @@
   const cssList = [...new Set([
     // Preserve table geometry even if the 32-key style budget is full.
     "display","boxSizing","borderCollapse","borderSpacing","borderWidth",
-    "marginLeft","marginRight","padding","width","height","minWidth","maxWidth",
+    "marginTop","marginBottom","marginLeft","marginRight","padding","width","height","minWidth","maxWidth",
     "gridTemplateColumns","gridTemplateRows","flexDirection","flexWrap","justifyContent",
     "alignItems","objectFit","textAlign","color","backgroundColor",
     "borderColor","fontWeight","fontSize","lineHeight","whiteSpace",
     "wordBreak","overflowWrap","gap","rowGap","columnGap",
-    "marginTop","marginBottom","minHeight","maxHeight",
+    "minHeight","maxHeight",
     "borderRadius",
     ...Object.keys(styleKeys),...allowedLength,
   ])];
@@ -197,32 +197,32 @@
         const value = build(child, depth + 1);
         if (value) children.push(value);
       }
-      // Empty cells still occupy a column; dropping them shifts every later
-      // cell and can make text spill into the following paragraph.
-      // A visible but unfilled Grid region is meaningful layout, even when
-      // it contains no approved text or raster children. The 0db39fd4
-      // fixture includes a 423px gallery reservation that was collapsed,
-      // shifting every later section. Preserve only bounded in-scope boxes.
-      const emptyGridSpacer = mapped === "div" && computed.display === "grid" &&
-        rect && rect.width >= 24 && rect.height >= 12 && rect.height <= 2048 &&
-        rect.width <= 3000 && children.length === 0;
-      // Empty 17px block with 16px top margin after a table in the
-      // fa937767 sample; dropping it shifts all following sections 33px.
-      // Limit this to visible, contentless, bounded blocks within reply scope.
-      const emptyBlockSpacer = mapped === "div" && computed.display === "block" &&
-        rect && rect.width >= 240 && rect.width <= 3000 &&
-        rect.height >= 12 && rect.height <= 512 &&
-        element.childNodes.length === 0 && children.length === 0 &&
-        ((/^\d{1,2}(?:\.\d{1,3})?px$/.test(computed.marginTop) &&
-          parseFloat(computed.marginTop) >= 8) ||
-          // A 17px separator after an OL and before an H2 remains even
-          // without a positive margin in the 0db39fd4 tail.
-          (element.previousElementSibling?.matches?.("ol,ul") &&
-           element.nextElementSibling?.matches?.("h1,h2,h3,h4")));
-      if (!children.length && !["hr","br","td","th"].includes(mapped) &&
-          !emptyGridSpacer && !emptyBlockSpacer) return null;
+      // Keep measurable, genuinely empty layout boxes inside the already
+      // selected reply. Their dimensions come from computed geometry; no
+      // chat-specific pixel constants or heading positions are assumed.
+      const space=v=>{
+        const m=/^(?:0|(\d{1,4}(?:\.\d{1,3})?)px)$/.exec(String(v||"").trim());
+        return m?Number(m[1]||0):0;
+      };
+      const neighbor=element.previousElementSibling?.matches?.(
+          "p,ol,ul,table,figure,pre,blockquote,h1,h2,h3,h4,h5,h6") &&
+        element.nextElementSibling?.matches?.(
+          "p,ol,ul,table,figure,pre,blockquote,h1,h2,h3,h4,h5,h6");
+      const emptyLayout=mapped==="div" && element.childNodes.length===0 &&
+        children.length===0 && rect && Number.isFinite(rect.width) &&
+        Number.isFinite(rect.height) && rect.width>=12 && rect.width<=8192 &&
+        rect.height>=2 && rect.height<=8192 &&
+        ["block","grid","flex","inline-flex"].includes(computed.display) &&
+        (computed.display==="grid" || computed.display==="flex" ||
+         computed.display==="inline-flex" || space(computed.marginTop)>=2 ||
+         space(computed.marginBottom)>=2 || space(computed.paddingTop)>=2 ||
+         space(computed.paddingBottom)>=2 || neighbor);
+      if(!children.length && !["hr","br","td","th"].includes(mapped) && !emptyLayout)
+        return null;
       nodes += 1;
       const result = {tag:mapped,style:safeStyle(element)};
+      if(emptyLayout && !result.style.height)
+        result.style.height=`${Number(rect.height.toFixed(3))}px`;
       if (children.length) result.children = children;
       return result;
     };
