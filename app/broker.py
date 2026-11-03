@@ -82,6 +82,7 @@ _TERMINAL_PROVENANCE_STRINGS = {
     "terminal_worker_ack_type",
     "native_capture_failure", "native_transport_ack_error",
     "native_structural_failure",
+    "native_reply_scope_binding", "native_reply_scope_phase",
     "native_chatgpt_conversation_url",
 }
 
@@ -113,7 +114,7 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
                 result[key] = value[:100]
     for key in ("response_terminal_dom_reconciled", "terminal_integrity_upgraded",
                 "native_chunk_complete", "native_final_capture_committed", "native_observer_loaded",
-                "native_capture_attempted"):
+                "native_capture_attempted", "native_reply_scope_verified"):
         if isinstance(raw.get(key), bool):
             result[key] = raw[key]
     return result

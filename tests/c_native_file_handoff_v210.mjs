@@ -128,6 +128,24 @@ test("Office Blob created by a verified Download button without a link is captur
     assert.equal(h.clicked(),1);
   }
 });
+test("verified JSON export captures UTF-8 typed and generic Blob bytes without an anchor",async()=>{
+  const bytes=new TextEncoder().encode('{"schedule":[{"time":"09:00","volunteers":12}]}');
+  for(const mime of ["application/json;charset=utf-8","text/plain;charset=utf-8","application/octet-stream"]){
+    const h=await harness({typedButtonOnly:true,fileName:"schedule.json",mime,bytes});
+    const result=await h.content.capture(h.scope,"req_json_"+mime);
+    assert.equal(result.count,1,mime);
+    const raw=Buffer.from(result.text.match(/base64,([^)]*)/)[1],"base64");
+    assert.deepEqual(raw,Buffer.from(bytes),"export original JSON bytes without reconstruction");
+    assert.equal(h.clicked(),1);
+  }
+});
+test("generic Blob path never accepts invalid JSON as a file",async()=>{
+  const h=await harness({typedButtonOnly:true,fileName:"schedule.json",mime:"text/plain;charset=utf-8",
+    bytes:new TextEncoder().encode("<html>preview</html>")});
+  const result=await h.content.capture(h.scope,"req_json_invalid");
+  assert.equal(result.count,0);
+  assert.equal(result.failure_stages.json,"new-blob-signature-invalid");
+});
 test("MIME-less Blob without an anchor cannot be fabricated as an XLSX",async()=>{
   const h=await harness({typedButtonOnly:true,mime:""});
   const result=await h.content.capture(h.scope,"req_ambiguous");

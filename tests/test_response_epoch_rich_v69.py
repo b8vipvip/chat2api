@@ -53,7 +53,7 @@ def test_generated_media_handoff_keeps_single_request_terminal_authority():
     assert 'function isInternalMediaHandoff(value)' in source
     assert 'function hasTransferableImage(value)' in source
     assert 'captureMedia && (mediaReplyRoot || sourceMedia.length) && sourceStable' in source
-    assert 'mediaHandoffTerminalReady(active, generating, pageWorking)' in source
+    assert 'mediaHandoffTerminalReady(active, generating, pageWorking, Date.now(), scopedMediaBoundary)' in source
     assert 'if (generating || pageWorking) return false;' in source
     assert 'active.baselineUserTurns = new Set' in source
     assert 'response_terminal_source: "verified-request-media-dom-v176"' in source

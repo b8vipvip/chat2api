@@ -218,7 +218,7 @@ function requestHistoryOwnedImageUrl(value){
   }catch(_){return '';}
 }
 function requestHistoryNativeNode(value,assets,budget,depth=0){
-  if(!value||typeof value!=='object'||depth>24||++budget.count>30000
+  if(!value||typeof value!=='object'||depth>64||++budget.count>30000
       ||!requestHistoryNativeTags.has(value.tag))throw new Error('原生快照结构无效');
   const node=document.createElement(value.tag);
   // Images must follow the same validated, bounded style tree as text/cards.
@@ -241,7 +241,7 @@ function requestHistoryNativeNode(value,assets,budget,depth=0){
   }
   if(typeof value.text==='string')node.textContent=value.text;
   const children=Array.isArray(value.children)?value.children:[];
-  if(children.length>160)throw new Error('原生快照子节点超限');
+  if(children.length>8192)throw new Error('原生快照子节点超限');
   for(const child of children)node.appendChild(requestHistoryNativeNode(child,assets,budget,depth+1));
   return node;
 }

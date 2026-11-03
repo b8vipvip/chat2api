@@ -154,7 +154,11 @@ def test_f7c8_deep_game_asset_gallery_retains_media_and_grid():
     assert stats["images"] == 4
     assert stats["grid"] == 1
     assert stats["media_mapping_complete"] is True
-    for _ in range(10):
+    # 2a43: preserve the exact final tree beyond the former 24-level cap.
+    for _ in range(21):
+        root = {"tag": "div", "children": [root]}
+    assert validate_native_snapshot({"version": 1, "revision": 12, "root": root})["root"] == root
+    for _ in range(50):
         root = {"tag": "div", "children": [root]}
     with pytest.raises(ValueError, match="exceeds limit"):
         validate_native_snapshot({"version": 1, "revision": 12, "root": root})

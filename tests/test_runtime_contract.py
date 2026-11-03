@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.260"
+    assert RELEASE_VERSION == "0.22.261"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -68,7 +68,7 @@ def test_realtime_protocol_contract_matches_live_bridge():
 def test_v148_release_contract_keeps_broker_terminal_authority():
     from pathlib import Path
     from app.runtime_contract import RELEASE_VERSION, CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.260"
+    assert RELEASE_VERSION == "0.22.261"
     assert CHROME_BRIDGE_BUNDLE_VERSION == RELEASE_VERSION
     root = Path(__file__).resolve().parents[1]
     watchdog = (root / "app/request_stall_patch.py").read_text(encoding="utf-8")
@@ -142,7 +142,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     client = TestClient(runtime)
     html = client.get("/admin").text
     assert f'<script src="{ADMIN_VERSION_ASSET}"></script>' in html
-    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.260"></script>' in html
+    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.261"></script>' in html
     assert html.index('/assets/historical.js') < html.index(ADMIN_VERSION_ASSET) < html.index(ADMIN_EXTENSION_COLUMNS_ASSET)
 
     developers_html = client.get("/developers").text
@@ -157,7 +157,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     assert "MutationObserver" in script
 
     columns_script = client.get(ADMIN_EXTENSION_COLUMNS_ASSET).text
-    assert 'const VERSION = "0.22.260-worker-list-v157"' in columns_script
+    assert 'const VERSION = "0.22.261-worker-list-v157"' in columns_script
     assert 'const COLUMN_SCHEMA_REVISION = 152' in columns_script
     assert 'const STORAGE_KEY = "chat2api.extensionColumns.v3"' in columns_script
     assert 'const LEGACY_STORAGE_KEY = "chat2api.extensionColumns.v2"' in columns_script
@@ -389,7 +389,7 @@ def test_f7c8_media_handoff_does_not_complete_while_page_is_generating():
     source=(ROOT/"chrome_extension"/"content_request_v6.js").read_text("utf-8")
     assert 'function mediaHandoffTerminalReady(active, generating, pageWorking' in source
     assert 'if (generating || pageWorking) return false;' in source
-    assert 'mediaHandoffTerminalReady(active, generating, pageWorking)' in source
+    assert 'mediaHandoffTerminalReady(active, generating, pageWorking, Date.now(), scopedMediaBoundary)' in source
     assert 'media-handoff-await-page-terminal' in source
     # Keep existing request-v6 as the only authority for completion, rather
     # than permitting Worker probes or image archive callbacks to terminate.
@@ -404,4 +404,4 @@ def test_062f_media_terminal_requires_source_structure_coverage():
     assert 'scene_uncovered_block_chars' in request
     assert 'scene.changed >= 10 && scene.uncovered >= 8' in request
     assert 'media_terminal_scene_uncovered_blocks' in request
-    assert 'mediaHandoffTerminalReady(active, generating, pageWorking)' in request
+    assert 'mediaHandoffTerminalReady(active, generating, pageWorking, Date.now(), scopedMediaBoundary)' in request

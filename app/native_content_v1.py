@@ -22,7 +22,7 @@ MAX_NODES = 30000
 # Large roleless ChatGPT responses can place thousands of blocks under one
 # flex/grid parent. Byte/node caps still prevent unbounded trees.
 MAX_CHILDREN = 8192
-MAX_DEPTH = 24
+MAX_DEPTH = 64
 MAX_TEXT = 300000
 MAX_ACTIVE = 128
 MAX_AGE_SECONDS = 90 * 86400

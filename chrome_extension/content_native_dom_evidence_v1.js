@@ -89,7 +89,7 @@
     const counts={nodes:0,text_chars:0,images:0,grids:0,flex:0,tables:0,headings:0,links:0};
     let truncated=false;
     const convert=(node,depth)=>{
-      if (counts.nodes>=MAX_NODES || depth>24) { truncated=true;return null; }
+      if (counts.nodes>=MAX_NODES || depth>64) { truncated=true;return null; }
       if (node.nodeType===Node.TEXT_NODE) {
         const raw=String(node.nodeValue || "");
         if (!raw.trim()) return null;

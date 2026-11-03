@@ -18,6 +18,9 @@ def test_terminal_native_diagnostics_allowlist_and_boundaries():
         "native_capture_failure": "structural-max-depth",
         "native_transport_ack_error": "invalid-native-envelope",
         "native_structural_failure": "max-depth",
+        "native_reply_scope_verified": True,
+        "native_reply_scope_binding": "same-request-baseline+network+fresh-reply-toolbar-v260",
+        "native_reply_scope_phase": "terminal",
         "native_capture_revision": 7,
         "native_chunk_complete": False,
         "native_identity_candidate_count": 3,
@@ -28,6 +31,7 @@ def test_terminal_native_diagnostics_allowlist_and_boundaries():
     result=_terminal_provenance(event)
     for key in ("native_observer_loaded","native_capture_attempted",
                 "native_capture_failure","native_transport_ack_error",
+                "native_reply_scope_verified","native_reply_scope_binding","native_reply_scope_phase",
                 "native_structural_failure","native_capture_revision",
                 "native_chunk_complete","native_identity_candidate_count",
                 "native_identity_verified_count"):
