@@ -1719,7 +1719,7 @@ async def _capture_inner(args,owned_tabs):
                                 "captureBeyondViewport":False,"clip":clip},timeout=20)
                             raw=base64.b64decode(png["data"],validate=True)
                             if (len(raw)<24 or len(raw)>4*1024*1024
-                                or not raw.startswith(b"\\x89PNG\\r\\n\\x1a\\n")):
+                                or not raw.startswith(b"\x89PNG\r\n\x1a\n")):
                                 break
                             w,h=struct.unpack(">II",raw[16:24])
                             if w!=clip["width"] or h!=clip["height"]:break
