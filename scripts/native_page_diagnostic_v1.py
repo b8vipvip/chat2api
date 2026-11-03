@@ -26,7 +26,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.24"
+VERSION = "1.2.25"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -241,13 +241,20 @@ SCREENSHOT_PREP = r"""(async function(expected,offset,limit){
  const vw=Math.floor(window.innerWidth),vh=Math.floor(window.innerHeight);
  const x=Math.max(0,Math.ceil(r.left)),y=Math.ceil(r.top+offset);
  const width=Math.floor(Math.min(vw,r.right)-x);
- const height=Math.floor(Math.min(limit,r.bottom-y,vh-y-4));
+ // Browser layout uses fractional CSS pixels. Flooring the last viewport
+ // segment discarded a real final pixel in two independent live captures.
+ // Round up only where the final pixel is confirmed inside the candidate.
+ const fractionalHeight=Math.min(limit,r.bottom-y,vh-y-4);
+ const height=fractionalHeight>0?
+   Math.min(limit,Math.ceil(fractionalHeight)):0;
  // Clip is viewport-relative. Never fall back to a negative/document-space
  // coordinate or to a blank clip beyond the viewport.
  if(x<0||y<0||width<100||height<1||y>=vh||x>=vw||
     r.height<500||Math.abs(r.height-initial.height)>20)return fail('offscreen');
- const sampleRows=height<18?[y+Math.floor(height/2)]:
-   [y+8,y+Math.floor(height/2),y+height-8];
+ const sampleRows=height<18?
+   [y+0.5,y+Math.floor(height/2),y+height-0.5]:
+   [y+0.5,y+8,y+Math.floor(height/2),y+height-8,
+    y+height-0.5];
  for(const sy of sampleRows){
    const hit=document.elementFromPoint(Math.min(vw-2,x+Math.floor(width/2)),sy);
    if(!hit||!(hit===candidate||candidate.contains(hit)))
