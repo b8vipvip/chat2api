@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import struct
 import subprocess
 import sys
 import time
@@ -22,7 +23,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.16"
+VERSION = "1.2.17"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -171,6 +172,74 @@ return {ok:!reason,reason,version:1,scope,boundary_verified:boundaryVerified,
  counts:counters,rect:{x:Math.max(0,Math.floor(left)),y:Math.max(0,Math.floor(top)),w:Math.ceil(right-left),h:Math.ceil(bottom-top)},
  image_rects:imageRects,root:{tag:'assistant-reply',children},
  generating:!!document.querySelector('button[aria-label*="Stop generating"],button[aria-label*="Stop response"]')};
+})"""
+
+
+# This helper runs only in a tab CREATED by the diagnostic. The normal
+# complete native DOM can be read from existing tabs without scrolling them.
+# It scrolls to the assistant/candidate within the nearest scrollable parent,
+# then returns a viewport-only clip verified by elementFromPoint. Never send
+# text, URLs, outerHTML, cookies or scripts from the page to the worker log.
+SCREENSHOT_PREP = r"""(function(expected,offset,limit){
+ 'use strict';
+ const fail=(reason)=>({ok:false,reason});
+ if(!/^req_diag_[A-Za-z0-9_-]{6,100}$/.test(expected))
+   return fail('not-url-only');
+ if(!Number.isInteger(offset)||offset<0||offset>40000||
+    !Number.isInteger(limit)||limit<1||limit>800)return fail('bad-offset');
+ const main=document.querySelector('main,[role="main"]');
+ if(!main)return fail('missing-main');
+ const visible=e=>{try{const r=e.getBoundingClientRect(),s=getComputedStyle(e);
+  return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';}
+  catch(_){return false;}};
+ const tables=[...document.querySelectorAll('main table,main [role="table"],[role="main"] table')]
+   .filter(e=>e.isConnected&&visible(e)).slice(0,200);
+ if(tables.length<3)return fail('tables-missing');
+ let candidate=tables[0].parentElement;
+ while(candidate&&tables.some(t=>!candidate.contains(t)))candidate=candidate.parentElement;
+ let ancestor=candidate,depth=0;
+ while(ancestor&&ancestor!==main&&depth<55){ancestor=ancestor.parentElement;depth++;}
+ const unsafe='form,textarea,input,[contenteditable="true"],[role="textbox"],nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"],[data-testid="user-message"]';
+ const text=String(candidate?.innerText||'');
+ const headingList=candidate?[...candidate.querySelectorAll('h1,h2,h3,h4,h5,h6')]:[];
+ if(!candidate||candidate===main||ancestor!==main||depth<3||depth>=55||
+    candidate.matches(unsafe)||candidate.querySelector(unsafe)||
+    candidate.closest('nav,aside,header,footer,[role="dialog"],[data-message-author-role="user"]')||
+    headingList.some(e=>/^(?:You said|你说|你发送)\s*[:：]?$/i.test(String(e.textContent||'').trim()))||
+    headingList.length<2||candidate.querySelectorAll('p').length<10||
+    candidate.children.length<4||text.length<600||text.length>250000||
+    candidate.getBoundingClientRect().height<500)return fail('boundary-changed');
+ let scrollable=null;
+ for(let parent=candidate.parentElement;parent;parent=parent.parentElement){
+   const css=getComputedStyle(parent);
+   if(/auto|scroll|overlay/.test(css.overflowY)&&
+      parent.scrollHeight>parent.clientHeight+12){scrollable=parent;break;}
+ }
+ const rootScroller=document.scrollingElement;
+ const scroller=scrollable||rootScroller;
+ if(!scroller)return fail('no-scroller');
+ const isRoot=scroller===rootScroller;
+ const initial=candidate.getBoundingClientRect();
+ const scrollerRect=isRoot?{top:0}:scroller.getBoundingClientRect();
+ const initialScroll=isRoot?(window.scrollY||rootScroller.scrollTop||0):scroller.scrollTop;
+ const desired=initialScroll+initial.top-scrollerRect.top+offset-12;
+ if(isRoot)window.scrollTo(0,Math.max(0,desired));
+ else scroller.scrollTop=Math.max(0,desired);
+ const r=candidate.getBoundingClientRect();
+ const vw=Math.floor(window.innerWidth),vh=Math.floor(window.innerHeight);
+ const x=Math.max(0,Math.ceil(r.left)),y=Math.ceil(r.top+offset);
+ const width=Math.floor(Math.min(vw,r.right)-x);
+ const height=Math.floor(Math.min(limit,r.bottom-y,vh-y-4));
+ // Clip is viewport-relative. Never fall back to a negative/document-space
+ // coordinate or to a blank clip beyond the viewport.
+ if(x<0||y<0||width<100||height<48||y>=vh||x>=vw||
+    r.height<500||Math.abs(r.height-initial.height)>20)return fail('offscreen');
+ for(const sy of [y+8,y+Math.floor(height/2),y+height-8]){
+   const hit=document.elementFromPoint(Math.min(vw-2,x+Math.floor(width/2)),sy);
+   if(!hit||!(hit===candidate||candidate.contains(hit)))
+     return fail('outside-candidate');
+ }
+ return {ok:true,clip:{x,y,width,height,scale:1},offset,height};
 })"""
 
 # Installed in the dedicated diagnostic tab before fresh navigation or reload.
@@ -1346,19 +1415,68 @@ async def _capture_inner(args,owned_tabs):
                     "artifact_kind":"unverified-rich-candidate",
                     "candidate_file":dom_filename},ensure_ascii=False))
             rect=report["rect"];screens=0
-            # Bounded screenshot strips of assistant reply, no sidebar or user prompt.
-            if rect["w"]>0 and rect["h"]>0:
-                for y in range(rect["y"],rect["y"]+min(rect["h"],1600*24),1600):
-                    if screens>=24:break
-                    clip={"x":rect["x"],"y":y,"width":min(3000,rect["w"]),
-                          "height":min(1600,rect["y"]+rect["h"]-y),"scale":1}
-                    result=await cdp.call("Page.captureScreenshot",{"format":"png","fromSurface":True,"captureBeyondViewport":True,"clip":clip})
-                    prefix="assistant" if boundary_verified else "unverified_candidate"
-                    archive.writestr(f"screenshots/{prefix}_{screens:02d}.png",
-                        base64.b64decode(result["data"]))
-                    screens+=1
-                    status(folder,"capturing-screenshots",45+int(40*screens/min(24,max(1,(rect["h"]+1599)//1600))),screenshots=screens)
-                    if path.stat().st_size>MAX_ZIP:raise RuntimeError("evidence_zip_size_limit")
+            screenshot_coverage_px=0
+            screenshot_complete=False
+            screenshot_skip_reason="not-attempted"
+            # v1.2.16 used a positive document-space clip after clamping a
+            # negative viewport Y. This mistakenly captured the USER PROMPT
+            # and then blank frames. Never reuse that unsafe clip.
+            if not boundary_verified:
+                screenshot_skip_reason="unverified-candidate-not-owned-tab"
+                if (tab_origin=="dedicated-worker-tab"
+                    and str(picked.get("id") or "") in owned_tabs
+                    and str(report.get("scope") or "")=="inferred-rich-table-candidate"):
+                    screenshot_skip_reason="candidate-viewport-not-verified"
+                    while (screenshot_coverage_px<min(int(rect["h"]),24*640)
+                           and screens<24):
+                        off=screenshot_coverage_px
+                        try:
+                            evaluate=await cdp.call("Runtime.evaluate",{
+                                "expression":SCREENSHOT_PREP+"("+
+                                    json.dumps(args.request_id)+","+
+                                    str(off)+",640)",
+                                "returnByValue":True,"silent":True},timeout=15)
+                            if evaluate.get("exceptionDetails"):break
+                            geometry=(evaluate.get("result") or {}).get("value") or {}
+                            if not geometry.get("ok"):
+                                screenshot_skip_reason=str(geometry.get("reason") or
+                                    "candidate-viewport-not-verified")[:60]
+                                break
+                            clip=geometry.get("clip") or {}
+                            if (not all(isinstance(clip.get(k),int) for k in (
+                                    "x","y","width","height"))
+                                or clip["x"]<0 or clip["y"]<0
+                                or clip["width"]<100 or clip["height"]<48
+                                or geometry.get("offset")!=off):
+                                break
+                            result=await cdp.call("Page.captureScreenshot",{
+                                "format":"png","fromSurface":True,
+                                "captureBeyondViewport":False,"clip":clip},timeout=20)
+                            encoded=base64.b64decode(result["data"],validate=True)
+                            if (not encoded.startswith(b"\x89PNG\r\n\x1a\n")
+                                or len(encoded)<24):break
+                            width,height=struct.unpack(">II",encoded[16:24])
+                            if (width!=clip["width"] or
+                                height!=clip["height"]):break
+                            archive.writestr(
+                                f"screenshots/unverified_candidate_{screens:02d}.png",
+                                encoded)
+                            screens+=1
+                            screenshot_coverage_px+=height
+                            status(folder,"capturing-screenshots",
+                                45+int(40*screens/24),screenshots=screens)
+                            if path.stat().st_size>MAX_ZIP:
+                                raise RuntimeError("evidence_zip_size_limit")
+                        except Exception:
+                            screenshot_skip_reason="candidate-screenshot-cdp-error"
+                            break
+                    screenshot_complete=(screenshot_coverage_px>=int(rect["h"]))
+                    if screenshot_complete:screenshot_skip_reason="none"
+            else:
+                # Existing-tab DOM reads MUST remain read-only; do not scroll
+                # or sample unrelated viewport areas as if they were assistant.
+                screenshot_skip_reason="verified-screenshot-needs-safe-viewport"
+
             archive.writestr("manifest.json",json.dumps({"tool":"native-page-diagnostic",
                 "version":VERSION,"request_id":args.request_id,"worker_id":args.worker_id,
                 "scope":report["scope"],"counts":report["counts"],
@@ -1366,7 +1484,11 @@ async def _capture_inner(args,owned_tabs):
                 "completeness_verified":boundary_verified and not bool(report.get("reason")),
                 "artifact_kind":("verified-assistant" if boundary_verified
                     else "unverified-rich-candidate"),"dom_file":dom_filename,
-                "screenshot_count":screens,"truncated":bool(report.get("reason")),
+                "screenshot_count":screens,
+                "screenshot_coverage_px":screenshot_coverage_px,
+                "screenshot_capture_complete":screenshot_complete,
+                "screenshot_skip_reason":screenshot_skip_reason,
+                "truncated":bool(report.get("reason")),
                 "source":"existing-chatgpt-page","conversation_url_included":False,
                 "request_binding":verification,
                  "capture_origin":tab_origin},ensure_ascii=False))
@@ -1377,6 +1499,8 @@ async def _capture_inner(args,owned_tabs):
     status(folder,"complete",100,size=path.stat().st_size,sha256=digest,
            screenshots=screens,counts=report["counts"],tool_version=VERSION,
            boundary_verified=report.get("boundary_verified") is not False,
+           screenshot_capture_complete=screenshot_complete,
+           screenshot_coverage_px=screenshot_coverage_px,
            artifact_kind=("verified-assistant" if report.get("boundary_verified") is not False
                else "unverified-rich-candidate"))
     data=json.loads((folder/"status.json").read_text());data["status"]="completed"
