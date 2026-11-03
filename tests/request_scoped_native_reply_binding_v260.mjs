@@ -1,0 +1,85 @@
+import assert from "node:assert/strict";
+import {readFileSync} from "node:fs";
+import {runInNewContext} from "node:vm";
+
+const source=readFileSync("chrome_extension/content_request_v6.js","utf8");
+const start=source.indexOf("  function bindNativeReplyScope(active, phase");
+const end=source.indexOf("  // A redesigned reply can render one Markdown/code/table component",start);
+assert.ok(start>0 && end>start,"request binding must live in request-v6");
+const binder=source.slice(start,end)+"\nthis.bind=bindNativeReplyScope;";
+
+class Element {
+  constructor(text="") {this.innerText=text;this.textContent=text;this.isConnected=true;this.user=false;}
+  matches(){return false;}
+  closest(selector){
+    if(this.user && selector.includes("data-message-author-role"))return {user:true};
+    if(selector.includes("main,[role='main'],#thread"))return main;
+    return null;
+  }
+}
+const main=new Element();
+const candidate=new Element("Safe assistant response with tables and files");
+const action=new Element();
+const stale=new Element();
+let actions=[action],scopeOwner=null,newTurn=true;
+const reply=new Element("Safe assistant response with tables and files");
+reply.contains=node=>node===candidate;
+reply.querySelector=()=>null;
+const scope={
+  Element,
+  currentAssistantState:()=>({isNew:newTurn,latest:candidate}),
+  responseFinishActions:()=>actions,
+  replyScopeForFinishAction:(_candidate,button)=>button===action?scopeOwner:null,
+  turnFollows:()=>true,
+  visible:()=>true,
+  normalize:value=>String(value||"").replace(/\s+/g," ").trim(),
+};
+scopeOwner=reply;
+runInNewContext(binder,scope);
+
+const baseline={
+  requestId:"req_exact123456",
+  submitStartedAt:200,baselineCapturedAt:199,baselineFinishActions:new Set([stale]),
+  networkStreamSeen:true,networkObservedAt:205,promptNormalized:"A distinct user input",
+  cancelled:false,lastCandidateNode:candidate,
+};
+const make=()=>({...baseline,baselineFinishActions:new Set([stale])});
+const good=make();
+assert.equal(scope.bind(good,"terminal"),true);
+assert.equal(good.nativeVerifiedReplyScope,reply);
+assert.match(good.nativeBindingEvidence,/same-request-baseline/);
+assert.equal(good.nativeBindingPhase,"terminal");
+
+const noNetwork=make();noNetwork.networkStreamSeen=false;
+assert.equal(scope.bind(noNetwork),false);
+const preSubmitNetwork=make();preSubmitNetwork.networkObservedAt=199;
+assert.equal(scope.bind(preSubmitNetwork),false);
+const missingBaseline=make();missingBaseline.baselineCapturedAt=0;
+assert.equal(scope.bind(missingBaseline),false);
+newTurn=false;
+assert.equal(scope.bind(make()),false,"old assistant node is never rebound");
+newTurn=true;
+actions=[stale];
+assert.equal(scope.bind(make()),false,"a baseline toolbar is not fresh");
+actions=[action];
+candidate.user=true;
+assert.equal(scope.bind(make()),false,"user message candidate must be rejected");
+candidate.user=false;
+reply.querySelector=selector=>selector.includes("user")?{user:true}:null;
+assert.equal(scope.bind(make()),false,"contaminated reply scope must be rejected");
+reply.querySelector=()=>null;
+reply.matches=selector=>selector.includes("main");
+assert.equal(scope.bind(make()),false,"page-wide chat root must be rejected");
+reply.matches=()=>false;
+reply.innerText="A distinct user input";
+assert.equal(scope.bind(make()),false,"current prompt echoed inside scope must be rejected");
+reply.innerText="Safe assistant response with tables and files";
+const another=new Element("other reply scope");
+another.contains=n=>n===candidate;another.querySelector=()=>null;
+scope.replyScopeForFinishAction=(_candidate,button)=>button===action?reply:another;
+actions=[action,new Element("another toolbar")];
+assert.equal(scope.bind(make()),false,"ambiguous scopes must be rejected");
+assert.ok(source.includes('bindNativeReplyScope(active, "terminal")'));
+assert.ok(source.includes('bindNativeReplyScope(active, "progress")'));
+assert.ok(source.includes('if (active.nativeVerifiedReplyScope?.isConnected)'));
+console.log("v260 request-local native binding: positive scope and six fail-closed cases passed");
