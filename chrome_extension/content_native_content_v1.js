@@ -7,9 +7,12 @@
   const KEY = "__CHAT2API_NATIVE_CONTENT_V1__";
   if (globalThis[KEY]) return;
   const tags = new Set("div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br".split(" "));
+  const mathTags=new Set("math semantics mrow mi mo mn msub mfrac".split(" "));
+  const mathTokens=new Set("mi mo mn".split(" "));
+  const mathNamespace="http://www.w3.org/1998/Math/MathML";
   const banned = "button,script,style,form,nav,header,footer,aside,input,textarea,select,iframe,canvas,svg,[role='menu'],[contenteditable='true']";
   const styleKeys = {
-    display: ["block","inline","inline-block","flex","inline-flex","grid"],
+    display: ["block","inline","inline-block","flex","inline-flex","grid","block math","inline math"],
     boxSizing: ["border-box","content-box"],
     borderCollapse: ["collapse","separate"],
     flexDirection: ["row","row-reverse","column","column-reverse"],
@@ -151,7 +154,7 @@
       const rect = element.getBoundingClientRect?.();
       const computed = getComputedStyle(element);
       if (computed.display === "none" || computed.visibility === "hidden") return null;
-      let mapped = tags.has(tag) ? tag : "div";
+      let mapped = (mathTags.has(tag) && element.namespaceURI===mathNamespace) ? tag : tags.has(tag) ? tag : "div";
       if (tag === "img") {
         if (!rect || rect.width < 40 || rect.height < 40) return null;
         if (images >= 40) {
@@ -171,6 +174,16 @@
           result.intrinsic_width=nw;result.intrinsic_height=nh;
         }
         return result;
+      }
+      // MathML mi/mo/mn must own their text directly: adding an HTML
+      // <span> inside these tokens changes native fraction geometry.
+      if(mathTokens.has(mapped) && [...element.childNodes].every(n=>n.nodeType===Node.TEXT_NODE)){
+        const raw=String(element.textContent||"");
+        if(chars+raw.length>textBudget){active.nativeStructuralFailure="max-text";truncated=true;return null;}
+        chars+=raw.length;nodes+=1;
+        const out={tag:mapped,style:safeStyle(element)};
+        if(raw)out.text=raw;
+        return out;
       }
       const children = [];
       active.nativeStructuralMaxChildren = Math.max(
