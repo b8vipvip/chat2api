@@ -27,7 +27,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.3.7"
+VERSION = "1.3.8"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -2700,7 +2700,7 @@ def validation_pixel_diff(reference,candidate):
     width,height=struct.unpack(">II",reference[16:24]);cw,ch=struct.unpack(">II",candidate[16:24])
     if (width,height)!=(cw,ch):raise ValueError("comparison_dimensions_mismatch")
     c1,r1=native_png_crop_rows(reference,0,0,width,height);c2,r2=native_png_crop_rows(candidate,0,0,width,height)
-    a=3 if c1==2 else 4;b=3 if c2==2 else 4;changed=0;rows=[]
+    a=3 if c1==2 else 4;b=3 if c2==2 else 4;changed=0;changed12=0;rows=[]
     for left,right in zip(r1,r2):
         heat=bytearray(b"\xff"*(width*3))
         if a==b and left==right:
@@ -2708,9 +2708,12 @@ def validation_pixel_diff(reference,candidate):
         for x in range(width):
             lp=left[x*a:x*a+3];rp=right[x*b:x*b+3]
             diff=lp!=rp
-            if diff:changed+=1;heat[x*3:x*3+3]=bytes((235,45,70))
+            if diff:
+                changed+=1;heat[x*3:x*3+3]=bytes((235,45,70))
+                if (abs(lp[0]-rp[0])>12 or abs(lp[1]-rp[1])>12
+                    or abs(lp[2]-rp[2])>12):changed12+=1
         rows.append(bytes(heat))
-    return {"changed_pixels":changed,"pixels":width*height,"changed_ratio":round(changed/(width*height),6)},native_png_pack_rows(width,height,2,rows)
+    return {"changed_pixels":changed,"changed_pixels_tol12":changed12,"pixels":width*height,"changed_ratio":round(changed/(width*height),6),"changed_ratio_tol12":round(changed12/(width*height),6)},native_png_pack_rows(width,height,2,rows)
 
 def validation_safe_fixture(value):
     if not isinstance(value,dict) or value.get("schema")!="native-reply-fixture-v1":raise ValueError("fixture_schema")
@@ -2784,8 +2787,7 @@ def validation_write_result(archive,report,strips):
         "历史回放不能证明新请求绑定、模型选择、生成终态或真实 SSE/WebSocket 送达。\n")
 
 def validation_merge(archive,payload,report):
-    # Remain within the controller's 18 MiB ZIP ceiling. Keep reusable source
-    # and original-byte evidence before optional screenshot comparisons.
+    # Preserve verified sources and complete triples within the ZIP cap.
     with ZipFile(BytesIO(payload)) as extra:
         budget=MAX_ZIP-archive.fp.tell()-512000;used=0;keep=set();omitted=[]
         special={"validation/report.json","index.html","REPLAY.txt","validation/assets.json"}
@@ -2859,8 +2861,7 @@ def validation_merge(archive,payload,report):
 
 async def validation_render(cdp,context,texts,snapshot,fixture,assets,reference_strips,archive):
     renderer=validation_renderer(texts)
-    # The real production renderer constructs approved DOM nodes. No source
-    # HTML, event handlers, hrefs, or code supplied by fixtures can execute.
+    # Use trusted production renderer; fixture code is never evaluated.
     await validation_eval(cdp,renderer,context)
     result=await validation_eval(cdp,"""(async function(snapshot,assets,font){
  // A full-height preview would otherwise create a 15px viewport scrollbar
@@ -2888,12 +2889,12 @@ async def validation_render(cdp,context,texts,snapshot,fixture,assets,reference_
    images_loaded:images.filter(image=>image.complete&&image.naturalWidth>0).length,
    images_ready:imagesReady,fonts_ready:fontsReady};
 })("""+json.dumps(snapshot,ensure_ascii=False)+","+json.dumps(assets)+","+json.dumps(fixture.get("font_family",""))+")",context)
-    comparisons=[];changed=total=0
+    comparisons=[];changed=changed12=total=0
     for index,item in enumerate(reference_strips[:64]):
         raw=item["bytes"];width,height=struct.unpack(">II",raw[16:24]);offset=int(item["offset"])
         png=await cdp.call("Page.captureScreenshot",{"format":"png","captureBeyondViewport":True,"clip":{"x":0,"y":offset,"width":width,"height":height,"scale":1}},timeout=20)
         candidate=base64.b64decode(png["data"],validate=True)
-        diff,heat=validation_pixel_diff(raw,candidate);changed+=diff["changed_pixels"];total+=diff["pixels"]
+        diff,heat=validation_pixel_diff(raw,candidate);changed+=diff["changed_pixels"];changed12+=diff["changed_pixels_tol12"];total+=diff["pixels"]
         refname=f"validation/reference/strip_{index:02d}.png";canname=f"validation/candidate/strip_{index:02d}.png";diffname=f"validation/difference/strip_{index:02d}.png"
         archive.writestr(refname,raw);archive.writestr(canname,candidate);archive.writestr(diffname,heat)
         comparisons.append({"index":index,"offset":offset,"reference":refname,"candidate":canname,"difference":diffname,"diff":diff})
@@ -2901,7 +2902,7 @@ async def validation_render(cdp,context,texts,snapshot,fixture,assets,reference_
     coverage=sum(struct.unpack(">II",x["bytes"][16:24])[1] for x in reference_strips[:len(comparisons)])
     assets_ready=(result["images_loaded"]==result["images_expected"] and
         result["images_ready"] is True and result["fonts_ready"] is True)
-    visual={"strips":len(comparisons),"reference_width":fixture["rect"]["w"],"rendered_width":result["width"],"reference_height":fixture["rect"]["h"],"rendered_height":result["height"],"coverage_px":coverage,"changed_pixels":changed,"pixels":total,"changed_ratio":round(changed/total,6) if total else None,
+    visual={"strips":len(comparisons),"reference_width":fixture["rect"]["w"],"rendered_width":result["width"],"reference_height":fixture["rect"]["h"],"rendered_height":result["height"],"coverage_px":coverage,"changed_pixels":changed,"pixels":total,"changed_ratio":round(changed/total,6) if total else None,"changed_ratio_tol12":round(changed12/total,6) if total else None,
         "images_expected":result["images_expected"],"images_loaded":result["images_loaded"],
         "images_ready":result["images_ready"],"fonts_ready":result["fonts_ready"],
         "complete":bool(assets_ready and reference_strips and coverage==fixture["rect"]["h"] and not fixture.get("unsupported")),"exact":bool(assets_ready and total and changed==0 and result["width"]==fixture["rect"]["w"] and result["height"]==fixture["rect"]["h"]),"renderer_scope":"production-admin-component"}
@@ -3111,10 +3112,7 @@ def validation_import_zip(path):
         if not 1<=w<=3000 or not 1<=h<=640 or w!=fixture["rect"]["w"]:raise ValueError("fixture_png_bounds")
         strips.append({"bytes":raw,"offset":offset});offset+=h
     fallback_unverified=False
-    # v1.3.0 saved full original-page screenshot strips but its validation
-    # renderer could time out on offscreen loading=lazy images before writing
-    # validation/reference/strip_*. Reuse those strips only as a LOW-TRUST
-    # visual aid; never convert their unverified boundary into proof.
+    # Legacy screenshots remain unverified; never upgrade their provenance.
     if not strips and "manifest.json" in names:
         try:
             manifest=json.loads(archive.read("manifest.json"))
