@@ -10,6 +10,7 @@ import asyncio
 import base64
 import fcntl
 import hashlib
+from io import BytesIO
 import json
 import os
 from pathlib import Path
@@ -23,7 +24,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.22"
+VERSION = "1.2.23"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -241,9 +242,11 @@ SCREENSHOT_PREP = r"""(async function(expected,offset,limit){
  const height=Math.floor(Math.min(limit,r.bottom-y,vh-y-4));
  // Clip is viewport-relative. Never fall back to a negative/document-space
  // coordinate or to a blank clip beyond the viewport.
- if(x<0||y<0||width<100||height<48||y>=vh||x>=vw||
+ if(x<0||y<0||width<100||height<1||y>=vh||x>=vw||
     r.height<500||Math.abs(r.height-initial.height)>20)return fail('offscreen');
- for(const sy of [y+8,y+Math.floor(height/2),y+height-8]){
+ const sampleRows=height<18?[y+Math.floor(height/2)]:
+   [y+8,y+Math.floor(height/2),y+height-8];
+ for(const sy of sampleRows){
    const hit=document.elementFromPoint(Math.min(vw-2,x+Math.floor(width/2)),sy);
    if(!hit||!(hit===candidate||candidate.contains(hit)))
      return fail('outside-candidate');
@@ -270,7 +273,7 @@ SCREENSHOT_PREP = r"""(async function(expected,offset,limit){
     Math.abs(settled.top-r.top)>2||
     Math.abs(settled.left-r.left)>2)
    return fail('layout-changed-during-image-load');
- for(const sy of [y+8,y+Math.floor(height/2),y+height-8]){
+ for(const sy of sampleRows){
    const hit=document.elementFromPoint(Math.min(vw-2,x+Math.floor(width/2)),sy);
    if(!hit||!(hit===candidate||candidate.contains(hit)))
      return fail('clip-changed-during-image-load');
@@ -325,7 +328,7 @@ MEDIA_SOURCE_PROBE = r"""(async function(expected){
    candidate.querySelectorAll('h1,h2,h3,h4,h5,h6').length<2||
    candidate.querySelectorAll('p').length<10)return fail('candidate-unsafe');
  const imgs=[...candidate.querySelectorAll('img')].filter(visible);
- if(!imgs.length||imgs.length>16)return fail('image-count-outside-bounds');
+ if(!imgs.length||imgs.length>40)return fail('image-count-outside-bounds');
  const images=[];
  for(let index=0;index<imgs.length;index++){
    const img=imgs[index],url=String(img.currentSrc||img.src||'');
@@ -347,7 +350,7 @@ MEDIA_CROP_PREP = r"""(function(expected,index){
  'use strict';
  const fail=reason=>({ok:false,reason});
  if(!/^req_diag_[A-Za-z0-9_-]{6,100}$/.test(expected)||
-   !Number.isInteger(index)||index<0||index>15)return fail('bad-identity');
+   !Number.isInteger(index)||index<0||index>39)return fail('bad-identity');
  const main=document.querySelector('main,[role="main"]');
  if(!main)return fail('missing-main');
  const visible=e=>{try{const r=e.getBoundingClientRect(),s=getComputedStyle(e);
@@ -366,7 +369,7 @@ MEDIA_CROP_PREP = r"""(function(expected,index){
    candidate.querySelectorAll('h1,h2,h3,h4,h5,h6').length<2||
    candidate.querySelectorAll('p').length<10)return fail('candidate-unsafe');
  const imgs=[...candidate.querySelectorAll('img')].filter(visible);
- if(index>=imgs.length||imgs.length>16)return fail('image-missing');
+ if(index>=imgs.length||imgs.length>40)return fail('image-missing');
  const img=imgs[index];
  if(!img.complete||img.naturalWidth<1||img.naturalHeight<1)return fail('not-loaded');
  let scrollable=null;
@@ -818,6 +821,93 @@ def image_dimensions_sequence(report):
         for child in node.get("children") or ():
             walk(child)
     walk(report.get("root") or {})
+    return result
+
+
+def screenshot_image_mapping(report,strips,image_fingerprints,archive):
+    """Associate DOM image rectangles to *already captured* screenshot strips.
+
+    No network access or extra browser interaction. Optional Pillow creates
+    visible-size PNG crops; without Pillow, strip coordinate mappings remain
+    sufficient for later offline reconstruction. Neither is original media.
+    """
+    result=[]
+    try:
+        from PIL import Image
+    except ImportError:
+        Image=None
+    root=(report.get("root") or {}).get("children") or []
+    if len(root)!=1 or not isinstance(root[0],dict):
+        return result
+    base=root[0].get("rect") or {}
+    source={i.get("image_index"):i for i in image_fingerprints
+            if isinstance(i,dict) and type(i.get("image_index")) is int}
+    rects=report.get("image_rects") or []
+    if not strips or not 0<len(rects)<=40:
+        return result
+    for rect in rects:
+        if not isinstance(rect,dict):
+            continue
+        idx=rect.get("index")
+        if type(idx) is not int or idx<0 or idx>=40 or idx not in source:
+            continue
+        if any(type(rect.get(k)) is not int for k in ("x","y","w","h")):
+            continue
+        x=rect["x"]-int(base.get("x") or 0)
+        y=rect["y"]-int(base.get("y") or 0)
+        width,height=rect["w"],rect["h"]
+        if (x<0 or y<0 or width<1 or height<1
+            or width>2000 or height>2000
+            or x+width>strips[0][3]):
+            continue
+        coverage=0
+        segments=[]
+        for filename,offset,data,sw,sh in strips:
+            start=max(y,offset)
+            end=min(y+height,offset+sh)
+            if end<=start:continue
+            if start!=y+coverage or x+width>sw:
+                break
+            segments.append((filename,offset,data,x,start-offset,
+                             width,end-start,coverage))
+            coverage+=end-start
+            if coverage==height:break
+        if coverage!=height:
+            continue
+        fact=source[idx]
+        record={
+            "image_index":idx,
+            "source_url_sha256":fact["source_url_sha256"],
+            "natural_width":fact["natural_width"],
+            "natural_height":fact["natural_height"],
+            "rendered_width":width,"rendered_height":height,
+            "original_bytes_captured":False,
+            "source":"diagnostic-screenshot-pixels",
+            "segments":[{
+                "screenshot":filename,"source_x":cx,"source_y":cy,
+                "width":cw,"height":ch,"target_y":target
+            } for filename,_,_,cx,cy,cw,ch,target in segments]
+        }
+        if Image is not None:
+            try:
+                canvas=Image.new("RGB",(width,height))
+                for _,_,png,cx,cy,cw,ch,target in segments:
+                    with Image.open(BytesIO(png)) as screen:
+                        if screen.size[0]<cx+cw or screen.size[1]<cy+ch:
+                            raise ValueError("screenshot_geometry_changed")
+                        canvas.paste(screen.convert("RGB").crop(
+                            (cx,cy,cx+cw,cy+ch)),(0,target))
+                output=BytesIO()
+                canvas.save(output,format="PNG")
+                payload=output.getvalue()
+                if len(payload)<=4*1024*1024:
+                    name=f"media/screenshot_image_{idx:02d}.png"
+                    archive.writestr(name,payload)
+                    record["rendered_png_file"]=name
+                    record["rendered_png_sha256"]=hashlib.sha256(payload).hexdigest()
+            except (OSError,ValueError,TypeError):
+                pass
+        result.append(record)
     return result
 
 
@@ -1796,6 +1886,7 @@ async def _capture_inner(args,owned_tabs):
             screenshot_coverage_px=0
             screenshot_image_evidence={}
             screenshot_image_conflicts=0
+            screenshot_strips=[]
             screenshot_complete=False
             screenshot_skip_reason="not-attempted"
             # v1.2.16 used a positive document-space clip after clamping a
@@ -1828,7 +1919,7 @@ async def _capture_inner(args,owned_tabs):
                             if (not all(isinstance(clip.get(k),int) for k in (
                                     "x","y","width","height"))
                                 or clip["x"]<0 or clip["y"]<0
-                                or clip["width"]<100 or clip["height"]<48
+                                or clip["width"]<100 or clip["height"]<1
                                 or geometry.get("offset")!=off):
                                 break
                             result=await cdp.call("Page.captureScreenshot",{
@@ -1840,9 +1931,9 @@ async def _capture_inner(args,owned_tabs):
                             width,height=struct.unpack(">II",encoded[16:24])
                             if (width!=clip["width"] or
                                 height!=clip["height"]):break
-                            archive.writestr(
-                                f"screenshots/unverified_candidate_{screens:02d}.png",
-                                encoded)
+                            filename=f"screenshots/unverified_candidate_{screens:02d}.png"
+                            archive.writestr(filename,encoded)
+                            screenshot_strips.append((filename,off,encoded,width,height))
                             screens+=1
                             screenshot_coverage_px+=height
                             for item in (geometry.get("observed_images") or [])[:40]:
@@ -1929,7 +2020,7 @@ async def _capture_inner(args,owned_tabs):
             if (not boundary_verified and
                 tab_origin=="dedicated-worker-tab" and
                 str(picked.get("id") or "") in owned_tabs and
-                0<int(report.get("counts",{}).get("images") or 0)<=16):
+                0<int(report.get("counts",{}).get("images") or 0)<=40):
                 try:
                     checked=await cdp.call("Runtime.evaluate",{
                         "expression":MEDIA_SOURCE_PROBE+"("+
@@ -2021,6 +2112,10 @@ async def _capture_inner(args,owned_tabs):
                 screenshot_image_evidence[idx]
                 for idx in sorted(screenshot_image_evidence)]
             report["screenshot_image_conflicts"]=screenshot_image_conflicts
+            strip_mappings=screenshot_image_mapping(report,screenshot_strips,
+                report["screenshot_image_evidence"],archive) if (
+                    not boundary_verified and screenshot_image_conflicts==0) else []
+            report["screenshot_image_mapping"]=strip_mappings
             archive.writestr(dom_filename,json.dumps(report,ensure_ascii=False))
             remaining_px=max(0,int(rect["h"])-screenshot_coverage_px)
             screenshot_near_complete=(screens>0 and remaining_px<=2
@@ -2044,6 +2139,13 @@ async def _capture_inner(args,owned_tabs):
                 "screenshot_max_count":MAX_SCREENSHOTS,
                 "screenshot_image_sources_observed":len(screenshot_image_evidence),
                 "screenshot_image_source_conflicts":screenshot_image_conflicts,
+                "screenshot_image_mapped_count":len(strip_mappings),
+                "screenshot_image_crop_count":sum(
+                    bool(item.get("rendered_png_file")) for item in strip_mappings),
+                "screenshot_image_mapping_complete":(
+                    screenshot_image_conflicts==0 and
+                    len(strip_mappings)==int(report.get("counts",{}).get("images") or 0)
+                    and len(strip_mappings)>0),
                 "screenshot_image_sources_complete":(
                     screenshot_image_conflicts==0 and
                     len(screenshot_image_evidence)==
