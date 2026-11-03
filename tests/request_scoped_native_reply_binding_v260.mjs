@@ -85,6 +85,22 @@ another.contains=n=>n===candidate;another.querySelector=()=>null;
 scope.replyScopeForFinishAction=(_candidate,button)=>button===action?reply:another;
 actions=[action,new Element("another toolbar")];
 assert.equal(scope.bind(make()),false,"ambiguous scopes must be rejected");
+
+// A redesigned roleless reply has its toolbar as a sibling. Its shared
+// ancestor contains the prompt, so binding must use the positively verified
+// whole assistant DIV, never that common ancestor or a nested paragraph.
+actions=[action];
+scope.currentAssistantState=()=>({isNew:true,latest:candidate,reason:"fresh-roleless-rich-answer-v246"});
+scope.verifiedRolelessRichAbortCandidate=()=>({finishAction:action});
+scope.replyScopeForFinishAction=()=>null;
+candidate.contains=node=>node===candidate;
+candidate.querySelector=()=>null;
+candidate.querySelectorAll=()=>[];
+const roleless=make();
+assert.equal(scope.bind(roleless),true);
+assert.equal(roleless.nativeVerifiedReplyScope,candidate);
+scope.verifiedRolelessRichAbortCandidate=()=>null;
+assert.equal(scope.bind(make()),false,"unverified roleless fragment remains rejected");
 assert.ok(source.includes('bindNativeReplyScope(active, "terminal")'));
 assert.ok(source.includes('bindNativeReplyScope(active, "progress")'));
 assert.ok(source.includes('if (active.nativeVerifiedReplyScope?.isConnected)'));

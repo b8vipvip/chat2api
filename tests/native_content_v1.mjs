@@ -192,10 +192,14 @@ function findImgs(node) {
   return (node.tag==="img"?1:0)+(node.children||[]).reduce((n,child)=>n+findImgs(child),0);
 }
 assert.equal(findImgs(deepReply.root),1,"deep image ordinal must remain in final tree");
+let finalDeep=new Element("P",[{nodeType:3,nodeValue:"final deep block"}]);
+for(let i=0;i<38;i++)finalDeep=new Element("DIV",[finalDeep]);
+assert.ok(capture.snapshot(candidateFor([finalDeep])),
+  "2a43: complete 38-level rich reply must survive the final capture");
 let overDeep=new Element("P",[{nodeType:3,nodeValue:"over-depth"}]);
-for(let i=0;i<26;i++)overDeep=new Element("DIV",[overDeep]);
+for(let i=0;i<66;i++)overDeep=new Element("DIV",[overDeep]);
 assert.equal(capture.snapshot(candidateFor([overDeep])),null,
-  "more than 24 nested levels must still fail closed");
+  "more than 64 nested levels must still fail closed");
 
 // Production 33da: the 24-month ceramics plan had one 111-child
 // assistant reply container. The previous 80-child cap abandoned the

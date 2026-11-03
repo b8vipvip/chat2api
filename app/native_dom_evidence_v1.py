@@ -55,7 +55,7 @@ def validate_evidence(value: object, expected_request_id: str) -> dict:
         return value
     state={"nodes":0,"chars":0}
     def check(node,depth):
-        if not isinstance(node,dict) or depth>26 or set(node)-{"tag","text","children","layout","image","link"}:
+        if not isinstance(node,dict) or depth>66 or set(node)-{"tag","text","children","layout","image","link"}:
             raise ValueError("Unsafe tree node")
         tag=node.get("tag")
         if tag not in TAGS:

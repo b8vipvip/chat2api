@@ -110,6 +110,21 @@ assert.ok(bigger.counts.nodes>8000);
 assert.equal(bigger.counts.tables,1);
 assert.equal(bigger.counts.images,1);
 
+// The final native snapshot and private evidence share a bounded depth.
+let nested=new Element('P',[{nodeType:TEXT,nodeValue:'last deep reply section'}]);
+for(let i=0;i<38;i++)nested=new Element('DIV',[nested]);
+const deepVerified=new Element('DIV',[nested]);
+const deepPage=new Element('MAIN',[deepVerified]);
+const deepReport=probe.captureData({...active,lastCandidateNode:nested,
+  nativeVerifiedReplyScope:deepVerified});
+assert.equal(deepReport.complete,true);
+assert.ok(JSON.stringify(deepReport).includes('last deep reply section'));
+for(let i=0;i<30;i++)nested=new Element('DIV',[nested]);
+const overVerified=new Element('DIV',[nested]);
+const overPage=new Element('MAIN',[overVerified]);
+assert.equal(probe.captureData({...active,lastCandidateNode:nested,
+  nativeVerifiedReplyScope:overVerified}).complete,false,"over-depth evidence must still fail closed");
+
 // 9d090b: image previews are wrapped in <button>. They are request-scoped
 // raster evidence, not UI control text. Never export click action labels.
 const btnImg=new Element('IMG');btnImg.naturalWidth=900;btnImg.naturalHeight=600;

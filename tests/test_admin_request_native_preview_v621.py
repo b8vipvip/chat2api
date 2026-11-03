@@ -70,8 +70,8 @@ def test_pending_generated_files_refresh_without_changing_request_terminal():
     assert "requestHistoryGeneratedFileStatusLabel(files)" in SOURCE
 
 
-def test_33da_admin_native_preview_supports_111_siblings():
-    assert "if(children.length>160)throw new Error('原生快照子节点超限');" in SOURCE
+def test_admin_native_preview_matches_worker_child_budget():
+    assert "if(children.length>8192)throw new Error('原生快照子节点超限');" in SOURCE
     assert "if(children.length>80)throw new Error('原生快照子节点超限');" not in SOURCE
 
 
@@ -119,6 +119,20 @@ def test_17b4_admin_renderer_accepts_4000_nodes_but_not_30001():
     assert.ok(budget.count>3200 && budget.count<6400,budget.count);
     assert.equal(rendered.children.length,50);
     assert.equal(rendered.children[49].children[79].textContent,'49-79');
+
+    // 2a43's 165 children and >24 levels must survive the actual renderer.
+    let deep={tag:'p',text:'last deep section'};
+    for(let i=0;i<38;i++)deep={tag:'div',children:[deep]};
+    const wide={tag:'div',children:Array.from({length:165},(_,i)=>({tag:'p',text:'section '+i}))};
+    const current=requestHistoryNativeNode({tag:'div',children:[deep,wide]},[],{count:0});
+    assert.equal(current.children[1].children[164].textContent,'section 164');
+    let renderedDeep=current.children[0];
+    for(let i=0;i<38;i++)renderedDeep=renderedDeep.children[0];
+    assert.equal(renderedDeep.textContent,'last deep section');
+    let tooDeep={tag:'p',text:'over limit'};
+    for(let i=0;i<65;i++)tooDeep={tag:'div',children:[tooDeep]};
+    assert.throws(()=>requestHistoryNativeNode(tooDeep,[],{count:0}),/原生快照结构无效/);
+    assert.throws(()=>requestHistoryNativeNode({tag:'div',children:Array.from({length:8193},()=>({tag:'p'}))},[],{count:0}),/子节点超限/);
 
     const overflow={
       tag:'div',

@@ -62,6 +62,7 @@
   // fanout rejected the final 3a882b reply while a stale 333-node snapshot
   // remained published. Preserve DOM order/layout without synthetic wrappers.
   const MAX_NATIVE_CHILDREN = 8192;
+  const MAX_NATIVE_DEPTH = 64;
   function snapshot(active) {
     if (active) { active.nativeStructuralFailure = ""; active.nativeStructuralMaxChildren = 0; }
     if (!active?.submitStartedAt || typeof Element === "undefined") return null;
@@ -80,8 +81,8 @@
     const textBudget = 300000;
     const ignore = element => element.matches?.(banned) || !!element.closest?.("nav,aside,footer");
     const build = (element, depth) => {
-      if (depth > 24 || nodes >= 30000) {
-        active.nativeStructuralFailure = depth > 24 ? "max-depth" : "max-nodes";
+      if (depth > MAX_NATIVE_DEPTH || nodes >= 30000) {
+        active.nativeStructuralFailure = depth > MAX_NATIVE_DEPTH ? "max-depth" : "max-nodes";
         truncated = true;
         return null;
       }

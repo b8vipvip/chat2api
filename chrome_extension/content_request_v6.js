@@ -193,7 +193,7 @@
   // writing code and explanation. A stable image source is proof of media
   // transfer, NEVER proof of completion of the accompanying text response.
   // Keep this check separate from the single request-v6 terminal authority.
-  function mediaHandoffTerminalReady(active, generating, pageWorking, now = Date.now()) {
+  function mediaHandoffTerminalReady(active, generating, pageWorking, now = Date.now(), replyBoundary = null) {
     if (generating || pageWorking) return false;
     // When network evidence has begun but has not reached a verified clean EOF,
     // allow a DOM-complete media reply only after a sustained network quiet
@@ -201,6 +201,40 @@
     if (active?.networkStreamSeen && !confirmedTransportTerminal(active)) {
       const at = Number(active.networkObservedAt || 0);
       if (!at || now - at < 7500) return false;
+    }
+    // 890e: the page-wide scan counted 262 user-prompt blocks as uncovered
+    // assistant content. Prefer a positively verified current reply and its
+    // fresh toolbar; audit all content inside that scope before overriding
+    // the page-wide guard. A paragraph alone or stale toolbar cannot do so.
+    if (active) active.mediaTerminalReplyScopeVerified = false;
+    const scope = replyBoundary?.replyScope;
+    const finish = replyBoundary?.finishAction;
+    if (scope?.isConnected && finish?.isConnected
+        && active?.lastCandidateNode?.isConnected
+        && active.baselineCapturedAt > 0
+        && active.baselineCapturedAt <= active.submitStartedAt
+        && active.networkStreamSeen
+        && Number(active.networkObservedAt || 0) >= active.submitStartedAt
+        && active.baselineFinishActions?.has(finish) === false
+        && scope.contains?.(active.lastCandidateNode)
+        && !scope.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']")
+        && !scope.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,[contenteditable='true']")
+        && !promptStillPresent(active)) {
+      const coverage = renderedResponseBoundaryEvidence(active, active.lastCandidateNode, scope);
+      const structural = [...(scope.querySelectorAll?.(
+        "p,h1,h2,h3,h4,h5,h6,li,pre,table,figure,img,math,.katex-display") || [])];
+      const unfinishedTail = scope.contains(finish) && structural.some(node =>
+        visible(node) && !node.contains?.(finish)
+        && !node.closest?.("button,pre button,[role='toolbar']")
+        && (normalize(node.innerText || node.textContent || "").length >= 2
+          || String(node.tagName || "").toLowerCase() === "img")
+        && turnFollows(finish, node));
+      if (!coverage.scan_overflow && structural.length <= 1600 && !unfinishedTail && coverage.nodes?.length
+          && coverage.nodes.every(node => turnFollows(node, finish))) {
+        active.mediaTerminalReplyScopeVerified = true;
+        return true;
+      }
+      return false;
     }
     // 062f: browser controls looked idle and SSE had been quiet for 68s,
     // but the assistant output still ended mid-sentence. The same-request
@@ -838,9 +872,15 @@
       !active.baselineFinishActions.has(button) &&
       button.isConnected && turnFollows(candidate, button));
     if (!newActions.length) return false;
+    const roleless = ["fresh-roleless-rich-answer-v246","fresh-roleless-compact-div-v248"]
+      .includes(current.reason) ? verifiedRolelessRichAbortCandidate(active, current) : null;
     const scopes = new Set();
     for (const button of newActions) {
-      const scope = replyScopeForFinishAction(candidate, button);
+      // Redesigned pages put the toolbar next to the complete assistant DIV.
+      // Their common ancestor also contains the user prompt, so it must never
+      // be the capture scope. Reuse the already verified fresh H4/DIV pair.
+      const scope = roleless?.finishAction === button ? candidate
+        : replyScopeForFinishAction(candidate, button);
       if (!scope || !scope.isConnected || !scope.contains?.(candidate) ||
           scope.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']") ||
           scope.closest?.("nav,aside,header,footer,form,[role='dialog']") ||
@@ -2363,6 +2403,8 @@
       const fileReplyBoundary = fileCreationRequested && !generating
         && !upstreamStillWorking()
         ? verifiedFileReplyBoundary(active, current) : null;
+      const mediaReplyBoundary = fileReplyBoundary || (!generating && !upstreamStillWorking()
+        ? verifiedFileReplyBoundary(active, current) : null);
       // v247: distinguish page generation latency from file transfer latency.
       // Report only the first validated same-request completion boundary.
       if (fileReplyBoundary && !active.mediaFileBoundaryVerifiedAt) {
@@ -2375,7 +2417,7 @@
           media_delivery_phase: "native-binary-capture-pending",
         });
       }
-      const mediaReplyRoot = fileReplyBoundary?.replyScope || sameTurnRoot;
+      const mediaReplyRoot = mediaReplyBoundary?.replyScope || sameTurnRoot;
       const visibleTurnMedia = Boolean(mediaReplyRoot && rich?.hasCandidateImage?.(mediaReplyRoot));
       const visibleTurnFiles = Boolean(mediaReplyRoot && rich?.hasCandidateFile?.(mediaReplyRoot));
       const visibleTurnPreviews = Boolean(mediaReplyRoot && rich?.hasPreviewFile?.(mediaReplyRoot));
@@ -2397,6 +2439,8 @@
         || visibleTurnMedia || visibleTurnFiles || visibleTurnPreviews || fileCreationRequested || pageMediaFound;
       const captureOrigin = pageMediaFound && !visibleTurnMedia ? "new-page-media" : "assistant-turn";
       const sourceMedia = pageMediaFound && !visibleTurnMedia ? discovered.images : [];
+      const scopedMediaBoundary = mediaReplyBoundary && sourceMedia.every(img =>
+        mediaReplyBoundary.replyScope.contains?.(img)) ? mediaReplyBoundary : null;
       const sourceFingerprint = sourceMedia.map(img =>
         String(img.currentSrc || img.getAttribute("src") || "")).join("|");
       if (sourceFingerprint !== active.mediaSourceFingerprint) {
@@ -2478,7 +2522,7 @@
       // never send the internal marker as the user-visible answer.
       const pageWorking = captureMedia && upstreamStillWorking();
       if (captureMedia && (mediaReplyRoot || sourceMedia.length) && sourceStable
-          && !mediaHandoffTerminalReady(active, generating, pageWorking)
+          && !mediaHandoffTerminalReady(active, generating, pageWorking, Date.now(), scopedMediaBoundary)
           && (!active.mediaHandoffBlockedAt || Date.now() - active.mediaHandoffBlockedAt >= 8000)) {
         active.mediaHandoffBlockedAt = Date.now();
         await diagnostic(active, "media-handoff-await-page-terminal", {
@@ -2491,11 +2535,12 @@
           media_terminal_scene_uncovered_blocks: Number(active.mediaTerminalSceneFacts?.uncovered || 0),
           media_terminal_scene_uncovered_chars: Number(active.mediaTerminalSceneFacts?.uncoveredChars || 0),
           media_terminal_scene_finish_after_all: active.mediaTerminalSceneFacts?.finishedAfterAll ?? null,
+          media_terminal_reply_scope_verified: active.mediaTerminalReplyScopeVerified === true,
           media_terminal_delivery_ready_only: true,
         });
       }
       if (captureMedia && (mediaReplyRoot || sourceMedia.length) && sourceStable
-          && mediaHandoffTerminalReady(active, generating, pageWorking)
+          && mediaHandoffTerminalReady(active, generating, pageWorking, Date.now(), scopedMediaBoundary)
           && Date.now() - imageCaptureAt >= 1000) {
         imageCaptureAt = Date.now();
         // Prefer the validated current assistant turn, but permit a strictly

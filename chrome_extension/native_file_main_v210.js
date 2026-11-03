@@ -35,13 +35,19 @@
       // that is acceptable ONLY after proving the OOXML workbook structure.
       // Never accept MIME-less blobs or a generic ZIP relabeled as XLSX.
       const session = armed;
-      const mime = String(object.type || "").toLowerCase();
+      const mime = String(object.type || "").toLowerCase().split(";",1)[0].trim();
       const expected = session ? mimeForName(session.filename) : "";
       const typed = Boolean(expected && mime === expected);
       const octetWorkbook = Boolean(session && mime === "application/octet-stream"
         && /\.xlsx$/i.test(session.filename));
+      // JSON exports commonly create a text/plain;charset=utf-8 Blob and
+      // invoke the browser save path without an anchor. Only a newly created
+      // Blob after this verified .json click is eligible; parse the actual
+      // bytes below. Do not relax the ordinary fetch/inline JSON observer.
+      const genericJson = Boolean(session && /\.json$/i.test(session.filename)
+        && ["text/plain","application/octet-stream"].includes(mime));
       if (session && !session.used && !session.inFlight
-          && Date.now() < session.until && (typed || octetWorkbook)) {
+          && Date.now() < session.until && (typed || octetWorkbook || genericJson)) {
         session.inFlight = true;
         stage(session, "same-tab-typed-blob-created");
         void object.arrayBuffer().then(raw => {
