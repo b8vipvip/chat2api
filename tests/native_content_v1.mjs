@@ -278,8 +278,8 @@ const noMarginResult=blankBlockNoMargin.__CHAT2API_NATIVE_CONTENT_V1__.snapshot(
     new Element("H2",[{nodeType:3,nodeValue:"next section"}])
   ])
 });
-assert.equal(noMarginResult.root.children.length,2,
-  "non-spaced empty DIV must remain excluded");
+assert.equal(noMarginResult.root.children.length,3,
+  "measured blank box between content blocks must preserve its geometry");
 // A 21-table / 28-MathML live fixture has TWO genuinely empty,
  // visible 448px chart reservations with 16px top margins. Previous 48px
  // cutoff shifted all subsequent headings upward by 928px.
@@ -302,13 +302,13 @@ const chartTree=chartCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
 assert.equal(chartTree.root.children.length,3);
 assert.equal(chartTree.root.children[1].style.height,"448px");
 const tooLargeCtx={...ctx,getComputedStyle:()=>({
-  display:"block",visibility:"visible",width:"768px",height:"800px",
+  display:"block",visibility:"visible",width:"768px",height:"9000px",
   marginTop:"16px"
 })};
 delete tooLargeCtx.__CHAT2API_NATIVE_CONTENT_V1__;
 runInNewContext(code,tooLargeCtx);
 const excessive=new Element("DIV");
-excessive.getBoundingClientRect=()=>({width:768,height:800});
+excessive.getBoundingClientRect=()=>({width:768,height:9000});
 const rejected=tooLargeCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
   requestId:"req_bigblank_12345",submitStartedAt:Date.now(),
   lastCandidateNode:new Element("DIV",[
@@ -317,8 +317,24 @@ const rejected=tooLargeCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
     new Element("P",[{nodeType:3,nodeValue:"after"}]),
   ])
 });
-assert.equal(rejected.root.children.length,2,"oversized empty area stays excluded");
-console.log("Native bounded 448px chart reservations retained; >512px empties excluded");
+assert.equal(rejected.root.children.length,2,"out-of-budget empty area stays excluded");
+// An 800px slot is within the general layout budget. It must not be
+// rejected just because historical examples happened to be 17px/448px.
+const scalableCtx={...ctx,getComputedStyle:()=>({
+  display:"block",visibility:"visible",width:"768px",height:"800px",marginTop:"16px"
+})};
+delete scalableCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,scalableCtx);
+const scalable=new Element("DIV");
+scalable.getBoundingClientRect=()=>({width:768,height:800});
+const scalableSnapshot=scalableCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_geometry_123456",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[new Element("P",[{nodeType:3,nodeValue:"before"}]),scalable])
+});
+assert.equal(scalableSnapshot.root.children.length,2);
+assert.equal(scalableSnapshot.root.children[1].style.height,"800px");
+
+console.log("Native generic empty layout: 17px, 448px and guarded >8k sizes");
 
 console.log("Native bounded table-to-heading spacer retains 33px layout without extra text");
 
@@ -332,8 +348,8 @@ delete listGapCtx.__CHAT2API_NATIVE_CONTENT_V1__;
 runInNewContext(code,listGapCtx);
 const listGap=new Element("DIV");
 listGap.getBoundingClientRect=()=>({width:742,height:17});
-listGap.previousElementSibling={matches:sel=>sel==="ol,ul"};
-listGap.nextElementSibling={matches:sel=>sel==="h1,h2,h3,h4"};
+listGap.previousElementSibling={matches:sel=>sel.includes("ol")};
+listGap.nextElementSibling={matches:sel=>sel.includes("h2")};
 const listGapReply=listGapCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
   requestId:"req_listgap_123456",submitStartedAt:Date.now(),
   lastCandidateNode:new Element("DIV",[
