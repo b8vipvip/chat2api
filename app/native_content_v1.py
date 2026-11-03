@@ -32,6 +32,8 @@ SAFE_TAGS = {"div", "p", "span", "strong", "em", "h1", "h2", "h3", "h4",
              "tbody", "tr", "td", "th", "figure", "figcaption", "img", "hr", "br"}
 SAFE_STYLES = {
     "display": {"block", "inline", "inline-block", "flex", "inline-flex", "grid"},
+    "boxSizing": {"border-box", "content-box"},
+    "borderCollapse": {"collapse", "separate"},
     "flexDirection": {"row", "row-reverse", "column", "column-reverse"},
     "flexWrap": {"wrap", "nowrap"},
     "justifyContent": {"start", "center", "end", "space-between", "space-around"},
@@ -125,6 +127,10 @@ def validate_native_snapshot(payload: object) -> dict:
                 if not isinstance(key, str) or not isinstance(item, str):
                     raise ValueError("Unsafe CSS value")
                 if key in SAFE_STYLES and item in SAFE_STYLES[key]:
+                    styles[key] = item
+                elif (key in {"padding", "borderSpacing"} and len(item) <= 80
+                      and 1 <= len(item.split()) <= (4 if key == "padding" else 2)
+                      and all(LENGTH.fullmatch(part) for part in item.split())):
                     styles[key] = item
                 elif key in LENGTH_STYLES and LENGTH.fullmatch(item) and len(item) <= 16:
                     styles[key] = item

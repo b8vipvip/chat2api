@@ -129,6 +129,32 @@ await capture.capture(active,false);
 assert.equal(sent.length,1);
 console.log("Native rich observer: bounded capture, no DOM URLs, independent request status");
 
+// Native table geometry includes empty columns and multi-value padding. A
+// missing middle TD moves later values into the wrong column even when all
+// text and the table count still match.
+const tableCtx={...ctx,getComputedStyle:()=>({display:"block",visibility:"visible",
+  boxSizing:"border-box",borderCollapse:"collapse",borderSpacing:"0px",
+  padding:"8px 8px 8px 0px",fontSize:"14px",fontWeight:"400",lineHeight:"20px"})};
+delete tableCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,tableCtx);
+const table=new Element("TABLE",[new Element("TBODY",[
+  new Element("TR",[new Element("TD",[{nodeType:3,nodeValue:"left"}]),
+    new Element("TD"),new Element("TD",[{nodeType:3,nodeValue:"right"}])]),
+  new Element("TR",[new Element("TH"),new Element("TH",[{nodeType:3,nodeValue:"header"}])]),
+])]);
+const tableTree=tableCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_tablelayout12345",submitStartedAt:Date.now(),lastCandidateNode:table,
+});
+assert.equal(tableTree.root.children[0].children[0].children.length,3);
+assert.equal(tableTree.root.children[0].children[0].children[1].tag,"td");
+assert.equal(tableTree.root.children[0].children[1].children[0].tag,"th");
+assert.equal(tableTree.root.style.padding,"8px 8px 8px 0px");
+assert.equal(tableTree.root.style.boxSizing,"border-box");
+assert.equal(tableTree.root.style.borderCollapse,"collapse");
+assert.equal(tableTree.root.style.borderSpacing,"0px");
+assert.ok(Object.keys(tableTree.root.style).length<=32);
+console.log("Native table observer: empty cells, box sizing, collapsed borders and bounded padding preserved");
+
 function candidateFor(children) {
   return {requestId:"req_boundedtest1234",submitStartedAt:Date.now(),
     lastCandidateNode:new Element("DIV",children)};

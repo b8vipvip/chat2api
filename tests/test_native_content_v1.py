@@ -36,6 +36,30 @@ def test_disallowed_native_content_is_rejected(payload):
 def test_safe_layout_is_preserved():
     assert validate_native_snapshot(snapshot()) == snapshot()
 
+
+def test_table_box_model_and_empty_cells_survive_store_and_reload(tmp_path):
+    value = {"version": 1, "revision": 1, "root": {"tag": "table", "style": {
+        "boxSizing": "border-box", "borderCollapse": "collapse", "borderSpacing": "0px",
+        "padding": "8px 8px 8px 0px"}, "children": [{"tag": "tbody", "children": [
+            {"tag": "tr", "children": [{"tag": "td", "text": "left"},
+                                      {"tag": "td"}, {"tag": "td", "text": "right"}]}]}]}}
+    store = NativeContentStore(tmp_path)
+    assert store.publish("req_tablelayout12345", "owner", value)
+    assert store.persist("req_tablelayout12345", "owner")
+    assert NativeContentStore(tmp_path).get("req_tablelayout12345", "owner") == value
+
+
+@pytest.mark.parametrize("style", [
+    {"padding": "8px 8px 8px 0px 1px"}, {"padding": "url(https://bad)"},
+    {"padding": "8px;position:fixed"}, {"padding": "calc(100% - 1px)"},
+    {"padding": "-1px 2px"}, {"padding": ""}, {"padding": "99999px"},
+    {"borderSpacing": "1px 2px 3px"}, {"borderSpacing": "var(--private)"},
+    {"boxSizing": "url(bad)"}, {"borderCollapse": "collapse;display:none"},
+])
+def test_table_spacing_and_box_model_reject_unsafe_or_unbounded_css(style):
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1, "root": {"tag": "td", "style": style}})
+
 def test_large_safe_native_tree_is_preserved_without_silent_truncation():
     # This many blocks exceeded the earlier 420-node cutoff, causing MV3C
     # to quietly revert to Markdown even though the original answer was ready.

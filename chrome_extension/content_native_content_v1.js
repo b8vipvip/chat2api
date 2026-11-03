@@ -10,6 +10,8 @@
   const banned = "button,script,style,form,nav,header,footer,aside,input,textarea,select,iframe,canvas,svg,[role='menu'],[contenteditable='true']";
   const styleKeys = {
     display: ["block","inline","inline-block","flex","inline-flex","grid"],
+    boxSizing: ["border-box","content-box"],
+    borderCollapse: ["collapse","separate"],
     flexDirection: ["row","row-reverse","column","column-reverse"],
     flexWrap: ["wrap","nowrap"],
     justifyContent: ["start","center","end","space-between","space-around"],
@@ -30,12 +32,14 @@
     "marginLeft","marginRight","width","minWidth","maxWidth","height","minHeight",
     "maxHeight","borderRadius","borderWidth","letterSpacing","fontSize","lineHeight"]);
   const length = /^(?:0|\d{1,4}(?:\.\d{1,2})?(?:px|rem|%))$/;
+  const lengthList = (value, count) => value.length <= 80 &&
+    value.split(/\s+/).length <= count && value.split(/\s+/).every(part => length.test(part));
   const color = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s]+\))$/i;
   const grid = /^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$/;
   // Server validates at most 32 style keys per element. Chromium may emit
   // more, so prioritize actual visual styling before optional dimensions.
   const cssList = [...new Set([
-    "display","gridTemplateColumns","flexDirection","flexWrap",
+    "display","boxSizing","borderCollapse","borderSpacing","gridTemplateColumns","flexDirection","flexWrap",
     "justifyContent","alignItems","objectFit","textAlign",
     "color","backgroundColor","borderColor","fontWeight",
     "fontSize","lineHeight","whiteSpace","wordBreak","overflowWrap",
@@ -51,6 +55,8 @@
       const value = String(css[key] || "").trim();
       if (styleKeys[key]?.includes(value) ||
           allowedLength.has(key) && value.length <= 16 && length.test(value) ||
+          key === "padding" && lengthList(value,4) ||
+          key === "borderSpacing" && lengthList(value,2) ||
           ["color","backgroundColor","borderColor"].includes(key) && value.length <= 48 && color.test(value) ||
           key === "gridTemplateColumns" && value.length <= 120 && grid.test(value)) {
         obj[key] = value;
@@ -160,7 +166,9 @@
         const value = build(child, depth + 1);
         if (value) children.push(value);
       }
-      if (!children.length && !["hr","br"].includes(mapped)) return null;
+      // Empty cells still occupy a column; dropping them shifts every later
+      // cell and can make text spill into the following paragraph.
+      if (!children.length && !["hr","br","td","th"].includes(mapped)) return null;
       nodes += 1;
       const result = {tag:mapped,style:safeStyle(element)};
       if (children.length) result.children = children;
