@@ -159,6 +159,37 @@ assert.equal(tableTree.root.style.borderWidth,"0px 0px 1px");
 assert.ok(Object.keys(tableTree.root.style).length<=32);
 console.log("Native table observer: empty cells, box sizing, collapsed borders and bounded padding preserved");
 
+// Geometry-sensitive properties must remain inside the 32-property budget
+// even when computed styles supply every other supported declaration.
+const denseStyles={
+  display:"block",visibility:"visible",boxSizing:"border-box",
+  borderCollapse:"collapse",borderSpacing:"0px",borderWidth:"0px 0px 1px",
+  marginLeft:"-395px",marginRight:"-395px",padding:"8px 8px 8px 0px",
+  width:"768px",minWidth:"0px",maxWidth:"1558px",height:"100px",
+  minHeight:"0px",maxHeight:"1000px",borderRadius:"4px",
+  gridTemplateColumns:"1fr 1fr",flexDirection:"row",flexWrap:"wrap",
+  justifyContent:"start",alignItems:"center",objectFit:"cover",
+  textAlign:"left",color:"#222222",backgroundColor:"#ffffff",
+  borderColor:"#dddddd",fontWeight:"400",fontSize:"14px",
+  lineHeight:"20px",whiteSpace:"normal",wordBreak:"normal",
+  overflowWrap:"normal",gap:"8px",rowGap:"4px",columnGap:"4px",
+  marginTop:"0px",marginBottom:"0px"
+};
+const denseCtx={...ctx,getComputedStyle:()=>denseStyles};
+delete denseCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,denseCtx);
+const denseTable=denseCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_dense_table1234",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("TABLE",[new Element("TBODY",[
+    new Element("TR",[new Element("TD",[{nodeType:3,nodeValue:"data"}])])
+  ])])
+});
+assert.equal(denseTable.root.style.marginLeft,"-395px");
+assert.equal(denseTable.root.style.marginRight,"-395px");
+assert.equal(denseTable.root.style.borderWidth,"0px 0px 1px");
+assert.ok(Object.keys(denseTable.root.style).length<=32);
+console.log("Native dense style: table geometry prioritized under 32 keys");
+
 function candidateFor(children) {
   return {requestId:"req_boundedtest1234",submitStartedAt:Date.now(),
     lastCandidateNode:new Element("DIV",children)};
