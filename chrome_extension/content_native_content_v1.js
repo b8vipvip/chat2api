@@ -34,6 +34,16 @@
   const length = /^(?:0|\d{1,4}(?:\.\d{1,2})?(?:px|rem|%))$/;
   const lengthList = (value, count) => value.length <= 80 &&
     value.split(/\s+/).length <= count && value.split(/\s+/).every(part => length.test(part));
+  // ChatGPT's wide tables use negative horizontal margins to cancel a
+  // matching 395px inner padding. Preserve bounded pixel offsets only.
+  const safeNegativeMargin = value => /^-(?:[1-9]\d{0,3})(?:\.\d{1,2})?px$/.test(value) &&
+    Math.abs(Number.parseFloat(value)) <= 1024;
+  // Computed row borders are often "0px 0px 1px". Discarding this
+  // shorthand makes the browser invent a 3px medium border for solid rows.
+  const safeBorderWidths = value => value.length <= 64 &&
+    value.split(/\s+/).length <= 4 && value.split(/\s+/).every(part =>
+      /^(?:0|\d{1,2}(?:\.\d{1,2})?px)$/.test(part) &&
+      Number.parseFloat(part) <= 16);
   const color = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s]+\))$/i;
   const grid = /^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$/;
   // Server validates at most 32 style keys per element. Chromium may emit
@@ -57,6 +67,8 @@
           allowedLength.has(key) && value.length <= 16 && length.test(value) ||
           key === "padding" && lengthList(value,4) ||
           key === "borderSpacing" && lengthList(value,2) ||
+          (key === "marginLeft" || key === "marginRight") && safeNegativeMargin(value) ||
+          key === "borderWidth" && safeBorderWidths(value) ||
           ["color","backgroundColor","borderColor"].includes(key) && value.length <= 48 && color.test(value) ||
           key === "gridTemplateColumns" && value.length <= 120 && grid.test(value)) {
         obj[key] = value;
