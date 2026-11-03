@@ -2,7 +2,8 @@
 """Versioned, read-only CDP evidence collector for existing ChatGPT replies.
 
 An independent Worker tool: it neither submits prompts nor changes chat2api
-request status. Does not read cookies, storage, network bodies or signed URLs.
+request status. Does not export cookies, storage or signed URLs. Candidate validation reads
+only selected-reply cached image bytes and narrowly armed native downloads.
 """
 from __future__ import annotations
 import argparse
@@ -26,7 +27,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.25"
+VERSION = "1.3.0"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -879,8 +880,7 @@ def native_png_crop_rows(payload,x,y,w,h):
         raise ValueError("png_decode_limit")
     inflater=zlib.decompressobj()
     raw=inflater.decompress(b"".join(parts),expected+1)
-    raw+=inflater.flush()
-    if not inflater.eof or len(raw)!=expected:
+    if inflater.unconsumed_tail or not inflater.eof or len(raw)!=expected:
         raise ValueError("invalid_png_stream")
     previous=bytearray(rowbytes)
     extracted=[];at=0
@@ -2244,6 +2244,24 @@ async def _capture_inner(args,owned_tabs):
             if (screenshot_near_complete and not screenshot_complete
                 and screenshot_skip_reason!="dom-changed-during-capture"):
                 screenshot_skip_reason="rounding-tail-1-to-2-px"
+            # Independent candidate validation adds replay inputs and reports;
+            # normal diagnosis remains downloadable even when validation fails.
+            status(folder,"validating-delivery",88,tool_version=VERSION)
+            extra_buffer=BytesIO()
+            try:
+                with ZipFile(extra_buffer,"w",ZIP_DEFLATED,compresslevel=6) as extra:
+                    validation=await asyncio.wait_for(delivery_validation_live(cdp,args,report,extra,
+                        owned_tabs,str(picked.get("id") or "") in owned_tabs),timeout=110)
+            except Exception as exc:
+                validation={"schema":"native-delivery-validation-v1","tool_version":VERSION,
+                    "status":"incomplete","reason":"validation-"+type(exc).__name__,
+                    "checks":{"candidate_capture":"not-run","visual":"not-run"},
+                    "model_request_sent":False,"production_redeployed":False}
+                # Discard a partial extra archive; normal evidence survives.
+                extra_buffer=BytesIO()
+                with ZipFile(extra_buffer,"w",ZIP_DEFLATED,compresslevel=6) as extra:
+                    validation_write_result(extra,validation,[])
+            validation=validation_merge(archive,extra_buffer.getvalue(),validation)
             archive.writestr("manifest.json",json.dumps({"tool":"native-page-diagnostic",
                 "version":VERSION,"request_id":args.request_id,"worker_id":args.worker_id,
                 "scope":report["scope"],"counts":report["counts"],
@@ -2285,6 +2303,9 @@ async def _capture_inner(args,owned_tabs):
                 "capture_layout_stable":capture_layout_stable,
                 "history_readiness":history_readiness,
                 "truncated":bool(report.get("reason")),
+                "delivery_validation_status":validation.get("status"),
+                "delivery_validation_report":"validation/report.json",
+                "delivery_validation_view":"index.html",
                 "source":"existing-chatgpt-page","conversation_url_included":False,
                 "request_binding":verification,
                  "capture_origin":tab_origin},ensure_ascii=False))
@@ -2309,14 +2330,755 @@ async def _capture_inner(args,owned_tabs):
         stream.write(json.dumps({"tool_version":VERSION,"status":"completed",
             "stage":"complete","percent":100,"updated_at":int(time.time())})+"\n")
 
+# v1.3: independent candidate delivery replay. Only trusted repository sources
+# execute. Fixture ZIPs supply inert data; their bundled Python/JS is NEVER run.
+VALIDATION_REF = "native-delivery-validation-candidate"
+VALIDATION_REPO = "b8vipvip/chat2api"
+VALIDATION_FILES = (
+    "chrome_extension/content_native_dom_evidence_v1.js",
+    "chrome_extension/content_native_content_v1.js",
+    "chrome_extension/content_native_file_v210.js",
+    "chrome_extension/native_file_main_v210.js",
+    "app/native_content_v1.py", "app/request_history_v94_patch.py",
+)
+VALIDATION_CSS = "display position top right bottom left boxSizing width height minWidth maxWidth minHeight maxHeight margin marginTop marginRight marginBottom marginLeft padding paddingTop paddingRight paddingBottom paddingLeft fontFamily fontSize fontWeight fontStyle lineHeight letterSpacing wordSpacing textAlign textDecorationLine textDecorationColor textTransform whiteSpace wordBreak overflowWrap verticalAlign color backgroundColor borderColor borderWidth borderTopWidth borderRightWidth borderBottomWidth borderLeftWidth borderTopStyle borderRightStyle borderBottomStyle borderLeftStyle borderTopColor borderRightColor borderBottomColor borderLeftColor borderRadius borderCollapse borderSpacing tableLayout listStyleType listStylePosition flexDirection flexWrap flexGrow flexShrink flexBasis justifyContent alignItems alignContent alignSelf gap rowGap columnGap gridTemplateColumns gridTemplateRows gridColumn gridRow objectFit objectPosition overflowX overflowY opacity visibility transform transformOrigin".split()
+VALIDATION_TAGS = set("div section article p span strong em b i h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a sup sub button svg g path rect circle ellipse line polyline polygon text tspan defs clippath math mrow mi mn mo msup msub mfrac msqrt semantics annotation".split())
+
+FREEZE_REFERENCE = r"""(function(cssKeys){
+const roots=globalThis.__CHAT2API_VALIDATION_ROOTS__||[];
+if(!roots.length||roots.some(e=>!e.isConnected))throw Error('reference-root-missing');
+const blocked='script,style,iframe,form,input,textarea,select,nav,aside,header,footer,[contenteditable="true"],[data-message-author-role="user"],[data-testid="user-message"]';
+const allowed=new Set('div section article p span strong em b i h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a sup sub button svg g path rect circle ellipse line polyline polygon text tspan defs clippath math mrow mi mn mo msup msub mfrac msqrt semantics annotation'.split(' '));
+const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&(r.width>0&&r.height>0||e.namespaceURI.includes('svg'));};
+let count=0,chars=0;const styles=[],styleIds=new Map(),images=[],unsupported=[];
+const styleOf=e=>{const s=getComputedStyle(e),out={};for(const key of cssKeys){const v=String(s[key]||'');if(v&&v.length<300&&!/url\s*\(|var\s*\(|[<>;{}]/i.test(v))out[key]=v;}const sig=JSON.stringify(out);if(!styleIds.has(sig)){styleIds.set(sig,styles.length);styles.push(out);}return styleIds.get(sig);};
+function node(e,depth){
+ if(depth>64||++count>30000)throw Error('reference-tree-limit');
+ if(e.nodeType===3){const text=String(e.nodeValue||'');if(!text.trim())return null;if((chars+=text.length)>300000)throw Error('reference-text-limit');return {tag:'#text',text};}
+ if(e.nodeType!==1||e.matches(blocked)||!visible(e))return null;
+ let tag=e.tagName.toLowerCase();if(tag==='canvas'){unsupported.push('canvas');return null;}
+ if(tag==='button'&&!e.querySelector('img'))return null;
+ if(!allowed.has(tag))tag='div';
+ const out={tag,style:styleOf(e)},attrs={};
+ for(const key of ['colspan','rowspan','start','viewBox','d','fill','stroke','stroke-width','x','y','x1','y1','x2','y2','cx','cy','r','rx','ry','width','height','points']){const v=e.getAttribute(key);if(v&&v.length<20000&&!/url\s*\(|[<>]/i.test(v))attrs[key]=v;}
+ if(Object.keys(attrs).length)out.attrs=attrs;
+ if(e.namespaceURI.includes('svg'))out.ns='svg';if(e.namespaceURI.includes('MathML'))out.ns='math';
+ if(tag==='img'){
+  const r=e.getBoundingClientRect();if(r.width<40||r.height<40)return null;
+  if(images.length>=40)throw Error('reference-image-limit');
+  out.image=images.length;out.natural_width=e.naturalWidth;out.natural_height=e.naturalHeight;images.push(e);
+ }else{out.children=[...e.childNodes].map(c=>node(c,depth+1)).filter(Boolean);}
+ return out;
+}
+const children=roots.map(e=>node(e,0)).filter(Boolean),rects=roots.map(e=>e.getBoundingClientRect());
+const left=Math.min(...rects.map(r=>r.left)),top=Math.min(...rects.map(r=>r.top));
+const right=Math.max(...rects.map(r=>r.right)),bottom=Math.max(...rects.map(r=>r.bottom));
+globalThis.__CHAT2API_VALIDATION_IMAGES__=images;
+return {schema:'native-reply-fixture-v1',root:{tag:'div',children},styles,unsupported,
+ counts:{nodes:count,text_chars:chars,images:images.length},
+ rect:{w:Math.ceil(right)-Math.floor(left),h:Math.ceil(bottom)-Math.floor(top)},
+ viewport:{width:innerWidth,height:innerHeight,device_scale:devicePixelRatio},
+ font_family:getComputedStyle(roots[0]).fontFamily};
+})"""
+
+HYDRATE_REFERENCE = r"""(async function(fixture,assets){
+const spaces={svg:'http://www.w3.org/2000/svg',math:'http://www.w3.org/1998/Math/MathML'};
+function node(v){if(v.tag==='#text')return document.createTextNode(v.text);
+ const e=v.ns?document.createElementNS(spaces[v.ns],v.tag==='clippath'?'clipPath':v.tag):document.createElement(v.tag);
+ for(const [k,x] of Object.entries(fixture.styles[v.style]||{}))e.style[k]=x;
+ for(const [k,x] of Object.entries(v.attrs||{}))e.setAttribute(k,x);
+ if(v.tag==='img'){e.src=assets[v.image]||'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6V2sAAAAASUVORK5CYII=';
+  if(!assets[v.image])e.style.background='#fdd';
+  if(v.natural_width>0){Object.defineProperty(e,'naturalWidth',{get:()=>v.natural_width});Object.defineProperty(e,'naturalHeight',{get:()=>v.natural_height});}
+ }else for(const c of v.children||[])e.appendChild(node(c));
+ return e;
+}
+document.body.style.cssText='margin:0;background:white';document.body.style.fontFamily=fixture.font_family||'Arial,sans-serif';
+const main=document.createElement('main'),scope=node(fixture.root);main.appendChild(scope);document.body.replaceChildren(main);
+globalThis.__CHAT2API_VALIDATION_ROOTS__=[scope];
+globalThis.__CHAT2API_VALIDATION_IMAGES__=[...scope.querySelectorAll('img')];
+await Promise.all([...scope.querySelectorAll('img')].map(e=>e.decode().catch(()=>{})));
+return true;
+})"""
+
+REFERENCE_STRIP = r"""(async function(offset){
+const roots=globalThis.__CHAT2API_VALIDATION_ROOTS__||[];
+if(!roots.length||roots.some(e=>!e.isConnected))return {ok:false};
+let top=Math.min(...roots.map(e=>e.getBoundingClientRect().top));
+let scroller=null;for(let p=roots[0].parentElement;p;p=p.parentElement){const s=getComputedStyle(p);if(/auto|scroll/.test(s.overflowY)&&p.scrollHeight>p.clientHeight+8){scroller=p;break;}}
+const delta=top+offset-96;if(scroller)scroller.scrollTo({top:scroller.scrollTop+delta,behavior:'instant'});else scrollTo({top:scrollY+delta,behavior:'instant'});
+await new Promise(r=>setTimeout(r,80));
+const rr=roots.map(e=>e.getBoundingClientRect()),x=Math.max(0,Math.floor(Math.min(...rr.map(r=>r.left)))),y=Math.max(0,Math.floor(Math.min(...rr.map(r=>r.top)))+offset);
+const width=Math.min(3000,Math.ceil(Math.max(...rr.map(r=>r.right)))-x),height=Math.min(640,Math.ceil(Math.max(...rr.map(r=>r.bottom)))-y,innerHeight-y-1);
+if(width<1||height<1||x+width>innerWidth||y<0)return {ok:false};
+for(const fx of [.08,.5,.92])for(const fy of [.08,.5,.92]){const hit=document.elementFromPoint(x+width*fx,y+height*fy);if(!hit||!roots.some(e=>e===hit||e.contains(hit)))return {ok:false,reason:'viewport-occluded'};}
+return {ok:true,clip:{x,y,width,height,scale:1},height,width,offset};
+})"""
+
+def validation_json_get(path, limit=1000000):
+    # The URL cannot come from a fixture, UI, environment or filename.
+    req=Request("https://api.github.com/repos/"+VALIDATION_REPO+path,
+        headers={"Accept":"application/vnd.github+json","User-Agent":"chat2api-delivery-validation"})
+    with urlopen(req,timeout=15) as response:
+        if urlsplit(response.url).hostname!="api.github.com":raise ValueError("candidate_redirect_refused")
+        data=response.read(limit+1)
+    if len(data)>limit:raise ValueError("candidate_source_size")
+    return json.loads(data)
+
+def validation_sources(folder, candidate_sha="", source_dir=""):
+    if source_dir:
+        source=Path(source_dir).resolve();texts={};rows=[]
+        for name in VALIDATION_FILES:
+            path=(source/name).resolve()
+            if source not in path.parents:raise ValueError("candidate_path_escape")
+            raw=path.read_bytes()
+            if not 0<len(raw)<=512000:raise ValueError("candidate_source_size")
+            texts[name]=raw.decode("utf8");rows.append({"path":name,"sha256":hashlib.sha256(raw).hexdigest()})
+        # Local worktree bytes are explicit CLI input, never code from a ZIP.
+        return texts,{"repository":VALIDATION_REPO,"commit":None,"source":"explicit-local-worktree",
+            "files":rows,"tree_sha256":hashlib.sha256(json.dumps(rows,sort_keys=True).encode()).hexdigest()}
+    if candidate_sha and not re.fullmatch(r"[a-f0-9]{40}",candidate_sha):raise ValueError("candidate_sha_invalid")
+    sha=candidate_sha or str(validation_json_get("/branches/"+VALIDATION_REF).get("commit",{}).get("sha") or "")
+    if not re.fullmatch(r"[a-f0-9]{40}",sha):raise ValueError("candidate_sha_invalid")
+    cache=Path(folder).parent/"validation_source_cache"/sha;cache.mkdir(parents=True,exist_ok=True,mode=0o700)
+    meta_path=cache/"source.json";saved={}
+    if meta_path.is_file():
+        try:saved=json.loads(meta_path.read_text())
+        except (ValueError,OSError):pass
+    texts={};rows=[]
+    for name in VALIDATION_FILES:
+        path=cache/name;raw=None
+        info=next((x for x in saved.get("files",[]) if x.get("path")==name),{})
+        if path.is_file():
+            body=path.read_bytes()
+            blob=hashlib.sha1(b"blob "+str(len(body)).encode()+b"\0"+body).hexdigest()
+            if saved.get("commit")==sha and blob==info.get("git_blob_sha") and hashlib.sha256(body).hexdigest()==info.get("sha256"):raw=body
+        if raw is None:
+            obj=validation_json_get("/contents/"+name+"?ref="+sha)
+            if obj.get("type")!="file" or obj.get("path")!=name or obj.get("encoding")!="base64":raise ValueError("candidate_source_envelope")
+            raw=base64.b64decode(str(obj.get("content") or "").replace("\n",""),validate=True)
+            blob=hashlib.sha1(b"blob "+str(len(raw)).encode()+b"\0"+raw).hexdigest()
+            if not 0<len(raw)<=512000 or obj.get("size")!=len(raw) or obj.get("sha")!=blob:raise ValueError("candidate_source_hash")
+            path.parent.mkdir(parents=True,exist_ok=True,mode=0o700);path.write_bytes(raw);path.chmod(0o600)
+        rows.append({"path":name,"git_blob_sha":blob,"sha256":hashlib.sha256(raw).hexdigest()})
+        texts[name]=raw.decode("utf8")
+    info={"repository":VALIDATION_REPO,"branch":VALIDATION_REF,"commit":sha,"source":"github-fixed-repo-verified-blob","files":rows}
+    meta_path.write_text(json.dumps(info));meta_path.chmod(0o600)
+    return texts,info
+
+async def validation_eval(cdp, code, context=None, timeout=35):
+    params={"expression":code,"returnByValue":True,"awaitPromise":True,"silent":True}
+    if context is not None:params["contextId"]=context
+    result=await cdp.call("Runtime.evaluate",params,timeout=timeout)
+    if result.get("exceptionDetails"):raise RuntimeError("candidate_javascript_failed")
+    return (result.get("result") or {}).get("value")
+
+async def validation_world(cdp):
+    tree=await cdp.call("Page.getFrameTree")
+    frame=tree["frameTree"]["frame"]["id"]
+    world=await cdp.call("Page.createIsolatedWorld",{"frameId":frame,"worldName":"chat2api-delivery-validation-"+os.urandom(8).hex()})
+    return frame,world["executionContextId"]
+
+async def validation_blank(port,owned_tabs):
+    import websockets
+    req=Request(f"http://127.0.0.1:{port}/json/new?about:blank",method="PUT")
+    with urlopen(req,timeout=5) as response:page=json.load(response)
+    tab=str(page.get("id") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{6,100}",tab):raise ValueError("validation_tab_invalid")
+    owned_tabs.append(tab)
+    ws=await websockets.connect(ws_endpoint(page["webSocketDebuggerUrl"],port),open_timeout=5,max_size=24*1024*1024)
+    cdp=CDP(ws);await cdp.call("Page.enable")
+    return ws,cdp
+
+def validation_raster(raw):
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):return "image/png","png"
+    if raw.startswith(b"\xff\xd8\xff"):return "image/jpeg","jpg"
+    if raw[:6] in (b"GIF87a",b"GIF89a"):return "image/gif","gif"
+    if raw[:4]==b"RIFF" and raw[8:12]==b"WEBP":return "image/webp","webp"
+    raise ValueError("original_image_signature")
+
+async def validation_originals(cdp,frame,context,fixture,archive):
+    urls=await validation_eval(cdp,"(globalThis.__CHAT2API_VALIDATION_IMAGES__||[]).map(e=>String(e.currentSrc||e.src||''))",context)
+    assets=[];digests=[];total_bytes=0
+    for index,rawurl in enumerate((urls or [])[:40]):
+        item={"image_index":index,"original_bytes_captured":False}
+        try:
+            u=urlsplit(rawurl)
+            allowed=(u.scheme=="https" and not u.username and not u.password and
+                (u.hostname in HOSTS or re.search(r"\.(?:oaiusercontent\.com|oaistatic\.com|openai\.com|chatgpt\.com)$",u.hostname or "")))
+            if u.scheme=="data" and rawurl.startswith("data:image/") and ";base64," in rawurl:
+                raw=base64.b64decode(rawurl.split(";base64,",1)[1],validate=True)
+            elif allowed:
+                # Read the already-loaded image response from THIS page's
+                # cache. No HTTP request, cookies, headers or URL are exported.
+                response=await cdp.call("Page.getResourceContent",{"frameId":frame,"url":rawurl},timeout=8)
+                if not response.get("base64Encoded"):raise ValueError("image_cache_not_binary")
+                encoded=response.get("content") or ""
+                if len(encoded)>5600000:raise ValueError("image_cache_limit")
+                raw=base64.b64decode(encoded,validate=True)
+            elif u.scheme=="blob" and u.path.startswith("https://chatgpt.com/"):
+                # Browser-local Blob only. A remote fetch is not a fallback.
+                encoded=await validation_eval(cdp,"(async()=>{const e=__CHAT2API_VALIDATION_IMAGES__["+str(index)+"];const r=await fetch(e.currentSrc||e.src);const b=await r.blob();if(b.size>4194304)throw Error();const a=new Uint8Array(await b.arrayBuffer());let s='';for(let i=0;i<a.length;i+=16384)s+=String.fromCharCode(...a.subarray(i,i+16384));return btoa(s);})()",context,timeout=8)
+                raw=base64.b64decode(encoded,validate=True)
+            else:raise ValueError("image_source_not_cached")
+            if not 0<len(raw)<=4194304:raise ValueError("image_original_limit")
+            if total_bytes+len(raw)>6*1024*1024:raise ValueError("image_original_total_limit")
+            mime,ext=validation_raster(raw);digest=hashlib.sha256(raw).hexdigest()
+            name=f"validation/assets/original_{index:02d}.{ext}"
+            archive.writestr(name,raw)
+            total_bytes+=len(raw)
+            item.update({"file":name,"sha256":digest,"bytes":len(raw),"mime":mime,"original_bytes_captured":True})
+        except Exception:item["reason"]="original-byte-cache-unavailable"
+        assets.append(item);digests.append(item.get("sha256") or "")
+    await validation_eval(cdp,"globalThis.__CHAT2API_VALIDATION_DIGESTS__="+json.dumps(digests),context)
+    return assets
+
+def validation_file_bytes(filename,raw):
+    ext=filename.rsplit(".",1)[-1].lower()
+    if not 1<=len(raw)<=12*1024*1024:raise ValueError("file_byte_limit")
+    if ext in ("xlsx","pptx","docx","zip"):
+        with ZipFile(BytesIO(raw)) as zipped:
+            infos=zipped.infolist();names=set(zipped.namelist())
+            if len(infos)>1000 or sum(i.file_size for i in infos)>96*1024*1024:raise ValueError("file_zip_expansion")
+            if len(names)!=len(infos) or any(i.flag_bits&1 for i in infos):raise ValueError("file_zip_ambiguous")
+            if any(i.filename.startswith(("/","\\")) or ".." in i.filename.replace("\\","/").split("/") for i in infos):raise ValueError("file_zip_path")
+            required={"xlsx":"xl/workbook.xml","pptx":"ppt/presentation.xml","docx":"word/document.xml"}
+            if ext in required and ("[Content_Types].xml" not in names or required[ext] not in names):raise ValueError("file_office_structure")
+            if zipped.testzip() is not None:raise ValueError("file_zip_crc")
+    elif ext=="json":json.loads(raw.decode("utf-8-sig"))
+    elif ext=="pdf" and not raw.startswith(b"%PDF-"):raise ValueError("file_pdf_signature")
+    return True
+
+async def validation_native_files(cdp,context,texts,archive,allow_click):
+    if not allow_click:return {"status":"not-run","reason":"native-download-needs-owned-verified-single-reply","files":[]}
+    # Download suppression is scoped to THIS diagnostic page, never Browser.*.
+    try:await cdp.call("Page.setDownloadBehavior",{"behavior":"deny"})
+    except Exception:return {"status":"not-run","reason":"per-page-download-suppression-unavailable","files":[]}
+    channel="chat2api.validation.file."+os.urandom(12).hex()
+    main=texts["chrome_extension/native_file_main_v210.js"]
+    content=texts["chrome_extension/content_native_file_v210.js"]
+    if main.count('"__CHAT2API_NATIVE_FILE_MAIN_V210__"')!=1 or main.count('"chat2api.native-file.v210"')!=1 or content.count('"chat2api.native-file.v210"')!=1:
+        return {"status":"failed","reason":"candidate-file-hook-contract-changed","files":[]}
+    # Only the singleton key and private message channel are namespaced. All
+    # capture/filename/MIME/signature logic remains the pinned production code.
+    main=main.replace('"__CHAT2API_NATIVE_FILE_MAIN_V210__"',json.dumps(channel+".main"),1).replace('"chat2api.native-file.v210"',json.dumps(channel),1)
+    content=content.replace('"chat2api.native-file.v210"',json.dumps(channel),1)
+    await validation_eval(cdp,main)
+    await validation_eval(cdp,"globalThis.__VALIDATION_FILE_CHUNKS__=[];globalThis.chrome={runtime:{sendMessage:async m=>{if(m.type!=='chat2api.file.chunk')return {ok:false};__VALIDATION_FILE_CHUNKS__.push(m.event);return {ok:true};}}};",context)
+    await validation_eval(cdp,content,context)
+    expected=await validation_eval(cdp,r"[...String(__CHAT2API_VALIDATION_ROOTS__[0].innerText||'').matchAll(/\.((?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md))\b/gi)].map(m=>m[1].toLowerCase())",context)
+    result=await validation_eval(cdp,"__CHAT2API_NATIVE_FILE_V210__.capture(__CHAT2API_VALIDATION_ROOTS__[0],'req_validation_files001')",context,timeout=45)
+    if set(result.get("captured_types",[]))>={"xlsx","pptx","json"} and "zip" not in result.get("captured_types",[]):
+        await asyncio.sleep(5.1)
+        result=await validation_eval(cdp,"__CHAT2API_NATIVE_FILE_V210__.capture(__CHAT2API_VALIDATION_ROOTS__[0],'req_validation_files001')",context,timeout=15)
+    chunks=await validation_eval(cdp,"__VALIDATION_FILE_CHUNKS__",context)
+    staged={}
+    for row in chunks or []:staged.setdefault(row.get("upload_id"),[]).append(row)
+    rows=[];total=0;originals={}
+    pattern=r"!\[📎 ([^\]\r\n]{1,180})\]\((data:[a-z0-9.+-]+/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+|chat2api-staged:[a-f0-9]{32})\)"
+    for index,match in enumerate(re.finditer(pattern,str(result.get("text") or ""),re.I)):
+        filename,marker=match.groups();ext=filename.rsplit(".",1)[-1].lower()
+        if re.search(r"[/\\\x00-\x1f]",filename) or ext not in {"xlsx","pptx","docx","zip","json","pdf","csv","txt","md","py","js","ts","html"}:continue
+        item={"filename":filename,"extension":ext,"status":"failed"}
+        try:
+            if marker.startswith("data:"):raw=base64.b64decode(marker.split(";base64,",1)[1],validate=True)
+            else:
+                parts=sorted(staged.get(marker.split(":",1)[1],[]),key=lambda x:x.get("sequence",-1))
+                if not parts or [x.get("sequence") for x in parts]!=list(range(len(parts))) or parts[-1].get("final") is not True:raise ValueError("file_staging_sequence")
+                raw=b"".join(base64.b64decode(x["base64_chunk"],validate=True) for x in parts)
+                if len(raw)!=parts[0]["expected_bytes"] or hashlib.sha256(raw).hexdigest()!=parts[0]["expected_sha256"]:raise ValueError("file_staging_hash")
+            validation_file_bytes(filename,raw)
+            if total+len(raw)>6*1024*1024:raise ValueError("file_report_total_limit")
+            name=f"validation/files/original_{index:02d}.{ext}";archive.writestr(name,raw);total+=len(raw)
+            item.update({"file":name,"bytes":len(raw),"sha256":hashlib.sha256(raw).hexdigest(),"status":"passed","source":"candidate-native-click-original-bytes"})
+            originals[filename]=raw
+        except Exception:item["reason"]="file-byte-validation-or-budget-failed"
+        rows.append(item)
+    has_candidates=int(result.get("button_candidates") or 0)>0
+    missing=sorted(set(expected or [])-{x["extension"] for x in rows if x["status"]=="passed"})
+    zip_members=[]
+    for name,raw in originals.items():
+        if not name.lower().endswith('.zip'):continue
+        with ZipFile(BytesIO(raw)) as zipped:
+            for filename,data in originals.items():
+                if filename.lower().endswith('.zip'):continue
+                ok=filename in zipped.namelist() and hashlib.sha256(zipped.read(filename)).digest()==hashlib.sha256(data).digest()
+                zip_members.append({"filename":filename,"bytes_identical":ok})
+    state="failed" if any(x["status"]=="failed" for x in rows) or result.get("failed_types") or any(not x["bytes_identical"] for x in zip_members) else "incomplete" if missing else "passed" if rows else "not-applicable" if not has_candidates and not expected else "incomplete"
+    return {"status":state,"files":rows,"missing_types":missing,"zip_members":zip_members,"button_candidates":result.get("button_candidates",0),"failed_types":result.get("failed_types",[]),"failure_stages":result.get("failure_stages",{}),"synthesized_zip":bool(result.get("synthesized_zip")),"browser_save_suppressed":True,"source_transform":"singleton-key-and-message-channel-only","generated_file_http_routes":"not-run"}
+
+async def validation_capture_snapshot(cdp,context,texts):
+    # All production capture logic is unmodified. Only the test input scope is
+    # supplied externally; this does NOT test request-v6's live turn binding.
+    for path in VALIDATION_FILES[:2]:await validation_eval(cdp,texts[path],context)
+    return await validation_eval(cdp,"""(()=>{
+ const roots=__CHAT2API_VALIDATION_ROOTS__,images=__CHAT2API_VALIDATION_IMAGES__||[];
+ const active={requestId:'req_validation_replay001',submitStartedAt:1,lastCandidateNode:roots[0],
+   nativeVerifiedReplyScope:roots.length===1?roots[0]:null,baselineRolelessHeadings:new Set(),
+   nativeImageDigests:new Map(images.map((e,i)=>[e,(__CHAT2API_VALIDATION_DIGESTS__||[])[i]]).filter(x=>x[1]))};
+ const snapshot=__CHAT2API_NATIVE_CONTENT_V1__.snapshot(active);
+ return {snapshot,failure:active.nativeStructuralFailure||'',max_children:active.nativeStructuralMaxChildren||0};
+})()""",context)
+
+def validation_server(texts,snapshot,assets,folder):
+    import tempfile
+    ns={"__name__":"chat2api_validation_candidate"}
+    # Source was fetched from the fixed trusted repo, or explicit --source-dir.
+    # Never import any .py/.js that happened to arrive inside the fixture ZIP.
+    exec(compile(texts["app/native_content_v1.py"],"candidate/app/native_content_v1.py","exec"),ns)
+    validated=ns["validate_native_snapshot"](snapshot)
+    with tempfile.TemporaryDirectory(prefix="native-validation-",dir=folder) as tmp:
+        store=ns["NativeContentStore"](Path(tmp));owner="validation-only-owner"
+        rid="req_validation_direct001"
+        if not store.publish(rid,owner,snapshot) or not store.persist(rid,owner):raise ValueError("candidate_store_failed")
+        if ns["NativeContentStore"](Path(tmp)).get(rid,owner)!=validated:raise ValueError("candidate_store_reload_failed")
+        if store.get(rid,"different-validation-owner") is not None:raise ValueError("candidate_store_owner_failed")
+        chunks=ns["NativeChunkAssembler"](store);raw=json.dumps(snapshot,ensure_ascii=False,separators=(",",":")).encode()
+        length=chunks.CHUNK_BYTES;count=(len(raw)+length-1)//length;digest=hashlib.sha256(raw).hexdigest()
+        for index in range(count):
+            committed=chunks.ingest("req_validation_chunks001",owner,{"revision":snapshot["revision"],"index":index,"count":count,"byte_length":len(raw),"sha256":digest,"data":base64.b64encode(raw[index*length:(index+1)*length]).decode()})
+            if committed!=(index==count-1):raise ValueError("candidate_chunk_commit_failed")
+        if store.get("req_validation_chunks001",owner)!=validated:raise ValueError("candidate_chunk_reload_failed")
+    identity=ns["native_image_identity_candidates"](validated,[{"sha256":x.get("sha256")} for x in assets])
+    return validated,{"validation":"passed","persistence":"passed","chunk_assembly":"passed","owner_isolation":"passed",
+        "layout":ns["native_layout_summary"](validated,len(assets)),"image_identity":identity,
+        "http_routes":"not-run","live_websocket_ack":"not-run","sse_delivery":"not-run"}
+
+def validation_renderer(texts):
+    source=texts["app/request_history_v94_patch.py"]
+    first=source.find("const requestHistoryNativeTags=new Set(")
+    end=source.find("async function requestHistoryLoadNativePreview(",first)
+    if first<0 or end<=first:raise ValueError("candidate_renderer_contract_changed")
+    return source[first:end]
+
+def validation_plain_tree(root):
+    parts=[];counts={"tables":0,"images":0,"headings":0};stack=[root]
+    while stack:
+        node=stack.pop();tag=node.get("tag")
+        if node.get("text"):parts.append(str(node["text"]))
+        if tag=="table":counts["tables"]+=1
+        if tag=="img":counts["images"]+=1
+        if re.fullmatch(r"h[1-6]",str(tag or "")):counts["headings"]+=1
+        stack.extend(reversed(node.get("children") or []))
+    return re.sub(r"\s+"," ","".join(parts)).strip(),counts
+
+def validation_pixel_diff(reference,candidate):
+    width,height=struct.unpack(">II",reference[16:24]);cw,ch=struct.unpack(">II",candidate[16:24])
+    if (width,height)!=(cw,ch):raise ValueError("comparison_dimensions_mismatch")
+    c1,r1=native_png_crop_rows(reference,0,0,width,height);c2,r2=native_png_crop_rows(candidate,0,0,width,height)
+    a=3 if c1==2 else 4;b=3 if c2==2 else 4;changed=0;rows=[]
+    for left,right in zip(r1,r2):
+        heat=bytearray(b"\xff"*(width*3))
+        if a==b and left==right:
+            rows.append(bytes(heat));continue
+        for x in range(width):
+            lp=left[x*a:x*a+3];rp=right[x*b:x*b+3]
+            diff=lp!=rp
+            if diff:changed+=1;heat[x*3:x*3+3]=bytes((235,45,70))
+        rows.append(bytes(heat))
+    return {"changed_pixels":changed,"pixels":width*height,"changed_ratio":round(changed/(width*height),6)},native_png_pack_rows(width,height,2,rows)
+
+def validation_safe_fixture(value):
+    if not isinstance(value,dict) or value.get("schema")!="native-reply-fixture-v1":raise ValueError("fixture_schema")
+    styles=value.get("styles")
+    if not isinstance(styles,list) or len(styles)>30000:raise ValueError("fixture_styles")
+    for css in styles:
+        if not isinstance(css,dict) or len(css)>len(VALIDATION_CSS):raise ValueError("fixture_styles")
+        for k,v in css.items():
+            if k not in VALIDATION_CSS or not isinstance(v,str) or len(v)>300 or re.search(r"url\s*\(|var\s*\(|[<>;{}]",v,re.I):raise ValueError("fixture_unsafe_style")
+    state={"nodes":0,"chars":0,"images":[]}
+    def check(node,depth):
+        if depth>66 or not isinstance(node,dict):raise ValueError("fixture_depth")
+        state["nodes"]+=1
+        if state["nodes"]>30001 or set(node)-{"tag","text","style","children","attrs","ns","image","natural_width","natural_height"}:raise ValueError("fixture_node")
+        tag=node.get("tag")
+        if tag=="#text":
+            if set(node)!={"tag","text"} or not isinstance(node["text"],str):raise ValueError("fixture_text")
+            state["chars"]+=len(node["text"])
+            if state["chars"]>300000:raise ValueError("fixture_text_limit")
+            return
+        if tag not in VALIDATION_TAGS or node.get("ns") not in (None,"svg","math"):raise ValueError("fixture_tag")
+        if "style" in node and (type(node["style"]) is not int or not 0<=node["style"]<len(styles)):raise ValueError("fixture_style_ref")
+        attrs=node.get("attrs",{})
+        if not isinstance(attrs,dict):raise ValueError("fixture_attrs")
+        for k,v in attrs.items():
+            if k not in {"colspan","rowspan","start","viewBox","d","fill","stroke","stroke-width","x","y","x1","y1","x2","y2","cx","cy","r","rx","ry","width","height","points"} or not isinstance(v,str) or len(v)>20000 or re.search(r"url\s*\(|[<>]",v,re.I):raise ValueError("fixture_unsafe_attr")
+        if tag=="img" and (type(node.get("image")) is not int or not 0<=node["image"]<40):raise ValueError("fixture_image_index")
+        if tag=="img":
+            state["images"].append(node["image"])
+            if any(type(node.get(k,0)) is not int or not 0<=node.get(k,0)<=16384 for k in ("natural_width","natural_height")):raise ValueError("fixture_image_dimensions")
+        children=node.get("children",[])
+        if not isinstance(children,list):raise ValueError("fixture_children")
+        for child in children:check(child,depth+1)
+    check(value.get("root"),0)
+    rect=value.get("rect",{})
+    if any(type(rect.get(k)) is not int or not 1<=rect[k]<=40960 for k in ("w","h")) or rect["w"]>3000:raise ValueError("fixture_geometry")
+    family=value.get("font_family","")
+    if not isinstance(family,str) or len(family)>300 or re.search(r"[<>;{}]|url\s*\(",family,re.I):raise ValueError("fixture_font")
+    if state["images"]!=list(range(len(state["images"]))):raise ValueError("fixture_image_order")
+    if value.get("unsupported") not in (None,[]) and (not isinstance(value["unsupported"],list) or len(value["unsupported"])>30000 or any(x!="canvas" for x in value["unsupported"])):raise ValueError("fixture_unsupported")
+    value["counts"]={"nodes":state["nodes"],"text_chars":state["chars"],"images":len(state["images"])}
+    return value
+
+def validation_report_html(report,strips):
+    import html
+    esc=lambda x:html.escape(str(x),quote=True)
+    nonce=os.urandom(12).hex();status=str(report.get("status") or "incomplete")
+    labels={"passed":"通过","failed":"失败","incomplete":"未完整验证","not-run":"未运行"}
+    checks=report.get("checks") or {}
+    rows="".join("<tr><td>"+esc(k)+"</td><td>"+esc(labels.get(v,v))+"</td></tr>" for k,v in checks.items())
+    pics=""
+    for item in strips:
+        cols="".join('<div><b>'+label+'</b><img loading="lazy" src="'+esc(item[key])+'"></div>' for key,label in (("reference","原生参考"),("candidate","候选代码交付"),("difference","像素差异（红色）")))
+        pics+='<section><h3>第 '+str(item["index"]+1)+' 段 · 差异 '+esc(item["diff"]["changed_ratio"]*100)+'%</h3><div class="compare">'+cols+'</div></section>'
+    note="历史页面验证不证明新请求发送、模型选择、生成终态或真实 SSE/WebSocket 送达；原始图片、文件下载、范围归属或参考截图缺失时，不能判为完整通过。"
+    return ('<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src \'self\' data: file:; style-src \'unsafe-inline\'; script-src \'nonce-'+nonce+'\'"><title>富内容交付验证报告</title><style>body{font:15px system-ui;margin:24px;color:#152238;background:#f6f8fc}h1{margin-bottom:8px}table{border-collapse:collapse;background:white}td{padding:8px 16px;border:1px solid #dae0ea}.compare{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.compare div{background:white;overflow:auto}.compare b{display:block;padding:8px;position:sticky;top:0;background:white}.compare img{width:100%;display:block}section{margin:24px 0}pre{white-space:pre-wrap;max-height:240px;overflow:auto;background:white;padding:16px}.note{background:#fff0c2;padding:12px;border-radius:8px}button{padding:8px 16px}body.diff-off .compare{grid-template-columns:repeat(2,minmax(0,1fr))}body.diff-off .compare div:last-child{display:none}</style><h1>富内容交付验证：'+esc(labels.get(status,status))+'</h1><p>候选提交：<code>'+esc((report.get("candidate") or {}).get("commit") or (report.get("candidate") or {}).get("tree_sha256") or "未加载")+'</code> · 工具 '+esc(VERSION)+'</p><p class="note">'+note+'</p><table>'+rows+'</table><p><button id="diff">显示／隐藏差异列</button></p>'+pics+'<h2>机器可读报告</h2><pre>'+esc(json.dumps(report,ensure_ascii=False,indent=2))+'</pre><script nonce="'+nonce+'">document.getElementById("diff").onclick=()=>document.body.classList.toggle("diff-off");</script></html>')
+
+def validation_write_result(archive,report,strips):
+    archive.writestr("validation/report.json",json.dumps(report,ensure_ascii=False,indent=2))
+    # index.html is at ZIP root; every artifact path remains archive-relative.
+    archive.writestr("index.html",validation_report_html(report,strips))
+    archive.writestr("REPLAY.txt", "富内容交付回放\n\n解压后打开 index.html 查看原生参考、候选交付和像素差异。\n"
+        "把这个 ZIP 留作回归样本；以后测试候选修复无需重新生成回复或部署主服务。\n"
+        "从仓库独立诊断分支取得可信工具后，复用 Worker 的本机 Chrome 调试端口：\n"
+        "python native_page_diagnostic_v1.py --replay sample.zip --output replay-result --cdp-port 9222\n"
+        "可加 --candidate-sha <40位提交> 固定版本；本地开发可用 --source-dir <可信项目目录>。\n"
+        "默认候选分支："+VALIDATION_REF+"；每次开始时固定提交并校验源码哈希。\n"
+        "不要执行样本 ZIP 内的源码；工具只把它们留作审计，不会导入执行。\n"
+        "回放仅新建空白页，不打开 ChatGPT、不登录、不发起模型请求。\n"
+        "缺失的原图、文件、回复归属或参考截图仍需一次真实采样。\n"
+        "历史回放不能证明新请求绑定、模型选择、生成终态或真实 SSE/WebSocket 送达。\n")
+
+def validation_merge(archive,payload,report):
+    # Preserve the existing controller's 18 MiB transfer contract. Optional
+    # validation must never make an otherwise usable diagnosis undownloadable.
+    with ZipFile(BytesIO(payload)) as extra:
+        budget=MAX_ZIP-archive.fp.tell()-512000;used=0;keep=set();omitted=[]
+        special={"validation/report.json","index.html","REPLAY.txt","validation/assets.json"}
+        def priority(name):
+            if name.endswith("fixture.json") or name in ("validation/source.json","validation/snapshot.json"):return 0
+            if name.startswith(("validation/assets/","validation/files/")):return 1
+            if name.startswith("validation/reference/"):return 2
+            if name.startswith(("validation/candidate/","validation/difference/")):return 3
+            return 4
+        for item in sorted(extra.infolist(),key=lambda x:(priority(x.filename),x.filename)):
+            if item.filename in special:continue
+            if used+item.compress_size+len(item.filename)+160>budget:omitted.append(item.filename);continue
+            raw=extra.read(item.filename);archive.writestr(item.filename,raw)
+            used+=item.compress_size+len(item.filename)+160;keep.add(item.filename)
+        assets=json.loads(extra.read("validation/assets.json")) if "validation/assets.json" in extra.namelist() else []
+        for row in assets:
+            if row.get("file") and row["file"] not in keep:
+                for k in ("file","sha256","bytes","mime"):row.pop(k,None)
+                row.update({"original_bytes_captured":False,"reason":"evidence-transfer-budget"})
+        archive.writestr("validation/assets.json",json.dumps(assets,ensure_ascii=False))
+        for row in (report.get("files") or {}).get("files",[]):
+            if row.get("file") and row["file"] not in keep:
+                row.pop("file",None);row["status"]="incomplete";row["reason"]="evidence-transfer-budget"
+                report["files"]["status"]="incomplete";report.setdefault("checks",{})["file_bytes"]="incomplete"
+        strips=[x for x in report.get("visual_strips",[]) if all(x.get(k) in keep for k in ("reference","candidate","difference"))]
+        if omitted:
+            report["omitted_artifacts"]=omitted
+            if report.get("status")!="failed":report["status"]="incomplete"
+            if any(n.startswith(("validation/reference/","validation/candidate/","validation/difference/","validation/assets/")) for n in omitted):
+                report.setdefault("checks",{})["visual"]="incomplete"
+                if report.get("capture_render_status")!="failed":report["capture_render_status"]="incomplete"
+        validation_write_result(archive,report,strips)
+    return report
+
+async def validation_render(cdp,context,texts,snapshot,fixture,assets,reference_strips,archive):
+    renderer=validation_renderer(texts)
+    # The real production renderer constructs approved DOM nodes. No source
+    # HTML, event handlers, hrefs, or code supplied by fixtures can execute.
+    await validation_eval(cdp,renderer,context)
+    result=await validation_eval(cdp,"""(async function(snapshot,assets,font){
+ document.body.style.cssText='margin:0;background:white';document.body.style.fontFamily=font||'Arial,sans-serif';
+ const tree=requestHistoryNativeNode(snapshot.root,assets,{count:0});document.body.replaceChildren(tree);
+ await Promise.all([...tree.querySelectorAll('img')].map(e=>e.decode().catch(()=>{})));
+ await document.fonts.ready;const r=tree.getBoundingClientRect();return {width:Math.ceil(r.width),height:Math.ceil(r.height)};
+})("""+json.dumps(snapshot,ensure_ascii=False)+","+json.dumps(assets)+","+json.dumps(fixture.get("font_family",""))+")",context)
+    comparisons=[];changed=total=0
+    for index,item in enumerate(reference_strips[:64]):
+        raw=item["bytes"];width,height=struct.unpack(">II",raw[16:24]);offset=int(item["offset"])
+        png=await cdp.call("Page.captureScreenshot",{"format":"png","captureBeyondViewport":True,"clip":{"x":0,"y":offset,"width":width,"height":height,"scale":1}},timeout=20)
+        candidate=base64.b64decode(png["data"],validate=True)
+        diff,heat=validation_pixel_diff(raw,candidate);changed+=diff["changed_pixels"];total+=diff["pixels"]
+        refname=f"validation/reference/strip_{index:02d}.png";canname=f"validation/candidate/strip_{index:02d}.png";diffname=f"validation/difference/strip_{index:02d}.png"
+        archive.writestr(refname,raw);archive.writestr(canname,candidate);archive.writestr(diffname,heat)
+        comparisons.append({"index":index,"offset":offset,"reference":refname,"candidate":canname,"difference":diffname,"diff":diff})
+        if archive.fp.tell()>MAX_ZIP-512000:break
+    coverage=sum(struct.unpack(">II",x["bytes"][16:24])[1] for x in reference_strips[:len(comparisons)])
+    visual={"strips":len(comparisons),"reference_width":fixture["rect"]["w"],"rendered_width":result["width"],"reference_height":fixture["rect"]["h"],"rendered_height":result["height"],"coverage_px":coverage,"changed_pixels":changed,"pixels":total,"changed_ratio":round(changed/total,6) if total else None,
+        "complete":bool(reference_strips and coverage==fixture["rect"]["h"] and not fixture.get("unsupported")),"exact":bool(total and changed==0 and result["width"]==fixture["rect"]["w"] and result["height"]==fixture["rect"]["h"]),"renderer_scope":"production-admin-component"}
+    return visual,comparisons
+
+async def validation_run(cdp,context,fixture,texts,source,assets,reference_strips,archive,args,owned_tabs,provenance,files=None):
+    started=time.monotonic()
+    fixture=validation_safe_fixture(fixture)
+    result={"schema":"native-delivery-validation-v1","tool_version":VERSION,"candidate":source,"mode":provenance.get("mode"),"provenance":provenance,
+        "checks":{"capture":"not-run","server_validation":"not-run","persistence":"not-run","chunk_assembly":"not-run","text_order":"not-run","tables":"not-run","images":"not-run","file_bytes":"not-run","native_file_click":"not-run","visual":"not-run","live_turn_binding":"not-run","live_generation_terminal":"not-run","live_sse_delivery":"not-run"}}
+    checks=result["checks"];comparisons=[]
+    result["files"]=files or {"status":"not-run","files":[]}
+    checks["file_bytes"]=result["files"]["status"]
+    if result["files"].get("browser_save_suppressed") is True:checks["native_file_click"]=result["files"]["status"]
+    archive.writestr("validation/reference/fixture.json",json.dumps(fixture,ensure_ascii=False))
+    archive.writestr("validation/source.json",json.dumps(source,ensure_ascii=False,indent=2))
+    for path,text in texts.items():archive.writestr("validation/source/"+path,text)
+    archive.writestr("validation/assets.json",json.dumps(assets,ensure_ascii=False))
+    try:
+        result["stage"]="production-native-capture"
+        captured=await validation_capture_snapshot(cdp,context,texts)
+        if not captured or not captured.get("snapshot"):
+            result["reason"]="capture-"+str((captured or {}).get("failure") or "unavailable")
+            checks["capture"]="failed";result["status"]="failed";result["elapsed_seconds"]=round(time.monotonic()-started,3);validation_write_result(archive,result,[]);return result
+        checks["capture"]="passed";snapshot=captured["snapshot"]
+        result["stage"]="production-server-validation"
+        validated,server=validation_server(texts,snapshot,assets,Path(args.output))
+        result["server"]=server
+        for key in ("server_validation","persistence","chunk_assembly"):checks[key]="passed"
+        archive.writestr("validation/snapshot.json",json.dumps(validated,ensure_ascii=False))
+        before,bcounts=validation_plain_tree(fixture["root"]);after,acounts=validation_plain_tree(validated["root"])
+        checks["text_order"]="passed" if before==after else "failed"
+        checks["tables"]="passed" if bcounts["tables"]==acounts["tables"] else "failed"
+        result["structure"]={"reference":bcounts,"captured":acounts,"reference_text_sha256":hashlib.sha256(before.encode()).hexdigest(),"captured_text_sha256":hashlib.sha256(after.encode()).hexdigest()}
+        checks["images"]=("passed" if bcounts["images"]==acounts["images"] and
+            (bcounts["images"]==0 or server["image_identity"].get("status")=="verified-sha256") else "incomplete")
+        if bcounts["images"]!=acounts["images"]:checks["images"]="failed"
+        display=[]
+        for i in range(bcounts["images"]):
+            item=next((x for x in assets if x.get("image_index")==i),{})
+            raw=archive.read(item["file"]) if item.get("file") in archive.namelist() else b""
+            display.append("data:"+item.get("mime","image/png")+";base64,"+base64.b64encode(raw).decode() if raw else "")
+        # Renderer needs an image for each native ordinal, including missing
+        # assets. Missing originals stay explicitly incomplete, never verified.
+        count=server["layout"]["images"]
+        display=(display+[""]*40)[:count]
+        if server["image_identity"].get("status")=="verified-sha256":
+            # Match the production admin preview's hash-based remapping.
+            # Ordinal-only display could conceal a candidate image reorder.
+            display=[display[index] for index in server["image_identity"]["indices"]]
+        ws,target=await validation_blank(args.cdp_port,owned_tabs)
+        try:
+            result["stage"]="production-renderer-visual-comparison"
+            await target.call("Emulation.setDeviceMetricsOverride",{"width":fixture["rect"]["w"],"height":1100,"deviceScaleFactor":1,"mobile":False})
+            _,world=await validation_world(target)
+            visual,comparisons=await validation_render(target,world,texts,validated,fixture,display,reference_strips,archive)
+            result["visual"]=visual
+            result["visual_strips"]=comparisons
+            checks["visual"]=("passed" if visual["complete"] and visual["exact"] else "failed" if visual["complete"] else "incomplete")
+        finally:await ws.close()
+        required=("capture","server_validation","persistence","chunk_assembly","text_order","tables","images","visual")
+        result["capture_render_status"]=("failed" if any(checks[k]=="failed" for k in required) else "passed" if all(checks[k]=="passed" for k in required) else "incomplete")
+        result["status"]=("failed" if "failed" in checks.values() else "passed" if result["capture_render_status"]=="passed" and checks["file_bytes"] in ("passed","not-applicable") and provenance.get("boundary_verified") is True else "incomplete")
+        result["scope"]="selected-existing-reply-capture-store-render-only"
+    except Exception as exc:
+        result["status"]="failed";result["reason"]=result.get("stage","validation")+":"+type(exc).__name__
+        # Fixed stages and exception class only; no page/source URL or stack.
+    result["elapsed_seconds"]=round(time.monotonic()-started,3)
+    validation_write_result(archive,result,comparisons)
+    return result
+
+async def validation_scope(args,fixture,assets,archive,owned_tabs):
+    # Candidate capture runs on the inert selected reply, not the page's
+    # other conversation turns. Live request-v6 boundary binding is separate.
+    display=[];digests=[]
+    for index in range(fixture["counts"]["images"]):
+        item=next((x for x in assets if x["image_index"]==index),{})
+        raw=archive.read(item["file"]) if item.get("file") in archive.namelist() else b""
+        display.append("data:"+item.get("mime","image/png")+";base64,"+base64.b64encode(raw).decode() if raw else "")
+        digests.append(item.get("sha256","") if raw else "")
+    ws,cdp=await validation_blank(args.cdp_port,owned_tabs)
+    try:
+        await cdp.call("Emulation.setDeviceMetricsOverride",{"width":fixture["rect"]["w"],"height":1100,"deviceScaleFactor":1,"mobile":False})
+        _,context=await validation_world(cdp)
+        await validation_eval(cdp,HYDRATE_REFERENCE+"("+json.dumps(fixture,ensure_ascii=False)+","+json.dumps(display)+")",context)
+        await validation_eval(cdp,"globalThis.__CHAT2API_VALIDATION_DIGESTS__="+json.dumps(digests),context)
+        return ws,cdp,context
+    except BaseException:
+        await ws.close();raise
+
+async def delivery_validation_live(cdp,args,report,archive,owned_tabs,source_owned):
+    import asyncio
+    texts,source=await asyncio.to_thread(validation_sources,args.output,getattr(args,"candidate_sha",""),getattr(args,"source_dir",""))
+    if source_owned:
+        viewport=await validation_eval(cdp,"({width:innerWidth,height:innerHeight})")
+        await cdp.call("Emulation.setDeviceMetricsOverride",{"width":max(800,min(3000,int(viewport["width"]))),"height":1100,"deviceScaleFactor":1,"mobile":False})
+    frame,context=await validation_world(cdp)
+    choose=CAPTURE.replace("const counters={","globalThis.__CHAT2API_VALIDATION_ROOTS__=roots;const counters={",1)
+    chosen=await validation_eval(cdp,choose+"("+json.dumps(args.request_id)+")",context)
+    if not chosen or not chosen.get("ok") or chosen.get("generating"):raise ValueError("validation_reference_unavailable")
+    fixture=await validation_eval(cdp,FREEZE_REFERENCE+"("+json.dumps(VALIDATION_CSS)+")",context)
+    fixture=validation_safe_fixture(fixture)
+    assets=await validation_originals(cdp,frame,context,fixture,archive)
+    try:files=await validation_native_files(cdp,context,texts,archive,source_owned and chosen.get("boundary_verified") is True and len(fixture["root"]["children"])==1)
+    except Exception:files={"status":"failed","reason":"candidate-native-file-capture-failed","files":[]}
+    strips=[];offset=0
+    if source_owned:
+        while offset<fixture["rect"]["h"] and len(strips)<64:
+            part=await validation_eval(cdp,REFERENCE_STRIP+"("+str(offset)+")",context)
+            if not part or not part.get("ok"):break
+            png=await cdp.call("Page.captureScreenshot",{"format":"png","captureBeyondViewport":False,"clip":part["clip"]},timeout=20)
+            raw=base64.b64decode(png["data"],validate=True)
+            w,h=struct.unpack(">II",raw[16:24])
+            if (w,h)!=(part["width"],part["height"]):break
+            strips.append({"bytes":raw,"offset":offset});offset+=h
+            if archive.fp.tell()>MAX_ZIP:raise ValueError("validation_archive_limit")
+    # Detect source mutation during screenshots; unrelated page changes do
+    # not matter, but altered reply text/structure must invalidate the reference.
+    after=await validation_eval(cdp,FREEZE_REFERENCE+"("+json.dumps(VALIDATION_CSS)+")",context)
+    stable=(validation_plain_tree(fixture["root"])==validation_plain_tree(after["root"]) and fixture["rect"]==after["rect"])
+    if not stable:strips=[]
+    ws,target,world=await validation_scope(args,fixture,assets,archive,owned_tabs)
+    try:
+        return await validation_run(target,world,fixture,texts,source,assets,strips,archive,args,owned_tabs,
+            {"mode":"existing-live-history","boundary_verified":chosen.get("boundary_verified") is True,"business_request_bound":report.get("request_marker")==args.request_id,"reference_stable":stable,"source_owned_tab":source_owned,"candidate_capture_input":"inert-selected-reply-reconstruction","model_request_sent":False,"production_redeployed":False},files)
+    finally:await ws.close()
+
+def validation_import_legacy(archive):
+    """Older diagnosis bundles remain useful, with explicit missing evidence."""
+    names=set(archive.namelist());meta=json.loads(archive.read("manifest.json"))
+    if meta.get("tool")!="native-page-diagnostic":raise ValueError("legacy_fixture_schema")
+    name=meta.get("dom_file") or "assistant_dom.json"
+    if name not in ("assistant_dom.json","unverified_rich_candidate_dom.json") or name not in names:raise ValueError("legacy_fixture_dom")
+    report=json.loads(archive.read(name));styles=[];style_ids={};counter={"images":0}
+    def node(value):
+        tag=value.get("tag")
+        if tag=="#text":return {"tag":"#text","text":str(value.get("text") or "")}
+        if tag not in VALIDATION_TAGS:tag="div"
+        css={k:v for k,v in (value.get("style") or {}).items() if k in VALIDATION_CSS and isinstance(v,str) and len(v)<300 and not re.search(r"url\s*\(|var\s*\(|[<>;{}]",v,re.I)}
+        signature=json.dumps(css,sort_keys=True)
+        if signature not in style_ids:style_ids[signature]=len(styles);styles.append(css)
+        result={"tag":tag,"style":style_ids[signature]}
+        if tag=="img":
+            image=value.get("image") or {};result.update({"image":counter["images"],"natural_width":int(image.get("natural_width") or 0),"natural_height":int(image.get("natural_height") or 0)})
+            counter["images"]+=1
+        else:result["children"]=[node(x) for x in value.get("children",[])]
+        return result
+    root=node(report.get("root") or {});rect=report.get("rect") or {}
+    fixture={"schema":"native-reply-fixture-v1","root":root,"styles":styles,"rect":{"w":int(rect.get("w") or 0),"h":int(rect.get("h") or 0)},"counts":{"images":counter["images"]},"font_family":"Arial,sans-serif","legacy_partial_style_capture":True}
+    validation_safe_fixture(fixture)
+    assets=[{"image_index":i,"original_bytes_captured":False,"reason":"legacy-bundle-has-no-original-image-bytes"} for i in range(counter["images"])]
+    strips=[];offset=0
+    for name in sorted(n for n in names if re.fullmatch(r"screenshots/(?:unverified_candidate|assistant)_[0-9]{2}\.png",n)):
+        raw=archive.read(name)
+        if not raw.startswith(b"\x89PNG\r\n\x1a\n") or len(raw)>8*1024*1024:raise ValueError("legacy_png")
+        w,h=struct.unpack(">II",raw[16:24])
+        if not 1<=w<=3000 or not 1<=h<=2000:raise ValueError("legacy_png_bounds")
+        # Old capture may have a rounding tail. Preserve it as incomplete.
+        strips.append({"bytes":raw,"offset":offset});offset+=h
+    return fixture,assets,strips,{"mode":"legacy-diagnostic-replay","boundary_verified":False,"business_request_bound":False,"model_request_sent":False,"production_redeployed":False,"legacy_partial_styles":True,"original_image_bytes":"unavailable","source_tool_version":meta.get("version")}
+
+def validation_import_zip(path):
+    """Read inert fixtures with bounded ZIP expansion; never extract paths/code."""
+    archive=ZipFile(path)
+    infos=archive.infolist()
+    if len(infos)>400 or sum(x.file_size for x in infos)>100*1024*1024:raise ValueError("fixture_zip_limit")
+    if any(x.filename.startswith(("/","\\")) or ".." in x.filename.replace("\\","/").split("/") or x.flag_bits&1 for x in infos):raise ValueError("fixture_zip_path")
+    names=set(archive.namelist())
+    if len(names)!=len(infos):raise ValueError("fixture_duplicate_paths")
+    if "validation/reference/fixture.json" not in names:
+        if "manifest.json" not in names:raise ValueError("legacy_fixture_needs_one_recapture")
+        try:return validation_import_legacy(archive)
+        finally:archive.close()
+    fixture=validation_safe_fixture(json.loads(archive.read("validation/reference/fixture.json")))
+    assets=json.loads(archive.read("validation/assets.json"));meta=json.loads(archive.read("validation/report.json"))
+    if not isinstance(meta,dict):raise ValueError("fixture_report")
+    if not isinstance(assets,list) or len(assets)>40:raise ValueError("fixture_asset_limit")
+    originals=[]
+    for item in assets:
+        if not isinstance(item,dict) or type(item.get("image_index")) is not int or not 0<=item["image_index"]<40:raise ValueError("fixture_asset")
+        row={k:item[k] for k in ("image_index","file","sha256","mime","bytes") if k in item}
+        row["original_bytes_captured"]=False
+        if row.get("file"):
+            if not re.fullmatch(r"validation/assets/original_[0-9]{2}\.(?:png|jpg|webp|gif)",row["file"]):raise ValueError("fixture_asset_path")
+            raw=archive.read(row["file"])
+            if not 0<len(raw)<=4194304 or hashlib.sha256(raw).hexdigest()!=row.get("sha256"):raise ValueError("fixture_asset_hash")
+            mime,_=validation_raster(raw)
+            if mime!=row.get("mime"):raise ValueError("fixture_asset_mime")
+            row.update({"bytes_data":raw,"bytes":len(raw),"original_bytes_captured":True})
+        originals.append(row)
+    if [x["image_index"] for x in originals]!=list(range(len(originals))):raise ValueError("fixture_asset_order")
+    strips=[];offset=0
+    for name in sorted(n for n in names if re.fullmatch(r"validation/reference/strip_[0-9]{2}\.png",n)):
+        raw=archive.read(name)
+        if not raw.startswith(b"\x89PNG\r\n\x1a\n") or len(raw)>8*1024*1024:raise ValueError("fixture_png")
+        w,h=struct.unpack(">II",raw[16:24])
+        if not 1<=w<=3000 or not 1<=h<=640 or w!=fixture["rect"]["w"]:raise ValueError("fixture_png_bounds")
+        strips.append({"bytes":raw,"offset":offset});offset+=h
+    files={"status":"not-run","files":[],"native_click":"not-run","source":"fixture-byte-revalidation"}
+    oldfiles=meta.get("files") or {};items=oldfiles.get("files",[]) if isinstance(oldfiles,dict) else []
+    if not isinstance(items,list) or len(items)>40:raise ValueError("fixture_file_limit")
+    total=0
+    for item in items:
+        if not isinstance(item,dict):raise ValueError("fixture_file")
+        name=item.get("file");filename=item.get("filename")
+        if not name:continue
+        if not isinstance(name,str) or not re.fullmatch(r"validation/files/original_[0-9]{2}\.(?:xlsx|pptx|docx|zip|json|pdf|csv|txt|md|py|js|ts|html)",name):raise ValueError("fixture_file_path")
+        if not isinstance(filename,str) or len(filename)>180 or re.search(r"[/\\\x00-\x1f]",filename) or filename.rsplit(".",1)[-1].lower()!=name.rsplit(".",1)[-1]:raise ValueError("fixture_file_name")
+        raw=archive.read(name);total+=len(raw)
+        if total>6*1024*1024 or hashlib.sha256(raw).hexdigest()!=item.get("sha256"):raise ValueError("fixture_file_hash")
+        validation_file_bytes(filename,raw)
+        files["files"].append({"filename":filename,"file":name,"extension":filename.rsplit(".",1)[-1],"bytes":len(raw),"sha256":hashlib.sha256(raw).hexdigest(),"bytes_data":raw,"status":"passed"})
+    if files["files"]:files["status"]="passed"
+    files["zip_members"]=[]
+    for row in files["files"]:
+        if row["extension"].lower()!="zip":continue
+        with ZipFile(BytesIO(row["bytes_data"])) as zipped:
+            for other in files["files"]:
+                if other["extension"].lower()=="zip":continue
+                name=other["filename"];ok=name in zipped.namelist() and zipped.read(name)==other["bytes_data"]
+                files["zip_members"].append({"filename":name,"bytes_identical":ok})
+                if not ok:files["status"]="failed"
+    # Missing earlier files remain incomplete even if another file replays.
+    if not isinstance(oldfiles,dict):raise ValueError("fixture_file_metadata")
+    if oldfiles and oldfiles.get("status") not in ("passed","not-applicable") and files["status"]!="failed":files["status"]="incomplete"
+    archive.close()
+    # User-supplied report status and candidate source are not trusted proof.
+    return fixture,originals,strips,{"mode":"offline-fixture-replay","boundary_verified":False,"business_request_bound":False,"reference_from_prior_capture":True,"candidate_capture_input":"inert-selected-reply-reconstruction","model_request_sent":False,"production_redeployed":False,"input_provenance":str((meta.get("provenance") or {}).get("mode", ""))[:80],"_file_replay":files}
+
+async def delivery_validation_replay(args):
+    import websockets
+    folder=Path(args.output);folder.mkdir(parents=True,exist_ok=True,mode=0o700)
+    if Path(args.replay).resolve()==(folder/"native-page-evidence.zip").resolve():raise ValueError("replay_output_would_overwrite_input")
+    start=time.monotonic();owned=[];ws=None
+    try:
+        fixture,assets,strips,provenance=validation_import_zip(args.replay)
+        texts,source=await asyncio.to_thread(validation_sources,folder,args.candidate_sha,args.source_dir)
+        files=provenance.pop("_file_replay",None)
+        with ZipFile(folder/"native-page-evidence.zip","w",ZIP_DEFLATED,compresslevel=6) as archive:
+            for row in assets:
+                raw=row.pop("bytes_data",b"")
+                if raw:archive.writestr(row["file"],raw)
+            for row in (files or {}).get("files",[]):
+                raw=row.pop("bytes_data",b"")
+                if raw:archive.writestr(row["file"],raw)
+            ws,cdp,context=await validation_scope(args,fixture,assets,archive,owned)
+            result=await validation_run(cdp,context,fixture,texts,source,assets,strips,archive,args,owned,provenance,files)
+            archive.writestr("manifest.json",json.dumps({"tool":"native-delivery-replay","version":VERSION,"candidate":source,"model_request_sent":False,"validation_status":result["status"]}))
+        print(json.dumps({"status":result["status"],"capture_render_status":result.get("capture_render_status","incomplete"),"report":str(folder/"native-page-evidence.zip"),"elapsed_seconds":round(time.monotonic()-start,3)},ensure_ascii=False))
+        return 0 if result["status"]=="passed" else 2
+    finally:
+        if ws:await ws.close()
+        for tab in owned:
+            try:
+                with urlopen(f"http://127.0.0.1:{args.cdp_port}/json/close/"+quote(tab,safe=""),timeout=3):pass
+            except Exception:pass
+
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument("--version",action="store_true")
     parser.add_argument("--output");parser.add_argument("--request-id")
     parser.add_argument("--worker-id");parser.add_argument("--cdp-port",type=int,default=9222)
     parser.add_argument("--conversation-url",default="")
+    parser.add_argument("--replay",default="",help="Replay an inert evidence ZIP in new blank Chrome tabs; no model request")
+    parser.add_argument("--candidate-sha",default="",help="Pin trusted repository sources to a 40-character commit")
+    parser.add_argument("--source-dir",default="",help="Use an explicitly trusted local checkout instead of GitHub sources")
     args=parser.parse_args()
     if args.version:print(VERSION);return
+    if args.replay:
+        if not args.output or not 1024<=args.cdp_port<=65535:raise SystemExit("invalid_replay_arguments")
+        raise SystemExit(asyncio.run(delivery_validation_replay(args)))
     if not REQUEST.fullmatch(args.request_id or "") or not re.fullmatch(r"wrk_[A-Za-z0-9_-]{6,100}",args.worker_id or "") or args.cdp_port not in range(9222,9254):
         raise SystemExit("invalid_request_or_worker")
     folder=Path(args.output)
