@@ -112,7 +112,9 @@ test("only the single request controller may capture sibling cards in a verified
   const request=readFileSync("chrome_extension/content_request_v6.js","utf8");
   assert.match(request,/const fileReplyBoundary = fileCreationRequested/);
   assert.match(request,/verifiedRenderedAbortCandidate\(active, current\)/);
-  assert.match(request,/const mediaReplyRoot = fileReplyBoundary\?\.replyScope \|\| sameTurnRoot/);
+  assert.match(request,/const mediaReplyBoundary = fileReplyBoundary \|\|/);
+  assert.match(request,/const mediaReplyRoot = mediaReplyBoundary\?\.replyScope \|\| sameTurnRoot/);
+  assert.match(request,/sourceMedia\.every\(img =>\s*mediaReplyBoundary\.replyScope\.contains\?\.\(img\)\)/);
   assert.match(request,/await finalNodeText\(mediaReplyRoot\)/);
   assert.match(request,/const delivered = deliveredImages \+ deliveredFiles/);
   assert.match(request,/delivered > 0 && \(hasTransferableImage\(captured\) \|\| hasTransferableFile\(captured\)\)/);
