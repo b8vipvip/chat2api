@@ -282,6 +282,30 @@ assert.equal(noMarginResult.root.children.length,2,
   "non-spaced empty DIV must remain excluded");
 console.log("Native bounded table-to-heading spacer retains 33px layout without extra text");
 
+// Tail of 0db39fd4: a separate 17px blank block between an ordered
+// list and H2 uses no positive margin; the prior rule excluded it.
+const listGapCtx={...ctx,getComputedStyle:()=>({
+  display:"block",visibility:"visible",width:"742px",height:"17px",
+  marginTop:"0px"
+})};
+delete listGapCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,listGapCtx);
+const listGap=new Element("DIV");
+listGap.getBoundingClientRect=()=>({width:742,height:17});
+listGap.previousElementSibling={matches:sel=>sel==="ol,ul"};
+listGap.nextElementSibling={matches:sel=>sel==="h1,h2,h3,h4"};
+const listGapReply=listGapCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_listgap_123456",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[
+    new Element("OL",[new Element("LI",[{nodeType:3,nodeValue:"one"}])]),
+    listGap,
+    new Element("H2",[{nodeType:3,nodeValue:"next heading"}])
+  ])
+});
+assert.equal(listGapReply.root.children.length,3);
+assert.equal(listGapReply.root.children[1].tag,"div");
+console.log("Native list-heading 17px spacer preserved without capturing generic blanks");
+
 function candidateFor(children) {
   return {requestId:"req_boundedtest1234",submitStartedAt:Date.now(),
     lastCandidateNode:new Element("DIV",children)};
