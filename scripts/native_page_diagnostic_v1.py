@@ -23,7 +23,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.18"
+VERSION = "1.2.19"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -240,6 +240,108 @@ SCREENSHOT_PREP = r"""(function(expected,offset,limit){
      return fail('outside-candidate');
  }
  return {ok:true,clip:{x,y,width,height,scale:1},offset,height};
+})"""
+
+
+# These probes return only one-way SHA-256 of a displayed image source URL,
+# fixed metadata and safe viewport crop coordinates. They do NOT fetch any
+# original media URLs, retrieve cookies, or send source URLs to the worker.
+MEDIA_SOURCE_PROBE = r"""(async function(expected){
+ 'use strict';
+ const fail=reason=>({ok:false,reason});
+ if(!/^req_diag_[A-Za-z0-9_-]{6,100}$/.test(expected))
+   return fail('not-url-only');
+ const main=document.querySelector('main,[role="main"]');
+ if(!main||!crypto?.subtle)return fail('no-crypto-or-main');
+ const visible=e=>{try{const r=e.getBoundingClientRect(),s=getComputedStyle(e);
+  return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';
+ }catch(_){return false;}};
+ const tables=[...main.querySelectorAll('table,[role="table"]')].filter(visible);
+ if(tables.length<3)return fail('tables-missing');
+ let candidate=tables[0].parentElement;
+ while(candidate&&tables.some(e=>!candidate.contains(e)))
+   candidate=candidate.parentElement;
+ let ancestor=candidate,depth=0;
+ while(ancestor&&ancestor!==main&&depth<55){ancestor=ancestor.parentElement;depth++;}
+ const unsafe='form,textarea,input,[contenteditable="true"],[role="textbox"],[data-message-author-role="user"],[data-testid="user-message"],nav,aside,header,footer,[role="dialog"]';
+ if(!candidate||candidate===main||ancestor!==main||depth<3||depth>=55||
+   candidate.matches(unsafe)||candidate.querySelector(unsafe)||
+   candidate.querySelectorAll('h1,h2,h3,h4,h5,h6').length<2||
+   candidate.querySelectorAll('p').length<10)return fail('candidate-unsafe');
+ const imgs=[...candidate.querySelectorAll('img')].filter(visible);
+ if(!imgs.length||imgs.length>16)return fail('image-count-outside-bounds');
+ const images=[];
+ for(let index=0;index<imgs.length;index++){
+   const img=imgs[index],url=String(img.currentSrc||img.src||'');
+   if(!url||url.length>4096||!img.complete||img.naturalWidth<1||img.naturalHeight<1)
+     return fail('image-source-unavailable');
+   try{
+     const bytes=new TextEncoder().encode(url);
+     const digest=await crypto.subtle.digest('SHA-256',bytes);
+     const fingerprint=[...new Uint8Array(digest)]
+       .map(x=>x.toString(16).padStart(2,'0')).join('');
+     images.push({index,source_url_sha256:fingerprint,
+       natural_width:img.naturalWidth,natural_height:img.naturalHeight});
+   }catch(_){return fail('digest-unavailable');}
+ }
+ return {ok:true,images};
+})"""
+
+MEDIA_CROP_PREP = r"""(function(expected,index){
+ 'use strict';
+ const fail=reason=>({ok:false,reason});
+ if(!/^req_diag_[A-Za-z0-9_-]{6,100}$/.test(expected)||
+   !Number.isInteger(index)||index<0||index>15)return fail('bad-identity');
+ const main=document.querySelector('main,[role="main"]');
+ if(!main)return fail('missing-main');
+ const visible=e=>{try{const r=e.getBoundingClientRect(),s=getComputedStyle(e);
+  return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';
+ }catch(_){return false;}};
+ const tables=[...main.querySelectorAll('table,[role="table"]')].filter(visible);
+ if(tables.length<3)return fail('tables-missing');
+ let candidate=tables[0].parentElement;
+ while(candidate&&tables.some(e=>!candidate.contains(e)))
+   candidate=candidate.parentElement;
+ let at=candidate,depth=0;
+ while(at&&at!==main&&depth<55){at=at.parentElement;depth++;}
+ const unsafe='form,textarea,input,[contenteditable="true"],[role="textbox"],[data-message-author-role="user"],[data-testid="user-message"],nav,aside,header,footer,[role="dialog"]';
+ if(!candidate||candidate===main||at!==main||depth<3||depth>=55||
+   candidate.matches(unsafe)||candidate.querySelector(unsafe)||
+   candidate.querySelectorAll('h1,h2,h3,h4,h5,h6').length<2||
+   candidate.querySelectorAll('p').length<10)return fail('candidate-unsafe');
+ const imgs=[...candidate.querySelectorAll('img')].filter(visible);
+ if(index>=imgs.length||imgs.length>16)return fail('image-missing');
+ const img=imgs[index];
+ if(!img.complete||img.naturalWidth<1||img.naturalHeight<1)return fail('not-loaded');
+ let scrollable=null;
+ for(let p=img.parentElement;p;p=p.parentElement){
+   const cs=getComputedStyle(p);
+   if(/auto|scroll|overlay/.test(cs.overflowY)&&p.scrollHeight>p.clientHeight+12){
+     scrollable=p;break;
+   }
+ }
+ const root=document.scrollingElement,scroller=scrollable||root;
+ if(!scroller)return fail('no-scroller');
+ const isRoot=scroller===root;
+ const before=img.getBoundingClientRect();
+ const parentTop=isRoot?0:scroller.getBoundingClientRect().top;
+ const current=isRoot?(window.scrollY||root.scrollTop||0):scroller.scrollTop;
+ const desired=current+before.top-parentTop-72;
+ if(isRoot)window.scrollTo(0,Math.max(0,desired));
+ else scroller.scrollTop=Math.max(0,desired);
+ const r=img.getBoundingClientRect();
+ const vw=Math.floor(window.innerWidth),vh=Math.floor(window.innerHeight);
+ const x=Math.ceil(r.left),y=Math.ceil(r.top);
+ const width=Math.floor(r.width),height=Math.floor(r.height);
+ if(x<0||y<0||width<64||height<64||
+    x+width>vw||y+height>vh||
+    width>1600||height>1600)return fail('image-offscreen');
+ for(const py of [y+8,y+Math.floor(height/2),y+height-8]){
+   const point=document.elementFromPoint(x+Math.floor(width/2),py);
+   if(point!==img&&!img.contains(point))return fail('image-obscured');
+ }
+ return {ok:true,clip:{x,y,width,height,scale:1},
+  index,natural_width:img.naturalWidth,natural_height:img.naturalHeight};
 })"""
 
 # Installed in the dedicated diagnostic tab before fresh navigation or reload.
@@ -1565,6 +1667,78 @@ async def _capture_inner(args,owned_tabs):
                 except Exception:
                     pass
             loaded_images_after=image_loaded_count(report)
+            # P2: create a stable within-run mapping from DOM image index to
+            # the *rendered image pixels* and SHA-256 of the full source URL.
+            # Never export the URL itself or claim to have original bytes.
+            rendered_image_evidence=[]
+            image_source_probe_ok=False
+            if (not boundary_verified and
+                tab_origin=="dedicated-worker-tab" and
+                str(picked.get("id") or "") in owned_tabs and
+                0<int(report.get("counts",{}).get("images") or 0)<=16):
+                try:
+                    checked=await cdp.call("Runtime.evaluate",{
+                        "expression":MEDIA_SOURCE_PROBE+"("+
+                            json.dumps(args.request_id)+")",
+                        "awaitPromise":True,"returnByValue":True,"silent":True},
+                        timeout=15)
+                    images=(checked.get("result") or {}).get("value") or {}
+                    source_rows=images.get("images") or []
+                    image_source_probe_ok=bool(
+                        images.get("ok") and isinstance(source_rows,list)
+                        and len(source_rows)==int(report["counts"]["images"])
+                        and all(isinstance(row,dict)
+                            and row.get("index")==idx
+                            and isinstance(row.get("natural_width"),int)
+                            and isinstance(row.get("natural_height"),int)
+                            and 0<row["natural_width"]<=20000
+                            and 0<row["natural_height"]<=20000
+                            and re.fullmatch(r"[a-f0-9]{64}",
+                                str(row.get("source_url_sha256") or ""))
+                            for idx,row in enumerate(source_rows)))
+                    if image_source_probe_ok:
+                        for row in source_rows:
+                            idx=row["index"]
+                            geometry=await cdp.call("Runtime.evaluate",{
+                                "expression":MEDIA_CROP_PREP+"("+
+                                    json.dumps(args.request_id)+","+str(idx)+")",
+                                "returnByValue":True,"silent":True},timeout=10)
+                            clipdata=(geometry.get("result") or {}).get("value") or {}
+                            clip=clipdata.get("clip") or {}
+                            if (not clipdata.get("ok") or
+                                clipdata.get("index")!=idx or
+                                clipdata.get("natural_width")!=row["natural_width"] or
+                                clipdata.get("natural_height")!=row["natural_height"] or
+                                not all(type(clip.get(k)) is int for k in
+                                    ("x","y","width","height")) or
+                                clip["width"]<64 or clip["height"]<64 or
+                                clip["x"]<0 or clip["y"]<0):
+                                break
+                            png=await cdp.call("Page.captureScreenshot",{
+                                "format":"png","fromSurface":True,
+                                "captureBeyondViewport":False,"clip":clip},timeout=20)
+                            raw=base64.b64decode(png["data"],validate=True)
+                            if (len(raw)<24 or len(raw)>4*1024*1024
+                                or not raw.startswith(b"\\x89PNG\\r\\n\\x1a\\n")):
+                                break
+                            w,h=struct.unpack(">II",raw[16:24])
+                            if w!=clip["width"] or h!=clip["height"]:break
+                            fname=f"media/rendered_image_{idx:02d}.png"
+                            archive.writestr(fname,raw)
+                            rendered_image_evidence.append({
+                                "image_index":idx,
+                                "source_url_sha256":row["source_url_sha256"],
+                                "natural_width":row["natural_width"],
+                                "natural_height":row["natural_height"],
+                                "rendered_width":w,"rendered_height":h,
+                                "rendered_png_sha256":hashlib.sha256(raw).hexdigest(),
+                                "rendered_file":fname,
+                                "original_bytes_captured":False})
+                            if path.stat().st_size>MAX_ZIP:
+                                raise RuntimeError("evidence_zip_size_limit")
+                except Exception:
+                    image_source_probe_ok=False
+            report["rendered_image_evidence"]=rendered_image_evidence
             archive.writestr(dom_filename,json.dumps(report,ensure_ascii=False))
             remaining_px=max(0,int(rect["h"])-screenshot_coverage_px)
             screenshot_near_complete=(screens>0 and remaining_px<=2
@@ -1586,6 +1760,12 @@ async def _capture_inner(args,owned_tabs):
                 "screenshot_skip_reason":screenshot_skip_reason,
                 "loaded_images_before":loaded_images_before,
                 "loaded_images_after":loaded_images_after,
+                "image_source_probe_ok":image_source_probe_ok,
+                "rendered_image_crop_count":len(rendered_image_evidence),
+                "rendered_image_crops_complete":(
+                    len(rendered_image_evidence)==
+                    int(report.get("counts",{}).get("images") or 0) and
+                    len(rendered_image_evidence)>0),
                 "post_render_snapshot_accepted":post_render_snapshot_accepted,
                 "truncated":bool(report.get("reason")),
                 "source":"existing-chatgpt-page","conversation_url_included":False,
@@ -1602,6 +1782,7 @@ async def _capture_inner(args,owned_tabs):
            screenshot_coverage_px=screenshot_coverage_px,
            screenshot_uncovered_px=remaining_px,
            loaded_images_after=loaded_images_after,
+           rendered_image_crop_count=len(rendered_image_evidence),
            artifact_kind=("verified-assistant" if report.get("boundary_verified") is not False
                else "unverified-rich-candidate"))
     data=json.loads((folder/"status.json").read_text());data["status"]="completed"
