@@ -536,13 +536,23 @@
       }
     }
     if (event?.type === "chat.completed" && active) {
-      bindNativeReplyScope(active, "terminal");
+      const requestScopeBound = bindNativeReplyScope(active, "terminal");
+      // A fresh roleless ChatGPT said heading followed by reply siblings is
+      // an existing alternate positive boundary. Otherwise never publish a
+      // partial candidate paragraph as a "complete" native HTML sidecar.
+      const rolelessScope = requestScopeBound ? null :
+        globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
+      const rolelessBound = rolelessScope?.scope === "roleless_reply_siblings"
+        && rolelessScope.roots?.length > 0;
       active.nativeObserverLoaded = Boolean(native?.capture);
-      active.nativeCaptureAttempted = true;
+      active.nativeCaptureAttempted = false;
       try {
         if (!native?.capture) {
           active.nativeCaptureFailure = "native-observer-not-loaded";
+        } else if (!requestScopeBound && !rolelessBound) {
+          active.nativeCaptureFailure = "native-reply-scope-unverified";
         } else {
+          active.nativeCaptureAttempted = true;
           await native.capture(active, true);
         }
       } catch (_) {
