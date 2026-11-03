@@ -23,9 +23,16 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.20"
+VERSION = "1.2.21"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
+# Historical HTML readyState and the first candidate DOM are NOT hydration
+# completion signals. Wait for a sustained unchanged assistant subtree.
+HISTORY_LOAD_MAX_SECONDS = 240
+HISTORY_LOAD_POLL_SECONDS = 2
+HISTORY_LOAD_STABLE_SECONDS = 12
+HISTORY_LOAD_MIN_SECONDS = 18
+HISTORY_LOAD_MIN_SAMPLES = 4
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
 CONVERSATION = re.compile(r"^/c/[A-Za-z0-9-]{12,90}/?$")
@@ -721,6 +728,27 @@ def chrome_history_candidates(port,hints,history_file=None):
     return candidates
 
 
+def history_content_signature(report):
+    """Privacy-safe in-memory structural fingerprint; never exported."""
+    if not isinstance(report,dict) or not report.get("ok"):
+        return None
+    if report.get("reason") or report.get("generating"):
+        return None
+    count=report.get("counts") or {}
+    rect=report.get("rect") or {}
+    if (not (report.get("root") or {}).get("children")
+        or not count.get("nodes") or not count.get("text_chars")):
+        return None
+    # Hash covers serialized text and layout indicators. We intentionally
+    # exclude img.loaded: below-the-fold lazy assets load only when scrolled.
+    keys=("nodes","text_chars","tables","images","headings",
+          "max_children","grids","flex")
+    dimensions=("w","h")
+    return (report.get("scope"),native_text_digest(report),
+        tuple(count.get(k) for k in keys),
+        tuple(rect.get(k) for k in dimensions))
+
+
 def native_text_digest(report):
     """Local-only integrity fingerprint; never export source text/hash."""
     digest=hashlib.sha256()
@@ -912,6 +940,8 @@ async def inspect_page(cdp, request_id):
 
 def failure_reason(probe):
     """Fixed error code, never based on raw page text or exception messages."""
+    if probe.get("history_load_timeout"):
+        return "history_load_stability_timeout_no_complete_evidence"
     if (probe.get("body_visible_tables") or
         probe.get("body_markdown_blocks") or
         probe.get("existing_tab_visible_content_candidates")) and not (
@@ -1114,6 +1144,7 @@ async def _capture_inner(args,owned_tabs):
             picked=t;report=value;break
     binding="live-request-marker"
     tab_origin="dedicated-worker-tab"
+    history_readiness={}
     hints=recovery_hints()
 
     async def read_existing_history_tab(url,diagnostic_tab_id):
@@ -1278,7 +1309,7 @@ async def _capture_inner(args,owned_tabs):
         Never reuse/navigate a tab owned by an API request or another
         diagnosis, and never attempt authentication or submit a new prompt.
         """
-        nonlocal last_probe
+        nonlocal last_probe,history_readiness
         safe_url(url)
         status(folder,"opening-new-tab",15,open_mode="dedicated-worker-tab")
         # For one-off recovery create a blank page, instrument before the
@@ -1325,11 +1356,22 @@ async def _capture_inner(args,owned_tabs):
         reload_attempted=False
         reload_result="not-attempted"
         post_reload_at=-1
+        opened_monotonic=time.monotonic()
+        first_stable_monotonic=None
+        stable_signature=None
+        stable_samples=0
+        observed_content_changes=0
+        screenshot_preflight_root_seen=False
+        history_readiness={
+            "stable":False,"elapsed_sec":0,"stable_sec":0,
+            "stable_samples":0,"content_changes":0,
+            "network_quiet":False,"root_seen":False,
+            "max_wait_sec":HISTORY_LOAD_MAX_SECONDS}
         suspicious_redirect_streak=0
         transient_redirect_count=0
         existing_evidence={}
-        for i in range(62):
-            await asyncio.sleep(1 if i else 0.4)
+        for i in range(HISTORY_LOAD_MAX_SECONDS//HISTORY_LOAD_POLL_SECONDS):
+            await asyncio.sleep(HISTORY_LOAD_POLL_SECONDS if i else 0.4)
             # Do not discard a redirected tab just because it moved to
             # about:blank, an error route, or an authentication endpoint.
             all_tabs=json_get(args.cdp_port,"/json/list")
@@ -1396,7 +1438,68 @@ async def _capture_inner(args,owned_tabs):
                                         "attempt":i+1,
                                         "reload_attempted":reload_attempted,
                                         "reload_result":reload_result}
-                            if obj and obj.get("root",{}).get("children"):
+                            # First sight of content is not readiness. Long
+                            # historic replies may still be hydrating, adding
+                            # late tables/images/chapters after readyState.
+                            now=time.monotonic()
+                            elapsed=now-opened_monotonic
+                            signature=history_content_signature(obj)
+                            snapshot_ready=bool(signature and
+                                probe.get("ready_state")=="complete" and
+                                probe.get("route")=="conversation" and
+                                not probe.get("password_fields") and
+                                not probe.get("challenge_frames"))
+                            # A recent resource completion may be the final
+                            # conversation payload; allow the browser time to
+                            # commit its DOM before declaring quiescence.
+                            resource_age=probe.get("last_finished_age_ms")
+                            network_quiet=(type(resource_age) is int and
+                                (resource_age>=2000 or resource_age==0
+                                    and not probe.get("fetch_total")))
+                            if snapshot_ready and network_quiet:
+                                if signature!=stable_signature:
+                                    if stable_signature is not None:
+                                        observed_content_changes+=1
+                                    stable_signature=signature
+                                    first_stable_monotonic=now
+                                    stable_samples=1
+                                else:
+                                    stable_samples+=1
+                            else:
+                                stable_signature=None
+                                first_stable_monotonic=None
+                                stable_samples=0
+                            stable_seconds=(now-first_stable_monotonic
+                                if first_stable_monotonic is not None else 0)
+                            screenshot_preflight_root_seen=(
+                                screenshot_preflight_root_seen or
+                                bool(obj and obj.get("root",{}).get("children")))
+                            history_readiness={
+                                "stable":False,
+                                "elapsed_sec":round(elapsed,1),
+                                "stable_sec":round(stable_seconds,1),
+                                "stable_samples":stable_samples,
+                                "content_changes":observed_content_changes,
+                                "network_quiet":network_quiet,
+                                "root_seen":screenshot_preflight_root_seen,
+                                "max_wait_sec":HISTORY_LOAD_MAX_SECONDS}
+                            last_probe={**last_probe,
+                                "history_load_elapsed_sec":int(elapsed),
+                                "history_load_stable_sec":int(stable_seconds),
+                                "history_load_stable_samples":stable_samples,
+                                "history_load_content_changes":observed_content_changes,
+                                "history_load_network_quiet":network_quiet,
+                                "history_load_root_seen":screenshot_preflight_root_seen,
+                                "history_load_ready":False}
+                            if (snapshot_ready and network_quiet
+                                and elapsed>=HISTORY_LOAD_MIN_SECONDS
+                                and stable_samples>=HISTORY_LOAD_MIN_SAMPLES
+                                and stable_seconds>=HISTORY_LOAD_STABLE_SECONDS):
+                                history_readiness["stable"]=True
+                                last_probe["history_load_ready"]=True
+                                status(folder,"history-content-stable",40,
+                                       page_probe=last_probe,
+                                       attempt=i+1)
                                 return page,obj,tab_id
                             # 429 may be caused by historical page traffic or
                             # this diagnostic. Avoid automatic reload/extra fetch.
@@ -1419,11 +1522,15 @@ async def _capture_inner(args,owned_tabs):
                             # has no assistant/user turns after ~25 seconds.
                             # This never navigates another Worker/API tab,
                             # enters credentials or sends model prompts.
-                            if (allow_reload and i>=24 and not reload_attempted
+                            if (allow_reload and
+                                elapsed>=45 and not reload_attempted
                                 and kind=="conversation"
                                 and probe.get("ready_state")=="complete"
                                 and probe.get("visibility_state")=="visible"
                                 and probe.get("loading_skeletons")
+                                and not screenshot_preflight_root_seen
+                                and int(probe.get("body_visible_tables") or 0)==0
+                                and int(probe.get("main_longest_child_paragraphs") or 0)<5
                                 and not any(probe.get(k) for k in (
                                     "assistant_roles","assistant_testids",
                                     "user_roles","conversation_turns",
@@ -1470,8 +1577,10 @@ async def _capture_inner(args,owned_tabs):
                 "reload_result":reload_result,
                 "transient_redirect_count":transient_redirect_count,
                 "suspicious_redirect_streak":suspicious_redirect_streak}
-            if i==0 or (i+1)%3==0 or i==61:
-                status(folder,"awaiting-assistant",min(44,19+i//3),
+            if i==0 or (i+1)%3==0 or i==HISTORY_LOAD_MAX_SECONDS//HISTORY_LOAD_POLL_SECONDS-1:
+                status(folder,"waiting-history-stable",
+                       min(39,19+int(20*(i+1)/
+                           (HISTORY_LOAD_MAX_SECONDS//HISTORY_LOAD_POLL_SECONDS))),
                        page_probe=last_probe,tab_created=True,
                        retry_count=int(reload_attempted),attempt=i+1)
             # Access gates are evidence of a redirect; do not repeatedly
@@ -1484,6 +1593,12 @@ async def _capture_inner(args,owned_tabs):
                 and suspicious_redirect_streak>=4
                 and (not reload_attempted or
                      i-post_reload_at>15)):break
+        history_readiness["stable"]=False
+        history_readiness["timed_out"]=bool(
+            time.monotonic()-opened_monotonic>=HISTORY_LOAD_MAX_SECONDS-4)
+        last_probe={**last_probe,"history_load_ready":False,
+            "history_load_timeout":bool(history_readiness["timed_out"]),
+            "history_load_root_seen":screenshot_preflight_root_seen}
         return None,None,tab_id
 
     if not picked and target_url:
@@ -1557,7 +1672,9 @@ async def _capture_inner(args,owned_tabs):
                 raise RuntimeError(failure_reason(last_probe))
         else:
             status(folder,"opening-history",18)
-            picked,report,_=await open_history_page(target_url)
+            # Use pre-navigation error hooks and avoid mid-hydration reload
+            # for a newly opened, potentially very long history page.
+            picked,report,_=await open_history_page(target_url,allow_reload=False)
         binding="saved-or-manual-conversation-url-unverified-turn"
     if not picked and not target_url:
         candidates=chrome_history_candidates(args.cdp_port,hints)
@@ -1726,7 +1843,11 @@ async def _capture_inner(args,owned_tabs):
                         and native_text_digest(refreshed)==native_text_digest(report)
                         and all(refreshed.get("counts",{}).get(k)==
                                 report.get("counts",{}).get(k)
-                                for k in ("tables","headings","text_chars","images"))
+                                for k in ("nodes","tables","headings","text_chars",
+                                          "images","max_children","grids","flex"))
+                        and all(abs(int(refreshed.get("rect",{}).get(k) or 0)-
+                                    int(report.get("rect",{}).get(k) or 0))<=2
+                                for k in ("w","h"))
                     )
                     if matching:
                         report=refreshed
@@ -1734,6 +1855,11 @@ async def _capture_inner(args,owned_tabs):
                 except Exception:
                     pass
             loaded_images_after=image_loaded_count(report)
+            capture_layout_stable=(boundary_verified or
+                (screens>0 and post_render_snapshot_accepted))
+            if not capture_layout_stable and screens>0:
+                screenshot_complete=False
+                screenshot_skip_reason="dom-changed-during-capture"
             # P2: create a stable within-run mapping from DOM image index to
             # the *rendered image pixels* and SHA-256 of the full source URL.
             # Never export the URL itself or claim to have original bytes.
@@ -1872,6 +1998,8 @@ async def _capture_inner(args,owned_tabs):
                     int(report.get("counts",{}).get("images") or 0) and
                     len(rendered_image_evidence)>0),
                 "post_render_snapshot_accepted":post_render_snapshot_accepted,
+                "capture_layout_stable":capture_layout_stable,
+                "history_readiness":history_readiness,
                 "truncated":bool(report.get("reason")),
                 "source":"existing-chatgpt-page","conversation_url_included":False,
                 "request_binding":verification,
@@ -1887,6 +2015,7 @@ async def _capture_inner(args,owned_tabs):
            screenshot_coverage_px=screenshot_coverage_px,
            screenshot_uncovered_px=remaining_px,
            loaded_images_after=loaded_images_after,
+           history_readiness=history_readiness,
            rendered_image_crop_count=len(rendered_image_evidence),
            artifact_kind=("verified-assistant" if report.get("boundary_verified") is not False
                else "unverified-rich-candidate"))
