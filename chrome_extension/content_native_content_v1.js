@@ -49,13 +49,15 @@
   // Server validates at most 32 style keys per element. Chromium may emit
   // more, so prioritize actual visual styling before optional dimensions.
   const cssList = [...new Set([
-    "display","boxSizing","borderCollapse","borderSpacing","gridTemplateColumns","flexDirection","flexWrap",
-    "justifyContent","alignItems","objectFit","textAlign",
-    "color","backgroundColor","borderColor","fontWeight",
-    "fontSize","lineHeight","whiteSpace","wordBreak","overflowWrap",
-    "gap","rowGap","columnGap","padding","marginTop","marginBottom",
-    "marginLeft","marginRight","width","minWidth","maxWidth",
-    "height","minHeight","maxHeight","borderRadius","borderWidth",
+    // Preserve table geometry even if the 32-key style budget is full.
+    "display","boxSizing","borderCollapse","borderSpacing","borderWidth",
+    "marginLeft","marginRight","padding","width","minWidth","maxWidth",
+    "gridTemplateColumns","flexDirection","flexWrap","justifyContent",
+    "alignItems","objectFit","textAlign","color","backgroundColor",
+    "borderColor","fontWeight","fontSize","lineHeight","whiteSpace",
+    "wordBreak","overflowWrap","gap","rowGap","columnGap",
+    "marginTop","marginBottom","height","minHeight","maxHeight",
+    "borderRadius",
     ...Object.keys(styleKeys),...allowedLength,
   ])];
   function safeStyle(element) {
