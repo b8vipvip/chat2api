@@ -790,7 +790,7 @@
     if (!active?.requestId || !active.submitStartedAt ||
         !active.baselineCapturedAt ||
         active.baselineCapturedAt > active.submitStartedAt ||
-        !(active.baselineFinishActions instanceof Set) ||
+        typeof active.baselineFinishActions?.has !== "function" ||
         !active.networkStreamSeen ||
         Number(active.networkObservedAt || 0) < active.submitStartedAt ||
         active.cancelled) return false;
