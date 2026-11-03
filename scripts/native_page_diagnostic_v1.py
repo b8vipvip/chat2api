@@ -942,6 +942,8 @@ def failure_reason(probe):
     """Fixed error code, never based on raw page text or exception messages."""
     if probe.get("history_load_timeout"):
         return "history_load_stability_timeout_no_complete_evidence"
+    if probe.get("history_existing_content_not_stable"):
+        return "history_existing_content_not_stable"
     if (probe.get("body_visible_tables") or
         probe.get("body_markdown_blocks") or
         probe.get("existing_tab_visible_content_candidates")) and not (
@@ -1146,6 +1148,7 @@ async def _capture_inner(args,owned_tabs):
     tab_origin="dedicated-worker-tab"
     history_readiness={}
     hints=recovery_hints()
+    existing_stability={}
 
     async def read_existing_history_tab(url,diagnostic_tab_id):
         """Read-only exact-conversation fallback; never navigate an existing tab.
@@ -1184,6 +1187,7 @@ async def _capture_inner(args,owned_tabs):
         inspected_tabs=0
         captured_errors=0
         sample_probe=None
+        content_pending=0
         sample_rank=(-1,-1,-1,-1,-1,-1,-1)
         structural_fingerprints=set()
         max_body_tables=0
@@ -1261,15 +1265,37 @@ async def _capture_inner(args,owned_tabs):
                             or probe.get("conversation_api_recent_429"))))
                     captured_errors+=int(probe.get("capture_error") not in
                         ("none","no-verified-assistant-boundary"))
-                    if (result and result.get("ok")
-                        and result.get("root",{}).get("children")
-                        and not result.get("generating")):
-                        verified.append((tab,result))
+                    tab_id=str(tab.get("id") or "")
+                    signature=history_content_signature(result)
+                    quiet=bool(
+                        probe.get("ready_state")=="complete"
+                        and probe.get("route")=="conversation"
+                        and (int(probe.get("last_finished_age_ms") or 0)>=2000
+                            or not probe.get("fetch_total")))
+                    now=time.monotonic()
+                    if signature and quiet:
+                        last=existing_stability.get(tab_id)
+                        if not last or last[0]!=signature:
+                            existing_stability[tab_id]=(signature,now,1)
+                        else:
+                            existing_stability[tab_id]=(signature,last[1],last[2]+1)
+                        _,since,samples=existing_stability[tab_id]
+                        if (samples>=HISTORY_LOAD_MIN_SAMPLES and
+                            now-since>=HISTORY_LOAD_STABLE_SECONDS):
+                            verified.append((tab,result))
+                        else:
+                            content_pending+=1
+                    elif signature:
+                        existing_stability.pop(tab_id,None)
+                        content_pending+=1
+                    else:
+                        existing_stability.pop(tab_id,None)
             except Exception:
                 continue
         evidence={"existing_tab_readonly_checked":True,
             "existing_tab_candidates":len(matches),
             "existing_tab_verified":len(verified),
+            "existing_tab_content_pending":content_pending,
             "existing_tab_max_main_text_chars":max_text_chars,
             "existing_tab_ambiguous":len(verified)>1,
             "existing_tab_inspected":inspected_tabs,
@@ -1506,16 +1532,9 @@ async def _capture_inner(args,owned_tabs):
                             if probe.get("fetch_http_recent_429") or probe.get("conversation_api_recent_429"):
                                 last_probe["rate_limit_detected"]=True
                                 break
-                            # A dedicated tab may be skeleton-only while an
-                            # operator-visible tab with this exact history URL
-                            # has fully rendered the assistant reply. Inspect
-                            # the latter read-only (no reload or injection).
-                            if target_url and i in (9,32):
-                                alternate,reply,evidence=await read_existing_history_tab(
-                                    url,tab_id)
-                                existing_evidence.update(evidence)
-                                if alternate and reply:
-                                    return alternate,reply,tab_id
+                            # Existing tabs were already checked before this
+                            # new tab was opened. Never switch mid-hydration
+                            # to a different, possibly partial history tab.
                             # A single, non-destructive recovery attempt:
                             # only reload OUR diagnostic tab when its own
                             # page is complete, visible, skeleton-only and
@@ -1610,8 +1629,15 @@ async def _capture_inner(args,owned_tabs):
         # Poll only existing DOM state. Never reload or request conversation
         # again. An old Resource Timing 429 does not abort this observation.
         if not found and evidence["existing_tab_candidates"]:
-            for _ in range(2):
+            # Existing visible history tabs may still be hydrating. Stay
+            # read-only and require the same 12s stable structural evidence
+            # before accepting their content. When there is no root at all,
+            # a bounded 60s observation precedes the guarded recovery path.
+            for _ in range(HISTORY_LOAD_MAX_SECONDS//3-1):
                 if evidence.get("existing_tab_recent_429"):
+                    break
+                if (observation_rounds>=20 and
+                    not evidence.get("existing_tab_content_pending")):
                     break
                 await asyncio.sleep(3)
                 existing,found,evidence=await read_existing_history_tab(
@@ -1623,6 +1649,10 @@ async def _capture_inner(args,owned_tabs):
         last_probe={**desktop_evidence,**last_probe,**evidence}
         if existing and found:
             picked,report=existing,found
+            history_readiness={"stable":True,
+                "mode":"existing-tab-readonly",
+                "observation_rounds":observation_rounds,
+                "minimum_stable_seconds":HISTORY_LOAD_STABLE_SECONDS}
         elif evidence["existing_tab_candidates"]:
             # v1.2.9 could not progress: four long-stalled identical shell
             # tabs prevented a fresh history navigation forever. Recover only
@@ -1638,6 +1668,7 @@ async def _capture_inner(args,owned_tabs):
                 and evidence["existing_tab_max_markdown_blocks"]==0
                 and evidence["existing_tab_visible_content_candidates"]==0
                 and evidence["existing_tab_recent_429"]==0
+                and evidence["existing_tab_content_pending"]==0
                 and not last_probe.get("password_fields")
                 and not last_probe.get("challenge_frames")
                 and not last_probe.get("fetch_http_401_403")
@@ -1668,6 +1699,8 @@ async def _capture_inner(args,owned_tabs):
                     if recovered and recovered_reply:
                         picked,report=recovered,recovered_reply
             if not picked:
+                if evidence.get("existing_tab_content_pending"):
+                    last_probe["history_existing_content_not_stable"]=True
                 status(folder,"page-unavailable",44,page_probe=last_probe)
                 raise RuntimeError(failure_reason(last_probe))
         else:
@@ -1965,7 +1998,8 @@ async def _capture_inner(args,owned_tabs):
             remaining_px=max(0,int(rect["h"])-screenshot_coverage_px)
             screenshot_near_complete=(screens>0 and remaining_px<=2
                 and screenshot_coverage_px>0)
-            if screenshot_near_complete and not screenshot_complete:
+            if (screenshot_near_complete and not screenshot_complete
+                and screenshot_skip_reason!="dom-changed-during-capture"):
                 screenshot_skip_reason="rounding-tail-1-to-2-px"
             archive.writestr("manifest.json",json.dumps({"tool":"native-page-diagnostic",
                 "version":VERSION,"request_id":args.request_id,"worker_id":args.worker_id,
