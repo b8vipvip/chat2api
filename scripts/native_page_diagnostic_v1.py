@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import binascii
 import fcntl
 import hashlib
 from io import BytesIO
@@ -20,11 +21,12 @@ import struct
 import subprocess
 import sys
 import time
+import zlib
 from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.23"
+VERSION = "1.2.24"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -824,12 +826,110 @@ def image_dimensions_sequence(report):
     return result
 
 
+
+def native_png_crop_rows(payload,x,y,w,h):
+    """Decode bounded non-interlaced Chrome RGB/RGBA PNG screenshot region.
+
+    No Pillow or external fetch. Fail closed on unknown PNG layout, bad
+    checksum, overlarge chunks/dimensions or invalid crop bounds.
+    """
+    if (not isinstance(payload,bytes) or len(payload)>8*1024*1024
+        or not payload.startswith(b"\x89PNG\r\n\x1a\n")):
+        raise ValueError("unsupported_png")
+    pos=8; width=height=channels=0;parts=[];compressed_size=0
+    while pos+12<=len(payload):
+        count=struct.unpack(">I",payload[pos:pos+4])[0]
+        kind=payload[pos+4:pos+8]
+        if count>8*1024*1024 or pos+12+count>len(payload):
+            raise ValueError("bad_png_chunk")
+        chunk=payload[pos+8:pos+8+count]
+        crc=struct.unpack(">I",payload[pos+8+count:pos+12+count])[0]
+        if (binascii.crc32(kind+chunk)&0xffffffff)!=crc:
+            raise ValueError("bad_png_crc")
+        if kind==b"IHDR":
+            if count!=13 or width:
+                raise ValueError("bad_png_header")
+            width,height,depth,color,comp,filter_type,interlace=struct.unpack(
+                ">IIBBBBB",chunk)
+            if (not 0<width<=3000 or not 0<height<=2000 or depth!=8
+                or color not in (2,6) or comp or filter_type or interlace):
+                raise ValueError("unsupported_png_layout")
+            channels=3 if color==2 else 4
+        elif kind==b"IDAT":
+            compressed_size+=count
+            if compressed_size>8*1024*1024:
+                raise ValueError("png_idat_limit")
+            parts.append(chunk)
+        elif kind==b"IEND":
+            break
+        pos+=12+count
+    if (not width or not parts or x<0 or y<0 or w<1 or h<1
+        or x+w>width or y+h>height):
+        raise ValueError("crop_outside_png")
+    rowbytes=width*channels
+    expected=(rowbytes+1)*height
+    if expected>30*1024*1024:
+        raise ValueError("png_decode_limit")
+    inflater=zlib.decompressobj()
+    raw=inflater.decompress(b"".join(parts),expected+1)
+    raw+=inflater.flush()
+    if not inflater.eof or len(raw)!=expected:
+        raise ValueError("invalid_png_stream")
+    previous=bytearray(rowbytes)
+    extracted=[];at=0
+    for line in range(height):
+        predictor=raw[at];at+=1
+        row=bytearray(raw[at:at+rowbytes]);at+=rowbytes
+        if predictor==1:
+            for k in range(channels,rowbytes):
+                row[k]=(row[k]+row[k-channels])&255
+        elif predictor==2:
+            for k in range(rowbytes):
+                row[k]=(row[k]+previous[k])&255
+        elif predictor==3:
+            for k in range(rowbytes):
+                left=row[k-channels] if k>=channels else 0
+                row[k]=(row[k]+(left+previous[k])//2)&255
+        elif predictor==4:
+            for k in range(rowbytes):
+                left=row[k-channels] if k>=channels else 0
+                above=previous[k]
+                upperleft=previous[k-channels] if k>=channels else 0
+                midpoint=left+above-upperleft
+                da=abs(midpoint-left)
+                db=abs(midpoint-above)
+                dc=abs(midpoint-upperleft)
+                nearest=left if da<=db and da<=dc else (above if db<=dc else upperleft)
+                row[k]=(row[k]+nearest)&255
+        elif predictor!=0:
+            raise ValueError("unknown_png_filter")
+        if y<=line<y+h:
+            extracted.append(bytes(row[x*channels:(x+w)*channels]))
+        previous=row
+    return color,extracted
+
+
+def native_png_pack_rows(width,height,color,rows):
+    if color not in (2,6) or len(rows)!=height:
+        raise ValueError("png_pack_invalid")
+    bytes_per_pixel=3 if color==2 else 4
+    if any(len(row)!=width*bytes_per_pixel for row in rows):
+        raise ValueError("png_pack_row_invalid")
+    def chunk(kind,value):
+        return (struct.pack(">I",len(value))+kind+value+
+                struct.pack(">I",binascii.crc32(kind+value)&0xffffffff))
+    header=struct.pack(">IIBBBBB",width,height,8,color,0,0,0)
+    body=zlib.compress(b"".join(b"\0"+r for r in rows),6)
+    return (b"\x89PNG\r\n\x1a\n"+chunk(b"IHDR",header)+
+            chunk(b"IDAT",body)+chunk(b"IEND",b""))
+
+
 def screenshot_image_mapping(report,strips,image_fingerprints,archive):
     """Associate DOM image rectangles to *already captured* screenshot strips.
 
-    No network access or extra browser interaction. Optional Pillow creates
-    visible-size PNG crops; without Pillow, strip coordinate mappings remain
-    sufficient for later offline reconstruction. Neither is original media.
+    No network access or extra browser interaction. Pillow is optional; the
+    bounded standard-library PNG RGB/RGBA fallback generates visible-size PNG
+    crops from Chrome screenshots. Neither is original media.
     """
     result=[]
     try:
@@ -888,8 +988,8 @@ def screenshot_image_mapping(report,strips,image_fingerprints,archive):
                 "width":cw,"height":ch,"target_y":target
             } for filename,_,_,cx,cy,cw,ch,target in segments]
         }
-        if Image is not None:
-            try:
+        try:
+            if Image is not None:
                 canvas=Image.new("RGB",(width,height))
                 for _,_,png,cx,cy,cw,ch,target in segments:
                     with Image.open(BytesIO(png)) as screen:
@@ -900,13 +1000,27 @@ def screenshot_image_mapping(report,strips,image_fingerprints,archive):
                 output=BytesIO()
                 canvas.save(output,format="PNG")
                 payload=output.getvalue()
-                if len(payload)<=4*1024*1024:
-                    name=f"media/screenshot_image_{idx:02d}.png"
-                    archive.writestr(name,payload)
-                    record["rendered_png_file"]=name
-                    record["rendered_png_sha256"]=hashlib.sha256(payload).hexdigest()
-            except (OSError,ValueError,TypeError):
-                pass
+                record["crop_decoder"]="Pillow"
+            else:
+                rows=[None]*height
+                color=None
+                for _,_,png,cx,cy,cw,ch,target in segments:
+                    part_color,part=native_png_crop_rows(png,cx,cy,cw,ch)
+                    if color is not None and color!=part_color:
+                        raise ValueError("mixed_png_color_type")
+                    color=part_color
+                    rows[target:target+ch]=part
+                if any(row is None for row in rows):
+                    raise ValueError("png_crop_incomplete")
+                payload=native_png_pack_rows(width,height,color,rows)
+                record["crop_decoder"]="stdlib-png"
+            if len(payload)<=4*1024*1024:
+                name=f"media/screenshot_image_{idx:02d}.png"
+                archive.writestr(name,payload)
+                record["rendered_png_file"]=name
+                record["rendered_png_sha256"]=hashlib.sha256(payload).hexdigest()
+        except (OSError,ValueError,TypeError,zlib.error,struct.error):
+            record["crop_decoder"]="not-supported"
         result.append(record)
     return result
 
