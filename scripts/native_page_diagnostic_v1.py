@@ -27,7 +27,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.3.6"
+VERSION = "1.3.7"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -2952,20 +2952,26 @@ async def validation_run(cdp,context,fixture,texts,source,assets,reference_strip
             # Match the production admin preview's hash-based remapping.
             # Ordinal-only display could conceal a candidate image reorder.
             display=[display[index] for index in server["image_identity"]["indices"]]
-        ws,target=await validation_blank(args.cdp_port,owned_tabs)
-        try:
-            result["stage"]="production-renderer-visual-comparison"
-            await target.call("Emulation.setDeviceMetricsOverride",{"width":fixture["rect"]["w"],"height":1100,"deviceScaleFactor":1,"mobile":False})
-            _,world=await validation_world(target)
-            visual,comparisons=await validation_render(target,world,texts,validated,fixture,display,reference_strips,archive)
-            if provenance.get("reference_unverified_candidate_screenshots"):
-                visual["reference_quality"]="unverified-history-candidate-screenshots"
-                visual["complete"]=False
-                visual["exact"]=False
-            result["visual"]=visual
-            result["visual_strips"]=comparisons
-            checks["visual"]=("passed" if visual["complete"] and visual["exact"] else "failed" if visual["complete"] else "incomplete")
-        finally:await ws.close()
+        if not reference_strips:
+            result["stage"]="visual-reference-unavailable"
+            result["visual"]={"complete":False,"exact":False,
+                "reason":"safe-reference-screenshots-unavailable"}
+            checks["visual"]="incomplete"
+        else:
+            ws,target=await validation_blank(args.cdp_port,owned_tabs)
+            try:
+                result["stage"]="production-renderer-visual-comparison"
+                await target.call("Emulation.setDeviceMetricsOverride",{"width":fixture["rect"]["w"],"height":1100,"deviceScaleFactor":1,"mobile":False})
+                _,world=await validation_world(target)
+                visual,comparisons=await validation_render(target,world,texts,validated,fixture,display,reference_strips,archive)
+                if provenance.get("reference_unverified_candidate_screenshots"):
+                    visual["reference_quality"]="unverified-history-candidate-screenshots"
+                    visual["complete"]=False
+                    visual["exact"]=False
+                result["visual"]=visual
+                result["visual_strips"]=comparisons
+                checks["visual"]=("passed" if visual["complete"] and visual["exact"] else "failed" if visual["complete"] else "incomplete")
+            finally:await ws.close()
         required=("capture","server_validation","persistence","chunk_assembly","text_order","tables","images","visual")
         result["capture_render_status"]=("failed" if any(checks[k]=="failed" for k in required) else "passed" if all(checks[k]=="passed" for k in required) else "incomplete")
         result["status"]=("failed" if "failed" in checks.values() else "passed" if result["capture_render_status"]=="passed" and checks["file_bytes"] in ("passed","not-applicable") and provenance.get("boundary_verified") is True else "incomplete")
