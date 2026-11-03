@@ -791,7 +791,9 @@
     // At most a bounded climb, and never promote a per-answer action to the
     // whole chat main or conversation list. The button and answer must truly
     // share one non-page ancestor, without an identified user message.
-    for (let depth = 0; common && depth < 24; depth++, common = common.parentElement) {
+    // v260: verified rich DOMs may nest more than 35 levels. The climb is
+    // still bounded and must stop before main / any user-turn ancestor.
+    for (let depth = 0; common && depth < 64; depth++, common = common.parentElement) {
       if (!common.contains?.(button)) continue;
       if (common.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']")
           || common.querySelector?.("[data-message-author-role='user'],[data-testid='user-message']"))
@@ -819,6 +821,9 @@
     if (prior?.isConnected &&
         !prior.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']") &&
         !prior.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,[contenteditable='true']") &&
+        ![...(prior.querySelectorAll?.("h4,h5,h6") || [])]
+          .some(node => /^(?:You said|你说|你发送)\s*[:：]?$/i.test(
+            normalize(node.innerText || node.textContent || ""))) &&
         active.lastCandidateNode?.isConnected &&
         prior.contains?.(active.lastCandidateNode)) return true;
     active.nativeVerifiedReplyScope = null;
