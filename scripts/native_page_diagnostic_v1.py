@@ -23,7 +23,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.17"
+VERSION = "1.2.18"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_NODES = 30000
 REQUEST = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
@@ -430,6 +430,23 @@ while(scopeAt&&scopeAt!==main&&scopeDepth<50){
  if(parent===main)scopeChildIndex=[...main.children].indexOf(scopeAt);
  scopeDepth++;scopeAt=parent;
 }
+// A second conversation can contain substantial prose and just ONE table.
+// Do not force the old 3-table capture heuristic onto it; report only
+// aggregate topology of the longest visible main child for later triage.
+const mainChildren=main?[...main.children].slice(0,40):[];
+const childEvidence=mainChildren.map((e,i)=>({
+ index:i,chars:Math.min(500000,String(e.innerText||'').length),
+ tables:e.querySelectorAll('table,[role="table"]').length,
+ headings:e.querySelectorAll('h1,h2,h3,h4,h5,h6').length,
+ paragraphs:e.querySelectorAll('p').length,
+ pre:e.querySelectorAll('pre').length,
+ code:e.querySelectorAll('code').length,
+ composer:e.querySelectorAll('form,textarea,[contenteditable="true"],[role="textbox"]').length,
+ user:e.querySelectorAll('[data-message-author-role="user"],[data-testid="user-message"]').length
+}));
+childEvidence.sort((a,b)=>b.chars-a.chars);
+const longestChild=childEvidence[0]||{index:-1,chars:0,tables:0,
+ headings:0,paragraphs:0,pre:0,code:0,composer:0,user:0};
 const scopeRect=scope?.getBoundingClientRect();
 const scopeComposer=scope?scope.querySelectorAll('form,textarea,[contenteditable="true"],[role="textbox"]').length:0;
 const scopeUserMarkers=scope?scope.querySelectorAll('[data-message-author-role="user"],[data-testid="user-message"]').length:0;
@@ -482,6 +499,15 @@ return {ready_state:String(document.readyState||'unknown').slice(0,16),
   body_markdown_blocks:allBodyMarkdown.length,
   body_visible_tables:visibleTables.length,
   main_visible_tables:mainTables.length,
+  main_longest_child_index:longestChild.index,
+  main_longest_child_visible_text_chars:longestChild.chars,
+  main_longest_child_tables:longestChild.tables,
+  main_longest_child_headings:longestChild.headings,
+  main_longest_child_paragraphs:longestChild.paragraphs,
+  main_longest_child_pre:longestChild.pre,
+  main_longest_child_code:longestChild.code,
+  main_longest_child_composers:longestChild.composer,
+  main_longest_child_user_markers:longestChild.user,
   ...tableScopeStats,
   body_visible_table_rows:Math.min(100000,visibleTables.reduce((n,e)=>
    n+e.querySelectorAll('tr,[role="row"]').length,0)),
@@ -571,6 +597,36 @@ def chrome_history_candidates(port,hints,history_file=None):
     return candidates
 
 
+def native_text_digest(report):
+    """Local-only integrity fingerprint; never export source text/hash."""
+    digest=hashlib.sha256()
+    def scan(node):
+        if not isinstance(node,dict):
+            return
+        if node.get("tag")=="#text":
+            digest.update(str(node.get("text") or "").encode("utf-8"))
+        else:
+            for child in node.get("children") or ():
+                scan(child)
+    scan(report.get("root") or {})
+    return digest.digest()
+
+
+def image_loaded_count(report):
+    """Loaded image count within the already selected reply candidate."""
+    count=0
+    def scan(node):
+        nonlocal count
+        if not isinstance(node,dict):
+            return
+        if isinstance(node.get("image"),dict) and node["image"].get("loaded"):
+            count+=1
+        for child in node.get("children") or ():
+            scan(child)
+    scan(report.get("root") or {})
+    return count
+
+
 def reference_matches(report,hashes):
     """Compare assistant-only normalized text by digest; export no snippets."""
     if not isinstance(report,dict) or not report.get("ok") or len(hashes)<2:return 0
@@ -620,6 +676,11 @@ _PROBE_KEYS = {"ready_state", "route", "visibility_state", "has_focus",
     "body_text_chars", "body_visible_text_chars",
     "body_article_count", "body_markdown_blocks",
     "body_visible_tables", "main_visible_tables", "body_visible_table_rows",
+    "main_longest_child_index", "main_longest_child_visible_text_chars",
+    "main_longest_child_tables", "main_longest_child_headings",
+    "main_longest_child_paragraphs", "main_longest_child_pre",
+    "main_longest_child_code", "main_longest_child_composers",
+    "main_longest_child_user_markers",
     "table_scope_tag", "table_scope_depth", "table_scope_main_child_index",
     "table_scope_is_main", "table_scope_direct_children",
     "table_scope_visible_text_chars", "table_scope_table_count",
@@ -1404,7 +1465,8 @@ async def _capture_inner(args,owned_tabs):
             boundary_verified=report.get("boundary_verified") is not False
             dom_filename=("assistant_dom.json" if boundary_verified
                 else "unverified_rich_candidate_dom.json")
-            archive.writestr(dom_filename,json.dumps(report,ensure_ascii=False))
+            # DOM is written AFTER candidate screenshot capture so a second
+            # verified in-page snapshot can include images loaded meanwhile.
             if not boundary_verified:
                 # The currently deployed server ZIP receiver requires the
                 # assistant_dom.json name. Supply a *non-content* compatibility
@@ -1477,6 +1539,38 @@ async def _capture_inner(args,owned_tabs):
                 # or sample unrelated viewport areas as if they were assistant.
                 screenshot_skip_reason="verified-screenshot-needs-safe-viewport"
 
+            # A screenshot can show images that were still unloaded during
+            # the initial CAPTURE snapshot. Resample DOM after the screenshots
+            # and accept it only if the same candidate, text and structural
+            # counts are unchanged. This does NOT identify the media asset.
+            loaded_images_before=image_loaded_count(report)
+            post_render_snapshot_accepted=False
+            if (not boundary_verified and screens>0
+                and tab_origin=="dedicated-worker-tab"
+                and str(picked.get("id") or "") in owned_tabs):
+                try:
+                    refreshed,_=await inspect_page(cdp,args.request_id)
+                    matching=(
+                        isinstance(refreshed,dict) and refreshed.get("ok")
+                        and refreshed.get("scope")==report.get("scope")
+                        and refreshed.get("boundary_verified") is False
+                        and native_text_digest(refreshed)==native_text_digest(report)
+                        and all(refreshed.get("counts",{}).get(k)==
+                                report.get("counts",{}).get(k)
+                                for k in ("tables","headings","text_chars","images"))
+                    )
+                    if matching:
+                        report=refreshed
+                        post_render_snapshot_accepted=True
+                except Exception:
+                    pass
+            loaded_images_after=image_loaded_count(report)
+            archive.writestr(dom_filename,json.dumps(report,ensure_ascii=False))
+            remaining_px=max(0,int(rect["h"])-screenshot_coverage_px)
+            screenshot_near_complete=(screens>0 and remaining_px<=2
+                and screenshot_coverage_px>0)
+            if screenshot_near_complete and not screenshot_complete:
+                screenshot_skip_reason="rounding-tail-1-to-2-px"
             archive.writestr("manifest.json",json.dumps({"tool":"native-page-diagnostic",
                 "version":VERSION,"request_id":args.request_id,"worker_id":args.worker_id,
                 "scope":report["scope"],"counts":report["counts"],
@@ -1487,7 +1581,12 @@ async def _capture_inner(args,owned_tabs):
                 "screenshot_count":screens,
                 "screenshot_coverage_px":screenshot_coverage_px,
                 "screenshot_capture_complete":screenshot_complete,
+                "screenshot_near_complete":screenshot_near_complete,
+                "screenshot_uncovered_px":remaining_px,
                 "screenshot_skip_reason":screenshot_skip_reason,
+                "loaded_images_before":loaded_images_before,
+                "loaded_images_after":loaded_images_after,
+                "post_render_snapshot_accepted":post_render_snapshot_accepted,
                 "truncated":bool(report.get("reason")),
                 "source":"existing-chatgpt-page","conversation_url_included":False,
                 "request_binding":verification,
@@ -1501,6 +1600,8 @@ async def _capture_inner(args,owned_tabs):
            boundary_verified=report.get("boundary_verified") is not False,
            screenshot_capture_complete=screenshot_complete,
            screenshot_coverage_px=screenshot_coverage_px,
+           screenshot_uncovered_px=remaining_px,
+           loaded_images_after=loaded_images_after,
            artifact_kind=("verified-assistant" if report.get("boundary_verified") is not False
                else "unverified-rich-candidate"))
     data=json.loads((folder/"status.json").read_text());data["status"]="completed"
