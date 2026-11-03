@@ -3052,7 +3052,7 @@ def validation_import_zip(path):
                     if name not in names:break
                     raw=archive.read(name)
                     if (len(raw)>8*1024*1024 or len(raw)<24 or
-                        not raw.startswith(b"\\x89PNG\\r\\n\\x1a\\n")):break
+                        not raw.startswith(b"\x89PNG\r\n\x1a\n")):break
                     w,h=struct.unpack(">II",raw[16:24])
                     if w!=fixture["rect"]["w"] or not 1<=h<=640:break
                     recovered.append({"bytes":raw,"offset":covered});covered+=h
