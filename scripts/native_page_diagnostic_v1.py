@@ -23,7 +23,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.2.21"
+VERSION = "1.2.22"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -247,6 +247,33 @@ SCREENSHOT_PREP = r"""(async function(expected,offset,limit){
    const hit=document.elementFromPoint(Math.min(vw-2,x+Math.floor(width/2)),sy);
    if(!hit||!(hit===candidate||candidate.contains(hit)))
      return fail('outside-candidate');
+ }
+ // Even when the history DOM is stable, offscreen images may load only
+ // after scrolling into view. Wait for this *clip's* visible IMG elements
+ // before screenshots (never navigate/fetch the original asset ourselves).
+ const frameImages=[...candidate.querySelectorAll('img')].slice(0,40)
+   .filter(visible).filter(img=>{
+     const box=img.getBoundingClientRect();
+     return box.bottom>y&&box.top<y+height&&box.right>x&&box.left<x+width;
+   });
+ const imageWaitStart=performance.now();
+ while(frameImages.some(img=>!img.complete)&&
+       performance.now()-imageWaitStart<6000){
+   await new Promise(resolve=>setTimeout(resolve,200));
+ }
+ if(frameImages.some(img=>!img.complete))
+   return fail('visible-image-loading-timeout');
+ if(frameImages.some(img=>img.complete&&img.naturalWidth<1))
+   return fail('visible-image-load-failed');
+ const settled=candidate.getBoundingClientRect();
+ if(Math.abs(settled.height-r.height)>2||
+    Math.abs(settled.top-r.top)>2||
+    Math.abs(settled.left-r.left)>2)
+   return fail('layout-changed-during-image-load');
+ for(const sy of [y+8,y+Math.floor(height/2),y+height-8]){
+   const hit=document.elementFromPoint(Math.min(vw-2,x+Math.floor(width/2)),sy);
+   if(!hit||!(hit===candidate||candidate.contains(hit)))
+     return fail('clip-changed-during-image-load');
  }
  // Snapshot only image source *hashes*, never full URLs or request contents.
  const observedImages=[];
