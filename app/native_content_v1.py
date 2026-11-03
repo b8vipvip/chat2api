@@ -27,11 +27,12 @@ MAX_TEXT = 300000
 MAX_ACTIVE = 128
 MAX_AGE_SECONDS = 90 * 86400
 SNAPSHOT_FILENAME = re.compile(r"(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}\.json")
-SAFE_TAGS = {"div", "p", "span", "strong", "em", "h1", "h2", "h3", "h4",
+MATH_TAGS = {"math", "semantics", "mrow", "mi", "mo", "mn", "msub", "mfrac"}
+SAFE_TAGS = MATH_TAGS | {"div", "p", "span", "strong", "em", "h1", "h2", "h3", "h4",
              "ul", "ol", "li", "blockquote", "pre", "code", "table", "thead",
              "tbody", "tr", "td", "th", "figure", "figcaption", "img", "hr", "br"}
 SAFE_STYLES = {
-    "display": {"block", "inline", "inline-block", "flex", "inline-flex", "grid"},
+    "display": {"block", "inline", "inline-block", "flex", "inline-flex", "grid", "block math", "inline math"},
     "boxSizing": {"border-box", "content-box"},
     "borderCollapse": {"collapse", "separate"},
     "flexDirection": {"row", "row-reverse", "column", "column-reverse"},
@@ -163,6 +164,9 @@ def validate_native_snapshot(payload: object) -> dict:
             children = value["children"]
             if tag in {"img", "hr", "br"} or not isinstance(children, list) or len(children) > MAX_CHILDREN:
                 raise ValueError("Invalid children")
+            if tag in MATH_TAGS and any(not isinstance(child, dict)
+                or child.get("tag") not in MATH_TAGS for child in children):
+                raise ValueError("Invalid MathML children")
             result["children"] = [node(child, depth + 1) for child in children]
         return result
 
@@ -498,6 +502,12 @@ def native_public_v1_tree(root: dict) -> dict:
     """
     result = {key: value for key,value in root.items()
               if key not in ("intrinsic_width", "intrinsic_height", "source_sha256", "children")}
+    # Older public native-v1 consumers accept HTML only; keep the fully
+    # validated MathML nodes privately for the admin native layout preview.
+    if root.get("tag") in MATH_TAGS:
+        result["tag"] = "span"
+        if "style" in result:
+            result["style"] = {k:v for k,v in result["style"].items() if k!="display"}
     if "children" in root:
         result["children"] = [native_public_v1_tree(child) for child in root["children"]]
     return result
