@@ -536,12 +536,32 @@
       }
     }
     if (event?.type === "chat.completed" && active) {
+      // DOM observers are optional. Even if ChatGPT changes structure in
+      // the middle of scanning, they must never throw across the sole
+      // request-v6 text terminal or cancel its standard OpenAI response.
+      let requestScopeBound = false;
+      let rolelessBound = false;
+      try {
+        requestScopeBound = bindNativeReplyScope(active, "terminal");
+        const rolelessScope = requestScopeBound ? null :
+          globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
+        rolelessBound = rolelessScope?.scope === "roleless_reply_siblings"
+          && rolelessScope.roots?.length > 0;
+      } catch (_) {
+        requestScopeBound = false;
+        rolelessBound = false;
+        active.nativeVerifiedReplyScope = null;
+        active.nativeBindingEvidence = "scope-observer-error";
+      }
       active.nativeObserverLoaded = Boolean(native?.capture);
-      active.nativeCaptureAttempted = true;
+      active.nativeCaptureAttempted = false;
       try {
         if (!native?.capture) {
           active.nativeCaptureFailure = "native-observer-not-loaded";
+        } else if (!requestScopeBound && !rolelessBound) {
+          active.nativeCaptureFailure = "native-reply-scope-unverified";
         } else {
+          active.nativeCaptureAttempted = true;
           await native.capture(active, true);
         }
       } catch (_) {
@@ -579,6 +599,9 @@
       event.diagnostics = {...(event.diagnostics || {}),
         native_chatgpt_conversation_url:nativeConversationUrl,
         native_observer_loaded:active.nativeObserverLoaded === true,
+        native_reply_scope_verified:Boolean(active.nativeVerifiedReplyScope?.isConnected),
+        native_reply_scope_binding:String(active.nativeBindingEvidence || "").slice(0,90),
+        native_reply_scope_phase:String(active.nativeBindingPhase || "").slice(0,16),
         native_capture_attempted:active.nativeCaptureAttempted === true,
         native_capture_failure:String(active.nativeCaptureFailure || "").slice(0,80),
         native_transport_ack_error:String(active.nativeTransportAckError || "").slice(0,80),
@@ -768,7 +791,9 @@
     // At most a bounded climb, and never promote a per-answer action to the
     // whole chat main or conversation list. The button and answer must truly
     // share one non-page ancestor, without an identified user message.
-    for (let depth = 0; common && depth < 24; depth++, common = common.parentElement) {
+    // v260: verified rich DOMs may nest more than 35 levels. The climb is
+    // still bounded and must stop before main / any user-turn ancestor.
+    for (let depth = 0; common && depth < 64; depth++, common = common.parentElement) {
       if (!common.contains?.(button)) continue;
       if (common.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']")
           || common.querySelector?.("[data-message-author-role='user'],[data-testid='user-message']"))
@@ -776,6 +801,71 @@
       return common;
     }
     return null;
+  }
+
+
+  // Request-scoped native reply binding, read-only. The request-v6 controller
+  // owns dispatch and terminal; this helper only supplies positive DOM scope
+  // evidence to native-content and native DOM diagnostic observers.
+  function bindNativeReplyScope(active, phase = "terminal") {
+    if (!active?.requestId || !active.submitStartedAt ||
+        !active.baselineCapturedAt ||
+        active.baselineCapturedAt > active.submitStartedAt ||
+        typeof active.baselineFinishActions?.has !== "function" ||
+        !active.networkStreamSeen ||
+        Number(active.networkObservedAt || 0) < active.submitStartedAt ||
+        active.cancelled ||
+        active.options?.voice === true ||
+        active.options?.mode === "voice") return false;
+    const prior = active.nativeVerifiedReplyScope;
+    if (prior?.isConnected &&
+        !prior.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']") &&
+        !prior.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,[contenteditable='true']") &&
+        ![...(prior.querySelectorAll?.("h4,h5,h6") || [])]
+          .some(node => /^(?:You said|你说|你发送)\s*[:：]?$/i.test(
+            normalize(node.innerText || node.textContent || ""))) &&
+        active.lastCandidateNode?.isConnected &&
+        prior.contains?.(active.lastCandidateNode)) return true;
+    active.nativeVerifiedReplyScope = null;
+    active.nativeBindingEvidence = "";
+    const current = currentAssistantState(active);
+    const candidate = current?.latest;
+    if (!current?.isNew || !(candidate instanceof Element) ||
+        !candidate.isConnected || !visible(candidate) ||
+        candidate.closest?.("[data-message-author-role='user'],[data-testid='user-message'],form,nav,aside,header,footer,[role='dialog']") ||
+        !candidate.closest?.("main,[role='main'],#thread")) return false;
+    const newActions = responseFinishActions().filter(button =>
+      !active.baselineFinishActions.has(button) &&
+      button.isConnected && turnFollows(candidate, button));
+    if (!newActions.length) return false;
+    const scopes = new Set();
+    for (const button of newActions) {
+      const scope = replyScopeForFinishAction(candidate, button);
+      if (!scope || !scope.isConnected || !scope.contains?.(candidate) ||
+          scope.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']") ||
+          scope.closest?.("nav,aside,header,footer,form,[role='dialog']") ||
+          scope.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,input,[contenteditable='true']")) continue;
+      const content = normalize(scope.innerText || scope.textContent || "");
+      const submitted = String(active.promptNormalized || "").trim();
+      const prefix = submitted.slice(0,100);
+      const suffix = submitted.slice(-100);
+      const rolelessUserHeading = [...(scope.querySelectorAll?.("h4,h5,h6") || [])]
+        .some(node => /^(?:You said|你说|你发送)\s*[:：]?$/i.test(
+          normalize(node.innerText || node.textContent || "")));
+      if (rolelessUserHeading || content.length < 3 || content.length > 300000 ||
+          (submitted.length >= 4 && submitted.length <= 100 && content.includes(submitted)) ||
+          (prefix.length >= 12 && content.includes(prefix)) ||
+          (suffix.length >= 12 && content.includes(suffix))) continue;
+      scopes.add(scope);
+    }
+    // Multiple different reply/tool scopes are ambiguous. Never guess.
+    if (scopes.size !== 1) return false;
+    const [scope] = scopes;
+    active.lastCandidateNode = candidate;
+    active.nativeVerifiedReplyScope = scope;
+    active.nativeBindingEvidence = "same-request-baseline+network+fresh-reply-toolbar-v260";
+    active.nativeBindingPhase = phase;
+    return true;
   }
 
   // A redesigned reply can render one Markdown/code/table component per
@@ -1900,9 +1990,13 @@
     if (!text || transientText(text) || text === previous) return previous;
     active.lastCaptureAt = Date.now();
     active.lastCapturedText = text;
-    // Optional independent native rich update. No await: a slow snapshot
-    // cannot delay normal OpenAI deltas or the Browser/Broker terminal.
-    void native?.capture?.(active, false);
+    // Incremental native snapshots require an already-bound current reply,
+    // instead of silently promoting a paragraph into a complete rich tree.
+    try { bindNativeReplyScope(active, "progress"); }
+    catch (_) { active.nativeVerifiedReplyScope = null;
+      active.nativeBindingEvidence = "scope-observer-error"; }
+    if (active.nativeVerifiedReplyScope?.isConnected)
+      void native?.capture?.(active, false);
 
     if (text.startsWith(previous)) {
       const delta = text.slice(previous.length);
@@ -3078,6 +3172,9 @@
       networkTerminalTransportErrorReason: "",
       baselineFinishActions: null,
       baselineRolelessHeadings: null,
+      nativeVerifiedReplyScope: null,
+      nativeBindingEvidence: "",
+      nativeBindingPhase: "",
       networkStreamSeen: false,
       networkStreamResponseAt: 0,
       networkStreamResponseStatus: 0,
