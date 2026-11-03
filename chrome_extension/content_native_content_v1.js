@@ -51,12 +51,12 @@
   const cssList = [...new Set([
     // Preserve table geometry even if the 32-key style budget is full.
     "display","boxSizing","borderCollapse","borderSpacing","borderWidth",
-    "marginLeft","marginRight","padding","width","minWidth","maxWidth",
+    "marginLeft","marginRight","padding","width","height","minWidth","maxWidth",
     "gridTemplateColumns","gridTemplateRows","flexDirection","flexWrap","justifyContent",
     "alignItems","objectFit","textAlign","color","backgroundColor",
     "borderColor","fontWeight","fontSize","lineHeight","whiteSpace",
     "wordBreak","overflowWrap","gap","rowGap","columnGap",
-    "marginTop","marginBottom","height","minHeight","maxHeight",
+    "marginTop","marginBottom","minHeight","maxHeight",
     "borderRadius",
     ...Object.keys(styleKeys),...allowedLength,
   ])];
