@@ -221,7 +221,7 @@
         return null;
       nodes += 1;
       const result = {tag:mapped,style:safeStyle(element)};
-      if(emptyLayout && !result.style.height)
+      if(emptyLayout && !result.style.height && Object.keys(result.style).length<32)
         result.style.height=`${Number(rect.height.toFixed(3))}px`;
       if (children.length) result.children = children;
       return result;
