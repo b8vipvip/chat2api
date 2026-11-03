@@ -199,8 +199,12 @@
         rect && rect.width >= 240 && rect.width <= 3000 &&
         rect.height >= 12 && rect.height <= 48 &&
         children.length === 0 &&
-        /^\d{1,2}(?:\.\d{1,3})?px$/.test(computed.marginTop) &&
-        parseFloat(computed.marginTop) >= 8;
+        ((/^\d{1,2}(?:\.\d{1,3})?px$/.test(computed.marginTop) &&
+          parseFloat(computed.marginTop) >= 8) ||
+          // A 17px separator after an OL and before an H2 remains even
+          // without a positive margin in the 0db39fd4 tail.
+          (element.previousElementSibling?.matches?.("ol,ul") &&
+           element.nextElementSibling?.matches?.("h1,h2,h3,h4")));
       if (!children.length && !["hr","br","td","th"].includes(mapped) &&
           !emptyGridSpacer && !emptyBlockSpacer) return null;
       nodes += 1;
