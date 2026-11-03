@@ -94,7 +94,7 @@ const climbEnd=source.indexOf("  // Request-scoped native reply binding",climbBe
 assert.ok(climbBegin>0&&climbEnd>climbBegin);
 const scopeRuntime={turnFollows:()=>true};
 runInNewContext(source.slice(climbBegin,climbEnd)+
-  "\\nthis.resolveReplyScope=replyScopeForFinishAction;",scopeRuntime);
+  "\nthis.resolveReplyScope=replyScopeForFinishAction;",scopeRuntime);
 class DeepNode {
   constructor(type,parent=null){
     this.tagName=type;this.parentElement=parent;this.children=[];
