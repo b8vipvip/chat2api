@@ -240,6 +240,48 @@ assert.equal(blankGridResult.root.children[1].tag,"div");
 assert.equal(blankGridResult.root.children[1].style.height,"423.125px");
 console.log("Native layout: bounded empty Grid remains between adjacent text blocks");
 
+// Real fa937767 fixture has a 17px blank block + 16px top margin
+// between the last operating-plan table and the next section header.
+// This is layout, not extra reply text.
+const blankBlockCtx={...ctx,getComputedStyle:()=>({
+  display:"block",visibility:"visible",width:"768px",height:"17px",
+  marginTop:"16px",lineHeight:"17px"
+})};
+delete blankBlockCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,blankBlockCtx);
+const spacer=new Element("DIV");
+spacer.getBoundingClientRect=()=>({width:768,height:17});
+const blankBlockResult=blankBlockCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_blankblock_12345",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[
+    new Element("P",[{nodeType:3,nodeValue:"prior table"}]),
+    spacer,
+    new Element("H2",[{nodeType:3,nodeValue:"next section"}])
+  ])
+});
+assert.equal(blankBlockResult.root.children.length,3);
+assert.equal(blankBlockResult.root.children[1].tag,"div");
+assert.equal(blankBlockResult.root.children[1].style.marginTop,"16px");
+const blankBlockNoMargin={...ctx,getComputedStyle:()=>({
+  display:"block",visibility:"visible",width:"768px",height:"17px",
+  marginTop:"0px"
+})};
+delete blankBlockNoMargin.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,blankBlockNoMargin);
+const noMarginSpacer=new Element("DIV");
+noMarginSpacer.getBoundingClientRect=()=>({width:768,height:17});
+const noMarginResult=blankBlockNoMargin.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_nomargin_12345",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[
+    new Element("P",[{nodeType:3,nodeValue:"prior table"}]),
+    noMarginSpacer,
+    new Element("H2",[{nodeType:3,nodeValue:"next section"}])
+  ])
+});
+assert.equal(noMarginResult.root.children.length,2,
+  "non-spaced empty DIV must remain excluded");
+console.log("Native bounded table-to-heading spacer retains 33px layout without extra text");
+
 function candidateFor(children) {
   return {requestId:"req_boundedtest1234",submitStartedAt:Date.now(),
     lastCandidateNode:new Element("DIV",children)};
