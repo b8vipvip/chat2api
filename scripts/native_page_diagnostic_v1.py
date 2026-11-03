@@ -2750,22 +2750,56 @@ def validation_write_result(archive,report,strips):
         "历史回放不能证明新请求绑定、模型选择、生成终态或真实 SSE/WebSocket 送达。\n")
 
 def validation_merge(archive,payload,report):
-    # Preserve the existing controller's 18 MiB transfer contract. Optional
-    # validation must never make an otherwise usable diagnosis undownloadable.
+    # Remain within the controller's 18 MiB ZIP ceiling. Keep reusable source
+    # and original-byte evidence before optional screenshot comparisons.
     with ZipFile(BytesIO(payload)) as extra:
         budget=MAX_ZIP-archive.fp.tell()-512000;used=0;keep=set();omitted=[]
         special={"validation/report.json","index.html","REPLAY.txt","validation/assets.json"}
+        items=extra.infolist()
+        def visual(name):
+            return name.startswith(("validation/reference/strip_",
+                "validation/candidate/strip_","validation/difference/strip_"))
         def priority(name):
-            if name.endswith("fixture.json") or name in ("validation/source.json","validation/snapshot.json"):return 0
+            if (name.endswith("fixture.json") or name in
+                ("validation/source.json","validation/snapshot.json") or
+                name.startswith("validation/source/")):return 0
             if name.startswith(("validation/assets/","validation/files/")):return 1
-            if name.startswith("validation/reference/"):return 2
-            if name.startswith(("validation/candidate/","validation/difference/")):return 3
-            return 4
-        for item in sorted(extra.infolist(),key=lambda x:(priority(x.filename),x.filename)):
-            if item.filename in special:continue
-            if used+item.compress_size+len(item.filename)+160>budget:omitted.append(item.filename);continue
-            raw=extra.read(item.filename);archive.writestr(item.filename,raw)
-            used+=item.compress_size+len(item.filename)+160;keep.add(item.filename)
+            return 2
+        def cost(item):return item.compress_size+len(item.filename)+160
+        def copy(item):
+            nonlocal used
+            archive.writestr(item.filename,extra.read(item.filename))
+            used+=cost(item);keep.add(item.filename)
+        for item in sorted(items,key=lambda x:(priority(x.filename),x.filename)):
+            if item.filename in special or visual(item.filename):continue
+            if used+cost(item)>budget:omitted.append(item.filename);continue
+            copy(item)
+        # The old sort saved all reference screenshots first and omitted
+        # every difference heatmap and all six production source files on
+        # 0db39fd4. Preserve complete comparison triples, not half-pairs;
+        # sample uniformly from beginning/end/middle when the budget is tight.
+        rows=report.get("visual_strips") or []
+        order=[];pending=[(0,len(rows)-1)]
+        while pending:
+            next_pending=[]
+            for lo,hi in pending:
+                if lo>hi:continue
+                mid=(lo+hi)//2;order.append(mid)
+                next_pending.extend(((lo,mid-1),(mid+1,hi)))
+            pending=next_pending
+        available={item.filename:item for item in items}
+        for idx in order:
+            row=rows[idx]
+            names=[row.get(k) for k in ("reference","candidate","difference")]
+            group=[available.get(n) for n in names]
+            if not all(group) or used+sum(cost(item) for item in group)>budget:
+                omitted.extend(n for n in names if isinstance(n,str))
+                continue
+            for item in group:copy(item)
+        # No unpaired strip can masquerade as a complete comparison.
+        for item in items:
+            if visual(item.filename) and item.filename not in keep and item.filename not in omitted:
+                omitted.append(item.filename)
         assets=json.loads(extra.read("validation/assets.json")) if "validation/assets.json" in extra.namelist() else []
         for row in assets:
             if row.get("file") and row["file"] not in keep:
@@ -2776,15 +2810,20 @@ def validation_merge(archive,payload,report):
             if row.get("file") and row["file"] not in keep:
                 row.pop("file",None);row["status"]="incomplete";row["reason"]="evidence-transfer-budget"
                 report["files"]["status"]="incomplete";report.setdefault("checks",{})["file_bytes"]="incomplete"
-        strips=[x for x in report.get("visual_strips",[]) if all(x.get(k) in keep for k in ("reference","candidate","difference"))]
+        strips=[x for x in rows if all(x.get(k) in keep for k in ("reference","candidate","difference"))]
+        report["visual_packaging"]={"complete_triplets":len(strips),
+            "total_triplets":len(rows),"selection":"spread-complete-triples-v1",
+            "all_strips_archived":len(strips)==len(rows)}
         if omitted:
             report["omitted_artifacts"]=omitted
             if report.get("status")!="failed":report["status"]="incomplete"
-            if any(n.startswith(("validation/reference/","validation/candidate/","validation/difference/","validation/assets/")) for n in omitted):
+            if any(n.startswith(("validation/reference/","validation/candidate/",
+                "validation/difference/","validation/assets/")) for n in omitted):
                 report.setdefault("checks",{})["visual"]="incomplete"
                 if report.get("capture_render_status")!="failed":report["capture_render_status"]="incomplete"
         validation_write_result(archive,report,strips)
     return report
+
 
 async def validation_render(cdp,context,texts,snapshot,fixture,assets,reference_strips,archive):
     renderer=validation_renderer(texts)
