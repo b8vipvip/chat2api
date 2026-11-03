@@ -536,14 +536,23 @@
       }
     }
     if (event?.type === "chat.completed" && active) {
-      const requestScopeBound = bindNativeReplyScope(active, "terminal");
-      // A fresh roleless ChatGPT said heading followed by reply siblings is
-      // an existing alternate positive boundary. Otherwise never publish a
-      // partial candidate paragraph as a "complete" native HTML sidecar.
-      const rolelessScope = requestScopeBound ? null :
-        globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
-      const rolelessBound = rolelessScope?.scope === "roleless_reply_siblings"
-        && rolelessScope.roots?.length > 0;
+      // DOM observers are optional. Even if ChatGPT changes structure in
+      // the middle of scanning, they must never throw across the sole
+      // request-v6 text terminal or cancel its standard OpenAI response.
+      let requestScopeBound = false;
+      let rolelessBound = false;
+      try {
+        requestScopeBound = bindNativeReplyScope(active, "terminal");
+        const rolelessScope = requestScopeBound ? null :
+          globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
+        rolelessBound = rolelessScope?.scope === "roleless_reply_siblings"
+          && rolelessScope.roots?.length > 0;
+      } catch (_) {
+        requestScopeBound = false;
+        rolelessBound = false;
+        active.nativeVerifiedReplyScope = null;
+        active.nativeBindingEvidence = "scope-observer-error";
+      }
       active.nativeObserverLoaded = Boolean(native?.capture);
       active.nativeCaptureAttempted = false;
       try {
@@ -1978,7 +1987,9 @@
     active.lastCapturedText = text;
     // Incremental native snapshots require an already-bound current reply,
     // instead of silently promoting a paragraph into a complete rich tree.
-    bindNativeReplyScope(active, "progress");
+    try { bindNativeReplyScope(active, "progress"); }
+    catch (_) { active.nativeVerifiedReplyScope = null;
+      active.nativeBindingEvidence = "scope-observer-error"; }
     if (active.nativeVerifiedReplyScope?.isConnected)
       void native?.capture?.(active, false);
 
