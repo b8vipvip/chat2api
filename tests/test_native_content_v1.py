@@ -61,6 +61,36 @@ def test_wide_table_margins_and_borders_reject_unsafe_values(styles):
                                   "root": {"tag": "div", "style": styles}})
 
 
+@pytest.mark.parametrize("style", [
+    {"gridTemplateColumns": "250.656px 250.672px 250.672px",
+     "gridTemplateRows": "200.531px"},
+    {"gridTemplateRows": "201.001px"},
+    {"height": "200.531px", "width": "250.672px"},
+])
+def test_fractional_grid_tracks_from_native_zip_pass(style):
+    value = {"version": 1, "revision": 1,
+             "root": {"tag": "div", "style": style}}
+    assert validate_native_snapshot(value) == value
+
+
+@pytest.mark.parametrize("style", [
+    {"gridTemplateRows": "repeat(100,200px)"},
+    {"gridTemplateRows": "calc(100% - 3px)"},
+    {"gridTemplateRows": "1fr"},
+    {"gridTemplateRows": "10000px"},
+    {"gridTemplateColumns": "250.1234px"},
+    {"gridTemplateColumns": "250.656px;position:absolute"},
+    {"gridTemplateColumns": " ".join(["200px"] * 7)},
+    {"gridTemplateColumns": "url(https://example.org/a)"},
+    {"height": "5.1234px"},
+    {"height": "-200.531px"},
+])
+def test_fractional_grid_track_rejects_unsafe_or_unbounded_css(style):
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1,
+                                  "root": {"tag": "div", "style": style}})
+
+
 def test_safe_layout_is_preserved():
     assert validate_native_snapshot(snapshot()) == snapshot()
 
