@@ -46,7 +46,8 @@
       Number.parseFloat(part) <= 16);
   // Computed CSS Grid tracks use fractional pixel widths (250.656px).
   // Accept at most six bounded, nonnegative pixel tracks, never raw CSS.
-  const gridTrack = /^(?:\d{1,4}(?:\.\d{1,3})?px)(?:\s+\d{1,4}(?:\.\d{1,3})?px){0,5}$/;\n  const color = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s]+\))$/i;
+  const gridTrack = /^(?:\d{1,4}(?:\.\d{1,3})?px)(?:\s+\d{1,4}(?:\.\d{1,3})?px){0,5}$/;
+  const color = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s]+\))$/i;
   const grid = /^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$/;
   // Server validates at most 32 style keys per element. Chromium may emit
   // more, so prioritize actual visual styling before optional dimensions.
