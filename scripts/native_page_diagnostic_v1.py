@@ -27,7 +27,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -2887,6 +2887,10 @@ async def validation_run(cdp,context,fixture,texts,source,assets,reference_strip
             await target.call("Emulation.setDeviceMetricsOverride",{"width":fixture["rect"]["w"],"height":1100,"deviceScaleFactor":1,"mobile":False})
             _,world=await validation_world(target)
             visual,comparisons=await validation_render(target,world,texts,validated,fixture,display,reference_strips,archive)
+            if provenance.get("reference_unverified_candidate_screenshots"):
+                visual["reference_quality"]="unverified-history-candidate-screenshots"
+                visual["complete"]=False
+                visual["exact"]=False
             result["visual"]=visual
             result["visual_strips"]=comparisons
             checks["visual"]=("passed" if visual["complete"] and visual["exact"] else "failed" if visual["complete"] else "incomplete")
@@ -3029,6 +3033,35 @@ def validation_import_zip(path):
         w,h=struct.unpack(">II",raw[16:24])
         if not 1<=w<=3000 or not 1<=h<=640 or w!=fixture["rect"]["w"]:raise ValueError("fixture_png_bounds")
         strips.append({"bytes":raw,"offset":offset});offset+=h
+    fallback_unverified=False
+    # v1.3.0 saved full original-page screenshot strips but its validation
+    # renderer could time out on offscreen loading=lazy images before writing
+    # validation/reference/strip_*. Reuse those strips only as a LOW-TRUST
+    # visual aid; never convert their unverified boundary into proof.
+    if not strips and "manifest.json" in names:
+        try:
+            manifest=json.loads(archive.read("manifest.json"))
+            count=manifest.get("screenshot_count")
+            if (manifest.get("tool")=="native-page-diagnostic"
+                and manifest.get("capture_layout_stable") is True
+                and manifest.get("scope")=="inferred-rich-table-candidate"
+                and type(count) is int and 1<=count<=MAX_SCREENSHOTS):
+                recovered=[];covered=0
+                for i in range(count):
+                    name=f"screenshots/unverified_candidate_{i:02d}.png"
+                    if name not in names:break
+                    raw=archive.read(name)
+                    if (len(raw)>8*1024*1024 or len(raw)<24 or
+                        not raw.startswith(b"\\x89PNG\\r\\n\\x1a\\n")):break
+                    w,h=struct.unpack(">II",raw[16:24])
+                    if w!=fixture["rect"]["w"] or not 1<=h<=640:break
+                    recovered.append({"bytes":raw,"offset":covered});covered+=h
+                if (len(recovered)==count and
+                    covered==manifest.get("screenshot_coverage_px") and
+                    covered<=fixture["rect"]["h"]):
+                    strips=recovered;fallback_unverified=True
+        except (ValueError,TypeError,KeyError,struct.error):
+            pass
     files={"status":"not-run","files":[],"native_click":"not-run","source":"fixture-byte-revalidation"}
     oldfiles=meta.get("files") or {};items=oldfiles.get("files",[]) if isinstance(oldfiles,dict) else []
     if not isinstance(items,list) or len(items)>40:raise ValueError("fixture_file_limit")
@@ -3058,7 +3091,7 @@ def validation_import_zip(path):
     if oldfiles and oldfiles.get("status") not in ("passed","not-applicable") and files["status"]!="failed":files["status"]="incomplete"
     archive.close()
     # User-supplied report status and candidate source are not trusted proof.
-    return fixture,originals,strips,{"mode":"offline-fixture-replay","boundary_verified":False,"business_request_bound":False,"reference_from_prior_capture":True,"candidate_capture_input":"inert-selected-reply-reconstruction","model_request_sent":False,"production_redeployed":False,"input_provenance":str((meta.get("provenance") or {}).get("mode", ""))[:80],"_file_replay":files}
+    return fixture,originals,strips,{"mode":"offline-fixture-replay","boundary_verified":False,"business_request_bound":False,"reference_from_prior_capture":True,"reference_unverified_candidate_screenshots":fallback_unverified,"candidate_capture_input":"inert-selected-reply-reconstruction","model_request_sent":False,"production_redeployed":False,"input_provenance":str((meta.get("provenance") or {}).get("mode", ""))[:80],"_file_replay":files}
 
 async def delivery_validation_replay(args):
     import websockets
