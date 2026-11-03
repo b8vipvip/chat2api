@@ -182,7 +182,14 @@
       }
       // Empty cells still occupy a column; dropping them shifts every later
       // cell and can make text spill into the following paragraph.
-      if (!children.length && !["hr","br","td","th"].includes(mapped)) return null;
+      // A visible but unfilled Grid region is meaningful layout, even when
+      // it contains no approved text or raster children. The 0db39fd4
+      // fixture includes a 423px gallery reservation that was collapsed,
+      // shifting every later section. Preserve only bounded in-scope boxes.
+      const emptyGridSpacer = mapped === "div" && computed.display === "grid" &&
+        rect && rect.width >= 24 && rect.height >= 12 && rect.height <= 2048 &&
+        rect.width <= 3000 && children.length === 0;
+      if (!children.length && !["hr","br","td","th"].includes(mapped) && !emptyGridSpacer) return null;
       nodes += 1;
       const result = {tag:mapped,style:safeStyle(element)};
       if (children.length) result.children = children;
