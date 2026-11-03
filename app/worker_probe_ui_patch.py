@@ -44,7 +44,8 @@ PANEL = r'''
     <button class="action" id="nativePageReload">刷新记录</button>
     <span class="muted">工具独立发布：首次升级更新机制后，后续直接点击「更新诊断工具」，不再部署服务端。</span>
   </div>
-  <p id="nativePageStatus" class="muted">输入完整请求 ID 或原生 ChatGPT /c/ 历史链接后即可执行；不发起新生成请求。</p>
+  <p id="nativePageStatus" class="muted" role="status">输入完整请求 ID 或原生 ChatGPT /c/ 历史链接后即可执行；不发起新生成请求。</p>
+  <div id="nativePageDownloads" aria-live="polite" aria-label="诊断文件下载进度与保存链接"></div>
   <div class="scroll native-tool-table"><table><thead><tr>
     <th>诊断任务</th><th>请求 ID / 历史链接</th><th>Worker ID</th><th>工具版本</th><th>状态/结果</th><th>进度</th><th>操作</th>
   </tr></thead><tbody id="nativePageRecords"></tbody></table></div>
