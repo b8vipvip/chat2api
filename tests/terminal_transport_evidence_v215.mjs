@@ -9,7 +9,14 @@ function harness(results) {
   const messages=[];
   const active={requestId:"req_terminal_v215",mediaCaptureLastInlined:0,mediaCaptureLastEmbedded:0};
   const context={
-    state:{active}, native:{capture:async()=>{}}, globalThis:{__CHAT2API_PROBE_SUPERVISOR_V1__:{capture:async()=>({})}},
+    state:{active}, native:{capture:async()=>{}},
+    // Isolated emit harness deliberately has no page-owned reply scope.
+    // The new native gate must fail closed without changing terminal sends.
+    bindNativeReplyScope:()=>false,
+    globalThis:{
+      __CHAT2API_PROBE_SUPERVISOR_V1__:{capture:async()=>({})},
+      __CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{replyRoots:()=>({scope:"candidate_only",roots:[]})},
+    },
     assistantOnlyReplyText:(_,text)=>({text, pending:false,stripped:false}),
     rememberNativeConversationUrl:()=>"", // isolated emit VM omits outer page observer
     chrome:{runtime:{sendMessage:async payload=>{
@@ -27,6 +34,9 @@ function harness(results) {
   assert.equal(h.messages.length,2);
   assert.equal(h.messages[0].event.diagnostics.terminal_worker_send_attempt,1);
   assert.equal(h.messages[1].event.diagnostics.terminal_worker_send_attempt,2);
+  assert.equal(h.messages[1].event.diagnostics.native_capture_failure,
+    "native-reply-scope-unverified",
+    "unverified native sidecar must not suppress a valid OpenAI terminal");
 }
 {
   const h=harness([false,false,false]);
