@@ -31,7 +31,7 @@
   const allowedLength = new Set(["gap","rowGap","columnGap","padding","marginTop","marginBottom",
     "marginLeft","marginRight","width","minWidth","maxWidth","height","minHeight",
     "maxHeight","borderRadius","borderWidth","letterSpacing","fontSize","lineHeight"]);
-  const length = /^(?:0|\d{1,4}(?:\.\d{1,2})?(?:px|rem|%))$/;
+  const length = /^(?:0|\d{1,4}(?:\.\d{1,3})?px|\d{1,4}(?:\.\d{1,2})?(?:rem|%))$/;
   const lengthList = (value, count) => value.length <= 80 &&
     value.split(/\s+/).length <= count && value.split(/\s+/).every(part => length.test(part));
   // ChatGPT's wide tables use negative horizontal margins to cancel a
@@ -44,7 +44,7 @@
     value.split(/\s+/).length <= 4 && value.split(/\s+/).every(part =>
       /^(?:0|\d{1,2}(?:\.\d{1,2})?px)$/.test(part) &&
       Number.parseFloat(part) <= 16);
-  const color = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s]+\))$/i;
+  // Computed CSS Grid tracks use fractional pixel widths (250.656px).\n  // Accept at most six bounded, nonnegative pixel tracks, never raw CSS.\n  const gridTrack = /^(?:\d{1,4}(?:\.\d{1,3})?px)(?:\s+\d{1,4}(?:\.\d{1,3})?px){0,5}$/;\n  const color = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s]+\))$/i;
   const grid = /^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$/;
   // Server validates at most 32 style keys per element. Chromium may emit
   // more, so prioritize actual visual styling before optional dimensions.
@@ -52,7 +52,7 @@
     // Preserve table geometry even if the 32-key style budget is full.
     "display","boxSizing","borderCollapse","borderSpacing","borderWidth",
     "marginLeft","marginRight","padding","width","minWidth","maxWidth",
-    "gridTemplateColumns","flexDirection","flexWrap","justifyContent",
+    "gridTemplateColumns","gridTemplateRows","flexDirection","flexWrap","justifyContent",
     "alignItems","objectFit","textAlign","color","backgroundColor",
     "borderColor","fontWeight","fontSize","lineHeight","whiteSpace",
     "wordBreak","overflowWrap","gap","rowGap","columnGap",
@@ -72,7 +72,7 @@
           (key === "marginLeft" || key === "marginRight") && safeNegativeMargin(value) ||
           key === "borderWidth" && safeBorderWidths(value) ||
           ["color","backgroundColor","borderColor"].includes(key) && value.length <= 48 && color.test(value) ||
-          key === "gridTemplateColumns" && value.length <= 120 && grid.test(value)) {
+          key === "gridTemplateColumns" && value.length <= 120 && (grid.test(value) || gridTrack.test(value)) ||\n          key === "gridTemplateRows" && value.length <= 120 && gridTrack.test(value)) {
         obj[key] = value;
       }
     }
