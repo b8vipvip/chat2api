@@ -295,3 +295,22 @@ def test_v644_diagnosis_one_input_and_native_history_context_copy_contract():
     assert 'native_chatgpt_conversation_url' in history
     assert 'rememberNativeConversationUrl(active);' in worker
     assert worker.count('response_terminal_source: "verified-request-media-dom-v176"')==1
+
+
+def test_v260_native_scope_binding_keeps_single_terminal_owner_and_rejects_partial_dom():
+    source = read("chrome_extension/content_request_v6.js")
+    assert "function bindNativeReplyScope(active, phase" in source
+    assert 'bindNativeReplyScope(active, "terminal")' in source
+    assert 'bindNativeReplyScope(active, "progress")' in source
+    assert "active.baselineCapturedAt > active.submitStartedAt" in source
+    assert "active.networkObservedAt || 0" in source
+    assert "active.baselineFinishActions.has" in source
+    assert "if (scopes.size !== 1) return false" in source
+    assert 'active.options?.mode === "voice"' in source
+    assert 'native-reply-scope-unverified' in source
+    assert "if (!requestScopeBound && !rolelessBound)" in source
+    assert "native_reply_scope_verified" in source
+    assert "active.nativeVerifiedReplyScope?.isConnected" in source
+    assert 'type: "chat.completed"' in source
+    assert "request-v6" in source
+
