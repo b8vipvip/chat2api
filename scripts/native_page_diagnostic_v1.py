@@ -27,7 +27,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.3.9"
+VERSION = "1.3.10"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -204,7 +204,7 @@ return {ok:!reason,reason,version:1,scope,boundary_verified:boundaryVerified,
 
 # This helper runs only in a tab CREATED by the diagnostic. The normal
 # complete native DOM can be read from existing tabs without scrolling them.
-# It scrolls to the assistant/candidate within the nearest scrollable parent,
+
 # then returns a viewport-only clip verified by elementFromPoint. Never send
 # text, URLs, outerHTML, cookies or scripts from the page to the worker log.
 SCREENSHOT_PREP = r"""(async function(expected,offset,limit){
@@ -607,7 +607,7 @@ const middle=document.elementFromPoint(Math.floor(innerWidth*0.66),
 const allBodyArticles=document.querySelectorAll('article,[role="article"]');
 const allBodyMarkdown=document.querySelectorAll('.markdown,.prose,[data-testid*="markdown"]');
 // Recover structural ancestry of rendered tables without exporting content.
-// A single shared table ancestor is NOT automatically an assistant boundary.
+
 const mainTables=visibleTables.filter(e=>main?.contains(e));
 let tableRegion=mainTables[0]?.parentElement||null;
 while(tableRegion&&mainTables.some(e=>!tableRegion.contains(e)))
@@ -799,7 +799,7 @@ def history_content_signature(report):
         or not count.get("nodes") or not count.get("text_chars")):
         return None
     # Hash covers serialized text and layout indicators. We intentionally
-    # exclude img.loaded: below-the-fold lazy assets load only when scrolled.
+
     keys=("nodes","text_chars","tables","images","headings",
           "max_children","grids","flex")
     dimensions=("w","h")
@@ -1203,6 +1203,8 @@ def failure_reason(probe):
         and probe.get("body_visible_tables",0)>=3
         and probe.get("table_scope_composer_count",0)>0):
         return "history_rich_content_boundary_overlaps_editor"
+    if probe.get("history_content_visible_unassigned"):
+        return "history_visible_content_without_safe_reply_boundary"
     if probe.get("history_load_timeout"):
         return "history_load_stability_timeout_no_complete_evidence"
     if probe.get("history_existing_content_not_stable"):
@@ -1224,7 +1226,7 @@ def failure_reason(probe):
     if probe.get("password_fields") or probe.get("route")=="access-gate":
         return "history_access_gate_detected"
     # A document whose load event finished but whose conversation remains
-    # skeleton-only is NOT evidence that browser navigation is still loading.
+
     if (probe.get("route")=="conversation"
         and probe.get("ready_state")=="complete"
         and probe.get("loading_skeletons")
@@ -1602,7 +1604,7 @@ async def _capture_inner(args,owned_tabs):
         safe_url(url)
         status(folder,"opening-new-tab",15,open_mode="dedicated-worker-tab")
         # For one-off recovery create a blank page, instrument before the
-        # first ChatGPT navigation, then navigate only this self-created tab.
+
         # The normal path is preserved for backwards compatibility.
         initial_url=("about:blank" if not allow_reload else url)
         with urlopen(Request(f"http://127.0.0.1:{args.cdp_port}/json/new?"+
@@ -1660,6 +1662,7 @@ async def _capture_inner(args,owned_tabs):
         transient_redirect_count=0
         existing_evidence={}
         missing_polls=0;tab_retried=False
+        unassigned_signature=None;unassigned_since=None
         for i in range(HISTORY_LOAD_MAX_SECONDS//HISTORY_LOAD_POLL_SECONDS):
             await asyncio.sleep(HISTORY_LOAD_POLL_SECONDS if i else 0.4)
             # Do not discard a redirected tab just because it moved to
@@ -1762,6 +1765,20 @@ async def _capture_inner(args,owned_tabs):
                             network_quiet=(type(resource_age) is int and
                                 (resource_age>=2000 or resource_age==0
                                     and not probe.get("fetch_total")))
+                            if (not obj and network_quiet and elapsed>=45
+                                and probe.get("ready_state")=="complete"
+                                and int(probe.get("main_visible_text_chars") or 0)>=250
+                                and not probe.get("conversation_api_recent_429")):
+                                sig=tuple(probe.get(k) for k in (
+                                    "main_visible_text_chars","main_longest_child_paragraphs",
+                                    "main_visible_tables","main_visible_images"))
+                                if sig!=unassigned_signature:
+                                    unassigned_signature=sig;unassigned_since=now
+                                elif elapsed>=75 and now-unassigned_since>=20:
+                                    last_probe["history_content_visible_unassigned"]=True
+                                    break
+                            else:
+                                unassigned_signature=None;unassigned_since=None
                             if snapshot_ready and network_quiet:
                                 if signature!=stable_signature:
                                     if stable_signature is not None:
@@ -1887,7 +1904,7 @@ async def _capture_inner(args,owned_tabs):
             # probe the login page or attempt any sign-in action.
             if access_observed>=3:break
             # Do not fail on a one-poll transient after the diagnostic tab
-            # reload. Persistent untrusted off-origin navigation is different:
+
             # stop after the bounded grace and repeated confirmations.
             if (last_probe.get("navigation_route")=="unexpected-redirect"
                 and suspicious_redirect_streak>=4
@@ -2141,7 +2158,7 @@ async def _capture_inner(args,owned_tabs):
                 screenshot_skip_reason="verified-screenshot-needs-safe-viewport"
 
             # A screenshot can show images that were still unloaded during
-            # the initial CAPTURE snapshot. Resample DOM after the screenshots
+
             # and accept it only if the same candidate, text and structural
             # counts are unchanged. This does NOT identify the media asset.
             loaded_images_before=image_loaded_count(report)
@@ -2287,7 +2304,7 @@ async def _capture_inner(args,owned_tabs):
             if (screenshot_near_complete and not screenshot_complete
                 and screenshot_skip_reason!="dom-changed-during-capture"):
                 screenshot_skip_reason="rounding-tail-1-to-2-px"
-            # Independent candidate validation adds replay inputs and reports;
+
 
             status(folder,"validating-delivery",88,tool_version=VERSION)
             extra_buffer=BytesIO()
@@ -2373,7 +2390,7 @@ async def _capture_inner(args,owned_tabs):
         stream.write(json.dumps({"tool_version":VERSION,"status":"completed",
             "stage":"complete","percent":100,"updated_at":int(time.time())})+"\n")
 
-# v1.3: independent candidate delivery replay. Only trusted repository sources
+
 # execute. Fixture ZIPs supply inert data; their bundled Python/JS is NEVER run.
 VALIDATION_REF = "native-delivery-validation-candidate"
 VALIDATION_REPO = "b8vipvip/chat2api"
@@ -2654,7 +2671,7 @@ async def validation_native_files(cdp,context,texts,archive,allow_click):
     return {"status":state,"files":rows,"missing_types":missing,"zip_members":zip_members,"button_candidates":result.get("button_candidates",0),"failed_types":result.get("failed_types",[]),"failure_stages":result.get("failure_stages",{}),"synthesized_zip":bool(result.get("synthesized_zip")),"browser_save_suppressed":True,"source_transform":"singleton-key-and-message-channel-only","generated_file_http_routes":"not-run"}
 
 async def validation_capture_snapshot(cdp,context,texts):
-    # All production capture logic is unmodified. Only the test input scope is
+
     # supplied externally; this does NOT test request-v6's live turn binding.
     for path in VALIDATION_FILES[:2]:await validation_eval(cdp,texts[path],context)
     return await validation_eval(cdp,"""(()=>{
@@ -2785,7 +2802,7 @@ def validation_report_html(report,strips):
 
 def validation_write_result(archive,report,strips):
     archive.writestr("validation/report.json",json.dumps(report,ensure_ascii=False,indent=2))
-    # index.html is at ZIP root; every artifact path remains archive-relative.
+
     archive.writestr("index.html",validation_report_html(report,strips))
     archive.writestr("REPLAY.txt", "富内容交付回放\n\n解压后打开 index.html 查看原生参考、候选交付和像素差异。\n"
         "把这个 ZIP 留作回归样本；以后测试候选修复无需重新生成回复或部署主服务。\n"
