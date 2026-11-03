@@ -91,6 +91,37 @@ def test_fractional_grid_track_rejects_unsafe_or_unbounded_css(style):
                                   "root": {"tag": "div", "style": style}})
 
 
+def test_mathml_fraction_is_validated_and_public_v1_downgrades_to_html():
+    from app.native_content_v1 import native_public_v1_tree
+    math = {"tag": "math", "style": {"display": "block math",
+            "fontSize": "19.36px"}, "children": [
+        {"tag": "semantics", "children": [
+            {"tag": "mfrac", "children": [
+                {"tag": "mi", "text": "q"},
+                {"tag": "mn", "text": "26"}]}]}]}
+    value = {"version": 1, "revision": 1,
+             "root": {"tag": "div", "children": [math]}}
+    assert validate_native_snapshot(value) == value
+    downgraded = native_public_v1_tree(math)
+    assert downgraded["tag"] == "span"
+    assert "display" not in downgraded.get("style", {})
+    assert downgraded["children"][0]["tag"] == "span"
+    assert downgraded["children"][0]["children"][0]["children"][0]["text"] == "q"
+
+
+@pytest.mark.parametrize("root", [
+    {"tag": "math", "href": "https://invalid.example", "children": []},
+    {"tag": "math", "children": [{"tag": "script", "text": "bad"}]},
+    {"tag": "math", "children": [{"tag": "img", "media_index": 0}]},
+    {"tag": "mfrac", "children": [{"tag": "div"}]},
+    {"tag": "mi", "text": "x", "style": {"display": "url(x)"}},
+    {"tag": "math", "children": [{"tag": "mi", "style": {"position": "fixed"}}]},
+])
+def test_mathml_rejects_markup_and_unsafe_attrs(root):
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1, "root": root})
+
+
 def test_safe_layout_is_preserved():
     assert validate_native_snapshot(snapshot()) == snapshot()
 
