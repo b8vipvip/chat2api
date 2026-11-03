@@ -5,14 +5,14 @@ const source=readFileSync("chrome_extension/content_request_v6.js","utf8");
 const start=source.indexOf("  async function emit(event) {");
 const end=source.indexOf("\n  async function diagnostic(",start);
 assert.ok(start>0&&end>start);
-function harness(results) {
+function harness(results,{throwsScope=false}={}) {
   const messages=[];
   const active={requestId:"req_terminal_v215",mediaCaptureLastInlined:0,mediaCaptureLastEmbedded:0};
   const context={
     state:{active}, native:{capture:async()=>{}},
     // Isolated emit harness deliberately has no page-owned reply scope.
     // The new native gate must fail closed without changing terminal sends.
-    bindNativeReplyScope:()=>false,
+    bindNativeReplyScope:()=>{if(throwsScope)throw new Error('page changed');return false;},
     globalThis:{
       __CHAT2API_PROBE_SUPERVISOR_V1__:{capture:async()=>({})},
       __CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{replyRoots:()=>({scope:"candidate_only",roots:[]})},
@@ -37,6 +37,13 @@ function harness(results) {
   assert.equal(h.messages[1].event.diagnostics.native_capture_failure,
     "native-reply-scope-unverified",
     "unverified native sidecar must not suppress a valid OpenAI terminal");
+}
+{
+  const h=harness([true],{throwsScope:true});
+  await h.emit({type:"chat.completed",request_id:"req_terminal_v215",text:"safe text"});
+  assert.equal(h.messages.length,1,"optional DOM observer errors must not prevent terminal");
+  assert.equal(h.messages[0].event.diagnostics.native_capture_failure,
+    "native-reply-scope-unverified");
 }
 {
   const h=harness([false,false,false]);
