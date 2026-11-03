@@ -134,7 +134,8 @@ console.log("Native rich observer: bounded capture, no DOM URLs, independent req
 // text and the table count still match.
 const tableCtx={...ctx,getComputedStyle:()=>({display:"block",visibility:"visible",
   boxSizing:"border-box",borderCollapse:"collapse",borderSpacing:"0px",
-  padding:"8px 8px 8px 0px",fontSize:"14px",fontWeight:"400",lineHeight:"20px"})};
+  padding:"8px 8px 8px 0px",marginLeft:"-395px",marginRight:"-395px",
+  borderWidth:"0px 0px 1px",fontSize:"14px",fontWeight:"400",lineHeight:"20px"})};
 delete tableCtx.__CHAT2API_NATIVE_CONTENT_V1__;
 runInNewContext(code,tableCtx);
 const table=new Element("TABLE",[new Element("TBODY",[
@@ -152,6 +153,9 @@ assert.equal(tableTree.root.style.padding,"8px 8px 8px 0px");
 assert.equal(tableTree.root.style.boxSizing,"border-box");
 assert.equal(tableTree.root.style.borderCollapse,"collapse");
 assert.equal(tableTree.root.style.borderSpacing,"0px");
+assert.equal(tableTree.root.style.marginLeft,"-395px");
+assert.equal(tableTree.root.style.marginRight,"-395px");
+assert.equal(tableTree.root.style.borderWidth,"0px 0px 1px");
 assert.ok(Object.keys(tableTree.root.style).length<=32);
 console.log("Native table observer: empty cells, box sizing, collapsed borders and bounded padding preserved");
 
