@@ -216,6 +216,30 @@ assert.equal(gridSnapshot.root.style.height,"200.531px");
 assert.ok(Object.keys(gridSnapshot.root.style).length<=32);
 console.log("Native fractional grid tracks retain three side-by-side images");
 
+// Real 0db39fd4 reply kept a 423.125px, visible but empty Grid asset
+// reservation. Silently dropping the box moved subsequent headings ~439px.
+const blankGridCtx={...ctx,getComputedStyle:()=>({
+  display:"grid",visibility:"visible",width:"768px",height:"423.125px",
+  gridTemplateColumns:"250.656px 250.656px 250.656px",
+  gridTemplateRows:"423.125px",marginTop:"16px"
+})};
+delete blankGridCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,blankGridCtx);
+const emptyGrid=new Element("DIV");
+emptyGrid.getBoundingClientRect=()=>({width:768,height:423.125});
+const blankGridResult=blankGridCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_blankgrid_123456",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[
+    new Element("P",[{nodeType:3,nodeValue:"before"}]),
+    emptyGrid,
+    new Element("P",[{nodeType:3,nodeValue:"after"}])
+  ])
+});
+assert.equal(blankGridResult.root.children.length,3);
+assert.equal(blankGridResult.root.children[1].tag,"div");
+assert.equal(blankGridResult.root.children[1].style.height,"423.125px");
+console.log("Native layout: bounded empty Grid remains between adjacent text blocks");
+
 function candidateFor(children) {
   return {requestId:"req_boundedtest1234",submitStartedAt:Date.now(),
     lastCandidateNode:new Element("DIV",children)};
