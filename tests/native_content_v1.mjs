@@ -346,6 +346,45 @@ assert.equal(listGapReply.root.children.length,3);
 assert.equal(listGapReply.root.children[1].tag,"div");
 console.log("Native list-heading 17px spacer preserved without capturing generic blanks");
 
+// v1.3.6 21-table history contains MathML formulas with native fractions
+// and subscripts. MathML tokens require direct text, never injected HTML.
+const mathNamespace="http://www.w3.org/1998/Math/MathML";
+const formulaCtx={...ctx,getComputedStyle:()=>({
+  display:"block math",visibility:"visible",fontSize:"19.36px",
+  height:"13px",width:"25px",color:"rgb(13, 13, 13)"
+})};
+delete formulaCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,formulaCtx);
+const token=(tag,value)=>{
+  const e=new Element(tag.toUpperCase(),[{nodeType:3,nodeValue:value}]);
+  e.namespaceURI=mathNamespace;e.textContent=value;return e;
+};
+const mi=token("mi","q"),mn=token("mn","26"),mo=token("mo","=");
+const frac=new Element("MFRAC",[mi,mn]);frac.namespaceURI=mathNamespace;
+const row=new Element("MROW",[mo,frac]);row.namespaceURI=mathNamespace;
+const math=new Element("MATH",[row]);math.namespaceURI=mathNamespace;
+const formula=formulaCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_mathtest_12345",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[math])
+});
+assert.equal(formula.root.children[0].tag,"math");
+const mrow=formula.root.children[0].children[0];
+assert.equal(mrow.tag,"mrow");
+assert.equal(mrow.children[0].tag,"mo");
+assert.equal(mrow.children[0].text,"=");
+assert.equal(mrow.children[1].tag,"mfrac");
+assert.equal(mrow.children[1].children[0].text,"q");
+assert.equal(mrow.children[1].children[1].text,"26");
+assert.equal(formula.root.children[0].style.display,"block math");
+const spoofed=new Element("MI",[{nodeType:3,nodeValue:"not math"}]);
+const spoofedResult=formulaCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_mathspoof_12345",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[spoofed])
+});
+assert.notEqual(spoofedResult.root.children[0].tag,"mi",
+  "HTML custom elements must never gain MathML privileges");
+console.log("Native MathML: safe namespace, direct operator text and fractions");
+
 function candidateFor(children) {
   return {requestId:"req_boundedtest1234",submitStartedAt:Date.now(),
     lastCandidateNode:new Element("DIV",children)};
