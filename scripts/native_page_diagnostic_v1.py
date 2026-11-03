@@ -27,7 +27,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.3.3"
+VERSION = "1.3.4"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -2779,7 +2779,8 @@ def validation_merge(archive,payload,report):
         # 0db39fd4. Preserve complete comparison triples, not half-pairs;
         # sample uniformly from beginning/end/middle when the budget is tight.
         rows=report.get("visual_strips") or []
-        order=[];pending=[(0,len(rows)-1)]
+        order=([0,len(rows)-1] if len(rows)>1 else [0] if rows else [])
+        pending=[(1,len(rows)-2)]
         while pending:
             next_pending=[]
             for lo,hi in pending:
