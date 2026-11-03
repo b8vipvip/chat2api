@@ -88,4 +88,34 @@ assert.equal(scope.bind(make()),false,"ambiguous scopes must be rejected");
 assert.ok(source.includes('bindNativeReplyScope(active, "terminal")'));
 assert.ok(source.includes('bindNativeReplyScope(active, "progress")'));
 assert.ok(source.includes('if (active.nativeVerifiedReplyScope?.isConnected)'));
-console.log("v260 request-local native binding: positive scope and six fail-closed cases passed");
+
+const climbBegin=source.indexOf("  function replyScopeForFinishAction(candidate, button)");
+const climbEnd=source.indexOf("  // Request-scoped native reply binding",climbBegin);
+assert.ok(climbBegin>0&&climbEnd>climbBegin);
+const scopeRuntime={turnFollows:()=>true};
+runInNewContext(source.slice(climbBegin,climbEnd)+
+  "\\nthis.resolveReplyScope=replyScopeForFinishAction;",scopeRuntime);
+class DeepNode {
+  constructor(type,parent=null){
+    this.tagName=type;this.parentElement=parent;this.children=[];
+    if(parent)parent.children.push(this);
+  }
+  contains(target){for(let n=target;n;n=n.parentElement)if(n===this)return true;return false;}
+  matches(selector){return this.tagName==="MAIN"&&selector.includes("main");}
+  querySelector(){return null;}
+  getAttribute(key){return key==="aria-label"?"Copy":"";}
+  closest(){return null;}
+}
+const chatPage=new DeepNode("MAIN");
+const deepReply=new DeepNode("DIV",chatPage);
+let inner=deepReply;
+for(let depth=0;depth<38;depth++)inner=new DeepNode("DIV",inner);
+const deepCandidate=new DeepNode("P",inner);
+const deepCopyButton=new DeepNode("BUTTON",deepReply);
+assert.equal(scopeRuntime.resolveReplyScope(deepCandidate,deepCopyButton),deepReply,
+  "35+ nested rich reply must bind to its toolbar without returning page root");
+deepReply.querySelector=()=>({user:true});
+assert.equal(scopeRuntime.resolveReplyScope(deepCandidate,deepCopyButton),null,
+  "deep reply scope containing an explicit user message must remain rejected");
+
+console.log("v260 request-bound native ownership, deep rich container, and negative guards passed");
