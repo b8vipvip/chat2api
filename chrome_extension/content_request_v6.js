@@ -536,6 +536,7 @@
       }
     }
     if (event?.type === "chat.completed" && active) {
+      bindNativeReplyScope(active, "terminal");
       active.nativeObserverLoaded = Boolean(native?.capture);
       active.nativeCaptureAttempted = true;
       try {
@@ -579,6 +580,9 @@
       event.diagnostics = {...(event.diagnostics || {}),
         native_chatgpt_conversation_url:nativeConversationUrl,
         native_observer_loaded:active.nativeObserverLoaded === true,
+        native_reply_scope_verified:Boolean(active.nativeVerifiedReplyScope?.isConnected),
+        native_reply_scope_binding:String(active.nativeBindingEvidence || "").slice(0,90),
+        native_reply_scope_phase:String(active.nativeBindingPhase || "").slice(0,16),
         native_capture_attempted:active.nativeCaptureAttempted === true,
         native_capture_failure:String(active.nativeCaptureFailure || "").slice(0,80),
         native_transport_ack_error:String(active.nativeTransportAckError || "").slice(0,80),
@@ -776,6 +780,61 @@
       return common;
     }
     return null;
+  }
+
+
+  // Request-scoped native reply binding, read-only. The request-v6 controller
+  // owns dispatch and terminal; this helper only supplies positive DOM scope
+  // evidence to native-content and native DOM diagnostic observers.
+  function bindNativeReplyScope(active, phase = "terminal") {
+    if (!active?.requestId || !active.submitStartedAt ||
+        !active.baselineCapturedAt ||
+        active.baselineCapturedAt > active.submitStartedAt ||
+        !(active.baselineFinishActions instanceof Set) ||
+        !active.networkStreamSeen ||
+        Number(active.networkObservedAt || 0) < active.submitStartedAt ||
+        active.cancelled) return false;
+    const prior = active.nativeVerifiedReplyScope;
+    if (prior?.isConnected &&
+        !prior.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']") &&
+        !prior.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,[contenteditable='true']") &&
+        active.lastCandidateNode?.isConnected &&
+        prior.contains?.(active.lastCandidateNode)) return true;
+    active.nativeVerifiedReplyScope = null;
+    active.nativeBindingEvidence = "";
+    const current = currentAssistantState(active);
+    const candidate = current?.latest;
+    if (!current?.isNew || !(candidate instanceof Element) ||
+        !candidate.isConnected || !visible(candidate) ||
+        candidate.closest?.("[data-message-author-role='user'],[data-testid='user-message'],form,nav,aside,header,footer,[role='dialog']") ||
+        !candidate.closest?.("main,[role='main'],#thread")) return false;
+    const newActions = responseFinishActions().filter(button =>
+      !active.baselineFinishActions.has(button) &&
+      button.isConnected && turnFollows(candidate, button));
+    if (!newActions.length) return false;
+    const scopes = new Set();
+    for (const button of newActions) {
+      const scope = replyScopeForFinishAction(candidate, button);
+      if (!scope || !scope.isConnected || !scope.contains?.(candidate) ||
+          scope.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']") ||
+          scope.closest?.("nav,aside,header,footer,form,[role='dialog']") ||
+          scope.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,input,[contenteditable='true']")) continue;
+      const content = normalize(scope.innerText || scope.textContent || "");
+      const prefix = String(active.promptNormalized || "").slice(0,100);
+      const suffix = String(active.promptNormalized || "").slice(-100);
+      if (content.length < 3 || content.length > 300000 ||
+          (prefix.length >= 12 && content.includes(prefix)) ||
+          (suffix.length >= 12 && content.includes(suffix))) continue;
+      scopes.add(scope);
+    }
+    // Multiple different reply/tool scopes are ambiguous. Never guess.
+    if (scopes.size !== 1) return false;
+    const [scope] = scopes;
+    active.lastCandidateNode = candidate;
+    active.nativeVerifiedReplyScope = scope;
+    active.nativeBindingEvidence = "same-request-baseline+network+fresh-reply-toolbar-v260";
+    active.nativeBindingPhase = phase;
+    return true;
   }
 
   // A redesigned reply can render one Markdown/code/table component per
@@ -1900,9 +1959,11 @@
     if (!text || transientText(text) || text === previous) return previous;
     active.lastCaptureAt = Date.now();
     active.lastCapturedText = text;
-    // Optional independent native rich update. No await: a slow snapshot
-    // cannot delay normal OpenAI deltas or the Browser/Broker terminal.
-    void native?.capture?.(active, false);
+    // Incremental native snapshots require an already-bound current reply,
+    // instead of silently promoting a paragraph into a complete rich tree.
+    bindNativeReplyScope(active, "progress");
+    if (active.nativeVerifiedReplyScope?.isConnected)
+      void native?.capture?.(active, false);
 
     if (text.startsWith(previous)) {
       const delta = text.slice(previous.length);
@@ -3078,6 +3139,9 @@
       networkTerminalTransportErrorReason: "",
       baselineFinishActions: null,
       baselineRolelessHeadings: null,
+      nativeVerifiedReplyScope: null,
+      nativeBindingEvidence: "",
+      nativeBindingPhase: "",
       networkStreamSeen: false,
       networkStreamResponseAt: 0,
       networkStreamResponseStatus: 0,
