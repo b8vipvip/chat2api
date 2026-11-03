@@ -190,6 +190,32 @@ assert.equal(denseTable.root.style.borderWidth,"0px 0px 1px");
 assert.ok(Object.keys(denseTable.root.style).length<=32);
 console.log("Native dense style: table geometry prioritized under 32 keys");
 
+// Replayed native v1.3.2 example: three thumbnail columns reported as
+// 250.656px 250.672px 250.672px. Older two-decimal CSS validation dropped
+// the tracks and stacked the images vertically.
+const gridCtx={...ctx,getComputedStyle:()=>({
+  display:"grid",visibility:"visible",
+  gridTemplateColumns:"250.656px 250.672px 250.672px",
+  gridTemplateRows:"200.531px",width:"768px",
+  height:"200.531px",gap:"8px",boxSizing:"border-box"
+})};
+delete gridCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,gridCtx);
+const gridSnapshot=gridCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_fractionalgrid123",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[
+    new Element("DIV",[{nodeType:3,nodeValue:"tile 1"}]),
+    new Element("DIV",[{nodeType:3,nodeValue:"tile 2"}]),
+    new Element("DIV",[{nodeType:3,nodeValue:"tile 3"}])
+  ])
+});
+assert.equal(gridSnapshot.root.style.gridTemplateColumns,
+  "250.656px 250.672px 250.672px");
+assert.equal(gridSnapshot.root.style.gridTemplateRows,"200.531px");
+assert.equal(gridSnapshot.root.style.height,"200.531px");
+assert.ok(Object.keys(gridSnapshot.root.style).length<=32);
+console.log("Native fractional grid tracks retain three side-by-side images");
+
 function candidateFor(children) {
   return {requestId:"req_boundedtest1234",submitStartedAt:Date.now(),
     lastCandidateNode:new Element("DIV",children)};
