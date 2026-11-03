@@ -204,8 +204,9 @@ function requestHistoryEnsureConversationModal(){
 // native sidecar is a separate optional layout preview, NOT the API body.
 // This renderer creates safe DOM nodes only. Never insert upstream HTML.
 const requestHistoryNativeTags=new Set(
-  'div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br'.split(' ')
+  'div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br math semantics mrow mi mo mn msub mfrac'.split(' ')
 );
+const requestHistoryNativeMathTags=new Set('math semantics mrow mi mo mn msub mfrac'.split(' '));
 const requestHistoryNativeStyles=new Set(
   'display boxSizing borderCollapse borderSpacing flexDirection flexWrap justifyContent alignItems objectFit textAlign fontWeight whiteSpace wordBreak overflowWrap verticalAlign textDecorationLine borderStyle alignSelf justifySelf gap rowGap columnGap padding marginTop marginBottom marginLeft marginRight width minWidth maxWidth height minHeight maxHeight borderRadius borderWidth letterSpacing fontSize lineHeight color backgroundColor borderColor gridTemplateColumns gridTemplateRows'.split(' ')
 );
@@ -220,7 +221,9 @@ function requestHistoryOwnedImageUrl(value){
 function requestHistoryNativeNode(value,assets,budget,depth=0){
   if(!value||typeof value!=='object'||depth>64||++budget.count>30000
       ||!requestHistoryNativeTags.has(value.tag))throw new Error('原生快照结构无效');
-  const node=document.createElement(value.tag);
+  const node=requestHistoryNativeMathTags.has(value.tag)
+    ?document.createElementNS('http://www.w3.org/1998/Math/MathML',value.tag)
+    :document.createElement(value.tag);
   // Images must follow the same validated, bounded style tree as text/cards.
   // The old early return silently discarded original objectFit, borderRadius,
   // width, grid layout and spacing, even for hash-verified image assets.
