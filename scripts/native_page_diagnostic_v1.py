@@ -2792,6 +2792,10 @@ async def validation_render(cdp,context,texts,snapshot,fixture,assets,reference_
     # HTML, event handlers, hrefs, or code supplied by fixtures can execute.
     await validation_eval(cdp,renderer,context)
     result=await validation_eval(cdp,"""(async function(snapshot,assets,font){
+ // A full-height preview would otherwise create a 15px viewport scrollbar
+ // and shrink the 768px reference content to 753px in Chromium.
+ // The isolated screenshot uses Page.captureScreenshot beyond the viewport.
+ document.documentElement.style.overflow='hidden';
  document.body.style.cssText='margin:0;background:white';document.body.style.fontFamily=font||'Arial,sans-serif';
  const tree=requestHistoryNativeNode(snapshot.root,assets,{count:0});document.body.replaceChildren(tree);
  // The production renderer remains lazy. Only the isolated validation
