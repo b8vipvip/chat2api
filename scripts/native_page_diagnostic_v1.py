@@ -27,7 +27,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -2794,8 +2794,24 @@ async def validation_render(cdp,context,texts,snapshot,fixture,assets,reference_
     result=await validation_eval(cdp,"""(async function(snapshot,assets,font){
  document.body.style.cssText='margin:0;background:white';document.body.style.fontFamily=font||'Arial,sans-serif';
  const tree=requestHistoryNativeNode(snapshot.root,assets,{count:0});document.body.replaceChildren(tree);
- await Promise.all([...tree.querySelectorAll('img')].map(e=>e.decode().catch(()=>{})));
- await document.fonts.ready;const r=tree.getBoundingClientRect();return {width:Math.ceil(r.width),height:Math.ceil(r.height)};
+ // The production renderer remains lazy. Only the isolated validation
+ // screenshot eagerly decodes offscreen images: otherwise decode() can hang.
+ const images=[...tree.querySelectorAll('img')];
+ for(const image of images)image.loading='eager';
+ const imagesReady=await new Promise(resolve=>{
+   const deadline=setTimeout(()=>resolve(false),12000);
+   Promise.allSettled(images.map(image=>image.decode())).then(
+     ()=>{clearTimeout(deadline);resolve(true);},
+     ()=>{clearTimeout(deadline);resolve(false);});
+ });
+ const fontsReady=await Promise.race([
+   document.fonts.ready.then(()=>true,()=>false),
+   new Promise(resolve=>setTimeout(()=>resolve(false),5000))]);
+ const r=tree.getBoundingClientRect();
+ return {width:Math.ceil(r.width),height:Math.ceil(r.height),
+   images_expected:images.length,
+   images_loaded:images.filter(image=>image.complete&&image.naturalWidth>0).length,
+   images_ready:imagesReady,fonts_ready:fontsReady};
 })("""+json.dumps(snapshot,ensure_ascii=False)+","+json.dumps(assets)+","+json.dumps(fixture.get("font_family",""))+")",context)
     comparisons=[];changed=total=0
     for index,item in enumerate(reference_strips[:64]):
@@ -2808,8 +2824,12 @@ async def validation_render(cdp,context,texts,snapshot,fixture,assets,reference_
         comparisons.append({"index":index,"offset":offset,"reference":refname,"candidate":canname,"difference":diffname,"diff":diff})
         if archive.fp.tell()>MAX_ZIP-512000:break
     coverage=sum(struct.unpack(">II",x["bytes"][16:24])[1] for x in reference_strips[:len(comparisons)])
+    assets_ready=(result["images_loaded"]==result["images_expected"] and
+        result["images_ready"] is True and result["fonts_ready"] is True)
     visual={"strips":len(comparisons),"reference_width":fixture["rect"]["w"],"rendered_width":result["width"],"reference_height":fixture["rect"]["h"],"rendered_height":result["height"],"coverage_px":coverage,"changed_pixels":changed,"pixels":total,"changed_ratio":round(changed/total,6) if total else None,
-        "complete":bool(reference_strips and coverage==fixture["rect"]["h"] and not fixture.get("unsupported")),"exact":bool(total and changed==0 and result["width"]==fixture["rect"]["w"] and result["height"]==fixture["rect"]["h"]),"renderer_scope":"production-admin-component"}
+        "images_expected":result["images_expected"],"images_loaded":result["images_loaded"],
+        "images_ready":result["images_ready"],"fonts_ready":result["fonts_ready"],
+        "complete":bool(assets_ready and reference_strips and coverage==fixture["rect"]["h"] and not fixture.get("unsupported")),"exact":bool(assets_ready and total and changed==0 and result["width"]==fixture["rect"]["w"] and result["height"]==fixture["rect"]["h"]),"renderer_scope":"production-admin-component"}
     return visual,comparisons
 
 async def validation_run(cdp,context,fixture,texts,source,assets,reference_strips,archive,args,owned_tabs,provenance,files=None):
