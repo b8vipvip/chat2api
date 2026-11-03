@@ -836,7 +836,7 @@
       const prefix = submitted.slice(0,100);
       const suffix = submitted.slice(-100);
       const rolelessUserHeading = [...(scope.querySelectorAll?.("h4,h5,h6") || [])]
-        .some(node => /^(?:You said|你说|你发送)\\s*[:：]?$/i.test(
+        .some(node => /^(?:You said|你说|你发送)\s*[:：]?$/i.test(
           normalize(node.innerText || node.textContent || "")));
       if (rolelessUserHeading || content.length < 3 || content.length > 300000 ||
           (submitted.length >= 4 && submitted.length <= 100 && content.includes(submitted)) ||
