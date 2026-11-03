@@ -280,6 +280,46 @@ const noMarginResult=blankBlockNoMargin.__CHAT2API_NATIVE_CONTENT_V1__.snapshot(
 });
 assert.equal(noMarginResult.root.children.length,2,
   "non-spaced empty DIV must remain excluded");
+// A 21-table / 28-MathML live fixture has TWO genuinely empty,
+ // visible 448px chart reservations with 16px top margins. Previous 48px
+ // cutoff shifted all subsequent headings upward by 928px.
+const chartCtx={...ctx,getComputedStyle:()=>({
+  display:"block",visibility:"visible",width:"768px",height:"448px",
+  marginTop:"16px"
+})};
+delete chartCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,chartCtx);
+const chartSpacer=new Element("DIV");
+chartSpacer.getBoundingClientRect=()=>({width:768,height:448});
+const chartTree=chartCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_emptychart_12345",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[
+    new Element("H3",[{nodeType:3,nodeValue:"monthly revenue chart"}]),
+    chartSpacer,
+    new Element("H3",[{nodeType:3,nodeValue:"business revenue calculation"}]),
+  ])
+});
+assert.equal(chartTree.root.children.length,3);
+assert.equal(chartTree.root.children[1].style.height,"448px");
+const tooLargeCtx={...ctx,getComputedStyle:()=>({
+  display:"block",visibility:"visible",width:"768px",height:"800px",
+  marginTop:"16px"
+})};
+delete tooLargeCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,tooLargeCtx);
+const excessive=new Element("DIV");
+excessive.getBoundingClientRect=()=>({width:768,height:800});
+const rejected=tooLargeCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_bigblank_12345",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[
+    new Element("P",[{nodeType:3,nodeValue:"before"}]),
+    excessive,
+    new Element("P",[{nodeType:3,nodeValue:"after"}]),
+  ])
+});
+assert.equal(rejected.root.children.length,2,"oversized empty area stays excluded");
+console.log("Native bounded 448px chart reservations retained; >512px empties excluded");
+
 console.log("Native bounded table-to-heading spacer retains 33px layout without extra text");
 
 // Tail of 0db39fd4: a separate 17px blank block between an ordered
