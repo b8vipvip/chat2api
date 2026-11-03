@@ -57,10 +57,11 @@ LENGTH_STYLES = {"gap", "rowGap", "columnGap", "padding", "marginTop", "marginBo
 COLOR_STYLES = {"color", "backgroundColor", "borderColor"}
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{3,8}$")
 RGB_COLOR = re.compile(r"^rgba?\([0-9.,\s]+\)$")
-LENGTH = re.compile(r"^(?:0|(?:\d{1,4}(?:\.\d{1,2})?)(?:px|rem|%))$")
+LENGTH = re.compile(r"^(?:0|\d{1,4}(?:\.\d{1,3})?px|\d{1,4}(?:\.\d{1,2})?(?:rem|%))$")
 NEGATIVE_MARGIN_PX = re.compile(r"^-(?:[1-9]\d{0,3})(?:\.\d{1,2})?px$")
 BORDER_WIDTH_PX = re.compile(r"^(?:0|\d{1,2}(?:\.\d{1,2})?px)$")
 GRID_COLUMNS = re.compile(r"^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$")
+GRID_TRACK_PIXELS = re.compile(r"^\d{1,4}(?:\.\d{1,3})?px(?:\s+\d{1,4}(?:\.\d{1,3})?px){0,5}$")
 
 
 def validate_native_snapshot(payload: object) -> dict:
@@ -146,7 +147,10 @@ def validate_native_snapshot(payload: object) -> dict:
                     styles[key] = item
                 elif key in LENGTH_STYLES and LENGTH.fullmatch(item) and len(item) <= 16:
                     styles[key] = item
-                elif key == "gridTemplateColumns" and len(item) <= 120 and GRID_COLUMNS.fullmatch(item):
+                elif (key == "gridTemplateColumns" and len(item) <= 120
+                      and (GRID_COLUMNS.fullmatch(item) or GRID_TRACK_PIXELS.fullmatch(item))):
+                    styles[key] = item
+                elif key == "gridTemplateRows" and len(item) <= 120 and GRID_TRACK_PIXELS.fullmatch(item):
                     styles[key] = item
                 elif key in COLOR_STYLES and len(item) <= 48 and (
                         HEX_COLOR.fullmatch(item) or RGB_COLOR.fullmatch(item)):
