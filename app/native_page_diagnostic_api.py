@@ -334,17 +334,32 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     @app.get("/api/admin/worker-tools/native-page/workers")
     async def eligible_workers(request:Request):
         authorize(request)
-        rows=[]
+        rows=[];linux_clients=set()
         for item in app.state.linux_workers.list_public():
-            if item.get("revoked_at"): continue
+            if item.get("revoked_at"):continue
             wid=str(item.get("worker_id") or "")
-            if not WORKER_ID.fullmatch(wid): continue
+            if not WORKER_ID.fullmatch(wid):continue
+            client=linux_client(wid)
+            if not EXT_WORKER_ID.fullmatch(client):continue
+            linux_clients.add(client)
             controller=str((item.get("metadata") or {}).get("controller_worker_id") or wid)
-            rows.append({"worker_id":wid,
+            rows.append({"worker_id":client,"platform":"linux",
                          "name":str(item.get("name") or "")[:80],
                          "online":controller in app.state.worker_sockets,
                          "status":str(item.get("status") or "")[:32],
                          "worker_slot":(item.get("metadata") or {}).get("worker_slot")})
+        for cid,client in app.state.registry.clients.items():
+            if cid in linux_clients or not EXT_WORKER_ID.fullmatch(str(cid)):
+                continue
+            meta=client.metadata if isinstance(client.metadata,dict) else {}
+            if meta.get("linux_worker_id") or meta.get("controller_worker_id"):
+                continue
+            if not client.connection_enabled:continue
+            rows.append({"worker_id":cid,"platform":"windows",
+                "name":str(client.name or "")[:80],
+                "online":cid in app.state.registry.sockets,
+                "status":"online" if cid in app.state.registry.sockets else "offline",
+                "worker_slot":meta.get("worker_slot")})
         return {"data":rows}
 
     @app.get("/api/admin/worker-tools/native-page/request-worker/{request_id}")
@@ -365,7 +380,11 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                     r"/c/[A-Za-z0-9-]{12,90}/?",p.path)):
                 saved=""
         except ValueError:saved=""
-        return {"request_id":request_id,"worker_id":str(row.get("linux_worker_id") or ""),
+        owner=str(row.get("linux_worker_id") or row.get("worker_client_id")
+                  or row.get("client_id") or "")
+        if WORKER_ID.fullmatch(owner):
+            owner=linux_client(owner) or ""
+        return {"request_id":request_id,"worker_id":owner,
                 "worker_slot":row.get("worker_slot"),
                 "conversation_url":saved,
                 "conversation_link_saved":bool(saved)}
@@ -397,13 +416,15 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             if explicit and not sanitized_chatgpt_url(explicit):
                 raise HTTPException(422,"Only exact HTTPS ChatGPT /c/ URLs allowed")
             url=sanitized_chatgpt_url(explicit) if explicit else saved
-            original_worker=str(row.get("linux_worker_id") or "")
+            original_worker=str(row.get("linux_worker_id") or
+                row.get("worker_client_id") or row.get("client_id") or "")
             worker=str(body.get("worker_id") or original_worker).strip()
-            if original_worker and worker!=original_worker:
+            if original_worker and normalize_worker(worker)[0]!=normalize_worker(original_worker)[0]:
                 raise HTTPException(409,"Chosen Worker does not own this request")
+        worker,platform,display=normalize_worker(worker)
         check_worker(worker)
         if worker in locks:raise HTTPException(409,"This Worker already has a diagnosis running")
-        if worker not in app.state.worker_sockets and not any(
+        if platform=="linux" and worker not in app.state.worker_sockets and not any(
             str((v.get("metadata") or {}).get("controller_worker_id")) in app.state.worker_sockets
             for k,v in app.state.linux_workers.data["workers"].items() if k==worker):
             raise HTTPException(409,"Worker device controller is offline")
@@ -415,7 +436,8 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 "original_request_id":original_request_id,
                 "target_type":"conversation_url" if is_url else "request_id",
                 "target_label":url if is_url else original_request_id,
-                "worker_id":worker,"status":"running","stage":"queued",
+                "worker_id":worker,"display_worker_id":display,"worker_platform":platform,
+                "status":"running","stage":"queued",
                 "percent":0,"tool_version":None,
                 "created_at":int(time.time()),"updated_at":int(time.time())}
         write(record);locks[worker]=job_id
