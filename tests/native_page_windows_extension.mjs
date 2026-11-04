@@ -6,7 +6,7 @@ import {webcrypto} from "node:crypto";
 const source=readFileSync("chrome_extension/background_native_page_diagnostic_v1.js","utf8");
 const events=[],opens=[],closed=[],activated=[],focused=[];
 let activeTabId=8;
-const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.1.0",
+const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.1.1",
   boundary_verified:true,request_bound:false,complete:true,
   message_id:"reply-abc",counts:{nodes:12,text_chars:50,tables:1,images:2},
   probe:{ready_state:"complete",assistant_role_nodes:1},
@@ -37,7 +37,7 @@ const scope={
 runInNewContext(source,scope);
 const diag=scope.__CHAT2API_WINDOWS_NATIVE_PAGE_DIAG_V1__;
 assert.ok(diag);
-assert.equal(diag.version,"windows-dom-1.1.0");
+assert.equal(diag.version,"windows-dom-1.1.1");
 assert.equal(diag.validUrl("https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"),true);
 for(const url of ["https://evil.example/c/01234567-89ab-cdef-0123-456789abcdef",
   "https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef?token=1",
