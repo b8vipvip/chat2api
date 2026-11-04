@@ -27,7 +27,7 @@ class Element {
       const value=raw.trim();if(!value)return false;
       const tag=value.match(/^[a-z][a-z0-9-]*/i)?.[0];
       if(tag&&tag.toUpperCase()!==this.tagName)return false;
-      const attrs=[...value.matchAll(/\\[([\\w-]+)(?:\\s*([\\^\\$*~|]?=)\\s*["']?([^"'\\]]+)["']?)?\\]/g)];
+      const attrs=[...value.matchAll(/\[([\w-]+)(?:\s*([\^\$*~|]?=)\s*["']?([^"'\]]+)["']?)?\]/g)];
       if(!tag&&!attrs.length)return false;
       return attrs.every(m=>{
         const actual=this.getAttribute(m[1]);if(actual===null)return false;
