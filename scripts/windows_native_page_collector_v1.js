@@ -3,16 +3,19 @@
  * No extension APIs, page mutation, network access or live request terminals.
  */
 (()=>{
-  const DIAGNOSTIC_TOOL_VERSION="1.0.2";
+  const DIAGNOSTIC_TOOL_VERSION="1.0.3";
   function capturePage() {
     const now=new Date().toISOString();
     const visible=node=>{
       try{const r=node.getBoundingClientRect(),s=getComputedStyle(node);
-        return r.width>0&&r.height>0&&s.display!=="none"&&s.visibility!=="hidden";
+        return s.display!=="none"&&s.visibility!=="hidden"&&
+          (s.display==="contents"||(r.width>0&&r.height>0));
       }catch(_){return false;}
     };
     const USER="[data-message-author-role='user'],[data-conversation-role='user'],[data-testid='user-message']";
-    const SKIP="script,style,form,textarea,input,button,nav,aside,header,footer,[contenteditable='true'],[role='textbox'],[role='dialog'],[role='menu']";
+    // Safe, bounded assistant selection precedes traversal; preserve native
+    // widget labels (including headers/buttons), sanitizing tags to inert divs.
+    const SKIP="script,style,form,textarea,input,[contenteditable='true'],[role='textbox'],[role='dialog'],[role='menu']";
     const selections=[];
     for(const heading of document.querySelectorAll("h4[data-conversation-role='assistant']")){
       const wrap=heading.closest("[data-chatgpt-search-message-ids]");
@@ -62,6 +65,8 @@
     const safeCss=v=>typeof v==="string"&&v.length<100&&
       !/(?:url\s*\(|expression|javascript:|var\s*\(|calc\s*\(|[;<>{}])/i.test(v);
     let nodes=0,chars=0,images=0,tables=0,truncated=false;
+    const preservedStructure={display_contents_nodes:0,embedded_button_nodes:0,
+      embedded_header_nodes:0,embedded_nav_nodes:0};
     const imageMetrics={loaded:0,pending:0,offscreen:0,
       auto:0,lazy:0,eager:0,timing_matched:0,timing_unmatched:0};
     const viewWidth=Math.max(0,Number(globalThis.innerWidth)||0);
@@ -97,6 +102,10 @@
       if(!(node instanceof Element)||!visible(node)||node.matches(SKIP)||node.matches(USER))return null;
       if(++nodes>12000){truncated=true;return null;}
       const tag=node.tagName.toLowerCase();
+      if(getComputedStyle(node).display==="contents")preservedStructure.display_contents_nodes++;
+      if(tag==="button")preservedStructure.embedded_button_nodes++;
+      if(tag==="header")preservedStructure.embedded_header_nodes++;
+      if(tag==="nav")preservedStructure.embedded_nav_nodes++;
       const out={tag:allowed.has(tag)?tag:"div"};
       if(out.tag==="img"){
         images++;
@@ -154,6 +163,7 @@
     probe.viewport_width=viewWidth;
     probe.viewport_height=viewHeight;
     probe.image_load_summary=imageMetrics;
+    probe.assistant_scoped_preserved_structure=preservedStructure;
     probe.resource_timing_note="Best effort only: no timing entry does not prove no network request.";
     const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.1.1",
       boundary_verified:!!target.id&&!truncated,
@@ -163,6 +173,6 @@
     return {ok:true,answer};
   }
   const result=capturePage();
-  if(result?.ok&&result.answer){result.answer.version="windows-hot-1.0.2";result.answer.collector_version=DIAGNOSTIC_TOOL_VERSION;}
+  if(result?.ok&&result.answer){result.answer.version="windows-hot-1.0.3";result.answer.collector_version=DIAGNOSTIC_TOOL_VERSION;}
   return result;
 })()
