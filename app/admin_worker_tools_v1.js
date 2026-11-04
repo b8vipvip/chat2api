@@ -186,8 +186,15 @@
         if (!unique.has(worker.worker_id)) unique.set(worker.worker_id, worker);
       }
       for (const worker of unique.values()) {
-        const option = elem("option", (worker.name || worker.worker_id) +
-          " · " + worker.worker_id + (worker.online ? " · 在线" : " · 离线"));
+        const raw = String(worker.worker_id || "");
+        const ext = [worker.extension_client_id,worker.client_id,
+          worker.worker_client_id,raw].map(value => String(value||""))
+          .find(value => /^ext_[A-Za-z0-9_-]{5,120}$/.test(value));
+        const label = (worker.name || "Worker") +
+          " · " + (ext || "ext_ 待绑定") +
+          (worker.online ? " · 在线" : " · 离线");
+        const option = elem("option", label);
+        // Keep the backend policy scope key stable and private.
         option.value = "worker:" + worker.worker_id;
         picker.append(option);
       }
