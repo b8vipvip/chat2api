@@ -73,7 +73,8 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     def public(job):
         visible={key:job.get(key) for key in ("job_id","worker_id","target_type",
             "target_label","status","stage","percent","error","tool_version",
-            "counts","screenshots","size","created_at","updated_at","page_probe")}
+            "counts","screenshots","size","created_at","updated_at","page_probe",
+            "show_tab","trace","elapsed_ms","diagnostic_tab_id","diagnostic_window_id")}
         # URL-only tasks use a private internal request key for authenticated
         # Worker ZIP ownership. Never present it as a real API request ID.
         wid=str(job.get("worker_id") or "")
@@ -134,7 +135,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 raise HTTPException(409,"Windows extension is offline")
             client=app.state.registry.clients.get(canonical)
             meta=client.metadata if isinstance(client.metadata,dict) else {}
-            if meta.get("windows_native_page_diagnostic_version")!="windows-dom-1.0.1":
+            if meta.get("windows_native_page_diagnostic_version")!="windows-dom-1.1.0":
                 raise HTTPException(409,"Windows Worker extension needs native diagnosis upgrade")
             return {"worker_id":canonical}
         return app.state.linux_workers.data["workers"][canonical]
@@ -247,6 +248,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 "size":size,"sha256":expected,"error":None,"updated_at":int(time.time())})
             write(record)
         except Exception as exc:
+            record=read(job_id)
             record.update({"status":"failed","stage":"failed","percent":100,
                 "error":str(exc)[:180],"updated_at":int(time.time())})
             write(record)
@@ -254,16 +256,39 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             locks.pop(worker,None)
             jobs.pop(job_id,None)
 
+    WINDOWS_STAGE_PERCENT={
+        "accepted":10,"worker_lookup":16,"tab_opening":20,"tab_opened":25,
+        "tab_loading":32,"page_ready":45,"assistant_scanning":57,
+        "assistant_captured":73,"uploading":82,"upload_complete":91,
+        "tab_closed":95,"failed":95,
+    }
+
     async def run_windows(job_id,url):
         record=read(job_id);worker=record["worker_id"]
+        async def on_progress(event):
+            # Only authenticated progress from the matching Extension/job
+            # enters this timeline; payload fields were strictly allowlisted.
+            current=read(job_id)
+            if current.get("status")!="running":return
+            trace=current.setdefault("trace",[])
+            if len(trace)<48:trace.append(event)
+            current.update({"stage":"windows-"+event["stage"],
+                "percent":max(int(current.get("percent") or 0),
+                    WINDOWS_STAGE_PERCENT[event["stage"]]),
+                "elapsed_ms":event["elapsed_ms"],"updated_at":int(time.time())})
+            if "tab_id" in event:current["diagnostic_tab_id"]=event["tab_id"]
+            if "window_id" in event:current["diagnostic_window_id"]=event["window_id"]
+            write(current)
         try:
-            record.update({"stage":"windows-collecting","percent":15,
-                "tool_version":"windows-dom-1.0.1"})
+            record.update({"stage":"windows-dispatching","percent":5,
+                "tool_version":"windows-dom-1.1.0"})
             write(record)
-            report,raw=await windows_bridge.collect(worker,job_id,url,timeout=155)
+            report,raw=await windows_bridge.collect(worker,job_id,url,timeout=155,
+                show_tab=record.get("show_tab") is True,on_progress=on_progress)
+            record=read(job_id)  # Preserve progress updates from bridge callbacks.
             manifest={"schema":"chat2api-native-page-manifest-v1",
                 "request_id":record["request_id"],"worker_id":worker,
-                "worker_platform":"windows","tool_version":"windows-dom-1.0.1",
+                "worker_platform":"windows","tool_version":"windows-dom-1.1.0",
                 "request_binding":"url-only-unbound" if record["target_type"]=="conversation_url"
                     else "history-link-request-unverified",
                 "boundary_verified":report.get("boundary_verified") is True,
@@ -271,11 +296,20 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 "completeness_verified":False,
                 "visual_verified":False,
                 "capture_mode":"windows-extension-dom-only",
+                "visual_tab_requested":record.get("show_tab") is True,
+                "trace_file":"execution_trace.json",
                 "limitations":report.get("limitations") or []}
             buffer=io.BytesIO()
             from zipfile import ZIP_DEFLATED
             with ZipFile(buffer,"w",compression=ZIP_DEFLATED,compresslevel=6) as archive:
                 archive.writestr("assistant_dom.json",raw)
+                archive.writestr("execution_trace.json",json.dumps({
+                    "schema":"windows-native-diagnostic-execution-trace-v1",
+                    "show_tab":record.get("show_tab") is True,
+                    "diagnostic_tab_id":record.get("diagnostic_tab_id"),
+                    "diagnostic_window_id":record.get("diagnostic_window_id"),
+                    "trace":record.get("trace") or [],
+                },ensure_ascii=False))
                 archive.writestr("manifest.json",json.dumps(manifest,ensure_ascii=False))
                 archive.writestr("README.txt",
                     "Windows extension DOM-only diagnosis. No complete screenshot, "
@@ -376,7 +410,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 "name":str(client.name or "")[:80],
                 "online":cid in app.state.registry.sockets,
                 "status":"online" if cid in app.state.registry.sockets else "offline",
-                "diagnostic_supported":meta.get("windows_native_page_diagnostic_version")=="windows-dom-1.0.1",
+                "diagnostic_supported":meta.get("windows_native_page_diagnostic_version")=="windows-dom-1.1.0",
                 "worker_slot":meta.get("worker_slot")})
         return {"data":rows}
 
@@ -440,6 +474,11 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             if original_worker and normalize_worker(worker)[0]!=normalize_worker(original_worker)[0]:
                 raise HTTPException(409,"Chosen Worker does not own this request")
         worker,platform,display=normalize_worker(worker)
+        show_tab=body.get("show_tab",False)
+        if type(show_tab) is not bool:
+            raise HTTPException(422,"show_tab must be boolean")
+        if show_tab and platform!="windows":
+            raise HTTPException(422,"可视化标签页仅适用于 Windows Worker")
         check_worker(worker)
         # Windows Chrome extensions cannot recover a request's old URL from
         # the Linux Controller's local Chrome History SQLite database. A
@@ -464,6 +503,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 "worker_id":worker,"display_worker_id":display,"worker_platform":platform,
                 "status":"running","stage":"queued",
                 "percent":0,"tool_version":None,
+                "show_tab":show_tab,"trace":[],
                 "created_at":int(time.time()),"updated_at":int(time.time())}
         write(record);locks[worker]=job_id
         jobs[job_id]=asyncio.create_task(run(
@@ -492,7 +532,8 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         safe={key:record.get(key) for key in (
             "job_id","original_request_id","target_type","target_label","worker_id","status","stage","percent",
             "error","tool_version","counts","screenshots","size",
-            "created_at","updated_at","page_probe")}
+            "created_at","updated_at","page_probe",
+            "show_tab","trace","elapsed_ms","diagnostic_tab_id","diagnostic_window_id")}
         safe["worker_id"]=public(record)["worker_id"]
         safe["worker_platform"]=record.get("worker_platform") or "linux"
         return Response(json.dumps({"schema":"chat2api-native-page-diagnostic-log-v1",
@@ -523,10 +564,10 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             meta=client.metadata if client and isinstance(client.metadata,dict) else {}
             current=str(meta.get("windows_native_page_diagnostic_version") or "")
             return {"worker_id":display,"tool":{"version":current or "未安装",
-                "installed":current=="windows-dom-1.0.1",
+                "installed":current=="windows-dom-1.1.0",
                 "capture_mode":"extension-dom-only",
                 "note":"Windows diagnostic code is bundled with the Chrome extension"},
-                "latest":{"version":"windows-dom-1.0.1"}}
+                "latest":{"version":"windows-dom-1.1.0"}}
         check_worker(actual)
         result=await command(actual,"native_page_version",{},timeout=15)
         try:
