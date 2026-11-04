@@ -232,7 +232,9 @@
     const windows = await chrome.windows.getAll({ populate: true }).catch(() => []);
     for (const win of windows || []) {
       if (!Number.isInteger(win?.id)) continue;
-      const tabs = Array.isArray(win.tabs) ? win.tabs : [];
+      const diagnostic=globalThis.__CHAT2API_NATIVE_PAGE_DIAG_TAB_IDS_V1__;
+      const tabs = (Array.isArray(win.tabs) ? win.tabs : []).filter(
+        item => !diagnostic?.has?.(item?.id));
       let tab = tabs.find(item => Number.isInteger(item?.id) && isChatGpt(item.url || item.pendingUrl || ""));
       if (!tab) tab = tabs.find(item => Number.isInteger(item?.id) && isManagedSurface(item.url || item.pendingUrl || ""));
       if (!tab?.id) continue;
