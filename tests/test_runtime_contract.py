@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.261"
+    assert RELEASE_VERSION == "0.22.262"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -68,7 +68,7 @@ def test_realtime_protocol_contract_matches_live_bridge():
 def test_v148_release_contract_keeps_broker_terminal_authority():
     from pathlib import Path
     from app.runtime_contract import RELEASE_VERSION, CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.261"
+    assert RELEASE_VERSION == "0.22.262"
     assert CHROME_BRIDGE_BUNDLE_VERSION == RELEASE_VERSION
     root = Path(__file__).resolve().parents[1]
     watchdog = (root / "app/request_stall_patch.py").read_text(encoding="utf-8")
@@ -142,7 +142,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     client = TestClient(runtime)
     html = client.get("/admin").text
     assert f'<script src="{ADMIN_VERSION_ASSET}"></script>' in html
-    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.261"></script>' in html
+    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.262"></script>' in html
     assert html.index('/assets/historical.js') < html.index(ADMIN_VERSION_ASSET) < html.index(ADMIN_EXTENSION_COLUMNS_ASSET)
 
     developers_html = client.get("/developers").text
@@ -405,3 +405,27 @@ def test_062f_media_terminal_requires_source_structure_coverage():
     assert 'scene.changed >= 10 && scene.uncovered >= 8' in request
     assert 'media_terminal_scene_uncovered_blocks' in request
     assert 'mediaHandoffTerminalReady(active, generating, pageWorking, Date.now(), scopedMediaBoundary)' in request
+
+
+def test_v262_windows_diagnostic_is_not_a_request_terminal_owner():
+    """New Windows capture must stay on its own authenticated diagnostic path."""
+    entry = (ROOT / "chrome_extension" / "background_entry.js").read_text(encoding="utf-8")
+    collector = (ROOT / "chrome_extension" / "background_native_page_diagnostic_v1.js").read_text(encoding="utf-8")
+    server = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+    api = (ROOT / "app" / "native_page_diagnostic_api.py").read_text(encoding="utf-8")
+    assert '"background_native_page_diagnostic_v1.js"' in entry
+    assert '"native.page.windows.start"' in collector
+    assert '"native.page.windows.chunk"' in collector
+    assert '"native.page.windows.finished"' in collector
+    assert 'const VERSION="windows-dom-1.0.1"' in collector
+    assert 'worker_managed_chatgpt_tab_not_found' in collector
+    assert 'diagnostic_conversation_redirected' in collector
+    assert 'generation_active:generationActive' in collector
+    assert 'if(seen>=3&&meta.complete&&meta.boundary_verified)break;' in collector
+    assert 'if message_type in {"native.page.windows.chunk","native.page.windows.finished"}:' in server
+    assert 'if platform=="windows":' in api
+    assert '"visual_verified":False' in api
+    assert 'if platform=="windows" and not url:' in api
+    request = (ROOT / "chrome_extension" / "content_request_v6.js").read_text(encoding="utf-8")
+    assert "native.page.windows" not in request
+
