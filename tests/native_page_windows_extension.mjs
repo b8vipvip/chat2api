@@ -4,8 +4,9 @@ import {runInNewContext} from "node:vm";
 import {webcrypto} from "node:crypto";
 
 const source=readFileSync("chrome_extension/background_native_page_diagnostic_v1.js","utf8");
-const events=[],opens=[],closed=[];
-const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.0.1",
+const events=[],opens=[],closed=[],activated=[],focused=[];
+let activeTabId=8;
+const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.1.0",
   boundary_verified:true,request_bound:false,complete:true,
   message_id:"reply-abc",counts:{nodes:12,text_chars:50,tables:1,images:2},
   probe:{ready_state:"complete",assistant_role_nodes:1},
@@ -16,15 +17,17 @@ const scope={
   chrome:{
     storage:{local:{get:async()=>({boundTabId:8})}},
     tabs:{
-      query:async()=>[
+      query:async options=>options?.active===true ? [{id:activeTabId,windowId:26}] : [
         {id:7,windowId:25,url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"},
         {id:8,windowId:26,url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"}
       ],
-      create:async options=>{opens.push(options);return {id:101};},
+      create:async options=>{opens.push(options);if(options.active)activeTabId=101;return {id:101};},
       get:async()=>({id:101,status:"complete",url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"}),
-      remove:async id=>{closed.push(id);}
+      remove:async id=>{closed.push(id);if(activeTabId===id)activeTabId=8;},
+      update:async(id,options)=>{activated.push({id,...options});if(options.active)activeTabId=id;}
     },
-    scripting:{executeScript:async()=>[{result:{ok:true,answer}}]}
+    scripting:{executeScript:async()=>[{result:{ok:true,answer}}]},
+    windows:{update:async(id,options)=>{focused.push({id,...options});}}
   },
   TextEncoder,crypto:webcrypto,btoa,
   URL,Date,
@@ -34,7 +37,7 @@ const scope={
 runInNewContext(source,scope);
 const diag=scope.__CHAT2API_WINDOWS_NATIVE_PAGE_DIAG_V1__;
 assert.ok(diag);
-assert.equal(diag.version,"windows-dom-1.0.1");
+assert.equal(diag.version,"windows-dom-1.1.0");
 assert.equal(diag.validUrl("https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"),true);
 for(const url of ["https://evil.example/c/01234567-89ab-cdef-0123-456789abcdef",
   "https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef?token=1",
@@ -51,6 +54,10 @@ assert.equal(scope.__CHAT2API_NATIVE_PAGE_DIAG_TAB_IDS_V1__?.size,0,
   "Remove the diagnostic tab lease even after completion");
 assert.equal(events.filter(x=>x.type==="native.page.windows.finished"&&x.ok).length,1);
 assert.ok(events.some(x=>x.type==="native.page.windows.chunk"));
+assert.ok(events.some(x=>x.type==="native.page.windows.progress"&&x.stage==="tab_opened"),
+  "Must emit real tab creation evidence");
+assert.ok(events.some(x=>x.type==="native.page.windows.progress"&&x.stage==="tab_closed"),
+  "Must emit tab cleanup evidence");
 assert.equal(events.some(x=>x.type==="chat.completed"||x.type==="chat.request"),false,
   "Diagnostics never own the request terminal or issue a model request");
 assert.ok(events.every(x=>!JSON.stringify(x).includes("token=1")));
@@ -96,4 +103,55 @@ await diag.execute({job_id:"f".repeat(32),
   conversation_url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"});
 assert.equal(opens.at(-1).windowId,26);
 assert.ok(events.some(x=>x.type==="native.page.windows.finished"&&x.ok&&x.job_id==="f".repeat(32)));
-console.log("Windows native diagnosis: isolated tab, URL allowlist, bounded authenticated chunks, read-only completion");
+// Foreground is explicitly opt-in. It must use an already owned Worker
+// window, reveal the diagnostic tab, and restore the previous active tab.
+scope.chrome.storage.local.get=async()=>({boundTabId:8});
+delete scope.__CHAT2API_PERSISTENT_WINDOW_POOL_V132__;
+const beforeVisible=events.length;
+await diag.execute({job_id:"1".repeat(32),
+  conversation_url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef",
+  show_tab:true});
+assert.equal(opens.at(-1).active,true);
+assert.equal(opens.at(-1).windowId,26);
+assert.ok(focused.some(x=>x.id===26&&x.focused===true));
+assert.ok(activated.some(x=>x.id===8&&x.active===true));
+const visibleEvents=events.slice(beforeVisible);
+assert.ok(visibleEvents.some(x=>x.type==="native.page.windows.finished"&&x.ok));
+for(const stage of ["accepted","tab_opened","page_ready","assistant_scanning",
+  "assistant_captured","uploading","upload_complete","tab_closed"]){
+  assert.ok(visibleEvents.some(x=>x.type==="native.page.windows.progress"&&x.stage===stage),
+    "Missing bounded progress stage "+stage);
+}
+assert.ok(visibleEvents.findIndex(x=>x.type==="native.page.windows.progress"&&x.stage==="tab_closed") <
+  visibleEvents.findIndex(x=>x.type==="native.page.windows.finished"&&x.ok),
+  "Close the temporary tab before finalizing the report");
+
+// Busy API requests must never be hidden by a foreground diagnostic.
+scope.__CHAT2API_CONVERSATION_ROUTING_V1__={routes:{},activeRequests:new Map([["req_active",{}]])};
+const beforeBusy=events.length,openedBeforeBusy=opens.length;
+await diag.execute({job_id:"2".repeat(32),
+  conversation_url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef",
+  show_tab:true});
+assert.equal(opens.length,openedBeforeBusy,"Busy Worker cannot open visible diagnosis");
+assert.ok(events.slice(beforeBusy).some(x=>x.type==="native.page.windows.finished"&&
+  x.ok===false&&x.error==="worker_busy_visual_diagnosis"));
+assert.equal(scope.__CHAT2API_NATIVE_PAGE_DIAG_TAB_IDS_V1__.size,0);
+// A request that starts during capture must win over the diagnostic's
+// original foreground tab restoration.
+delete scope.__CHAT2API_CONVERSATION_ROUTING_V1__;
+const oldExecute=scope.chrome.scripting.executeScript;
+scope.chrome.scripting.executeScript=async (...args)=>{
+  scope.__CHAT2API_CONVERSATION_ROUTING_V1__={
+    routes:{},activeRequests:new Map([["req_arrived_mid_capture",{}]])
+  };
+  activeTabId=8; // A different real Worker tab has taken focus.
+  return oldExecute(...args);
+};
+const beforeLateRestore=activated.length;
+await diag.execute({job_id:"3".repeat(32),
+  conversation_url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef",
+  show_tab:true});
+assert.equal(activated.length,beforeLateRestore,
+  "Never steal focus from an API request that arrived during capture");
+assert.ok(events.some(x=>x.type==="native.page.windows.finished"&&x.ok&&x.job_id==="3".repeat(32)));
+console.log("Windows native diagnosis: visible tab, phase timeline, busy and late-request focus safety");

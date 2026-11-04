@@ -12,7 +12,7 @@
 |---|---|---|
 | 公共 Worker ID | `ext_…` | `ext_…` |
 | 执行器 | 原 Linux Controller + localhost CDP + 独立 Python 工具 | 已配对 Windows Chrome 扩展的后台只读采集器 |
-| 检查版本 | 独立 `native-page-diagnostic-releases` 发布分支 | 扩展内置 `windows-dom-1.0.1` |
+| 检查版本 | 独立 `native-page-diagnostic-releases` 发布分支 | 扩展内置 `windows-dom-1.1.0` |
 | 原生历史链接 | 支持 | 支持 |
 | 请求 ID 且保存了安全历史链接 | 支持 | 支持 |
 | 请求 ID 但没有历史链接 | Linux 原历史恢复机制 | 快速返回 422，并提示粘贴 /c/ 链接 |
@@ -36,7 +36,7 @@ Windows 采集器仅允许明确的 HTTPS ChatGPT /c/ URL，禁止 URL 查询串
 ## 部署与验收顺序
 
 1. 此分支**涉及中心服务端、Windows Chrome 扩展、标签页监管和管理后台**，不同于可独立热更新的 Linux 诊断 Python 脚本。首次部署必须按正式服务端/Worker 升级流程更新相应组件；只点击 Linux「更新诊断工具」无法获得 Windows 功能。
-2. 在升级 Windows Worker 扩展并重新连线之后，中心服务端看到其 `windows_native_page_diagnostic_version=windows-dom-1.0.1`，才在原生诊断下拉框中允许选择；旧扩展仅展示“需更新 Windows 扩展”，不能发起无效任务。
+2. 在升级 Windows Worker 扩展并重新连线之后，中心服务端看到其 `windows_native_page_diagnostic_version=windows-dom-1.1.0`，才在原生诊断下拉框中允许选择；旧扩展仅展示“需更新 Windows 扩展”，不能发起无效任务。
 3. Windows 选择 `ext_…` → 粘贴正确账号下的原生历史 URL → 开始诊断 → 获取 ZIP。确认 `manifest.worker_platform=windows`、`request_binding=url-only-unbound`、`visual_verified=false`、实际 HTML 消息 ID 和表格/图片计数。
 4. 同时在 Windows Worker 发起真实 API 请求，检查 Windows 诊断标签页不会被错误回收、误占预约备用窗口、改变路由任务或异常消耗并发指标。再运行 Linux 历史诊断回归，验证 `ext_` 展示映射到原 `wrk_` Controller，Linux 更新版本功能仍可用。
 5. 验证 Windows 旧版本检查、离线/禁用、macOS 不被伪装成 Windows、诊断并发限制、错误 ZIP、非法 URL/请求跨 Worker 归属、浏览器关闭中断和按版本区分提示。失败时不动 `main`、保留本功能独立分支。
@@ -51,3 +51,13 @@ Windows 采集器仅允许明确的 HTTPS ChatGPT /c/ URL，禁止 URL 查询串
 ## 回滚
 
 回滚本功能代码只需恢复服务端/Windows 扩展至前一已确认版本；保留 Linux Worker 的 `wrk_` 注册/Controller 数据、Chrome profile、已存在真实请求和独立诊断 ZIP 原样不动。不要批量修改持久化 Worker ID 或清空客户端配对。
+
+## 2026-11-04：Windows 可视化诊断与逐阶段进度（v1.1.0）
+
+- 管理后台「原生页面诊断」支持勾选 **显示诊断标签页（Windows 可视化模式）**。默认不勾选仍采用 `active:false` 后台标签页；Linux Controller 不支持此选项。
+- 勾选后仅在当前 Worker 拥有的 ChatGPT Chrome 窗口里新增 `active:true` 临时历史会话标签页，尝试将窗口前置；完成或异常时关闭临时标签页并尽力恢复之前的活动页。不允许借用任意其他用户窗口。
+- 在活动路由请求或 Worker requestRoutes 未清空时，**拒绝**可视化模式并报告 `worker_busy_visual_diagnosis`，避免主动隐藏正在运行的 API 请求窗口。后台模式继续可用。该防护是执行时检查，不能替代高并发场景的实机冲突验证。
+- Windows 扩展经已认证连接发送独立 `native.page.windows.progress` 消息（不属于 `chat.completed`、`request-v6` 终态）。服务端仅接受匹配的 Worker 和 Job，限定阶段、数值范围和最多 48 条事件；不会接受任意页面文本或 URL 进入进度证据。
+- 管理后台在诊断记录中展示当前阶段、百分比及耗时，并提供「查看轨迹」，记录标签页 ID、窗口 ID 与各阶段相对耗时。ZIP 增加 `execution_trace.json`，管理员导出的 `diagnostic.json` 也包含 `trace`。
+- 阶段：accepted → worker_lookup → tab_opening → tab_opened → tab_loading → page_ready → assistant_scanning → assistant_captured → uploading → upload_complete → tab_closed → 完成。异常同样记录 `failed` 和清理信息（如有标签页）。
+- **范围限制不变**：显示历史页面≠抓取完整页面截图；不导出完整截图或图片源字节，也不自动宣称视觉 1:1 交付成功。更新本功能需要更新 Server 与 Windows Chrome Worker 扩展；Linux 独立工具仍通过独立发布分支更新。

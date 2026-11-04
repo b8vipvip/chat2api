@@ -286,7 +286,7 @@ def test_v644_diagnosis_one_input_and_native_history_context_copy_contract():
     assert 'id="nativePageRequestId"' in ui
     assert 'id="nativePageConversationUrl"' not in ui
     assert 'nativePageUrlPattern.test(target)' in javascript
-    assert 'body: {worker_id, target}' in javascript
+    assert 'body: {worker_id, target, show_tab}' in javascript
     assert 'target_type' in server and 'url-only-unbound' in server
     assert '"req_diag_"+job_id' in server
     assert '"url-only-unbound" if args.request_id.startswith("req_diag_")' in collector

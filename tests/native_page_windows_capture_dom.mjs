@@ -6,7 +6,7 @@ const source=readFileSync("chrome_extension/background_native_page_diagnostic_v1
 const start=source.indexOf("  function capturePage() {");
 const stop=source.indexOf("\n  async function send(message)",start);
 assert.ok(start>=0&&stop>start);
-const captureSource=source.slice(start,stop)+"\nreturn capturePage();";
+const captureSource="(()=>{\n"+source.slice(start,stop)+"\nreturn capturePage();\n})()";
 class TextNode {
   constructor(value){this.nodeType=3;this.nodeValue=value;this.parentElement=null;}
 }

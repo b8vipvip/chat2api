@@ -26,6 +26,10 @@ PANEL = r'''
 #view-worker-tools .native-id {font-family:monospace;font-size:12px}
 #nativePageRecords progress {width:110px;max-width:100%}
 #nativePageStatus {margin:6px 0}
+#nativePageForeground {width:auto;min-width:0;margin-right:4px}
+#nativePageTimeline {margin:8px 0;border:1px solid rgba(125,145,165,.22);border-radius:8px;padding:8px 12px}
+#nativePageTimeline ol {margin:6px 0 0 20px;max-height:220px;overflow:auto;font-family:monospace;font-size:12px}
+#nativePageTimeline li {padding:2px 0}
 </style>
 <div class="panel" id="nativePageToolPanel">
   <h2 style="margin:0 0 4px">原生页面诊断 <span class="muted" style="font-size:12px;font-weight:normal">独立 Worker 工具</span></h2>
@@ -37,6 +41,13 @@ PANEL = r'''
     <button class="action good" id="nativePageStart">开始诊断</button>
   </div>
   <div class="native-tool-bar">
+    <label title="仅 Windows：使用 Worker 已拥有的 Chrome 窗口显示临时历史标签页。若 Worker 正在处理请求，会拒绝抢占。">
+      <input id="nativePageForeground" type="checkbox" disabled>
+      显示诊断标签页（Windows 可视化模式）
+    </label>
+    <span class="muted">默认后台执行；勾选后会切换 Worker Chrome 的活动标签页，完成后关闭临时页并尽力恢复原标签页；忙碌时拒绝。</span>
+  </div>
+  <div class="native-tool-bar">
     <div class="native-tool-release-actions" style="display:flex;align-items:center;gap:8px;flex-wrap:nowrap">
       <button class="action" id="nativePageUpdate">更新诊断工具</button>
       <button class="action" id="nativePageVersion">检查版本</button>
@@ -45,6 +56,10 @@ PANEL = r'''
     <span class="muted">工具独立发布：首次升级更新机制后，后续直接点击「更新诊断工具」，不再部署服务端。</span>
   </div>
   <p id="nativePageStatus" class="muted" role="status">输入完整请求 ID 或原生 ChatGPT /c/ 历史链接后即可执行；不发起新生成请求。</p>
+  <div id="nativePageTimeline" aria-live="polite">
+    <strong id="nativePageTimelineTitle">实时执行过程</strong>
+    <ol id="nativePageTimelineList"><li>选择 Windows Worker 开始诊断后显示阶段、标签页 ID 和耗时。</li></ol>
+  </div>
   <div id="nativePageDownloads" aria-live="polite" aria-label="诊断文件下载进度与保存链接"></div>
   <div class="scroll native-tool-table"><table><thead><tr>
     <th>诊断任务</th><th>请求 ID / 历史链接</th><th>Worker ID</th><th>工具版本</th><th>状态/结果</th><th>进度</th><th>操作</th>

@@ -102,3 +102,50 @@ async def test_windows_diagnostic_rejects_finished_size_mismatch():
     with pytest.raises(ValueError,match="windows_diagnostic_transfer_incomplete"):
         await task
     assert not bridge.pending
+
+
+@pytest.mark.asyncio
+async def test_windows_visible_progress_is_authenticated_bounded_and_not_chat_terminal():
+    registry=FakeRegistry()
+    bridge=WindowsNativePageBridge(registry)
+    job="e"*32
+    timeline=[]
+    async def progress(event):
+        timeline.append(event)
+    task=asyncio.create_task(bridge.collect(
+        "ext_abcdef123456",job,
+        "https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef",
+        timeout=5,show_tab=True,on_progress=progress))
+    await asyncio.sleep(0)
+    assert registry.sent[0][1]["show_tab"] is True
+    valid={"type":"native.page.windows.progress","job_id":job,
+           "stage":"tab_opened","elapsed_ms":53,
+           "tab_id":104,"window_id":26,"show_tab":True}
+    await bridge.ingest("ext_spoofed",valid)
+    await bridge.ingest("ext_abcdef123456",{**valid,"show_tab":False})
+    await bridge.ingest("ext_abcdef123456",{**valid,"stage":"chat.completed"})
+    await bridge.ingest("ext_abcdef123456",{**valid,"elapsed_ms":"53"})
+    assert timeline==[]
+    await bridge.ingest("ext_abcdef123456",{**valid,"conversation_url":"https://bad.invalid"})
+    assert len(timeline)==1
+    assert timeline[0]["stage"]=="tab_opened"
+    assert timeline[0]["tab_id"]==104
+    assert timeline[0]["window_id"]==26
+    assert timeline[0]["elapsed_ms"]==53
+    assert "conversation_url" not in timeline[0]
+    assert "received_at_ms" in timeline[0]
+    await bridge.ingest("ext_abcdef123456",{
+        "type":"native.page.windows.finished","job_id":job,
+        "ok":False,"error":"worker_busy_visual_diagnosis"})
+    with pytest.raises(RuntimeError,match="worker_busy_visual_diagnosis"):
+        await task
+    assert not bridge.pending
+
+
+@pytest.mark.asyncio
+async def test_windows_diagnostic_rejects_nonboolean_visual_mode():
+    bridge=WindowsNativePageBridge(FakeRegistry())
+    with pytest.raises(ValueError,match="invalid_visual_diagnostic_option"):
+        await bridge.collect("ext_abcdef123456","f"*32,
+            "https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef",
+            show_tab="true")
