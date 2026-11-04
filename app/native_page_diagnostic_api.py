@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 
 from .admin_auth import SESSION_COOKIE
+from .native_page_windows_bridge import WindowsNativePageBridge
 from .native_page_tool_release import (
     DiagnosticReleaseSource, DiagnosticReleaseUnavailable,
     RELEASE_BRANCH,
@@ -30,6 +31,7 @@ from .native_page_tool_release import (
 REQUEST_ID = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
 JOB_ID = re.compile(r"^[0-9a-f]{32}$")
 WORKER_ID = re.compile(r"^wrk_[A-Za-z0-9_-]{6,100}$")
+EXT_WORKER_ID = re.compile(r"^ext_[A-Za-z0-9_-]{5,120}$")
 MAX_ARCHIVE = 18 * 1024 * 1024
 POLL_SECONDS = 2
 
@@ -42,6 +44,8 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     jobs:dict[str,asyncio.Task]={}
     locks:dict[str,str]={}
     releases = DiagnosticReleaseSource()
+    windows_bridge=WindowsNativePageBridge(app.state.registry)
+    app.state.native_page_windows_ingest=windows_bridge.ingest
 
     def authorize(request:Request):
         token=str(request.headers.get("authorization") or "")
@@ -72,6 +76,10 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             "counts","screenshots","size","created_at","updated_at","page_probe")}
         # URL-only tasks use a private internal request key for authenticated
         # Worker ZIP ownership. Never present it as a real API request ID.
+        wid=str(job.get("worker_id") or "")
+        visible["worker_id"]=(job.get("display_worker_id")
+            or (linux_client(wid) or "ext_ 待绑定" if WORKER_ID.fullmatch(wid) else wid))
+        visible["worker_platform"]=job.get("worker_platform") or "linux"
         visible["request_id"]=job.get("original_request_id",
             job.get("request_id") if job.get("target_type") != "conversation_url" else "")
         return visible
@@ -90,12 +98,46 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         except ValueError:pass
         return ""
 
-    def check_worker(worker):
-        if not WORKER_ID.fullmatch(worker):raise HTTPException(400,"Invalid Worker")
-        source=app.state.linux_workers.data.get("workers",{}).get(worker)
-        if not source or source.get("revoked_at"):
+    def linux_client(worker):
+        entry=app.state.linux_workers.data.get("workers",{}).get(worker) or {}
+        return str(entry.get("extension_client_id") or "").strip()
+
+    def normalize_worker(worker):
+        if WORKER_ID.fullmatch(worker):
+            entry=app.state.linux_workers.data.get("workers",{}).get(worker)
+            if entry and not entry.get("revoked_at"):
+                return worker,"linux",linux_client(worker) or worker
             raise HTTPException(404,"Worker does not exist")
-        return source
+        if not EXT_WORKER_ID.fullmatch(worker):
+            raise HTTPException(400,"Invalid Worker")
+        # The Linux Controller has a distinct authenticated channel. Its
+        # diagnostic availability must not depend on the Chrome extension's
+        # separate enable/disable switch or reconnect timing.
+        for wid,entry in app.state.linux_workers.data.get("workers",{}).items():
+            if not entry.get("revoked_at") and entry.get("extension_client_id")==worker:
+                return wid,"linux",worker
+        client=app.state.registry.clients.get(worker)
+        if not client or not client.connection_enabled:
+            raise HTTPException(404,"Worker does not exist or is disabled")
+        meta=client.metadata if isinstance(client.metadata,dict) else {}
+        if meta.get("linux_worker_id") or meta.get("controller_worker_id"):
+            raise HTTPException(409,"Linux bridge is not bound")
+        platform=str(meta.get("platform_os") or meta.get("platform") or "").lower()
+        if platform and platform not in {"win","windows","win32","unknown"}:
+            raise HTTPException(409,"Only Windows extension workers support this execution path")
+        return worker,"windows",worker
+
+    def check_worker(worker):
+        canonical,platform,_=normalize_worker(worker)
+        if platform=="windows":
+            if canonical not in app.state.registry.sockets:
+                raise HTTPException(409,"Windows extension is offline")
+            client=app.state.registry.clients.get(canonical)
+            meta=client.metadata if isinstance(client.metadata,dict) else {}
+            if meta.get("windows_native_page_diagnostic_version")!="windows-dom-1.0.1":
+                raise HTTPException(409,"Windows Worker extension needs native diagnosis upgrade")
+            return {"worker_id":canonical}
+        return app.state.linux_workers.data["workers"][canonical]
 
     async def command(worker,action,arguments,timeout=30):
         response=await app.state.send_linux_worker_command(
@@ -136,6 +178,8 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     async def run(job_id,url,hints=None):
         record=read(job_id)
         worker=record["worker_id"]
+        if record.get("worker_platform")=="windows":
+            return await run_windows(job_id,url)
         try:
             result=await command(worker,"native_page_start",{
                 "job_id":job_id,"request_id":record["request_id"],
@@ -210,6 +254,47 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             locks.pop(worker,None)
             jobs.pop(job_id,None)
 
+    async def run_windows(job_id,url):
+        record=read(job_id);worker=record["worker_id"]
+        try:
+            record.update({"stage":"windows-collecting","percent":15,
+                "tool_version":"windows-dom-1.0.1"})
+            write(record)
+            report,raw=await windows_bridge.collect(worker,job_id,url,timeout=155)
+            manifest={"schema":"chat2api-native-page-manifest-v1",
+                "request_id":record["request_id"],"worker_id":worker,
+                "worker_platform":"windows","tool_version":"windows-dom-1.0.1",
+                "request_binding":"url-only-unbound" if record["target_type"]=="conversation_url"
+                    else "history-link-request-unverified",
+                "boundary_verified":report.get("boundary_verified") is True,
+                "dom_capture_complete":report.get("complete") is True,
+                "completeness_verified":False,
+                "visual_verified":False,
+                "capture_mode":"windows-extension-dom-only",
+                "limitations":report.get("limitations") or []}
+            buffer=io.BytesIO()
+            from zipfile import ZIP_DEFLATED
+            with ZipFile(buffer,"w",compression=ZIP_DEFLATED,compresslevel=6) as archive:
+                archive.writestr("assistant_dom.json",raw)
+                archive.writestr("manifest.json",json.dumps(manifest,ensure_ascii=False))
+                archive.writestr("README.txt",
+                    "Windows extension DOM-only diagnosis. No complete screenshot, "
+                    "no source image bytes, no live API request binding.\n")
+            data=buffer.getvalue()
+            if not 0<len(data)<=MAX_ARCHIVE:raise RuntimeError("windows_evidence_zip_budget")
+            out=root/(job_id+".zip");out.write_bytes(data);out.chmod(0o600)
+            record.update({"status":"completed","stage":"complete","percent":100,
+                "size":len(data),"sha256":hashlib.sha256(data).hexdigest(),
+                "counts":report.get("counts") or {},"page_probe":report.get("probe") or {},
+                "error":None,"updated_at":int(time.time())})
+            write(record)
+        except Exception as exc:
+            record.update({"status":"failed","stage":"failed","percent":100,
+                "error":str(exc)[:180],"updated_at":int(time.time())})
+            write(record)
+        finally:
+            locks.pop(worker,None);jobs.pop(job_id,None)
+
     async def latest_release():
         try:
             return await releases.load()
@@ -263,17 +348,36 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     @app.get("/api/admin/worker-tools/native-page/workers")
     async def eligible_workers(request:Request):
         authorize(request)
-        rows=[]
+        rows=[];linux_clients=set()
         for item in app.state.linux_workers.list_public():
-            if item.get("revoked_at"): continue
+            if item.get("revoked_at"):continue
             wid=str(item.get("worker_id") or "")
-            if not WORKER_ID.fullmatch(wid): continue
+            if not WORKER_ID.fullmatch(wid):continue
+            client=linux_client(wid)
+            if not EXT_WORKER_ID.fullmatch(client):continue
+            linux_clients.add(client)
             controller=str((item.get("metadata") or {}).get("controller_worker_id") or wid)
-            rows.append({"worker_id":wid,
+            rows.append({"worker_id":client,"platform":"linux",
                          "name":str(item.get("name") or "")[:80],
                          "online":controller in app.state.worker_sockets,
                          "status":str(item.get("status") or "")[:32],
                          "worker_slot":(item.get("metadata") or {}).get("worker_slot")})
+        for cid,client in app.state.registry.clients.items():
+            if cid in linux_clients or not EXT_WORKER_ID.fullmatch(str(cid)):
+                continue
+            meta=client.metadata if isinstance(client.metadata,dict) else {}
+            if meta.get("linux_worker_id") or meta.get("controller_worker_id"):
+                continue
+            platform=str(meta.get("platform_os") or meta.get("platform") or "").lower()
+            if platform and platform not in {"win","windows","win32","unknown"}:
+                continue
+            if not client.connection_enabled:continue
+            rows.append({"worker_id":cid,"platform":"windows",
+                "name":str(client.name or "")[:80],
+                "online":cid in app.state.registry.sockets,
+                "status":"online" if cid in app.state.registry.sockets else "offline",
+                "diagnostic_supported":meta.get("windows_native_page_diagnostic_version")=="windows-dom-1.0.1",
+                "worker_slot":meta.get("worker_slot")})
         return {"data":rows}
 
     @app.get("/api/admin/worker-tools/native-page/request-worker/{request_id}")
@@ -294,7 +398,11 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                     r"/c/[A-Za-z0-9-]{12,90}/?",p.path)):
                 saved=""
         except ValueError:saved=""
-        return {"request_id":request_id,"worker_id":str(row.get("linux_worker_id") or ""),
+        owner=str(row.get("linux_worker_id") or row.get("worker_client_id")
+                  or row.get("client_id") or "")
+        if WORKER_ID.fullmatch(owner):
+            owner=linux_client(owner) or ""
+        return {"request_id":request_id,"worker_id":owner,
                 "worker_slot":row.get("worker_slot"),
                 "conversation_url":saved,
                 "conversation_link_saved":bool(saved)}
@@ -326,13 +434,22 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             if explicit and not sanitized_chatgpt_url(explicit):
                 raise HTTPException(422,"Only exact HTTPS ChatGPT /c/ URLs allowed")
             url=sanitized_chatgpt_url(explicit) if explicit else saved
-            original_worker=str(row.get("linux_worker_id") or "")
+            original_worker=str(row.get("linux_worker_id") or
+                row.get("worker_client_id") or row.get("client_id") or "")
             worker=str(body.get("worker_id") or original_worker).strip()
-            if original_worker and worker!=original_worker:
+            if original_worker and normalize_worker(worker)[0]!=normalize_worker(original_worker)[0]:
                 raise HTTPException(409,"Chosen Worker does not own this request")
+        worker,platform,display=normalize_worker(worker)
         check_worker(worker)
+        # Windows Chrome extensions cannot recover a request's old URL from
+        # the Linux Controller's local Chrome History SQLite database. A
+        # request ID without a saved history link would otherwise wait until
+        # timeout in the extension; reject it before creating any job.
+        if platform=="windows" and not url:
+            raise HTTPException(422,
+                "Windows 诊断缺少该请求的 ChatGPT 历史链接；请直接粘贴 https://chatgpt.com/c/... 进行诊断")
         if worker in locks:raise HTTPException(409,"This Worker already has a diagnosis running")
-        if worker not in app.state.worker_sockets and not any(
+        if platform=="linux" and worker not in app.state.worker_sockets and not any(
             str((v.get("metadata") or {}).get("controller_worker_id")) in app.state.worker_sockets
             for k,v in app.state.linux_workers.data["workers"].items() if k==worker):
             raise HTTPException(409,"Worker device controller is offline")
@@ -344,7 +461,8 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 "original_request_id":original_request_id,
                 "target_type":"conversation_url" if is_url else "request_id",
                 "target_label":url if is_url else original_request_id,
-                "worker_id":worker,"status":"running","stage":"queued",
+                "worker_id":worker,"display_worker_id":display,"worker_platform":platform,
+                "status":"running","stage":"queued",
                 "percent":0,"tool_version":None,
                 "created_at":int(time.time()),"updated_at":int(time.time())}
         write(record);locks[worker]=job_id
@@ -375,6 +493,8 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             "job_id","original_request_id","target_type","target_label","worker_id","status","stage","percent",
             "error","tool_version","counts","screenshots","size",
             "created_at","updated_at","page_probe")}
+        safe["worker_id"]=public(record)["worker_id"]
+        safe["worker_platform"]=record.get("worker_platform") or "linux"
         return Response(json.dumps({"schema":"chat2api-native-page-diagnostic-log-v1",
             "record":safe},ensure_ascii=False,indent=2),
             media_type="application/json",
@@ -383,21 +503,36 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
 
     @app.post("/api/admin/worker-tools/native-page/workers/{worker_id}/update")
     async def update(worker_id:str,request:Request):
-        authorize(request);check_worker(worker_id)
+        authorize(request)
+        actual,platform,display=normalize_worker(worker_id)
+        if platform=="windows":
+            raise HTTPException(409,"Windows diagnostic is bundled with its Chrome extension; update the extension")
+        check_worker(actual)
         _,manifest=await latest_release()
-        result=await command(worker_id,"native_page_update",{},timeout=60)
+        result=await command(actual,"native_page_update",{},timeout=60)
         if result.get("sha256")!=manifest["sha256"]:
             raise HTTPException(409,"worker_installed_release_sha_mismatch_retry")
-        return {"worker_id":worker_id,"tool":result,"latest":manifest}
+        return {"worker_id":display,"tool":result,"latest":manifest}
 
     @app.get("/api/admin/worker-tools/native-page/workers/{worker_id}/version")
     async def version(worker_id:str,request:Request):
-        authorize(request);check_worker(worker_id)
-        result=await command(worker_id,"native_page_version",{},timeout=15)
+        authorize(request)
+        actual,platform,display=normalize_worker(worker_id)
+        if platform=="windows":
+            client=app.state.registry.clients.get(actual)
+            meta=client.metadata if client and isinstance(client.metadata,dict) else {}
+            current=str(meta.get("windows_native_page_diagnostic_version") or "")
+            return {"worker_id":display,"tool":{"version":current or "未安装",
+                "installed":current=="windows-dom-1.0.1",
+                "capture_mode":"extension-dom-only",
+                "note":"Windows diagnostic code is bundled with the Chrome extension"},
+                "latest":{"version":"windows-dom-1.0.1"}}
+        check_worker(actual)
+        result=await command(actual,"native_page_version",{},timeout=15)
         try:
             _,manifest=await latest_release()
-            return {"worker_id":worker_id,"tool":result,"latest":manifest}
+            return {"worker_id":display,"tool":result,"latest":manifest}
         except HTTPException as exc:
-            return {"worker_id":worker_id,"tool":result,
+            return {"worker_id":display,"tool":result,
                     "latest_error":str(exc.detail)[:100]}
     return app

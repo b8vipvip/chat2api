@@ -161,7 +161,9 @@
 
     const owned = await ownership();
     const tabs = await allChatTabs();
-    const adopt = tabs.find(tab => !owned.workerTabs.has(tab.id) && tab.id !== owned.loginTabId);
+    const diagnostic=globalThis.__CHAT2API_NATIVE_PAGE_DIAG_TAB_IDS_V1__;
+    const adopt = tabs.find(tab => !owned.workerTabs.has(tab.id)
+      && tab.id !== owned.loginTabId && !diagnostic?.has?.(tab.id));
     if (adopt) return storeInitialization(adopt);
 
     const created = await createManagedWindow({ url: INIT_URL, focused: false, type: "normal" }, "initialization");
@@ -182,7 +184,8 @@
       const rows = await state.baseChatTabs(...args);
       const stored = await chrome.storage.local.get({ [INIT_TAB_KEY]: null }).catch(() => ({}));
       const initTabId = stored[INIT_TAB_KEY];
-      return (rows || []).filter(tab => tab?.id !== initTabId);
+      const diagnosis = globalThis.__CHAT2API_NATIVE_PAGE_DIAG_TAB_IDS_V1__;
+      return (rows || []).filter(tab => tab?.id !== initTabId && !diagnosis?.has?.(tab?.id));
     };
     wrapped.__chat2apiSupervisorV32 = true;
     globalThis.chatTabs = wrapped;
@@ -210,6 +213,9 @@
       const orphanIds = [];
 
       for (const tab of tabs) {
+        // Diagnostics own their own short-lived tab and close it explicitly.
+        // Never adopt or reclaim that tab as an unowned ChatGPT session.
+        if (globalThis.__CHAT2API_NATIVE_PAGE_DIAG_TAB_IDS_V1__?.has?.(tab.id)) continue;
         if (current.protectedTabs.has(tab.id) || current.workerTabs.has(tab.id)) continue;
         const createdAt = Number(state.createdAt.get(tab.id) || 0);
         const startupRestored = state.startupChatTabs.has(tab.id);

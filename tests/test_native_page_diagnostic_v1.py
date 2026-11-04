@@ -74,18 +74,26 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
     monkeypatch.setattr(module,"POLL_SECONDS",0.01)
     app=FastAPI()
     worker="wrk_abc123456"
+    worker_ext="ext_linux123456"
+    wrong_ext="ext_linuxwrong12"
     request_id="req_abc12345678"
     app.state.settings=SimpleNamespace(data_dir=tmp_path,api_key="master-secret")
     app.state.admin_sessions=None
+    app.state.registry=SimpleNamespace(
+        clients={
+            worker_ext:SimpleNamespace(connection_enabled=True,metadata={}),
+            wrong_ext:SimpleNamespace(connection_enabled=True,metadata={})},
+        sockets={})
     app.state.telemetry=SimpleNamespace(get=lambda rid: {
         "request_id":rid,"linux_worker_id":worker,"worker_slot":1}
         if rid==request_id else None)
     app.state.linux_workers=SimpleNamespace(data={"workers":{
-        worker:{"revoked_at":None},"wrk_wrong123456":{"revoked_at":None}}},
+        worker:{"revoked_at":None,"extension_client_id":worker_ext},
+        "wrk_wrong123456":{"revoked_at":None,"extension_client_id":wrong_ext}}},
         list_public=lambda: [
-            {"worker_id":worker,"name":"Linux-free","status":"ready","revoked_at":None,
+            {"worker_id":worker,"extension_client_id":worker_ext,"name":"Linux-free","status":"ready","revoked_at":None,
              "metadata":{"worker_slot":1}},
-            {"worker_id":"wrk_wrong123456","name":"Offline","status":"offline",
+            {"worker_id":"wrk_wrong123456","extension_client_id":wrong_ext,"name":"Offline","status":"offline",
              "revoked_at":None,"metadata":{"worker_slot":2}},
         ])
     app.state.worker_sockets={worker:object()}
@@ -137,11 +145,11 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
     with TestClient(app) as client:
         assert client.get("/api/admin/worker-tools/native-page/jobs").status_code==401
         assert client.get("/api/admin/worker-tools/native-page/request-worker/"+request_id,
-            headers=auth).json()["worker_id"]==worker
+            headers=auth).json()["worker_id"]==worker_ext
         assert client.get("/api/admin/worker-tools/native-page/workers").status_code==401
         listed=client.get("/api/admin/worker-tools/native-page/workers",headers=auth).json()
         assert len(listed["data"])==2
-        assert listed["data"][0]["worker_id"]==worker
+        assert listed["data"][0]["worker_id"]==worker_ext
         assert listed["data"][0]["name"]=="Linux-free"
         mismatch=client.post("/api/admin/worker-tools/native-page/jobs",headers=auth,
             json={"request_id":request_id,"worker_id":"wrk_wrong123456"})
@@ -149,6 +157,7 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
         created=client.post("/api/admin/worker-tools/native-page/jobs",headers=auth,
             json={"request_id":request_id})
         assert created.status_code==200,created.text
+        assert created.json()["job"]["worker_id"]==worker_ext
         job=created.json()["job"]["job_id"]
         result=None
         for _ in range(70):
@@ -174,7 +183,7 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
             assert client.post("/api/admin/worker-tools/native-page/jobs",
                 headers=auth,json={"target":bad,"worker_id":worker}).status_code==422
         url_job=client.post("/api/admin/worker-tools/native-page/jobs",
-            headers=auth,json={"target":history,"worker_id":worker})
+            headers=auth,json={"target":history,"worker_id":worker_ext})
         assert url_job.status_code==200,url_job.text
         visible=url_job.json()["job"]
         assert visible["request_id"]==""

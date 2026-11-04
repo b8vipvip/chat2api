@@ -177,6 +177,13 @@
     if(summary)summary.textContent=`设备：${state.devices.length} · Linux Worker：${state.devices.reduce((n,d)=>n+(d.workers||[]).length,0)}`;
   }
 
+  // UI identity only: the internal wrk_ key remains unchanged for commands,
+  // data attributes and Linux Controller ownership.
+  const visibleWorkerId = worker => {
+    const id=String(worker?.extension_client_id||"").trim();
+    return /^ext_[A-Za-z0-9_-]{5,120}$/.test(id)?id:"ext_ 待绑定";
+  };
+
   function renderWorkers(){
     // Do not destroy an active inline edit during Linux Worker polling.
     if (document.querySelector('[data-v121-inline-editing="1"]')) return;
@@ -191,6 +198,7 @@
         const [status,tone]=workerStatus(w);
         if(tone==="good")online++;
         const id=String(w.worker_id||"");
+        const publicId=visibleWorkerId(w);
         const slot=Number(w.worker_slot||1);
         const linked=clientById.get(String(w.extension_client_id||""))||null;
         const mismatch=linked && (linked.metadata?.linux_bridge_binding_conflict===true ||
@@ -207,7 +215,7 @@
         const concurrency=Math.max(1,Math.min(32,Number(ext.max_concurrency||capacity.limit_units||1)));
         // Single server-owned maximum concurrency, never a separate window count.
         const limits=ext.client_id?`<div data-v121-worker-limits="${esc(ext.client_id)}" style="display:inline-flex;gap:6px;align-items:center;white-space:nowrap;min-width:78px"><strong data-v121-limit-summary>${concurrency}</strong><button type="button" class="action" data-v121-edit-limits title="编辑最大并发请求数">✎</button></div>`:"-";
-                rows.push(`<tr data-linux-worker-id="${esc(id)}"><td><code>${esc(id)}</code><div class="v124-muted">Worker ${slot} · ${esc(w.extension_client_id||"未绑定 Bridge")}</div></td><td>${esc(accountLabel)}</td><td><span class="v124-pill v124-worker-status ${mismatch?"bad":tone}">${esc(mismatch?"Bridge 绑定冲突":status==="运行正常"&&(ext.busy===true||Number(running)>0)?"忙碌":status)}</span></td><td>${esc(running)} / ${reserve}</td><td>${limits}</td><td>${esc(d.device_name)}<div class="v124-muted">Slot ${slot}</div></td><td>${esc(chatgpt(w,ext))}</td><td><div class="v124-actions"><button class="action" data-worker-login-edit="${esc(id)}">登录</button><button class="action" data-worker-action="initialize" data-worker="${esc(id)}">初始化</button><button class="action" data-login-worker="${esc(id)}" data-name="${esc(d.device_name)} · Worker ${slot}">远程</button><button class="action" data-diagnostics="${esc(id)}">诊断日志</button><button class="action ${w.enabled===false?"good":"danger"}" data-linux-worker-enable="${esc(id)}" data-enabled="${w.enabled===false?"1":"0"}">${w.enabled===false?"启用":"禁用"}</button><button class="action danger" data-linux-worker-delete="${esc(id)}" data-worker-slot="${slot}">删除</button></div></td></tr>`);
+                rows.push(`<tr data-linux-worker-id="${esc(id)}"><td><code>${esc(publicId)}</code><div class="v124-muted">Worker ${slot}</div></td><td>${esc(accountLabel)}</td><td><span class="v124-pill v124-worker-status ${mismatch?"bad":tone}">${esc(mismatch?"Bridge 绑定冲突":status==="运行正常"&&(ext.busy===true||Number(running)>0)?"忙碌":status)}</span></td><td>${esc(running)} / ${reserve}</td><td>${limits}</td><td>${esc(d.device_name)}<div class="v124-muted">Slot ${slot}</div></td><td>${esc(chatgpt(w,ext))}</td><td><div class="v124-actions"><button class="action" data-worker-login-edit="${esc(id)}">登录</button><button class="action" data-worker-action="initialize" data-worker="${esc(id)}">初始化</button><button class="action" data-login-worker="${esc(id)}" data-name="${esc(d.device_name)} · Worker ${slot}">远程</button><button class="action" data-diagnostics="${esc(id)}">诊断日志</button><button class="action ${w.enabled===false?"good":"danger"}" data-linux-worker-enable="${esc(id)}" data-enabled="${w.enabled===false?"1":"0"}">${w.enabled===false?"启用":"禁用"}</button><button class="action danger" data-linux-worker-delete="${esc(id)}" data-worker-slot="${slot}">删除</button></div></td></tr>`);
       }
     }
     body.innerHTML=rows.join("")||'<tr><td colspan="8" class="v124-muted">暂无 Linux Worker。请先在设备列表新增设备。</td></tr>';
@@ -222,7 +230,7 @@
     if(!d){if(name)name.textContent="未选择设备";box.textContent="请从设备列表选择需要管理的设备。";return;}
     if(name)name.textContent=`${d.device_name} · ${(d.workers||[]).length} Worker`;
     box.innerHTML='<div class="v124-muted">此处仅管理设备内 Worker 数量。初始化、远程、诊断日志等操作请在下方 Worker 列表中按 Worker ID 操作。</div>'+
-      (d.workers||[]).map(w=>`<div style="padding:8px 0;border-bottom:1px solid #334155">Worker ${Number(w.worker_slot||1)} · <code>${esc(w.worker_id)}</code></div>`).join("");
+      (d.workers||[]).map(w=>`<div style="padding:8px 0;border-bottom:1px solid #334155">Worker ${Number(w.worker_slot||1)} · <code>${esc(visibleWorkerId(w))}</code></div>`).join("");
   }
 
   function renamePairingHeader(){const body=document.getElementById("pairingBody");const first=body?.closest("table")?.querySelector("thead th:first-child");if(first)first.textContent="设备名称";}
@@ -237,7 +245,7 @@
   function loginStatus(text){const n=document.getElementById("linuxLoginStatus");if(n)n.textContent=text;}
   function loginPoint(event){const image=document.getElementById("linuxLoginFrame"),r=image.getBoundingClientRect();if(!r.width||!r.height)return null;return {x:Math.round((event.clientX-r.left)/r.width*state.login.sourceWidth),y:Math.round((event.clientY-r.top)/r.height*state.login.sourceHeight)};}
   async function fetchFrame(){if(!state.login.workerId||!state.login.ticket||state.login.closing||!document.getElementById("linuxWorkerLoginDialog").open)return;try{const r=await api(`/api/admin/linux-workers/${encodeURIComponent(state.login.workerId)}/login-session/frame`,{headers:loginHeaders()});if(r.complete){loginStatus("已登录 · 远程画面继续保持");state.login.timer=setTimeout(fetchFrame,850);return;}state.login.sourceWidth=Number(r.source_width||1920);state.login.sourceHeight=Number(r.source_height||1080);const img=document.getElementById("linuxLoginFrame");img.src=`data:${r.mime||"image/jpeg"};base64,${r.frame}`;document.getElementById("linuxLoginPlaceholder").style.display="none";loginStatus("当前桌面实时画面 · 可点击并输入");state.login.timer=setTimeout(fetchFrame,850);}catch(e){loginStatus(e.message);state.login.timer=setTimeout(fetchFrame,1800);}}
-  async function openLogin(workerId,name){if(document.getElementById("linuxWorkerLoginDialog").open)await closeLogin();const r=await api(`/api/admin/linux-workers/${encodeURIComponent(workerId)}/login-session`,{method:"POST",body:{mode:"remote"}});state.login={workerId,ticket:String(r.ticket||""),sourceWidth:Number(r.source_width||1920),sourceHeight:Number(r.source_height||1080),timer:0,closing:false};document.getElementById("linuxLoginWorkerName").textContent=name||workerId;document.getElementById("linuxLoginPlaceholder").style.display="block";document.getElementById("linuxWorkerLoginDialog").showModal();loginStatus("正在连接当前桌面（不会打开登录页）");fetchFrame();}
+  async function openLogin(workerId,name){if(document.getElementById("linuxWorkerLoginDialog").open)await closeLogin();const r=await api(`/api/admin/linux-workers/${encodeURIComponent(workerId)}/login-session`,{method:"POST",body:{mode:"remote"}});state.login={workerId,ticket:String(r.ticket||""),sourceWidth:Number(r.source_width||1920),sourceHeight:Number(r.source_height||1080),timer:0,closing:false};document.getElementById("linuxLoginWorkerName").textContent=name||"Worker";document.getElementById("linuxLoginPlaceholder").style.display="block";document.getElementById("linuxWorkerLoginDialog").showModal();loginStatus("正在连接当前桌面（不会打开登录页）");fetchFrame();}
   async function closeLogin(){if(state.login.closing)return;state.login.closing=true;if(state.login.timer)clearTimeout(state.login.timer);const {workerId,ticket}=state.login;state.login.ticket="";if(workerId&&ticket){try{await api(`/api/admin/linux-workers/${encodeURIComponent(workerId)}/login-session`,{method:"DELETE",headers:{"X-Chat2API-Login-Ticket":ticket}});}catch(_){}}document.getElementById("linuxLoginFrame").removeAttribute("src");document.getElementById("linuxWorkerLoginDialog").close();state.login={workerId:"",ticket:"",sourceWidth:1920,sourceHeight:1080,timer:0,closing:false};}
 
   function installEvents(button,section){

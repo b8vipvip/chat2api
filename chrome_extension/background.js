@@ -241,6 +241,7 @@ async function sendExtensionStatus(forceModelDiscovery = false) {
       models: modelData.models || [],
       current_model: modelData.current_model || "default",
       capabilities: ["text", "vision", "file-understanding", "image-generation", "model-selection", "diagnostics", "estimated-token-usage"],
+      windows_native_page_diagnostic_version:globalThis.__CHAT2API_WINDOWS_NATIVE_PAGE_DIAG_V1__?.version || "",
       ...nativeCapacityControlMetadata(),
     },
   });
@@ -365,6 +366,7 @@ async function connectSocket() {
         extension_version: chrome.runtime.getManifest().version,
         runtime_id: chrome.runtime.id,
         transport_runtime_epoch: WORKER_RUNTIME_EPOCH,
+        windows_native_page_diagnostic_version:globalThis.__CHAT2API_WINDOWS_NATIVE_PAGE_DIAG_V1__?.version || "",
         ...nativeCapacityControlMetadata(),
       },
     });

@@ -94,7 +94,7 @@
 
   const setProxyBusy = busy => { document.getElementById("applyLinuxProxy").disabled = busy; document.getElementById("testLinuxProxy").disabled = busy; document.getElementById("closeLinuxProxy").disabled = busy; };
   const closeProxyDialog = () => { document.getElementById("linuxProxyShareLink").value = ""; document.getElementById("linuxProxyResult").textContent = ""; selectedWorkerId = ""; if (proxyDialog.open) proxyDialog.close(); };
-  const openProxyDialog = (workerId, workerName) => { selectedWorkerId = workerId; document.getElementById("linuxProxyWorkerName").textContent = workerName || workerId; document.getElementById("linuxProxyShareLink").value = ""; document.getElementById("linuxProxyResult").textContent = ""; proxyDialog.showModal(); document.getElementById("linuxProxyShareLink").focus(); };
+  const openProxyDialog = (workerId, workerName) => { selectedWorkerId = workerId; document.getElementById("linuxProxyWorkerName").textContent = workerName || "Worker"; document.getElementById("linuxProxyShareLink").value = ""; document.getElementById("linuxProxyResult").textContent = ""; proxyDialog.showModal(); document.getElementById("linuxProxyShareLink").focus(); };
   const loginHeaders = () => ({"X-Chat2API-Login-Ticket": loginTicket});
   const clearLoginTimer = () => { if (loginFrameTimer) clearTimeout(loginFrameTimer); loginFrameTimer = 0; };
   const setLoginStatus = text => { document.getElementById("linuxLoginStatus").textContent = text; };
@@ -128,7 +128,7 @@
     loginTicket = result.ticket;
     loginSourceWidth = Number(result.source_width || 1920);
     loginSourceHeight = Number(result.source_height || 1080);
-    document.getElementById("linuxLoginWorkerName").textContent = workerName || workerId;
+    document.getElementById("linuxLoginWorkerName").textContent = workerName || "Worker";
     document.getElementById("linuxLoginPlaceholder").style.display = "block";
     document.getElementById("linuxLoginPlaceholder").textContent = "正在连接安全登录画面…";
     loginDialog.showModal();

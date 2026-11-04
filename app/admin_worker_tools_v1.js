@@ -186,8 +186,15 @@
         if (!unique.has(worker.worker_id)) unique.set(worker.worker_id, worker);
       }
       for (const worker of unique.values()) {
-        const option = elem("option", (worker.name || worker.worker_id) +
-          " · " + worker.worker_id + (worker.online ? " · 在线" : " · 离线"));
+        const raw = String(worker.worker_id || "");
+        const ext = [worker.extension_client_id,worker.client_id,
+          worker.worker_client_id,raw].map(value => String(value||""))
+          .find(value => /^ext_[A-Za-z0-9_-]{5,120}$/.test(value));
+        const label = (worker.name || "Worker") +
+          " · " + (ext || "ext_ 待绑定") +
+          (worker.online ? " · 在线" : " · 离线");
+        const option = elem("option", label);
+        // Keep the backend policy scope key stable and private.
         option.value = "worker:" + worker.worker_id;
         picker.append(option);
       }
@@ -349,22 +356,27 @@
   async function nativePageWorkers() {
     const target = $("nativePageWorker");
     if (!target) return;
-    // The standard probe catalog contains Browser/extension pseudo-Workers
-    // which have no Linux device-controller CDP executor. Only use canonical
-    // entries from Worker management, with exactly one full worker_id.
+    // Public identity uses the canonical ext_ worker ID on both platforms;
+    // the server resolves the internal Linux controller for existing jobs.
     const response = await json("/api/admin/worker-tools/native-page/workers");
     const old = target.value;
     target.replaceChildren();
-    const none = elem("option", "请选择 Linux Worker");
+    const none = elem("option", "请选择 Worker（Windows / Linux）");
     none.value = "";
     target.append(none);
     for (const worker of response.data || []) {
       const wid = String(worker.worker_id || "");
-      if (!/^wrk_[a-zA-Z0-9_-]{6,100}$/.test(wid)) continue;
-      const label = wid + (worker.name && worker.name !== wid
-        ? " · " + worker.name : "") + (worker.online ? " · 在线" : " · 离线");
+      if (!/^ext_[a-zA-Z0-9_-]{5,120}$/.test(wid)) continue;
+      const os = worker.platform === "windows" ? "Windows" : "Linux";
+      const unsupported=worker.platform==="windows" && worker.diagnostic_supported !== true;
+      const label = wid + " · " + os +
+        (worker.name && worker.name !== wid ? " · " + worker.name : "") +
+        (worker.online ? " · 在线" : " · 离线") +
+        (unsupported ? " · 需更新 Windows 扩展" : "");
       const option = elem("option", label);
       option.value = wid;
+      option.dataset.platform = worker.platform || "linux";
+      option.disabled = unsupported;
       target.append(option);
     }
     if ([...target.options].some(item => item.value === old)) target.value = old;
@@ -451,11 +463,11 @@
       if (chosen && owner && chosen !== owner)
         throw new Error("该请求属于 " + owner + "，不能指定其他 Worker 采集");
       worker_id = owner || chosen;
-      if (!worker_id) throw new Error("请求记录没有可识别的 Linux Worker");
+      if (!worker_id) throw new Error("请求记录没有可识别的 ext_ Worker");
       if ([...$("nativePageWorker").options].some(x => x.value === worker_id))
         $("nativePageWorker").value = worker_id;
     } else if (!worker_id) {
-      throw new Error("通过历史链接诊断时，请选择登录了该 ChatGPT 账号的 Linux Worker");
+      throw new Error("通过历史链接诊断时，请选择登录该 ChatGPT 账号的 Windows 或 Linux Worker");
     }
     const response = await json("/api/admin/worker-tools/native-page/jobs", {
       method: "POST", body: {worker_id, target},
@@ -470,18 +482,27 @@
     if (!worker) throw new Error("请先选择目标 Worker");
     const path = "/api/admin/worker-tools/native-page/workers/" +
       encodeURIComponent(worker) + (action === "update" ? "/update" : "/version");
+    const platform = $("nativePageWorker")?.selectedOptions?.[0]?.dataset?.platform;
+    if (platform === "windows" && action === "update") {
+      throw new Error("Windows 诊断随 Chrome 扩展发布，请更新 Windows Worker 扩展版本。Linux 诊断仍可独立更新。");
+    }
     nativePageMessage(action === "update" ? "正在更新工具，并验证代码 SHA-256…" : "正在检查工具版本…");
     const result = await json(path,action === "update" ? {method:"POST"} : undefined);
     const tool = result.tool || {};
     const latest = result.latest || {};
     const local = String(tool.version || "不可用");
     const remote = String(latest.version || "未知");
-    const same = Boolean(tool.sha256 && tool.sha256 === latest.sha256);
+    const same = platform === "windows"
+      ? Boolean(tool.installed && tool.version && tool.version === latest.version)
+      : Boolean(tool.sha256 && tool.sha256 === latest.sha256);
     const updateState = action === "update"
       ? tool.updated === false ? " · 已是最新，无需重复安装" : " · 安装完成并通过 SHA-256 校验"
-      : same ? " · 当前已是最新" : latest.version ? " · 有独立工具更新可用" : "";
-    nativePageMessage("Worker " + worker + " · 已安装 v" + local +
-      " · 发布分支最新 v" + remote + " · " +
+      : same ? " · 当前已是最新" : latest.version
+        ? platform === "windows" ? " · 需更新 Windows Worker 扩展" : " · 有独立工具更新可用"
+        : "";
+    const latestLabel = platform === "windows" ? "扩展内置最新" : "独立发布分支最新";
+    nativePageMessage("Worker " + worker + " · 已安装 " + local +
+      " · " + latestLabel + " " + remote + " · " +
       (result.latest_error ? "查询失败：" + result.latest_error
         : tool.installed ? "已安装" : "未安装") + updateState,
       Boolean(result.latest_error));
