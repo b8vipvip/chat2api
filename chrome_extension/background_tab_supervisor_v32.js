@@ -184,7 +184,8 @@
       const rows = await state.baseChatTabs(...args);
       const stored = await chrome.storage.local.get({ [INIT_TAB_KEY]: null }).catch(() => ({}));
       const initTabId = stored[INIT_TAB_KEY];
-      return (rows || []).filter(tab => tab?.id !== initTabId);
+      const diagnosis = globalThis.__CHAT2API_NATIVE_PAGE_DIAG_TAB_IDS_V1__;
+      return (rows || []).filter(tab => tab?.id !== initTabId && !diagnosis?.has?.(tab?.id));
     };
     wrapped.__chat2apiSupervisorV32 = true;
     globalThis.chatTabs = wrapped;
