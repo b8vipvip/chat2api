@@ -25,6 +25,14 @@ Windows 证据每份最多约 1.5 MiB 原始 JSON，单次采集限定节点、�
 
 Windows 采集器仅允许明确的 HTTPS ChatGPT /c/ URL，禁止 URL 查询串/凭证、其它主机和自定义路径；只在所选扩展对应 Chrome Profile 中创建**额外的后台标签页**，绝不复用/覆盖当前 API 请求标签页。通过 `__CHAT2API_NATIVE_PAGE_DIAG_TAB_IDS_V1__` 登记临时租约，标签页监督器不回收它；v132 持久窗口池、v90 观察器及 v88 兼容管理器不把它算入可用窗口或改变路由身份；结束后主动关闭并撤销租约。采集脚本不点击、提交或修改页面。保留 user 消息排除和 DIL ID 对齐校验。
 
+## 追加安全修复 · 2026-11-04
+
+- Windows 诊断选择浏览器会话时，只允许当前扩展显式绑定的 `boundTabId` 或当前 Worker conversation router 记录的 `tab_id`；**不再把查询到的第一个 ChatGPT 标签页当作兜底**。如果没有可证明的 Worker 所属标签页，返回 `worker_managed_chatgpt_tab_not_found`，管理员需先完成绑定或实际路由。
+- 打开临时页面后，要求实际已完成加载的 HTTPS ChatGPT 页面与管理员指定的 `/c/` 路径一致；跳转到登录页、主页或其它对话返回 `diagnostic_conversation_redirected`，不得上传无关内容。
+- 采集时记录 `probe.generation_active`（可见的生成停止控制或助手 busy 标记）。稳定哈希只有在边界有效且页面不处于生成中时才能提前结束轮询；持续生成或边界无法证明的采样必须保留 `complete=false`。
+- 服务端分块接收器额外检查 `finished.size` 与原始分块声明一致，不能只依赖摘要匹配。
+- 独立执行过扩展真实源码的模拟浏览器检查（5 个场景），以及 `capturePage()` 真实源码模拟 DOM 检查（4 个场景）；**V8 模拟不等于仓库 Node 脚本、Python pytest 或真实 Windows 浏览器验收**。Python/FastAPI 完整回归与 Windows TX03 实机仍待完成。
+
 ## 部署与验收顺序
 
 1. 此分支**涉及中心服务端、Windows Chrome 扩展、标签页监管和管理后台**，不同于可独立热更新的 Linux 诊断 Python 脚本。首次部署必须按正式服务端/Worker 升级流程更新相应组件；只点击 Linux「更新诊断工具」无法获得 Windows 功能。
