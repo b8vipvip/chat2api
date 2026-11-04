@@ -186,7 +186,7 @@
       if(showTab){
         // Opt-in foreground mode intentionally reveals the history tab. Do
         // not navigate or reload the previous Worker-owned tab.
-        await chrome.windows?.update?.(windowId,{focused:true}).catch(()=>{});
+        try{await chrome.windows?.update?.(windowId,{focused:true});}catch(_){}
       }
       const expectedPath=new URL(job.conversation_url).pathname.replace(/\/$/,"");
       let stable="",seen=0,best=null,pageReady=false,scanning=false;
