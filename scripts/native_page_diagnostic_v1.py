@@ -27,7 +27,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.3.10"
+VERSION = "1.3.11"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -44,14 +44,38 @@ HOSTS = {"chatgpt.com", "www.chatgpt.com", "chat.openai.com"}
 CAPTURE = r"""(function(expected){
 'use strict';
 const allowed=new Set('div section article p span strong em b i h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a sup sub'.split(' '));
-const forbidden='script,style,form,nav,aside,header,footer,input,textarea,iframe,canvas,svg,[role="menu"],[role="dialog"],[contenteditable="true"],[data-message-author-role="user"],[data-testid="user-message"]';
+const forbidden='script,style,form,nav,aside,header,footer,input,textarea,iframe,canvas,svg,[role="menu"],[role="dialog"],[contenteditable="true"],[data-message-author-role="user"],[data-conversation-role="user"],[data-testid="user-message"]';
 const visible=e=>{try{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';}catch(_){return false;}};
 const norm=s=>String(s||'').replace(/\s+/g,' ').trim();
-const hasUser=e=>!!e.querySelector('[data-message-author-role="user"],[data-testid="user-message"]');
+const hasUser=e=>!!e.querySelector('[data-message-author-role="user"],[data-conversation-role="user"],[data-testid="user-message"]');
 let scope='',roots=[],boundaryVerified=true;
 const tagged=document.querySelector('[data-chat2api-native-request-id="'+expected+'"]');
+const nativeSelection=sel=>{
+ if(!sel||!visible(sel))return null;
+ const id=sel.getAttribute('data-chatgpt-selection-message-id');
+ const wrap=sel.closest('[data-chatgpt-search-message-ids]');
+ if(!id||!wrap||!(wrap.getAttribute('data-chatgpt-search-message-ids')||'').split(/\\s+/).includes(id))return null;
+ if(!wrap.querySelector('h4[data-conversation-role="assistant"]'))return null;
+ const md=sel.querySelector('[data-markdown-text-style="assistant-message"]');
+ if(!md||!visible(md))return null;
+ const dil=md.querySelector('[data-dil-message-id]'),src=md.querySelector('[data-dil-source-message-id]');
+ if(dil&&dil.getAttribute('data-dil-message-id')!==id||src&&src.getAttribute('data-dil-source-message-id')!==id)return null;
+ if(sel.querySelector('[data-conversation-role="user"],[data-message-author-role="user"],[data-testid="user-message"]'))return null;
+ return sel;
+};
+const nativeAssistant=[...document.querySelectorAll('h4[data-conversation-role="assistant"]')].map(h=>{
+ const wrap=h.closest('[data-chatgpt-search-message-ids]');
+ if(!wrap)return null;
+ for(const sel of wrap.querySelectorAll('[data-chatgpt-selection-message-id]')){
+  const match=nativeSelection(sel);if(match)return match;
+ }
+ return null;
+}).filter(Boolean);
+const taggedNative=nativeSelection(tagged?.closest?.('[data-chatgpt-selection-message-id]'));
 const assistant=[...document.querySelectorAll('[data-message-author-role="assistant"]')].filter(e=>e.isConnected&&visible(e)&&!hasUser(e)&&!e.parentElement?.closest('[data-message-author-role="assistant"]'));
-if(assistant.length){
+if(taggedNative){scope='native-assistant-message-id';roots=[taggedNative];}
+else if(nativeAssistant.length){scope='native-assistant-message-id';roots=[nativeAssistant[nativeAssistant.length-1]];}
+else if(assistant.length){
   scope='assistant-role';
   const root=tagged?.closest('[data-message-author-role="assistant"]');
   roots=[root&&visible(root)&&!hasUser(root)?root:assistant[assistant.length-1]];
@@ -69,7 +93,6 @@ else if(([...document.querySelectorAll(
 )].filter(e=>e.isConnected&&visible(e)&&!hasUser(e)&&
  !e.closest('[data-message-author-role="user"],[data-testid="user-message"]'))).length){
  // Newer ChatGPT renders the assistant as a turn with .agent-turn and
- // sometimes no data-message-author-role or "ChatGPT said" heading.
  // This is an explicit assistant marker, never a generic last article.
  scope='verified-agent-turn';
  roots=[...document.querySelectorAll(
@@ -78,8 +101,6 @@ else if(([...document.querySelectorAll(
  !e.closest('[data-message-author-role="user"],[data-testid="user-message"]')).slice(-1);
 }
 else {
- // For historical ChatGPT replies, a roleless "ChatGPT said" heading may
- // live INSIDE a verified turn container, not beside the answer body.
  const h=[...document.querySelectorAll('main h4,main h5,main h6,[role="main"] h4,[role="main"] h5,[role="main"] h6,#thread h4,#thread h5')].filter(e=>e.isConnected&&/^ChatGPT said\s*[:：]?$/.test(norm(e.textContent)));
  if(!h.length){
   // The explicit URL-only req_diag_ path permits bounded STRUCTURAL
@@ -154,7 +175,7 @@ function walk(node,depth){
  if(reason)return null;
  if(depth>55||counters.nodes>=30000){reason=depth>55?'max-depth':'max-nodes';return null;}
  if(node.nodeType===Node.TEXT_NODE){const t=String(node.nodeValue||'');if(!t.trim())return null;if(counters.text_chars+t.length>500000){reason='max-text';return null;}counters.nodes++;counters.text_chars+=t.length;return {tag:'#text',text:t};}
- if(!(node instanceof Element)||!visible(node)||node.matches(forbidden)||node.closest('nav,aside,header,footer,[data-message-author-role="user"],[data-testid="user-message"]'))return null;
+ if(!(node instanceof Element)||!visible(node)||node.matches(forbidden)||node.closest('nav,aside,header,footer,[data-message-author-role="user"],[data-conversation-role="user"],[data-testid="user-message"]'))return null;
  const tag=node.tagName.toLowerCase();
  if(tag==='button'){
    const imgs=[...node.querySelectorAll('img')].filter(img=>visible(img)&&img.getBoundingClientRect().width>=40&&img.getBoundingClientRect().height>=40);
@@ -186,7 +207,6 @@ function walk(node,depth){
  return out;
 }
 const children=[];for(const e of roots){const n=walk(e,0);if(n)children.push(n);if(reason)break;}
-// A content script runs in an isolated Chrome world, invisible to the
 
 // by request-v6 for the exact request. Never infer it from page similarity.
 return {ok:!reason,reason,version:1,scope,boundary_verified:boundaryVerified,
@@ -194,7 +214,12 @@ return {ok:!reason,reason,version:1,scope,boundary_verified:boundaryVerified,
   table_count:roots[0].querySelectorAll('table,[role="table"]').length,
   heading_count:roots[0].querySelectorAll('h1,h2,h3,h4,h5,h6').length,
   paragraph_count:roots[0].querySelectorAll('p').length,
-  excluded_composer:true,excluded_user_markers:true,manual_url_only:true}:null,
+  excluded_composer:true,excluded_user_markers:true,manual_url_only:true
+ }:scope==='native-assistant-message-id'?{
+  assistant_role_marker:true,selection_message_id:true,wrapper_message_id_match:true,
+  dil_message_id_match:!!roots[0].querySelector('[data-dil-message-id]'),
+  source_message_id_match:!!roots[0].querySelector('[data-dil-source-message-id]')
+ }:null,
  request_marker:tagged?expected:null,
  counts:counters,rect:{x:Math.max(0,Math.floor(left)),y:Math.max(0,Math.floor(top)),w:Math.ceil(right-left),h:Math.ceil(bottom-top)},
  image_rects:imageRects,root:{tag:'assistant-reply',children},
@@ -666,6 +691,10 @@ return {ready_state:String(document.readyState||'unknown').slice(0,16),
   online_hint:typeof navigator!=='undefined' ? Boolean(navigator.onLine) : null,
   assistant_roles:document.querySelectorAll('[data-message-author-role="assistant"]').length,
   user_roles:document.querySelectorAll('[data-message-author-role="user"]').length,
+  native_assistant_roles:document.querySelectorAll('h4[data-conversation-role="assistant"]').length,
+  native_selections:document.querySelectorAll('[data-chatgpt-selection-message-id]').length,
+  native_dil:document.querySelectorAll('[data-dil-message-id]').length,
+  native_dil_sources:document.querySelectorAll('[data-dil-source-message-id]').length,
   conversation_turns:document.querySelectorAll('[data-testid="conversation-turn"],[data-testid^="conversation-turn-"]').length,
   numbered_conversation_turns:document.querySelectorAll('[data-testid^="conversation-turn-"]').length,
   agent_turns:document.querySelectorAll('main article .agent-turn,main [data-testid^="conversation-turn-"].agent-turn').length,
@@ -798,7 +827,6 @@ def history_content_signature(report):
     if (not (report.get("root") or {}).get("children")
         or not count.get("nodes") or not count.get("text_chars")):
         return None
-    # Hash covers serialized text and layout indicators. We intentionally
 
     keys=("nodes","text_chars","tables","images","headings",
           "max_children","grids","flex")
@@ -1212,7 +1240,8 @@ def failure_reason(probe):
     if (probe.get("body_visible_tables") or
         probe.get("body_markdown_blocks") or
         probe.get("existing_tab_visible_content_candidates")) and not (
-        probe.get("assistant_roles") or probe.get("conversation_turns")):
+        probe.get("assistant_roles") or probe.get("conversation_turns")
+         or probe.get("native_assistant_roles")):
         return "history_visible_content_unrecognized_by_assistant_selectors"
     if probe.get("navigation_route")=="navigation-error":
         return "history_browser_navigation_failed"
@@ -1270,8 +1299,6 @@ def failure_reason(probe):
 def status(folder,stage,percent,error=None,**meta):
     data={"tool_version":VERSION,"status":"failed" if error else "running","stage":stage,
       "percent":percent,"updated_at":int(time.time()),"error":error,**meta}
-    # Preserve the last harmless structural page probe even if the error
-    # handler subsequently changes the stage to failed.
     if "page_probe" not in data:
         try:
             previous=json.loads((folder/"status.json").read_text())
@@ -1603,9 +1630,7 @@ async def _capture_inner(args,owned_tabs):
         nonlocal last_probe,history_readiness
         safe_url(url)
         status(folder,"opening-new-tab",15,open_mode="dedicated-worker-tab")
-        # For one-off recovery create a blank page, instrument before the
 
-        # The normal path is preserved for backwards compatibility.
         initial_url=("about:blank" if not allow_reload else url)
         with urlopen(Request(f"http://127.0.0.1:{args.cdp_port}/json/new?"+
                 quote(initial_url,safe=""),method="PUT"),timeout=8) as response:
@@ -1740,7 +1765,6 @@ async def _capture_inner(args,owned_tabs):
                             await cdp.call("Runtime.enable")
                             obj,probe=await inspect_page(cdp,args.request_id)
                             # Avoid false "still loading" when the app's
-                            # incidental skeleton markup stays in the DOM:
                             # a verified assistant reply always wins.
                             last_probe={**last_probe,**probe,
                                         "navigation_route":kind,
@@ -1748,7 +1772,6 @@ async def _capture_inner(args,owned_tabs):
                                         "reload_attempted":reload_attempted,
                                         "reload_result":reload_result}
                             # First sight of content is not readiness. Long
-                            # historic replies may still be hydrating, adding
                             # late tables/images/chapters after readyState.
                             now=time.monotonic()
                             elapsed=now-opened_monotonic
@@ -1760,7 +1783,6 @@ async def _capture_inner(args,owned_tabs):
                                 not probe.get("challenge_frames"))
                             # A recent resource completion may be the final
                             # conversation payload; allow the browser time to
-                            # commit its DOM before declaring quiescence.
                             resource_age=probe.get("last_finished_age_ms")
                             network_quiet=(type(resource_age) is int and
                                 (resource_age>=2000 or resource_age==0
@@ -1832,7 +1854,6 @@ async def _capture_inner(args,owned_tabs):
                             # Existing tabs were already checked before this
                             # new tab was opened. Never switch mid-hydration
                             # to a different, possibly partial history tab.
-                            # A single, non-destructive recovery attempt:
                             # only reload OUR diagnostic tab when its own
                             # page is complete, visible, skeleton-only and
                             # has no assistant/user turns after ~25 seconds.
@@ -1864,7 +1885,6 @@ async def _capture_inner(args,owned_tabs):
                                        retry_count=1,attempt=i+1)
                                 try:
                                     await cdp.call("Page.enable")
-                                    # This script is registered on OUR new
 
                                     try:
                                         await cdp.call("Page.addScriptToEvaluateOnNewDocument",
@@ -1929,7 +1949,6 @@ async def _capture_inner(args,owned_tabs):
         if not found and evidence["existing_tab_candidates"]:
             # Existing visible history tabs may still be hydrating. Stay
             # read-only and require the same 12s stable structural evidence
-            # before accepting their content. When there is no root at all,
             # a bounded 60s observation precedes the guarded recovery path.
             for _ in range(HISTORY_LOAD_MAX_SECONDS//3-1):
                 if evidence.get("existing_tab_recent_429"):
@@ -2055,7 +2074,6 @@ async def _capture_inner(args,owned_tabs):
             # DOM is written AFTER candidate screenshot capture so a second
             # verified in-page snapshot can include images loaded meanwhile.
             if not boundary_verified:
-                # The currently deployed server ZIP receiver requires the
 
                 # stub, never mislabel the candidate as an assistant reply.
                 archive.writestr("assistant_dom.json",json.dumps({
@@ -2070,7 +2088,6 @@ async def _capture_inner(args,owned_tabs):
             screenshot_strips=[]
             screenshot_complete=False
             screenshot_skip_reason="not-attempted"
-            # v1.2.16 used a positive document-space clip after clamping a
             # negative viewport Y. This mistakenly captured the USER PROMPT
             # and then blank frames. Never reuse that unsafe clip.
             if not boundary_verified:
@@ -2859,7 +2876,6 @@ def validation_merge(archive,payload,report):
                 omitted.extend(n for n in names if isinstance(n,str))
                 continue
             for item in group:copy(item)
-        # No unpaired strip can masquerade as a complete comparison.
         for item in items:
             if visual(item.filename) and item.filename not in keep and item.filename not in omitted:
                 omitted.append(item.filename)
@@ -2974,12 +2990,10 @@ async def validation_run(cdp,context,fixture,texts,source,assets,reference_strip
             item=next((x for x in assets if x.get("image_index")==i),{})
             raw=archive.read(item["file"]) if item.get("file") in archive.namelist() else b""
             display.append("data:"+item.get("mime","image/png")+";base64,"+base64.b64encode(raw).decode() if raw else "")
-        # Renderer needs an image for each native ordinal, including missing
         # assets. Missing originals stay explicitly incomplete, never verified.
         count=server["layout"]["images"]
         display=(display+[""]*40)[:count]
         if server["image_identity"].get("status")=="verified-sha256":
-            # Match the production admin preview's hash-based remapping.
             # Ordinal-only display could conceal a candidate image reorder.
             display=[display[index] for index in server["image_identity"]["indices"]]
         if not reference_strips:
@@ -3099,7 +3113,6 @@ def validation_import_legacy(archive):
         if not raw.startswith(b"\x89PNG\r\n\x1a\n") or len(raw)>8*1024*1024:raise ValueError("legacy_png")
         w,h=struct.unpack(">II",raw[16:24])
         if not 1<=w<=3000 or not 1<=h<=2000:raise ValueError("legacy_png_bounds")
-        # Old capture may have a rounding tail. Preserve it as incomplete.
         strips.append({"bytes":raw,"offset":offset});offset+=h
     return fixture,assets,strips,{"mode":"legacy-diagnostic-replay","boundary_verified":False,"business_request_bound":False,"model_request_sent":False,"production_redeployed":False,"legacy_partial_styles":True,"original_image_bytes":"unavailable","source_tool_version":meta.get("version")}
 
@@ -3245,7 +3258,6 @@ def main():
     folder=Path(args.output)
     try:asyncio.run(capture(args))
     except Exception as exc:
-        # Even an older Controller that omits page_probe from its response
         # can carry this fixed, non-sensitive diagnostic summary as "error".
         probe={}
         try:
