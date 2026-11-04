@@ -246,10 +246,20 @@
       await progress("failed");
     }finally{
       if(Number.isInteger(tab?.id)){
+        // An API request may arrive *after* the initial foreground idle
+        // check. Never reactivate an old tab when a request took focus.
+        let restore=false;
+        if(showTab&&Number.isInteger(previousActiveTabId)){
+          const routerNow=globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
+          const busyNow=Boolean(routerNow?.activeRequests?.size)
+            || Object.values(routerNow?.routes||{}).some(route=>Boolean(route?.inflight_request_id))
+            || Boolean(globalThis.__CHAT2API_CONVERSATION_WORKERS_V24__?.requestRoutes?.size);
+          const activeNow=await chrome.tabs.query({active:true,windowId}).catch(()=>[]);
+          restore=!busyNow&&activeNow.some(item=>item?.id===tab.id);
+        }
         await chrome.tabs.remove(tab.id).catch(()=>{});
         diagnosticTabs.delete(tab.id);
-        if(showTab&&Number.isInteger(previousActiveTabId))
-          await chrome.tabs.update(previousActiveTabId,{active:true}).catch(()=>{});
+        if(restore)await chrome.tabs.update(previousActiveTabId,{active:true}).catch(()=>{});
         await progress("tab_closed");
       }
       try{if(finished)await send(finished);}catch(_){}
