@@ -157,6 +157,7 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
         created=client.post("/api/admin/worker-tools/native-page/jobs",headers=auth,
             json={"request_id":request_id})
         assert created.status_code==200,created.text
+        assert created.json()["job"]["worker_id"]==worker_ext
         job=created.json()["job"]["job_id"]
         result=None
         for _ in range(70):
@@ -182,7 +183,7 @@ def test_admin_jobs_are_request_bound_and_zip_authenticated(tmp_path,monkeypatch
             assert client.post("/api/admin/worker-tools/native-page/jobs",
                 headers=auth,json={"target":bad,"worker_id":worker}).status_code==422
         url_job=client.post("/api/admin/worker-tools/native-page/jobs",
-            headers=auth,json={"target":history,"worker_id":worker})
+            headers=auth,json={"target":history,"worker_id":worker_ext})
         assert url_job.status_code==200,url_job.text
         visible=url_job.json()["job"]
         assert visible["request_id"]==""
