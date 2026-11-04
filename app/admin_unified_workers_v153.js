@@ -561,7 +561,7 @@
       const t=row.cells;if(t.length<8)continue;
       const worker=workerById.get(text(row.dataset.linuxWorkerId));
       const ext=clientsById.get(text(worker?.extension_client_id));
-      rows.push('<tr data-unified-worker-id="'+esc(row.dataset.linuxWorkerId)+'"><td><code>'+esc(text(worker?.extension_client_id)||"—（扩展未绑定）")+'</code>'+
+      rows.push('<tr data-unified-worker-id="'+esc(text(worker?.extension_client_id)||"")+'"><td><code>'+esc(text(worker?.extension_client_id)||"—（扩展未绑定）")+'</code>'+
         '</td><td>'+t[5].innerHTML+'</td><td>Linux</td><td>'+workerVersion(ext,worker)+'</td><td>'+t[1].innerHTML+
         '</td><td>'+linuxWorkerState(worker,ext)+'</td><td>'+t[3].innerHTML+'</td><td>'+t[4].innerHTML+
         '</td><td>'+t[6].innerHTML+'</td><td>'+t[7].innerHTML+'</td></tr>');
