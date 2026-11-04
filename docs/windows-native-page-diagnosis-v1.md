@@ -27,7 +27,7 @@ Windows 采集器仅允许明确的 HTTPS ChatGPT /c/ URL，禁止 URL 查询串
 
 ## 追加安全修复 · 2026-11-04
 
-- Windows 诊断选择浏览器会话时，只允许当前扩展显式绑定的 `boundTabId`、当前 Worker conversation router 记录的 `tab_id`，或持久窗口池已通过运行时验证的 `runtimeReadyTabs` 标签页；**不再把查询到的第一个 ChatGPT 标签页当作兜底**。如果没有可证明的 Worker 所属标签页，返回 `worker_managed_chatgpt_tab_not_found`，管理员需先完成绑定或实际路由。
+- Windows 诊断选择浏览器会话时，只允许当前扩展显式绑定的 `boundTabId`、当前 Worker conversation router 记录的 `tab_id`，或持久窗口池已通过运行时验证的 `runtimeReadyTabs` 标签页；**不再把查询到的第一个 ChatGPT 标签页当作兜底**。旧版 v1.1.0 如无可证明的受管标签页会返回 `worker_managed_chatgpt_tab_not_found`；**v1.1.1 起已改为安全创建独立诊断窗口**，详见下方修复记录。
 - 打开临时页面后，要求实际已完成加载的 HTTPS ChatGPT 页面与管理员指定的 `/c/` 路径一致；跳转到登录页、主页或其它对话返回 `diagnostic_conversation_redirected`，不得上传无关内容。
 - 采集时记录 `probe.generation_active`（可见的生成停止控制或助手 busy 标记）。稳定哈希只有在边界有效且页面不处于生成中时才能提前结束轮询；持续生成或边界无法证明的采样必须保留 `complete=false`。
 - 服务端分块接收器额外检查 `finished.size` 与原始分块声明一致，不能只依赖摘要匹配。
