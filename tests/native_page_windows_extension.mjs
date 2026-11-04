@@ -21,7 +21,7 @@ const scope={
         {id:8,windowId:26,url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"}
       ],
       create:async options=>{opens.push(options);return {id:101};},
-      get:async()=>({id:101,status:"complete"}),
+      get:async()=>({id:101,status:"complete",url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"}),
       remove:async id=>{closed.push(id);}
     },
     scripting:{executeScript:async()=>[{result:{ok:true,answer}}]}
@@ -54,4 +54,35 @@ assert.ok(events.some(x=>x.type==="native.page.windows.chunk"));
 assert.equal(events.some(x=>x.type==="chat.completed"||x.type==="chat.request"),false,
   "Diagnostics never own the request terminal or issue a model request");
 assert.ok(events.every(x=>!JSON.stringify(x).includes("token=1")));
+// A signed-out account/redirect must not be misattributed to the target history.
+const goodGet=scope.chrome.tabs.get;
+scope.chrome.tabs.get=async()=>({id:102,status:"complete",
+  url:"https://chatgpt.com/c/ffffffff-ffff-ffff-ffff-ffffffffffff"});
+const beforeRedirect=events.length;
+await diag.execute({job_id:"c".repeat(32),
+  conversation_url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"});
+const redirected=events.slice(beforeRedirect);
+assert.ok(redirected.some(x=>x.type==="native.page.windows.finished"&&
+  x.ok===false&&x.error==="diagnostic_conversation_redirected"));
+assert.ok(!redirected.some(x=>x.type==="native.page.windows.chunk"),
+  "Wrong conversation must never export assistant content");
+scope.chrome.tabs.get=goodGet;
+
+// No explicit binding and no router-owned tab: never pick tabs[0] as a
+// fallback because it can belong to an unrelated user's interactive window.
+scope.chrome.storage.local.get=async()=>({boundTabId:null});
+const openedBefore=opens.length;
+const beforeUnbound=events.length;
+await diag.execute({job_id:"d".repeat(32),
+  conversation_url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"});
+assert.equal(opens.length,openedBefore,"Unowned Chrome tab must not be used");
+assert.ok(events.slice(beforeUnbound).some(x=>x.type==="native.page.windows.finished"&&
+  x.ok===false&&x.error==="worker_managed_chatgpt_tab_not_found"));
+
+// Router-owned tabs remain usable even when the legacy boundTabId is absent.
+scope.__CHAT2API_CONVERSATION_ROUTING_V1__={routes:{active:{tab_id:7}}};
+await diag.execute({job_id:"e".repeat(32),
+  conversation_url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"});
+assert.equal(opens.at(-1).windowId,25);
+assert.ok(events.some(x=>x.type==="native.page.windows.finished"&&x.ok&&x.job_id==="e".repeat(32)));
 console.log("Windows native diagnosis: isolated tab, URL allowlist, bounded authenticated chunks, read-only completion");
