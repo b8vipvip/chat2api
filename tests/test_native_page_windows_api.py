@@ -25,7 +25,7 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
     history="https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc"
     report={
         "schema":"windows-native-page-evidence-v1",
-        "version":"windows-dom-1.1.0","boundary_verified":True,
+        "version":"windows-dom-1.1.1","boundary_verified":True,
         "request_bound":False,"complete":True,"message_id":"assistant-native-1",
         "probe":{"ready_state":"complete","assistant_role_nodes":1},
         "counts":{"nodes":6,"text_chars":10,"tables":1,"images":1},
@@ -40,10 +40,11 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
             self.clients={
                 ext:SimpleNamespace(connection_enabled=True,name="win-plus",
                     metadata={"platform_os":"win",
-                              "windows_native_page_diagnostic_version":"windows-dom-1.1.0"}),
+                              "extension_version":"0.22.264",
+                              "windows_native_page_diagnostic_version":"windows-dom-1.1.1"}),
                 "ext_mac777777":SimpleNamespace(connection_enabled=True,name="Mac",
                     metadata={"platform_os":"mac",
-                              "windows_native_page_diagnostic_version":"windows-dom-1.1.0"}),
+                              "windows_native_page_diagnostic_version":"windows-dom-1.1.1"}),
             }
             self.sockets={ext:object()}
             self.sent=[]
@@ -90,9 +91,11 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
         assert rows[0]["worker_id"]==ext
         assert rows[0]["platform"]=="windows"
         assert rows[0]["diagnostic_supported"] is True
+        assert rows[0]["diagnostic_version"]=="windows-dom-1.1.1"
+        assert rows[0]["extension_version"]=="0.22.264"
         ver=client.get(f"/api/admin/worker-tools/native-page/workers/{ext}/version",headers=auth)
         assert ver.status_code==200
-        assert ver.json()["tool"]["version"]=="windows-dom-1.1.0"
+        assert ver.json()["tool"]["version"]=="windows-dom-1.1.1"
         update=client.post(f"/api/admin/worker-tools/native-page/workers/{ext}/update",headers=auth)
         assert update.status_code==409
         not_owner=client.post("/api/admin/worker-tools/native-page/jobs",headers=auth,

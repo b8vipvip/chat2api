@@ -416,15 +416,24 @@
       const wid = String(worker.worker_id || "");
       if (!/^ext_[a-zA-Z0-9_-]{5,120}$/.test(wid)) continue;
       const os = worker.platform === "windows" ? "Windows" : "Linux";
-      const unsupported=worker.platform==="windows" && worker.diagnostic_supported !== true;
+      const windows=worker.platform==="windows";
+      const supported=worker.diagnostic_supported===true;
+      const reported=String(worker.diagnostic_version||"");
+      const extension=String(worker.extension_version||"");
+      const versionLabel=windows ? (extension ? " · 扩展 "+extension : "")+
+        (reported ? " · 诊断 "+reported : " · 诊断能力未上报")+
+        (supported ? " · 已就绪" : reported ? " · 需升级扩展" :
+          " · 请重连 Worker 刷新能力") : "";
       const label = wid + " · " + os +
         (worker.name && worker.name !== wid ? " · " + worker.name : "") +
-        (worker.online ? " · 在线" : " · 离线") +
-        (unsupported ? " · 需更新 Windows 扩展" : "");
+        (worker.online ? " · 在线" : " · 离线") + versionLabel;
       const option = elem("option", label);
       option.value = wid;
       option.dataset.platform = worker.platform || "linux";
-      option.disabled = unsupported;
+      option.dataset.diagnosticSupported = supported ? "true" : "false";
+      // Do not disable the option: an admin needs to select it to inspect
+      // the installed version even when status metadata is not yet synced.
+      // The authenticated POST endpoint remains the final capability gate.
       target.append(option);
     }
     if ([...target.options].some(item => item.value === old)) target.value = old;
@@ -551,6 +560,7 @@
     }
     nativePageMessage(action === "update" ? "正在更新工具，并验证代码 SHA-256…" : "正在检查工具版本…");
     const result = await json(path,action === "update" ? {method:"POST"} : undefined);
+    if(platform==="windows") await nativePageWorkers(); // refresh cached list status
     const tool = result.tool || {};
     const latest = result.latest || {};
     const local = String(tool.version || "不可用");
@@ -600,8 +610,9 @@
     error => nativePageMessage(error.message, true)));
   $("nativePageUpdate")?.addEventListener("click", () => nativePageToolAction("update").catch(
     error => nativePageMessage(error.message, true)));
-  $("nativePageReload")?.addEventListener("click", () => nativePageRecords().catch(
-    error => nativePageMessage(error.message, true)));
+  $("nativePageReload")?.addEventListener("click", () => Promise.all([
+    nativePageWorkers(),nativePageRecords()
+  ]).catch(error => nativePageMessage(error.message, true)));
 
   window.loadWorkerTools = load;
   const navigation = document.querySelector('.nav button[data-view="worker-tools"]');

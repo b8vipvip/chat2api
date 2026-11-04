@@ -135,8 +135,11 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 raise HTTPException(409,"Windows extension is offline")
             client=app.state.registry.clients.get(canonical)
             meta=client.metadata if isinstance(client.metadata,dict) else {}
-            if meta.get("windows_native_page_diagnostic_version")!="windows-dom-1.1.0":
-                raise HTTPException(409,"Windows Worker extension needs native diagnosis upgrade")
+            if meta.get("windows_native_page_diagnostic_version")!="windows-dom-1.1.1":
+                reported=str(meta.get("windows_native_page_diagnostic_version") or "未上报")
+                raise HTTPException(409,
+                    "Windows 诊断能力版本 "+reported+
+                    "，服务端需要 windows-dom-1.1.1。请更新并重连 Windows Worker 扩展。")
             return {"worker_id":canonical}
         return app.state.linux_workers.data["workers"][canonical]
 
@@ -256,7 +259,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             jobs.pop(job_id,None)
 
     WINDOWS_STAGE_PERCENT={
-        "accepted":10,"worker_lookup":16,"tab_opening":20,"tab_opened":25,
+        "accepted":10,"worker_lookup":16,"tab_opening":20,"window_creating":21,"window_created":23,"tab_opened":25,
         "tab_loading":32,"page_ready":45,"assistant_scanning":57,
         "assistant_captured":73,"uploading":82,"upload_complete":91,
         "tab_closed":95,"failed":95,
@@ -280,14 +283,14 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             write(current)
         try:
             record.update({"stage":"windows-dispatching","percent":5,
-                "tool_version":"windows-dom-1.1.0"})
+                "tool_version":"windows-dom-1.1.1"})
             write(record)
             report,raw=await windows_bridge.collect(worker,job_id,url,timeout=155,
                 show_tab=record.get("show_tab") is True,on_progress=on_progress)
             record=read(job_id)  # Preserve progress updates from bridge callbacks.
             manifest={"schema":"chat2api-native-page-manifest-v1",
                 "request_id":record["request_id"],"worker_id":worker,
-                "worker_platform":"windows","tool_version":"windows-dom-1.1.0",
+                "worker_platform":"windows","tool_version":"windows-dom-1.1.1",
                 "request_binding":"url-only-unbound" if record["target_type"]=="conversation_url"
                     else "history-link-request-unverified",
                 "boundary_verified":report.get("boundary_verified") is True,
@@ -410,7 +413,9 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 "name":str(client.name or "")[:80],
                 "online":cid in app.state.registry.sockets,
                 "status":"online" if cid in app.state.registry.sockets else "offline",
-                "diagnostic_supported":meta.get("windows_native_page_diagnostic_version")=="windows-dom-1.1.0",
+                "diagnostic_supported":meta.get("windows_native_page_diagnostic_version")=="windows-dom-1.1.1",
+                "diagnostic_version":str(meta.get("windows_native_page_diagnostic_version") or "")[:50],
+                "extension_version":str(meta.get("extension_version") or "")[:32],
                 "worker_slot":meta.get("worker_slot")})
         return {"data":rows}
 
@@ -564,10 +569,10 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             meta=client.metadata if client and isinstance(client.metadata,dict) else {}
             current=str(meta.get("windows_native_page_diagnostic_version") or "")
             return {"worker_id":display,"tool":{"version":current or "未安装",
-                "installed":current=="windows-dom-1.1.0",
+                "installed":current=="windows-dom-1.1.1",
                 "capture_mode":"extension-dom-only",
                 "note":"Windows diagnostic code is bundled with the Chrome extension"},
-                "latest":{"version":"windows-dom-1.1.0"}}
+                "latest":{"version":"windows-dom-1.1.1"}}
         check_worker(actual)
         result=await command(actual,"native_page_version",{},timeout=15)
         try:

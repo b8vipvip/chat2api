@@ -17,7 +17,7 @@ DIGEST = re.compile(r"^[a-f0-9]{64}$")
 MAX_BYTES = 1_500_000
 PART_BYTES = 32_768
 PROGRESS_STAGES = frozenset({
-    "accepted", "worker_lookup", "tab_opening", "tab_opened",
+    "accepted", "worker_lookup", "window_creating", "window_created", "tab_opening", "tab_opened",
     "tab_loading", "page_ready", "assistant_scanning",
     "assistant_captured", "uploading", "upload_complete",
     "tab_closed", "failed",

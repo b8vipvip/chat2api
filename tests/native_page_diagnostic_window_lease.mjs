@@ -17,6 +17,15 @@ assert.ok(capture.includes('globalThis[TAB_LEASE_KEY]=diagnosticTabs'),
   "Temporary diagnosis tabs need a global lifetime lease");
 assert.ok(capture.includes("diagnosticTabs.add(tab.id)"));
 assert.ok(capture.includes("diagnosticTabs.delete(tab.id)"));
+assert.ok(capture.includes('chrome.windows.create({'),
+  "Unbound Windows Worker must create an isolated own Chrome window");
+assert.ok(capture.includes('url:"about:blank"'),
+  "Owned diagnosis tab must be protected before ChatGPT navigation");
+assert.ok(capture.indexOf("diagnosticTabs.add(tab.id)") <
+  capture.indexOf("await chrome.tabs.update(tab.id,{url:job.conversation_url})"),
+  "Lifetime lease must precede navigation to ChatGPT");
+assert.ok(capture.includes("worker_busy_visual_diagnosis"),
+  "Foreground independent window cannot hide a current API request");
 assert.ok(capture.includes("active:showTab"),
   "Background diagnosis remains inactive; foreground is explicit opt-in");
 assert.ok(capture.includes("const showTab=job.show_tab===true"));
