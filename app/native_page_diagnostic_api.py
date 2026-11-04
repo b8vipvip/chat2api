@@ -476,21 +476,32 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
 
     @app.post("/api/admin/worker-tools/native-page/workers/{worker_id}/update")
     async def update(worker_id:str,request:Request):
-        authorize(request);check_worker(worker_id)
+        authorize(request)
+        actual,platform,display=normalize_worker(worker_id)
+        if platform=="windows":
+            raise HTTPException(409,"Windows diagnostic is bundled with its Chrome extension; update the extension")
+        check_worker(actual)
         _,manifest=await latest_release()
-        result=await command(worker_id,"native_page_update",{},timeout=60)
+        result=await command(actual,"native_page_update",{},timeout=60)
         if result.get("sha256")!=manifest["sha256"]:
             raise HTTPException(409,"worker_installed_release_sha_mismatch_retry")
-        return {"worker_id":worker_id,"tool":result,"latest":manifest}
+        return {"worker_id":display,"tool":result,"latest":manifest}
 
     @app.get("/api/admin/worker-tools/native-page/workers/{worker_id}/version")
     async def version(worker_id:str,request:Request):
-        authorize(request);check_worker(worker_id)
-        result=await command(worker_id,"native_page_version",{},timeout=15)
+        authorize(request)
+        actual,platform,display=normalize_worker(worker_id)
+        if platform=="windows":
+            return {"worker_id":display,"tool":{"version":"windows-dom-1.0.0",
+                "installed":True,"capture_mode":"extension-dom-only",
+                "note":"Windows diagnostic code is bundled with the Chrome extension"},
+                "latest":{"version":"windows-dom-1.0.0"}}
+        check_worker(actual)
+        result=await command(actual,"native_page_version",{},timeout=15)
         try:
             _,manifest=await latest_release()
-            return {"worker_id":worker_id,"tool":result,"latest":manifest}
+            return {"worker_id":display,"tool":result,"latest":manifest}
         except HTTPException as exc:
-            return {"worker_id":worker_id,"tool":result,
+            return {"worker_id":display,"tool":result,
                     "latest_error":str(exc.detail)[:100]}
     return app
