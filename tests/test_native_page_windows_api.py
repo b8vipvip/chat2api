@@ -40,6 +40,7 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
             self.clients={
                 ext:SimpleNamespace(connection_enabled=True,name="win-plus",
                     metadata={"platform_os":"win",
+                              "extension_version":"0.22.264",
                               "windows_native_page_diagnostic_version":"windows-dom-1.1.1"}),
                 "ext_mac777777":SimpleNamespace(connection_enabled=True,name="Mac",
                     metadata={"platform_os":"mac",
@@ -90,6 +91,8 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
         assert rows[0]["worker_id"]==ext
         assert rows[0]["platform"]=="windows"
         assert rows[0]["diagnostic_supported"] is True
+        assert rows[0]["diagnostic_version"]=="windows-dom-1.1.1"
+        assert rows[0]["extension_version"]=="0.22.264"
         ver=client.get(f"/api/admin/worker-tools/native-page/workers/{ext}/version",headers=auth)
         assert ver.status_code==200
         assert ver.json()["tool"]["version"]=="windows-dom-1.1.1"
