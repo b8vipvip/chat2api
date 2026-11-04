@@ -261,7 +261,9 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 "request_binding":"url-only-unbound" if record["target_type"]=="conversation_url"
                     else "history-link-request-unverified",
                 "boundary_verified":report.get("boundary_verified") is True,
-                "completeness_verified":report.get("complete") is True,
+                "dom_capture_complete":report.get("complete") is True,
+                "completeness_verified":False,
+                "visual_verified":False,
                 "capture_mode":"windows-extension-dom-only",
                 "limitations":report.get("limitations") or []}
             buffer=io.BytesIO()
