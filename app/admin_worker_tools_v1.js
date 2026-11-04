@@ -361,12 +361,15 @@
       const wid = String(worker.worker_id || "");
       if (!/^ext_[a-zA-Z0-9_-]{5,120}$/.test(wid)) continue;
       const os = worker.platform === "windows" ? "Windows" : "Linux";
+      const unsupported=worker.platform==="windows" && worker.diagnostic_supported !== true;
       const label = wid + " · " + os +
         (worker.name && worker.name !== wid ? " · " + worker.name : "") +
-        (worker.online ? " · 在线" : " · 离线");
+        (worker.online ? " · 在线" : " · 离线") +
+        (unsupported ? " · 需更新 Windows 扩展" : "");
       const option = elem("option", label);
       option.value = wid;
       option.dataset.platform = worker.platform || "linux";
+      option.disabled = unsupported;
       target.append(option);
     }
     if ([...target.options].some(item => item.value === old)) target.value = old;
