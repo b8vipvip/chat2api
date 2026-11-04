@@ -425,7 +425,10 @@ def test_v262_windows_diagnostic_is_not_a_request_terminal_owner():
     assert 'diagnostic_conversation_redirected' in collector
     assert 'generation_active:generationActive' in collector
     assert 'if(seen>=3&&meta.complete&&meta.boundary_verified)break;' in collector
-    assert 'if message_type in {"native.page.windows.chunk","native.page.windows.finished","native.page.windows.progress"}:' in server
+    assert 'if message_type in {"native.page.windows.chunk","native.page.windows.finished","native.page.windows.progress","native.page.windows.tool.updated"}:' in server
+    assert '"native.page.windows.tool.update"' in collector
+    assert 'chrome.userScripts.execute({' in collector
+    assert '"userScripts"' in (ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8")
     assert 'if platform=="windows":' in api
     assert '"visual_verified":False' in api
     assert 'if platform=="windows" and not url:' in api

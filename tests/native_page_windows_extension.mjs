@@ -228,8 +228,12 @@ assert.equal((await diag.getToolStatus()).version,"1.0.0");
 
 // User must explicitly enable Chrome's "Allow User Scripts" toggle.
 userScriptsAvailable=false;
+const permissionSource=toolSource.replaceAll("1.0.0","1.0.1");
+const permissionDigest=[...new Uint8Array(await webcrypto.subtle.digest("SHA-256",
+  new TextEncoder().encode(permissionSource)))]
+  .map(b=>b.toString(16).padStart(2,"0")).join("");
 await diag.installTool({update_id:"8".repeat(32),version:"1.0.1",
-  sha256:toolDigest,source:toolSource});
+  sha256:permissionDigest,source:permissionSource});
 assert.equal(events.at(-1).ok,false);
 assert.match(events.at(-1).error,/user_scripts_permission_disabled/);
 assert.equal((await diag.getToolStatus()).ready,false);
