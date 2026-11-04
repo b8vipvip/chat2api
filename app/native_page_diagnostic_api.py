@@ -22,6 +22,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 
 from .admin_auth import SESSION_COOKIE
+from .native_page_windows_bridge import WindowsNativePageBridge
 from .native_page_tool_release import (
     DiagnosticReleaseSource, DiagnosticReleaseUnavailable,
     RELEASE_BRANCH,
@@ -30,6 +31,7 @@ from .native_page_tool_release import (
 REQUEST_ID = re.compile(r"^(?:req|resp|imgreq)_[A-Za-z0-9_-]{6,100}$")
 JOB_ID = re.compile(r"^[0-9a-f]{32}$")
 WORKER_ID = re.compile(r"^wrk_[A-Za-z0-9_-]{6,100}$")
+EXT_WORKER_ID = re.compile(r"^ext_[A-Za-z0-9_-]{5,120}$")
 MAX_ARCHIVE = 18 * 1024 * 1024
 POLL_SECONDS = 2
 
@@ -42,6 +44,8 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     jobs:dict[str,asyncio.Task]={}
     locks:dict[str,str]={}
     releases = DiagnosticReleaseSource()
+    windows_bridge=WindowsNativePageBridge(app.state.registry)
+    app.state.native_page_windows_ingest=windows_bridge.ingest
 
     def authorize(request:Request):
         token=str(request.headers.get("authorization") or "")
@@ -72,6 +76,8 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             "counts","screenshots","size","created_at","updated_at","page_probe")}
         # URL-only tasks use a private internal request key for authenticated
         # Worker ZIP ownership. Never present it as a real API request ID.
+        visible["worker_id"]=job.get("display_worker_id") or job.get("worker_id")
+        visible["worker_platform"]=job.get("worker_platform") or "linux"
         visible["request_id"]=job.get("original_request_id",
             job.get("request_id") if job.get("target_type") != "conversation_url" else "")
         return visible
@@ -90,12 +96,36 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         except ValueError:pass
         return ""
 
-    def check_worker(worker):
-        if not WORKER_ID.fullmatch(worker):raise HTTPException(400,"Invalid Worker")
-        source=app.state.linux_workers.data.get("workers",{}).get(worker)
-        if not source or source.get("revoked_at"):
+    def linux_client(worker):
+        entry=app.state.linux_workers.data.get("workers",{}).get(worker) or {}
+        return str(entry.get("extension_client_id") or "").strip()
+
+    def normalize_worker(worker):
+        if WORKER_ID.fullmatch(worker):
+            entry=app.state.linux_workers.data.get("workers",{}).get(worker)
+            if entry and not entry.get("revoked_at"):
+                return worker,"linux",linux_client(worker) or worker
             raise HTTPException(404,"Worker does not exist")
-        return source
+        if not EXT_WORKER_ID.fullmatch(worker):
+            raise HTTPException(400,"Invalid Worker")
+        client=app.state.registry.clients.get(worker)
+        if not client or not client.connection_enabled:
+            raise HTTPException(404,"Worker does not exist or is disabled")
+        for wid,entry in app.state.linux_workers.data.get("workers",{}).items():
+            if not entry.get("revoked_at") and entry.get("extension_client_id")==worker:
+                return wid,"linux",worker
+        meta=client.metadata if isinstance(client.metadata,dict) else {}
+        if meta.get("linux_worker_id") or meta.get("controller_worker_id"):
+            raise HTTPException(409,"Linux bridge is not bound")
+        return worker,"windows",worker
+
+    def check_worker(worker):
+        canonical,platform,_=normalize_worker(worker)
+        if platform=="windows":
+            if canonical not in app.state.registry.sockets:
+                raise HTTPException(409,"Windows extension is offline")
+            return {"worker_id":canonical}
+        return app.state.linux_workers.data["workers"][canonical]
 
     async def command(worker,action,arguments,timeout=30):
         response=await app.state.send_linux_worker_command(
@@ -136,6 +166,8 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     async def run(job_id,url,hints=None):
         record=read(job_id)
         worker=record["worker_id"]
+        if record.get("worker_platform")=="windows":
+            return await run_windows(job_id,url)
         try:
             result=await command(worker,"native_page_start",{
                 "job_id":job_id,"request_id":record["request_id"],
@@ -209,6 +241,45 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         finally:
             locks.pop(worker,None)
             jobs.pop(job_id,None)
+
+    async def run_windows(job_id,url):
+        record=read(job_id);worker=record["worker_id"]
+        try:
+            record.update({"stage":"windows-collecting","percent":15,
+                "tool_version":"windows-dom-1.0.0"})
+            write(record)
+            report,raw=await windows_bridge.collect(worker,job_id,url,timeout=155)
+            manifest={"schema":"chat2api-native-page-manifest-v1",
+                "request_id":record["request_id"],"worker_id":worker,
+                "worker_platform":"windows","tool_version":"windows-dom-1.0.0",
+                "request_binding":"url-only-unbound" if record["target_type"]=="conversation_url"
+                    else "history-link-request-unverified",
+                "boundary_verified":report.get("boundary_verified") is True,
+                "completeness_verified":report.get("complete") is True,
+                "capture_mode":"windows-extension-dom-only",
+                "limitations":report.get("limitations") or []}
+            buffer=io.BytesIO()
+            from zipfile import ZIP_DEFLATED
+            with ZipFile(buffer,"w",compression=ZIP_DEFLATED,compresslevel=6) as archive:
+                archive.writestr("assistant_dom.json",raw)
+                archive.writestr("manifest.json",json.dumps(manifest,ensure_ascii=False))
+                archive.writestr("README.txt",
+                    "Windows extension DOM-only diagnosis. No complete screenshot, "
+                    "no source image bytes, no live API request binding.\n")
+            data=buffer.getvalue()
+            if not 0<len(data)<=MAX_ARCHIVE:raise RuntimeError("windows_evidence_zip_budget")
+            out=root/(job_id+".zip");out.write_bytes(data);out.chmod(0o600)
+            record.update({"status":"completed","stage":"complete","percent":100,
+                "size":len(data),"sha256":hashlib.sha256(data).hexdigest(),
+                "counts":report.get("counts") or {},"page_probe":report.get("probe") or {},
+                "error":None,"updated_at":int(time.time())})
+            write(record)
+        except Exception as exc:
+            record.update({"status":"failed","stage":"failed","percent":100,
+                "error":str(exc)[:180],"updated_at":int(time.time())})
+            write(record)
+        finally:
+            locks.pop(worker,None);jobs.pop(job_id,None)
 
     async def latest_release():
         try:
