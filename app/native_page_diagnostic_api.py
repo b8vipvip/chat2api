@@ -119,6 +119,9 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         meta=client.metadata if isinstance(client.metadata,dict) else {}
         if meta.get("linux_worker_id") or meta.get("controller_worker_id"):
             raise HTTPException(409,"Linux bridge is not bound")
+        platform=str(meta.get("platform_os") or meta.get("platform") or "").lower()
+        if platform and platform not in {"win","windows","win32","unknown"}:
+            raise HTTPException(409,"Only Windows extension workers support this execution path")
         return worker,"windows",worker
 
     def check_worker(worker):
@@ -361,6 +364,9 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 continue
             meta=client.metadata if isinstance(client.metadata,dict) else {}
             if meta.get("linux_worker_id") or meta.get("controller_worker_id"):
+                continue
+            platform=str(meta.get("platform_os") or meta.get("platform") or "").lower()
+            if platform and platform not in {"win","windows","win32","unknown"}:
                 continue
             if not client.connection_enabled:continue
             rows.append({"worker_id":cid,"platform":"windows",
