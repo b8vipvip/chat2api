@@ -124,6 +124,10 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         if platform=="windows":
             if canonical not in app.state.registry.sockets:
                 raise HTTPException(409,"Windows extension is offline")
+            client=app.state.registry.clients.get(canonical)
+            meta=client.metadata if isinstance(client.metadata,dict) else {}
+            if meta.get("windows_native_page_diagnostic_version")!="windows-dom-1.0.0":
+                raise HTTPException(409,"Windows Worker extension needs native diagnosis upgrade")
             return {"worker_id":canonical}
         return app.state.linux_workers.data["workers"][canonical]
 
@@ -359,6 +363,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 "name":str(client.name or "")[:80],
                 "online":cid in app.state.registry.sockets,
                 "status":"online" if cid in app.state.registry.sockets else "offline",
+                "diagnostic_supported":meta.get("windows_native_page_diagnostic_version")=="windows-dom-1.0.0",
                 "worker_slot":meta.get("worker_slot")})
         return {"data":rows}
 
@@ -494,8 +499,12 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         authorize(request)
         actual,platform,display=normalize_worker(worker_id)
         if platform=="windows":
-            return {"worker_id":display,"tool":{"version":"windows-dom-1.0.0",
-                "installed":True,"capture_mode":"extension-dom-only",
+            client=app.state.registry.clients.get(actual)
+            meta=client.metadata if client and isinstance(client.metadata,dict) else {}
+            current=str(meta.get("windows_native_page_diagnostic_version") or "")
+            return {"worker_id":display,"tool":{"version":current or "未安装",
+                "installed":current=="windows-dom-1.0.0",
+                "capture_mode":"extension-dom-only",
                 "note":"Windows diagnostic code is bundled with the Chrome extension"},
                 "latest":{"version":"windows-dom-1.0.0"}}
         check_worker(actual)
