@@ -90,8 +90,8 @@ const mismatch=message("a-selection-123","SHOULD_NOT_CAPTURE","assistant","a-dif
 assert.equal(execute(new Element("main",{},[mismatch])).ok,false,
   "A mismatched DIL source message ID must fail closed");
 // A visible generation stop control disqualifies an otherwise stable DOM.
-const stop=new Element("button",{"data-testid":"stop-button"},[T("Stop")]);
-const busyMain=new Element("main",{},[first,last,stop]);
+const stopButton=new Element("button",{"data-testid":"stop-button"},[T("Stop")]);
+const busyMain=new Element("main",{},[first,last,stopButton]);
 const busy=execute(busyMain);
 assert.equal(busy.ok,true);
 assert.equal(busy.answer.probe.generation_active,true);
