@@ -5,7 +5,7 @@
   "use strict";
   const KEY="__CHAT2API_WINDOWS_NATIVE_PAGE_DIAG_V1__";
   if(globalThis[KEY])return;
-  const VERSION="windows-dom-1.0.0";
+  const VERSION="windows-dom-1.0.1";
   const URL_RE=/^https:\/\/(?:chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)\/c\/[A-Za-z0-9-]{12,90}\/?$/;
   const JOB_RE=/^[0-9a-f]{32}$/;
   const jobs=new Set();
@@ -113,7 +113,7 @@
       return out;
     }
     const tree=walk(target.node,0);
-    const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.0.0",
+    const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.0.1",
       boundary_verified:!!target.id&&!truncated,
       request_bound:false,complete:!truncated&&!generationActive,
       message_id:target.id,counts:{nodes,text_chars:chars,tables,images},
