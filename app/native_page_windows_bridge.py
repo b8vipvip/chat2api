@@ -106,4 +106,6 @@ class WindowsNativePageBridge:
                 future.set_result(raw)
         except (ValueError, RuntimeError, TypeError, binascii.Error) as exc:
             if not future.done():
-                future.set_exception(exc)
+                future.set_exception(
+                    ValueError("windows_chunk_invalid_base64")
+                    if isinstance(exc,binascii.Error) else exc)
