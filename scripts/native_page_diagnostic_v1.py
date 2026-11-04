@@ -54,7 +54,7 @@ const nativeSelection=sel=>{
  if(!sel||!visible(sel))return null;
  const id=sel.getAttribute('data-chatgpt-selection-message-id');
  const wrap=sel.closest('[data-chatgpt-search-message-ids]');
- if(!id||!wrap||!(wrap.getAttribute('data-chatgpt-search-message-ids')||'').split(/\\s+/).includes(id))return null;
+ if(!id||!wrap||!(wrap.getAttribute('data-chatgpt-search-message-ids')||'').split(/\s+/).includes(id))return null;
  if(!wrap.querySelector('h4[data-conversation-role="assistant"]'))return null;
  const md=sel.querySelector('[data-markdown-text-style="assistant-message"]');
  if(!md||!visible(md))return null;
