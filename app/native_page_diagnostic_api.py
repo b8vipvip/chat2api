@@ -248,7 +248,6 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 "size":size,"sha256":expected,"error":None,"updated_at":int(time.time())})
             write(record)
         except Exception as exc:
-            record=read(job_id)
             record.update({"status":"failed","stage":"failed","percent":100,
                 "error":str(exc)[:180],"updated_at":int(time.time())})
             write(record)
@@ -323,6 +322,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 "error":None,"updated_at":int(time.time())})
             write(record)
         except Exception as exc:
+            record=read(job_id)  # Retain last recorded phase even on failure.
             record.update({"status":"failed","stage":"failed","percent":100,
                 "error":str(exc)[:180],"updated_at":int(time.time())})
             write(record)
