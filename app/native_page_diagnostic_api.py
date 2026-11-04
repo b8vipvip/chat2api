@@ -136,7 +136,10 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             client=app.state.registry.clients.get(canonical)
             meta=client.metadata if isinstance(client.metadata,dict) else {}
             if meta.get("windows_native_page_diagnostic_version")!="windows-dom-1.1.1":
-                raise HTTPException(409,"Windows Worker extension needs native diagnosis upgrade")
+                reported=str(meta.get("windows_native_page_diagnostic_version") or "未上报")
+                raise HTTPException(409,
+                    "Windows 诊断能力版本 "+reported+
+                    "，服务端需要 windows-dom-1.1.1。请更新并重连 Windows Worker 扩展。")
             return {"worker_id":canonical}
         return app.state.linux_workers.data["workers"][canonical]
 
@@ -411,6 +414,8 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 "online":cid in app.state.registry.sockets,
                 "status":"online" if cid in app.state.registry.sockets else "offline",
                 "diagnostic_supported":meta.get("windows_native_page_diagnostic_version")=="windows-dom-1.1.1",
+                "diagnostic_version":str(meta.get("windows_native_page_diagnostic_version") or "")[:50],
+                "extension_version":str(meta.get("extension_version") or "")[:32],
                 "worker_slot":meta.get("worker_slot")})
         return {"data":rows}
 
