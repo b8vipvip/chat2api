@@ -55,6 +55,11 @@
       for(const selection of wrapper.querySelectorAll(SELECTION))add(selection);
     }
     for(const node of doc.querySelectorAll("[data-message-author-role='assistant']"))add(node);
+    result.sort((a,b)=>{
+      const relation=a.compareDocumentPosition(b);
+      return relation&Node.DOCUMENT_POSITION_FOLLOWING?-1:
+        relation&Node.DOCUMENT_POSITION_PRECEDING?1:0;
+    });
     return result;
   }
   function userMessages(doc=document){
@@ -63,17 +68,23 @@
       "[data-content-search-unit-key$=':user']","[data-message-author-role='user']",
       "h4[data-conversation-role='user']"]){
       for(const node of doc.querySelectorAll(selector)){
-        const target=node.closest(USER_UNIT)||node.closest(
+        const target=node.closest(USER_UNIT)||node.closest(WRAPPER)||node.closest(
           "article[data-testid^='conversation-turn'],[data-testid^='conversation-turn'],article[data-message-id]")||node;
         if(!isUser(target)||!target.isConnected||!visible(target)||seen.has(target))continue;
         seen.add(target);result.push(target);
       }
     }
+    result.sort((a,b)=>{
+      const relation=a.compareDocumentPosition(b);
+      return relation&Node.DOCUMENT_POSITION_FOLLOWING?-1:
+        relation&Node.DOCUMENT_POSITION_PRECEDING?1:0;
+    });
     return result;
   }
   function turnOf(node){
     return node?.closest?.(SELECTION)
       ||node?.closest?.(USER_UNIT)
+      ||node?.closest?.(WRAPPER)
       ||node?.closest?.("article[data-testid^='conversation-turn'],[data-testid^='conversation-turn'],article[data-message-id]")
       ||node||null;
   }
