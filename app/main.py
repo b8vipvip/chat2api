@@ -2177,6 +2177,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         await websocket.send_json({"type": "heartbeat.ack", "ts": time.time()})
                     continue
                 request_id = str(message.get("request_id") or "")
+                if message_type in {"native.page.windows.chunk","native.page.windows.finished"}:
+                    # Only the authenticated extension's current WebSocket may
+                    # deliver its administrator-triggered, read-only evidence.
+                    # Never forward this event into the live request broker.
+                    receiver=getattr(app.state,"native_page_windows_ingest",None)
+                    if callable(receiver) and registry.sockets.get(client_id) is websocket:
+                        await receiver(client_id,message)
+                    continue
                 if message_type == "chat.file.chunk":
                     # A successful socket.send is NOT a persisted chunk ACK.
                     # The server replies to the same authenticated socket only
