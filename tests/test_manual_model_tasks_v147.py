@@ -126,7 +126,7 @@ def test_manual_only_no_automatic_model_discovery_and_unified_id_column():
     assert "modelObservedChoices" in router
     assert "发现模型" in ui
     assert "任务记录" in ui
-    assert "Linux Worker 管理绑定：" in unified
+    assert 'String(state.worker_id || "").startsWith("ext_")' in unified\n    assert '(linuxBind.extension_client_id || "—（ext_ 扩展未绑定）")' in unified
 
     import shutil
     import subprocess
