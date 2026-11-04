@@ -6,6 +6,7 @@ live routing windows or the Linux Python/CDP diagnosis controller.
 from __future__ import annotations
 import asyncio
 import base64
+import binascii
 import hashlib
 import json
 import re
@@ -103,6 +104,6 @@ class WindowsNativePageBridge:
                     or message.get("sha256") != state["sha256"]):
                     raise ValueError("windows_diagnostic_transfer_incomplete")
                 future.set_result(raw)
-        except (ValueError, RuntimeError, TypeError) as exc:
+        except (ValueError, RuntimeError, TypeError, binascii.Error) as exc:
             if not future.done():
                 future.set_exception(exc)
