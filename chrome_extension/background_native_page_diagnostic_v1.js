@@ -9,6 +9,11 @@
   const URL_RE=/^https:\/\/(?:chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)\/c\/[A-Za-z0-9-]{12,90}\/?$/;
   const JOB_RE=/^[0-9a-f]{32}$/;
   const jobs=new Set();
+  // Shared, ephemeral tab lease: tab supervisor and physical window observers
+  // must not reclaim or count the diagnostic's own temporary ChatGPT tab.
+  const TAB_LEASE_KEY="__CHAT2API_NATIVE_PAGE_DIAG_TAB_IDS_V1__";
+  const diagnosticTabs=globalThis[TAB_LEASE_KEY] || new Set();
+  globalThis[TAB_LEASE_KEY]=diagnosticTabs;
   const sleep=ms=>new Promise(done=>setTimeout(done,ms));
   function validUrl(text) {
     if(!URL_RE.test(String(text||"")))return false;
@@ -118,9 +123,18 @@
     jobs.add(jobId);
     let tab=null;
     try {
-      // Never capture an API-owned live tab, steal its window or change a prompt.
-      tab=await chrome.tabs.create({url:job.conversation_url,active:false});
+      // Append to an existing ChatGPT window without stealing focus or
+      // changing any routed tab. Keep this new tab out of Worker pool quotas.
+      const existing=(await chrome.tabs.query({url:[
+        "https://chatgpt.com/*","https://www.chatgpt.com/*",
+        "https://chat.openai.com/*"
+      ]}).catch(()=>[])).find(item=>Number.isInteger(item?.windowId)
+        && Number.isInteger(item?.id)&&!diagnosticTabs.has(item.id));
+      const options={url:job.conversation_url,active:false};
+      if(existing)options.windowId=existing.windowId;
+      tab=await chrome.tabs.create(options);
       if(!Number.isInteger(tab?.id))throw new Error("independent_tab_not_created");
+      diagnosticTabs.add(tab.id);
       let stable="",seen=0,best=null;
       for(let attempt=0;attempt<60;attempt++){
         await sleep(attempt<2?1200:1800);
@@ -163,7 +177,10 @@
       try{await send({type:"native.page.windows.finished",job_id:jobId,
         ok:false,version:VERSION,error:String(e?.message||e).slice(0,120)})}catch(_){}
     }finally{
-      if(Number.isInteger(tab?.id))await chrome.tabs.remove(tab.id).catch(()=>{});
+      if(Number.isInteger(tab?.id)){
+        await chrome.tabs.remove(tab.id).catch(()=>{});
+        diagnosticTabs.delete(tab.id);
+      }
       jobs.delete(jobId);
     }
   }
