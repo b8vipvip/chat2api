@@ -234,7 +234,7 @@
           button.type = "button";
           button.textContent = "配对码";
           button.dataset.workerPairing = String(row.worker_id);
-          button.dataset.workerName = String(row.name || row.hostname || row.worker_id);
+          button.dataset.workerName = String(row.name || row.hostname || row.extension_client_id || "Worker");
           button.title = pairingTitle(row);
           cells[9].appendChild(button);
         } else if (row.worker_id) {
