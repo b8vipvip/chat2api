@@ -468,6 +468,8 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             "job_id","original_request_id","target_type","target_label","worker_id","status","stage","percent",
             "error","tool_version","counts","screenshots","size",
             "created_at","updated_at","page_probe")}
+        safe["worker_id"]=record.get("display_worker_id") or record.get("worker_id")
+        safe["worker_platform"]=record.get("worker_platform") or "linux"
         return Response(json.dumps({"schema":"chat2api-native-page-diagnostic-log-v1",
             "record":safe},ensure_ascii=False,indent=2),
             media_type="application/json",
