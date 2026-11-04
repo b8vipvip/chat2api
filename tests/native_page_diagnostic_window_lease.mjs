@@ -17,7 +17,13 @@ assert.ok(capture.includes('globalThis[TAB_LEASE_KEY]=diagnosticTabs'),
   "Temporary diagnosis tabs need a global lifetime lease");
 assert.ok(capture.includes("diagnosticTabs.add(tab.id)"));
 assert.ok(capture.includes("diagnosticTabs.delete(tab.id)"));
-assert.ok(capture.includes("active:false"));
+assert.ok(capture.includes("active:showTab"),
+  "Background diagnosis remains inactive; foreground is explicit opt-in");
+assert.ok(capture.includes("const showTab=job.show_tab===true"));
+assert.ok(capture.includes("worker_busy_visual_diagnosis"),
+  "Foreground mode cannot hide an active API request");
+assert.ok(capture.includes("restore=!busyNow&&activeNow.some"),
+  "Do not restore focus over a newly active API request");
 assert.ok(capture.includes("chrome.tabs.remove(tab.id)"));
 assert.ok(supervisor.includes(KEY)&&
   supervisor.includes("!diagnostic?.has?.(tab.id)")&&
