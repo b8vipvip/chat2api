@@ -85,4 +85,15 @@ await diag.execute({job_id:"e".repeat(32),
   conversation_url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"});
 assert.equal(opens.at(-1).windowId,25);
 assert.ok(events.some(x=>x.type==="native.page.windows.finished"&&x.ok&&x.job_id==="e".repeat(32)));
+
+// An idle Worker can still diagnose using a previously runtime-verified pool
+// standby, without borrowing a random ChatGPT tab.
+delete scope.__CHAT2API_CONVERSATION_ROUTING_V1__;
+scope.__CHAT2API_PERSISTENT_WINDOW_POOL_V132__={
+  runtimeReadyTabs:new Map([[8,true]])
+};
+await diag.execute({job_id:"f".repeat(32),
+  conversation_url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"});
+assert.equal(opens.at(-1).windowId,26);
+assert.ok(events.some(x=>x.type==="native.page.windows.finished"&&x.ok&&x.job_id==="f".repeat(32)));
 console.log("Windows native diagnosis: isolated tab, URL allowlist, bounded authenticated chunks, read-only completion");
