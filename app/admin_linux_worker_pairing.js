@@ -270,7 +270,7 @@
   };
   const openPairing = async (workerId, workerName) => {
     selectedPairingWorkerId = workerId;
-    document.getElementById("linuxWorkerPairingName").textContent = workerName || workerId;
+    document.getElementById("linuxWorkerPairingName").textContent = workerName || "Worker";
     document.getElementById("linuxWorkerPairingCode").value = "";
     document.getElementById("linuxWorkerPairingResult").textContent = "";
     await fetchRows(true).catch(() => {});
