@@ -441,6 +441,13 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 raise HTTPException(409,"Chosen Worker does not own this request")
         worker,platform,display=normalize_worker(worker)
         check_worker(worker)
+        # Windows Chrome extensions cannot recover a request's old URL from
+        # the Linux Controller's local Chrome History SQLite database. A
+        # request ID without a saved history link would otherwise wait until
+        # timeout in the extension; reject it before creating any job.
+        if platform=="windows" and not url:
+            raise HTTPException(422,
+                "Windows 诊断缺少该请求的 ChatGPT 历史链接；请直接粘贴 https://chatgpt.com/c/... 进行诊断")
         if worker in locks:raise HTTPException(409,"This Worker already has a diagnosis running")
         if platform=="linux" and worker not in app.state.worker_sockets and not any(
             str((v.get("metadata") or {}).get("controller_worker_id")) in app.state.worker_sockets
