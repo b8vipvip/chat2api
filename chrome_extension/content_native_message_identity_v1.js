@@ -45,6 +45,9 @@
       if(!(node instanceof Element))return;
       const native=resolveAssistantSelection(node)
         ||[...(node.querySelectorAll?.(SELECTION)||[])].map(resolveAssistantSelection).find(Boolean);
+      // An explicitly identified native message with conflicting DIL IDs is
+      // untrusted. Never silently downgrade it to a legacy role-less node.
+      if ((node.matches(SELECTION) || node.closest(SELECTION)) && !native) return;
       const target=native||node;
       if(!target.isConnected||!visible(target)||isUser(target)||seen.has(target))return;
       seen.add(target);result.push(target);
