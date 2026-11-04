@@ -80,3 +80,25 @@ async def test_windows_diagnostic_rejects_chunk_sequence_and_digest():
         "count":2,"size":32769,"sha256":"b"*64,"data":"AA=="})
     with pytest.raises(ValueError):
         await task
+
+
+@pytest.mark.asyncio
+async def test_windows_diagnostic_rejects_finished_size_mismatch():
+    registry=FakeRegistry()
+    bridge=WindowsNativePageBridge(registry)
+    job="d"*32
+    payload=b'{"schema":"windows-native-page-evidence-v1"}'
+    digest=hashlib.sha256(payload).hexdigest()
+    task=asyncio.create_task(bridge.collect("ext_abcdef123456",job,
+        "https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef",timeout=5))
+    await asyncio.sleep(0)
+    await bridge.ingest("ext_abcdef123456",{
+        "type":"native.page.windows.chunk","job_id":job,
+        "index":0,"count":1,"size":len(payload),"sha256":digest,
+        "data":base64.b64encode(payload).decode()})
+    await bridge.ingest("ext_abcdef123456",{
+        "type":"native.page.windows.finished","job_id":job,
+        "ok":True,"sha256":digest,"size":len(payload)+1})
+    with pytest.raises(ValueError,match="windows_diagnostic_transfer_incomplete"):
+        await task
+    assert not bridge.pending
