@@ -1,5 +1,5 @@
 /*
- * ChatGPT historical page diagnostic v1.2 (local-only, no dependencies)
+ * ChatGPT historical page diagnostic v1.2.1 (local-only, no dependencies)
  * Usage: Open https://chatgpt.com/c/... in Chrome, F12 > Console, paste ALL and Enter.
  * It downloads a ZIP containing the LAST visible assistant turn's safe DOM representation,
  * computed styles, image states before/after scrolling, timings, and environment metadata.
@@ -7,9 +7,9 @@
  * collect Network response bodies, or include full resource URLs.
  * CAUTION: the ZIP contains assistant reply text. Review it before sharing.
  */
-(async function chatgptPageDiagnosticV11() {
+(async function chatgptPageDiagnosticV12() {
   'use strict';
-  const VERSION = '1.2.0';
+  const VERSION = '1.2.1';
   const CFG = { maxNodes: 16000, maxTextChars: 1200000, maxImages: 160,
     maxScrollImages: 24, scrollWaitMs: 700, settleWaitMs: 1200,
     maxOutputBytes: 24 * 1024 * 1024 };
@@ -37,6 +37,39 @@
     try { const u = new URL(s, location.href); return u.origin === location.origin ? 'same-origin' : 'cross-origin'; }
     catch (_) { return 'other'; }
   };
+  // Evidence-only correlation keys. Only truncated SHA-256 digests leave the browser;
+  // signed URL queries, path segments, credentials and response bodies never do.
+  async function shortDigest(source) {
+    if (!globalThis.crypto || !crypto.subtle || !source) return null;
+    try {
+      const digest=await crypto.subtle.digest('SHA-256',enc.encode(String(source)));
+      return Array.from(new Uint8Array(digest)).slice(0,12).map(b=>b.toString(16).padStart(2,'0')).join('');
+    } catch (_) { return null; }
+  }
+  async function imageIdentity(img,index) {
+    const raw=img.currentSrc||img.getAttribute('src')||'';
+    const kind=safeUrlType(raw);
+    if(kind==='none'||kind==='data'||kind==='blob')return {index,kind,pathDigest:null};
+    try {
+      const u=new URL(raw,location.href);
+      // Exclude query and fragment: these often contain expiring access signatures.
+      return {index,kind,pathDigest:await shortDigest(u.origin+u.pathname)};
+    } catch (_) {return {index,kind:'other',pathDigest:null};}
+  }
+  function summarizeImageStates(phase) {
+    const count={loaded:0,pending:0,completeWithoutPixels:0,noSource:0,offscreen:0,
+      noCurrentSrc:0,resourceTimingSeen:0};
+    for(const s of phase.states) {
+      if (!s.hasSrc && !s.hasCurrentSrc)count.noSource++;
+      else if (s.complete && s.naturalWidth>0 && s.naturalHeight>0)count.loaded++;
+      else if (!s.complete)count.pending++;
+      else count.completeWithoutPixels++;
+      if (!s.inViewport)count.offscreen++;
+      if (!s.hasCurrentSrc)count.noCurrentSrc++;
+      if (s.resource)count.resourceTimingSeen++;
+    }
+    return count;
+  }
   function queryCount(selector, root=document) { try { return root.querySelectorAll(selector).length; } catch (_) { return -1; } }
   function identifyRoot() {
     // Current ChatGPT pages may use native message-ID and heading anchors,
@@ -115,6 +148,7 @@
     const inViewport=!!box && box.width>0 && box.height>0 && box.x+box.width>0 && box.y+box.height>0 && box.x<innerWidth && box.y<innerHeight;
     return {index,srcKind:safeUrlType(raw),hasSrc:!!img.getAttribute('src'),hasCurrentSrc:!!img.currentSrc,srcsetPresent:!!img.getAttribute('srcset'),inViewport,
       loading:img.loading||null,decoding:img.decoding||null,
+      fetchPriority:img.fetchPriority||null,
       complete:!!img.complete,naturalWidth:img.naturalWidth||0,naturalHeight:img.naturalHeight||0,
       rendered:box,connected:img.isConnected,resource,
       alt:truncate(img.alt||'',200)};
@@ -267,11 +301,20 @@
   const after=collectImageState(root,'after-scroll-and-settle');
   const finalStructure=collectStructure();
   const resources=collectResources();
-  const countBad=phase=>phase.states.filter(s=>!s.complete||!s.naturalWidth).length;
+  const imageStatusBefore=summarizeImageStates(before),imageStatusAfter=summarizeImageStates(after);
+  const imageIdentities=await Promise.all(images.map(imageIdentity));
+  const pagePathDigest=await shortDigest(location.hostname+location.pathname);
+  if(!pagePathDigest)warnings.push('SHA-256 correlation key unavailable in this browser.');
   const summary={version:VERSION,capturedAt:new Date().toISOString(),site:location.hostname,
-    route:maskPath(),durationMs:Date.now()-started,assistantSelection:chosen.kind,
+    route:maskPath(),pagePathDigest,durationMs:Date.now()-started,assistantSelection:chosen.kind,
     assistantCandidates:chosen.candidates,assistantMessageId:chosen.messageId||null,assistantElementFound:!!root,
-    images:images.length,pendingImagesBefore:countBad(before),pendingImagesAfter:countBad(after),
+    images:images.length,pendingImagesBefore:imageStatusBefore.pending+imageStatusBefore.completeWithoutPixels,
+    pendingImagesAfter:imageStatusAfter.pending+imageStatusAfter.completeWithoutPixels,
+    imageStatusBefore,imageStatusAfter,
+    domElements:{table:queryCount('table',root||document.createElement('div')),
+      th:queryCount('th',root||document.createElement('div')),
+      td:queryCount('td',root||document.createElement('div')),
+      img:queryCount('img',root||document.createElement('div'))},
     mutationCount,mutationKinds,initialStructure,finalStructure,
     completenessVerified:false,visualVerified:false,warnings,
     privacy:'Assistant reply text is included. Cookie, token, raw URL, network bodies, and other conversation turns are excluded by design.'};
@@ -282,13 +325,14 @@
     'Nothing was uploaded by this script. Review all files before sharing.',
     'report.json: summary, counters, status and limitations.',
     'assistant_dom.json: selected last assistant turn, text content, safe attributes, layout/computed styles.',
-    'image_evidence.json: image loading/size/geometry before+after local scrolling, timing if available.',
+    'image_evidence.json: image loading/size/geometry before+after scrolling, timing and query-free source digests.',
     'resource_evidence.json: resource timing summary (NO resource URLs).',
     'No raw image bytes, complete HAR, response bodies or full-page screenshots are captured.',
+    'pagePathDigest / image pathDigest are truncated SHA-256 correlation IDs, not raw URLs.',
     'Do not interpret this as proof of pixel-perfect rendering or backend request ownership.'
   ].join('\n');
   let entries=[['README.txt',readme],['report.json',json(summary)],
-    ['assistant_dom.json',json(dom)],['image_evidence.json',json({before,scroll,after})],
+    ['assistant_dom.json',json(dom)],['image_evidence.json',json({before,scroll,after,imageIdentities})],
     ['resource_evidence.json',json(resources)]];
   let size=entries.reduce((n,[a,b])=>n+enc.encode(a).length+enc.encode(b).length+90,0);
   if(size>CFG.maxOutputBytes) {
