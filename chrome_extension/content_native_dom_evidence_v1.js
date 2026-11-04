@@ -27,6 +27,19 @@
     if (!(candidate instanceof Element) || !candidate.isConnected) return null;
     const page = candidate.closest("main,[role='main'],#thread");
     if (!page) return null;
+    const identity=globalThis.__CHAT2API_NATIVE_MESSAGE_IDENTITY_V1__;
+    const selection=identity?.resolveAssistantSelection?.(candidate);
+    const id=selection && identity.messageId(selection);
+    // The request-v6 controller selected this current message; the native
+    // semantic ID, assistant heading and DIL source/renderer IDs delimit it.
+    // Never widen to the entire chat or include an adjacent user message.
+    if (selection && id && active?.submitStartedAt &&
+        active.baselineCapturedAt <= active.submitStartedAt &&
+        !active.baselineIds?.has(id) && !active.baselineNodes?.has(selection) &&
+        identity.isUser(selection) !== true) {
+      return {roots:[selection],scope:"verified_reply_container",
+        boundary:"same_request_native_message_id"};
+    }
     // request-v6 can positively bind the final reply to a fresh completion
     // toolbar without an explicit "ChatGPT said" header. Prefer that exact
     // already-verified non-page scope rather than a partial paragraph.
