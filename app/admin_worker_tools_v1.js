@@ -216,6 +216,54 @@
   // Independent, request-bound, versioned Native Page Diagnosis. This tool
   // does not take part in request-v6 completion or per-request probe policies.
   let nativePageTimer = null;
+  let nativePageSelectedJobId = "";
+  const nativePageStageLabels = Object.freeze({
+    queued:"等待调度","windows-dispatching":"向 Windows 扩展下发指令",
+    "windows-accepted":"扩展已接收任务",
+    "windows-worker_lookup":"核验 Worker 所属窗口",
+    "windows-tab_opening":"创建临时标签页",
+    "windows-tab_opened":"临时标签页已创建",
+    "windows-tab_loading":"历史页面加载中",
+    "windows-page_ready":"历史页面已加载",
+    "windows-assistant_scanning":"正在定位助手回复",
+    "windows-assistant_captured":"DOM 已采集",
+    "windows-uploading":"正在回传证据",
+    "windows-upload_complete":"证据回传完成",
+    "windows-tab_closed":"临时标签页已关闭",
+    "windows-failed":"扩展采集失败",
+    "complete":"采集完成","failed":"诊断失败",
+  });
+  function refreshNativePageVisibleMode() {
+    const input=$("nativePageForeground");
+    const option=$("nativePageWorker")?.selectedOptions?.[0];
+    if (!input) return;
+    const windows=Boolean(option?.value && option.dataset.platform==="windows");
+    input.disabled=!windows;
+    if (!windows) input.checked=false;
+  }
+  function nativePageShowTimeline(record) {
+    const target=$("nativePageTimelineList");
+    if (!target) return;
+    target.replaceChildren();
+    $("nativePageTimelineTitle").textContent="执行过程 · " + String(record?.job_id || "").slice(0,12);
+    if (!record) {
+      target.append(elem("li","尚无诊断任务"));
+      return;
+    }
+    const trace=Array.isArray(record.trace)?record.trace:[];
+    if (!trace.length) target.append(elem("li",
+      "正在等待 Worker 上报执行阶段（如没有上报，请检查扩展版本和连接）"));
+    for (const event of trace) {
+      const label=nativePageStageLabels["windows-"+event.stage] || String(event.stage||"未知阶段");
+      const ms=Number.isInteger(event.elapsed_ms) ? event.elapsed_ms+"ms" : "—";
+      const tab=Number.isInteger(event.tab_id) ? " · 标签页 #"+event.tab_id : "";
+      const win=Number.isInteger(event.window_id) ? " · 窗口 #"+event.window_id : "";
+      target.append(elem("li",label+" · "+ms+tab+win));
+    }
+    if (record.status!=="running") target.append(elem("li",
+      record.status==="completed" ? "已完成 · ZIP 中包含执行轨迹" :
+      "已结束 · "+String(record.error||record.status)));
+  }
   function nativePageMessage(message, bad = false) {
     const el = $("nativePageStatus");
     if (!el) return;
@@ -380,6 +428,7 @@
       target.append(option);
     }
     if ([...target.options].some(item => item.value === old)) target.value = old;
+    refreshNativePageVisibleMode();
   }
   async function nativePageRecords() {
     if (!$("nativePageRecords")) return;
@@ -388,6 +437,9 @@
     const target = $("nativePageRecords");
     target.replaceChildren();
     let active = false;
+    if (!nativePageSelectedJobId && rows.length) nativePageSelectedJobId=String(rows[0].job_id||"");
+    const selected=rows.find(x=>x.job_id===nativePageSelectedJobId);
+    nativePageShowTimeline(selected||rows[0]||null);
     for (const item of rows) {
       const row = elem("tr");
       const state = String(item.status || "");
@@ -409,7 +461,11 @@
         : /(?:navigation|redirect|target_not_visible|tab_missing)/.test(issue)
           ? "页面不可用"
         : state === "failed" ? "诊断未通过" : "待处理";
-      const stateCell = elem("td", stateLabel + " · " + resultLabel);
+      const stageLabel=nativePageStageLabels[item.stage] || String(item.stage||"");
+      const elapsed=Number.isInteger(item.elapsed_ms) ? " · "+item.elapsed_ms+"ms" : "";
+      const tabId=Number.isInteger(item.diagnostic_tab_id) ? " · Tab #"+item.diagnostic_tab_id : "";
+      const stateCell = elem("td", stateLabel + " · " + resultLabel +
+        (state==="running" ? " · "+stageLabel+elapsed+tabId : ""));
       row.append(elem("td", String(item.job_id || "").slice(0,12)),
         elem("td", item.target_label || item.request_id || "-", "native-id"),
         elem("td", item.worker_id || "-", "native-id"),
@@ -425,6 +481,9 @@
       log.dataset.exportKind = "日志"; log.dataset.exportLabel = "导出日志";
       log.onclick = () => nativePageExport(item, "log");
       cell.append(log);
+      const timeline=elem("button","查看轨迹","action");
+      timeline.onclick=()=>{nativePageSelectedJobId=String(item.job_id||"");nativePageShowTimeline(item);};
+      cell.append(timeline);
       if (state === "completed") {
         const action = elem("button", "导出诊断 ZIP", "action");
         action.dataset.nativeExport = item.job_id + ":zip";
@@ -469,12 +528,16 @@
     } else if (!worker_id) {
       throw new Error("通过历史链接诊断时，请选择登录该 ChatGPT 账号的 Windows 或 Linux Worker");
     }
+    refreshNativePageVisibleMode();
+    const show_tab=$("nativePageForeground")?.checked===true &&
+      $("nativePageWorker")?.selectedOptions?.[0]?.dataset?.platform==="windows";
     const response = await json("/api/admin/worker-tools/native-page/jobs", {
-      method: "POST", body: {worker_id, target},
+      method: "POST", body: {worker_id, target, show_tab},
     });
+    nativePageSelectedJobId=String(response.job.job_id||"");
     nativePageMessage("诊断任务 " + response.job.job_id.slice(0,12) +
-      (isHistory ? " 已创建：优先只读检查所选 Worker 的现有历史会话标签页，符合安全恢复条件时才打开独立临时页。" :
-        " 已创建：优先核对原请求页面；需打开历史链接时将在 Worker Chrome 中使用独立标签页。"));
+      (show_tab ? " 已创建：Windows 空闲时打开可见临时标签页，完成后恢复原活动页。" :
+       " 已创建：默认后台打开临时标签页；执行阶段显示在下方。"));
     await nativePageRecords();
   }
   async function nativePageToolAction(action) {
@@ -507,6 +570,7 @@
         : tool.installed ? "已安装" : "未安装") + updateState,
       Boolean(result.latest_error));
   }
+  $("nativePageWorker")?.addEventListener("change",refreshNativePageVisibleMode);
   let nativeWorkerLookup = 0;
   $("nativePageRequestId")?.addEventListener("change", async () => {
     const id = $("nativePageRequestId")?.value.trim() || "";
@@ -522,6 +586,7 @@
       if (current !== nativeWorkerLookup) return;
       if (found.worker_id && [...$("nativePageWorker").options].some(x => x.value === found.worker_id)) {
         $("nativePageWorker").value = found.worker_id;
+        refreshNativePageVisibleMode();
         nativePageMessage("已从请求记录定位 Worker：" + found.worker_id +
           (found.conversation_link_saved
             ? "，并找到了已保存的原生会话链接。无需另外填写。"
