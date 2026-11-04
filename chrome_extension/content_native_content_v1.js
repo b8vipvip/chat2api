@@ -97,9 +97,15 @@
       active.nativeStructuralFailure = "reply-candidate-unavailable";
       return null;
     }
-    const reply = candidate.closest?.("[data-message-author-role='assistant'],[data-testid^='conversation-turn']")
+    const identity=globalThis.__CHAT2API_NATIVE_MESSAGE_IDENTITY_V1__;
+    const nativeReply=identity?.resolveAssistantSelection?.(candidate);
+    const reply = nativeReply
+      || active.nativeVerifiedReplyScope?.contains?.(candidate) && active.nativeVerifiedReplyScope
+      || candidate.closest?.("[data-message-author-role='assistant'],[data-testid^='conversation-turn']")
       || candidate;
-    if (reply.matches?.("[data-message-author-role='user']") || reply.closest?.("nav,aside")) return null;
+    if (identity?.isUser?.(reply) === true
+        || reply.matches?.("[data-message-author-role='user']")
+        || reply.closest?.("nav,aside")) return null;
     let nodes = 0, chars = 0, images = 0;
     let truncated = false;
     // 17b4 exceeded the previous 3,200-node budget while the rich reply
@@ -327,9 +333,10 @@
   async function resolveImageIdentities(active) {
     const candidate=active.lastCandidateNode;
     const scoped=globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
+    const nativeReply=globalThis.__CHAT2API_NATIVE_MESSAGE_IDENTITY_V1__?.resolveAssistantSelection?.(candidate);
     const roots=(scoped?.scope==="roleless_reply_siblings"
        || scoped?.scope==="verified_reply_container") && scoped.roots?.length
-      ? scoped.roots : [candidate];
+      ? scoped.roots : [nativeReply || candidate];
     const images=[];
     for (const root of roots) {
       if (!(root instanceof Element) || !root.isConnected) continue;
