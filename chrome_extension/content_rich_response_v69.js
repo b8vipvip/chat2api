@@ -178,6 +178,23 @@
 
   function contentRoot(node) {
     if (!node) return null;
+    // Current DIL ChatGPT replies put their original text and rich blocks
+    // inside a message-ID-bound MarkdownRoot, not legacy lowercase .markdown.
+    // Preserve sibling media or Office cards in the same verified selection.
+    const identity=globalThis.__CHAT2API_NATIVE_MESSAGE_IDENTITY_V1__;
+    const native=identity?.resolveAssistantSelection?.(node);
+    if (native) {
+      const md=native.querySelector("[data-markdown-text-style='assistant-message']");
+      if (md) {
+        const outsideMedia=[...native.querySelectorAll("img")].some(img=>
+          candidateImage(img) && !md.contains(img));
+        const outsideFile=[...native.querySelectorAll(FILE_ANCHORS)].some(link=>
+          recognizedFile(link) && !md.contains(link));
+        if (!outsideMedia && !outsideFile
+            && !(hasPreviewFile(native) && !hasPreviewFile(md))) return md;
+      }
+      return native;
+    }
     const candidates = [];
     const seen = new Set();
     const add = candidate => {
