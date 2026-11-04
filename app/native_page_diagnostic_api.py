@@ -76,7 +76,9 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             "counts","screenshots","size","created_at","updated_at","page_probe")}
         # URL-only tasks use a private internal request key for authenticated
         # Worker ZIP ownership. Never present it as a real API request ID.
-        visible["worker_id"]=job.get("display_worker_id") or job.get("worker_id")
+        wid=str(job.get("worker_id") or "")
+        visible["worker_id"]=(job.get("display_worker_id")
+            or (linux_client(wid) or "ext_ 待绑定" if WORKER_ID.fullmatch(wid) else wid))
         visible["worker_platform"]=job.get("worker_platform") or "linux"
         visible["request_id"]=job.get("original_request_id",
             job.get("request_id") if job.get("target_type") != "conversation_url" else "")
