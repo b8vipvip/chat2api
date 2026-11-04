@@ -67,7 +67,10 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
     app.state.registry=registry
     app.state.settings=SimpleNamespace(data_dir=tmp_path,api_key="api-secret")
     app.state.admin_sessions=None
-    app.state.telemetry=SimpleNamespace(get=lambda rid:None)
+    missing_link_id="req_windowsnomedia12345"
+    app.state.telemetry=SimpleNamespace(get=lambda rid:
+        {"request_id":rid,"worker_client_id":ext,"diagnostics":{}}
+        if rid==missing_link_id else None)
     app.state.linux_workers=SimpleNamespace(data={"workers":{}},list_public=lambda:[])
     app.state.worker_sockets={}
     install_native_page_diagnostics(app)
@@ -87,6 +90,15 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
         not_owner=client.post("/api/admin/worker-tools/native-page/jobs",headers=auth,
             json={"target":history,"worker_id":"ext_mac777777"})
         assert not_owner.status_code==409
+
+        owner=client.get("/api/admin/worker-tools/native-page/request-worker/"+missing_link_id,
+            headers=auth)
+        assert owner.status_code==200
+        assert owner.json()["worker_id"]==ext
+        missing=client.post("/api/admin/worker-tools/native-page/jobs",headers=auth,
+            json={"target":missing_link_id,"worker_id":ext})
+        assert missing.status_code==422,missing.text
+        assert not registry.sent
 
         created=client.post("/api/admin/worker-tools/native-page/jobs",headers=auth,
             json={"target":history,"worker_id":ext})
