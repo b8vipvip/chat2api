@@ -110,12 +110,15 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             raise HTTPException(404,"Worker does not exist")
         if not EXT_WORKER_ID.fullmatch(worker):
             raise HTTPException(400,"Invalid Worker")
-        client=app.state.registry.clients.get(worker)
-        if not client or not client.connection_enabled:
-            raise HTTPException(404,"Worker does not exist or is disabled")
+        # The Linux Controller has a distinct authenticated channel. Its
+        # diagnostic availability must not depend on the Chrome extension's
+        # separate enable/disable switch or reconnect timing.
         for wid,entry in app.state.linux_workers.data.get("workers",{}).items():
             if not entry.get("revoked_at") and entry.get("extension_client_id")==worker:
                 return wid,"linux",worker
+        client=app.state.registry.clients.get(worker)
+        if not client or not client.connection_enabled:
+            raise HTTPException(404,"Worker does not exist or is disabled")
         meta=client.metadata if isinstance(client.metadata,dict) else {}
         if meta.get("linux_worker_id") or meta.get("controller_worker_id"):
             raise HTTPException(409,"Linux bridge is not bound")
