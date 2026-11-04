@@ -293,56 +293,76 @@
     };
   }
 
+  function nativeMessageIdentity() {
+    return globalThis.__CHAT2API_NATIVE_MESSAGE_IDENTITY_V1__ || null;
+  }
+
   function conversationTurns() {
-    const result = [];
-    const seen = new Set();
+    const result = [], seen = new Set();
+    const add = node => {
+      if (!node || seen.has(node)) return;
+      seen.add(node);result.push(node);
+    };
     for (const selector of [
       "article[data-testid^='conversation-turn']",
       "[data-testid^='conversation-turn']",
       "article[data-message-id]",
     ]) {
-      for (const turn of document.querySelectorAll(selector)) {
-        if (seen.has(turn)) continue;
-        seen.add(turn);
-        result.push(turn);
-      }
+      for (const turn of document.querySelectorAll(selector)) add(turn);
     }
+    // Current ChatGPT can omit all legacy conversation-turn attributes.
+    // Use the native user wrapper for request-local prompt anchoring.
+    for (const turn of nativeMessageIdentity()?.userMessages?.() || []) add(turn);
+    result.sort((a,b) => {
+      const pos=a.compareDocumentPosition(b);
+      return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 :
+        pos & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0;
+    });
     return result;
   }
 
   function userTurn(turn) {
-    return turn?.getAttribute?.("data-message-author-role") === "user"
+    return nativeMessageIdentity()?.isUser?.(turn) === true
+      || turn?.getAttribute?.("data-message-author-role") === "user"
       || Boolean(turn?.querySelector?.("[data-message-author-role='user']"));
   }
 
   function assistantNodes() {
-    const result = [];
-    const seen = new Set();
+    const result = [], seen = new Set();
+    const add = node => {
+      if (!node || seen.has(node) || !visible(node) ||
+          nativeMessageIdentity()?.isUser?.(node) === true) return;
+      seen.add(node);result.push(node);
+    };
+    // Native message identity is stronger than a guessed, largest paragraph.
+    for (const node of nativeMessageIdentity()?.assistantMessages?.() || []) add(node);
     for (const selector of ["[data-message-author-role='assistant']", "article[data-testid^='conversation-turn'] [data-message-author-role='assistant']"]) {
       for (const node of document.querySelectorAll(selector)) {
-        if (!seen.has(node) && visible(node)) {
-          seen.add(node);
-          result.push(node);
-        }
+        add(nativeMessageIdentity()?.resolveAssistantSelection?.(node) || node);
       }
     }
+    result.sort((a,b) => {
+      const pos=a.compareDocumentPosition(b);
+      return pos & Node.DOCUMENT_POSITION_FOLLOWING ? -1 :
+        pos & Node.DOCUMENT_POSITION_PRECEDING ? 1 : 0;
+    });
     return result;
   }
 
   function turnOf(node) {
-    return node?.closest?.("article[data-testid^='conversation-turn'],[data-testid^='conversation-turn'],article[data-message-id]") || node || null;
+    return nativeMessageIdentity()?.turnOf?.(node)
+      || node?.closest?.("article[data-testid^='conversation-turn'],[data-testid^='conversation-turn'],article[data-message-id]") || node || null;
   }
 
   function nodeIdentity(node) {
     const turn = turnOf(node);
-    return String(
-      turn?.getAttribute?.("data-message-id")
+    return String(nativeMessageIdentity()?.messageId?.(node)
+      || turn?.getAttribute?.("data-message-id")
       || turn?.dataset?.messageId
       || turn?.id
       || turn?.getAttribute?.("data-testid")
       || node?.getAttribute?.("data-message-id")
-      || ""
-    );
+      || "");
   }
 
   function transientText(value) {
@@ -609,9 +629,11 @@
       try {
         const correlated=active.lastCandidateNode;
         const assistantNode=correlated?.nodeType === 1
-          ? (correlated.closest?.('[data-message-author-role="assistant"]')
+          ? (nativeMessageIdentity()?.resolveAssistantSelection?.(correlated)
+            || correlated.closest?.('[data-message-author-role="assistant"]')
             || (!correlated.closest?.(
                 '[data-message-author-role="user"],[data-testid="user-message"]')
+                && nativeMessageIdentity()?.isUser?.(correlated) !== true
                 ? correlated : null))
           : null;
         if (assistantNode?.isConnected &&
@@ -867,7 +889,25 @@
     if (!current?.isNew || !(candidate instanceof Element) ||
         !candidate.isConnected || !visible(candidate) ||
         candidate.closest?.("[data-message-author-role='user'],[data-testid='user-message'],form,nav,aside,header,footer,[role='dialog']") ||
+        nativeMessageIdentity()?.isUser?.(candidate) === true ||
         !candidate.closest?.("main,[role='main'],#thread")) return false;
+    // For modern DIL pages, message role, selection ID, renderer ID and
+    // the before-send baseline can establish a complete *capture* scope
+    // without waiting for an unrelated toolbar. This never decides terminal.
+    const nativeSelection=nativeMessageIdentity()?.resolveAssistantSelection?.(candidate);
+    const nativeId=nativeSelection && nativeMessageIdentity()?.messageId?.(nativeSelection);
+    const currentUser=currentUserTurn(active);
+    if (nativeSelection && nativeId &&
+        !active.baselineNodes?.has(nativeSelection) &&
+        !active.baselineIds?.has(nativeId) &&
+        (!currentUser || turnFollows(currentUser,nativeSelection)) &&
+        !nativeSelection.querySelector("form,textarea,input,[contenteditable='true']")) {
+      active.lastCandidateNode=nativeSelection;
+      active.nativeVerifiedReplyScope=nativeSelection;
+      active.nativeBindingEvidence="same-request-native-message-id+baseline+network-v261";
+      active.nativeBindingPhase=phase;
+      return true;
+    }
     const newActions = responseFinishActions().filter(button =>
       !active.baselineFinishActions.has(button) &&
       button.isConnected && turnFollows(candidate, button));
