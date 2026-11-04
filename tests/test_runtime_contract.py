@@ -418,7 +418,10 @@ def test_v262_windows_diagnostic_is_not_a_request_terminal_owner():
     assert '"native.page.windows.chunk"' in collector
     assert '"native.page.windows.finished"' in collector
     assert 'const VERSION="windows-dom-1.1.1"' in collector
-    assert 'worker_managed_chatgpt_tab_not_found' in collector
+    assert 'chrome.windows.create({' in collector
+    assert 'url:"about:blank"' in collector
+    assert 'diagnosticTabs.add(tab.id)' in collector
+    assert 'await chrome.tabs.update(tab.id,{url:job.conversation_url})' in collector
     assert 'diagnostic_conversation_redirected' in collector
     assert 'generation_active:generationActive' in collector
     assert 'if(seen>=3&&meta.complete&&meta.boundary_verified)break;' in collector
