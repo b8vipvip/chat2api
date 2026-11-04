@@ -84,7 +84,7 @@ def parse_windows_collector_raw(body: bytes) -> tuple[str, dict]:
     """
     if not isinstance(body, bytes) or not 0 < len(body) <= MAX_SOURCE_BYTES:
         raise WindowsCollectorReleaseUnavailable("windows_release_raw_size_invalid")
-    blob = hashlib.sha1(f"blob {len(body)}\\0".encode("ascii") + body).hexdigest()
+    blob = hashlib.sha1(f"blob {len(body)}\0".encode("ascii") + body).hexdigest()
     envelope = {
         "type": "file", "path": RELEASE_PATH,
         "encoding": "base64", "size": len(body), "sha": blob,
