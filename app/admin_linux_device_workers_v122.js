@@ -162,7 +162,7 @@
         const bridge = worker?.metadata?.bridge && typeof worker.metadata.bridge === "object" ? worker.metadata.bridge : {};
         const extension = worker.extension_client_id || bridge.client_id ? (bridge.online === false ? "离线" : "已连接") : "未绑定";
         return `<tr>
-          <td><b>Worker ${esc(worker.worker_slot || "-")}</b><div class="dw-muted">${esc(worker.name || worker.worker_id || "")}</div></td>
+          <td><b>Worker ${esc(worker.worker_slot || "-")}</b><div class="dw-muted">${esc(worker.name || worker.extension_client_id || "ext_ 待绑定")}</div></td>
           <td>${esc(statusText(worker))}</td>
           <td>${proxy ? "已配置" : "未配置"}</td>
           <td>${esc(chatgptText(worker))}</td>
