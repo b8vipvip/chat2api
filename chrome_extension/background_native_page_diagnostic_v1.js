@@ -149,8 +149,12 @@
       const router=globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
       const managedIds=new Set(Object.values(router?.routes || {})
         .map(route=>route?.tab_id).filter(Number.isInteger));
+      const pool=globalThis.__CHAT2API_PERSISTENT_WINDOW_POOL_V132__;
+      const readyPoolIds=new Set(Array.from(pool?.runtimeReadyTabs?.entries?.() || [])
+        .filter(([,ready])=>ready===true).map(([id])=>id));
       const existing=tabs.find(item=>item.id===boundTabId)
-        || tabs.find(item=>managedIds.has(item.id));
+        || tabs.find(item=>managedIds.has(item.id))
+        || tabs.find(item=>readyPoolIds.has(item.id));
       if(!existing)throw new Error("worker_managed_chatgpt_tab_not_found");
       const options={url:job.conversation_url,active:false,windowId:existing.windowId};
       tab=await chrome.tabs.create(options);
