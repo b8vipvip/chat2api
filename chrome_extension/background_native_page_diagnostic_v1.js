@@ -53,6 +53,14 @@
       selections.push({node:role,id:String(role.getAttribute("data-message-id")||"")});
     }
     const target=selections[selections.length-1];
+    // A stable DOM is not necessarily a finished response. A generation may
+    // pause without changing node/text counts for multiple polling intervals.
+    const generationActive=Array.from(document.querySelectorAll(
+      "[data-testid='stop-button'],[data-testid='composer-stop-button'],"+
+      "[data-testid='stop-generating-button'],"+
+      "button[aria-label='Stop generating'],button[aria-label='停止生成'],"+
+      "[data-conversation-role='assistant'][aria-busy='true']"
+    )).some(visible);
     const probe={
       ready_state:document.readyState,assistant_role_nodes:document.querySelectorAll(
         "h4[data-conversation-role='assistant'],[data-message-author-role='assistant']").length,
@@ -60,6 +68,7 @@
       user_role_nodes:document.querySelectorAll(
         "h4[data-conversation-role='user'],[data-message-author-role='user']").length,
       selected_assistant_count:selections.length,
+      generation_active:generationActive,
       captured_at:now
     };
     if(!target)return {ok:false,stage:"no-safe-assistant-boundary",probe};
@@ -106,7 +115,7 @@
     const tree=walk(target.node,0);
     const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.0.0",
       boundary_verified:!!target.id&&!truncated,
-      request_bound:false,complete:!truncated,
+      request_bound:false,complete:!truncated&&!generationActive,
       message_id:target.id,counts:{nodes,text_chars:chars,tables,images},
       probe,root:tree,limitations:["No full-page screenshot","No source image bytes","No API request identity validation"]};
     return {ok:true,answer};
@@ -135,20 +144,33 @@
         const data=await chrome.storage?.local?.get?.({boundTabId:null});
         if(Number.isInteger(data?.boundTabId))boundTabId=data.boundTabId;
       }catch(_){}
-      // Prefer the extension's explicitly bound Worker window, not a
-      // user's unrelated interactive ChatGPT window.
-      const existing=tabs.find(item=>item.id===boundTabId) || tabs[0];
-      const options={url:job.conversation_url,active:false};
-      if(existing)options.windowId=existing.windowId;
+      // Select only a tab demonstrably owned by this Worker's binding or
+      // conversation router. Never borrow another user's ChatGPT window.
+      const router=globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
+      const managedIds=new Set(Object.values(router?.routes || {})
+        .map(route=>route?.tab_id).filter(Number.isInteger));
+      const existing=tabs.find(item=>item.id===boundTabId)
+        || tabs.find(item=>managedIds.has(item.id));
+      if(!existing)throw new Error("worker_managed_chatgpt_tab_not_found");
+      const options={url:job.conversation_url,active:false,windowId:existing.windowId};
       tab=await chrome.tabs.create(options);
       if(!Number.isInteger(tab?.id))throw new Error("independent_tab_not_created");
       diagnosticTabs.add(tab.id);
+      const expectedPath=new URL(job.conversation_url).pathname.replace(/\/$/,"");
       let stable="",seen=0,best=null;
       for(let attempt=0;attempt<60;attempt++){
         await sleep(attempt<2?1200:1800);
         const current=await chrome.tabs.get(tab.id).catch(()=>null);
         if(!current)throw new Error("diagnostic_tab_closed");
         if(current.status!=="complete")continue;
+        // A signed-out account or an unrelated redirect cannot be used as
+        // evidence for the requested conversation.
+        let loaded;
+        try{loaded=new URL(String(current.url||""));}catch(_){}
+        if(!loaded||loaded.protocol!=="https:"||
+            !["chatgpt.com","www.chatgpt.com","chat.openai.com"].includes(loaded.hostname)||
+            loaded.pathname.replace(/\/$/,"")!==expectedPath)
+          throw new Error("diagnostic_conversation_redirected");
         const result=await chrome.scripting.executeScript({
           target:{tabId:tab.id},func:capturePage
         }).catch(()=>null);
@@ -163,10 +185,10 @@
           +"|"+meta.message_id+"|"+meta.complete;
         if(fingerprint===stable)seen++;else{stable=fingerprint;seen=1;}
         best=meta;
-        if(seen>=3)break;
+        if(seen>=3&&meta.complete&&meta.boundary_verified)break;
       }
       if(!best)throw new Error("no_safe_assistant_reply_after_wait");
-      if(seen<3)best.complete=false;
+      if(seen<3||!best.boundary_verified)best.complete=false;
       const bytes=new TextEncoder().encode(JSON.stringify(best));
       if(bytes.byteLength>1500000)throw new Error("diagnostic_data_budget_exceeded");
       const digest=new Uint8Array(await crypto.subtle.digest("SHA-256",bytes));
