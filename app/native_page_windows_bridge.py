@@ -10,11 +10,18 @@ import binascii
 import hashlib
 import json
 import re
+import time
 
 JOB_ID = re.compile(r"^[a-f0-9]{32}$")
 DIGEST = re.compile(r"^[a-f0-9]{64}$")
 MAX_BYTES = 1_500_000
 PART_BYTES = 32_768
+PROGRESS_STAGES = frozenset({
+    "accepted", "worker_lookup", "tab_opening", "tab_opened",
+    "tab_loading", "page_ready", "assistant_scanning",
+    "assistant_captured", "uploading", "upload_complete",
+    "tab_closed", "failed",
+})
 
 
 class WindowsNativePageBridge:
@@ -22,7 +29,10 @@ class WindowsNativePageBridge:
         self.registry = registry
         self.pending: dict[str, dict] = {}
 
-    async def collect(self, client_id: str, job_id: str, url: str, *, timeout: float = 155):
+    async def collect(self, client_id: str, job_id: str, url: str, *, timeout: float = 155,
+                      show_tab: bool = False, on_progress=None):
+        if type(show_tab) is not bool:
+            raise ValueError("invalid_visual_diagnostic_option")
         if not JOB_ID.fullmatch(job_id):
             raise ValueError("invalid_windows_job_id")
         if job_id in self.pending:
@@ -34,11 +44,13 @@ class WindowsNativePageBridge:
         self.pending[job_id] = {
             "client_id": client_id, "future": future, "chunks": [],
             "size": None, "sha256": None, "count": None,
+            "show_tab": show_tab, "on_progress": on_progress, "events": 0,
         }
         try:
             await self.registry.send(client_id, {
                 "type": "native.page.windows.start",
                 "job_id": job_id, "conversation_url": url,
+                "show_tab": show_tab,
             })
             raw = await asyncio.wait_for(future, timeout)
             record = json.loads(raw)
@@ -66,7 +78,37 @@ class WindowsNativePageBridge:
             return
         try:
             kind = str(message.get("type") or "")
-            if kind == "native.page.windows.chunk":
+            if kind == "native.page.windows.progress":
+                stage = message.get("stage")
+                elapsed = message.get("elapsed_ms")
+                shown = message.get("show_tab")
+                tab_id = message.get("tab_id")
+                window_id = message.get("window_id")
+                if (stage not in PROGRESS_STAGES
+                    or type(elapsed) is not int or not 0 <= elapsed <= 180000
+                    or type(shown) is not bool or shown != state["show_tab"]
+                    or (tab_id is not None and
+                        (type(tab_id) is not int or not 1 <= tab_id <= 2**31-1))
+                    or (window_id is not None and
+                        (type(window_id) is not int or not 1 <= window_id <= 2**31-1))):
+                    return
+                if state["events"] >= 48:
+                    return
+                event = {
+                    "stage": stage,
+                    "elapsed_ms": elapsed,
+                    "received_at_ms": int(time.time() * 1000),
+                    "show_tab": shown,
+                }
+                if tab_id is not None:
+                    event["tab_id"] = tab_id
+                if window_id is not None:
+                    event["window_id"] = window_id
+                state["events"] += 1
+                callback = state.get("on_progress")
+                if callback is not None:
+                    await callback(event)
+            elif kind == "native.page.windows.chunk":
                 count = message.get("count")
                 index = message.get("index")
                 length = message.get("size")
