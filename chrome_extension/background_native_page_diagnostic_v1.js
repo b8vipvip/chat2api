@@ -5,7 +5,7 @@
   "use strict";
   const KEY="__CHAT2API_WINDOWS_NATIVE_PAGE_DIAG_V1__";
   if(globalThis[KEY])return;
-  const VERSION="windows-dom-1.1.0";
+  const VERSION="windows-dom-1.1.1";
   const URL_RE=/^https:\/\/(?:chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)\/c\/[A-Za-z0-9-]{12,90}\/?$/;
   const JOB_RE=/^[0-9a-f]{32}$/;
   const jobs=new Set();
@@ -113,7 +113,7 @@
       return out;
     }
     const tree=walk(target.node,0);
-    const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.1.0",
+    const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.1.1",
       boundary_verified:!!target.id&&!truncated,
       request_bound:false,complete:!truncated&&!generationActive,
       message_id:target.id,counts:{nodes,text_chars:chars,tables,images},
@@ -144,8 +144,9 @@
     };
     try {
       await progress("accepted");
-      // Append only to an explicitly Worker-owned ChatGPT window. Do not
-      // borrow arbitrary windows even when this is a foreground diagnosis.
+      // Reuse a provably Worker-owned window if one still exists. An idle
+      // Windows Worker may legitimately have *no* ChatGPT tab after cleanup;
+      // never borrow an arbitrary user's tab as a fallback.
       const tabs=(await chrome.tabs.query({url:[
         "https://chatgpt.com/*","https://www.chatgpt.com/*",
         "https://chat.openai.com/*"
@@ -165,27 +166,55 @@
       const existing=tabs.find(item=>item.id===boundTabId)
         || tabs.find(item=>managedIds.has(item.id))
         || tabs.find(item=>readyPoolIds.has(item.id));
-      if(!existing)throw new Error("worker_managed_chatgpt_tab_not_found");
-      windowId=existing.windowId;
+      windowId=existing?.windowId??null;
       await progress("worker_lookup");
+
+      // Visible mode is explicitly opt-in. Never steal focus from a routed
+      // request, even when no Worker-owned browser tab is currently present.
       if(showTab){
-        // Foreground mode is explicit opt-in, never permitted to hide a
-        // currently routed API request's Chrome tab.
         const busy=Boolean(router?.activeRequests?.size)
           || Object.values(router?.routes||{}).some(route=>Boolean(route?.inflight_request_id))
           || Boolean(globalThis.__CHAT2API_CONVERSATION_WORKERS_V24__?.requestRoutes?.size);
         if(busy)throw new Error("worker_busy_visual_diagnosis");
-        const active=await chrome.tabs.query({active:true,windowId}).catch(()=>[]);
-        previousActiveTabId=active.find(item=>Number.isInteger(item?.id))?.id??null;
+        if(Number.isInteger(windowId)){
+          const active=await chrome.tabs.query({active:true,windowId}).catch(()=>[]);
+          previousActiveTabId=active.find(item=>Number.isInteger(item?.id))?.id??null;
+        }
       }
       await progress("tab_opening");
-      tab=await chrome.tabs.create({url:job.conversation_url,active:showTab,windowId});
-      if(!Number.isInteger(tab?.id))throw new Error("independent_tab_not_created");
+      if(existing){
+        // Start with an inert blank tab; register its lease *before*
+        // navigating to ChatGPT so the pool/supervisor never adopts it.
+        tab=await chrome.tabs.create({url:"about:blank",active:showTab,windowId});
+      }else{
+        // No Worker-owned ChatGPT tab is not a fatal condition. Create a new
+        // independent, same-profile Chrome window instead of borrowing tabs.
+        // about:blank avoids a race with supervisor onCreated handlers.
+        await progress("window_creating");
+        const ownedWindow=await chrome.windows.create({
+          url:"about:blank",focused:showTab,type:"normal"
+        });
+        if(!Number.isInteger(ownedWindow?.id))
+          throw new Error("diagnostic_owned_window_not_created");
+        windowId=ownedWindow.id;
+        const fresh=Array.isArray(ownedWindow.tabs)?
+          ownedWindow.tabs.find(item=>Number.isInteger(item?.id)):null;
+        if(fresh)tab=fresh;
+        else{
+          const inWindow=await chrome.tabs.query({windowId});
+          tab=(inWindow||[]).find(item=>Number.isInteger(item?.id)
+            && (item.url==="about:blank"||item.pendingUrl==="about:blank"))||null;
+        }
+        await progress("window_created");
+      }
+      if(!Number.isInteger(tab?.id))
+        throw new Error("independent_tab_not_created");
       diagnosticTabs.add(tab.id);
+      // A purely blank, owned temporary tab is never a live API route.
+      // Navigating only this tab preserves existing ChatGPT request windows.
+      await chrome.tabs.update(tab.id,{url:job.conversation_url});
       await progress("tab_opened");
-      if(showTab){
-        // Opt-in foreground mode intentionally reveals the history tab. Do
-        // not navigate or reload the previous Worker-owned tab.
+      if(showTab&&existing){
         try{await chrome.windows?.update?.(windowId,{focused:true});}catch(_){}
       }
       const expectedPath=new URL(job.conversation_url).pathname.replace(/\/$/,"");
