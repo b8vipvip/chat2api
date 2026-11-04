@@ -47,7 +47,7 @@ const allowed=new Set('div section article p span strong em b i h1 h2 h3 h4 h5 h
 const forbidden='script,style,form,nav,aside,header,footer,input,textarea,iframe,canvas,svg,[role="menu"],[role="dialog"],[contenteditable="true"],[data-message-author-role="user"],[data-conversation-role="user"],[data-testid="user-message"]';
 const visible=e=>{try{const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>0&&r.height>0&&s.display!=='none'&&s.visibility!=='hidden';}catch(_){return false;}};
 const norm=s=>String(s||'').replace(/\s+/g,' ').trim();
-const hasUser=e=>!!e.querySelector('[data-message-author-role="user"],[data-conversation-role="user"],[data-testid="user-message"]');
+const hasUser=e=>!!e.querySelector('[data-message-author-role="user"],[data-conversation-role="user"],[data-testid="user-message"]')||!!e.closest('[data-chatgpt-search-message-ids]')?.querySelector('h4[data-conversation-role="user"]');
 let scope='',roots=[],boundaryVerified=true;
 const tagged=document.querySelector('[data-chat2api-native-request-id="'+expected+'"]');
 const nativeSelection=sel=>{
