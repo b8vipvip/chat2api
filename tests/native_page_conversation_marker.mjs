@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
 
 const source=readFileSync("scripts/native_page_diagnostic_v1.py","utf8");
-const match=source.match(/CAPTURE = r"""([\\s\\S]*?)"""/);
+const match=source.match(/CAPTURE = r"""([\s\S]*?)"""/);
 assert.ok(match,"CAPTURE must exist");
 const capture=match[1];
 new Function(capture);
