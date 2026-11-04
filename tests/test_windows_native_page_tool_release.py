@@ -63,3 +63,31 @@ def test_fixed_github_raw_release_parser_matches_content_hashes():
     assert manifest["version"] == "1.0.2"
     assert manifest["source"] == "github-raw-fixed-release-branch"
     assert manifest["sha256"] == hashlib.sha256(source).hexdigest()
+
+
+@pytest.mark.asyncio
+async def test_rest_403_uses_fixed_raw_source(monkeypatch):
+    import httpx
+    from app import windows_native_page_tool_release as module
+    raw = b'(()=>{ const DIAGNOSTIC_TOOL_VERSION="1.0.2"; return {ok:true}; })()'
+    requests = []
+    def respond(request):
+        requests.append(str(request.url))
+        if str(request.url) == module.RELEASE_API:
+            return httpx.Response(403)
+        assert str(request.url) == module.RELEASE_RAW
+        return httpx.Response(200, content=raw)
+    original = httpx.AsyncClient
+    def client(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(respond)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(module.httpx, "AsyncClient", client)
+    release = module.WindowsCollectorReleaseSource()
+    source, manifest = await release.load(force=True)
+    assert source.encode() == raw
+    assert manifest["version"] == "1.0.2"
+    assert manifest["api_fallback_reason"] == "github_windows_release_http_403"
+    assert requests == [module.RELEASE_API, module.RELEASE_RAW]
+    await release.load(force=True)
+    assert requests[-1] == module.RELEASE_RAW
+    assert len(requests) == 3
