@@ -3,7 +3,7 @@
  * No extension APIs, page mutation, network access or live request terminals.
  */
 (()=>{
-  const DIAGNOSTIC_TOOL_VERSION="1.0.0";
+  const DIAGNOSTIC_TOOL_VERSION="1.0.1";
   function capturePage() {
     const now=new Date().toISOString();
     const visible=node=>{
@@ -77,11 +77,32 @@
       if(out.tag==="img"){
         images++;
         const box=node.getBoundingClientRect();
-        out.image={natural_width:Math.max(0,Number(node.naturalWidth)||0),
-          natural_height:Math.max(0,Number(node.naturalHeight)||0),
+        const nw=Math.max(0,Number(node.naturalWidth)||0),nh=Math.max(0,Number(node.naturalHeight)||0);
+        const complete=node.complete===true;
+        const declared=String(node.getAttribute("src")||"");
+        const current=String(node.currentSrc||"");
+        const hasSrcset=Boolean(node.getAttribute("srcset"));
+        const chosen=current||declared;
+        // Export only the URL *kind*, never the source path or signed token.
+        const sourceKind=!chosen?(hasSrcset?"srcset-unresolved":"none"):
+          /^blob:/i.test(chosen)?"blob":/^data:/i.test(chosen)?"data":
+          /^https:/i.test(chosen)?"https":/^http:/i.test(chosen)?"http":
+          /^[./]/.test(chosen)?"relative":"other";
+        const vw=Math.max(0,Number(globalThis.innerWidth)||0);
+        const vh=Math.max(0,Number(globalThis.innerHeight)||0);
+        const inViewport=vw>0&&vh>0&&
+          box.right>0&&box.bottom>0&&box.left<vw&&box.top<vh;
+        const rawLoading=String(node.loading||node.getAttribute("loading")||"");
+        const loading=["lazy","eager"].includes(rawLoading)?rawLoading:"auto";
+        const loaded=complete&&nw>0&&nh>0;
+        const loadState=loaded?"loaded":!complete?"pending":
+          !chosen&&!hasSrcset?"no-source":"completed-without-image";
+        out.image={natural_width:nw,natural_height:nh,
           display_width:Math.round(box.width*100)/100,
           display_height:Math.round(box.height*100)/100,
-          loaded:node.complete===true};
+          loaded,complete,load_state:loadState,loading,
+          in_viewport:inViewport,source_kind:sourceKind,
+          has_src:!!declared,has_current_src:!!current,has_srcset:hasSrcset};
       }else if(out.tag==="table"){tables++;}
       const computed=getComputedStyle(node);
       const styles={};
@@ -104,6 +125,6 @@
     return {ok:true,answer};
   }
   const result=capturePage();
-  if(result?.ok&&result.answer){result.answer.version="windows-hot-1.0.0";result.answer.collector_version=DIAGNOSTIC_TOOL_VERSION;}
+  if(result?.ok&&result.answer){result.answer.version="windows-hot-1.0.1";result.answer.collector_version=DIAGNOSTIC_TOOL_VERSION;}
   return result;
 })()
