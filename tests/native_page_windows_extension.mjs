@@ -15,6 +15,7 @@ const scope={
   setTimeout:fn=>{Promise.resolve().then(fn);return 1;},
   chrome:{
     tabs:{
+      query:async()=>[{id:7,windowId:25,url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"}],
       create:async options=>{opens.push(options);return {id:101};},
       get:async()=>({id:101,status:"complete"}),
       remove:async id=>{closed.push(id);}
@@ -40,7 +41,10 @@ await diag.execute({job_id:"b".repeat(32),
   conversation_url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"});
 assert.equal(opens.length,1);
 assert.equal(opens[0].active,false,"Never steal an active API tab");
+assert.equal(opens[0].windowId,25,"Reuse an existing ChatGPT Chrome session, never a new pool window");
 assert.deepEqual(closed,[101],"Owned diagnostic tab removed after capture");
+assert.equal(scope.__CHAT2API_NATIVE_PAGE_DIAG_TAB_IDS_V1__?.size,0,
+  "Remove the diagnostic tab lease even after completion");
 assert.equal(events.filter(x=>x.type==="native.page.windows.finished"&&x.ok).length,1);
 assert.ok(events.some(x=>x.type==="native.page.windows.chunk"));
 assert.equal(events.some(x=>x.type==="chat.completed"||x.type==="chat.request"),false,
