@@ -338,7 +338,9 @@
     for (const node of nativeMessageIdentity()?.assistantMessages?.() || []) add(node);
     for (const selector of ["[data-message-author-role='assistant']", "article[data-testid^='conversation-turn'] [data-message-author-role='assistant']"]) {
       for (const node of document.querySelectorAll(selector)) {
-        add(nativeMessageIdentity()?.resolveAssistantSelection?.(node) || node);
+        const native=nativeMessageIdentity()?.resolveAssistantSelection?.(node);
+        if (node.closest?.("[data-chatgpt-selection-message-id]") && !native) continue;
+        add(native || node);
       }
     }
     result.sort((a,b) => {
