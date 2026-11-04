@@ -492,12 +492,17 @@
     const latest = result.latest || {};
     const local = String(tool.version || "不可用");
     const remote = String(latest.version || "未知");
-    const same = Boolean(tool.sha256 && tool.sha256 === latest.sha256);
+    const same = platform === "windows"
+      ? Boolean(tool.installed && tool.version && tool.version === latest.version)
+      : Boolean(tool.sha256 && tool.sha256 === latest.sha256);
     const updateState = action === "update"
       ? tool.updated === false ? " · 已是最新，无需重复安装" : " · 安装完成并通过 SHA-256 校验"
-      : same ? " · 当前已是最新" : latest.version ? " · 有独立工具更新可用" : "";
+      : same ? " · 当前已是最新" : latest.version
+        ? platform === "windows" ? " · 需更新 Windows Worker 扩展" : " · 有独立工具更新可用"
+        : "";
+    const latestLabel = platform === "windows" ? "扩展内置最新" : "独立发布分支最新";
     nativePageMessage("Worker " + worker + " · 已安装 " + local +
-      " · 发布分支最新 v" + remote + " · " +
+      " · " + latestLabel + " " + remote + " · " +
       (result.latest_error ? "查询失败：" + result.latest_error
         : tool.installed ? "已安装" : "未安装") + updateState,
       Boolean(result.latest_error));
