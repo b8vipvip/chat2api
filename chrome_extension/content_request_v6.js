@@ -1584,7 +1584,19 @@
 
     const currentUser = currentUserTurn(active);
     if (currentUser) {
-      const afterUser = nodes.filter(node => turnFollows(currentUser, turnOf(node)));
+      const afterUser = nodes.filter(node => {
+        if (!turnFollows(currentUser, turnOf(node))) return false;
+        const id=nodeIdentity(node);
+        const newNode=!active.baselineNodes?.has(node);
+        const newId=Boolean(id && !active.baselineIds?.has(id));
+        const changedWhileGenerating=Boolean(
+          active.baselineLatestNode===node && isGenerating() &&
+          plainNodeText(node) !== active.baselineLatestText
+        );
+        // The same prompt can be submitted twice. An old matching user
+        // turn is not sufficient proof that a historical reply is current.
+        return newNode || newId || changedWhileGenerating;
+      });
       if (afterUser.length) {
         const latest = afterUser[afterUser.length - 1];
         return {
