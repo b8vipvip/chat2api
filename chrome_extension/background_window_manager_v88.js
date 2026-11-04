@@ -210,7 +210,9 @@
       const windows = await chrome.windows.getAll({ populate: true });
       for (const win of windows || []) {
         if (!Number.isInteger(win?.id)) continue;
-        const tab = (win.tabs || []).find(item => Number.isInteger(item?.id) && isChatGpt(item.url || item.pendingUrl || ""));
+        const diagnostic=globalThis.__CHAT2API_NATIVE_PAGE_DIAG_TAB_IDS_V1__;
+        const tab = (win.tabs || []).find(item => Number.isInteger(item?.id)
+          && !diagnostic?.has?.(item.id) && isChatGpt(item.url || item.pendingUrl || ""));
         if (tab) result.set(win.id, tab);
       }
     } catch (_) {}
