@@ -349,22 +349,24 @@
   async function nativePageWorkers() {
     const target = $("nativePageWorker");
     if (!target) return;
-    // The standard probe catalog contains Browser/extension pseudo-Workers
-    // which have no Linux device-controller CDP executor. Only use canonical
-    // entries from Worker management, with exactly one full worker_id.
+    // Public identity uses the canonical ext_ worker ID on both platforms;
+    // the server resolves the internal Linux controller for existing jobs.
     const response = await json("/api/admin/worker-tools/native-page/workers");
     const old = target.value;
     target.replaceChildren();
-    const none = elem("option", "请选择 Linux Worker");
+    const none = elem("option", "请选择 Worker（Windows / Linux）");
     none.value = "";
     target.append(none);
     for (const worker of response.data || []) {
       const wid = String(worker.worker_id || "");
-      if (!/^wrk_[a-zA-Z0-9_-]{6,100}$/.test(wid)) continue;
-      const label = wid + (worker.name && worker.name !== wid
-        ? " · " + worker.name : "") + (worker.online ? " · 在线" : " · 离线");
+      if (!/^ext_[a-zA-Z0-9_-]{5,120}$/.test(wid)) continue;
+      const os = worker.platform === "windows" ? "Windows" : "Linux";
+      const label = wid + " · " + os +
+        (worker.name && worker.name !== wid ? " · " + worker.name : "") +
+        (worker.online ? " · 在线" : " · 离线");
       const option = elem("option", label);
       option.value = wid;
+      option.dataset.platform = worker.platform || "linux";
       target.append(option);
     }
     if ([...target.options].some(item => item.value === old)) target.value = old;
@@ -451,11 +453,11 @@
       if (chosen && owner && chosen !== owner)
         throw new Error("该请求属于 " + owner + "，不能指定其他 Worker 采集");
       worker_id = owner || chosen;
-      if (!worker_id) throw new Error("请求记录没有可识别的 Linux Worker");
+      if (!worker_id) throw new Error("请求记录没有可识别的 ext_ Worker");
       if ([...$("nativePageWorker").options].some(x => x.value === worker_id))
         $("nativePageWorker").value = worker_id;
     } else if (!worker_id) {
-      throw new Error("通过历史链接诊断时，请选择登录了该 ChatGPT 账号的 Linux Worker");
+      throw new Error("通过历史链接诊断时，请选择登录该 ChatGPT 账号的 Windows 或 Linux Worker");
     }
     const response = await json("/api/admin/worker-tools/native-page/jobs", {
       method: "POST", body: {worker_id, target},
@@ -470,6 +472,10 @@
     if (!worker) throw new Error("请先选择目标 Worker");
     const path = "/api/admin/worker-tools/native-page/workers/" +
       encodeURIComponent(worker) + (action === "update" ? "/update" : "/version");
+    const platform = $("nativePageWorker")?.selectedOptions?.[0]?.dataset?.platform;
+    if (platform === "windows" && action === "update") {
+      throw new Error("Windows 诊断随 Chrome 扩展发布，请更新 Windows Worker 扩展版本。Linux 诊断仍可独立更新。");
+    }
     nativePageMessage(action === "update" ? "正在更新工具，并验证代码 SHA-256…" : "正在检查工具版本…");
     const result = await json(path,action === "update" ? {method:"POST"} : undefined);
     const tool = result.tool || {};
@@ -480,7 +486,7 @@
     const updateState = action === "update"
       ? tool.updated === false ? " · 已是最新，无需重复安装" : " · 安装完成并通过 SHA-256 校验"
       : same ? " · 当前已是最新" : latest.version ? " · 有独立工具更新可用" : "";
-    nativePageMessage("Worker " + worker + " · 已安装 v" + local +
+    nativePageMessage("Worker " + worker + " · 已安装 " + local +
       " · 发布分支最新 v" + remote + " · " +
       (result.latest_error ? "查询失败：" + result.latest_error
         : tool.installed ? "已安装" : "未安装") + updateState,
