@@ -149,3 +149,72 @@ async def test_windows_diagnostic_rejects_nonboolean_visual_mode():
         await bridge.collect("ext_abcdef123456","f"*32,
             "https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef",
             show_tab="true")
+
+
+@pytest.mark.asyncio
+async def test_hot_collector_install_is_worker_bound_with_real_digest():
+    registry = FakeRegistry()
+    bridge = WindowsNativePageBridge(registry)
+    source = '/* safe source */(()=>{const DIAGNOSTIC_TOOL_VERSION="1.0.0";return {ok:true};})()'
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    manifest = {"version": "1.0.0", "bytes": len(source.encode()), "sha256": digest}
+    task = asyncio.create_task(bridge.install_tool(
+        "ext_abcdef123456", source, manifest, timeout=3))
+    await asyncio.sleep(0)
+    packet = registry.sent[0][1]
+    assert packet["type"] == "native.page.windows.tool.update"
+    assert packet["sha256"] == digest
+    assert packet["version"] == "1.0.0"
+    update_id = packet["update_id"]
+    await bridge.ingest("ext_spoofed", {
+        "type": "native.page.windows.tool.updated", "update_id": update_id,
+        "ok": True, "version": "1.0.0", "sha256": digest, "updated": True,
+    })
+    assert not task.done()
+    await bridge.ingest("ext_abcdef123456", {
+        "type": "native.page.windows.tool.updated", "update_id": update_id,
+        "ok": True, "version": "1.0.0", "sha256": "0"*64, "updated": True,
+    })
+    with pytest.raises(ValueError, match="receipt_mismatch"):
+        await task
+    assert not bridge.pending_updates
+
+
+@pytest.mark.asyncio
+async def test_hot_collector_install_receipt_commits_only_after_matching_sha():
+    registry = FakeRegistry()
+    bridge = WindowsNativePageBridge(registry)
+    source = '/* safe source */(()=>{const DIAGNOSTIC_TOOL_VERSION="1.0.0";return {ok:true};})()'
+    digest = hashlib.sha256(source.encode()).hexdigest()
+    manifest = {"version": "1.0.0", "bytes": len(source.encode()), "sha256": digest}
+    task = asyncio.create_task(bridge.install_tool(
+        "ext_abcdef123456", source, manifest, timeout=3))
+    await asyncio.sleep(0)
+    packet = registry.sent[0][1]
+    await bridge.ingest("ext_abcdef123456", {
+        "type": "native.page.windows.tool.updated", "update_id": packet["update_id"],
+        "ok": True, "version": "1.0.0", "sha256": digest, "updated": True,
+    })
+    result = await task
+    assert result["installed"] is True and result["updated"] is True
+    assert result["sha256"] == digest
+    assert not bridge.pending_updates
+
+
+@pytest.mark.asyncio
+async def test_hot_collector_permission_failure_is_explicit_and_does_not_mark_installed():
+    registry=FakeRegistry()
+    bridge=WindowsNativePageBridge(registry)
+    source='/* safe source */(()=>{const DIAGNOSTIC_TOOL_VERSION="1.0.0";return {ok:true};})()'
+    manifest={"version":"1.0.0", "bytes":len(source.encode()),
+              "sha256":hashlib.sha256(source.encode()).hexdigest()}
+    task=asyncio.create_task(bridge.install_tool(
+        "ext_abcdef123456",source,manifest,timeout=3))
+    await asyncio.sleep(0)
+    await bridge.ingest("ext_abcdef123456",{
+        "type":"native.page.windows.tool.updated",
+        "update_id":registry.sent[0][1]["update_id"],
+        "ok":False,"error":"user_scripts_permission_disabled_enable_in_extension_details"})
+    with pytest.raises(RuntimeError,match="user_scripts_permission_disabled"):
+        await task
+    assert not bridge.pending_updates

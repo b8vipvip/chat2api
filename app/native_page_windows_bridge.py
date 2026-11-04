@@ -11,6 +11,7 @@ import hashlib
 import json
 import re
 import time
+import uuid
 
 JOB_ID = re.compile(r"^[a-f0-9]{32}$")
 DIGEST = re.compile(r"^[a-f0-9]{64}$")
@@ -28,6 +29,39 @@ class WindowsNativePageBridge:
     def __init__(self, registry):
         self.registry = registry
         self.pending: dict[str, dict] = {}
+        self.pending_updates: dict[str, dict] = {}
+
+    async def install_tool(self, client_id: str, source: str, manifest: dict,
+                           *, timeout: float = 25.0) -> dict:
+        """Push only the server-verified fixed GitHub release to an online Worker."""
+        if client_id not in self.registry.sockets:
+            raise RuntimeError("windows_extension_offline")
+        version = str(manifest.get("version") or "")
+        sha = str(manifest.get("sha256") or "")
+        data = source.encode("utf-8")
+        if (not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
+            or not DIGEST.fullmatch(sha)
+            or not 0 < len(data) <= 120000
+            or manifest.get("bytes") != len(data)
+            or hashlib.sha256(data).hexdigest() != sha
+            or any(state["client_id"] == client_id
+                   for state in self.pending_updates.values())):
+            raise RuntimeError("windows_tool_install_not_ready")
+        token = uuid.uuid4().hex
+        future = asyncio.get_running_loop().create_future()
+        self.pending_updates[token] = {
+            "future": future, "client_id": client_id,
+            "version": version, "sha256": sha,
+        }
+        try:
+            await self.registry.send(client_id, {
+                "type": "native.page.windows.tool.update",
+                "update_id": token, "version": version,
+                "sha256": sha, "source": source,
+            })
+            return await asyncio.wait_for(future, timeout)
+        finally:
+            self.pending_updates.pop(token, None)
 
     async def collect(self, client_id: str, job_id: str, url: str, *, timeout: float = 155,
                       show_tab: bool = False, on_progress=None):
@@ -67,6 +101,32 @@ class WindowsNativePageBridge:
             self.pending.pop(job_id, None)
 
     async def ingest(self, client_id: str, message: dict):
+        if message.get("type") == "native.page.windows.tool.updated":
+            update_id = str(message.get("update_id") or "")
+            state = self.pending_updates.get(update_id)
+            if (not state or state["client_id"] != client_id
+                or state["future"].done()):
+                return
+            if message.get("ok") is not True:
+                error = str(message.get("error") or "tool_install_failed")[:120]
+                state["future"].set_exception(RuntimeError(
+                    "windows_diagnostic_tool_" + error))
+            elif (message.get("version") != state["version"]
+                  or message.get("sha256") != state["sha256"]
+                  or type(message.get("updated")) is not bool):
+                state["future"].set_exception(
+                    ValueError("windows_diagnostic_tool_receipt_mismatch"))
+            else:
+                state["future"].set_result({
+                    "ok": True,
+                    "installed": True,
+                    "version": state["version"],
+                    "sha256": state["sha256"],
+                    "updated": message["updated"],
+                    "source": "github-dedicated-release-branch",
+                    "capture_mode": "userScripts/USER_SCRIPT",
+                })
+            return
         job_id = str(message.get("job_id") or "")
         if not JOB_ID.fullmatch(job_id):
             return

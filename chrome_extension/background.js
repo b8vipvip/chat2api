@@ -230,6 +230,8 @@ async function sendExtensionStatus(forceModelDiscovery = false) {
   if (!bound && settings.autoBind && tabs.length === 1) bound = await maybeAutoBind();
   let modelData = { models: settings.models || [], current_model: settings.currentModel || "default" };
   if (bound && forceModelDiscovery) modelData = await discoverModels(bound, true);
+  const nativeTool=await (globalThis.__CHAT2API_WINDOWS_NATIVE_PAGE_DIAG_V1__?.getToolStatus?.()
+    || Promise.resolve({})).catch(()=>({}));
   await trySendSocket({
     type: "extension.status",
     metadata: {
@@ -242,6 +244,9 @@ async function sendExtensionStatus(forceModelDiscovery = false) {
       current_model: modelData.current_model || "default",
       capabilities: ["text", "vision", "file-understanding", "image-generation", "model-selection", "diagnostics", "estimated-token-usage"],
       windows_native_page_diagnostic_version:globalThis.__CHAT2API_WINDOWS_NATIVE_PAGE_DIAG_V1__?.version || "",
+      windows_native_tool_version:nativeTool.version||"",
+      windows_native_tool_sha256:nativeTool.sha256||"",
+      windows_native_tool_ready:nativeTool.ready===true,
       ...nativeCapacityControlMetadata(),
     },
   });
@@ -360,6 +365,8 @@ async function connectSocket() {
   socket.onopen = async () => {
     reconnectAttempt = 0;
     await updateState("connected");
+    const nativeTool=await (globalThis.__CHAT2API_WINDOWS_NATIVE_PAGE_DIAG_V1__?.getToolStatus?.()
+      || Promise.resolve({})).catch(()=>({}));
     await sendSocket({
       type: "extension.hello",
       metadata: {
