@@ -92,6 +92,28 @@ assert.equal(verifiedSent.length,1);
 assert.equal(verifiedSent[0].event.snapshot.root.children[0].children.length,3);
 assert.equal(verifiedSent[0].event.snapshot.root.children[0].children[1].media_index,0);
 
+// New DIL ChatGPT assistant replies carry the message ID on an outer
+// selection; a short text candidate must not omit later text/images.
+const nativeSent=[];
+const nativeCtx={...ctx,
+  __CHAT2API_NATIVE_MESSAGE_IDENTITY_V1__:{
+    resolveAssistantSelection:()=>scopeNode,isUser:()=>false
+  },
+  chrome:{runtime:{sendMessage:async message=>{
+    nativeSent.push(message);return {ok:true,committed:true};
+  }}}
+};
+delete nativeCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,nativeCtx);
+await nativeCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture({
+  requestId:"req_nativeidbound1234",submitStartedAt:Date.now(),
+  lastCandidateNode:scopeNode.childNodes[0],nativeVerifiedReplyScope:null,
+},true);
+assert.equal(nativeSent.length,1);
+assert.equal(nativeSent[0].event.snapshot.root.children.length,3,
+  "Native message identity must lift the candidate to all sibling cards");
+assert.equal(nativeSent[0].event.snapshot.root.children[1].media_index,0);
+
 // Browser computed styles may pass more than the server's 32-key safe limit.
 // Preserve color/grid first and ensure a safe snapshot is still published.
 const styleCtx={...ctx,getComputedStyle:()=>({
