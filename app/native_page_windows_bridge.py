@@ -101,7 +101,9 @@ class WindowsNativePageBridge:
                 if (count is None or len(state["chunks"]) != count
                     or len(raw) != state["size"]
                     or hashlib.sha256(raw).hexdigest() != state["sha256"]
-                    or message.get("sha256") != state["sha256"]):
+                    or message.get("sha256") != state["sha256"]
+                    or type(message.get("size")) is not int
+                    or message.get("size") != state["size"]):
                     raise ValueError("windows_diagnostic_transfer_incomplete")
                 future.set_result(raw)
         except (ValueError, RuntimeError, TypeError, binascii.Error) as exc:
