@@ -25,7 +25,7 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
     history="https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc"
     report={
         "schema":"windows-native-page-evidence-v1",
-        "version":"windows-dom-1.0.1","boundary_verified":True,
+        "version":"windows-dom-1.1.0","boundary_verified":True,
         "request_bound":False,"complete":True,"message_id":"assistant-native-1",
         "probe":{"ready_state":"complete","assistant_role_nodes":1},
         "counts":{"nodes":6,"text_chars":10,"tables":1,"images":1},
@@ -40,10 +40,10 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
             self.clients={
                 ext:SimpleNamespace(connection_enabled=True,name="win-plus",
                     metadata={"platform_os":"win",
-                              "windows_native_page_diagnostic_version":"windows-dom-1.0.1"}),
+                              "windows_native_page_diagnostic_version":"windows-dom-1.1.0"}),
                 "ext_mac777777":SimpleNamespace(connection_enabled=True,name="Mac",
                     metadata={"platform_os":"mac",
-                              "windows_native_page_diagnostic_version":"windows-dom-1.0.1"}),
+                              "windows_native_page_diagnostic_version":"windows-dom-1.1.0"}),
             }
             self.sockets={ext:object()}
             self.sent=[]
@@ -52,8 +52,16 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
             assert worker==ext
             assert payload["type"]=="native.page.windows.start"
             assert payload["conversation_url"]==history
+            assert type(payload["show_tab"]) is bool
             async def reply():
                 receiver=app.state.native_page_windows_ingest
+                for phase,elapsed in [("accepted",10),("worker_lookup",28),
+                    ("tab_opening",34),("tab_opened",58),("page_ready",143),
+                    ("assistant_scanning",150),("assistant_captured",512),
+                    ("uploading",520),("upload_complete",550),("tab_closed",571)]:
+                    await receiver(ext,{"type":"native.page.windows.progress",
+                        "job_id":payload["job_id"],"stage":phase,"elapsed_ms":elapsed,
+                        "tab_id":101,"window_id":26,"show_tab":payload["show_tab"]})
                 count=(len(body)+PART_BYTES-1)//PART_BYTES
                 for i,offset in enumerate(range(0,len(body),PART_BYTES)):
                     await receiver(ext,{"type":"native.page.windows.chunk",
@@ -84,7 +92,7 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
         assert rows[0]["diagnostic_supported"] is True
         ver=client.get(f"/api/admin/worker-tools/native-page/workers/{ext}/version",headers=auth)
         assert ver.status_code==200
-        assert ver.json()["tool"]["version"]=="windows-dom-1.0.1"
+        assert ver.json()["tool"]["version"]=="windows-dom-1.1.0"
         update=client.post(f"/api/admin/worker-tools/native-page/workers/{ext}/update",headers=auth)
         assert update.status_code==409
         not_owner=client.post("/api/admin/worker-tools/native-page/jobs",headers=auth,
@@ -121,6 +129,13 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
         with ZipFile(io.BytesIO(exported.content)) as archive:
             assert json.loads(archive.read("assistant_dom.json"))==report
             manifest=json.loads(archive.read("manifest.json"))
+            trace=json.loads(archive.read("execution_trace.json"))
+        assert trace["diagnostic_tab_id"]==101
+        assert trace["diagnostic_window_id"]==26
+        assert trace["show_tab"] is False
+        assert [item["stage"] for item in trace["trace"]][-1]=="tab_closed"
+        assert trace["trace"][0]["elapsed_ms"]==10
+
         assert manifest["request_binding"]=="url-only-unbound"
         assert manifest["worker_id"]==ext
         assert manifest["worker_platform"]=="windows"
@@ -131,3 +146,6 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
                        headers=auth).json()
         assert log["record"]["worker_id"]==ext
         assert log["record"]["worker_platform"]=="windows"
+        assert log["record"]["diagnostic_tab_id"]==101
+        assert log["record"]["trace"][-1]["stage"]=="tab_closed"
+        assert log["record"]["show_tab"] is False
