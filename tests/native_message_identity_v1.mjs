@@ -19,9 +19,9 @@ class Element {
       if(!name&&!clauses.length)return false;
       return clauses.every(([,key,op,value])=>{
         const attr=this.getAttribute(key);
-        return attr!=null&&(!op||op==="="?attr===value:
+        return attr!=null&&(!op||(op==="="?attr===value:
           op==="$="?attr.endsWith(value):op==="^="?attr.startsWith(value):
-          op==="*="?attr.includes(value):false);
+          op==="*="?attr.includes(value):false));
       });
     });
   }
