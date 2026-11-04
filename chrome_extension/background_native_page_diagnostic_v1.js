@@ -133,8 +133,12 @@
         const value=result?.[0]?.result;
         if(!value?.ok||!value.answer?.root){stable="";seen=0;continue;}
         const meta=value.answer;
-        const fingerprint=[meta.message_id,meta.counts.nodes,meta.counts.text_chars,
-          meta.counts.images,meta.counts.tables].join("|");
+        // Equal DOM counts do not mean equal content. Responses can stream
+        // text updates in-place without adding or removing nodes.
+        const bytesForFingerprint=new TextEncoder().encode(JSON.stringify(meta.root));
+        const fingerprint=Array.from(new Uint8Array(await crypto.subtle.digest(
+          "SHA-256",bytesForFingerprint))).map(v=>v.toString(16).padStart(2,"0")).join("")
+          +"|"+meta.message_id+"|"+meta.complete;
         if(fingerprint===stable)seen++;else{stable=fingerprint;seen=1;}
         best=meta;
         if(seen>=3)break;
