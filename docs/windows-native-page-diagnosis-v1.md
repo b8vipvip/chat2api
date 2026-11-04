@@ -61,3 +61,11 @@ Windows 采集器仅允许明确的 HTTPS ChatGPT /c/ URL，禁止 URL 查询串
 - 管理后台在诊断记录中展示当前阶段、百分比及耗时，并提供「查看轨迹」，记录标签页 ID、窗口 ID 与各阶段相对耗时。ZIP 增加 `execution_trace.json`，管理员导出的 `diagnostic.json` 也包含 `trace`。
 - 阶段：accepted → worker_lookup → tab_opening → tab_opened → tab_loading → page_ready → assistant_scanning → assistant_captured → uploading → upload_complete → tab_closed → 完成。异常同样记录 `failed` 和清理信息（如有标签页）。
 - **范围限制不变**：显示历史页面≠抓取完整页面截图；不导出完整截图或图片源字节，也不自动宣称视觉 1:1 交付成功。更新本功能需要更新 Server 与 Windows Chrome Worker 扩展；Linux 独立工具仍通过独立发布分支更新。
+
+## 2026-11-04 空闲 Windows Worker 自有窗口回退（v1.1.1 / chat2api v0.22.264）
+
+- 根因：旧版仅检索现存的 `boundTabId` / conversation router / persistent ready pool 标签页。Windows Worker 空闲后窗口被回收，诊断在 `worker_lookup` 之前直接返回 `worker_managed_chatgpt_tab_not_found`，不会执行到打开页面阶段。
+- 修复：若存在已验证的 Worker 所属 ChatGPT 窗口，就在该窗口中新建空白诊断标签页；如果一个也没有，扩展直接使用同一 Chrome Profile 的 `chrome.windows.create({url:"about:blank", ...})` 新建**完全独立**的诊断窗口。新建页面先拿到 tab ID、登记全局诊断 lease，再用 `chrome.tabs.update` 导航至历史 /c/ URL，以免窗口监督器提前把诊断页面收进业务池。
+- 新增阶段：`window_creating`、`window_created`。日志和 `execution_trace.json` 会记录窗口 ID、标签页 ID、耗时以及最终清理；如果业务请求在诊断期间到来，不强行切回之前活动页面。默认 `show_tab=false` 时不主动聚焦；勾选“显示诊断标签页”时创建聚焦窗口，并且有活动请求时拒绝进入可视化模式。
+- 故障显示：服务端现在分别公开当前扩展包 `extension_version`、诊断能力 `diagnostic_version`。后台下拉框不再把未上报能力一律写成“需更新”，并允许选择 Worker 查看实际版本，刷新记录会刷新 Worker 状态；真正不满足版本要求的情况仍由后端安全阻断。
+- 该机制只对 Windows 扩展内置工具生效；Linux Controller 独立工具及业务 `request-v6` 完成终态均不变。Windows 扩展必须安装新包并重连后才能上报 `windows-dom-1.1.1`。这只是开窗与采集诊断修复，不等于富媒体视觉 1:1 已通过。
