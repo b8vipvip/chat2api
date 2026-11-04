@@ -125,11 +125,19 @@
     try {
       // Append to an existing ChatGPT window without stealing focus or
       // changing any routed tab. Keep this new tab out of Worker pool quotas.
-      const existing=(await chrome.tabs.query({url:[
+      const tabs=(await chrome.tabs.query({url:[
         "https://chatgpt.com/*","https://www.chatgpt.com/*",
         "https://chat.openai.com/*"
-      ]}).catch(()=>[])).find(item=>Number.isInteger(item?.windowId)
+      ]}).catch(()=>[])).filter(item=>Number.isInteger(item?.windowId)
         && Number.isInteger(item?.id)&&!diagnosticTabs.has(item.id));
+      let boundTabId=null;
+      try{
+        const data=await chrome.storage?.local?.get?.({boundTabId:null});
+        if(Number.isInteger(data?.boundTabId))boundTabId=data.boundTabId;
+      }catch(_){}
+      // Prefer the extension's explicitly bound Worker window, not a
+      // user's unrelated interactive ChatGPT window.
+      const existing=tabs.find(item=>item.id===boundTabId) || tabs[0];
       const options={url:job.conversation_url,active:false};
       if(existing)options.windowId=existing.windowId;
       tab=await chrome.tabs.create(options);
