@@ -21,8 +21,9 @@ assert.ok(capture.includes("active:false"));
 assert.ok(capture.includes("chrome.tabs.remove(tab.id)"));
 assert.ok(supervisor.includes(KEY)&&
   supervisor.includes("!diagnostic?.has?.(tab.id)")&&
+  supervisor.includes("!diagnosis?.has?.(tab?.id)")&&
   supervisor.includes("if (globalThis."+KEY+"?.has?.(tab.id)) continue"),
-  "Tab Supervisor must neither adopt nor reclaim diagnostic tabs");
+  "Tab Supervisor must exclude diagnostic tabs from shared tab count, adoption and reclaim");
 for(const [name,source] of [["pool",pool],["observer",observer],["manager",legacy]]){
   assert.ok(source.includes(KEY),"Physical "+name+" must exclude diagnostic tabs");
   assert.ok(source.includes("!diagnostic?.has?.("),"Physical "+name+" must check the tab lease");
