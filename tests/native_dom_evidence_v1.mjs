@@ -148,4 +148,25 @@ const contaminated=new Element('DIV',[first,new Element('USER')]);
 const foreignPage=new Element('MAIN',[contaminated]);
 const foreign=probe.captureData({...active,nativeVerifiedReplyScope:contaminated});
 assert.equal(foreign.complete,false);
+// A native DIL assistant message is bound by its selection and source IDs.
+// Capture the *whole* selection even when request-v6's text candidate points
+// at the first paragraph, without requiring an unrelated finish toolbar.
+scope.__CHAT2API_NATIVE_MESSAGE_IDENTITY_V1__={
+  resolveAssistantSelection:node=>node===p ? verified : null,
+  messageId:node=>node===verified ? "same-request-native-message" : "",
+  isUser:()=>false,
+};
+const nativeOwned=probe.captureData({...active,lastCandidateNode:p,
+  nativeVerifiedReplyScope:null,baselineCapturedAt:1,submitStartedAt:2,
+  baselineNodes:new Set(),baselineIds:new Set()});
+assert.equal(nativeOwned.complete,true);
+assert.equal(nativeOwned.scope,"verified_reply_container");
+assert.equal(nativeOwned.boundary,"same_request_native_message_id");
+assert.ok(JSON.stringify(nativeOwned).includes("Other category"),
+  "A selected paragraph must not truncate sibling DIL cards");
+const stale=probe.captureData({...active,lastCandidateNode:p,
+  nativeVerifiedReplyScope:null,baselineCapturedAt:1,submitStartedAt:2,
+  baselineNodes:new Set(),baselineIds:new Set(["same-request-native-message"])});
+assert.equal(stale.scope,"candidate_only","Old message IDs cannot be promoted");
+
 console.log('Native DOM evidence: verified sibling cards, excluded user/page scope, private URL redaction');
