@@ -79,6 +79,8 @@ importScripts(
   // clears stale text-model capability and republishes only freshly validated
   // ChatGPT model-picker entries.
   "background_model_library_v145.js",
+  // Isolated read-only history diagnosis for Windows Chrome extensions.
+  "background_native_page_diagnostic_v1.js",
 );
 
 globalThis.__CHAT2API_WINDOW_OBSERVER_V90__?.report?.(true).catch?.(() => {});
