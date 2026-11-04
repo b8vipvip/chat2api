@@ -17,15 +17,16 @@ from fastapi.testclient import TestClient
 
 from app.native_page_diagnostic_api import install_native_page_diagnostics
 from app.native_page_windows_bridge import PART_BYTES
+from app.windows_native_page_tool_release import WindowsCollectorReleaseSource
 
 
-def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path):
+def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path,monkeypatch):
     app=FastAPI()
     ext="ext_winplus123456"
     history="https://chatgpt.com/c/12345678-1234-1234-1234-123456789abc"
     report={
         "schema":"windows-native-page-evidence-v1",
-        "version":"windows-dom-1.1.1","boundary_verified":True,
+        "version":"windows-dom-1.1.2","boundary_verified":True,
         "request_bound":False,"complete":True,"message_id":"assistant-native-1",
         "probe":{"ready_state":"complete","assistant_role_nodes":1},
         "counts":{"nodes":6,"text_chars":10,"tables":1,"images":1},
@@ -33,6 +34,13 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
         "limitations":["No full-page screenshot","No source image bytes",
                        "No API request identity validation"],
     }
+    independent='/* verified GitHub source */(()=>{const DIAGNOSTIC_TOOL_VERSION="1.0.0";return {ok:true};})()'
+    independent_digest=hashlib.sha256(independent.encode()).hexdigest()
+    independent_manifest={"version":"1.0.0","sha256":independent_digest,
+                          "bytes":len(independent.encode()),"source":"github-dedicated-release-branch"}
+    async def fake_release(self,*,force=False):
+        return independent,independent_manifest
+    monkeypatch.setattr(WindowsCollectorReleaseSource,"load",fake_release)
     body=json.dumps(report,ensure_ascii=False).encode("utf8")
     digest=hashlib.sha256(body).hexdigest()
     class Registry:
@@ -40,17 +48,28 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
             self.clients={
                 ext:SimpleNamespace(connection_enabled=True,name="win-plus",
                     metadata={"platform_os":"win",
-                              "extension_version":"0.22.264",
-                              "windows_native_page_diagnostic_version":"windows-dom-1.1.1"}),
+                              "extension_version":"0.22.265",
+                              "windows_native_page_diagnostic_version":"windows-dom-1.1.2"}),
                 "ext_mac777777":SimpleNamespace(connection_enabled=True,name="Mac",
                     metadata={"platform_os":"mac",
-                              "windows_native_page_diagnostic_version":"windows-dom-1.1.1"}),
+                              "windows_native_page_diagnostic_version":"windows-dom-1.1.2"}),
             }
             self.sockets={ext:object()}
             self.sent=[]
         async def send(self,worker,payload):
             self.sent.append((worker,payload))
             assert worker==ext
+            if payload["type"]=="native.page.windows.tool.update":
+                assert payload["version"]=="1.0.0"
+                assert payload["sha256"]==independent_digest
+                async def reply_update():
+                    await app.state.native_page_windows_ingest(ext,{
+                        "type":"native.page.windows.tool.updated",
+                        "update_id":payload["update_id"],"ok":True,
+                        "version":"1.0.0","sha256":independent_digest,
+                        "updated":True})
+                asyncio.create_task(reply_update())
+                return
             assert payload["type"]=="native.page.windows.start"
             assert payload["conversation_url"]==history
             assert type(payload["show_tab"]) is bool
@@ -91,13 +110,21 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
         assert rows[0]["worker_id"]==ext
         assert rows[0]["platform"]=="windows"
         assert rows[0]["diagnostic_supported"] is True
-        assert rows[0]["diagnostic_version"]=="windows-dom-1.1.1"
-        assert rows[0]["extension_version"]=="0.22.264"
+        assert rows[0]["diagnostic_version"]=="windows-dom-1.1.2"
+        assert rows[0]["extension_version"]=="0.22.265"
         ver=client.get(f"/api/admin/worker-tools/native-page/workers/{ext}/version",headers=auth)
         assert ver.status_code==200
-        assert ver.json()["tool"]["version"]=="windows-dom-1.1.1"
+        assert ver.json()["tool"]["version"]=="未安装独立诊断工具"
+        assert ver.json()["tool"]["extension_diagnostic_version"]=="windows-dom-1.1.2"
+        assert ver.json()["latest"]["version"]=="1.0.0"
         update=client.post(f"/api/admin/worker-tools/native-page/workers/{ext}/update",headers=auth)
-        assert update.status_code==409
+        assert update.status_code==200,update.text
+        assert update.json()["tool"]["version"]=="1.0.0"
+        assert update.json()["tool"]["sha256"]==independent_digest
+        assert registry.clients[ext].metadata["windows_native_tool_version"]=="1.0.0"
+        after=client.get(f"/api/admin/worker-tools/native-page/workers/{ext}/version",headers=auth)
+        assert after.json()["tool"]["version"]=="1.0.0"
+        assert after.json()["tool"]["installed"] is True
         not_owner=client.post("/api/admin/worker-tools/native-page/jobs",headers=auth,
             json={"target":history,"worker_id":"ext_mac777777"})
         assert not_owner.status_code==409
@@ -109,7 +136,7 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
         missing=client.post("/api/admin/worker-tools/native-page/jobs",headers=auth,
             json={"target":missing_link_id,"worker_id":ext})
         assert missing.status_code==422,missing.text
-        assert not registry.sent
+        assert len(registry.sent)==1  # Only authenticated hot-update command sent.
 
         created=client.post("/api/admin/worker-tools/native-page/jobs",headers=auth,
             json={"target":history,"worker_id":ext})
@@ -125,7 +152,7 @@ def test_windows_native_page_job_ext_identity_and_read_only_provenance(tmp_path)
                 break
             time.sleep(0.02)
         assert result.json()["job"]["status"]=="completed",result.text
-        assert len(registry.sent)==1
+        assert len(registry.sent)==2
         exported=client.get("/api/admin/worker-tools/native-page/jobs/"+job["job_id"]+"/download",
                             headers=auth)
         assert exported.status_code==200

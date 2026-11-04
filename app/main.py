@@ -2177,7 +2177,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         await websocket.send_json({"type": "heartbeat.ack", "ts": time.time()})
                     continue
                 request_id = str(message.get("request_id") or "")
-                if message_type in {"native.page.windows.chunk","native.page.windows.finished","native.page.windows.progress"}:
+                if message_type in {"native.page.windows.chunk","native.page.windows.finished","native.page.windows.progress","native.page.windows.tool.updated"}:
                     # Only the authenticated extension's current WebSocket may
                     # deliver its administrator-triggered, read-only evidence.
                     # Never forward this event into the live request broker.

@@ -12,7 +12,7 @@
 |---|---|---|
 | 公共 Worker ID | `ext_…` | `ext_…` |
 | 执行器 | 原 Linux Controller + localhost CDP + 独立 Python 工具 | 已配对 Windows Chrome 扩展的后台只读采集器 |
-| 检查版本 | 独立 `native-page-diagnostic-releases` 发布分支 | 扩展内置 `windows-dom-1.1.1` |
+| 检查版本 | 独立 `native-page-diagnostic-releases` 发布分支 | 扩展内置 `windows-dom-1.1.2` |
 | 原生历史链接 | 支持 | 支持 |
 | 请求 ID 且保存了安全历史链接 | 支持 | 支持 |
 | 请求 ID 但没有历史链接 | Linux 原历史恢复机制 | 快速返回 422，并提示粘贴 /c/ 链接 |
@@ -36,7 +36,7 @@ Windows 采集器仅允许明确的 HTTPS ChatGPT /c/ URL，禁止 URL 查询串
 ## 部署与验收顺序
 
 1. 此分支**涉及中心服务端、Windows Chrome 扩展、标签页监管和管理后台**，不同于可独立热更新的 Linux 诊断 Python 脚本。首次部署必须按正式服务端/Worker 升级流程更新相应组件；只点击 Linux「更新诊断工具」无法获得 Windows 功能。
-2. 在升级 Windows Worker 扩展并重新连线之后，中心服务端看到其 `windows_native_page_diagnostic_version=windows-dom-1.1.1`，才在原生诊断下拉框中允许选择；旧扩展仅展示“需更新 Windows 扩展”，不能发起无效任务。
+2. 在升级 Windows Worker 扩展并重新连线之后，中心服务端看到其 `windows_native_page_diagnostic_version=windows-dom-1.1.2`，才在原生诊断下拉框中允许选择；旧扩展仅展示“需更新 Windows 扩展”，不能发起无效任务。
 3. Windows 选择 `ext_…` → 粘贴正确账号下的原生历史 URL → 开始诊断 → 获取 ZIP。确认 `manifest.worker_platform=windows`、`request_binding=url-only-unbound`、`visual_verified=false`、实际 HTML 消息 ID 和表格/图片计数。
 4. 同时在 Windows Worker 发起真实 API 请求，检查 Windows 诊断标签页不会被错误回收、误占预约备用窗口、改变路由任务或异常消耗并发指标。再运行 Linux 历史诊断回归，验证 `ext_` 展示映射到原 `wrk_` Controller，Linux 更新版本功能仍可用。
 5. 验证 Windows 旧版本检查、离线/禁用、macOS 不被伪装成 Windows、诊断并发限制、错误 ZIP、非法 URL/请求跨 Worker 归属、浏览器关闭中断和按版本区分提示。失败时不动 `main`、保留本功能独立分支。
@@ -68,4 +68,4 @@ Windows 采集器仅允许明确的 HTTPS ChatGPT /c/ URL，禁止 URL 查询串
 - 修复：若存在已验证的 Worker 所属 ChatGPT 窗口，就在该窗口中新建空白诊断标签页；如果一个也没有，扩展直接使用同一 Chrome Profile 的 `chrome.windows.create({url:"about:blank", ...})` 新建**完全独立**的诊断窗口。新建页面先拿到 tab ID、登记全局诊断 lease，再用 `chrome.tabs.update` 导航至历史 /c/ URL，以免窗口监督器提前把诊断页面收进业务池。
 - 新增阶段：`window_creating`、`window_created`。日志和 `execution_trace.json` 会记录窗口 ID、标签页 ID、耗时以及最终清理；如果业务请求在诊断期间到来，不强行切回之前活动页面。默认 `show_tab=false` 时不主动聚焦；勾选“显示诊断标签页”时创建聚焦窗口，并且有活动请求时拒绝进入可视化模式。
 - 故障显示：服务端现在分别公开当前扩展包 `extension_version`、诊断能力 `diagnostic_version`。后台下拉框不再把未上报能力一律写成“需更新”，并允许选择 Worker 查看实际版本，刷新记录会刷新 Worker 状态；真正不满足版本要求的情况仍由后端安全阻断。
-- 该机制只对 Windows 扩展内置工具生效；Linux Controller 独立工具及业务 `request-v6` 完成终态均不变。Windows 扩展必须安装新包并重连后才能上报 `windows-dom-1.1.1`。这只是开窗与采集诊断修复，不等于富媒体视觉 1:1 已通过。
+- 该机制只对 Windows 扩展内置工具生效；Linux Controller 独立工具及业务 `request-v6` 完成终态均不变。Windows 扩展必须安装新包并重连后才能上报 `windows-dom-1.1.2`。这只是开窗与采集诊断修复，不等于富媒体视觉 1:1 已通过。

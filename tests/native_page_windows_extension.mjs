@@ -5,8 +5,11 @@ import {webcrypto} from "node:crypto";
 
 const source=readFileSync("chrome_extension/background_native_page_diagnostic_v1.js","utf8");
 const events=[],opens=[],ownedWindows=[],closed=[],activated=[],navigated=[],focused=[];
+const localStorage={boundTabId:8};
+const hotCalls=[];
+let userScriptsAvailable=true;
 let activeTabId=8;
-const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.1.1",
+const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.1.2",
   boundary_verified:true,request_bound:false,complete:true,
   message_id:"reply-abc",counts:{nodes:12,text_chars:50,tables:1,images:2},
   probe:{ready_state:"complete",assistant_role_nodes:1},
@@ -15,7 +18,10 @@ const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.1.
 const scope={
   setTimeout:fn=>{Promise.resolve().then(fn);return 1;},
   chrome:{
-    storage:{local:{get:async()=>({boundTabId:8})}},
+    storage:{local:{
+      get:async input=>typeof input==="string"?{[input]:localStorage[input]}:{boundTabId:localStorage.boundTabId},
+      set:async value=>{Object.assign(localStorage,value);}
+    }},
     tabs:{
       query:async options=>options?.active===true ? [{id:activeTabId,windowId:26}] : [
         {id:7,windowId:25,url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"},
@@ -27,6 +33,11 @@ const scope={
       update:async(id,options)=>{if(options.url)navigated.push({id,url:options.url});if(options.active){activated.push({id,...options});activeTabId=id;}}
     },
     scripting:{executeScript:async()=>[{result:{ok:true,answer}}]},
+    userScripts:{
+      getScripts:async()=>{if(!userScriptsAvailable)throw new Error("not allowed");return [];},
+      execute:async args=>{hotCalls.push(args);return [{result:{ok:true,
+        answer:{...answer,version:"windows-hot-1.0.0",collector_version:"1.0.0"}}}]}
+    },
     windows:{update:async(id,options)=>{focused.push({id,...options});},
       create:async options=>{ownedWindows.push(options);return {id:35,tabs:[{id:301,windowId:35,url:"about:blank"}]};}}
   },
@@ -38,7 +49,7 @@ const scope={
 runInNewContext(source,scope);
 const diag=scope.__CHAT2API_WINDOWS_NATIVE_PAGE_DIAG_V1__;
 assert.ok(diag);
-assert.equal(diag.version,"windows-dom-1.1.1");
+assert.equal(diag.version,"windows-dom-1.1.2");
 assert.equal(diag.validUrl("https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"),true);
 for(const url of ["https://evil.example/c/01234567-89ab-cdef-0123-456789abcdef",
   "https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef?token=1",
@@ -184,4 +195,42 @@ await diag.execute({job_id:"3".repeat(32),
 assert.equal(activated.length,beforeLateRestore,
   "Never steal focus from an API request that arrived during capture");
 assert.ok(events.some(x=>x.type==="native.page.windows.finished"&&x.ok&&x.job_id==="3".repeat(32)));
-console.log("Windows native diagnosis: owned idle window fallback, visible/tab isolation, phase timeline and busy focus safety");
+// The independently released collector is installed only from a source and
+// SHA-256 delivered through the authenticated Worker command.
+const toolSource='/* Independently verified read-only assistant DOM collector. This header is long enough for the release size gate. */(()=>{const DIAGNOSTIC_TOOL_VERSION="1.0.0";return {ok:true};})()';
+const toolDigest=[...new Uint8Array(await webcrypto.subtle.digest("SHA-256",
+  new TextEncoder().encode(toolSource)))]
+  .map(b=>b.toString(16).padStart(2,"0")).join("");
+const initialEvents=events.length;
+await diag.installTool({update_id:"a".repeat(32),version:"1.0.0",
+  sha256:toolDigest,source:toolSource});
+const installAck=events.slice(initialEvents).find(e=>e.type==="native.page.windows.tool.updated");
+assert.equal(installAck?.ok,true);
+assert.equal(installAck?.version,"1.0.0");
+assert.equal(installAck?.sha256,toolDigest);
+assert.equal(installAck?.updated,true);
+assert.ok((await diag.getToolStatus()).ready);
+assert.equal((await diag.getToolStatus()).version,"1.0.0");
+assert.equal(localStorage.chat2apiWindowsNativePageToolV1?.sha256,toolDigest);
+delete scope.__CHAT2API_CONVERSATION_ROUTING_V1__;
+scope.chrome.scripting.executeScript=async()=>{throw Error("Bundled capture not expected after hot install");};
+await diag.execute({job_id:"6".repeat(32),
+  conversation_url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"});
+assert.ok(hotCalls.some(x=>x.world==="USER_SCRIPT"&&
+  x.js[0].code===toolSource&&x.target.tabId===101));
+assert.ok(events.some(x=>x.type==="native.page.windows.finished"&&x.ok&&x.job_id==="6".repeat(32)));
+
+// Bad digest must never replace a working collector.
+await diag.installTool({update_id:"7".repeat(32),version:"1.0.1",
+  sha256:"b".repeat(64),source:toolSource.replaceAll("1.0.0","1.0.1")});
+assert.equal(events.at(-1).ok,false);
+assert.equal((await diag.getToolStatus()).version,"1.0.0");
+
+// User must explicitly enable Chrome's "Allow User Scripts" toggle.
+userScriptsAvailable=false;
+await diag.installTool({update_id:"8".repeat(32),version:"1.0.1",
+  sha256:toolDigest,source:toolSource});
+assert.equal(events.at(-1).ok,false);
+assert.match(events.at(-1).error,/user_scripts_permission_disabled/);
+assert.equal((await diag.getToolStatus()).ready,false);
+console.log("Windows native diagnosis: isolated windows, verified independent userScript install and execution");

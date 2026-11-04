@@ -5,7 +5,7 @@
   "use strict";
   const KEY="__CHAT2API_WINDOWS_NATIVE_PAGE_DIAG_V1__";
   if(globalThis[KEY])return;
-  const VERSION="windows-dom-1.1.1";
+  const VERSION="windows-dom-1.1.2";
   const URL_RE=/^https:\/\/(?:chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)\/c\/[A-Za-z0-9-]{12,90}\/?$/;
   const JOB_RE=/^[0-9a-f]{32}$/;
   const jobs=new Set();
@@ -15,6 +15,87 @@
   const diagnosticTabs=globalThis[TAB_LEASE_KEY] || new Set();
   globalThis[TAB_LEASE_KEY]=diagnosticTabs;
   const sleep=ms=>new Promise(done=>setTimeout(done,ms));
+  const HOT_TOOL_STORAGE_KEY="chat2apiWindowsNativePageToolV1";
+  const HOT_TOOL_VERSION=/^[0-9]+\.[0-9]+\.[0-9]+$/;
+  const HOT_TOOL_SHA=/^[a-f0-9]{64}$/;
+  const HOT_TOOL_LIMIT=120000;
+  let cachedTool=null,toolLoaded=false;
+  const sha256=async bytes=>{
+    const hash=new Uint8Array(await crypto.subtle.digest("SHA-256",bytes));
+    return [...hash].map(value=>value.toString(16).padStart(2,"0")).join("");
+  };
+  function compareVersions(left,right){
+    const a=left.split(".").map(Number),b=right.split(".").map(Number);
+    for(let i=0;i<3;i++){if(a[i]!==b[i])return a[i]>b[i]?1:-1;}
+    return 0;
+  }
+  async function readTool(){
+    if(toolLoaded)return cachedTool;
+    const stored=await chrome.storage.local.get(HOT_TOOL_STORAGE_KEY).catch(()=>({}));
+    const value=stored?.[HOT_TOOL_STORAGE_KEY];
+    if(value&&HOT_TOOL_VERSION.test(value.version)&&HOT_TOOL_SHA.test(value.sha256)
+      &&typeof value.source==="string"&&value.source.length<=HOT_TOOL_LIMIT
+      &&value.source.includes('const DIAGNOSTIC_TOOL_VERSION="'+value.version+'";')
+      &&value.source.trimEnd().endsWith("})()")
+      &&await sha256(new TextEncoder().encode(value.source))===value.sha256){
+      cachedTool=value;
+    }
+    toolLoaded=true;
+    return cachedTool;
+  }
+  async function toolStatus(){
+    const installed=await readTool();
+    let userScriptsReady=false;
+    try{
+      if(typeof chrome.userScripts?.execute==="function"){
+        await chrome.userScripts.getScripts();
+        userScriptsReady=true;
+      }
+    }catch(_){}
+    return {version:installed?.version||"",sha256:installed?.sha256||"",
+      ready:userScriptsReady};
+  }
+  async function installTool(message){
+    const id=String(message?.update_id||"");
+    let finished={type:"native.page.windows.tool.updated",update_id:id,ok:false,
+      error:"invalid_tool_install_request"};
+    try{
+      if(!JOB_RE.test(id)||jobs.size)throw new Error("diagnostic_busy_or_update_id_invalid");
+      const source=message.source,version=message.version,digest=message.sha256;
+      if(typeof source!=="string"||source.length>HOT_TOOL_LIMIT||source.length<100
+        ||typeof version!=="string"||!HOT_TOOL_VERSION.test(version)
+        ||typeof digest!=="string"||!HOT_TOOL_SHA.test(digest)
+        ||!source.includes('const DIAGNOSTIC_TOOL_VERSION="'+version+'";')
+        ||!source.trimEnd().endsWith("})()"))
+        throw new Error("invalid_verified_tool_payload");
+      if(typeof chrome.userScripts?.execute!=="function")
+        throw new Error("user_scripts_api_unavailable_chrome_135_required");
+      try{await chrome.userScripts.getScripts();}
+      catch(_){throw new Error("user_scripts_permission_disabled_enable_in_extension_details");}
+      const raw=new TextEncoder().encode(source);
+      if(raw.length>HOT_TOOL_LIMIT||await sha256(raw)!==digest)
+        throw new Error("diagnostic_tool_sha256_mismatch");
+      const previous=await readTool();
+      if(previous){
+        if(compareVersions(version,previous.version)<0)
+          throw new Error("diagnostic_tool_downgrade_refused");
+        if(version===previous.version&&digest!==previous.sha256)
+          throw new Error("diagnostic_tool_version_must_increment");
+      }
+      const changed=!previous||previous.sha256!==digest;
+      if(changed){
+        const value={version,sha256:digest,source,installed_at:Date.now()};
+        await chrome.storage.local.set({[HOT_TOOL_STORAGE_KEY]:value});
+        cachedTool=value;
+        toolLoaded=true;
+      }
+      finished={type:"native.page.windows.tool.updated",update_id:id,
+        ok:true,version,sha256:digest,updated:changed};
+    }catch(error){
+      finished.error=String(error?.message||error).slice(0,120);
+    }
+    try{await send(finished);}catch(_){}
+  }
   function validUrl(text) {
     if(!URL_RE.test(String(text||"")))return false;
     try{const u=new URL(text);return !u.search&&!u.hash&&!u.username&&!u.password;}catch(_){return false;}
@@ -113,7 +194,7 @@
       return out;
     }
     const tree=walk(target.node,0);
-    const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.1.1",
+    const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.1.2",
       boundary_verified:!!target.id&&!truncated,
       request_bound:false,complete:!truncated&&!generationActive,
       message_id:target.id,counts:{nodes,text_chars:chars,tables,images},
@@ -236,9 +317,26 @@
         if(!scanning||[10,25,45].includes(attempt)){
           scanning=true;await progress("assistant_scanning");
         }
-        const result=await chrome.scripting.executeScript({
-          target:{tabId:tab.id},func:capturePage
-        }).catch(()=>null);
+        const tool=await readTool();
+        let result;
+        if(tool){
+          // Chrome MV3 permits downloaded code only through the documented
+          // userScripts API. Never eval/importScripts remote sources.
+          if(typeof chrome.userScripts?.execute!=="function")
+            throw new Error("user_scripts_api_unavailable");
+          try{
+            result=await chrome.userScripts.execute({
+              target:{tabId:tab.id},world:"USER_SCRIPT",
+              js:[{code:tool.source}]
+            });
+          }catch(_){
+            throw new Error("hot_collector_execution_failed_check_user_scripts_permission");
+          }
+        }else{
+          result=await chrome.scripting.executeScript({
+            target:{tabId:tab.id},func:capturePage
+          }).catch(()=>null);
+        }
         const value=result?.[0]?.result;
         if(!value?.ok||!value.answer?.root){stable="";seen=0;continue;}
         const meta=value.answer;
@@ -297,6 +395,10 @@
   }
   const previous=globalThis.handleServerMessage;
   const wrapped=async message=>{
+    if(message?.type==="native.page.windows.tool.update"){
+      void installTool(message);
+      return;
+    }
     if(message?.type==="native.page.windows.start"){
       const jobId=String(message.job_id||"");
       if(JOB_RE.test(jobId)&&validUrl(message.conversation_url)){
@@ -308,5 +410,6 @@
   };
   globalThis.handleServerMessage=wrapped;
   try{handleServerMessage=wrapped}catch(_){}
-  globalThis[KEY]=Object.freeze({version:VERSION,execute,validUrl});
+  globalThis[KEY]=Object.freeze({version:VERSION,execute,validUrl,
+    getToolStatus:toolStatus,installTool});
 })();

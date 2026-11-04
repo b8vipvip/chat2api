@@ -53,7 +53,7 @@ PANEL = r'''
       <button class="action" id="nativePageVersion">检查版本</button>
     </div>
     <button class="action" id="nativePageReload">刷新记录</button>
-    <span class="muted">工具独立发布：首次升级更新机制后，后续直接点击「更新诊断工具」，不再部署服务端。</span>
+    <span class="muted">Linux / Windows 诊断采集器分别独立更新。Windows 首次使用需在 Chrome 扩展详情启用「允许用户脚本」，然后点击「更新诊断工具」；以后修改采集脚本无需重新部署主服务。</span>
   </div>
   <p id="nativePageStatus" class="muted" role="status">输入完整请求 ID 或原生 ChatGPT /c/ 历史链接后即可执行；不发起新生成请求。</p>
   <div id="nativePageTimeline" aria-live="polite">

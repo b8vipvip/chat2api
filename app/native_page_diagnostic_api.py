@@ -23,6 +23,9 @@ from fastapi.responses import Response
 
 from .admin_auth import SESSION_COOKIE
 from .native_page_windows_bridge import WindowsNativePageBridge
+from .windows_native_page_tool_release import (
+    WindowsCollectorReleaseSource, WindowsCollectorReleaseUnavailable,
+)
 from .native_page_tool_release import (
     DiagnosticReleaseSource, DiagnosticReleaseUnavailable,
     RELEASE_BRANCH,
@@ -44,6 +47,7 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
     jobs:dict[str,asyncio.Task]={}
     locks:dict[str,str]={}
     releases = DiagnosticReleaseSource()
+    windows_releases = WindowsCollectorReleaseSource()
     windows_bridge=WindowsNativePageBridge(app.state.registry)
     app.state.native_page_windows_ingest=windows_bridge.ingest
 
@@ -135,11 +139,11 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 raise HTTPException(409,"Windows extension is offline")
             client=app.state.registry.clients.get(canonical)
             meta=client.metadata if isinstance(client.metadata,dict) else {}
-            if meta.get("windows_native_page_diagnostic_version")!="windows-dom-1.1.1":
+            if meta.get("windows_native_page_diagnostic_version")!="windows-dom-1.1.2":
                 reported=str(meta.get("windows_native_page_diagnostic_version") or "未上报")
                 raise HTTPException(409,
                     "Windows 诊断能力版本 "+reported+
-                    "，服务端需要 windows-dom-1.1.1。请更新并重连 Windows Worker 扩展。")
+                    "，服务端需要 windows-dom-1.1.2。请更新并重连 Windows Worker 扩展。")
             return {"worker_id":canonical}
         return app.state.linux_workers.data["workers"][canonical]
 
@@ -283,14 +287,20 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
             write(current)
         try:
             record.update({"stage":"windows-dispatching","percent":5,
-                "tool_version":"windows-dom-1.1.1"})
+                "tool_version":"windows-dom-1.1.2"})
             write(record)
             report,raw=await windows_bridge.collect(worker,job_id,url,timeout=155,
                 show_tab=record.get("show_tab") is True,on_progress=on_progress)
             record=read(job_id)  # Preserve progress updates from bridge callbacks.
+            collector=str(report.get("collector_version") or "")
+            if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+",collector):
+                record["tool_version"]="windows-hot-"+collector
             manifest={"schema":"chat2api-native-page-manifest-v1",
                 "request_id":record["request_id"],"worker_id":worker,
-                "worker_platform":"windows","tool_version":"windows-dom-1.1.1",
+                "worker_platform":"windows",
+                "tool_version":record.get("tool_version") or "windows-dom-1.1.2",
+                "extension_diagnostic_version":"windows-dom-1.1.2",
+                "collector_version":collector or None,
                 "request_binding":"url-only-unbound" if record["target_type"]=="conversation_url"
                     else "history-link-request-unverified",
                 "boundary_verified":report.get("boundary_verified") is True,
@@ -413,8 +423,10 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
                 "name":str(client.name or "")[:80],
                 "online":cid in app.state.registry.sockets,
                 "status":"online" if cid in app.state.registry.sockets else "offline",
-                "diagnostic_supported":meta.get("windows_native_page_diagnostic_version")=="windows-dom-1.1.1",
+                "diagnostic_supported":meta.get("windows_native_page_diagnostic_version")=="windows-dom-1.1.2",
                 "diagnostic_version":str(meta.get("windows_native_page_diagnostic_version") or "")[:50],
+                "diagnostic_tool_version":str(meta.get("windows_native_tool_version") or "")[:30],
+                "diagnostic_tool_ready":meta.get("windows_native_tool_ready") is True,
                 "extension_version":str(meta.get("extension_version") or "")[:32],
                 "worker_slot":meta.get("worker_slot")})
         return {"data":rows}
@@ -552,7 +564,33 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         authorize(request)
         actual,platform,display=normalize_worker(worker_id)
         if platform=="windows":
-            raise HTTPException(409,"Windows diagnostic is bundled with its Chrome extension; update the extension")
+            check_worker(actual)
+            if actual in locks:
+                raise HTTPException(409,"Windows Worker 诊断任务运行中，请完成后再更新")
+            try:
+                source, manifest = await windows_releases.load(force=True)
+            except WindowsCollectorReleaseUnavailable as exc:
+                raise HTTPException(503,str(exc)) from None
+            try:
+                result=await windows_bridge.install_tool(actual,source,manifest,timeout=25)
+            except asyncio.TimeoutError:
+                raise HTTPException(504,"Windows Worker 安装回执超时，请检查扩展连接和用户脚本权限") from None
+            except (RuntimeError,ValueError) as exc:
+                detail=str(exc)
+                if "user_scripts_permission_disabled" in detail:
+                    detail=("Windows 扩展尚未启用用户脚本权限。请打开 chrome://extensions，"
+                            "进入 chat2api Worker 的「详情」，启用「允许用户脚本 / Allow User Scripts」，然后重试")
+                raise HTTPException(409,detail) from None
+            if result["sha256"]!=manifest["sha256"]:
+                raise HTTPException(409,"windows_tool_install_digest_mismatch")
+            client=app.state.registry.clients.get(actual)
+            if client and isinstance(client.metadata,dict):
+                client.metadata.update({
+                    "windows_native_tool_version":result["version"],
+                    "windows_native_tool_sha256":result["sha256"],
+                    "windows_native_tool_ready":True,
+                })
+            return {"worker_id":display,"tool":result,"latest":manifest}
         check_worker(actual)
         _,manifest=await latest_release()
         result=await command(actual,"native_page_update",{},timeout=60)
@@ -567,12 +605,23 @@ def install_native_page_diagnostics(app: FastAPI) -> FastAPI:
         if platform=="windows":
             client=app.state.registry.clients.get(actual)
             meta=client.metadata if client and isinstance(client.metadata,dict) else {}
-            current=str(meta.get("windows_native_page_diagnostic_version") or "")
-            return {"worker_id":display,"tool":{"version":current or "未安装",
-                "installed":current=="windows-dom-1.1.1",
-                "capture_mode":"extension-dom-only",
-                "note":"Windows diagnostic code is bundled with the Chrome extension"},
-                "latest":{"version":"windows-dom-1.1.1"}}
+            package=str(meta.get("windows_native_page_diagnostic_version") or "")
+            installed=str(meta.get("windows_native_tool_version") or "")
+            digest=str(meta.get("windows_native_tool_sha256") or "")
+            status={"worker_id":display,
+                "tool":{"version":installed or "未安装独立诊断工具",
+                        "installed":bool(installed and digest),
+                        "sha256":digest,
+                        "extension_diagnostic_version":package,
+                        "capture_mode":"userScripts/USER_SCRIPT" if installed else "bundled-dom-only",
+                        "ready":meta.get("windows_native_tool_ready") is True},
+                "latest":{}}
+            try:
+                _,manifest=await windows_releases.load()
+                status["latest"]=manifest
+            except WindowsCollectorReleaseUnavailable as exc:
+                status["latest_error"]=str(exc)
+            return status
         check_worker(actual)
         result=await command(actual,"native_page_version",{},timeout=15)
         try:

@@ -423,7 +423,8 @@
       const versionLabel=windows ? (extension ? " · 扩展 "+extension : "")+
         (reported ? " · 诊断 "+reported : " · 诊断能力未上报")+
         (supported ? " · 已就绪" : reported ? " · 需升级扩展" :
-          " · 请重连 Worker 刷新能力") : "";
+          " · 请重连 Worker 刷新能力")+
+        (worker.diagnostic_tool_version ? " · 独立工具 "+worker.diagnostic_tool_version : "") : "";
       const label = wid + " · " + os +
         (worker.name && worker.name !== wid ? " · " + worker.name : "") +
         (worker.online ? " · 在线" : " · 离线") + versionLabel;
@@ -555,25 +556,19 @@
     const path = "/api/admin/worker-tools/native-page/workers/" +
       encodeURIComponent(worker) + (action === "update" ? "/update" : "/version");
     const platform = $("nativePageWorker")?.selectedOptions?.[0]?.dataset?.platform;
-    if (platform === "windows" && action === "update") {
-      throw new Error("Windows 诊断随 Chrome 扩展发布，请更新 Windows Worker 扩展版本。Linux 诊断仍可独立更新。");
-    }
     nativePageMessage(action === "update" ? "正在更新工具，并验证代码 SHA-256…" : "正在检查工具版本…");
     const result = await json(path,action === "update" ? {method:"POST"} : undefined);
-    if(platform==="windows") await nativePageWorkers(); // refresh cached list status
+    if(platform==="windows") await nativePageWorkers(); // Refresh actual locally acknowledged version.
     const tool = result.tool || {};
     const latest = result.latest || {};
     const local = String(tool.version || "不可用");
     const remote = String(latest.version || "未知");
-    const same = platform === "windows"
-      ? Boolean(tool.installed && tool.version && tool.version === latest.version)
-      : Boolean(tool.sha256 && tool.sha256 === latest.sha256);
+    const same = Boolean(tool.sha256 && latest.sha256 && tool.sha256 === latest.sha256);
     const updateState = action === "update"
       ? tool.updated === false ? " · 已是最新，无需重复安装" : " · 安装完成并通过 SHA-256 校验"
       : same ? " · 当前已是最新" : latest.version
-        ? platform === "windows" ? " · 需更新 Windows Worker 扩展" : " · 有独立工具更新可用"
-        : "";
-    const latestLabel = platform === "windows" ? "扩展内置最新" : "独立发布分支最新";
+        ? " · 有独立诊断工具更新可用" : "";
+    const latestLabel = "独立发布分支最新";
     nativePageMessage("Worker " + worker + " · 已安装 " + local +
       " · " + latestLabel + " " + remote + " · " +
       (result.latest_error ? "查询失败：" + result.latest_error
