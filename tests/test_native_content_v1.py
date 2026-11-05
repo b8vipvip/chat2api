@@ -124,6 +124,51 @@ def test_mathml_rejects_markup_and_unsafe_attrs(root):
         validate_native_snapshot({"version": 1, "revision": 1, "root": root})
 
 
+def test_extended_mathml_units_and_overscripts_roundtrip(tmp_path):
+    # Replays of KaTeX math include Chinese unit labels (<mtext>) plus
+    # over/under-script structures. Preserve the MathML namespace tree.
+    from app.native_content_v1 import native_public_v1_tree
+    tree = {"version": 1, "revision": 1, "root": {
+        "tag": "div", "children": [{"tag": "math", "children": [
+            {"tag": "semantics", "children": [{"tag": "mrow", "children": [
+                {"tag": "msub", "children": [
+                    {"tag": "mi", "text": "N"}, {"tag": "mtext", "text": "每炉"}]},
+                {"tag": "mo", "text": "="},
+                {"tag": "mover", "children": [
+                    {"tag": "mo", "text": "∑"},
+                    {"tag": "mrow", "children": [
+                        {"tag": "mi", "text": "i"}, {"tag": "mn", "text": "1"}]}]},
+                {"tag": "mtext", "text": "件"}]}]}]}]}}
+    assert validate_native_snapshot(tree) == tree
+    store = NativeContentStore(tmp_path)
+    assert store.publish("req_mathml_units001", "owner", tree)
+    assert store.persist("req_mathml_units001", "owner")
+    assert NativeContentStore(tmp_path).get("req_mathml_units001", "owner") == tree
+    # The OpenAI-compat public tree remains inert HTML, not raw MathML.
+    assert native_public_v1_tree(tree["root"]["children"][0])["tag"] == "span"
+
+
+@pytest.mark.parametrize("bad", [
+    {"tag": "math", "children": [{"tag": "div", "text": "每炉"}]},
+    {"tag": "mover", "children": [{"tag": "iframe", "text": "unsafe"}]},
+    {"tag": "mtext", "style": {"backgroundImage": "url(https://evil.example)"}},
+    {"tag": "mtext", "onclick": "x"},
+])
+def test_extended_mathml_fails_closed_for_html_and_unsafe_attributes(bad):
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1, "root": bad})
+
+
+def test_native_preview_renderer_allowlist_includes_extended_mathml():
+    from pathlib import Path
+    source = (Path(__file__).resolve().parents[1]
+              / "app/request_history_v94_patch.py").read_text(encoding="utf-8")
+    for tag in ("mtext", "mover", "munder", "munderover", "msup", "msubsup",
+                "msqrt", "mroot"):
+        assert tag in source
+    assert "document.createElementNS('http://www.w3.org/1998/Math/MathML',value.tag)" in source
+
+
 def test_safe_layout_is_preserved():
     assert validate_native_snapshot(snapshot()) == snapshot()
 
