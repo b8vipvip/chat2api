@@ -152,6 +152,37 @@ assert.ok(!forbiddenStyle.root.style.backgroundColor);
 assert.ok(!forbiddenStyle.root.style.color);
 assert.ok(!forbiddenStyle.root.style.borderColor);
 
+// Windows v1.0.4: 42 table cells have multi-side padding; 57 have CSS
+// fractional widths. Linux v1.3.11: 372 and 648, respectively. Without
+// this allowlist, all these visual styles silently disappear in delivery.
+const tableStyleCtx={...ctx,getComputedStyle:()=>({
+  display:"table-cell",visibility:"visible",padding:"8px 8px 8px 0px",
+  width:"159.219px",height:"36.5px",color:"rgb(13, 13, 13)"
+})};
+delete tableStyleCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,tableStyleCtx);
+const tableStyleSnap=tableStyleCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_tablecellstyle12",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("TH",[{nodeType:3,nodeValue:"教学负责"}])
+});
+assert.equal(tableStyleSnap.root.style.padding,"8px 8px 8px 0px");
+assert.equal(tableStyleSnap.root.style.width,"159.219px");
+assert.equal(tableStyleSnap.root.style.height,"36.5px");
+const tableCssAttackCtx={...ctx,getComputedStyle:()=>({
+  display:"table-cell",visibility:"visible",
+  padding:"8px 8px 8px 0px;position:absolute",
+  width:"159.219px;background:url(https://evil.invalid)"
+})};
+delete tableCssAttackCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,tableCssAttackCtx);
+const tableCssAttack=tableCssAttackCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_badtablecss123",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("TD",[{nodeType:3,nodeValue:"普通文本"}])
+});
+assert.equal(tableCssAttack.root.style.padding,undefined);
+assert.equal(tableCssAttack.root.style.width,undefined);
+
+
 
 // Enqueue-only ACK must NOT claim that a native snapshot is durable.
 const pendingCtx={...ctx,chrome:{runtime:{sendMessage:async()=>({ok:true})}}};
