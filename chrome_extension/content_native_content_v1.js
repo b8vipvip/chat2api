@@ -398,11 +398,13 @@
 
 
   const IDENTITY_MIMES = new Set(["image/jpeg","image/png","image/webp","image/gif"]);
-  const MAX_IDENTITY_BYTES = 4 * 1024 * 1024;
+  // The media archive accepts originals up to 20 MiB. A 4 MiB hash cap
+  // silently left otherwise-archived originals without byte identity proof.
+  const MAX_IDENTITY_BYTES = 20 * 1024 * 1024;
   const HASH_HEX = /^[a-f0-9]{64}$/;
   async function hashVisibleRaster(img) {
     const url=String(img.currentSrc || img.getAttribute?.("src") || "");
-    if (!url || !globalThis.crypto?.subtle) return "";
+    if (!url) return "";
     try {
       if (/^https:\/\//i.test(url)) {
         // Existing background allowlist enforces sender/tab and trusted
@@ -412,7 +414,11 @@
         });
         return result?.ok && HASH_HEX.test(result.sha256) ? result.sha256 : "";
       }
-      if (!/^(blob:|data:image\/)/i.test(url)) return "";
+      if (!/^(blob:|data:image\/)/i.test(url) || !globalThis.crypto?.subtle) return "";
+      // Do not fetch an oversized inline base64 URL even if the response
+      // omits Content-Length. Images beyond the archive limit cannot match.
+      if (/^data:image\//i.test(url) && url.length > 4*Math.ceil(MAX_IDENTITY_BYTES/3)+128)
+        return "";
       // Blob/data are resolved only in this already-authorized ChatGPT tab.
       // No original URL, pixel byte buffer or token is sent to telemetry.
       const response=await fetch(url,{credentials:"omit",redirect:"error"});
@@ -449,24 +455,32 @@
     }
     const digests=new Map();
     // The request-v6 controller awaits final native.capture before emitting
-    // the terminal. Never make a stalled CDN or blob fetch delay OpenAI
-    // completion for 40 * 6.5 seconds. At most 3.5 seconds total, four
-    // concurrent fetches; unverified positions remain explicitly unmatched.
+    // the terminal. Keep the existing 3.5-second aggregate budget/four-wide
+    // concurrency, but do NOT discard a fast image's hash because a sibling
+    // fetch stalls. Promise.all + batch timeout previously lost *every* proof
+    // from that batch on one slow CDN URL. Late results must not mutate the
+    // published snapshot after the deadline.
     const deadline=Date.now()+3500;
     for (let start=0;start<images.length && Date.now()<deadline;start+=4) {
       const batch=images.slice(start,start+4);
-      let timer;
+      let accepting=true, timer;
       try {
-        const remaining=Math.max(1,deadline-Date.now());
-        const result=await Promise.race([
-          Promise.all(batch.map(hashVisibleRaster)),
-          new Promise(resolve=>{timer=setTimeout(()=>resolve(null),remaining);}),
-        ]);
-        if (!result) break;
-        batch.forEach((img,index)=>{
-          if (HASH_HEX.test(result[index])) digests.set(img,result[index]);
+        const jobs=batch.map(async img=>{
+          try {
+            const digest=await hashVisibleRaster(img);
+            if (accepting && Date.now()<=deadline && HASH_HEX.test(digest))
+              digests.set(img,digest);
+          } catch (_) { /* An unavailable original must stay unverified. */ }
         });
-      } finally {if(timer)clearTimeout(timer);}
+        const remaining=Math.max(1,deadline-Date.now());
+        await Promise.race([
+          Promise.allSettled(jobs),
+          new Promise(resolve=>{timer=setTimeout(resolve,remaining);}),
+        ]);
+      } finally {
+        accepting=false;
+        if(timer)clearTimeout(timer);
+      }
     }
     active.nativeImageDigests=digests;
     active.nativeIdentityVerifiedCount=digests.size;
