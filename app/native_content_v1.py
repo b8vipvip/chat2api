@@ -111,6 +111,8 @@ SAFE_STYLES = {
     "verticalAlign": {"baseline", "middle", "top", "bottom", "sub", "super"},
     "textDecorationLine": {"none", "underline", "line-through", "overline"},
     "borderStyle": {"none", "solid", "dashed", "dotted", "double"},
+    "boxSizing": {"border-box", "content-box"},
+    "borderCollapse": {"collapse", "separate"},
     "alignSelf": {"auto", "start", "center", "end", "stretch", "baseline"},
     "justifySelf": {"auto", "start", "center", "end", "stretch"},
 }
@@ -127,6 +129,9 @@ LENGTH = re.compile(r"^(?:0|(?:\d{1,4}(?:\.\d{1,3})?)(?:px|rem|%))$")
 PADDING_SHORTHAND = re.compile(
     r"^(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))"
     r"(?:\s+(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))){0,3}$")
+BORDER_SPACING = re.compile(
+    r"^(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))"
+    r"(?:\s+(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%)))?$")
 GRID_COLUMNS = re.compile(r"^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$")
 
 
@@ -227,6 +232,8 @@ def validate_native_snapshot(payload: object) -> dict:
                 elif key in LENGTH_STYLES and LENGTH.fullmatch(item) and len(item) <= 16:
                     styles[key] = item
                 elif key == "padding" and len(item) <= 64 and PADDING_SHORTHAND.fullmatch(item):
+                    styles[key] = item
+                elif key == "borderSpacing" and tag == "table" and len(item) <= 36 and BORDER_SPACING.fullmatch(item):
                     styles[key] = item
                 elif key == "gridTemplateColumns" and len(item) <= 120 and GRID_COLUMNS.fullmatch(item):
                     styles[key] = item
@@ -596,6 +603,11 @@ def native_public_v1_tree(root: dict) -> dict:
     result = {key: value for key,value in root.items()
               if key not in ("intrinsic_width", "intrinsic_height", "source_sha256",
                              "attrs", "children", "col_span", "row_span")}
+    # Older native-v1 clients do not know these newer table layout styles.
+    # Keep them only in the authenticated admin native preview.
+    if "style" in result:
+        result["style"] = {key: item for key, item in result["style"].items()
+                           if key not in {"boxSizing", "borderCollapse", "borderSpacing"}}
     # Existing strict v1 consumers accept HTML nodes, not arbitrary MathML.
     # Preserve MathML natively in private admin preview; public v1 gets safe
     # inert HTML spans until the protocol formally negotiates MathML.
