@@ -1,7 +1,7 @@
 (() => {
   const KEY = "__CHAT2API_CONTENT_BUNDLE_MARKER_V71__";
   globalThis[KEY] = {
-    bundle: "0.22.270",
+    bundle: "0.22.271",
     revision: 71,
     request_revision: 69,
     response_revision: 69,
