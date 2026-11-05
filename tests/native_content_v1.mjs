@@ -395,10 +395,10 @@ const codeNative=new Element("PRE",[new Element("CODE",[
 const codeOnly=capture.snapshot({requestId:"req_codewhitespace123",
   submitStartedAt:Date.now(),lastCandidateNode:codeNative});
 assert.ok(codeOnly);
-const nested=codeOnly.root.children[0].children[0].children;
-assert.equal(nested[0].text,"x=1");
-assert.equal(nested[1].text,"\n  ");
-assert.equal(nested[2].text,"y=2");
+const codeLeaves=codeOnly.root.children[0].children[0].children;
+assert.equal(codeLeaves[0].text,"x=1");
+assert.equal(codeLeaves[1].text,"\n  ");
+assert.equal(codeLeaves[2].text,"y=2");
 const ordinaryWhitespace=capture.snapshot({requestId:"req_outsidecode123",
   submitStartedAt:Date.now(),lastCandidateNode:new Element("P",[
     {nodeType:3,nodeValue:"plain"},{nodeType:3,nodeValue:"\n  "},
