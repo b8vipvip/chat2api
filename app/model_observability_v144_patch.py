@@ -6,7 +6,7 @@ from fastapi import FastAPI
 
 from . import admin as admin_module
 from . import model_capability_routing_patch as model_routing
-from .model_catalog import model_transport_id, normalize_model_id, normalize_reasoning_level
+from .model_catalog import model_transport_id, normalize_concrete_model_id, normalize_model_id, normalize_reasoning_level
 from .worker_model_library_v145_patch import install_worker_model_library_v145_patch
 
 PATCH_ID = "final-model-authority-v144"
@@ -48,8 +48,10 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
     requested = normalize_model_id(authority.get("requested_model") or evidence.get("authority_requested_model"))
     routed = normalize_model_id(authority.get("routed_model") or evidence.get("authority_routed_model") or requested)
     request_model = normalize_model_id(evidence.get("request_model"))
-    served = normalize_model_id(evidence.get("served_model"))
-    default_model = normalize_model_id(evidence.get("default_model"))
+    # A page transport alias ("auto"/"default") is not evidence of a model
+    # actually serving the request. Do not mark such a response verified.
+    served = normalize_concrete_model_id(evidence.get("served_model"))
+    default_model = normalize_concrete_model_id(evidence.get("default_model"))
     # Profile/default metadata is diagnostic only. It must never prove which
     # concrete model actually served this request.
     observed = served
