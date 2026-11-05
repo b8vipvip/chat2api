@@ -389,7 +389,7 @@ assert.equal(iconCapture.root.children.length,1,
 // "\\n  " text nodes (9 characters) discarded inside pre/code. The formal
 // request observer must retain them, not just the independent diagnostic.
 const codeNative=new Element("PRE",[new Element("CODE",[
-  new Element("SPAN",[{nodeType:3,nodeValue:"x=1"},{nodeType:3,nodeValue:"\\n  "},
+  new Element("SPAN",[{nodeType:3,nodeValue:"x=1"},{nodeType:3,nodeValue:"\n  "},
     {nodeType:3,nodeValue:"y=2"}])
 ])]);
 const codeOnly=capture.snapshot({requestId:"req_codewhitespace123",
@@ -397,11 +397,11 @@ const codeOnly=capture.snapshot({requestId:"req_codewhitespace123",
 assert.ok(codeOnly);
 const nested=codeOnly.root.children[0].children[0].children;
 assert.equal(nested[0].text,"x=1");
-assert.equal(nested[1].text,"\\n  ");
+assert.equal(nested[1].text,"\n  ");
 assert.equal(nested[2].text,"y=2");
 const ordinaryWhitespace=capture.snapshot({requestId:"req_outsidecode123",
   submitStartedAt:Date.now(),lastCandidateNode:new Element("P",[
-    {nodeType:3,nodeValue:"plain"},{nodeType:3,nodeValue:"\\n  "},
+    {nodeType:3,nodeValue:"plain"},{nodeType:3,nodeValue:"\n  "},
   ])});
 assert.equal(ordinaryWhitespace.root.children.length,1,
   "Whitespace-only plain paragraph nodes still get filtered");
