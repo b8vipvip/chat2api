@@ -443,6 +443,39 @@ const spoofedResult=formulaCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
 assert.notEqual(spoofedResult.root.children[0].tag,"mi",
   "HTML custom elements must never gain MathML privileges");
 console.log("Native MathML: safe namespace, direct operator text and fractions");
+// A real-world KaTeX cost formula contains MathML <mtext> labels (每炉,
+// 件) and an <mover> for a summation. Those nodes must stay in the MathML
+// namespace rather than become HTML div/span children rejected by the server.
+const costLabel=token("mtext","每炉");
+const subscript=new Element("MSUB",[token("mi","N"),costLabel]);
+subscript.namespaceURI=mathNamespace;
+const overscript=new Element("MOVER",[token("mo","∑"),token("mi","n")]);
+overscript.namespaceURI=mathNamespace;
+const unitsRow=new Element("MROW",[subscript,overscript,token("mtext","件")]);
+unitsRow.namespaceURI=mathNamespace;
+const unitsMath=new Element("MATH",[unitsRow]);unitsMath.namespaceURI=mathNamespace;
+const unitsSnapshot=formulaCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_mathunits_12345",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[unitsMath])
+});
+const mathUnits=unitsSnapshot.root.children[0].children[0];
+assert.equal(mathUnits.children[0].tag,"msub");
+assert.equal(mathUnits.children[0].children[1].tag,"mtext");
+assert.equal(mathUnits.children[0].children[1].text,"每炉");
+assert.equal(mathUnits.children[1].tag,"mover");
+assert.equal(mathUnits.children[2].tag,"mtext");
+assert.equal(mathUnits.children[2].text,"件");
+// Older frozen reference samples used MathML-namespaced div for unknown
+// math tags. Treat ONLY this namespace-qualified legacy shape as inert
+// mtext or mrow; HTML divs still stay HTML.
+const legacyUnit=token("div","每炉");
+const legacyResult=formulaCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_legacyunits1234",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[legacyUnit])
+});
+assert.equal(legacyResult.root.children[0].tag,"mtext");
+assert.equal(legacyResult.root.children[0].text,"每炉");
+
 
 function candidateFor(children) {
   return {requestId:"req_boundedtest1234",submitStartedAt:Date.now(),
