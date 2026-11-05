@@ -87,6 +87,8 @@ assert.equal(longConflict.model_field,null);
 const isolatedCode=fs.readFileSync(
   new URL("../chrome_extension/content_model_evidence_v144.js",import.meta.url),"utf8");
 const isolatedEmits=[], messageListeners=[], bridgeRequests=[];
+const storedEvidence=[];
+let stallNextEvidenceWrite=false,releaseStalledEvidenceWrite=null;
 const isolatedContext={
   Date, setTimeout, clearTimeout, postMessage(){},
   chrome:{
@@ -96,7 +98,15 @@ const isolatedContext={
     },
     storage:{
       local:{get:async()=>({}),set:async()=>{}},
-      session:{set:async()=>{}},
+      session:{set:async data=>{
+        const record=Object.values(data)[0];
+        if(stallNextEvidenceWrite && record.served_model==="gpt-6"
+          && record.model_conflict!==true) {
+          stallNextEvidenceWrite=false;
+          await new Promise(resolve=>{releaseStalledEvidenceWrite=resolve});
+        }
+        storedEvidence.push(record);
+      }},
     },
   },
   addEventListener(name,handler){if(name==="message")messageListeners.push(handler)},
@@ -186,6 +196,33 @@ dispatch("stream-3","response",{ok:false,status:403,
 await takeLast();
 assert.equal(isolatedEmits.length,beforeError,
   "failed HTTP responses must not create served-model proof");
+// Deliberately delay an earlier model proof's session storage write. The
+// network parser may publish a conflict while this async write is pending.
+// The *last* stored and emitted state must be the latest conflict, never A.
+issueRequest("req_asyncconflict123");
+dispatch("stream-race","request",{request_model:"gpt-6",
+  request_wire_model:"gpt-6"});
+await takeLast();
+stallNextEvidenceWrite=true;
+dispatch("stream-race","evidence",{served_model:"gpt-6",
+  model_field:"served_model_slug",
+  evidence_source:"network_response_metadata"});
+for(let i=0;i<10&&!releaseStalledEvidenceWrite;i++)
+  await new Promise(resolve=>setImmediate(resolve));
+assert.equal(typeof releaseStalledEvidenceWrite,"function",
+  "first model storage write must be held in-flight");
+dispatch("stream-race","evidence",{served_model:null,
+  model_conflict:true,model_field:null,
+  evidence_source:"network_response_metadata"});
+releaseStalledEvidenceWrite();
+bridged=await takeLast();
+assert.equal(bridged.served_model,null,
+  "older async model proof cannot overwrite a later conflict");
+assert.equal(bridged.model_conflict,true);
+assert.equal(storedEvidence.at(-1).served_model,null);
+assert.equal(storedEvidence.at(-1).model_conflict,true);
+console.log("Worker isolated bridge: stale async storage/publish cannot overwrite model conflict");
+
 console.log("Worker isolated bridge: conflicting evidence clears old model; header-only proof is status-bound");
 
 console.log("GPTWork served-vs-default model evidence port: four Chrome Bridge integration scenarios passed");
