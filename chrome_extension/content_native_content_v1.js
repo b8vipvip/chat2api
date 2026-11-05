@@ -28,13 +28,13 @@
   // Capture only bounded, visual-only computed values from the same node.
   const svgComputedKeys=new Set(["fill","stroke","stroke-width","font-size",
     "font-weight","opacity","text-anchor"]);
-  function svgSafeAttributes(element){
+  function svgSafeAttributes(element,computedStyle){
     const result={};
+    const computed=computedStyle||getComputedStyle(element);
     for(const key of svgAttrs){
       let raw=element.getAttribute?.(key);
       if((raw===null||raw===undefined||raw==="")&&svgComputedKeys.has(key)){
-        const css=getComputedStyle(element);
-        raw=css.getPropertyValue?.(key)||css[key]||"";
+        raw=computed.getPropertyValue?.(key)||computed[key]||"";
       }
       const v=safeSvgAttr(key,raw);
       if(v)result[key]=v;
@@ -240,13 +240,13 @@
         chars += raw.length; nodes += 1;
         const out = {tag:mapped,style:safeStyle(element)};
         if(svgElement){
-          const attributes=svgSafeAttributes(element);
+          const attributes=svgSafeAttributes(element,computed);
           if(Object.keys(attributes).length)out.attrs=attributes;
         }
         if (raw) out.text = raw;
         return out;
       }
-      const attributes=svgElement?svgSafeAttributes(element):{};
+      const attributes=svgElement?svgSafeAttributes(element,computed):{};
       const children = [];
       active.nativeStructuralMaxChildren = Math.max(
         Number(active.nativeStructuralMaxChildren || 0), element.childNodes.length);
