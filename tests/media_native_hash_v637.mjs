@@ -44,4 +44,57 @@ assert.equal(Object.hasOwn(result,"url"),false);
 assert.equal((await send({type:"chat2api.media.hash-v2",
   url:"https://cdn.openai.com/image.jpg"},
   {url:"https://outsider.example/x",tab:{id:7}})).ok,false);
+// The archive accepts up to 20 MiB originals, while byte relay remains
+// capped at 4 MiB. Identity must hash a real >4 MiB image without copying
+// those bytes into the extension reply. Missing Content-Length is safe only
+// via a bounded streaming read.
+const largeRaw=new Uint8Array(5*1024*1024);
+largeRaw[0]=137;largeRaw[largeRaw.length-1]=42;
+const tooBig=[new Uint8Array(19*1024*1024),new Uint8Array(2*1024*1024)];
+const boundedListeners=[];
+let streamWasRead=0,overflowReads=0;
+runInNewContext(source,{
+  URL,AbortController,Uint8Array,setTimeout,clearTimeout,btoa,crypto:webcrypto,
+  chrome:{runtime:{onMessage:{addListener(fn){boundedListeners.push(fn)}}}},
+  fetch:async(url,options)=>{
+    assert.equal(options.credentials,"omit");
+    assert.equal(options.redirect,"error");
+    const oversized=url.includes("overflow");
+    const unknown=url.includes("unknown-length");
+    const chunks=oversized?tooBig:[largeRaw];
+    let index=0;
+    return {ok:true,headers:{get:key=>key==="content-type"?"image/png":
+      key==="content-length"?(unknown||oversized?null:String(largeRaw.length)):null},
+      body:{getReader:()=>({
+        read:async()=>{
+          if(index>=chunks.length)return {done:true};
+          streamWasRead++;
+          if(oversized)overflowReads++;
+          return {done:false,value:chunks[index++]};
+        },
+        cancel:async()=>{},
+      })},
+      arrayBuffer:async()=>{throw Error("stream must not buffer unbounded response")},
+    };
+  },
+});
+assert.equal(boundedListeners.length,3);
+const boundedHash=boundedListeners[1];
+function sendBounded(url){
+  return new Promise(resolve=>boundedHash(
+    {type:"chat2api.media.hash-v2",url},trusted,resolve));
+}
+const largeIdentity=await sendBounded("https://media.oaiusercontent.com/large.png");
+assert.equal(largeIdentity.ok,true);
+assert.equal(largeIdentity.bytes,largeRaw.length);
+assert.equal(largeIdentity.sha256,Buffer.from(
+  await webcrypto.subtle.digest("SHA-256",largeRaw)).toString("hex"));
+assert.ok(!("data_url" in largeIdentity) && !("url" in largeIdentity));
+const missingLength=await sendBounded("https://media.oaiusercontent.com/unknown-length.png");
+assert.equal(missingLength.ok,true);
+const overflow=await sendBounded("https://media.oaiusercontent.com/overflow.png");
+assert.equal(overflow.ok,false);
+assert.equal(overflowReads,2);
+assert.ok(streamWasRead>=4);
+
 console.log("Original raster SHA only; no bytes or URL leave trusted background bridge");
