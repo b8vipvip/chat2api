@@ -132,7 +132,7 @@
     // was still growing; the hard byte/depth/text budgets remain unchanged.
     const textBudget = 300000;
     const ignore = element => element.matches?.(banned) || !!element.closest?.("nav,aside,footer");
-    const build = (element, depth, inMath = false, inSvg = false) => {
+    const build = (element, depth, inMath = false, inSvg = false, inCode = false) => {
       if (depth > MAX_NATIVE_DEPTH || nodes >= 30000) {
         active.nativeStructuralFailure = depth > MAX_NATIVE_DEPTH ? "max-depth" : "max-nodes";
         truncated = true;
@@ -140,7 +140,9 @@
       }
       if (element.nodeType === Node.TEXT_NODE) {
         const raw = String(element.nodeValue || "");
-        if (!raw.trim()) return null;
+        // Windows v1.0.4 verified that code blocks may carry whitespace-only
+        // newline/indent text nodes. Never discard them inside <pre>/<code>.
+        if (!raw.trim() && !inCode) return null;
         if (chars + raw.length > textBudget) {
           active.nativeStructuralFailure = "max-text";
           truncated = true;
@@ -254,7 +256,7 @@
           truncated = true;
           break;
         }
-        const value = build(child, depth + 1, inMath || mathElement, inSvg || svgElement);
+        const value = build(child, depth + 1, inMath || mathElement, inSvg || svgElement, inCode || tag==="pre" || tag==="code");
         if (value) children.push(value);
       }
       if (!children.length && !["hr","br"].includes(mapped) &&
