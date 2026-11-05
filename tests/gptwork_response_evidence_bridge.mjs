@@ -111,8 +111,11 @@ const isolatedContext={
   },
   addEventListener(name,handler){if(name==="message")messageListeners.push(handler)},
 };
-isolatedContext.globalThis=isolatedContext;
-vm.runInNewContext(isolatedCode,isolatedContext);
+// Chromium requires event.source === window. Node's vm contextified
+// global object is a distinct identity from the raw sandbox argument.
+vm.createContext(isolatedContext);
+vm.runInContext(isolatedCode,isolatedContext);
+const bridgeWindow=vm.runInContext("globalThis",isolatedContext);
 assert.equal(messageListeners.length,1);
 assert.equal(bridgeRequests.length,1);
 const issueRequest=(requestId,model="gpt-6")=>bridgeRequests[0]({
@@ -121,7 +124,7 @@ const issueRequest=(requestId,model="gpt-6")=>bridgeRequests[0]({
     transport_model:model}},
 });
 const dispatch=(stream_id,phase,extra={})=>messageListeners[0]({
-  source:isolatedContext,
+  source:bridgeWindow,
   data:{source:"chat2api-model-evidence-v144",stream_id,phase,...extra},
 });
 const takeLast=async()=>{
