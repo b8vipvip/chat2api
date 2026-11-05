@@ -268,10 +268,19 @@
         const value = build(child, depth + 1, inMath || mathElement, inSvg || svgElement, inCode || tag==="pre" || tag==="code");
         if (value) children.push(value);
       }
-      if (!children.length && !["hr","br"].includes(mapped) &&
+      // Empty table cells are structural: deleting them shifts all subsequent
+      // columns. These are present in real ChatGPT rich tables, not blank UI.
+      if (!children.length && !["hr","br","td","th"].includes(mapped) &&
           !(svgElement && ["path","line","rect","circle","ellipse","polyline","polygon"].includes(mapped))) return null;
       nodes += 1;
       const result = {tag:mapped,style:safeStyle(element)};
+      if (mapped==="td" || mapped==="th") {
+        // Preserve browser-normalized table spans, not arbitrary DOM attrs.
+        // Only bounds that the server and safe renderer also understand.
+        const col=Number(element.colSpan),row=Number(element.rowSpan);
+        if (Number.isInteger(col)&&col>1&&col<=256)result.col_span=col;
+        if (Number.isInteger(row)&&row>=0&&row<=256&&row!==1)result.row_span=row;
+      }
       if(svgElement && Object.keys(attributes).length)result.attrs=attributes;
       if (children.length) result.children = children;
       return result;
