@@ -220,6 +220,41 @@ const ignoredSpans=capture.snapshot({
 assert.equal(ignoredSpans.root.col_span,undefined);
 assert.equal(ignoredSpans.root.row_span,undefined);
 
+// Browser-calculated table box model previously disappeared even though the
+// 1:1 reference contains collapsed borders and spacing-sensitive cells.
+const boxCtx={...ctx,getComputedStyle:()=>({
+  display:"block",visibility:"visible",
+  boxSizing:"border-box",borderCollapse:"collapse",borderSpacing:"0px 2.5px"
+})};
+delete boxCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,boxCtx);
+const boxSnap=boxCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_tableboxmodel123",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("TABLE",[
+    new Element("TR",[new Element("TD")])
+  ])
+});
+assert.equal(boxSnap.root.style.borderCollapse,"collapse");
+assert.equal(boxSnap.root.style.borderSpacing,"0px 2.5px");
+assert.equal(boxSnap.root.style.boxSizing,"border-box");
+assert.equal(boxSnap.root.children[0].children[0].style.borderSpacing,undefined);
+const injectedBoxCtx={...ctx,getComputedStyle:()=>({
+  display:"block",visibility:"visible",
+  borderCollapse:"collapse;display:none",
+  borderSpacing:"0px 0px;url(https://evil.example)",
+  boxSizing:"border-box;position:fixed"
+})};
+delete injectedBoxCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,injectedBoxCtx);
+const injectedBox=injectedBoxCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_tableboxattack123",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("TABLE",[new Element("TR",[new Element("TD")])])
+});
+assert.equal(injectedBox.root.style.borderCollapse,undefined);
+assert.equal(injectedBox.root.style.borderSpacing,undefined);
+assert.equal(injectedBox.root.style.boxSizing,undefined);
+
+
 
 
 
