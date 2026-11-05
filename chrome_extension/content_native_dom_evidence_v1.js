@@ -38,6 +38,38 @@
       return {roots:[verified],scope:"verified_reply_container",
         boundary:"same_request_verified_finish_action"};
     }
+    // Windows independent diagnostics proved the new ChatGPT conversation
+    // UI assigns an assistant selection id inside a matching message-id
+    // wrapper. Bind that entire *new request* assistant selection when all
+    // current-request signals are positive; never take a last historical turn.
+    const selection=candidate.closest?.("[data-chatgpt-selection-message-id]");
+    if(selection?.isConnected && selection!==page && selection.contains(candidate)
+        && active.baselineCapturedAt>0
+        && active.baselineCapturedAt<=active.submitStartedAt
+        && active.networkStreamSeen===true
+        && Number(active.networkObservedAt||0)>=active.submitStartedAt){
+      const id=String(selection.getAttribute("data-chatgpt-selection-message-id")||"");
+      const wrap=selection.closest?.("[data-chatgpt-search-message-ids]");
+      const members=String(wrap?.getAttribute("data-chatgpt-search-message-ids")||"")
+        .split(/\s+/);
+      const heading=wrap?.querySelector?.("h4[data-conversation-role='assistant']");
+      const md=selection.querySelector?.("[data-markdown-text-style='assistant-message']");
+      const dil=md?.querySelector?.("[data-dil-message-id]");
+      const source=md?.querySelector?.("[data-dil-source-message-id]");
+      if(/^[A-Za-z0-9-]{12,100}$/.test(id) && members.includes(id)
+          && wrap && heading?.isConnected && visible(heading)
+          && typeof active.baselineRolelessHeadings?.has==="function"
+          && !active.baselineRolelessHeadings.has(heading)
+          && !wrap.querySelector("h4[data-conversation-role='user']")
+          && md && selection.contains(md) && visible(md)
+          && (!dil||dil.getAttribute("data-dil-message-id")===id)
+          && (!source||source.getAttribute("data-dil-source-message-id")===id)
+          && !selection.matches("main,[role='main'],#thread")
+          && !selection.querySelector("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,[contenteditable='true']")){
+        return {roots:[selection],scope:"verified_native_assistant_selection",
+          boundary:"fresh_request_assistant_message_id"};
+      }
+    }
     const normalize = el => String(el?.innerText || el?.textContent || "").replace(/\s+/g," ").trim();
     // Require a freshly created ChatGPT assistant heading from the same
     // request when the role-less desktop UI is used.
@@ -174,7 +206,7 @@
     const report={
       schema:"request-native-dom-evidence-v1",request_id:active.requestId,
       captured_at:new Date().toISOString(),scope,boundary,
-      complete:!truncated && (scope==="roleless_reply_siblings" || scope==="verified_reply_container"),
+      complete:!truncated && (scope==="roleless_reply_siblings" || scope==="verified_reply_container" || scope==="verified_native_assistant_selection"),
       counts,root:{tag:"reply",children:rootChildren},
     };
     const encoded=JSON.stringify(report);
