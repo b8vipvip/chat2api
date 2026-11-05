@@ -205,6 +205,49 @@
     if(typeof trySendSocket!=="function"||!await trySendSocket(message))
       throw new Error("extension_socket_disconnected");
   }
+  // A service-worker restart restores persisted router.routes, but does not
+  // restore the in-memory activeRequests map. A historical inflight marker by
+  // itself is therefore not proof that an API request still has a live tab.
+  // Only disregard provably orphaned markers; never mutate the request router
+  // or clear a route here. Unknown Chrome errors always fail closed.
+  async function visualDiagnosisBusy() {
+    const router=globalThis.__CHAT2API_CONVERSATION_ROUTING_V1__;
+    const workers=globalThis.__CHAT2API_CONVERSATION_WORKERS_V24__;
+    if(router?.loaded===false||router?.activeRequests?.size||
+        workers?.requestRoutes?.size)return true;
+    const previous=Object.entries(router?.routes||{})
+      .filter(([,route])=>Boolean(route?.inflight_request_id))
+      .map(([key,route])=>({
+        key,requestId:String(route.inflight_request_id),
+        tabId:route.tab_id
+      }));
+    for(const item of previous){
+      if(!Number.isInteger(item.tabId))return true;
+      try{
+        const tab=await chrome.tabs.get(item.tabId);
+        // A physical tab could still be processing the request even if the
+        // service worker forgot its in-memory claim. Do not steal focus.
+        if(tab)return true;
+        return true; // An unexpected empty Chrome result is not a proof of absence.
+      }catch(error){
+        const message=String(error?.message||error);
+        if(!/^No tab with id(?::|\s)/i.test(message))return true;
+      }
+    }
+    // A request may arrive while Chrome resolves the tab probes. Only proceed
+    // if there are still no active claims and no new/replaced inflight leases.
+    if(router?.loaded===false||router?.activeRequests?.size||
+        workers?.requestRoutes?.size)return true;
+    const before=new Map(previous.map(item=>[item.key,item]));
+    return Object.entries(router?.routes||{}).some(([key,route])=>{
+      const inflight=String(route?.inflight_request_id||"");
+      if(!inflight)return false;
+      const original=before.get(key);
+      return !original||original.requestId!==inflight||
+        original.tabId!==route?.tab_id;
+    });
+  }
+
   async function execute(job) {
     const jobId=String(job.job_id||"");
     if(!JOB_RE.test(jobId)||!validUrl(job.conversation_url))
@@ -253,10 +296,8 @@
       // Visible mode is explicitly opt-in. Never steal focus from a routed
       // request, even when no Worker-owned browser tab is currently present.
       if(showTab){
-        const busy=Boolean(router?.activeRequests?.size)
-          || Object.values(router?.routes||{}).some(route=>Boolean(route?.inflight_request_id))
-          || Boolean(globalThis.__CHAT2API_CONVERSATION_WORKERS_V24__?.requestRoutes?.size);
-        if(busy)throw new Error("worker_busy_visual_diagnosis");
+        if(await visualDiagnosisBusy())
+          throw new Error("worker_busy_visual_diagnosis");
         if(Number.isInteger(windowId)){
           const active=await chrome.tabs.query({active:true,windowId}).catch(()=>[]);
           previousActiveTabId=active.find(item=>Number.isInteger(item?.id))?.id??null;
