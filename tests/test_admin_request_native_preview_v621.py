@@ -12,16 +12,19 @@ def test_request_dialog_has_explicit_native_preview_switch():
     assert '/api/admin/requests/' in SOURCE and "'/native-content'" in SOURCE
     assert '@app.get("/api/admin/requests/{request_id}/native-content", dependencies=[Depends(require_admin_key)])' in SERVER
 
-def test_unmapped_images_fail_closed_to_canonical_markdown():
-    assert "(!noNativeImages&&!verifiedHash&&!completeOrdinal&&!dimensionHint)" in SOURCE
+def test_unmapped_images_have_inert_placeholders_without_discarding_rich_layout():
     assert "const noNativeImages=Number.isInteger(imageCount)&&imageCount===0" in SOURCE
     assert "原生回复没有已绑定图片" in SOURCE
     assert 'previewAssets.length!==imageCount' in SOURCE
     assert 'requestHistoryNativeNode(snapshot.root,previewAssets,{count:0})' in SOURCE
-    assert "completeOrdinal=summary.media_mapping_complete===true" in SOURCE
-    assert "candidate?.status==='unique-dimensions-unverified'" in SOURCE
-    assert "nativeButton.disabled=true" in SOURCE
-    assert "预览不等于像素级 1:1 验收" in SOURCE
+    assert "candidate?.status==='verified-sha256-partial'" in SOURCE
+    assert "candidate?.status==='verified-sha256'" in SOURCE
+    assert "原生图片索引无效" in SOURCE
+    assert "字节身份未验证（未插入图片）" in SOURCE
+    assert "Array(imageCount).fill(null)" in SOURCE
+    assert "completeOrdinal?assets:" not in SOURCE
+    assert "dimensionHint?candidate.indices" not in SOURCE
+    assert "结构捕获完成不等于像素级 1:1 验收" in SOURCE
 
 def test_archived_media_list_is_not_capped_at_four_and_supports_med_id():
     assert "row.response_media.slice(0,40)" in SOURCE
@@ -78,21 +81,22 @@ def test_admin_native_preview_matches_worker_child_budget():
     assert "if(children.length>80)throw new Error('原生快照子节点超限');" not in SOURCE
 
 
-def test_unique_dimension_preview_is_explicitly_unverified_and_fail_closed():
+def test_unproven_dimensions_or_ordinal_never_map_to_native_image_bytes():
     assert "data?.image_asset_candidates" in SOURCE
-    assert "unique-dimensions-unverified" in SOURCE
-    assert "new Set(candidate.indices).size===candidate.indices.length" in SOURCE
-    assert "未验证内容哈希" in SOURCE
     assert "const previewAssets=noNativeImages?[]" in SOURCE
-    assert "candidate.indices.map(i=>assets[i])" in SOURCE
+    assert "candidate.indices.map(i=>i===null?null:assets[i]||null)" in SOURCE
+    assert "Array(imageCount).fill(null)" in SOURCE
+    assert "完整" not in SOURCE.split("const completeOrdinal=")[-1].split("const previewAssets=")[0] if "const completeOrdinal=" in SOURCE else True
     assert "native_image_identity_candidates(" in SERVER
 
 
-def test_only_selected_native_image_assets_must_be_valid():
-    # Extra archived assets are not rendered and do not control selected URLs.
-    assert "previewAssets.some(u=>!u)" in SOURCE
+def test_only_sha_proven_image_positions_get_owned_asset_urls():
+    # Extra archived assets and unverified slots cannot inject the wrong image.
+    assert "previewAssets.filter(Boolean).length" in SOURCE
     assert "assets.some(u=>!u)" not in SOURCE
     assert "previewAssets.length!==imageCount" in SOURCE
+    assert "const owned=assets[index]" in SOURCE
+    assert "if(!owned)" in SOURCE
 
 
 def test_17b4_admin_renderer_accepts_4000_nodes_but_not_30001():
@@ -163,6 +167,26 @@ def test_17b4_admin_renderer_accepts_4000_nodes_but_not_30001():
     assert.equal(img.style.borderRadius,'12px');
     assert.equal(img.style.width,'320px');
     assert.equal(img.style.height,'180px');
+
+    const imagePositions=requestHistoryNativeNode({tag:'div',children:[
+      {tag:'p',text:'已验证的文字和表格不能丢失'},
+      {tag:'img',media_index:0},
+      {tag:'table',children:[{tag:'tr',children:[{tag:'td',text:'金额'}]}]},
+      {tag:'img',media_index:1},
+      {tag:'img',media_index:2}
+    ]},['/api/media/med_owned/sha_verified',null,
+       '/api/media/med_second/proven_hash'],{count:0});
+    assert.equal(imagePositions.children.length,5);
+    assert.equal(imagePositions.children[0].textContent,'已验证的文字和表格不能丢失');
+    assert.equal(imagePositions.children[1].src,'/api/media/med_owned/sha_verified');
+    assert.equal(imagePositions.children[2].children[0].children[0].textContent,'金额');
+    assert.equal(imagePositions.children[3].tag,'span');
+    assert.ok(imagePositions.children[3].textContent.includes('字节身份未验证'));
+    assert.equal(imagePositions.children[3].src,undefined);
+    assert.equal(imagePositions.children[4].src,'/api/media/med_second/proven_hash');
+    assert.throws(()=>requestHistoryNativeNode({tag:'img',media_index:3},
+       [null,null,null],{count:0}),/原生图片索引无效/);
+
     const math=requestHistoryNativeNode({tag:'math',children:[
       {tag:'mrow',children:[{tag:'mtext',text:'每炉'}]}
     ]},[],{count:0});
@@ -205,12 +229,14 @@ def test_17b4_admin_renderer_accepts_4000_nodes_but_not_30001():
     assert result.returncode==0,result.stderr+result.stdout
 
 
-def test_sha256_verified_images_take_priority_over_ordinal_and_dimensions():
+def test_sha256_verified_and_partial_images_never_fallback_to_ordinal():
     assert "candidate?.status==='verified-sha256'" in SOURCE
-    assert "candidate?.status==='identity-incomplete'" in SOURCE
-    assert "图片与归档原始字节 SHA256 已逐张一致" in SOURCE
-    assert "图片按归档顺序展示，身份尚未全部验证" in SOURCE
+    assert "candidate?.status==='verified-sha256-partial'" in SOURCE
+    assert "未验证图片保留原位置提示，绝不按顺序或尺寸替换" in SOURCE
+    assert "图片按归档顺序展示" not in SOURCE
     assert "source_sha256" in (ROOT/"app"/"native_content_v1.py").read_text("utf-8")
+    assert '"visual_gaps":' in SERVER
+    assert '"visual_completeness_verified": False' in SERVER
 
 
 def test_image_identity_fetch_does_not_block_request_terminal_unboundedly():

@@ -40,10 +40,15 @@ def test_missing_or_contradictory_hash_never_uses_dimensions():
     node=tree([A,C])
     archived=[{"sha256":A,"width":1290,"height":860},
               {"sha256":B,"width":1290,"height":860}]
+    # A proved byte identity remains usable at its exact DOM slot; the
+    # missing/contradictory second slot must NEVER be filled from similar
+    # dimensions, archive ordering or unrelated byte hash B.
     assert native_image_identity_candidates(node,archived)=={
-        "status":"identity-incomplete","indices":[]}
+        "status":"verified-sha256-partial",
+        "indices":[0,None],"matched_count":1}
     assert native_image_identity_candidates(tree([A,None]),archived)=={
-        "status":"identity-incomplete","indices":[]}
+        "status":"verified-sha256-partial",
+        "indices":[0,None],"matched_count":1}
     assert native_image_identity_candidates(tree([None,None]),archived)=={
         "status":"unavailable","indices":[]}
 
