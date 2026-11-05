@@ -7,8 +7,8 @@
   const KEY = "__CHAT2API_NATIVE_CONTENT_V1__";
   if (globalThis[KEY]) return;
   const tags = new Set("div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br".split(" "));
-  const mathTags=new Set("math semantics mrow mi mo mn msub mfrac".split(" "));
-  const mathTokens=new Set("mi mo mn".split(" "));
+  const mathTags=new Set("math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot".split(" "));
+  const mathTokens=new Set("mi mo mn mtext".split(" "));
   const mathNamespace="http://www.w3.org/1998/Math/MathML";
   const banned = "button,script,style,form,nav,header,footer,aside,input,textarea,select,iframe,canvas,svg,[role='menu'],[contenteditable='true']";
   const styleKeys = {
@@ -159,7 +159,16 @@
       const rect = element.getBoundingClientRect?.();
       const computed = getComputedStyle(element);
       if (computed.display === "none" || computed.visibility === "hidden") return null;
-      let mapped = (mathTags.has(tag) && element.namespaceURI===mathNamespace) ? tag : tags.has(tag) ? tag : "div";
+      // Preserve safe MathML tags natively. Old frozen replay fixtures encoded
+      // unsupported MathML tags as MathML-namespaced div nodes; only that
+      // exact legacy case is normalized to inert mtext/mrow in the candidate.
+      const mathElement=element.namespaceURI===mathNamespace;
+      const legacyMathDiv=mathElement && tag==="div";
+      const legacyMathText=legacyMathDiv && [...element.childNodes]
+        .every(n=>n.nodeType===Node.TEXT_NODE);
+      let mapped = mathElement && mathTags.has(tag) ? tag
+        : legacyMathDiv ? (legacyMathText ? "mtext" : "mrow")
+        : tags.has(tag) ? tag : "div";
       if (tag === "img") {
         if (!rect || rect.width < 40 || rect.height < 40) return null;
         if (images >= 40) {
