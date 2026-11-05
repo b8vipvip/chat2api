@@ -69,6 +69,18 @@ assert.equal(pageAlias.served_model,null,
   "page-routing aliases cannot prove that a concrete upstream model served");
 assert.equal(pageAlias.default_model,null);
 
+// Thousands of SSE blocks must be accumulated in linear work and bounded
+// memory. The former adapter re-parsed every prior object on each new frame
+// (quadratic work), slowing long ChatGPT requests that had no new model fact.
+const longStream=Array.from({length:4000},(_,i)=>
+  i===0?{served_model_slug:"gpt-6-astra-wm"}
+  :i===3999?{resolved_model_slug:"gpt-5.6-sol-wm"}
+  :{event:"stream-progress",percent:i%100});
+const longConflict=await capture(longStream);
+assert.equal(longConflict.served_model,null);
+assert.equal(longConflict.model_conflict,true);
+assert.equal(longConflict.model_field,null);
+
 // The page-world stream parser is only the first half of the model evidence
 // contract. Verify the isolated Worker bridge can clear previously published
 // served/default/reasoning facts after an authoritative later conflict.
