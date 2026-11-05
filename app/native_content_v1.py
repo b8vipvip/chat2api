@@ -40,6 +40,15 @@ SVG_ATTRS = {"viewBox", "width", "height", "preserveAspectRatio", "x", "y",
 SVG_NUMBER = re.compile(r"^[-+]?(?:\d{1,6}(?:\.\d{1,5})?|\.\d{1,5})(?:px|%)?$")
 SVG_GEOMETRY = re.compile(r"^[MmLlHhVvCcSsQqTtAaZzEe0-9+.,\-\s]+$")
 SVG_NUMBERS = re.compile(r"^[0-9eE+.,\-\s]+$")
+# Modern Chromium and ChatGPT cards emit CSS Color 4 computed values.
+# Numeric-only grammar and a 96-char cap prevent CSS variables, url(), calc(),
+# nested expressions or user-supplied style text from crossing this boundary.
+MODERN_COLOR = re.compile(
+    r"^(?:(?:oklab|oklch)\(\s*[-+]?\d*\.?\d+\s+[-+]?\d*\.?\d+\s+"
+    r"[-+]?\d*\.?\d+(?:\s*/\s*\d*\.?\d+)?\s*\)|color\(srgb\s+"
+    r"\d*\.?\d+\s+\d*\.?\d+\s+\d*\.?\d+"
+    r"(?:\s*/\s*\d*\.?\d+)?\s*\))$", re.I)
+
 SVG_COLOR = re.compile(
     r"^(?:none|currentColor|transparent|black|white|red|blue|green|gray|grey|"
     r"#[\da-f]{3,8}|rgba?\([\d.,\s%]+\))$", re.I)
@@ -63,7 +72,7 @@ def _svg_attribute(key: str, value: object) -> bool:
     if key == "transform":
         return bool(SVG_TRANSFORM.fullmatch(value))
     if key in {"fill", "stroke"}:
-        return bool(SVG_COLOR.fullmatch(value))
+        return bool(SVG_COLOR.fullmatch(value) or MODERN_COLOR.fullmatch(value))
     if key == "id":
         return bool(SVG_ID.fullmatch(value))
     if key == "clip-path":
@@ -198,8 +207,9 @@ def validate_native_snapshot(payload: object) -> dict:
                     styles[key] = item
                 elif key == "gridTemplateColumns" and len(item) <= 120 and GRID_COLUMNS.fullmatch(item):
                     styles[key] = item
-                elif key in COLOR_STYLES and len(item) <= 48 and (
-                        HEX_COLOR.fullmatch(item) or RGB_COLOR.fullmatch(item)):
+                elif key in COLOR_STYLES and len(item) <= 96 and (
+                        HEX_COLOR.fullmatch(item) or RGB_COLOR.fullmatch(item)
+                        or MODERN_COLOR.fullmatch(item)):
                     styles[key] = item
                 else:
                     raise ValueError("Unsupported CSS property")
