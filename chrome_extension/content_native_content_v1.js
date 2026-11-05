@@ -205,25 +205,48 @@
       }
       if (!(element instanceof Element)) return null;
       const tag = element.tagName.toLowerCase();
-      // Generated-image cards are often rendered INSIDE inert-looking
-      // <button> wrappers. Discard their click action and control text, but
-      // preserve only the visible raster descendants inside this request's
-      // already-verified assistant reply scope.
+      // Generated-image cards AND charts can be rendered inside inert-looking
+      // <button> wrappers. Never copy control labels, action attributes, or
+      // handlers. Preserve the actual IMG and TOP-LEVEL SVG roots in DOM order.
+      // An earlier predicate matched every SVG descendant (path/g/rect), thus
+      // duplicating graphics and exhausting the 40-candidate cap before a
+      // later image. Apply visibility before the bounded match limit.
       if (tag === "button") {
         if (element.closest?.("nav,aside,footer,header,form,[role='menu'],[role='dialog']"))
           return null;
-        const rasters = composedFind(element,img=>
-          img.tagName?.toLowerCase()==="img" || img.namespaceURI===svgNS,40)
-          .filter(img => {
-            const box=img.getBoundingClientRect?.();
-            const vector=img.namespaceURI===svgNS;
-            return box && box.width>=(vector?120:40) && box.height>=(vector?80:40)
-              && !img.closest?.("nav,aside,footer,[data-message-author-role='user']");
-          });
-        if (!rasters.length) return null;
+        const graphical = composedFind(element,node=>{
+          const type=node.tagName?.toLowerCase();
+          const raster=type==="img" && !node.closest?.("svg");
+          const vector=type==="svg" && node.namespaceURI===svgNS
+            && !node.parentElement?.closest?.("svg");
+          if (!raster && !vector) return false;
+          const box=node.getBoundingClientRect?.();
+          if (!box || box.width<(vector?120:40) || box.height<(vector?80:40)
+              || node.closest?.("nav,aside,footer,[data-message-author-role='user']"))
+            return false;
+          const style=getComputedStyle(node);
+          return style.display!=="none" && style.visibility!=="hidden";
+        },41);
+        if (graphical.length>40) {
+          active.nativeStructuralFailure="button-graphic-cap";
+          truncated=true;
+          return null;
+        }
+        // Canvas pixels are still unsupported. Count canvases nested in a
+        // button as missing media, rather than silently reporting no gaps.
+        const canvases=composedFind(element,node=>
+          node.tagName?.toLowerCase()==="canvas",41);
+        active.nativeCanvasOmitted+=canvases.length;
+        active.nativeGraphicsUnsupported+=canvases.length;
+        if (canvases.length>40) {
+          active.nativeStructuralFailure="button-canvas-cap";
+          truncated=true;
+          return null;
+        }
+        if (!graphical.length) return null;
         const children=[];
-        for(const img of rasters.slice(0,40)){
-          const mapped=build(img,depth+1);
+        for(const media of graphical){
+          const mapped=build(media,depth+1);
           if(mapped)children.push(mapped);
           if(truncated)break;
         }
