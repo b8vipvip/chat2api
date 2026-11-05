@@ -140,6 +140,69 @@ assert.equal(buttons.root.children[0].children[0].tag,"figure");
 assert.ok(!JSON.stringify(buttons).includes("Download secret control"));
 assert.ok(!JSON.stringify(buttons).includes("secret.example"));
 
+// A button preview can contain a full SVG chart and a Canvas, not only
+// <img>. The private observer must count both graphics without leaking SVG
+// vector attribute URLs, Canvas pixels, or action labels. It must also retain
+// the entire sibling reply if the roleless ChatGPT heading precedes buttons.
+const buttonSvg=new Element("SVG",[
+  new Element("PATH"),new Element("G",[new Element("PATH")]),
+]);
+const buttonCanvas=new Element("CANVAS");
+const buttonGraphic=new Element("BUTTON",[buttonSvg,buttonCanvas,
+  {nodeType:TEXT,nodeValue:"Download protected button action"}]);
+buttonGraphic.matches=selector=>selector.includes("button");
+const afterGraphic=new Element("P",[
+  {nodeType:TEXT,nodeValue:"Important final explanation after the chart"},
+]);
+const graphicContainer=new Element("DIV",[buttonGraphic,afterGraphic]);
+const graphicPage=new Element("MAIN",[graphicContainer]);
+const buttonReport=probe.captureData({...active,lastCandidateNode:afterGraphic,
+  nativeVerifiedReplyScope:graphicContainer});
+assert.ok(buttonReport.complete);
+assert.equal(buttonReport.counts.svg,1,
+  "SVG descendants must not be counted as independent chart roots");
+assert.equal(buttonReport.counts.canvas,1,
+  "Canvas within a button must appear as an unsupported graphic fact");
+assert.ok(JSON.stringify(buttonReport).includes("Important final explanation"));
+assert.ok(!JSON.stringify(buttonReport).includes("Download protected button action"));
+const chartFigure=buttonReport.root.children[0].children[0];
+assert.equal(chartFigure.tag,"figure");
+assert.equal(chartFigure.children.length,2);
+
+// Roleless assistant scope: the old blocked-button test stopped before a
+// SVG-only or Canvas-only chart and lost all later sibling text as well.
+const h4=new Element("H4");
+h4.innerText="ChatGPT said";
+const svgOnlyButton=new Element("BUTTON",[new Element("SVG")]);
+svgOnlyButton.matches=selector=>selector.includes("button");
+const canvasOnlyButton=new Element("BUTTON",[new Element("CANVAS")]);
+canvasOnlyButton.matches=selector=>selector.includes("button");
+const tailP=new Element("P",[{nodeType:TEXT,nodeValue:"Final section retained"}]);
+const rolelessHolder=new Element("DIV",[
+  h4,svgOnlyButton,canvasOnlyButton,tailP
+]);
+const rolelessPage=new Element("MAIN",[rolelessHolder]);
+rolelessPage.querySelectorAll=selector=>selector==="h4"?[h4]:[];
+h4.nextElementSibling=svgOnlyButton;
+svgOnlyButton.nextElementSibling=canvasOnlyButton;
+canvasOnlyButton.nextElementSibling=tailP;
+tailP.nextElementSibling=null;
+const rolelessScope=probe.replyRoots({
+  ...active,lastCandidateNode:tailP,nativeVerifiedReplyScope:null,
+  networkStreamSeen:false,baselineRolelessHeadings:new Set(),
+});
+assert.equal(rolelessScope.scope,"roleless_reply_siblings");
+assert.equal(rolelessScope.roots.length,3,
+  "both graphics buttons and trailing paragraph belong to the same reply");
+const rolelessReport=probe.captureData({
+  ...active,lastCandidateNode:tailP,nativeVerifiedReplyScope:null,
+  networkStreamSeen:false,baselineRolelessHeadings:new Set(),
+});
+assert.equal(rolelessReport.complete,true);
+assert.equal(rolelessReport.counts.svg,1);
+assert.equal(rolelessReport.counts.canvas,1);
+assert.ok(JSON.stringify(rolelessReport).includes("Final section retained"));
+
 // A same-request reply may render SVG/Canvas/image content in an OPEN
 // ShadowRoot, with <slot> assigning its text outside the shadow's childNodes.
 // This probe must report the real graphic counts without exporting pixels or
