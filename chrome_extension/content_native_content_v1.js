@@ -250,7 +250,8 @@
         const value = build(child, depth + 1, inMath || mathElement, inSvg || svgElement);
         if (value) children.push(value);
       }
-      if (!children.length && !["hr","br"].includes(mapped)) return null;
+      if (!children.length && !["hr","br"].includes(mapped) &&
+          !(svgElement && ["path","line","rect","circle","ellipse","polyline","polygon"].includes(mapped))) return null;
       nodes += 1;
       const result = {tag:mapped,style:safeStyle(element)};
       if(svgElement && Object.keys(attributes).length)result.attrs=attributes;
