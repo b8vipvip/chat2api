@@ -190,6 +190,7 @@ assert.equal(bridged.model_conflict,true);
 
 issueRequest("req_headererror123");
 dispatch("stream-3","request",{request_model:"gpt-6"});
+await takeLast(); // Drain the initial request-only diagnostic first.
 const beforeError=isolatedEmits.length;
 dispatch("stream-3","response",{ok:false,status:403,
   header_model:"gpt-6-astra-wm"});
