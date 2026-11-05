@@ -61,7 +61,21 @@
         if ((cursor.matches(blocked) && !rasterButton) ||
             cursor.querySelector("h4")?.textContent?.match(/^You said\s*[:：]?$/i)) break;
         if (cursor.tagName==="H4" && /said\s*[:：]?$/i.test(normalize(cursor))) break;
-        if (cursor.contains(candidate) || cursor===candidate || normalize(cursor).length>=2 || cursor.querySelector("img")) {
+        // Charts may contain no DOM text or <img>; the old sibling filter
+        // silently omitted standalone SVG/Canvas while preserving adjacent
+        // tables and paragraphs. Only admit substantial *visible* graphics
+        // under this newly identified assistant heading, never page controls.
+        const graphicNodes=[...(cursor.matches?.("svg,canvas")?[cursor]:[]),
+          ...(cursor.querySelectorAll?.("svg,canvas")||[])];
+        const graphical=graphicNodes.some(node=>{
+          const r=node.getBoundingClientRect?.();
+          return r&&r.width>=120&&r.height>=80&&visible(node);
+        });
+        if(cursor.matches?.("[data-message-author-role='user'],[data-testid='user-message'],form")
+            || cursor.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,[contenteditable='true']"))
+          break;
+        if (cursor.contains(candidate) || cursor===candidate ||
+            normalize(cursor).length>=2 || cursor.querySelector("img") || graphical) {
           siblings.push(cursor);
         }
         cursor=cursor.nextElementSibling;
@@ -86,7 +100,7 @@
     if(!boundaryInfo)return null;
     const {roots,scope,boundary}=boundaryInfo;
     const origin=roots[0].getBoundingClientRect();
-    const counts={nodes:0,text_chars:0,images:0,grids:0,flex:0,tables:0,headings:0,links:0};
+    const counts={nodes:0,text_chars:0,images:0,grids:0,flex:0,tables:0,headings:0,links:0,svg:0,svg_large:0,canvas:0,canvas_large:0};
     let truncated=false;
     const convert=(node,depth)=>{
       if (counts.nodes>=MAX_NODES || depth>64) { truncated=true;return null; }
@@ -135,6 +149,8 @@
       counts.nodes++;if(layout.display.includes("grid"))counts.grids++;
       if(layout.display.includes("flex"))counts.flex++;
       if(tag==="table")counts.tables++;
+      if(name==="svg"){counts.svg++;if(rect.width>=120&&rect.height>=80)counts.svg_large++;}
+      if(name==="canvas"){counts.canvas++;if(rect.width>=120&&rect.height>=80)counts.canvas_large++;}
       if(/^h[1-6]$/.test(tag))counts.headings++;
       const output={tag,layout};
       if(tag==="img") {
