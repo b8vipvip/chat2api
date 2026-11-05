@@ -33,6 +33,41 @@ def test_disallowed_native_content_is_rejected(payload):
     with pytest.raises(ValueError):
         validate_native_snapshot(payload)
 
+@pytest.mark.parametrize("color", [
+    "oklab(0.683029 -0.16619 0.102668 / 0.15)",
+    "oklab(0.159065 0.00000723451 0.00000317395 / 0.08)",
+    "color(srgb 0.952941 0.952941 0.952941 / 0.82)",
+])
+def test_observed_windows_linux_modern_colors_survive_native_contract(color):
+    card = {"version": 1, "revision": 1, "root": {
+        "tag": "div", "style": {"color": color, "backgroundColor": color,
+                                "borderColor": color},
+        "children": [{"tag": "p", "text": "安全颜色"}]}}
+    assert validate_native_snapshot(card)["root"]["style"]["backgroundColor"] == color
+    vector = {"version": 1, "revision": 1, "root": {
+        "tag": "svg", "attrs": {"viewBox": "0 0 650 300"},
+        "children": [{"tag": "path", "attrs": {
+            "d": "M0 0 L20 50", "stroke": color}}]}}
+    assert validate_native_snapshot(vector)["root"]["children"][0]["attrs"]["stroke"] == color
+
+
+@pytest.mark.parametrize("unsafe", [
+    "color(srgb 0 0 0);background:url(https://evil.invalid)",
+    "oklab(var(--secret) 0 0)",
+    "color(srgb 0 0 0 / url(#x))",
+    "color(display-p3 1 1 1)",
+    "oklab(1 0 0) url(https://evil.invalid)",
+    "oklab(1 0 0 / 0.5)!important",
+])
+def test_modern_css_colors_are_numeric_and_reject_nested_or_active_values(unsafe):
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1,
+            "root": {"tag": "div", "style": {"backgroundColor": unsafe}}})
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1,
+            "root": {"tag": "svg", "attrs": {"fill": unsafe}}})
+
+
 def test_request_scoped_mathml_preserves_units_operators_and_scripts(tmp_path):
     from app.native_content_v1 import native_public_v1_tree
     formula = {"tag": "math", "style": {"display": "block math"},
