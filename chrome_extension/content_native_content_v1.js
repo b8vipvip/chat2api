@@ -277,7 +277,7 @@
       return null;
     }
     const scopedRoots = (replyRegion?.scope === "roleless_reply_siblings"
-      || replyRegion?.scope === "verified_reply_container")
+      || (replyRegion?.scope === "verified_reply_container" || replyRegion?.scope === "verified_native_assistant_selection"))
       ? replyRegion.roots : null;
     let root = null;
     if (scopedRoots?.length) {
@@ -367,7 +367,7 @@
     const candidate=active.lastCandidateNode;
     const scoped=globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
     const roots=(scoped?.scope==="roleless_reply_siblings"
-       || scoped?.scope==="verified_reply_container") && scoped.roots?.length
+       || (scoped?.scope==="verified_reply_container" || scoped?.scope==="verified_native_assistant_selection")) && scoped.roots?.length
       ? scoped.roots : [candidate];
     const images=[];
     for (const root of roots) {
