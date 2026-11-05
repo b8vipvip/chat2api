@@ -57,3 +57,21 @@ def test_native_rich_sidecar_does_not_replace_request_v6_terminal():
     assert 'type:"chat.native.snapshot"' in sidecar
     assert 'type:"chat.completed"' not in sidecar
     assert 'type:"chat.error"' not in sidecar
+
+
+def test_native_svg_is_a_non_owning_visual_sidecar_and_roleless_scope_is_distinct():
+    """Extending request-scoped vectors must not create another API terminal."""
+    native = (EXT / "content_native_content_v1.js").read_text(encoding="utf-8")
+    evidence = (EXT / "content_native_dom_evidence_v1.js").read_text(encoding="utf-8")
+    request = (EXT / "content_request_v6.js").read_text(encoding="utf-8")
+    assert 'const svgNS="http://www.w3.org/2000/svg"' in native
+    assert 'nativeSvgChartsCaptured' in native
+    assert 'nativeGraphicsUnsupported' in native
+    assert 'canvas' in native
+    assert 'graphicNodes' in evidence
+    assert 'native_roleless_scope_observed:rolelessBound === true' in request
+    assert 'native_svg_charts_captured:Number(active.nativeSvgChartsCaptured || 0)' in request
+    assert 'native_canvas_omitted:Number(active.nativeCanvasOmitted || 0)' in request
+    assert 'type:"chat.native.snapshot"' in native
+    assert 'type:"chat.completed"' not in native
+    assert 'type:"chat.error"' not in native
