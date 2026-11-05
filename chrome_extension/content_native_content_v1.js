@@ -80,6 +80,8 @@
     verticalAlign: ["baseline","middle","top","bottom","sub","super"],
     textDecorationLine: ["none","underline","line-through","overline"],
     borderStyle: ["none","solid","dashed","dotted","double"],
+    boxSizing: ["border-box","content-box"],
+    borderCollapse: ["collapse","separate"],
     alignSelf: ["auto","start","center","end","stretch","baseline"],
     justifySelf: ["auto","start","center","end","stretch"],
   };
@@ -90,6 +92,8 @@
   // Actual table cells in the 2026-11-05 Windows/Linux evidence use
   // e.g. padding:8px 8px 8px 0px. Keep at most four safe length tokens.
   const paddingShorthand = /^(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))(?:\s+(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))){0,3}$/;
+  // Table border spacing is a bounded one/two-value CSS length, never CSS text.
+  const borderSpacing = /^(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))(?:\s+(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%)))?$/;
   const color = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s]+\))$/i;
   const grid = /^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$/;
   // Server validates at most 32 style keys per element. Chromium may emit
@@ -99,7 +103,9 @@
     "justifyContent","alignItems","objectFit","textAlign",
     "color","backgroundColor","borderColor","fontWeight",
     "fontSize","lineHeight","whiteSpace","wordBreak","overflowWrap",
-    "gap","rowGap","columnGap","padding","marginTop","marginBottom",
+    "gap","rowGap","columnGap","padding",
+    "boxSizing","borderCollapse","borderSpacing",
+    "marginTop","marginBottom",
     "marginLeft","marginRight","width","minWidth","maxWidth",
     "height","minHeight","maxHeight","borderRadius","borderWidth",
     ...Object.keys(styleKeys),...allowedLength,
@@ -112,6 +118,8 @@
       if (styleKeys[key]?.includes(value) ||
           allowedLength.has(key) && value.length <= 16 && length.test(value) ||
           key === "padding" && value.length <= 64 && paddingShorthand.test(value) ||
+          key === "borderSpacing" && element.tagName?.toLowerCase()==="table"
+            && value.length <= 36 && borderSpacing.test(value) ||
           ["color","backgroundColor","borderColor"].includes(key) && value.length <= 96 && (color.test(value)||modernColor.test(value)) ||
           key === "gridTemplateColumns" && value.length <= 120 && grid.test(value)) {
         obj[key] = value;
@@ -268,10 +276,19 @@
         const value = build(child, depth + 1, inMath || mathElement, inSvg || svgElement, inCode || tag==="pre" || tag==="code");
         if (value) children.push(value);
       }
-      if (!children.length && !["hr","br"].includes(mapped) &&
+      // Empty table cells are structural: deleting them shifts all subsequent
+      // columns. These are present in real ChatGPT rich tables, not blank UI.
+      if (!children.length && !["hr","br","td","th"].includes(mapped) &&
           !(svgElement && ["path","line","rect","circle","ellipse","polyline","polygon"].includes(mapped))) return null;
       nodes += 1;
       const result = {tag:mapped,style:safeStyle(element)};
+      if (mapped==="td" || mapped==="th") {
+        // Preserve browser-normalized table spans, not arbitrary DOM attrs.
+        // Only bounds that the server and safe renderer also understand.
+        const col=Number(element.colSpan),row=Number(element.rowSpan);
+        if (Number.isInteger(col)&&col>1&&col<=256)result.col_span=col;
+        if (Number.isInteger(row)&&row>=0&&row<=256&&row!==1)result.row_span=row;
+      }
       if(svgElement && Object.keys(attributes).length)result.attrs=attributes;
       if (children.length) result.children = children;
       return result;

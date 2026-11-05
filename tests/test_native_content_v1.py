@@ -33,6 +33,83 @@ def test_disallowed_native_content_is_rejected(payload):
     with pytest.raises(ValueError):
         validate_native_snapshot(payload)
 
+def test_empty_and_merged_table_cells_roundtrip_without_shifting_columns(tmp_path):
+    from app.native_content_v1 import native_public_v1_tree
+
+    doc = {"version": 1, "revision": 1, "root": {
+        "tag": "table", "children": [
+            {"tag": "thead", "children": [{"tag": "tr", "children": [
+                {"tag": "th", "col_span": 3, "row_span": 2, "text": "合并表头"},
+                {"tag": "th"},
+            ]}]},
+            {"tag": "tbody", "children": [{"tag": "tr", "children": [
+                {"tag": "td"},
+                {"tag": "td", "text": "保留原列"},
+            ]}]},
+        ]}}
+    value = validate_native_snapshot(doc)
+    header = value["root"]["children"][0]["children"][0]["children"]
+    body = value["root"]["children"][1]["children"][0]["children"]
+    assert len(header) == len(body) == 2
+    assert header[0]["col_span"] == 3 and header[0]["row_span"] == 2
+    assert header[1] == {"tag": "th"}
+    assert body[0] == {"tag": "td"}
+    assert body[1]["text"] == "保留原列"
+    store = NativeContentStore(tmp_path)
+    assert store.publish("req_tablemerge12345", "owner", doc)
+    assert store.persist("req_tablemerge12345", "owner")
+    assert NativeContentStore(tmp_path).get("req_tablemerge12345", "owner") == value
+    public = native_public_v1_tree(value["root"])
+    assert "col_span" not in public["children"][0]["children"][0]["children"][0]
+    assert "row_span" not in public["children"][0]["children"][0]["children"][0]
+
+
+@pytest.mark.parametrize("tag,spans", [
+    ("div", {"col_span": 2}),
+    ("tr", {"row_span": 2}),
+    ("td", {"col_span": 0}),
+    ("th", {"col_span": True}),
+    ("th", {"col_span": 257}),
+    ("td", {"row_span": -1}),
+    ("td", {"row_span": 1}),
+    ("td", {"row_span": 257}),
+    ("td", {"row_span": "2"}),
+])
+def test_table_spans_reject_non_cells_and_untrusted_bounds(tag, spans):
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1,
+                                  "root": {"tag": tag, **spans}})
+
+
+def test_bounded_table_box_model_preserves_private_layout_not_legacy_v1():
+    from app.native_content_v1 import native_public_v1_tree
+
+    doc = {"version": 1, "revision": 1, "root": {
+        "tag": "table",
+        "style": {"boxSizing": "border-box", "borderCollapse": "collapse",
+                  "borderSpacing": "0px 2.5px"},
+        "children": [{"tag": "tr", "children": [{"tag": "td"}]}]}}
+    safe = validate_native_snapshot(doc)["root"]
+    assert safe["style"] == doc["root"]["style"]
+    legacy = native_public_v1_tree(safe)
+    assert legacy["style"] == {}
+    assert legacy["children"][0]["children"][0] == {"tag": "td"}
+
+
+@pytest.mark.parametrize("tag,style", [
+    ("table", {"borderSpacing": "0px 0px;url(https://evil.invalid)"}),
+    ("table", {"borderSpacing": "calc(10px)"}),
+    ("table", {"borderSpacing": "1px 2px 3px"}),
+    ("td", {"borderSpacing": "0px 0px"}),
+    ("table", {"boxSizing": "border-box;position:fixed"}),
+    ("table", {"borderCollapse": "collapse;display:none"}),
+])
+def test_table_box_model_refuses_unsafe_style_values(tag, style):
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1, "root": {
+            "tag": tag, "style": style}})
+
+
 @pytest.mark.parametrize("color", [
     "oklab(0.683029 -0.16619 0.102668 / 0.15)",
     "oklab(0.159065 0.00000723451 0.00000317395 / 0.08)",

@@ -111,6 +111,8 @@ SAFE_STYLES = {
     "verticalAlign": {"baseline", "middle", "top", "bottom", "sub", "super"},
     "textDecorationLine": {"none", "underline", "line-through", "overline"},
     "borderStyle": {"none", "solid", "dashed", "dotted", "double"},
+    "boxSizing": {"border-box", "content-box"},
+    "borderCollapse": {"collapse", "separate"},
     "alignSelf": {"auto", "start", "center", "end", "stretch", "baseline"},
     "justifySelf": {"auto", "start", "center", "end", "stretch"},
 }
@@ -127,6 +129,9 @@ LENGTH = re.compile(r"^(?:0|(?:\d{1,4}(?:\.\d{1,3})?)(?:px|rem|%))$")
 PADDING_SHORTHAND = re.compile(
     r"^(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))"
     r"(?:\s+(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))){0,3}$")
+BORDER_SPACING = re.compile(
+    r"^(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))"
+    r"(?:\s+(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%)))?$")
 GRID_COLUMNS = re.compile(r"^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$")
 
 
@@ -153,9 +158,25 @@ def validate_native_snapshot(payload: object) -> dict:
         if tag in SVG_TAGS and parent_tag not in SVG_TAGS and tag != "svg":
             raise ValueError("Unscoped SVG element")
         if set(value) - {"tag", "text", "children", "style", "media_index",
-                          "intrinsic_width", "intrinsic_height", "source_sha256", "attrs"}:
+                          "intrinsic_width", "intrinsic_height", "source_sha256", "attrs",
+                          "col_span", "row_span"}:
             raise ValueError("Native element has unsafe attributes")
         result = {"tag": tag}
+        # Browser-normalized table spans are layout structure, never raw
+        # HTML attributes. Reject them on non-cells and cap expansion.
+        if "col_span" in value or "row_span" in value:
+            if tag not in {"td", "th"}:
+                raise ValueError("Table span on non-cell element")
+            if "col_span" in value:
+                col_span = value["col_span"]
+                if type(col_span) is not int or not 2 <= col_span <= 256:
+                    raise ValueError("Invalid table col span")
+                result["col_span"] = col_span
+            if "row_span" in value:
+                row_span = value["row_span"]
+                if type(row_span) is not int or not 0 <= row_span <= 256 or row_span == 1:
+                    raise ValueError("Invalid table row span")
+                result["row_span"] = row_span
         if "attrs" in value:
             if tag not in SVG_TAGS or not isinstance(value["attrs"], dict) or len(value["attrs"]) > 24:
                 raise ValueError("Unsafe SVG attributes")
@@ -211,6 +232,8 @@ def validate_native_snapshot(payload: object) -> dict:
                 elif key in LENGTH_STYLES and LENGTH.fullmatch(item) and len(item) <= 16:
                     styles[key] = item
                 elif key == "padding" and len(item) <= 64 and PADDING_SHORTHAND.fullmatch(item):
+                    styles[key] = item
+                elif key == "borderSpacing" and tag == "table" and len(item) <= 36 and BORDER_SPACING.fullmatch(item):
                     styles[key] = item
                 elif key == "gridTemplateColumns" and len(item) <= 120 and GRID_COLUMNS.fullmatch(item):
                     styles[key] = item
@@ -578,7 +601,13 @@ def native_public_v1_tree(root: dict) -> dict:
     display; old MV3C clients accept only the original five safe node keys.
     """
     result = {key: value for key,value in root.items()
-              if key not in ("intrinsic_width", "intrinsic_height", "source_sha256", "attrs", "children")}
+              if key not in ("intrinsic_width", "intrinsic_height", "source_sha256",
+                             "attrs", "children", "col_span", "row_span")}
+    # Older native-v1 clients do not know these newer table layout styles.
+    # Keep them only in the authenticated admin native preview.
+    if "style" in result:
+        result["style"] = {key: item for key, item in result["style"].items()
+                           if key not in {"boxSizing", "borderCollapse", "borderSpacing"}}
     # Existing strict v1 consumers accept HTML nodes, not arbitrary MathML.
     # Preserve MathML natively in private admin preview; public v1 gets safe
     # inert HTML spans until the protocol formally negotiates MathML.

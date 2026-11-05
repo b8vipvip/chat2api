@@ -182,6 +182,80 @@ const tableCssAttack=tableCssAttackCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
 assert.equal(tableCssAttack.root.style.padding,undefined);
 assert.equal(tableCssAttack.root.style.width,undefined);
 
+ 
+// Previously, an empty <td>/<th> returned null and shifted the following
+// cells one column to the left. Native rich tables must retain their slots,
+// including intentional blanks and merged headers.
+const emptyCell=new Element("TD");
+const mergedHeader=new Element("TH",[{nodeType:3,nodeValue:"合并表头"}]);
+mergedHeader.colSpan=3;mergedHeader.rowSpan=2;
+const remainingCell=new Element("TD",[{nodeType:3,nodeValue:"保留原列"}]);
+const emptyHeader=new Element("TH");
+const tableTree=new Element("TABLE",[
+  new Element("THEAD",[new Element("TR",[mergedHeader,emptyHeader])]),
+  new Element("TBODY",[new Element("TR",[emptyCell,remainingCell])])
+]);
+const tableFidelity=capture.snapshot({
+  requestId:"req_tablegeometry12345",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[tableTree])
+});
+const tableRoot=tableFidelity.root.children[0];
+assert.equal(tableRoot.tag,"table");
+const headerCells=tableRoot.children[0].children[0].children;
+assert.equal(headerCells.length,2,"empty header cell must remain in-place");
+assert.equal(headerCells[0].col_span,3);
+assert.equal(headerCells[0].row_span,2);
+assert.equal(headerCells[1].tag,"th");
+assert.equal(headerCells[1].children,undefined);
+const bodyCells=tableRoot.children[1].children[0].children;
+assert.equal(bodyCells.length,2,"empty body cell must remain in-place");
+assert.equal(bodyCells[0].tag,"td");
+assert.equal(bodyCells[1].children[0].text,"保留原列");
+const invalidSpanCell=new Element("TD",[{nodeType:3,nodeValue:"normal"}]);
+invalidSpanCell.colSpan=9999;invalidSpanCell.rowSpan=-5;
+const ignoredSpans=capture.snapshot({
+  requestId:"req_tablebadspan12",submitStartedAt:Date.now(),
+  lastCandidateNode:invalidSpanCell
+});
+assert.equal(ignoredSpans.root.col_span,undefined);
+assert.equal(ignoredSpans.root.row_span,undefined);
+
+// Browser-calculated table box model previously disappeared even though the
+// 1:1 reference contains collapsed borders and spacing-sensitive cells.
+const boxCtx={...ctx,getComputedStyle:()=>({
+  display:"block",visibility:"visible",
+  boxSizing:"border-box",borderCollapse:"collapse",borderSpacing:"0px 2.5px"
+})};
+delete boxCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,boxCtx);
+const boxSnap=boxCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_tableboxmodel123",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("TABLE",[
+    new Element("TR",[new Element("TD")])
+  ])
+});
+assert.equal(boxSnap.root.style.borderCollapse,"collapse");
+assert.equal(boxSnap.root.style.borderSpacing,"0px 2.5px");
+assert.equal(boxSnap.root.style.boxSizing,"border-box");
+assert.equal(boxSnap.root.children[0].children[0].style.borderSpacing,undefined);
+const injectedBoxCtx={...ctx,getComputedStyle:()=>({
+  display:"block",visibility:"visible",
+  borderCollapse:"collapse;display:none",
+  borderSpacing:"0px 0px;url(https://evil.example)",
+  boxSizing:"border-box;position:fixed"
+})};
+delete injectedBoxCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,injectedBoxCtx);
+const injectedBox=injectedBoxCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_tableboxattack123",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("TABLE",[new Element("TR",[new Element("TD")])])
+});
+assert.equal(injectedBox.root.style.borderCollapse,undefined);
+assert.equal(injectedBox.root.style.borderSpacing,undefined);
+assert.equal(injectedBox.root.style.boxSizing,undefined);
+
+
+
 
 
 // Enqueue-only ACK must NOT claim that a native snapshot is durable.
