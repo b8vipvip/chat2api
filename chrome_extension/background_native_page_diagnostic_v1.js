@@ -224,11 +224,10 @@
     for(const item of previous){
       if(!Number.isInteger(item.tabId))return true;
       try{
-        const tab=await chrome.tabs.get(item.tabId);
-        // A physical tab could still be processing the request even if the
-        // service worker forgot its in-memory claim. Do not steal focus.
-        if(tab)return true;
-        return true; // An unexpected empty Chrome result is not a proof of absence.
+        // Any successful lookup, even without expected metadata, is not
+        // proof that this tab is gone. Keep the busy guard fail-closed.
+        await chrome.tabs.get(item.tabId);
+        return true;
       }catch(error){
         const message=String(error?.message||error);
         if(!/^No tab with id(?::|\s)/i.test(message))return true;
