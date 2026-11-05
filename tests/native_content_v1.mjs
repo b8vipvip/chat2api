@@ -129,6 +129,49 @@ await capture.capture(active,false);
 assert.equal(sent.length,1);
 console.log("Native rich observer: bounded capture, no DOM URLs, independent request status");
 
+// Actual KaTeX MathML must never become HTML div descendants of <math>.
+// The real regression fixture contains mtext unit labels and overscripts.
+const mathNS="http://www.w3.org/1998/Math/MathML";
+function mathEl(tag,children=[],textValue=null){
+  const el=new Element(tag.toUpperCase(),children);
+  el.namespaceURI=mathNS;
+  if(textValue!==null)el.textContent=textValue;
+  return el;
+}
+const mathTree=mathEl("math",[
+  mathEl("mrow",[
+    mathEl("msub",[mathEl("mi",[{nodeType:3,nodeValue:"N"}],"N"),
+                    mathEl("mtext",[{nodeType:3,nodeValue:"每炉"}],"每炉")]),
+    mathEl("mo",[{nodeType:3,nodeValue:"="}],"="),
+    mathEl("mover",[mathEl("mo",[{nodeType:3,nodeValue:"∑"}],"∑"),
+                    mathEl("mi",[{nodeType:3,nodeValue:"n"}],"n")]),
+  ]),
+]);
+const mathReply=capture.snapshot({
+  requestId:"req_mathunitsnative001",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[mathTree])
+});
+assert.equal(mathReply.root.children[0].tag,"math");
+const units=mathReply.root.children[0].children[0].children[0].children[1];
+assert.equal(units.tag,"mtext");
+assert.equal(units.text,"每炉");
+assert.equal(mathReply.root.children[0].children[0].children[2].tag,"mover");
+const legacyUnit=mathEl("div",[{nodeType:3,nodeValue:"单位"}],"单位");
+const legacyMath=capture.snapshot({
+  requestId:"req_legacyunitnative001",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[legacyUnit])
+});
+assert.equal(legacyMath.root.children[0].tag,"mtext");
+const htmlMathSpoof=capture.snapshot({
+  requestId:"req_htmlspoofnative001",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[
+    new Element("MROW",[{nodeType:3,nodeValue:"not MathML"}]),
+  ])
+});
+assert.notEqual(htmlMathSpoof.root.children[0].tag,"mrow");
+
+
+
 function candidateFor(children) {
   return {requestId:"req_boundedtest1234",submitStartedAt:Date.now(),
     lastCandidateNode:new Element("DIV",children)};
