@@ -216,7 +216,7 @@ const requestHistoryNativeSvgAttrs=new Set(
   'viewBox width height preserveAspectRatio x y dx dy x1 x2 y1 y2 cx cy r rx ry d points transform fill stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray opacity fill-opacity stroke-opacity text-anchor dominant-baseline font-size font-weight id clip-path'.split(' ')
 );
 const requestHistoryNativeStyles=new Set(
-  'display flexDirection flexWrap justifyContent alignItems objectFit textAlign fontWeight whiteSpace wordBreak overflowWrap verticalAlign textDecorationLine borderStyle alignSelf justifySelf gap rowGap columnGap padding marginTop marginBottom marginLeft marginRight width minWidth maxWidth height minHeight maxHeight borderRadius borderWidth letterSpacing fontSize lineHeight color backgroundColor borderColor gridTemplateColumns'.split(' ')
+  'display flexDirection flexWrap justifyContent alignItems objectFit textAlign fontWeight whiteSpace wordBreak overflowWrap verticalAlign textDecorationLine borderStyle alignSelf justifySelf gap rowGap columnGap padding marginTop marginBottom marginLeft marginRight width minWidth maxWidth height minHeight maxHeight borderRadius borderWidth letterSpacing fontSize lineHeight color backgroundColor borderColor gridTemplateColumns boxSizing borderCollapse borderSpacing'.split(' ')
 );
 function requestHistoryOwnedImageUrl(value){
   try{
