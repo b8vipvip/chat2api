@@ -114,6 +114,45 @@ assert.equal(styleTree.root.style.color,"#123456");
 assert.equal(styleTree.root.style.backgroundColor,"#abcdef");
 assert.equal(styleTree.root.style.gridTemplateColumns,"1fr 1fr");
 
+// Real Windows hot-1.0.4 and Linux v1.3.11 exports contain these computed
+// CSS Color 4 values; previously the Worker silently dropped card colors.
+const modernStyleValues={
+  oklab:"oklab(0.159065 0.00000723451 0.00000317395 / 0.08)",
+  srgb:"color(srgb 0.952941 0.952941 0.952941 / 0.82)",
+  oklabAccent:"oklab(0.683029 -0.16619 0.102668 / 0.15)"
+};
+const modernCtx={...ctx,getComputedStyle:()=>({
+  display:"block",visibility:"visible",
+  color:modernStyleValues.oklabAccent,
+  backgroundColor:modernStyleValues.oklab,
+  borderColor:modernStyleValues.srgb
+})};
+delete modernCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,modernCtx);
+const modernResult=modernCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_moderncolor12345",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[{nodeType:3,nodeValue:"styled card"}])
+});
+assert.equal(modernResult.root.style.color,modernStyleValues.oklabAccent);
+assert.equal(modernResult.root.style.backgroundColor,modernStyleValues.oklab);
+assert.equal(modernResult.root.style.borderColor,modernStyleValues.srgb);
+const forbiddenStyleCtx={...ctx,getComputedStyle:()=>({
+  display:"block",visibility:"visible",
+  backgroundColor:"color(srgb 0 0 0);background:url(https://evil.invalid/pixel)",
+  borderColor:"oklab(var(--secret) 0 0)",
+  color:"url(https://evil.invalid/pixel)"
+})};
+delete forbiddenStyleCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,forbiddenStyleCtx);
+const forbiddenStyle=forbiddenStyleCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot({
+  requestId:"req_moderncolorbad1",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[{nodeType:3,nodeValue:"style attack"}])
+});
+assert.ok(!forbiddenStyle.root.style.backgroundColor);
+assert.ok(!forbiddenStyle.root.style.color);
+assert.ok(!forbiddenStyle.root.style.borderColor);
+
+
 // Enqueue-only ACK must NOT claim that a native snapshot is durable.
 const pendingCtx={...ctx,chrome:{runtime:{sendMessage:async()=>({ok:true})}}};
 delete pendingCtx.__CHAT2API_NATIVE_CONTENT_V1__;
@@ -352,6 +391,16 @@ assert.equal(chartNode.children[1].children[0].attrs.d,
   "M0 220 L100 210 L200 185 L500 20");
 assert.equal(chartNode.children[2].text,"75万元");
 assert.equal(chartNode.children[2].attrs.x,"24");
+
+// Modern colors on computed SVG strokes must stay inert but visually faithful.
+const modernStroke="color(srgb 0.952941 0.952941 0.952941 / 0.82)";
+const modernVector=vector("svg",[
+  vector("path",[],{d:"M0 10 L200 100",stroke:modernStroke})
+],{width:"650",height:"300"},{width:650,height:300});
+const modernSvg=capture.snapshot({requestId:"req_colorvector123",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[modernVector])});
+assert.equal(modernSvg.root.children[0].children[0].attrs.stroke,modernStroke);
+
 assert.equal(chartActive.nativeSvgChartsCaptured,1);
 assert.equal(chartActive.nativeGraphicsUnsupported,0);
 const poisonedPath=vector("path",[],{d:"M0 0L30 60",href:"https://evil.example",
