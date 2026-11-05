@@ -3,7 +3,7 @@
  * No extension APIs, page mutation, network access or live request terminals.
  */
 (()=>{
-  const DIAGNOSTIC_TOOL_VERSION="1.0.4";
+  const DIAGNOSTIC_TOOL_VERSION="1.0.5";
   function capturePage() {
     const now=new Date().toISOString();
     const visible=node=>{
@@ -58,7 +58,7 @@
       captured_at:now
     };
     if(!target)return {ok:false,stage:"no-safe-assistant-boundary",probe};
-    const allowed=new Set("div p span strong em h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br math semantics mrow mi mo mn mfrac msub msup msubsup".split(" "));
+    const allowed=new Set("div p span strong em h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br math semantics mrow mi mo mn mfrac msub msup msubsup mtext mover munder munderover msqrt mroot".split(" "));
     const cssKeys=["display","fontSize","fontWeight","lineHeight","color","backgroundColor",
       "textAlign","whiteSpace","padding","marginTop","marginBottom","marginLeft","marginRight",
       "width","height","gridTemplateColumns","gridTemplateRows","gap","borderWidth"];
@@ -163,6 +163,45 @@
       if(children.length)out.children=children;
       return out;
     }
+    // Observe *only* this verified assistant subtree. Do not read SVG
+    // markup/path contents, canvas pixels, iframe documents, source URLs,
+    // unrelated turns or browser credentials. Closed shadow roots stay opaque.
+    const graphics={schema:"reply-graphics-probe-v1",scanned_nodes:0,
+      svg_total:0,svg_large:0,svg_shape_elements:0,canvas_total:0,
+      canvas_large:0,iframe_total:0,role_img_total:0,open_shadow_hosts:0,
+      shadow_graphic_elements:0,css_background_nodes:0,probe_truncated:false,samples:[]};
+    const graphicsShapes=new Set(["path","circle","rect","line","ellipse","polyline","polygon"]);
+    const stack=[{node:target.node,depth:0,shadow:false}];
+    while(stack.length){
+      const {node,depth,shadow}=stack.pop();
+      if(++graphics.scanned_nodes>12000){graphics.probe_truncated=true;break;}
+      if(depth>48){graphics.probe_truncated=true;continue;}
+      if(!(node instanceof Element)||node.matches(SKIP)||node.matches(USER)||
+         node.matches("nav,aside,header,footer"))continue;
+      const tag=String(node.localName||node.tagName||"").toLowerCase();
+      const rect=node.getBoundingClientRect(),css=getComputedStyle(node);
+      const shown=css.display!=="none"&&css.visibility!=="hidden"&&rect.width>0&&rect.height>0;
+      const w=Math.max(0,Math.min(40960,Math.round(rect.width))),
+        h=Math.max(0,Math.min(40960,Math.round(rect.height)));
+      const large=shown&&w>=120&&h>=80;
+      let kind="";
+      if(tag==="svg"){graphics.svg_total++;if(large)graphics.svg_large++;kind="svg";}
+      else if(tag==="canvas"){graphics.canvas_total++;if(large)graphics.canvas_large++;kind="canvas";}
+      else if(tag==="iframe"){graphics.iframe_total++;kind="iframe";}
+      else if(node.getAttribute?.("role")==="img"){graphics.role_img_total++;kind="role-img";}
+      if(graphicsShapes.has(tag)&&node.namespaceURI==="http://www.w3.org/2000/svg")
+        graphics.svg_shape_elements++;
+      if(shown&&css.backgroundImage&&css.backgroundImage!=="none")
+        graphics.css_background_nodes++;
+      if(kind&&shadow)graphics.shadow_graphic_elements++;
+      if(kind&&graphics.samples.length<16)graphics.samples.push({kind,w,h,visible:shown,shadow,large});
+      const shadowRoot=node.shadowRoot;
+      if(shadowRoot?.mode==="open"){
+        graphics.open_shadow_hosts++;
+        for(const child of shadowRoot.children)stack.push({node:child,depth:depth+1,shadow:true});
+      }
+      for(const child of node.children)stack.push({node:child,depth:depth+1,shadow});
+    }
     const tree=walk(target.node,0);
     probe.page_visibility_state=["visible","hidden","prerender"].includes(
       document.visibilityState)?document.visibilityState:"unknown";
@@ -171,6 +210,7 @@
     probe.viewport_height=viewHeight;
     probe.image_load_summary=imageMetrics;
     probe.assistant_scoped_preserved_structure=preservedStructure;
+    probe.graphics_probe=graphics;
     probe.resource_timing_note="Best effort only: no timing entry does not prove no network request.";
     const answer={schema:"windows-native-page-evidence-v1",version:"windows-dom-1.1.1",
       boundary_verified:!!target.id&&!truncated,
@@ -180,6 +220,6 @@
     return {ok:true,answer};
   }
   const result=capturePage();
-  if(result?.ok&&result.answer){result.answer.version="windows-hot-1.0.4";result.answer.collector_version=DIAGNOSTIC_TOOL_VERSION;}
+  if(result?.ok&&result.answer){result.answer.version="windows-hot-1.0.5";result.answer.collector_version=DIAGNOSTIC_TOOL_VERSION;}
   return result;
 })()
