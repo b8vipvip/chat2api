@@ -33,6 +33,55 @@ def test_disallowed_native_content_is_rejected(payload):
     with pytest.raises(ValueError):
         validate_native_snapshot(payload)
 
+def test_request_scoped_mathml_preserves_units_operators_and_scripts(tmp_path):
+    from app.native_content_v1 import native_public_v1_tree
+    formula = {"tag": "math", "style": {"display": "block math"},
+        "children": [{"tag": "mrow", "children": [
+            {"tag": "msub", "children": [
+                {"tag": "mi", "text": "N"}, {"tag": "mtext", "text": "每炉"}]},
+            {"tag": "mo", "text": "="},
+            {"tag": "mover", "children": [
+                {"tag": "mo", "text": "∑"}, {"tag": "mi", "text": "n"}]},
+            {"tag": "mtext", "text": "万元"}]}]}
+    value = {"version": 1, "revision": 1,
+        "root": {"tag": "div", "children": [formula]}}
+    assert validate_native_snapshot(value) == value
+    store = NativeContentStore(tmp_path)
+    assert store.publish("req_mathtestv26701", "owner", value)
+    assert store.persist("req_mathtestv26701", "owner")
+    assert NativeContentStore(tmp_path).get("req_mathtestv26701", "owner") == value
+    # Old clients receive inert HTML-only span nodes, not unrecognized MathML.
+    public = native_public_v1_tree(formula)
+    assert public["tag"] == "span"
+    assert public["children"][0]["children"][0]["tag"] == "span"
+    assert "display" not in public.get("style", {})
+
+
+@pytest.mark.parametrize("bad", [
+    {"tag": "math", "children": [{"tag": "div", "text": "spoof"}]},
+    {"tag": "mfrac", "children": [{"tag": "img", "media_index": 0}]},
+    {"tag": "mtext", "style": {"backgroundImage": "url(x)"}},
+    {"tag": "mtext", "onclick": "alert(1)"},
+    {"tag": "math", "children": [{"tag": "script", "text": "bad"}]},
+])
+def test_request_scoped_mathml_fails_closed_on_unsafe_nodes(bad):
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1, "root": bad})
+
+
+def test_image_free_native_reply_does_not_claim_extra_archive_identity():
+    from app.native_content_v1 import native_layout_summary, native_image_identity_candidates
+    value = validate_native_snapshot({"version": 1, "revision": 1,
+        "root": {"tag": "div", "children": [{"tag": "table", "children": [
+            {"tag": "tbody", "children": [{"tag": "tr", "children": [
+                {"tag": "td", "text": "安全表格"}]}]}]}]}})
+    facts = native_layout_summary(value, 1)
+    assert facts["images"] == 0
+    assert facts["archived_assets"] == 1
+    assert facts["media_mapping_complete"] is False
+    assert native_image_identity_candidates(value, [{"sha256": "a" * 64}])["status"] == "unavailable"
+
+
 def test_safe_layout_is_preserved():
     assert validate_native_snapshot(snapshot()) == snapshot()
 

@@ -204,7 +204,10 @@ function requestHistoryEnsureConversationModal(){
 // native sidecar is a separate optional layout preview, NOT the API body.
 // This renderer creates safe DOM nodes only. Never insert upstream HTML.
 const requestHistoryNativeTags=new Set(
-  'div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br'.split(' ')
+  'div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot'.split(' ')
+);
+const requestHistoryNativeMathTags=new Set(
+  'math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot'.split(' ')
 );
 const requestHistoryNativeStyles=new Set(
   'display flexDirection flexWrap justifyContent alignItems objectFit textAlign fontWeight whiteSpace wordBreak overflowWrap verticalAlign textDecorationLine borderStyle alignSelf justifySelf gap rowGap columnGap padding marginTop marginBottom marginLeft marginRight width minWidth maxWidth height minHeight maxHeight borderRadius borderWidth letterSpacing fontSize lineHeight color backgroundColor borderColor gridTemplateColumns'.split(' ')
@@ -220,7 +223,9 @@ function requestHistoryOwnedImageUrl(value){
 function requestHistoryNativeNode(value,assets,budget,depth=0){
   if(!value||typeof value!=='object'||depth>64||++budget.count>30000
       ||!requestHistoryNativeTags.has(value.tag))throw new Error('原生快照结构无效');
-  const node=document.createElement(value.tag);
+  const node=requestHistoryNativeMathTags.has(value.tag)
+    ?document.createElementNS('http://www.w3.org/1998/Math/MathML',value.tag)
+    :document.createElement(value.tag);
   // Images must follow the same validated, bounded style tree as text/cards.
   // The old early return silently discarded original objectFit, borderRadius,
   // width, grid layout and spacing, even for hash-verified image assets.
@@ -260,6 +265,10 @@ async function requestHistoryLoadNativePreview(requestId,row,sequence){
     const assets=media.map(item=>requestHistoryOwnedImageUrl(item?.owned_url||item?.url));
     const candidate=data?.image_asset_candidates;
     const imageCount=Number(summary.images);
+    // Zero-image structured replies remain useful even when the request also
+    // archived unrelated rasters. Do not inject those unbound media into the
+    // reply or mislabel their position as a verified image mapping.
+    const noNativeImages=Number.isInteger(imageCount)&&imageCount===0;
     const dimensionHint=candidate?.status==='unique-dimensions-unverified'
       && Array.isArray(candidate.indices) && candidate.indices.length===imageCount
       && candidate.indices.every(i=>Number.isInteger(i)&&i>=0&&i<assets.length)
@@ -270,11 +279,12 @@ async function requestHistoryLoadNativePreview(requestId,row,sequence){
     const completeOrdinal=summary.media_mapping_complete===true
       && imageCount===media.length && candidate?.status!=='identity-incomplete';
     // Image SHA256 has higher authority than ordinal or natural dimensions.
-    const previewAssets=verifiedHash?candidate.indices.map(i=>assets[i])
-      :(completeOrdinal?assets:(dimensionHint?candidate.indices.map(i=>assets[i]):[]));
-    if(!snapshot?.root||snapshot.version!==1
-        ||(!verifiedHash && !completeOrdinal && !dimensionHint)
-        ||candidate?.status==='identity-incomplete'
+    const previewAssets=noNativeImages?[]
+      :(verifiedHash?candidate.indices.map(i=>assets[i])
+      :(completeOrdinal?assets:(dimensionHint?candidate.indices.map(i=>assets[i]):[])));
+    if(!snapshot?.root||snapshot.version!==1||!Number.isInteger(imageCount)
+        ||(!noNativeImages&&!verifiedHash&&!completeOrdinal&&!dimensionHint)
+        ||(!noNativeImages&&candidate?.status==='identity-incomplete')
         ||previewAssets.length!==imageCount||previewAssets.some(u=>!u))
       throw new Error('原生图片字节身份未完整验证，已拒绝错位预览；标准 API 正文仍可用');
     const tree=requestHistoryNativeNode(snapshot.root,previewAssets,{count:0});
@@ -282,7 +292,9 @@ async function requestHistoryLoadNativePreview(requestId,row,sequence){
     nativeButton.disabled=false;
     status.textContent='已取得原生结构预览（'+summary.nodes+' 节点 / '
       +summary.images+' 图片 / '+summary.grid+' Grid）。'
-      +(verifiedHash?'图片与归档原始字节 SHA256 已逐张一致。':completeOrdinal?'图片按归档顺序展示，身份尚未全部验证。':'图片仅按唯一天然尺寸匹配，未验证内容哈希。')
+      +(noNativeImages
+        ?(media.length?'原生回复没有已绑定图片；'+media.length+' 张另行归档的媒体不会插入原生布局。':'原生回复没有需映射的图片。')
+        :(verifiedHash?'图片与归档原始字节 SHA256 已逐张一致。':completeOrdinal?'图片按归档顺序展示，身份尚未全部验证。':'图片仅按唯一天然尺寸匹配，未验证内容哈希。'))
       +'预览不等于像素级 1:1 验收。';
   }catch(error){
     if(sequence===requestHistoryMediaSequence){

@@ -13,7 +13,9 @@ def test_request_dialog_has_explicit_native_preview_switch():
     assert '@app.get("/api/admin/requests/{request_id}/native-content", dependencies=[Depends(require_admin_key)])' in SERVER
 
 def test_unmapped_images_fail_closed_to_canonical_markdown():
-    assert '(!verifiedHash && !completeOrdinal && !dimensionHint)' in SOURCE
+    assert "(!noNativeImages&&!verifiedHash&&!completeOrdinal&&!dimensionHint)" in SOURCE
+    assert "const noNativeImages=Number.isInteger(imageCount)&&imageCount===0" in SOURCE
+    assert "原生回复没有已绑定图片" in SOURCE
     assert 'previewAssets.length!==imageCount' in SOURCE
     assert 'requestHistoryNativeNode(snapshot.root,previewAssets,{count:0})' in SOURCE
     assert "completeOrdinal=summary.media_mapping_complete===true" in SOURCE
@@ -33,7 +35,8 @@ def test_native_preview_builds_dom_from_approved_elements_without_raw_html():
     assert "requestHistoryNativeTags" in SOURCE
     assert "requestHistoryNativeStyles" in SOURCE
     assert "requestHistoryNativeNode" in SOURCE
-    assert "node=document.createElement(value.tag)" in SOURCE
+    assert ":document.createElement(value.tag)" in SOURCE
+    assert "document.createElementNS('http://www.w3.org/1998/Math/MathML',value.tag)" in SOURCE
     assert "node.textContent=value.text" in SOURCE
     assert "node.style[key]=raw" in SOURCE
     assert "node.innerHTML" not in SOURCE
@@ -80,7 +83,7 @@ def test_unique_dimension_preview_is_explicitly_unverified_and_fail_closed():
     assert "unique-dimensions-unverified" in SOURCE
     assert "new Set(candidate.indices).size===candidate.indices.length" in SOURCE
     assert "未验证内容哈希" in SOURCE
-    assert "const previewAssets=verifiedHash?candidate.indices.map(i=>assets[i])" in SOURCE
+    assert "const previewAssets=noNativeImages?[]" in SOURCE
     assert "candidate.indices.map(i=>assets[i])" in SOURCE
     assert "native_image_identity_candidates(" in SERVER
 
@@ -101,10 +104,15 @@ def test_17b4_admin_renderer_accepts_4000_nodes_but_not_30001():
     )[0]
     js = """
     const assert=require('node:assert/strict');
-    const requestHistoryNativeTags=new Set('div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br'.split(' '));
+    const requestHistoryNativeTags=new Set('div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot'.split(' '));
+    const requestHistoryNativeMathTags=new Set('math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot'.split(' '));
     const requestHistoryNativeStyles=new Set('display flexDirection flexWrap justifyContent alignItems objectFit textAlign fontWeight gap padding marginTop marginBottom width maxWidth height borderRadius fontSize lineHeight color backgroundColor gridTemplateColumns'.split(' '));
-    const document={createElement(tag){return {tag,children:[],style:{},
-       appendChild(c){this.children.push(c)}};}};
+    const document={
+       createElement(tag){return {tag,children:[],style:{},
+         appendChild(c){this.children.push(c)}};},
+       createElementNS(namespace,tag){return {tag,namespace,children:[],style:{},
+         appendChild(c){this.children.push(c)}};}
+    };
     function requestHistoryNativeNode("""
     js += renderer
     js += """
@@ -152,6 +160,13 @@ def test_17b4_admin_renderer_accepts_4000_nodes_but_not_30001():
     assert.equal(img.style.borderRadius,'12px');
     assert.equal(img.style.width,'320px');
     assert.equal(img.style.height,'180px');
+    const math=requestHistoryNativeNode({tag:'math',children:[
+      {tag:'mrow',children:[{tag:'mtext',text:'每炉'}]}
+    ]},[],{count:0});
+    assert.equal(math.namespace,'http://www.w3.org/1998/Math/MathML');
+    assert.equal(math.children[0].children[0].textContent,'每炉');
+    assert.throws(()=>requestHistoryNativeNode({
+      tag:'script',text:'alert(1)'},[],{count:0}),/原生快照结构无效/);
     // Do not execute URL/CSS injection even in an image node.
     const injected=requestHistoryNativeNode({
       tag:'img',media_index:0,
