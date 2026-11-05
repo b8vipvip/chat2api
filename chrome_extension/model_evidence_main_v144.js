@@ -34,6 +34,9 @@
   function normalizeModel(value) {
     const model = String(value || "").trim().toLowerCase();
     if (!/^[a-z0-9._:-]{1,128}$/.test(model)) return null;
+    // "auto"/"default" denote page routing, not an actual upstream model.
+    // The isolated bridge already rejects these non-concrete model IDs.
+    if (model === "auto" || model === "default" || model === "chatgpt-web") return null;
     if (model === "gpt-6-astra" || /^gpt-6-astra[.:_-]/.test(model)) return "gpt-6-astra";
     if (model === "gpt-6-sol" || /^gpt-6-sol[.:_-]/.test(model)) return "gpt-6-sol";
     return aliases[model] || model;
@@ -180,9 +183,32 @@
     if (!reader) return;
     const decoder = new TextDecoder("utf-8");
     let buffer = "", bytes = 0, lastFingerprint = "";
-    const objects = [];
+    // SSE replies can contain thousands of events. Rewalking the full
+    // `objects` history after EACH event caused O(N²) parsing and retained
+    // all prior payload objects in the page's main world. Track only the
+    // strongest bounded model/default/reasoning facts seen so far.
+    const evidenceState=inspectObjects([]);
+    function mergeNext(object) {
+      const next=inspectObjects([object]);
+      for (const [valueKey,fieldKey,conflictKey] of [
+        ["served_model","model_field","model_conflict"],
+        ["default_model","default_model_field","default_model_conflict"],
+        ["reasoning","reasoning_field","reasoning_conflict"],
+      ]) {
+        if (evidenceState[conflictKey] || next[conflictKey]
+            || (evidenceState[valueKey] && next[valueKey]
+                && evidenceState[valueKey] !== next[valueKey])) {
+          evidenceState[valueKey]=null;
+          evidenceState[fieldKey]=null;
+          evidenceState[conflictKey]=true;
+        } else if (next[valueKey]) {
+          evidenceState[valueKey]=next[valueKey];
+          evidenceState[fieldKey]=next[fieldKey];
+        }
+      }
+    }
     const emitEvidence = terminal => {
-      const evidence = inspectObjects(objects);
+      const evidence = {...evidenceState};
       if (headerModel) {
         if (evidence.served_model && evidence.served_model !== headerModel) {
           evidence.served_model = null; evidence.model_conflict = true; evidence.model_field = null;
@@ -207,10 +233,10 @@
           if (bytes > MAX_BUFFER) break;
           buffer += decoder.decode(value, { stream: true });
           const blocks = buffer.split(/\r?\n\r?\n/); buffer = blocks.pop() || "";
-          for (const block of blocks) { const parsed = parseEvent(block); if (parsed) { objects.push(parsed); emitEvidence(false); } }
+          for (const block of blocks) { const parsed = parseEvent(block); if (parsed) { mergeNext(parsed); emitEvidence(false); } }
         }
         buffer += decoder.decode();
-        if (buffer.trim()) { const parsed = parseEvent(buffer); if (parsed) objects.push(parsed); }
+        if (buffer.trim()) { const parsed = parseEvent(buffer); if (parsed) mergeNext(parsed); }
         emitEvidence(true);
         post({ phase: "done", stream_id: streamId, bytes });
       } catch (error) {

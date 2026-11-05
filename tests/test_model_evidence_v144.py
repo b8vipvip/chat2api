@@ -44,6 +44,29 @@ def test_response_served_model_beats_default_profile_metadata() -> None:
     assert evidence.model_conflict is False
 
 
+def test_nonconcrete_network_aliases_never_verify_served_model() -> None:
+    # ChatGPT uses "auto" / "default" for routing, not the concrete model
+    # that actually served a response. Reject those as served evidence while
+    # still recording an explicit model requested on the wire.
+    data = json.dumps({"served_model_slug": "auto",
+                       "default_model_slug": "default"})
+    evidence = extract_response_evidence(
+        data, headers={"x-openai-model": "auto"})
+    assert evidence.served_model is None
+    assert evidence.default_model is None
+    assert evidence.model_conflict is False
+    assert extract_request_evidence(json.dumps({"model": "auto"})).request_model == "auto"
+
+    from app.model_observability_v144_patch import _trace
+    trace = _trace({"requested_model": "gpt-6", "routed_model": "gpt-6"},
+                   {"served_model": "auto", "default_model": "default",
+                    "evidence_source": "network_response_metadata"})
+    assert trace["served_model"] is None
+    assert trace["model_verified"] is False
+    assert trace["model_conflict"] is False
+    assert trace["model_verification_level"] == "unverified"
+
+
 def test_response_equal_authority_conflict_fails_closed() -> None:
     body = "data: " + json.dumps({
         "served_model_slug": "gpt-6-astra-wm",

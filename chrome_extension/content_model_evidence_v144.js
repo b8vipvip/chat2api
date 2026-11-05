@@ -55,25 +55,35 @@
     return row;
   }
   function publicEvidence(row, detail) {
+    const previous=row.evidence || {};
+    const owns=key=>Object.prototype.hasOwnProperty.call(detail,key);
+    // A later authoritative response may EXPLICITLY invalidate an earlier
+    // model. 'newValue || oldValue' accidentally resurrected the old served
+    // model when the network adapter emitted {served_model:null,
+    // model_conflict:true}. Conflicts are sticky for this same stream.
+    const select=key=>owns(key)?detail[key]:previous[key];
+    const modelConflict=Boolean(detail.model_conflict || previous.model_conflict);
+    const defaultConflict=Boolean(detail.default_model_conflict || previous.default_model_conflict);
+    const reasoningConflict=Boolean(detail.reasoning_conflict || previous.reasoning_conflict);
     const evidence = {
-      request_model: normalizeModel(detail.request_model || row.evidence.request_model),
+      request_model: normalizeModel(select("request_model")),
       // Raw model field actually handed to same-request /conversation fetch.
       // Keep transport suffixes here; logical normalization would hide a
       // failed rewrite even while falsely claiming the picker was correct.
       request_wire_model: (() => {
-        const raw=String(detail.request_wire_model || row.evidence.request_wire_model || "").toLowerCase();
+        const raw=String(select("request_wire_model") || "").toLowerCase();
         return /^[a-z0-9._:-]{1,128}$/.test(raw) ? raw : null;
       })(),
-      served_model: normalizeModel(detail.served_model || row.evidence.served_model),
-      default_model: normalizeModel(detail.default_model || row.evidence.default_model),
-      reasoning: detail.reasoning || row.evidence.reasoning || null,
-      model_conflict: Boolean(detail.model_conflict || row.evidence.model_conflict),
-      default_model_conflict: Boolean(detail.default_model_conflict || row.evidence.default_model_conflict),
-      reasoning_conflict: Boolean(detail.reasoning_conflict || row.evidence.reasoning_conflict),
-      model_field: detail.model_field || row.evidence.model_field || null,
-      default_model_field: detail.default_model_field || row.evidence.default_model_field || null,
-      reasoning_field: detail.reasoning_field || row.evidence.reasoning_field || null,
-      evidence_source: detail.evidence_source || "network_response_metadata",
+      served_model: modelConflict?null:normalizeModel(select("served_model")),
+      default_model: defaultConflict?null:normalizeModel(select("default_model")),
+      reasoning: reasoningConflict?null:(select("reasoning") || null),
+      model_conflict: modelConflict,
+      default_model_conflict: defaultConflict,
+      reasoning_conflict: reasoningConflict,
+      model_field: modelConflict?null:(select("model_field") || null),
+      default_model_field: defaultConflict?null:(select("default_model_field") || null),
+      reasoning_field: reasoningConflict?null:(select("reasoning_field") || null),
+      evidence_source: detail.evidence_source || previous.evidence_source || "network_request_metadata",
       request_rewritten: Boolean(detail.request_rewritten || row.evidence.request_rewritten),
       authority_violation: Boolean(detail.authority_violation || row.evidence.authority_violation),
       authority_requested_model: normalizeModel(row.authority?.requested_model),
@@ -85,22 +95,40 @@
     row.evidence = evidence;
     return evidence;
   }
-  async function publishEvidence(row, detail) {
-    if (!row?.requestId) return;
+  function publishEvidence(row, detail) {
+    if (!row?.requestId) return Promise.resolve();
     const evidence = publicEvidence(row, detail);
-    rememberModel(evidence.served_model, "network_served");
-    rememberModel(evidence.default_model, "network_default_profile");
-    try { await chrome.storage.session?.set?.({ [EVIDENCE_KEY]: { request_id: row.requestId, at: Date.now(), ...evidence } }); } catch (_) {}
-    await emit({
-      type: "chat.diagnostics",
-      request_id: row.requestId,
-      diagnostics: {
-        model_evidence_v144: evidence,
-        model_evidence_revision: 144,
-        model_evidence_transport: "main-world-fetch",
-        redesigned_chatgpt_model_adapter: "v144",
-      },
+    const revision = (row.publishRevision || 0) + 1;
+    row.publishRevision = revision;
+    // chrome.storage.session.set() and runtime.sendMessage() are async. When
+    // a newer event invalidates served_model, an older pending write could
+    // otherwise finish last and resurrect a false served-model record in
+    // both session storage and server telemetry. Serialize per network stream,
+    // skipping superseded revisions; distinct streams are unaffected.
+    const previous = row.publishTail || Promise.resolve();
+    const job = previous.catch(() => {}).then(async () => {
+      if (revision !== row.publishRevision) return;
+      rememberModel(evidence.served_model, "network_served");
+      rememberModel(evidence.default_model, "network_default_profile");
+      try {
+        await chrome.storage.session?.set?.({
+          [EVIDENCE_KEY]: { request_id: row.requestId, at: Date.now(), ...evidence }
+        });
+      } catch (_) {}
+      if (revision !== row.publishRevision) return;
+      await emit({
+        type: "chat.diagnostics",
+        request_id: row.requestId,
+        diagnostics: {
+          model_evidence_v144: evidence,
+          model_evidence_revision: 144,
+          model_evidence_transport: "main-world-fetch",
+          redesigned_chatgpt_model_adapter: "v144",
+        },
+      });
     });
+    row.publishTail = job.catch(() => {});
+    return job;
   }
 
   globalThis.addEventListener("message", event => {
@@ -117,6 +145,21 @@
       row.evidence.request_rewritten = Boolean(detail.request_rewritten);
       row.evidence.authority_violation = Boolean(detail.authority_violation);
       publishEvidence(row, detail).catch(() => {});
+      return;
+    }
+    if (detail.phase === "response") {
+      // Some valid /conversation fetch replies expose only a response header
+      // (e.g. an empty or non-SSE response). Previously the main-world
+      // adapter posted this proof but the isolated bridge ignored the phase.
+      // An error status is NOT proof that a model served the request.
+      const headerModel=detail.ok===true && Number(detail.status)===200
+        ? normalizeModel(detail.header_model):null;
+      if (headerModel) publishEvidence(row,{
+        ...detail,
+        served_model:headerModel,
+        model_field:"response-header",
+        evidence_source:"network_response_header",
+      }).catch(() => {});
       return;
     }
     if (detail.phase === "evidence") {
