@@ -17,7 +17,7 @@ class Element {
     const walk=node=>{
       for(const child of node.childNodes||[]){
         if(child instanceof Element){
-          if(selector==="img" && child.tagName==="IMG")out.push(child);
+          if(selector.split(",").map(v=>v.trim().toUpperCase()).includes(child.tagName))out.push(child);
           walk(child);
         }
       }
