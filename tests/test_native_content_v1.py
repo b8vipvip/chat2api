@@ -292,6 +292,54 @@ def test_062f_19_archived_images_and_1800_rich_nodes_fit_complete_safe_tree():
                                   "root":{"tag":"div","children":larger}})
 
 
+def test_sha256_partial_mapping_preserves_only_proven_image_positions():
+    from app.native_content_v1 import native_image_identity_candidates
+
+    proof_a = "a" * 64
+    proof_b = "b" * 64
+    proof_c = "c" * 64
+    archive = [{"sha256": "f" * 64}, {"sha256": proof_b},
+               {"sha256": proof_a}, {"sha256": "e" * 64}]
+    value = validate_native_snapshot({"version": 1, "revision": 1,
+        "root": {"tag": "div", "children": [
+            {"tag": "img", "media_index": 0, "source_sha256": proof_a},
+            {"tag": "p", "text": "表格与文字必须完整保留"},
+            {"tag": "img", "media_index": 1},
+            {"tag": "img", "media_index": 2, "source_sha256": proof_b},
+            {"tag": "img", "media_index": 3, "source_sha256": proof_c},
+        ]}})
+    candidates = native_image_identity_candidates(value, archive)
+    assert candidates == {
+        "status": "verified-sha256-partial",
+        "indices": [2, None, 1, None],
+        "matched_count": 2,
+    }
+    # Duplicate *visible DOM positions* can legitimately reuse one owned byte
+    # identity; they must never be mapped to an arbitrary different archive.
+    duplicates = validate_native_snapshot({"version": 1, "revision": 1,
+        "root": {"tag": "div", "children": [
+            {"tag": "img", "media_index": 0, "source_sha256": proof_a},
+            {"tag": "img", "media_index": 1, "source_sha256": proof_a},
+        ]}})
+    assert native_image_identity_candidates(duplicates, archive) == {
+        "status": "verified-sha256", "indices": [2, 2]}
+    unknown = validate_native_snapshot({"version": 1, "revision": 1,
+        "root": {"tag": "div", "children": [
+            {"tag": "img", "media_index": 0, "source_sha256": proof_c},
+            {"tag": "img", "media_index": 1},
+        ]}})
+    assert native_image_identity_candidates(unknown, archive) == {
+        "status": "identity-incomplete", "indices": []}
+    # No proof: dimension matching remains diagnostic and cannot be presented
+    # as a byte-verified image identity.
+    only_size = validate_native_snapshot({"version": 1, "revision": 1,
+        "root": {"tag": "div", "children": [
+            {"tag": "img", "media_index": 0,
+             "intrinsic_width": 640, "intrinsic_height": 480}]}})
+    assert native_image_identity_candidates(only_size,
+        [{"width": 640, "height": 480}])["status"] == "unique-dimensions-unverified"
+
+
 def test_native_image_mapping_detects_duplicate_missing_and_reordered_indices():
     from app.native_content_v1 import native_layout_summary
     def rich(*indices):
