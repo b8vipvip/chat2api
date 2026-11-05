@@ -27,7 +27,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.3.12"
+VERSION = "1.3.13"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -206,6 +206,51 @@ function walk(node,depth){
  if(children.length)out.children=children;
  return out;
 }
+// Read-only graphics diagnostics for the already selected reply only.
+// Never export canvas bytes, SVG markup/path d, URLs, iframe content,
+// text nodes, screenshots, user turns or the page's unrelated components.
+const graphics={schema:'reply-graphics-probe-v1',scanned_nodes:0,
+ svg_total:0,svg_large:0,svg_shape_elements:0,canvas_total:0,canvas_large:0,
+ iframe_total:0,role_img_total:0,open_shadow_hosts:0,
+ shadow_graphic_elements:0,css_background_nodes:0,probe_truncated:false,
+ samples:[]};
+const shapes=new Set(['path','circle','rect','line','ellipse','polyline','polygon']);
+const inspectGraphic=(root,inShadow)=>{
+ const stack=[{node:root,depth:0,shadow:inShadow}];
+ while(stack.length){
+  const item=stack.pop(),n=item.node;
+  if(++graphics.scanned_nodes>12000){graphics.probe_truncated=true;return;}
+  if(item.depth>48){graphics.probe_truncated=true;continue;}
+  if(!(n instanceof Element))continue;
+  if(n.matches('form,script,style,nav,aside,header,footer,textarea,input,[contenteditable="true"],[data-message-author-role="user"],[data-testid="user-message"]'))continue;
+  const tag=n.localName||n.tagName.toLowerCase();
+  const r=n.getBoundingClientRect(),cs=getComputedStyle(n);
+  const shown=cs.display!=='none'&&cs.visibility!=='hidden'&&r.width>0&&r.height>0;
+  const w=Math.max(0,Math.min(40960,Math.round(r.width))),
+        h=Math.max(0,Math.min(40960,Math.round(r.height)));
+  const large=shown&&w>=120&&h>=80;
+  let kind='';
+  if(tag==='svg'){graphics.svg_total++;if(large)graphics.svg_large++;kind='svg';}
+  else if(tag==='canvas'){graphics.canvas_total++;if(large)graphics.canvas_large++;kind='canvas';}
+  else if(tag==='iframe'){graphics.iframe_total++;kind='iframe';}
+  else if(n.getAttribute('role')==='img'){graphics.role_img_total++;kind='role-img';}
+  if(shapes.has(tag)&&n.namespaceURI==='http://www.w3.org/2000/svg')
+    graphics.svg_shape_elements++;
+  if(shown&&cs.backgroundImage&&cs.backgroundImage!=='none')
+    graphics.css_background_nodes++;
+  if(kind&&item.shadow)graphics.shadow_graphic_elements++;
+  if(kind&&graphics.samples.length<16)
+    graphics.samples.push({kind,w,h,visible:shown,shadow:item.shadow,large});
+  // Only OPEN shadow DOM is observable; never request internal iframe data.
+  const shadow=n.shadowRoot;
+  if(shadow&&shadow.mode==='open'){
+    graphics.open_shadow_hosts++;
+    for(const child of shadow.children)stack.push({node:child,depth:item.depth+1,shadow:true});
+  }
+  for(const child of n.children)stack.push({node:child,depth:item.depth+1,shadow:item.shadow});
+ }
+};
+for(const e of roots){if(graphics.probe_truncated)break;inspectGraphic(e,false);}
 const children=[];for(const e of roots){const n=walk(e,0);if(n)children.push(n);if(reason)break;}
 
 // by request-v6 for the exact request. Never infer it from page similarity.
@@ -222,7 +267,7 @@ return {ok:!reason,reason,version:1,scope,boundary_verified:boundaryVerified,
  }:null,
  request_marker:tagged?expected:null,
  counts:counters,rect:{x:Math.max(0,Math.floor(left)),y:Math.max(0,Math.floor(top)),w:Math.ceil(right-left),h:Math.ceil(bottom-top)},
- image_rects:imageRects,root:{tag:'assistant-reply',children},
+ image_rects:imageRects,graphics_probe:graphics,root:{tag:'assistant-reply',children},
  generating:!!document.querySelector('button[aria-label*="Stop generating"],button[aria-label*="Stop response"]')};
 })"""
 
