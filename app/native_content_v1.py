@@ -40,6 +40,15 @@ SVG_ATTRS = {"viewBox", "width", "height", "preserveAspectRatio", "x", "y",
 SVG_NUMBER = re.compile(r"^[-+]?(?:\d{1,6}(?:\.\d{1,5})?|\.\d{1,5})(?:px|%)?$")
 SVG_GEOMETRY = re.compile(r"^[MmLlHhVvCcSsQqTtAaZzEe0-9+.,\-\s]+$")
 SVG_NUMBERS = re.compile(r"^[0-9eE+.,\-\s]+$")
+# Modern Chromium and ChatGPT cards emit CSS Color 4 computed values.
+# Numeric-only grammar and a 96-char cap prevent CSS variables, url(), calc(),
+# nested expressions or user-supplied style text from crossing this boundary.
+MODERN_COLOR = re.compile(
+    r"^(?:(?:oklab|oklch)\(\s*[-+]?\d*\.?\d+\s+[-+]?\d*\.?\d+\s+"
+    r"[-+]?\d*\.?\d+(?:\s*/\s*\d*\.?\d+)?\s*\)|color\(srgb\s+"
+    r"\d*\.?\d+\s+\d*\.?\d+\s+\d*\.?\d+"
+    r"(?:\s*/\s*\d*\.?\d+)?\s*\))$", re.I)
+
 SVG_COLOR = re.compile(
     r"^(?:none|currentColor|transparent|black|white|red|blue|green|gray|grey|"
     r"#[\da-f]{3,8}|rgba?\([\d.,\s%]+\))$", re.I)
@@ -63,7 +72,7 @@ def _svg_attribute(key: str, value: object) -> bool:
     if key == "transform":
         return bool(SVG_TRANSFORM.fullmatch(value))
     if key in {"fill", "stroke"}:
-        return bool(SVG_COLOR.fullmatch(value))
+        return bool(SVG_COLOR.fullmatch(value) or MODERN_COLOR.fullmatch(value))
     if key == "id":
         return bool(SVG_ID.fullmatch(value))
     if key == "clip-path":
@@ -112,7 +121,12 @@ LENGTH_STYLES = {"gap", "rowGap", "columnGap", "padding", "marginTop", "marginBo
 COLOR_STYLES = {"color", "backgroundColor", "borderColor"}
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{3,8}$")
 RGB_COLOR = re.compile(r"^rgba?\([0-9.,\s]+\)$")
-LENGTH = re.compile(r"^(?:0|(?:\d{1,4}(?:\.\d{1,2})?)(?:px|rem|%))$")
+LENGTH = re.compile(r"^(?:0|(?:\d{1,4}(?:\.\d{1,3})?)(?:px|rem|%))$")
+# Up to 4 bounded side lengths. Covers observed ChatGPT th/td padding;
+# no calc(), url(), var(), !important, or arbitrary CSS survives.
+PADDING_SHORTHAND = re.compile(
+    r"^(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))"
+    r"(?:\s+(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))){0,3}$")
 GRID_COLUMNS = re.compile(r"^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$")
 
 
@@ -196,10 +210,13 @@ def validate_native_snapshot(payload: object) -> dict:
                     styles[key] = item
                 elif key in LENGTH_STYLES and LENGTH.fullmatch(item) and len(item) <= 16:
                     styles[key] = item
+                elif key == "padding" and len(item) <= 64 and PADDING_SHORTHAND.fullmatch(item):
+                    styles[key] = item
                 elif key == "gridTemplateColumns" and len(item) <= 120 and GRID_COLUMNS.fullmatch(item):
                     styles[key] = item
-                elif key in COLOR_STYLES and len(item) <= 48 and (
-                        HEX_COLOR.fullmatch(item) or RGB_COLOR.fullmatch(item)):
+                elif key in COLOR_STYLES and len(item) <= 96 and (
+                        HEX_COLOR.fullmatch(item) or RGB_COLOR.fullmatch(item)
+                        or MODERN_COLOR.fullmatch(item)):
                     styles[key] = item
                 else:
                     raise ValueError("Unsupported CSS property")

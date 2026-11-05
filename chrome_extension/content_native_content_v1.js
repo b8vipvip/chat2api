@@ -15,6 +15,11 @@
   // SVG is vector data, not raw HTML. Only inert geometry/axis labels and
   // internal clip references can leave the trusted assistant reply scope.
   const svgNS="http://www.w3.org/2000/svg";
+  // Chrome 156+ emits these CSS Color 4 forms on ChatGPT cards/charts.
+  // Accept ONLY bounded numeric oklab/oklch and color(srgb), never CSS
+  // variables, relative colors, nested functions or external url() values.
+  const modernColor=/^(?:(?:oklab|oklch)\(\s*[-+]?\d*\.?\d+\s+[-+]?\d*\.?\d+\s+[-+]?\d*\.?\d+(?:\s*\/\s*\d*\.?\d+)?\s*\)|color\(srgb\s+\d*\.?\d+\s+\d*\.?\d+\s+\d*\.?\d+(?:\s*\/\s*\d*\.?\d+)?\s*\))$/i;
+
   const svgTags=new Set("svg g path line rect circle ellipse polyline polygon text tspan defs clippath".split(" "));
   const svgAttrs=new Set("viewBox width height preserveAspectRatio x y dx dy x1 x2 y1 y2 cx cy r rx ry d points transform fill stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray opacity fill-opacity stroke-opacity text-anchor dominant-baseline font-size font-weight id clip-path".split(" "));
   const svgNumber=/^[-+]?(?:\d{1,6}(?:\.\d{1,5})?|\.\d{1,5})(?:px|%)?$/;
@@ -48,7 +53,7 @@
     if(key==="d")return svgGeometry.test(v)?v:"";
     if(["points","stroke-dasharray","viewBox"].includes(key))return svgNumbers.test(v)?v:"";
     if(key==="transform")return svgTransform.test(v)?v:"";
-    if(["fill","stroke"].includes(key))return svgColor.test(v)?v:"";
+    if(["fill","stroke"].includes(key))return (svgColor.test(v)||modernColor.test(v))?v:"";
     if(key==="id")return svgTokenId.test(v)?v:"";
     if(key==="clip-path")return svgClip.test(v)?v:"";
     if(key==="preserveAspectRatio")return /^(?:none|x(?:Min|Mid|Max)Y(?:Min|Mid|Max))(?:\s+(?:meet|slice))?$/.test(v)?v:"";
@@ -81,7 +86,10 @@
   const allowedLength = new Set(["gap","rowGap","columnGap","padding","marginTop","marginBottom",
     "marginLeft","marginRight","width","minWidth","maxWidth","height","minHeight",
     "maxHeight","borderRadius","borderWidth","letterSpacing","fontSize","lineHeight"]);
-  const length = /^(?:0|\d{1,4}(?:\.\d{1,2})?(?:px|rem|%))$/;
+  const length = /^(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))$/;
+  // Actual table cells in the 2026-11-05 Windows/Linux evidence use
+  // e.g. padding:8px 8px 8px 0px. Keep at most four safe length tokens.
+  const paddingShorthand = /^(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))(?:\s+(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))){0,3}$/;
   const color = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s]+\))$/i;
   const grid = /^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$/;
   // Server validates at most 32 style keys per element. Chromium may emit
@@ -103,7 +111,8 @@
       const value = String(css[key] || "").trim();
       if (styleKeys[key]?.includes(value) ||
           allowedLength.has(key) && value.length <= 16 && length.test(value) ||
-          ["color","backgroundColor","borderColor"].includes(key) && value.length <= 48 && color.test(value) ||
+          key === "padding" && value.length <= 64 && paddingShorthand.test(value) ||
+          ["color","backgroundColor","borderColor"].includes(key) && value.length <= 96 && (color.test(value)||modernColor.test(value)) ||
           key === "gridTemplateColumns" && value.length <= 120 && grid.test(value)) {
         obj[key] = value;
       }
