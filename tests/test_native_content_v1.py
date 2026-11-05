@@ -68,6 +68,34 @@ def test_modern_css_colors_are_numeric_and_reject_nested_or_active_values(unsafe
             "root": {"tag": "svg", "attrs": {"fill": unsafe}}})
 
 
+@pytest.mark.parametrize("padding,width", [
+    ("8px 8px 8px 0px", "159.219px"),
+    ("8px 0px 8px 8px", "385.609px"),
+    ("8px", "229.531px"),
+    ("0", "36.5px"),
+])
+def test_windows_linux_table_cell_padding_and_fractional_width_contract(padding, width):
+    value = validate_native_snapshot({"version": 1, "revision": 1,
+        "root": {"tag": "th", "style": {"padding": padding, "width": width},
+                 "text": "表格完整保真"}})
+    assert value["root"]["style"]["padding"] == padding
+    assert value["root"]["style"]["width"] == width
+
+
+@pytest.mark.parametrize("unsafe", [
+    "8px 8px 8px 0px;position:absolute",
+    "8px 8px 8px 0px 1px",
+    "8px calc(10px)",
+    "8px url(https://evil.invalid)",
+    "-1px 0px",
+    "8px 8px !important",
+])
+def test_table_padding_stays_strictly_length_only(unsafe):
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1,
+            "root": {"tag": "td", "style": {"padding": unsafe}, "text": "安全"}})
+
+
 def test_request_scoped_mathml_preserves_units_operators_and_scripts(tmp_path):
     from app.native_content_v1 import native_public_v1_tree
     formula = {"tag": "math", "style": {"display": "block math"},
