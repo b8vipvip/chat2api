@@ -30,22 +30,40 @@ def validate_evidence(value: object, expected_request_id: str) -> dict:
         raise ValueError("Unknown evidence fields")
     if value.get("schema") != "request-native-dom-evidence-v1" or value.get("request_id") != expected_request_id:
         raise ValueError("Mismatched evidence request")
-    if value.get("scope") not in ("roleless_reply_siblings", "verified_reply_container", "candidate_only"):
+    # The current Windows-confirmed request-v6 assistant ID route emits
+    # verified_native_assistant_selection. That is a verified *single-message*
+    # scope, unlike candidate_only; rejecting it silently discards the very
+    # forensic tree used to debug real native rich requests.
+    trusted_scopes = {"roleless_reply_siblings", "verified_reply_container",
+                      "verified_native_assistant_selection"}
+    if value.get("scope") not in trusted_scopes | {"candidate_only"}:
         raise ValueError("Unknown reply scope")
-    if value.get("complete") is True and value.get("scope") not in ("roleless_reply_siblings", "verified_reply_container"):
+    if value.get("complete") is True and value.get("scope") not in trusted_scopes:
         raise ValueError("Partial candidate claimed complete")
     if type(value.get("complete")) is not bool or not isinstance(value.get("boundary"), str) or len(value["boundary"]) > 100:
         raise ValueError("Invalid evidence status")
     if not isinstance(value.get("captured_at"), str) or len(value["captured_at"]) > 48:
         raise ValueError("Invalid capture time")
     counts=value.get("counts")
-    keys={"nodes", "text_chars", "images", "grids", "flex", "tables", "headings", "links"}
-    if not isinstance(counts,dict) or set(counts)!=keys or any(
-        type(v) is not int or v<0 or v>150000 for v in counts.values()
-    ):
+    base_keys={"nodes", "text_chars", "images", "grids", "flex",
+               "tables", "headings", "links"}
+    # Formal content_native_dom_evidence_v1.js now emits these four graphics
+    # counters on EVERY capture, even if all values are zero. Old diagnostic
+    # records contain only base_keys. Admit both exact schemas, not arbitrary
+    # partial or extra data, and keep strictly bounded integer facts.
+    graphics_keys={"svg", "svg_large", "canvas", "canvas_large"}
+    if (not isinstance(counts,dict)
+        or set(counts) not in (base_keys, base_keys | graphics_keys)
+        or any(type(v) is not int or v<0 or v>150000 for v in counts.values())):
         raise ValueError("Invalid counts")
     if counts["nodes"]>MAX_NODES or counts["text_chars"]>MAX_CHARS:
         raise ValueError("Capture exceeds node/text limits")
+    if graphics_keys <= set(counts):
+        if (counts["svg_large"]>counts["svg"]
+            or counts["canvas_large"]>counts["canvas"]
+            or counts["svg"]>counts["nodes"]
+            or counts["canvas"]>counts["nodes"]):
+            raise ValueError("Inconsistent graphics counts")
     raw=json.dumps(value,ensure_ascii=False,separators=(",",":")).encode("utf8")
     if len(raw)>MAX_JSON_BYTES:
         raise ValueError("Capture exceeds byte limit")

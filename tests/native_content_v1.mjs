@@ -539,6 +539,62 @@ assert.equal(iconCapture.root.children.length,1,
   "tiny SVG controls should not be promoted into charts");
 
  
+// Open Shadow DOM is rendered content but is invisible to childNodes and
+// querySelectorAll on the host. Capture charts/images in composed order and
+// hash only the actual visible original bytes. Slotted content belongs once.
+const shadowChart=vector("svg",[
+  vector("path",[],{d:"M0 0 L90 80",stroke:"#112233"})
+],{viewBox:"0 0 240 160"},{width:240,height:160});
+const shadowImg=new Element("IMG");
+shadowImg.currentSrc="https://cdn.example.invalid/visible-image?private=never-export";
+shadowImg.naturalWidth=640;shadowImg.naturalHeight=480;
+const slottedText=new Element("P",[{nodeType:3,nodeValue:"Slotted delivery text"}]);
+const shadowSlot=new Element("SLOT");
+shadowSlot.assignedNodes=()=>[slottedText];
+const shadowHost=new Element("CHART-PREVIEW");
+shadowHost.shadowRoot={mode:"open",childNodes:[shadowChart,shadowSlot,shadowImg]};
+const shadowOuter=new Element("DIV",[shadowHost]);
+const shadowMessages=[];
+const shadowCtx={...ctx,crypto:{subtle:{}},chrome:{runtime:{
+  sendMessage:async message=>{
+    shadowMessages.push(message);
+    if(message.type==="chat2api.media.hash-v2")
+      return {ok:true,sha256:"a".repeat(64)};
+    return {ok:true,committed:true};
+  }
+}}};
+delete shadowCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,shadowCtx);
+const shadowActive={requestId:"req_shadowcomposed123",submitStartedAt:Date.now(),
+  lastCandidateNode:shadowOuter};
+await shadowCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture(shadowActive,true);
+const shadowPayload=shadowMessages.find(m=>m.event?.type==="chat.native.snapshot");
+assert.ok(shadowPayload,"open-shadow reply snapshot was submitted");
+const shadowTree=shadowPayload.event.snapshot.root;
+const shadowFind=(node,tag)=>{
+  if(node.tag===tag)return node;
+  for(const child of node.children||[]){
+    const result=shadowFind(child,tag);if(result)return result;
+  }
+  return null;
+};
+assert.equal(shadowFind(shadowTree,"svg").attrs.viewBox,"0 0 240 160");
+assert.equal(shadowFind(shadowTree,"p").children[0].text,"Slotted delivery text");
+assert.equal(shadowFind(shadowTree,"img").source_sha256,"a".repeat(64));
+assert.equal(shadowActive.nativeIdentityVerifiedCount,1);
+assert.equal(shadowActive.nativeSvgChartsCaptured,1);
+assert.ok(!JSON.stringify(shadowPayload).includes("private=never-export"));
+const closedHost=new Element("CLOSED-CHART");
+closedHost.shadowRoot=null;
+const closedCapture=capture.snapshot({requestId:"req_closedshadow123",
+  submitStartedAt:Date.now(),lastCandidateNode:new Element("DIV",[
+    new Element("P",[{nodeType:3,nodeValue:"Visible text"}]),closedHost
+  ])});
+assert.ok(closedCapture);
+assert.ok(!JSON.stringify(closedCapture).includes("CLOSED-CHART"),
+  "opaque/closed roots are not invented as trusted SVG or pixels");
+
+ 
 // Prior Windows v1.0.3 vs Chrome comparison found three standalone
 // "\\n  " text nodes (9 characters) discarded inside pre/code. The formal
 // request observer must retain them, not just the independent diagnostic.

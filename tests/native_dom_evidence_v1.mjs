@@ -140,6 +140,47 @@ assert.equal(buttons.root.children[0].children[0].tag,"figure");
 assert.ok(!JSON.stringify(buttons).includes("Download secret control"));
 assert.ok(!JSON.stringify(buttons).includes("secret.example"));
 
+// A same-request reply may render SVG/Canvas/image content in an OPEN
+// ShadowRoot, with <slot> assigning its text outside the shadow's childNodes.
+// This probe must report the real graphic counts without exporting pixels or
+// the original image URL. Closed shadows are deliberately never traversed.
+const shadowSvg=new Element('SVG');
+const shadowCanvas=new Element('CANVAS');
+const shadowImage=new Element('IMG');
+shadowImage.naturalWidth=640;shadowImage.naturalHeight=480;
+shadowImage.complete=true;
+shadowImage.src='https://cdn.example.invalid/image?secret=do-not-export';
+const shadowSlot=new Element('SLOT');
+shadowSlot.assignedNodes=()=>[new Element('P',[
+  {nodeType:TEXT,nodeValue:'Slotted explanation'}
+])];
+const shadowHost=new Element('CHART-CARD');
+shadowHost.shadowRoot={mode:'open',
+  childNodes:[shadowSvg,shadowCanvas,shadowImage,shadowSlot]};
+const shadowParagraph=new Element('P',[
+  {nodeType:TEXT,nodeValue:'Main explanation'}
+]);
+const shadowVerified=new Element('DIV',[shadowParagraph,shadowHost]);
+const shadowMain=new Element('MAIN',[shadowVerified]);
+const shadowReport=probe.captureData({...active,lastCandidateNode:shadowParagraph,
+  nativeVerifiedReplyScope:shadowVerified});
+assert.equal(shadowReport.complete,true);
+assert.equal(shadowReport.counts.svg,1);
+assert.equal(shadowReport.counts.svg_large,1);
+assert.equal(shadowReport.counts.canvas,1);
+assert.equal(shadowReport.counts.canvas_large,1);
+assert.equal(shadowReport.counts.images,1);
+assert.ok(JSON.stringify(shadowReport).includes('Slotted explanation'));
+assert.ok(!JSON.stringify(shadowReport).includes('do-not-export'));
+const closedShadowHost=new Element('CLOSED-CARD');
+closedShadowHost.shadowRoot=null;
+const closedVerified=new Element('DIV',[shadowParagraph,closedShadowHost]);
+const closedMain=new Element('MAIN',[closedVerified]);
+const closedReport=probe.captureData({...active,lastCandidateNode:shadowParagraph,
+  nativeVerifiedReplyScope:closedVerified});
+assert.equal(closedReport.counts.svg,0);
+assert.equal(closedReport.counts.canvas,0);
+
 // Untrusted page-wide or cross-user scope cannot be promoted.
 const mainScope=probe.captureData({...active,nativeVerifiedReplyScope:main});
 assert.equal(mainScope.complete,false);

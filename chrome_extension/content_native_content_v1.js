@@ -132,6 +132,39 @@
   // remained published. Preserve DOM order/layout without synthetic wrappers.
   const MAX_NATIVE_CHILDREN = 8192;
   const MAX_NATIVE_DEPTH = 64;
+  // Use the browser's composed-visible subtree, not only childNodes:
+  // a chart/image can be entirely inside an OPEN Shadow DOM. A <slot>
+  // renders assigned light-DOM nodes in place; never collect those twice.
+  // Closed shadows and iframe contents remain unsupported/opaque.
+  function composedChildren(element) {
+    if (!(element instanceof Element)) return [...(element?.childNodes || [])];
+    if (element.tagName?.toLowerCase()==="slot") {
+      try {
+        const assigned=element.assignedNodes?.({flatten:true});
+        if (assigned?.length) return [...assigned];
+      } catch (_) {}
+    }
+    const shadow=element.shadowRoot;
+    return shadow?.mode==="open"
+      ? [...(shadow.childNodes || [])] : [...(element.childNodes || [])];
+  }
+  function composedFind(root, accept, limit=40) {
+    const found=[], seen=new Set(), stack=[{node:root,depth:0}];
+    let visited=0;
+    while(stack.length && found.length<limit && visited<30000){
+      const {node,depth}=stack.pop();
+      if(!(node instanceof Element)||seen.has(node))continue;
+      seen.add(node);visited++;
+      if(node!==root && node.matches?.(
+          "nav,aside,header,footer,form,[role='menu'],[role='dialog'],[contenteditable='true'],[data-message-author-role='user']"))continue;
+      if(accept(node))found.push(node);
+      if(depth>=MAX_NATIVE_DEPTH)continue;
+      const children=composedChildren(node);
+      for(let index=children.length-1;index>=0;index--)
+        stack.push({node:children[index],depth:depth+1});
+    }
+    return found;
+  }
   function snapshot(active) {
     if (active) { active.nativeStructuralFailure = ""; active.nativeStructuralMaxChildren = 0; active.nativeSvgChartsCaptured = 0; active.nativeGraphicsUnsupported = 0; active.nativeCanvasOmitted = 0; }
     if (!active?.submitStartedAt || typeof Element === "undefined") return null;
@@ -179,7 +212,8 @@
       if (tag === "button") {
         if (element.closest?.("nav,aside,footer,header,form,[role='menu'],[role='dialog']"))
           return null;
-        const rasters = [...(element.querySelectorAll?.("img,svg") || [])]
+        const rasters = composedFind(element,img=>
+          img.tagName?.toLowerCase()==="img" || img.namespaceURI===svgNS,40)
           .filter(img => {
             const box=img.getBoundingClientRect?.();
             const vector=img.namespaceURI===svgNS;
@@ -265,9 +299,10 @@
       }
       const attributes=svgElement?svgSafeAttributes(element,computed):{};
       const children = [];
+      const sourceChildren=composedChildren(element);
       active.nativeStructuralMaxChildren = Math.max(
-        Number(active.nativeStructuralMaxChildren || 0), element.childNodes.length);
-      for (const child of element.childNodes) {
+        Number(active.nativeStructuralMaxChildren || 0), sourceChildren.length);
+      for (const child of sourceChildren) {
         if (nodes >= 30000 || children.length >= MAX_NATIVE_CHILDREN) {
           active.nativeStructuralFailure = nodes >= 30000 ? "max-nodes" : "max-children";
           truncated = true;
@@ -400,8 +435,8 @@
     const images=[];
     for (const root of roots) {
       if (!(root instanceof Element) || !root.isConnected) continue;
-      const candidates=root.tagName?.toLowerCase()==="img"
-        ? [root] : [...(root.querySelectorAll?.("img") || [])];
+      const candidates=composedFind(root,
+        node=>node.tagName?.toLowerCase()==="img",40);
       for (const img of candidates) {
         if (!(img instanceof Element) || images.includes(img)) continue;
         const box=img.getBoundingClientRect?.();
