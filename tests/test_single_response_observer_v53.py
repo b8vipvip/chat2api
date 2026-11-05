@@ -69,7 +69,10 @@ def test_native_svg_is_a_non_owning_visual_sidecar_and_roleless_scope_is_distinc
     assert 'nativeGraphicsUnsupported' in native
     assert 'canvas' in native
     assert 'graphicNodes' in evidence
-    assert 'native_roleless_scope_observed:rolelessBound === true' in request
+    assert 'native_roleless_scope_observed:rolelessBound === true && !nativeSelectionBound' in request
+    assert 'native_message_id_scope_verified:nativeSelectionBound === true' in request
+    assert 'verified_native_assistant_selection' in evidence and 'verified_native_assistant_selection' in native
+    assert 'active.baselineRolelessHeadings.has(heading)' in evidence
     assert 'native_svg_charts_captured:Number(active.nativeSvgChartsCaptured || 0)' in request
     assert 'native_canvas_omitted:Number(active.nativeCanvasOmitted || 0)' in request
     assert 'type:"chat.native.snapshot"' in native
