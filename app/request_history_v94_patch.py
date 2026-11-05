@@ -230,6 +230,7 @@ function requestHistoryNativeNode(value,assets,budget,depth=0,svgScope=null){
   if(!value||typeof value!=='object'||depth>64||++budget.count>30000
       ||!requestHistoryNativeTags.has(value.tag))throw new Error('原生快照结构无效');
   const isSvg=requestHistoryNativeSvgTags.has(value.tag);
+  if(svgScope&&!isSvg)throw new Error('SVG 子节点必须是安全矢量标签');
   if(isSvg&&value.tag!=='svg'&&!svgScope)throw new Error('SVG 图形缺少受限根节点');
   let scope=svgScope;
   if(value.tag==='svg'){
