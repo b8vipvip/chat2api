@@ -117,13 +117,21 @@
       // The old 80-sibling loop silently promoted a clipped assistant turn.
       // Keep a strict bounded scan, and mark overflow unverified instead.
       while(cursor && siblings.length<4096) {
-        const rasterButton=cursor.tagName==="BUTTON" &&
-          composedFind(cursor,img=>{
-            if(img.tagName?.toLowerCase()!=="img")return false;
-            const r=img.getBoundingClientRect?.();
-            return r && r.width>=40 && r.height>=40 && visible(img);
+        // A full-sized SVG or Canvas preview may be the only content of a
+        // generated chart button. Treat it as a reply graphic so the roleless
+        // scan does not mistake that button for the next UI toolbar and clip
+        // every later assistant paragraph. Tiny control icons stay excluded.
+        const visualButton=cursor.tagName==="BUTTON" &&
+          composedFind(cursor,node=>{
+            const tag=node.tagName?.toLowerCase();
+            if(tag!=="img" && tag!=="svg" && tag!=="canvas")return false;
+            if(tag==="svg" && node.parentElement?.closest?.("svg"))return false;
+            const r=node.getBoundingClientRect?.();
+            const min=tag==="img"?40:120;
+            return r && r.width>=min && r.height>=(tag==="img"?40:80)
+              && visible(node);
           }).length>0;
-        if ((cursor.matches(blocked) && !rasterButton) ||
+        if ((cursor.matches(blocked) && !visualButton) ||
             cursor.querySelector("h4")?.textContent?.match(/^You said\s*[:：]?$/i)) break;
         if (cursor.tagName==="H4" && /said\s*[:：]?$/i.test(normalize(cursor))) break;
         // Charts may contain no DOM text or <img>; the old sibling filter
@@ -192,20 +200,25 @@
         weight:n(style.fontWeight),align:clean(style.textAlign).slice(0,16),
       };
       if (name === "button") {
-        // ChatGPT image previews often live inside a <button>. Match the
-        // native delivery observer: preserve raster geometry only, never the
-        // button label, action text, event handler or source URL.
+        // Match the formal native-delivery observer's request-owned media
+        // boundary. <button> may wrap a large SVG chart or Canvas, not just
+        // IMG. Preserve only inert geometry/facts, not controls, hrefs, text
+        // labels, original URLs or Canvas pixel bytes.
         if (node.closest("nav,aside,footer,header,form,[role='menu'],[role='dialog']")) return null;
-        const raster=composedFind(node,img=>{
-          if(img.tagName?.toLowerCase()!=="img")return false;
-          const box=img.getBoundingClientRect?.();
-          return box && box.width>=40 && box.height>=40 && visible(img) &&
-            !img.closest("nav,aside,footer,[data-message-author-role='user']");
+        const visuals=composedFind(node,child=>{
+          const tag=child.tagName?.toLowerCase();
+          if(tag!=="img" && tag!=="svg" && tag!=="canvas")return false;
+          if(tag==="svg" && child.parentElement?.closest?.("svg"))return false;
+          if(tag==="img" && child.closest("svg"))return false;
+          const box=child.getBoundingClientRect?.();
+          return box && box.width>=(tag==="img"?40:120)
+            && box.height>=(tag==="img"?40:80) && visible(child)
+            && !child.closest("nav,aside,footer,[data-message-author-role='user']");
         },41);
-        if (raster.length > 40) { truncated=true;return null; }
+        if (visuals.length>40) { truncated=true;return null; }
         const children=[];
-        for (const img of raster) {
-          const entry=convert(img,depth+1);
+        for (const media of visuals) {
+          const entry=convert(media,depth+1);
           if (entry) children.push(entry);
           if (truncated) break;
         }
