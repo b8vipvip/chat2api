@@ -527,8 +527,9 @@ def native_image_identity_candidates(snapshot: dict, archived_media: list[dict])
     proofs=[node.get("source_sha256") for node in images]
     if not any(proofs):
         return native_unique_dimension_candidates(snapshot,archived_media)
-    if not all(isinstance(p,str) and re.fullmatch("[0-9a-f]{64}",p) for p in proofs):
-        return {"status":"identity-incomplete","indices":[]}
+    # Partial byte proofs are useful: verified positions may be shown while
+    # every unverified position stays a placeholder. Never replace a missing
+    # hash with archive order, dimensions or a different picture.
     table={}
     for index,media in enumerate(archived_media):
         if not isinstance(media,dict):
@@ -537,11 +538,20 @@ def native_image_identity_candidates(snapshot: dict, archived_media: list[dict])
         if isinstance(digest,str) and re.fullmatch("[0-9a-f]{64}",digest):
             table.setdefault(digest,index)
     result=[]
+    matched=0
     for index,proof in enumerate(proofs):
-        if images[index].get("media_index") != index or proof not in table:
+        if images[index].get("media_index") != index:
             return {"status":"identity-incomplete","indices":[]}
-        result.append(table[proof])
-    return {"status":"verified-sha256","indices":result}
+        asset=table.get(proof) if isinstance(proof,str) and re.fullmatch("[0-9a-f]{64}",proof) else None
+        result.append(asset)
+        if asset is not None:
+            matched+=1
+    if matched==len(images):
+        return {"status":"verified-sha256","indices":result}
+    if matched:
+        return {"status":"verified-sha256-partial","indices":result,
+                "matched_count":matched}
+    return {"status":"identity-incomplete","indices":[]}
 
 
 def native_public_v1_tree(root: dict) -> dict:
