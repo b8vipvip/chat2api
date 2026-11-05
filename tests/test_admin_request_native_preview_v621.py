@@ -167,6 +167,26 @@ def test_17b4_admin_renderer_accepts_4000_nodes_but_not_30001():
     assert.equal(img.style.borderRadius,'12px');
     assert.equal(img.style.width,'320px');
     assert.equal(img.style.height,'180px');
+
+    const imagePositions=requestHistoryNativeNode({tag:'div',children:[
+      {tag:'p',text:'已验证的文字和表格不能丢失'},
+      {tag:'img',media_index:0},
+      {tag:'table',children:[{tag:'tr',children:[{tag:'td',text:'金额'}]}]},
+      {tag:'img',media_index:1},
+      {tag:'img',media_index:2}
+    ]},['/api/media/med_owned/sha_verified',null,
+       '/api/media/med_second/proven_hash'],{count:0});
+    assert.equal(imagePositions.children.length,5);
+    assert.equal(imagePositions.children[0].textContent,'已验证的文字和表格不能丢失');
+    assert.equal(imagePositions.children[1].src,'/api/media/med_owned/sha_verified');
+    assert.equal(imagePositions.children[2].children[0].children[0].textContent,'金额');
+    assert.equal(imagePositions.children[3].tag,'span');
+    assert.ok(imagePositions.children[3].textContent.includes('字节身份未验证'));
+    assert.equal(imagePositions.children[3].src,undefined);
+    assert.equal(imagePositions.children[4].src,'/api/media/med_second/proven_hash');
+    assert.throws(()=>requestHistoryNativeNode({tag:'img',media_index:3},
+       [null,null,null],{count:0}),/原生图片索引无效/);
+
     const math=requestHistoryNativeNode({tag:'math',children:[
       {tag:'mrow',children:[{tag:'mtext',text:'每炉'}]}
     ]},[],{count:0});
