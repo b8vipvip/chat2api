@@ -95,22 +95,40 @@
     row.evidence = evidence;
     return evidence;
   }
-  async function publishEvidence(row, detail) {
-    if (!row?.requestId) return;
+  function publishEvidence(row, detail) {
+    if (!row?.requestId) return Promise.resolve();
     const evidence = publicEvidence(row, detail);
-    rememberModel(evidence.served_model, "network_served");
-    rememberModel(evidence.default_model, "network_default_profile");
-    try { await chrome.storage.session?.set?.({ [EVIDENCE_KEY]: { request_id: row.requestId, at: Date.now(), ...evidence } }); } catch (_) {}
-    await emit({
-      type: "chat.diagnostics",
-      request_id: row.requestId,
-      diagnostics: {
-        model_evidence_v144: evidence,
-        model_evidence_revision: 144,
-        model_evidence_transport: "main-world-fetch",
-        redesigned_chatgpt_model_adapter: "v144",
-      },
+    const revision = (row.publishRevision || 0) + 1;
+    row.publishRevision = revision;
+    // chrome.storage.session.set() and runtime.sendMessage() are async. When
+    // a newer event invalidates served_model, an older pending write could
+    // otherwise finish last and resurrect a false served-model record in
+    // both session storage and server telemetry. Serialize per network stream,
+    // skipping superseded revisions; distinct streams are unaffected.
+    const previous = row.publishTail || Promise.resolve();
+    const job = previous.catch(() => {}).then(async () => {
+      if (revision !== row.publishRevision) return;
+      rememberModel(evidence.served_model, "network_served");
+      rememberModel(evidence.default_model, "network_default_profile");
+      try {
+        await chrome.storage.session?.set?.({
+          [EVIDENCE_KEY]: { request_id: row.requestId, at: Date.now(), ...evidence }
+        });
+      } catch (_) {}
+      if (revision !== row.publishRevision) return;
+      await emit({
+        type: "chat.diagnostics",
+        request_id: row.requestId,
+        diagnostics: {
+          model_evidence_v144: evidence,
+          model_evidence_revision: 144,
+          model_evidence_transport: "main-world-fetch",
+          redesigned_chatgpt_model_adapter: "v144",
+        },
+      });
     });
+    row.publishTail = job.catch(() => {});
+    return job;
   }
 
   globalThis.addEventListener("message", event => {
