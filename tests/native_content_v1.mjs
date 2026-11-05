@@ -497,6 +497,55 @@ assert.equal(chartNode.children[1].children[0].attrs.d,
 assert.equal(chartNode.children[2].text,"75万元");
 assert.equal(chartNode.children[2].attrs.x,"24");
 
+// A ChatGPT chart can be wrapped in a preview <button>. The old scan
+// included all SVG descendants before applying its 40-item limit: 39 paths
+// could hide a later raster, and a chart was duplicated as loose path nodes.
+// Keep exactly the top-level SVG + actual IMG in their composed order.
+const buttonChart=vector("svg",Array.from({length:46},(_,i)=>
+  vector("path",[],{d:`M0 ${i} L120 ${i+1}`})
+),{viewBox:"0 0 650 300"},{width:650,height:300});
+const buttonChartRaster=new Element("IMG");
+const chartInButton=new Element("BUTTON",[
+  buttonChart,buttonChartRaster,
+  {nodeType:3,nodeValue:"Download chart secret action"},
+]);
+const afterChart=new Element("P",[{nodeType:3,nodeValue:"After preview explanation"}]);
+const buttonChartActive=candidateFor([chartInButton,afterChart]);
+const buttonChartSnapshot=capture.snapshot(buttonChartActive);
+assert.ok(buttonChartSnapshot,"a button chart must not be dropped");
+const chartFigure=buttonChartSnapshot.root.children[0];
+assert.equal(chartFigure.tag,"figure");
+assert.deepEqual([...chartFigure.children.map(node=>node.tag)],["svg","img"],
+  "one SVG root, no duplicated paths, then the real image");
+assert.equal(chartFigure.children[0].children.length,46);
+assert.equal(chartFigure.children[1].media_index,0);
+assert.equal(buttonChartActive.nativeSvgChartsCaptured,1);
+assert.equal(buttonChartSnapshot.root.children[1].children[0].text,"After preview explanation");
+assert.ok(!JSON.stringify(buttonChartSnapshot).includes("Download chart secret action"));
+const tooManyButtonMedia=candidateFor([
+  new Element("BUTTON",Array.from({length:41},()=>new Element("IMG"))),
+  new Element("P",[{nodeType:3,nodeValue:"tail"}]),
+]);
+assert.equal(capture.snapshot(tooManyButtonMedia),null,
+  "buttons with over 40 visible images must fail closed, not clip the tail");
+assert.equal(tooManyButtonMedia.nativeStructuralFailure,"button-graphic-cap");
+// Canvas-only buttons still cannot be delivered as pixels, but MUST count
+// the unsupported graphic and retain subsequent trusted assistant content.
+const canvasButtonActive=candidateFor([
+  new Element("P",[{nodeType:3,nodeValue:"Before canvas preview"}]),
+  new Element("BUTTON",[new Element("CANVAS"),
+    {nodeType:3,nodeValue:"Save Canvas picture"}]),
+  new Element("P",[{nodeType:3,nodeValue:"After canvas preview"}]),
+]);
+const canvasButtonSnapshot=capture.snapshot(canvasButtonActive);
+assert.ok(canvasButtonSnapshot);
+assert.equal(canvasButtonActive.nativeCanvasOmitted,1);
+assert.equal(canvasButtonActive.nativeGraphicsUnsupported,1);
+assert.equal(canvasButtonSnapshot.root.children.length,2);
+assert.equal(canvasButtonSnapshot.root.children[1].children[0].text,
+  "After canvas preview");
+assert.ok(!JSON.stringify(canvasButtonSnapshot).includes("Save Canvas picture"));
+
 // Modern colors on computed SVG strokes must stay inert but visually faithful.
 const modernStroke="color(srgb 0.952941 0.952941 0.952941 / 0.82)";
 const modernVector=vector("svg",[
