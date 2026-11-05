@@ -127,6 +127,73 @@ assert.ok(events.some(x=>x.type==="native.page.windows.finished"&&x.ok===false&&
   x.error==="worker_busy_visual_diagnosis"&&x.job_id==="5".repeat(32)));
 delete scope.__CHAT2API_CONVERSATION_ROUTING_V1__;
 
+// A restarted MV3 service worker may restore four old inflight markers from
+// disk while its in-memory activeRequests is empty. A provably absent tab may
+// not permanently block an opt-in visual diagnosis, but its route stays owned
+// by the router; the diagnostic itself must never delete persistent claims.
+const originalTabsGet=scope.chrome.tabs.get;
+const orphanRoute={inflight_request_id:"request-from-earlier-worker-instance",
+  tab_id:979,window_id:199};
+scope.__CHAT2API_CONVERSATION_ROUTING_V1__={
+  loaded:true,activeRequests:new Map(),routes:{orphan:orphanRoute}};
+scope.chrome.tabs.get=async id=>{
+  if(id===979)throw new Error("No tab with id: 979");
+  return originalTabsGet(id);
+};
+const beforeOrphan=ownedWindows.length;
+await diag.execute({job_id:"7".repeat(32),
+  conversation_url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef",
+  show_tab:true});
+assert.equal(ownedWindows.length,beforeOrphan+1,
+  "Only a verified missing-tab inflight marker may permit foreground diagnosis");
+assert.equal(orphanRoute.inflight_request_id,"request-from-earlier-worker-instance",
+  "Diagnostics must never mutate the authoritative router's stale leases");
+assert.ok(events.some(x=>x.type==="native.page.windows.finished"&&x.ok&&
+  x.job_id==="7".repeat(32)));
+
+// A live tab with the same in-flight marker could still be generating even
+// when activeRequests was lost. This case must remain fail closed.
+scope.chrome.tabs.get=async id=>id===979
+  ?{id:979,windowId:199,url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"}
+  :originalTabsGet(id);
+const beforeLive=ownedWindows.length;
+await diag.execute({job_id:"8".repeat(32),
+  conversation_url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef",
+  show_tab:true});
+assert.equal(ownedWindows.length,beforeLive,"A live in-flight route remains protected");
+assert.ok(events.some(x=>x.type==="native.page.windows.finished"&&
+  x.ok===false&&x.error==="worker_busy_visual_diagnosis"&&x.job_id==="8".repeat(32)));
+
+// Non-'No tab with id' Chrome API errors are inconclusive and must not
+// silently downgrade safety. In-flight additions during an async tab query
+// must also stop the opt-in foreground operation.
+scope.chrome.tabs.get=async id=>{
+  if(id===979)throw new Error("Extension context invalidated");
+  return originalTabsGet(id);
+};
+await diag.execute({job_id:"9".repeat(32),
+  conversation_url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef",
+  show_tab:true});
+assert.equal(ownedWindows.length,beforeLive);
+assert.ok(events.some(x=>x.type==="native.page.windows.finished"&&
+  x.ok===false&&x.error==="worker_busy_visual_diagnosis"&&x.job_id==="9".repeat(32)));
+scope.chrome.tabs.get=async id=>{
+  if(id===979){
+    scope.__CHAT2API_CONVERSATION_ROUTING_V1__.activeRequests.set("new-inflight",{});
+    throw new Error("No tab with id: 979");
+  }
+  return originalTabsGet(id);
+};
+await diag.execute({job_id:"a".repeat(32),
+  conversation_url:"https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef",
+  show_tab:true});
+assert.equal(ownedWindows.length,beforeLive,
+  "New activity during the physical tab check must fail closed");
+assert.ok(events.some(x=>x.type==="native.page.windows.finished"&&
+  x.ok===false&&x.error==="worker_busy_visual_diagnosis"&&x.job_id==="a".repeat(32)));
+delete scope.__CHAT2API_CONVERSATION_ROUTING_V1__;
+scope.chrome.tabs.get=originalTabsGet;
+
 // Router-owned tabs remain usable even when the legacy boundTabId is absent.
 scope.__CHAT2API_CONVERSATION_ROUTING_V1__={routes:{active:{tab_id:7}}};
 await diag.execute({job_id:"e".repeat(32),
