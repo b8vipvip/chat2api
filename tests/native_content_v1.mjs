@@ -595,6 +595,42 @@ assert.ok(!JSON.stringify(closedCapture).includes("CLOSED-CHART"),
   "opaque/closed roots are not invented as trusted SVG or pixels");
 
  
+// A slow original image must never erase another image's successfully
+// verified SHA within the same four-wide batch. The deadline remains 3.5s;
+// after it expires, only the unverified image stays a placeholder.
+const fastIdentity=new Element("IMG");
+fastIdentity.currentSrc="https://media.oaiusercontent.com/fast.png";
+fastIdentity.naturalWidth=400;fastIdentity.naturalHeight=300;
+const stuckIdentity=new Element("IMG");
+stuckIdentity.currentSrc="https://media.oaiusercontent.com/stuck.png";
+stuckIdentity.naturalWidth=500;stuckIdentity.naturalHeight=400;
+const partialIdentityRequests=[];
+const partialIdentityCtx={...ctx,chrome:{runtime:{
+  sendMessage:async message=>{
+    if(message.type==="chat2api.media.hash-v2"){
+      partialIdentityRequests.push(message.url);
+      return message.url.endsWith("/stuck.png")
+        ? new Promise(()=>{}) : {ok:true,sha256:"b".repeat(64)};
+    }
+    partialIdentityRequests.push(message.event?.type||"unknown");
+    return {ok:true,committed:true};
+  }
+}}};
+delete partialIdentityCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,partialIdentityCtx);
+const partialIdentityActive={
+  requestId:"req_partialidentity123",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[stuckIdentity,fastIdentity])
+};
+await partialIdentityCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture(partialIdentityActive,true);
+const partialTree=partialIdentityActive.nativeImageDigests;
+assert.equal(partialIdentityActive.nativeIdentityCandidateCount,2);
+assert.equal(partialIdentityActive.nativeIdentityVerifiedCount,1);
+assert.equal(partialTree.has(stuckIdentity),false);
+assert.equal(partialTree.get(fastIdentity),"b".repeat(64));
+assert.ok(partialIdentityRequests.includes("chat.native.snapshot"));
+assert.equal(partialIdentityActive.nativeFinalCaptureCommitted,true);
+
 // Prior Windows v1.0.3 vs Chrome comparison found three standalone
 // "\\n  " text nodes (9 characters) discarded inside pre/code. The formal
 // request observer must retain them, not just the independent diagnostic.

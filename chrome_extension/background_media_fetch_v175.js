@@ -96,6 +96,9 @@
   // P2 identity proof: a ChatGPT page can ask for the digest of a trusted
   // raster it is actually displaying. Never return bytes or source URLs;
   // never follow redirects or send cookies/credentials.
+  // Originals are archived up to 20 MiB. This larger cap applies ONLY to
+  // hashing (the byte relay to a page retains its existing 4 MiB limit).
+  const MAX_IDENTITY_BYTES = 20 * 1024 * 1024;
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type !== "chat2api.media.hash-v2") return false;
     let senderHost = "";
@@ -116,11 +119,38 @@
         const size = Number(response.headers.get("content-length") || 0);
         const mime = String(response.headers.get("content-type") || "")
           .split(";")[0].trim().toLowerCase();
-        if (!response.ok || !SAFE_TYPES.has(mime) || size > MAX_BYTES)
+        if (!response.ok || !SAFE_TYPES.has(mime) || !Number.isFinite(size)
+            || size < 0 || size > MAX_IDENTITY_BYTES)
           throw new Error("unusable-raster");
-        const bytes = await response.arrayBuffer();
-        if (!bytes.byteLength || bytes.byteLength > MAX_BYTES)
-          throw new Error("raster-size-limit");
+        // Content-Length may be missing or dishonest. Cap the *actual* body
+        // while streaming, before allocating the digest buffer, so large
+        // untrusted CDN responses cannot be pulled into memory without bound.
+        let bytes;
+        const reader=response.body?.getReader?.();
+        if (reader) {
+          const chunks=[];
+          let total=0;
+          try {
+            while (true) {
+              const {done,value}=await reader.read();
+              if (done) break;
+              total+=value.byteLength;
+              if (total > MAX_IDENTITY_BYTES) throw new Error("raster-size-limit");
+              chunks.push(value);
+            }
+          } finally { try { await reader.cancel(); } catch (_) {} }
+          if (!total) throw new Error("raster-empty");
+          bytes=new Uint8Array(total);
+          let offset=0;
+          for(const part of chunks){ bytes.set(part,offset);offset+=part.byteLength; }
+        } else {
+          // Legacy fetch mocks and unusual browser responses have no stream.
+          // Never download unknown-size bodies in this fallback path.
+          if (!size) throw new Error("raster-size-unknown");
+          bytes=new Uint8Array(await response.arrayBuffer());
+          if (!bytes.byteLength || bytes.byteLength>MAX_IDENTITY_BYTES)
+            throw new Error("raster-size-limit");
+        }
         const digest = new Uint8Array(await crypto.subtle.digest("SHA-256",bytes));
         sendResponse({ok:true,sha256:[...digest].map(x=>x.toString(16).padStart(2,"0")).join(""),
                       bytes:bytes.byteLength});
