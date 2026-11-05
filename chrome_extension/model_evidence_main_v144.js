@@ -34,6 +34,9 @@
   function normalizeModel(value) {
     const model = String(value || "").trim().toLowerCase();
     if (!/^[a-z0-9._:-]{1,128}$/.test(model)) return null;
+    // "auto"/"default" denote page routing, not an actual upstream model.
+    // The isolated bridge already rejects these non-concrete model IDs.
+    if (model === "auto" || model === "default" || model === "chatgpt-web") return null;
     if (model === "gpt-6-astra" || /^gpt-6-astra[.:_-]/.test(model)) return "gpt-6-astra";
     if (model === "gpt-6-sol" || /^gpt-6-sol[.:_-]/.test(model)) return "gpt-6-sol";
     return aliases[model] || model;
