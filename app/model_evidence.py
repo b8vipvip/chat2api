@@ -4,7 +4,7 @@ import json
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 
-from .model_catalog import normalize_model_id, normalize_reasoning_level
+from .model_catalog import normalize_concrete_model_id, normalize_model_id, normalize_reasoning_level
 
 MODEL_KEYS = {
     "model_slug", "modelslug", "model_id", "modelid", "used_model", "resolved_model",
@@ -83,11 +83,12 @@ def _collect(value: Any, candidates: dict[str, list[tuple[str, int, str]]], path
         key = canonical_key(raw_key)
         next_path = [*path, str(raw_key)]
         if key in DEFAULT_MODEL_KEYS and isinstance(child, str):
-            default = normalize_model_id(child)
+            default = normalize_concrete_model_id(child)
             if default and mode == "response":
                 candidates["default_model"].append((default, 110, ".".join(next_path)))
         if key in MODEL_KEYS and isinstance(child, str):
-            model = normalize_model_id(child)
+            model = (normalize_model_id(child) if mode == "request"
+                     else normalize_concrete_model_id(child))
             score = _path_score(path, key, "model", mode)
             if model and score:
                 candidates["model"].append((model, score, ".".join(next_path)))
@@ -174,7 +175,7 @@ def extract_request_evidence(post_data: str | bytes | None) -> ModelEvidence:
 
 def extract_response_evidence(body: str = "", headers: dict[str, str] | None = None, mime_type: str = "") -> ModelEvidence:
     normalized_headers = {str(k).lower(): str(v) for k, v in (headers or {}).items() if isinstance(v, str)}
-    header_model = next((normalize_model_id(normalized_headers.get(name)) for name in MODEL_HEADERS if normalize_model_id(normalized_headers.get(name))), None)
+    header_model = next((normalize_concrete_model_id(normalized_headers.get(name)) for name in MODEL_HEADERS if normalize_concrete_model_id(normalized_headers.get(name))), None)
     header_reasoning = next((normalize_reasoning_level(normalized_headers.get(name)) for name in REASONING_HEADERS if normalize_reasoning_level(normalized_headers.get(name))), None)
     values: list[Any] = []
     text = str(body or "")
