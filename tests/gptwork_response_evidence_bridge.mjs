@@ -62,6 +62,13 @@ assert.equal(headerProof.served_model,"gpt-6-astra");
 assert.equal(headerProof.model_conflict,false);
 assert.equal(headerProof.default_model_conflict,true);
 
+const pageAlias=await capture([
+  {served_model_slug:"auto",default_model_slug:"default"},
+]);
+assert.equal(pageAlias.served_model,null,
+  "page-routing aliases cannot prove that a concrete upstream model served");
+assert.equal(pageAlias.default_model,null);
+
 // The page-world stream parser is only the first half of the model evidence
 // contract. Verify the isolated Worker bridge can clear previously published
 // served/default/reasoning facts after an authoritative later conflict.
