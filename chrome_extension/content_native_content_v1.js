@@ -7,9 +7,14 @@
   const KEY = "__CHAT2API_NATIVE_CONTENT_V1__";
   if (globalThis[KEY]) return;
   const tags = new Set("div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br".split(" "));
+  // Do not serialize MathML as HTML div/span descendants; its parent structure
+  // and unit labels require the MathML namespace through the server and UI.
+  const mathTags = new Set("math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot".split(" "));
+  const mathTokens = new Set("mi mo mn mtext".split(" "));
+  const mathNamespace = "http://www.w3.org/1998/Math/MathML";
   const banned = "button,script,style,form,nav,header,footer,aside,input,textarea,select,iframe,canvas,svg,[role='menu'],[contenteditable='true']";
   const styleKeys = {
-    display: ["block","inline","inline-block","flex","inline-flex","grid"],
+    display: ["block","inline","inline-block","flex","inline-flex","grid","block math","inline math"],
     flexDirection: ["row","row-reverse","column","column-reverse"],
     flexWrap: ["wrap","nowrap"],
     justifyContent: ["start","center","end","space-between","space-around"],
@@ -80,7 +85,7 @@
     // was still growing; the hard byte/depth/text budgets remain unchanged.
     const textBudget = 300000;
     const ignore = element => element.matches?.(banned) || !!element.closest?.("nav,aside,footer");
-    const build = (element, depth) => {
+    const build = (element, depth, inMath = false) => {
       if (depth > MAX_NATIVE_DEPTH || nodes >= 30000) {
         active.nativeStructuralFailure = depth > MAX_NATIVE_DEPTH ? "max-depth" : "max-nodes";
         truncated = true;
@@ -95,7 +100,9 @@
           return null;
         }
         chars += raw.length; nodes += 1;
-        return {tag:"span",text:raw};
+        // Standalone text under a MathML container cannot be wrapped in an
+        // HTML span: the service rejects foreign HTML inside MathML.
+        return {tag:inMath ? "mtext" : "span",text:raw};
       }
       if (!(element instanceof Element)) return null;
       const tag = element.tagName.toLowerCase();
@@ -127,7 +134,17 @@
       const rect = element.getBoundingClientRect?.();
       const computed = getComputedStyle(element);
       if (computed.display === "none" || computed.visibility === "hidden") return null;
-      let mapped = tags.has(tag) ? tag : "div";
+      const mathElement = element.namespaceURI === mathNamespace;
+      const legacyMathDiv = mathElement && tag === "div";
+      const mathTextOnly = mathElement && [...element.childNodes]
+        .every(n => n.nodeType === Node.TEXT_NODE);
+      // Earlier frozen fixtures used MathML-namespaced div as a fallback for
+      // unsupported MathML. Map only these inert nodes, never arbitrary HTML.
+      const mapped = mathElement && mathTags.has(tag) ? tag
+        : legacyMathDiv ? (mathTextOnly ? "mtext" : "mrow")
+        : mathElement ? (mathTextOnly ? "mtext" : "mrow")
+        : inMath ? "mtext"
+        : tags.has(tag) ? tag : "div";
       if (tag === "img") {
         if (!rect || rect.width < 40 || rect.height < 40) return null;
         if (images >= 40) {
@@ -148,6 +165,20 @@
         }
         return result;
       }
+      if (mathTokens.has(mapped) && [...element.childNodes]
+          .every(n => n.nodeType === Node.TEXT_NODE)) {
+        const raw = String(element.textContent || element.childNodes
+          .map(n => n.nodeValue || "").join(""));
+        if (chars + raw.length > textBudget) {
+          active.nativeStructuralFailure = "max-text";
+          truncated = true;
+          return null;
+        }
+        chars += raw.length; nodes += 1;
+        const out = {tag:mapped,style:safeStyle(element)};
+        if (raw) out.text = raw;
+        return out;
+      }
       const children = [];
       active.nativeStructuralMaxChildren = Math.max(
         Number(active.nativeStructuralMaxChildren || 0), element.childNodes.length);
@@ -157,7 +188,7 @@
           truncated = true;
           break;
         }
-        const value = build(child, depth + 1);
+        const value = build(child, depth + 1, inMath || mathElement);
         if (value) children.push(value);
       }
       if (!children.length && !["hr","br"].includes(mapped)) return null;
