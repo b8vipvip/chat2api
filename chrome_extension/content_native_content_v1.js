@@ -143,10 +143,11 @@
       if (tag === "button") {
         if (element.closest?.("nav,aside,footer,header,form,[role='menu'],[role='dialog']"))
           return null;
-        const rasters = [...(element.querySelectorAll?.("img") || [])]
+        const rasters = [...(element.querySelectorAll?.("img,svg") || [])]
           .filter(img => {
             const box=img.getBoundingClientRect?.();
-            return box && box.width>=40 && box.height>=40
+            const vector=img.namespaceURI===svgNS;
+            return box && box.width>=(vector?120:40) && box.height>=(vector?80:40)
               && !img.closest?.("nav,aside,footer,[data-message-author-role='user']");
           });
         if (!rasters.length) return null;
@@ -219,6 +220,14 @@
         }
         chars += raw.length; nodes += 1;
         const out = {tag:mapped,style:safeStyle(element)};
+        if(svgElement){
+          const attributes={};
+          for(const key of svgAttrs){
+            const v=safeSvgAttr(key,element.getAttribute?.(key));
+            if(v)attributes[key]=v;
+          }
+          if(Object.keys(attributes).length)out.attrs=attributes;
+        }
         if (raw) out.text = raw;
         return out;
       }
