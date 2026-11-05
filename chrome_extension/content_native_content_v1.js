@@ -86,7 +86,10 @@
   const allowedLength = new Set(["gap","rowGap","columnGap","padding","marginTop","marginBottom",
     "marginLeft","marginRight","width","minWidth","maxWidth","height","minHeight",
     "maxHeight","borderRadius","borderWidth","letterSpacing","fontSize","lineHeight"]);
-  const length = /^(?:0|\d{1,4}(?:\.\d{1,2})?(?:px|rem|%))$/;
+  const length = /^(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))$/;
+  // Actual table cells in the 2026-11-05 Windows/Linux evidence use
+  // e.g. padding:8px 8px 8px 0px. Keep at most four safe length tokens.
+  const paddingShorthand = /^(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))(?:\s+(?:0|\d{1,4}(?:\.\d{1,3})?(?:px|rem|%))){0,3}$/;
   const color = /^(?:#[0-9a-f]{3,8}|rgba?\([0-9.,\s]+\))$/i;
   const grid = /^(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)(?:\s+(?:\d{1,4}(?:\.\d{1,2})?(?:px|%)|minmax\(\d{1,4}(?:\.\d{1,2})?px,\s*1fr\)|1fr)){0,5}$/;
   // Server validates at most 32 style keys per element. Chromium may emit
@@ -108,6 +111,7 @@
       const value = String(css[key] || "").trim();
       if (styleKeys[key]?.includes(value) ||
           allowedLength.has(key) && value.length <= 16 && length.test(value) ||
+          key === "padding" && value.length <= 64 && paddingShorthand.test(value) ||
           ["color","backgroundColor","borderColor"].includes(key) && value.length <= 96 && (color.test(value)||modernColor.test(value)) ||
           key === "gridTemplateColumns" && value.length <= 120 && grid.test(value)) {
         obj[key] = value;
