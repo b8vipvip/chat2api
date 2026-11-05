@@ -607,12 +607,25 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             {key: media[key] for key in ("id", "mime", "width", "height", "sha256") if key in media}
             for media in archived[:40] if isinstance(media, dict)
         ]
+        # Transport ACK can prove a validated snapshot was persisted; it
+        # cannot prove visual fidelity when Canvas/iframe was omitted. Expose
+        # bounded request-only counts for the privileged preview.
+        recorded = row.get("diagnostics") or {}
+        if not isinstance(recorded, dict):
+            recorded = {}
+        def gap_count(key: str) -> int:
+            value = recorded.get(key, 0)
+            return max(0, min(30000, value)) if type(value) is int else 0
         return JSONResponse(
             {"request_id": request_id, "version": 1, "snapshot": snapshot,
              "layout_summary": native_layout_summary(snapshot, len(details)),
              "media_metadata": details,
              "image_asset_candidates": native_image_identity_candidates(
-                 snapshot, details)},
+                 snapshot, details),
+             "visual_gaps": {"unsupported_graphics": gap_count("native_graphics_unsupported"),
+                             "canvas_omitted": gap_count("native_canvas_omitted"),
+                             "svg_captured": gap_count("native_svg_charts_captured"),
+                             "visual_completeness_verified": False}},
             headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
         )
 
@@ -1132,7 +1145,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             state.diagnostics["native_image_identity_status"] = identity["status"]
             state.diagnostics["native_identity_matched_count"] = (
                 len(identity.get("indices") or [])
-                if identity.get("status") == "verified-sha256" else 0
+                if identity.get("status") == "verified-sha256"
+                else sum(i is not None for i in identity.get("indices") or ())
+                    if identity.get("status") == "verified-sha256-partial"
+                else 0
             )
             state.diagnostics["native_identity_archived_count"] = len(items)
             state.diagnostics["native_identity_dom_image_count"] = summary["images"]
