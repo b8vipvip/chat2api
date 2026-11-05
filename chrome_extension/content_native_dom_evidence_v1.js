@@ -57,7 +57,7 @@
       const dil=md?.querySelector?.("[data-dil-message-id]");
       const source=md?.querySelector?.("[data-dil-source-message-id]");
       if(/^[A-Za-z0-9-]{12,100}$/.test(id) && members.includes(id)
-          && wrap && heading?.isConnected && visible(heading)
+          && wrap && heading?.isConnected
           && typeof active.baselineRolelessHeadings?.has==="function"
           && !active.baselineRolelessHeadings.has(heading)
           && !wrap.querySelector("h4[data-conversation-role='user']")
