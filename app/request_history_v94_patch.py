@@ -245,6 +245,14 @@ function requestHistoryNativeNode(value,assets,budget,depth=0,svgScope=null){
       ?document.createElementNS('http://www.w3.org/2000/svg',
         value.tag==='clippath'?'clipPath':value.tag)
       :document.createElement(value.tag);
+  // Inert table geometry only: native server already validated the exact
+  // integer range. Repeat the guard here for admin preview defense-in-depth.
+  if(value.tag==='td'||value.tag==='th'){
+    if(Number.isInteger(value.col_span)&&value.col_span>=2&&value.col_span<=256)
+      node.colSpan=value.col_span;
+    if(Number.isInteger(value.row_span)&&value.row_span>=0&&value.row_span<=256
+        &&value.row_span!==1)node.rowSpan=value.row_span;
+  }
   if(value.attrs!==undefined){
     if(!isSvg||!value.attrs||typeof value.attrs!=='object'
         ||Object.keys(value.attrs).length>24)throw new Error('SVG 属性不安全');
