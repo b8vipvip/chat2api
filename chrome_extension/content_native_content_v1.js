@@ -12,7 +12,37 @@
   const mathTags = new Set("math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot".split(" "));
   const mathTokens = new Set("mi mo mn mtext".split(" "));
   const mathNamespace = "http://www.w3.org/1998/Math/MathML";
-  const banned = "button,script,style,form,nav,header,footer,aside,input,textarea,select,iframe,canvas,svg,[role='menu'],[contenteditable='true']";
+  // SVG is vector data, not raw HTML. Only inert geometry/axis labels and
+  // internal clip references can leave the trusted assistant reply scope.
+  const svgNS="http://www.w3.org/2000/svg";
+  const svgTags=new Set("svg g path line rect circle ellipse polyline polygon text tspan defs clippath".split(" "));
+  const svgAttrs=new Set("viewBox width height preserveAspectRatio x y dx dy x1 x2 y1 y2 cx cy r rx ry d points transform fill stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray opacity fill-opacity stroke-opacity text-anchor dominant-baseline font-size font-weight id clip-path".split(" "));
+  const svgNumber=/^[-+]?(?:\d{1,6}(?:\.\d{1,5})?|\.\d{1,5})(?:px|%)?$/;
+  const svgGeometry=/^[MmLlHhVvCcSsQqTtAaZzEe0-9+.,\-\s]+$/;
+  const svgNumbers=/^[0-9eE+.,\-\s]+$/;
+  const svgColor=/^(?:none|currentColor|transparent|black|white|red|blue|green|gray|grey|#[\da-f]{3,8}|rgba?\([\d.,\s%]+\))$/i;
+  const svgTransform=/^(?:(?:translate|scale|rotate|matrix|skewX|skewY)\([-+0-9.,\s]+\)\s*){1,8}$/;
+  const svgTokenId=/^[A-Za-z_][A-Za-z0-9_-]{0,80}$/;
+  const svgClip=/^url\(#([A-Za-z_][A-Za-z0-9_-]{0,80})\)$/;
+  function safeSvgAttr(key,raw){
+    if(!svgAttrs.has(key)||typeof raw!=="string")return "";
+    const v=raw.trim();
+    if(!v||v.length>(key==="d"?16000:key==="points"?4096:240))return "";
+    if(key==="d")return svgGeometry.test(v)?v:"";
+    if(["points","stroke-dasharray","viewBox"].includes(key))return svgNumbers.test(v)?v:"";
+    if(key==="transform")return svgTransform.test(v)?v:"";
+    if(["fill","stroke"].includes(key))return svgColor.test(v)?v:"";
+    if(key==="id")return svgTokenId.test(v)?v:"";
+    if(key==="clip-path")return svgClip.test(v)?v:"";
+    if(key==="preserveAspectRatio")return /^(?:none|x(?:Min|Mid|Max)Y(?:Min|Mid|Max))(?:\s+(?:meet|slice))?$/.test(v)?v:"";
+    if(key==="stroke-linecap")return ["butt","round","square"].includes(v)?v:"";
+    if(key==="stroke-linejoin")return ["miter","round","bevel"].includes(v)?v:"";
+    if(key==="text-anchor")return ["start","middle","end"].includes(v)?v:"";
+    if(key==="dominant-baseline")return ["auto","middle","central","hanging","alphabetic","text-after-edge"].includes(v)?v:"";
+    if(key==="font-weight")return ["normal","bold","400","500","600","700"].includes(v)?v:"";
+    return svgNumber.test(v)?v:"";
+  }
+  const banned = "button,script,style,form,nav,header,footer,aside,input,textarea,select,iframe,canvas,[role='menu'],[contenteditable='true']";
   const styleKeys = {
     display: ["block","inline","inline-block","flex","inline-flex","grid","block math","inline math"],
     flexDirection: ["row","row-reverse","column","column-reverse"],
@@ -69,7 +99,7 @@
   const MAX_NATIVE_CHILDREN = 8192;
   const MAX_NATIVE_DEPTH = 64;
   function snapshot(active) {
-    if (active) { active.nativeStructuralFailure = ""; active.nativeStructuralMaxChildren = 0; }
+    if (active) { active.nativeStructuralFailure = ""; active.nativeStructuralMaxChildren = 0; active.nativeSvgChartsCaptured = 0; active.nativeGraphicsUnsupported = 0; active.nativeCanvasOmitted = 0; }
     if (!active?.submitStartedAt || typeof Element === "undefined") return null;
     const candidate = active.lastCandidateNode;
     if (!(candidate instanceof Element) || !candidate.isConnected) {
@@ -85,7 +115,7 @@
     // was still growing; the hard byte/depth/text budgets remain unchanged.
     const textBudget = 300000;
     const ignore = element => element.matches?.(banned) || !!element.closest?.("nav,aside,footer");
-    const build = (element, depth, inMath = false) => {
+    const build = (element, depth, inMath = false, inSvg = false) => {
       if (depth > MAX_NATIVE_DEPTH || nodes >= 30000) {
         active.nativeStructuralFailure = depth > MAX_NATIVE_DEPTH ? "max-depth" : "max-nodes";
         truncated = true;
@@ -102,7 +132,7 @@
         chars += raw.length; nodes += 1;
         // Standalone text under a MathML container cannot be wrapped in an
         // HTML span: the service rejects foreign HTML inside MathML.
-        return {tag:inMath ? "mtext" : "span",text:raw};
+        return {tag:inMath ? "mtext" : inSvg ? "tspan" : "span",text:raw};
       }
       if (!(element instanceof Element)) return null;
       const tag = element.tagName.toLowerCase();
@@ -130,17 +160,31 @@
         nodes+=1;
         return {tag:"figure",children};
       }
+      if(tag==="canvas"||tag==="iframe"){
+        if(tag==="canvas")active.nativeCanvasOmitted++;
+        active.nativeGraphicsUnsupported++;
+        return null;
+      }
       if (ignore(element)) return null;
       const rect = element.getBoundingClientRect?.();
       const computed = getComputedStyle(element);
       if (computed.display === "none" || computed.visibility === "hidden") return null;
+      const svgElement=element.namespaceURI===svgNS;
+      if(svgElement&&!svgTags.has(tag)||inSvg&&!svgElement){
+        active.nativeGraphicsUnsupported++;
+        return null;
+      }
+      if(svgElement&&tag==="svg"&&!inSvg){
+        if(!rect||rect.width<120||rect.height<80)return null;
+        active.nativeSvgChartsCaptured++;
+      }
       const mathElement = element.namespaceURI === mathNamespace;
       const legacyMathDiv = mathElement && tag === "div";
       const mathTextOnly = mathElement && [...element.childNodes]
         .every(n => n.nodeType === Node.TEXT_NODE);
       // Earlier frozen fixtures used MathML-namespaced div as a fallback for
       // unsupported MathML. Map only these inert nodes, never arbitrary HTML.
-      const mapped = mathElement && mathTags.has(tag) ? tag
+      const mapped = svgElement && svgTags.has(tag) ? tag : mathElement && mathTags.has(tag) ? tag
         : legacyMathDiv ? (mathTextOnly ? "mtext" : "mrow")
         : mathElement ? (mathTextOnly ? "mtext" : "mrow")
         : inMath ? "mtext"
@@ -165,7 +209,7 @@
         }
         return result;
       }
-      if (mathTokens.has(mapped) && [...element.childNodes]
+      if ((mathTokens.has(mapped) || (svgElement && (tag==="text"||tag==="tspan"))) && [...element.childNodes]
           .every(n => n.nodeType === Node.TEXT_NODE)) {
         const raw = String(element.textContent || Array.from(element.childNodes, n => n.nodeValue || "").join(""));
         if (chars + raw.length > textBudget) {
@@ -178,6 +222,13 @@
         if (raw) out.text = raw;
         return out;
       }
+      const attributes={};
+      if(svgElement){
+        for(const key of svgAttrs){
+          const v=safeSvgAttr(key,element.getAttribute?.(key));
+          if(v)attributes[key]=v;
+        }
+      }
       const children = [];
       active.nativeStructuralMaxChildren = Math.max(
         Number(active.nativeStructuralMaxChildren || 0), element.childNodes.length);
@@ -187,12 +238,13 @@
           truncated = true;
           break;
         }
-        const value = build(child, depth + 1, inMath || mathElement);
+        const value = build(child, depth + 1, inMath || mathElement, inSvg || svgElement);
         if (value) children.push(value);
       }
       if (!children.length && !["hr","br"].includes(mapped)) return null;
       nodes += 1;
       const result = {tag:mapped,style:safeStyle(element)};
+      if(svgElement && Object.keys(attributes).length)result.attrs=attributes;
       if (children.length) result.children = children;
       return result;
     };
