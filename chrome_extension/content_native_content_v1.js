@@ -167,8 +167,7 @@
       }
       if (mathTokens.has(mapped) && [...element.childNodes]
           .every(n => n.nodeType === Node.TEXT_NODE)) {
-        const raw = String(element.textContent || element.childNodes
-          .map(n => n.nodeValue || "").join(""));
+        const raw = String(element.textContent || Array.from(element.childNodes, n => n.nodeValue || "").join(""));
         if (chars + raw.length > textBudget) {
           active.nativeStructuralFailure = "max-text";
           truncated = true;
