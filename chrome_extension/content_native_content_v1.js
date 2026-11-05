@@ -24,6 +24,23 @@
   const svgTransform=/^(?:(?:translate|scale|rotate|matrix|skewX|skewY)\([-+0-9.,\s]+\)\s*){1,8}$/;
   const svgTokenId=/^[A-Za-z_][A-Za-z0-9_-]{0,80}$/;
   const svgClip=/^url\(#([A-Za-z_][A-Za-z0-9_-]{0,80})\)$/;
+  // Recharts may style ticks/lines with safe CSS instead of SVG attributes.
+  // Capture only bounded, visual-only computed values from the same node.
+  const svgComputedKeys=new Set(["fill","stroke","stroke-width","font-size",
+    "font-weight","opacity","text-anchor"]);
+  function svgSafeAttributes(element){
+    const result={};
+    for(const key of svgAttrs){
+      let raw=element.getAttribute?.(key);
+      if((raw===null||raw===undefined||raw==="")&&svgComputedKeys.has(key)){
+        const css=getComputedStyle(element);
+        raw=css.getPropertyValue?.(key)||css[key]||"";
+      }
+      const v=safeSvgAttr(key,raw);
+      if(v)result[key]=v;
+    }
+    return result;
+  }
   function safeSvgAttr(key,raw){
     if(!svgAttrs.has(key)||typeof raw!=="string")return "";
     const v=raw.trim();
@@ -221,23 +238,13 @@
         chars += raw.length; nodes += 1;
         const out = {tag:mapped,style:safeStyle(element)};
         if(svgElement){
-          const attributes={};
-          for(const key of svgAttrs){
-            const v=safeSvgAttr(key,element.getAttribute?.(key));
-            if(v)attributes[key]=v;
-          }
+          const attributes=svgSafeAttributes(element);
           if(Object.keys(attributes).length)out.attrs=attributes;
         }
         if (raw) out.text = raw;
         return out;
       }
-      const attributes={};
-      if(svgElement){
-        for(const key of svgAttrs){
-          const v=safeSvgAttr(key,element.getAttribute?.(key));
-          if(v)attributes[key]=v;
-        }
-      }
+      const attributes=svgElement?svgSafeAttributes(element):{};
       const children = [];
       active.nativeStructuralMaxChildren = Math.max(
         Number(active.nativeStructuralMaxChildren || 0), element.childNodes.length);
