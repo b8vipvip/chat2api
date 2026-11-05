@@ -16,10 +16,42 @@
   const n = v => Math.max(-100000, Math.min(100000, Math.round(Number(v) || 0)));
   const clean = s => String(s || "").replace(/[\u0000-\u001f\u007f]/g," ").slice(0,400);
   const display = s => ["block","inline","inline-block","flex","inline-flex","grid","inline-grid","table","table-row","table-cell","list-item"].includes(s) ? s : "other";
+  // Match the production native-delivery observer's composed DOM walk.
+  // Only OPEN shadows within a verified reply are traversed; slots use the
+  // rendered assigned nodes rather than also duplicating the light children.
+  function composedChildren(el) {
+    if (!(el instanceof Element)) return [...(el?.childNodes||[])];
+    if (el.tagName?.toLowerCase()==="slot") {
+      try {
+        const assigned=el.assignedNodes?.({flatten:true});
+        if (assigned?.length) return [...assigned];
+      } catch (_) {}
+    }
+    const shadow=el.shadowRoot;
+    return shadow?.mode==="open"
+      ? [...(shadow.childNodes||[])] : [...(el.childNodes||[])];
+  }
+  function composedFind(root,predicate,limit=1) {
+    const stack=[{node:root,depth:0}],seen=new Set(),found=[];
+    let visited=0;
+    while(stack.length && found.length<limit && visited<3000){
+      const {node,depth}=stack.pop();
+      if(!(node instanceof Element)||seen.has(node))continue;
+      seen.add(node);visited++;
+      if(node!==root && node.matches?.(
+        "nav,aside,header,footer,form,[role='menu'],[role='dialog'],[contenteditable='true'],[data-message-author-role='user']"))continue;
+      if(predicate(node))found.push(node);
+      if(depth>=64)continue;
+      const children=composedChildren(node);
+      for(let i=children.length-1;i>=0;i--)stack.push({node:children[i],depth:depth+1});
+    }
+    return found;
+  }
   function visible(el) {
     try {
       const r=el.getBoundingClientRect(),s=getComputedStyle(el);
-      return r.width>0 && r.height>0 && s.display!=="none" && s.visibility!=="hidden";
+      return (r.width>0 && r.height>0 || el.shadowRoot?.mode==="open")
+        && s.display!=="none" && s.visibility!=="hidden";
     } catch { return false; }
   }
   function replyRoots(active) {
@@ -86,10 +118,11 @@
       // Keep a strict bounded scan, and mark overflow unverified instead.
       while(cursor && siblings.length<4096) {
         const rasterButton=cursor.tagName==="BUTTON" &&
-          [...(cursor.querySelectorAll?.("img") || [])].some(img => {
+          composedFind(cursor,img=>{
+            if(img.tagName?.toLowerCase()!=="img")return false;
             const r=img.getBoundingClientRect?.();
             return r && r.width>=40 && r.height>=40 && visible(img);
-          });
+          }).length>0;
         if ((cursor.matches(blocked) && !rasterButton) ||
             cursor.querySelector("h4")?.textContent?.match(/^You said\s*[:：]?$/i)) break;
         if (cursor.tagName==="H4" && /said\s*[:：]?$/i.test(normalize(cursor))) break;
@@ -97,17 +130,18 @@
         // silently omitted standalone SVG/Canvas while preserving adjacent
         // tables and paragraphs. Only admit substantial *visible* graphics
         // under this newly identified assistant heading, never page controls.
-        const graphicNodes=[...(cursor.matches?.("svg,canvas")?[cursor]:[]),
-          ...(cursor.querySelectorAll?.("svg,canvas")||[])];
-        const graphical=graphicNodes.some(node=>{
+        const graphical=composedFind(cursor,node=>{
+          const tag=node.tagName?.toLowerCase();
+          if(tag!=="svg" && tag!=="canvas")return false;
           const r=node.getBoundingClientRect?.();
           return r&&r.width>=120&&r.height>=80&&visible(node);
-        });
+        }).length>0;
         if(cursor.matches?.("[data-message-author-role='user'],[data-testid='user-message'],form")
             || cursor.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,[contenteditable='true']"))
           break;
         if (cursor.contains(candidate) || cursor===candidate ||
-            normalize(cursor).length>=2 || cursor.querySelector("img") || graphical) {
+            normalize(cursor).length>=2 || graphical ||
+            composedFind(cursor,node=>node.tagName?.toLowerCase()==="img" && visible(node)).length>0) {
           siblings.push(cursor);
         }
         cursor=cursor.nextElementSibling;
@@ -162,11 +196,12 @@
         // native delivery observer: preserve raster geometry only, never the
         // button label, action text, event handler or source URL.
         if (node.closest("nav,aside,footer,header,form,[role='menu'],[role='dialog']")) return null;
-        const raster=[...(node.querySelectorAll?.("img") || [])].filter(img => {
+        const raster=composedFind(node,img=>{
+          if(img.tagName?.toLowerCase()!=="img")return false;
           const box=img.getBoundingClientRect?.();
           return box && box.width>=40 && box.height>=40 && visible(img) &&
             !img.closest("nav,aside,footer,[data-message-author-role='user']");
-        });
+        },41);
         if (raster.length > 40) { truncated=true;return null; }
         const children=[];
         for (const img of raster) {
@@ -196,7 +231,7 @@
       }
       if(tag==="a") {counts.links++;output.link=true;} // never copy href/token
       const children=[];
-      for(const child of node.childNodes){ const entry=convert(child,depth+1);
+      for(const child of composedChildren(node)){ const entry=convert(child,depth+1);
         if(entry)children.push(entry);if(truncated)break; }
       if(children.length)output.children=children;
       return output;
