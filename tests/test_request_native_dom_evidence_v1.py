@@ -50,6 +50,70 @@ def test_partial_capture_must_admit_incomplete(tmp_path):
     assert NativeDomEvidenceStore(tmp_path).save(RID,"owner",partial)
     assert NativeDomEvidenceStore(tmp_path).summary(RID,"owner")["complete"] is False
 
+def test_formal_graphics_and_verified_assistant_id_report_persists(tmp_path):
+    """The real v1 Worker now emits four graphics counters on every report.
+
+    Previously the server rejected all such captures as Invalid counts, so
+    request ZIP exports lost the exact SVG/Canvas diagnostics we needed.
+    """
+    report = example()
+    report["scope"] = "verified_native_assistant_selection"
+    report["boundary"] = "fresh_request_assistant_message_id"
+    report["counts"].update({"svg": 1, "svg_large": 1,
+                             "canvas": 1, "canvas_large": 0})
+    # Current worker counts actual svg/canvas as DOM nodes in the evidence
+    # tree (the sanitized tag on each is an inert div).
+    report["counts"]["nodes"] = 5
+    store = NativeDomEvidenceStore(tmp_path)
+    assert store.save(RID, "principal-A", report)
+    loaded = store.get(RID, "principal-A")
+    assert loaded["scope"] == "verified_native_assistant_selection"
+    assert loaded["counts"]["svg_large"] == 1
+    assert loaded["counts"]["canvas"] == 1
+    assert store.summary(RID, "principal-A")["available"] is True
+    assert store.summary(RID, "principal-B")["available"] is False
+
+
+@pytest.mark.parametrize("bad_counts", [
+    {"svg": 1},  # mixed old/new partial schemas must fail closed
+    {"svg": 2, "svg_large": 3, "canvas": 0, "canvas_large": 0},
+    {"svg": 0, "svg_large": 0, "canvas": 0, "canvas_large": True},
+    {"svg": -1, "svg_large": 0, "canvas": 0, "canvas_large": 0},
+    {"svg": 30001, "svg_large": 0, "canvas": 0, "canvas_large": 0},
+    {"svg": 0, "svg_large": 0, "canvas": 0, "canvas_large": 0, "untrusted": 7},
+])
+def test_formal_graphics_counts_reject_invalid_or_unbounded_values(bad_counts):
+    report = example()
+    report["counts"].update(bad_counts)
+    with pytest.raises(ValueError, match="counts|Capture exceeds"):
+        validate_evidence(report, RID)
+
+
+def test_verified_assistant_id_scope_cannot_override_user_boundary():
+    report = example()
+    report["scope"] = "verified_native_assistant_selection"
+    assert validate_evidence(report, RID)["complete"] is True
+    report["scope"] = "unverified_native_assistant_selection"
+    with pytest.raises(ValueError, match="reply scope"):
+        validate_evidence(report, RID)
+    report["scope"] = "candidate_only"
+    with pytest.raises(ValueError, match="Partial candidate"):
+        validate_evidence(report, RID)
+
+
+def test_service_graphics_validator_matches_current_worker_contract():
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "chrome_extension" / "content_native_dom_evidence_v1.js").read_text()
+    for field in ("svg", "svg_large", "canvas", "canvas_large"):
+        assert field in source
+    assert 'scope:"verified_native_assistant_selection"' in source
+    report = example()
+    report["counts"].update({"svg": 0, "svg_large": 0,
+                             "canvas": 0, "canvas_large": 0})
+    assert validate_evidence(report, RID)["complete"] is True
+
+
 def test_expired_evidence_removed(tmp_path,monkeypatch):
     store=NativeDomEvidenceStore(tmp_path)
     assert store.save(RID,"owner",example())
