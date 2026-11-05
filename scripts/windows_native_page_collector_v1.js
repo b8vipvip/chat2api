@@ -3,7 +3,7 @@
  * No extension APIs, page mutation, network access or live request terminals.
  */
 (()=>{
-  const DIAGNOSTIC_TOOL_VERSION="1.0.3";
+  const DIAGNOSTIC_TOOL_VERSION="1.0.4";
   function capturePage() {
     const now=new Date().toISOString();
     const visible=node=>{
@@ -91,11 +91,13 @@
           response_status:http>=100&&http<=599?http:null};
       }catch(_){return null;}
     };
-    function walk(node,depth) {
+    function walk(node,depth,inCode=false) {
       if(truncated||depth>64){truncated=true;return null;}
       if(node.nodeType===Node.TEXT_NODE){
         const value=String(node.nodeValue||"");
-        if(!value.trim())return null;
+        // A pre/code subtree is whitespace-sensitive. Removing standalone
+        // newline/indent nodes silently changes the original code layout.
+        if(!value.trim()&&!inCode)return null;
         if(chars+value.length>150000){truncated=true;return null;}
         chars+=value.length;return {tag:"#text",text:value};
       }
@@ -152,7 +154,12 @@
       }
       if(Object.keys(styles).length)out.style=styles;
       const children=[];
-      for(const child of node.childNodes){const c=walk(child,depth+1);if(c)children.push(c);if(truncated)break;}
+      const preserveCodeWhitespace=inCode||tag==="pre"||tag==="code";
+      for(const child of node.childNodes){
+        const c=walk(child,depth+1,preserveCodeWhitespace);
+        if(c)children.push(c);
+        if(truncated)break;
+      }
       if(children.length)out.children=children;
       return out;
     }
@@ -173,6 +180,6 @@
     return {ok:true,answer};
   }
   const result=capturePage();
-  if(result?.ok&&result.answer){result.answer.version="windows-hot-1.0.3";result.answer.collector_version=DIAGNOSTIC_TOOL_VERSION;}
+  if(result?.ok&&result.answer){result.answer.version="windows-hot-1.0.4";result.answer.collector_version=DIAGNOSTIC_TOOL_VERSION;}
   return result;
 })()
