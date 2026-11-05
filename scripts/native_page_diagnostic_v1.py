@@ -27,7 +27,7 @@ from urllib.parse import urlsplit, quote
 from urllib.request import urlopen, Request
 from zipfile import ZipFile, ZIP_DEFLATED
 
-VERSION = "1.3.11"
+VERSION = "1.3.12"
 MAX_ZIP = 18 * 1024 * 1024
 MAX_SCREENSHOTS = 64  # 40,960 CSS px, subject to original ZIP cap
 # Historical HTML readyState and the first candidate DOM are NOT hydration
@@ -2417,13 +2417,13 @@ VALIDATION_FILES = (
     "app/native_content_v1.py", "app/request_history_v94_patch.py",
 )
 VALIDATION_CSS = "display position top right bottom left boxSizing width height minWidth maxWidth minHeight maxHeight margin marginTop marginRight marginBottom marginLeft padding paddingTop paddingRight paddingBottom paddingLeft fontFamily fontSize fontWeight fontStyle lineHeight letterSpacing wordSpacing textAlign textDecorationLine textDecorationColor textTransform whiteSpace wordBreak overflowWrap verticalAlign color backgroundColor borderColor borderWidth borderTopWidth borderRightWidth borderBottomWidth borderLeftWidth borderTopStyle borderRightStyle borderBottomStyle borderLeftStyle borderTopColor borderRightColor borderBottomColor borderLeftColor borderRadius borderCollapse borderSpacing tableLayout listStyleType listStylePosition flexDirection flexWrap flexGrow flexShrink flexBasis justifyContent alignItems alignContent alignSelf gap rowGap columnGap gridTemplateColumns gridTemplateRows gridColumn gridRow objectFit objectPosition overflowX overflowY opacity visibility transform transformOrigin".split()
-VALIDATION_TAGS = set("div section article p span strong em b i h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a sup sub button svg g path rect circle ellipse line polyline polygon text tspan defs clippath math mrow mi mn mo msup msub mfrac msqrt semantics annotation".split())
+VALIDATION_TAGS = set("div section article p span strong em b i h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a sup sub button svg g path rect circle ellipse line polyline polygon text tspan defs clippath math mrow mi mn mo msup msub mfrac msqrt semantics annotation mtext mover munder munderover msubsup mroot".split())
 
 FREEZE_REFERENCE = r"""(function(cssKeys){
 const roots=globalThis.__CHAT2API_VALIDATION_ROOTS__||[];
 if(!roots.length||roots.some(e=>!e.isConnected))throw Error('reference-root-missing');
 const blocked='script,style,iframe,form,input,textarea,select,nav,aside,header,footer,[contenteditable="true"],[data-message-author-role="user"],[data-testid="user-message"]';
-const allowed=new Set('div section article p span strong em b i h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a sup sub button svg g path rect circle ellipse line polyline polygon text tspan defs clippath math mrow mi mn mo msup msub mfrac msqrt semantics annotation'.split(' '));
+const allowed=new Set('div section article p span strong em b i h1 h2 h3 h4 h5 h6 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br a sup sub button svg g path rect circle ellipse line polyline polygon text tspan defs clippath math mrow mi mn mo msup msub mfrac msqrt semantics annotation mtext mover munder munderover msubsup mroot'.split(' '));
 const visible=e=>{const s=getComputedStyle(e),r=e.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&(r.width>0&&r.height>0||e.namespaceURI.includes('svg'));};
 let count=0,chars=0;const styles=[],styleIds=new Map(),images=[],unsupported=[];
 const styleOf=e=>{const s=getComputedStyle(e),out={};for(const key of cssKeys){const v=String(s[key]||'');if(v&&v.length<300&&!/url\s*\(|var\s*\(|[<>;{}]/i.test(v))out[key]=v;}const sig=JSON.stringify(out);if(!styleIds.has(sig)){styleIds.set(sig,styles.length);styles.push(out);}return styleIds.get(sig);};
@@ -3020,7 +3020,23 @@ async def validation_run(cdp,context,fixture,texts,source,assets,reference_strip
         result["scope"]="selected-existing-reply-capture-store-render-only"
     except Exception as exc:
         result["status"]="failed";result["reason"]=result.get("stage","validation")+":"+type(exc).__name__
-        # Fixed stages and exception class only; no page/source URL or stack.
+        # Safe, fixed validation reason codes reveal the violated contract
+        # without exporting page text, URLs, filenames, credentials or stack.
+        if result.get("stage")=="production-server-validation" and isinstance(exc,ValueError):
+            safe_codes={
+                "Invalid MathML children":"invalid-mathml-children",
+                "Unsupported native element":"unsupported-native-element",
+                "Invalid children":"invalid-children",
+                "Unsupported CSS property":"unsupported-css-property",
+                "Native snapshot byte cap":"snapshot-byte-cap",
+                "Native tree exceeds limit":"native-tree-limit",
+                "Invalid media index":"invalid-media-index",
+                "Invalid text":"invalid-text",
+                "Unsafe CSS":"unsafe-css",
+                "Invalid intrinsic image dimensions":"invalid-image-dimensions",
+            }
+            reason=safe_codes.get(str(exc))
+            if reason:result["reason"]+=":"+reason
     result["elapsed_seconds"]=round(time.monotonic()-started,3)
     validation_write_result(archive,result,comparisons)
     return result
