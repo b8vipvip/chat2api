@@ -575,15 +575,19 @@
       // request-v6 text terminal or cancel its standard OpenAI response.
       let requestScopeBound = false;
       let rolelessBound = false;
+      let nativeSelectionBound = false;
       try {
         requestScopeBound = bindNativeReplyScope(active, "terminal");
         const rolelessScope = requestScopeBound ? null :
           globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
-        rolelessBound = rolelessScope?.scope === "roleless_reply_siblings"
-          && rolelessScope.roots?.length > 0;
+        nativeSelectionBound = rolelessScope?.scope === "verified_native_assistant_selection"
+          && rolelessScope.roots?.length === 1;
+        rolelessBound = (rolelessScope?.scope === "roleless_reply_siblings"
+            || nativeSelectionBound) && rolelessScope.roots?.length > 0;
       } catch (_) {
         requestScopeBound = false;
         rolelessBound = false;
+        nativeSelectionBound = false;
         active.nativeVerifiedReplyScope = null;
         active.nativeBindingEvidence = "scope-observer-error";
       }
@@ -634,6 +638,8 @@
         native_chatgpt_conversation_url:nativeConversationUrl,
         native_observer_loaded:active.nativeObserverLoaded === true,
         native_reply_scope_verified:Boolean(active.nativeVerifiedReplyScope?.isConnected),
+        native_roleless_scope_observed:rolelessBound === true && !nativeSelectionBound,
+        native_message_id_scope_verified:nativeSelectionBound === true,
         native_reply_scope_binding:String(active.nativeBindingEvidence || "").slice(0,90),
         native_reply_scope_phase:String(active.nativeBindingPhase || "").slice(0,16),
         native_capture_attempted:active.nativeCaptureAttempted === true,
@@ -648,6 +654,9 @@
         native_chunk_complete:active.nativeChunkComplete === true,
         native_identity_candidate_count:Number(active.nativeIdentityCandidateCount || 0),
         native_identity_verified_count:Number(active.nativeIdentityVerifiedCount || 0),
+        native_svg_charts_captured:Number(active.nativeSvgChartsCaptured || 0),
+        native_graphics_unsupported:Number(active.nativeGraphicsUnsupported || 0),
+        native_canvas_omitted:Number(active.nativeCanvasOmitted || 0),
       };
     }
     // Persist the same sanitized historical URL for failed/cancelled

@@ -204,10 +204,16 @@ function requestHistoryEnsureConversationModal(){
 // native sidecar is a separate optional layout preview, NOT the API body.
 // This renderer creates safe DOM nodes only. Never insert upstream HTML.
 const requestHistoryNativeTags=new Set(
-  'div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot'.split(' ')
+  'div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br svg g path line rect circle ellipse polyline polygon text tspan defs clippath math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot'.split(' ')
 );
 const requestHistoryNativeMathTags=new Set(
   'math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot'.split(' ')
+);
+const requestHistoryNativeSvgTags=new Set(
+  'svg g path line rect circle ellipse polyline polygon text tspan defs clippath'.split(' ')
+);
+const requestHistoryNativeSvgAttrs=new Set(
+  'viewBox width height preserveAspectRatio x y dx dy x1 x2 y1 y2 cx cy r rx ry d points transform fill stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray opacity fill-opacity stroke-opacity text-anchor dominant-baseline font-size font-weight id clip-path'.split(' ')
 );
 const requestHistoryNativeStyles=new Set(
   'display flexDirection flexWrap justifyContent alignItems objectFit textAlign fontWeight whiteSpace wordBreak overflowWrap verticalAlign textDecorationLine borderStyle alignSelf justifySelf gap rowGap columnGap padding marginTop marginBottom marginLeft marginRight width minWidth maxWidth height minHeight maxHeight borderRadius borderWidth letterSpacing fontSize lineHeight color backgroundColor borderColor gridTemplateColumns'.split(' ')
@@ -220,12 +226,43 @@ function requestHistoryOwnedImageUrl(value){
     return url.href;
   }catch(_){return '';}
 }
-function requestHistoryNativeNode(value,assets,budget,depth=0){
+function requestHistoryNativeNode(value,assets,budget,depth=0,svgScope=null){
   if(!value||typeof value!=='object'||depth>64||++budget.count>30000
       ||!requestHistoryNativeTags.has(value.tag))throw new Error('原生快照结构无效');
+  const isSvg=requestHistoryNativeSvgTags.has(value.tag);
+  if(svgScope&&!isSvg)throw new Error('SVG 子节点必须是安全矢量标签');
+  if(isSvg&&value.tag!=='svg'&&!svgScope)throw new Error('SVG 图形缺少受限根节点');
+  let scope=svgScope;
+  if(value.tag==='svg'){
+    budget.svgSerial=(budget.svgSerial||0)+1;
+    // Every preview SVG gets a locally scoped ID namespace. Clipping paths
+    // can refer only to this same chart; no document-global ID collisions.
+    scope='chat2api-native-v1-'+Date.now().toString(36)+'-'+budget.svgSerial+'-';
+  }
   const node=requestHistoryNativeMathTags.has(value.tag)
     ?document.createElementNS('http://www.w3.org/1998/Math/MathML',value.tag)
-    :document.createElement(value.tag);
+    :isSvg
+      ?document.createElementNS('http://www.w3.org/2000/svg',
+        value.tag==='clippath'?'clipPath':value.tag)
+      :document.createElement(value.tag);
+  if(value.attrs!==undefined){
+    if(!isSvg||!value.attrs||typeof value.attrs!=='object'
+        ||Object.keys(value.attrs).length>24)throw new Error('SVG 属性不安全');
+    for(const [key,raw] of Object.entries(value.attrs)){
+      if(!requestHistoryNativeSvgAttrs.has(key)||typeof raw!=='string'
+          ||raw.length>16000||/[;{}<>]/.test(raw)
+          ||/https?:|javascript:|data:|blob:|@import/i.test(raw))
+        throw new Error('SVG 属性不安全');
+      const val=key==='id'?scope+raw:
+        key==='clip-path'?
+          (String(raw).match(/^url\(#([A-Za-z_][A-Za-z0-9_-]{0,80})\)$/)
+            ?'url(#'+scope+raw.match(/^url\(#([A-Za-z_][A-Za-z0-9_-]{0,80})\)$/)[1]+')'
+            :'')
+          :raw;
+      if(!val)throw new Error('SVG 属性不安全');
+      node.setAttribute(key,val);
+    }
+  }
   // Images must follow the same validated, bounded style tree as text/cards.
   // The old early return silently discarded original objectFit, borderRadius,
   // width, grid layout and spacing, even for hash-verified image assets.
@@ -247,7 +284,7 @@ function requestHistoryNativeNode(value,assets,budget,depth=0){
   if(typeof value.text==='string')node.textContent=value.text;
   const children=Array.isArray(value.children)?value.children:[];
   if(children.length>8192)throw new Error('原生快照子节点超限');
-  for(const child of children)node.appendChild(requestHistoryNativeNode(child,assets,budget,depth+1));
+  for(const child of children)node.appendChild(requestHistoryNativeNode(child,assets,budget,depth+1,scope));
   return node;
 }
 async function requestHistoryLoadNativePreview(requestId,row,sequence){

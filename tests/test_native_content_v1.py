@@ -69,6 +69,59 @@ def test_request_scoped_mathml_fails_closed_on_unsafe_nodes(bad):
         validate_native_snapshot({"version": 1, "revision": 1, "root": bad})
 
 
+def test_sanitized_svg_chart_roundtrip_with_internal_clip(tmp_path):
+    """True chart geometry/axis labels stay in the private validated SVG tree."""
+    from app.native_content_v1 import native_public_v1_tree
+    path = {"tag": "path", "attrs": {"d": "M0 220 L100 210 L200 185 L500 20",
+                                    "fill": "none", "stroke": "#2288cc"}}
+    chart = {"tag": "svg", "attrs": {"viewBox": "0 0 650 300",
+                                    "width": "650", "height": "300"},
+             "children": [
+                 {"tag": "defs", "children": [
+                     {"tag": "clippath", "attrs": {"id": "recharts-clip"},
+                      "children": [{"tag": "rect", "attrs": {
+                          "x": "0", "y": "0", "width": "600", "height": "280"}}]}]},
+                 {"tag": "g", "attrs": {"clip-path": "url(#recharts-clip)"},
+                  "children": [path]},
+                 {"tag": "text", "text": "75万元",
+                  "attrs": {"x": "24", "y": "38", "fill": "#333333",
+                            "text-anchor": "end"}}]}
+    data = {"version": 1, "revision": 1, "root": {"tag": "div", "children": [chart]}}
+    assert validate_native_snapshot(data) == data
+    store = NativeContentStore(tmp_path)
+    assert store.publish("req_sanitizedsvg12345", "owner", data)
+    assert store.persist("req_sanitizedsvg12345", "owner")
+    assert NativeContentStore(tmp_path).get("req_sanitizedsvg12345", "owner") == data
+    public = native_public_v1_tree(chart)
+    assert public["tag"] == "span"
+    assert "attrs" not in public
+    assert public["children"][2]["text"] == "75万元"
+    assert "attrs" not in public["children"][1]["children"][0]
+
+
+@pytest.mark.parametrize("invalid", [
+    {"tag": "svg", "attrs": {"href": "https://evil.example"}},
+    {"tag": "svg", "attrs": {"onclick": "alert(1)"}},
+    {"tag": "svg", "attrs": {"fill": "url(#external)"}},
+    {"tag": "svg", "attrs": {"viewBox": "0 0 1 1;position:fixed"}},
+    {"tag": "svg", "children": [{"tag": "foreignobject", "text": "script"}]},
+    {"tag": "svg", "children": [{"tag": "script", "text": "alert(1)"}]},
+    {"tag": "path", "attrs": {"d": "M0 0"}},
+    {"tag": "svg", "children": [{"tag": "div", "text": "HTML inside SVG"}]},
+    {"tag": "svg", "children": [{"tag": "path", "attrs": {
+        "d": "M0 0 L10 10", "stroke": "url(https://evil.example)"}}]},
+    {"tag": "svg", "children": [{"tag": "path", "attrs": {
+        "d": "M0 0 L10 10", "clip-path": "url(https://evil.example)"}}]},
+    {"tag": "svg", "children": [{"tag": "path", "attrs": {"d": "M0 0 L10 10",
+        "onload": "alert(1)"}}]},
+    {"tag": "svg", "children": [{"tag": "image", "attrs": {"href": "data:..."}}]},
+    {"tag": "svg", "children": [{"tag": "circle", "text": "bad"}]},
+])
+def test_svg_rejects_active_or_nonlocal_markup(invalid):
+    with pytest.raises(ValueError):
+        validate_native_snapshot({"version": 1, "revision": 1, "root": invalid})
+
+
 def test_image_free_native_reply_does_not_claim_extra_archive_identity():
     from app.native_content_v1 import native_layout_summary, native_image_identity_candidates
     value = validate_native_snapshot({"version": 1, "revision": 1,

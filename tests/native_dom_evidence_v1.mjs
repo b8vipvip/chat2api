@@ -149,3 +149,49 @@ const foreignPage=new Element('MAIN',[contaminated]);
 const foreign=probe.captureData({...active,nativeVerifiedReplyScope:contaminated});
 assert.equal(foreign.complete,false);
 console.log('Native DOM evidence: verified sibling cards, excluded user/page scope, private URL redaction');
+
+ 
+// The independent Windows collector identifies ChatGPT's new native message
+// selection by a matching wrapper ID. Only a heading born AFTER this request
+// with matching current network evidence may bind the full native reply.
+const replyId='2115ac8a-f0a0-4d81-a392-a8e02bbc9971';
+const freshParagraph=new Element('P',[{nodeType:TEXT,nodeValue:'陶艺运营方案'}]);
+const currentMarkdown=new Element('DIV',[freshParagraph,new Element('TABLE'),new Element('SVG')]);
+const assistantSelection=new Element('DIV',[currentMarkdown]);
+const assistantHeading=new Element('H4');
+const messageWrap=new Element('DIV',[assistantHeading,assistantSelection]);
+const messagePage=new Element('MAIN',[messageWrap]);
+const baseParagraphClosest=freshParagraph.closest.bind(freshParagraph);
+freshParagraph.closest=sel=>sel.includes('data-chatgpt-selection-message-id')
+  ?assistantSelection:baseParagraphClosest(sel);
+assistantSelection.closest=sel=>sel.includes('data-chatgpt-search-message-ids')
+  ?messageWrap:Element.prototype.closest.call(assistantSelection,sel);
+assistantSelection.getAttribute=key=>key==='data-chatgpt-selection-message-id'?replyId:null;
+assistantSelection.querySelector=selector=>selector.includes('data-markdown-text-style')
+  ?currentMarkdown:null;
+messageWrap.getAttribute=key=>key==='data-chatgpt-search-message-ids'?replyId:null;
+messageWrap.querySelector=selector=>selector.includes("h4[data-conversation-role='assistant']")
+  ?assistantHeading:null;
+const newMessageActive={...active,submitStartedAt:1000,baselineCapturedAt:900,
+  lastCandidateNode:freshParagraph,nativeVerifiedReplyScope:null,
+  baselineRolelessHeadings:new Set(),networkStreamSeen:true,
+  networkObservedAt:1150};
+const messageScope=probe.replyRoots(newMessageActive);
+assert.equal(messageScope?.scope,'verified_native_assistant_selection');
+assert.equal(messageScope.roots[0],assistantSelection);
+const messageReport=probe.captureData(newMessageActive);
+assert.equal(messageReport.complete,true);
+assert.equal(messageReport.counts.tables,1);
+assert.equal(messageReport.counts.svg,1);
+assert.equal(messageReport.counts.svg_large,1);
+assert.ok(JSON.stringify(messageReport).includes('陶艺运营方案'));
+const oldHeading=probe.replyRoots({...newMessageActive,
+  baselineRolelessHeadings:new Set([assistantHeading])});
+assert.notEqual(oldHeading?.scope,'verified_native_assistant_selection',
+  'historical ChatGPT messages may not be bound to a new request');
+const noNetworkProof=probe.replyRoots({...newMessageActive,networkStreamSeen:false});
+assert.notEqual(noNetworkProof?.scope,'verified_native_assistant_selection');
+messageWrap.getAttribute=key=>key==='data-chatgpt-search-message-ids'?'old-different-id':null;
+const wrongIdentity=probe.replyRoots(newMessageActive);
+assert.notEqual(wrongIdentity?.scope,'verified_native_assistant_selection');
+console.log('Native message ID: fresh heading + matching wrapper + network proof required');

@@ -17,7 +17,7 @@ class Element {
     const walk=node=>{
       for(const child of node.childNodes||[]){
         if(child instanceof Element){
-          if(selector==="img" && child.tagName==="IMG")out.push(child);
+          if(selector.split(",").map(v=>v.trim().toUpperCase()).includes(child.tagName))out.push(child);
           walk(child);
         }
       }
@@ -312,3 +312,96 @@ dimensionImage.naturalWidth=900;dimensionImage.naturalHeight=900;
 const dimensionSnapshot=capture.snapshot(candidateFor([dimensionImage]));
 assert.equal(dimensionSnapshot.root.children[0].intrinsic_width,900);
 assert.equal(dimensionSnapshot.root.children[0].intrinsic_height,900);
+
+
+// A 30-month earnings chart may be a large SVG containing no HTML <img>.
+// Capture only inert vector geometry, preserve axis labels and clip IDs, and
+// never ship the source's links, event handlers or scripts.
+const svgNs="http://www.w3.org/2000/svg";
+function vector(tag,children=[],attributes={},size={width:50,height:20}){
+  const el=new Element(tag.toUpperCase(),children);
+  el.namespaceURI=svgNs;
+  el.getAttribute=(name)=>attributes[name]??null;
+  el.getBoundingClientRect=()=>size;
+  if(tag==="text"||tag==="tspan")
+    el.textContent=children.map(c=>c.nodeValue||"").join("");
+  return el;
+}
+const axis=vector("text",[{nodeType:3,nodeValue:"75万元"}],
+  {x:"24",y:"38",fill:"#333333","text-anchor":"end"});
+const clip=vector("clippath",[
+  vector("rect",[],{x:"0",y:"0",width:"600",height:"280"})
+],{id:"recharts-clip"});
+const defs=vector("defs",[clip]);
+const line=vector("path",[],{d:"M0 220 L100 210 L200 185 L500 20",
+  fill:"none",stroke:"#2288cc","stroke-width":"2"});
+const graphics=vector("g",[line],{"clip-path":"url(#recharts-clip)"});
+const chart=vector("svg",[defs,graphics,axis],{
+  viewBox:"0 0 650 300",width:"650",height:"300"},
+  {width:650,height:300});
+const chartActive={requestId:"req_chartnative123",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[chart])};
+const chartCapture=capture.snapshot(chartActive);
+assert.ok(chartCapture,"bounded SVG chart must be accepted");
+const chartNode=chartCapture.root.children[0];
+assert.equal(chartNode.tag,"svg");
+assert.equal(chartNode.attrs.viewBox,"0 0 650 300");
+assert.equal(chartNode.children[0].children[0].attrs.id,"recharts-clip");
+assert.equal(chartNode.children[1].attrs["clip-path"],"url(#recharts-clip)");
+assert.equal(chartNode.children[1].children[0].attrs.d,
+  "M0 220 L100 210 L200 185 L500 20");
+assert.equal(chartNode.children[2].text,"75万元");
+assert.equal(chartNode.children[2].attrs.x,"24");
+assert.equal(chartActive.nativeSvgChartsCaptured,1);
+assert.equal(chartActive.nativeGraphicsUnsupported,0);
+const poisonedPath=vector("path",[],{d:"M0 0L30 60",href:"https://evil.example",
+  onclick:"alert(1)",fill:"url(https://evil.example/icon.svg)"});
+const badChart=vector("svg",[poisonedPath],{width:"650",height:"300"},
+  {width:650,height:300});
+const safeChart=capture.snapshot({requestId:"req_safechart123",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[badChart])});
+const serialized=JSON.stringify(safeChart);
+assert.ok(serialized.includes("M0 0L30 60"));
+assert.ok(!serialized.includes("evil.example")&&!serialized.includes("onclick"));
+assert.ok(!serialized.includes("alert(1)"));
+const canvasActive={requestId:"req_canvasnative123",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[
+    new Element("P",[{nodeType:3,nodeValue:"Visible paragraph"}]),
+    new Element("CANVAS"),
+  ])};
+const safeWithoutCanvas=capture.snapshot(canvasActive);
+assert.ok(safeWithoutCanvas);
+assert.equal(canvasActive.nativeCanvasOmitted,1);
+assert.equal(canvasActive.nativeGraphicsUnsupported,1);
+assert.ok(!JSON.stringify(safeWithoutCanvas).includes("canvas"));
+const iconOnly=vector("svg",[vector("path",[],{d:"M0 0 L12 12"})],
+  {width:"24",height:"24"},{width:24,height:24});
+const iconCapture=capture.snapshot({requestId:"req_vectoricon123",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[
+    new Element("P",[{nodeType:3,nodeValue:"Text outside decorative icon"}]),iconOnly,
+  ])});
+assert.ok(iconCapture);
+assert.equal(iconCapture.root.children.length,1,
+  "tiny SVG controls should not be promoted into charts");
+
+ 
+// Prior Windows v1.0.3 vs Chrome comparison found three standalone
+// "\\n  " text nodes (9 characters) discarded inside pre/code. The formal
+// request observer must retain them, not just the independent diagnostic.
+const codeNative=new Element("PRE",[new Element("CODE",[
+  new Element("SPAN",[{nodeType:3,nodeValue:"x=1"},{nodeType:3,nodeValue:"\n  "},
+    {nodeType:3,nodeValue:"y=2"}])
+])]);
+const codeOnly=capture.snapshot({requestId:"req_codewhitespace123",
+  submitStartedAt:Date.now(),lastCandidateNode:codeNative});
+assert.ok(codeOnly);
+const codeLeaves=codeOnly.root.children[0].children[0].children;
+assert.equal(codeLeaves[0].text,"x=1");
+assert.equal(codeLeaves[1].text,"\n  ");
+assert.equal(codeLeaves[2].text,"y=2");
+const ordinaryWhitespace=capture.snapshot({requestId:"req_outsidecode123",
+  submitStartedAt:Date.now(),lastCandidateNode:new Element("P",[
+    {nodeType:3,nodeValue:"plain"},{nodeType:3,nodeValue:"\n  "},
+  ])});
+assert.equal(ordinaryWhitespace.root.children.length,1,
+  "Whitespace-only plain paragraph nodes still get filtered");

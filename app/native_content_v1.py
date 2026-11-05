@@ -29,7 +29,62 @@ MAX_AGE_SECONDS = 90 * 86400
 SNAPSHOT_FILENAME = re.compile(r"(?:req|resp|imgreq)_[a-zA-Z0-9_-]{6,100}\.json")
 MATH_TAGS = {"math", "semantics", "mrow", "mi", "mo", "mn", "msub", "mfrac",
              "mtext", "mover", "munder", "munderover", "msup", "msubsup", "msqrt", "mroot"}
-SAFE_TAGS = MATH_TAGS | {"div", "p", "span", "strong", "em", "h1", "h2", "h3", "h4",
+SVG_TAGS = {"svg", "g", "path", "line", "rect", "circle", "ellipse",
+            "polyline", "polygon", "text", "tspan", "defs", "clippath"}
+SVG_ATTRS = {"viewBox", "width", "height", "preserveAspectRatio", "x", "y",
+             "dx", "dy", "x1", "x2", "y1", "y2", "cx", "cy", "r", "rx", "ry",
+             "d", "points", "transform", "fill", "stroke", "stroke-width",
+             "stroke-linecap", "stroke-linejoin", "stroke-dasharray", "opacity",
+             "fill-opacity", "stroke-opacity", "text-anchor",
+             "dominant-baseline", "font-size", "font-weight", "id", "clip-path"}
+SVG_NUMBER = re.compile(r"^[-+]?(?:\d{1,6}(?:\.\d{1,5})?|\.\d{1,5})(?:px|%)?$")
+SVG_GEOMETRY = re.compile(r"^[MmLlHhVvCcSsQqTtAaZzEe0-9+.,\-\s]+$")
+SVG_NUMBERS = re.compile(r"^[0-9eE+.,\-\s]+$")
+SVG_COLOR = re.compile(
+    r"^(?:none|currentColor|transparent|black|white|red|blue|green|gray|grey|"
+    r"#[\da-f]{3,8}|rgba?\([\d.,\s%]+\))$", re.I)
+SVG_TRANSFORM = re.compile(
+    r"^(?:(?:translate|scale|rotate|matrix|skewX|skewY)\([-+0-9.,\s]+\)\s*){1,8}$")
+SVG_ID = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,80}$")
+SVG_CLIP = re.compile(r"^url\(#([A-Za-z_][A-Za-z0-9_-]{0,80})\)$")
+SVG_RATIO = re.compile(r"^(?:none|x(?:Min|Mid|Max)Y(?:Min|Mid|Max))(?:\s+(?:meet|slice))?$")
+
+def _svg_attribute(key: str, value: object) -> bool:
+    """Only inert, bounded vector geometry. Never URLs or event handlers."""
+    if key not in SVG_ATTRS or not isinstance(value, str):
+        return False
+    if not value or value != value.strip() or len(value) > (
+            16000 if key == "d" else 4096 if key == "points" else 240):
+        return False
+    if key == "d":
+        return bool(SVG_GEOMETRY.fullmatch(value))
+    if key in {"points", "stroke-dasharray", "viewBox"}:
+        return bool(SVG_NUMBERS.fullmatch(value))
+    if key == "transform":
+        return bool(SVG_TRANSFORM.fullmatch(value))
+    if key in {"fill", "stroke"}:
+        return bool(SVG_COLOR.fullmatch(value))
+    if key == "id":
+        return bool(SVG_ID.fullmatch(value))
+    if key == "clip-path":
+        return bool(SVG_CLIP.fullmatch(value))
+    if key == "preserveAspectRatio":
+        return bool(SVG_RATIO.fullmatch(value))
+    if key == "stroke-linecap":
+        return value in {"butt", "round", "square"}
+    if key == "stroke-linejoin":
+        return value in {"miter", "round", "bevel"}
+    if key == "text-anchor":
+        return value in {"start", "middle", "end"}
+    if key == "dominant-baseline":
+        return value in {"auto", "middle", "central", "hanging",
+                         "alphabetic", "text-after-edge"}
+    if key == "font-weight":
+        return value in {"normal", "bold", "400", "500", "600", "700"}
+    return bool(SVG_NUMBER.fullmatch(value))
+
+
+SAFE_TAGS = MATH_TAGS | SVG_TAGS | {"div", "p", "span", "strong", "em", "h1", "h2", "h3", "h4",
              "ul", "ol", "li", "blockquote", "pre", "code", "table", "thead",
              "tbody", "tr", "td", "th", "figure", "figcaption", "img", "hr", "br"}
 SAFE_STYLES = {
@@ -71,7 +126,7 @@ def validate_native_snapshot(payload: object) -> dict:
         raise ValueError("Invalid revision")
     count, chars = 0, 0
 
-    def node(value: object, depth: int) -> dict:
+    def node(value: object, depth: int, parent_tag: str | None = None) -> dict:
         nonlocal count, chars
         if depth > MAX_DEPTH or count >= MAX_NODES or not isinstance(value, dict):
             raise ValueError("Native tree exceeds limit")
@@ -79,10 +134,21 @@ def validate_native_snapshot(payload: object) -> dict:
         tag = value.get("tag")
         if tag not in SAFE_TAGS or not isinstance(tag, str):
             raise ValueError("Unsupported native element")
+        if parent_tag in SVG_TAGS and tag not in SVG_TAGS:
+            raise ValueError("Invalid SVG children")
+        if tag in SVG_TAGS and parent_tag not in SVG_TAGS and tag != "svg":
+            raise ValueError("Unscoped SVG element")
         if set(value) - {"tag", "text", "children", "style", "media_index",
-                          "intrinsic_width", "intrinsic_height", "source_sha256"}:
+                          "intrinsic_width", "intrinsic_height", "source_sha256", "attrs"}:
             raise ValueError("Native element has unsafe attributes")
         result = {"tag": tag}
+        if "attrs" in value:
+            if tag not in SVG_TAGS or not isinstance(value["attrs"], dict) or len(value["attrs"]) > 24:
+                raise ValueError("Unsafe SVG attributes")
+            if any(not isinstance(key, str) or not _svg_attribute(key, val)
+                   for key, val in value["attrs"].items()):
+                raise ValueError("Unsafe SVG attributes")
+            result["attrs"] = dict(value["attrs"])
         if tag == "img":
             if set(value) - {"tag", "media_index", "style",
                              "intrinsic_width", "intrinsic_height", "source_sha256"}:
@@ -112,7 +178,7 @@ def validate_native_snapshot(payload: object) -> dict:
             raise ValueError("Image reference on non-image element")
         if "text" in value:
             content = value["text"]
-            if tag == "img" or not isinstance(content, str):
+            if tag == "img" or tag in (SVG_TAGS - {"text", "tspan"}) or not isinstance(content, str):
                 raise ValueError("Invalid text")
             chars += len(content)
             if chars > MAX_TEXT:
@@ -148,7 +214,10 @@ def validate_native_snapshot(payload: object) -> dict:
             if tag in MATH_TAGS and any(not isinstance(child, dict)
                 or child.get("tag") not in MATH_TAGS for child in children):
                 raise ValueError("Invalid MathML children")
-            result["children"] = [node(child, depth + 1) for child in children]
+            if tag in SVG_TAGS and any(not isinstance(child, dict)
+                    or child.get("tag") not in SVG_TAGS for child in children):
+                raise ValueError("Invalid SVG children")
+            result["children"] = [node(child, depth + 1, tag) for child in children]
         return result
 
     root = node(payload["root"], 0)
@@ -482,11 +551,11 @@ def native_public_v1_tree(root: dict) -> dict:
     display; old MV3C clients accept only the original five safe node keys.
     """
     result = {key: value for key,value in root.items()
-              if key not in ("intrinsic_width", "intrinsic_height", "source_sha256", "children")}
+              if key not in ("intrinsic_width", "intrinsic_height", "source_sha256", "attrs", "children")}
     # Existing strict v1 consumers accept HTML nodes, not arbitrary MathML.
     # Preserve MathML natively in private admin preview; public v1 gets safe
     # inert HTML spans until the protocol formally negotiates MathML.
-    if root.get("tag") in MATH_TAGS:
+    if root.get("tag") in MATH_TAGS | SVG_TAGS:
         result["tag"] = "span"
         if "style" in result:
             result["style"] = {k:v for k,v in result["style"].items() if k!="display"}

@@ -104,13 +104,16 @@ def test_17b4_admin_renderer_accepts_4000_nodes_but_not_30001():
     )[0]
     js = """
     const assert=require('node:assert/strict');
-    const requestHistoryNativeTags=new Set('div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot'.split(' '));
+    const requestHistoryNativeTags=new Set('div p span strong em h1 h2 h3 h4 ul ol li blockquote pre code table thead tbody tr td th figure figcaption img hr br svg g path line rect circle ellipse polyline polygon text tspan defs clippath math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot'.split(' '));
     const requestHistoryNativeMathTags=new Set('math semantics mrow mi mo mn msub mfrac mtext mover munder munderover msup msubsup msqrt mroot'.split(' '));
+    const requestHistoryNativeSvgTags=new Set('svg g path line rect circle ellipse polyline polygon text tspan defs clippath'.split(' '));
+    const requestHistoryNativeSvgAttrs=new Set('viewBox width height preserveAspectRatio x y dx dy x1 x2 y1 y2 cx cy r rx ry d points transform fill stroke stroke-width stroke-linecap stroke-linejoin stroke-dasharray opacity fill-opacity stroke-opacity text-anchor dominant-baseline font-size font-weight id clip-path'.split(' '));
     const requestHistoryNativeStyles=new Set('display flexDirection flexWrap justifyContent alignItems objectFit textAlign fontWeight gap padding marginTop marginBottom width maxWidth height borderRadius fontSize lineHeight color backgroundColor gridTemplateColumns'.split(' '));
     const document={
        createElement(tag){return {tag,children:[],style:{},
          appendChild(c){this.children.push(c)}};},
        createElementNS(namespace,tag){return {tag,namespace,children:[],style:{},
+         attrs:{},setAttribute(k,v){this.attrs[k]=v},
          appendChild(c){this.children.push(c)}};}
     };
     function requestHistoryNativeNode("""
@@ -167,6 +170,26 @@ def test_17b4_admin_renderer_accepts_4000_nodes_but_not_30001():
     assert.equal(math.children[0].children[0].textContent,'每炉');
     assert.throws(()=>requestHistoryNativeNode({
       tag:'script',text:'alert(1)'},[],{count:0}),/原生快照结构无效/);
+    const chart=requestHistoryNativeNode({tag:'svg',attrs:{
+        viewBox:'0 0 650 300',width:'650',height:'300'
+      },children:[{tag:'defs',children:[{tag:'clippath',
+        attrs:{id:'internal-clip'},children:[{tag:'rect',
+          attrs:{x:'0',y:'0',width:'650',height:'300'}}]}]},
+      {tag:'g',attrs:{'clip-path':'url(#internal-clip)'},
+        children:[{tag:'path',attrs:{d:'M0 220 L100 210 L500 20',
+          stroke:'#2288cc',fill:'none'}}]},
+      {tag:'text',text:'75万元',attrs:{x:'24',y:'38'}}]
+    },[],{count:0});
+    assert.equal(chart.namespace,'http://www.w3.org/2000/svg');
+    const definedId=chart.children[0].children[0].attrs.id;
+    assert.ok(definedId.startsWith('chat2api-native-v1-'));
+    assert.equal(chart.children[1].attrs['clip-path'],'url(#'+definedId+')');
+    assert.equal(chart.children[1].children[0].attrs.d,'M0 220 L100 210 L500 20');
+    assert.equal(chart.children[2].textContent,'75万元');
+    assert.throws(()=>requestHistoryNativeNode({tag:'svg',
+      attrs:{onclick:'alert(1)'}},[],{count:0}),/SVG 属性不安全/);
+    assert.throws(()=>requestHistoryNativeNode({tag:'svg',
+      children:[{tag:'script',text:'evil'}]},[],{count:0}),/原生快照结构无效/);
     // Do not execute URL/CSS injection even in an image node.
     const injected=requestHistoryNativeNode({
       tag:'img',media_index:0,
