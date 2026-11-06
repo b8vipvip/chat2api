@@ -102,6 +102,18 @@ class GeneratedFileArchive:
             (owner, request_id, name, canonical, digest),
         ).fetchone()
         if prior:
+            # A matching SQLite manifest is *not* proof of downloadable bytes.
+            # This is especially important when deferred jobs replay after a
+            # restart or an object has disappeared from S3/local storage.
+            # Never reuse a bearer URL unless the exact prior object can be
+            # read back and independently matches its durable size and SHA.
+            try:
+                previous = self.storage._read(cfg, prior["backend"], prior["object_key"])
+            except Exception as exc:
+                raise ValueError("Existing generated file readback unavailable") from exc
+            if (len(previous) != prior["size"]
+                    or hashlib.sha256(previous).hexdigest() != prior["sha256"]):
+                raise ValueError("Existing generated file readback integrity mismatch")
             return {
                 "id": prior["id"], "token": prior["token"],
                 "filename": prior["filename"], "mime_type": prior["mime"],
@@ -117,6 +129,15 @@ class GeneratedFileArchive:
         # an object even though _write raised. Random keys are never shared.
         new_objects.append((cfg, key))
         self.storage._write(cfg, key, data, canonical)
+        # A successful provider write ACK alone cannot establish a ready
+        # download: validate the object retrieved through the *same* backend
+        # path that /api/generated-files ultimately uses. This is bounded
+        # by MAX_FILE_BYTES; on mismatch the surrounding store() rollback
+        # removes this newly allocated object without touching prior URLs.
+        verified = self.storage._read(cfg, cfg["backend"], key)
+        if (len(verified) != len(data)
+                or hashlib.sha256(verified).hexdigest() != digest):
+            raise ValueError("Generated file storage readback integrity mismatch")
         now = datetime.now(timezone.utc).isoformat()
         conn.execute(
             "INSERT INTO generated_files VALUES (?,?,?,?,?,?,?,?,?,?,?)",
