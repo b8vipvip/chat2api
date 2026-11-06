@@ -18,6 +18,8 @@ const raw=[data("first"),data(" second"),"data: "+JSON.stringify({choices:[{delt
 let reads=0,cancelled=0,released=0,progressFailures=0;
 const mock={
   TextDecoder,Promise,Error,JSON,String,
+  // Standalone VM does not inherit the browser's performance object.
+  performance:{now:()=>1010},
   fetch:async()=>({ok:true,body:{getReader(){return {
     async read(){return reads<raw.length?{done:false,value:new TextEncoder().encode(raw[reads++])}:{done:true}},
     async cancel(){cancelled++},
