@@ -105,4 +105,24 @@ const loading = await runScenario({ hotHealWorks: false });
 assert.equal(loading.reloads, 1, "reload remains a bounded fallback when hot-heal cannot establish the epoch");
 assert.equal(loading.state.last?.ok, true);
 
+// Exercise the real content contract: a fresh marker cannot prove that an
+// old one-shot request-v6 listener was replaced inside a persistent tab.
+const contentContractSource = fs.readFileSync(
+  new URL("../chrome_extension/content_runtime_contract_v71.js", import.meta.url), "utf8");
+const contractContext = {
+  __CHAT2API_CONTENT_BUNDLE_MARKER_V71__: {bundle:"0.22.287",revision:71},
+  __CHAT2API_REQUEST_CONTENT_V6__: {revision:69},
+  document:{documentElement:{getAttribute(){return null;}},readyState:"complete"},
+  location:{href:"https://chatgpt.com/"},
+  Date,
+  chrome:{runtime:{onMessage:{addListener(){},removeListener(){}}}},
+};
+contractContext.globalThis=contractContext;
+vm.createContext(contractContext);
+vm.runInContext(contentContractSource, contractContext);
+const snapshot=contractContext.__CHAT2API_CONTENT_RUNTIME_CONTRACT_V71__.snapshot;
+assert.equal(snapshot().modules.native_scope_gate_v287, false);
+contractContext.__CHAT2API_REQUEST_CONTENT_V6__.nativeScopeGateRevision=287;
+assert.equal(snapshot().modules.native_scope_gate_v287, true);
+
 console.log("runtime preflight v71 single-owner regression scenarios passed");
