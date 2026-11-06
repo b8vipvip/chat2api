@@ -81,7 +81,25 @@ async function recoverDisconnectedStream(requestId, update) {
 
 async function stream(model,auth,requestId,messages,update){
 const clientStarted=performance.now();
-const r=await fetch("/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+auth.token,"X-Chat2API-Request-ID":requestId},body:JSON.stringify({model,messages,prompt_mode:"full",stream:true})});
+const safeErrorKind=error=>{
+  const kind=String(error?.name||"Error");
+  return ["AbortError","TypeError","SyntaxError","TimeoutError","NetworkError","RangeError","Error"].includes(kind)
+    ?kind:"OtherError";
+};
+let r;
+try{
+  r=await fetch("/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+auth.token,"X-Chat2API-Request-ID":requestId},body:JSON.stringify({model,messages,prompt_mode:"full",stream:true})});
+}catch(error){
+  // Fetch can reject before even returning SSE response headers. Keep this
+  // distinct from a reader abort after headers, without storing exception text.
+  const failure=error&&typeof error==="object"?error:Error("SSE fetch failed");
+  failure.clientSseTruth={
+    response_headers_received:false,fetch_error_name:safeErrorKind(error),
+    fetch_failed_after_ms:Math.max(0,Math.round(performance.now()-clientStarted)),
+    reader_cancel_requested:false,protocol_done_seen:false,native_reader_eof_seen:false
+  };
+  throw failure;
+}
 if(!r.ok)throw Error("API HTTP "+r.status+": "+(await r.text()).slice(0,300));
 if(!r.body)throw Error("缺少SSE响应体");
 const responseHeadersAt=performance.now();
@@ -117,7 +135,7 @@ safeProgress(update,answer.length,frames,lastStatus);
 }catch(error){
   streamError=error;
   // Error messages can include server data; record the exception *class* only.
-  readerErrorName=String(error?.name||"Error").slice(0,48);
+  readerErrorName=safeErrorKind(error);
 }
 finally{
   try{
@@ -133,6 +151,7 @@ finally{
 }
 const relative=at=>at===null?null:Math.max(0,Math.round(at-clientStarted));
 const clientSseTruth={
+  response_headers_received:true,
   response_headers_ms:relative(responseHeadersAt),
   protocol_stop_seen:stopped,
   protocol_done_seen:done,
