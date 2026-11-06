@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import logging
 import secrets
 import sqlite3
 import threading
@@ -100,10 +101,15 @@ class DeferredGeneratedFiles:
         # Atomic file creation is bounded by the same existing file limits.
         results, output, offset = [], [], 0
         submitted = []
+        allocated = []
         try:
             with self.lock:
                 for match, filename, mime, data in decoded:
                     file_id = "pgen_" + secrets.token_hex(16)
+                    # Track the ID before touching disk or SQLite: either
+                    # write_bytes, rename or INSERT can fail after creating
+                    # an unpublished .part/.bin file.
+                    allocated.append(file_id)
                     token = secrets.token_urlsafe(24)
                     path = self.root / (file_id + ".bin")
                     staged = path.with_suffix(".part")
@@ -131,12 +137,28 @@ class DeferredGeneratedFiles:
                     self.pool.submit(self._finish, item)
             return "".join(output), results
         except Exception:
-            # Never leave a partially published response: this method raises,
-            # so no pending link is returned. Clean only files from this batch.
-            with self._db() as conn:
-                for item in submitted:
-                    conn.execute("DELETE FROM deferred_generated_files WHERE id=?",(item,))
-                    (self.root / (item + ".bin")).unlink(missing_ok=True)
+            # No public link is returned from a failed batch. A file can
+            # exist *before* SQLite INSERT succeeds, so submitted is not a
+            # complete rollback list. Only delete random IDs allocated here.
+            try:
+                with self._db() as conn:
+                    for item in allocated:
+                        conn.execute(
+                            "DELETE FROM deferred_generated_files WHERE id=?", (item,)
+                        )
+            except Exception:
+                # Preserve the original staging failure for the caller.
+                logging.getLogger(__name__).exception(
+                    "Failed to roll back deferred-file metadata"
+                )
+            for item in allocated:
+                for suffix in (".bin", ".part"):
+                    try:
+                        (self.root / (item + suffix)).unlink(missing_ok=True)
+                    except OSError:
+                        logging.getLogger(__name__).exception(
+                            "Failed to clean unpublished deferred-file bytes"
+                        )
             raise
 
     def _finish(self, pending_id: str) -> None:
