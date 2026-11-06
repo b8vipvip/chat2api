@@ -24,6 +24,7 @@ from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout, 
 from .chat_progress_stream_v196 import status_from_diagnostics, progress_is_real
 from .chat_stream_delivery_v194 import StagedStreamText, final_text_chunks, sse_heartbeat_interval
 from .stream_detached_terminal_v219 import settle_detached_stream
+from .sse_asgi_transport_truth_v284 import SSETransportTruth
 from .terminal_archive_singleflight_v277 import archive_once
 from .mixed_media_archive_v280 import archive_mixed_reply
 from .archive_write_stop_v280 import ArchiveWriteStop
@@ -137,6 +138,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Pure ASGI receive/send observer: records HTTP disconnect and actual
+    # body send boundaries, never contents, and never owns Broker terminal.
+    app.add_middleware(SSETransportTruth, telemetry=telemetry)
 
     def supplied_token(authorization: str | None, x_api_key: str | None) -> str:
         supplied = (x_api_key or "").strip()
@@ -1841,6 +1845,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise HTTPException(status_code=503, detail=str(error)) from error
 
         if body.stream:
+            # Only this request-owned state may be correlated by the ASGI
+            # observer. No model text/credentials are copied into the scope.
+            request.scope["chat2api_sse_request_id"] = request_id
+            request.scope["chat2api_sse_broker_state"] = state
             return StreamingResponse(
                 stream_request(request, state, response_id, body.model, timeout_seconds, prompt, principal,
                                body.prompt_mode, len(attachments), automatic_media_extension, long_text_requested),
