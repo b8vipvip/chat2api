@@ -321,6 +321,7 @@ async function requestHistoryLoadNativePreview(requestId,row,sequence){
     const media=Array.isArray(row?.response_media)?row.response_media.slice(0,40):[];
     const assets=media.map(item=>requestHistoryOwnedImageUrl(item?.owned_url||item?.url));
     const candidate=data?.image_asset_candidates;
+    const comparison=data?.capture_comparison||{};
     const imageCount=Number(summary.images);
     // Zero-image structured replies remain useful even when the request also
     // archived unrelated rasters. Do not inject those unbound media into the
@@ -354,6 +355,16 @@ async function requestHistoryLoadNativePreview(requestId,row,sequence){
         ?(media.length?'原生回复没有已绑定图片；'+media.length+' 张另行归档的媒体不会插入原生布局。':'原生回复没有需映射的图片。')
         :('图片 SHA256 已验证 '+verifiedCount+'/'+imageCount
           +'；未验证图片保留原位置提示，绝不按顺序或尺寸替换。'))
+      +(comparison.status==='possible-large-image-capture-gap'
+        ?'独立 DOM 探针记录 '+comparison.private_images_displayed_large
+          +' 张至少 40×40 的可见图片，正式原生结构仅 '+comparison.native_images
+          +' 张，存在 '+comparison.possible_missing_large_images
+          +' 张潜在捕获缺口；需结合采集时点与原始字节 SHA256 核实。'
+        :comparison.status==='only-small-decorative-private-images'
+          ?'独立 DOM 中仅有 '+comparison.private_images_small
+            +' 个小于 40×40 的装饰性图片节点，不能据此判定正式原生结构漏图。'
+          :comparison.status==='private-capture-incomplete'
+            ?'独立 DOM 证据不完整，无法对图片节点差异作可信判定。':'')
       +(Number(data?.visual_gaps?.unsupported_graphics||0)>0
         ?'检测到 '+Number(data.visual_gaps.unsupported_graphics)
           +' 处未支持图形（包括 '+Number(data.visual_gaps.canvas_omitted||0)
