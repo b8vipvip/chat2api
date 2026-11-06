@@ -25,6 +25,7 @@ from .chat_progress_stream_v196 import status_from_diagnostics, progress_is_real
 from .chat_stream_delivery_v194 import StagedStreamText, final_text_chunks, sse_heartbeat_interval
 from .stream_detached_terminal_v219 import settle_detached_stream
 from .terminal_archive_singleflight_v277 import archive_once
+from .mixed_media_archive_v280 import archive_mixed_reply
 from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
@@ -1383,17 +1384,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
 
     def archive_final_markdown(text: str, owner: str, request_id: str, base_url: str):
-        # Server-side archival is a presentation boundary, not a terminal arbiter.
-        # Images remain handled by their established thumbnail store. Generated
-        # file handoffs reuse that store's configured local/S3 backend.
-        text, media = media_archive.rewrite_markdown(text, owner, request_id, base_url)
-        # Verified bytes are staged before the API text is delivered. Local/S3
-        # transfer proceeds independently and the bearer URL reports 202 until
-        # real archive bytes have passed the existing signature/hash checks.
-        text, files = deferred_generated_files.rewrite(text, owner, request_id, base_url)
-        if "data:image/" in text or "![📎 " in text:
-            raise ValueError("Incomplete generated attachment payload")
-        return text, media, files
+        # Broker retains sole terminal authority. A later generated-file
+        # failure must not strand images archived by the earlier stage.
+        return archive_mixed_reply(
+            text, owner, request_id, base_url,
+            media_archive=media_archive,
+            deferred_generated_files=deferred_generated_files,
+        )
 
     async def stream_request(
         request: Request, state: RequestState, response_id: str, model: str, timeout_seconds: int,
