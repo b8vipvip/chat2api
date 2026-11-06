@@ -241,7 +241,7 @@ class ClientRegistry:
             reported_version = metadata.get("extension_version")
             if isinstance(reported_version, str):
                 reported_version = reported_version.strip()
-                if re.fullmatch(r"\\d{1,3}\\.\\d{1,3}\\.\\d{1,5}(?:[-+][A-Za-z0-9._-]{1,20})?", reported_version):
+                if re.fullmatch(r"\d{1,3}\.\d{1,3}\.\d{1,5}(?:[-+][A-Za-z0-9._-]{1,20})?", reported_version):
                     if client.version != reported_version:
                         client.version = reported_version
                         changed = True
