@@ -115,8 +115,40 @@
   }
 
   async function bodyText(input, init) {
-    if (typeof init?.body === "string") return init.body;
-    try { if (input instanceof Request) return await input.clone().text(); } catch (_) {}
+    // fetch(Request, {body: Blob/Uint8Array/...}) uses the INIT body, not
+    // Request.body. The former observer read the old Request body, then
+    // recorded a rewritten model even though fetch's init.body overrode it.
+    // Never fall back to stale Request bytes when an explicit body is present.
+    const hasOverride=init && Object.prototype.hasOwnProperty.call(init,"body")
+      && init.body !== undefined;
+    if (hasOverride) {
+      const body=init.body;
+      if (typeof body === "string") return body.length <= MAX_BUFFER ? body : "";
+      try {
+        if (typeof Blob !== "undefined" && body instanceof Blob) {
+          return body.size <= MAX_BUFFER ? await body.text() : "";
+        }
+        if (typeof ArrayBuffer !== "undefined" && body instanceof ArrayBuffer) {
+          return body.byteLength <= MAX_BUFFER ? new TextDecoder().decode(body) : "";
+        }
+        if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView(body)) {
+          return body.byteLength <= MAX_BUFFER
+            ? new TextDecoder().decode(new Uint8Array(body.buffer,body.byteOffset,body.byteLength)) : "";
+        }
+      } catch (_) {}
+      // Streams, FormData, null and unknown BodyInit types must remain
+      // unverified; consuming them or claiming a different wire model is unsafe.
+      return "";
+    }
+    try {
+      if (input instanceof Request) {
+        const copy=input.clone();
+        const contentLength=Number(copy.headers?.get?.("content-length") || 0);
+        if (contentLength > MAX_BUFFER) return "";
+        const raw=await copy.text();
+        return raw.length <= MAX_BUFFER ? raw : "";
+      }
+    } catch (_) {}
     return "";
   }
   async function applyAuthority(input, init, authority, streamId) {
@@ -144,8 +176,12 @@
       if (normalizeModel(beforeTransport) !== target || beforeTransport !== transport) {
         payload.model = transport;
         const nextBody = JSON.stringify(payload);
-        if (typeof init?.body === "string") {
-          nextInit = { ...(init || {}), body: nextBody };
+        if (init && Object.prototype.hasOwnProperty.call(init,"body")
+            && init.body != null) {
+          // The init BodyInit always takes priority over input Request.body.
+          // Put the rewrite into init itself, including Blob/typed-array
+          // overrides, so fetch cannot silently send the original model.
+          nextInit = { ...init, body: nextBody };
           rewritten = true;
         } else if (input instanceof Request) {
           try {
