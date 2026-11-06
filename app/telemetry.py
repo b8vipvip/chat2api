@@ -129,7 +129,9 @@ class TelemetryStore:
     async def append(self, item: dict[str, Any]) -> None:
         await self.upsert(item)
 
-    async def upsert(self, item: dict[str, Any]) -> dict[str, Any]:
+    async def upsert(
+        self, item: dict[str, Any], *, merge_diagnostics: bool = False,
+    ) -> dict[str, Any]:
         record = dict(item)
         trace_id = current_trace_id.get()
         if trace_id:
@@ -137,6 +139,20 @@ class TelemetryStore:
         async with self.lock:
             request_id = str(record.get("request_id") or "")
             existing = self.get(request_id) if request_id else None
+            if merge_diagnostics:
+                # Read AND merge inside the same lock protecting the append.
+                # A passive SSE observer must never overwrite a more recent
+                # Worker terminal, native capture or media/file diagnosis.
+                if not existing:
+                    raise KeyError(f"Unknown request: {request_id}")
+                delta = record.get("diagnostics")
+                if not isinstance(delta, dict):
+                    raise ValueError("Diagnostic patch must be an object")
+                previous = existing.get("diagnostics")
+                record["diagnostics"] = {
+                    **(previous if isinstance(previous, dict) else {}),
+                    **delta,
+                }
             # Request-v6's first terminal is authoritative. An asynchronous
             # observer or late write from an earlier running snapshot may not
             # reopen the completed/error request or replace its final body.
@@ -179,6 +195,24 @@ class TelemetryStore:
         if not self.get(request_id):
             raise KeyError(f"Unknown request: {request_id}")
         return await self.upsert({"request_id": request_id, **changes})
+
+    async def merge_diagnostics(
+        self, request_id: str, patch: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Merge only supplied evidence keys, atomically with other telemetry.
+
+        Diagnostic snapshots must not be read outside the store lock and
+        rewritten later by a passive observer. A missing/evicted request
+        cannot be resurrected by late HTTP transport observation.
+        """
+        if not isinstance(request_id, str) or not request_id:
+            raise KeyError("Unknown request")
+        if not isinstance(patch, dict):
+            raise ValueError("Diagnostic patch must be an object")
+        return await self.upsert(
+            {"request_id": request_id, "diagnostics": patch},
+            merge_diagnostics=True,
+        )
 
     def recent(self, limit: int = 100) -> list[dict[str, Any]]:
         size = max(1, min(int(limit), self.items.maxlen or 500))

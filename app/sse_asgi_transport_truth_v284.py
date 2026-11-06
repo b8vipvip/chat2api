@@ -200,17 +200,14 @@ class SSETransportTruth:
         if not isinstance(request_id, str) or not request_id:
             return
         try:
-            row = self.telemetry.get(request_id)
-            if row is None:
-                return
-            prior = row.get("diagnostics")
-            diagnostics = dict(prior) if isinstance(prior, dict) else {}
-            diagnostics.update({
+            # The store merges under its own lock. The old read/modify/write
+            # sequence could overwrite concurrent Worker finalization evidence
+            # (including native snapshot and generated-file diagnostics).
+            await self.telemetry.merge_diagnostics(request_id, {
                 "api_stream_peer_disconnect_seen": truth["http_disconnect_seen"],
                 "api_delivery_state": delivery_state,
                 "api_stream_transport_truth": dict(truth),
             })
-            await self.telemetry.update(request_id, {"diagnostics": diagnostics})
         except Exception:
             # Optional evidence MUST NOT mask the upstream ASGI transport
             # failure or override the Worker/Broker authoritative terminal.
