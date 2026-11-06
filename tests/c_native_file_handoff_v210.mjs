@@ -194,8 +194,8 @@ test("an unrelated earlier anchor must not consume the current PPTX download arm
     assert.equal(result.count,1,wrongFirstName);
     assert.equal(result.bytes,6);
     assert.deepEqual(Array.from(result.captured_types),["pptx"]);
-    assert.match(result.text,/actual-deck\\.pptx/);
-    assert.doesNotMatch(result.text,/old-slide-deck|Budget\\.xlsx/);
+    assert.match(result.text,/actual-deck\.pptx/);
+    assert.doesNotMatch(result.text,/old-slide-deck|Budget\.xlsx/);
     assert.equal(h.clicked(),1,"do not generate repeated download side-effects");
   }
 });
