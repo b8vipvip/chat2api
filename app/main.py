@@ -26,6 +26,7 @@ from .chat_stream_delivery_v194 import StagedStreamText, final_text_chunks, sse_
 from .stream_detached_terminal_v219 import settle_detached_stream
 from .terminal_archive_singleflight_v277 import archive_once
 from .mixed_media_archive_v280 import archive_mixed_reply
+from .archive_write_stop_v280 import ArchiveWriteStop
 from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
@@ -1070,6 +1071,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # therefore REUSES exactly the same shielded archive task; otherwise
         # it can write each media asset twice for a single Worker terminal.
         async def run_verified_archive():
+            # Cancelling asyncio.to_thread() does not cancel its worker thread.
+            # Signal that thread to stop *future* writes and compensate any
+            # in-flight image writes at the next safe checkpoint.
+            stop = ArchiveWriteStop()
             state.diagnostics["server_finalization_stage"] = "archive-started"
             state.diagnostics["server_finalization_started_at"] = time.time()
             await telemetry.upsert({
@@ -1079,16 +1084,24 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             try:
                 result = await asyncio.wait_for(
                     asyncio.to_thread(
-                        archive_final_markdown, text, key_id, request_id, base_url
+                        archive_final_markdown, text, key_id, request_id, base_url, stop
                     ),
                     timeout=180.0,
                 )
             except asyncio.TimeoutError as error:
+                stop.stop()
+                state.diagnostics["server_finalization_cooperative_stop_signaled"] = True
                 state.diagnostics["server_finalization_stage"] = "archive-timeout"
                 state.diagnostics["server_finalization_elapsed_ms"] = round(
                     (time.time() - state.diagnostics["server_finalization_started_at"]) * 1000
                 )
                 raise ValueError("Post-terminal media archival exceeded 180 seconds") from error
+            except asyncio.CancelledError:
+                # Server shutdown / archive-task cancellation is distinct
+                # from an HTTP disconnect, which archive_once already shields.
+                stop.stop()
+                state.diagnostics["server_finalization_cooperative_stop_signaled"] = True
+                raise
             except Exception:
                 state.diagnostics["server_finalization_stage"] = "archive-error"
                 raise
@@ -1383,13 +1396,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return started_at + effective - asyncio.get_running_loop().time()
 
 
-    def archive_final_markdown(text: str, owner: str, request_id: str, base_url: str):
-        # Broker retains sole terminal authority. A later generated-file
-        # failure must not strand images archived by the earlier stage.
+    def archive_final_markdown(text: str, owner: str, request_id: str,
+                               base_url: str, stop: ArchiveWriteStop | None = None):
+        # Broker retains sole terminal authority. The stop token comes only
+        # from the request-owned 180s archive deadline, never from HTTP peer
+        # cancellation. All writes check it at safe rollback checkpoints.
         return archive_mixed_reply(
             text, owner, request_id, base_url,
             media_archive=media_archive,
             deferred_generated_files=deferred_generated_files,
+            stop=stop,
         )
 
     async def stream_request(

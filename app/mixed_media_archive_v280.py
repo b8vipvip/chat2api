@@ -16,20 +16,34 @@ LOG = logging.getLogger(__name__)
 
 def archive_mixed_reply(
     text: str, owner: str, request_id: str, base_url: str,
-    *, media_archive: Any, deferred_generated_files: Any,
+    *, media_archive: Any, deferred_generated_files: Any, stop: Any = None,
 ):
-    rewritten, media = media_archive.rewrite_markdown(
-        text, owner, request_id, base_url
-    )
+    if stop is not None:
+        stop.checkpoint()
+    if stop is None:
+        rewritten, media = media_archive.rewrite_markdown(
+            text, owner, request_id, base_url
+        )
+    else:
+        rewritten, media = media_archive.rewrite_markdown(
+            text, owner, request_id, base_url, stop=stop
+        )
     try:
+        if stop is not None:
+            stop.checkpoint()
         # Image rewrite must finish completely before starting asynchronous
         # file staging; otherwise pending file jobs could run for a reply that
         # must ultimately be rejected because of leftover image bytes.
         if "data:image/" in rewritten:
             raise ValueError("Incomplete generated attachment payload")
-        rewritten, files = deferred_generated_files.rewrite(
-            rewritten, owner, request_id, base_url
-        )
+        if stop is None:
+            rewritten, files = deferred_generated_files.rewrite(
+                rewritten, owner, request_id, base_url
+            )
+        else:
+            rewritten, files = deferred_generated_files.rewrite(
+                rewritten, owner, request_id, base_url, stop=stop
+            )
         if "data:image/" in rewritten or "![📎 " in rewritten:
             raise ValueError("Incomplete generated attachment payload")
         return rewritten, media, files

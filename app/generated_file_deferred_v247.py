@@ -59,7 +59,10 @@ class DeferredGeneratedFiles:
         conn.row_factory = sqlite3.Row
         return conn
 
-    def rewrite(self, text: str, owner: str, request_id: str, base_url: str):
+    def rewrite(self, text: str, owner: str, request_id: str, base_url: str,
+                *, stop=None):
+        if stop is not None:
+            stop.checkpoint()
         source = str(text or "")
         matches = sorted([*FILE_MARKER.finditer(source), *STAGED_MARKER.finditer(source)],
                          key=lambda match: match.start())
@@ -78,6 +81,8 @@ class DeferredGeneratedFiles:
         decoded = []
         total = 0
         for match in matches:
+            if stop is not None:
+                stop.checkpoint()
             name = match.group(1)
             if match.re is STAGED_MARKER:
                 if not getattr(self.archive, "staging", None):
@@ -111,6 +116,8 @@ class DeferredGeneratedFiles:
         try:
             with self.lock:
                 for match, filename, mime, data in decoded:
+                    if stop is not None:
+                        stop.checkpoint()
                     file_id = "pgen_" + secrets.token_hex(16)
                     # Track the ID before touching disk or SQLite: either
                     # write_bytes, rename or INSERT can fail after creating
@@ -120,7 +127,11 @@ class DeferredGeneratedFiles:
                     path = self.root / (file_id + ".bin")
                     staged = path.with_suffix(".part")
                     staged.write_bytes(data)
+                    if stop is not None:
+                        stop.checkpoint()
                     staged.replace(path)
+                    if stop is not None:
+                        stop.checkpoint()
                     now = datetime.now(timezone.utc).isoformat()
                     with self._db() as conn:
                         conn.execute("""INSERT INTO deferred_generated_files
@@ -141,10 +152,14 @@ class DeferredGeneratedFiles:
                 output.append(source[offset:])
                 result = ("".join(output), results)
                 for item in submitted:
+                    if stop is not None:
+                        stop.checkpoint()
                     self.pool.submit(
                         self._finish_after_batch_commit, item,
                         batch_release, batch_accepted,
                     )
+                if stop is not None:
+                    stop.checkpoint()
                 batch_accepted[0] = True
             return result
         except Exception:
