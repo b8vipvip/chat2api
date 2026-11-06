@@ -4,7 +4,7 @@ import vm from "node:vm";
 
 const source = fs.readFileSync(new URL("../chrome_extension/background_runtime_preflight_v48.js", import.meta.url), "utf8");
 
-function currentContract() {
+function currentContract(nativeGate = true) {
   return {
     ok: true,
     contract_revision: 71,
@@ -16,6 +16,7 @@ function currentContract() {
     marker: { bundle: "0.22.287", revision: 71 },
     modules: {
       request_v6: true,
+      native_scope_gate_v287: nativeGate,
       rich_response_v69: true,
       model_evidence_v144: true,
       model_evidence_main_v144: true,
@@ -33,8 +34,9 @@ function currentContract() {
   };
 }
 
-async function runScenario({ hotHealWorks }) {
+async function runScenario({ hotHealWorks, staleScopeGate = false }) {
   let injected = 0;
+  let clockAdvance = 0;
   let reloads = 0;
   let baseEnsures = 0;
   const saved = [];
@@ -54,6 +56,10 @@ async function runScenario({ hotHealWorks }) {
       async sendMessage(_tabId, message) {
         if (message?.type === "chat2api.tool-isolation.preflight") return { ok: true };
         if (message?.type !== "chat2api.runtime.contract.v71") return null;
+        // An old request-v6 one-shot controller can coexist with a fresh
+        // v287 bundle marker and a freshly injected contract script.
+        // It must force a full document reload, not pass the fast path.
+        if (staleScopeGate && reloads === 0) return currentContract(false);
         if (hotHealWorks && injected >= 2) return currentContract();
         if (reloads > 0) return currentContract();
         return null;
@@ -68,7 +74,7 @@ async function runScenario({ hotHealWorks }) {
     chrome,
     console,
     Promise,
-    Date,
+    Date: staleScopeGate ? {now: () => Date.now() + (clockAdvance += 150)} : Date,
     setTimeout(callback) { return setImmediate(callback); },
     clearTimeout(handle) { clearImmediate(handle); },
     ensureContent: async () => { baseEnsures += 1; return true; },
@@ -88,6 +94,12 @@ assert.equal(hot.worlds[0], "MAIN");
 assert.ok(hot.injectedFiles.includes("model_evidence_main_v144.js"));
 assert.ok(hot.injectedFiles.includes("content_model_evidence_v144.js"));
 assert.equal(hot.state.last?.ok, true);
+
+const stale = await runScenario({ hotHealWorks: true, staleScopeGate: true });
+assert.equal(stale.reloads, 1,
+  "an old request-v6 listener must be reloaded despite a current bundle marker");
+assert.equal(stale.state.last?.ok, true);
+assert.equal(stale.state.last?.reloaded, true);
 
 const loading = await runScenario({ hotHealWorks: false });
 assert.equal(loading.reloads, 1, "reload remains a bounded fallback when hot-heal cannot establish the epoch");
