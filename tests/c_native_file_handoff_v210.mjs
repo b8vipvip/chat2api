@@ -9,7 +9,8 @@ const request=readFileSync("chrome_extension/content_request_v6.js","utf8");
 const manifest=JSON.parse(readFileSync("chrome_extension/manifest.json","utf8"));
 
 async function harness({bytes=new Uint8Array([80,75,3,4,0,1]),
-  precreated=false, typedButtonOnly=false, mime="", fileName="Bookkeeping.xlsx"}={}) {
+  precreated=false, typedButtonOnly=false, mime="", fileName="Bookkeeping.xlsx",
+  wrongFirstName=null}={}) {
   let clicked=0, next=0, precreatedUrl=null;
   const listeners=new Map();
   const pageOrigin="https://chatgpt.com";
@@ -40,6 +41,11 @@ async function harness({bytes=new Uint8Array([80,75,3,4,0,1]),
       clicked++;
       const uri=precreatedUrl || FakeURL.createObjectURL(new Blob([bytes],{type:mime}));
       if (typedButtonOnly) return;
+      if (wrongFirstName) {
+        // One UI action can invoke a sibling anchor before the matching one.
+        const unrelated=new FakeAnchor();
+        unrelated.download=wrongFirstName;unrelated.href=uri;unrelated.click();
+      }
       const anchor=new FakeAnchor();
       anchor.download=fileName;anchor.href=uri;anchor.click();
     },
@@ -178,4 +184,18 @@ test("armed current-reply octet-stream workbook requires verified OOXML entries"
   const rejected=await fakeZip.content.capture(fakeZip.scope,"req_fake_workbook");
   assert.equal(rejected.count,0);
   assert.equal(rejected.failure_stages.xlsx,"new-blob-workbook-structure-invalid");
+});
+
+
+test("an unrelated earlier anchor must not consume the current PPTX download arm",async()=>{
+  for (const wrongFirstName of ["Budget.xlsx", "old-slide-deck.pptx"]) {
+    const h=await harness({fileName:"actual-deck.pptx",wrongFirstName});
+    const result=await h.content.capture(h.scope,"req_armed_pptx_cross_anchor");
+    assert.equal(result.count,1,wrongFirstName);
+    assert.equal(result.bytes,6);
+    assert.deepEqual(Array.from(result.captured_types),["pptx"]);
+    assert.match(result.text,/actual-deck\\.pptx/);
+    assert.doesNotMatch(result.text,/old-slide-deck|Budget\\.xlsx/);
+    assert.equal(h.clicked(),1,"do not generate repeated download side-effects");
+  }
 });
