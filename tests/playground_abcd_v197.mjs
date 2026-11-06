@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import { test } from "node:test";
+import { webcrypto } from "node:crypto";
 
 const source=readFileSync(new URL("../app/admin_playground_abcd_v197.js",import.meta.url),"utf8");
 const FULL = "## 开店\n" + "咖啡运营".repeat(900) + 
@@ -10,7 +11,7 @@ const FULL = "## 开店\n" + "咖啡运营".repeat(900) +
   "js\nconsole.log(1)\n" + String.fromCharCode(96).repeat(3) +
   "\n执行任务表：指定负责人与期限。";
 const IMG_LINK=i=>"![插画](https://api.test/api/media/med_1234567890/abc"+i+")";
-const FILE_LINK=(ext,i)=>"[📎 资料"+i+"."+ext+"](https://api.test/api/generated-files/gen_abc"+i+"/token"+i+")";
+const FILE_LINK=(ext,i)=>"[📎 资料"+i+"."+ext+"](https://api.test/api/generated-files/pending/pgen_"+(i+1).toString(16).padStart(32,"0")+"/token"+String(i).padStart(16,"0")+")";
 const frames=(text,includeDone=true)=>
 "data: "+JSON.stringify({choices:[{index:0,delta:{role:"assistant"},finish_reason:null}]})+"\n\n"+
 "data: "+JSON.stringify({choices:[{index:0,delta:{chat2api_status:{text:"正在分析"}},finish_reason:null}]})+"\n\n"+
@@ -18,8 +19,9 @@ const frames=(text,includeDone=true)=>
 "data: "+JSON.stringify({choices:[{index:0,delta:{},finish_reason:"stop"}]})+"\n\n"+
 (includeDone?"data: [DONE]\n\n":"");
 
-function scenario(id, outputs) {
+function scenario(id, outputs, {corruptZip=false,modelMismatch=false}={}) {
   const elements=new Map(), requests=[], records=[],downloads=[];
+  let submittedReport=null;
   let cancels=0, releases=0;
   const element=key=>{
     if(!elements.has(key))elements.set(key,{
@@ -33,7 +35,7 @@ function scenario(id, outputs) {
   element("pgChatKeyInput").value="sk-private-test";
   element("pgABCDSelect").value=id;
   const host={querySelector(){return {after(){}}}};
-  let uuid=0, postIndex=0, outputIndex=0;
+  let uuid=0, postIndex=0;
   const document={
     getElementById:key=>key==="playgroundChatPanel"?host:(key==="pgABCD"&&!elements.has(key)?null:element(key)),
     createElement(){return {style:{},innerHTML:"",querySelector(){return {after(){}}}}}
@@ -50,13 +52,23 @@ function scenario(id, outputs) {
           cancel:async()=>{cancels++;},releaseLock(){releases++;}};
       }}};
     }
-    downloads.push(String(url));
-    const ext=String(url).includes("gen_abc")?(id==="D"?"md":["xlsx","pptx","json","zip"][outputIndex++ % 4]):"image";
+    const link=String(url).replace(/\/status$/,"");
+    const pending=link.match(/\/pending\/pgen_([a-f0-9]{32})\/token[0-9]+$/);
+    const index=pending?parseInt(pending[1],16)-1:-1;
+    const ext=index>=0?(id==="D"?"md":["xlsx","pptx","json","zip"][index%4]):"image";
     let bytes;
     if(ext==="image")bytes=Uint8Array.from([137,80,78,71,13,10,26,10,...Array(25).fill(1)]);
     else if(ext==="json")bytes=new TextEncoder().encode(JSON.stringify({schedule:"full",events:[1,2,3]}));
     else if(ext==="md")bytes=new TextEncoder().encode("# Characters\nDetails of the heroes.");
     else bytes=Uint8Array.from([80,75,3,4,...Array(25).fill(1)]);
+    if(String(url).endsWith("/status")){
+      const sha256=[...new Uint8Array(await webcrypto.subtle.digest("SHA-256",bytes))]
+        .map(x=>x.toString(16).padStart(2,"0")).join("");
+      return {ok:true,json:async()=>({status:"ready",filename:"资料"+index+"."+ext,
+        bytes:bytes.length,sha256})};
+    }
+    downloads.push(String(url));
+    if(corruptZip&&ext==="zip"){bytes=bytes.slice();bytes[10]^=1;}
     return {ok:true,arrayBuffer:async()=>bytes.buffer};
   };
   let claimSerial=0;
@@ -73,20 +85,26 @@ function scenario(id, outputs) {
       status:"completed",response_text:"",response_text_truncated:false,
       diagnostics:{network_stream_terminal_proof:true,network_stream_phase:"complete"}
     };
-    if(endpoint.includes("/api/admin/requests/"))return {status:"completed",diagnostics:{network_stream_terminal_proof:true,network_stream_phase:"complete"}};
+    if(endpoint.includes("/api/admin/requests/"))return {
+      status:"completed",requested_model:"gpt-5.6-sol",
+      served_model:modelMismatch?"gpt-6":"gpt-5.6-sol",
+      model_verified:!modelMismatch,model_conflict:modelMismatch,
+      diagnostics:{network_stream_terminal_proof:true,network_stream_phase:"complete"}
+    };
+    if(endpoint.endsWith("/abcd/report")){submittedReport=options.body.report;return {};}
     if(endpoint.endsWith("/chat-runs"))records.push({kind:"start",body:options.body});
     if(endpoint.endsWith("/chat-records"))records.push({kind:"terminal",body:options.body});
     return {};
   };
   const context={
-    document,fetch,api,crypto:{randomUUID:()=>("00000000-0000-0000-0000-"+String(++uuid).padStart(12,"0"))},
+    document,fetch,api,crypto:{randomUUID:()=>("00000000-0000-0000-0000-"+String(++uuid).padStart(12,"0")),subtle:webcrypto.subtle},
     TextDecoder,TextEncoder,performance:{now:()=>1234},location:{origin:"https://api.test"},
     console,setTimeout:()=>0,Blob,URL
   };
   vm.runInNewContext(source,context);
   return {run:async()=>{
     await element("pgABCDRun").handlers.click();
-    return {status:element("pgABCDNote").textContent,requests,records,downloads,cancels,releases};
+    return {status:element("pgABCDNote").textContent,requests,records,downloads,cancels,releases,report:submittedReport};
   }, element};
 }
 
@@ -131,4 +149,22 @@ test("A: recovered long-form LaTex and one-backtick Python counts as content, wi
   assert.match(r.status,/内容验收有警告/);
   assert.doesNotMatch(r.status,/未通过/);
   assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"warning");
+});
+
+test("C: corrupted ZIP with valid magic and size must fail independent SHA256 verification",async()=>{
+  const links=["xlsx","pptx","json","zip"].map(FILE_LINK).join("\n");
+  const r=await scenario("C",[links],{corruptZip:true}).run();
+  assert.match(r.status,/未通过/);
+  assert.match(r.status,/SHA256/);
+  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"failed");
+});
+
+test("A: actual served-model mismatch cannot pass silently",async()=>{
+  const r=await scenario("A",[FULL],{modelMismatch:true}).run();
+  assert.match(r.status,/内容验收有警告/);
+  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"warning");
+  assert.equal(r.report.turns[0].upstream_evidence.model_conflict,true);
+  assert.equal(r.report.turns[0].upstream_evidence.requested_model,"gpt-5.6-sol");
+  assert.equal(r.report.turns[0].upstream_evidence.served_model,"gpt-6");
+  assert.ok(r.report.warnings.some(x=>x.includes("实际服务模型")));
 });
