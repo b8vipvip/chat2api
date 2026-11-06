@@ -19,7 +19,7 @@ const frames=(text,includeDone=true)=>
 "data: "+JSON.stringify({choices:[{index:0,delta:{},finish_reason:"stop"}]})+"\n\n"+
 (includeDone?"data: [DONE]\n\n":"");
 
-function scenario(id, outputs, {corruptZip=false,modelMismatch=false}={}) {
+function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,recoveredText=null,fetchFailure=false}={}) {
   const elements=new Map(), requests=[], records=[],downloads=[];
   let submittedReport=null;
   let cancels=0, releases=0;
@@ -42,14 +42,17 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false}={}) {
   };
   const fetch=async (url, options={})=>{
     if(url==="/v1/chat/completions"){
+      if(fetchFailure){const error=Error("should never appear in client proof");error.name="AbortError";throw error;}
       const body=JSON.parse(options.body);
       requests.push({url,body,headers:options.headers});
       const text=outputs[Math.min(postIndex++,outputs.length-1)];
       const data=typeof text==="string"?frames(text):frames(text.text,text.done!==false);
       return {ok:true,body:{getReader(){
         let read=false;
-        return {read:async()=>read?{done:true}:(read=true,{done:false,value:new TextEncoder().encode(data)}),
-          cancel:async()=>{cancels++;},releaseLock(){releases++;}};
+        return {read:async()=>{
+          if(readerFailure){const error=Error("synthetic read error");error.name="AbortError";throw error;}
+          return read?{done:true}:(read=true,{done:false,value:new TextEncoder().encode(data)});
+        },cancel:async()=>{cancels++;},releaseLock(){releases++;}};
       }}};
     }
     const link=String(url).replace(/\/status$/,"");
@@ -82,7 +85,7 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false}={}) {
         prompts,end_anchor:"执行任务表",keywords:[title],next:{title:"新主题"+scene+claimSerial}};
     }
     if(endpoint.includes("/api/admin/playground/requests/"))return {
-      status:"completed",response_text:"",response_text_truncated:false,
+      status:"completed",response_text:recoveredText??"",response_text_truncated:false,
       diagnostics:{network_stream_terminal_proof:true,network_stream_phase:"complete"}
     };
     if(endpoint.includes("/api/admin/requests/"))return {
@@ -115,6 +118,12 @@ test("A: real SSE terminal and full-length report is accepted",async()=>{
   assert.equal(r.requests[0].body.stream,true);
   assert.equal(r.cancels,0,"completed SSE reader must not cancel its fetch");
   assert.equal(r.releases,1,"release reader lock to permit final HTTP body boundary");
+  assert.equal(r.report.turns[0].client_sse_truth.protocol_done_seen,true);
+  assert.equal(r.report.turns[0].client_sse_truth.protocol_stop_seen,true);
+  assert.equal(r.report.turns[0].client_sse_truth.reader_cancel_requested,false);
+  assert.equal(r.report.turns[0].client_sse_truth.reader_lock_released,true);
+  assert.equal(r.report.turns[0].client_sse_truth.native_reader_eof_seen,false,
+    "reading [DONE] stops before the underlying ASGI EOF; do not invent EOF proof");
   assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"passed");
   assert.match(r.requests[0].body.messages[0].content,/新主题A/);
 });
@@ -124,6 +133,40 @@ test("Incomplete SSE without [DONE] must fail even with full content",async()=>{
   assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"failed");
   assert.equal(r.cancels,1,"incomplete SSE must cancel the abandoned read");
   assert.equal(r.releases,0);
+  assert.equal(r.report.turns[0].client_sse_truth.reader_cancel_requested,true);
+  assert.equal(r.report.turns[0].client_sse_truth.native_reader_eof_seen,true);
+  assert.equal(r.report.turns[0].client_sse_truth.protocol_stop_seen,true);
+  assert.equal(r.report.turns[0].client_sse_truth.protocol_done_seen,false);
+});
+test("A: thrown browser reader error records class only, never fake EOF",async()=>{
+  const r=await scenario("A",[FULL],{readerFailure:true}).run();
+  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"failed");
+  const truth=r.report.turns[0].client_sse_truth;
+  assert.equal(truth.reader_error_name,"AbortError");
+  assert.equal(truth.reader_cancel_requested,true);
+  assert.equal(truth.native_reader_eof_seen,false);
+  assert.equal(truth.protocol_done_seen,false);
+  assert.doesNotMatch(JSON.stringify(truth),/synthetic read error/);
+});
+test("A: premature SSE EOF recovers SAME request while retaining client cancel proof",async()=>{
+  const r=await scenario("A",[{text:FULL,done:false}],{recoveredText:FULL}).run();
+  assert.equal(r.requests.length,1,"recovery cannot issue a second model request");
+  assert.equal(r.report.turns[0].recovered_after_disconnect,true);
+  assert.equal(r.report.turns[0].client_sse_truth.protocol_done_seen,false);
+  assert.equal(r.report.turns[0].client_sse_truth.protocol_stop_seen,true);
+  assert.equal(r.report.turns[0].client_sse_truth.native_reader_eof_seen,true);
+  assert.equal(r.report.turns[0].client_sse_truth.reader_cancel_requested,true);
+  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"warning");
+});
+test("A: fetch aborted before response headers keeps distinct proof",async()=>{
+  const r=await scenario("A",[FULL],{fetchFailure:true}).run();
+  const truth=r.report.turns[0].client_sse_truth;
+  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"failed");
+  assert.equal(truth.response_headers_received,false);
+  assert.equal(truth.fetch_error_name,"AbortError");
+  assert.equal(truth.reader_cancel_requested,false);
+  assert.equal(truth.native_reader_eof_seen,false);
+  assert.doesNotMatch(JSON.stringify(truth),/should never appear/);
 });
 test("B: three distinct image files are fetched",async()=>{
   const r=await scenario("B",[IMG_LINK(1)+"\n"+IMG_LINK(2)+"\n"+IMG_LINK(3)]).run();

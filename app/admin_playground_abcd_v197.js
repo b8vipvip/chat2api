@@ -80,14 +80,39 @@ async function recoverDisconnectedStream(requestId, update) {
 }
 
 async function stream(model,auth,requestId,messages,update){
-const r=await fetch("/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+auth.token,"X-Chat2API-Request-ID":requestId},body:JSON.stringify({model,messages,prompt_mode:"full",stream:true})});
+const clientStarted=performance.now();
+const safeErrorKind=error=>{
+  const kind=String(error?.name||"Error");
+  return ["AbortError","TypeError","SyntaxError","TimeoutError","NetworkError","RangeError","Error"].includes(kind)
+    ?kind:"OtherError";
+};
+let r;
+try{
+  r=await fetch("/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+auth.token,"X-Chat2API-Request-ID":requestId},body:JSON.stringify({model,messages,prompt_mode:"full",stream:true})});
+}catch(error){
+  // Fetch can reject before even returning SSE response headers. Keep this
+  // distinct from a reader abort after headers, without storing exception text.
+  const failure=error&&typeof error==="object"?error:Error("SSE fetch failed");
+  failure.clientSseTruth={
+    response_headers_received:false,fetch_error_name:safeErrorKind(error),
+    fetch_failed_after_ms:Math.max(0,Math.round(performance.now()-clientStarted)),
+    reader_cancel_requested:false,protocol_done_seen:false,native_reader_eof_seen:false
+  };
+  throw failure;
+}
 if(!r.ok)throw Error("API HTTP "+r.status+": "+(await r.text()).slice(0,300));
 if(!r.body)throw Error("缺少SSE响应体");
+const responseHeadersAt=performance.now();
 let buffer="",answer="",stopped=false,done=false,frames=0,lastStatus="",streamError=null;
+let nativeEof=false,firstChunkAt=null,lastChunkAt=null,readerCancelled=false,readerReleased=false;
+let readerErrorName=null;
 const reader=r.body.getReader(),decoder=new TextDecoder();
 try{
 while(!done){
-const chunk=await reader.read();if(chunk.done)break;
+const chunk=await reader.read();if(chunk.done){nativeEof=true;break;}
+const readAt=performance.now();
+if(firstChunkAt===null)firstChunkAt=readAt;
+lastChunkAt=readAt;
 buffer+=decoder.decode(chunk.value,{stream:true}).replace(/\r\n/g,"\n");
 if(buffer.length>8000000)throw Error("SSE帧超过8MB");
 let pos;
@@ -107,24 +132,58 @@ if(c.finish_reason==="stop")stopped=true;
 safeProgress(update,answer.length,frames,lastStatus);
 }
 }
-}catch(error){streamError=error;}
+}catch(error){
+  streamError=error;
+  // Error messages can include server data; record the exception *class* only.
+  readerErrorName=safeErrorKind(error);
+}
 finally{
   try{
-    // After the exact stop+[DONE] terminal, release our reader WITHOUT
-    // cancelling the underlying fetch. The Server still needs to send its
-    // final ASGI body boundary and persist transport evidence. Cancel only
-    // failed/incomplete SSE streams; those require request-id recovery.
-    if(!streamError&&stopped&&done)reader.releaseLock?.();
-    else await reader.cancel();
-  }catch(e){/* the read-side cleanup never owns the Broker terminal */}
+    // Only the browser HTTP client records this action. The Broker has no
+    // authority to infer client receipt or the cause of a server disconnect.
+    if(!streamError&&stopped&&done){
+      if(typeof reader.releaseLock==="function"){reader.releaseLock();readerReleased=true;}
+    }else{
+      readerCancelled=true;
+      await reader.cancel();
+    }
+  }catch(e){/* observer cleanup never owns Broker terminal */}
 }
+const relative=at=>at===null?null:Math.max(0,Math.round(at-clientStarted));
+const clientSseTruth={
+  response_headers_received:true,
+  response_headers_ms:relative(responseHeadersAt),
+  protocol_stop_seen:stopped,
+  protocol_done_seen:done,
+  native_reader_eof_seen:nativeEof,
+  reader_cancel_requested:readerCancelled,
+  reader_lock_released:readerReleased,
+  reader_error_name:readerErrorName,
+  first_chunk_ms:relative(firstChunkAt),
+  last_chunk_ms:relative(lastChunkAt),
+  read_elapsed_ms:relative(performance.now()),
+  parsed_frames:Math.min(frames,1000000),
+};
+// Always attach this bounded, content-free client observation to the SAME
+// request's ABCD report, including the detached-Broker recovery path.
 if(!stopped||!done){
-  const recovered=await recoverDisconnectedStream(requestId,update);
-  if(recovered)return recovered;
-  throw streamError||Error("SSE缺少stop或[DONE]，不能判为完成");
+  try{
+    const recovered=await recoverDisconnectedStream(requestId,update);
+    if(recovered)return {...recovered,client_sse_truth:clientSseTruth};
+  }catch(error){
+    if(error&&typeof error==="object")error.clientSseTruth=clientSseTruth;
+    throw error;
+  }
+  const err=streamError||Error("SSE缺少stop或[DONE]，不能判为完成");
+  if(err&&typeof err==="object")err.clientSseTruth=clientSseTruth;
+  throw err;
 }
-if(!answer.trim())throw Error("权威正文为空");
-return {text:answer,frames};
+if(!answer.trim()){
+  const err=Error("权威正文为空");
+  err.clientSseTruth=clientSseTruth;
+  throw err;
+}
+return {text:answer,frames,client_sse_truth:clientSseTruth};
 }
 const images=text=>[...text.matchAll(/!\[[^\]\n]*\]\((https:\/\/[^)\s]+)\)/g)].map(x=>({name:"picture",url:x[1]}));
 const files=text=>[...text.matchAll(/\[📎\s*([^\]\n]+)\]\((https:\/\/[^)\s]+)\)/g)].map(x=>({name:x[1],url:x[2]}));
@@ -243,9 +302,12 @@ try{
 const out=await stream(model,auth,request_id,history,(chars,frames,status)=>note(sceneId+" 第"+(i+1)+"轮 "+request_id+"\n正文"+chars+"字符，SSE帧"+frames+"\n"+status));
 history.push({role:"assistant",content:out.text});
 report.turns.push({request_id,prompt,text:out.text,frames:out.frames,
+  client_sse_truth:out.client_sse_truth||null,
   recovered_after_disconnect:out.recovered===true,duration_ms:Math.round(performance.now()-begin)});
 }catch(e){
-report.turns.push({request_id,prompt,text:"",frames:0,error:String(e),duration_ms:Math.round(performance.now()-begin)});
+report.turns.push({request_id,prompt,text:"",frames:0,error:String(e),
+  client_sse_truth:e?.clientSseTruth||null,
+  duration_ms:Math.round(performance.now()-begin)});
 throw e;
 }
 }
