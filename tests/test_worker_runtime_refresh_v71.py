@@ -66,6 +66,7 @@ def test_runtime_preflight_hot_heals_before_reload() -> None:
     assert "result?.modules?.terminal_prompt_v88" in preflight
     assert "result = await heal(tabId)" in preflight
     assert "waitForReloadOrContract" in preflight
+    assert "result?.modules?.native_scope_gate_v287" in preflight
 
 
 def test_v71_contract_preserves_runtime_checks_with_request_v6_terminal_owner() -> None:
@@ -80,6 +81,9 @@ def test_v71_contract_preserves_runtime_checks_with_request_v6_terminal_owner() 
         assert token in contract
     assert "__CHAT2API_RESPONSE_STREAM_RECOVERY_V69__" not in contract
     assert 'response_terminal_owner: "request-v6"' in contract
+    assert 'native_scope_gate_v287: Number(request?.nativeScopeGateRevision || 0) >= 287' in contract
+    request = (EXT / "content_request_v6.js").read_text(encoding="utf-8")
+    assert "nativeScopeGateRevision: 287" in request
 
 
 def test_runtime_preflight_v71_vm_regressions() -> None:

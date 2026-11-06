@@ -4,7 +4,7 @@ import vm from "node:vm";
 
 const source = fs.readFileSync(new URL("../chrome_extension/background_runtime_preflight_v48.js", import.meta.url), "utf8");
 
-function currentContract() {
+function currentContract(nativeGate = true) {
   return {
     ok: true,
     contract_revision: 71,
@@ -16,6 +16,7 @@ function currentContract() {
     marker: { bundle: "0.22.287", revision: 71 },
     modules: {
       request_v6: true,
+      native_scope_gate_v287: nativeGate,
       rich_response_v69: true,
       model_evidence_v144: true,
       model_evidence_main_v144: true,
@@ -33,8 +34,9 @@ function currentContract() {
   };
 }
 
-async function runScenario({ hotHealWorks }) {
+async function runScenario({ hotHealWorks, staleScopeGate = false }) {
   let injected = 0;
+  let clockAdvance = 0;
   let reloads = 0;
   let baseEnsures = 0;
   const saved = [];
@@ -54,6 +56,10 @@ async function runScenario({ hotHealWorks }) {
       async sendMessage(_tabId, message) {
         if (message?.type === "chat2api.tool-isolation.preflight") return { ok: true };
         if (message?.type !== "chat2api.runtime.contract.v71") return null;
+        // An old request-v6 one-shot controller can coexist with a fresh
+        // v287 bundle marker and a freshly injected contract script.
+        // It must force a full document reload, not pass the fast path.
+        if (staleScopeGate && reloads === 0) return currentContract(false);
         if (hotHealWorks && injected >= 2) return currentContract();
         if (reloads > 0) return currentContract();
         return null;
@@ -68,7 +74,7 @@ async function runScenario({ hotHealWorks }) {
     chrome,
     console,
     Promise,
-    Date,
+    Date: staleScopeGate ? {now: () => Date.now() + (clockAdvance += 150)} : Date,
     setTimeout(callback) { return setImmediate(callback); },
     clearTimeout(handle) { clearImmediate(handle); },
     ensureContent: async () => { baseEnsures += 1; return true; },
@@ -89,8 +95,34 @@ assert.ok(hot.injectedFiles.includes("model_evidence_main_v144.js"));
 assert.ok(hot.injectedFiles.includes("content_model_evidence_v144.js"));
 assert.equal(hot.state.last?.ok, true);
 
+const stale = await runScenario({ hotHealWorks: true, staleScopeGate: true });
+assert.equal(stale.reloads, 1,
+  "an old request-v6 listener must be reloaded despite a current bundle marker");
+assert.equal(stale.state.last?.ok, true);
+assert.equal(stale.state.last?.reloaded, true);
+
 const loading = await runScenario({ hotHealWorks: false });
 assert.equal(loading.reloads, 1, "reload remains a bounded fallback when hot-heal cannot establish the epoch");
 assert.equal(loading.state.last?.ok, true);
+
+// Exercise the real content contract: a fresh marker cannot prove that an
+// old one-shot request-v6 listener was replaced inside a persistent tab.
+const contentContractSource = fs.readFileSync(
+  new URL("../chrome_extension/content_runtime_contract_v71.js", import.meta.url), "utf8");
+const contractContext = {
+  __CHAT2API_CONTENT_BUNDLE_MARKER_V71__: {bundle:"0.22.287",revision:71},
+  __CHAT2API_REQUEST_CONTENT_V6__: {revision:69},
+  document:{documentElement:{getAttribute(){return null;}},readyState:"complete"},
+  location:{href:"https://chatgpt.com/"},
+  Date,
+  chrome:{runtime:{onMessage:{addListener(){},removeListener(){}}}},
+};
+contractContext.globalThis=contractContext;
+vm.createContext(contractContext);
+vm.runInContext(contentContractSource, contractContext);
+const snapshot=contractContext.__CHAT2API_CONTENT_RUNTIME_CONTRACT_V71__.snapshot;
+assert.equal(snapshot().modules.native_scope_gate_v287, false);
+contractContext.__CHAT2API_REQUEST_CONTENT_V6__.nativeScopeGateRevision=287;
+assert.equal(snapshot().modules.native_scope_gate_v287, true);
 
 console.log("runtime preflight v71 single-owner regression scenarios passed");
