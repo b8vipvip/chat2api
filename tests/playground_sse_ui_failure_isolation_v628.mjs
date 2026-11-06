@@ -15,12 +15,13 @@ assert.ok(helperStart>0 && helperEnd>helperStart && streamStart>0 && streamEnd>s
 
 const data=chunk=>"data: "+JSON.stringify({choices:[{delta:{content:chunk},finish_reason:null}]})+"\n\n";
 const raw=[data("first"),data(" second"),"data: "+JSON.stringify({choices:[{delta:{},finish_reason:"stop"}]})+"\n\n"+"data: [DONE]\n\n"];
-let reads=0,cancelled=0,progressFailures=0;
+let reads=0,cancelled=0,released=0,progressFailures=0;
 const mock={
   TextDecoder,Promise,Error,JSON,String,
   fetch:async()=>({ok:true,body:{getReader(){return {
     async read(){return reads<raw.length?{done:false,value:new TextEncoder().encode(raw[reads++])}:{done:true}},
     async cancel(){cancelled++},
+    releaseLock(){released++}, 
   }}}}),
   setTimeout,
 };
@@ -32,5 +33,6 @@ assert.equal(result.text,"first second");
 assert.equal(result.frames,3);
 assert.equal(reads,3,"UI progress errors must never close SSE before [DONE]");
 assert.equal(progressFailures,3);
-assert.equal(cancelled,1);
+assert.equal(cancelled,0,"successful stop+[DONE] must not abort underlying HTTP");
+assert.equal(released,1,"successful SSE releases the reader lock");
 console.log("SSE progress presentation cannot cancel active reply delivery");
