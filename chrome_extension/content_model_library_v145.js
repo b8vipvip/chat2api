@@ -249,6 +249,44 @@
     }
   }
 
+  function emptyMenuEvidence() {
+    // These are bounded structural counts only: never persist model-menu
+    // text, page HTML, account identity or clipboard content in API logs.
+    const roots = menuRoots().slice(0, 6);
+    let visibleRows = 0;
+    let concreteRows = 0;
+    for (const root of roots) {
+      for (const item of [...root.querySelectorAll(
+        "button,[role='menuitem'],[role='menuitemradio'],[role='option']"
+      )].slice(0, 32)) {
+        if (!visible(item)) continue;
+        visibleRows += 1;
+        if (distinctModelIds(labelOf(item)).length === 1) concreteRows += 1;
+      }
+    }
+    return {
+      popup_roots: roots.length, visible_rows: visibleRows,
+      concrete_rows: concreteRows,
+      composer_ready: Boolean(document.querySelector(
+        "#prompt-textarea,textarea,[contenteditable='true']"
+      )),
+    };
+  }
+
+  function emptyMenuFailure() {
+    const proof = emptyMenuEvidence();
+    const failure = new Error(
+      "ChatGPT model menu did not expose concrete model choices" +
+      "; popup_roots=" + proof.popup_roots +
+      "; visible_rows=" + proof.visible_rows +
+      "; concrete_rows=" + proof.concrete_rows +
+      "; composer_ready=" + Number(proof.composer_ready)
+    );
+    failure.code = "model_menu_no_concrete_choices";
+    failure.stage = "read-model-picker";
+    return failure;
+  }
+
   async function openModelMenu() {
     closeMenus();
     const picker = await waitFor(() => modelPicker(), OPEN_TIMEOUT_MS, 120);
@@ -274,7 +312,7 @@
         return rows.length ? rows : null;
       }, OPEN_TIMEOUT_MS, 100);
     }
-    if (!choices) throw new Error("ChatGPT model menu did not expose concrete model choices");
+    if (!choices) throw emptyMenuFailure();
     const expansion = expansionChoice();
     if (expansion) {
       expansion.click();
@@ -285,7 +323,7 @@
       const byId = new Map([...choices, ...nested].map(item => [item.id, item]));
       choices = [...byId.values()];
     }
-    if (!choices.length) throw new Error("ChatGPT model menu did not expose concrete model choices");
+    if (!choices.length) throw emptyMenuFailure();
     return choices;
   }
 
@@ -309,8 +347,8 @@
       choices = await openModelMenu();
     } catch (error) {
       const failure = new Error("Model picker unavailable: "+String(error?.message||error));
-      failure.code = "model_picker_unavailable";
-      failure.stage = "open-picker";
+      failure.code = String(error?.code || "model_picker_unavailable");
+      failure.stage = String(error?.stage || "open-picker");
       throw failure;
     }
     const compact = choices.map(item => ({

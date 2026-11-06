@@ -105,3 +105,7 @@ assert.equal(unconfirmed.result.ok,false);
 assert.equal(unconfirmed.result.code,"model_selection_unconfirmed");
 assert.equal(unconfirmed.result.stage,"confirm-model-selection");
 console.log("v148 model picker: container rejection, selection, disabled, missing and unconfirmed states passed");
+
+// Keep the fail-closed zero-choice evidence regression in the existing CI
+// model-picker step; workflows run this suite by its explicit file name.
+await import("./model_picker_zero_choices_evidence_v285.mjs");
