@@ -315,3 +315,13 @@ def test_v260_native_scope_binding_keeps_single_terminal_owner_and_rejects_parti
     assert 'type: "chat.completed"' in source
     assert "request-v6" in source
 
+
+
+def test_v286_native_multi_toolbar_node_regression():
+    """Execute the full mocked DOM positive/negative gates, not just source strings."""
+    result = subprocess.run(
+        ["node", "tests/request_scoped_native_reply_binding_v260.mjs"],
+        cwd=ROOT, capture_output=True, text=True, check=False, timeout=25,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "v260 request-bound native ownership" in result.stdout
