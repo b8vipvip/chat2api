@@ -237,7 +237,12 @@ def test_v247_single_worker_terminal_and_file_archive_separation():
     assert "v247-same-request-roleless-rich-DIV-with-fresh-toolbar" in worker
     assert "media_file_ready_since_submit_ms" in worker
     assert "type: \"chat.completed\"" in worker
-    assert "deferred_generated_files.rewrite(text, owner, request_id, base_url)" in backend
+    # The formal Server entry delegates to a single failure-atomic handoff,
+    # which still invokes deferred file staging after successful image rewrite.
+    mixed = (root / "app/mixed_media_archive_v280.py").read_text(encoding="utf-8")
+    assert "return archive_mixed_reply(" in backend
+    assert "rewritten, files = deferred_generated_files.rewrite(" in mixed
+    assert "media_archive.rewrite_markdown(" in mixed
     assert "/api/generated-files/pending/{file_id}/{access_token}" in backend
 
 def test_v248_compact_div_uses_original_single_terminal_controller():
