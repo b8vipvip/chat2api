@@ -242,9 +242,10 @@
           try{button.click();}catch(_){finish();}
         }else if(event.data.direction==="captured"){
           const name=String(event.data.filename||"");
-          // The filename may be supplied by ChatGPT's native anchor.
-          // An exact match protects against unrelated page download events.
-          if(name!==filename){finish({failure_stage:"download-filename-mismatch"});return;}
+          // An unrelated same-tab anchor can race the expected download.
+          // Never transfer its bytes, but do not prematurely consume the arm:
+          // the correctly named file may still arrive from this click.
+          if(name!==filename){lastStage="download-filename-mismatch";return;}
           const bytes=Number(event.data.bytes||0);
           const url=dataUrl(filename,String(event.data.base64||""),bytes);
           finish(url?{filename,data_url:url,bytes}:{failure_stage:"download-signature-invalid"});
