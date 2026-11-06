@@ -305,7 +305,8 @@ def test_v260_native_scope_binding_keeps_single_terminal_owner_and_rejects_parti
     assert "active.baselineCapturedAt > active.submitStartedAt" in source
     assert "active.networkObservedAt || 0" in source
     assert "active.baselineFinishActions.has" in source
-    assert "if (scopes.size !== 1) return false" in source
+    assert "if (selectedScopes.size !== 1) return gate(" in source
+    assert "roleless?.rolelessRichVerified === true" in source
     assert 'active.options?.mode === "voice"' in source
     assert 'native-reply-scope-unverified' in source
     assert "if (!requestScopeBound && !rolelessBound)" in source
