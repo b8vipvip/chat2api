@@ -30,6 +30,12 @@ class FakeTelemetry:
         self.rows[request_id] = {**self.rows[request_id], **changes}
         return self.rows[request_id]
 
+    async def merge_diagnostics(self, request_id, patch):
+        self.writes.append((request_id, {"diagnostics_patch": patch}))
+        row = self.rows[request_id]
+        row["diagnostics"] = {**row.get("diagnostics", {}), **patch}
+        return dict(row)
+
 
 def run(app, *, path="/v1/chat/completions", peer_disconnect=False,
         failing_send=False):
@@ -264,3 +270,118 @@ def test_done_detection_does_not_scan_failed_asgi_send():
     evidence = telemetry.get(RID)["diagnostics"]["api_stream_transport_truth"]
     assert evidence["asgi_done_frame_sent"] is False
     assert evidence["asgi_send_error"] == "OSError"
+
+
+
+def test_atomic_sse_diagnostics_merge_preserves_concurrent_worker_fields(tmp_path):
+    """An old diagnostic snapshot cannot erase a newly committed terminal.
+
+    The SSE observer used to read diagnostics outside TelemetryStore's lock,
+    then call update() with an entire stale dictionary. The new patch must
+    coexist with finalization, native-content evidence, file status, and
+    existing response payload even when writes are scheduled concurrently.
+    """
+    from app.telemetry import TelemetryStore
+
+    async def scenario():
+        store = TelemetryStore(tmp_path)
+        await store.upsert({
+            "request_id": RID, "status": "running",
+            "diagnostics": {"request_admission_stage": "accepted"},
+        })
+        # A Worker terminal may arrive before HTTP finally unwinds.
+        await store.update(RID, {
+            "status": "completed",
+            "response_text": "worker original reply",
+            "diagnostics": {
+                "request_admission_stage": "accepted",
+                "worker_terminal": "chat.completed",
+                "native_snapshot_terminal_complete": True,
+                "generated_files_ready": 3,
+            },
+        })
+        await asyncio.gather(*(
+            store.merge_diagnostics(RID, {f"concurrent_proof_{n}": n})
+            for n in range(12)
+        ))
+        await store.merge_diagnostics(RID, {
+            "api_delivery_state": "disconnected",
+            "api_stream_peer_disconnect_seen": True,
+        })
+        row = store.get(RID)
+        diag = row["diagnostics"]
+        assert row["status"] == "completed"
+        assert row["response_text"] == "worker original reply"
+        assert diag["request_admission_stage"] == "accepted"
+        assert diag["worker_terminal"] == "chat.completed"
+        assert diag["native_snapshot_terminal_complete"] is True
+        assert diag["generated_files_ready"] == 3
+        assert diag["api_delivery_state"] == "disconnected"
+        assert all(diag[f"concurrent_proof_{n}"] == n for n in range(12))
+
+    asyncio.run(scenario())
+
+
+def test_atomic_sse_evidence_patch_does_not_resurrect_evicted_request(tmp_path):
+    from app.telemetry import TelemetryStore
+
+    async def scenario():
+        store = TelemetryStore(tmp_path, max_items=1)
+        with pytest.raises(KeyError, match="Unknown request"):
+            await store.merge_diagnostics(RID, {"api_delivery_state": "disconnected"})
+        assert store.recent() == []
+        await store.upsert({"request_id": RID, "status": "running"})
+        await store.upsert({"request_id": "req_later_eviction", "status": "running"})
+        with pytest.raises(KeyError, match="Unknown request"):
+            await store.merge_diagnostics(RID, {"api_delivery_state": "disconnected"})
+        assert len(store.recent()) == 1
+        assert store.get(RID) is None
+
+    asyncio.run(scenario())
+
+
+def test_sse_middleware_merges_late_transport_truth_after_worker_finalization(tmp_path):
+    from app.telemetry import TelemetryStore
+
+    async def scenario():
+        store = TelemetryStore(tmp_path)
+        await store.upsert({"request_id": RID, "status": "running",
+                            "diagnostics": {"request_admission_stage": "sent"}})
+        state = SimpleNamespace(diagnostics={"worker_terminal": "chat.completed"})
+        scope = {"type": "http", "path": "/v1/chat/completions", "method": "POST"}
+
+        async def receive():
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            return None
+
+        async def app(scope, receive, send):
+            scope["chat2api_sse_request_id"] = RID
+            scope["chat2api_sse_broker_state"] = state
+            await send({"type": "http.response.start", "status": 200,
+                        "headers": [(b"content-type", b"text/event-stream")]})
+            await send({"type": "http.response.body", "body": b": keepalive\n\n",
+                        "more_body": True})
+            assert (await receive())["type"] == "http.disconnect"
+            # Finalization races with the middleware unwind.
+            await store.update(RID, {
+                "status": "completed",
+                "response_text": "owned-by-Worker",
+                "diagnostics": {
+                    "native_capture_revision": 42,
+                    "request_admission_stage": "sent",
+                    "worker_terminal": "chat.completed",
+                },
+            })
+
+        await SSETransportTruth(app, store)(scope, receive, send)
+        row = store.get(RID)
+        assert row["status"] == "completed"
+        assert row["response_text"] == "owned-by-Worker"
+        assert row["diagnostics"]["native_capture_revision"] == 42
+        assert row["diagnostics"]["worker_terminal"] == "chat.completed"
+        assert row["diagnostics"]["api_delivery_state"] == "disconnected"
+        assert state.diagnostics["api_delivery_state"] == "disconnected"
+
+    asyncio.run(scenario())
