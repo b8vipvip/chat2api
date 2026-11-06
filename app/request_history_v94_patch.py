@@ -322,6 +322,10 @@ async function requestHistoryLoadNativePreview(requestId,row,sequence){
     const assets=media.map(item=>requestHistoryOwnedImageUrl(item?.owned_url||item?.url));
     const candidate=data?.image_asset_candidates;
     const comparison=data?.capture_comparison||{};
+    // A prior good incremental DOM ACK is not a final reply ACK. Keep the
+    // stale revision inspectable for admins, but explicitly label it as
+    // forensic-only and default back to the canonical Markdown.
+    const finality=data?.snapshot_finality;
     const imageCount=Number(summary.images);
     // Zero-image structured replies remain useful even when the request also
     // archived unrelated rasters. Do not inject those unbound media into the
@@ -349,7 +353,13 @@ async function requestHistoryLoadNativePreview(requestId,row,sequence){
     const tree=requestHistoryNativeNode(snapshot.root,previewAssets,{count:0});
     preview.appendChild(tree);
     nativeButton.disabled=false;
-    status.textContent='已取得原生结构预览（'+summary.nodes+' 节点 / '
+    status.textContent=(finality==='rejected-final'
+      ?'警告：最终原生捕获失败或快照版本不符。当前为旧增量诊断快照，不能作为最终回复交付；请以标准文字回复为准。'
+      :finality==='unverified-final'
+        ?'注意：旧版本缺少最终快照确认标记，只能作为未核实的结构参考。'
+        :finality==='live-provisional'
+          ?'请求仍在执行：当前为非最终增量预览。':'')
+      +'已取得原生结构预览（'+summary.nodes+' 节点 / '
       +summary.images+' 图片 / '+summary.grid+' Grid）。'
       +(noNativeImages
         ?(media.length?'原生回复没有已绑定图片；'+media.length+' 张另行归档的媒体不会插入原生布局。':'原生回复没有需映射的图片。')
