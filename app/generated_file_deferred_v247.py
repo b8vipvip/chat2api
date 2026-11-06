@@ -193,24 +193,56 @@ class DeferredGeneratedFiles:
                 return
             row = conn.execute("SELECT * FROM deferred_generated_files WHERE id=?", (pending_id,)).fetchone()
         path = self.root / (pending_id + ".bin")
+        saved = None
         try:
             data = path.read_bytes()
             if len(data) != row["size"] or hashlib.sha256(data).hexdigest() != row["sha256"]:
                 raise ValueError("Deferred generated file staging integrity mismatch")
             saved = self.archive.store(data,row["filename"],row["mime"],row["owner"],row["request_id"])
             with self._db() as conn:
-                conn.execute("""UPDATE deferred_generated_files
+                ready = conn.execute("""UPDATE deferred_generated_files
                     SET state='ready',file_id=?,file_token=?,updated_at=?
                     WHERE id=? AND state='processing'""",
                     (saved["id"],saved["token"],datetime.now(timezone.utc).isoformat(),pending_id))
-            path.unlink(missing_ok=True)
+                if ready.rowcount != 1:
+                    raise RuntimeError("Generated file pending record disappeared before ready commit")
         except Exception:
-            with self._db() as conn:
-                conn.execute("UPDATE deferred_generated_files SET state='failed',updated_at=? WHERE id=?",
-                             (datetime.now(timezone.utc).isoformat(), pending_id))
-            # Retain no raw content after a failed job; the client sees an
-            # explicit retriable failure rather than a counterfeit download.
+            # A successful durable archive.store may still be followed by a
+            # failed/zero-row pending-manifest update. Remove ONLY a freshly
+            # created file; never delete an existing deduplicated object.
+            if isinstance(saved, dict) and saved.get("_created") is True:
+                try:
+                    self.archive.delete(saved["id"])
+                except Exception:
+                    logging.getLogger(__name__).exception(
+                        "Failed to discard unpublished generated file"
+                    )
+            try:
+                with self._db() as conn:
+                    conn.execute("UPDATE deferred_generated_files SET state='failed',updated_at=? WHERE id=?",
+                                 (datetime.now(timezone.utc).isoformat(), pending_id))
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "Failed to mark generated-file transfer failed"
+                )
+            # A failed job must not keep private raw staging bytes.
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                logging.getLogger(__name__).exception(
+                    "Failed to clean failed generated-file staging bytes"
+                )
+            return
+
+        # A ready DB commit is the durable availability boundary. Staging-file
+        # cleanup is best-effort *afterwards*; its failure must not downgrade
+        # a verified and downloadable ready file to failed.
+        try:
             path.unlink(missing_ok=True)
+        except OSError:
+            logging.getLogger(__name__).exception(
+                "Failed to clean ready generated-file staging bytes"
+            )
 
     def read(self, pending_id: str, token: str):
         if not pending_id.startswith("pgen_") or len(pending_id)!=37:
