@@ -108,7 +108,16 @@ safeProgress(update,answer.length,frames,lastStatus);
 }
 }
 }catch(error){streamError=error;}
-finally{try{await reader.cancel()}catch(e){}}
+finally{
+  try{
+    // After the exact stop+[DONE] terminal, release our reader WITHOUT
+    // cancelling the underlying fetch. The Server still needs to send its
+    // final ASGI body boundary and persist transport evidence. Cancel only
+    // failed/incomplete SSE streams; those require request-id recovery.
+    if(!streamError&&stopped&&done)reader.releaseLock?.();
+    else await reader.cancel();
+  }catch(e){/* the read-side cleanup never owns the Broker terminal */}
+}
 if(!stopped||!done){
   const recovered=await recoverDisconnectedStream(requestId,update);
   if(recovered)return recovered;
