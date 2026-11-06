@@ -978,10 +978,18 @@
     // Never silently take only the tail of a long response. The previous
     // slice(-420) discarded opening sections of lengthy rich-text answers.
     const structuralNodes = [...scope.querySelectorAll(selectors)];
-    const scanOverflow = structuralNodes.length > 1600;
-    const changed = (scanOverflow ? [] : structuralNodes)
+    // Large *complete* rich replies may contain thousands of table cells,
+    // headings and formula nodes inside the verified candidate. The previous
+    // 1600-node limit counted all those descendants before skipping them,
+    // wrongly forcing scan_overflow on a 4k-node complete answer. Limit only
+    // independent/outside-candidate material, whose ownership still needs
+    // validation. Never silently truncate or waive the outside-node guard.
+    const outsideCandidate = structuralNodes.filter(node =>
+      !candidate.contains(node) && !node.contains(candidate));
+    const scanOverflow = outsideCandidate.length > 1600;
+    const changed = (scanOverflow ? [] : outsideCandidate)
       .filter(node => {
-        if (!visible(node) || candidate.contains(node) || node.contains(candidate)
+        if (!visible(node)
             || node.closest?.("nav,aside,header,footer,form,[role='dialog'],[contenteditable='true']"))
           return false;
         const text = normalize(node.innerText || node.textContent || "");
@@ -1028,6 +1036,7 @@
       nodes: scanOverflow ? [] : all,
       scan_overflow: scanOverflow,
       scan_structural_node_count: structuralNodes.length,
+      scan_outside_candidate_node_count: outsideCandidate.length,
       independent_count: independent.length,
       independent_chars: sizes.reduce((sum, n) => sum + n, 0),
       max_independent_chars: Math.max(0, ...sizes),

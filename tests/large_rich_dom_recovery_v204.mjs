@@ -77,8 +77,10 @@ test("Historical pre-submit blocks cannot leak into the new response",()=>{
   assert.equal(result.coverage.nodes.length,593);
   assert.equal(result.coverage.nodes[0].id,"block-17");
 });
-test("The 1600 structural scan limit remains a refusal, not a truncated success",()=>{
-  assert.equal(scene({count:1601}).result,null);
+test("More than 1600 independent outside-candidate blocks remain an explicit refusal",()=>{
+  // One candidate itself is already owned. The independent-only limit starts
+  // after excluding that candidate and its descendants.
+  assert.equal(scene({count:1602}).result,null);
 });
 test("The sole terminal owner still revalidates full rich text and 8s stability",()=>{
   assert.ok(source.includes("response_integrity_full_block_count: rendered.coverage.nodes.length"));

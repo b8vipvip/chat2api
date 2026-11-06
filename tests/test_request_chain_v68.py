@@ -325,3 +325,13 @@ def test_v286_native_multi_toolbar_node_regression():
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "v260 request-bound native ownership" in result.stdout
+
+
+def test_v289_large_rich_boundary_scans_only_independent_nodes():
+    """4.8k owned answer children must not overflow; unowned overflow rejects."""
+    result = subprocess.run(
+        ["node", "tests/rich_boundary_outside_candidate_v289.mjs"],
+        cwd=ROOT, capture_output=True, text=True, check=False, timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "rich DOM 4800-node contained vs unowned overflow" in result.stdout
