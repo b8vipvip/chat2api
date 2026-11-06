@@ -39,6 +39,7 @@ from .native_content_v1 import (NativeContentStore, NativeChunkAssembler, native
                                 native_image_identity_candidates,
                                 native_public_v1_tree)
 from .native_dom_evidence_v1 import NativeDomEvidenceStore
+from .native_capture_audit_v281 import capture_comparison
 from .media_public_origin_v187 import media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
 from .responses_multimodal_input_v183 import attachment_specs as canonical_attachment_specs
@@ -619,12 +620,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         def gap_count(key: str) -> int:
             value = recorded.get(key, 0)
             return max(0, min(30000, value)) if type(value) is int else 0
+        layout = native_layout_summary(snapshot, len(details))
+        image_candidates = native_image_identity_candidates(snapshot, details)
+        # Historical req_20a00da had one 12x12 decorative forensic IMG
+        # but zero native IMG nodes: simple 1!=0 counts were a false alarm.
+        # Only compare displayed >=40x40 images within a complete, trusted
+        # request-owned private DOM capture. No raw DOM/user text is returned.
+        forensic = native_dom_evidence.get(request_id, str(row["api_key_id"]))
+        comparison = capture_comparison(
+            forensic, layout, len(details), image_candidates,
+        )
         return JSONResponse(
             {"request_id": request_id, "version": 1, "snapshot": snapshot,
-             "layout_summary": native_layout_summary(snapshot, len(details)),
+             "layout_summary": layout,
              "media_metadata": details,
-             "image_asset_candidates": native_image_identity_candidates(
-                 snapshot, details),
+             "image_asset_candidates": image_candidates,
+             "capture_comparison": comparison,
              "visual_gaps": {"unsupported_graphics": gap_count("native_graphics_unsupported"),
                              "canvas_omitted": gap_count("native_canvas_omitted"),
                              "svg_captured": gap_count("native_svg_charts_captured"),
@@ -1164,6 +1175,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                      if isinstance(item, dict)]
             summary = native_layout_summary(native, len(items))
             identity = native_image_identity_candidates(native, items)
+            # Non-authoritative, size-qualified comparison of independent DOM
+            # observation against actual native payload. A later forensic
+            # report can still be inspected via the live admin endpoint.
+            state.diagnostics["native_capture_comparison"] = capture_comparison(
+                native_dom_evidence.get(state.request_id, principal.key_id),
+                summary, len(items), identity,
+            )
             state.diagnostics["native_layout_summary"] = summary
             state.diagnostics["native_image_identity_status"] = identity["status"]
             state.diagnostics["native_identity_matched_count"] = (
