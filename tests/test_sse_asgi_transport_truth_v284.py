@@ -385,3 +385,85 @@ def test_sse_middleware_merges_late_transport_truth_after_worker_finalization(tm
         assert state.diagnostics["api_delivery_state"] == "disconnected"
 
     asyncio.run(scenario())
+
+
+
+def test_terminal_snapshot_cannot_erase_authoritative_asgi_transport_proof(tmp_path):
+    """A stale Worker diagnostics snapshot must not erase later ASGI truth.
+
+    This is the reverse race of PR #703. A passive observer can save the
+    actual terminal frames before a detached finalizer performs a full
+    diagnostics upsert from a previously taken snapshot. Preserve only the
+    server-authored transport proof, never freeze unrelated Worker evidence.
+    """
+    from app.telemetry import TelemetryStore
+
+    async def scenario():
+        store = TelemetryStore(tmp_path)
+        await store.upsert({
+            "request_id": RID, "status": "running",
+            "diagnostics": {"worker_phase": "dispatched"},
+        })
+        proof = {
+            "http_disconnect_seen": False,
+            "asgi_done_frame_sent": True,
+            "asgi_final_body_sent": True,
+            "asgi_body_chunks_sent": 13,
+        }
+        await store.merge_diagnostics(RID, {
+            "api_stream_transport_truth": proof,
+            "api_stream_peer_disconnect_seen": False,
+            "api_delivery_state": "asgi-complete-unconfirmed",
+        })
+        # A detached task writes an older pre-observation snapshot.
+        await store.upsert({
+            "request_id": RID, "status": "completed",
+            "response_text": "Worker authoritative final text",
+            "diagnostics": {"worker_terminal": "chat.completed"},
+        })
+        row = store.get(RID)
+        assert row["status"] == "completed"
+        assert row["response_text"] == "Worker authoritative final text"
+        diag = row["diagnostics"]
+        assert diag["worker_terminal"] == "chat.completed"
+        assert diag["api_stream_transport_truth"] == proof
+        assert diag["api_stream_peer_disconnect_seen"] is False
+        assert diag["api_delivery_state"] == "asgi-complete-unconfirmed"
+
+        # A second late full update cannot fabricate a different transport
+        # verdict. A real observer patch, on the other hand, can replace its
+        # own authority when the actual HTTP disconnect is observed.
+        await store.update(RID, {"diagnostics": {
+            "worker_terminal": "chat.completed",
+            "api_delivery_state": "stale-worker-assumption",
+        }})
+        assert store.get(RID)["diagnostics"]["api_delivery_state"] == (
+            "asgi-complete-unconfirmed"
+        )
+        await store.merge_diagnostics(RID, {
+            "api_stream_transport_truth": {
+                "http_disconnect_seen": True,
+                "asgi_done_frame_sent": False,
+                "asgi_final_body_sent": False,
+            },
+            "api_stream_peer_disconnect_seen": True,
+            "api_delivery_state": "disconnected",
+        })
+        assert store.get(RID)["diagnostics"]["api_delivery_state"] == "disconnected"
+        assert store.get(RID)["diagnostics"]["api_stream_peer_disconnect_seen"] is True
+
+    asyncio.run(scenario())
+
+
+def test_absent_sse_transport_proof_does_not_freeze_other_delivery_state(tmp_path):
+    from app.telemetry import TelemetryStore
+
+    async def scenario():
+        store = TelemetryStore(tmp_path)
+        await store.upsert({"request_id": RID, "status": "running",
+                            "diagnostics": {"api_delivery_state": "pending"}})
+        await store.upsert({"request_id": RID,
+                            "diagnostics": {"api_delivery_state": "completed"}})
+        assert store.get(RID)["diagnostics"]["api_delivery_state"] == "completed"
+
+    asyncio.run(scenario())
