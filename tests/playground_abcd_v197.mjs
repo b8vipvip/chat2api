@@ -20,6 +20,7 @@ const frames=(text,includeDone=true)=>
 
 function scenario(id, outputs) {
   const elements=new Map(), requests=[], records=[],downloads=[];
+  let cancels=0, releases=0;
   const element=key=>{
     if(!elements.has(key))elements.set(key,{
       value:"",disabled:false,textContent:"",style:{},handlers:{},
@@ -46,7 +47,7 @@ function scenario(id, outputs) {
       return {ok:true,body:{getReader(){
         let read=false;
         return {read:async()=>read?{done:true}:(read=true,{done:false,value:new TextEncoder().encode(data)}),
-          cancel:async()=>{}};
+          cancel:async()=>{cancels++;},releaseLock(){releases++;}};
       }}};
     }
     downloads.push(String(url));
@@ -85,7 +86,7 @@ function scenario(id, outputs) {
   vm.runInNewContext(source,context);
   return {run:async()=>{
     await element("pgABCDRun").handlers.click();
-    return {status:element("pgABCDNote").textContent,requests,records,downloads};
+    return {status:element("pgABCDNote").textContent,requests,records,downloads,cancels,releases};
   }, element};
 }
 
@@ -94,6 +95,8 @@ test("A: real SSE terminal and full-length report is accepted",async()=>{
   assert.match(r.status,/协议和上游终态已证实/);
   assert.equal(r.requests.length,1);
   assert.equal(r.requests[0].body.stream,true);
+  assert.equal(r.cancels,0,"completed SSE reader must not cancel its fetch");
+  assert.equal(r.releases,1,"release reader lock to permit final HTTP body boundary");
   assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"passed");
   assert.match(r.requests[0].body.messages[0].content,/新主题A/);
 });
@@ -101,6 +104,8 @@ test("Incomplete SSE without [DONE] must fail even with full content",async()=>{
   const r=await scenario("A",[{text:FULL,done:false}]).run();
   assert.match(r.status,/未通过/);
   assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"failed");
+  assert.equal(r.cancels,1,"incomplete SSE must cancel the abandoned read");
+  assert.equal(r.releases,0);
 });
 test("B: three distinct image files are fetched",async()=>{
   const r=await scenario("B",[IMG_LINK(1)+"\n"+IMG_LINK(2)+"\n"+IMG_LINK(3)]).run();
