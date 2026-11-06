@@ -91,7 +91,7 @@ class SSETransportTruth:
                 # StreamingResponse sends each generator yield as one ASGI
                 # body message. A generated JSON string containing '[DONE]'
                 # is NOT an actual terminal frame.
-                if body.strip() == b"data: [DONE]":
+                if len(body) <= 32 and body.strip() == b"data: [DONE]":
                     truth["asgi_done_frame_sent"] = True
                 if not message.get("more_body", False):
                     truth["asgi_final_body_sent"] = True
@@ -99,43 +99,43 @@ class SSETransportTruth:
         try:
             await self.app(scope, observed_receive, observed_send)
         finally:
-            if not is_sse:
-                return
-            if truth["http_disconnect_seen"] and not truth["asgi_done_frame_sent"]:
-                delivery_state = "disconnected"
-            elif truth["asgi_send_error"]:
-                delivery_state = "asgi-send-error"
-            elif truth["asgi_done_frame_sent"] and truth["asgi_final_body_sent"]:
-                # ASGI send acceptance is NOT the same as client receipt.
-                delivery_state = "asgi-complete-unconfirmed"
-            else:
-                delivery_state = "asgi-incomplete"
+            if is_sse:
+                await self._persist_truth(scope, truth)
 
-            # Use the request-owned Broker state, not another Worker lease.
-            # A disconnected HTTP client may finalize in the detached broker
-            # supervisor many minutes later; it must retain this observation.
-            state = scope.get("chat2api_sse_broker_state")
-            if state is not None and isinstance(getattr(state, "diagnostics", None), dict):
-                state.diagnostics["api_stream_peer_disconnect_seen"] = truth["http_disconnect_seen"]
-                state.diagnostics["api_delivery_state"] = delivery_state
-                state.diagnostics["api_stream_transport_truth"] = dict(truth)
+    async def _persist_truth(self, scope: dict, truth: dict) -> None:
+        if truth["http_disconnect_seen"] and not truth["asgi_done_frame_sent"]:
+            delivery_state = "disconnected"
+        elif truth["asgi_send_error"]:
+            delivery_state = "asgi-send-error"
+        elif truth["asgi_done_frame_sent"] and truth["asgi_final_body_sent"]:
+            # ASGI send acceptance is NOT equivalent to client receipt.
+            delivery_state = "asgi-complete-unconfirmed"
+        else:
+            delivery_state = "asgi-incomplete"
 
-            request_id = scope.get("chat2api_sse_request_id")
-            if not isinstance(request_id, str) or not request_id:
-                return
+        # The request-owned Broker state survives detached HTTP close.
+        state = scope.get("chat2api_sse_broker_state")
+        if state is not None and isinstance(getattr(state, "diagnostics", None), dict):
+            state.diagnostics["api_stream_peer_disconnect_seen"] = truth["http_disconnect_seen"]
+            state.diagnostics["api_delivery_state"] = delivery_state
+            state.diagnostics["api_stream_transport_truth"] = dict(truth)
+
+        request_id = scope.get("chat2api_sse_request_id")
+        if not isinstance(request_id, str) or not request_id:
+            return
+        try:
             row = self.telemetry.get(request_id)
             if row is None:
                 return
-            try:
-                prior = row.get("diagnostics")
-                diagnostics = dict(prior) if isinstance(prior, dict) else {}
-                diagnostics.update({
-                    "api_stream_peer_disconnect_seen": truth["http_disconnect_seen"],
-                    "api_delivery_state": delivery_state,
-                    "api_stream_transport_truth": dict(truth),
-                })
-                await self.telemetry.update(request_id, {"diagnostics": diagnostics})
-            except Exception:
-                # Optional evidence MUST NOT mask or overwrite the upstream
-                # HTTP transport outcome, generation terminal or file archive.
-                LOG.exception("Cannot persist SSE transport evidence request_id=%s", request_id)
+            prior = row.get("diagnostics")
+            diagnostics = dict(prior) if isinstance(prior, dict) else {}
+            diagnostics.update({
+                "api_stream_peer_disconnect_seen": truth["http_disconnect_seen"],
+                "api_delivery_state": delivery_state,
+                "api_stream_transport_truth": dict(truth),
+            })
+            await self.telemetry.update(request_id, {"diagnostics": diagnostics})
+        except Exception:
+            # Optional evidence MUST NOT mask the upstream ASGI transport
+            # failure or override the Worker/Broker authoritative terminal.
+            LOG.exception("Cannot persist SSE transport evidence request_id=%s", request_id)
