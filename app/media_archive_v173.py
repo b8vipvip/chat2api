@@ -231,6 +231,13 @@ class MediaArchive:
                 if image_url.startswith("data:image/"):
                     header, encoded = image_url.split(",", 1)
                     mime = header[5:].split(";", 1)[0].lower()
+                    # A pasted model reply may contain an enormous inline
+                    # image. Reject before b64decode allocates another binary
+                    # buffer; store_image's MAX_BYTES check happens too late
+                    # to protect the Server from the extra allocation.
+                    max_encoded = 4 * ((MAX_BYTES + 2) // 3)
+                    if len(encoded) > max_encoded:
+                        raise ValueError("Inline image exceeds archive limit")
                     raw = base64.b64decode(encoded, validate=True)
                 else:
                     remote = urlsplit(image_url)

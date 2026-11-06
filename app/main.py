@@ -24,6 +24,7 @@ from .chat_media_deadline_v171 import chat_timeout_window, worker_chat_timeout, 
 from .chat_progress_stream_v196 import status_from_diagnostics, progress_is_real
 from .chat_stream_delivery_v194 import StagedStreamText, final_text_chunks, sse_heartbeat_interval
 from .stream_detached_terminal_v219 import settle_detached_stream
+from .terminal_archive_singleflight_v277 import archive_once
 from .config import Settings, get_settings
 from .file_store import FileStore
 from .media_archive_v173 import MediaArchive
@@ -1062,36 +1063,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     async def archive_verified_terminal(state: RequestState, text: str, key_id: str,
                                        request_id: str, base_url: str):
-        # The Worker/Broker alone decides completion. This is a bounded
-        # *post-terminal delivery step*: if archival stalls, persist an actual
-        # API delivery failure instead of leaving the log in running forever.
-        state.diagnostics["server_finalization_stage"] = "archive-started"
-        state.diagnostics["server_finalization_started_at"] = time.time()
-        await telemetry.upsert({
-            "request_id": request_id,
-            "diagnostics": dict(state.diagnostics),
-        })
-        try:
-            result = await asyncio.wait_for(
-                asyncio.to_thread(
-                    archive_final_markdown, text, key_id, request_id, base_url
-                ),
-                timeout=180.0,
-            )
-        except asyncio.TimeoutError as error:
-            state.diagnostics["server_finalization_stage"] = "archive-timeout"
+        # The Worker/Broker alone decides completion. Post-terminal media
+        # writes must also have one owner: if SSE/HTTP disconnects during a
+        # to_thread archive, the thread keeps running. Detached finalization
+        # therefore REUSES exactly the same shielded archive task; otherwise
+        # it can write each media asset twice for a single Worker terminal.
+        async def run_verified_archive():
+            state.diagnostics["server_finalization_stage"] = "archive-started"
+            state.diagnostics["server_finalization_started_at"] = time.time()
+            await telemetry.upsert({
+                "request_id": request_id,
+                "diagnostics": dict(state.diagnostics),
+            })
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        archive_final_markdown, text, key_id, request_id, base_url
+                    ),
+                    timeout=180.0,
+                )
+            except asyncio.TimeoutError as error:
+                state.diagnostics["server_finalization_stage"] = "archive-timeout"
+                state.diagnostics["server_finalization_elapsed_ms"] = round(
+                    (time.time() - state.diagnostics["server_finalization_started_at"]) * 1000
+                )
+                raise ValueError("Post-terminal media archival exceeded 180 seconds") from error
+            except Exception:
+                state.diagnostics["server_finalization_stage"] = "archive-error"
+                raise
+            state.diagnostics["server_finalization_stage"] = "archive-finished"
             state.diagnostics["server_finalization_elapsed_ms"] = round(
                 (time.time() - state.diagnostics["server_finalization_started_at"]) * 1000
             )
-            raise ValueError("Post-terminal media archival exceeded 180 seconds") from error
-        except Exception:
-            state.diagnostics["server_finalization_stage"] = "archive-error"
-            raise
-        state.diagnostics["server_finalization_stage"] = "archive-finished"
-        state.diagnostics["server_finalization_elapsed_ms"] = round(
-            (time.time() - state.diagnostics["server_finalization_started_at"]) * 1000
+            return result
+
+        return await archive_once(
+            state, request_id=request_id, owner=key_id, final_text=text,
+            base_url=base_url, run=run_verified_archive,
         )
-        return result
 
     async def record_request(
         state: RequestState,
