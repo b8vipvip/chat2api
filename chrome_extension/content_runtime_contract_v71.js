@@ -23,6 +23,9 @@
     const uiHygiene = globalThis.__CHAT2API_UI_HYGIENE_V31__ || null;
     const modules = {
       request_v6: Number(request?.revision || 0) >= 69,
+      // A pre-existing tab can retain its old request-v6 listener because
+      // that module is one-shot; a fresh bundle marker does not upgrade it.
+      native_scope_gate_v287: Number(request?.nativeScopeGateRevision || 0) >= 287,
       rich_response_v69: Boolean(rich),
       model_evidence_v144: Number(modelEvidence?.version || 0) >= 144,
       model_evidence_main_v144: document.documentElement?.getAttribute?.("data-chat2api-model-evidence-main-v144") === "144",
