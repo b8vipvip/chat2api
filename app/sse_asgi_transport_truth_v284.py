@@ -17,6 +17,74 @@ from typing import Any
 LOG = logging.getLogger("chat2api.sse_transport")
 
 
+class _DoneFrameDetector:
+    """Bounded SSE *event* parser; no response content is retained in telemetry.
+
+    ASGI may coalesce several events into one body message or split a terminal
+    event across sends. Only an entire SSE event containing exactly one
+    'data: [DONE]' field counts, not the same bytes embedded in JSON text.
+    Keep at most 64 transient bytes from any line, even for large responses.
+    """
+
+    _MAX_LINE_PREFIX = 64
+
+    def __init__(self) -> None:
+        self._line = bytearray()
+        self._line_overflow = False
+        self._data_line_count = 0
+        self._done_data_only = False
+        self.done = False
+
+    def _append(self, body: bytes, start: int, end: int) -> None:
+        if self._line_overflow:
+            return
+        # Check the span BEFORE slicing: a 12-MiB JSON data line must not
+        # allocate another 12-MiB temporary just for terminal detection.
+        if end - start > self._MAX_LINE_PREFIX - len(self._line):
+            self._line.clear()
+            self._line_overflow = True
+            return
+        self._line.extend(memoryview(body)[start:end])
+
+    def _finish_line(self) -> None:
+        if self._line_overflow:
+            # An uninspected oversized line might contain another data field;
+            # reject the candidate event rather than declaring false success.
+            self._data_line_count += 1
+            self._done_data_only = False
+        else:
+            line = bytes(self._line).removesuffix(b"\r")
+            if not line:
+                if self._data_line_count == 1 and self._done_data_only:
+                    self.done = True
+                self._data_line_count = 0
+                self._done_data_only = False
+            elif line.startswith(b"data:") or line == b"data":
+                value = line[5:] if line.startswith(b"data:") else b""
+                if value.startswith(b" "):
+                    value = value[1:]
+                self._data_line_count += 1
+                self._done_data_only = (
+                    self._data_line_count == 1 and value == b"[DONE]"
+                )
+        self._line.clear()
+        self._line_overflow = False
+
+    def feed(self, body: bytes) -> bool:
+        if self.done:
+            return True
+        offset = 0
+        while offset < len(body):
+            end = body.find(b"\n", offset)
+            if end < 0:
+                self._append(body, offset, len(body))
+                break
+            self._append(body, offset, end)
+            self._finish_line()
+            offset = end + 1
+        return self.done
+
+
 class SSETransportTruth:
     def __init__(self, app: Any, telemetry: Any):
         self.app = app
@@ -31,6 +99,9 @@ class SSETransportTruth:
         truth = {
             "http_disconnect_seen": False,
             "http_disconnect_ms": None,
+            "asgi_receive_calls": 0,
+            "asgi_receive_messages": 0,
+            "asgi_receive_last_ms": None,
             "asgi_response_started_ms": None,
             "asgi_first_body_ms": None,
             "asgi_last_body_ms": None,
@@ -46,12 +117,18 @@ class SSETransportTruth:
         # the same ASGI scope, so the cancellation path sees actual evidence.
         scope["chat2api_sse_transport_truth"] = truth
         is_sse = False
+        done_detector = _DoneFrameDetector()
 
         def elapsed_ms() -> int:
             return max(0, round((time.monotonic() - started) * 1000))
 
         async def observed_receive():
+            # No receive call means disconnect absence was NOT checked.
+            # Count message boundaries only, never inspect request payloads.
+            truth["asgi_receive_calls"] += 1
             message = await receive()
+            truth["asgi_receive_messages"] += 1
+            truth["asgi_receive_last_ms"] = elapsed_ms()
             if message.get("type") == "http.disconnect":
                 truth["http_disconnect_seen"] = True
                 truth["http_disconnect_ms"] = elapsed_ms()
@@ -88,10 +165,9 @@ class SSETransportTruth:
                     if truth["asgi_first_body_ms"] is not None else elapsed_ms()
                 )
                 truth["asgi_last_body_ms"] = elapsed_ms()
-                # StreamingResponse sends each generator yield as one ASGI
-                # body message. A generated JSON string containing '[DONE]'
-                # is NOT an actual terminal frame.
-                if len(body) <= 32 and body.strip() == b"data: [DONE]":
+                # Observe framing across coalesced or split ASGI sends, but
+                # never persist a chunk, prompt, token or even a line excerpt.
+                if isinstance(body, bytes) and done_detector.feed(body):
                     truth["asgi_done_frame_sent"] = True
                 if not message.get("more_body", False):
                     truth["asgi_final_body_sent"] = True
