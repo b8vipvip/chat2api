@@ -181,3 +181,53 @@ def test_second_pending_file_failure_cleans_first_and_second_files(tmp_path):
         deferred.rewrite(first + "\\n" + second, "owner", "req-two", "https://example.test")
     _assert_no_partial_pending_files(deferred, archive)
     deferred.pool.shutdown(wait=True)
+
+
+@pytest.mark.parametrize("fail_at", [1, 2])
+def test_failed_background_submission_cannot_publish_rolled_back_file_batch(
+    tmp_path, monkeypatch, fail_at,
+):
+    """An already accepted first job may not store bytes if second submit fails."""
+    gate = threading.Event()
+    gate.set()  # Make any incorrectly started _finish run immediately.
+    archive = FakeArchive(tmp_path, gate)
+    deferred = DeferredGeneratedFiles(archive)
+    real_submit = deferred.pool.submit
+    calls = 0
+
+    def fail_submission(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == fail_at:
+            raise RuntimeError("injected executor shutdown during batch")
+        return real_submit(*args, **kwargs)
+
+    monkeypatch.setattr(deferred.pool, "submit", fail_submission)
+    with pytest.raises(RuntimeError, match="executor shutdown"):
+        deferred.rewrite(
+            _marker(b'{"first":1}') + "\n" + _marker(b'{"second":2}'),
+            "owner-A", "req-batch-abort", "https://example.test",
+        )
+    deferred.pool.shutdown(wait=True)
+    _assert_no_partial_pending_files(deferred, archive)
+    assert archive.published == {}, (
+        "an accepted job may not outlive a failed batch and store orphaned bytes"
+    )
+
+
+def test_successful_background_batch_releases_all_jobs(tmp_path):
+    gate = threading.Event()
+    gate.set()
+    archive = FakeArchive(tmp_path, gate)
+    deferred = DeferredGeneratedFiles(archive)
+    text, files = deferred.rewrite(
+        _marker(b'{"first":1}') + "\n" + _marker(b'{"second":2}'),
+        "owner-A", "req-batch-success", "https://example.test",
+    )
+    deferred.pool.shutdown(wait=True)
+    assert len(files) == 2
+    assert text.count("/api/generated-files/pending/") == 2
+    assert all(
+        deferred.status(*item["url"].rsplit("/", 2)[-2:])["status"] == "ready"
+        for item in files
+    )
