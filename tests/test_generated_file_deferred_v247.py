@@ -231,3 +231,96 @@ def test_successful_background_batch_releases_all_jobs(tmp_path):
         deferred.status(*item["url"].rsplit("/", 2)[-2:])["status"] == "ready"
         for item in files
     )
+
+
+
+def _real_deferred(tmp_path):
+    from app.media_archive_v173 import MediaArchive
+    from app.generated_files_v196 import GeneratedFileArchive
+
+    media = MediaArchive(tmp_path, "master")
+    generated = GeneratedFileArchive(media)
+    return generated, DeferredGeneratedFiles(generated)
+
+
+def test_ready_manifest_insert_error_discards_only_newly_written_file(tmp_path):
+    generated, deferred = _real_deferred(tmp_path)
+    with deferred._db() as conn:
+        conn.execute("""CREATE TRIGGER fail_ready BEFORE UPDATE ON deferred_generated_files
+                        WHEN NEW.state = 'ready'
+                        BEGIN SELECT RAISE(ABORT, 'injected ready update failure'); END""")
+    _, files = deferred.rewrite(
+        _marker(b'{"new":true}'), "owner", "req-ready-fail", "https://example.test",
+    )
+    deferred.pool.shutdown(wait=True)
+    fid, token = files[0]["url"].rsplit("/", 2)[-2:]
+    assert deferred.status(fid, token)["status"] == "failed"
+    with pytest.raises(FileTransferFailed):
+        deferred.read(fid, token)
+    assert generated.list_items() == [], "failed ready-commit cannot strand original bytes"
+    assert not list((generated.storage.root / "objects").glob("gen_*"))
+
+
+def test_failed_ready_commit_must_not_delete_deduplicated_existing_file(tmp_path):
+    generated, deferred = _real_deferred(tmp_path)
+    raw = b'{"existing":true}'
+    previous = generated.store(raw, "result.json", "application/json", "owner", "req-same")
+    assert previous["_created"] is True
+    with deferred._db() as conn:
+        conn.execute("""CREATE TRIGGER fail_ready BEFORE UPDATE ON deferred_generated_files
+                        WHEN NEW.state = 'ready'
+                        BEGIN SELECT RAISE(ABORT, 'injected ready update failure'); END""")
+    _, files = deferred.rewrite(
+        _marker(raw), "owner", "req-same", "https://example.test",
+    )
+    deferred.pool.shutdown(wait=True)
+    fid, token = files[0]["url"].rsplit("/", 2)[-2:]
+    assert deferred.status(fid, token)["status"] == "failed"
+    assert generated.read(previous["id"], previous["token"])[0] == raw
+    assert len(generated.list_items()) == 1
+
+
+def test_staging_unlink_error_after_ready_does_not_make_download_fail(tmp_path, monkeypatch):
+    generated, deferred = _real_deferred(tmp_path)
+    original_unlink = Path.unlink
+
+    def fail_pending_unlink(self, *args, **kwargs):
+        if self.parent == deferred.root and self.suffix == ".bin":
+            raise OSError("injected staging cleanup failure")
+        return original_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_pending_unlink)
+    raw = b'{"ready":true}'
+    _, files = deferred.rewrite(
+        _marker(raw), "owner", "req-unlink-ready", "https://example.test",
+    )
+    deferred.pool.shutdown(wait=True)
+    fid, token = files[0]["url"].rsplit("/", 2)[-2:]
+    assert deferred.status(fid, token)["status"] == "ready"
+    assert deferred.read(fid, token)[0] == raw
+    assert len(generated.list_items()) == 1
+
+
+def test_disappeared_pending_row_after_original_store_is_compensated(tmp_path, monkeypatch):
+    generated, deferred = _real_deferred(tmp_path)
+    real_store = generated.store
+
+    def store_then_remove_manifest(*args, **kwargs):
+        record = real_store(*args, **kwargs)
+        with deferred._db() as conn:
+            conn.execute(
+                "DELETE FROM deferred_generated_files WHERE request_id=?",
+                ("req-missing",),
+            )
+        return record
+
+    monkeypatch.setattr(generated, "store", store_then_remove_manifest)
+    _, files = deferred.rewrite(
+        _marker(b'{"new":2}'), "owner", "req-missing", "https://example.test",
+    )
+    deferred.pool.shutdown(wait=True)
+    assert generated.list_items() == []
+    assert not list((generated.storage.root / "objects").glob("gen_*"))
+    fid, token = files[0]["url"].rsplit("/", 2)[-2:]
+    with pytest.raises(KeyError):
+        deferred.status(fid, token)
