@@ -19,7 +19,7 @@ const frames=(text,includeDone=true)=>
 "data: "+JSON.stringify({choices:[{index:0,delta:{},finish_reason:"stop"}]})+"\n\n"+
 (includeDone?"data: [DONE]\n\n":"");
 
-function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,recoveredText=null}={}) {
+function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,recoveredText=null,fetchFailure=false}={}) {
   const elements=new Map(), requests=[], records=[],downloads=[];
   let submittedReport=null;
   let cancels=0, releases=0;
@@ -42,6 +42,7 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
   };
   const fetch=async (url, options={})=>{
     if(url==="/v1/chat/completions"){
+      if(fetchFailure){const error=Error("should never appear in client proof");error.name="AbortError";throw error;}
       const body=JSON.parse(options.body);
       requests.push({url,body,headers:options.headers});
       const text=outputs[Math.min(postIndex++,outputs.length-1)];
@@ -156,6 +157,16 @@ test("A: premature SSE EOF recovers SAME request while retaining client cancel p
   assert.equal(r.report.turns[0].client_sse_truth.native_reader_eof_seen,true);
   assert.equal(r.report.turns[0].client_sse_truth.reader_cancel_requested,true);
   assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"warning");
+});
+test("A: fetch aborted before response headers keeps distinct proof",async()=>{
+  const r=await scenario("A",[FULL],{fetchFailure:true}).run();
+  const truth=r.report.turns[0].client_sse_truth;
+  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"failed");
+  assert.equal(truth.response_headers_received,false);
+  assert.equal(truth.fetch_error_name,"AbortError");
+  assert.equal(truth.reader_cancel_requested,false);
+  assert.equal(truth.native_reader_eof_seen,false);
+  assert.doesNotMatch(JSON.stringify(truth),/should never appear/);
 });
 test("B: three distinct image files are fetched",async()=>{
   const r=await scenario("B",[IMG_LINK(1)+"\n"+IMG_LINK(2)+"\n"+IMG_LINK(3)]).run();
