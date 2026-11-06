@@ -80,11 +80,12 @@ async function recoverDisconnectedStream(requestId, update) {
 }
 
 async function stream(model,auth,requestId,messages,update){
+const clientStarted=performance.now();
 const r=await fetch("/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+auth.token,"X-Chat2API-Request-ID":requestId},body:JSON.stringify({model,messages,prompt_mode:"full",stream:true})});
 if(!r.ok)throw Error("API HTTP "+r.status+": "+(await r.text()).slice(0,300));
 if(!r.body)throw Error("缺少SSE响应体");
+const responseHeadersAt=performance.now();
 let buffer="",answer="",stopped=false,done=false,frames=0,lastStatus="",streamError=null;
-const clientStarted=performance.now();
 let nativeEof=false,firstChunkAt=null,lastChunkAt=null,readerCancelled=false,readerReleased=false;
 let readerErrorName=null;
 const reader=r.body.getReader(),decoder=new TextDecoder();
@@ -132,6 +133,7 @@ finally{
 }
 const relative=at=>at===null?null:Math.max(0,Math.round(at-clientStarted));
 const clientSseTruth={
+  response_headers_ms:relative(responseHeadersAt),
   protocol_stop_seen:stopped,
   protocol_done_seen:done,
   native_reader_eof_seen:nativeEof,
