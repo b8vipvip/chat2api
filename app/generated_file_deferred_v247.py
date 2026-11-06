@@ -102,6 +102,12 @@ class DeferredGeneratedFiles:
         results, output, offset = [], [], 0
         submitted = []
         allocated = []
+        # A ThreadPoolExecutor.submit failure can happen after earlier jobs
+        # were accepted. Keep workers behind a batch barrier until *all*
+        # jobs have been submitted; otherwise an earlier job may publish
+        # file bytes after this request's rollback removed its manifest row.
+        batch_release = threading.Event()
+        batch_accepted = [False]
         try:
             with self.lock:
                 for match, filename, mime, data in decoded:
@@ -133,9 +139,14 @@ class DeferredGeneratedFiles:
                                     "status":"processing"})
                     offset = match.end()
                 output.append(source[offset:])
+                result = ("".join(output), results)
                 for item in submitted:
-                    self.pool.submit(self._finish, item)
-            return "".join(output), results
+                    self.pool.submit(
+                        self._finish_after_batch_commit, item,
+                        batch_release, batch_accepted,
+                    )
+                batch_accepted[0] = True
+            return result
         except Exception:
             # No public link is returned from a failed batch. A file can
             # exist *before* SQLite INSERT succeeds, so submitted is not a
@@ -160,6 +171,17 @@ class DeferredGeneratedFiles:
                             "Failed to clean unpublished deferred-file bytes"
                         )
             raise
+        finally:
+            # Wake queued workers on both success and failure. A rejected
+            # batch exits without reading or publishing any staged bytes.
+            batch_release.set()
+
+    def _finish_after_batch_commit(
+        self, pending_id: str, release: threading.Event, accepted: list[bool],
+    ) -> None:
+        release.wait()
+        if accepted[0]:
+            self._finish(pending_id)
 
     def _finish(self, pending_id: str) -> None:
         with self._db() as conn:
