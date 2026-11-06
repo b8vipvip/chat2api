@@ -40,6 +40,7 @@ from .native_content_v1 import (NativeContentStore, NativeChunkAssembler, native
                                 native_public_v1_tree)
 from .native_dom_evidence_v1 import NativeDomEvidenceStore
 from .native_capture_audit_v281 import capture_comparison
+from .native_snapshot_finality_v282 import native_snapshot_finality
 from .media_public_origin_v187 import media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
 from .responses_multimodal_input_v183 import attachment_specs as canonical_attachment_specs
@@ -384,6 +385,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if not snapshot:
             return None
         row = telemetry.get(request_id) or {}
+        # Historical req_3a882bb5: rev12 persisted, then final capture failed
+        # structural-max-children. Never serve that old revision as final
+        # native content. Running requests may still show live increments.
+        if native_snapshot_finality(row, snapshot) == "rejected-final":
+            return None
         # Reuse the *same* archived media records as the canonical Markdown.
         # Never return a ChatGPT blob URL or a model-generated remote URL.
         assets = []
@@ -617,6 +623,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         recorded = row.get("diagnostics") or {}
         if not isinstance(recorded, dict):
             recorded = {}
+        # Private preview may inspect a proven stale revision, but its
+        # finality must be visible, never silently claimed as 1:1.
+        finality = native_snapshot_finality(row, snapshot)
         def gap_count(key: str) -> int:
             value = recorded.get(key, 0)
             return max(0, min(30000, value)) if type(value) is int else 0
@@ -636,6 +645,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
              "media_metadata": details,
              "image_asset_candidates": image_candidates,
              "capture_comparison": comparison,
+             "snapshot_finality": finality,
              "visual_gaps": {"unsupported_graphics": gap_count("native_graphics_unsupported"),
                              "canvas_omitted": gap_count("native_canvas_omitted"),
                              "svg_captured": gap_count("native_svg_charts_captured"),
@@ -1592,7 +1602,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                             ensure_ascii=False,
                         ) + "\n\n"
                     meta = chat2api_meta(state, token_meta, principal)
-                    if native_content.get(state.request_id, principal.key_id):
+                    if native_content.get(state.request_id, principal.key_id) and (
+                        native_snapshot_finality(
+                            {"status": "completed", "diagnostics": state.diagnostics},
+                            native_content.get(state.request_id, principal.key_id),
+                        ) != "rejected-final"
+                    ):
                         meta["native_content"] = {
                             "version": 1,
                             "url": f"/v1/native-content/{state.request_id}",
@@ -1870,7 +1885,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     file_items=archived_files,
             )
             meta = chat2api_meta(state, token_meta, principal)
-            if native_content.get(request_id, principal.key_id):
+            if native_content.get(request_id, principal.key_id) and (
+                        native_snapshot_finality(
+                            {"status": "completed", "diagnostics": state.diagnostics},
+                            native_content.get(request_id, principal.key_id),
+                        ) != "rejected-final"
+                    ):
                 meta["native_content"] = {
                     "version": 1,
                     "url": f"/v1/native-content/{request_id}",
