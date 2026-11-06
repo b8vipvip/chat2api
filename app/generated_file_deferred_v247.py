@@ -299,8 +299,17 @@ class DeferredGeneratedFiles:
 
     def status(self, pending_id: str, token: str):
         with self._db() as conn:
-            row=conn.execute("SELECT state,filename FROM deferred_generated_files WHERE id=? AND token=?",
-                             (pending_id,token)).fetchone()
+            row=conn.execute(
+                "SELECT state,filename,size,sha256 FROM deferred_generated_files WHERE id=? AND token=?",
+                (pending_id,token),
+            ).fetchone()
         if not row:
             raise KeyError("Unknown generated file")
-        return {"status":row["state"],"filename":row["filename"]}
+        # Token-authorized expected identity for independent browser download
+        # validation. The digest was computed from the staged bytes *before*
+        # asynchronous storage; a client must still hash its own downloaded
+        # bytes and compare them. Never return backend paths or storage tokens.
+        return {
+            "status": row["state"], "filename": row["filename"],
+            "bytes": row["size"], "sha256": row["sha256"],
+        }
