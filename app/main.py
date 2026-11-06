@@ -40,7 +40,7 @@ from .native_content_v1 import (NativeContentStore, NativeChunkAssembler, native
                                 native_public_v1_tree)
 from .native_dom_evidence_v1 import NativeDomEvidenceStore
 from .native_capture_audit_v281 import capture_comparison
-from .native_snapshot_finality_v282 import native_snapshot_finality
+from .native_snapshot_finality_v282 import native_snapshot_finality, native_terminal_view
 from .media_public_origin_v187 import media_base_for_request
 from .response_history_media_v188 import history_safe_response_text
 from .responses_multimodal_input_v183 import attachment_specs as canonical_attachment_specs
@@ -388,7 +388,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Historical req_3a882bb5: rev12 persisted, then final capture failed
         # structural-max-children. Never serve that old revision as final
         # native content. Running requests may still show live increments.
-        if native_snapshot_finality(row, snapshot) == "rejected-final":
+        finality_row = native_terminal_view(row, broker.requests.get(request_id))
+        if native_snapshot_finality(finality_row, snapshot) == "rejected-final":
             return None
         # Reuse the *same* archived media records as the canonical Markdown.
         # Never return a ChatGPT blob URL or a model-generated remote URL.
@@ -625,7 +626,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             recorded = {}
         # Private preview may inspect a proven stale revision, but its
         # finality must be visible, never silently claimed as 1:1.
-        finality = native_snapshot_finality(row, snapshot)
+        finality_row = native_terminal_view(row, broker.requests.get(request_id))
+        finality = native_snapshot_finality(finality_row, snapshot)
         def gap_count(key: str) -> int:
             value = recorded.get(key, 0)
             return max(0, min(30000, value)) if type(value) is int else 0
