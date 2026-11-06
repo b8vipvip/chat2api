@@ -147,6 +147,15 @@
     const name = String(anchor?.download || session.filename || "").trim();
     const raw = String(anchor?.href || "");
     if (!validName(name)) { stage(session, "download-filename-invalid"); return; }
+    // A page click can synchronously trigger unrelated attachment anchors.
+    // They share this physical tab but NOT the requested file identity.
+    // Do not consume the one-shot arm before the requested filename arrives.
+    // Same-type aliases are only accepted in the fetch path when attachment
+    // disposition, MIME, age and file signature independently corroborate it.
+    if (name !== session.filename) {
+      stage(session, "download-filename-mismatch");
+      return;
+    }
     if (!allowedSource(raw)) { stage(session, "download-url-not-trusted"); return; }
     pruneBlobs();
     const blob = blobs.get(raw)?.blob;
