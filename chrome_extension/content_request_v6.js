@@ -11,7 +11,11 @@
   const rich = globalThis.__CHAT2API_RICH_RESPONSE_V69__ || null;
   const native = globalThis.__CHAT2API_NATIVE_CONTENT_V1__ || null;
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-  const state = { active: null, listener: null, contract: null, revision: 69 };
+  // Compatibility revision stays 69; track native-scope feature freshness
+  // separately so a retained tab with an old request-v6 listener cannot pass
+  // a newly injected bundle marker after an extension update.
+  const state = { active: null, listener: null, contract: null, revision: 69,
+    nativeScopeGateRevision: 287 };
   globalThis[KEY] = state;
 
   const normalize = value => String(value || "")
