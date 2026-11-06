@@ -4,6 +4,7 @@ import asyncio
 import contextvars
 import hashlib
 import json
+import re
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -233,6 +234,17 @@ class ClientRegistry:
                 if client.metadata.get(key) != value:
                     client.metadata[key] = value
                     changed = True
+            # The persisted version is initially populated at pairing, but a
+            # paired extension can be upgraded in-place without rotating its
+            # device identity. Accept only a bounded manifest-style version
+            # from the already authenticated Worker socket.
+            reported_version = metadata.get("extension_version")
+            if isinstance(reported_version, str):
+                reported_version = reported_version.strip()
+                if re.fullmatch(r"\\d{1,3}\\.\\d{1,3}\\.\\d{1,5}(?:[-+][A-Za-z0-9._-]{1,20})?", reported_version):
+                    if client.version != reported_version:
+                        client.version = reported_version
+                        changed = True
             reported_device = str(metadata.get("device_id") or "").strip()
             if reported_device and client.device_id != reported_device:
                 client.device_id = reported_device
