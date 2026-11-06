@@ -153,6 +153,25 @@ class TelemetryStore:
                     **(previous if isinstance(previous, dict) else {}),
                     **delta,
                 }
+            elif existing and isinstance(record.get("diagnostics"), dict):
+                # Transport observation is owned by the ASGI observer, not by
+                # late Worker snapshots. A detached terminal/finalizer may
+                # asynchronously upsert an older whole diagnostics dict after
+                # the observer's atomic patch and erase the delivered/closed
+                # framing proof. Preserve ONLY the three previously verified
+                # transport fields, leaving other Worker fields unchanged.
+                previous = existing.get("diagnostics")
+                if (isinstance(previous, dict)
+                        and isinstance(previous.get("api_stream_transport_truth"), dict)):
+                    incoming = dict(record["diagnostics"])
+                    for key in (
+                        "api_stream_transport_truth",
+                        "api_stream_peer_disconnect_seen",
+                        "api_delivery_state",
+                    ):
+                        if key in previous:
+                            incoming[key] = previous[key]
+                    record["diagnostics"] = incoming
             # Request-v6's first terminal is authoritative. An asynchronous
             # observer or late write from an earlier running snapshot may not
             # reopen the completed/error request or replace its final body.
