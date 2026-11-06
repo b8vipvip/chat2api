@@ -445,3 +445,20 @@ def test_v262_windows_diagnostic_is_not_a_request_terminal_owner():
     assert 'nativePageForeground' in (ROOT / "app" / "worker_probe_ui_patch.py").read_text(encoding="utf-8")
     assert 'nativePageShowTimeline' in (ROOT / "app" / "admin_worker_tools_v1.js").read_text(encoding="utf-8")
 
+
+
+def test_v286_request_owned_native_multi_toolbar_contract():
+    """A verified whole assistant DIV may outvote overlapping toolbar ancestors.
+
+    It must NEVER grant authority to unverified candidates, prior user turns,
+    page roots, legacy toolbars, or change the request-v6 terminal owner.
+    """
+    source = (ROOT / "chrome_extension" / "content_request_v6.js").read_text("utf-8")
+    assert "const exactRoleless = roleless?.rolelessRichVerified === true" in source
+    assert "Boolean(roleless.finishAction) && scopes.has(candidate)" in source
+    assert "const selectedScopes = exactRoleless ? new Set([candidate]) : scopes" in source
+    assert 'if (selectedScopes.size !== 1) return gate(' in source
+    assert "native_scope_gate_reason:" in source
+    assert "native_scope_gate_facts:" in source
+    assert 'native_capture_failure = "native-reply-scope-unverified"' in source
+    assert 'if (event?.type === "chat.completed" && active)' in source
