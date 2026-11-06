@@ -98,3 +98,26 @@ def test_other_worker_terminal_cannot_override_request_row():
 def test_endpoint_uses_same_worker_broker_truth_before_row_finalized():
     source=(__import__("pathlib").Path(__file__).resolve().parents[1]/"app/main.py").read_text()
     assert 'native_terminal_view(row, broker.requests.get(request_id))' in source
+
+
+def test_live_api_route_refuses_broker_finished_but_history_still_running(tmp_path):
+    from app.broker import RequestState
+    app=create_app(Settings(CHAT2API_API_KEY="test-key",CHAT2API_PAIRING_CODE="test-pair",
+                            CHAT2API_DATA_DIR=tmp_path))
+    with TestClient(app) as client:
+        async def seed():
+            await app.state.telemetry.upsert({"request_id":RID,"api_key_id":"master",
+                                              "client_id":"ext_consistent_lease",
+                                              "status":"running","diagnostics":{}})
+        asyncio.run(seed())
+        assert app.state.native_content.publish(RID,"master",SNAP)
+        state=RequestState(request_id=RID,client_id="ext_consistent_lease")
+        state.terminal_event_type="chat.completed"
+        state.diagnostics.update(BAD)
+        app.state.broker.requests[RID]=state
+        auth={"Authorization":"Bearer test-key"}
+        assert client.get(f"/v1/native-content/{RID}",headers=auth).status_code==404
+        admin=client.get(f"/api/admin/requests/{RID}/native-content",headers=auth)
+        assert admin.status_code==200
+        assert admin.json()["snapshot_finality"]=="rejected-final"
+        assert app.state.telemetry.get(RID)["status"]=="running"
