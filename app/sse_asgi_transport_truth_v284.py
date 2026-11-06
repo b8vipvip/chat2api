@@ -17,7 +17,6 @@ from typing import Any
 LOG = logging.getLogger("chat2api.sse_transport")
 
 
-
 class _DoneFrameDetector:
     """Bounded SSE *event* parser; no response content is retained in telemetry.
 
@@ -36,14 +35,16 @@ class _DoneFrameDetector:
         self._done_data_only = False
         self.done = False
 
-    def _append(self, fragment: bytes) -> None:
+    def _append(self, body: bytes, start: int, end: int) -> None:
         if self._line_overflow:
             return
-        if len(fragment) > self._MAX_LINE_PREFIX - len(self._line):
+        # Check the span BEFORE slicing: a 12-MiB JSON data line must not
+        # allocate another 12-MiB temporary just for terminal detection.
+        if end - start > self._MAX_LINE_PREFIX - len(self._line):
             self._line.clear()
             self._line_overflow = True
             return
-        self._line.extend(fragment)
+        self._line.extend(memoryview(body)[start:end])
 
     def _finish_line(self) -> None:
         if self._line_overflow:
@@ -76,9 +77,9 @@ class _DoneFrameDetector:
         while offset < len(body):
             end = body.find(b"\n", offset)
             if end < 0:
-                self._append(body[offset:])
+                self._append(body, offset, len(body))
                 break
-            self._append(body[offset:end])
+            self._append(body, offset, end)
             self._finish_line()
             offset = end + 1
         return self.done
