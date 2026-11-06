@@ -15,7 +15,7 @@ async function run(inputBody, makeInit, useRequest=true) {
   const emitted=[],sent=[];
   const listeners=[];
   const ctx={
-    URL, Request, Response, Blob, ArrayBuffer, Uint8Array,
+    URL, Request, Response, Headers, Blob, ArrayBuffer, Uint8Array,
     TextDecoder, TextEncoder,
     location:{href:"https://chatgpt.com/"},
     document:{documentElement:{setAttribute(){}}},
@@ -28,7 +28,7 @@ async function run(inputBody, makeInit, useRequest=true) {
       const raw=await effective.text();
       let parsed=null;
       try {parsed=JSON.parse(raw)}catch(_){}
-      sent.push({raw,parsed});
+      sent.push({raw,parsed,contentType:effective.headers.get('content-type'),probe:effective.headers.get('x-probe')});
       return new Response("data: [DONE]\n\n",{
         status:200,headers:{"content-type":"text/event-stream"},
       });
@@ -57,6 +57,7 @@ async function run(inputBody, makeInit, useRequest=true) {
 }
 
 function expectRouted({wire,observation}) {
+  assert.equal(wire.contentType,'application/json', 'rewritten JSON body must retain application/json');
   assert.equal(wire.parsed.model,routedModel,
     "actual fetch body must contain requested transport model");
   assert.equal(observation.request_wire_model,routedModel,
@@ -83,6 +84,16 @@ expectRouted(await run(payload(oldModel),()=>({method:"POST"})));
 expectRouted(await run(payload(oldModel),()=>({
   method:"POST",body:new Blob([payload(oldModel)],{type:"application/json"}),
 }),false));
+
+// A Blob's inferred MIME must not be silently changed to text/plain by
+// converting the transmitted body into a JavaScript string.
+const vendor=await run(payload(oldModel),()=>({
+  method:"POST",headers:{"x-probe":"must-stay"},
+  body:new Blob([payload(oldModel)],{type:"application/vnd.api+json"}),
+}),false);
+assert.equal(vendor.wire.parsed.model,routedModel);
+assert.equal(vendor.wire.contentType,"application/vnd.api+json");
+assert.equal(vendor.wire.probe,"must-stay");
 
 // Non-JSON unknown BodyInit must NEVER be described as the old Request model.
 // Its actual contents are deliberately left untouched.
