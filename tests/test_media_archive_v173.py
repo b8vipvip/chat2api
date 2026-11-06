@@ -70,6 +70,26 @@ def test_reject_non_image_and_corrupt_inline_data_without_external_network(tmp_p
     assert store.public_config()["count"] == 0
 
 
+def test_oversized_base64_image_is_refused_before_decode_allocation(tmp_path: Path, monkeypatch):
+    """20 MiB decoded cap must be checked before allocating another bytearray."""
+    import app.media_archive_v173 as module
+
+    store = MediaArchive(tmp_path, "master")
+    monkeypatch.setattr(module, "MAX_BYTES", 32)
+    decoded = []
+
+    def must_not_decode(*args, **kwargs):
+        decoded.append(True)
+        raise AssertionError("oversized base64 should never be decoded")
+
+    monkeypatch.setattr(module.base64, "b64decode", must_not_decode)
+    huge_inline = "![Generated](data:image/png;base64," + ("A" * 80) + ")"
+    with pytest.raises(ValueError, match="could not be transferred"):
+        store.rewrite_markdown(huge_inline, "owner", "req_image", "https://site.example")
+    assert decoded == []
+    assert store.public_config()["count"] == 0
+
+
 def test_real_storage_healthcheck_for_local_and_fake_s3(tmp_path: Path, monkeypatch):
     store = MediaArchive(tmp_path, "master")
     assert store.test_backend() == {"ok": True, "backend": "local", "verified": "write-read"}
