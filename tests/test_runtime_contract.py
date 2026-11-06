@@ -460,5 +460,5 @@ def test_v286_request_owned_native_multi_toolbar_contract():
     assert 'if (selectedScopes.size !== 1) return gate(' in source
     assert "native_scope_gate_reason:" in source
     assert "native_scope_gate_facts:" in source
-    assert 'native_capture_failure = "native-reply-scope-unverified"' in source
+    assert 'active.nativeCaptureFailure = "native-reply-scope-unverified"' in source
     assert 'if (event?.type === "chat.completed" && active)' in source
