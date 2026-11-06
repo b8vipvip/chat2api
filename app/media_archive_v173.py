@@ -228,7 +228,8 @@ class MediaArchive:
                     "Failed to discard unpublished media object"
                 )
 
-    def store_image(self, raw: bytes, mime: str, owner: str, request_id: str):
+    def store_image(self, raw: bytes, mime: str, owner: str, request_id: str,
+                    *, stop=None):
         width, height, preview = self._render_thumbnail(raw, mime)
         cfg = self._config()
         if not cfg["auto_archive"]:
@@ -239,8 +240,14 @@ class MediaArchive:
         full_key = origin + "." + ALLOWED[mime]
         thumb_key = origin + "-thumb.webp"
         try:
+            if stop is not None:
+                stop.checkpoint()
             self._write(cfg, full_key, raw, mime)
+            if stop is not None:
+                stop.checkpoint()
             self._write(cfg, thumb_key, preview, "image/webp")
+            if stop is not None:
+                stop.checkpoint()
             with self._db() as conn:
                 conn.execute("INSERT INTO media VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (
                     media_id, token, owner, request_id, mime, len(raw), width, height,
@@ -254,7 +261,8 @@ class MediaArchive:
                 "width": width, "height": height, "backend": cfg["backend"],
                 "sha256": hashlib.sha256(raw).hexdigest()}
 
-    def rewrite_markdown(self, source: str, owner: str, request_id: str, base_url: str):
+    def rewrite_markdown(self, source: str, owner: str, request_id: str,
+                         base_url: str, *, stop=None):
         output = []
         last = 0
         rows = []
@@ -262,6 +270,8 @@ class MediaArchive:
         complete = False
         try:
             for match in MEDIA_PATTERN.finditer(source):
+                if stop is not None:
+                    stop.checkpoint()
                 image_url = match.group(2)
                 try:
                     if image_url.startswith("data:image/"):
@@ -299,9 +309,19 @@ class MediaArchive:
                                         raise ValueError("Remote image exceeds archive limit")
                                     parts.append(chunk)
                                 raw = b"".join(parts)
-                    record = self.store_image(raw, mime, owner, request_id)
-                    # Record immediately, even if later URL formatting raises.
+                    if stop is not None:
+                        stop.checkpoint()
+                        record = self.store_image(
+                            raw, mime, owner, request_id, stop=stop
+                        )
+                    else:
+                        record = self.store_image(raw, mime, owner, request_id)
+                    # Record immediately, even if late timeout is signaled
+                    # while the storage backend was completing a blocking
+                    # write. The rollback finally owns this exact media ID.
                     stored_ids.append(record["id"])
+                    if stop is not None:
+                        stop.checkpoint()
                 except (ValueError, OSError, httpx.HTTPError) as exc:
                     raise ValueError("Generated image could not be transferred to configured storage") from exc
                 prefix = (self._config().get("public_base_url") or base_url.rstrip("/"))
