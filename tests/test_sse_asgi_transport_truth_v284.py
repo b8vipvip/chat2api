@@ -184,3 +184,83 @@ def test_main_wires_same_request_broker_state_and_no_request_body_copy():
     assert 'request.scope["chat2api_sse_broker_state"] = state' in server
     assert 'request.scope["chat2api_sse_request_id"] = request_id' in server
     assert "chat2api_sse_transport_truth" in server
+
+
+@pytest.mark.parametrize(
+    ("frames", "expected_done"),
+    [
+        # ASGI servers are free to combine several SSE events into one send.
+        ([b'data: {"step":1}\n\ndata: [DONE]\n\n'], True),
+        # TCP/ASGI boundaries need not align with an SSE line or event.
+        ([b"data: [DO", b"NE]\r\n", b"\r\n"], True),
+        ([b"data: [DONE]\n", b"\n"], True),
+        # A textual mention in another data value must not be a DONE event.
+        ([b'data: {"content":"data: [DONE]"}\n\n'], False),
+        # A second data field invalidates the whole candidate event.
+        ([b"data: [DONE]\ndata: more\n\n"], False),
+        # Closing the event with no blank line is not a complete SSE frame.
+        ([b"data: [DONE]\n"], False),
+        # Huge data fields are skipped without keeping response bytes.
+        ([b"data: " + b"X" * 100_000 + b"\n\n", b"data: [DONE]\n\n"], True),
+    ],
+)
+def test_sse_done_detection_follows_event_framing_across_body_sends(
+    frames, expected_done,
+):
+    telemetry = FakeTelemetry()
+
+    async def app(scope, receive, send):
+        scope["chat2api_sse_request_id"] = RID
+        await send({"type": "http.response.start", "status": 200,
+                    "headers": [(b"content-type", b"text/event-stream")]})
+        for frame in frames:
+            await send({"type": "http.response.body", "body": frame,
+                        "more_body": True})
+        await send({"type": "http.response.body", "body": b"",
+                    "more_body": False})
+
+    run(SSETransportTruth(app, telemetry))
+    evidence = telemetry.get(RID)["diagnostics"]["api_stream_transport_truth"]
+    assert evidence["asgi_done_frame_sent"] is expected_done
+    assert evidence["asgi_body_bytes_sent"] == sum(map(len, frames))
+    assert evidence["asgi_receive_calls"] == 0
+    assert evidence["asgi_receive_messages"] == 0
+    assert evidence["asgi_receive_last_ms"] is None
+    assert telemetry.get(RID)["diagnostics"]["api_delivery_state"] == (
+        "asgi-complete-unconfirmed" if expected_done else "asgi-incomplete"
+    )
+
+
+def test_disconnect_absence_has_observation_coverage_not_false_negative_proof():
+    telemetry = FakeTelemetry()
+
+    async def app(scope, receive, send):
+        scope["chat2api_sse_request_id"] = RID
+        await send({"type": "http.response.start", "status": 200,
+                    "headers": [(b"content-type", b"text/event-stream")]})
+        assert (await receive())["type"] == "http.request"
+        await send({"type": "http.response.body", "body": b": alive\n\n",
+                    "more_body": True})
+
+    run(SSETransportTruth(app, telemetry))
+    evidence = telemetry.get(RID)["diagnostics"]["api_stream_transport_truth"]
+    assert evidence["http_disconnect_seen"] is False
+    assert evidence["asgi_receive_calls"] == 1
+    assert evidence["asgi_receive_messages"] == 1
+    assert evidence["asgi_receive_last_ms"] is not None
+
+
+def test_done_detection_does_not_scan_failed_asgi_send():
+    telemetry = FakeTelemetry()
+
+    async def app(scope, receive, send):
+        scope["chat2api_sse_request_id"] = RID
+        await send({"type": "http.response.start", "status": 200,
+                    "headers": [(b"content-type", b"text/event-stream")]})
+        await send({"type": "http.response.body", "body": b"data: [DONE]\n\n",
+                    "more_body": True})
+
+    run(SSETransportTruth(app, telemetry), failing_send=True)
+    evidence = telemetry.get(RID)["diagnostics"]["api_stream_transport_truth"]
+    assert evidence["asgi_done_frame_sent"] is False
+    assert evidence["asgi_send_error"] == "OSError"
