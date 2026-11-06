@@ -33,7 +33,7 @@ def test_python_package_versions_are_aligned():
 def test_chrome_bridge_contract_matches_manifest_bundle():
     manifest = json.loads((ROOT / "chrome_extension" / "manifest.json").read_text(encoding="utf-8"))
     assert RELEASE_VERSION == SERVER_RUNTIME_VERSION == CHROME_BRIDGE_VERSION == CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.289"
+    assert RELEASE_VERSION == "0.22.290"
     assert manifest["version"] == RELEASE_VERSION
 
 
@@ -68,7 +68,7 @@ def test_realtime_protocol_contract_matches_live_bridge():
 def test_v148_release_contract_keeps_broker_terminal_authority():
     from pathlib import Path
     from app.runtime_contract import RELEASE_VERSION, CHROME_BRIDGE_BUNDLE_VERSION
-    assert RELEASE_VERSION == "0.22.289"
+    assert RELEASE_VERSION == "0.22.290"
     assert CHROME_BRIDGE_BUNDLE_VERSION == RELEASE_VERSION
     root = Path(__file__).resolve().parents[1]
     watchdog = (root / "app/request_stall_patch.py").read_text(encoding="utf-8")
@@ -142,7 +142,7 @@ def test_runtime_contract_is_final_admin_version_owner():
     client = TestClient(runtime)
     html = client.get("/admin").text
     assert f'<script src="{ADMIN_VERSION_ASSET}"></script>' in html
-    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.289"></script>' in html
+    assert f'<script src="{ADMIN_EXTENSION_COLUMNS_ASSET}?v=0.22.290"></script>' in html
     assert html.index('/assets/historical.js') < html.index(ADMIN_VERSION_ASSET) < html.index(ADMIN_EXTENSION_COLUMNS_ASSET)
 
     developers_html = client.get("/developers").text
