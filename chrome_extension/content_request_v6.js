@@ -642,6 +642,8 @@
         native_message_id_scope_verified:nativeSelectionBound === true,
         native_reply_scope_binding:String(active.nativeBindingEvidence || "").slice(0,90),
         native_reply_scope_phase:String(active.nativeBindingPhase || "").slice(0,16),
+        native_scope_gate_reason:String(active.nativeScopeGateReason || "unknown").slice(0,40),
+        native_scope_gate_facts:active.nativeScopeGateFacts || null,
         native_capture_attempted:active.nativeCaptureAttempted === true,
         native_capture_failure:String(active.nativeCaptureFailure || "").slice(0,80),
         native_transport_ack_error:String(active.nativeTransportAckError || "").slice(0,80),
@@ -851,6 +853,23 @@
   // owns dispatch and terminal; this helper only supplies positive DOM scope
   // evidence to native-content and native DOM diagnostic observers.
   function bindNativeReplyScope(active, phase = "terminal") {
+    // Bounded read-only gate telemetry. Never record text, DOM, URLs or prompts.
+    const gate = (reason, kind = "", actions = 0, scopes = 0, roleless = false) => {
+      if (active && typeof active === "object") {
+        const allowed = ["fresh-roleless-rich-answer-v246",
+          "fresh-roleless-compact-div-v248", "after-current-user-turn",
+          "new-turn-identity", "historical-turn"];
+        active.nativeScopeGateReason = reason;
+        active.nativeScopeGateFacts = {
+          reason, phase: phase === "terminal" ? "terminal" : "progress",
+          candidate_kind: allowed.includes(kind) ? kind : "other",
+          fresh_action_count: Math.min(32, actions),
+          eligible_scope_count: Math.min(32, scopes),
+          roleless_reply_verified: Boolean(roleless),
+        };
+      }
+      return false;
+    };
     if (!active?.requestId || !active.submitStartedAt ||
         !active.baselineCapturedAt ||
         active.baselineCapturedAt > active.submitStartedAt ||
@@ -859,7 +878,7 @@
         Number(active.networkObservedAt || 0) < active.submitStartedAt ||
         active.cancelled ||
         active.options?.voice === true ||
-        active.options?.mode === "voice") return false;
+        active.options?.mode === "voice") return gate("preconditions");
     const prior = active.nativeVerifiedReplyScope;
     if (prior?.isConnected &&
         !prior.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']") &&
@@ -876,11 +895,12 @@
     if (!current?.isNew || !(candidate instanceof Element) ||
         !candidate.isConnected || !visible(candidate) ||
         candidate.closest?.("[data-message-author-role='user'],[data-testid='user-message'],form,nav,aside,header,footer,[role='dialog']") ||
-        !candidate.closest?.("main,[role='main'],#thread")) return false;
+        !candidate.closest?.("main,[role='main'],#thread"))
+      return gate("candidate-not-verifiable", current?.reason);
     const newActions = responseFinishActions().filter(button =>
       !active.baselineFinishActions.has(button) &&
       button.isConnected && turnFollows(candidate, button));
-    if (!newActions.length) return false;
+    if (!newActions.length) return gate("no-fresh-toolbar", current?.reason);
     const roleless = ["fresh-roleless-rich-answer-v246","fresh-roleless-compact-div-v248"]
       .includes(current.reason) ? verifiedRolelessRichAbortCandidate(active, current) : null;
     const scopes = new Set();
@@ -907,9 +927,26 @@
           (suffix.length >= 12 && content.includes(suffix))) continue;
       scopes.add(scope);
     }
-    // Multiple different reply/tool scopes are ambiguous. Never guess.
-    if (scopes.size !== 1) return false;
-    const [scope] = scopes;
+    // A positive H4/DIV/fresh-toolbar proof identifies the exact reply DIV.
+    // Extra action-specific ancestor scopes are not distinct assistant turns.
+    // Never apply this coalescing rule to an unverified generic candidate.
+    const exactRoleless = roleless?.rolelessRichVerified === true
+      && Boolean(roleless.finishAction) && scopes.has(candidate);
+    const selectedScopes = exactRoleless ? new Set([candidate]) : scopes;
+    if (selectedScopes.size !== 1) return gate(
+      scopes.size ? "ambiguous-reply-scopes" : "no-safe-reply-scope",
+      current?.reason, newActions.length, scopes.size, exactRoleless);
+    const [scope] = selectedScopes;
+    active.nativeScopeGateReason = "verified";
+    active.nativeScopeGateFacts = {
+      reason: "verified", phase: phase === "terminal" ? "terminal" : "progress",
+      candidate_kind: ["fresh-roleless-rich-answer-v246",
+        "fresh-roleless-compact-div-v248"].includes(current?.reason)
+        ? current.reason : "other",
+      fresh_action_count: Math.min(32, newActions.length),
+      eligible_scope_count: Math.min(32, scopes.size),
+      roleless_reply_verified: exactRoleless,
+    };
     active.lastCandidateNode = candidate;
     active.nativeVerifiedReplyScope = scope;
     active.nativeBindingEvidence = "same-request-baseline+network+fresh-reply-toolbar-v260";

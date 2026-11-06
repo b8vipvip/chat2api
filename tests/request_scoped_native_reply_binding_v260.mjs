@@ -99,6 +99,28 @@ candidate.querySelectorAll=()=>[];
 const roleless=make();
 assert.equal(scope.bind(roleless),true);
 assert.equal(roleless.nativeVerifiedReplyScope,candidate);
+// A verified full answer DIV with two fresh controls must not be rejected
+// merely because another action's *ancestor* differs from the exact reply.
+// Do not broaden the rule to unverified roleless candidates.
+const auxiliary=new Element("Other action toolbar");
+scope.verifiedRolelessRichAbortCandidate=()=>({
+  finishAction:action,rolelessRichVerified:true,
+});
+scope.replyScopeForFinishAction=(_candidate,button)=>button===auxiliary?another:null;
+actions=[action,auxiliary];
+const multiple=make();
+assert.equal(scope.bind(multiple,"terminal"),true,
+  "verified entire reply DIV must survive multiple auxiliary toolbars");
+assert.equal(multiple.nativeVerifiedReplyScope,candidate);
+assert.equal(multiple.nativeScopeGateFacts?.eligible_scope_count,2);
+assert.equal(multiple.nativeScopeGateFacts?.roleless_reply_verified,true);
+const notIndependent=make();
+scope.verifiedRolelessRichAbortCandidate=()=>({finishAction:action});
+assert.equal(scope.bind(notIndependent),false,
+  "without independent roleless terminal proof, ambiguous scopes remain rejected");
+assert.equal(notIndependent.nativeScopeGateReason,"ambiguous-reply-scopes");
+assert.equal(notIndependent.nativeScopeGateFacts?.eligible_scope_count,2);
+actions=[action];
 scope.verifiedRolelessRichAbortCandidate=()=>null;
 assert.equal(scope.bind(make()),false,"unverified roleless fragment remains rejected");
 assert.ok(source.includes('bindNativeReplyScope(active, "terminal")'));
