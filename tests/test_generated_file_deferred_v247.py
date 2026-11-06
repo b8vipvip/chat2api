@@ -129,3 +129,55 @@ def test_deferred_manifest_status_is_owner_scoped_without_exposing_tokens(tmp_pa
         thread.join(timeout=5)
     assert deferred.list_for_request("req-A", "key-A")[0]["status"] == "ready"
     deferred.pool.shutdown(wait=True)
+
+
+def _assert_no_partial_pending_files(deferred: DeferredGeneratedFiles, archive: FakeArchive) -> None:
+    assert list(deferred.root.glob("pgen_*")) == []
+    with sqlite3.connect(archive.db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM deferred_generated_files").fetchone()[0] == 0
+
+
+def test_staged_write_failure_removes_part_file_before_sqlite_registration(tmp_path, monkeypatch):
+    archive = FakeArchive(tmp_path, threading.Event())
+    deferred = DeferredGeneratedFiles(archive)
+    real_write = Path.write_bytes
+
+    def fail_after_partial_write(self, data):
+        if self.parent == deferred.root and self.suffix == ".part":
+            real_write(self, b"partial")
+            raise OSError("injected disk-full write")
+        return real_write(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", fail_after_partial_write)
+    with pytest.raises(OSError, match="disk-full"):
+        deferred.rewrite(_marker(b'{"ok":true}'), "owner", "req-part", "https://example.test")
+    _assert_no_partial_pending_files(deferred, archive)
+    deferred.pool.shutdown(wait=True)
+
+
+def test_staged_insert_failure_removes_renamed_bin_before_registration(tmp_path):
+    archive = FakeArchive(tmp_path, threading.Event())
+    deferred = DeferredGeneratedFiles(archive)
+    with sqlite3.connect(archive.db_path) as conn:
+        conn.execute("""CREATE TRIGGER fail_pending BEFORE INSERT ON deferred_generated_files
+                     BEGIN SELECT RAISE(ABORT, 'injected pending insert'); END""")
+    with pytest.raises(sqlite3.IntegrityError, match="injected pending insert"):
+        deferred.rewrite(_marker(b'{"ok":true}'), "owner", "req-db", "https://example.test")
+    _assert_no_partial_pending_files(deferred, archive)
+    deferred.pool.shutdown(wait=True)
+
+
+def test_second_pending_file_failure_cleans_first_and_second_files(tmp_path):
+    archive = FakeArchive(tmp_path, threading.Event())
+    deferred = DeferredGeneratedFiles(archive)
+    with sqlite3.connect(archive.db_path) as conn:
+        conn.execute("""CREATE TRIGGER fail_second_pending BEFORE INSERT ON deferred_generated_files
+                        WHEN NEW.filename = 'broken.json'
+                        BEGIN SELECT RAISE(ABORT, 'injected second insert'); END""")
+    first = _marker(b'{"first":1}')
+    second = "![📎 broken.json](data:application/json;base64," + (
+        base64.b64encode(b'{"second":2}').decode()) + ")"
+    with pytest.raises(sqlite3.IntegrityError, match="injected second insert"):
+        deferred.rewrite(first + "\\n" + second, "owner", "req-two", "https://example.test")
+    _assert_no_partial_pending_files(deferred, archive)
+    deferred.pool.shutdown(wait=True)
