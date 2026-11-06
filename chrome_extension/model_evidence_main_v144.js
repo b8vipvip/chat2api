@@ -181,8 +181,26 @@
           // The init BodyInit always takes priority over input Request.body.
           // Put the rewrite into init itself, including Blob/typed-array
           // overrides, so fetch cannot silently send the original model.
-          nextInit = { ...init, body: nextBody };
-          rewritten = true;
+          // Replacing Blob/bytes with a JS string otherwise silently changes
+          // Fetch's inferred Content-Type to text/plain;charset=UTF-8.
+          // Preserve effective Request/RequestInit headers, and synthesize a
+          // JSON type only where the original binary BodyInit supplied none.
+          // This is a ChatGPT /conversation JSON endpoint, not arbitrary
+          // upload rewriting. Never drop Authorization or other headers.
+          try {
+            const headers = new Headers(init.headers !== undefined ? init.headers
+              : input instanceof Request ? input.headers : undefined);
+            if (!headers.has("content-type")) {
+              const originalType = typeof Blob !== "undefined"
+                && init.body instanceof Blob ? init.body.type : "";
+              headers.set("content-type", originalType || "application/json");
+            }
+            nextInit = { ...init, headers, body: nextBody };
+            rewritten = true;
+          } catch (_) {
+            // Invalid inherited headers must not cause a false-success
+            // request_wire_model diagnostic; leave the original fetch intact.
+          }
         } else if (input instanceof Request) {
           try {
             nextInput = new Request(input, { body: nextBody });

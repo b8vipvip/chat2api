@@ -21,5 +21,6 @@ def test_main_world_adapter_never_falls_back_to_stale_request_body_on_override()
     assert 'Object.prototype.hasOwnProperty.call(init,"body")' in script
     assert 'if (hasOverride)' in script
     assert "new TextDecoder().decode" in script
-    assert "nextInit = { ...init, body: nextBody }" in script
+    assert "nextInit = { ...init, headers, body: nextBody }" in script
+    assert 'headers.set("content-type", originalType || "application/json")' in script
     assert "const actualWire = rewritten ? rawModel(payload) : originalWire;" in script
