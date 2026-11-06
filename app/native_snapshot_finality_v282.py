@@ -69,3 +69,33 @@ def native_snapshot_finality(row: dict[str, Any] | None,
         # still carry all positive same-revision transport evidence.
         return "verified-final"
     return "unverified-final"
+
+
+def native_terminal_view(row: dict[str, Any], broker_state: Any) -> dict[str, Any]:
+    """Use a request-owned Broker terminal even before telemetry is finalized.
+
+    A Worker terminal may precede 180 seconds of file archival while the row
+    still says running. Only correlate a Broker state when its client id
+    *exactly* equals the existing telemetry row's Worker client id. Never
+    allow an unrelated/new same-header request to override an older row.
+    """
+    if not isinstance(row, dict) or row.get("status") in TERMINAL:
+        return row
+    if broker_state is None:
+        return row
+    terminal = getattr(broker_state, "terminal_event_type", None)
+    if terminal not in {"chat.completed", "chat.error", "chat.cancelled"}:
+        return row
+    client_id = row.get("client_id")
+    if not isinstance(client_id, str) or not client_id:
+        return row
+    if getattr(broker_state, "client_id", None) != client_id:
+        return row
+
+    observed = getattr(broker_state, "diagnostics", None)
+    prior = row.get("diagnostics")
+    merged = dict(prior) if isinstance(prior, dict) else {}
+    if isinstance(observed, dict):
+        merged.update(observed)
+    return {**row, "status": "completed" if terminal == "chat.completed" else "error",
+            "diagnostics": merged}
