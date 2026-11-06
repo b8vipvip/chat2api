@@ -73,7 +73,14 @@ def test_v247_text_is_returned_before_file_storage_unblocks(tmp_path):
     gate.set()
     for future in list(deferred.pool._threads):
         future.join(timeout=5)
-    assert deferred.status(pending_id, token)["status"] == "ready"
+    meta = deferred.status(pending_id, token)
+    assert meta["status"] == "ready"
+    assert meta["filename"] == "result.json"
+    assert meta["bytes"] == len(raw)
+    import hashlib
+    assert meta["sha256"] == hashlib.sha256(raw).hexdigest()
+    with pytest.raises(KeyError):
+        deferred.status(pending_id, "invalid")
     data, mime, name = deferred.read(pending_id, token)
     assert data == raw and mime == "application/json" and name == "result.json"
     assert not (deferred.root / (pending_id + ".bin")).exists()

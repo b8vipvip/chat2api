@@ -132,6 +132,20 @@ const unique=items=>[...new Map(items.map(x=>[x.url,x])).values()];
 async function verifyAsset(asset,image){
 const u=new URL(asset.url);
 if(u.protocol!=="https:"||u.origin!==location.origin||!(image?u.pathname.startsWith("/api/media/"):u.pathname.startsWith("/api/generated-files/")))throw Error("不是当前站点的受控产物："+asset.name);
+// A ready status carries the SHA256 of the original staged bytes.
+// Download and hash independently: file headers alone cannot prove identity.
+const pending=/^\/api\/generated-files\/pending\/pgen_[a-f0-9]{32}\/[A-Za-z0-9_-]{16,150}$/.test(u.pathname);
+let expected=null;
+if(pending){
+  if(u.search||u.hash)throw Error("产物链接包含意外参数："+asset.name);
+  const stat=await fetch(u.origin+u.pathname+"/status",{cache:"no-store",credentials:"omit"});
+  if(!stat.ok)throw Error("无法读取归档文件校验信息："+asset.name);
+  expected=await stat.json();
+  if(expected?.status!=="ready"||!Number.isSafeInteger(expected?.bytes)
+    ||expected.bytes<1||!(/^[a-f0-9]{64}$/i).test(String(expected.sha256||""))
+    ||expected.filename!==asset.name)
+    throw Error("文件归档状态或身份未验证："+asset.name);
+}
 const r=await fetch(u.href,{cache:"no-store",credentials:"omit"});
 if(!r.ok)throw Error("文件无法下载："+asset.name+" HTTP "+r.status);
 const buf=await r.arrayBuffer(),b=new Uint8Array(buf),ext=asset.name.toLowerCase().split(".").pop();
@@ -141,7 +155,17 @@ const pic=(b[0]===137&&b[1]===80&&b[2]===78&&b[3]===71)||(b[0]===255&&b[1]===216
 if(image&&!pic)throw Error("文件头不是图像："+asset.name);
 if(!image&&["xlsx","pptx","zip"].includes(ext)&&!zip)throw Error("文件头不是ZIP/Office："+asset.name);
 if(!image&&ext==="json")JSON.parse(new TextDecoder().decode(b));
-return {name:asset.name,url:u.href,bytes:b.length};
+let sha256Verified=false;
+if(expected){
+  if(b.length!==expected.bytes)throw Error("文件下载大小与归档记录不一致："+asset.name);
+  if(!globalThis.crypto?.subtle?.digest)throw Error("浏览器无法完成 SHA256 校验："+asset.name);
+  const digest=await globalThis.crypto.subtle.digest("SHA-256",buf);
+  const actual=[...new Uint8Array(digest)].map(x=>x.toString(16).padStart(2,"0")).join("");
+  if(actual!==String(expected.sha256).toLowerCase())
+    throw Error("文件实际下载 SHA256 与归档不一致："+asset.name);
+  sha256Verified=true;
+}
+return {name:asset.name,url:u.href,bytes:b.length,sha256_verified:sha256Verified};
 }
 async function inspect(id,turns,task){
 const checks=[],assets=[],warnings=[],text=turns.map(x=>x.text).join("\n");
@@ -170,6 +194,8 @@ check(Boolean(f),"有"+ext.toUpperCase()+"文件");
 if(f)assets.push(await verifyAsset(f,false));
 }
 check(assets.length===4,"全部四种文件真实下载");
+check(assets.length===4&&assets.every(x=>x.sha256_verified===true),
+  "四种文件下载字节 SHA256 均与服务端归档记录一致");
 }
 if(id==="D" && task.kind==="web_app"){
 check(turns.length===1,"完成完整的离线网页开发请求");
@@ -233,13 +259,24 @@ for(const turn of report.turns){
   try{
     const detail=await api("/api/admin/requests/"+encodeURIComponent(turn.request_id));
     const diag=detail.diagnostics||{};
+    const expectedModel=String(detail.routed_model||detail.requested_model||model||"").trim();
+    const servedModel=String(detail.served_model||diag.served_model||"").trim();
+    const modelMismatch=detail.model_conflict===true||diag.model_conflict===true
+      ||Boolean(servedModel&&expectedModel&&servedModel!==expectedModel);
     turn.upstream_evidence={
       api_status:detail.status,
       network_terminal_proof:diag.network_stream_terminal_proof===true,
       network_stream_phase:diag.network_stream_phase||null,
       network_stream_error:diag.network_stream_error||null,
-      response_terminal_source:diag.response_terminal_source||null
+      response_terminal_source:diag.response_terminal_source||null,
+      requested_model:expectedModel||null,
+      served_model:servedModel||null,
+      model_conflict:modelMismatch,
+      model_verified:detail.model_verified===true
     };
+    if(modelMismatch)report.warnings.push("请求 "+turn.request_id+
+      " 的实际服务模型 "+(servedModel||"未确认")+" 与指定模型 "+(expectedModel||"未确认")+
+      " 不一致；不得作为指定模型验收通过");
     if(detail.status!=="completed"||diag.network_stream_terminal_proof!==true)
       report.warnings.push("请求 "+turn.request_id+" 的底层ChatGPT流缺乏正常终态证据，请人工复核；API completed 不能替代上游终态");
   }catch(e){report.warnings.push("请求 "+turn.request_id+" 无法读取上游终态诊断："+String(e.message||e));}
