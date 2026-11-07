@@ -56,6 +56,7 @@ const verified = new Element('DIV',[first,second]);
 const main = new Element('MAIN',[verified]);
 const events=[];
 const scope={
+  document:{querySelectorAll:()=>[]},
   Element,Node:{TEXT_NODE:TEXT},Date,setTimeout,clearTimeout,
   getComputedStyle:()=>({display:'grid',visibility:'visible',gap:'12px',
     fontSize:'16px',fontWeight:'400',gridTemplateColumns:'120px 120px',
