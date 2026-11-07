@@ -221,6 +221,10 @@ jobs:
         run: node --test tests/complete_reply_boundary_v202.mjs
       - name: ABCD rich-text code and math serialization VM
         run: node --test tests/rich_code_math_v201.mjs
+      - name: Native code editor and Markdown fence fidelity v296
+        run: |
+          node tests/native_content_code_editor_v296.mjs
+          node tests/rich_response_code_editor_v296.mjs
       - name: Live upstream terminal and MathML v206 regression
         run: node --test tests/request_upstream_math_v206.mjs
       - name: Verified short replies and generated-file signatures v207
