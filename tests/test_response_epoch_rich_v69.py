@@ -37,7 +37,9 @@ def test_manual_playground_waits_for_exact_final_reply_and_safely_renders_markdo
     assert 'PATCH_ID = "playground-chat-v3"' in patch
     assert 'with_name("admin_playground_chat_v69.js")' in patch
     assert "stream:false" in source.replace(" ","")
-    assert "payload.choices?.[0]?.message?.content" in source
+    assert 'const recovered = await recoverAuthoritativeResult(requestId,' in source
+    assert 'server-detached-v292' in source
+    assert '/api/admin/playground/chat-dispatch' in source
     assert "function renderMarkdown(markdown)" in source
     assert "innerHTML = assistantText" not in source
 
