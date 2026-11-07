@@ -23,9 +23,9 @@ FAILURE_FIELDS = ("native_capture_failure", "native_structural_failure",
 
 
 _CODE_LINE = re.compile(
-    r"(?m)^(?:import [A-Za-z_][A-Za-z_0-9.]*(?:\\s+as\\s+\\w+)?"
+    r"(?m)^(?:import [A-Za-z_][A-Za-z_0-9.]*(?:\s+as\s+\w+)?"
     r"|from [A-Za-z_][A-Za-z_0-9.]* import [A-Za-z_0-9*, ]+"
-    r"|(?:async\\s+)?def [A-Za-z_]\\w*\\([^\\n]{0,160}\\)\\s*:)"
+    r"|(?:async\s+)?def [A-Za-z_]\w*\([^\n]{0,160}\)\s*:)"
 )
 
 
@@ -68,12 +68,12 @@ def native_code_coverage(row: dict[str, Any] | None,
             nodes.extend(node.get("children") or [])
     if visited >= 30000:
         return "unverified"
-    rendered_code = re.sub(r"\\s+", "", "".join(pre_text))
+    rendered_code = re.sub(r"\s+", "", "".join(pre_text))
     if not rendered_code:
         return "missing-code-block"
     missing = [
         line for line in signatures
-        if re.sub(r"\\s+", "", line) not in rendered_code
+        if re.sub(r"\s+", "", line) not in rendered_code
     ]
     return "missing-code-lines" if missing else "covered"
 
