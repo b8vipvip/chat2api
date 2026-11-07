@@ -29,7 +29,8 @@
     if (!wrap?.isConnected || !wrap.contains?.(selection)
         || !String(wrap.getAttribute?.("data-chatgpt-search-message-ids")||"")
           .split(/\s+/).includes(id)
-        || wrap.querySelector?.(USER) || selection.querySelector?.(USER+","+INVALID))
+        || wrap.querySelector?.(USER) || selection.querySelector?.(USER)
+        || selection.closest?.(INVALID) || wrap.closest?.(INVALID))
       return null;
     const heading=wrap.querySelector?.(HEAD);
     const markdown=selection.querySelector?.(MD);
@@ -69,6 +70,63 @@
     }
     return {ids,nodes};
   }
+  // Diagnose WHY a long rich reply failed identity matching, without
+  // exposing IDs, prompt text, DOM markup, URLs or attribute values.
+  // The helper remains read-only; all counters are capped before logging.
+  function rejectionFacts(active,root,visible=defaultVisible) {
+    const keys=[
+      "selection_nodes","historical_nodes","fresh_nodes","invalid_id_nodes",
+      "hidden_fresh","bad_wrapper","missing_assistant_heading",
+      "missing_markdown","user_contaminated","dil_mismatch",
+      "outside_main","eligible_fresh","rich_controls_inside","scan_truncated"
+    ];
+    const facts=Object.fromEntries(keys.map(key=>[key,0]));
+    const increment=key=>{facts[key]=Math.min(32,facts[key]+1);};
+    let inspected=0;
+    for (const node of root?.querySelectorAll?.(SEL) || []) {
+      if (inspected++>=256) {facts.scan_truncated=1;break;}
+      increment("selection_nodes");
+      const id=String(node.getAttribute?.("data-chatgpt-selection-message-id")||"");
+      if(!ID.test(id)){increment("invalid_id_nodes");continue;}
+      if(active?.baselineNativeMessageIds?.has(id)
+          || active?.baselineNativeSelectionNodes?.has(node)){
+        increment("historical_nodes");continue;
+      }
+      increment("fresh_nodes");
+      if(node.querySelector?.(INVALID))increment("rich_controls_inside");
+      if(!node.isConnected || !visible(node)){increment("hidden_fresh");continue;}
+      const wrap=node.closest?.(WRAP);
+      if(!wrap?.isConnected || !wrap.contains?.(node)
+          || !String(wrap.getAttribute?.("data-chatgpt-search-message-ids")||"")
+             .split(/\\s+/).includes(id)
+          || node.closest?.(INVALID) || wrap.closest?.(INVALID)){
+        increment("bad_wrapper");continue;
+      }
+      if(wrap.querySelector?.(USER) || node.querySelector?.(USER)){
+        increment("user_contaminated");continue;
+      }
+      const heading=wrap.querySelector?.(HEAD);
+      if(!heading?.isConnected || !visible(heading)){
+        increment("missing_assistant_heading");continue;
+      }
+      const md=node.querySelector?.(MD);
+      if(!md?.isConnected || !node.contains?.(md) || !visible(md)){
+        increment("missing_markdown");continue;
+      }
+      const dil=md.querySelector?.("[data-dil-message-id]");
+      const source=md.querySelector?.("[data-dil-source-message-id]");
+      if((dil && dil.getAttribute?.("data-dil-message-id")!==id)
+          ||(source && source.getAttribute?.("data-dil-source-message-id")!==id)){
+        increment("dil_mismatch");continue;
+      }
+      if(!node.closest?.("main,[role='main'],#thread")){
+        increment("outside_main");continue;
+      }
+      increment("eligible_fresh");
+    }
+    return facts;
+  }
+
   function resolveRequest(active, candidate=null, root=globalThis.document,
                           visible=defaultVisible) {
     const fail=(reason,count=0)=>({ok:false,reason,candidate_count:Math.min(32,count)});
@@ -91,7 +149,8 @@
       && !active.baselineRolelessHeadings.has(item.heading)
       && item.node.closest?.("main,[role='main'],#thread"));
     if (fresh.length!==1)
-      return fail(fresh.length ? "ambiguous-new-assistant-ids" : "no-new-assistant-id",fresh.length);
+      return {...fail(fresh.length ? "ambiguous-new-assistant-ids" : "no-new-assistant-id",fresh.length),
+        facts:rejectionFacts(active,root,visible)};
     const selected=fresh[0];
     const owner=pageCandidate?.closest?.(SEL);
     // If request-v6 already has an independently selected assistant
