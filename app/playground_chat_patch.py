@@ -230,14 +230,20 @@ def install_playground_chat_patch(app: FastAPI) -> FastAPI:
             # terminal result without first calling the v3 start endpoint.
             existing = await app.state.test_runs.upsert(_running_row(body))
         changes = _terminal_changes(body)
-        # A terminal report from a legacy tab must not erase the dispatch
-        # version recorded before admission.
-        previous_transport = (existing.get("quality") or {}).get("transport_contract")
-        if previous_transport:
-            changes["quality"]["transport_contract"] = previous_transport
-        previous_scene = (existing.get("quality") or {}).get("abcd_scene")
-        if previous_scene in {"A", "B", "C", "D"}:
-            changes["quality"]["abcd_scene"] = previous_scene
+        previous_quality = (
+            existing.get("quality")
+            if isinstance(existing.get("quality"), dict) else {}
+        )
+        # TestRunStore.update is a SHALLOW merge. Writing a fresh quality
+        # dictionary here silently erased the client_sse_truth_v293 that was
+        # saved BEFORE the potentially multi-minute stream recovery. Preserve
+        # all previously recorded bounded transport facts and origin identity
+        # while allowing terminal response counters to be refreshed.
+        changes["quality"] = {**previous_quality, **changes["quality"]}
+        if previous_quality.get("transport_contract"):
+            changes["quality"]["transport_contract"] = previous_quality["transport_contract"]
+        if previous_quality.get("abcd_scene") in {"A", "B", "C", "D"}:
+            changes["quality"]["abcd_scene"] = previous_quality["abcd_scene"]
         row = await app.state.test_runs.update(run_id, changes)
         return {"run": row}
 
