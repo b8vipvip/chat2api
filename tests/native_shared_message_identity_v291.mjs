@@ -175,7 +175,7 @@ assert.equal(owned.nativeMessageIdentityBound,true);
 assert.equal(owned.nativeScopeGateReason,"verified");
 assert.equal(owned.nativeBindingEvidence,"same-request-native-assistant-message-id-v291");
 assert.equal(owned.lastCandidateNode,fresh.selection);
-const denied={...owned,baselineNativeMessageIds:new Set([idOld,idNew]),
+const denied={...owned,baselineNativeMessageIds:new Set([idOld,idNew,idStale]),
   nativeVerifiedReplyScope:null,nativeMessageIdentityBound:false,lastCandidateNode:old.paragraph};
 assert.equal(bindContext.bind(denied,"terminal"),false);
 assert.equal(denied.nativeMessageIdentityReason,"no-new-assistant-id");
