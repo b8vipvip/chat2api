@@ -31,6 +31,7 @@ class PlaygroundChatStart(BaseModel):
     api_key_name: str | None = Field(default=None, max_length=200)
     prompt: str = Field(default="", max_length=20000)
     attachments_count: int = Field(default=0, ge=0, le=4)
+    transport_contract: str | None = Field(default=None, max_length=80)
 
 
 class PlaygroundChatRecord(PlaygroundChatStart):
@@ -105,6 +106,7 @@ def _running_row(body: PlaygroundChatStart) -> dict[str, Any]:
         "quality": {
             "source": "manual-playground-chat",
             "playground_chat": PATCH_ID,
+            "transport_contract": body.transport_contract or "legacy-unmarked",
             "prompt_preview": _prompt_preview(body.prompt),
             "prompt_chars": len(body.prompt),
             "response_chars": 0,
@@ -150,6 +152,7 @@ def _terminal_changes(body: PlaygroundChatRecord) -> dict[str, Any]:
         "quality": {
             "source": "manual-playground-chat",
             "playground_chat": PATCH_ID,
+            "transport_contract": body.transport_contract or "legacy-unmarked",
             "prompt_preview": _prompt_preview(body.prompt),
             "prompt_chars": len(body.prompt),
             "response_chars": body.response_chars,
@@ -221,7 +224,13 @@ def install_playground_chat_patch(app: FastAPI) -> FastAPI:
             # Backward compatibility for an older console asset that reaches a
             # terminal result without first calling the v3 start endpoint.
             existing = await app.state.test_runs.upsert(_running_row(body))
-        row = await app.state.test_runs.update(run_id, _terminal_changes(body))
+        changes = _terminal_changes(body)
+        # A terminal report from a legacy tab must not erase the dispatch
+        # version recorded before admission.
+        previous_transport = (existing.get("quality") or {}).get("transport_contract")
+        if previous_transport:
+            changes["quality"]["transport_contract"] = previous_transport
+        row = await app.state.test_runs.update(run_id, changes)
         return {"run": row}
 
     async def require_abcd_report_admin(authorization: str | None = Header(default=None)) -> None:
