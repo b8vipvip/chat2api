@@ -256,6 +256,8 @@ class TelemetryStore:
         current_version_only: bool = False,
         server_version: str | None = None,
         server_commit: str | None = None,
+        source: str | None = None,
+        playground_request_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         # Query consumers are allowed to decorate/redact list rows. Return copies
         # so list-only redaction (final_prompt/response_text) can never mutate the
@@ -267,8 +269,18 @@ class TelemetryStore:
         model_value = (model or "").strip().lower()
         key_value = (key_id or "").strip()
         search = (q or "").strip().lower()
+        source_value = (source or "").strip().lower()
+        if source_value not in {"", "playground", "external"}:
+            raise ValueError("Unsupported request source")
+        if source_value and playground_request_ids is None:
+            raise ValueError("Request source needs verified Playground run IDs")
+        known_tests = set(playground_request_ids or ())
 
         def matches(row: dict[str, Any]) -> bool:
+            if source_value:
+                test_request = str(row.get("request_id") or "") in known_tests
+                if (source_value == "playground") != test_request:
+                    return False
             if current_version_only and (
                 not server_commit
                 or str(row.get("request_server_commit") or "") != server_commit
@@ -313,6 +325,12 @@ class TelemetryStore:
             return True
 
         filtered = [row for row in rows if matches(row)]
+        if playground_request_ids is not None:
+            for row in filtered:
+                row["request_source"] = (
+                    "playground" if str(row.get("request_id") or "") in known_tests
+                    else "external"
+                )
         safe_limit = max(1, min(int(limit), self.items.maxlen or 500))
         safe_offset = max(0, int(offset))
         return {

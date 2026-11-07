@@ -189,6 +189,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
         q: str | None = Query(default=None, max_length=200),
         status: str | None = Query(default=None, max_length=40),
         model: str | None = Query(default=None, max_length=120),
+        source: str | None = Query(default=None, pattern="^(playground|external)$"),
     ) -> StreamingResponse:
         # Exactly the same retained-row predicate as /api/admin/requests.
         # No timestamp means no time restriction, including version-scoped export.
@@ -207,9 +208,11 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
         # intentionally removes prompt and response text. Rehydrate from the
         # original request history BEFORE assembling the export; exporting
         # list-view copies would silently destroy diagnostic evidence.
+        test_index = request_test_index(getattr(app.state, "test_runs", None), limit=1000)
         filtered_rows = telemetry.query(
             limit=telemetry.items.maxlen or 500, offset=0,
             q=q, status=status, model=model, since=cutoff,
+            source=source, playground_request_ids=set(test_index),
             current_version_only=current_version_only,
             server_version=SERVER_RUNTIME_VERSION,
             server_commit=active_commit,
@@ -223,7 +226,6 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             detail = "No retained request records match the selected filters"
             raise HTTPException(status_code=404, detail=detail)
 
-        test_index = request_test_index(getattr(app.state, "test_runs", None))
         extension_snapshot = _safe_client_rows(registry)
         exported = []
         plain_bytes = 0
@@ -255,6 +257,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                         "request_id": request_id,
                         "recorded_at": row.get("recorded_at"),
                         "status": row.get("status"),
+                        "request_source": ("playground" if request_id in test_index else "external"),
                         "request_server_version": row.get("request_server_version"),
                         "request_server_commit": row.get("request_server_commit"),
                         "filename": filename,
@@ -265,8 +268,9 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                 manifest = {
                     "report_type": "chat2api-recent-request-log-bundle",
                     "report_version": 3,
-                    "selection_mode": "current_version" if current_version_only else ("since" if cutoff and not any((q, status, model)) else "filtered"),
-                    "filters": {"q": q or None, "status": status or None, "model": model or None},
+                    "selection_mode": "current_version" if current_version_only else ("since" if cutoff and not any((q, status, model, source)) else "filtered"),
+                    "filters": {"q": q or None, "status": status or None, "model": model or None,
+                                "source": source or None},
                     "current_version_only": current_version_only,
                     "request_version_field": "request_server_commit",
                     "request_commit_field": "request_server_commit",
@@ -290,7 +294,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
                     ("chat2api — 请求日志合并包\n"
                      f"导出数量：{len(exported)} 条（仅限仍留存的请求记录）\n"
                      f"起始时间（含）：{cutoff.isoformat() if cutoff else '不限制时间'}\n"
-                     f"其它筛选：搜索={q or '不限'}，状态={status or '不限'}，模型={model or '不限'}\n"
+                     f"其它筛选：搜索={q or '不限'}，状态={status or '不限'}，模型={model or '不限'}，来源={source or '不限'}\n"
                      f"仅当前运行提交：{'是，'+active_commit if current_version_only else '否'}\n"
                      f"当前正式版本：{SERVER_RUNTIME_VERSION}\n"
                      "历史请求若缺少创建时的可靠 Git SHA 标记，不会被归入当前提交。\n"

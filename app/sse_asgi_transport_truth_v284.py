@@ -99,6 +99,8 @@ class SSETransportTruth:
         truth = {
             "http_disconnect_seen": False,
             "http_disconnect_ms": None,
+            "http_disconnect_last_body_gap_ms": None,
+            "http_disconnect_activity": None,
             "asgi_receive_calls": 0,
             "asgi_receive_messages": 0,
             "asgi_receive_last_ms": None,
@@ -132,6 +134,18 @@ class SSETransportTruth:
             if message.get("type") == "http.disconnect":
                 truth["http_disconnect_seen"] = True
                 truth["http_disconnect_ms"] = elapsed_ms()
+                last_body = truth["asgi_last_body_ms"]
+                if last_body is not None:
+                    gap = max(0, truth["http_disconnect_ms"] - last_body)
+                    truth["http_disconnect_last_body_gap_ms"] = gap
+                    # This describes observed traffic only, not whether the
+                    # browser, proxy or an upstream hop initiated the close.
+                    truth["http_disconnect_activity"] = (
+                        "recent-successful-asgi-send" if gap <= 1000
+                        else "no-recent-asgi-send"
+                    )
+                else:
+                    truth["http_disconnect_activity"] = "before-first-sse-body"
             return message
 
         async def observed_send(message):

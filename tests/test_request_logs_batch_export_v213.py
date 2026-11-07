@@ -301,6 +301,7 @@ def test_filter_parity_between_history_table_and_full_retained_zip(tmp_path: Pat
             assert manifest["time_filter_field"] == "recorded_at"
             assert manifest["filters"] == {
                 "q": "mv3c", "status": "completed", "model": "gpt-6",
+                "source": None,
             }
             assert {v["request_id"] for v in manifest["requests"]} == {
                 f"req_match_{i:03d}" for i in range(130)
@@ -459,7 +460,7 @@ def test_current_version_checkbox_applies_table_filter_and_export_uses_applied_r
     assert "requestHistoryAppliedFilterQuery=null" in source
     # Explicit display of server success versus disconnected SSE client.
     assert "api_stream_closed_before_delivery===true" in source
-    assert "客户端断连" in source
+    assert "HTTP连接断开" in source
 
 
 def test_export_api_excludes_nonmatching_search_status_model_and_sha(tmp_path: Path, monkeypatch):
