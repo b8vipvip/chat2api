@@ -97,27 +97,27 @@ const historicalCandidate=shared.resolveRequest(active,old.paragraph,document,()
 assert.equal(historicalCandidate.ok,true,
   "an old exact baseline assistant paragraph must not mask the new Message ID");
 assert.equal(historicalCandidate.node,fresh.selection);
-assert.deepEqual(shared.collect(document,()=>true).map(item=>item.id),[idOld,idStale,idNew]);
+assert.deepEqual([...shared.collect(document,()=>true).map(item=>item.id)],[idOld,idStale,idNew]);
 const structural=shared.structuralManifest(fresh.selection);
 assert.equal(structural.ok,true);
 assert.equal(structural.images,8);
 assert.equal(structural.tables,3);
-const reference=structural.ordered.slice();
+const reference=[...structural.ordered];
 assert.deepEqual(reference.slice(0,5),["h2","p","table","table","table"]);
 assert.equal(reference.at(-1),"blockquote");
 assert.ok(!JSON.stringify(structural).includes("private.invalid"));
 assert.ok(!JSON.stringify(structural).includes(idNew));
 const missingImage=reply(idOther,{images:7,tables:3});
-assert.notDeepEqual(shared.structuralManifest(missingImage.selection).ordered,reference,
+assert.notDeepEqual([...shared.structuralManifest(missingImage.selection).ordered],reference,
   "missing a picture is not accepted as a complete ordered block inventory");
 const missingTable=reply(idOther,{images:8,tables:2});
-assert.notDeepEqual(shared.structuralManifest(missingTable.selection).ordered,reference);
+assert.notDeepEqual([...shared.structuralManifest(missingTable.selection).ordered],reference);
 const reordered=reply(idOther);
 const mdRoot=reordered.md.querySelector("[data-dil-message-id]");
 const move=mdRoot.childNodes.find(child=>child.tagName==="IMG");
 mdRoot.childNodes.splice(mdRoot.childNodes.indexOf(move),1);
 mdRoot.childNodes.splice(1,0,move);
-assert.notDeepEqual(shared.structuralManifest(reordered.selection).ordered,reference,
+assert.notDeepEqual([...shared.structuralManifest(reordered.selection).ordered],reference,
   "the same number of blocks in a different DOM order is not equivalent");
 
 // The *Windows* selection proof alone never authorizes request ownership.
