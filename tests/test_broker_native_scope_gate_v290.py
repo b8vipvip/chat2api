@@ -86,3 +86,30 @@ def test_native_scope_gate_rejects_untrusted_text_and_unbounded_fields():
         "eligible_scope_count": 0,
         "roleless_reply_verified": True,
     }
+
+
+def test_shared_native_message_id_gate_preserved_without_arbitrary_dom_text():
+    allowed = _terminal_provenance({
+        "diagnostics": {
+            "native_message_identity_reason": "verified-native-message-id",
+            "native_message_identity_candidate_count": 1,
+            "native_message_identity_bound": True,
+            "native_message_id_scope_verified": True,
+        },
+    })
+    assert allowed["native_message_identity_reason"] == "verified-native-message-id"
+    assert allowed["native_message_identity_candidate_count"] == 1
+    assert allowed["native_message_identity_bound"] is True
+    assert allowed["native_message_id_scope_verified"] is True
+    bad = _terminal_provenance({
+        "diagnostics": {
+            "native_message_identity_reason": "private prompt + source image URL",
+            "native_message_identity_candidate_count": 100000,
+            "native_message_identity_bound": "yes",
+            "native_message_id_scope_verified": 1,
+        },
+    })
+    assert "native_message_identity_reason" not in bad
+    assert "native_message_identity_candidate_count" not in bad
+    assert "native_message_identity_bound" not in bad
+    assert "native_message_id_scope_verified" not in bad
