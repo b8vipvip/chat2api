@@ -19,7 +19,7 @@ from typing import Any
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 log = logging.getLogger("chat2api.playground.detached")
 _REQUEST_ID = re.compile(r"req_[a-f0-9]{32}\Z", re.I)
@@ -31,7 +31,7 @@ _ALLOWED_PAYLOAD = {
 
 class DetachedChatRequest(BaseModel):
     request_id: str = Field(min_length=36, max_length=36)
-    api_key: str = Field(min_length=1, max_length=512)
+    api_key: SecretStr = Field(min_length=1, max_length=512)
     payload: dict[str, Any]
 
 
@@ -132,7 +132,7 @@ def install_playground_detached_chat(app: FastAPI, chat_run_id) -> None:
         record: dict[str, Any] = {"state": "running", "finished_at": None, "http_status": None}
         jobs[request_id] = record
         record["task"] = asyncio.create_task(
-            run_internal(request_id, body.api_key, payload, record),
+            run_internal(request_id, body.api_key.get_secret_value(), payload, record),
             name="playground-" + request_id[:20],
         )
         return {"request_id": request_id, "state": "running", "reused": False,
