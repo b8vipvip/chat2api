@@ -78,7 +78,8 @@
       "selection_nodes","historical_nodes","fresh_nodes","invalid_id_nodes",
       "hidden_fresh","bad_wrapper","missing_assistant_heading",
       "missing_markdown","user_contaminated","dil_mismatch",
-      "outside_main","eligible_fresh","rich_controls_inside","scan_truncated"
+      "outside_main","eligible_fresh","historical_heading",
+      "rich_controls_inside","scan_truncated"
     ];
     const facts=Object.fromEntries(keys.map(key=>[key,0]));
     const increment=key=>{facts[key]=Math.min(32,facts[key]+1);};
@@ -108,6 +109,9 @@
       const heading=wrap.querySelector?.(HEAD);
       if(!heading?.isConnected || !visible(heading)){
         increment("missing_assistant_heading");continue;
+      }
+      if(active?.baselineRolelessHeadings?.has(heading)){
+        increment("historical_heading");continue;
       }
       const md=node.querySelector?.(MD);
       if(!md?.isConnected || !node.contains?.(md) || !visible(md)){
