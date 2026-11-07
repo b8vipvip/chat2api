@@ -174,7 +174,8 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
             "invalid_id_nodes", "hidden_fresh", "bad_wrapper",
             "missing_assistant_heading", "missing_markdown",
             "user_contaminated", "dil_mismatch", "outside_main",
-            "eligible_fresh", "rich_controls_inside", "scan_truncated",
+            "eligible_fresh", "historical_heading",
+            "rich_controls_inside", "scan_truncated",
         ):
             value = identity_facts.get(key)
             if type(value) is int and 0 <= value <= 32:
