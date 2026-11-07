@@ -113,3 +113,36 @@ def test_shared_native_message_id_gate_preserved_without_arbitrary_dom_text():
     assert "native_message_identity_candidate_count" not in bad
     assert "native_message_identity_bound" not in bad
     assert "native_message_id_scope_verified" not in bad
+
+
+def test_native_message_identity_rejection_facts_are_bounded_and_private():
+    allowed = _terminal_provenance({"diagnostics": {
+        "native_message_identity_reason": "no-new-assistant-id",
+        "native_message_identity_facts": {
+            "selection_nodes": 4,
+            "historical_nodes": 3,
+            "fresh_nodes": 1,
+            "rich_controls_inside": 1,
+            "bad_wrapper": 1,
+            "scan_truncated": 0,
+            "selection_message_id": "private-message-uuid",
+            "raw_prompt": "private prompt",
+            "signed_url": "https://private.invalid?secret=1",
+            "invalid_id_nodes": 99999,
+            "missing_markdown": True,
+        },
+    }})
+    facts = allowed["native_message_identity_facts"]
+    assert facts == {
+        "selection_nodes": 4,
+        "historical_nodes": 3,
+        "fresh_nodes": 1,
+        "rich_controls_inside": 1,
+        "bad_wrapper": 1,
+        "scan_truncated": 0,
+    }
+    assert "private" not in str(facts)
+    rejected = _terminal_provenance({"diagnostics": {
+        "native_message_identity_facts": {"arbitrary_field": "<main>secret</main>"}
+    }})
+    assert "native_message_identity_facts" not in rejected

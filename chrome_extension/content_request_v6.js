@@ -646,6 +646,7 @@
         native_message_id_scope_verified:active.nativeMessageIdentityBound === true || nativeSelectionBound === true,
         native_message_identity_bound:active.nativeMessageIdentityBound === true,
         native_message_identity_reason:String(active.nativeMessageIdentityReason || "unknown").slice(0,40),
+        native_message_identity_facts:active.nativeMessageIdentityFacts || null,
         native_message_identity_candidate_count:Math.min(32,Number(active.nativeMessageIdentityCandidateCount || 0)),
         native_reply_scope_binding:String(active.nativeBindingEvidence || "").slice(0,90),
         native_reply_scope_phase:String(active.nativeBindingPhase || "").slice(0,16),
@@ -901,6 +902,7 @@
     const messageIdentity=globalThis.__CHAT2API_NATIVE_MESSAGE_IDENTITY_V291__
       ?.resolveRequest?.(active,active.lastCandidateNode,document,visible);
     active.nativeMessageIdentityReason=String(messageIdentity?.reason || "helper-unavailable");
+    active.nativeMessageIdentityFacts=messageIdentity?.facts || null;
     active.nativeMessageIdentityCandidateCount=Math.min(32,
       Number(messageIdentity?.candidate_count || 0));
     active.nativeMessageIdentityBound=false;

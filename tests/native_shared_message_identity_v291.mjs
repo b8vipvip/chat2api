@@ -124,7 +124,9 @@ assert.notDeepEqual([...shared.structuralManifest(reordered.selection).ordered],
 assert.equal(shared.resolveRequest({},fresh.paragraph,document,()=>true).ok,false);
 assert.equal(shared.resolveRequest({...active,networkStreamSeen:false},fresh.paragraph,document,()=>true).ok,false);
 assert.equal(shared.resolveRequest({...active,networkObservedAt:99},fresh.paragraph,document,()=>true).ok,false);
-assert.equal(shared.resolveRequest({...active,baselineRolelessHeadings:new Set([old.heading,fresh.heading])},fresh.paragraph,document,()=>true).ok,false);
+const oldHeadingRejection=shared.resolveRequest({...active,baselineRolelessHeadings:new Set([old.heading,fresh.heading])},fresh.paragraph,document,()=>true);
+assert.equal(oldHeadingRejection.ok,false);
+assert.equal(oldHeadingRejection.facts.historical_heading,1);
 assert.equal(shared.resolveRequest({...active,baselineNativeMessageIds:new Set([idOld,idNew])},fresh.paragraph,document,()=>true).ok,false);
 assert.equal(shared.resolveRequest({...active,baselineNativeSelectionNodes:new Set([fresh.selection])},fresh.paragraph,document,()=>true).ok,false);
 assert.equal(shared.resolveRequest({...active,options:{mode:"voice"}},fresh.paragraph,document,()=>true).ok,false);
@@ -146,6 +148,19 @@ const bad=reply(idOther,{badDil:true});
 const contaminated=reply(idOther,{user:true});
 assert.equal(shared.inspect(bad.selection,()=>true),null);
 assert.equal(shared.inspect(contaminated.selection,()=>true),null);
+// Rendered assistant widgets may contain controls, forms or textarea as
+// *content*. They must not revoke a matching, request-owned assistant ID.
+const interactive=reply(idOther,{images:1,tables:1});
+interactive.md.querySelector("[data-dil-message-id]").append(
+  new El("form",{},[new El("input"),new El("textarea")]));
+assert.equal(shared.inspect(interactive.selection,()=>true)?.id,idOther,
+  "nested rich answer form controls do not make assistant identity invalid");
+// But an assistant-looking selection mounted INSIDE the page composer form
+// must never be treated as a trusted assistant reply.
+const composerLookalike=reply(idOther);
+const composerForm=new El("form",{},[composerLookalike.wrap]);
+assert.equal(shared.inspect(composerLookalike.selection,()=>true),null,
+  "a selection under a composer/form ancestor is not trusted");
 const wrongWrap=reply(idOther);
 wrongWrap.wrap.attrs["data-chatgpt-search-message-ids"]=idOld;
 assert.equal(shared.inspect(wrongWrap.selection,()=>true),null);
@@ -179,5 +194,18 @@ const denied={...owned,baselineNativeMessageIds:new Set([idOld,idNew,idStale]),
   nativeVerifiedReplyScope:null,nativeMessageIdentityBound:false,lastCandidateNode:old.paragraph};
 assert.equal(bindContext.bind(denied,"terminal"),false);
 assert.equal(denied.nativeMessageIdentityReason,"no-new-assistant-id");
+// Real request-v6 binder must retain only finite, shape-only rejection
+// counters, not any assistant ID, signed URL, prompt or HTML.
+assert.equal(denied.nativeMessageIdentityFacts.historical_nodes,3);
+assert.equal(denied.nativeMessageIdentityFacts.fresh_nodes,0);
+const invalidFresh=reply(idOther);
+invalidFresh.wrap.attrs["data-chatgpt-search-message-ids"]=idOld;
+main.append(invalidFresh.wrap);
+const badReport=shared.resolveRequest(denied,old.paragraph,document,()=>true);
+assert.equal(badReport.reason,"no-new-assistant-id");
+assert.equal(badReport.facts.bad_wrapper,1);
+assert.equal(badReport.facts.eligible_fresh,0);
+assert.equal(JSON.stringify(badReport.facts).includes(idOther),false);
+main.childNodes.pop();
 
 console.log("v291 shared Windows/request native identity, 8-image/3-table ordered manifest and negative gates passed");
