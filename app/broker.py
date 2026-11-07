@@ -164,6 +164,23 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
             safe_facts["roleless_reply_verified"] = gate_facts["roleless_reply_verified"]
         if safe_facts:
             result["native_scope_gate_facts"] = safe_facts
+    # Native identity rejection counters: allowlisted, bounded, purely
+    # structural. Never accept page text, Message IDs, URLs or raw HTML.
+    identity_facts = raw.get("native_message_identity_facts")
+    if isinstance(identity_facts, dict):
+        safe_identity: dict[str, int] = {}
+        for key in (
+            "selection_nodes", "historical_nodes", "fresh_nodes",
+            "invalid_id_nodes", "hidden_fresh", "bad_wrapper",
+            "missing_assistant_heading", "missing_markdown",
+            "user_contaminated", "dil_mismatch", "outside_main",
+            "eligible_fresh", "rich_controls_inside", "scan_truncated",
+        ):
+            value = identity_facts.get(key)
+            if type(value) is int and 0 <= value <= 32:
+                safe_identity[key] = value
+        if safe_identity:
+            result["native_message_identity_facts"] = safe_identity
     return result
 
 
