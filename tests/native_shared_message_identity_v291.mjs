@@ -53,7 +53,7 @@ function reply(id,{images=8,tables=3,badDil=false,user=false}={}){
   const imageNodes=Array.from({length:images},()=>new El("img",{src:"https://private.invalid/?token=never-export"}));
   const code=new El("pre",{},[new El("code")]);
   const sequence=[new El("h2"),paragraph,...tableNodes,...imageNodes,code,new El("blockquote")];
-  const dil=new El("div",{"data-dil-message-id":badDil?idOther:id},sequence);
+  const dil=new El("div",{"data-dil-message-id":badDil?idOld:id},sequence);
   const md=new El("div",{"data-markdown-text-style":"assistant-message"},[dil]);
   const selection=new El("section",{"data-chatgpt-selection-message-id":id},[md]);
   const heading=new El("h4",{"data-conversation-role":"assistant"});
