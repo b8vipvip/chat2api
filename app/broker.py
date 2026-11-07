@@ -117,6 +117,40 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
                 "native_capture_attempted", "native_reply_scope_verified"):
         if isinstance(raw.get(key), bool):
             result[key] = raw[key]
+    # Request-v6 emits these *on every completed native request* but its
+    # diagnostics were silently stripped by this terminal allowlist. Preserve
+    # only finite gate enums and bounded counters; never forward arbitrary
+    # Worker/page text, element markup, signed URLs or raw DOM as telemetry.
+    allowed_reasons = {
+        "verified", "unknown", "preconditions", "candidate-not-verifiable",
+        "no-fresh-toolbar", "ambiguous-reply-scopes", "no-safe-reply-scope",
+    }
+    gate_reason = raw.get("native_scope_gate_reason")
+    if isinstance(gate_reason, str) and gate_reason in allowed_reasons:
+        result["native_scope_gate_reason"] = gate_reason
+    gate_facts = raw.get("native_scope_gate_facts")
+    if isinstance(gate_facts, dict):
+        safe_facts: dict[str, Any] = {}
+        fact_reason = gate_facts.get("reason")
+        if isinstance(fact_reason, str) and fact_reason in allowed_reasons:
+            safe_facts["reason"] = fact_reason
+        phase = gate_facts.get("phase")
+        if phase in ("terminal", "progress"):
+            safe_facts["phase"] = phase
+        kind = gate_facts.get("candidate_kind")
+        if kind in {
+            "fresh-roleless-rich-answer-v246", "fresh-roleless-compact-div-v248",
+            "after-current-user-turn", "new-turn-identity", "historical-turn", "other",
+        }:
+            safe_facts["candidate_kind"] = kind
+        for key in ("fresh_action_count", "eligible_scope_count"):
+            number = gate_facts.get(key)
+            if type(number) is int and 0 <= number <= 32:
+                safe_facts[key] = number
+        if isinstance(gate_facts.get("roleless_reply_verified"), bool):
+            safe_facts["roleless_reply_verified"] = gate_facts["roleless_reply_verified"]
+        if safe_facts:
+            result["native_scope_gate_facts"] = safe_facts
     return result
 
 
