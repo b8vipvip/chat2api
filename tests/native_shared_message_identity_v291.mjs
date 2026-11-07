@@ -43,6 +43,7 @@ class El {
 const idOld="aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
 const idNew="2115ac8a-f0a0-4d81-a392-a8e02bbc9971";
 const idOther="cccccccc-cccc-4ccc-cccc-cccccccccccc";
+const idStale="dddddddd-dddd-4ddd-dddd-dddddddddddd";
 function reply(id,{images=8,tables=3,badDil=false,user=false}={}){
   const paragraph=new El("p");
   const tableNodes=Array.from({length:tables},()=>new El("table",{},[
@@ -62,7 +63,10 @@ function reply(id,{images=8,tables=3,badDil=false,user=false}={}){
   return {wrap,heading,selection,paragraph,md};
 }
 const old=reply(idOld,{images:1,tables:1}),fresh=reply(idNew);
-const main=new El("main",{},[old.wrap]);
+const stale=reply(idStale);
+// Its Markdown is not yet hydrated when the new request starts.
+stale.selection.childNodes=[];
+const main=new El("main",{},[old.wrap,stale.wrap]);
 const document={querySelectorAll:query=>main.querySelectorAll(query)};
 const context={document,Element:El,getComputedStyle:()=>({display:"block",visibility:"visible"})};
 runInNewContext(readFileSync("chrome_extension/content_native_message_identity_v291.js","utf8"),context);
@@ -70,6 +74,10 @@ const shared=context.__CHAT2API_NATIVE_MESSAGE_IDENTITY_V291__;
 assert.equal(shared.version,291);
 const baseline=shared.baseline(document);
 assert.equal(baseline.ids.has(idOld),true);
+assert.equal(baseline.ids.has(idStale),true,
+  "hidden/unhydrated historical selection IDs still belong to the baseline");
+assert.equal(baseline.nodes.has(stale.selection),true);
+stale.selection.append(stale.md);  // historical hydration after dispatch
 main.append(fresh.wrap);
 const active={
   requestId:"req_native_workerv291",submitStartedAt:100,
@@ -85,7 +93,7 @@ assert.equal(result.ok,true);
 assert.equal(result.id,idNew);
 assert.equal(result.node,fresh.selection);
 assert.equal(result.candidate_count,1);
-assert.deepEqual(shared.collect(document,()=>true).map(item=>item.id),[idOld,idNew]);
+assert.deepEqual(shared.collect(document,()=>true).map(item=>item.id),[idOld,idStale,idNew]);
 const structural=shared.structuralManifest(fresh.selection);
 assert.equal(structural.ok,true);
 assert.equal(structural.images,8);
