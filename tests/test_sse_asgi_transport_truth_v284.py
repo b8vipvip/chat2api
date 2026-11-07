@@ -128,7 +128,7 @@ def test_cancelled_empty_final_body_after_done_does_not_mean_early_disconnect():
         await send({"type": "http.response.start", "status": 200,
                     "headers": [(b"content-type", b"text/event-stream")]})
         await send({"type": "http.response.body",
-                    "body": b"data: [DONE]\\n\\n", "more_body": True})
+                    "body": b"data: [DONE]\n\n", "more_body": True})
         await send({"type": "http.response.body",
                     "body": b"", "more_body": False})
 
