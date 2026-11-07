@@ -1774,9 +1774,30 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             headers=request.headers, test_runs=test_runs,
         )
         if origin_evidence:
-            await telemetry.merge_diagnostics(
-                request_id, {"playground_transport_attribution_v293": origin_evidence},
-            )
+            try:
+                await telemetry.merge_diagnostics(
+                    request_id, {"playground_transport_attribution_v293": origin_evidence},
+                )
+            except Exception as evidence_error:
+                # An observer must not break an admitted production request.
+                # Never include prompt, credentials, page DOM, URL or raw
+                # browser exception in runtime/request-log diagnostics.
+                logger.exception(
+                    "Passive Playground transport evidence failed request_id=%s error_type=%s",
+                    request_id, type(evidence_error).__name__,
+                )
+                try:
+                    await telemetry.update(request_id, {
+                        "diagnostics": {
+                            "playground_transport_attribution_error_v294":
+                                type(evidence_error).__name__[:60],
+                        },
+                    })
+                except Exception:
+                    logger.warning(
+                        "Passive Playground evidence failure could not be persisted request_id=%s",
+                        request_id,
+                    )
         try:
             client_id = await resolve_client_with_reconnect_grace(requested_client)
             await telemetry.update(request_id, {
