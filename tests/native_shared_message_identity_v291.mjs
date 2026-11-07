@@ -93,6 +93,10 @@ assert.equal(result.ok,true);
 assert.equal(result.id,idNew);
 assert.equal(result.node,fresh.selection);
 assert.equal(result.candidate_count,1);
+const historicalCandidate=shared.resolveRequest(active,old.paragraph,document,()=>true);
+assert.equal(historicalCandidate.ok,true,
+  "an old exact baseline assistant paragraph must not mask the new Message ID");
+assert.equal(historicalCandidate.node,fresh.selection);
 assert.deepEqual(shared.collect(document,()=>true).map(item=>item.id),[idOld,idStale,idNew]);
 const structural=shared.structuralManifest(fresh.selection);
 assert.equal(structural.ok,true);
