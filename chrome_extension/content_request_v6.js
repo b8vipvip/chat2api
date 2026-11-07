@@ -15,7 +15,7 @@
   // separately so a retained tab with an old request-v6 listener cannot pass
   // a newly injected bundle marker after an extension update.
   const state = { active: null, listener: null, contract: null, revision: 69,
-    nativeScopeGateRevision: 287 };
+    nativeScopeGateRevision: 287, nativeMessageIdentityRevision: 291 };
   globalThis[KEY] = state;
 
   const normalize = value => String(value || "")
@@ -643,7 +643,10 @@
         native_observer_loaded:active.nativeObserverLoaded === true,
         native_reply_scope_verified:Boolean(active.nativeVerifiedReplyScope?.isConnected),
         native_roleless_scope_observed:rolelessBound === true && !nativeSelectionBound,
-        native_message_id_scope_verified:nativeSelectionBound === true,
+        native_message_id_scope_verified:active.nativeMessageIdentityBound === true || nativeSelectionBound === true,
+        native_message_identity_bound:active.nativeMessageIdentityBound === true,
+        native_message_identity_reason:String(active.nativeMessageIdentityReason || "unknown").slice(0,40),
+        native_message_identity_candidate_count:Math.min(32,Number(active.nativeMessageIdentityCandidateCount || 0)),
         native_reply_scope_binding:String(active.nativeBindingEvidence || "").slice(0,90),
         native_reply_scope_phase:String(active.nativeBindingPhase || "").slice(0,16),
         native_scope_gate_reason:String(active.nativeScopeGateReason || "unknown").slice(0,40),
@@ -825,6 +828,13 @@
     active.baselineFinishActions = new Set(responseFinishActions());
     active.baselineRolelessHeadings = new Set(document.querySelectorAll(
       "main h4,[role='main'] h4,#thread h4"));
+    // Snapshot the *original* assistant message identities before dispatch.
+    // A post-dispatch assistant ID must be genuinely new, not last-in-history.
+    const baselineIdentity=globalThis.__CHAT2API_NATIVE_MESSAGE_IDENTITY_V291__?.baseline?.(
+      document,visible);
+    active.baselineNativeMessageIds=baselineIdentity?.ids || new Set();
+    active.baselineNativeSelectionNodes=baselineIdentity?.nodes || new Set();
+    active.nativeMessageIdentityBound=false;
   }
 
   // Bind each completion action to the smallest current reply container.
@@ -883,6 +893,32 @@
         active.cancelled ||
         active.options?.voice === true ||
         active.options?.mode === "voice") return gate("preconditions");
+    // Prefer the same actual assistant Message ID that the independent
+    // Windows diagnostic recognizes. Current-request ownership is checked
+    // against this tab's pre-submit identity + heading baseline and observed
+    // post-submit network evidence; Copy/toolbar is no longer a second,
+    // conflicting mandatory selector for this *verified* message ID route.
+    const messageIdentity=globalThis.__CHAT2API_NATIVE_MESSAGE_IDENTITY_V291__
+      ?.resolveRequest?.(active,active.lastCandidateNode,document,visible);
+    active.nativeMessageIdentityReason=String(messageIdentity?.reason || "helper-unavailable");
+    active.nativeMessageIdentityCandidateCount=Math.min(32,
+      Number(messageIdentity?.candidate_count || 0));
+    active.nativeMessageIdentityBound=false;
+    if (messageIdentity?.ok && messageIdentity.node?.isConnected
+        && !messageIdentity.node.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']")) {
+      active.lastCandidateNode=messageIdentity.node;
+      active.nativeVerifiedReplyScope=messageIdentity.node;
+      active.nativeMessageIdentityBound=true;
+      active.nativeBindingEvidence="same-request-native-assistant-message-id-v291";
+      active.nativeBindingPhase=phase;
+      active.nativeScopeGateReason="verified";
+      active.nativeScopeGateFacts={
+        reason:"verified",phase:phase==="terminal"?"terminal":"progress",
+        candidate_kind:"other",fresh_action_count:0,
+        eligible_scope_count:1,roleless_reply_verified:false,
+      };
+      return true;
+    }
     const prior = active.nativeVerifiedReplyScope;
     if (prior?.isConnected &&
         !prior.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']") &&
