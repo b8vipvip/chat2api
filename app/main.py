@@ -65,6 +65,7 @@ from .runtime_code_identity import runtime_code_sha
 from .worker_probe_store import WorkerProbeStore
 from .test_runs import TestRunStore
 from .playground_truth_v170 import reconcile_playground_runs, compact_playground_outcome, present_playground_run
+from .playground_request_evidence_v207 import request_test_index
 from .token_usage import usage_for
 
 logger = logging.getLogger("chat2api")
@@ -823,6 +824,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         model: str | None = Query(default=None),
         key_id: str | None = Query(default=None),
         q: str | None = Query(default=None),
+        source: str | None = Query(default=None, pattern="^(playground|external)$"),
         since: str | None = Query(default=None, max_length=64),
         current_version_only: bool = Query(default=False),
     ) -> dict[str, object]:
@@ -836,9 +838,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=409,
                 detail="Current running Git commit is unverified; cannot filter by current code revision",
             )
+        test_ids = set(request_test_index(test_runs, limit=test_runs.items.maxlen or 300))
         result = telemetry.query(
             limit=limit, offset=offset, status=status_filter, model=model,
-            key_id=key_id, q=q, since=cutoff,
+            key_id=key_id, q=q, since=cutoff, source=source,
+            playground_request_ids=test_ids,
             current_version_only=current_version_only,
             server_version=SERVER_RUNTIME_VERSION,
             server_commit=active_commit,
@@ -851,6 +855,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "since": cutoff.isoformat() if cutoff is not None else None,
                     "current_version_only": current_version_only,
                     "q": q, "status": status_filter, "model": model,
+                    "source": source,
                 }}
 
     @app.get("/api/admin/requests/{request_id}", dependencies=[Depends(require_admin_key)])
