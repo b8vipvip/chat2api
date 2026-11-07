@@ -783,4 +783,39 @@ wrongIdentitySnap.children.find(n=>n.tag==="img").media_index=7;
 assert.equal(matchesSource(wrongIdentitySnap),false,
   "same image count with duplicated/wrong index must fail");
 
-console.log("Phase 2 source DOM vs production native serializer: 8 images, 3 tables, order and corruption negatives passed");
+// Non-image regressions matter: a reply with all pictures present can still
+// lose a paragraph, table, code block or ordering without image-index drift.
+// These mutations exercise the same published-tree inventory, not a mock.
+const missingParagraph=JSON.parse(JSON.stringify(actualSnapshot.root));
+missingParagraph.children.splice(
+  missingParagraph.children.findIndex(n=>n.tag==="p"),1);
+assert.equal(matchesSource(missingParagraph),false,
+  "missing explanatory paragraph must fail despite eight intact images");
+const missingTable=JSON.parse(JSON.stringify(actualSnapshot.root));
+missingTable.children.splice(
+  missingTable.children.findIndex(n=>n.tag==="table"),1);
+assert.equal(matchesSource(missingTable),false,
+  "missing table must fail despite intact image counts and indices");
+const repeatedTable=JSON.parse(JSON.stringify(actualSnapshot.root));
+repeatedTable.children.push(
+  JSON.parse(JSON.stringify(repeatedTable.children.find(n=>n.tag==="table"))));
+assert.equal(matchesSource(repeatedTable),false,
+  "duplicated table must fail despite intact image counts and indices");
+const missingCode=JSON.parse(JSON.stringify(actualSnapshot.root));
+missingCode.children.splice(
+  missingCode.children.findIndex(n=>n.tag==="pre"),1);
+assert.equal(matchesSource(missingCode),false,
+  "missing code block must fail despite intact images and tables");
+const swappedTables=JSON.parse(JSON.stringify(actualSnapshot.root));
+const firstTable=swappedTables.children.findIndex(n=>n.tag==="table");
+const firstParagraph=swappedTables.children.findIndex(n=>n.tag==="p");
+[swappedTables.children[firstTable],swappedTables.children[firstParagraph]]=
+  [swappedTables.children[firstParagraph],swappedTables.children[firstTable]];
+assert.equal(matchesSource(swappedTables),false,
+  "same counts but changed paragraph/table ordering must fail");
+const insertedText=JSON.parse(JSON.stringify(actualSnapshot.root));
+insertedText.children.splice(1,0,{tag:"p",children:[{text:"extraneous block"}]});
+assert.equal(matchesSource(insertedText),false,
+  "unrelated injected text block must fail structural parity");
+
+console.log("Phase 2 source DOM vs production native serializer: 8 images, 3 tables, order and image/text/table/code corruption negatives passed");
