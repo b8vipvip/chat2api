@@ -76,7 +76,9 @@ def test_native_svg_is_a_non_owning_visual_sidecar_and_roleless_scope_is_distinc
     assert 'native_message_id_scope_verified:active.nativeMessageIdentityBound === true || nativeSelectionBound === true' in request
     assert 'nativeMessageIdentityRevision: 291' in request
     assert 'verified_native_assistant_selection' in evidence and 'verified_native_assistant_selection' in native
-    assert 'active.baselineRolelessHeadings.has(heading)' in evidence
+    shared = (EXT / "content_native_message_identity_v291.js").read_text(encoding="utf-8")
+    assert 'active.baselineRolelessHeadings.has(item.heading)' in shared
+    assert '__CHAT2API_NATIVE_MESSAGE_IDENTITY_V291__' in evidence
     assert 'native_svg_charts_captured:Number(active.nativeSvgChartsCaptured || 0)' in request
     assert 'native_canvas_omitted:Number(active.nativeCanvasOmitted || 0)' in request
     assert 'type:"chat.native.snapshot"' in native
