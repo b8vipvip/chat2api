@@ -13,7 +13,7 @@ function currentContract(nativeGate = true, nativeIdentity = true) {
     terminal_prompt_revision: 88,
     conversation_quota_failover_revision: 95,
     ui_hygiene_revision: 101,
-    marker: { bundle: "0.22.290", revision: 71 },
+    marker: { bundle: "0.22.291", revision: 71 },
     modules: {
       request_v6: true,
       native_scope_gate_v287: nativeGate,
@@ -112,7 +112,7 @@ assert.equal(loading.state.last?.ok, true);
 const contentContractSource = fs.readFileSync(
   new URL("../chrome_extension/content_runtime_contract_v71.js", import.meta.url), "utf8");
 const contractContext = {
-  __CHAT2API_CONTENT_BUNDLE_MARKER_V71__: {bundle:"0.22.290",revision:71},
+  __CHAT2API_CONTENT_BUNDLE_MARKER_V71__: {bundle:"0.22.291",revision:71},
   __CHAT2API_REQUEST_CONTENT_V6__: {revision:69},
   __CHAT2API_NATIVE_MESSAGE_IDENTITY_V291__: {version:291},
   document:{documentElement:{getAttribute(){return null;}},readyState:"complete"},
