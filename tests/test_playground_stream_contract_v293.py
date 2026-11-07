@@ -145,4 +145,17 @@ def test_client_sse_evidence_survives_missing_abcd_final_report(tmp_path: Path):
         assert late.json()["saved"] is False
         final = app.state.test_runs.get(run["run_id"])
         assert final["quality"]["client_sse_truth_v293"] == facts
+        completed = client.post("/api/admin/playground/chat-records", json={
+            "request_id": RID, "model": "gpt-5.6-sol", "prompt": "private prompt",
+            "status": "failed", "response_chars": 0,
+            "error": "stream transport failed",
+        })
+        assert completed.status_code == 200, completed.text
+        finalized = app.state.test_runs.get(run["run_id"])
+        assert finalized["quality"]["transport_contract"] == ABCD_TRANSPORT
+        assert finalized["quality"]["abcd_scene"] == "A"
+        assert finalized["quality"]["client_sse_truth_v293"] == facts
+        assert finalized["quality"]["client_sse_truth_phase"] == "incomplete"
+        assert playground_diagnostics(finalized)["test_quality"]["client_sse_truth_v293"] == facts
+
 
