@@ -36,7 +36,7 @@ def playground_request_badge(run: dict[str, Any] | None) -> str:
     quality = run.get("quality") if isinstance(run.get("quality"), dict) else {}
     report = run.get("abcd_report") if isinstance(run.get("abcd_report"), dict) else {}
     scene = quality.get("abcd_scene") or report.get("scene")
-    if scene in {"A", "B", "C", "D"}:
+    if isinstance(scene, str) and scene in {"A", "B", "C", "D"}:
         return "测" + scene
     run_id = str(run.get("run_id") or "")
     kind = str(run.get("test_type") or "")
