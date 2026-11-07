@@ -643,7 +643,7 @@
         const register = globalThis.__CHAT2API_PLAYGROUND_CHAT_RECORDS_V3__?.startChatRun;
         if (typeof register !== "function")
           throw new Error("测试场运行记录模块未加载，请刷新后台页面重试");
-        await register(requestId, body);
+        await register(requestId, body, "server-detached-v292");
         const launch = await fetch("/api/admin/playground/chat-dispatch", {
           method:"POST",
           headers:{...headers(key()),"Content-Type":"application/json"},
