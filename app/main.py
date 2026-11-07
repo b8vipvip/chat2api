@@ -1837,6 +1837,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "error": "API transport ended before Worker admission",
             })
             raise
+        except Exception as admission_error:
+            # A failure after the queued row was persisted but before any
+            # Worker was dispatched must not strand Request History in queued.
+            # Actual stack stays in redacted Runtime Logs; the per-request
+            # export gets a stable, content-free exception class and stage.
+            kind = type(admission_error).__name__[:60]
+            logger.exception(
+                "Unexpected API admission failure request_id=%s exception_kind=%s",
+                request_id, kind,
+            )
+            try:
+                await telemetry.update(request_id, {
+                    "status": "error",
+                    "error": "Internal request admission failed (" + kind + ")",
+                    "diagnostics": {
+                        "request_admission_stage": "failed-before-worker-dispatch",
+                        "request_admission_failure_kind_v294": kind,
+                        "request_admission_wait_ms": round(
+                            (time.perf_counter() - request_started) * 1000, 1
+                        ),
+                    },
+                })
+            except Exception:
+                logger.exception(
+                    "Failed to persist request admission failure request_id=%s",
+                    request_id,
+                )
+            raise HTTPException(
+                status_code=500,
+                detail="Internal request admission failure; inspect request_id=" + request_id,
+            ) from admission_error
 
         state.diagnostics["request_admission_stage"] = "dispatched"
         state.diagnostics["request_admission_wait_ms"] = round(
