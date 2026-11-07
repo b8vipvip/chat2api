@@ -6,22 +6,22 @@ from app.playground_abcd_pool_v198 import OneShotPool
 from app.telemetry import TelemetryStore, current_deployment_start
 
 
-def test_new_v4_case_is_next_claim_even_after_previous_rotation(tmp_path):
+def test_new_v5_case_is_next_claim_even_after_previous_rotation(tmp_path):
     pool = OneShotPool(tmp_path)
     with pool.connection() as db:
         db.execute("INSERT INTO abcd_counter(scene,serial) VALUES ('A',35)")
         db.commit()
     preview = pool.preview("A")
-    assert "旧住宅" in preview["title"]
+    assert "海岛潮汐物流站" in preview["title"]
     first = pool.claim("A", "abcd_test_unique_id_20261030")
-    assert first["case_version"] == "v4"
-    assert "96平方米" in first["prompts"][0]
+    assert first["case_version"] == "v5"
+    assert "舟山离岛" in first["prompts"][0]
     assert pool.claim("A", "abcd_test_unique_id_20261030")["prompts"] == first["prompts"]
     assert pool.preview("A")["title"] != preview["title"]
     assert OneShotPool(tmp_path).preview("A")["title"] != preview["title"]
 
 
-def test_all_four_v4_real_scenes_are_distinct(tmp_path):
+def test_all_four_v5_real_scenes_are_distinct(tmp_path):
     pool = OneShotPool(tmp_path)
     titles = []
     for scene in "ABCD":
