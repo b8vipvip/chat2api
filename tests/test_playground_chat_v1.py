@@ -66,7 +66,9 @@ def test_playground_chat_patch_injects_console_assets() -> None:
         assert records_asset.status_code == 200
         records_source = records_asset.text
         assert '/api/admin/playground/chat-runs' in records_source
-        assert 'await startChatRun(requestId, body);' in records_source
+        assert 'await startChatRun(requestId, body, transportContract);' in records_source
+        assert 'X-Chat2API-Playground-Transport' in records_source
+        assert 'transport_contract' in records_source
         assert 'return baseFetch(input, init);' in records_source
         assert 'start-before-api-dispatch' not in records_source
         assert 'if (typeof globalThis.loadTests === "function")' in records_source

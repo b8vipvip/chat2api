@@ -3,6 +3,8 @@ from __future__ import annotations
 import uuid
 import json
 import secrets
+import re
+import math
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +33,8 @@ class PlaygroundChatStart(BaseModel):
     api_key_name: str | None = Field(default=None, max_length=200)
     prompt: str = Field(default="", max_length=20000)
     attachments_count: int = Field(default=0, ge=0, le=4)
+    transport_contract: str | None = Field(default=None, max_length=80)
+    abcd_scene: str | None = Field(default=None, pattern="^[ABCD]$")
 
 
 class PlaygroundChatRecord(PlaygroundChatStart):
@@ -105,6 +109,8 @@ def _running_row(body: PlaygroundChatStart) -> dict[str, Any]:
         "quality": {
             "source": "manual-playground-chat",
             "playground_chat": PATCH_ID,
+            "transport_contract": body.transport_contract or "legacy-unmarked",
+            "abcd_scene": body.abcd_scene,
             "prompt_preview": _prompt_preview(body.prompt),
             "prompt_chars": len(body.prompt),
             "response_chars": 0,
@@ -150,6 +156,8 @@ def _terminal_changes(body: PlaygroundChatRecord) -> dict[str, Any]:
         "quality": {
             "source": "manual-playground-chat",
             "playground_chat": PATCH_ID,
+            "transport_contract": body.transport_contract or "legacy-unmarked",
+            "abcd_scene": body.abcd_scene,
             "prompt_preview": _prompt_preview(body.prompt),
             "prompt_chars": len(body.prompt),
             "response_chars": body.response_chars,
@@ -221,7 +229,16 @@ def install_playground_chat_patch(app: FastAPI) -> FastAPI:
             # Backward compatibility for an older console asset that reaches a
             # terminal result without first calling the v3 start endpoint.
             existing = await app.state.test_runs.upsert(_running_row(body))
-        row = await app.state.test_runs.update(run_id, _terminal_changes(body))
+        changes = _terminal_changes(body)
+        # A terminal report from a legacy tab must not erase the dispatch
+        # version recorded before admission.
+        previous_transport = (existing.get("quality") or {}).get("transport_contract")
+        if previous_transport:
+            changes["quality"]["transport_contract"] = previous_transport
+        previous_scene = (existing.get("quality") or {}).get("abcd_scene")
+        if previous_scene in {"A", "B", "C", "D"}:
+            changes["quality"]["abcd_scene"] = previous_scene
+        row = await app.state.test_runs.update(run_id, changes)
         return {"run": row}
 
     async def require_abcd_report_admin(authorization: str | None = Header(default=None)) -> None:
@@ -229,6 +246,60 @@ def install_playground_chat_patch(app: FastAPI) -> FastAPI:
         master = str(app.state.settings.api_key or "")
         if not master or not supplied or not secrets.compare_digest(supplied, master):
             raise HTTPException(status_code=403, detail="Administrator key required")
+
+    @app.post("/api/admin/playground/abcd/transport-truth",
+              dependencies=[Depends(require_abcd_report_admin)])
+    async def save_playground_client_sse_truth(body: dict[str, Any]) -> dict[str, Any]:
+        """Store bounded browser transport observations even if final ABCD report fails.
+
+        Observations do not own SSE terminal, Worker status or success marking.
+        Never store raw exception messages, reply text, prompt or credentials.
+        """
+        rid = str(body.get("request_id") or "")
+        scene = str(body.get("scene") or "")
+        if not re.fullmatch(r"req_[a-fA-F0-9]{32}", rid) or scene not in {"A", "B", "C", "D"}:
+            raise HTTPException(status_code=422, detail="Invalid ABCD request identity")
+        run_id = _chat_run_id(rid)
+        run = app.state.test_runs.get(run_id)
+        quality = run.get("quality") if isinstance(run, dict) else None
+        if (not isinstance(run, dict) or rid not in (run.get("request_ids") or []) or
+            not isinstance(quality, dict) or quality.get("abcd_scene") != scene or
+            quality.get("transport_contract") != "abcd-real-sse-v293"):
+            raise HTTPException(status_code=409, detail="No matching declared ABCD run")
+        raw = body.get("client_sse_truth")
+        if raw is not None and not isinstance(raw, dict):
+            raise HTTPException(status_code=422, detail="Invalid client transport facts")
+        raw = raw or {}
+        boolean_keys = {
+            "response_headers_received", "protocol_stop_seen", "protocol_done_seen",
+            "native_reader_eof_seen", "reader_cancel_requested", "reader_lock_released",
+        }
+        number_keys = {
+            "response_headers_ms", "first_chunk_ms", "last_chunk_ms",
+            "read_elapsed_ms", "parsed_frames", "fetch_failed_after_ms",
+        }
+        string_keys = {"reader_error_name", "fetch_error_name"}
+        facts: dict[str, Any] = {}
+        for key in boolean_keys:
+            if type(raw.get(key)) is bool:
+                facts[key] = raw[key]
+        for key in number_keys:
+            value = raw.get(key)
+            if type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1_000_000:
+                facts[key] = round(float(value), 2)
+        for key in string_keys:
+            value = raw.get(key)
+            if isinstance(value, str) and re.fullmatch(r"[a-zA-Z]{1,50}", value):
+                facts[key] = value
+        await app.state.test_runs.update(run_id, {
+            "quality": {
+                **quality,
+                "client_sse_truth_v293": facts,
+                "client_sse_truth_recorded_at": beijing_now_iso(),
+                "client_sse_failed": body.get("failed") is True,
+            }
+        })
+        return {"saved": True, "request_id": rid, "scene": scene, "facts": len(facts)}
 
     @app.post("/api/admin/playground/abcd/report", dependencies=[Depends(require_abcd_report_admin)])
     async def save_playground_abcd_report(body: dict[str, Any]) -> dict[str, Any]:

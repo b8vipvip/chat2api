@@ -88,7 +88,7 @@ const safeErrorKind=error=>{
 };
 let r;
 try{
-  r=await fetch("/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+auth.token,"X-Chat2API-Request-ID":requestId},body:JSON.stringify({model,messages,prompt_mode:"full",stream:true})});
+  r=await fetch("/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+auth.token,"X-Chat2API-Request-ID":requestId,"X-Chat2API-Playground-Transport":"abcd-real-sse-v293"},body:JSON.stringify({model,messages,prompt_mode:"full",stream:true})});
 }catch(error){
   // Fetch can reject before even returning SSE response headers. Keep this
   // distinct from a reader abort after headers, without storing exception text.
@@ -297,17 +297,29 @@ for(let i=0;i<scene.prompts.length;i++){
 const prompt=scene.prompts[i],request_id="req_"+crypto.randomUUID().replace(/-/g,""),begin=performance.now();
 history.push({role:"user",content:prompt});
 note(sceneId+"第"+(i+1)+"轮正在提交："+request_id);
-await api("/api/admin/playground/chat-runs",{method:"POST",body:{request_id,model,prompt,api_key_id:auth.id,api_key_name:auth.label,attachments_count:0}});
+await api("/api/admin/playground/chat-runs",{method:"POST",body:{request_id,model,prompt,api_key_id:auth.id,api_key_name:auth.label,attachments_count:0,transport_contract:"abcd-real-sse-v293",abcd_scene:sceneId}});
 try{
 const out=await stream(model,auth,request_id,history,(chars,frames,status)=>note(sceneId+" 第"+(i+1)+"轮 "+request_id+"\n正文"+chars+"字符，SSE帧"+frames+"\n"+status));
 history.push({role:"assistant",content:out.text});
 report.turns.push({request_id,prompt,text:out.text,frames:out.frames,
   client_sse_truth:out.client_sse_truth||null,
   recovered_after_disconnect:out.recovered===true,duration_ms:Math.round(performance.now()-begin)});
+try {
+  await api("/api/admin/playground/abcd/transport-truth",{method:"POST",body:{
+    request_id,scene:sceneId,client_sse_truth:out.client_sse_truth||null,failed:false
+  }});
+} catch (_) { /* evidence sink failure cannot change genuine protocol terminal */ }
 }catch(e){
 report.turns.push({request_id,prompt,text:"",frames:0,error:String(e),
   client_sse_truth:e?.clientSseTruth||null,
   duration_ms:Math.round(performance.now()-begin)});
+try {
+  // Persist bounded client-side receive facts before a later ABCD summary,
+  // page navigation or transport error prevents the full report from saving.
+  await api("/api/admin/playground/abcd/transport-truth",{method:"POST",body:{
+    request_id,scene:sceneId,client_sse_truth:e?.clientSseTruth||null,failed:true
+  }});
+} catch (_) { /* never hide original stream failure */ }
 throw e;
 }
 }
