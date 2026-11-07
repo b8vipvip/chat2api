@@ -700,3 +700,87 @@ const ordinaryWhitespace=capture.snapshot({requestId:"req_outsidecode123",
   ])});
 assert.equal(ordinaryWhitespace.root.children.length,1,
   "Whitespace-only plain paragraph nodes still get filtered");
+
+
+// Phase 2 source-to-native fidelity: take the SAME synthetic reply DOM
+// through the shared Windows/Worker inventory and the *real* production
+// native-content serializer. Inventory equivalence is structural only:
+// it is not source-image identity, layout fidelity or screenshot parity.
+const identityCode=readFileSync("chrome_extension/content_native_message_identity_v291.js","utf8");
+runInNewContext(identityCode,ctx);
+const idModule=ctx.__CHAT2API_NATIVE_MESSAGE_IDENTITY_V291__;
+assert.equal(idModule.version,291);
+const txt=v=>({nodeType:3,nodeValue:v});
+const block=(tag,value)=>new Element(tag,[txt(value)]);
+const fixtureTables=Array.from({length:3},(_,i)=>new Element("TABLE",[
+  new Element("TR",[new Element("TD",[txt("source row "+i)])])
+]));
+const fixturePictures=Array.from({length:8},(_,i)=>{
+  const node=new Element("IMG");
+  node.naturalWidth=640+i;node.naturalHeight=480+i;
+  return node;
+});
+const sampleDom=new Element("DIV",[
+  block("H2","Shared Windows fixture heading"),
+  block("P","The first complete explanatory paragraph"),
+  ...fixtureTables,
+  ...fixturePictures,
+  new Element("PRE",[new Element("CODE",[txt("const result = 1;")])]),
+  block("BLOCKQUOTE","Closing explanation"),
+]);
+const sourceManifest=idModule.structuralManifest(sampleDom);
+assert.equal(sourceManifest.ok,true);
+assert.equal(sourceManifest.images,8);
+assert.equal(sourceManifest.tables,3);
+const actualSnapshot=capture.snapshot({
+  requestId:"req_phase2structuralv291",submitStartedAt:Date.now(),
+  lastCandidateNode:sampleDom,
+});
+assert.ok(actualSnapshot?.root,"real production serializer must capture fixture");
+const structuralTags=new Set(["h1","h2","h3","h4","h5","h6","p","table",
+  "pre","img","svg","canvas","blockquote","ul","ol","math"]);
+function publishedInventory(root){
+  const ordered=[],media=[];
+  const visit=node=>{
+    if(!node || typeof node!=="object")return;
+    if(structuralTags.has(node.tag)){
+      ordered.push(node.tag);
+      if(node.tag==="img")media.push(node.media_index);
+    }
+    for(const child of node.children||[])visit(child);
+  };
+  visit(root);
+  return {ordered,media};
+}
+const serialized=publishedInventory(actualSnapshot.root);
+assert.equal(JSON.stringify(serialized.ordered),JSON.stringify([...sourceManifest.ordered]),
+  "all 8 images, 3 tables and ordered text/code blocks must survive real serialization");
+assert.equal(JSON.stringify(serialized.media),JSON.stringify([0,1,2,3,4,5,6,7]),
+  "image indices are unique, ordered and contiguous");
+function matchesSource(root){
+  const result=publishedInventory(root);
+  return JSON.stringify(result.ordered)===JSON.stringify([...sourceManifest.ordered])
+    && JSON.stringify(result.media)===JSON.stringify([0,1,2,3,4,5,6,7]);
+}
+const removedImage=JSON.parse(JSON.stringify(actualSnapshot.root));
+const imageParent=removedImage;
+imageParent.children.splice(
+  imageParent.children.findIndex(n=>n.tag==="img"),1);
+assert.equal(matchesSource(removedImage),false,
+  "a published snapshot missing an image cannot pass source parity");
+const reorderedSnap=JSON.parse(JSON.stringify(actualSnapshot.root));
+const moveIndex=reorderedSnap.children.findIndex(n=>n.tag==="img");
+const [moved]=reorderedSnap.children.splice(moveIndex,1);
+reorderedSnap.children.splice(1,0,moved);
+assert.equal(matchesSource(reorderedSnap),false,
+  "same blocks reordered across text/tables/images must fail");
+const duplicatedImage=JSON.parse(JSON.stringify(actualSnapshot.root));
+duplicatedImage.children.push(
+  JSON.parse(JSON.stringify(duplicatedImage.children.find(n=>n.tag==="img"))));
+assert.equal(matchesSource(duplicatedImage),false,"duplicate image fails coverage");
+const wrongIdentitySnap=JSON.parse(JSON.stringify(actualSnapshot.root));
+wrongIdentitySnap.children.find(n=>n.tag==="img").media_index=7;
+assert.equal(matchesSource(wrongIdentitySnap),false,
+  "same image count with duplicated/wrong index must fail");
+
+console.log("Phase 2 source DOM vs production native serializer: 8 images, 3 tables, order and corruption negatives passed");
