@@ -609,7 +609,7 @@
     if (!$chat("pgChatModel")?.value && $chat("pgChatMode").value !== "image") return status("没有已验证且可路由的在线 Worker 文本模型，请在模型管理查看发现错误", "bad");
     if (typeof api !== "function" || typeof fileToBase64 !== "function") return status("测试场脚本尚未初始化，请刷新页面后重试", "bad");
     sending = true; $chat("pgChatSend").disabled = true; $chat("pgChatSend").textContent = "生成中"; input.disabled = true;
-    let uploaded = [], credential = null, assistantText = "", firstTokenMs = null, diagnostics = null;
+    let uploaded = [], credential = null, assistantText = "", firstTokenMs = null, diagnostics = null, detachedLaunched = false, detachedOutcome = null;
     const userFiles = [...$chat("pgChatFiles").files].slice(0, 4), userIndex = messages.length;
     messages.push({role:"user",content:text,attachment_names:userFiles.map(file=>file.name),include_in_context:true,created_at:new Date().toISOString()}); input.value=""; renderMessages(); addPendingAssistant();
     const requestId = "req_" + (globalThis.crypto?.randomUUID ? crypto.randomUUID().replaceAll("-", "") : `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`);
@@ -656,8 +656,10 @@
         if (accepted?.transport !== "server-detached-v292" ||
             accepted?.request_id !== requestId)
           throw new Error("后台启动请求确认无效");
+        detachedLaunched = true;
         const recovered = await recoverAuthoritativeResult(requestId,
           {waitForTerminal:true,detached:true});
+        detachedOutcome = recovered;
         if (recovered?.terminalStatus !== "completed")
           throw new Error(recovered?.error || "后台任务未取得可确认的完成终态");
         assistantText = recovered.content;
@@ -704,7 +706,7 @@
       await recordChatTurn({requestId:actualRequestId,model,credential,text,statusValue:"passed",totalMs,firstTokenMs,responseChars:assistantText.length,attachmentsCount:userFiles.length,error:null});
     } catch (error) {
       const recoveryId = imageMode ? requestId.replace(/^req_/, "imgreq_") : requestId;
-      const recovered = await recoverAuthoritativeResult(recoveryId, {waitForTerminal:true}).catch(() => null);
+      const recovered = detachedOutcome || await recoverAuthoritativeResult(recoveryId, {waitForTerminal:true,detached:detachedLaunched}).catch(() => null);
       if (recovered?.terminalStatus === "completed") {
         const totalMs = performance.now() - started;
         document.getElementById("pgChatPending")?.remove();
@@ -717,7 +719,7 @@
         saveHistory(); renderMessages();
         status(recovered.textTruncated
           ? "服务端已完成；恢复正文超过 500,000 字符，已明确截断且不会用于后续上下文"
-          : "服务端已完成；浏览器连接中断后已恢复完整文本及可用媒体", "ok");
+          : (detachedLaunched ? "测试场后台任务已完成，已读取完整文本及可用媒体" : "服务端已完成；浏览器连接中断后已恢复完整文本及可用媒体"), "ok");
         await recordChatTurn({requestId:recoveryId,model,credential,text,statusValue:"passed",
           totalMs,firstTokenMs,responseChars:recovered.content.length,attachmentsCount:userFiles.length,error:null});
       } else if (recovered?.pending) {
