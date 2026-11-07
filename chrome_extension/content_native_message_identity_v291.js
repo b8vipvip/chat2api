@@ -72,8 +72,8 @@
   function resolveRequest(active, candidate=null, root=globalThis.document,
                           visible=defaultVisible) {
     const fail=(reason,count=0)=>({ok:false,reason,candidate_count:Math.min(32,count)});
-    if (!active?.requestId || !(active.baselineNativeMessageIds instanceof Set)
-        || !(active.baselineNativeSelectionNodes instanceof Set)
+    if (!active?.requestId || typeof active.baselineNativeMessageIds?.has!=="function"
+        || typeof active.baselineNativeSelectionNodes?.has!=="function"
         || typeof active.baselineRolelessHeadings?.has!=="function"
         || !active.baselineCapturedAt || !active.submitStartedAt
         || active.baselineCapturedAt>active.submitStartedAt
