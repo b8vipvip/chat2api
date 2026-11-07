@@ -15,6 +15,7 @@ class Element {
   }
   getBoundingClientRect(){return {width:600,height:180};}
   getAttribute(){return null;}
+  get children(){return this.childNodes.filter(n=>n instanceof Element);}
   get textContent(){
     return this.childNodes.map(node=>node instanceof Element?
       node.textContent:String(node.nodeValue||"")).join("");
