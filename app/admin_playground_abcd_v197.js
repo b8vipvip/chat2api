@@ -79,7 +79,18 @@ async function recoverDisconnectedStream(requestId, update) {
   throw Error("恢复等待结束，但服务端尚无已验证终态；请按请求 ID 查看请求记录");
 }
 
-async function stream(model,auth,requestId,messages,update){
+async function stream(model,auth,requestId,messages,update,sceneId){
+  // v294: save early client-side transport evidence independently of the
+  // final ABCD report or multi-minute same-ID Broker recovery.
+  const persistClientTruth=(facts,phase="progress")=>{
+    if(!sceneId)return Promise.resolve();
+    return api("/api/admin/playground/abcd/transport-truth",{
+      method:"POST",body:{
+        request_id:requestId,scene:sceneId,client_sse_truth:facts,
+        failed:phase!=="complete",phase
+      }
+    }).catch(()=>{});
+  };
 const clientStarted=performance.now();
 const safeErrorKind=error=>{
   const kind=String(error?.name||"Error");
@@ -100,17 +111,29 @@ try{
   };
   throw failure;
 }
-if(!r.ok)throw Error("API HTTP "+r.status+": "+(await r.text()).slice(0,300));
+if(!r.ok){
+  const error=Error("API HTTP "+r.status+": "+(await r.text()).slice(0,300));
+  error.clientSseTruth={
+    response_headers_received:true,
+    response_headers_ms:Math.max(0,Math.round(performance.now()-clientStarted)),
+    http_status:r.status,fetch_error_name:"HTTPStatusError",
+    reader_cancel_requested:false,
+    protocol_stop_seen:false,protocol_done_seen:false,native_reader_eof_seen:false,
+  };
+  throw error;
+}
 if(!r.body)throw Error("缺少SSE响应体");
 const responseHeadersAt=performance.now();
 let buffer="",answer="",stopped=false,done=false,frames=0,lastStatus="",streamError=null;
 let nativeEof=false,firstChunkAt=null,lastChunkAt=null,readerCancelled=false,readerReleased=false;
-let readerErrorName=null;
+let readerErrorName=null,lastCheckpointAt=null,bodyChunks=0;
+const relative=at=>at===null?null:Math.max(0,Math.round(at-clientStarted));
 const reader=r.body.getReader(),decoder=new TextDecoder();
 try{
 while(!done){
 const chunk=await reader.read();if(chunk.done){nativeEof=true;break;}
 const readAt=performance.now();
+bodyChunks++;
 if(firstChunkAt===null)firstChunkAt=readAt;
 lastChunkAt=readAt;
 buffer+=decoder.decode(chunk.value,{stream:true}).replace(/\r\n/g,"\n");
@@ -131,6 +154,25 @@ if(c.finish_reason==="stop")stopped=true;
 }
 safeProgress(update,answer.length,frames,lastStatus);
 }
+// Send a bounded, content-free progress checkpoint when the browser
+// actually receives chunks. A tab crash or proxy close can prevent the
+// later final report or recovery callback from ever being sent.
+if(lastCheckpointAt===null||readAt-lastCheckpointAt>=8000){
+  lastCheckpointAt=readAt;
+  void persistClientTruth({
+    response_headers_received:true,
+    response_headers_ms:relative(responseHeadersAt),
+    first_chunk_ms:relative(firstChunkAt),
+    last_chunk_ms:relative(lastChunkAt),
+    read_elapsed_ms:relative(readAt),
+    sse_body_chunks:Math.min(bodyChunks,1000000),
+    parsed_frames:Math.min(frames,1000000),
+    protocol_stop_seen:stopped,
+    protocol_done_seen:done,
+    reader_cancel_requested:false,
+    native_reader_eof_seen:false,
+  },"progress");
+}
 }
 }catch(error){
   streamError=error;
@@ -149,7 +191,6 @@ finally{
     }
   }catch(e){/* observer cleanup never owns Broker terminal */}
 }
-const relative=at=>at===null?null:Math.max(0,Math.round(at-clientStarted));
 const clientSseTruth={
   response_headers_received:true,
   response_headers_ms:relative(responseHeadersAt),
@@ -163,10 +204,17 @@ const clientSseTruth={
   last_chunk_ms:relative(lastChunkAt),
   read_elapsed_ms:relative(performance.now()),
   parsed_frames:Math.min(frames,1000000),
+  sse_body_chunks:Math.min(bodyChunks,1000000),
+  reader_cancel_reason:readerCancelled
+    ?(streamError?"StreamError":"MissingTerminal"):"None",
 };
 // Always attach this bounded, content-free client observation to the SAME
 // request's ABCD report, including the detached-Broker recovery path.
 if(!stopped||!done){
+  // This must be written BEFORE same-request recovery, which may continue
+  // for minutes. Previously the browser facts were lost if the user left
+  // during the recovery loop.
+  await persistClientTruth(clientSseTruth,"incomplete");
   try{
     const recovered=await recoverDisconnectedStream(requestId,update);
     if(recovered)return {...recovered,client_sse_truth:clientSseTruth};
@@ -299,7 +347,7 @@ history.push({role:"user",content:prompt});
 note(sceneId+"第"+(i+1)+"轮正在提交："+request_id);
 await api("/api/admin/playground/chat-runs",{method:"POST",body:{request_id,model,prompt,api_key_id:auth.id,api_key_name:auth.label,attachments_count:0,transport_contract:"abcd-real-sse-v293",abcd_scene:sceneId}});
 try{
-const out=await stream(model,auth,request_id,history,(chars,frames,status)=>note(sceneId+" 第"+(i+1)+"轮 "+request_id+"\n正文"+chars+"字符，SSE帧"+frames+"\n"+status));
+const out=await stream(model,auth,request_id,history,(chars,frames,status)=>note(sceneId+" 第"+(i+1)+"轮 "+request_id+"\n正文"+chars+"字符，SSE帧"+frames+"\n"+status),sceneId);
 history.push({role:"assistant",content:out.text});
 report.turns.push({request_id,prompt,text:out.text,frames:out.frames,
   client_sse_truth:out.client_sse_truth||null,
