@@ -41,7 +41,7 @@ assert.equal(media.safeImageUrl("https://chat2api.mv3.cn/api/media/med_abc123/se
 assert.equal(media.isActualImageReply("bash -lc python - <<'PY'\nsrc='/mnt/data/photo.png'"), false);
 assert.doesNotMatch(media.renderMarkdown("![x](javascript:alert(1))"), /<img/);
 assert.match(source, /\/v1\/images\/generations/);
-assert.match(source, /"X-Chat2API-Request-ID": imageMode/);
+assert.match(source, /"X-Chat2API-Request-ID": requestId\.replace\(/);
 assert.match(source, /response_format:"b64_json"/);
 assert.match(source, /if \(imageMode && !isActualImageReply\(assistantText\)\)/);
 console.log("Playground real image result rendering and image intent differentiation: passed");
