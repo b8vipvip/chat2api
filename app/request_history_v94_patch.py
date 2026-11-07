@@ -538,14 +538,14 @@ function requestHistoryParseExportSince(value){
 }
 function requestHistoryFilterParams(){
   const query=new URLSearchParams();
-  const raw=document.getElementById('rqSearch')?.value.trim()||'';
+  const rawInput=document.getElementById('rqSearch')?.value.trim()||'';
   const state=document.getElementById('rqStatus')?.value||'';
   const source=document.getElementById('rqSource')?.value||'';
   // One input covers request / trace / client / key / error and model.
   // Model-looking strings use the dedicated model predicate; all other
   // strings use server-side q (which also searches actual/served model).
-  const explicitModel=raw.match(/^model\\s*:\\s*(.+)$/i);
-  const input=explicitModel?explicitModel[1].trim():raw.replace(/^(?:request|client|error)\\s*:\\s*/i,'');
+  const explicitModel=rawInput.match(/^model\s*:\s*(.+)$/i);
+  const input=explicitModel?explicitModel[1].trim():rawInput.replace(/^(?:request|client|error)\s*:\s*/i,'');
   const isModel=Boolean(explicitModel)||/^(?:gpt|o[1-9]|claude|gemini|deepseek|qwen|kimi|llama|mistral|glm|doubao)(?:[-_.][a-z0-9._-]+)?$/i.test(input);
   if(input)query.set(isModel?'model':'q',input);
   if(state)query.set('status',state);
