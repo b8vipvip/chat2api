@@ -266,6 +266,14 @@ def install_playground_chat_patch(app: FastAPI) -> FastAPI:
             not isinstance(quality, dict) or quality.get("abcd_scene") != scene or
             quality.get("transport_contract") != "abcd-real-sse-v293"):
             raise HTTPException(status_code=409, detail="No matching declared ABCD run")
+        phase = str(body.get("phase") or ("incomplete" if body.get("failed") is True else "complete"))
+        if phase not in {"progress", "incomplete", "complete"}:
+            raise HTTPException(status_code=422, detail="Invalid transport evidence phase")
+        # Delayed periodic network snapshots must never erase a previously
+        # saved terminal/reader-error report.
+        previous_phase = str(quality.get("client_sse_truth_phase") or "")
+        if phase == "progress" and previous_phase in {"incomplete", "complete"}:
+            return {"saved": False, "request_id": rid, "scene": scene, "facts": 0}
         raw = body.get("client_sse_truth")
         if raw is not None and not isinstance(raw, dict):
             raise HTTPException(status_code=422, detail="Invalid client transport facts")
@@ -277,8 +285,9 @@ def install_playground_chat_patch(app: FastAPI) -> FastAPI:
         number_keys = {
             "response_headers_ms", "first_chunk_ms", "last_chunk_ms",
             "read_elapsed_ms", "parsed_frames", "fetch_failed_after_ms",
+            "sse_body_chunks", "http_status",
         }
-        string_keys = {"reader_error_name", "fetch_error_name"}
+        string_keys = {"reader_error_name", "fetch_error_name", "reader_cancel_reason"}
         facts: dict[str, Any] = {}
         for key in boolean_keys:
             if type(raw.get(key)) is bool:
@@ -295,6 +304,7 @@ def install_playground_chat_patch(app: FastAPI) -> FastAPI:
             "quality": {
                 **quality,
                 "client_sse_truth_v293": facts,
+                "client_sse_truth_phase": phase,
                 "client_sse_truth_recorded_at": beijing_now_iso(),
                 "client_sse_failed": body.get("failed") is True,
             }
