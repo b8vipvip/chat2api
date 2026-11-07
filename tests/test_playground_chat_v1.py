@@ -44,7 +44,12 @@ def test_playground_chat_patch_injects_console_assets() -> None:
         # Manual Playground now waits for the exact final response so Markdown
         # structure is not flattened by the incremental preview path.
         assert 'stream:false' in source.replace(" ", "")
-        assert 'payload.choices?.[0]?.message?.content' in source
+        assert '/api/admin/playground/chat-dispatch' in source
+        assert 'startChatRun' in source
+        assert 'recoverAuthoritativeResult(requestId' in source
+        assert 'server-detached-v292' in source
+        # Manual text no longer depends on a multi-minute browser HTTP link.
+        assert 'fetch(imageMode ? "/v1/images/generations" : "/v1/chat/completions"' not in source
         assert 'messages:normalizedHistory()' in source.replace(" ", "")
         assert 'attachments:referenceFiles' in source.replace(" ", "")
         assert 'uploaded.map(item=>({file_id:item.file_id}))' in source.replace(" ", "")
