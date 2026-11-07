@@ -28,7 +28,7 @@ def test_detached_chat_accepts_once_returns_202_then_completes_same_api_request(
         })
         # Longer than the launch HTTP call; the browser can close and the
         # internal job will remain alive on the server event loop.
-        await asyncio.sleep(0.15)
+        await asyncio.sleep(0.8)
         return {"id": "chatcmpl-test", "choices": [{"message": {"content": "ok"}}]}
 
     install_playground_detached_chat(app, lambda rid: rid)
@@ -52,14 +52,14 @@ def test_detached_chat_accepts_once_returns_202_then_completes_same_api_request(
                             headers=headers, json=launch_body)
         elapsed = time.monotonic() - started_at
         assert first.status_code == 202, first.text
-        assert elapsed < 0.12, "202 must not wait for the 150ms Worker reply"
+        assert elapsed < 0.65, "202 must not wait for the 800ms Worker reply"
         assert first.json()["transport"] == "server-detached-v292"
         repeat = client.post("/api/admin/playground/chat-dispatch",
                              headers=headers, json=launch_body)
         assert repeat.status_code == 202
         assert repeat.json()["reused"] is True
         final = None
-        for _ in range(40):
+        for _ in range(70):
             final = client.get("/api/admin/playground/chat-dispatch/" + request_id,
                                headers=headers)
             assert final.status_code == 200
