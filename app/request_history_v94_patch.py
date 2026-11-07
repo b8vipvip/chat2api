@@ -538,12 +538,18 @@ function requestHistoryParseExportSince(value){
 }
 function requestHistoryFilterParams(){
   const query=new URLSearchParams();
-  const search=document.getElementById('rqSearch')?.value.trim()||'';
+  const raw=document.getElementById('rqSearch')?.value.trim()||'';
   const state=document.getElementById('rqStatus')?.value||'';
-  const model=document.getElementById('rqModel')?.value.trim()||'';
-  if(search)query.set('q',search);
+  const source=document.getElementById('rqSource')?.value||'';
+  // One input covers request / trace / client / key / error and model.
+  // Model-looking strings use the dedicated model predicate; all other
+  // strings use server-side q (which also searches actual/served model).
+  const explicitModel=raw.match(/^model\\s*:\\s*(.+)$/i);
+  const input=explicitModel?explicitModel[1].trim():raw.replace(/^(?:request|client|error)\\s*:\\s*/i,'');
+  const isModel=Boolean(explicitModel)||/^(?:gpt|o[1-9]|claude|gemini|deepseek|qwen|kimi|llama|mistral|glm|doubao)(?:[-_.][a-z0-9._-]+)?$/i.test(input);
+  if(input)query.set(isModel?'model':'q',input);
   if(state)query.set('status',state);
-  if(model)query.set('model',model);
+  if(source)query.set('source',source);
   if(document.getElementById('rqBatchExportCurrentVersion')?.checked)
     query.set('current_version_only','true');
   const raw=document.getElementById('rqBatchExportSince')?.value.trim()||'';
@@ -554,6 +560,16 @@ function requestHistoryFilterParams(){
 function requestHistoryEnsureControls(){
   requestHistoryEnsureConversationModal();
   const section=document.getElementById('view-requests'),toolbar=section?.querySelector('.toolbar');
+  if(toolbar&&!document.getElementById('rqSource')){
+    const select=document.createElement('select');
+    select.id='rqSource';select.setAttribute('aria-label','请求来源');
+    for(const [value,label] of [['','全部来源'],['playground','测试场'],['external','外部']]){
+      const option=document.createElement('option');option.value=value;
+      option.textContent=label;select.appendChild(option);
+    }
+    const state=document.getElementById('rqStatus');
+    state?.insertAdjacentElement('afterend',select);
+  }
   if(toolbar&&!document.getElementById('rqBatchExportLogs')){
     const group=document.createElement('div');
     group.id='rqBatchExportLogs';
@@ -612,7 +628,7 @@ function requestHistoryEnsureControls(){
     // a provided time merely because the version checkbox is checked.
     const button=document.createElement('button');button.type='button';
     button.className='action';button.textContent='合并打包导出请求日志';
-    button.title='只导出列表筛选条件命中的全部留存请求：搜索、状态、模型、时间及当前版本 Git SHA';
+    button.title='只导出列表筛选条件命中的全部留存请求：统一搜索、状态、请求来源、时间及当前版本 Git SHA';
     button.addEventListener('click',async()=>{
       const hasTime=Boolean(since.value.trim());
       const parsed=hasTime?requestHistoryParseExportSince(since.value):null;
@@ -651,7 +667,7 @@ function requestHistoryEnsureControls(){
   }
   if(section&&!section.querySelector('[data-request-history-diagnostic-hint]')){
     const hint=document.createElement('div');hint.dataset.requestHistoryDiagnosticHint='1';hint.className='footer';
-    hint.textContent='「当前版本」勾选时自动筛选实际运行 Git SHA；搜索、状态、模型、起始时间和版本条件取交集。ZIP 只打包筛选命中的全部留存请求（列表前100条，最多留存500条），不导出其它请求；分享前请脱敏。';
+    hint.textContent='统一搜索自动识别 request / client / error / model；来源可选测试场或外部。「当前版本」按实际 Git SHA 筛选；搜索、状态、来源、起始时间和版本取交集。ZIP 仅打包筛选命中的留存请求（最多500条）；分享前请脱敏。';
     section.appendChild(hint);
   }
 }
@@ -692,6 +708,12 @@ async function loadRequests(){
     const applied=d?.applied_filters;
     const versionRequested=qs.get('current_version_only')==='true';
     const rows=Array.isArray(d?.data)?d.data:[];
+    const selectedSource=qs.get('source')||'';
+    if(applied && Object.hasOwn(applied,'source') &&
+        String(applied.source||'')!==selectedSource)
+      throw new Error('服务端返回了不一致的请求来源条件');
+    if(selectedSource && rows.some(row=>row?.request_source!==selectedSource))
+      throw new Error('请求来源筛选未实际生效，已阻止错误导出');
     // "applied_filters" is additive metadata: some production wrappers omit
     // the echo even while the underlying telemetry.query really filtered.
     // An absent echo must not turn a correctly filtered table into an error.
@@ -955,6 +977,17 @@ def _normalize_admin_html(html: str) -> str:
             f"{PATCH_ID}: expected exactly one legacy request-detail panel, found {html.count(_BASE_REQUEST_DETAIL_PANEL)}"
         )
 
+    # The model field is merged into the existing smart request/error/client
+    # input; do not leave an orphaned hidden predicate on the admin page.
+    base_model = '<input id="rqModel" placeholder="模型">'
+    if html.count(base_model) != 1:
+        raise RuntimeError(f"{PATCH_ID}: expected one legacy model filter")
+    html = html.replace(base_model, "", 1)
+    base_search = '<input id="rqSearch" placeholder="request / error / client">'
+    if html.count(base_search) != 1:
+        raise RuntimeError(f"{PATCH_ID}: expected one unified search input")
+    html = html.replace(base_search,
+        '<input id="rqSearch" placeholder="request / error / client / model" title="自动识别请求ID、客户端、错误、模型；可输入 model:gpt-6">', 1)
     html = html.replace(_BASE_HEADER, _FINAL_HEADER, 1)
     html = html.replace(_BASE_REQUEST_VIEW_OPEN, _FINAL_REQUEST_VIEW_OPEN, 1)
     html = html.replace(_BASE_REQUEST_DETAIL_PANEL, "", 1)
