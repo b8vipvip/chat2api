@@ -49,4 +49,12 @@ const partial={requestId:"req_monaco_incomplete",submitStartedAt:Date.now(),
   lastCandidateNode:new Element("DIV",[virtualized])};
 assert.equal(ctx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot(partial),null);
 assert.equal(partial.nativeStructuralFailure,"code-editor-virtualized");
+const cmGap=new Element("DIV",[]);
+cmGap.matches=editor.matches;
+cmGap.querySelectorAll=editor.querySelectorAll;
+cmGap.querySelector=selector=>selector===".cm-gap"?{}:null;
+const skippedCm={requestId:"req_cm_gap_incomplete",submitStartedAt:Date.now(),
+  lastCandidateNode:new Element("DIV",[cmGap])};
+assert.equal(ctx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot(skippedCm),null);
+assert.equal(skippedCm.nativeStructuralFailure,"code-editor-virtualized");
 console.log("Verified editor code lines included; virtualized code rejected safely");
