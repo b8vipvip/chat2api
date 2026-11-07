@@ -75,12 +75,12 @@ function execute(root){
   return runInNewContext(captureSource,ctx);
 }
 const user=message("u-user-1234","USER_ONLY_SENTINEL","user");
-const first=message("a-first-1234","EARLY_ASSISTANT");
-const last=message("a-last-1234","FINAL_ASSISTANT");
+const first=message("assistant-first-12345678","EARLY_ASSISTANT");
+const last=message("assistant-last-12345678","FINAL_ASSISTANT");
 const main=new Element("main",{},[user,first,last]);
 const captured=execute(main);
 assert.equal(captured.ok,true);
-assert.equal(captured.answer.message_id,"a-last-1234");
+assert.equal(captured.answer.message_id,"assistant-last-12345678");
 assert.equal(captured.answer.boundary_verified,true);
 assert.equal(captured.answer.counts.images,1);
 assert.equal(captured.answer.counts.tables,1);
