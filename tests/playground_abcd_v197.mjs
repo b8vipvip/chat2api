@@ -19,8 +19,8 @@ const frames=(text,includeDone=true)=>
 "data: "+JSON.stringify({choices:[{index:0,delta:{},finish_reason:"stop"}]})+"\n\n"+
 (includeDone?"data: [DONE]\n\n":"");
 
-function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,recoveredText=null,fetchFailure=false}={}) {
-  const elements=new Map(), requests=[], records=[],downloads=[];
+function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,recoveredText=null,fetchFailure=false,httpFailureStatus=0}={}) {
+  const elements=new Map(), requests=[], records=[],downloads=[],clientEvidence=[];
   let submittedReport=null;
   let cancels=0, releases=0;
   const element=key=>{
@@ -43,6 +43,7 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
   const fetch=async (url, options={})=>{
     if(url==="/v1/chat/completions"){
       if(fetchFailure){const error=Error("should never appear in client proof");error.name="AbortError";throw error;}
+      if(httpFailureStatus)return {ok:false,status:httpFailureStatus,text:async()=>"Internal Server Error"};
       const body=JSON.parse(options.body);
       requests.push({url,body,headers:options.headers});
       const text=outputs[Math.min(postIndex++,outputs.length-1)];
@@ -94,6 +95,7 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
       model_verified:!modelMismatch,model_conflict:modelMismatch,
       diagnostics:{network_stream_terminal_proof:true,network_stream_phase:"complete"}
     };
+    if(endpoint.endsWith("/abcd/transport-truth")){clientEvidence.push(options.body);return {};}
     if(endpoint.endsWith("/abcd/report")){submittedReport=options.body.report;return {};}
     if(endpoint.endsWith("/chat-runs"))records.push({kind:"start",body:options.body});
     if(endpoint.endsWith("/chat-records"))records.push({kind:"terminal",body:options.body});
@@ -107,7 +109,7 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
   vm.runInNewContext(source,context);
   return {run:async()=>{
     await element("pgABCDRun").handlers.click();
-    return {status:element("pgABCDNote").textContent,requests,records,downloads,cancels,releases,report:submittedReport};
+    return {status:element("pgABCDNote").textContent,requests,records,downloads,cancels,releases,report:submittedReport,clientEvidence};
   }, element};
 }
 
@@ -147,6 +149,22 @@ test("A: thrown browser reader error records class only, never fake EOF",async()
   assert.equal(truth.native_reader_eof_seen,false);
   assert.equal(truth.protocol_done_seen,false);
   assert.doesNotMatch(JSON.stringify(truth),/synthetic read error/);
+});
+test("A: failed SSE persists client reader/cancel evidence BEFORE recovery result",async()=>{
+  const r=await scenario("A",[{text:FULL,done:false}]).run();
+  const early=r.clientEvidence.find(x=>x.phase==="incomplete");
+  assert.ok(early,"pre-recovery client truth must be recorded even without terminal ABCD report");
+  assert.equal(early.client_sse_truth.protocol_done_seen,false);
+  assert.equal(early.client_sse_truth.reader_cancel_requested,true);
+  assert.equal(early.client_sse_truth.reader_cancel_reason,"MissingTerminal");
+});
+test("A: HTTP 500 response is reported as response-layer error with exact status",async()=>{
+  const r=await scenario("A",[FULL],{httpFailureStatus:500}).run();
+  const terminal=r.records.find(x=>x.kind==="terminal");
+  assert.equal(terminal.body.status,"failed");
+  assert.equal(r.report.turns[0].client_sse_truth.http_status,500);
+  assert.equal(r.report.turns[0].client_sse_truth.fetch_error_name,"HTTPStatusError");
+  assert.ok(r.clientEvidence.some(x=>x.client_sse_truth?.http_status===500));
 });
 test("A: premature SSE EOF recovers SAME request while retaining client cancel proof",async()=>{
   const r=await scenario("A",[{text:FULL,done:false}],{recoveredText:FULL}).run();
