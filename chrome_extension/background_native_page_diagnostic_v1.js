@@ -111,23 +111,12 @@
     };
     const USER="[data-message-author-role='user'],[data-conversation-role='user'],[data-testid='user-message']";
     const SKIP="script,style,form,textarea,input,button,nav,aside,header,footer,[contenteditable='true'],[role='textbox'],[role='dialog'],[role='menu']";
-    const selections=[];
-    for(const heading of document.querySelectorAll("h4[data-conversation-role='assistant']")){
-      const wrap=heading.closest("[data-chatgpt-search-message-ids]");
-      if(!wrap||wrap.querySelector("h4[data-conversation-role='user']"))continue;
-      const list=String(wrap.getAttribute("data-chatgpt-search-message-ids")||"").split(/\s+/);
-      for(const sel of wrap.querySelectorAll("[data-chatgpt-selection-message-id]")){
-        const id=String(sel.getAttribute("data-chatgpt-selection-message-id")||"");
-        if(!id||!list.includes(id)||!visible(sel)||sel.querySelector(USER))continue;
-        const md=sel.querySelector("[data-markdown-text-style='assistant-message']");
-        if(!md||!visible(md))continue;
-        const dil=md.querySelector("[data-dil-message-id]");
-        const source=md.querySelector("[data-dil-source-message-id]");
-        if(dil&&dil.getAttribute("data-dil-message-id")!==id||
-            source&&source.getAttribute("data-dil-source-message-id")!==id)continue;
-        selections.push({node:sel,id});
-      }
-    }
+    // Do not maintain a second Message ID validator in the independent
+    // Windows collector. Same selection/wrapper/assistant-heading/DIL rules
+    // as the real Worker; historical captures remain request_bound:false.
+    const identity=globalThis.__CHAT2API_NATIVE_MESSAGE_IDENTITY_V291__;
+    if(!identity?.collect)return {ok:false,stage:"shared-message-identity-unavailable"};
+    const selections=identity.collect(document,visible).map(item=>({node:item.node,id:item.id}));
     for(const role of document.querySelectorAll("[data-message-author-role='assistant']")){
       if(!visible(role)||role.querySelector(USER))continue;
       if(selections.some(s=>s.node===role||s.node.contains(role)))continue;
@@ -373,9 +362,15 @@
             throw new Error("hot_collector_execution_failed_check_user_scripts_permission");
           }
         }else{
-          result=await chrome.scripting.executeScript({
+          // The isolated-world diagnostic tab may have been created before a
+          // Worker update. Explicitly inject the same local, packaged helper
+          // used by formal requests, never remote code or an eval-string.
+          const prepared=await chrome.scripting.executeScript({
+            target:{tabId:tab.id},files:["content_native_message_identity_v291.js"]
+          }).then(()=>true).catch(()=>false);
+          result=prepared ? await chrome.scripting.executeScript({
             target:{tabId:tab.id},func:capturePage
-          }).catch(()=>null);
+          }).catch(()=>null) : null;
         }
         const value=result?.[0]?.result;
         if(!value?.ok||!value.answer?.root){stable="";seen=0;continue;}
