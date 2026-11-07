@@ -48,7 +48,7 @@ def _validated_payload(value: dict[str, Any]) -> dict[str, Any]:
             raise HTTPException(status_code=422, detail="Invalid chat message shape")
         if item.get("role") not in {"system", "developer", "user", "assistant"}:
             raise HTTPException(status_code=422, detail="Invalid role")
-    if not isinstance(messages[-1].get("content"), str) or len(messages[-1]["content"]) > 20000:
+    if messages[-1].get("role") != "user" or not isinstance(messages[-1].get("content"), str) or len(messages[-1]["content"]) > 20000:
         raise HTTPException(status_code=422, detail="Invalid final message")
     attachments = value.get("attachments", [])
     if not isinstance(attachments, list) or len(attachments) > 4:
@@ -94,7 +94,7 @@ def install_playground_detached_chat(app: FastAPI, chat_run_id) -> None:
                         "X-Chat2API-Playground-Dispatch": "server-detached-v292",
                     },
                 ), timeout=960)
-            record["state"] = "done"
+            record["state"] = "done" if response.status_code == 200 else "failed"
             record["http_status"] = response.status_code
         except asyncio.CancelledError:
             record["state"] = "cancelled"
