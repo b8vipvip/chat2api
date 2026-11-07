@@ -1,27 +1,22 @@
 import assert from "node:assert/strict";
 import {readFileSync} from "node:fs";
-import vm from "node:vm";
 
 const source=readFileSync("app/request_history_v94_patch.py","utf8");
 const start=source.indexOf("function requestHistoryParseExportSince(value){");
 const filterStart=source.indexOf("function requestHistoryFilterParams(){",start);
 const end=source.indexOf("\nfunction requestHistoryEnsureControls(){",filterStart);
 assert.ok(start>=0&&filterStart>start&&end>filterStart);
-// Load independent helpers explicitly. A former combined slice could be
-// shadowed by a runtime wrapper when evaluated with Node's VM context.
-const parserContext={Date};
-vm.runInNewContext(source.slice(start,filterStart)+"\nthis.parse=requestHistoryParseExportSince;",parserContext);
-assert.equal(typeof parserContext.parse,"function");
 function filter({time="",current=false,q="",status="",source=""}={}){
   const inputs={
     rqSearch:{value:q},rqStatus:{value:status},rqSource:{value:source},
     rqBatchExportSince:{value:time},rqBatchExportCurrentVersion:{checked:current},
   };
-  const context={document:{getElementById:id=>inputs[id]||null},
-    URLSearchParams,Date,requestHistoryParseExportSince:parserContext.parse};
-  vm.runInNewContext(source.slice(filterStart,end)+"\nthis.build=requestHistoryFilterParams;",context);
-  assert.equal(typeof context.build,"function");
-  return context.build();
+  // An explicit compiled closure avoids VM global binding differences.
+  const makeFilter=new Function("document","URLSearchParams","Date",
+    source.slice(start,end)+"\nreturn requestHistoryFilterParams;");
+  const build=makeFilter({getElementById:id=>inputs[id]||null},URLSearchParams,Date);
+  assert.equal(typeof build,"function");
+  return build();
 }
 const expected="2026-10-30T03:56:59.000Z";
 assert.equal(filter({time:"2026-10-30 11:56:59"}).get("since"),expected);
