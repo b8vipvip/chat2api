@@ -58,7 +58,7 @@
     };
   };
 
-  async function startChatRun(requestId, body) {
+  async function startChatRun(requestId, body, transportContract = "") {
     const key = selectedKey();
     const response = await baseFetch("/api/admin/playground/chat-runs", {
       method: "POST",
@@ -71,6 +71,7 @@
         api_key_name: key.api_key_name,
         prompt: latestUserPrompt(body),
         attachments_count: Array.isArray(body?.attachments) ? body.attachments.length : 0,
+        transport_contract: String(transportContract || "legacy-unmarked").slice(0, 80),
       }),
     });
     if (!response.ok) {
@@ -105,7 +106,9 @@
     // Persist the running row before the production API request is dispatched.
     // Fail closed here: an operator should never have a real Playground chat
     // request in Request History without a matching Test History row.
-    await startChatRun(requestId, body);
+    const transportContract=requestHeader(input,init,"X-Chat2API-Playground-Transport") ||
+      (body?.stream===true ? "legacy-direct-sse" : "legacy-direct-nonstream");
+    await startChatRun(requestId, body, transportContract);
     return baseFetch(input, init);
   }
 
