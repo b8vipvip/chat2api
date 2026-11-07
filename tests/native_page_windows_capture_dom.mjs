@@ -37,6 +37,7 @@ class Element {
     });
   }
   closest(s){for(let n=this;n;n=n.parentElement)if(n.matches(s))return n;return null;}
+  contains(target){for(let n=target;n;n=n.parentElement)if(n===this)return true;return false;}
   querySelectorAll(s){
     const result=[];const visit=n=>{
       for(const child of n.childNodes){
