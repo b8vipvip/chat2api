@@ -585,10 +585,32 @@
     if (node.nodeType === Node.TEXT_NODE) return normalizeInline(node.nodeValue || "").trim();
     if (!(node instanceof Element)) return "";
     const tag = node.tagName.toLowerCase();
+    // Modern code cards can render in CodeMirror instead of <pre>. A
+    // generic inline text flatten loses newlines/indentation and fails the
+    // ABCD Python code fence even though the model produced real code.
+    if (tag === "div" && node.matches?.(".cm-editor,.monaco-editor")) {
+      const cm = [...node.querySelectorAll(".cm-content .cm-line")];
+      const monaco = cm.length ? [] : [...node.querySelectorAll(".view-lines .view-line")];
+      const lines = cm.length ? cm : monaco;
+      const total = Number(node.querySelector?.("[aria-rowcount]")?.getAttribute?.("aria-rowcount") || 0);
+      const cmVirtual = cm.length > 0 && !!node.querySelector?.(".cm-gap");
+      const viewport = node.querySelector?.(".monaco-scrollable-element");
+      const viewportComplete = Boolean(viewport &&
+        Number.isFinite(viewport.scrollHeight) && Number.isFinite(viewport.clientHeight) &&
+        viewport.scrollHeight <= viewport.clientHeight + 2);
+      const monacoVirtual = monaco.length > 0 &&
+        !((total > 0 && total <= monaco.length) || viewportComplete);
+      if (!lines.length || cmVirtual || monacoVirtual) return "";
+      const text = lines.map(line => String(line.textContent || "")).join("\n").replace(/\r\n?/g,"\n").replace(/\n+$/, "");
+      if (!text.trim() || text.length > 150000) return "";
+      const ticks = "`".repeat(Math.max(3, ...[...text.matchAll(/`+/g)].map(hit=>hit[0].length+1)));
+      return ticks + languageOf(node) + "\n" + text + "\n" + ticks;
+    }
     if (tag === "pre") {
       const text = String(node.querySelector("code")?.textContent || node.textContent || "").replace(/\r\n?/g, "\n").replace(/\n+$/, "");
       const language = languageOf(node);
-      return `\`\`\`${language}\n${text}\n\`\`\``;
+      const ticks = "`".repeat(Math.max(3, ...[...text.matchAll(/`+/g)].map(hit=>hit[0].length+1)));
+      return ticks + language + "\n" + text + "\n" + ticks;
     }
     if (["ul", "ol"].includes(tag)) {
       const ordered = tag === "ol";

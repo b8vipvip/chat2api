@@ -195,6 +195,16 @@ class SSETransportTruth:
     async def _persist_truth(self, scope: dict, truth: dict) -> None:
         if truth["http_disconnect_seen"] and not truth["asgi_done_frame_sent"]:
             delivery_state = "disconnected"
+        elif (truth["asgi_done_frame_sent"]
+              and not truth["http_disconnect_seen"]
+              and truth["asgi_send_error"] == "CancelledError"):
+            # Starlette may cancel the ASGI body task while tearing down a
+            # completed SSE response. In 5692be71 the browser independently
+            # recorded stop+[DONE] without reader.cancel(), but ASGI's empty
+            # final-body send was cancelled. That is NOT evidence of a
+            # premature peer disconnect or a failed stream payload send.
+            # ASGI acceptance still does not prove browser receipt.
+            delivery_state = "asgi-done-sent-close-cancelled-unconfirmed"
         elif truth["asgi_send_error"]:
             delivery_state = "asgi-send-error"
         elif truth["asgi_done_frame_sent"] and truth["asgi_final_body_sent"]:

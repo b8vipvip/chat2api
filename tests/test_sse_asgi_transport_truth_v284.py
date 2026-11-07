@@ -116,6 +116,44 @@ def test_real_http_disconnect_before_done_is_captured_from_receive():
     assert state.diagnostics["api_stream_transport_truth"]["http_disconnect_seen"] is True
 
 
+def test_cancelled_empty_final_body_after_done_does_not_mean_early_disconnect():
+    # Reproduces req_5692be71: a 181s real SSE reached the browser
+    # stop+[DONE] but Starlette's empty final ASGI body was cancelled.
+    telemetry = FakeTelemetry()
+    state = SimpleNamespace(diagnostics={})
+
+    async def app(scope, receive, send):
+        scope["chat2api_sse_request_id"] = RID
+        scope["chat2api_sse_broker_state"] = state
+        await send({"type": "http.response.start", "status": 200,
+                    "headers": [(b"content-type", b"text/event-stream")]})
+        await send({"type": "http.response.body",
+                    "body": b"data: [DONE]\n\n", "more_body": True})
+        await send({"type": "http.response.body",
+                    "body": b"", "more_body": False})
+
+    async def sender(message):
+        if message["type"] == "http.response.body" and not message.get("more_body", True):
+            raise asyncio.CancelledError()
+
+    async def run_cancelled():
+        await SSETransportTruth(app, telemetry)(
+            {"type": "http", "method": "POST", "path": "/v1/chat/completions"},
+            lambda: {"type": "http.request", "body": b"", "more_body": False},
+            sender,
+        )
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(run_cancelled())
+    diag = telemetry.get(RID)["diagnostics"]
+    assert diag["api_stream_peer_disconnect_seen"] is False
+    assert diag["api_delivery_state"] == "asgi-done-sent-close-cancelled-unconfirmed"
+    truth = diag["api_stream_transport_truth"]
+    assert truth["asgi_done_frame_sent"] is True
+    assert truth["asgi_final_body_sent"] is False
+    assert truth["asgi_send_error"] == "CancelledError"
+
+
 def test_send_error_keeps_actual_exception_and_classifies_delivery_state():
     telemetry = FakeTelemetry()
     state = SimpleNamespace(diagnostics={})

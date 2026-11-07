@@ -166,7 +166,7 @@
     return found;
   }
   function snapshot(active) {
-    if (active) { active.nativeStructuralFailure = ""; active.nativeStructuralMaxChildren = 0; active.nativeSvgChartsCaptured = 0; active.nativeGraphicsUnsupported = 0; active.nativeCanvasOmitted = 0; }
+    if (active) { active.nativeStructuralFailure = ""; active.nativeStructuralMaxChildren = 0; active.nativeSvgChartsCaptured = 0; active.nativeGraphicsUnsupported = 0; active.nativeCanvasOmitted = 0; active.nativeCodeEditorCaptured = 0; }
     if (!active?.submitStartedAt || typeof Element === "undefined") return null;
     const candidate = active.lastCandidateNode;
     if (!(candidate instanceof Element) || !candidate.isConnected) {
@@ -283,6 +283,62 @@
         : mathElement ? (mathTextOnly ? "mtext" : "mrow")
         : inMath ? "mtext"
         : tags.has(tag) ? tag : "div";
+      // ChatGPT may render a generated code block through an editor view,
+      // with its visible lines under contenteditable=true. The ordinary
+      // sanitizer deliberately excludes editable inputs, which silently
+      // dropped the entire Python block in req_5692be71 while keeping the
+      // "Python" card title. Only read explicitly recognized editor *display*
+      // lines INSIDE the already verified assistant reply scope. Never
+      // include a generic form/input/editor or copy executable markup.
+      const codeEditor = tag === "div" && !!element.matches?.(".cm-editor,.monaco-editor");
+      if (codeEditor) {
+        if (element.closest?.(
+          "form,nav,aside,footer,[role='dialog'],[role='menu'],[data-message-author-role='user']"
+        )) return null;
+        const cmLines = [...(element.querySelectorAll?.(".cm-content .cm-line") || [])];
+        const monacoLines = cmLines.length ? [] :
+          [...(element.querySelectorAll?.(".view-lines .view-line") || [])];
+        const lines = cmLines.length ? cmLines : monacoLines;
+        // Monaco is commonly viewport-virtualized. Do not claim a full
+        // 1:1 snapshot from only currently visible scrolled lines.
+        const declaredTotal = Number(
+          element.querySelector?.("[aria-rowcount]")?.getAttribute?.("aria-rowcount") || 0
+        );
+        // Both Monaco and CodeMirror 6 can render only viewport lines.
+        // A CodeMirror cm-gap is explicit evidence of offscreen omissions.
+        const cmVirtual = cmLines.length > 0 &&
+          Boolean(element.querySelector?.(".cm-gap"));
+        // Monaco without a reliable total-line count is not proven complete.
+        // Only accept it when every declared line is present, or when the
+        // scrollable source region fits in the visible viewport.
+        const monacoViewport = element.querySelector?.(".monaco-scrollable-element");
+        const fitsViewport = Boolean(monacoViewport &&
+          Number.isFinite(monacoViewport.scrollHeight) &&
+          Number.isFinite(monacoViewport.clientHeight) &&
+          monacoViewport.scrollHeight <= monacoViewport.clientHeight + 2);
+        const monacoVirtual = monacoLines.length > 0 &&
+          !((declaredTotal > 0 && declaredTotal <= monacoLines.length) ||
+            fitsViewport);
+        if (!lines.length || lines.length > 10000 || cmVirtual || monacoVirtual) {
+          active.nativeStructuralFailure = cmVirtual || monacoVirtual
+            ? "code-editor-virtualized" : "code-editor-content-unavailable";
+          truncated = true;
+          return null;
+        }
+        const text = lines.map(line=>String(line.textContent || "")).join("\n");
+        if (!text.trim() || text.length > 150000 || chars + text.length > textBudget) {
+          active.nativeStructuralFailure = "code-editor-text-budget";
+          truncated = true;
+          return null;
+        }
+        chars += text.length;nodes += 3;
+        active.nativeCodeEditorCaptured = Number(active.nativeCodeEditorCaptured || 0) + 1;
+        // Preserve line breaks and spaces in an inert <pre><code> subtree.
+        // The server separately validates this same safe tag allowlist.
+        return {tag:"pre",style:safeStyle(element),children:[{
+          tag:"code",children:[{tag:"span",text}],
+        }]};
+      }
       if (tag === "img") {
         if (!rect || rect.width < 40 || rect.height < 40) return null;
         if (images >= 40) {
