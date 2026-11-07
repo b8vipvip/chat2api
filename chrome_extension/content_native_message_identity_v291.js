@@ -57,11 +57,17 @@
     return result;
   }
   function baseline(root=globalThis.document,visible=defaultVisible) {
-    const entries=collect(root,visible);
-    return {
-      ids:new Set(entries.map(item=>item.id)),
-      nodes:new Set(entries.map(item=>item.node)),
-    };
+    // Snapshot ALL pre-submit selection identities, including hidden or
+    // half-hydrated historical nodes. Inspecting only currently valid/visible
+    // Markdown would misclassify a historical node as fresh when it finishes
+    // hydrating *after* the API dispatch.
+    const nodes=new Set(),ids=new Set();
+    for(const node of root?.querySelectorAll?.(SEL) || []){
+      nodes.add(node);
+      const id=String(node.getAttribute?.("data-chatgpt-selection-message-id")||"");
+      if(ID.test(id))ids.add(id);
+    }
+    return {ids,nodes};
   }
   function resolveRequest(active, candidate=null, root=globalThis.document,
                           visible=defaultVisible) {
