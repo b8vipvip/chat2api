@@ -311,7 +311,14 @@ const html=files(turns[0]?.text||"").find(x=>x.name.toLowerCase().endsWith(".htm
 check(Boolean(html),"交付可下载的HTML文件");
 if(html)assets.push(await verifyAsset(html,false));
 check(/localStorage|本地存储/.test(text),"包含本地数据持久化机制");
-check(/库存|预约/.test(text),"包含库存和预约业务规则");
+if(task.case_version==="v5"){
+  // V5 offline apps span scheduling, repair, energy, lending, tournaments,
+  // check-in etc.; not all legitimately have inventory/reservation concepts.
+  check(/导入|import/i.test(text)&&/导出|export/i.test(text),"包含数据导入导出方案");
+  check(/校验|验证|validate|invalid/i.test(text),"包含异常输入和数据校验规则");
+}else{
+  check(/库存|预约/.test(text),"包含库存和预约业务规则");
+}
 }
 if(id==="D" && task.kind!=="web_app"){
 check(turns.length===2,"完成两轮请求");
