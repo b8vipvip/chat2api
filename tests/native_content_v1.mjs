@@ -752,10 +752,10 @@ function publishedInventory(root){
   visit(root);
   return {ordered,media};
 }
-const serialized=publishedInventory(actualSnapshot.root);
-assert.equal(JSON.stringify(serialized.ordered),JSON.stringify([...sourceManifest.ordered]),
+const phase2Serialized=publishedInventory(actualSnapshot.root);
+assert.equal(JSON.stringify(phase2Serialized.ordered),JSON.stringify([...sourceManifest.ordered]),
   "all 8 images, 3 tables and ordered text/code blocks must survive real serialization");
-assert.equal(JSON.stringify(serialized.media),JSON.stringify([0,1,2,3,4,5,6,7]),
+assert.equal(JSON.stringify(phase2Serialized.media),JSON.stringify([0,1,2,3,4,5,6,7]),
   "image indices are unique, ordered and contiguous");
 function matchesSource(root){
   const result=publishedInventory(root);
