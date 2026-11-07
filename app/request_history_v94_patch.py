@@ -69,8 +69,14 @@ function requestHistoryStatusCell(tr,value,stage='',diagnostics={}){
   if(text==='completed' && (diagnostics?.api_stream_closed_before_delivery===true
       ||diagnostics?.api_delivery_state==='disconnected')){
     const warning=document.createElement('small');
-    warning.textContent=' · 客户端断连';warning.className='warn';
-    warning.title='Worker 生成成功，但 HTTP/SSE 客户端在最终交付之前断开；未确认完整接收';
+    warning.textContent=' · HTTP连接断开';warning.className='warn';
+    const transport=diagnostics?.api_stream_transport_truth||{};
+    const gap=transport?.http_disconnect_last_body_gap_ms ??
+      (Number.isFinite(transport?.http_disconnect_ms)&&Number.isFinite(transport?.asgi_last_body_ms)
+        ?Math.max(0,transport.http_disconnect_ms-transport.asgi_last_body_ms):null);
+    warning.title='Worker 已完成，但原始 HTTP/SSE 未交付最终 DONE。'
+      +(gap!==null?'断连距离上次服务器成功发送 '+gap+'ms。':'')
+      +' 无法仅根据服务端日志判断是浏览器、代理还是网络主动关闭。';
     td.appendChild(warning);
   }
   tr.appendChild(td);return td;
