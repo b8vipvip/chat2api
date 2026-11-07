@@ -132,8 +132,8 @@ assert.equal(ambiguous.ok,false);
 assert.equal(ambiguous.reason,"ambiguous-new-assistant-ids");
 assert.equal(ambiguous.candidate_count,2);
 const ownOther=shared.resolveRequest({...active,
-  baselineNativeMessageIds:new Set([idOld,idNew]),
-  baselineNativeSelectionNodes:new Set([old.selection,fresh.selection])},
+  baselineNativeMessageIds:new Set([idOld,idNew,idStale]),
+  baselineNativeSelectionNodes:new Set([old.selection,fresh.selection,stale.selection])},
   fresh.paragraph,document,()=>true);
 assert.equal(ownOther.reason,"candidate-id-mismatch",
   "new but foreign assistant identity cannot replace an existing candidate");
