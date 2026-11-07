@@ -66,7 +66,7 @@ from .worker_probe_store import WorkerProbeStore
 from .test_runs import TestRunStore
 from .playground_truth_v170 import reconcile_playground_runs, compact_playground_outcome, present_playground_run
 from .playground_stream_contract_v293 import playground_stream_attribution
-from .playground_request_evidence_v207 import request_test_index
+from .playground_request_evidence_v207 import request_test_index, playground_link
 from .token_usage import usage_for
 
 logger = logging.getLogger("chat2api")
@@ -839,7 +839,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 status_code=409,
                 detail="Current running Git commit is unverified; cannot filter by current code revision",
             )
-        test_ids = set(request_test_index(test_runs, limit=test_runs.items.maxlen or 300))
+        test_index = request_test_index(test_runs, limit=test_runs.items.maxlen or 300)
+        test_ids = set(test_index)
         result = telemetry.query(
             limit=limit, offset=offset, status=status_filter, model=model,
             key_id=key_id, q=q, since=cutoff, source=source,
@@ -848,6 +849,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             server_version=SERVER_RUNTIME_VERSION,
             server_commit=active_commit,
         )
+        # Enrich only the display copies. Do not rewrite persisted requests,
+        # shorten real IDs on the server, or infer a scene from prompt text.
+        rows = result.get("data") or []
+        result["data"] = [
+            {**row, **playground_link(test_index.get(str(row.get("request_id") or "")))}
+            for row in rows
+        ]
         return {**result, "summary": telemetry.summary(),
                 "current_version_commit": active_commit if current_version_only else None,
                 # Echo the *applied*, normalized UTC cutoff so the UI can
