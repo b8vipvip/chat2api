@@ -280,7 +280,7 @@ if(working)return;
 working=true;byId("pgABCDRun").disabled=true;
 const sceneId=byId("pgABCDSelect").value,model=byId("pgChatModel").value;
 let scene=null;
-report={scene:sceneId,model,started_at:new Date().toISOString(),turns:[],checks:[],assets:[],warnings:[],status:"running",pool_version:"abcd-new-real-scenes-v4"};
+report={scene:sceneId,model,started_at:new Date().toISOString(),turns:[],checks:[],assets:[],warnings:[],status:"running",pool_version:"abcd-new-real-scenes-v5"};
 let auth=null;
 try{
 if(!model)throw Error("请选择在线Worker支持的模型");
