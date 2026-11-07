@@ -88,7 +88,7 @@ const safeErrorKind=error=>{
 };
 let r;
 try{
-  r=await fetch("/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+auth.token,"X-Chat2API-Request-ID":requestId},body:JSON.stringify({model,messages,prompt_mode:"full",stream:true})});
+  r=await fetch("/v1/chat/completions",{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+auth.token,"X-Chat2API-Request-ID":requestId,"X-Chat2API-Playground-Transport":"abcd-real-sse-v293"},body:JSON.stringify({model,messages,prompt_mode:"full",stream:true})});
 }catch(error){
   // Fetch can reject before even returning SSE response headers. Keep this
   // distinct from a reader abort after headers, without storing exception text.
