@@ -61,7 +61,7 @@
   function current(result) {
     return Boolean(result?.ok && String(result?.marker?.bundle || "") === REQUIRED_BUNDLE &&
       Number(result?.marker?.revision || 0) >= REQUIRED_REVISION && result?.modules?.request_v6 &&
-      result?.modules?.native_scope_gate_v287 &&
+      result?.modules?.native_scope_gate_v287 && result?.modules?.native_message_identity_v291 &&
       result?.modules?.rich_response_v69 && result?.modules?.model_evidence_v144 && result?.modules?.model_evidence_main_v144 &&
       result?.modules?.network_stream_recovery_v55 &&
       result?.modules?.native_tool_stream_v63 && result?.modules?.native_tool_stream_main_v63 &&
