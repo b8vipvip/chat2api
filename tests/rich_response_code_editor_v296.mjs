@@ -15,12 +15,19 @@ class Element {
   }
   getBoundingClientRect(){return {width:600,height:180};}
   getAttribute(){return null;}
+  get textContent(){
+    return this.childNodes.map(node=>node instanceof Element?
+      node.textContent:String(node.nodeValue||"")).join("");
+  }
   querySelectorAll(selector){
     if(this.codeLines!==null && selector===".cm-content .cm-line")
       return this.codeLines.map(text=>({textContent:text}));
     return [];
   }
-  querySelector(){return null;}
+  querySelector(selector){
+    if(selector==="code")return this.childNodes.find(x=>x instanceof Element&&x.tagName==="CODE")||null;
+    return null;
+  }
   cloneNode(deep){
     return new Element(this.tagName,deep?this.childNodes.map(child=>
       child instanceof Element?child.cloneNode(true):{...child}):[],
