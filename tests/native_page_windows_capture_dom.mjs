@@ -7,6 +7,7 @@ const start=source.indexOf("  function capturePage() {");
 const stop=source.indexOf("\n  async function send(message)",start);
 assert.ok(start>=0&&stop>start);
 const captureSource="(()=>{\n"+source.slice(start,stop)+"\nreturn capturePage();\n})()";
+const sharedSource=readFileSync("chrome_extension/content_native_message_identity_v291.js","utf8");
 class TextNode {
   constructor(value){this.nodeType=3;this.nodeValue=value;this.parentElement=null;}
 }
@@ -36,6 +37,7 @@ class Element {
     });
   }
   closest(s){for(let n=this;n;n=n.parentElement)if(n.matches(s))return n;return null;}
+  contains(target){for(let n=target;n;n=n.parentElement)if(n===this)return true;return false;}
   querySelectorAll(s){
     const result=[];const visit=n=>{
       for(const child of n.childNodes){
@@ -69,15 +71,16 @@ function execute(root){
   const ctx={document,Node:{TEXT_NODE:3},Element,Date,
     getComputedStyle:()=>({display:"block",visibility:"visible",
       fontSize:"16px",lineHeight:"24px"})};
+  runInNewContext(sharedSource,ctx);
   return runInNewContext(captureSource,ctx);
 }
 const user=message("u-user-1234","USER_ONLY_SENTINEL","user");
-const first=message("a-first-1234","EARLY_ASSISTANT");
-const last=message("a-last-1234","FINAL_ASSISTANT");
+const first=message("assistant-first-12345678","EARLY_ASSISTANT");
+const last=message("assistant-last-12345678","FINAL_ASSISTANT");
 const main=new Element("main",{},[user,first,last]);
 const captured=execute(main);
 assert.equal(captured.ok,true);
-assert.equal(captured.answer.message_id,"a-last-1234");
+assert.equal(captured.answer.message_id,"assistant-last-12345678");
 assert.equal(captured.answer.boundary_verified,true);
 assert.equal(captured.answer.counts.images,1);
 assert.equal(captured.answer.counts.tables,1);

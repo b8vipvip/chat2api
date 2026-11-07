@@ -35,6 +35,7 @@
           "content_request_v4.js",
           "content_request_v5.js",
           "content_rich_response_v69.js",
+          "content_native_message_identity_v291.js",
           "content_native_file_v210.js",
           "content_request_v6.js",
           "content_chatgpt_choice_policy_v143.js",

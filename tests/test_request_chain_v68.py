@@ -335,3 +335,13 @@ def test_v289_large_rich_boundary_scans_only_independent_nodes():
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "rich DOM 4800-node contained vs unowned overflow" in result.stdout
+
+
+def test_native_shared_message_identity_v291_win_and_request_regression():
+    """Actual shared JS + request-v6 binder with synthetic Windows 8-image/3-table fixtures."""
+    result = subprocess.run(
+        ["node", "tests/native_shared_message_identity_v291.mjs"],
+        cwd=ROOT, capture_output=True, text=True, check=False, timeout=40,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "v291 shared Windows/request native identity" in result.stdout

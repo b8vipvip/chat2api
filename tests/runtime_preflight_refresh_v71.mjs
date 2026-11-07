@@ -4,7 +4,7 @@ import vm from "node:vm";
 
 const source = fs.readFileSync(new URL("../chrome_extension/background_runtime_preflight_v48.js", import.meta.url), "utf8");
 
-function currentContract(nativeGate = true) {
+function currentContract(nativeGate = true, nativeIdentity = true) {
   return {
     ok: true,
     contract_revision: 71,
@@ -17,6 +17,7 @@ function currentContract(nativeGate = true) {
     modules: {
       request_v6: true,
       native_scope_gate_v287: nativeGate,
+      native_message_identity_v291: nativeIdentity,
       rich_response_v69: true,
       model_evidence_v144: true,
       model_evidence_main_v144: true,
@@ -93,6 +94,7 @@ assert.ok(hot.injected >= 2);
 assert.equal(hot.worlds[0], "MAIN");
 assert.ok(hot.injectedFiles.includes("model_evidence_main_v144.js"));
 assert.ok(hot.injectedFiles.includes("content_model_evidence_v144.js"));
+assert.ok(hot.injectedFiles.includes("content_native_message_identity_v291.js"));
 assert.equal(hot.state.last?.ok, true);
 
 const stale = await runScenario({ hotHealWorks: true, staleScopeGate: true });
@@ -112,6 +114,7 @@ const contentContractSource = fs.readFileSync(
 const contractContext = {
   __CHAT2API_CONTENT_BUNDLE_MARKER_V71__: {bundle:"0.22.290",revision:71},
   __CHAT2API_REQUEST_CONTENT_V6__: {revision:69},
+  __CHAT2API_NATIVE_MESSAGE_IDENTITY_V291__: {version:291},
   document:{documentElement:{getAttribute(){return null;}},readyState:"complete"},
   location:{href:"https://chatgpt.com/"},
   Date,
@@ -124,5 +127,12 @@ const snapshot=contractContext.__CHAT2API_CONTENT_RUNTIME_CONTRACT_V71__.snapsho
 assert.equal(snapshot().modules.native_scope_gate_v287, false);
 contractContext.__CHAT2API_REQUEST_CONTENT_V6__.nativeScopeGateRevision=287;
 assert.equal(snapshot().modules.native_scope_gate_v287, true);
+assert.equal(snapshot().modules.native_message_identity_v291, false,
+  "new helper cannot mask a retained request controller");
+contractContext.__CHAT2API_REQUEST_CONTENT_V6__.nativeMessageIdentityRevision=291;
+assert.equal(snapshot().modules.native_message_identity_v291,true);
+delete contractContext.__CHAT2API_NATIVE_MESSAGE_IDENTITY_V291__;
+assert.equal(snapshot().modules.native_message_identity_v291,false,
+  "a fresh request controller cannot pass without the actual shared helper");
 
 console.log("runtime preflight v71 single-owner regression scenarios passed");

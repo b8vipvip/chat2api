@@ -74,6 +74,7 @@ _TERMINAL_PROVENANCE_NUMBERS = {
     # were sent by v638/v639 but discarded by the terminal allowlist, hiding
     # invalid-native-envelope and structural capture failures in request ZIPs.
     "native_capture_revision", "native_structural_max_children", "native_identity_candidate_count",
+    "native_message_identity_candidate_count",
     "native_identity_verified_count",
 }
 _TERMINAL_PROVENANCE_STRINGS = {
@@ -83,6 +84,7 @@ _TERMINAL_PROVENANCE_STRINGS = {
     "native_capture_failure", "native_transport_ack_error",
     "native_structural_failure",
     "native_reply_scope_binding", "native_reply_scope_phase",
+    "native_message_identity_reason",
     "native_chatgpt_conversation_url",
 }
 
@@ -95,10 +97,20 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
     for key in _TERMINAL_PROVENANCE_NUMBERS:
         value = raw.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if key == "native_message_identity_candidate_count" and (
+                type(value) is not int or not 0 <= value <= 32
+            ):
+                continue
             result[key] = value
     for key in _TERMINAL_PROVENANCE_STRINGS:
         value = raw.get(key)
         if isinstance(value, str):
+            if key == "native_message_identity_reason" and value not in {
+                "helper-unavailable", "preconditions", "no-new-assistant-id",
+                "ambiguous-new-assistant-ids", "candidate-id-mismatch",
+                "verified-native-message-id", "unknown",
+            }:
+                continue
             if key == "native_chatgpt_conversation_url":
                 try:
                     p=urlsplit(value)
@@ -114,7 +126,8 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
                 result[key] = value[:100]
     for key in ("response_terminal_dom_reconciled", "terminal_integrity_upgraded",
                 "native_chunk_complete", "native_final_capture_committed", "native_observer_loaded",
-                "native_capture_attempted", "native_reply_scope_verified"):
+                "native_capture_attempted", "native_reply_scope_verified",
+                "native_message_identity_bound", "native_message_id_scope_verified"):
         if isinstance(raw.get(key), bool):
             result[key] = raw[key]
     # Request-v6 emits these *on every completed native request* but its
