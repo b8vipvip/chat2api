@@ -17,6 +17,8 @@ def test_worker_bundle_formally_seals_revisioned_content_epoch() -> None:
     assert "content_bundle_marker_v71.js" in scripts
     assert "content_runtime_contract_v71.js" in scripts
     assert "content_request_terminal_prompt_v88.js" in scripts
+    assert scripts.index("content_native_message_identity_v291.js") < scripts.index("content_native_dom_evidence_v1.js")
+    assert scripts.index("content_native_message_identity_v291.js") < scripts.index("content_request_v6.js")
     assert scripts.index("content_multimodal_v78.js") < scripts.index("content_multimodal_v68.js")
     assert scripts.index("content_rich_response_v69.js") < scripts.index("content_request_v6.js")
     assert "content_response_stream_recovery_v49.js" not in scripts
@@ -40,7 +42,7 @@ def test_v71_epoch_marker_and_contract_use_manifest_release() -> None:
 def test_programmatic_bootstrap_matches_current_text_request_chain() -> None:
     bootstrap = (EXT / "content_bootstrap.js").read_text(encoding="utf-8")
     for name in ("multimodal_main_v78.js", "content_bundle_marker_v71.js", "content_multimodal_v78.js",
-                 "content_rich_response_v69.js", "content_request_v6.js", "content_network_stream_recovery_v55.js",
+                 "content_rich_response_v69.js", "content_native_message_identity_v291.js", "content_request_v6.js", "content_network_stream_recovery_v55.js",
                  "content_request_terminal_prompt_v88.js", "content_runtime_contract_v71.js"):
         assert name in bootstrap
     for retired in ("content_response_stream_recovery_v49.js", "content_response_stream_recovery_v69.js", "content_terminal_integrity_v89.js"):
@@ -67,6 +69,8 @@ def test_runtime_preflight_hot_heals_before_reload() -> None:
     assert "result = await heal(tabId)" in preflight
     assert "waitForReloadOrContract" in preflight
     assert "result?.modules?.native_scope_gate_v287" in preflight
+    assert "result?.modules?.native_message_identity_v291" in preflight
+    assert "content_native_message_identity_v291.js" in preflight
 
 
 def test_v71_contract_preserves_runtime_checks_with_request_v6_terminal_owner() -> None:
@@ -84,6 +88,8 @@ def test_v71_contract_preserves_runtime_checks_with_request_v6_terminal_owner() 
     assert 'native_scope_gate_v287: Number(request?.nativeScopeGateRevision || 0) >= 287' in contract
     request = (EXT / "content_request_v6.js").read_text(encoding="utf-8")
     assert "nativeScopeGateRevision: 287" in request
+    assert "nativeMessageIdentityRevision: 291" in request
+    assert "native_message_identity_v291: Number(globalThis.__CHAT2API_NATIVE_MESSAGE_IDENTITY_V291__?.version || 0) >= 291" in contract
 
 
 def test_runtime_preflight_v71_vm_regressions() -> None:
