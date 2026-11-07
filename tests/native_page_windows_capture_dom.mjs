@@ -7,6 +7,7 @@ const start=source.indexOf("  function capturePage() {");
 const stop=source.indexOf("\n  async function send(message)",start);
 assert.ok(start>=0&&stop>start);
 const captureSource="(()=>{\n"+source.slice(start,stop)+"\nreturn capturePage();\n})()";
+const sharedSource=readFileSync("chrome_extension/content_native_message_identity_v291.js","utf8");
 class TextNode {
   constructor(value){this.nodeType=3;this.nodeValue=value;this.parentElement=null;}
 }
@@ -69,6 +70,7 @@ function execute(root){
   const ctx={document,Node:{TEXT_NODE:3},Element,Date,
     getComputedStyle:()=>({display:"block",visibility:"visible",
       fontSize:"16px",lineHeight:"24px"})};
+  runInNewContext(sharedSource,ctx);
   return runInNewContext(captureSource,ctx);
 }
 const user=message("u-user-1234","USER_ONLY_SENTINEL","user");
