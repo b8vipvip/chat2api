@@ -124,7 +124,9 @@ assert.notDeepEqual([...shared.structuralManifest(reordered.selection).ordered],
 assert.equal(shared.resolveRequest({},fresh.paragraph,document,()=>true).ok,false);
 assert.equal(shared.resolveRequest({...active,networkStreamSeen:false},fresh.paragraph,document,()=>true).ok,false);
 assert.equal(shared.resolveRequest({...active,networkObservedAt:99},fresh.paragraph,document,()=>true).ok,false);
-assert.equal(shared.resolveRequest({...active,baselineRolelessHeadings:new Set([old.heading,fresh.heading])},fresh.paragraph,document,()=>true).ok,false);
+const oldHeadingRejection=shared.resolveRequest({...active,baselineRolelessHeadings:new Set([old.heading,fresh.heading])},fresh.paragraph,document,()=>true);
+assert.equal(oldHeadingRejection.ok,false);
+assert.equal(oldHeadingRejection.facts.historical_heading,1);
 assert.equal(shared.resolveRequest({...active,baselineNativeMessageIds:new Set([idOld,idNew])},fresh.paragraph,document,()=>true).ok,false);
 assert.equal(shared.resolveRequest({...active,baselineNativeSelectionNodes:new Set([fresh.selection])},fresh.paragraph,document,()=>true).ok,false);
 assert.equal(shared.resolveRequest({...active,options:{mode:"voice"}},fresh.paragraph,document,()=>true).ok,false);
