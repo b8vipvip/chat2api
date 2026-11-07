@@ -98,7 +98,7 @@
       const wrap=node.closest?.(WRAP);
       if(!wrap?.isConnected || !wrap.contains?.(node)
           || !String(wrap.getAttribute?.("data-chatgpt-search-message-ids")||"")
-             .split(/\\s+/).includes(id)
+             .split(/\s+/).includes(id)
           || node.closest?.(INVALID) || wrap.closest?.(INVALID)){
         increment("bad_wrapper");continue;
       }
