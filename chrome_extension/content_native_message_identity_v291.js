@@ -96,8 +96,18 @@
     const owner=pageCandidate?.closest?.(SEL);
     // If request-v6 already has an independently selected assistant
     // identity, do not silently replace it with a different reply.
-    if (owner && owner!==selected.node)
-      return fail("candidate-id-mismatch",fresh.length);
+    if (owner && owner!==selected.node) {
+      // request-v6 can retain the old final assistant paragraph while a new
+      // assistant card is being hydrated. If that *exact* old selection, its
+      // ID, and its heading were all present before submit, its candidate is
+      // historical evidence, not a competing answer. Otherwise fail closed.
+      const old=inspect(owner,visible);
+      const historical=old
+        && active.baselineNativeMessageIds.has(old.id)
+        && active.baselineNativeSelectionNodes.has(owner)
+        && active.baselineRolelessHeadings.has(old.heading);
+      if (!historical) return fail("candidate-id-mismatch",fresh.length);
+    }
     // Never export UUID or assistant body in logging: return a *live*
     // DOM node to the same tab and only bounded status/count telemetry.
     return {ok:true,reason:"verified-native-message-id",candidate_count:1,
