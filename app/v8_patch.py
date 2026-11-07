@@ -20,6 +20,7 @@ from .runtime_contract import SERVER_RUNTIME_VERSION
 from .runtime_code_identity import runtime_code_sha
 from .telemetry import parse_request_since
 from .playground_request_evidence_v207 import request_test_index, playground_diagnostics
+from .native_snapshot_finality_v282 import native_code_coverage, native_snapshot_finality
 
 
 PATCH_VERSION = "0.8.0"
@@ -140,6 +141,20 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
         except (ValueError, TypeError):
             # Historical shortened IDs remain supported by the log exporter.
             native_dom_reply = None
+        # Bounded, content-free 1:1 integrity evidence. A successful Worker
+        # terminal and a committed native snapshot do not prove that a
+        # virtualized CodeMirror editor actually captured its code lines.
+        try:
+            native_layout = (
+                app.state.native_content.get(request_id, str(row.get("api_key_id") or ""))
+                if getattr(app.state, "native_content", None) else None
+            )
+        except (ValueError, TypeError):
+            native_layout = None
+        native_integrity = {
+            "finality": native_snapshot_finality(row, native_layout),
+            "code_coverage": native_code_coverage(row, native_layout),
+        }
         return {
             "report_type": "chat2api-request-diagnostic",
             "report_version": 1,
@@ -159,6 +174,7 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             # this report, so one familiar download now carries the evidence
             # needed for paired original-vs-MV3C comparison.
             "worker_native_dom_reply_tree": native_dom_reply,
+            "native_delivery_integrity_v296": native_integrity,
             "playground_diagnostics": playground_diagnostics(test_run),
             "extension_snapshot": extension_snapshot if extension_snapshot is not None else _safe_client_rows(registry),
             "notes": [
