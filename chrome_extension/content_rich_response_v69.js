@@ -593,7 +593,14 @@
       const monaco = cm.length ? [] : [...node.querySelectorAll(".view-lines .view-line")];
       const lines = cm.length ? cm : monaco;
       const total = Number(node.querySelector?.("[aria-rowcount]")?.getAttribute?.("aria-rowcount") || 0);
-      if (!lines.length || (monaco.length && total > monaco.length)) return "";
+      const cmVirtual = cm.length > 0 && !!node.querySelector?.(".cm-gap");
+      const viewport = node.querySelector?.(".monaco-scrollable-element");
+      const viewportComplete = Boolean(viewport &&
+        Number.isFinite(viewport.scrollHeight) && Number.isFinite(viewport.clientHeight) &&
+        viewport.scrollHeight <= viewport.clientHeight + 2);
+      const monacoVirtual = monaco.length > 0 &&
+        !((total > 0 && total <= monaco.length) || viewportComplete);
+      if (!lines.length || cmVirtual || monacoVirtual) return "";
       const text = lines.map(line => String(line.textContent || "")).join("\n").replace(/\r\n?/g,"\n").replace(/\n+$/, "");
       if (!text.trim() || text.length > 150000) return "";
       const ticks = "`".repeat(Math.max(3, ...[...text.matchAll(/`+/g)].map(hit=>hit[0].length+1)));
