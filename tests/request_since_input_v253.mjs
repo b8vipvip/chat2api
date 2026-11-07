@@ -6,9 +6,9 @@ const start=source.indexOf("function requestHistoryParseExportSince(value){");
 const filterStart=source.indexOf("function requestHistoryFilterParams(){",start);
 const end=source.indexOf("\nfunction requestHistoryEnsureControls(){",filterStart);
 assert.ok(start>=0&&filterStart>start&&end>filterStart);
-function filter({time="",current=false,q="",status="",source=""}={}){
+function filter({time="",current=false,q="",status="",source:sourceFilter=""}={}){
   const inputs={
-    rqSearch:{value:q},rqStatus:{value:status},rqSource:{value:source},
+    rqSearch:{value:q},rqStatus:{value:status},rqSource:{value:sourceFilter},
     rqBatchExportSince:{value:time},rqBatchExportCurrentVersion:{checked:current},
   };
   // An explicit compiled closure avoids VM global binding differences.
