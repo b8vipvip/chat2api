@@ -54,6 +54,11 @@ def test_native_rich_sidecar_does_not_replace_request_v6_terminal():
     assert 'native?.capture?.(active, false)' in worker
     assert 'await native.capture(active, true)' in worker
     assert '"native-observer-not-loaded"' in worker
+    # Diagnostics extend the existing request-v6 owner without becoming
+    # another finish signal or page-wide fallback.
+    assert "active.nativeMessageIdentityFacts=messageIdentity?.facts || null" in worker
+    assert "native_message_identity_facts:active.nativeMessageIdentityFacts || null" in worker
+    assert "native_capture_attempted:active.nativeCaptureAttempted === true" in worker
     assert 'type:"chat.native.snapshot"' in sidecar
     assert 'type:"chat.completed"' not in sidecar
     assert 'type:"chat.error"' not in sidecar
