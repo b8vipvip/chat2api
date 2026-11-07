@@ -502,7 +502,7 @@
   function normalizedHistory() {
     return messages.filter(item => item.include_in_context !== false).slice(-MAX_HISTORY_MESSAGES).map(item => ({role:item.role, content:item.content}));
   }
-  async function recoverAuthoritativeResult(requestId, {waitForTerminal=false} = {}) {
+  async function recoverAuthoritativeResult(requestId, {waitForTerminal=false, detached=false} = {}) {
     if (!/^((imgreq|req)_[a-z0-9-]{12,110})$/i.test(requestId)) return null;
     let outcome = null, observed = false, consecutiveErrors = 0;
     // A disconnected HTTP body does not cancel the Worker-owned request.
@@ -521,20 +521,46 @@
           consecutiveErrors = 0;
           if (!["running","queued","pending"].includes(outcome.status)) break;
           if (waitForTerminal && (attempt === 0 || attempt % 8 === 0))
-            status("浏览器连接已中断；服务端请求 " + requestId +
+            status((detached ? "测试场后台任务 " : "浏览器连接已中断；服务端请求 ") + requestId +
               " 仍在执行，正在等待实际 Worker 终态", "warn");
         }
       } catch (_) {
         consecutiveErrors++;
         // A request rejected before reaching the Broker has no durable ID.
         // Do not spend twenty minutes polling an unregistered request.
-        if (!observed && attempt >= 3) return null;
+        if (!observed && attempt >= 3) {
+          if (!detached) return null;
+          // A detached job is created before the Broker request exists.
+          // Do not give up after 1.2s simply because the Worker is still
+          // being admitted or the server-to-server dispatch is starting.
+          try {
+            const running = await api("/api/admin/playground/chat-dispatch/" +
+              encodeURIComponent(requestId));
+            if (!["running","done"].includes(running?.state))
+              return {terminalStatus:"error",error:"后台请求未能启动",requestId};
+            if (running.state === "done" && !observed && attempt >= 5)
+              return {terminalStatus:"error",error:"后台请求结束但未登记实际请求",requestId};
+          } catch (_) { return null; }
+        }
         if (consecutiveErrors >= 12) break;
       }
       // The dispatch may have been rejected before any Broker request ID
       // existed. Four missing/empty records are sufficient to stop looking;
       // otherwise the UI would spin for twenty minutes on a 404/empty row.
-      if (!observed && attempt >= 3) return null;
+      if (!observed && attempt >= 3) {
+          if (!detached) return null;
+          // A detached job is created before the Broker request exists.
+          // Do not give up after 1.2s simply because the Worker is still
+          // being admitted or the server-to-server dispatch is starting.
+          try {
+            const running = await api("/api/admin/playground/chat-dispatch/" +
+              encodeURIComponent(requestId));
+            if (!["running","done"].includes(running?.state))
+              return {terminalStatus:"error",error:"后台请求未能启动",requestId};
+            if (running.state === "done" && !observed && attempt >= 5)
+              return {terminalStatus:"error",error:"后台请求结束但未登记实际请求",requestId};
+          } catch (_) { return null; }
+        }
       if (attempt + 1 < maxChecks)
         await new Promise(resolve => setTimeout(resolve, waitForTerminal ? 4000 : 400));
     }
@@ -583,7 +609,7 @@
     if (!$chat("pgChatModel")?.value && $chat("pgChatMode").value !== "image") return status("没有已验证且可路由的在线 Worker 文本模型，请在模型管理查看发现错误", "bad");
     if (typeof api !== "function" || typeof fileToBase64 !== "function") return status("测试场脚本尚未初始化，请刷新页面后重试", "bad");
     sending = true; $chat("pgChatSend").disabled = true; $chat("pgChatSend").textContent = "生成中"; input.disabled = true;
-    let uploaded = [], credential = null, assistantText = "", firstTokenMs = null, diagnostics = null;
+    let uploaded = [], credential = null, assistantText = "", firstTokenMs = null, diagnostics = null, detachedLaunched = false, detachedOutcome = null;
     const userFiles = [...$chat("pgChatFiles").files].slice(0, 4), userIndex = messages.length;
     messages.push({role:"user",content:text,attachment_names:userFiles.map(file=>file.name),include_in_context:true,created_at:new Date().toISOString()}); input.value=""; renderMessages(); addPendingAssistant();
     const requestId = "req_" + (globalThis.crypto?.randomUUID ? crypto.randomUUID().replaceAll("-", "") : `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`);
@@ -608,16 +634,51 @@
         // 300s text / 600s verified media handoff without a second clock.
         : {model,messages:normalizedHistory(),prompt_mode:"full",attachments:referenceFiles,stream:false};
       if (!imageMode && model !== "gpt-5.5-mini" && $chat("pgChatReasoning").value && $chat("pgChatReasoning").value !== "default") body.reasoning_effort = $chat("pgChatReasoning").value;
-      const response = await fetch(imageMode ? "/v1/images/generations" : "/v1/chat/completions", {
-        method:"POST",headers:{...headers(credential.token),"Content-Type":"application/json",
-          "X-Chat2API-Request-ID": imageMode ? requestId.replace(/^req_/, "imgreq_") : requestId},
-        body:JSON.stringify(body),
-      });
-      if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
-      const payload = await response.json();
-      assistantText = imageMode ? imageResultMarkdown(payload)
-        : normalizeAssistantContent(payload.choices?.[0]?.message?.content);
-      diagnostics = payload.chat2api || null;
+      let textTruncated = false;
+      if (!imageMode) {
+        // The browser must not hold a multi-minute HTTP request open. The
+        // authenticated server dispatches the exact same production /v1 API
+        // inside its own ASGI process; the UI polls the original request ID.
+        // ABCD/SSE transport tests still exercise real streaming separately.
+        const register = globalThis.__CHAT2API_PLAYGROUND_CHAT_RECORDS_V3__?.startChatRun;
+        if (typeof register !== "function")
+          throw new Error("测试场运行记录模块未加载，请刷新后台页面重试");
+        await register(requestId, body);
+        const launch = await fetch("/api/admin/playground/chat-dispatch", {
+          method:"POST",
+          headers:{...headers(key()),"Content-Type":"application/json"},
+          body:JSON.stringify({request_id:requestId,api_key:credential.token,payload:body}),
+          cache:"no-store",
+        });
+        if (!launch.ok) throw new Error("后台启动请求失败：" + launch.status +
+          " " + (await launch.text()).slice(0,200));
+        const accepted = await launch.json();
+        if (accepted?.transport !== "server-detached-v292" ||
+            accepted?.request_id !== requestId)
+          throw new Error("后台启动请求确认无效");
+        detachedLaunched = true;
+        const recovered = await recoverAuthoritativeResult(requestId,
+          {waitForTerminal:true,detached:true});
+        detachedOutcome = recovered;
+        if (recovered?.terminalStatus !== "completed")
+          throw new Error(recovered?.error || "后台任务未取得可确认的完成终态");
+        assistantText = recovered.content;
+        textTruncated = recovered.textTruncated === true;
+        diagnostics = {request_id:requestId,
+          playground_transport:"server-detached-v292"};
+      } else {
+        const response = await fetch("/v1/images/generations", {
+          method:"POST",headers:{...headers(credential.token),"Content-Type":"application/json",
+            "X-Chat2API-Request-ID": requestId.replace(/^req_/, "imgreq_")},
+          body:JSON.stringify(body),
+        });
+        if (!response.ok) throw new Error(`${response.status} ${await response.text()}`);
+        const payload = await response.json();
+        assistantText = imageResultMarkdown(payload);
+        diagnostics = payload.chat2api || null;
+      }
+      firstTokenMs = Number(diagnostics?.timings?.first_token_ms ?? NaN);
+      if (!Number.isFinite(firstTokenMs)) firstTokenMs = null;
       if (imageMode && !isActualImageReply(assistantText))
         throw new Error("图片接口未返回可展示的真实图片字节或可信图片链接，不能把文本代码标为成功");
       firstTokenMs = Number(diagnostics?.timings?.first_token_ms ?? NaN);
@@ -636,7 +697,7 @@
       const actualRequestId = String(diagnostics?.request_id || (imageMode ? requestId.replace(/^req_/, "imgreq_") : requestId));
       const generatedFile = imageMode && credential.key_id
         ? (Array.isArray(diagnostics?.media_files) ? diagnostics.media_files[0]?.file_id : null) : null;
-      messages.push({role:"assistant",content:assistantText,include_in_context:!imageMode,
+      messages.push({role:"assistant",content:assistantText,include_in_context:!imageMode && !textTruncated,
         created_at:new Date().toISOString(),meta:{request_id:actualRequestId,model,total_ms:totalMs,
           first_token_ms:firstTokenMs,response_format:responseType,
           generated_file_id:generatedFile||null,generated_key_id:generatedFile?credential.key_id:null}});
@@ -645,7 +706,7 @@
       await recordChatTurn({requestId:actualRequestId,model,credential,text,statusValue:"passed",totalMs,firstTokenMs,responseChars:assistantText.length,attachmentsCount:userFiles.length,error:null});
     } catch (error) {
       const recoveryId = imageMode ? requestId.replace(/^req_/, "imgreq_") : requestId;
-      const recovered = await recoverAuthoritativeResult(recoveryId, {waitForTerminal:true}).catch(() => null);
+      const recovered = detachedOutcome || await recoverAuthoritativeResult(recoveryId, {waitForTerminal:true,detached:detachedLaunched}).catch(() => null);
       if (recovered?.terminalStatus === "completed") {
         const totalMs = performance.now() - started;
         document.getElementById("pgChatPending")?.remove();
@@ -658,7 +719,7 @@
         saveHistory(); renderMessages();
         status(recovered.textTruncated
           ? "服务端已完成；恢复正文超过 500,000 字符，已明确截断且不会用于后续上下文"
-          : "服务端已完成；浏览器连接中断后已恢复完整文本及可用媒体", "ok");
+          : (detachedLaunched ? "测试场后台任务已完成，已读取完整文本及可用媒体" : "服务端已完成；浏览器连接中断后已恢复完整文本及可用媒体"), "ok");
         await recordChatTurn({requestId:recoveryId,model,credential,text,statusValue:"passed",
           totalMs,firstTokenMs,responseChars:recovered.content.length,attachmentsCount:userFiles.length,error:null});
       } else if (recovered?.pending) {

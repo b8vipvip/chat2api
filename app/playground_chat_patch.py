@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field
 
 from .response_semantic_guard_patch import install_response_semantic_guard_patch
 from .playground_abcd_pool_v198 import install_playground_abcd_pool
+from .playground_detached_chat_v292 import install_playground_detached_chat
 from .timezone_utils import beijing_now_iso
 
 
@@ -174,6 +175,7 @@ def install_playground_chat_patch(app: FastAPI) -> FastAPI:
     app.state.playground_chat_patch_installed = True
     install_response_semantic_guard_patch(app)
     install_playground_abcd_pool(app)
+    install_playground_detached_chat(app, _chat_run_id)
 
     @app.get(ASSET_PATH, include_in_schema=False)
     async def playground_chat_js() -> Response:
