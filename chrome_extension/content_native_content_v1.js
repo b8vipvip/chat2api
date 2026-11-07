@@ -301,11 +301,26 @@
         const lines = cmLines.length ? cmLines : monacoLines;
         // Monaco is commonly viewport-virtualized. Do not claim a full
         // 1:1 snapshot from only currently visible scrolled lines.
+        const declaredTotal = Number(
+          element.querySelector?.("[aria-rowcount]")?.getAttribute?.("aria-rowcount") || 0
+        );
+        // Both Monaco and CodeMirror 6 can render only viewport lines.
+        // A CodeMirror cm-gap is explicit evidence of offscreen omissions.
+        const cmVirtual = cmLines.length > 0 &&
+          Boolean(element.querySelector?.(".cm-gap"));
+        // Monaco without a reliable total-line count is not proven complete.
+        // Only accept it when every declared line is present, or when the
+        // scrollable source region fits in the visible viewport.
+        const monacoViewport = element.querySelector?.(".monaco-scrollable-element");
+        const fitsViewport = Boolean(monacoViewport &&
+          Number.isFinite(monacoViewport.scrollHeight) &&
+          Number.isFinite(monacoViewport.clientHeight) &&
+          monacoViewport.scrollHeight <= monacoViewport.clientHeight + 2);
         const monacoVirtual = monacoLines.length > 0 &&
-          (Number(element.querySelector?.("[aria-rowcount]")?.getAttribute?.("aria-rowcount") || 0)
-            > monacoLines.length);
-        if (!lines.length || lines.length > 10000 || monacoVirtual) {
-          active.nativeStructuralFailure = monacoVirtual
+          !((declaredTotal > 0 && declaredTotal <= monacoLines.length) ||
+            fitsViewport);
+        if (!lines.length || lines.length > 10000 || cmVirtual || monacoVirtual) {
+          active.nativeStructuralFailure = cmVirtual || monacoVirtual
             ? "code-editor-virtualized" : "code-editor-content-unavailable";
           truncated = true;
           return null;
