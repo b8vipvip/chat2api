@@ -24,6 +24,32 @@ def request_test_index(test_runs: Any, limit: int = 300) -> dict[str, dict[str, 
     return index
 
 
+def playground_request_badge(run: dict[str, Any] | None) -> str:
+    """A label grounded in the *persisted* TestRun, never in prompt text.
+
+    ABCD shares the chat test_type with ordinary Playground chat, so scene
+    quality must take priority. Automatically scheduled Playground tests are
+    produced by the distinct lifecycle-v1/testrun_ owner.
+    """
+    if not isinstance(run, dict):
+        return ""
+    quality = run.get("quality") if isinstance(run.get("quality"), dict) else {}
+    report = run.get("abcd_report") if isinstance(run.get("abcd_report"), dict) else {}
+    scene = quality.get("abcd_scene") or report.get("scene")
+    if isinstance(scene, str) and scene in {"A", "B", "C", "D"}:
+        return "测" + scene
+    run_id = str(run.get("run_id") or "")
+    kind = str(run.get("test_type") or "")
+    if (quality.get("lifecycle") == "playground-lifecycle-v1"
+            or run_id.startswith("testrun_")):
+        return "测自"
+    if (quality.get("playground_chat") == "playground-chat-v3"
+            or (run_id.startswith("chatrun_") and kind == "chat")):
+        return "测聊"
+    # An old or incomplete test row has no verified classification.
+    return "测"
+
+
 def playground_link(run: dict[str, Any] | None) -> dict[str, Any]:
     if not run:
         return {"is_playground_test": False}
@@ -31,6 +57,7 @@ def playground_link(run: dict[str, Any] | None) -> dict[str, Any]:
         "is_playground_test": True,
         "playground_run_id": str(run.get("run_id") or ""),
         "playground_test_type": str(run.get("test_type") or ""),
+        "playground_request_badge": playground_request_badge(run),
     }
 
 

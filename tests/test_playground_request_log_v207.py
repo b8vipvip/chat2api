@@ -21,6 +21,7 @@ def test_origin_marker_only_for_matching_real_test_request():
     assert playground_link(index.get("req_abcd123456")) == {
         "is_playground_test": True, "playground_run_id": "chatrun_a",
         "playground_test_type": "chat",
+        "playground_request_badge": "测聊",
     }
     assert playground_link(index.get("req_realbot234567")) == {"is_playground_test": False}
 
@@ -49,7 +50,8 @@ def test_admin_and_download_reference_same_persisted_origin():
     logs = (root / "v8_patch.py").read_text()
     assert "request_test_index(getattr(app.state, \"test_runs\", None))" in history
     assert "idCell.appendChild(marker)" in history
-    assert "marker.textContent='测'" in history
+    assert "r?.playground_request_badge" in history
+    assert "knownBadges=['测聊','测A','测B','测C','测D','测自']" in history
     assert '"playground_diagnostics": playground_diagnostics(test_run)' in logs
 
 

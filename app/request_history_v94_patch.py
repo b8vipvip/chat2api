@@ -757,8 +757,10 @@ async function loadRequests(){
       const idCell=requestHistoryCell(tr,shortRequestId);
       if(r?.is_playground_test===true){
         const marker=document.createElement('span');
-        marker.textContent='测';
-        marker.title='测试场发起 · '+requestHistoryText(r?.playground_test_type,'测试');
+        const knownBadges=['测聊','测A','测B','测C','测D','测自'];
+        const requestedBadge=String(r?.playground_request_badge||'');
+        marker.textContent=knownBadges.includes(requestedBadge)?requestedBadge:'测';
+        marker.title='测试场请求 · '+marker.textContent+' · '+requestId;
         marker.style.cssText='display:inline-block;margin-left:4px;padding:1px 4px;border:1px solid currentColor;border-radius:4px;font-size:11px;line-height:1.2';
         idCell.appendChild(marker);
       }
