@@ -63,6 +63,7 @@ const scope={
   chrome:{runtime:{sendMessage:async message=>{events.push(message);return {ok:true}}}},
 };
 runInNewContext(source,scope);
+runInNewContext(readFileSync('chrome_extension/content_native_message_identity_v291.js','utf8'),scope);
 const probe=scope.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__;
 const active={
  requestId:'req_requestscoped123',submitStartedAt:1,lastCandidateNode:p,
@@ -276,7 +277,10 @@ assistantSelection.querySelector=selector=>selector.includes('data-markdown-text
 messageWrap.getAttribute=key=>key==='data-chatgpt-search-message-ids'?replyId:null;
 messageWrap.querySelector=selector=>selector.includes("h4[data-conversation-role='assistant']")
   ?assistantHeading:null;
+scope.document={querySelectorAll:sel=>sel.includes('data-chatgpt-selection-message-id')
+  ?[assistantSelection]:[]};
 const newMessageActive={...active,submitStartedAt:1000,baselineCapturedAt:900,
+  baselineNativeMessageIds:new Set(),baselineNativeSelectionNodes:new Set(),
   lastCandidateNode:freshParagraph,nativeVerifiedReplyScope:null,
   baselineRolelessHeadings:new Set(),networkStreamSeen:true,
   networkObservedAt:1150};
