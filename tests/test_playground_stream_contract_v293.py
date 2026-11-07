@@ -13,6 +13,7 @@ from app.playground_chat_patch import (
     PlaygroundChatStart, _chat_run_id, _running_row, install_playground_chat_patch,
 )
 from app.playground_lifecycle_patch import install_playground_lifecycle_patch
+from app.playground_request_evidence_v207 import playground_diagnostics
 from app.playground_stream_contract_v293 import (
     ABCD_TRANSPORT, DETACHED_TRANSPORT, playground_stream_attribution,
 )
@@ -126,3 +127,22 @@ def test_client_sse_evidence_survives_missing_abcd_final_report(tmp_path: Path):
         assert facts["read_elapsed_ms"] == 10750
         assert facts["reader_error_name"] == "TypeError"
         assert "private_prompt" not in facts and "raw_error" not in facts
+        # The exact same quality dictionary is included in authenticated
+        # request-log JSON and combined ZIP via playground_diagnostics().
+        exported = playground_diagnostics(row)
+        assert exported["test_quality"]["client_sse_truth_v293"] == facts
+        assert exported["abcd_report"] is None
+        assert exported["test_quality"]["client_sse_truth_phase"] == "incomplete"
+
+        # A delayed checkpoint must not erase terminal browser evidence.
+        late = client.post(path, headers=h, json={
+            "request_id": RID, "scene": "A", "phase": "progress", "failed": False,
+            "client_sse_truth": {
+                "protocol_done_seen": True, "read_elapsed_ms": 100,
+            },
+        })
+        assert late.status_code == 200
+        assert late.json()["saved"] is False
+        final = app.state.test_runs.get(run["run_id"])
+        assert final["quality"]["client_sse_truth_v293"] == facts
+
