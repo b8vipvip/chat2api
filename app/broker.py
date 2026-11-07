@@ -97,10 +97,20 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
     for key in _TERMINAL_PROVENANCE_NUMBERS:
         value = raw.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if key == "native_message_identity_candidate_count" and (
+                type(value) is not int or not 0 <= value <= 32
+            ):
+                continue
             result[key] = value
     for key in _TERMINAL_PROVENANCE_STRINGS:
         value = raw.get(key)
         if isinstance(value, str):
+            if key == "native_message_identity_reason" and value not in {
+                "helper-unavailable", "preconditions", "no-new-assistant-id",
+                "ambiguous-new-assistant-ids", "candidate-id-mismatch",
+                "verified-native-message-id", "unknown",
+            }:
+                continue
             if key == "native_chatgpt_conversation_url":
                 try:
                     p=urlsplit(value)
