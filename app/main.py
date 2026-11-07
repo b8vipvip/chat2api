@@ -65,6 +65,7 @@ from .runtime_code_identity import runtime_code_sha
 from .worker_probe_store import WorkerProbeStore
 from .test_runs import TestRunStore
 from .playground_truth_v170 import reconcile_playground_runs, compact_playground_outcome, present_playground_run
+from .playground_stream_contract_v293 import is_legacy_manual_playground_sse
 from .playground_request_evidence_v207 import request_test_index
 from .token_usage import usage_for
 
@@ -1752,6 +1753,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         file_ids = list(dict.fromkeys(body.all_file_ids() + inline_ids))
         attachments = attachment_specs(file_ids, principal)
         request_id = accepted_request_id(x_chat2api_request_id, "req_")
+        if is_legacy_manual_playground_sse(
+            request_id=request_id, stream=body.stream,
+            headers=request.headers, test_runs=test_runs,
+        ):
+            # Reject BEFORE queuing or dispatching a Worker. An old admin tab
+            # would otherwise spend minutes generating an answer that its
+            # already-broken browser SSE connection will never fully receive.
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "测试场正在使用已过期的浏览器直连 SSE 脚本；请 Ctrl+F5 "
+                    "刷新后台再发送。普通手动聊天已改为后台短请求，"
+                    "真实流式协议验收请在 ABCD 测试运行。"
+                ),
+                headers={"X-Chat2API-Playground-Refresh-Required": "true"},
+            )
         response_id = completion_id()
         request_started = time.perf_counter()
         requested_client = body.client_id or x_chat2api_client
