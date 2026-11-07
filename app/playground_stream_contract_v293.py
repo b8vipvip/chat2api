@@ -1,61 +1,68 @@
-"""Guard obsolete *manual* admin browser SSE without breaking real ABCD SSE.
+"""Content-free Playground transport attribution, not a stream admission gate.
 
-At v0.22.291 newer manual Playground chat uses a short, authenticated 202
-launch and an in-process nonstream API request. Real machines can keep old JS
-running in an already-open admin tab, still posting stream=true under the same
-TestRunStore v3 schema. A stale browser transport can close 5-11 seconds into
-a 180-second request. The Worker completing afterward does not prove that
-browser received its API response.
-
-A verified browser-origin Playground run *with no explicit new ABCD transport
-contract* must refresh rather than dispatch another expensive, doomed stream.
-This is a version-safety guard, NOT an SSE or reverse-proxy repair.
+An ABCD run can use browser SSE with no final ABCD report if browser connection
+breaks. Never infer ordinary manual chat from report absence. Attribution is
+best-effort and never changes Worker dispatch or request terminal authority.
 """
 from __future__ import annotations
 
-from urllib.parse import urlsplit
+import uuid
 from typing import Any
+from urllib.parse import urlsplit
 
 ABCD_TRANSPORT = "abcd-real-sse-v293"
+DETACHED_TRANSPORT = "server-detached-v292"
 
 
-def _is_admin_browser_request(headers: Any) -> bool:
-    """Require a real same-origin admin page route; never trust Referer alone."""
+def _same_origin_admin(headers: Any) -> bool:
     try:
-        origin = str(headers.get("origin") or "")
-        referer = str(headers.get("referer") or "")
-        if not origin or not referer:
-            return False
+        origin, referer = str(headers.get("origin") or ""), str(headers.get("referer") or "")
         o, r = urlsplit(origin), urlsplit(referer)
-        if not o.scheme in {"http", "https"} or not o.netloc or o.path or o.query or o.fragment:
-            return False
-        if r.scheme != o.scheme or r.netloc != o.netloc:
-            return False
-        return r.path in {"/admin", "/developers"}
+        return (bool(origin and referer) and o.scheme in {"http", "https"} and bool(o.netloc)
+                and not (o.path or o.query or o.fragment) and
+                r.scheme == o.scheme and r.netloc == o.netloc and
+                r.path in {"/admin", "/developers"})
     except (ValueError, AttributeError, TypeError):
         return False
 
 
-def is_legacy_manual_playground_sse(
-    *,
-    request_id: str,
-    stream: bool,
-    headers: Any,
-    test_runs: Any,
-) -> bool:
-    if not stream or not request_id.startswith("req_"):
-        return False
-    if not _is_admin_browser_request(headers):
-        return False
-    # Only current, explicitly registered Playground runs are in scope.
-    # Never block external API callers or uncertain/expired legacy records.
-    import uuid
+def playground_stream_attribution(
+    *, request_id: str, stream: bool, headers: Any, test_runs: Any,
+) -> dict[str, Any] | None:
+    """Classify only a matching persisted run. A missing ABCD report is NOT a type marker."""
+    if not request_id.startswith("req_"):
+        return None
+    contract = str(headers.get("x-chat2api-playground-transport") or "")
+    dispatch = str(headers.get("x-chat2api-playground-dispatch") or "")
+    if not _same_origin_admin(headers) and dispatch != DETACHED_TRANSPORT:
+        return None
     run_id = "chatrun_" + uuid.uuid5(
         uuid.NAMESPACE_URL, f"chat2api-playground-chat:{request_id}"
     ).hex
     run = test_runs.get(run_id) if test_runs is not None else None
     if not isinstance(run, dict) or request_id not in (run.get("request_ids") or []):
-        return False
-    # Dedicated ABCD real-SSE test deliberately owns the browser stream.
-    # A current v293 test declares that intent explicitly.
-    return str(headers.get("x-chat2api-playground-transport") or "") != ABCD_TRANSPORT
+        return None
+    quality = run.get("quality") if isinstance(run.get("quality"), dict) else {}
+    scene = str(quality.get("abcd_scene") or run.get("abcd_scene") or "")
+    if scene not in {"A", "B", "C", "D"}:
+        scene = ""
+    intent = str(quality.get("transport_contract") or "")
+    if dispatch == DETACHED_TRANSPORT and not stream:
+        kind = "manual-server-detached"
+    elif contract == ABCD_TRANSPORT and stream:
+        kind = "abcd-real-sse"
+    elif scene and stream:
+        kind = "abcd-scene-declared-sse"
+    elif stream:
+        kind = "unverified-browser-direct-sse"
+    else:
+        kind = "unverified-browser-nonstream"
+    return {
+        "kind": kind,
+        "stream": bool(stream),
+        "scene": scene or None,
+        "declared_contract": intent[:80] or None,
+        "request_header_contract": contract if contract == ABCD_TRANSPORT else None,
+        "internal_dispatch": dispatch == DETACHED_TRANSPORT,
+        "source": "matched-playground-run-v293",
+    }
