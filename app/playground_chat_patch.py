@@ -32,6 +32,7 @@ class PlaygroundChatStart(BaseModel):
     prompt: str = Field(default="", max_length=20000)
     attachments_count: int = Field(default=0, ge=0, le=4)
     transport_contract: str | None = Field(default=None, max_length=80)
+    abcd_scene: str | None = Field(default=None, pattern="^[ABCD]$")
 
 
 class PlaygroundChatRecord(PlaygroundChatStart):
@@ -107,6 +108,7 @@ def _running_row(body: PlaygroundChatStart) -> dict[str, Any]:
             "source": "manual-playground-chat",
             "playground_chat": PATCH_ID,
             "transport_contract": body.transport_contract or "legacy-unmarked",
+            "abcd_scene": body.abcd_scene,
             "prompt_preview": _prompt_preview(body.prompt),
             "prompt_chars": len(body.prompt),
             "response_chars": 0,
@@ -153,6 +155,7 @@ def _terminal_changes(body: PlaygroundChatRecord) -> dict[str, Any]:
             "source": "manual-playground-chat",
             "playground_chat": PATCH_ID,
             "transport_contract": body.transport_contract or "legacy-unmarked",
+            "abcd_scene": body.abcd_scene,
             "prompt_preview": _prompt_preview(body.prompt),
             "prompt_chars": len(body.prompt),
             "response_chars": body.response_chars,
@@ -230,6 +233,9 @@ def install_playground_chat_patch(app: FastAPI) -> FastAPI:
         previous_transport = (existing.get("quality") or {}).get("transport_contract")
         if previous_transport:
             changes["quality"]["transport_contract"] = previous_transport
+        previous_scene = (existing.get("quality") or {}).get("abcd_scene")
+        if previous_scene in {"A", "B", "C", "D"}:
+            changes["quality"]["abcd_scene"] = previous_scene
         row = await app.state.test_runs.update(run_id, changes)
         return {"run": row}
 
