@@ -619,7 +619,7 @@
 
       const probe = crypto.randomUUID().replace(/-/g, "").toLowerCase();
       if (!/^[a-f0-9]{32}$/.test(probe) ||
-          typeof editor.setAttribute !== "function") continue;
+          typeof editor.setAttribute !== "function") return;
       editor.setAttribute(EDITOR_PROBE_ATTR,probe);
       let timer;
       try {
