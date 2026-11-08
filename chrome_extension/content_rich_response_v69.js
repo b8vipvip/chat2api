@@ -715,6 +715,67 @@
     return normalizeOutput(blockMarkdown(clone));
   }
 
+  // Surgical same-request insertions preserve every existing image URL,
+  // archived file link, formula and table in the canonical OpenAI text.
+  // Any ambiguous anchor returns the original untouched; an observer cannot
+  // invent a second terminal or reconstruct missing media by ordinal order.
+  function spliceVerifiedCodeIntoCanonical(original, enriched, codeTexts) {
+    const source=String(original || "");
+    if (!source || !enriched || !Array.isArray(codeTexts) || !codeTexts.length ||
+        codeTexts.length>8) return {text:source,integrated:0,reason:"code-input-unavailable"};
+    const blocks=[...enriched.matchAll(/(?:^|\n)(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n\1(?=\n|$)/g)];
+    const uniqueMatch = (fragment, direction, text) => {
+      const parts=fragment.split(/\n\n+/).map(s=>s.trim())
+        .filter(s=>s.length>=24 && !s.startsWith("`"));
+      const paragraph=direction==="before" ? parts[parts.length-1] : parts[0];
+      if (!paragraph) return -1;
+      const options=[paragraph, direction==="before" ? paragraph.slice(-100) : paragraph.slice(0,100),
+        direction==="before" ? paragraph.slice(-56) : paragraph.slice(0,56)];
+      for (const part of options) {
+        if (part.length<24) continue;
+        const at=text.indexOf(part);
+        if (at>=0 && at===text.lastIndexOf(part))
+          return direction==="before" ? at+part.length : at;
+      }
+      return -1;
+    };
+    let result=source, inserted=0;
+    for (const doc of codeTexts) {
+      const body=String(doc||"").replace(/\r\n?/g,"\n").replace(/\n+$/g,"");
+      if (!body || body.length>150000) return {text:source,integrated:0,reason:"invalid-verified-code"};
+      if (result.includes(body)) {inserted++;continue;}
+      const matches=blocks.filter(match=>String(match[2]).replace(/\n+$/g,"")===body);
+      if (matches.length!==1) return {text:source,integrated:0,reason:"code-fence-not-unique"};
+      const match=matches[0], start=match.index+(match[0].startsWith("\n")?1:0);
+      const prefix=enriched.slice(0,start), suffix=enriched.slice(match.index+match[0].length);
+      const before=uniqueMatch(prefix,"before",result);
+      const after=uniqueMatch(suffix,"after",result);
+      // Both independent, unique anchors must enclose a short gap in the
+      // canonical reply (often the "Python" code-card label).
+      if (before<0 || after<before || after-before>1200)
+        return {text:source,integrated:0,reason:"code-position-unverified"};
+      const segment=match[0].replace(/^\n/,"").trim();
+      result=result.slice(0,after)+segment+"\n\n"+result.slice(after);
+      inserted++;
+    }
+    return {text:result,integrated:inserted,reason:"verified-editor-anchor-insert"};
+  }
+
+  function mergeVerifiedEditorMarkdown(original, node, verifiedEditorDocs) {
+    if (!(verifiedEditorDocs instanceof Map) || verifiedEditorDocs.size===0)
+      return {text:String(original||""),integrated:0,reason:"no-verified-editor-state"};
+    const evidence={docs:verifiedEditorDocs,found:0,integrated:0,reason:""};
+    const clone=cleanClone(node,evidence);
+    if (!clone || evidence.found!==verifiedEditorDocs.size ||
+        evidence.integrated!==verifiedEditorDocs.size) {
+      return {text:String(original||""),integrated:0,
+        reason:evidence.reason||"editor-reply-scope-incomplete"};
+    }
+    const enriched=normalizeOutput(blockMarkdown(clone));
+    return spliceVerifiedCodeIntoCanonical(original,enriched,
+      [...verifiedEditorDocs.values()].map(x=>x.text));
+  }
+
   function blobToDataUrl(blob) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -865,6 +926,8 @@
     locateNewPageMedia,
     capturePageImages,
     extractMarkdown,
+    mergeVerifiedEditorMarkdown,
+    spliceVerifiedCodeIntoCanonical,
     captureFinalMarkdown,
   });
 })();
