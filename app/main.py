@@ -395,7 +395,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # structural-max-children. Never serve that old revision as final
         # native content. Running requests may still show live increments.
         finality_row = native_terminal_view(row, broker.requests.get(request_id))
-        if native_snapshot_finality(finality_row, snapshot) == "rejected-final":
+        # Only the single authoritative native finality decision may publish.
+        # Legacy unverified-final is NOT safe merely because it is not an
+        # explicit rejection. Keep in-progress snapshots provisional only;
+        # completed requests require a proven final revision and ACK.
+        finality_status = native_snapshot_finality(finality_row, snapshot)
+        if finality_status not in {"live-provisional", "verified-final"}:
             return None
         # Reuse the *same* archived media records as the canonical Markdown.
         # Never return a ChatGPT blob URL or a model-generated remote URL.
@@ -1626,7 +1631,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         native_snapshot_finality(
                             {"status": "completed", "diagnostics": state.diagnostics},
                             native_content.get(state.request_id, principal.key_id),
-                        ) != "rejected-final"
+                        ) == "verified-final"
                     ):
                         meta["native_content"] = {
                             "version": 1,
@@ -1976,7 +1981,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         native_snapshot_finality(
                             {"status": "completed", "diagnostics": state.diagnostics},
                             native_content.get(request_id, principal.key_id),
-                        ) != "rejected-final"
+                        ) == "verified-final"
                     ):
                 meta["native_content"] = {
                     "version": 1,
