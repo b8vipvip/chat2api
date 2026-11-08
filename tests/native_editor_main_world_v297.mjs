@@ -102,4 +102,49 @@ assert.equal(oversized.reason,"editor-document-too-large");
 docValue="a\n";editorPresent=false;
 const notFound=await call();
 assert.equal(notFound.ok,false);
+
+// v302 production req_dd63b5bd: all 158 editor nodes were searched,
+// cmView attachments=0, viewport had 36 lines and an explicit .cm-gap.
+// A full source may live only on this SAME card's React component props.
+docValue="import math\n\ndef annual_profit(income, expense):\n    result = income - expense\n    if result <= 0: raise ValueError('invalid')\n    return math.floor(result)\n\nprint(annual_profit(100, 50))";
+editorPresent=true;
+editorAttachment="no-view";
+const shown=["import math","def annual_profit(income, expense):",
+  "    if result <= 0: raise ValueError('invalid')"];
+editor.querySelectorAll=selector=>selector===".cm-content .cm-line"
+  ? shown.map(textContent=>({textContent})) : [];
+const formerQuery=editor.querySelector;
+editor.querySelector=selector=>selector===".cm-gap" ? {} :
+  selector===".cm-content" ? {} : formerQuery(selector);
+const parent={children:[],parentElement:null,
+  matches:()=>false};
+parent["__reactFiber$test"]={memoizedProps:{code:docValue},return:null};
+editor.parentElement=parent;
+const react=await call();
+assert.equal(react.ok,true);
+assert.equal(react.source,"react-owned-code-v302");
+assert.equal(react.text,docValue);
+assert.equal(react.length,docValue.length);
+assert.equal(react.react_fiber_hosts,1);
+assert.equal(react.react_candidate_count,1);
+assert.equal(react.react_anchor_count,3);
+assert.equal(react.attachment_count,0);
+parent["__reactFiber$test"].memoizedProps={
+  code:docValue,source:docValue+"\n// contradictory owner text",
+};
+const conflicting=await call();
+assert.equal(conflicting.ok,false);
+assert.equal(conflicting.reason,"editor-view-not-found",
+  "contradictory React code must never be claimed as full source");
+assert.equal(conflicting.react_candidate_count,2);
+parent["__reactFiber$test"].memoizedProps={code:docValue};
+editor.querySelectorAll=selector=>selector===".cm-content .cm-line"
+  ? [{textContent:"import math"}] : [];
+const insufficient=await call();
+assert.equal(insufficient.ok,false);
+assert.equal(insufficient.react_candidate_count,0);
+editor.parentElement=null;
+editor.querySelectorAll=()=>[];
+editor.querySelector=formerQuery;
+
 console.log("v297 MAIN-world full CodeMirror document; bounded, tab-scoped and read-only");
