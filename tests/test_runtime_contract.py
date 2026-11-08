@@ -407,7 +407,10 @@ def test_062f_media_terminal_requires_source_structure_coverage():
     assert 'scene_finish_after_all_blocks === true' in request
     assert 'scene_uncovered_block_count' in request
     assert 'scene_uncovered_block_chars' in request
-    assert 'scene.changed >= 10 && scene.uncovered >= 8' in request
+    # req_97338 had 926 changed blocks but only 3 orphan headings (37 chars).
+    # A large answer must not be finalized from an unverified scope merely
+    # because the uncovered material is short.
+    assert 'scene.changed >= 10 && scene.uncovered > 0' in request
     assert 'media_terminal_scene_uncovered_blocks' in request
     assert 'mediaHandoffTerminalReady(active, generating, pageWorking, Date.now(), scopedMediaBoundary)' in request
 
