@@ -29,7 +29,7 @@ def test_rich_observers_cannot_override_broker_or_worker_terminal():
         src = (ROOT / path).read_text("utf-8")
         # Mentioning a terminal in comments is allowed. Emitting a terminal
         # envelope from an optional native observer is forbidden.
-        assert not re.search(r"""type\\s*:\\s*['\\"]chat\\.(?:completed|error|cancelled)['\\"]""", src), (
+        assert not re.search(r"""type\s*:\s*['\"]chat\.(?:completed|error|cancelled)['\"]""", src), (
             f"native observer emits request terminal: {path}"
         )
     for path in (
