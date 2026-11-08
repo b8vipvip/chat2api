@@ -176,6 +176,10 @@ def test_v297_unmapped_archived_images_cannot_prove_visual_1_to_1():
     }}
     assert native_snapshot_finality(row, SNAP) == "rejected-final"
     row["diagnostics"]["native_layout_summary"]["media_mapping_complete"] = True
+    # Slot order alone cannot prove the original image bytes.
+    assert native_snapshot_finality(row, SNAP) == "rejected-final"
+    row["diagnostics"]["native_image_identity_status"] = "verified-sha256"
+    row["diagnostics"]["native_identity_matched_count"] = 2
     assert native_snapshot_finality(row, SNAP) == "verified-final"
 
 
@@ -242,6 +246,9 @@ def test_v298_missing_or_mismatched_private_media_proof_never_overrides_finality
     }
     assert native_finality_decision(row, SNAP)["reason"] == "unmapped-archived-media"
     row["diagnostics"]["native_layout_summary"]["media_mapping_complete"] = True
+    assert native_finality_decision(row, SNAP)["reason"] == "unverified-media-byte-identity"
+    row["diagnostics"]["native_image_identity_status"] = "verified-sha256"
+    row["diagnostics"]["native_identity_matched_count"] = 3
     row["diagnostics"]["native_capture_comparison"] = {
         "comparable": True, "private_capture_complete": True,
         "private_tables": 16, "native_tables": 10,
