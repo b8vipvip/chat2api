@@ -205,7 +205,8 @@
       "form,textarea,input,[contenteditable='true'],[contenteditable=''],[contenteditable='plaintext-only']"
     );
     for (const control of controls) {
-      if (!control?.matches?.("[contenteditable]")) return true;
+      if (!control?.matches?.("form,textarea,input,[contenteditable]")) continue;
+      if (!control.matches("[contenteditable]")) return true;
       const editor = control.closest?.(".cm-editor,.monaco-editor");
       if (!editor || !scope.contains?.(editor)
           || editor.closest?.("form,nav,aside,footer,[role='dialog'],[data-message-author-role='user']"))
