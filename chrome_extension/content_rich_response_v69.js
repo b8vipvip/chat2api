@@ -739,11 +739,28 @@
       }
       return -1;
     };
+    // Equal code text in multiple different editor cards does not
+    // identify two different positions. Never pass a partial or guessed
+    // multi-editor merge to the single terminal owner.
+    if (new Set(codeTexts.map(doc=>String(doc||"").replace(/\\r\\n?/g,"\\n").replace(/\\n+$/g,""))).size
+        !==codeTexts.length)
+      return {text:source,integrated:0,reason:"duplicate-editor-text-ambiguous"};
     let result=source, inserted=0;
     for (const doc of codeTexts) {
       const body=String(doc||"").replace(/\r\n?/g,"\n").replace(/\n+$/g,"");
       if (!body || body.length>150000) return {text:source,integrated:0,reason:"invalid-verified-code"};
-      if (result.includes(body)) {inserted++;continue;}
+      if (result.includes(body)) {
+        // A raw substring in a paragraph, table, quotation or JS string is
+        // NOT proof that the verified CodeMirror source was delivered as a
+        // positioned Markdown code block. Accept idempotence only for one
+        // exact fenced block; anything else is ambiguous and fail-closed.
+        const existing=[...result.matchAll(/(?:^|\\n)(`{3,}|~{3,})[^\\n]*\\n([\\s\\S]*?)\\n\\1(?=\\n|$)/g)]
+          .filter(match=>String(match[2]).replace(/\\n+$/g,"")===body);
+        if (existing.length===1) { inserted++;continue; }
+        return {text:source,integrated:0,
+          reason:existing.length ? "existing-code-fence-ambiguous"
+            : "editor-code-plain-text-ambiguous"};
+      }
       const matches=blocks.filter(match=>String(match[2]).replace(/\n+$/g,"")===body);
       if (matches.length!==1) return {text:source,integrated:0,reason:"code-fence-not-unique"};
       const match=matches[0], start=match.index+(match[0].startsWith("\n")?1:0);
