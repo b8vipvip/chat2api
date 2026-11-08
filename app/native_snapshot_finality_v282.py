@@ -115,6 +115,15 @@ def native_snapshot_finality(row: dict[str, Any] | None,
         if (type(private_tables) is int and type(native_tables) is int
                 and private_tables > native_tables >= 0):
             return "rejected-final"
+    # Archived images without a proven DOM slot cannot be presented as
+    # visually identical to the ChatGPT reply. Native media mapping is
+    # independent of small favicon/decorative image counts.
+    layout = diag.get("native_layout_summary")
+    if (isinstance(layout, dict)
+            and layout.get("media_mapping_complete") is False
+            and type(layout.get("archived_assets")) is int
+            and layout["archived_assets"] > 0):
+        return "rejected-final"
     # v297: an editor in the verified reply cannot count as 1:1 unless the
     # complete page-side CodeMirror immutable document was read, not just
     # visible viewport lines in the isolated content script.
