@@ -193,6 +193,28 @@
     } catch (_) { return false; }
   }
 
+  // Request-scoped editor content is NOT a composer. The previous blanket
+  // [contenteditable=true] rejection banned every rich reply containing a
+  // CodeMirror .cm-content (2026-11-08 req_97338: 16 tables + 3 images
+  // + 2 code cards, but zero verified reply scope for 900 seconds).
+  // Never allow a real form/input or a non-editor editable to piggyback on
+  // the assistant boundary. This read-only predicate owns the distinction.
+  function hasUntrustedReplyInput(scope) {
+    if (!scope?.querySelectorAll) return true;
+    const controls = scope.querySelectorAll(
+      "form,textarea,input,[contenteditable='true'],[contenteditable=''],[contenteditable='plaintext-only']"
+    );
+    for (const control of controls) {
+      if (!control?.matches?.("form,textarea,input,[contenteditable]")) continue;
+      if (!control.matches("[contenteditable]")) return true;
+      const editor = control.closest?.(".cm-editor,.monaco-editor");
+      if (!editor || !scope.contains?.(editor)
+          || editor.closest?.("form,nav,aside,footer,[role='dialog'],[data-message-author-role='user']"))
+        return true;
+    }
+    return false;
+  }
+
   // f7c8: four archived web images appeared while ChatGPT was still actively
   // writing code and explanation. A stable image source is proof of media
   // transfer, NEVER proof of completion of the accompanying text response.
@@ -222,7 +244,8 @@
         && active.baselineFinishActions?.has(finish) === false
         && scope.contains?.(active.lastCandidateNode)
         && !scope.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']")
-        && !scope.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,[contenteditable='true']")
+        && !scope.querySelector?.("[data-message-author-role='user'],[data-testid='user-message']")
+        && !hasUntrustedReplyInput(scope)
         && !promptStillPresent(active)) {
       const coverage = renderedResponseBoundaryEvidence(active, active.lastCandidateNode, scope);
       const structural = [...(scope.querySelectorAll?.(
@@ -260,8 +283,8 @@
       }
       const scene = active.mediaTerminalSceneFacts;
       if (scene?.completionEvidencePresent && !scene.finishedAfterAll
-          && scene.changed >= 10 && scene.uncovered >= 8
-          && scene.uncoveredChars >= 128) return false;
+          && scene.changed >= 10 && scene.uncovered > 0
+          && scene.uncoveredChars > 0) return false;
     }
     return true;
   }
@@ -274,14 +297,25 @@
   // transaction boundary, without decoding or logging any media bytes.
   function mediaTerminalPayloadIntegrity(text) {
     const value = String(text || "");
-    const imageStarts = [...value.matchAll(/data:image\//gi)].map(m => m.index);
+    // A literal data:image/ inside Python/Markdown code is not a generated
+    // picture. Never let a code example manufacture a broken fourth image
+    // marker in a multi-image answer. Equally, an actual malformed Markdown
+    // image outside a fenced code block must keep failing closed.
+    const fenced = [...value.matchAll(
+      /^( {0,3})(`{3,}|~{3,})[^\r\n]*\r?\n[\s\S]*?^\1\2[ \t]*$/gm
+    )].map(m=>({start:m.index,end:m.index+m[0].length}));
+    const literalCode = index => fenced.some(r=>index>=r.start && index<r.end);
+    const imageStarts = [...value.matchAll(/data:image\//gi)]
+      .filter(m=>!literalCode(m.index)).map(m=>m.index);
     const imageRecognized = [...value.matchAll(
       /!\[[^\]\r\n]{0,200}\]\((data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+)\)/gi
-    )].map(m => m.index + m[0].indexOf("data:image/"));
-    const fileStarts = [...value.matchAll(/!\[📎 /g)].map(m => m.index);
+    )].map(m => m.index + m[0].indexOf("data:image/"))
+      .filter(index=>!literalCode(index));
+    const fileStarts = [...value.matchAll(/!\[📎 /g)]
+      .filter(m=>!literalCode(m.index)).map(m => m.index);
     const fileRecognized = [...value.matchAll(
       /!\[📎 ([^\]\r\n]{1,180})\]\((?:data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+|chat2api-staged:[a-f0-9]{32})\)/gi
-    )].map(m => m.index);
+    )].filter(m=>!literalCode(m.index)).map(m => m.index);
     const imagesComplete = imageStarts.length === imageRecognized.length
       && imageStarts.every((pos,i) => pos === imageRecognized[i]);
     const filesComplete = fileStarts.length === fileRecognized.length
@@ -977,7 +1011,8 @@
     const prior = active.nativeVerifiedReplyScope;
     if (prior?.isConnected &&
         !prior.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']") &&
-        !prior.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,[contenteditable='true']") &&
+        !prior.querySelector?.("[data-message-author-role='user'],[data-testid='user-message']") &&
+        !hasUntrustedReplyInput(prior) &&
         ![...(prior.querySelectorAll?.("h4,h5,h6") || [])]
           .some(node => /^(?:You said|你说|你发送)\s*[:：]?$/i.test(
             normalize(node.innerText || node.textContent || ""))) &&
@@ -1008,7 +1043,8 @@
       if (!scope || !scope.isConnected || !scope.contains?.(candidate) ||
           scope.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']") ||
           scope.closest?.("nav,aside,header,footer,form,[role='dialog']") ||
-          scope.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,input,[contenteditable='true']")) continue;
+          scope.querySelector?.("[data-message-author-role='user'],[data-testid='user-message']") ||
+          hasUntrustedReplyInput(scope)) continue;
       const content = normalize(scope.innerText || scope.textContent || "");
       const submitted = String(active.promptNormalized || "").trim();
       const prefix = submitted.slice(0,100);
@@ -3405,6 +3441,9 @@
   }
 
   state.contract = Object.freeze({
+    // One shared read-only editor/composer distinction used by the native
+    // evidence observer. Neither observer nor helper owns a terminal decision.
+    hasUntrustedReplyInput,
     currentAssistantState,
     currentUserTurn,
     refreshAssistantBaseline,

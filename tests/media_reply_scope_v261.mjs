@@ -45,6 +45,29 @@ const scoped=baseline();
 assert.equal(ready(scoped,false,false,now,boundary),true,
   "890e: user prompt blocks outside the verified reply must not force a 900s timeout");
 assert.equal(scoped.mediaTerminalReplyScopeVerified,true);
+// Actual CodeMirror read-only code cards contain contenteditable=true.
+// This must be accepted inside the verified assistant response, unlike
+// the composer or an arbitrary editable outside a code card.
+const originalQueryAll=reply.querySelectorAll.bind(reply);
+const cmEditor=new Element("DIV","");cmEditor.parentElement=reply;
+const cmContent=new Element("DIV","");
+cmContent.parentElement=cmEditor;
+cmContent.matches=selector=>selector.includes("[contenteditable]");
+cmContent.closest=selector=>selector.includes(".cm-editor")?cmEditor:null;
+reply.querySelectorAll=selector=>selector.includes("contenteditable")
+  ? [cmContent] : originalQueryAll();
+const codeCardScope=baseline();
+assert.equal(ready(codeCardScope,false,false,now,boundary),true,
+  "in-scope CodeMirror .cm-content must not invalidate the assistant boundary");
+assert.equal(codeCardScope.mediaTerminalReplyScopeVerified,true);
+const unsafeInput=new Element("DIV","User draft");
+unsafeInput.matches=selector=>selector.includes("[contenteditable]");
+unsafeInput.closest=()=>null;
+reply.querySelectorAll=selector=>selector.includes("contenteditable")
+  ? [cmContent,unsafeInput] : originalQueryAll();
+assert.equal(ready(baseline(),false,false,now,boundary),false,
+  "untrusted external contenteditable still blocks completion");
+reply.querySelectorAll=originalQueryAll;
 assert.equal(ready(baseline(),true,false,now,boundary),false);
 assert.equal(ready(baseline(),false,true,now,boundary),false);
 assert.equal(ready({...baseline(),networkObservedAt:now-1000},false,false,now,boundary),false,

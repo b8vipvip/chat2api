@@ -6,11 +6,17 @@ const source=readFileSync("chrome_extension/content_request_v6.js","utf8");
 const start=source.indexOf("  function bindNativeReplyScope(active, phase");
 const end=source.indexOf("  // A redesigned reply can render one Markdown/code/table component",start);
 assert.ok(start>0 && end>start,"request binding must live in request-v6");
-const binder=source.slice(start,end)+"\nthis.bind=bindNativeReplyScope;";
+const guardStart=source.indexOf("  function hasUntrustedReplyInput(scope) {");
+const guardEnd=source.indexOf("  // f7c8:",guardStart);
+assert.ok(guardStart>0 && guardEnd>guardStart,
+  "the one request-v6 editor-aware composer guard must be included");
+const binder=source.slice(guardStart,guardEnd)+source.slice(start,end)
+  +"\nthis.bind=bindNativeReplyScope;";
 
 class Element {
   constructor(text="") {this.innerText=text;this.textContent=text;this.isConnected=true;this.user=false;}
   matches(){return false;}
+  querySelectorAll(){return [];}
   closest(selector){
     if(this.user && selector.includes("data-message-author-role"))return {user:true};
     if(selector.includes("main,[role='main'],#thread"))return main;

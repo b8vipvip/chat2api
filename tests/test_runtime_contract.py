@@ -407,7 +407,10 @@ def test_062f_media_terminal_requires_source_structure_coverage():
     assert 'scene_finish_after_all_blocks === true' in request
     assert 'scene_uncovered_block_count' in request
     assert 'scene_uncovered_block_chars' in request
-    assert 'scene.changed >= 10 && scene.uncovered >= 8' in request
+    # req_97338 had 926 changed blocks but only 3 orphan headings (37 chars).
+    # A large answer must not be finalized from an unverified scope merely
+    # because the uncovered material is short.
+    assert 'scene.changed >= 10 && scene.uncovered > 0' in request
     assert 'media_terminal_scene_uncovered_blocks' in request
     assert 'mediaHandoffTerminalReady(active, generating, pageWorking, Date.now(), scopedMediaBoundary)' in request
 
@@ -560,3 +563,21 @@ def test_v304_same_model_authority_rechecks_after_reasoning_and_before_dispatch(
     assert "model_selection_proof_stage:" in router
     assert "model_selection_confirmation_method:" in router
     assert "safeSelect(tabId, model)" in selector
+
+
+
+def test_v305_only_request_v6_owns_code_editor_scope_and_media_terminal():
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    owner=(root/"chrome_extension/content_request_v6.js").read_text("utf-8")
+    observer=(root/"chrome_extension/content_native_dom_evidence_v1.js").read_text("utf-8")
+    assert "function hasUntrustedReplyInput(scope)" in owner
+    assert "hasUntrustedReplyInput," in owner
+    assert "!hasUntrustedReplyInput(scope)" in owner
+    assert "hasUntrustedReplyInput(prior)" in owner
+    assert "hasUntrustedReplyInput(scope)) continue" in owner
+    assert "contract?.hasUntrustedReplyInput" in observer
+    assert "scene.uncovered > 0" in owner
+    assert "literalCode" in owner
+    assert 'type:"chat.completed"' not in observer
+    assert 'type:"chat.error"' not in observer

@@ -34,6 +34,24 @@ for(const malformed of [
   // Reason and counters only; never return the media's embedded bytes.
   assert.ok(!JSON.stringify(r).includes("base64"));
 }
+// A Python snippet showing data-image syntax is not a third generated
+// image. The real media marker(s) must remain complete and independently
+// validated. No byte contents enter the diagnostics.
+const withLiteralCode = [
+  "![original](data:image/jpeg;base64,YWI=)",
+  "```python",
+  "payload = 'data:image/png;base64,THIS_IS_A_LITERAL'",
+  "asset = '![📎 draft.zip](chat2api-staged:short)'",
+  "```",
+].join("\n");
+const literalProof=check(withLiteralCode);
+assert.equal(literalProof.ok,true);
+assert.equal(literalProof.imageMarkers,1);
+assert.equal(literalProof.validImageMarkers,1);
+assert.equal(literalProof.fileMarkers,0);
+// The identical fragment outside fenced code is unsafe and must not pass.
+assert.equal(check("![original](data:image/jpeg;base64,YWI=)\n"+
+  "data:image/png;base64,THIS_IS_NOT_A_MARKDOWN_IMAGE").ok,false);
 assert.ok(source.includes("mediaTerminalPayloadIntegrity(captured)"));
 assert.ok(source.includes('imageCandidate="";'));
 assert.ok(source.indexOf("mediaTerminalPayloadIntegrity(captured)")
