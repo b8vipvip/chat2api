@@ -42,7 +42,13 @@ const ctx = {
   resolveTargetTab: async()=>({id:101,windowId:100}),
   handleServerMessage: async()=>{throw Error("Should not reach old handler")},
   __CHAT2API_MODEL_SWITCH_V149__: {
-    safeSelect: async() => ({ok:true,data:{validated:true,current_model:"gpt-5.6-sol"}})
+    safeSelect: async() => ({ok:true,data:{validated:true,current_model:"gpt-5.6-sol"}}),
+    // The same read-only live-menu owner confirms that the reasoning
+    // fallback did not mutate the selected model before submitting.
+    safeConfirmBeforeRequest: async(_tabId,requested) => ({
+      ok:requested==="gpt-5.6-sol",
+      data:{confirmed:true,validation_method:"pre-send-live-menu-selected-row-v304"},
+    }),
   },
   __CHAT2API_CONVERSATION_ROUTING_V1__:{
     failRequest:async()=>{retireCount++;return true;}
@@ -67,6 +73,8 @@ assert.equal(submitted[0].options.reasoning_level,undefined);
 assert.equal(submitted[0].options.effective_reasoning,null);
 assert.equal(eventLog.filter(event=>event.type==="chat.diagnostics").length,1);
 assert.equal(eventLog.find(event=>event.type==="chat.diagnostics").diagnostics.reasoning_default_unverified,true);
+assert.equal(eventLog.find(event=>event.type==="chat.diagnostics").diagnostics.model_selection_confirmation_method,
+  "pre-send-live-menu-selected-row-v304");
 const beforeExtraHigh = eventLog.length;
 await ctx.handleServerMessage({
   type:"chat.request", request_id:"req_extra_high_must_not_downgrade",
