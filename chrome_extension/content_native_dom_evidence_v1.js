@@ -131,12 +131,12 @@
         // retain the conservative legacy fail-closed behavior.
         const inputGuard=globalThis.__CHAT2API_REQUEST_CONTENT_V6__
           ?.contract?.hasUntrustedReplyInput;
-        const blocked=typeof inputGuard==="function"
+        const unsafeEditable=typeof inputGuard==="function"
           ? inputGuard(cursor)
           : Boolean(cursor.querySelector?.("form,textarea,input,[contenteditable='true']"));
         if(cursor.matches?.("[data-message-author-role='user'],[data-testid='user-message'],form")
             || cursor.querySelector?.("[data-message-author-role='user'],[data-testid='user-message']")
-            || blocked) break;
+            || unsafeEditable) break;
         if (cursor.contains(candidate) || cursor===candidate ||
             normalize(cursor).length>=2 || graphical ||
             composedFind(cursor,node=>node.tagName?.toLowerCase()==="img" && visible(node)).length>0) {
