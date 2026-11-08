@@ -1,5 +1,6 @@
 """Governance: 1 terminal writer, 1 native finality decision, optional layers observational."""
 from pathlib import Path
+import re
 
 from app.native_snapshot_finality_v282 import (
     native_finality_decision, native_snapshot_finality,
@@ -26,8 +27,11 @@ def test_rich_observers_cannot_override_broker_or_worker_terminal():
         "chrome_extension/background_native_editor_state_v297.js",
     ):
         src = (ROOT / path).read_text("utf-8")
-        assert "chat.completed" not in src, f"native observer has terminal authority: {path}"
-        assert "chat.error" not in src, f"native observer may error Broker: {path}"
+        # Mentioning a terminal in comments is allowed. Emitting a terminal
+        # envelope from an optional native observer is forbidden.
+        assert not re.search(r"""type\\s*:\\s*['\\"]chat\\.(?:completed|error|cancelled)['\\"]""", src), (
+            f"native observer emits request terminal: {path}"
+        )
     for path in (
         "app/native_capture_audit_v281.py",
         "app/native_snapshot_finality_v282.py",
