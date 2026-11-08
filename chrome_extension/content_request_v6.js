@@ -2417,7 +2417,9 @@
       && Number(active.networkTerminalTransportDoneAt || 0) >= Number(active.networkTerminalAt || 0)
       && String(active.networkTerminalTransportStreamId || "")
         === String(active.networkTerminalStreamId || "")
-      && !Number(active.networkTerminalTransportErrorAt || 0));
+      && !Number(active.networkTerminalTransportErrorAt || 0)
+      && (!active.networkStreamResponseId
+        || active.networkStreamResponseId === active.networkTerminalStreamId));
   }
 
   async function reconcileResponsesTerminal(active, networkText) {
@@ -2521,6 +2523,30 @@
       await delay(180);
     }
     return { text: raw, source: "network-sse-terminal-v57" };
+  }
+
+  // A browser fetch clone may abort while ChatGPT still shows Thinking,
+  // or a second same-request stream may follow the ended one. The former
+  // v125 guard fired chat.error after just 3 seconds, discarding an answer
+  // that had not finished rendering (real req_a99b / req_157d, 2026-11-08).
+  // This is ONLY the fail-closed ERROR policy; it never authorizes completed.
+  function unverifiedNetworkFailureReady(active, now, pageWorking, generating, captureMedia = false) {
+    const ended = Number(active?.networkStreamEndedWithoutTerminalAt || 0);
+    if (!ended || !active?.networkStreamSeen || active.networkTerminalAt || captureMedia)
+      return false;
+    const latest = String(active.networkStreamResponseId || "");
+    const failed = String(active.networkUnverifiedStreamId || "");
+    if (latest && failed && latest !== failed) return false;
+    // A 20-second recovery window lets the existing same-request DOM/toolbar
+    // path establish completion after a clone reader failed. A quiet 3-second
+    // interval is not proof that upstream finished its reply.
+    if (now - ended < 20000) return false;
+    if (generating || pageWorking) return false;
+    // Progress observed after stream failure resets the inactivity decision;
+    // it may be an in-progress multi-stream or rehydrated answer.
+    if (Number(active.networkObservedAt || 0) > 0
+        && now - Number(active.networkObservedAt) < 12000) return false;
+    return true;
   }
 
   function abortedReplyStableThreshold(rendered) {
@@ -3240,11 +3266,31 @@
       // A DOM pause or a missing Stop button cannot override an observed SSE
       // response that has not reached a verified assistant terminal.
       if (active.networkStreamEndedWithoutTerminalAt && !networkTerminalAt && !captureMedia
-          && Date.now() - active.networkStreamEndedWithoutTerminalAt >= 3000) {
+          && (!active.networkUnverifiedWaitReportedAt
+            || Date.now() - active.networkUnverifiedWaitReportedAt >= 15000)) {
+        active.networkUnverifiedWaitReportedAt = Date.now();
+        await diagnostic(active, "unverified-network-await-page-terminal", {
+          network_unverified_wait_policy: "same-request-working-ui-and-stream-grace-v307",
+          network_unverified_elapsed_ms: Math.max(0,
+            Date.now() - Number(active.networkStreamEndedWithoutTerminalAt || 0)),
+          network_unverified_page_working: upstreamStillWorking(),
+          network_unverified_generation_control: Boolean(generating),
+          network_unverified_newer_stream: Boolean(active.networkStreamResponseId
+            && active.networkUnverifiedStreamId
+            && active.networkStreamResponseId !== active.networkUnverifiedStreamId),
+          network_unverified_assistant_scope: Boolean(active.nativeVerifiedReplyScope?.isConnected),
+        });
+      }
+      if (unverifiedNetworkFailureReady(active, Date.now(), upstreamStillWorking(),
+          generating, captureMedia)) {
         await emit({
           type: "chat.error", request_id: active.requestId,
           error: "ChatGPT network stream ended without a verified assistant completion",
-          diagnostics: { response_integrity_guard: "verified-network-terminal-v125", network_stream_unverified_end: true },
+          diagnostics: {
+            response_integrity_guard: "verified-network-terminal-v307",
+            network_stream_unverified_end: true,
+            network_unverified_fail_closed_after_page_idle: true,
+          },
         });
         return;
       }
@@ -3414,6 +3460,8 @@
       networkStreamResponseStatus: 0,
       networkStreamResponseId: "",
       networkStreamEndedWithoutTerminalAt: 0,
+      networkUnverifiedStreamId: "",
+      networkUnverifiedWaitReportedAt: 0,
     };
     state.active = active;
     if (v5) v5.active = active;

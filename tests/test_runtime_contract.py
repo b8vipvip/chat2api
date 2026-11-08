@@ -604,3 +604,28 @@ def test_v306_virtual_editor_recovery_is_owned_by_request_v6_without_second_term
     assert 'type:"chat.completed"' not in reader
     assert 'type:"chat.completed"' not in native
     assert "rich.mergeVerifiedEditorMarkdown(event.text," in owner
+
+
+def test_v307_no_early_error_while_page_is_still_thinking_and_stale_streams_are_quarantined():
+    """A vanished browser clone SSE is not page completion, and not a 3s failure."""
+    from pathlib import Path
+    import subprocess
+    root = Path(__file__).resolve().parents[1]
+    owner = (root / "chrome_extension/content_request_v6.js").read_text("utf-8")
+    observer = (root / "chrome_extension/content_network_stream_recovery_v55.js").read_text("utf-8")
+    assert "function unverifiedNetworkFailureReady(active, now, pageWorking, generating" in owner
+    assert "now - ended < 20000" in owner
+    assert "if (generating || pageWorking) return false" in owner
+    assert "network_unverified_fail_closed_after_page_idle: true" in owner
+    assert "network_unverified_page_working: upstreamStillWorking()" in owner
+    assert "networkStreamResponseId === row.streamId" in observer
+    assert "active.networkUnverifiedStreamId = row.streamId" in observer
+    assert "active.networkStreamEndedWithoutTerminalAt = 0" in observer
+    assert "network_stream_stale_relative_to_request:" in observer
+    assert 'type: "chat.completed"' not in observer
+    assert "chat.error" not in observer
+    result = subprocess.run(
+        ["node", "tests/network_unverified_page_grace_v307.mjs"],
+        cwd=root, capture_output=True, text=True, timeout=20,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

@@ -75,7 +75,9 @@
     row.lastText = value;
     row.lastTextSequence = Math.max(Number(row.lastTextSequence || 0), nextSequence);
     const active = activeRequest();
-    if (String(active?.requestId || "") === row.requestId) {
+    if (String(active?.requestId || "") === row.requestId
+        && (!active.networkStreamResponseId
+          || active.networkStreamResponseId === row.streamId)) {
       active.networkObservedText = value;
       active.networkObservedAt = Date.now();
     }
@@ -84,7 +86,9 @@
 
   function recordTerminalEvidence(row, detail) {
     const active = activeRequest();
-    if (String(active?.requestId || "") !== row.requestId || active?.cancelled) return;
+    if (String(active?.requestId || "") !== row.requestId || active?.cancelled
+        || (active.networkStreamResponseId
+          && active.networkStreamResponseId !== row.streamId)) return;
     const text = String(row.lastText || detail?.text || "");
     if (!text) return;
     active.networkTerminalText = text;
@@ -103,7 +107,9 @@
     // EOF of the same stream with the verified assistant terminal can promote
     // this hint into an actionable completion proof for request-v6.
     const active = activeRequest();
-    if (String(active?.requestId || "") !== row.requestId || active.cancelled) return;
+    if (String(active?.requestId || "") !== row.requestId || active.cancelled
+        || (active.networkStreamResponseId
+          && active.networkStreamResponseId !== row.streamId)) return;
     // A late error on an older parallel/tool stream cannot erase a newer,
     // already verified clean EOF for this same request.
     if (phase === "error" && Number(active.networkTerminalTransportDoneAt || 0) > 0
@@ -132,6 +138,8 @@
         network_response_recovery: "evidence-only-v57",
         network_stream_phase: String(detail.phase || ""),
         network_stream_id: row.streamId,
+        network_stream_stale_relative_to_request: Boolean(active?.networkStreamResponseId
+          && active.networkStreamResponseId !== row.streamId),
         network_stream_sequence: Number(detail.sequence || 0),
         network_stream_chunks: Number(detail.chunks ?? row.chunks ?? 0),
         network_stream_bytes: Number(detail.bytes ?? row.bytes ?? 0),
@@ -231,6 +239,21 @@
         // This is never a ChatGPT completion/end-turn signal.
         const status = Number(detail.status || 0);
         if (status >= 200 && status < 300) {
+          const previous = String(active.networkStreamResponseId || "");
+          if (previous && previous !== row.streamId) {
+            // A genuinely new same-request SSE stream owns the future
+            // completion. Late error/EOF from an older stream must not
+            // abort this newer active stream's generation after 3 seconds.
+            active.networkStreamEndedWithoutTerminalAt = 0;
+            active.networkUnverifiedStreamId = "";
+            active.networkTerminalTransportErrorAt = 0;
+            active.networkTerminalTransportErrorReason = "";
+            active.networkTerminalTransportDoneAt = 0;
+            active.networkTerminalTransportStreamId = "";
+            active.networkTerminalAt = 0;
+            active.networkTerminalText = "";
+            active.networkTerminalStreamId = "";
+          }
           active.networkStreamResponseAt = Date.now();
           active.networkStreamResponseStatus = status;
           active.networkStreamResponseId = row.streamId;
@@ -276,7 +299,12 @@
           phase: eofProof ? "done-with-verified-eof-proof" : "done-after-terminal" });
       } else {
         const active = activeRequest();
-        if (active?.requestId === row.requestId) active.networkStreamEndedWithoutTerminalAt = Date.now();
+        if (active?.requestId === row.requestId
+            && (!active.networkStreamResponseId
+              || active.networkStreamResponseId === row.streamId)) {
+          active.networkStreamEndedWithoutTerminalAt = Date.now();
+          active.networkUnverifiedStreamId = row.streamId;
+        }
         await diagnostics(row, { ...detail, phase: "done-without-assistant-terminal" });
       }
       streams.delete(row.streamId);
@@ -289,8 +317,12 @@
       // the old error in diagnostics but do not re-mark this request unverified.
       const newerVerified = Number(active?.networkTerminalTransportDoneAt || 0) > 0
         && String(active?.networkTerminalTransportStreamId || "") !== row.streamId;
-      if (active?.requestId === row.requestId && !newerVerified)
+      if (active?.requestId === row.requestId && !newerVerified
+          && (!active.networkStreamResponseId
+            || active.networkStreamResponseId === row.streamId)) {
         active.networkStreamEndedWithoutTerminalAt = Date.now();
+        active.networkUnverifiedStreamId = row.streamId;
+      }
       await diagnostics(row, detail);
       streams.delete(row.streamId);
     }
