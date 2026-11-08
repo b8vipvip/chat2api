@@ -610,6 +610,42 @@
         // No exception text from the page is ever persisted.
         active.nativeCaptureFailure = "native-capture-exception";
       }
+      // The request-v6 controller is the ONLY canonical OpenAI terminal
+      // writer. The native observer may supply a verified read-only map of
+      // full CodeMirror documents, but NEVER a second chat.completed event.
+      // Insert them at two unique neighboring paragraph anchors into the
+      // already-authoritative Markdown, preserving all archived media URLs,
+      // tables, formulas and links verbatim. If position is uncertain, do
+      // not guess or silently append source code at the end.
+      if (active.nativeEditorStateCandidateCount > 0) {
+        let codeResult={text:String(event.text||""),integrated:0,
+          reason:"editor-document-unavailable"};
+        try {
+          const trustedIdentity=active.nativeMessageIdentityBound === true
+            || nativeSelectionBound === true;
+          if (trustedIdentity && active.nativeEditorDocs?.size ===
+              active.nativeEditorStateCandidateCount &&
+              typeof rich?.mergeVerifiedEditorMarkdown === "function") {
+            codeResult=rich.mergeVerifiedEditorMarkdown(event.text,
+              active.lastCandidateNode,active.nativeEditorDocs);
+          } else if (!trustedIdentity) {
+            codeResult.reason="verified-message-id-required";
+          }
+        } catch (_) {
+          codeResult.reason="editor-code-merge-error";
+        }
+        const good=codeResult.integrated > 0
+          && codeResult.integrated === active.nativeEditorStateCandidateCount
+          && typeof codeResult.text === "string"
+          && codeResult.text.length <= 300000
+          && codeResult.text.length >= String(event.text||"").length;
+        active.nativeCanonicalCodeIntegrated=good ? codeResult.integrated:0;
+        active.nativeCanonicalCodeReason=good ? "verified-editor-anchor-insert"
+          : String(codeResult.reason||"editor-merge-unverified").slice(0,60);
+        if (good) {
+          event={...event,text:codeResult.text};
+        }
+      }
       // DevTools Runtime.evaluate executes in the page's main world, while
       // our extension state is isolated. Attach a bounded, inert DOM identity
       // marker only to the assistant node already correlated by request-v6.
@@ -668,6 +704,8 @@
         native_code_editor_state_resolved:Number(active.nativeEditorStateResolvedCount || 0),
         native_code_editor_state_failure:String(active.nativeEditorStateFailure || "").slice(0,60),
         native_code_editor_captured:Number(active.nativeCodeEditorCaptured || 0),
+        native_canonical_code_integrated:Number(active.nativeCanonicalCodeIntegrated || 0),
+        native_canonical_code_reason:String(active.nativeCanonicalCodeReason || "not-attempted").slice(0,60),
         native_svg_charts_captured:Number(active.nativeSvgChartsCaptured || 0),
         native_graphics_unsupported:Number(active.nativeGraphicsUnsupported || 0),
         native_canvas_omitted:Number(active.nativeCanvasOmitted || 0),
