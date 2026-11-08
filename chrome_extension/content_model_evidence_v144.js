@@ -85,6 +85,13 @@
       reasoning_field: reasoningConflict?null:(select("reasoning_field") || null),
       evidence_source: detail.evidence_source || previous.evidence_source || "network_request_metadata",
       request_rewritten: Boolean(detail.request_rewritten || row.evidence.request_rewritten),
+      // Only the immutable request-phase MAIN-world observer may supply
+      // this fact; response-phase events must not manufacture new wire proof.
+      page_native_wire_respected: previous.page_native_wire_respected === true,
+      original_wire_model: (() => {
+        const raw=String(previous.original_wire_model || "").toLowerCase();
+        return /^[a-z0-9._:-]{1,128}$/.test(raw) ? raw : null;
+      })(),
       authority_violation: Boolean(detail.authority_violation || row.evidence.authority_violation),
       authority_requested_model: normalizeModel(row.authority?.requested_model),
       authority_routed_model: normalizeModel(row.authority?.routed_model),
@@ -143,6 +150,10 @@
       row.evidence.request_model = detail.request_model || null;
       row.evidence.request_wire_model = detail.request_wire_model || null;
       row.evidence.request_rewritten = Boolean(detail.request_rewritten);
+      row.evidence.page_native_wire_respected = detail.page_native_wire_respected === true;
+      row.evidence.original_wire_model = typeof detail.original_wire_model === "string"
+        && /^[a-z0-9._:-]{1,128}$/.test(detail.original_wire_model)
+        ? detail.original_wire_model : null;
       row.evidence.authority_violation = Boolean(detail.authority_violation);
       publishEvidence(row, detail).catch(() => {});
       return;
