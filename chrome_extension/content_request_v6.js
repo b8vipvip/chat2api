@@ -193,6 +193,27 @@
     } catch (_) { return false; }
   }
 
+  // Request-scoped editor content is NOT a composer. The previous blanket
+  // [contenteditable=true] rejection banned every rich reply containing a
+  // CodeMirror .cm-content (2026-11-08 req_97338: 16 tables + 3 images
+  // + 2 code cards, but zero verified reply scope for 900 seconds).
+  // Never allow a real form/input or a non-editor editable to piggyback on
+  // the assistant boundary. This read-only predicate owns the distinction.
+  function hasUntrustedReplyInput(scope) {
+    if (!scope?.querySelectorAll) return true;
+    const controls = scope.querySelectorAll(
+      "form,textarea,input,[contenteditable='true'],[contenteditable=''],[contenteditable='plaintext-only']"
+    );
+    for (const control of controls) {
+      if (!control?.matches?.("[contenteditable]")) return true;
+      const editor = control.closest?.(".cm-editor,.monaco-editor");
+      if (!editor || !scope.contains?.(editor)
+          || editor.closest?.("form,nav,aside,footer,[role='dialog'],[data-message-author-role='user']"))
+        return true;
+    }
+    return false;
+  }
+
   // f7c8: four archived web images appeared while ChatGPT was still actively
   // writing code and explanation. A stable image source is proof of media
   // transfer, NEVER proof of completion of the accompanying text response.
@@ -222,7 +243,8 @@
         && active.baselineFinishActions?.has(finish) === false
         && scope.contains?.(active.lastCandidateNode)
         && !scope.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']")
-        && !scope.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,[contenteditable='true']")
+        && !scope.querySelector?.("[data-message-author-role='user'],[data-testid='user-message']")
+        && !hasUntrustedReplyInput(scope)
         && !promptStillPresent(active)) {
       const coverage = renderedResponseBoundaryEvidence(active, active.lastCandidateNode, scope);
       const structural = [...(scope.querySelectorAll?.(
@@ -977,7 +999,8 @@
     const prior = active.nativeVerifiedReplyScope;
     if (prior?.isConnected &&
         !prior.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']") &&
-        !prior.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,[contenteditable='true']") &&
+        !prior.querySelector?.("[data-message-author-role='user'],[data-testid='user-message']") &&
+        !hasUntrustedReplyInput(prior) &&
         ![...(prior.querySelectorAll?.("h4,h5,h6") || [])]
           .some(node => /^(?:You said|你说|你发送)\s*[:：]?$/i.test(
             normalize(node.innerText || node.textContent || ""))) &&
@@ -1008,7 +1031,8 @@
       if (!scope || !scope.isConnected || !scope.contains?.(candidate) ||
           scope.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']") ||
           scope.closest?.("nav,aside,header,footer,form,[role='dialog']") ||
-          scope.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,input,[contenteditable='true']")) continue;
+          scope.querySelector?.("[data-message-author-role='user'],[data-testid='user-message']") ||
+          hasUntrustedReplyInput(scope)) continue;
       const content = normalize(scope.innerText || scope.textContent || "");
       const submitted = String(active.promptNormalized || "").trim();
       const prefix = submitted.slice(0,100);
