@@ -121,3 +121,54 @@ def test_live_api_route_refuses_broker_finished_but_history_still_running(tmp_pa
         assert admin.status_code==200
         assert admin.json()["snapshot_finality"]=="rejected-final"
         assert app.state.telemetry.get(RID)["status"]=="running"
+
+
+def test_v297_no_false_1_to_1_when_full_editor_state_is_missing():
+    assert native_snapshot_finality({
+        "status": "completed", "diagnostics": {
+            **GOOD, "native_code_editor_state_candidates": 1,
+            "native_code_editor_state_resolved": 0,
+        },
+    }, SNAP) == "rejected-final"
+    assert native_snapshot_finality({
+        "status": "completed", "diagnostics": {
+            **GOOD, "native_code_editor_state_candidates": 1,
+            "native_code_editor_state_resolved": 1,
+        },
+    }, SNAP) == "verified-final"
+
+
+def test_v297_unmapped_archived_images_cannot_prove_visual_1_to_1():
+    row = {"status": "completed", "diagnostics": {
+        **GOOD,
+        "native_layout_summary": {
+            "nodes": 6808, "tables": 25, "images": 0,
+            "archived_assets": 2, "media_mapping_complete": False,
+        },
+    }}
+    assert native_snapshot_finality(row, SNAP) == "rejected-final"
+    row["diagnostics"]["native_layout_summary"]["media_mapping_complete"] = True
+    assert native_snapshot_finality(row, SNAP) == "verified-final"
+
+
+def test_v297_private_reply_table_parity_blocks_stale_native_revision():
+    comparison = {
+        "comparable": True, "private_capture_complete": True,
+        "private_tables": 25, "native_tables": 20,
+        "private_images_small": 2, "native_images": 0,
+    }
+    assert native_snapshot_finality({
+        "status": "completed", "diagnostics": {
+            **GOOD, "native_capture_comparison": comparison,
+        },
+    }, SNAP) == "rejected-final"
+    assert native_snapshot_finality({
+        "status": "completed", "diagnostics": {
+            **GOOD, "native_capture_comparison": {
+                **comparison, "native_tables": 25,
+            },
+        },
+    }, SNAP) == "verified-final"
+    # Decorative small favicon images are not a verified generated-image
+    # identity; do not treat their absence as proof the rich output is wrong.
+    assert comparison["private_images_small"] == 2

@@ -319,14 +319,18 @@
         const monacoVirtual = monacoLines.length > 0 &&
           !((declaredTotal > 0 && declaredTotal <= monacoLines.length) ||
             fitsViewport);
-        if (!lines.length || lines.length > 10000 || cmVirtual || monacoVirtual) {
+        const trustedState = active.nativeEditorDocs?.get(element);
+        if ((!trustedState || trustedState.source !== "codemirror-state-v297") &&
+            (!lines.length || lines.length > 10000 || cmVirtual || monacoVirtual)) {
           active.nativeStructuralFailure = cmVirtual || monacoVirtual
             ? "code-editor-virtualized" : "code-editor-content-unavailable";
           truncated = true;
           return null;
         }
-        const text = lines.map(line=>String(line.textContent || "")).join("\n");
-        if (!text.trim() || text.length > 150000 || chars + text.length > textBudget) {
+        const text = trustedState?.source === "codemirror-state-v297"
+          ? trustedState.text : lines.map(line=>String(line.textContent || "")).join("\n");
+        if (typeof text !== "string" || !text.trim() || text.length > 150000 ||
+            chars + text.length > textBudget) {
           active.nativeStructuralFailure = "code-editor-text-budget";
           truncated = true;
           return null;
@@ -566,6 +570,92 @@
     active.nativeIdentityCandidateCount=images.length;
   }
 
+  const EDITOR_PROBE_ATTR = "data-chat2api-native-code-probe-v297";
+  const VERIFIED_EDITOR_SCOPES = new Set([
+    "verified_reply_container", "verified_native_assistant_selection",
+    "roleless_reply_siblings",
+  ]);
+  async function resolveVirtualEditorDocs(active) {
+    // Only a request-owned verified assistant root may reveal its editor
+    // content. This runs in ISOLATED; it cannot read the page JS's cmView.
+    // Chrome's SW retrieves the complete CodeMirror state in MAIN world,
+    // tied to this exact sender tab and a short-lived random DOM marker.
+    active.nativeEditorDocs = new Map();
+    active.nativeEditorStateCandidateCount = 0;
+    active.nativeEditorStateResolvedCount = 0;
+    active.nativeEditorStateFailure = "";
+    const region = globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
+    if (!VERIFIED_EDITOR_SCOPES.has(region?.scope) ||
+        !Array.isArray(region?.roots)) return;
+    const seen = new Set(), editors = [];
+    for (const root of region.roots) {
+      if (!(root instanceof Element) || !root.isConnected) continue;
+      const found = [
+        ...(root.matches?.(".cm-editor") ? [root] : []),
+        ...(root.querySelectorAll?.(".cm-editor") || []),
+      ];
+      for (const editor of found) {
+        if (!editor.isConnected || seen.has(editor) || editor.closest?.(
+          "form,nav,aside,footer,[role='dialog'],[role='menu'],[data-message-author-role='user']"
+        )) continue;
+        seen.add(editor);
+        editors.push(editor);
+      }
+    }
+    active.nativeEditorStateCandidateCount = editors.length;
+    if (editors.length > 8) {
+      active.nativeEditorStateFailure = "code-editor-count-over-budget";
+      return;
+    }
+    if (!globalThis.crypto?.randomUUID) {
+      active.nativeEditorStateFailure = "editor-random-probe-unavailable";
+      return;
+    }
+    // Work in bounded batches rather than 8 sequential 2.5-second waits.
+    // A rich reply with several CodeMirror cards must not add 20 seconds
+    // to a completed request's final publication path.
+    for (let start=0; start<editors.length; start+=4) {
+      await Promise.allSettled(editors.slice(start,start+4).map(async editor=>{
+
+      const probe = crypto.randomUUID().replace(/-/g, "").toLowerCase();
+      if (!/^[a-f0-9]{32}$/.test(probe) ||
+          typeof editor.setAttribute !== "function") return;
+      editor.setAttribute(EDITOR_PROBE_ATTR,probe);
+      let timer;
+      try {
+        const reply = await Promise.race([
+          chrome.runtime.sendMessage({
+            type:"chat2api.native.editor.read-v297",
+            request_id:active.requestId,probe,
+          }),
+          new Promise(resolve => {timer=setTimeout(
+            ()=>resolve({ok:false,reason:"editor-main-world-timeout"}),2500);
+          }),
+        ]);
+        if (reply?.ok === true && reply.source === "codemirror-state-v297" &&
+            typeof reply.text === "string" && reply.text.trim() &&
+            reply.length === reply.text.length && reply.text.length <= 150000 &&
+            active.requestId && editor.isConnected) {
+          active.nativeEditorDocs.set(editor,{
+            source:reply.source,text:reply.text,
+          });
+          active.nativeEditorStateResolvedCount++;
+        } else {
+          active.nativeEditorStateFailure = String(
+            reply?.reason || "editor-full-state-unavailable"
+          ).slice(0,60);
+        }
+      } catch (_) {
+        active.nativeEditorStateFailure = "editor-state-transport-error";
+      } finally {
+        if (timer) clearTimeout(timer);
+        if (editor.getAttribute?.(EDITOR_PROBE_ATTR) === probe)
+          editor.removeAttribute?.(EDITOR_PROBE_ATTR);
+      }
+      }));
+    }
+  }
+
   async function capture(active, final = false) {
     if (!active?.requestId || !active.submitStartedAt) return;
     const now = Date.now();
@@ -591,7 +681,10 @@
       active.nativeFinalCaptureCommitted = false;
     }
     try {
-      if (final) await resolveImageIdentities(active);
+      if (final) {
+        await resolveImageIdentities(active);
+        await resolveVirtualEditorDocs(active);
+      }
       const tree = snapshot(active);
       if (!tree) {
         active.nativeCaptureFailure = "structural-" +

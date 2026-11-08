@@ -462,3 +462,29 @@ def test_v286_request_owned_native_multi_toolbar_contract():
     assert "native_scope_gate_facts:" in source
     assert 'active.nativeCaptureFailure = "native-reply-scope-unverified"' in source
     assert 'if (event?.type === "chat.completed" && active)' in source
+
+
+def test_v297_native_virtual_editor_authority_is_read_only_request_scoped():
+    """Request-v6 retains terminal authority; MAIN-world editor bridge reads data only."""
+    root = ROOT / "chrome_extension"
+    manifest = json.loads((root / "manifest.json").read_text("utf-8"))
+    background = (root / "background_entry.js").read_text("utf-8")
+    bridge = (root / "background_native_editor_state_v297.js").read_text("utf-8")
+    observer = (root / "content_native_content_v1.js").read_text("utf-8")
+    controller = (root / "content_request_v6.js").read_text("utf-8")
+    assert "scripting" in manifest["permissions"]
+    assert "background_native_editor_state_v297.js" in background
+    assert 'world:"MAIN"' in bridge
+    assert 'sender.frameId !== 0' in bridge
+    assert "HOSTS.has(url.hostname)" in bridge
+    assert 'data-chat2api-native-code-probe-v297' in bridge
+    assert 'doc.sliceString(0,size)' in bridge
+    assert "state.doc" not in observer
+    assert 'VERIFIED_EDITOR_SCOPES.has(region?.scope)' in observer
+    assert "active.nativeEditorDocs = new Map()" in observer
+    assert 'native_code_editor_state_resolved:' in controller
+    assert "chat2api.native.editor.read-v297" in observer
+    assert "chat2api.native.editor.read-v297" in bridge
+    assert 'chat.native.snapshot' in observer
+    assert "native_final_capture_committed:" in controller
+    assert "chat.completed" in controller

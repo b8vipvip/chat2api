@@ -81,6 +81,7 @@ importScripts(
   "background_model_library_v145.js",
   // Isolated read-only history diagnosis for Windows Chrome extensions.
   "background_native_page_diagnostic_v1.js",
+  "background_native_editor_state_v297.js",
 );
 
 globalThis.__CHAT2API_WINDOW_OBSERVER_V90__?.report?.(true).catch?.(() => {});

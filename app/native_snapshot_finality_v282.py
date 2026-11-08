@@ -101,6 +101,37 @@ def native_snapshot_finality(row: dict[str, Any] | None,
         "missing-code-block", "missing-code-lines"
     }:
         return "rejected-final"
+    # A verified request-owned rich DOM reply may still contain 25 real
+    # tables while a stale incremental layout has 20. Native finality must
+    # require that a *complete comparable private capture* isn't missing
+    # structural table content. Decorative small images are not counted here.
+    comparison = diag.get("native_capture_comparison")
+    if isinstance(comparison, dict) and (
+        comparison.get("comparable") is True
+        and comparison.get("private_capture_complete") is True
+    ):
+        private_tables = comparison.get("private_tables")
+        native_tables = comparison.get("native_tables")
+        if (type(private_tables) is int and type(native_tables) is int
+                and private_tables > native_tables >= 0):
+            return "rejected-final"
+    # Archived images without a proven DOM slot cannot be presented as
+    # visually identical to the ChatGPT reply. Native media mapping is
+    # independent of small favicon/decorative image counts.
+    layout = diag.get("native_layout_summary")
+    if (isinstance(layout, dict)
+            and layout.get("media_mapping_complete") is False
+            and type(layout.get("archived_assets")) is int
+            and layout["archived_assets"] > 0):
+        return "rejected-final"
+    # v297: an editor in the verified reply cannot count as 1:1 unless the
+    # complete page-side CodeMirror immutable document was read, not just
+    # visible viewport lines in the isolated content script.
+    editor_count = diag.get("native_code_editor_state_candidates")
+    editor_resolved = diag.get("native_code_editor_state_resolved")
+    if (type(editor_count) is int and editor_count > 0 and
+            (type(editor_resolved) is not int or editor_resolved < editor_count)):
+        return "rejected-final"
     if diag.get("native_snapshot_terminal_complete") is False:
         return "rejected-final"
     if any(isinstance(diag.get(field), str) and diag[field].strip()
