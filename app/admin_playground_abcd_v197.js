@@ -280,10 +280,23 @@ const check=(ok,label)=>checks.push({passed:Boolean(ok),label});
 if(id==="A"){
 check(text.length>=2500,"全文至少2500字符");
 check((text.match(/^\|[^\n]+\|$/gm)||[]).length>=5,"包含Markdown表格");
-const fenced=text.includes(String.fromCharCode(96).repeat(3));
-const codePresent=fenced||/(?:^|\n)[ \t]*[`]?(?:import\s+\w+|from\s+\w+\s+import|def\s+\w+\s*\(|function\s+\w+\s*\(|const\s+\w+\s*=)/m.test(text);
-check(codePresent,"实际包含代码内容");
-if(codePresent&&!fenced) warnings.push("代码内容已出现，但 Markdown 代码围栏丢失；展示保真仍需修复");
+// Scenario A explicitly requires runnable Python. A fenced Plain text
+// output, a Mermaid diagram, or a paragraph mentioning "Python" is not
+// evidence of executable source. This validator only grades content, never
+// the request's Broker/SSE terminal.
+const codeBlocks=[...text.matchAll(/(?:^|\\n)(`{3,}|~{3,})[ \\t]*([a-zA-Z0-9_-]*)[ \\t]*\\r?\\n([\\s\\S]*?)\\r?\\n\\1[ \\t]*(?=\\r?\\n|$)/g)];
+const pythonCode=codeBlocks.some(match=>{
+  const language=String(match[2]||"").toLowerCase();
+  if(!["python","py",""].includes(language))return false;
+  const body=String(match[3]||"");
+  const lines=body.split(/\\r?\\n/).map(x=>x.trim()).filter(Boolean);
+  return lines.length>=3 && body.length>=60
+    && /(?:^|\\n)[ \\t]*(?:import [a-zA-Z_]|from [a-zA-Z_])/m.test(body)
+    && /(?:^|\\n)[ \\t]*(?:async\\s+def|def)\\s+[a-zA-Z_]\\w*\\s*\\(/m.test(body)
+    && /(?:^|\\n)[ \\t]*(?:return|print|raise|if |for |while |[a-zA-Z_]\\w*\\s*=)/m.test(body);
+});
+check(pythonCode,"包含完整可运行的 Python 代码块");
+if(!pythonCode)warnings.push("缺少经实码校验的 Python fenced 源码；文字描述、Plain text 输出及非Python围栏均不能替代");
 const formula=["\\boxed","\\frac","\\dfrac","\\sqrt","\\sum","\\begin","\\(","\\["].some(mark=>text.includes(mark))||/\$[^$\n]{3,}\$/.test(text);
 check(formula,"包含可识别的数学公式内容");
 check(text.lastIndexOf(task.end_anchor||"执行任务表")>text.length*.5,"末段含指定执行清单");
