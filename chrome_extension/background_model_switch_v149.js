@@ -156,5 +156,40 @@
     }
   }
 
-  globalThis[KEY] = {select, safeSelect};
+  async function confirmBeforeRequest(tabId, requestedModel) {
+    // Read-only recheck AFTER reasoning/file UI actions, BEFORE the prompt
+    // can be submitted. The same v145 live picker parser is the authority;
+    // this must never click a different model or dispatch a second request.
+    const tab=await chrome.tabs.get(tabId);
+    const url=String(tab?.pendingUrl || tab?.url || "");
+    if (!tab || tab.id!==tabId || tab.status==="loading" ||
+        !/^https:\/\/(chatgpt\.com|www\.chatgpt\.com|chat\.openai\.com)\//.test(url))
+      throw failure("model_pre_send_tab_unready","verify-model-before-request",
+        "The selected ChatGPT tab is not ready immediately before request");
+    const result=await inspectFreshSelection(tabId);
+    const matching = result?.selected_model===requestedModel &&
+      result?.selected_in_menu===requestedModel &&
+      result?.evidence_source==="live-menu-selected-row";
+    if (!matching) {
+      throw failure("model_pre_send_selection_changed","verify-model-before-request",
+        "The live ChatGPT model menu no longer confirms the requested model immediately before submit",
+        [],(result?.models || []).map(row=>({
+          id:row.id,selected:row.selected,enabled:row.enabled,
+        })));
+    }
+    return {model:requestedModel,confirmed:true,
+      validation_method:"pre-send-live-menu-selected-row-v304",
+      inspected_at:result.inspected_at||new Date().toISOString()};
+  }
+
+  async function safeConfirmBeforeRequest(tabId, model) {
+    try {return {ok:true,data:await confirmBeforeRequest(tabId,model)};}
+    catch (error) {
+      return {ok:false,code:String(error?.code||"model_pre_send_unverified"),
+        stage:String(error?.stage||"verify-model-before-request"),
+        error:String(error?.message||error),after:error?.model_after||[]};
+    }
+  }
+
+  globalThis[KEY] = {select, safeSelect, confirmBeforeRequest, safeConfirmBeforeRequest};
 })();

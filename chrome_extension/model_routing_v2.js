@@ -249,6 +249,26 @@
       const reasoningDiagnostics = await prepareReasoning(tab.id, requestedReasoning);
       const effectiveReasoning = reasoningDiagnostics.fallback_to_page_default ? null : requestedReasoning;
       const attachmentDiagnostics = await prepareAttachments(tab.id, message.attachments || []);
+      let preSendModelProof=null;
+      if (!defaultModelRequested && !freeDefaultCompat) {
+        const authority=globalThis.__CHAT2API_MODEL_SWITCH_V149__;
+        if (typeof authority?.safeConfirmBeforeRequest!=="function") {
+          const error=new Error("Live model pre-send inspector is unavailable");
+          error.code="model_pre_send_inspector_unavailable";
+          error.stage="verify-model-before-request";
+          throw error;
+        }
+        const inspected=await authority.safeConfirmBeforeRequest(tab.id,requestedModel);
+        if (!inspected?.ok || inspected?.data?.confirmed!==true) {
+          const error=new Error(inspected?.error ||
+            "ChatGPT model changed or became unverified before request submission");
+          error.code=String(inspected?.code||"model_pre_send_selection_changed");
+          error.stage=String(inspected?.stage||"verify-model-before-request");
+          error.model_after=inspected?.after || [];
+          throw error;
+        }
+        preSendModelProof=inspected.data;
+      }
       const diagnostics = {
         ...preflightDiagnostics,
         ...attachmentDiagnostics,
@@ -261,7 +281,11 @@
         effective_model: (defaultModelRequested || freeDefaultCompat) ? null : requestedModel,
         effective_reasoning: effectiveReasoning || null,
         reasoning_default_unverified: Boolean(reasoningDiagnostics.fallback_to_page_default),
-        model_selection_validated: !defaultModelRequested && !freeDefaultCompat,
+        model_selection_validated: !defaultModelRequested && !freeDefaultCompat &&
+          preSendModelProof?.confirmed===true,
+        model_selection_proof_stage:preSendModelProof
+          ? "after-reasoning-and-attachments-before-submit" : "default-route-unverified",
+        model_selection_confirmation_method:preSendModelProof?.validation_method || null,
         model_selection_current: (defaultModelRequested || freeDefaultCompat) ? null :
           (selected.current_model || selected.model || requestedModel),
         reasoning_selection: reasoningDiagnostics,
