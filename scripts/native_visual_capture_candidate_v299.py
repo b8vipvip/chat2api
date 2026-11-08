@@ -40,6 +40,11 @@ PROBE = r"""(function(requestId){
   if(style.display==="none"||style.visibility==="hidden"||
      r.width<200||r.height<80||r.width>3000||r.height>38400)
     return {ok:false,reason:"native-preview-not-visible-or-too-large"};
+  // A scroll-clipped container would silently omit offscreen table/code rows.
+  // Never call such a screenshot "full native reply".
+  if(node.scrollHeight>node.clientHeight+2 ||
+     node.scrollWidth>node.clientWidth+2)
+    return {ok:false,reason:"native-preview-scroll-clipped"};
   const x=window.scrollX + r.left, y=window.scrollY + r.top;
   const images=[...node.querySelectorAll("img")];
   if(images.some(img=>!img.complete || img.naturalWidth<=0))
