@@ -42,9 +42,13 @@ const ctx={
       if(mode==="late" && readCalls<=2)
         return {ok:false,reason:"editor-view-not-found",scan_count:261,
           attachment_count:0,dom_lines:40,virtual_gap:true};
-      return mode==="full" || mode==="late"
-        ? {ok:true,source:"codemirror-state-v297",text:ALL_CODE,
-           length:ALL_CODE.length,scan_count:270,attachment_count:1}
+      return mode==="full" || mode==="late" || mode==="react"
+        ? {ok:true,source:mode==="react" ? "react-owned-code-v302" : "codemirror-state-v297",
+           text:ALL_CODE,length:ALL_CODE.length,scan_count:270,
+           attachment_count:mode==="react" ? 0 : 1,
+           react_fiber_hosts:mode==="react" ? 1 : 0,
+           react_candidate_count:mode==="react" ? 1 : 0,
+           react_anchor_count:mode==="react" ? 3 : 0}
         : {ok:false,reason:"editor-main-world-unavailable"};
     }
     if(message.type==="chat2api.native.ack")return {ok:true,committed:true};
@@ -87,6 +91,19 @@ assert.equal(hydrated.nativeEditorProbeVirtualized,true);
 assert.equal(sent.filter(x=>x.type==="chat2api.native.editor.read-v297").length,3);
 assert.equal(sent.filter(x=>x.type==="chat2api.native.ack").length,1,
   "late editor hydration must never send a second terminal or snapshot");
+assert.equal(editor.getAttribute("data-chat2api-native-code-probe-v297"),null);
+mode="react";sent.length=0;readCalls=0;
+const reactOwned={requestId:"req_"+"e".repeat(32),
+  submitStartedAt:Date.now(),lastCandidateNode:root};
+await observer.capture(reactOwned,true);
+assert.equal(reactOwned.nativeEditorStateResolvedCount,1);
+assert.equal(reactOwned.nativeEditorReactRecovered,1);
+assert.equal(reactOwned.nativeEditorReactAnchorCount,3);
+assert.equal(reactOwned.nativeEditorReactFiberHosts,1);
+assert.equal(reactOwned.nativeFinalCaptureCommitted,true);
+assert.equal(sent.filter(x=>x.type==="chat2api.native.ack").length,1);
+const reactTree=sent.find(x=>x.type==="chat2api.native.ack").event.snapshot.root;
+assert.ok(JSON.stringify(reactTree).includes(ALL_CODE));
 assert.equal(editor.getAttribute("data-chat2api-native-code-probe-v297"),null);
 mode="unavailable";sent.length=0;
 const failed={requestId:"req_"+"c".repeat(32),submitStartedAt:Date.now(),
