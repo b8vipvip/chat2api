@@ -592,6 +592,9 @@
     active.nativeEditorReactFiberHosts=0;
     active.nativeEditorReactCandidateCount=0;
     active.nativeEditorReactAnchorCount=0;
+    active.nativeEditorReactHookNodes=0;
+    active.nativeEditorReactArrayNodes=0;
+    active.nativeEditorReactDocumentNodes=0;
     active.nativeEditorReactRecovered=0;
     const region = globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
     if (!VERIFIED_EDITOR_SCOPES.has(region?.scope) ||
@@ -671,6 +674,12 @@
             bounded("react_candidate_count",32));
           active.nativeEditorReactAnchorCount=Math.max(active.nativeEditorReactAnchorCount,
             bounded("react_anchor_count",8));
+          active.nativeEditorReactHookNodes=Math.max(active.nativeEditorReactHookNodes,
+            bounded("react_hook_nodes",32));
+          active.nativeEditorReactArrayNodes=Math.max(active.nativeEditorReactArrayNodes,
+            bounded("react_array_nodes",32));
+          active.nativeEditorReactDocumentNodes=Math.max(active.nativeEditorReactDocumentNodes,
+            bounded("react_document_nodes",32));
           if (reply?.ok || reply?.reason!=="editor-view-not-found" || attempt===2)
             break;
           active.nativeEditorProbeRetries++;

@@ -143,3 +143,38 @@ def test_v302_react_code_source_is_only_evidence_for_one_terminal_writer():
     assert 'type:"chat.completed"' not in reader
     assert 'type:"chat.completed"' not in observer
     assert "rich.mergeVerifiedEditorMarkdown(event.text," in controller
+
+
+
+def test_v306_react_hook_array_and_doc_evidence_is_bounded_and_content_free():
+    evidence = _terminal_provenance({"diagnostics": {
+        "native_editor_react_fiber_hosts": 5,
+        "native_editor_react_candidate_count": 0,
+        "native_editor_react_hook_nodes": 7,
+        "native_editor_react_array_nodes": 3,
+        "native_editor_react_document_nodes": 2,
+        "raw_react_memoized_state": {"source": "not allowed"},
+    }})
+    assert evidence["native_editor_react_hook_nodes"] == 7
+    assert evidence["native_editor_react_array_nodes"] == 3
+    assert evidence["native_editor_react_document_nodes"] == 2
+    assert "raw_react_memoized_state" not in evidence
+    bad = _terminal_provenance({"diagnostics": {
+        "native_editor_react_hook_nodes": 500,
+        "native_editor_react_array_nodes": -1,
+        "native_editor_react_document_nodes": "secret",
+    }})
+    assert all(key not in bad for key in (
+        "native_editor_react_hook_nodes","native_editor_react_array_nodes",
+        "native_editor_react_document_nodes"))
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    reader=(root/"chrome_extension/background_native_editor_state_v297.js").read_text()
+    controller=(root/"chrome_extension/content_request_v6.js").read_text()
+    assert "inspectHooks(fiber)" in reader
+    assert "inspectDocLike" in reader
+    assert "visitedHooks" in reader
+    assert "MAX_REACT_OBJECTS=300" in reader
+    assert "react_hook_nodes" in reader and "react_document_nodes" in reader
+    assert "native_editor_react_hook_nodes:" in controller
+    assert "chat.completed" not in reader

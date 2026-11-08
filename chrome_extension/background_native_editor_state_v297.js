@@ -88,7 +88,8 @@
     // This never reads a page-wide app store or walks other assistant turns.
     function readReactOwnerCode() {
       const proof={react_fiber_hosts:0,react_candidate_count:0,
-        react_anchor_count:0,react_props_scanned:0};
+        react_anchor_count:0,react_props_scanned:0,
+        react_hook_nodes:0,react_array_nodes:0,react_document_nodes:0};
       const visible=[...(node.querySelectorAll?.(".cm-content .cm-line") || [])]
         .slice(0,4096).map(line=>String(line.textContent||"").trim());
       const long=visible.filter(line=>line.length>=16 && line.length<=320);
@@ -103,7 +104,9 @@
       const acceptedNames=new Set(["code","source","value","text","content",
         "doc","initialCode","initialValue","codeText","sourceCode","defaultCode",
         "defaultValue","children"]);
-      const nestedNames=new Set(["data","block","editor","document","props","node"]);
+      const nestedNames=new Set(["data","block","editor","document","props","node",
+        "children","value","source","content","code","doc","initialState",
+        "initialCode","initialValue","editorState"]);
       function witness(value) {
         if (typeof value!=="string" || value.length<80 || value.length>150000)
           return false;
@@ -121,20 +124,90 @@
         matched.add(candidate);
         return true;
       }
+      // req_31d27a (2026-11-08): five verified SAME-card React owner
+      // hosts, zero matching direct string props, 36 virtualized lines.
+      // React code props may be nested in children arrays or hook state
+      // rather than the host's top-level memoizedProps. Walk only this
+      // editor's bounded owner chain, not sibling turns or global stores.
+      const MAX_REACT_OBJECTS=300;
+      function ownValue(object,key) {
+        if (!object || (typeof object!=="object" && typeof object!=="function"))
+          return undefined;
+        try {
+          const desc=Object.getOwnPropertyDescriptor(object,key);
+          return desc && Object.prototype.hasOwnProperty.call(desc,"value")
+            ? desc.value : undefined;
+        } catch (_) {return undefined;}
+      }
+      function inspectDocLike(object) {
+        if (!object || typeof object!=="object"
+            || proof.react_document_nodes>=32) return;
+        // The immutable CM6 Text object exposes sliceString and length,
+        // potentially from its prototype. It is NOT a viewport .cm-line.
+        const length=ownValue(object,"length");
+        if (!Number.isInteger(length) || length<80 || length>150000) return;
+        let fn=null,proto=object;
+        for(let depth=0;proto&&depth<4;depth++) {
+          fn=ownValue(proto,"sliceString");
+          if(typeof fn==="function")break;
+          try {proto=Object.getPrototypeOf(proto);}catch(_){break;}
+        }
+        if(typeof fn!=="function")return;
+        proof.react_document_nodes++;
+        try {
+          const value=fn.call(object,0,length);
+          if(typeof value==="string" && value.length===length) witness(value);
+        } catch (_) {}
+      }
       function inspectProps(props,depth=0) {
         if (!props || typeof props!=="object" || watched.has(props)
-            || proof.react_props_scanned>=180) return;
+            || proof.react_props_scanned>=MAX_REACT_OBJECTS || depth>6) return;
         watched.add(props);
         proof.react_props_scanned++;
+        if(Array.isArray(props)) {
+          proof.react_array_nodes=Math.min(32,proof.react_array_nodes+1);
+          // Traverse only arrays reachable from the SAME marked editor's
+          // owner props / hooks; no generic page DOM traversal.
+          for(let i=0;i<Math.min(props.length,24);i++) {
+            const value=ownValue(props,String(i));
+            if(typeof value==="string")witness(value);
+            else if(value && typeof value==="object")
+              inspectProps(value,depth+1);
+          }
+          return;
+        }
         let descriptors;
         try {descriptors=Object.getOwnPropertyDescriptors(props);}
         catch (_) {return;}
         for (const [key,desc] of Object.entries(descriptors).slice(0,64)) {
           if (!Object.prototype.hasOwnProperty.call(desc,"value")) continue;
-          if (acceptedNames.has(key)) witness(desc.value);
-          if (depth<2 && nestedNames.has(key) &&
-              desc.value && typeof desc.value==="object")
+          if (acceptedNames.has(key)) {
+            witness(desc.value);
+            if(key==="doc" || key==="document")inspectDocLike(desc.value);
+          }
+          if (depth<6 && (nestedNames.has(key)
+              || key==="state" || key==="current" || key==="editorState"
+              || key==="memoizedState" || key==="baseState")
+              && desc.value && typeof desc.value==="object")
             inspectProps(desc.value,depth+1);
+        }
+      }
+      const visitedHooks=new Set();
+      function inspectHooks(fiber) {
+        let hook=ownValue(fiber,"memoizedState");
+        // One React fiber usually has a linked list of hook states. A
+        // component's code may live here without any 'code' prop at all.
+        for(let i=0;hook && i<32 && proof.react_hook_nodes<32;i++) {
+          if(typeof hook!=="object" || visitedHooks.has(hook))break;
+          visitedHooks.add(hook);
+          proof.react_hook_nodes++;
+          const state=ownValue(hook,"memoizedState");
+          if(typeof state==="string")witness(state);
+          else if(state&&typeof state==="object"){
+            inspectDocLike(state);
+            inspectProps(state,0);
+          }
+          hook=ownValue(hook,"next");
         }
       }
       const visitedFibers=new Set();
@@ -155,8 +228,9 @@
           for (let fiber=owner,hops=0;fiber && hops<10;fiber=fiber.return,hops++) {
             if (visitedFibers.has(fiber)) break;
             visitedFibers.add(fiber);
-            inspectProps(fiber.memoizedProps);
-            inspectProps(fiber.pendingProps);
+            inspectProps(ownValue(fiber,"memoizedProps"));
+            inspectProps(ownValue(fiber,"pendingProps"));
+            inspectHooks(fiber);
           }
         }
         if (host.matches?.('[data-message-author-role="assistant"],[data-testid^="conversation-turn"]'))
@@ -225,7 +299,8 @@
     const stats={};
     for (const key of ["scan_count","attachment_count","dom_lines",
       "react_fiber_hosts","react_candidate_count","react_anchor_count",
-      "react_props_scanned"]) {
+      "react_props_scanned","react_hook_nodes","react_array_nodes",
+      "react_document_nodes"]) {
       const value=result?.[key];
       if (Number.isInteger(value) && value>=0 && value<=4096)
         stats[key]=value;

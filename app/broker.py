@@ -85,6 +85,8 @@ _TERMINAL_PROVENANCE_NUMBERS = {
     "native_editor_probe_visible_lines", "native_editor_probe_retries",
     "native_editor_react_fiber_hosts", "native_editor_react_candidate_count",
     "native_editor_react_anchor_count", "native_editor_react_recovered",
+    "native_editor_react_hook_nodes", "native_editor_react_array_nodes",
+    "native_editor_react_document_nodes",
     "native_canonical_code_integrated",
 }
 _TERMINAL_PROVENANCE_STRINGS = {
