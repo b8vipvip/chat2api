@@ -85,6 +85,40 @@ async function isolatedSession(){
   assert.equal(abortDiag?.diagnostics?.network_stream_terminal_marker_seen,true);
   assert.equal(abortDiag?.diagnostics?.network_stream_terminal_proof,false,
     "aborted reader may not advertise clean EOF completion");
+
+  // A stale aborted clone must not suppress a newer same-request SSE.
+  send("current-old","response",{event_stream:true,status:200});
+  send("current-old","assistant-snapshot",{text:"old short lead-in",sequence:1});
+  await tick();
+  send("current-old","error",{error:"signal is aborted without reason",
+    error_name:"AbortError",signal_aborted:true});
+  for(let i=0;i<3;i++)await tick();
+  assert.equal(active.networkUnverifiedStreamId,"current-old");
+  assert.ok(active.networkStreamEndedWithoutTerminalAt>0);
+  send("current-new","response",{event_stream:true,status:200});
+  await tick();
+  assert.equal(active.networkStreamResponseId,"current-new");
+  assert.equal(active.networkStreamEndedWithoutTerminalAt,0,
+    "new accepted SSE clears stale unverified ending");
+  assert.equal(active.networkTerminalTransportErrorAt,0);
+  assert.equal(active.networkUnverifiedStreamId,"");
+  send("current-old","assistant-snapshot",{text:"stale longer text",sequence:3});
+  send("current-old","error",{error:"late stale AbortError",signal_aborted:true});
+  for(let i=0;i<6;i++)await tick();
+  assert.equal(active.networkStreamEndedWithoutTerminalAt,0);
+  assert.equal(active.networkTerminalTransportErrorAt,0);
+  assert.notEqual(active.networkObservedText,"stale longer text");
+  send("current-new","assistant-snapshot",{text:"new complete reply",sequence:1,
+    parser_source:"json-patch"});
+  await tick();
+  send("current-new","done",{completion_hint:true,sequence:2,chunks:2,bytes:100});
+  for(let i=0;i<6;i++)await tick();
+  assert.equal(active.networkTerminalText,"new complete reply");
+  assert.equal(active.networkTerminalTransportStreamId,"current-new");
+  assert.equal(active.networkTerminalTransportErrorAt,0);
+  assert.equal(active.networkStreamEndedWithoutTerminalAt,0);
+  assert.ok(frames.some(f=>f?.diagnostics?.network_stream_stale_relative_to_request===true),
+    "stale errors may be observed diagnostically but never own request terminal");
 }
 
 async function mainWorldSession(kind){
