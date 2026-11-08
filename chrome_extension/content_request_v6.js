@@ -311,10 +311,11 @@
       /!\[[^\]\r\n]{0,200}\]\((data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+)\)/gi
     )].map(m => m.index + m[0].indexOf("data:image/"))
       .filter(index=>!literalCode(index));
-    const fileStarts = [...value.matchAll(/!\[📎 /g)].map(m => m.index);
+    const fileStarts = [...value.matchAll(/!\[📎 /g)]
+      .filter(m=>!literalCode(m.index)).map(m => m.index);
     const fileRecognized = [...value.matchAll(
       /!\[📎 ([^\]\r\n]{1,180})\]\((?:data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+|chat2api-staged:[a-f0-9]{32})\)/gi
-    )].map(m => m.index);
+    )].filter(m=>!literalCode(m.index)).map(m => m.index);
     const imagesComplete = imageStarts.length === imageRecognized.length
       && imageStarts.every((pos,i) => pos === imageRecognized[i]);
     const filesComplete = fileStarts.length === fileRecognized.length
