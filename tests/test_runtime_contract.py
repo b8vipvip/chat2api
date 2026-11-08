@@ -488,3 +488,20 @@ def test_v297_native_virtual_editor_authority_is_read_only_request_scoped():
     assert 'chat.native.snapshot' in observer
     assert "native_final_capture_committed:" in controller
     assert "chat.completed" in controller
+
+
+def test_v299_verified_editor_source_has_one_worker_terminal_owner():
+    """Main-world read produces data, request-v6 alone can publish it."""
+    root = ROOT / "chrome_extension"
+    controller = (root / "content_request_v6.js").read_text("utf-8")
+    bridge = (root / "background_native_editor_state_v297.js").read_text("utf-8")
+    rich = (root / "content_rich_response_v69.js").read_text("utf-8")
+    assert "native_canonical_code_integrated:" in controller
+    assert "rich.mergeVerifiedEditorMarkdown(event.text," in controller
+    assert "active.nativeMessageIdentityBound === true" in controller
+    assert "chat2api.native.editor.read-v297" in bridge
+    assert "readCodeMirrorDocument" in bridge
+    assert "spliceVerifiedCodeIntoCanonical" in rich
+    assert "code-position-unverified" in rich
+    assert "chat.completed" not in bridge
+    assert "chat.completed" not in rich
