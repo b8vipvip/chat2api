@@ -43,14 +43,14 @@ const withLiteralCode = [
   "payload = 'data:image/png;base64,THIS_IS_A_LITERAL'",
   "asset = '![📎 draft.zip](chat2api-staged:short)'",
   "```",
-].join("\\n");
+].join("\n");
 const literalProof=check(withLiteralCode);
 assert.equal(literalProof.ok,true);
 assert.equal(literalProof.imageMarkers,1);
 assert.equal(literalProof.validImageMarkers,1);
 assert.equal(literalProof.fileMarkers,0);
 // The identical fragment outside fenced code is unsafe and must not pass.
-assert.equal(check("![original](data:image/jpeg;base64,YWI=)\\n"+
+assert.equal(check("![original](data:image/jpeg;base64,YWI=)\n"+
   "data:image/png;base64,THIS_IS_NOT_A_MARKDOWN_IMAGE").ok,false);
 assert.ok(source.includes("mediaTerminalPayloadIntegrity(captured)"));
 assert.ok(source.includes('imageCandidate="";'));
