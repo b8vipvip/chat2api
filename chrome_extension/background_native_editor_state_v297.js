@@ -197,7 +197,7 @@
         let hook=ownValue(fiber,"memoizedState");
         // One React fiber usually has a linked list of hook states. A
         // component's code may live here without any 'code' prop at all.
-        for(let i=0;hook && i<32 && proof.react_hook_nodes<96;i++) {
+        for(let i=0;hook && i<32 && proof.react_hook_nodes<32;i++) {
           if(typeof hook!=="object" || visitedHooks.has(hook))break;
           visitedHooks.add(hook);
           proof.react_hook_nodes++;
