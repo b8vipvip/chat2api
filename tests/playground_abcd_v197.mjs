@@ -206,8 +206,8 @@ test("D: second turn keeps prior messages",async()=>{
 
 test("A: missing Python source cannot be promoted by unrelated Plain text fence",async()=>{
   const lost=FULL.replace(
-    /python\\nimport math\\n\\ndef revenue\\(amount\\):\\n    value = float\\(amount\\)\\n    return math\\.floor\\(value\\)/,
-    "text\\nExpected revenue: 1245"
+    /python\nimport math\n\ndef revenue\(amount\):\n    value = float\(amount\)\n    return math\.floor\(value\)/,
+    "text\nExpected revenue: 1245"
   );
   const r=await scenario("A",[lost]).run();
   assert.match(r.status,/未通过/);
@@ -218,8 +218,8 @@ test("A: missing Python source cannot be promoted by unrelated Plain text fence"
 
 test("A: raw inline Python code without a proper fenced executable block is not 1:1",async()=>{
   const lost=FULL.replace(
-    /`{3}python\\nimport math\\n\\ndef revenue\\(amount\\):\\n    value = float\\(amount\\)\\n    return math\\.floor\\(value\\)\\n`{3}/,
-    "`import math\\ndef revenue(amount):\\n return amount`"
+    /`{3}python\nimport math\n\ndef revenue\(amount\):\n    value = float\(amount\)\n    return math\.floor\(value\)\n`{3}/,
+    "`import math\ndef revenue(amount):\n return amount`"
   );
   const r=await scenario("A",[lost]).run();
   assert.match(r.status,/未通过/);
