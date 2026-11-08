@@ -211,15 +211,62 @@
       // content on redesigned ChatGPT. Keep the verified reply scope intact
       // for discovery; they still must not be serialized as downloaded files.
       if (hasPreviewFile(node) && !hasPreviewFile(selected)) return node;
+      // The model may put a CodeMirror card *beside* the Markdown root.
+      // Do not silently discard it by selecting only the largest text node.
+      if ([...node.querySelectorAll(".cm-editor,.monaco-editor")].some(
+        editor=>!selected.contains(editor))) return node;
     }
     return selected;
   }
 
-  function cleanClone(node) {
+  function cleanClone(node, editorContext = null) {
     const root = contentRoot(node);
     if (!root) return null;
     let clone = null;
     try { clone = root.cloneNode(true); } catch (_) { return null; }
+    if (editorContext) {
+      // Only request-v6 may provide the already verified per-request
+      // CodeMirror state map. Match the original editor DOM nodes 1:1 to
+      // cloned nodes BEFORE action-chrome cleanup changes the clone.
+      const findEditors = base => [
+        ...(base.matches?.(".cm-editor") ? [base] : []),
+        ...([...base.querySelectorAll?.(".cm-editor") || []]),
+      ];
+      const originals=findEditors(root), copies=findEditors(clone);
+      const docs=editorContext.docs;
+      editorContext.found=originals.length;
+      editorContext.integrated=0;
+      editorContext.reason="";
+      if (!originals.length || originals.length!==copies.length ||
+          !(docs instanceof Map) || originals.length>8) {
+        editorContext.reason="editor-scope-coverage-mismatch";
+        return null;
+      }
+      const replacements=[];
+      for (let i=0; i<originals.length; i++) {
+        const proof=docs.get(originals[i]);
+        if (proof?.source!=="codemirror-state-v297" ||
+            typeof proof.text!=="string" || !proof.text.trim() ||
+            proof.text.length>150000) {
+          editorContext.reason="editor-source-not-verified";
+          return null;
+        }
+        const pre=document.createElement("pre");
+        const code=document.createElement("code");
+        const inferred=/(?:^|\n)[ \t]*(?:async\s+def|def)\s+[A-Za-z_]\w*\([^\n]*\)\s*:/.test(proof.text)
+          && /(?:^|\n)[ \t]*(?:import|from)\s+[A-Za-z_]/.test(proof.text);
+        const language=languageOf(originals[i]) || (inferred?"python":"");
+        if (language) code.setAttribute("class","language-"+language);
+        code.textContent=proof.text;
+        pre.appendChild(code);
+        replacements.push({from:copies[i],to:pre});
+      }
+      for (const item of replacements) {
+        if (item.from===clone) clone=item.to;
+        else item.from.replaceWith(item.to);
+      }
+      editorContext.integrated=replacements.length;
+    }
     if (!clone?.querySelectorAll) return clone;
     // Browsers commonly expose <picture>/<img> as a srcset/currentSrc without
     // an ordinary src. Copy the resolved image source into the cloned turn
@@ -668,6 +715,67 @@
     return normalizeOutput(blockMarkdown(clone));
   }
 
+  // Surgical same-request insertions preserve every existing image URL,
+  // archived file link, formula and table in the canonical OpenAI text.
+  // Any ambiguous anchor returns the original untouched; an observer cannot
+  // invent a second terminal or reconstruct missing media by ordinal order.
+  function spliceVerifiedCodeIntoCanonical(original, enriched, codeTexts) {
+    const source=String(original || "");
+    if (!source || !enriched || !Array.isArray(codeTexts) || !codeTexts.length ||
+        codeTexts.length>8) return {text:source,integrated:0,reason:"code-input-unavailable"};
+    const blocks=[...enriched.matchAll(/(?:^|\n)(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n\1(?=\n|$)/g)];
+    const uniqueMatch = (fragment, direction, text) => {
+      const parts=fragment.split(/\n\n+/).map(s=>s.trim())
+        .filter(s=>s.length>=24 && !s.startsWith("`"));
+      const paragraph=direction==="before" ? parts[parts.length-1] : parts[0];
+      if (!paragraph) return -1;
+      const options=[paragraph, direction==="before" ? paragraph.slice(-100) : paragraph.slice(0,100),
+        direction==="before" ? paragraph.slice(-56) : paragraph.slice(0,56)];
+      for (const part of options) {
+        if (part.length<24) continue;
+        const at=text.indexOf(part);
+        if (at>=0 && at===text.lastIndexOf(part))
+          return direction==="before" ? at+part.length : at;
+      }
+      return -1;
+    };
+    let result=source, inserted=0;
+    for (const doc of codeTexts) {
+      const body=String(doc||"").replace(/\r\n?/g,"\n").replace(/\n+$/g,"");
+      if (!body || body.length>150000) return {text:source,integrated:0,reason:"invalid-verified-code"};
+      if (result.includes(body)) {inserted++;continue;}
+      const matches=blocks.filter(match=>String(match[2]).replace(/\n+$/g,"")===body);
+      if (matches.length!==1) return {text:source,integrated:0,reason:"code-fence-not-unique"};
+      const match=matches[0], start=match.index+(match[0].startsWith("\n")?1:0);
+      const prefix=enriched.slice(0,start), suffix=enriched.slice(match.index+match[0].length);
+      const before=uniqueMatch(prefix,"before",result);
+      const after=uniqueMatch(suffix,"after",result);
+      // Both independent, unique anchors must enclose a short gap in the
+      // canonical reply (often the "Python" code-card label).
+      if (before<0 || after<before || after-before>1200)
+        return {text:source,integrated:0,reason:"code-position-unverified"};
+      const segment=match[0].replace(/^\n/,"").trim();
+      result=result.slice(0,after)+segment+"\n\n"+result.slice(after);
+      inserted++;
+    }
+    return {text:result,integrated:inserted,reason:"verified-editor-anchor-insert"};
+  }
+
+  function mergeVerifiedEditorMarkdown(original, node, verifiedEditorDocs) {
+    if (!(verifiedEditorDocs instanceof Map) || verifiedEditorDocs.size===0)
+      return {text:String(original||""),integrated:0,reason:"no-verified-editor-state"};
+    const evidence={docs:verifiedEditorDocs,found:0,integrated:0,reason:""};
+    const clone=cleanClone(node,evidence);
+    if (!clone || evidence.found!==verifiedEditorDocs.size ||
+        evidence.integrated!==verifiedEditorDocs.size) {
+      return {text:String(original||""),integrated:0,
+        reason:evidence.reason||"editor-reply-scope-incomplete"};
+    }
+    const enriched=normalizeOutput(blockMarkdown(clone));
+    return spliceVerifiedCodeIntoCanonical(original,enriched,
+      [...verifiedEditorDocs.values()].map(x=>x.text));
+  }
+
   function blobToDataUrl(blob) {
     return new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -767,9 +875,15 @@
     return { inlined, bytes: total, stats };
   }
 
-  async function captureFinalMarkdown(node) {
-    const clone = cleanClone(node);
-    if (!clone) return { text: "", image_inlined_count: 0, image_inlined_bytes: 0 };
+  async function captureFinalMarkdown(node, options = null) {
+    const editorContext = options?.verifiedEditorDocs instanceof Map
+      ? {docs:options.verifiedEditorDocs,found:0,integrated:0,reason:""} : null;
+    const clone = cleanClone(node, editorContext);
+    if (!clone) return {
+      text:"", image_inlined_count:0, image_inlined_bytes:0,
+      verified_code_document_count:0,
+      code_integration_error:editorContext?.reason || "clone-unavailable",
+    };
     let embedded = 0;
     for (const image of [...clone.querySelectorAll("img")]) {
       const src = String(image.getAttribute("src") || "");
@@ -787,6 +901,8 @@
     const imageStats = await inlineBlobImages(clone);
     return {
       text: normalizeOutput(blockMarkdown(clone)),
+      verified_code_document_count:editorContext?.integrated || 0,
+      code_integration_error:editorContext?.reason || "",
       image_inlined_count: imageStats.inlined,
       image_embedded_count: embedded,
       image_inlined_bytes: imageStats.bytes,
@@ -810,6 +926,8 @@
     locateNewPageMedia,
     capturePageImages,
     extractMarkdown,
+    mergeVerifiedEditorMarkdown,
+    spliceVerifiedCodeIntoCanonical,
     captureFinalMarkdown,
   });
 })();

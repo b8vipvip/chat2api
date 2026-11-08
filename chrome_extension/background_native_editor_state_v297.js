@@ -30,13 +30,50 @@
         )) return {ok:false,reason:"untrusted-code-editor"};
     if (!node.closest?.("main,[role='main'],[data-testid^='conversation-turn'],#thread"))
       return {ok:false,reason:"editor-outside-conversation"};
+    // CodeMirror v6 attaches cmView to different content/viewport nodes
+    // across builds. The previous hard-coded .cm-content.cmView.view path
+    // reported editor-document-size even when no state.doc was found.
+    // Inspect ONLY the already-scoped editor and its immediate children.
+    // No page-wide probing, clipboard actions, scrolling, eval or mutation.
     const surface = node.querySelector?.(".cm-content");
-    const view = surface?.cmView?.view
-      || surface?.cmView?.rootView?.view || surface?.cmView?.root?.view;
-    const doc = view?.state?.doc;
-    const size = doc?.length;
-    if (!Number.isInteger(size) || size <= 0 || size > 150000)
-      return {ok:false,reason:"editor-document-size"};
+    const candidates = [
+      surface, node, node.querySelector?.(".cm-scroller"),
+      surface?.firstElementChild, surface?.parentElement,
+      node.querySelector?.(".cm-line"),
+      // Some CM6 builds attach their document view to a nested viewport
+      // element instead of cm-content. Scan only this marked editor's own
+      // bounded subtree; never inspect unrelated ChatGPT conversations.
+      ...Array.from(node.querySelectorAll?.("*") || []).slice(0,180)
+        .filter(element=>Object.prototype.hasOwnProperty.call(element,"cmView")),
+    ].filter(Boolean);
+    let doc = null;
+    for (const element of candidates) {
+      const cm = element?.cmView;
+      const possible = [
+        cm?.view, cm?.rootView?.view, cm?.root?.view,
+        cm?.editorView, cm,
+        element?.view,
+      ];
+      for (const view of possible) {
+        if (!view || typeof view !== "object") continue;
+        const candidateDoc = view?.state?.doc;
+        if (candidateDoc && typeof candidateDoc === "object") {
+          doc = candidateDoc;
+          break;
+        }
+      }
+      if (doc) break;
+    }
+    if (!doc) {
+      // Distinguish missing JS-owned EditorView from a too-large document.
+      // Do not expose class names, content, urls or page globals.
+      return {ok:false,reason:"editor-view-not-found"};
+    }
+    const size = doc.length;
+    if (!Number.isInteger(size) || size <= 0)
+      return {ok:false,reason:"editor-document-empty"};
+    if (size > 150000)
+      return {ok:false,reason:"editor-document-too-large"};
     let text;
     try {
       // Full immutable editor state, not the viewport's .cm-line elements.

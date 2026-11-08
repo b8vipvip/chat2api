@@ -231,6 +231,11 @@ jobs:
           node --check chrome_extension/content_native_content_v1.js
           node tests/native_editor_main_world_v297.mjs
           node tests/native_editor_bridge_capture_v297.mjs
+      - name: Native canonical CodeMirror source and byte-safe Markdown merge v299
+        run: |
+          node --check chrome_extension/content_rich_response_v69.js
+          node --check chrome_extension/content_request_v6.js
+          node tests/rich_response_code_merge_v299.mjs
       - name: Live upstream terminal and MathML v206 regression
         run: node --test tests/request_upstream_math_v206.mjs
       - name: Verified short replies and generated-file signatures v207
