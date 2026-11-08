@@ -55,3 +55,50 @@ def test_v299_verified_code_splice_is_request_v6_only_and_observable():
     }})
     assert "native_canonical_code_integrated" not in invalid
     assert len(invalid["native_canonical_code_reason"]) <= 100
+
+
+def test_v301_bounded_editor_view_probe_evidence_survives_single_terminal_owner():
+    observed = _terminal_provenance({"diagnostics": {
+        "native_code_editor_state_candidates": 1,
+        "native_code_editor_state_resolved": 0,
+        "native_code_editor_state_failure": "editor-view-not-found",
+        "native_editor_probe_scanned": 261,
+        "native_editor_probe_attachments": 0,
+        "native_editor_probe_visible_lines": 87,
+        "native_editor_probe_retries": 2,
+        "native_editor_probe_virtualized": True,
+    }})
+    assert observed["native_editor_probe_scanned"] == 261
+    assert observed["native_editor_probe_attachments"] == 0
+    assert observed["native_editor_probe_visible_lines"] == 87
+    assert observed["native_editor_probe_retries"] == 2
+    assert observed["native_editor_probe_virtualized"] is True
+    invalid = _terminal_provenance({"diagnostics": {
+        "native_editor_probe_scanned": 99999999,
+        "native_editor_probe_attachments": -1,
+        "native_editor_probe_visible_lines": "private source",
+        "native_editor_probe_retries": 17,
+        "native_editor_probe_virtualized": "true",
+        "native_canonical_code_integrated": 9,
+    }})
+    for key in ("native_editor_probe_scanned", "native_editor_probe_attachments",
+                "native_editor_probe_visible_lines", "native_editor_probe_retries",
+                "native_editor_probe_virtualized", "native_canonical_code_integrated"):
+        assert key not in invalid
+
+
+def test_v301_only_request_owned_mainworld_code_recovers_without_terminal_competition():
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    main=(root/"chrome_extension/background_native_editor_state_v297.js").read_text()
+    observer=(root/"chrome_extension/content_native_content_v1.js").read_text()
+    terminal=(root/"chrome_extension/content_request_v6.js").read_text()
+    assert "MAX_EDITOR_SCAN=4096" in main
+    assert "editor-state-ambiguous" in main
+    assert "element?.shadowRoot" in main
+    assert 'reply?.reason!=="editor-view-not-found"' in observer
+    assert "editor-owner-scope-disconnected" in observer
+    assert "native_editor_probe_scanned:" in terminal
+    assert "native_editor_probe_virtualized:" in terminal
+    # Observer only returns evidence; request-v6 keeps the sole terminal owner.
+    assert "chat.completed" not in main

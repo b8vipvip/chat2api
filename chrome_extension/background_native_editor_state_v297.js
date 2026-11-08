@@ -30,44 +30,74 @@
         )) return {ok:false,reason:"untrusted-code-editor"};
     if (!node.closest?.("main,[role='main'],[data-testid^='conversation-turn'],#thread"))
       return {ok:false,reason:"editor-outside-conversation"};
-    // CodeMirror v6 attaches cmView to different content/viewport nodes
-    // across builds. The previous hard-coded .cm-content.cmView.view path
-    // reported editor-document-size even when no state.doc was found.
-    // Inspect ONLY the already-scoped editor and its immediate children.
-    // No page-wide probing, clipboard actions, scrolling, eval or mutation.
-    const surface = node.querySelector?.(".cm-content");
-    const candidates = [
-      surface, node, node.querySelector?.(".cm-scroller"),
-      surface?.firstElementChild, surface?.parentElement,
-      node.querySelector?.(".cm-line"),
-      // Some CM6 builds attach their document view to a nested viewport
-      // element instead of cm-content. Scan only this marked editor's own
-      // bounded subtree; never inspect unrelated ChatGPT conversations.
-      ...Array.from(node.querySelectorAll?.("*") || []).slice(0,180)
-        .filter(element=>Object.prototype.hasOwnProperty.call(element,"cmView")),
-    ].filter(Boolean);
-    let doc = null;
-    for (const element of candidates) {
-      const cm = element?.cmView;
-      const possible = [
-        cm?.view, cm?.rootView?.view, cm?.root?.view,
-        cm?.editorView, cm,
-        element?.view,
-      ];
+    // Only the verified request-owned CodeMirror editor is inspected. A
+    // large virtualized editor may mount cmView below the first 180 nodes;
+    // accept CM6's rootView.view reference, not rendered cm-line snippets.
+    const MAX_EDITOR_SCAN=4096;
+    const surface=node.querySelector?.(".cm-content");
+    const foundDocs=new Set(), seen=new Set();
+    let attachments=0,scanned=0,scanBudget=false;
+    function inspectNode(element) {
+      if (!element || seen.has(element)) return;
+      seen.add(element);
+      let cm;
+      try { cm=element.cmView; } catch (_) { return; }
+      if (!cm || typeof cm!=="object") return;
+      attachments++;
+      let possible;
+      try {
+        possible=[
+          cm.view,cm.rootView?.view,cm.root?.view,
+          cm.parent?.rootView?.view,cm.editorView,
+          element.view,
+        ];
+      } catch (_) {return;}
       for (const view of possible) {
-        if (!view || typeof view !== "object") continue;
-        const candidateDoc = view?.state?.doc;
-        if (candidateDoc && typeof candidateDoc === "object") {
-          doc = candidateDoc;
-          break;
+        let candidateDoc;
+        try {candidateDoc=view?.state?.doc;} catch (_) {continue;}
+        if (candidateDoc && typeof candidateDoc==="object")
+          foundDocs.add(candidateDoc);
+      }
+    }
+    for (const element of [
+      surface,node,node.querySelector?.(".cm-scroller"),
+      surface?.firstElementChild,surface?.parentElement,
+      node.querySelector?.(".cm-line"),
+    ]) inspectNode(element);
+    if (foundDocs.size===0) {
+      const queue=[node];
+      for (let head=0;head<queue.length;head++) {
+        if (scanned>=MAX_EDITOR_SCAN) {scanBudget=true;break;}
+        const element=queue[head];
+        scanned++;
+        inspectNode(element);
+        if (foundDocs.size>1) break;
+        // Open shadow roots belong to this same editor, not to other turns.
+        for (const root of [element?.shadowRoot,element]) {
+          for (const child of root?.children || []) {
+            if (queue.length>=MAX_EDITOR_SCAN+1) {scanBudget=true;break;}
+            queue.push(child);
+          }
         }
       }
-      if (doc) break;
     }
+    const diagnostic={
+      scan_count:Math.min(MAX_EDITOR_SCAN,scanned),
+      attachment_count:Math.min(MAX_EDITOR_SCAN,attachments),
+      surface_found:Boolean(surface),
+      scan_budget:scanBudget,
+    };
+    if (foundDocs.size>1)
+      return {ok:false,reason:"editor-state-ambiguous",...diagnostic};
+    const doc=foundDocs.values().next().value;
     if (!doc) {
-      // Distinguish missing JS-owned EditorView from a too-large document.
-      // Do not expose class names, content, urls or page globals.
-      return {ok:false,reason:"editor-view-not-found"};
+      // The viewport is diagnostic only, never an authoritative full source.
+      diagnostic.dom_lines=Math.min(MAX_EDITOR_SCAN,
+        node.querySelectorAll?.(".cm-line")?.length || 0);
+      diagnostic.virtual_gap=Boolean(node.querySelector?.(".cm-gap"));
+      return {ok:false,reason:scanBudget
+        ? "editor-attachment-scan-budget" : "editor-view-not-found",
+        ...diagnostic};
     }
     const size = doc.length;
     if (!Number.isInteger(size) || size <= 0)
@@ -82,7 +112,7 @@
     } catch (_) { return {ok:false,reason:"editor-document-read"}; }
     if (typeof text !== "string" || text.length !== size || !text.trim())
       return {ok:false,reason:"editor-document-not-complete"};
-    return {ok:true,source:"codemirror-state-v297",text,length:size};
+    return {ok:true,source:"codemirror-state-v297",text,length:size,...diagnostic};
   }
   async function inspect(message,sender) {
     const tab = sender?.tab;
@@ -95,10 +125,21 @@
       args:[message.probe],
     });
     const result = results?.[0]?.result;
+    // Bounded, content-free evidence lets a real request ZIP distinguish
+    // missing CodeMirror attachment from a scan-budget or stale-view case.
+    const stats={};
+    for (const key of ["scan_count","attachment_count","dom_lines"]) {
+      const value=result?.[key];
+      if (Number.isInteger(value) && value>=0 && value<=4096)
+        stats[key]=value;
+    }
+    for (const key of ["surface_found","scan_budget","virtual_gap"]) {
+      if (typeof result?.[key]==="boolean") stats[key]=result[key];
+    }
     if (!result || result.ok !== true || typeof result.text !== "string" ||
         result.text.length > 150000 || result.length !== result.text.length)
-      return {ok:false,reason:String(result?.reason || "editor-main-world-unavailable").slice(0,60)};
-    return result;
+      return {ok:false,reason:String(result?.reason || "editor-main-world-unavailable").slice(0,60),...stats};
+    return {...result,...stats};
   }
   chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
     if (message?.type !== KIND) return false;

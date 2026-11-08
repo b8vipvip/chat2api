@@ -81,6 +81,8 @@ _TERMINAL_PROVENANCE_NUMBERS = {
     "native_code_editor_state_candidates",
     "native_code_editor_state_resolved",
     "native_code_editor_captured",
+    "native_editor_probe_scanned", "native_editor_probe_attachments",
+    "native_editor_probe_visible_lines", "native_editor_probe_retries",
     "native_canonical_code_integrated",
 }
 _TERMINAL_PROVENANCE_STRINGS = {
@@ -108,6 +110,11 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
             if (key.startswith("native_code_editor_")
                     or key == "native_canonical_code_integrated") and (
                 type(value) is not int or not 0 <= value <= 8
+            ):
+                continue
+            if key.startswith("native_editor_probe_") and (
+                type(value) is not int
+                or not 0 <= value <= (16 if key == "native_editor_probe_retries" else 4096)
             ):
                 continue
             if key == "native_message_identity_candidate_count" and (
@@ -140,7 +147,8 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
     for key in ("response_terminal_dom_reconciled", "terminal_integrity_upgraded",
                 "native_chunk_complete", "native_final_capture_committed", "native_observer_loaded",
                 "native_capture_attempted", "native_reply_scope_verified",
-                "native_message_identity_bound", "native_message_id_scope_verified"):
+                "native_message_identity_bound", "native_message_id_scope_verified",
+                "native_editor_probe_virtualized"):
         if isinstance(raw.get(key), bool):
             result[key] = raw[key]
     # Request-v6 emits these *on every completed native request* but its

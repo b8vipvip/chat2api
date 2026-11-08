@@ -505,3 +505,24 @@ def test_v299_verified_editor_source_has_one_worker_terminal_owner():
     assert "code-position-unverified" in rich
     assert "chat.completed" not in bridge
     assert "chat.completed" not in rich
+
+
+
+def test_v301_request_v6_retains_unique_terminal_owner_for_readonly_code_probe():
+    """Runtime contract: editor probe cannot publish completed/error itself."""
+    controller = (ROOT / "chrome_extension" / "content_request_v6.js").read_text("utf-8")
+    observer = (ROOT / "chrome_extension" / "content_native_content_v1.js").read_text("utf-8")
+    reader = (ROOT / "chrome_extension" / "background_native_editor_state_v297.js").read_text("utf-8")
+    broker = (ROOT / "app" / "broker.py").read_text("utf-8")
+    assert "native_editor_probe_scanned:" in controller
+    assert "native_editor_probe_attachments:" in controller
+    assert "native_editor_probe_virtualized:" in controller
+    assert 'type:"chat2api.native.editor.read-v297"' in observer
+    assert 'type:"chat2api.native.ack"' in observer
+    assert 'world:"MAIN"' in reader
+    assert "MAX_EDITOR_SCAN=4096" in reader
+    assert '"native_editor_probe_scanned"' in broker
+    assert '"native_editor_probe_virtualized"' in broker
+    for optional in (reader, observer):
+        assert 'type:"chat.completed"' not in optional
+        assert 'type:"chat.error"' not in optional
