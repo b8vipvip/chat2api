@@ -211,15 +211,62 @@
       // content on redesigned ChatGPT. Keep the verified reply scope intact
       // for discovery; they still must not be serialized as downloaded files.
       if (hasPreviewFile(node) && !hasPreviewFile(selected)) return node;
+      // The model may put a CodeMirror card *beside* the Markdown root.
+      // Do not silently discard it by selecting only the largest text node.
+      if ([...node.querySelectorAll(".cm-editor,.monaco-editor")].some(
+        editor=>!selected.contains(editor))) return node;
     }
     return selected;
   }
 
-  function cleanClone(node) {
+  function cleanClone(node, editorContext = null) {
     const root = contentRoot(node);
     if (!root) return null;
     let clone = null;
     try { clone = root.cloneNode(true); } catch (_) { return null; }
+    if (editorContext) {
+      // Only request-v6 may provide the already verified per-request
+      // CodeMirror state map. Match the original editor DOM nodes 1:1 to
+      // cloned nodes BEFORE action-chrome cleanup changes the clone.
+      const findEditors = base => [
+        ...(base.matches?.(".cm-editor") ? [base] : []),
+        ...([...base.querySelectorAll?.(".cm-editor") || []]),
+      ];
+      const originals=findEditors(root), copies=findEditors(clone);
+      const docs=editorContext.docs;
+      editorContext.found=originals.length;
+      editorContext.integrated=0;
+      editorContext.reason="";
+      if (!originals.length || originals.length!==copies.length ||
+          !(docs instanceof Map) || originals.length>8) {
+        editorContext.reason="editor-scope-coverage-mismatch";
+        return null;
+      }
+      const replacements=[];
+      for (let i=0; i<originals.length; i++) {
+        const proof=docs.get(originals[i]);
+        if (proof?.source!=="codemirror-state-v297" ||
+            typeof proof.text!=="string" || !proof.text.trim() ||
+            proof.text.length>150000) {
+          editorContext.reason="editor-source-not-verified";
+          return null;
+        }
+        const pre=document.createElement("pre");
+        const code=document.createElement("code");
+        const inferred=/(?:^|\n)[ \t]*(?:async\s+def|def)\s+[A-Za-z_]\w*\([^\n]*\)\s*:/.test(proof.text)
+          && /(?:^|\n)[ \t]*(?:import|from)\s+[A-Za-z_]/.test(proof.text);
+        const language=languageOf(originals[i]) || (inferred?"python":"");
+        if (language) code.setAttribute("class","language-"+language);
+        code.textContent=proof.text;
+        pre.appendChild(code);
+        replacements.push({from:copies[i],to:pre});
+      }
+      for (const item of replacements) {
+        if (item.from===clone) clone=item.to;
+        else item.from.replaceWith(item.to);
+      }
+      editorContext.integrated=replacements.length;
+    }
     if (!clone?.querySelectorAll) return clone;
     // Browsers commonly expose <picture>/<img> as a srcset/currentSrc without
     // an ordinary src. Copy the resolved image source into the cloned turn
@@ -767,9 +814,15 @@
     return { inlined, bytes: total, stats };
   }
 
-  async function captureFinalMarkdown(node) {
-    const clone = cleanClone(node);
-    if (!clone) return { text: "", image_inlined_count: 0, image_inlined_bytes: 0 };
+  async function captureFinalMarkdown(node, options = null) {
+    const editorContext = options?.verifiedEditorDocs instanceof Map
+      ? {docs:options.verifiedEditorDocs,found:0,integrated:0,reason:""} : null;
+    const clone = cleanClone(node, editorContext);
+    if (!clone) return {
+      text:"", image_inlined_count:0, image_inlined_bytes:0,
+      verified_code_document_count:0,
+      code_integration_error:editorContext?.reason || "clone-unavailable",
+    };
     let embedded = 0;
     for (const image of [...clone.querySelectorAll("img")]) {
       const src = String(image.getAttribute("src") || "");
@@ -787,6 +840,8 @@
     const imageStats = await inlineBlobImages(clone);
     return {
       text: normalizeOutput(blockMarkdown(clone)),
+      verified_code_document_count:editorContext?.integrated || 0,
+      code_integration_error:editorContext?.reason || "",
       image_inlined_count: imageStats.inlined,
       image_embedded_count: embedded,
       image_inlined_bytes: imageStats.bytes,
