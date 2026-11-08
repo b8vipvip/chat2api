@@ -584,6 +584,11 @@
     active.nativeEditorStateCandidateCount = 0;
     active.nativeEditorStateResolvedCount = 0;
     active.nativeEditorStateFailure = "";
+    active.nativeEditorProbeScanned=0;
+    active.nativeEditorProbeAttachments=0;
+    active.nativeEditorProbeVisibleLines=0;
+    active.nativeEditorProbeVirtualized=false;
+    active.nativeEditorProbeRetries=0;
     const region = globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
     if (!VERIFIED_EDITOR_SCOPES.has(region?.scope) ||
         !Array.isArray(region?.roots)) return;
@@ -623,15 +628,44 @@
       editor.setAttribute(EDITOR_PROBE_ATTR,probe);
       let timer;
       try {
-        const reply = await Promise.race([
-          chrome.runtime.sendMessage({
-            type:"chat2api.native.editor.read-v297",
-            request_id:active.requestId,probe,
-          }),
-          new Promise(resolve => {timer=setTimeout(
-            ()=>resolve({ok:false,reason:"editor-main-world-timeout"}),2500);
-          }),
-        ]);
+        let reply=null;
+        // The final ChatGPT code card may hydrate just after the terminal
+        // observer first sees .cm-editor. Retry ONLY a missing attached
+        // EditorView, at bounded delays, without scrolling, clicks or
+        // repairing the model's reply from virtualized DOM lines.
+        for (let attempt=0;attempt<3;attempt++) {
+          if (!editor.isConnected || editor.getAttribute?.(EDITOR_PROBE_ATTR)!==probe) {
+            reply={ok:false,reason:"editor-owner-scope-disconnected"};
+            break;
+          }
+          let readTimer;
+          try {
+            reply=await Promise.race([
+              chrome.runtime.sendMessage({
+                type:"chat2api.native.editor.read-v297",
+                request_id:active.requestId,probe,
+              }),
+              new Promise(resolve=>{readTimer=setTimeout(
+                ()=>resolve({ok:false,reason:"editor-main-world-timeout"}),2500);
+              }),
+            ]);
+          } finally {
+            if (readTimer) clearTimeout(readTimer);
+          }
+          const bounded=(key,max)=>Number.isInteger(reply?.[key])
+            && reply[key]>=0 && reply[key]<=max ? reply[key]:0;
+          active.nativeEditorProbeScanned=Math.max(active.nativeEditorProbeScanned,
+            bounded("scan_count",4096));
+          active.nativeEditorProbeAttachments=Math.max(active.nativeEditorProbeAttachments,
+            bounded("attachment_count",4096));
+          active.nativeEditorProbeVisibleLines=Math.max(active.nativeEditorProbeVisibleLines,
+            bounded("dom_lines",4096));
+          active.nativeEditorProbeVirtualized ||= reply?.virtual_gap===true;
+          if (reply?.ok || reply?.reason!=="editor-view-not-found" || attempt===2)
+            break;
+          active.nativeEditorProbeRetries++;
+          await new Promise(resolve=>setTimeout(resolve,attempt===0?160:360));
+        }
         if (reply?.ok === true && reply.source === "codemirror-state-v297" &&
             typeof reply.text === "string" && reply.text.trim() &&
             reply.length === reply.text.length && reply.text.length <= 150000 &&
