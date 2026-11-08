@@ -4,7 +4,7 @@ import vm from "node:vm";
 
 const source = readFileSync("chrome_extension/background_model_switch_v149.js","utf8");
 
-async function runScenario({navigates=false,clickSucceeds=true,missing=false,disabled=false}={}) {
+async function runScenario({navigates=false,clickSucceeds=true,missing=false,disabled=false,headerOnly=false}={}) {
   let now=100000, clicks=0, inspected=0, navChecks=0, loaded=0;
   let current="gpt-6";
   const desired="gpt-5.6-sol";
@@ -16,7 +16,9 @@ async function runScenario({navigates=false,clickSucceeds=true,missing=false,dis
     scripting:{executeScript:async detail=>{
       if(detail.files){loaded++;return []}
       if(detail.func){inspected++;return [{result:{selected_model:current,
-        inspected_at:"2026-10-14T12:40:00Z",evidence_source:"live-visible-picker"}}]}
+        selected_in_menu:headerOnly?null:current,
+        inspected_at:"2026-10-14T12:40:00Z",
+        evidence_source:headerOnly?"no-checked-model-in-live-menu":"live-menu-selected-row"}}]}
       throw Error("Unexpected script execution");
     }},
     tabs:{
@@ -79,6 +81,11 @@ const notChanged=await runScenario({clickSucceeds:false});
 assert.equal(notChanged.result.ok,false);
 assert.equal(notChanged.result.code,"model_selection_unconfirmed");
 assert.equal(notChanged.clicks,1,"never retry an already acknowledged click");
+
+const misleadingHeader=await runScenario({headerOnly:true});
+assert.equal(misleadingHeader.result.ok,false,
+  "page title/header alone cannot establish the selected model");
+assert.equal(misleadingHeader.result.code,"model_selection_unconfirmed");
 
 const notPresent=await runScenario({missing:true});
 assert.equal(notPresent.result.ok,false);

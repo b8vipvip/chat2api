@@ -65,8 +65,20 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
         authority.get("transport_model") or model_transport_id(routed) or ""
     ).strip().lower()
     observed_wire = str(evidence.get("request_wire_model") or "").strip().lower()
+    # The page-generated native model slug is more precise than a frozen
+    # -*wm transport alias, but only if the MAIN-world request observer
+    # explicitly proved it was left unchanged and canonically matched the
+    # requested logical model. Never let response/default metadata assert this.
+    native_wire = bool(evidence.get("page_native_wire_respected") is True)
+    original_wire = str(evidence.get("original_wire_model") or "").strip().lower()
+    page_native_verified = bool(
+        native_wire and routed and original_wire and observed_wire
+        and original_wire == observed_wire
+        and normalize_model_id(observed_wire) == routed
+    )
     wire_verified = (
-        None if not expected_wire or not observed_wire else expected_wire == observed_wire
+        None if not expected_wire or not observed_wire else
+        (expected_wire == observed_wire or page_native_verified)
     )
     authority_violation = bool(not page_default_route and (
         (routed and request_model and routed != request_model)
@@ -87,6 +99,8 @@ def _trace(authority: dict[str, Any] | None, evidence: dict[str, Any] | None) ->
         "worker_request_model": request_model,
         "request_wire_model": observed_wire or None,
         "model_wire_transport_matches": wire_verified,
+        "model_page_native_wire_respected": page_native_verified,
+        "original_wire_model": original_wire or None,
         "served_model": served,
         "observed_model": observed,
         "default_model": default_model,

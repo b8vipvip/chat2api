@@ -90,6 +90,10 @@ const hydrated=await scenario({hydrationReads:3});
 assert.equal(hydrated.discovered.ok,true,"model-menu shell must hydrate before extracting choices");
 assert.equal(hydrated.result.ok,true);
 
+const headerOnlyCatalog=await scenario();
+assert.equal(headerOnlyCatalog.discovered.data.validated_count,0,
+  "a header label alone must not certify a worker model catalog entry");
+assert.equal(headerOnlyCatalog.discovered.data.current_model,null);
 const success=await scenario();
 assert.equal(success.result.ok,true);
 assert.equal(success.result.data.validated,true);

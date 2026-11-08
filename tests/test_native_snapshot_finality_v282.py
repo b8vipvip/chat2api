@@ -282,3 +282,42 @@ def test_v300_canonical_source_not_delivered_never_claims_verified_final():
     assert native_finality_decision(row, SNAP)["status"] == "verified-final"
     row["diagnostics"]["native_code_editor_state_resolved"] = 3
     assert native_finality_decision(row, SNAP)["reason"] == "incomplete-editor-state"
+
+
+
+def test_v303_dynamic_native_media_and_table_counts_follow_current_request_only():
+    from app.native_snapshot_finality_v282 import native_finality_decision
+    # A new request may have ZERO tables or images, or any allowed amount.
+    # No result from a previous request is used as the expected count.
+    for tables in (0, 1, 5, 17, 23):
+        row={"status":"completed","diagnostics":{
+            **GOOD,
+            "native_capture_comparison":{
+                "comparable":True,"private_capture_complete":True,
+                "private_tables":tables,"native_tables":tables,
+                "private_images_displayed_large":0,"native_images":0,
+                "possible_missing_large_images":0,
+            },
+            "native_layout_summary":{"archived_assets":0,
+                "images":0,"tables":tables,"media_mapping_complete":True},
+        }}
+        proof=native_finality_decision(row,SNAP)
+        assert proof["status"]=="verified-final", (tables,proof)
+        assert proof["visually_verified"] is False
+        row["diagnostics"]["native_capture_comparison"]["native_tables"]=tables+1
+        assert native_finality_decision(row,SNAP)["reason"]=="same-request-table-duplication"
+    # A generated image present on the actual same-request page must be
+    # retained even when the media archiver has recorded 0 assets.
+    lost={"status":"completed","diagnostics":{
+        **GOOD,"native_capture_comparison":{
+            "comparable":True,"private_capture_complete":True,
+            "private_tables":0,"native_tables":0,
+            "private_images_displayed_large":1,
+            "native_images":0,"possible_missing_large_images":1,
+        },
+        "native_layout_summary":{"archived_assets":0,"media_mapping_complete":True},
+    }}
+    assert native_finality_decision(lost,SNAP)["reason"]=="same-request-large-image-loss"
+    lost["diagnostics"]["native_capture_comparison"].update({
+        "private_images_displayed_large":0,"possible_missing_large_images":0})
+    assert native_finality_decision(lost,SNAP)["status"]=="verified-final"

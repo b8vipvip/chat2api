@@ -11,7 +11,7 @@ const oldModel="gpt-5.6-sol-wm";
 const routedModel="gpt-6-astra-wm";
 const payload=value=>JSON.stringify({model:value,conversation_id:"safe-fixture",action:"next"});
 
-async function run(inputBody, makeInit, useRequest=true) {
+async function run(inputBody, makeInit, useRequest=true, route=null) {
   const emitted=[],sent=[];
   const listeners=[];
   const ctx={
@@ -42,7 +42,7 @@ async function run(inputBody, makeInit, useRequest=true) {
   listeners[0]({
     source:win,
     data:{source:"chat2api-model-authority-v144",request_id:"req_model-body-override",
-      authority:{requested_model:"gpt-6-astra",routed_model:"gpt-6-astra",
+      authority:route || {requested_model:"gpt-6-astra",routed_model:"gpt-6-astra",
         transport_model:routedModel}},
   });
   const input=useRequest?new Request(endpoint,{
@@ -113,3 +113,34 @@ assert.equal(formDataResult.observation.authority_violation,false);
   assert.ok(original.includes("authority?.default_page_route === true"));
 }
 console.log("model BodyInit override / true transmitted bytes evidence: passed");
+
+
+// Production 2026-11-08 req_ab206b: Worker picker selected gpt-5.6-sol,
+// but our bridge force-rewrote every matching native wire as
+// gpt-5.6-sol-wm; the upstream served gpt-6. Do not replace a same-model
+// wire ID authored by the ChatGPT page itself.
+const solAuthority={requested_model:"gpt-5.6-sol",routed_model:"gpt-5.6-sol",
+  transport_model:"gpt-5.6-sol-wm"};
+const nativeSol=await run(payload("gpt-5.6-sol"),
+  ()=>({method:"POST",body:payload("gpt-5.6-sol")}),false,solAuthority);
+assert.equal(nativeSol.wire.parsed.model,"gpt-5.6-sol");
+assert.equal(nativeSol.observation.request_wire_model,"gpt-5.6-sol");
+assert.equal(nativeSol.observation.original_wire_model,"gpt-5.6-sol");
+assert.equal(nativeSol.observation.request_rewritten,false);
+assert.equal(nativeSol.observation.page_native_wire_respected,true);
+assert.equal(nativeSol.observation.authority_violation,false);
+
+// If the live page ACTUALLY emits the wrong logical model, the single
+// server-owned routing authority must still rewrite it; no silent fallback.
+const wrongSol=await run(payload("gpt-6"),
+  ()=>({method:"POST",body:payload("gpt-6")}),false,solAuthority);
+assert.equal(wrongSol.wire.parsed.model,"gpt-5.6-sol-wm");
+assert.equal(wrongSol.observation.request_rewritten,true);
+assert.equal(wrongSol.observation.page_native_wire_respected,false);
+
+// A native -wm page choice is already equivalent. We do NOT unilaterally
+// mutate it or pretend that its served model is confirmed.
+const nativeLegacy=await run(payload("gpt-5.6-sol-wm"),
+  ()=>({method:"POST",body:payload("gpt-5.6-sol-wm")}),false,solAuthority);
+assert.equal(nativeLegacy.observation.page_native_wire_respected,true);
+assert.equal(nativeLegacy.observation.request_rewritten,false);

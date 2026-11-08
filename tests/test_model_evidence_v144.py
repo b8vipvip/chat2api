@@ -259,3 +259,38 @@ def test_same_request_wire_slug_distinguishes_bad_rewrite_from_upstream_fallback
     assert "request_wire_model: actualWire" in main
     assert "request_wire_model: requestInfo.requestWireModel" in main
     assert 'request_wire_model: (() =>' in content
+
+
+
+def test_v303_page_native_model_wire_is_not_overwritten_by_legacy_wm_alias():
+    from app.model_observability_v144_patch import _trace
+    authority={"requested_model":"gpt-5.6-sol",
+               "routed_model":"gpt-5.6-sol",
+               "transport_model":"gpt-5.6-sol-wm"}
+    native={"request_model":"gpt-5.6-sol",
+            "request_wire_model":"gpt-5.6-sol",
+            "original_wire_model":"gpt-5.6-sol",
+            "page_native_wire_respected":True,
+            "served_model":"gpt-5.6-sol"}
+    traced=_trace(authority,native)
+    assert traced["model_wire_transport_matches"] is True
+    assert traced["model_page_native_wire_respected"] is True
+    assert traced["model_authority_violation"] is False
+    assert traced["model_verified"] is True
+    # The served metadata is still the final authority: a correctly
+    # selected page-native wire CANNOT turn real GPT-6 into GPT-5.6.
+    mismatched=_trace(authority,{**native,"served_model":"gpt-6"})
+    assert mismatched["model_conflict"] is True
+    assert mismatched["model_verified"] is False
+    assert mismatched["model_fallback_reason"] == "upstream_served_model_mismatch"
+    for forged in (
+        {**native,"page_native_wire_respected":False},
+        {**native,"original_wire_model":"gpt-6"},
+        {**native,"request_wire_model":"gpt-6"},
+    ):
+        result=_trace(authority,forged)
+        assert result["model_page_native_wire_respected"] is False
+        assert result["model_wire_transport_matches"] is False
+        assert result["model_verified"] is False
+    unknown=_trace(authority,{**native,"served_model":None})
+    assert unknown["model_verified"] is False

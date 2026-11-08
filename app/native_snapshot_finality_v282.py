@@ -121,8 +121,20 @@ def native_finality_decision(
         private_tables = comparison.get("private_tables")
         native_tables = comparison.get("native_tables")
         if (type(private_tables) is int and type(native_tables) is int
-                and private_tables > native_tables >= 0):
-            return decide("rejected-final", "same-request-table-loss")
+                and private_tables >= 0 and native_tables >= 0):
+            # The expected number is sampled from *this exact response*,
+            # never copied from the preceding ABCD request or template.
+            if private_tables > native_tables:
+                return decide("rejected-final", "same-request-table-loss")
+            if private_tables < native_tables:
+                return decide("rejected-final", "same-request-table-duplication")
+        large = comparison.get("private_images_displayed_large")
+        delivered = comparison.get("native_images")
+        missing = comparison.get("possible_missing_large_images")
+        if (type(missing) is int and missing > 0
+                or type(large) is int and type(delivered) is int
+                and large > delivered >= 0):
+            return decide("rejected-final", "same-request-large-image-loss")
 
     layout = diag.get("native_layout_summary")
     if (isinstance(layout, dict)
