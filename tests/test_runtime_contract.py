@@ -541,3 +541,22 @@ def test_v302_code_fallback_cannot_create_a_second_terminal_owner():
     assert 'type:"chat.completed"' not in reader
     assert 'type:"chat.cancelled"' not in reader
     assert 'type:"chat.error"' not in reader
+
+
+
+def test_v304_same_model_authority_rechecks_after_reasoning_and_before_dispatch():
+    """The final identity inspector is a read-only guard, never a second picker."""
+    root=ROOT/"chrome_extension"
+    router=(root/"model_routing_v2.js").read_text(encoding="utf-8")
+    selector=(root/"background_model_switch_v149.js").read_text(encoding="utf-8")
+    assert "safeConfirmBeforeRequest" in selector
+    assert "model_pre_send_selection_changed" in selector
+    assert "confirmBeforeRequest" in selector
+    assert router.index("await selectValidatedModel(tab.id, requestedModel)") < (
+        router.index("await prepareReasoning(tab.id, requestedReasoning)") ) < (
+        router.index("await prepareAttachments(tab.id, message.attachments") ) < (
+        router.index("authority.safeConfirmBeforeRequest(tab.id,requestedModel)") ) < (
+        router.index('type: "chat2api.request"') )
+    assert "model_selection_proof_stage:" in router
+    assert "model_selection_confirmation_method:" in router
+    assert "safeSelect(tabId, model)" in selector
