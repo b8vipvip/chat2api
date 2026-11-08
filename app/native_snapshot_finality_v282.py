@@ -78,92 +78,100 @@ def native_code_coverage(row: dict[str, Any] | None,
     return "missing-code-lines" if missing else "covered"
 
 
-def native_snapshot_finality(row: dict[str, Any] | None,
-                             snapshot: dict[str, Any] | None) -> str:
-    """One of live-provisional, verified-final, rejected-final, unverified-final.
+def native_finality_decision(
+    row: dict[str, Any] | None,
+    snapshot: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """ONLY server-side authority for optional native reply publication.
 
-    This is presentation truth only: it must never change the Broker terminal,
-    durable native snapshot, request history, or generated-file state.
+    Returns a stable decision AND its first blocking reason. Every route and
+    forensic exporter must call this same pure function; nobody may combine
+    independent booleans to override a rejected finality. Never changes the
+    Broker request terminal, Worker emission, SSE or archive state.
     """
-    if not isinstance(row, dict) or row.get("status") not in TERMINAL:
-        return "live-provisional"
-    if row.get("status") != "completed" or not isinstance(snapshot, dict):
-        return "rejected-final"
+    def decide(status: str, reason: str) -> dict[str, Any]:
+        return {
+            "status": status, "reason": reason,
+            "authority": "server-native-finality-v298",
+            "scope": "native-sidecar-only",
+            "visually_verified": False,
+        }
 
+    if not isinstance(row, dict) or row.get("status") not in TERMINAL:
+        return decide("live-provisional", "broker-request-not-terminal")
+    if row.get("status") != "completed":
+        return decide("rejected-final", "broker-request-not-completed")
+    if not isinstance(snapshot, dict):
+        return decide("rejected-final", "final-native-snapshot-missing")
     diag = row.get("diagnostics")
     if not isinstance(diag, dict):
-        return "unverified-final"
+        return decide("unverified-final", "native-finality-proof-missing")
 
-    # The 1:1 native view must contain the actual code, not merely a Python
-    # panel label. This guard changes only native display eligibility; the
-    # canonical OpenAI reply, request status and archives stay untouched.
-    if native_code_coverage(row, snapshot) in {
-        "missing-code-block", "missing-code-lines"
-    }:
-        return "rejected-final"
-    # A verified request-owned rich DOM reply may still contain 25 real
-    # tables while a stale incremental layout has 20. Native finality must
-    # require that a *complete comparable private capture* isn't missing
-    # structural table content. Decorative small images are not counted here.
+    coverage = native_code_coverage(row, snapshot)
+    if coverage in {"missing-code-block", "missing-code-lines"}:
+        return decide("rejected-final", coverage)
+
+    # Private page DOM is evidence only. Comparing structures is allowed
+    # only when its request ownership AND capture completeness are proven.
     comparison = diag.get("native_capture_comparison")
     if isinstance(comparison, dict) and (
-        comparison.get("comparable") is True
-        and comparison.get("private_capture_complete") is True
+        comparison.get("comparable") is True and
+        comparison.get("private_capture_complete") is True
     ):
         private_tables = comparison.get("private_tables")
         native_tables = comparison.get("native_tables")
         if (type(private_tables) is int and type(native_tables) is int
                 and private_tables > native_tables >= 0):
-            return "rejected-final"
-    # Archived images without a proven DOM slot cannot be presented as
-    # visually identical to the ChatGPT reply. Native media mapping is
-    # independent of small favicon/decorative image counts.
+            return decide("rejected-final", "same-request-table-loss")
+
     layout = diag.get("native_layout_summary")
     if (isinstance(layout, dict)
-            and layout.get("media_mapping_complete") is False
             and type(layout.get("archived_assets")) is int
-            and layout["archived_assets"] > 0):
-        return "rejected-final"
-    # v297: an editor in the verified reply cannot count as 1:1 unless the
-    # complete page-side CodeMirror immutable document was read, not just
-    # visible viewport lines in the isolated content script.
-    editor_count = diag.get("native_code_editor_state_candidates")
-    editor_resolved = diag.get("native_code_editor_state_resolved")
-    if (type(editor_count) is int and editor_count > 0 and
-            (type(editor_resolved) is not int or editor_resolved < editor_count)):
-        return "rejected-final"
+            and layout["archived_assets"] > 0
+            and layout.get("media_mapping_complete") is False):
+        return decide("rejected-final", "unmapped-archived-media")
+
+    # CodeMirror editor probe provides EVIDENCE, not an alternative finality.
+    editors = diag.get("native_code_editor_state_candidates")
+    resolved = diag.get("native_code_editor_state_resolved")
+    if (type(editors) is int and editors > 0 and
+            (type(resolved) is not int or resolved < editors)):
+        return decide("rejected-final", "incomplete-editor-state")
+
     if diag.get("native_snapshot_terminal_complete") is False:
-        return "rejected-final"
-    if any(isinstance(diag.get(field), str) and diag[field].strip()
-           for field in FAILURE_FIELDS):
-        return "rejected-final"
-    for field in ("native_final_capture_committed", "native_chunk_complete",
-                  "native_snapshot_persisted", "native_reply_scope_verified"):
-        if field in diag and diag[field] is False:
-            return "rejected-final"
+        return decide("rejected-final", "final-capture-incomplete")
+    for key in FAILURE_FIELDS:
+        if isinstance(diag.get(key), str) and diag[key].strip():
+            return decide("rejected-final", "capture-error-" + key)
+    for key in (
+        "native_final_capture_committed", "native_chunk_complete",
+        "native_snapshot_persisted", "native_reply_scope_verified",
+    ):
+        if key in diag and diag[key] is False:
+            return decide("rejected-final", "failed-proof-" + key)
 
     revision = snapshot.get("revision")
-    captured_revision = diag.get("native_capture_revision")
-    if captured_revision is not None and (
-        type(captured_revision) is not int or captured_revision != revision
-    ):
-        return "rejected-final"
-    received_revision = diag.get("native_snapshot_received_revision")
-    if received_revision is not None and (
-        type(received_revision) is not int or received_revision != revision
-    ):
-        return "rejected-final"
+    for name in ("native_capture_revision", "native_snapshot_received_revision"):
+        value = diag.get(name)
+        if value is not None and (type(value) is not int or value != revision):
+            return decide("rejected-final", "revision-conflict-" + name)
 
     if diag.get("native_snapshot_terminal_complete") is True:
-        return "verified-final"
+        return decide("verified-final", "verified-terminal-revision")
+    # Old releases may predate the aggregate flag. Their positive, identical
+    # revision ACKs remain a compatibility path through THIS one function.
     if (diag.get("native_final_capture_committed") is True
             and diag.get("native_chunk_complete") is True
             and diag.get("native_snapshot_persisted") is True
             and diag.get("native_capture_revision") == revision):
-        # Older Server versions may predate the aggregate finality flag but
-        # still carry all positive same-revision transport evidence.
-        return "verified-final"
-    return "unverified-final"
+        return decide("verified-final", "legacy-same-revision-proof")
+    return decide("unverified-final", "positive-finality-proof-missing")
+
+
+def native_snapshot_finality(row: dict[str, Any] | None,
+                             snapshot: dict[str, Any] | None) -> str:
+    """Backward-compatible projection of the SINGLE native authority."""
+    return native_finality_decision(row, snapshot)["status"]
 
 
 def native_terminal_view(row: dict[str, Any], broker_state: Any) -> dict[str, Any]:
