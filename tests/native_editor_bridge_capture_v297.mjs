@@ -103,7 +103,14 @@ assert.equal(reactOwned.nativeEditorReactFiberHosts,1);
 assert.equal(reactOwned.nativeFinalCaptureCommitted,true);
 assert.equal(sent.filter(x=>x.type==="chat2api.native.ack").length,1);
 const reactTree=sent.find(x=>x.type==="chat2api.native.ack").event.snapshot.root;
-assert.ok(JSON.stringify(reactTree).includes(ALL_CODE));
+const reactNodes=[reactTree];let reactPre=null;
+while(reactNodes.length){
+  const item=reactNodes.pop();
+  if(item.tag==="pre")reactPre=item;
+  reactNodes.push(...(item.children||[]));
+}
+assert.ok(reactPre,"react-owned full source must be delivered as a code block");
+assert.equal(reactPre.children[0].children[0].text,ALL_CODE);
 assert.equal(editor.getAttribute("data-chat2api-native-code-probe-v297"),null);
 mode="unavailable";sent.length=0;
 const failed={requestId:"req_"+"c".repeat(32),submitStartedAt:Date.now(),
