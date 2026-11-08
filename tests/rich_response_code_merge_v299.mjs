@@ -51,3 +51,19 @@ const doubleFence=sourceText.replace("\n\n"+after,
 const ambiguousFences=rich.spliceVerifiedCodeIntoCanonical(doubleFence,enriched,[code]);
 assert.equal(ambiguousFences.integrated,0);
 assert.equal(ambiguousFences.reason,"existing-code-fence-ambiguous");
+
+
+// Regression: real Python may contain multiple intentional blank lines.
+// Passing the enriched reply through normalizeOutput would remove one and
+// prevent exact matching to the read-only full CodeMirror document.
+const codeWithBlanks="import math\n\n\n\ndef revenue(amount):\n    return math.floor(amount)";
+const rawEnriched=enriched.replace(code,codeWithBlanks);
+const withBlankLines=rich.spliceVerifiedCodeIntoCanonical(
+  sourceText,rawEnriched,[codeWithBlanks]);
+assert.equal(withBlankLines.integrated,1);
+assert.ok(withBlankLines.text.includes("import math\n\n\n\ndef revenue(amount):"),
+  "verified Python blank lines must survive the canonical merge unchanged");
+assert.equal(rich.spliceVerifiedCodeIntoCanonical(
+  withBlankLines.text,rawEnriched,[codeWithBlanks]).text,withBlankLines.text);
+assert.ok(source.includes("const enriched=blockMarkdown(clone);"),
+  "full editor source may never be globally normalized before exact merge");
