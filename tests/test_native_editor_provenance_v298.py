@@ -102,3 +102,44 @@ def test_v301_only_request_owned_mainworld_code_recovers_without_terminal_compet
     assert "native_editor_probe_virtualized:" in terminal
     # Observer only returns evidence; request-v6 keeps the sole terminal owner.
     assert "chat.completed" not in main
+
+
+def test_v302_same_editor_fiber_metadata_has_strict_broker_bounds():
+    data=_terminal_provenance({"diagnostics":{
+        "native_editor_react_fiber_hosts": 1,
+        "native_editor_react_candidate_count": 1,
+        "native_editor_react_anchor_count": 3,
+        "native_editor_react_recovered": 1,
+        "editor_raw_props": {"code":"private source not permitted"},
+    }})
+    assert all(data[key]==value for key,value in (
+        ("native_editor_react_fiber_hosts",1),
+        ("native_editor_react_candidate_count",1),
+        ("native_editor_react_anchor_count",3),
+        ("native_editor_react_recovered",1),
+    ))
+    assert "editor_raw_props" not in data
+    invalid=_terminal_provenance({"diagnostics":{
+        "native_editor_react_fiber_hosts":True,
+        "native_editor_react_candidate_count": 4097,
+        "native_editor_react_anchor_count":-1,
+        "native_editor_react_recovered": 100,
+    }})
+    assert not any(k.startswith("native_editor_react_") for k in invalid)
+
+
+def test_v302_react_code_source_is_only_evidence_for_one_terminal_writer():
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    reader=(root/"chrome_extension/background_native_editor_state_v297.js").read_text()
+    observer=(root/"chrome_extension/content_native_content_v1.js").read_text()
+    rich=(root/"chrome_extension/content_rich_response_v69.js").read_text()
+    controller=(root/"chrome_extension/content_request_v6.js").read_text()
+    assert "react-owned-code-v302" in reader
+    assert "editor-react-code-ambiguous" in reader
+    assert "react-owned-code-v302" in observer
+    assert "react-owned-code-v302" in rich
+    assert "native_editor_react_recovered:" in controller
+    assert 'type:"chat.completed"' not in reader
+    assert 'type:"chat.completed"' not in observer
+    assert "rich.mergeVerifiedEditorMarkdown(event.text," in controller
