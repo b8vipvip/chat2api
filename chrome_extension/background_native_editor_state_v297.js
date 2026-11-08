@@ -40,6 +40,11 @@
       surface, node, node.querySelector?.(".cm-scroller"),
       surface?.firstElementChild, surface?.parentElement,
       node.querySelector?.(".cm-line"),
+      // Some CM6 builds attach their document view to a nested viewport
+      // element instead of cm-content. Scan only this marked editor's own
+      // bounded subtree; never inspect unrelated ChatGPT conversations.
+      ...Array.from(node.querySelectorAll?.("*") || []).slice(0,180)
+        .filter(element=>Object.prototype.hasOwnProperty.call(element,"cmView")),
     ].filter(Boolean);
     let doc = null;
     for (const element of candidates) {
