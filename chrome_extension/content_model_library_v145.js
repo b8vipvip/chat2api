@@ -431,12 +431,15 @@
       const initialChoices = await openModelMenu();
       const labels = new Map();
       const enabledMap = new Map();
-      const selectedInMenu = initialChoices.find(item => item.selected)?.id || "";
+      const checked = initialChoices.filter(item => item.selected && item.enabled);
+      const selectedInMenu = checked.length === 1 ? checked[0].id : "";
       for (const choice of initialChoices) {
         if (choice.id && !labels.has(choice.id)) { labels.set(choice.id, choice.label || choice.id); enabledMap.set(choice.id, choice.enabled); }
       }
       const pickerSelected = modelIdOf(modelPicker());
-      const selected = [selectedInMenu, pickerSelected].find(id => labels.has(id)) || "";
+      // Header text can describe a preference or stale rendering. Only
+      // exactly one enabled selected row in the live model menu is proof.
+      const selected = selectedInMenu && labels.has(selectedInMenu) ? selectedInMenu : "";
       closeMenus();
       const observed = [...labels].map(([id, label]) => ({
         id, label, source: "chatgpt-model-picker", validated: false, enabled: enabledMap.get(id) === true,
@@ -521,7 +524,8 @@
       throw pickerFailure("Requested model option disabled: " + model,
         "model_option_disabled", "prepare-model-selection", evidence);
     }
-    const before = choices.find(item => item.selected)?.id || "";
+    const selectedRows = choices.filter(item => item.selected && item.enabled);
+    const before = selectedRows.length === 1 ? selectedRows[0].id : "";
     const alreadySelected = before === model;
     const ticket = "v149-" + (++state.selectionSequence);
     state.pendingSelection = alreadySelected ? null : {
@@ -563,19 +567,21 @@
       throw pickerFailure("Unable to inspect ChatGPT model picker: " + String(error?.message || error),
         "model_inspection_unavailable", "inspect-model-selection");
     }
-    const selectedInMenu = choices.find(item => item.selected)?.id || "";
+    const checkedRows = choices.filter(item=>item.selected && item.enabled);
+    const selectedInMenu = checkedRows.length === 1 ? checkedRows[0].id : "";
     const pickerModel = modelIdOf(modelPicker());
     const models = pickerEvidence(choices);
     closeMenus();
-    // Selected row is authoritative. Header fallback only applies to an exact,
-    // visible model label when the menu exposes no selected row at all.
-    const selected = selectedInMenu || (models.some(row => row.id === pickerModel) ? pickerModel : "");
+    // A header-only claim cannot establish that the model committed before
+    // an API send. More than one checked row is equally ambiguous.
+    const selected = selectedInMenu;
     return {
       selected_model: selected || null,
       selected_in_menu: selectedInMenu || null,
       picker_model: pickerModel || null,
       evidence_source: selectedInMenu ? "live-menu-selected-row" :
-        selected ? "live-picker-header-and-menu" : "no-checked-model-in-live-menu",
+        checkedRows.length > 1 ? "ambiguous-checked-rows" : "no-checked-model-in-live-menu",
+      checked_model_row_count: checkedRows.length,
       models, inspected_at: new Date().toISOString(),
     };
   }
