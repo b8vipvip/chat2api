@@ -513,9 +513,12 @@ async def capture(args):
             archive.writestr("manifest.json",json.dumps({"tool":"native-page-diagnostic",
                 "version":VERSION,"request_id":args.request_id,"worker_id":args.worker_id,
                 "scope":report["scope"],"counts":report["counts"],
-                "screenshot_count":screens,"truncated":bool(report.get("reason")),
+                "screenshot_count":screens,
+                "truncated":bool(report.get("reason")) or rect["w"]>3000,
+                "capture_rect":{"width":rect["w"],"height":rect["h"]},
                 "full_reply_screenshot": bool(
-                    screens and 0 < rect["h"] <= 1600 * 24
+                    screens and 0 < rect["w"] <= 3000
+                    and 0 < rect["h"] <= 1600 * 24
                     and screens * 1600 >= rect["h"]),
                 "source":"existing-chatgpt-page","conversation_url_included":False,
                 "request_binding":verification},ensure_ascii=False))
