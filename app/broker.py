@@ -76,6 +76,11 @@ _TERMINAL_PROVENANCE_NUMBERS = {
     "native_capture_revision", "native_structural_max_children", "native_identity_candidate_count",
     "native_message_identity_candidate_count",
     "native_identity_verified_count",
+    # Exact request-owned CodeMirror recovery evidence was emitted by v297
+    # but dropped here; missing ZIP fields caused false stale-Worker diagnoses.
+    "native_code_editor_state_candidates",
+    "native_code_editor_state_resolved",
+    "native_code_editor_captured",
 }
 _TERMINAL_PROVENANCE_STRINGS = {
     "response_terminal_source", "network_terminal_evidence_source",
@@ -86,6 +91,7 @@ _TERMINAL_PROVENANCE_STRINGS = {
     "native_reply_scope_binding", "native_reply_scope_phase",
     "native_message_identity_reason",
     "native_chatgpt_conversation_url",
+    "native_code_editor_state_failure",
 }
 
 
@@ -97,6 +103,10 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
     for key in _TERMINAL_PROVENANCE_NUMBERS:
         value = raw.get(key)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
+            if key.startswith("native_code_editor_") and (
+                type(value) is not int or not 0 <= value <= 8
+            ):
+                continue
             if key == "native_message_identity_candidate_count" and (
                 type(value) is not int or not 0 <= value <= 32
             ):
