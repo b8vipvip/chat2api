@@ -704,6 +704,13 @@
         native_code_editor_state_resolved:Number(active.nativeEditorStateResolvedCount || 0),
         native_code_editor_state_failure:String(active.nativeEditorStateFailure || "").slice(0,60),
         native_code_editor_captured:Number(active.nativeCodeEditorCaptured || 0),
+        // Content-free, bounded CM6 MAIN-world evidence for failing to
+        // locate an EditorView in a virtualized assistant code card.
+        native_editor_probe_scanned:Number(active.nativeEditorProbeScanned || 0),
+        native_editor_probe_attachments:Number(active.nativeEditorProbeAttachments || 0),
+        native_editor_probe_visible_lines:Number(active.nativeEditorProbeVisibleLines || 0),
+        native_editor_probe_retries:Number(active.nativeEditorProbeRetries || 0),
+        native_editor_probe_virtualized:active.nativeEditorProbeVirtualized === true,
         native_canonical_code_integrated:Number(active.nativeCanonicalCodeIntegrated || 0),
         native_canonical_code_reason:String(active.nativeCanonicalCodeReason || "not-attempted").slice(0,60),
         native_svg_charts_captured:Number(active.nativeSvgChartsCaptured || 0),
