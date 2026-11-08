@@ -8,13 +8,15 @@ const cmDoc={
   get length(){return docValue.length;},
   sliceString(start,end){return docValue.slice(start,end);},
 };
-let editorPresent=true;
+let editorPresent=true, editorAttachment="content";
 const editor={
   isConnected:true,
   matches:selector=>selector===".cm-editor",
   closest:selector=>selector.includes("main") ? {} : null,
   querySelector:selector=>selector===".cm-content"
-    ? {cmView:{view:{state:{doc:cmDoc}}}} : null,
+    ? editorAttachment==="content" ? {cmView:{view:{state:{doc:cmDoc}}}} : {}
+    : selector===".cm-scroller" && editorAttachment==="scroller"
+      ? {cmView:{rootView:{view:{state:{doc:cmDoc}}}}} : null,
 };
 const page={
   querySelector:selector=>selector.includes("data-chat2api-native-code-probe-v297") &&
@@ -45,15 +47,27 @@ assert.equal(value.source,"codemirror-state-v297");
 assert.equal(value.text,docValue);
 assert.equal(value.length,docValue.length);
 assert.equal(executions,1);
+// Regression: the 2026-11-08 real request had editor-document-size because
+// the exact .cm-content.cmView.view attachment was not always populated.
+editorAttachment="scroller";
+const reattached=await call();
+assert.equal(reattached.ok,true);
+assert.equal(reattached.text,docValue);
+editorAttachment="absent";
+const missing=await call();
+assert.equal(missing.ok,false);
+assert.equal(missing.reason,"editor-view-not-found");
+editorAttachment="content";
 const unauthorized=await call(request,{tab:{id:42,url:"https://evil.example/"},frameId:0});
 assert.equal(unauthorized.ok,false);
-assert.equal(executions,1);
+assert.equal(executions,3);
 const subframe=await call(request,{...trusted,frameId:1});
 assert.equal(subframe.ok,false);
-assert.equal(executions,1);
+assert.equal(executions,3);
 docValue="x".repeat(150001);
 const oversized=await call();
 assert.equal(oversized.ok,false);
+assert.equal(oversized.reason,"editor-document-too-large");
 docValue="a\n";editorPresent=false;
 const notFound=await call();
 assert.equal(notFound.ok,false);
