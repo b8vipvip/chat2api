@@ -127,9 +127,16 @@ def native_finality_decision(
     layout = diag.get("native_layout_summary")
     if (isinstance(layout, dict)
             and type(layout.get("archived_assets")) is int
-            and layout["archived_assets"] > 0
-            and layout.get("media_mapping_complete") is False):
-        return decide("rejected-final", "unmapped-archived-media")
+            and layout["archived_assets"] > 0):
+        count = layout["archived_assets"]
+        if layout.get("media_mapping_complete") is not True:
+            return decide("rejected-final", "unmapped-archived-media")
+        # A sequential media_index array is *not* a SHA256 identity proof.
+        # An ordinal/dimension-only match must never qualify as 1:1.
+        if (diag.get("native_image_identity_status") != "verified-sha256"
+                or type(diag.get("native_identity_matched_count")) is not int
+                or diag["native_identity_matched_count"] != count):
+            return decide("rejected-final", "unverified-media-byte-identity")
 
     # CodeMirror editor probe provides EVIDENCE, not an alternative finality.
     editors = diag.get("native_code_editor_state_candidates")
