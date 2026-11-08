@@ -25,6 +25,7 @@ def _bundle(tmp_path, role, *, color=(200, 200, 200), request=RID,
         "truncated": truncated,
         "full_reply_screenshot": not truncated,
         "screenshot_count": count,
+        "capture_rect": {"width": size[0], "height": size[1]*count},
     }
     path = tmp_path / f"{role}_{color}_{request[-4:]}.zip"
     with zipfile.ZipFile(path, "w") as result:
@@ -70,3 +71,30 @@ def test_unverified_original_or_native_is_never_a_valid_witness(tmp_path):
         load_capture(_bundle(tmp_path,"native",verified=False),"native")
     with pytest.raises(ValueError, match="screenshot-capture-incomplete"):
         load_capture(_bundle(tmp_path,"original",truncated=True),"original")
+
+
+def test_v300_declared_full_screenshot_cannot_hide_cropped_width_or_height(tmp_path):
+    import pytest
+    image=_bundle(tmp_path, "original")
+    with zipfile.ZipFile(image, "r") as archive:
+        items={name: archive.read(name) for name in archive.namelist()}
+    manifest=json.loads(items["manifest.json"])
+    manifest["capture_rect"]["width"]=80
+    items["manifest.json"]=json.dumps(manifest).encode()
+    with zipfile.ZipFile(image, "w") as archive:
+        for key, value in items.items():
+            archive.writestr(key, value)
+    with pytest.raises(ValueError, match="screenshot-pixels-do-not-cover-capture-rect"):
+        load_capture(image, "original")
+
+    actual=_bundle(tmp_path, "native")
+    with zipfile.ZipFile(actual, "r") as archive:
+        items={name: archive.read(name) for name in archive.namelist()}
+    manifest=json.loads(items["manifest.json"])
+    manifest["capture_rect"]["height"]=80
+    items["manifest.json"]=json.dumps(manifest).encode()
+    with zipfile.ZipFile(actual, "w") as archive:
+        for key, value in items.items():
+            archive.writestr(key, value)
+    with pytest.raises(ValueError, match="screenshot-pixels-do-not-cover-capture-rect"):
+        load_capture(actual, "native")
