@@ -581,3 +581,26 @@ def test_v305_only_request_v6_owns_code_editor_scope_and_media_terminal():
     assert "literalCode" in owner
     assert 'type:"chat.completed"' not in observer
     assert 'type:"chat.error"' not in observer
+
+
+
+def test_v306_virtual_editor_recovery_is_owned_by_request_v6_without_second_terminal():
+    """Bound React evidence is diagnostic; no helper may authorize a second final."""
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    owner=(root/"chrome_extension/content_request_v6.js").read_text("utf-8")
+    reader=(root/"chrome_extension/background_native_editor_state_v297.js").read_text("utf-8")
+    native=(root/"chrome_extension/content_native_content_v1.js").read_text("utf-8")
+    broker=(root/"app/broker.py").read_text("utf-8")
+    assert 'native_editor_react_hook_nodes:' in owner
+    assert 'native_editor_react_array_nodes:' in owner
+    assert 'native_editor_react_document_nodes:' in owner
+    assert "react_hook_nodes" in reader
+    assert "inspectHooks(fiber)" in reader
+    assert "react_array_nodes" in reader
+    assert "inspectDocLike" in reader
+    assert "react_document_nodes" in native
+    assert "native_editor_react_document_nodes" in broker
+    assert 'type:"chat.completed"' not in reader
+    assert 'type:"chat.completed"' not in native
+    assert "rich.mergeVerifiedEditorMarkdown(event.text," in owner
