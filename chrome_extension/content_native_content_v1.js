@@ -611,8 +611,12 @@
       active.nativeEditorStateFailure = "editor-random-probe-unavailable";
       return;
     }
-    for (const editor of editors) {
-      if (active.nativeEditorStateResolvedCount >= 8) break;
+    // Work in bounded batches rather than 8 sequential 2.5-second waits.
+    // A rich reply with several CodeMirror cards must not add 20 seconds
+    // to a completed request's final publication path.
+    for (let start=0; start<editors.length; start+=4) {
+      await Promise.allSettled(editors.slice(start,start+4).map(async editor=>{
+
       const probe = crypto.randomUUID().replace(/-/g, "").toLowerCase();
       if (!/^[a-f0-9]{32}$/.test(probe) ||
           typeof editor.setAttribute !== "function") continue;
@@ -648,6 +652,7 @@
         if (editor.getAttribute?.(EDITOR_PROBE_ATTR) === probe)
           editor.removeAttribute?.(EDITOR_PROBE_ATTR);
       }
+      }));
     }
   }
 
