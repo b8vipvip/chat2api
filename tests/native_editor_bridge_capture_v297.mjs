@@ -26,7 +26,7 @@ editor.querySelectorAll=selector=>selector===".cm-content .cm-line"
 editor.querySelector=selector=>selector===".cm-gap"?{}:null;
 const root=new Element("DIV",[editor]);
 root.querySelectorAll=selector=>selector===".cm-editor"?[editor]:[];
-let mode="full";
+let mode="full",readCalls=0;
 const sent=[];
 const ctx={
   Element,Node:{TEXT_NODE:3},Date,setTimeout,clearTimeout,TextEncoder,
@@ -37,9 +37,16 @@ const ctx={
   })},
   chrome:{runtime:{sendMessage:async message=>{
     sent.push(message);
-    if(message.type==="chat2api.native.editor.read-v297")return mode==="full"?
-      {ok:true,source:"codemirror-state-v297",text:ALL_CODE,length:ALL_CODE.length}:
-      {ok:false,reason:"editor-main-world-unavailable"};
+    if(message.type==="chat2api.native.editor.read-v297"){
+      readCalls++;
+      if(mode==="late" && readCalls<=2)
+        return {ok:false,reason:"editor-view-not-found",scan_count:261,
+          attachment_count:0,dom_lines:40,virtual_gap:true};
+      return mode==="full" || mode==="late"
+        ? {ok:true,source:"codemirror-state-v297",text:ALL_CODE,
+           length:ALL_CODE.length,scan_count:270,attachment_count:1}
+        : {ok:false,reason:"editor-main-world-unavailable"};
+    }
     if(message.type==="chat2api.native.ack")return {ok:true,committed:true};
     throw Error("unrecognized request");
   }}},
@@ -66,6 +73,21 @@ while(nodes.length){
 }
 assert.ok(codeNode);
 assert.equal(codeNode.children[0].children[0].text,ALL_CODE);
+mode="late";sent.length=0;readCalls=0;
+const hydrated={requestId:"req_"+"d".repeat(32),
+  submitStartedAt:Date.now(),lastCandidateNode:root};
+await observer.capture(hydrated,true);
+assert.equal(hydrated.nativeEditorStateResolvedCount,1);
+assert.equal(hydrated.nativeFinalCaptureCommitted,true);
+assert.equal(hydrated.nativeEditorProbeRetries,2);
+assert.equal(hydrated.nativeEditorProbeScanned,270);
+assert.equal(hydrated.nativeEditorProbeAttachments,1);
+assert.equal(hydrated.nativeEditorProbeVisibleLines,40);
+assert.equal(hydrated.nativeEditorProbeVirtualized,true);
+assert.equal(sent.filter(x=>x.type==="chat2api.native.editor.read-v297").length,3);
+assert.equal(sent.filter(x=>x.type==="chat2api.native.ack").length,1,
+  "late editor hydration must never send a second terminal or snapshot");
+assert.equal(editor.getAttribute("data-chat2api-native-code-probe-v297"),null);
 mode="unavailable";sent.length=0;
 const failed={requestId:"req_"+"c".repeat(32),submitStartedAt:Date.now(),
   lastCandidateNode:root};
