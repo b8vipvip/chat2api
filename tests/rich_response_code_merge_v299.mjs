@@ -34,3 +34,20 @@ const untrusted=rich.spliceVerifiedCodeIntoCanonical(sourceText,
 assert.equal(untrusted.integrated,0);
 assert.equal(untrusted.text,sourceText);
 console.log("v299 canonical code splice at exact unique assistant paragraphs preserves all archived images, formulas and tables");
+
+const rawButUnfenced=sourceText.replace("\\n\\n"+after,
+  "\\n\\n"+code+"\\n\\n"+after);
+const falsePositive=rich.spliceVerifiedCodeIntoCanonical(rawButUnfenced,enriched,[code]);
+assert.equal(falsePositive.integrated,0,
+  "a CodeMirror substring in plain prose must not count as delivered code");
+assert.equal(falsePositive.reason,"editor-code-plain-text-ambiguous");
+assert.equal(falsePositive.text,rawButUnfenced);
+const twoEditors=rich.spliceVerifiedCodeIntoCanonical(sourceText,enriched,[code,code]);
+assert.equal(twoEditors.integrated,0,
+  "identical text does not identify two separate editor positions");
+assert.equal(twoEditors.reason,"duplicate-editor-text-ambiguous");
+const doubleFence=sourceText.replace("\\n\\n"+after,
+  "\\n\\n"+fence+"\\n\\n"+fence+"\\n\\n"+after);
+const ambiguousFences=rich.spliceVerifiedCodeIntoCanonical(doubleFence,enriched,[code]);
+assert.equal(ambiguousFences.integrated,0);
+assert.equal(ambiguousFences.reason,"existing-code-fence-ambiguous");
