@@ -169,12 +169,20 @@
     }
     const target = normalizeModel(authority?.routed_model);
     const transport = String(authority?.transport_model || "").trim() || target;
+    // A concrete model selected in the real ChatGPT picker may already
+    // produce the exact matching native wire slug. Do not overwrite it with
+    // a historical *-wm alias just because its spelling differs.
+    // If the page actually sends another model, the server-owned transport
+    // still rewrites it. The response resolved_model_slug remains the only
+    // served-model proof, irrespective of either request-side decision.
+    const nativeWireMatches = Boolean(target && originalWire && before === target);
+    const chosenWire = nativeWireMatches ? originalWire : transport;
     let rewritten = false;
     let nextInput = input, nextInit = init;
     if (payload && typeof payload === "object" && !Array.isArray(payload) && target) {
       const beforeTransport = String(payload.model || "");
-      if (normalizeModel(beforeTransport) !== target || beforeTransport !== transport) {
-        payload.model = transport;
+      if (normalizeModel(beforeTransport) !== target || beforeTransport !== chosenWire) {
+        payload.model = chosenWire;
         const nextBody = JSON.stringify(payload);
         if (init && Object.prototype.hasOwnProperty.call(init,"body")
             && init.body != null) {
@@ -215,10 +223,13 @@
     const actualWire = rewritten ? rawModel(payload) : originalWire;
     const after = normalizeModel(actualWire);
     const violation = Boolean(target && after && after !== target);
+    const pageNativeWireRespected = Boolean(nativeWireMatches && !rewritten &&
+      originalWire === actualWire);
     if (rewritten) state.rewrites += 1;
     post({ phase: "request", stream_id: streamId,
       request_model: after, request_wire_model: actualWire,
       original_request_model: before, original_wire_model: originalWire,
+      page_native_wire_respected: pageNativeWireRespected,
       authority, request_rewritten: rewritten,
       authority_violation: violation });
     return { input: nextInput, init: nextInit, requestModel: after,
