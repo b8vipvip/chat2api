@@ -104,7 +104,9 @@
       const acceptedNames=new Set(["code","source","value","text","content",
         "doc","initialCode","initialValue","codeText","sourceCode","defaultCode",
         "defaultValue","children"]);
-      const nestedNames=new Set(["data","block","editor","document","props","node"]);
+      const nestedNames=new Set(["data","block","editor","document","props","node",
+        "children","value","source","content","code","doc","initialState",
+        "initialCode","initialValue","editorState"]);
       function witness(value) {
         if (typeof value!=="string" || value.length<80 || value.length>150000)
           return false;
@@ -201,7 +203,10 @@
           proof.react_hook_nodes++;
           const state=ownValue(hook,"memoizedState");
           if(typeof state==="string")witness(state);
-          else if(state&&typeof state==="object")inspectProps(state,0);
+          else if(state&&typeof state==="object"){
+            inspectDocLike(state);
+            inspectProps(state,0);
+          }
           hook=ownValue(hook,"next");
         }
       }
