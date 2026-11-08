@@ -560,3 +560,21 @@ def test_v304_same_model_authority_rechecks_after_reasoning_and_before_dispatch(
     assert "model_selection_proof_stage:" in router
     assert "model_selection_confirmation_method:" in router
     assert "safeSelect(tabId, model)" in selector
+
+
+
+def test_v305_only_request_v6_owns_code_editor_scope_and_media_terminal():
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    owner=(root/"chrome_extension/content_request_v6.js").read_text("utf-8")
+    observer=(root/"chrome_extension/content_native_dom_evidence_v1.js").read_text("utf-8")
+    assert "function hasUntrustedReplyInput(scope)" in owner
+    assert "hasUntrustedReplyInput," in owner
+    assert "!hasUntrustedReplyInput(scope)" in owner
+    assert "hasUntrustedReplyInput(prior)" in owner
+    assert "hasUntrustedReplyInput(scope)) continue" in owner
+    assert "contract?.hasUntrustedReplyInput" in observer
+    assert "scene.uncovered > 0" in owner
+    assert "literalCode" in owner
+    assert 'type:"chat.completed"' not in observer
+    assert 'type:"chat.error"' not in observer
