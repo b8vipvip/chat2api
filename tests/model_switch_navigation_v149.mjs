@@ -61,8 +61,17 @@ async function runScenario({navigates=false,clickSucceeds=true,missing=false,dis
   };
   context.globalThis=context;
   vm.runInNewContext(source,context);
-  const result=await context.__CHAT2API_MODEL_SWITCH_V149__.safeSelect(22,desired);
-  return {result,clicks,inspected,loaded};
+  const authority=context.__CHAT2API_MODEL_SWITCH_V149__;
+  const result=await authority.safeSelect(22,desired);
+  let preSend=null, changed=null;
+  if (result.ok) {
+    preSend=await authority.safeConfirmBeforeRequest(22,desired);
+    // Model UI changed during the downstream reasoning/attachment UI step:
+    // final verification must reject BEFORE any user prompt is submitted.
+    current="gpt-6";
+    changed=await authority.safeConfirmBeforeRequest(22,desired);
+  }
+  return {result,clicks,inspected,loaded,preSend,changed};
 }
 
 const navigation=await runScenario({navigates:true});
@@ -71,6 +80,12 @@ assert.equal(navigation.clicks,1,"navigation must not cause duplicate click");
 assert.equal(navigation.result.data.current_model,"gpt-5.6-sol");
 assert.ok(navigation.inspected>=2,"must verify from the new live page twice");
 assert.equal(navigation.result.data.validation_method,"fresh-tab-picker-state-v149");
+assert.equal(navigation.preSend.ok,true);
+assert.equal(navigation.preSend.data.validation_method,
+  "pre-send-live-menu-selected-row-v304");
+assert.equal(navigation.changed.ok,false);
+assert.equal(navigation.changed.code,"model_pre_send_selection_changed");
+assert.equal(navigation.clicks,1,"final proof must not select a model again");
 
 const steady=await runScenario();
 assert.equal(steady.result.ok,true);
