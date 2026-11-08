@@ -788,7 +788,11 @@
       return {text:String(original||""),integrated:0,
         reason:evidence.reason||"editor-reply-scope-incomplete"};
     }
-    const enriched=normalizeOutput(blockMarkdown(clone));
+    // Do not normalize the entire enriched Markdown: normalizeOutput()
+    // collapses 3+ newlines even INSIDE fenced Python source, so source
+    // equality fails after a correct full-editor read (or changes code).
+    // The surgical splice preserves canonical surrounding text unchanged.
+    const enriched=blockMarkdown(clone);
     return spliceVerifiedCodeIntoCanonical(original,enriched,
       [...verifiedEditorDocs.values()].map(x=>x.text));
   }
