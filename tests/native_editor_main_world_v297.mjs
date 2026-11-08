@@ -145,6 +145,43 @@ editor.querySelectorAll=selector=>selector===".cm-content .cm-line"
 const insufficient=await call();
 assert.equal(insufficient.ok,false);
 assert.equal(insufficient.react_candidate_count,0);
+// req_31d27a production: five same-card React hosts were found but
+// direct props contained no corroborated strings. The immutable CM6 Text
+// document may be held by a React hook, still only on THIS editor card.
+editor.querySelectorAll=selector=>selector===".cm-content .cm-line"
+  ? shown.map(textContent=>({textContent})) : [];
+parent["__reactFiber$test"].memoizedProps={label:"Python"};
+const hookedDoc={
+  length:docValue.length,
+  sliceString(begin,end){return docValue.slice(begin,end);},
+};
+parent["__reactFiber$test"].memoizedState={
+  memoizedState:{editorState:{doc:hookedDoc}},next:null,
+};
+const hooked=await call();
+assert.equal(hooked.ok,true);
+assert.equal(hooked.text,docValue);
+assert.equal(hooked.react_document_nodes,1);
+assert.ok(hooked.react_hook_nodes>=1);
+// Same-origin React child arrays may wrap a nested CodeMirror code prop.
+// Traverse only children under this marked editor's bounded owner chain.
+parent["__reactFiber$test"].memoizedState=null;
+parent["__reactFiber$test"].memoizedProps={
+  children:[{props:{children:[{props:{source:docValue}}]}}],
+};
+const nested=await call();
+assert.equal(nested.ok,true);
+assert.equal(nested.text,docValue);
+assert.ok(nested.react_array_nodes>=2);
+// A competing candidate inside hooks MUST NOT win by position/length.
+parent["__reactFiber$test"].memoizedState={
+  memoizedState:{code:docValue+"\\n// diverging owner"},next:null,
+};
+const ambiguousNested=await call();
+assert.equal(ambiguousNested.ok,false);
+assert.equal(ambiguousNested.reason,"editor-view-not-found");
+assert.equal(ambiguousNested.react_candidate_count,2);
+parent["__reactFiber$test"].memoizedState=null;
 editor.parentElement=null;
 editor.querySelectorAll=()=>[];
 editor.querySelector=formerQuery;
