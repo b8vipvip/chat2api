@@ -3429,6 +3429,9 @@
   }
 
   state.contract = Object.freeze({
+    // One shared read-only editor/composer distinction used by the native
+    // evidence observer. Neither observer nor helper owns a terminal decision.
+    hasUntrustedReplyInput,
     currentAssistantState,
     currentUserTurn,
     refreshAssistantBaseline,
