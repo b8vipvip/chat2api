@@ -514,6 +514,9 @@ async def capture(args):
                 "version":VERSION,"request_id":args.request_id,"worker_id":args.worker_id,
                 "scope":report["scope"],"counts":report["counts"],
                 "screenshot_count":screens,"truncated":bool(report.get("reason")),
+                "full_reply_screenshot": bool(
+                    screens and 0 < rect["h"] <= 1600 * 24
+                    and screens * 1600 >= rect["h"]),
                 "source":"existing-chatgpt-page","conversation_url_included":False,
                 "request_binding":verification},ensure_ascii=False))
             if (folder/"diagnostic.log").is_file():
