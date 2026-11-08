@@ -245,7 +245,7 @@
       const replacements=[];
       for (let i=0; i<originals.length; i++) {
         const proof=docs.get(originals[i]);
-        if (proof?.source!=="codemirror-state-v297" ||
+        if (!["codemirror-state-v297","react-owned-code-v302"].includes(proof?.source) ||
             typeof proof.text!=="string" || !proof.text.trim() ||
             proof.text.length>150000) {
           editorContext.reason="editor-source-not-verified";
@@ -788,7 +788,11 @@
       return {text:String(original||""),integrated:0,
         reason:evidence.reason||"editor-reply-scope-incomplete"};
     }
-    const enriched=normalizeOutput(blockMarkdown(clone));
+    // Do not normalize the entire enriched Markdown: normalizeOutput()
+    // collapses 3+ newlines even INSIDE fenced Python source, so source
+    // equality fails after a correct full-editor read (or changes code).
+    // The surgical splice preserves canonical surrounding text unchanged.
+    const enriched=blockMarkdown(clone);
     return spliceVerifiedCodeIntoCanonical(original,enriched,
       [...verifiedEditorDocs.values()].map(x=>x.text));
   }

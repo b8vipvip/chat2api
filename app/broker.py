@@ -83,6 +83,8 @@ _TERMINAL_PROVENANCE_NUMBERS = {
     "native_code_editor_captured",
     "native_editor_probe_scanned", "native_editor_probe_attachments",
     "native_editor_probe_visible_lines", "native_editor_probe_retries",
+    "native_editor_react_fiber_hosts", "native_editor_react_candidate_count",
+    "native_editor_react_anchor_count", "native_editor_react_recovered",
     "native_canonical_code_integrated",
 }
 _TERMINAL_PROVENANCE_STRINGS = {
@@ -110,6 +112,10 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
             if (key.startswith("native_code_editor_")
                     or key == "native_canonical_code_integrated") and (
                 type(value) is not int or not 0 <= value <= 8
+            ):
+                continue
+            if key.startswith("native_editor_react_") and (
+                type(value) is not int or not 0 <= value <= 32
             ):
                 continue
             if key.startswith("native_editor_probe_") and (

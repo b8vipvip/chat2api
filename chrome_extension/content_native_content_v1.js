@@ -320,14 +320,14 @@
           !((declaredTotal > 0 && declaredTotal <= monacoLines.length) ||
             fitsViewport);
         const trustedState = active.nativeEditorDocs?.get(element);
-        if ((!trustedState || trustedState.source !== "codemirror-state-v297") &&
+        if ((!trustedState || !["codemirror-state-v297","react-owned-code-v302"].includes(trustedState.source)) &&
             (!lines.length || lines.length > 10000 || cmVirtual || monacoVirtual)) {
           active.nativeStructuralFailure = cmVirtual || monacoVirtual
             ? "code-editor-virtualized" : "code-editor-content-unavailable";
           truncated = true;
           return null;
         }
-        const text = trustedState?.source === "codemirror-state-v297"
+        const text = ["codemirror-state-v297","react-owned-code-v302"].includes(trustedState?.source)
           ? trustedState.text : lines.map(line=>String(line.textContent || "")).join("\n");
         if (typeof text !== "string" || !text.trim() || text.length > 150000 ||
             chars + text.length > textBudget) {
@@ -589,6 +589,10 @@
     active.nativeEditorProbeVisibleLines=0;
     active.nativeEditorProbeVirtualized=false;
     active.nativeEditorProbeRetries=0;
+    active.nativeEditorReactFiberHosts=0;
+    active.nativeEditorReactCandidateCount=0;
+    active.nativeEditorReactAnchorCount=0;
+    active.nativeEditorReactRecovered=0;
     const region = globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
     if (!VERIFIED_EDITOR_SCOPES.has(region?.scope) ||
         !Array.isArray(region?.roots)) return;
@@ -661,12 +665,19 @@
           active.nativeEditorProbeVisibleLines=Math.max(active.nativeEditorProbeVisibleLines,
             bounded("dom_lines",4096));
           active.nativeEditorProbeVirtualized ||= reply?.virtual_gap===true;
+          active.nativeEditorReactFiberHosts=Math.max(active.nativeEditorReactFiberHosts,
+            bounded("react_fiber_hosts",32));
+          active.nativeEditorReactCandidateCount=Math.max(active.nativeEditorReactCandidateCount,
+            bounded("react_candidate_count",32));
+          active.nativeEditorReactAnchorCount=Math.max(active.nativeEditorReactAnchorCount,
+            bounded("react_anchor_count",8));
           if (reply?.ok || reply?.reason!=="editor-view-not-found" || attempt===2)
             break;
           active.nativeEditorProbeRetries++;
           await new Promise(resolve=>setTimeout(resolve,attempt===0?160:360));
         }
-        if (reply?.ok === true && reply.source === "codemirror-state-v297" &&
+        if (reply?.ok === true &&
+            ["codemirror-state-v297","react-owned-code-v302"].includes(reply.source) &&
             typeof reply.text === "string" && reply.text.trim() &&
             reply.length === reply.text.length && reply.text.length <= 150000 &&
             active.requestId && editor.isConnected) {
@@ -674,6 +685,8 @@
             source:reply.source,text:reply.text,
           });
           active.nativeEditorStateResolvedCount++;
+          if (reply.source==="react-owned-code-v302")
+            active.nativeEditorReactRecovered++;
         } else {
           active.nativeEditorStateFailure = String(
             reply?.reason || "editor-full-state-unavailable"
