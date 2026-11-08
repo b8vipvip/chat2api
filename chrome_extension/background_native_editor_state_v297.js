@@ -59,7 +59,6 @@
         const candidateDoc = view?.state?.doc;
         if (candidateDoc && typeof candidateDoc === "object") {
           doc = candidateDoc;
-          editorViewLocated = true;
           break;
         }
       }
