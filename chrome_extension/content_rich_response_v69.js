@@ -742,7 +742,7 @@
     // Equal code text in multiple different editor cards does not
     // identify two different positions. Never pass a partial or guessed
     // multi-editor merge to the single terminal owner.
-    if (new Set(codeTexts.map(doc=>String(doc||"").replace(/\\r\\n?/g,"\\n").replace(/\\n+$/g,""))).size
+    if (new Set(codeTexts.map(doc=>String(doc||"").replace(/\r\n?/g,"\n").replace(/\n+$/g,""))).size
         !==codeTexts.length)
       return {text:source,integrated:0,reason:"duplicate-editor-text-ambiguous"};
     let result=source, inserted=0;
@@ -754,8 +754,8 @@
         // NOT proof that the verified CodeMirror source was delivered as a
         // positioned Markdown code block. Accept idempotence only for one
         // exact fenced block; anything else is ambiguous and fail-closed.
-        const existing=[...result.matchAll(/(?:^|\\n)(`{3,}|~{3,})[^\\n]*\\n([\\s\\S]*?)\\n\\1(?=\\n|$)/g)]
-          .filter(match=>String(match[2]).replace(/\\n+$/g,"")===body);
+        const existing=[...result.matchAll(/(?:^|\n)(`{3,}|~{3,})[^\n]*\n([\s\S]*?)\n\1(?=\n|$)/g)]
+          .filter(match=>String(match[2]).replace(/\n+$/g,"")===body);
         if (existing.length===1) { inserted++;continue; }
         return {text:source,integrated:0,
           reason:existing.length ? "existing-code-fence-ambiguous"
