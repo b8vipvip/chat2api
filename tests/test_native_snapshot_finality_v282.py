@@ -138,6 +138,19 @@ def test_v297_no_false_1_to_1_when_full_editor_state_is_missing():
     }, SNAP) == "verified-final"
 
 
+def test_v297_unmapped_archived_images_cannot_prove_visual_1_to_1():
+    row = {"status": "completed", "diagnostics": {
+        **GOOD,
+        "native_layout_summary": {
+            "nodes": 6808, "tables": 25, "images": 0,
+            "archived_assets": 2, "media_mapping_complete": False,
+        },
+    }}
+    assert native_snapshot_finality(row, SNAP) == "rejected-final"
+    row["diagnostics"]["native_layout_summary"]["media_mapping_complete"] = True
+    assert native_snapshot_finality(row, SNAP) == "verified-final"
+
+
 def test_v297_private_reply_table_parity_blocks_stale_native_revision():
     comparison = {
         "comparable": True, "private_capture_complete": True,
