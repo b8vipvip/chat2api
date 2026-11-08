@@ -11,6 +11,7 @@ const cmDoc={
 let editorPresent=true, editorAttachment="content";
 const editor={
   isConnected:true,
+  children:[],shadowRoot:null,
   matches:selector=>selector===".cm-editor",
   closest:selector=>selector.includes("main") ? {} : null,
   querySelector:selector=>selector===".cm-content"
@@ -57,13 +58,43 @@ editorAttachment="absent";
 const missing=await call();
 assert.equal(missing.ok,false);
 assert.equal(missing.reason,"editor-view-not-found");
+assert.equal(missing.attachment_count,0);
+assert.equal(missing.surface_found,true);
+// Real virtualized code cards may attach the CM6 rootView after the
+// previous 180-node scan limit: only the marked editor's descendants
+// are eligible, no page-wide search or viewport-line reconstruction.
+editorAttachment="late";
+editor.children=Array.from({length:260},(_,i)=>({
+  children:[],...(i===259?{cmView:{rootView:{view:{state:{doc:cmDoc}}}}}:{}),
+}));
+const late=await call();
+assert.equal(late.ok,true);
+assert.equal(late.text,docValue);
+assert.ok(late.scan_count>=261, "late attachment must actually be scanned");
+assert.equal(late.attachment_count,1);
+editor.children=[];
+editorAttachment="shadow";
+editor.shadowRoot={children:[{
+  children:[],cmView:{rootView:{view:{state:{doc:cmDoc}}}},
+}]};
+const shadow=await call();
+assert.equal(shadow.ok,true);
+assert.equal(shadow.text,docValue);
+editor.shadowRoot=null;
 editorAttachment="content";
+editor.cmView={view:{state:{doc:{length:4,sliceString:()=>"evil"}}}};
+const ambiguous=await call();
+assert.equal(ambiguous.ok,false);
+assert.equal(ambiguous.reason,"editor-state-ambiguous");
+delete editor.cmView;
+editorAttachment="content";
+const expectedExecutions=executions;
 const unauthorized=await call(request,{tab:{id:42,url:"https://evil.example/"},frameId:0});
 assert.equal(unauthorized.ok,false);
-assert.equal(executions,3);
+assert.equal(executions,expectedExecutions);
 const subframe=await call(request,{...trusted,frameId:1});
 assert.equal(subframe.ok,false);
-assert.equal(executions,3);
+assert.equal(executions,expectedExecutions);
 docValue="x".repeat(150001);
 const oversized=await call();
 assert.equal(oversized.ok,false);
