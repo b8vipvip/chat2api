@@ -63,3 +63,40 @@ def test_v299_unknown_media_hash_cannot_be_labeled_cryptographically_verified():
     )["blocks"] if b["type"] == "image")
     assert "archive_sha256" not in block
     assert "position_proof" not in block
+
+
+def test_v300_colliding_image_url_must_not_choose_sha_by_last_write():
+    url = "https://chat2api.example/api/media/shared/signed"
+    markdown = f"before ![same]({url}) after"
+    assets = [
+        {"id": "med_one", "url": url, "sha256": "a" * 64},
+        {"id": "med_two", "owned_url": url, "sha256": "b" * 64},
+    ]
+    result = manifest(markdown, assets, [])
+    assert result["blocks"] == [
+        {"type": "markdown", "start": 0, "end": len(markdown)}
+    ]
+    assert manifest(markdown, list(reversed(assets)), []) == result
+    same = [
+        {"id": "med_one", "url": url, "sha256": "a" * 64},
+        {"id": "med_one", "owned_url": url, "sha256": "a" * 64},
+    ]
+    img = [x for x in manifest(markdown, same, [])["blocks"] if x["type"] == "image"]
+    assert len(img) == 1 and img[0]["archive_sha256"] == "a" * 64
+
+
+def test_v300_code_fence_links_cannot_claim_archived_media_positions():
+    url = "https://chat2api.example/api/media/med_one/signed"
+    outside = f"![real]({url})"
+    fake = f"![example]({url})"
+    text = f"before\n\n\x60\x60\x60markdown\n{fake}\n\x60\x60\x60\n\n{outside}\n\n~~~md\n{fake}\n~~~\n"
+    result = manifest(text, [{"id": "med_one", "url": url,
+                              "sha256": "f" * 64}], [])
+    image_spans = [x for x in result["blocks"] if x["type"] == "image"]
+    assert len(image_spans) == 1
+    assert text[image_spans[0]["start"]:image_spans[0]["end"]] == outside
+    assert "".join(text[b["start"]:b["end"]] for b in result["blocks"]) == text
+    unclosed = f"\x60\x60\x60markdown\n{fake}\n"
+    assert manifest(unclosed, [{"id": "med_one", "url": url}], [])["blocks"] == [
+        {"type": "markdown", "start": 0, "end": len(unclosed)}
+    ]

@@ -118,6 +118,7 @@ async def capture(request_id: str, path: Path, port: int) -> dict:
                 "native_finality":"verified-final",
                 "media_sha256_status":"verified-sha256",
                 "media_assets":report["images"],
+                "capture_rect":{"width":rect["w"],"height":rect["h"]},
                 "native_tables":report["tables"],
                 "native_code_blocks":report["code_blocks"],
                 "screenshot_count":screenshot_count,

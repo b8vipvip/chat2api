@@ -141,9 +141,17 @@ def native_finality_decision(
     # CodeMirror editor probe provides EVIDENCE, not an alternative finality.
     editors = diag.get("native_code_editor_state_candidates")
     resolved = diag.get("native_code_editor_state_resolved")
-    if (type(editors) is int and editors > 0 and
-            (type(resolved) is not int or resolved < editors)):
-        return decide("rejected-final", "incomplete-editor-state")
+    if type(editors) is int and editors > 0:
+        if type(resolved) is not int or resolved != editors:
+            return decide("rejected-final", "incomplete-editor-state")
+        # Resolving editor state is only input evidence, not proof that the
+        # source reached the canonical OpenAI text. request-v6 is the sole
+        # canonical output owner; its post-splice count must match *all*
+        # request-owned editors. Missing/older diagnostics fail closed for
+        # optional native finality, without changing API business completion.
+        integrated = diag.get("native_canonical_code_integrated")
+        if type(integrated) is not int or integrated != editors:
+            return decide("rejected-final", "canonical-editor-code-not-delivered")
 
     if diag.get("native_snapshot_terminal_complete") is False:
         return decide("rejected-final", "final-capture-incomplete")
