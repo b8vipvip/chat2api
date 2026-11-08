@@ -318,6 +318,11 @@ async function requestHistoryLoadNativePreview(requestId,row,sequence){
   const status=document.getElementById('requestConversationNativeStatus');
   const nativeButton=document.getElementById('requestConversationNativeMode');
   preview.replaceChildren();nativeButton.disabled=true;
+  // Screenshot tools must not confuse the previous request's DOM with the
+  // newly selected request. Clear all witness markers before async loading.
+  preview.removeAttribute('data-chat2api-native-render-request-id');
+  preview.removeAttribute('data-chat2api-native-render-finality');
+  preview.removeAttribute('data-chat2api-native-media-sha-verified');
   status.textContent='正在确认原生结构快照…';
   try{
     const data=await api('/api/admin/requests/'+encodeURIComponent(requestId)+'/native-content');
@@ -358,6 +363,15 @@ async function requestHistoryLoadNativePreview(requestId,row,sequence){
       throw new Error('原生图片验证数据无效，已拒绝不可信映射');
     const tree=requestHistoryNativeNode(snapshot.root,previewAssets,{count:0});
     preview.appendChild(tree);
+    // CDP captures may only witness a real verified-final same-request
+    // renderer. DOM attributes contain no user text, file bytes or token.
+    if(finality==='verified-final' && /^req_[a-f0-9]{32}$/.test(requestId)) {
+      preview.setAttribute('data-chat2api-native-render-request-id',requestId);
+      preview.setAttribute('data-chat2api-native-render-finality',finality);
+      preview.setAttribute('data-chat2api-native-media-sha-verified',
+        !media.length || (candidate?.status==='verified-sha256'
+          && verifiedCount===imageCount && imageCount===media.length) ? 'true':'false');
+    }
     nativeButton.disabled=false;
     status.textContent=(finality==='rejected-final'
       ?'警告：最终原生捕获失败或快照版本不符。当前为旧增量诊断快照，不能作为最终回复交付；请以标准文字回复为准。'
