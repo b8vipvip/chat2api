@@ -19,7 +19,11 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from zipfile import ZipFile, ZIP_DEFLATED
 from PIL import Image
-from scripts.native_page_diagnostic_v1 import CDP, json_get, ws_endpoint
+try:
+    from scripts.native_page_diagnostic_v1 import CDP, json_get, ws_endpoint
+except ModuleNotFoundError:
+    # Direct invocation: python scripts/native_visual_capture_candidate_v299.py
+    from native_page_diagnostic_v1 import CDP, json_get, ws_endpoint
 
 ALLOWED_HOSTS = frozenset({"chat2api.mv3.cn"})
 REQUEST = re.compile(r"^req_[a-f0-9]{32}$")
