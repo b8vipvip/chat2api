@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import math
 import re
 import zipfile
 from pathlib import Path
@@ -79,6 +80,22 @@ def load_capture(path: str | Path, kind: str) -> dict:
                     images.append(source.convert("RGB"))
             except (UnidentifiedImageError, OSError) as exc:
                 raise ValueError("screenshot-png-invalid") from exc
+        # A self-declared "full_reply_screenshot" is not evidence of
+        # geometry. Compare actual decoded PNG coverage with the bounded
+        # CSS capture rectangle. Right-edge or bottom truncation must fail
+        # even if both images happen to show identical cropped pixels.
+        rect = manifest.get("capture_rect")
+        if not isinstance(rect, dict):
+            raise ValueError("capture-geometry-proof-missing")
+        width, height = rect.get("width"), rect.get("height")
+        if (type(width) not in (int, float) or type(height) not in (int, float)
+                or not math.isfinite(width) or not math.isfinite(height)
+                or not 8 <= width <= 3000 or not 8 <= height <= 38400):
+            raise ValueError("capture-geometry-untrusted")
+        if any(abs(frame.width-width) > 2 for frame in images) or (
+                abs(sum(frame.height for frame in images)-height) >
+                2*len(images)):
+            raise ValueError("screenshot-pixels-do-not-cover-capture-rect")
         return {"manifest": manifest, "images": images}
 
 
