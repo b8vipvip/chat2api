@@ -163,6 +163,13 @@ def test_v297_no_false_1_to_1_when_full_editor_state_is_missing():
             **GOOD, "native_code_editor_state_candidates": 1,
             "native_code_editor_state_resolved": 1,
         },
+    }, SNAP) == "rejected-final", "reading a CodeMirror doc is not SSE delivery"
+    assert native_snapshot_finality({
+        "status": "completed", "diagnostics": {
+            **GOOD, "native_code_editor_state_candidates": 1,
+            "native_code_editor_state_resolved": 1,
+            "native_canonical_code_integrated": 1,
+        },
     }, SNAP) == "verified-final"
 
 
@@ -241,6 +248,8 @@ def test_v298_missing_or_mismatched_private_media_proof_never_overrides_finality
     }}
     assert native_finality_decision(row, SNAP)["reason"] == "incomplete-editor-state"
     row["diagnostics"]["native_code_editor_state_resolved"] = 1
+    assert native_finality_decision(row, SNAP)["reason"] == "canonical-editor-code-not-delivered"
+    row["diagnostics"]["native_canonical_code_integrated"] = 1
     row["diagnostics"]["native_layout_summary"] = {
         "archived_assets": 3, "media_mapping_complete": False,
     }
@@ -256,3 +265,20 @@ def test_v298_missing_or_mismatched_private_media_proof_never_overrides_finality
     assert native_finality_decision(row, SNAP)["reason"] == "same-request-table-loss"
     row["diagnostics"]["native_capture_comparison"]["native_tables"] = 16
     assert native_finality_decision(row, SNAP)["status"] == "verified-final"
+
+
+def test_v300_canonical_source_not_delivered_never_claims_verified_final():
+    from app.native_snapshot_finality_v282 import native_finality_decision
+    row = {"status": "completed", "diagnostics": {
+        **GOOD, "native_code_editor_state_candidates": 2,
+        "native_code_editor_state_resolved": 2,
+    }}
+    assert native_finality_decision(row, SNAP)["reason"] == "canonical-editor-code-not-delivered"
+    for invalid in (None, False, 0, 1, 3):
+        row["diagnostics"]["native_canonical_code_integrated"] = invalid
+        assert native_finality_decision(row, SNAP)["reason"] == "canonical-editor-code-not-delivered"
+        assert row["status"] == "completed"
+    row["diagnostics"]["native_canonical_code_integrated"] = 2
+    assert native_finality_decision(row, SNAP)["status"] == "verified-final"
+    row["diagnostics"]["native_code_editor_state_resolved"] = 3
+    assert native_finality_decision(row, SNAP)["reason"] == "incomplete-editor-state"
