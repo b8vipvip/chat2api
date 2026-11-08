@@ -51,6 +51,34 @@ def test_proven_stale_native_snapshot_get_and_sse_do_not_deliver_false_final(tmp
         assert admin.json()["snapshot_finality"]=="rejected-final"
         assert app.state.telemetry.get(RID)["status"]=="completed"
 
+def test_completed_but_unverified_legacy_native_snapshot_is_forensic_only(tmp_path):
+    app=create_app(Settings(CHAT2API_API_KEY="test-key",CHAT2API_PAIRING_CODE="test-pair",
+                            CHAT2API_DATA_DIR=tmp_path))
+    with TestClient(app) as client:
+        async def seed():
+            await app.state.telemetry.upsert({"request_id":RID,"api_key_id":"master",
+                                              "status":"completed","diagnostics":{}})
+        asyncio.run(seed())
+        assert app.state.native_content.publish(RID,"master",SNAP)
+        auth={"Authorization":"Bearer test-key"}
+        assert client.get(f"/v1/native-content/{RID}",headers=auth).status_code==404
+        events=client.get(f"/v1/native-content/{RID}/events",headers=auth)
+        assert events.status_code==200
+        assert "event: native.snapshot" not in events.text
+        forensic=client.get(f"/api/admin/requests/{RID}/native-content",headers=auth)
+        assert forensic.status_code==200
+        assert forensic.json()["snapshot_finality"]=="unverified-final"
+        assert forensic.json()["snapshot"]["revision"]==12
+
+
+def test_v298_api_metadata_only_links_authoritatively_verified_native_reply():
+    from pathlib import Path
+    source=(Path(__file__).resolve().parents[1]/"app/main.py").read_text("utf-8")
+    assert 'if finality_status not in {"live-provisional", "verified-final"}:' in source
+    assert source.count(') == "verified-final"') >= 2
+    assert ') != "rejected-final"' not in source
+
+
 def test_verified_final_snapshot_still_delivered(tmp_path):
     app=create_app(Settings(CHAT2API_API_KEY="test-key",CHAT2API_PAIRING_CODE="test-pair",
                             CHAT2API_DATA_DIR=tmp_path))
