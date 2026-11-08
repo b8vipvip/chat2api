@@ -68,6 +68,13 @@ ctx.__CHAT2API_PROBE_SUPERVISOR_V1__ = {snapshot:()=>({
 assert.equal(terminal(richPending,false,false,now+1500),true,
   'a new verified finish toolbar after all blocks permits completion');
 ctx.__CHAT2API_PROBE_SUPERVISOR_V1__ = {snapshot:()=>({
+  scene_changed_block_count:926,scene_uncovered_block_count:3,
+  scene_uncovered_block_chars:37,scene_finish_after_all_blocks:false,
+})};
+const req973={...pending,networkObservedAt:now-68000};
+assert.equal(terminal(req973,false,false,now+3000),false,
+  'req_97338: even 3 tiny orphan blocks may be a user heading, assistant heading and unfinished tail; never complete a 926-block answer without scope proof');
+ctx.__CHAT2API_PROBE_SUPERVISOR_V1__ = {snapshot:()=>({
   scene_changed_block_count:5,scene_uncovered_block_count:2,
   scene_uncovered_block_chars:24,scene_finish_after_all_blocks:false,
 })};
