@@ -283,8 +283,8 @@
       }
       const scene = active.mediaTerminalSceneFacts;
       if (scene?.completionEvidencePresent && !scene.finishedAfterAll
-          && scene.changed >= 10 && scene.uncovered >= 8
-          && scene.uncoveredChars >= 128) return false;
+          && scene.changed >= 10 && scene.uncovered > 0
+          && scene.uncoveredChars > 0) return false;
     }
     return true;
   }
@@ -297,10 +297,20 @@
   // transaction boundary, without decoding or logging any media bytes.
   function mediaTerminalPayloadIntegrity(text) {
     const value = String(text || "");
-    const imageStarts = [...value.matchAll(/data:image\//gi)].map(m => m.index);
+    // A literal data:image/ inside Python/Markdown code is not a generated
+    // picture. Never let a code example manufacture a broken fourth image
+    // marker in a multi-image answer. Equally, an actual malformed Markdown
+    // image outside a fenced code block must keep failing closed.
+    const fenced = [...value.matchAll(
+      /^( {0,3})(`{3,}|~{3,})[^\r\n]*\r?\n[\s\S]*?^\1\2[ \t]*$/gm
+    )].map(m=>({start:m.index,end:m.index+m[0].length}));
+    const literalCode = index => fenced.some(r=>index>=r.start && index<r.end);
+    const imageStarts = [...value.matchAll(/data:image\//gi)]
+      .filter(m=>!literalCode(m.index)).map(m=>m.index);
     const imageRecognized = [...value.matchAll(
       /!\[[^\]\r\n]{0,200}\]\((data:image\/(?:png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+)\)/gi
-    )].map(m => m.index + m[0].indexOf("data:image/"));
+    )].map(m => m.index + m[0].indexOf("data:image/"))
+      .filter(index=>!literalCode(index));
     const fileStarts = [...value.matchAll(/!\[📎 /g)].map(m => m.index);
     const fileRecognized = [...value.matchAll(
       /!\[📎 ([^\]\r\n]{1,180})\]\((?:data:[a-z0-9.+-]+\/[a-z0-9.+-]+;base64,[A-Za-z0-9+/=]+|chat2api-staged:[a-f0-9]{32})\)/gi
