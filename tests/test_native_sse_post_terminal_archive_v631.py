@@ -19,6 +19,17 @@ def test_native_sidecar_stream_tracks_ready_after_completed_request(tmp_path, mo
     async def record():
         await app.state.telemetry.upsert({
             "request_id": rid, "api_key_id": "master", "status": "completed",
+            # The completed request's native document must be a genuinely
+            # ACKed same-revision terminal snapshot for public SSE publication;
+            # deferred file readiness is orthogonal to that native finality.
+            "diagnostics": {
+                "native_snapshot_terminal_complete": True,
+                "native_capture_revision": 4,
+                "native_final_capture_committed": True,
+                "native_chunk_complete": True,
+                "native_snapshot_persisted": True,
+                "native_reply_scope_verified": True,
+            },
             "response_text": f"[📎 plan.xlsx]({url})",
             "response_generated_files": [{"filename": "plan.xlsx", "url": url,
                 "bytes": 321, "status": "processing"}],

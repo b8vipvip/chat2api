@@ -51,6 +51,34 @@ def test_proven_stale_native_snapshot_get_and_sse_do_not_deliver_false_final(tmp
         assert admin.json()["snapshot_finality"]=="rejected-final"
         assert app.state.telemetry.get(RID)["status"]=="completed"
 
+def test_completed_but_unverified_legacy_native_snapshot_is_forensic_only(tmp_path):
+    app=create_app(Settings(CHAT2API_API_KEY="test-key",CHAT2API_PAIRING_CODE="test-pair",
+                            CHAT2API_DATA_DIR=tmp_path))
+    with TestClient(app) as client:
+        async def seed():
+            await app.state.telemetry.upsert({"request_id":RID,"api_key_id":"master",
+                                              "status":"completed","diagnostics":{}})
+        asyncio.run(seed())
+        assert app.state.native_content.publish(RID,"master",SNAP)
+        auth={"Authorization":"Bearer test-key"}
+        assert client.get(f"/v1/native-content/{RID}",headers=auth).status_code==404
+        events=client.get(f"/v1/native-content/{RID}/events",headers=auth)
+        assert events.status_code==200
+        assert "event: native.snapshot" not in events.text
+        forensic=client.get(f"/api/admin/requests/{RID}/native-content",headers=auth)
+        assert forensic.status_code==200
+        assert forensic.json()["snapshot_finality"]=="unverified-final"
+        assert forensic.json()["snapshot"]["revision"]==12
+
+
+def test_v298_api_metadata_only_links_authoritatively_verified_native_reply():
+    from pathlib import Path
+    source=(Path(__file__).resolve().parents[1]/"app/main.py").read_text("utf-8")
+    assert 'if finality_status not in {"live-provisional", "verified-final"}:' in source
+    assert source.count(') == "verified-final"') >= 2
+    assert ') != "rejected-final"' not in source
+
+
 def test_verified_final_snapshot_still_delivered(tmp_path):
     app=create_app(Settings(CHAT2API_API_KEY="test-key",CHAT2API_PAIRING_CODE="test-pair",
                             CHAT2API_DATA_DIR=tmp_path))
@@ -148,6 +176,10 @@ def test_v297_unmapped_archived_images_cannot_prove_visual_1_to_1():
     }}
     assert native_snapshot_finality(row, SNAP) == "rejected-final"
     row["diagnostics"]["native_layout_summary"]["media_mapping_complete"] = True
+    # Slot order alone cannot prove the original image bytes.
+    assert native_snapshot_finality(row, SNAP) == "rejected-final"
+    row["diagnostics"]["native_image_identity_status"] = "verified-sha256"
+    row["diagnostics"]["native_identity_matched_count"] = 2
     assert native_snapshot_finality(row, SNAP) == "verified-final"
 
 
@@ -172,3 +204,55 @@ def test_v297_private_reply_table_parity_blocks_stale_native_revision():
     # Decorative small favicon images are not a verified generated-image
     # identity; do not treat their absence as proof the rich output is wrong.
     assert comparison["private_images_small"] == 2
+
+
+def test_v298_one_finality_authority_reports_conflicts_with_stable_reason():
+    from app.native_snapshot_finality_v282 import native_finality_decision
+    row = {"status": "completed", "diagnostics": {
+        **GOOD, "native_final_capture_committed": False,
+    }}
+    original = dict(row["diagnostics"])
+    verdict = native_finality_decision(row, SNAP)
+    assert verdict == {
+        "status": "rejected-final",
+        "reason": "failed-proof-native_final_capture_committed",
+        "authority": "server-native-finality-v298",
+        "scope": "native-sidecar-only",
+        "visually_verified": False,
+    }
+    assert native_snapshot_finality(row, SNAP) == verdict["status"]
+    assert row["diagnostics"] == original
+    assert row["status"] == "completed"
+
+    row["diagnostics"] = {**GOOD}
+    proved = native_finality_decision(row, SNAP)
+    assert proved["status"] == "verified-final"
+    assert proved["reason"] == "verified-terminal-revision"
+    # Structural finality is NOT a pixel-perfect/media-byte identity claim.
+    assert proved["visually_verified"] is False
+
+
+def test_v298_missing_or_mismatched_private_media_proof_never_overrides_finality():
+    from app.native_snapshot_finality_v282 import native_finality_decision
+    row = {"status": "completed", "diagnostics": {
+        **GOOD,
+        "native_code_editor_state_candidates": 1,
+        "native_code_editor_state_resolved": 0,
+    }}
+    assert native_finality_decision(row, SNAP)["reason"] == "incomplete-editor-state"
+    row["diagnostics"]["native_code_editor_state_resolved"] = 1
+    row["diagnostics"]["native_layout_summary"] = {
+        "archived_assets": 3, "media_mapping_complete": False,
+    }
+    assert native_finality_decision(row, SNAP)["reason"] == "unmapped-archived-media"
+    row["diagnostics"]["native_layout_summary"]["media_mapping_complete"] = True
+    assert native_finality_decision(row, SNAP)["reason"] == "unverified-media-byte-identity"
+    row["diagnostics"]["native_image_identity_status"] = "verified-sha256"
+    row["diagnostics"]["native_identity_matched_count"] = 3
+    row["diagnostics"]["native_capture_comparison"] = {
+        "comparable": True, "private_capture_complete": True,
+        "private_tables": 16, "native_tables": 10,
+    }
+    assert native_finality_decision(row, SNAP)["reason"] == "same-request-table-loss"
+    row["diagnostics"]["native_capture_comparison"]["native_tables"] = 16
+    assert native_finality_decision(row, SNAP)["status"] == "verified-final"

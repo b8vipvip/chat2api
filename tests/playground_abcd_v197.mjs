@@ -8,7 +8,7 @@ const source=readFileSync(new URL("../app/admin_playground_abcd_v197.js",import.
 const FULL = "## 开店\n" + "咖啡运营".repeat(900) + 
   "\n| 类别 | 数值 |\n|---|---|\n| A | 1 |\n| 类别 | 数值 |\n|---|---|\n| B | 2 |" +
   "\n\\(100+200=300\\)\n" + String.fromCharCode(96).repeat(3) +
-  "js\nconsole.log(1)\n" + String.fromCharCode(96).repeat(3) +
+  "python\nimport math\n\ndef revenue(amount):\n    value = float(amount)\n    return math.floor(value)\n" + String.fromCharCode(96).repeat(3) +
   "\n执行任务表：指定负责人与期限。";
 const IMG_LINK=i=>"![插画](https://api.test/api/media/med_1234567890/abc"+i+")";
 const FILE_LINK=(ext,i)=>"[📎 资料"+i+"."+ext+"](https://api.test/api/generated-files/pending/pgen_"+(i+1).toString(16).padStart(32,"0")+"/token"+String(i).padStart(16,"0")+")";
@@ -204,12 +204,26 @@ test("D: second turn keeps prior messages",async()=>{
   assert.equal(r.records.filter(x=>x.kind==="terminal").length,2);
 });
 
-test("A: recovered long-form LaTex and one-backtick Python counts as content, with formatting warning",async()=>{
-  const fallback=FULL.replace(/\`\`\`js\nconsole.log\(1\)\n\`\`\`/, "\`import math\\ndef profit():\\n return 1\`").replace("\\(100+200=300\\)","\\\\boxed{100+200=300}");
-  const r=await scenario("A",[fallback]).run();
-  assert.match(r.status,/内容验收有警告/);
-  assert.doesNotMatch(r.status,/未通过/);
-  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"warning");
+test("A: missing Python source cannot be promoted by unrelated Plain text fence",async()=>{
+  const lost=FULL.replace(
+    /python\nimport math\n\ndef revenue\(amount\):\n    value = float\(amount\)\n    return math\.floor\(value\)/,
+    "text\nExpected revenue: 1245"
+  );
+  const r=await scenario("A",[lost]).run();
+  assert.match(r.status,/未通过/);
+  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"failed");
+  const check=r.report.checks.find(x=>x.label.includes("Python"));
+  assert.equal(check.passed,false);
+});
+
+test("A: raw inline Python code without a proper fenced executable block is not 1:1",async()=>{
+  const lost=FULL.replace(
+    /`{3}python\nimport math\n\ndef revenue\(amount\):\n    value = float\(amount\)\n    return math\.floor\(value\)\n`{3}/,
+    "`import math\ndef revenue(amount):\n return amount`"
+  );
+  const r=await scenario("A",[lost]).run();
+  assert.match(r.status,/未通过/);
+  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"failed");
 });
 
 test("C: corrupted ZIP with valid magic and size must fail independent SHA256 verification",async()=>{

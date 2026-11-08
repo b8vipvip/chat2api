@@ -20,7 +20,7 @@ from .runtime_contract import SERVER_RUNTIME_VERSION
 from .runtime_code_identity import runtime_code_sha
 from .telemetry import parse_request_since
 from .playground_request_evidence_v207 import request_test_index, playground_diagnostics
-from .native_snapshot_finality_v282 import native_code_coverage, native_snapshot_finality
+from .native_snapshot_finality_v282 import native_code_coverage, native_finality_decision
 
 
 PATCH_VERSION = "0.8.0"
@@ -151,8 +151,14 @@ def install_v8_patch(app: FastAPI) -> FastAPI:
             )
         except (ValueError, TypeError):
             native_layout = None
+        # Export the same decision authority used by GET/SSE/UI. Do not
+        # recalculate finality with independent per-route boolean conditions.
+        verdict = native_finality_decision(row, native_layout)
         native_integrity = {
-            "finality": native_snapshot_finality(row, native_layout),
+            "finality": verdict["status"],
+            "finality_reason": verdict["reason"],
+            "finality_authority": verdict["authority"],
+            "visual_1to1_verified": verdict["visually_verified"],
             "code_coverage": native_code_coverage(row, native_layout),
         }
         return {
