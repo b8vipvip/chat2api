@@ -4,6 +4,28 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
 
+def _publish_verified_native_fixture(app, request_id, owner, snapshot):
+    """These route tests exercise authenticated display, not finality failure.
+
+    Set real same-revision finality evidence for synthetic completed requests.
+    Separate finality tests intentionally omit it and assert forensic-only.
+    This is structural publication proof, never a visual/SHA identity claim.
+    """
+    row = app.state.telemetry.get(request_id) or {}
+    if row.get("status") == "completed":
+        async def record_ack():
+            await app.state.telemetry.merge_diagnostics(request_id, {
+                "native_snapshot_terminal_complete": True,
+                "native_capture_revision": snapshot["revision"],
+                "native_final_capture_committed": True,
+                "native_chunk_complete": True,
+                "native_snapshot_persisted": True,
+                "native_reply_scope_verified": True,
+            })
+        asyncio.run(record_ack())
+    return app.state.native_content.publish(request_id, owner, snapshot)
+
+
 def test_native_sidecar_is_authenticated_and_independent_of_terminal(tmp_path: Path):
     app = create_app(Settings(CHAT2API_API_KEY="test-key",
         CHAT2API_PAIRING_CODE="test-pair", CHAT2API_DATA_DIR=tmp_path))
@@ -15,7 +37,7 @@ def test_native_sidecar_is_authenticated_and_independent_of_terminal(tmp_path: P
                 "response_media": [{"url": "https://media.example.com/api/media/med_12345678/tokenABC12345678"}],
             })
         asyncio.run(record())
-        assert app.state.native_content.publish(rid, "master", {
+        assert _publish_verified_native_fixture(app, rid, "master", {
             "version": 1, "revision": 1,
             "root": {"tag": "div", "children": [
                 {"tag": "p", "text": "Hello"}, {"tag": "img", "media_index": 0},
@@ -47,7 +69,7 @@ def test_verified_owned_url_takes_priority_over_original_source(tmp_path: Path):
                 }],
             })
         asyncio.run(record())
-        app.state.native_content.publish(rid, "master", {
+        _publish_verified_native_fixture(app, rid, "master", {
             "version": 1, "revision": 3, "root": {"tag": "img", "media_index": 0},
         })
         response = client.get(f"/v1/native-content/{rid}",
@@ -85,7 +107,7 @@ def test_privileged_native_layout_evidence_does_not_expose_asset_tokens(tmp_path
                 }],
             })
         asyncio.run(record())
-        app.state.native_content.publish(rid, "master", {
+        _publish_verified_native_fixture(app, rid, "master", {
             "version": 1, "revision": 5,
             "root": {"tag": "div", "style": {"display": "grid"},
                      "children": [{"tag": "img", "media_index": 0}]},
@@ -115,7 +137,7 @@ def test_probe_zip_includes_safe_full_native_layout_snapshot(tmp_path: Path):
                 "request_id": rid, "api_key_id": "master", "status": "completed",
             })
         asyncio.run(record())
-        assert app.state.native_content.publish(rid, "master", {
+        assert _publish_verified_native_fixture(app, rid, "master", {
             "version": 1, "revision": 2,
             "root": {"tag": "div", "style": {"display": "grid",
                      "gridTemplateColumns": "1fr 1fr 1fr"},
@@ -157,7 +179,7 @@ def test_owned_file_manifest_and_native_stream_same_revision(tmp_path: Path):
                 ],
             })
         asyncio.run(record())
-        app.state.native_content.publish(rid, "master", {
+        _publish_verified_native_fixture(app, rid, "master", {
             "version": 1, "revision": 2, "root": {"tag": "p", "text": "Here are the files:"},
         })
         auth = {"Authorization": "Bearer test-key"}
@@ -203,7 +225,7 @@ def test_native_file_status_follows_deferred_archive_after_openai_completed(tmp_
                 }],
             })
         asyncio.run(record())
-        assert app.state.native_content.publish(rid, "master", {
+        assert _publish_verified_native_fixture(app, rid, "master", {
             "version": 1, "revision": 7,
             "root": {"tag": "p", "text": "Your plan"},
         })
@@ -260,7 +282,7 @@ def test_slow_deferred_file_status_does_not_block_http_event_loop(tmp_path: Path
                                               "bytes": 321, "status": "processing"}],
             })
         asyncio.run(record())
-        assert app.state.native_content.publish(rid, "master", {
+        assert _publish_verified_native_fixture(app, rid, "master", {
             "version": 1, "revision": 3,
             "root": {"tag": "p", "text": "A spreadsheet"},
         })
@@ -316,7 +338,7 @@ def test_native_file_sqlite_failure_stays_processing_without_http_500(tmp_path: 
                 }],
             })
         asyncio.run(record())
-        assert app.state.native_content.publish(rid, "master", {
+        assert _publish_verified_native_fixture(app, rid, "master", {
             "version": 1, "revision": 2,
             "root": {"tag": "p", "text": "Your spreadsheet"},
         })
@@ -353,7 +375,7 @@ def test_public_native_v1_remains_compatible_with_strict_legacy_image_nodes(tmp_
         })
     with TestClient(app) as client:
         asyncio.run(record())
-        assert app.state.native_content.publish(rid,"master",{
+        assert _publish_verified_native_fixture(app, rid,"master",{
             "version":1,"revision":1,
             "root":{"tag":"img","media_index":0,
                     "intrinsic_width":900,"intrinsic_height":900},
@@ -385,7 +407,7 @@ def test_native_v1_reorders_only_unique_owned_dimension_subset(tmp_path):
         })
     with TestClient(app) as client:
         asyncio.run(record())
-        assert app.state.native_content.publish(rid,"master",{
+        assert _publish_verified_native_fixture(app, rid,"master",{
             "version":1,"revision":5,"root":{"tag":"div","children":[
                 {"tag":"img","media_index":0,"intrinsic_width":1200,"intrinsic_height":687},
                 {"tag":"img","media_index":1,"intrinsic_width":900,"intrinsic_height":900},
@@ -436,7 +458,7 @@ def test_verified_image_hash_reorders_public_and_admin_assets_even_same_size(tmp
                      "height":860,"sha256":b,"id":"med_hashb123"}],
             })
         asyncio.run(record())
-        app.state.native_content.publish(rid,"master",{
+        _publish_verified_native_fixture(app, rid,"master",{
             "version":1,"revision":12,"root":{"tag":"div","children":[
                 {"tag":"img","media_index":0,"source_sha256":b,
                  "intrinsic_width":1290,"intrinsic_height":860},
