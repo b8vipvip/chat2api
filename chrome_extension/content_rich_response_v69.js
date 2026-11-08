@@ -245,7 +245,7 @@
       const replacements=[];
       for (let i=0; i<originals.length; i++) {
         const proof=docs.get(originals[i]);
-        if (proof?.source!=="codemirror-state-v297" ||
+        if (!["codemirror-state-v297","react-owned-code-v302"].includes(proof?.source) ||
             typeof proof.text!=="string" || !proof.text.trim() ||
             proof.text.length>150000) {
           editorContext.reason="editor-source-not-verified";
