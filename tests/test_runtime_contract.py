@@ -526,3 +526,18 @@ def test_v301_request_v6_retains_unique_terminal_owner_for_readonly_code_probe()
     for optional in (reader, observer):
         assert 'type:"chat.completed"' not in optional
         assert 'type:"chat.error"' not in optional
+
+
+def test_v302_code_fallback_cannot_create_a_second_terminal_owner():
+    controller=(ROOT/"chrome_extension/content_request_v6.js").read_text("utf-8")
+    reader=(ROOT/"chrome_extension/background_native_editor_state_v297.js").read_text("utf-8")
+    native=(ROOT/"chrome_extension/content_native_content_v1.js").read_text("utf-8")
+    rich=(ROOT/"chrome_extension/content_rich_response_v69.js").read_text("utf-8")
+    assert 'react-owned-code-v302' in reader
+    assert 'react-owned-code-v302' in native
+    assert 'react-owned-code-v302' in rich
+    assert "native_editor_react_recovered:" in controller
+    assert "mergeVerifiedEditorMarkdown" in controller
+    assert 'type:"chat.completed"' not in reader
+    assert 'type:"chat.cancelled"' not in reader
+    assert 'type:"chat.error"' not in reader
