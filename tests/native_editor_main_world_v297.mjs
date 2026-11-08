@@ -109,8 +109,10 @@ assert.equal(notFound.ok,false);
 docValue="import math\n\ndef annual_profit(income, expense):\n    result = income - expense\n    if result <= 0: raise ValueError('invalid')\n    return math.floor(result)\n\nprint(annual_profit(100, 50))";
 editorPresent=true;
 editorAttachment="no-view";
-const shown=["import math","def annual_profit(income, expense):",
-  "    if result <= 0: raise ValueError('invalid')"];
+const shown=["def annual_profit(income, expense):",
+  "    result = income - expense",
+  "    if result <= 0: raise ValueError('invalid')",
+  "    return math.floor(result)"];
 editor.querySelectorAll=selector=>selector===".cm-content .cm-line"
   ? shown.map(textContent=>({textContent})) : [];
 const formerQuery=editor.querySelector;
