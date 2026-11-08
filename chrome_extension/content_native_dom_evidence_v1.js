@@ -124,9 +124,19 @@
           const r=node.getBoundingClientRect?.();
           return r&&r.width>=120&&r.height>=80&&visible(node);
         }).length>0;
+        // A legitimate CodeMirror source card contains .cm-content with
+        // contenteditable=true. Do not cut the verified roleless assistant
+        // subtree at its first code card: the request-v6 owner supplies the
+        // ONLY composer/editable predicate. If that owner is unavailable,
+        // retain the conservative legacy fail-closed behavior.
+        const inputGuard=globalThis.__CHAT2API_REQUEST_CONTENT_V6__
+          ?.contract?.hasUntrustedReplyInput;
+        const blocked=typeof inputGuard==="function"
+          ? inputGuard(cursor)
+          : Boolean(cursor.querySelector?.("form,textarea,input,[contenteditable='true']"));
         if(cursor.matches?.("[data-message-author-role='user'],[data-testid='user-message'],form")
-            || cursor.querySelector?.("[data-message-author-role='user'],[data-testid='user-message'],form,textarea,[contenteditable='true']"))
-          break;
+            || cursor.querySelector?.("[data-message-author-role='user'],[data-testid='user-message']")
+            || blocked) break;
         if (cursor.contains(candidate) || cursor===candidate ||
             normalize(cursor).length>=2 || graphical ||
             composedFind(cursor,node=>node.tagName?.toLowerCase()==="img" && visible(node)).length>0) {
