@@ -106,7 +106,9 @@
           lastError = lastInspection.selected_model
             ? "visible-selected-model=" + lastInspection.selected_model
             : String(lastInspection.evidence_source || "selected-model-not-visible");
-          if (lastInspection.selected_model === model) {
+          if (lastInspection.selected_model === model &&
+              lastInspection.selected_in_menu === model &&
+              lastInspection.evidence_source === "live-menu-selected-row") {
             matched += 1;
             // Two live menu observations verify the requested selection
             // after navigation without accepting the pre-click option as proof.
