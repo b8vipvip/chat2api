@@ -164,7 +164,13 @@
     if(!boundaryInfo)return null;
     const {roots,scope,boundary}=boundaryInfo;
     const origin=roots[0].getBoundingClientRect();
-    const counts={nodes:0,text_chars:0,images:0,grids:0,flex:0,tables:0,headings:0,links:0,svg:0,svg_large:0,canvas:0,canvas_large:0};
+    // Opaque large surfaces may be iframe/closed-shadow/CSS rendered
+    // diagrams. Log geometry-only CANDIDATES; never treat them as actual
+    // matched charts or inspect non-owned embeds. req_d4d49 had a 768x789
+    // Mermaid region with only empty wrapper DIV nodes in private evidence.
+    const counts={nodes:0,text_chars:0,images:0,grids:0,flex:0,tables:0,headings:0,links:0,
+      svg:0,svg_large:0,canvas:0,canvas_large:0,
+      opaque_large:0,opaque_large_max_w:0,opaque_large_max_h:0};
     let truncated=false;
     const convert=(node,depth)=>{
       if (counts.nodes>=MAX_NODES || depth>64) { truncated=true;return null; }
@@ -237,6 +243,17 @@
       for(const child of composedChildren(node)){ const entry=convert(child,depth+1);
         if(entry)children.push(entry);if(truncated)break; }
       if(children.length)output.children=children;
+      // A large empty leaf inside the *already verified assistant scope*
+      // can conceal a rendered diagram that DOM serialization cannot read.
+      // No image bytes, href, iframe content, CSS URL, or user input escapes.
+      // This remains an investigation hint (not a terminal decision).
+      if(!children.length && tag==="div" && depth>=2
+          && rect.width>=300 && rect.height>=240
+          && visible(node) && counts.opaque_large<40) {
+        counts.opaque_large++;
+        counts.opaque_large_max_w=Math.max(counts.opaque_large_max_w,n(rect.width));
+        counts.opaque_large_max_h=Math.max(counts.opaque_large_max_h,n(rect.height));
+      }
       return output;
     };
     const rootChildren=[];
