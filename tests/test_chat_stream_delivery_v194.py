@@ -60,8 +60,15 @@ def test_early_heartbeat_before_short_lived_http_peer_disconnect():
     assert sse_heartbeat_interval(0) == 1.0
     assert sse_heartbeat_interval(2.1) == 1.0
     assert sse_heartbeat_interval(29.99) == 1.0
-    assert sse_heartbeat_interval(30) == 5.0
-    assert sse_heartbeat_interval(600) == 5.0
+    # 2026-11-09 18:55: A's peer vanished 285s into generation, with an
+    # observed 2.927s gap since the last ASGI body. Avoid the old 5-second
+    # application heartbeat backoff on long-lived SSE. This transport fact
+    # never authorizes the Broker terminal or claims browser receipt.
+    assert sse_heartbeat_interval(30) == 1.0
+    assert sse_heartbeat_interval(60) == 1.0
+    assert sse_heartbeat_interval(285) == 1.0
+    assert sse_heartbeat_interval(600) == 1.0
+    assert sse_heartbeat_interval(915) == 1.0
 
 
 def test_heartbeat_does_not_claim_worker_completion_or_modify_final_text():
