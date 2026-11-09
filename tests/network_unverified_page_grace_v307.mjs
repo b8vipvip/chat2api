@@ -6,7 +6,10 @@ const source=readFileSync("chrome_extension/content_request_v6.js","utf8");
 const start=source.indexOf("  function unverifiedNetworkFailureReady(active, now,");
 const end=source.indexOf("  function abortedReplyStableThreshold(rendered)",start);
 assert.ok(start>0 && end>start,"v307 guard must be request-v6-owned");
-const scope={};
+const scope={confirmedTransportTerminal:active=>
+  Number(active.networkTerminalTransportDoneAt||0)>0
+  && !Number(active.networkTerminalTransportErrorAt||0)
+  && active.networkTerminalTransportStreamId===active.networkStreamResponseId};
 runInNewContext(source.slice(start,end)+
   "\nthis.guard=unverifiedNetworkFailureReady;",scope);
 const guard=scope.guard;
