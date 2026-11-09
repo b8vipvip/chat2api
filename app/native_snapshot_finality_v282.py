@@ -189,6 +189,23 @@ def native_finality_decision(
             return decide("rejected-final", "same-request-large-image-loss")
 
     layout = diag.get("native_layout_summary")
+    if isinstance(layout, dict):
+        # A final ACK cannot validate counters from a previous native revision.
+        # The snapshot is request-owned; the layout summary must belong to
+        # that exact revision whenever it includes a revision field.
+        if ("revision" in layout
+                and (type(layout["revision"]) is not int
+                     or layout["revision"] != snapshot.get("revision"))):
+            return decide("rejected-final", "revision-conflict-native-layout-summary")
+        slots = layout.get("images")
+        archived = layout.get("archived_assets")
+        # Images can render in native DOM before originals have been archived.
+        # A zero-item archive must NEVER make a positive native finality claim
+        # about a response containing image slots; absent bytes cannot prove
+        # image identity. Leave Broker/stream success and optional archive
+        # progress untouched.
+        if type(slots) is int and slots > 0 and archived == 0:
+            return decide("rejected-final", "native-images-without-archived-originals")
     if (isinstance(layout, dict)
             and type(layout.get("archived_assets")) is int
             and layout["archived_assets"] > 0):
@@ -296,5 +313,9 @@ def native_terminal_view(row: dict[str, Any], broker_state: Any) -> dict[str, An
     merged = dict(prior) if isinstance(prior, dict) else {}
     if isinstance(observed, dict):
         merged.update(observed)
-    return {**row, "status": "completed" if terminal == "chat.completed" else "error",
-            "diagnostics": merged}
+    business_status = {
+        "chat.completed": "completed",
+        "chat.error": "error",
+        "chat.cancelled": "cancelled",
+    }[terminal]
+    return {**row, "status": business_status, "diagnostics": merged}
