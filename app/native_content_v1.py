@@ -357,7 +357,11 @@ class NativeChunkAssembler:
                     self._sessions.popitem(last=False)
             previous = state["parts"].get(index)
             if previous is not None and previous != chunk:
-                del self._sessions[key]
+                # A duplicate with altered bytes is not authorized to erase
+                # earlier SHA-bound, ACKed chunks for this SAME revision.
+                # Keep the proven partial state intact, reject only the bad
+                # replay, and allow the original Worker to finish its upload.
+                # Invalid bytes never reach the snapshot publication path.
                 raise ValueError("Conflicting native chunk")
             state["parts"][index] = chunk
             state["at"] = now
