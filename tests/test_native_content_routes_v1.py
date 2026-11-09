@@ -195,6 +195,55 @@ def test_owned_file_manifest_and_native_stream_same_revision(tmp_path: Path):
         assert client.get(f"/v1/native-content/{rid}").status_code == 401
 
 
+def test_archived_original_generated_file_is_ready_not_stuck_processing(tmp_path: Path):
+    """Stored original bytes + permanent URL are ready; pending URLs are not."""
+    app = create_app(Settings(CHAT2API_API_KEY="test-key",
+        CHAT2API_PAIRING_CODE="test-pair", CHAT2API_DATA_DIR=tmp_path))
+    rid = "req_archivedready12345"
+    permanent = ("https://files.example.com/api/generated-files/"
+                 "file_123456789/tokenABC123456789")
+    inconsistent_pending = ("https://files.example.com/api/generated-files/pending/"
+                            "pgen_" + "a" * 32 + "/" + "B" * 24)
+
+    async def record():
+        await app.state.telemetry.upsert({
+            "request_id": rid, "api_key_id": "master",
+            "status": "completed",
+            "response_text": (
+                f"[📎 source.py]({permanent}) "
+                f"[📎 pending.zip]({inconsistent_pending})"
+            ),
+            "response_generated_files": [
+                {"filename": "source.py", "url": permanent,
+                 "bytes": 4096, "status": "archived"},
+                {"filename": "pending.zip", "url": inconsistent_pending,
+                 "bytes": 1024, "status": "archived"},
+            ],
+        })
+
+    with TestClient(app) as client:
+        asyncio.run(record())
+        assert _publish_verified_native_fixture(app, rid, "master", {
+            "version": 1, "revision": 3, "root": {
+                "tag": "p", "text": "File cards",
+            },
+        })
+        auth = {"Authorization": "Bearer test-key"}
+        response = client.get(f"/v1/native-content/{rid}", headers=auth)
+        assert response.status_code == 200
+        assert response.json()["files"] == [
+            {"filename": "source.py", "url": permanent,
+             "bytes": 4096, "status": "ready"},
+            {"filename": "pending.zip", "url": inconsistent_pending,
+             "bytes": 1024, "status": "processing"},
+        ]
+        stream = client.get(f"/v1/native-content/{rid}/events", headers=auth)
+        assert stream.status_code == 200
+        assert 'event: native.snapshot' in stream.text
+        assert '"status": "ready"' in stream.text
+        assert app.state.telemetry.get(rid)["status"] == "completed"
+
+
 def test_file_manifest_changes_are_new_sse_state_without_dom_revision():
     from app.native_content_v1 import native_delivery_fingerprint
     original = {"version": 1, "revision": 7, "assets": [], "files": []}
