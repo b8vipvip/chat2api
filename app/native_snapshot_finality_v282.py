@@ -78,6 +78,36 @@ def native_code_coverage(row: dict[str, Any] | None,
     return "missing-code-lines" if missing else "covered"
 
 
+# A real 2026-11-09 request produced an approximately 768×789 rendered
+# Mermaid visual inside the native assistant reply, but standard Markdown
+# contained only the standalone string "Mermaid diagram" between paragraphs.
+# The native sidecar ACK and equal 19-table counts were TRUE, not proof that
+# an opaque embedded diagram was delivered. Never call this verified-final
+# merely because a visual placeholder survived the text serializer.
+_MERMAID_PLACEHOLDER = re.compile(r"(?m)^[ \t]*Mermaid diagram[ \t]*$")
+_MERMAID_FENCE = re.compile(
+    r"(?m)^[ \t]{0,3}(?:\x60{3,}|~{3,})[ \t]*mermaid\b", re.IGNORECASE
+)
+
+
+def native_diagram_coverage(row: dict[str, Any] | None) -> str:
+    """Evidence-only exact Markdown source check; never invent chart code.
+
+    A normal paragraph mentioning "Mermaid diagram" is not a placeholder.
+    This rejects only a standalone diagram stand-in lacking the actual
+    Mermaid fenced source. No diagram quantity is inferred from a template
+    or a previous request, and the Broker's chat.completed is unchanged.
+    """
+    if not isinstance(row, dict):
+        return "unverified"
+    response = row.get("response_text")
+    if not isinstance(response, str) or not response:
+        return "unverified"
+    if _MERMAID_PLACEHOLDER.search(response) and not _MERMAID_FENCE.search(response):
+        return "mermaid-placeholder-without-source"
+    return "no-proven-loss"
+
+
 def native_finality_decision(
     row: dict[str, Any] | None,
     snapshot: dict[str, Any] | None,
@@ -106,6 +136,13 @@ def native_finality_decision(
     diag = row.get("diagnostics")
     if not isinstance(diag, dict):
         return decide("unverified-final", "native-finality-proof-missing")
+
+    # The optional native layout's terminal ACK is not evidence that an
+    # opaque embedded Mermaid diagram survived in OpenAI Markdown/SSE.
+    # Keep the standard API completion intact; reject only false sidecar
+    # "verified-final" when the chart has been replaced by UI placeholder.
+    if native_diagram_coverage(row) == "mermaid-placeholder-without-source":
+        return decide("rejected-final", "mermaid-diagram-source-omitted")
 
     coverage = native_code_coverage(row, snapshot)
     if coverage in {"missing-code-block", "missing-code-lines"}:
