@@ -50,6 +50,28 @@ def test_conflicting_same_revision_sha_cannot_replace_acked_chunks(tmp_path):
     assert assembler.store.get(RID, "owner")["root"]["text"] == "A" * 66000
 
 
+def test_corrupt_retransmission_same_chunk_index_preserves_valid_partial_state(tmp_path):
+    assembler = native.NativeChunkAssembler(native.NativeContentStore(tmp_path))
+    chunks = chunk_envelopes(13, text="correct" * 10500)
+    assert len(chunks) == 2
+    assert assembler.ingest(RID, "owner", chunks[0]) is False
+    original = base64.b64decode(chunks[0]["data"])
+    corrupted = dict(chunks[0])
+    corrupted["data"] = base64.b64encode(b"X" + original[1:]).decode()
+    # This replay lies about its SHA256 while preserving all envelope fields.
+    # Only the invalid replay is rejected; it MUST NOT erase the originally
+    # ACKed chunk or force a new native revision.
+    with pytest.raises(ValueError, match="Conflicting native chunk"):
+        assembler.ingest(RID, "owner", corrupted)
+    progress = assembler.progress(RID, "owner")
+    assert progress["revision"] == 13
+    assert progress["received_chunks"] == 1
+    # Idempotent byte-exact retransmission is still permitted.
+    assert assembler.ingest(RID, "owner", chunks[0]) is False
+    assert assembler.ingest(RID, "owner", chunks[1]) is True
+    assert assembler.store.get(RID, "owner")["root"]["text"] == "correct" * 10500
+
+
 def test_genuinely_newer_revision_may_supersede_partial_old_one(tmp_path):
     assembler = native.NativeChunkAssembler(native.NativeContentStore(tmp_path))
     old = chunk_envelopes(11, text="A" * 66000)
