@@ -82,12 +82,15 @@ async function recoverDisconnectedStream(requestId, update) {
 async function stream(model,auth,requestId,messages,update,sceneId){
   // v294: save early client-side transport evidence independently of the
   // final ABCD report or multi-minute same-ID Broker recovery.
-  const persistClientTruth=(facts,phase="progress")=>{
+  const persistClientTruth=(facts,phase="progress",keepalive=false)=>{
     if(!sceneId)return Promise.resolve();
     return api("/api/admin/playground/abcd/transport-truth",{
-      method:"POST",body:{
+      method:"POST",keepalive:keepalive===true,body:{
         request_id:requestId,scene:sceneId,client_sse_truth:facts,
-        failed:phase!=="complete",phase
+        // A received-progress checkpoint is NOT a failed request. Previous
+        // v294 flagged *every* early checkpoint as "client_sse_failed" even
+        // while the browser was still reading chunks (req_4ab3).
+        failed:phase==="incomplete",phase
       }
     }).catch(()=>{});
   };
@@ -129,6 +132,50 @@ let nativeEof=false,firstChunkAt=null,lastChunkAt=null,readerCancelled=false,rea
 let readerErrorName=null,lastCheckpointAt=null,bodyChunks=0;
 const relative=at=>at===null?null:Math.max(0,Math.round(at-clientStarted));
 const reader=r.body.getReader(),decoder=new TextDecoder();
+// v312: real req_4ab3 completed 214s at the Broker, but its HTTP peer
+// vanished 2.829s after admission, only 868ms after a successful ASGI
+// keepalive. The only persisted browser truth was a 664ms progress checkpoint.
+// Distinguish document navigation/pagehide from a network-only close; never
+// infer that a network AbortError implies a browser page was unloaded.
+let pagehideSeen=false,pagehideAt=null,pagehidePersisted=false;
+let visibilityHiddenSeen=false,visibilityHiddenAt=null;
+const lifecycleFacts=()=>({
+  response_headers_received:true,
+  response_headers_ms:relative(responseHeadersAt),
+  first_chunk_ms:relative(firstChunkAt),
+  last_chunk_ms:relative(lastChunkAt),
+  read_elapsed_ms:relative(performance.now()),
+  parsed_frames:Math.min(frames,1000000),
+  sse_body_chunks:Math.min(bodyChunks,1000000),
+  protocol_stop_seen:stopped,
+  protocol_done_seen:done,
+  native_reader_eof_seen:nativeEof,
+  reader_cancel_requested:readerCancelled,
+  client_pagehide_seen:pagehideSeen,
+  client_pagehide_persisted:pagehidePersisted,
+  client_pagehide_after_ms:relative(pagehideAt),
+  client_visibility_hidden_seen:visibilityHiddenSeen,
+  client_visibility_hidden_after_ms:relative(visibilityHiddenAt),
+});
+const onDocumentHidden=()=>{
+  if(visibilityHiddenSeen || document.visibilityState!=="hidden")return;
+  visibilityHiddenSeen=true;
+  visibilityHiddenAt=performance.now();
+  // The best-effort report is a *separate small authenticated* keepalive
+  // HTTP call. It neither cancels the original SSE nor launches a new model
+  // request. A hidden tab alone is NOT proof of pagehide or navigation.
+  void persistClientTruth(lifecycleFacts(),"progress",true);
+};
+const onPageHide=(evt)=>{
+  if(pagehideSeen)return;
+  pagehideSeen=true;
+  pagehideAt=performance.now();
+  pagehidePersisted=evt?.persisted===true;
+  void persistClientTruth(lifecycleFacts(),"progress",true);
+};
+globalThis.addEventListener?.("pagehide",onPageHide);
+document.addEventListener?.("visibilitychange",onDocumentHidden);
+try{
 try{
 while(!done){
 const chunk=await reader.read();if(chunk.done){nativeEof=true;break;}
@@ -205,6 +252,11 @@ const clientSseTruth={
   read_elapsed_ms:relative(performance.now()),
   parsed_frames:Math.min(frames,1000000),
   sse_body_chunks:Math.min(bodyChunks,1000000),
+  client_pagehide_seen:pagehideSeen,
+  client_pagehide_persisted:pagehidePersisted,
+  client_pagehide_after_ms:relative(pagehideAt),
+  client_visibility_hidden_seen:visibilityHiddenSeen,
+  client_visibility_hidden_after_ms:relative(visibilityHiddenAt),
   reader_cancel_reason:readerCancelled
     ?(streamError?"StreamError":"MissingTerminal"):"None",
 };
@@ -232,6 +284,10 @@ if(!answer.trim()){
   throw err;
 }
 return {text:answer,frames,client_sse_truth:clientSseTruth};
+}finally{
+  globalThis.removeEventListener?.("pagehide",onPageHide);
+  document.removeEventListener?.("visibilitychange",onDocumentHidden);
+}
 }
 const images=text=>[...text.matchAll(/!\[[^\]\n]*\]\((https:\/\/[^)\s]+)\)/g)].map(x=>({name:"picture",url:x[1]}));
 const files=text=>[...text.matchAll(/\[📎\s*([^\]\n]+)\]\((https:\/\/[^)\s]+)\)/g)].map(x=>({name:x[1],url:x[2]}));
