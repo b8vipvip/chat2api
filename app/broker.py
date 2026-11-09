@@ -100,6 +100,7 @@ _TERMINAL_PROVENANCE_STRINGS = {
     "native_chatgpt_conversation_url",
     "native_code_editor_state_failure",
     "native_canonical_code_reason",
+    "native_editor_prepared_reason",
 }
 
 
@@ -156,7 +157,8 @@ def _terminal_provenance(event: dict[str, Any]) -> dict[str, Any]:
                 "native_chunk_complete", "native_final_capture_committed", "native_observer_loaded",
                 "native_capture_attempted", "native_reply_scope_verified",
                 "native_message_identity_bound", "native_message_id_scope_verified",
-                "native_editor_probe_virtualized"):
+                "native_editor_probe_virtualized",
+                "native_editor_prepared_ready"):
         if isinstance(raw.get(key), bool):
             result[key] = raw[key]
     # Request-v6 emits these *on every completed native request* but its
