@@ -461,6 +461,19 @@
         native_signal_abort_observed: Boolean(nativeSignalAbortAt || signal?.aborted),
         native_signal_abort_after_ms: nativeSignalAbortAt
           ? Math.max(0, nativeSignalAbortAt - observerStartedAt) : null,
+        // B req_b738: an ORIGINAL ChatGPT page fetch signal aborted at
+        // 2015ms, but no evidence linked that event to page navigation.
+        // These are strictly read-only enum/boolean lifecycle observations,
+        // never proof of the party that triggered AbortController.abort().
+        native_signal_abort_reason_kind: abortReasonKind,
+        native_signal_abort_visibility: abortVisibility,
+        native_pagehide_during_stream: Boolean(
+          pagehideAt && pagehideAt >= observerStartedAt),
+        native_pagehide_before_abort: Boolean(
+          pagehideAt && nativeSignalAbortAt && pagehideAt <= nativeSignalAbortAt),
+        native_pagehide_persisted: pagehidePersisted,
+        native_visibility_hidden_during_stream: Boolean(
+          visibilityHiddenAt && visibilityHiddenAt >= observerStartedAt),
         clone_last_chunk_age_ms: lastChunkAt ? Date.now() - lastChunkAt : null,
         clone_reader_failure_kind: signal?.aborted || nativeSignalAbortAt
           ? "page-fetch-signal-aborted" : "clone-reader-without-native-abort",
@@ -474,15 +487,53 @@
     const observerStartedAt = Date.now();
     const signalInitiallyAborted = signal?.aborted === true;
     let nativeSignalAbortAt = signalInitiallyAborted ? observerStartedAt : 0;
-    const onNativeAbort = () => { nativeSignalAbortAt ||= Date.now(); };
+    let pagehideAt=0, pagehidePersisted=false, visibilityHiddenAt=0;
+    // Never send AbortSignal.reason itself: it can include arbitrary page
+    // contents. Only allow well-known exception kinds, with an explicit
+    // "other" bucket and no arbitrary strings or URLs.
+    const abortReason=()=>{
+      try {
+        if (!signal?.aborted) return "not-aborted";
+        const name=String(signal.reason?.name || "");
+        return ["AbortError","TimeoutError","NetworkError","NotAllowedError"]
+          .includes(name) ? name : "other";
+      } catch (_) { return "unknown"; }
+    };
+    const pageVisibility=()=>{
+      try {
+        const state=String(document.visibilityState || "");
+        return ["visible","hidden","prerender"].includes(state) ? state : "unknown";
+      } catch (_) { return "unknown"; }
+    };
+    let abortVisibility=signalInitiallyAborted ? pageVisibility() : "unobserved";
+    let abortReasonKind=signalInitiallyAborted ? abortReason() : "not-aborted";
+    const onNativeAbort=()=>{
+      nativeSignalAbortAt ||= Date.now();
+      abortVisibility=pageVisibility();
+      abortReasonKind=abortReason();
+    };
+    const onPagehide=evt=>{
+      pagehideAt ||= Date.now();
+      pagehidePersisted=evt?.persisted===true;
+    };
+    const onVisibilitychange=()=>{
+      if(pageVisibility()==="hidden")visibilityHiddenAt ||= Date.now();
+    };
+    const removeLifecycle=()=>{
+      try { signal?.removeEventListener?.("abort",onNativeAbort); } catch (_) {}
+      try { globalThis.removeEventListener?.("pagehide",onPagehide); } catch (_) {}
+      try { document.removeEventListener?.("visibilitychange",onVisibilitychange); } catch (_) {}
+    };
     try { signal?.addEventListener?.("abort", onNativeAbort, {once:true}); } catch (_) {}
+    try { globalThis.addEventListener?.("pagehide",onPagehide); } catch (_) {}
+    try { document.addEventListener?.("visibilitychange",onVisibilitychange); } catch (_) {}
     let lastChunkAt = 0;
     let clone;
     try {
       clone = response.clone();
     } catch (error) {
       fail("clone", error);
-      try { signal?.removeEventListener?.("abort", onNativeAbort); } catch (_) {}
+      removeLifecycle();
       return;
     }
     let reader;
@@ -491,7 +542,7 @@
       if (!reader) throw new Error("cloned-response-reader-unavailable");
     } catch (error) {
       fail("get-reader", error);
-      try { signal?.removeEventListener?.("abort", onNativeAbort); } catch (_) {}
+      removeLifecycle();
       return;
     }
     const decoder = decoderFactory();
@@ -536,7 +587,7 @@
       });
     } finally {
       try { reader.releaseLock(); } catch (_) {}
-      try { signal?.removeEventListener?.("abort", onNativeAbort); } catch (_) {}
+      removeLifecycle();
     }
   }
 
