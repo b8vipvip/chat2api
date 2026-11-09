@@ -52,8 +52,14 @@ def validate_evidence(value: object, expected_request_id: str) -> dict:
     # records contain only base_keys. Admit both exact schemas, not arbitrary
     # partial or extra data, and keep strictly bounded integer facts.
     graphics_keys={"svg", "svg_large", "canvas", "canvas_large"}
+    opaque_keys={"opaque_large", "opaque_large_max_w", "opaque_large_max_h"}
+    # Legacy captures remain readable. A new Worker can report bounded
+    # geometry-only candidates for rendered diagrams hidden behind a closed
+    # shadow/embed, without exporting pixels or trusting them as real charts.
+    schemas=(base_keys, base_keys | graphics_keys,
+             base_keys | graphics_keys | opaque_keys)
     if (not isinstance(counts,dict)
-        or set(counts) not in (base_keys, base_keys | graphics_keys)
+        or set(counts) not in schemas
         or any(type(v) is not int or v<0 or v>150000 for v in counts.values())):
         raise ValueError("Invalid counts")
     if counts["nodes"]>MAX_NODES or counts["text_chars"]>MAX_CHARS:
@@ -64,6 +70,17 @@ def validate_evidence(value: object, expected_request_id: str) -> dict:
             or counts["svg"]>counts["nodes"]
             or counts["canvas"]>counts["nodes"]):
             raise ValueError("Inconsistent graphics counts")
+    if opaque_keys <= set(counts):
+        if (counts["opaque_large"] > 40
+            or counts["opaque_large"] > counts["nodes"]
+            or counts["opaque_large_max_w"] > 100000
+            or counts["opaque_large_max_h"] > 100000
+            or (counts["opaque_large"] == 0
+                and (counts["opaque_large_max_w"] or counts["opaque_large_max_h"]))
+            or (counts["opaque_large"] > 0
+                and (counts["opaque_large_max_w"] < 300
+                     or counts["opaque_large_max_h"] < 240))):
+            raise ValueError("Inconsistent opaque visual evidence")
     raw=json.dumps(value,ensure_ascii=False,separators=(",",":")).encode("utf8")
     if len(raw)>MAX_JSON_BYTES:
         raise ValueError("Capture exceeds byte limit")

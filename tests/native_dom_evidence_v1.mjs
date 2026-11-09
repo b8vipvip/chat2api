@@ -246,6 +246,35 @@ const closedReport=probe.captureData({...active,lastCandidateNode:shadowParagrap
 assert.equal(closedReport.counts.svg,0);
 assert.equal(closedReport.counts.canvas,0);
 
+// req_d4d49: a Mermaid graphic occupies about 768x789 original CSS px
+// yet the private composed DOM tree has only inert empty DIV wrappers.
+// Record this as a large opaque VISUAL CANDIDATE, not a real chart or pixel
+// proof; do not leak CSS URL, iframe content or arbitrary page layout.
+const opaqueLeaf=new Element('DIV');
+opaqueLeaf.getBoundingClientRect=()=>({
+  left:20,top:20,width:768,height:789,
+});
+const opaqueSection=new Element('DIV',[opaqueLeaf]);
+const opaqueReply=new Element('DIV',[
+  new Element('P',[{nodeType:TEXT,nodeValue:'以下Mermaid流程覆盖市场与审批。'}]),
+  opaqueSection,
+  new Element('P',[{nodeType:TEXT,nodeValue:'最终建议。'}]),
+]);
+const opaquePage=new Element('MAIN',[opaqueReply]);
+const opaqueReport=probe.captureData({...active,lastCandidateNode:opaqueReply.childNodes[0],
+  nativeVerifiedReplyScope:opaqueReply});
+assert.equal(opaqueReport.complete,true);
+assert.equal(opaqueReport.counts.opaque_large,1);
+assert.equal(opaqueReport.counts.opaque_large_max_w,768);
+assert.equal(opaqueReport.counts.opaque_large_max_h,789);
+assert.equal(opaqueReport.counts.svg_large,0);
+assert.equal(opaqueReport.counts.canvas_large,0);
+assert.equal(opaqueReport.counts.images,0);
+assert.ok(!JSON.stringify(opaqueReport).includes('iframe src='),
+  "a candidate is a bounded geometry-only fact, never iframe contents");
+assert.equal(report.counts.opaque_large,0,
+  "normal 260x80 text and image cards must not be suspected opaque charts");
+
 // Untrusted page-wide or cross-user scope cannot be promoted.
 const mainScope=probe.captureData({...active,nativeVerifiedReplyScope:main});
 assert.equal(mainScope.complete,false);

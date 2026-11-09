@@ -114,6 +114,45 @@ def test_service_graphics_validator_matches_current_worker_contract():
     assert validate_evidence(report, RID)["complete"] is True
 
 
+
+
+def test_v310_mermaid_large_opaque_geometry_has_bounded_private_schema(tmp_path):
+    """A chart lost behind non-composed rendering must appear as uncertainty."""
+    report = example()
+    report["scope"] = "verified_native_assistant_selection"
+    report["counts"].update({
+        "svg": 0, "svg_large": 0,
+        "canvas": 0, "canvas_large": 0,
+        "opaque_large": 1, "opaque_large_max_w": 768,
+        "opaque_large_max_h": 789,
+    })
+    assert validate_evidence(report, RID)["counts"]["opaque_large"] == 1
+    store = NativeDomEvidenceStore(tmp_path)
+    assert store.save(RID, "owner", report)
+    assert store.summary(RID, "owner")["counts"]["opaque_large_max_h"] == 789
+    # No page source URL, SVG bytes, iframe content, or CSS is retained.
+    assert "iframe" not in str(store.get(RID, "owner"))
+
+
+@pytest.mark.parametrize("overrides", [
+    {"opaque_large": 1},  # Partial new schema is never accepted
+    {"opaque_large": 1, "opaque_large_max_w": 768},
+    {"opaque_large": 1, "opaque_large_max_w": 0, "opaque_large_max_h": 789},
+    {"opaque_large": 1, "opaque_large_max_w": 768, "opaque_large_max_h": 0},
+    {"opaque_large": -1, "opaque_large_max_w": 768, "opaque_large_max_h": 789},
+    {"opaque_large": 41, "opaque_large_max_w": 768, "opaque_large_max_h": 789},
+    {"opaque_large": 0, "opaque_large_max_w": 768, "opaque_large_max_h": 0},
+])
+def test_v310_opaque_geometry_cannot_accept_partial_or_invented_proof(overrides):
+    report = example()
+    report["counts"].update({
+        "svg": 0, "svg_large": 0, "canvas": 0, "canvas_large": 0,
+    })
+    report["counts"].update(overrides)
+    with pytest.raises(ValueError, match="counts|opaque"):
+        validate_evidence(report, RID)
+
+
 def test_expired_evidence_removed(tmp_path,monkeypatch):
     store=NativeDomEvidenceStore(tmp_path)
     assert store.save(RID,"owner",example())

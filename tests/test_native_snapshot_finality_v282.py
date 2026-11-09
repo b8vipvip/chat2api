@@ -321,3 +321,47 @@ def test_v303_dynamic_native_media_and_table_counts_follow_current_request_only(
     lost["diagnostics"]["native_capture_comparison"].update({
         "private_images_displayed_large":0,"possible_missing_large_images":0})
     assert native_finality_decision(lost,SNAP)["status"]=="verified-final"
+
+
+
+def test_v310_real_mermaid_visual_cannot_be_declared_complete_from_placeholder():
+    # Sanitized same-request evidence: req_d4d49e65 had a 768x789 original
+    # chart region, 19 matching text tables and full Python code, while the
+    # canonical OpenAI Markdown included only the stand-in below.
+    from app.native_snapshot_finality_v282 import (
+        native_diagram_coverage, native_finality_decision,
+    )
+    base = {"status": "completed", "diagnostics": dict(GOOD)}
+    missing = {**base, "response_text": (
+        "## 十二、项目决策流程图\n\n"
+        "以下 Mermaid 流程覆盖市场验证与审批。\n\n"
+        "Mermaid diagram\n\n下一步方案。"
+    )}
+    assert native_diagram_coverage(missing) == "mermaid-placeholder-without-source"
+    assert native_finality_decision(missing, SNAP) == {
+        "status": "rejected-final",
+        "reason": "mermaid-diagram-source-omitted",
+        "authority": "server-native-finality-v298",
+        "scope": "native-sidecar-only",
+        "visually_verified": False,
+    }
+    # This is a READ-ONLY sidecar truth guard, not a second Broker terminal.
+    assert missing["status"] == "completed"
+    assert native_diagram_coverage({
+        **base, "response_text": "## Merlin\n\nThe label Mermaid diagram was mentioned."
+    }) == "no-proven-loss"
+    # Genuine Mermaid source is a materially different artifact from a
+    # placeholder. Do not reject it just because a label is also present.
+    source = {**missing, "response_text": (
+        missing["response_text"] +
+        "\n\n```mermaid\nflowchart TD\n  A[Start] --> B[End]\n```"
+    )}
+    assert native_diagram_coverage(source) == "no-proven-loss"
+    assert native_finality_decision(source, SNAP)["status"] == "verified-final"
+    # Ordinary human text, not an entire standalone missing visual element.
+    assert native_diagram_coverage({
+        **base, "response_text": "Please provide a Mermaid diagram in markdown."
+    }) == "no-proven-loss"
+    assert native_finality_decision({
+        **missing, "status": "error"
+    }, SNAP)["reason"] == "broker-request-not-completed"
