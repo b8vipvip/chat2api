@@ -43,6 +43,10 @@ assert.equal(test({networkStreamEndedWithoutTerminalAt:NOW-10000}),false,
   "never turn a short 10s network pause into a failure");
 assert.equal(test({networkObservedAt:NOW-9000}),false,
   "a fresh same-request SSE / network update preserves generation");
+assert.equal(test({lastCaptureAt:NOW-9000}),false,
+  "a progressing same-request DOM after aborted network may still become the full reply");
+assert.equal(test({lastCaptureAt:NOW-14000}),true,
+  "a stale DOM checkpoint cannot hold a page that is otherwise idle forever");
 assert.equal(test({networkUnverifiedStreamId:"stream-old"}),false,
   "a newer live stream supersedes any old stream error");
 assert.equal(test({}, {pageWorking:true}),false,
