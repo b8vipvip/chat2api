@@ -439,6 +439,31 @@ const unverified=candidateFor([new Element("P",[{nodeType:3,nodeValue:"partial"}
 assert.equal(unverifiedCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot(unverified),null);
 assert.equal(unverified.nativeStructuralFailure,"reply-scope-unverified");
 
+// The production boundary resolver can return NULL when an observed
+// paragraph sits outside the request's <main> or has been reparented after
+// hydration. It must not fall through to the candidate.closest(turn) branch:
+// a partial reply would become a false complete native ACK. Likewise, an
+// unknown scope, disconnected root or empty roots array proves nothing.
+for(const [label, region, reason] of [
+  ["null", null, "reply-boundary-unavailable"],
+  ["unknown", {scope:"not-verified",roots:[node]}, "reply-boundary-unavailable"],
+  ["empty", {scope:"verified_reply_container",roots:[]}, "reply-scope-roots-invalid"],
+  ["disconnected", {scope:"verified_reply_container",
+                    roots:[Object.assign(new Element("DIV"),{isConnected:false})]},
+                   "reply-scope-roots-invalid"],
+]){
+  const testCtx={...ctx,__CHAT2API_NATIVE_DOM_EVIDENCE_V1__:{
+    replyRoots:()=>region
+  }};
+  delete testCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+  runInNewContext(code,testCtx);
+  const active=candidateFor([
+    new Element("P",[{nodeType:3,nodeValue:"partial outside verified boundary"}])
+  ]);
+  assert.equal(testCtx.__CHAT2API_NATIVE_CONTENT_V1__.snapshot(active),null,label);
+  assert.equal(active.nativeStructuralFailure,reason,label);
+}
+
 const actionOnly=capture.snapshot(candidateFor([
   new Element("BUTTON",[{nodeType:3,nodeValue:"Copy"}]),
   new Element("P",[{nodeType:3,nodeValue:"safe answer"}]),

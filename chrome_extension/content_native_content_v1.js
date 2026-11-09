@@ -414,17 +414,36 @@
     // v1 evidence bridge: the ordinary candidate is often a nested paragraph
     // in the newly rendered rich ChatGPT card. Reuse only a verified fresh
     // assistant-heading sibling scope, never a whole main/history container.
-    const replyRegion = globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
-    // An explicitly unverified or overflowed reply boundary is never
-    // promoted to a complete native answer merely because the paragraph
-    // itself can be serialized. The canonical response remains authoritative.
-    if (replyRegion?.scope === "candidate_only") {
-      active.nativeStructuralFailure = "reply-scope-unverified";
+    const boundaryResolver = globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots;
+    const replyRegion = typeof boundaryResolver === "function"
+      ? boundaryResolver(active) : null;
+    // In the real extension the boundary resolver is installed in the same
+    // manifest as this observer. If it returns null (e.g. the candidate is
+    // outside <main>) the OLD fallback serialized candidate.closest(turn)
+    // and could publish a partial/unrelated assistant card as a verified final
+    // native reply. Null, unknown scopes and empty roots MUST fail closed.
+    // An absent legacy test harness may still use its former local fallback;
+    // production's present resolver must prove scope before publication.
+    if (typeof boundaryResolver === "function"
+        && (!replyRegion || ![
+          "roleless_reply_siblings",
+          "verified_reply_container",
+          "verified_native_assistant_selection",
+        ].includes(replyRegion.scope))) {
+      active.nativeStructuralFailure = replyRegion?.scope === "candidate_only"
+        ? "reply-scope-unverified" : "reply-boundary-unavailable";
       return null;
     }
     const scopedRoots = (replyRegion?.scope === "roleless_reply_siblings"
-      || (replyRegion?.scope === "verified_reply_container" || replyRegion?.scope === "verified_native_assistant_selection"))
+      || (replyRegion?.scope === "verified_reply_container"
+          || replyRegion?.scope === "verified_native_assistant_selection"))
       ? replyRegion.roots : null;
+    if (typeof boundaryResolver === "function"
+        && (!Array.isArray(scopedRoots) || !scopedRoots.length
+            || scopedRoots.some(node=>!(node instanceof Element) || !node.isConnected))) {
+      active.nativeStructuralFailure = "reply-scope-roots-invalid";
+      return null;
+    }
     let root = null;
     if (scopedRoots?.length) {
       const children = [];
