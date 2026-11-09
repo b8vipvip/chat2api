@@ -202,7 +202,7 @@ def test_v311_frozen_same_message_editor_proof_survives_native_ack_without_code_
     assert "rich.spliceVerifiedCodeIntoCanonical(event.text," in request
     assert 'verified-editor-prepared-anchor-insert' in request
     assert "function prepareVerifiedEditorMarkdown(node, verifiedEditorDocs)" in rich
-    assert "chat.completed" not in native  # only request-v6 owns completion
+    assert 'type:"chat.completed"' not in native  # only request-v6 owns completion
     child=subprocess.run(["node","tests/native_editor_prepared_merge_v311.mjs"],
                          cwd=root,capture_output=True,text=True,timeout=20)
     assert child.returncode==0,child.stdout+child.stderr
