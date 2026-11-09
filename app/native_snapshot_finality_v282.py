@@ -193,13 +193,30 @@ def native_finality_decision(
             and type(layout.get("archived_assets")) is int
             and layout["archived_assets"] > 0):
         count = layout["archived_assets"]
-        if layout.get("media_mapping_complete") is not True:
+        # Structural media_index coverage is only an ordinal hint. One
+        # original image can occupy several distinct request-owned DOM slots
+        # while the archive contains just one SHA256-verified original. The
+        # old images==archived_assets check rejected such valid duplication
+        # even when the *byte identity* of every slot was proven.
+        slots = layout.get("images")
+        if type(slots) is not int or slots < 0:
+            slots = count  # Legacy telemetry without an explicit slot count.
+        identity_verified = (
+            diag.get("native_image_identity_status") == "verified-sha256"
+            and type(diag.get("native_identity_matched_count")) is int
+            and diag["native_identity_matched_count"] == slots
+            and (type(diag.get("native_identity_dom_image_count")) is not int
+                 or diag["native_identity_dom_image_count"] == slots)
+            and (type(diag.get("native_identity_archived_count")) is not int
+                 or diag["native_identity_archived_count"] == count)
+        )
+        # The server-side SHA mapper guarantees all DOM positions match exact
+        # original bytes AND every distinct archived SHA is represented.
+        # It also rejects missing, out-of-order or guessed media_index slots.
+        # Never upgrade a dimensions-only or partial hash candidate.
+        if layout.get("media_mapping_complete") is not True and not identity_verified:
             return decide("rejected-final", "unmapped-archived-media")
-        # A sequential media_index array is *not* a SHA256 identity proof.
-        # An ordinal/dimension-only match must never qualify as 1:1.
-        if (diag.get("native_image_identity_status") != "verified-sha256"
-                or type(diag.get("native_identity_matched_count")) is not int
-                or diag["native_identity_matched_count"] != count):
+        if not identity_verified:
             return decide("rejected-final", "unverified-media-byte-identity")
 
     # CodeMirror editor probe provides EVIDENCE, not an alternative finality.
