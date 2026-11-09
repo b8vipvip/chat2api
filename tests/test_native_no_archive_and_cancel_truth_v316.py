@@ -87,9 +87,10 @@ def test_cancelled_broker_terminal_is_not_mislabeled_error():
         assert projected["status"] == expected
         assert projected["diagnostics"]["some_terminal_observation"] is True
         assert original["status"] == "running"
-        assert native_finality_decision(
-            projected, TEXT_SNAPSHOT,
-        )["status"] == "rejected-final" if expected != "completed" else True
+        if expected != "completed":
+            assert native_finality_decision(
+                projected, TEXT_SNAPSHOT,
+            )["reason"] == "broker-request-not-completed"
 
 
 def test_broker_terminal_of_other_client_cannot_change_status():
