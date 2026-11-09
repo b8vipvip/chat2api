@@ -2599,7 +2599,22 @@
   // This is ONLY the fail-closed ERROR policy; it never authorizes completed.
   function unverifiedNetworkFailureReady(active, now, pageWorking, generating, captureMedia = false) {
     const ended = Number(active?.networkStreamEndedWithoutTerminalAt || 0);
-    if (!ended || !active?.networkStreamSeen || active.networkTerminalAt || captureMedia)
+    if (!ended || !active?.networkStreamSeen || captureMedia)
+      return false;
+    // v314: A parsed assistant end-turn is PROVISIONAL until the SAME
+    // response stream ends cleanly. Real req_13338 (20 MB/583 chunks)
+    // saw an early 34-char end-turn hint, then the page-owned stream aborted
+    // with no verified reply boundary. The old "active.networkTerminalAt"
+    // early return blocked the quiet-page failure gate forever: the request
+    // stalled for 915s until the browser lease was forcibly reclaimed.
+    //
+    // A valid confirmed transport terminal still belongs to the normal
+    // reconcile path, and a still-open stream with a provisional marker
+    // MUST stay alive. Only a PROVEN transport error may let the provisional
+    // marker enter the existing quiet-page fail-closed policy.
+    if (Number(active.networkTerminalAt || 0) > 0
+        && (confirmedTransportTerminal(active)
+          || !Number(active.networkTerminalTransportErrorAt || 0)))
       return false;
     const latest = String(active.networkStreamResponseId || "");
     const failed = String(active.networkUnverifiedStreamId || "");
@@ -3332,12 +3347,17 @@
 
       // A DOM pause or a missing Stop button cannot override an observed SSE
       // response that has not reached a verified assistant terminal.
-      if (active.networkStreamEndedWithoutTerminalAt && !networkTerminalAt && !captureMedia
+      if (active.networkStreamEndedWithoutTerminalAt && !captureMedia
+          && (!networkTerminalAt || (active.networkTerminalTransportErrorAt
+              && !confirmedTransportTerminal(active)))
           && (!active.networkUnverifiedWaitReportedAt
             || Date.now() - active.networkUnverifiedWaitReportedAt >= 15000)) {
         active.networkUnverifiedWaitReportedAt = Date.now();
         await diagnostic(active, "unverified-network-await-page-terminal", {
-          network_unverified_wait_policy: "same-request-working-ui-and-stream-grace-v307",
+          network_unverified_wait_policy: "same-request-working-ui-and-stream-grace-v314",
+          network_unverified_provisional_terminal_seen: Boolean(networkTerminalAt),
+          network_unverified_transport_error_seen:
+            Boolean(active.networkTerminalTransportErrorAt),
           network_unverified_elapsed_ms: Math.max(0,
             Date.now() - Number(active.networkStreamEndedWithoutTerminalAt || 0)),
           network_unverified_page_working: upstreamStillWorking(),
@@ -3354,7 +3374,11 @@
           type: "chat.error", request_id: active.requestId,
           error: "ChatGPT network stream ended without a verified assistant completion",
           diagnostics: {
-            response_integrity_guard: "verified-network-terminal-v307",
+            response_integrity_guard: "verified-network-terminal-v314",
+            network_unverified_provisional_terminal_seen:
+              Boolean(active.networkTerminalAt),
+            network_unverified_transport_error_seen:
+              Boolean(active.networkTerminalTransportErrorAt),
             network_stream_unverified_end: true,
             network_unverified_fail_closed_after_page_idle: true,
           },
