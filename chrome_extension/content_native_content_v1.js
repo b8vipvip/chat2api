@@ -735,11 +735,51 @@
     if (final) {
       active.nativeChunkComplete = false;
       active.nativeFinalCaptureCommitted = false;
+      // Never reuse a prepared proof from an earlier incremental revision
+      // or a different request / previous assistant selection.
+      active.nativePreparedEditorMerge = null;
+      active.nativePreparedEditorReason = "";
     }
     try {
       if (final) {
         await resolveImageIdentities(active);
         await resolveVirtualEditorDocs(active);
+        // The read-only full CodeMirror document and its original DOM card
+        // have already been verified together NOW. Stage only their bounded
+        // exact Markdown positioning evidence while the DOM is still live:
+        // sending the native snapshot/ACK below is asynchronous, and page
+        // hydration can detach the card before request-v6's terminal merge.
+        const docs=active.nativeEditorDocs;
+        if (active.nativeMessageIdentityBound === true
+            && docs instanceof Map && docs.size>0
+            && docs.size===active.nativeEditorStateCandidateCount) {
+          const region=globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__
+            ?.replyRoots?.(active);
+          const root=region?.scope==="verified_native_assistant_selection"
+            && region.roots?.length===1 ? region.roots[0] : null;
+          const rich=globalThis.__CHAT2API_RICH_RESPONSE_V69__;
+          if (root?.isConnected && root===active.nativeVerifiedReplyScope
+              && [...docs.keys()].every(editor=>editor?.isConnected
+                && root.contains?.(editor))
+              && typeof rich?.prepareVerifiedEditorMarkdown==="function") {
+            const prepared=rich.prepareVerifiedEditorMarkdown(root,docs);
+            if (prepared?.ok && prepared.integrated===docs.size) {
+              active.nativePreparedEditorMerge={
+                requestId:active.requestId,
+                messageScope:root,
+                codeTexts:prepared.codeTexts,
+                enriched:prepared.enriched,
+                integrated:prepared.integrated,
+              };
+              active.nativePreparedEditorReason="prepared-verified-message-id";
+            } else {
+              active.nativePreparedEditorReason=String(
+                prepared?.reason||"editor-preparation-unavailable").slice(0,60);
+            }
+          } else {
+            active.nativePreparedEditorReason="prepared-reply-owner-unavailable";
+          }
+        }
       }
       const tree = snapshot(active);
       if (!tree) {
