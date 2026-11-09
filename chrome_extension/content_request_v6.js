@@ -819,6 +819,8 @@
         native_editor_react_recovered:Number(active.nativeEditorReactRecovered || 0),
         native_canonical_code_integrated:Number(active.nativeCanonicalCodeIntegrated || 0),
         native_canonical_code_reason:String(active.nativeCanonicalCodeReason || "not-attempted").slice(0,60),
+        native_editor_prepared_ready:Boolean(active.nativePreparedEditorMerge),
+        native_editor_prepared_reason:String(active.nativePreparedEditorReason || "").slice(0,60),
         native_svg_charts_captured:Number(active.nativeSvgChartsCaptured || 0),
         native_graphics_unsupported:Number(active.nativeGraphicsUnsupported || 0),
         native_canvas_omitted:Number(active.nativeCanvasOmitted || 0),
