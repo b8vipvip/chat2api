@@ -74,7 +74,10 @@ const editor=new Element("div",[],"editor");
 const root=new Element("div",[
   new Element("p",[text(before)]),editor,new Element("p",[text(after)])
 ]);
-const docs=new Map([[editor,{source:"react-owned-code-v302",text:code}]]);
+// runInNewContext has its own Map constructor, just like browser worlds.
+// The fixture must instantiate the SAME realm's type as the rich reader.
+const VMMap=runInNewContext("Map",ctx);
+const docs=new VMMap([[editor,{source:"react-owned-code-v302",text:code}]]);
 const prepared=rich.prepareVerifiedEditorMarkdown(root,docs);
 assert.equal(prepared.ok,true,prepared.reason);
 assert.equal(prepared.integrated,1);
