@@ -35,6 +35,7 @@ class Element {
         if(selector.includes(".cm-editor")&&c.kind==="editor")found.push(c);
         else if(selector==="img"&&c.tagName==="IMG")found.push(c);
         else if(selector==="button"&&c.tagName==="BUTTON")found.push(c);
+        else if(selector==="code"&&c.tagName==="CODE")found.push(c);
         visit(c);
       }
     }
