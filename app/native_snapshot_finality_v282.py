@@ -84,27 +84,42 @@ def native_code_coverage(row: dict[str, Any] | None,
 # The native sidecar ACK and equal 19-table counts were TRUE, not proof that
 # an opaque embedded diagram was delivered. Never call this verified-final
 # merely because a visual placeholder survived the text serializer.
-_MERMAID_PLACEHOLDER = re.compile(r"(?m)^[ \t]*Mermaid diagram[ \t]*$")
-_MERMAID_FENCE = re.compile(
-    r"(?m)^[ \t]{0,3}(?:\x60{3,}|~{3,})[ \t]*mermaid\b", re.IGNORECASE
-)
+_MERMAID_PLACEHOLDER = re.compile(r"^ {0,3}Mermaid diagram[ \t]*$")
+_MARKDOWN_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})([^\r\n]*)$")
 
 
 def native_diagram_coverage(row: dict[str, Any] | None) -> str:
-    """Evidence-only exact Markdown source check; never invent chart code.
+    """Detect EACH missing diagram slot, not whether another diagram exists.
 
-    A normal paragraph mentioning "Mermaid diagram" is not a placeholder.
-    This rejects only a standalone diagram stand-in lacking the actual
-    Mermaid fenced source. No diagram quantity is inferred from a template
-    or a previous request, and the Broker's chat.completed is unchanged.
+    Real req_d4d49 lost a rendered 768x789 diagram as a standalone
+    "Mermaid diagram" label. A subsequent actual fenced Mermaid chart in
+    the same reply is a *different slot*; its source cannot prove that the
+    preceding opaque figure was delivered. The prior v310 "no fence anywhere"
+    rule falsely passed such partial multi-diagram answers.
+
+    Scan only Markdown OUTSIDE code fences. Code examples containing the
+    literal label, and indented 4-space code blocks, are not missing diagrams.
+    Dynamic request-local evidence only; no prescribed chart count and no
+    fabricated Mermaid code, SVG pixels or second Broker terminal.
     """
     if not isinstance(row, dict):
         return "unverified"
     response = row.get("response_text")
     if not isinstance(response, str) or not response:
         return "unverified"
-    if _MERMAID_PLACEHOLDER.search(response) and not _MERMAID_FENCE.search(response):
-        return "mermaid-placeholder-without-source"
+    fence_char = ""
+    fence_len = 0
+    for line in response.splitlines():
+        marker = _MARKDOWN_FENCE.fullmatch(line)
+        if marker:
+            run, suffix = marker.groups()
+            if not fence_char:
+                fence_char, fence_len = run[0], len(run)
+            elif run[0] == fence_char and len(run) >= fence_len and not suffix.strip():
+                fence_char, fence_len = "", 0
+            continue
+        if not fence_char and _MERMAID_PLACEHOLDER.fullmatch(line):
+            return "mermaid-placeholder-without-source"
     return "no-proven-loss"
 
 
