@@ -45,4 +45,14 @@ def sse_heartbeat_interval(elapsed_seconds: float) -> float:
     former 15-second heartbeat. This is transport cadence only: provisional
     heartbeats cannot claim an assistant completion or change Broker state.
     """
-    return 1.0 if max(0.0, float(elapsed_seconds)) < 30.0 else 5.0
+    # v315: the real long rich-media A request lost its HTTP SSE peer
+    # 285 seconds in, 2.927s after the last accepted ASGI body, while the
+    # Worker later continued to a 915s lease stall. The previous 30s->5s
+    # backoff leaves a >3s idle window across the application-level
+    # generator and proxy chain. Match the independently configured 1s
+    # transport middleware at *every* elapsed time, without adding assistant
+    # content, altering request-v6, or inferring client receipt from ASGI send.
+    # This only narrows transport idle gaps; it does not assert that a proxy
+    # or browser navigation was the actual cause of every observed disconnect.
+    max(0.0, float(elapsed_seconds))  # retain numeric contract
+    return 1.0
