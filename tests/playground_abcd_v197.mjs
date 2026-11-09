@@ -19,10 +19,11 @@ const frames=(text,includeDone=true)=>
 "data: "+JSON.stringify({choices:[{index:0,delta:{},finish_reason:"stop"}]})+"\n\n"+
 (includeDone?"data: [DONE]\n\n":"");
 
-function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,recoveredText=null,fetchFailure=false,httpFailureStatus=0}={}) {
+function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,recoveredText=null,fetchFailure=false,httpFailureStatus=0,simulatePagehide=false}={}) {
   const elements=new Map(), requests=[], records=[],downloads=[],clientEvidence=[];
   let submittedReport=null;
   let cancels=0, releases=0;
+  const pageEvents=new Map(),docEvents=new Map();
   const element=key=>{
     if(!elements.has(key))elements.set(key,{
       value:"",disabled:false,textContent:"",style:{},handlers:{},
@@ -37,6 +38,9 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
   const host={querySelector(){return {after(){}}}};
   let uuid=0, postIndex=0;
   const document={
+    visibilityState:"visible",
+    addEventListener(name,cb){docEvents.set(name,cb)},
+    removeEventListener(name,cb){if(docEvents.get(name)===cb)docEvents.delete(name)},
     getElementById:key=>key==="playgroundChatPanel"?host:(key==="pgABCD"&&!elements.has(key)?null:element(key)),
     createElement(){return {style:{},innerHTML:"",querySelector(){return {after(){}}}}}
   };
@@ -52,6 +56,11 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
         let read=false;
         return {read:async()=>{
           if(readerFailure){const error=Error("synthetic read error");error.name="AbortError";throw error;}
+          if(simulatePagehide&&!read) {
+            document.visibilityState="hidden";
+            docEvents.get("visibilitychange")?.();
+            pageEvents.get("pagehide")?.({persisted:false});
+          }
           return read?{done:true}:(read=true,{done:false,value:new TextEncoder().encode(data)});
         },cancel:async()=>{cancels++;},releaseLock(){releases++;}};
       }}};
@@ -95,7 +104,9 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
       model_verified:!modelMismatch,model_conflict:modelMismatch,
       diagnostics:{network_stream_terminal_proof:true,network_stream_phase:"complete"}
     };
-    if(endpoint.endsWith("/abcd/transport-truth")){clientEvidence.push(options.body);return {};}
+    if(endpoint.endsWith("/abcd/transport-truth")){clientEvidence.push({
+      ...options.body,keepalive:options.keepalive===true
+    });return {};}
     if(endpoint.endsWith("/abcd/report")){submittedReport=options.body.report;return {};}
     if(endpoint.endsWith("/chat-runs"))records.push({kind:"start",body:options.body});
     if(endpoint.endsWith("/chat-records"))records.push({kind:"terminal",body:options.body});
@@ -104,7 +115,9 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
   const context={
     document,fetch,api,crypto:{randomUUID:()=>("00000000-0000-0000-0000-"+String(++uuid).padStart(12,"0")),subtle:webcrypto.subtle},
     TextDecoder,TextEncoder,performance:{now:()=>1234},location:{origin:"https://api.test"},
-    console,setTimeout:()=>0,Blob,URL
+    console,setTimeout:()=>0,Blob,URL,
+    addEventListener(name,cb){pageEvents.set(name,cb)},
+    removeEventListener(name,cb){if(pageEvents.get(name)===cb)pageEvents.delete(name)},
   };
   vm.runInNewContext(source,context);
   return {run:async()=>{
@@ -112,6 +125,24 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
     return {status:element("pgABCDNote").textContent,requests,records,downloads,cancels,releases,report:submittedReport,clientEvidence};
   }, element};
 }
+
+test("v312: pagehide persists authenticated keepalive facts without cancelling healthy SSE",async()=>{
+  const r=await scenario("A",[FULL],{simulatePagehide:true}).run();
+  assert.equal(r.requests.length,1,"a page lifecycle signal must never replay the model prompt");
+  assert.equal(r.cancels,0,"pagehide telemetry must not cancel the active reader");
+  assert.equal(r.report.turns[0].client_sse_truth.protocol_done_seen,true);
+  assert.equal(r.report.turns[0].client_sse_truth.client_pagehide_seen,true);
+  assert.equal(r.report.turns[0].client_sse_truth.client_visibility_hidden_seen,true);
+  const pagehide=r.clientEvidence.find(e=>e.keepalive===true
+    && e.client_sse_truth?.client_pagehide_seen===true);
+  assert.ok(pagehide,"pagehide after response headers needs its own bounded, keepalive POST");
+  assert.equal(pagehide.failed,false,"progress is not a failed terminal");
+  assert.equal(pagehide.phase,"progress");
+  assert.equal(pagehide.client_sse_truth.reader_cancel_requested,false);
+  assert.equal(pagehide.client_sse_truth.response_headers_received,true);
+  assert.equal(pagehide.client_sse_truth.client_pagehide_persisted,false);
+  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"passed");
+});
 
 test("A: real SSE terminal and full-length report is accepted",async()=>{
   const r=await scenario("A",[FULL]).run();

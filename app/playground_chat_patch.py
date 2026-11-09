@@ -287,11 +287,14 @@ def install_playground_chat_patch(app: FastAPI) -> FastAPI:
         boolean_keys = {
             "response_headers_received", "protocol_stop_seen", "protocol_done_seen",
             "native_reader_eof_seen", "reader_cancel_requested", "reader_lock_released",
+            "client_pagehide_seen", "client_pagehide_persisted",
+            "client_visibility_hidden_seen",
         }
         number_keys = {
             "response_headers_ms", "first_chunk_ms", "last_chunk_ms",
             "read_elapsed_ms", "parsed_frames", "fetch_failed_after_ms",
             "sse_body_chunks", "http_status",
+            "client_pagehide_after_ms", "client_visibility_hidden_after_ms",
         }
         string_keys = {"reader_error_name", "fetch_error_name", "reader_cancel_reason"}
         facts: dict[str, Any] = {}
@@ -306,6 +309,24 @@ def install_playground_chat_patch(app: FastAPI) -> FastAPI:
             value = raw.get(key)
             if isinstance(value, str) and re.fullmatch(r"[a-zA-Z]{1,50}", value):
                 facts[key] = value
+        # A pagehide keepalive POST may race a regular progress POST. The
+        # event is a sticky, request-scoped observation: neither a delayed
+        # early checkpoint nor a terminal report may erase earlier evidence
+        # that this admin document exited while the SSE was still pending.
+        prior = quality.get("client_sse_truth_v293")
+        prior = prior if isinstance(prior, dict) else {}
+        for key in ("client_pagehide_seen", "client_visibility_hidden_seen"):
+            if prior.get(key) is True:
+                facts[key] = True
+        if prior.get("client_pagehide_seen") is True and (
+            "client_pagehide_persisted" not in facts
+        ) and type(prior.get("client_pagehide_persisted")) is bool:
+            facts["client_pagehide_persisted"] = prior["client_pagehide_persisted"]
+        for key in ("client_pagehide_after_ms", "client_visibility_hidden_after_ms"):
+            if key in prior and isinstance(prior[key], (int, float)) and (
+                key not in facts or prior[key] < facts[key]
+            ):
+                facts[key] = prior[key]
         await app.state.test_runs.update(run_id, {
             "quality": {
                 **quality,

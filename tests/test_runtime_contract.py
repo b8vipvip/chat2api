@@ -699,3 +699,28 @@ def test_v313_original_chatgpt_abort_lifecycle_is_content_free_observer_only():
     result=subprocess.run(["node","tests/network_native_abort_page_lifecycle_v313.mjs"],
                           cwd=root,capture_output=True,text=True,timeout=20)
     assert result.returncode==0,result.stdout+result.stderr
+
+
+def test_v312_playground_SSE_document_lifecycle_is_evidence_only():
+    """An admin pagehide must never cancel the original production API run."""
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    html=(root/"app/admin.py").read_text("utf8")
+    ui=(root/"app/admin_playground_abcd_v197.js").read_text("utf8")
+    server=(root/"app/playground_chat_patch.py").read_text("utf8")
+    assert "keepalive:opt.keepalive===true" in html
+    assert 'globalThis.addEventListener?.("pagehide",onPageHide)' in ui
+    assert 'globalThis.removeEventListener?.("pagehide",onPageHide)' in ui
+    assert 'client_pagehide_after_ms:relative(pagehideAt)' in ui
+    assert 'client_pagehide_seen:pagehideSeen' in ui
+    assert 'failed:phase==="incomplete",phase' in ui
+    assert 'void persistClientTruth(lifecycleFacts(),"progress",true)' in ui
+    assert '"client_pagehide_seen"' in server
+    assert '"client_visibility_hidden_seen"' in server
+    assert 'client_pagehide_after_ms' in server
+    assert 'prior.get(key) is True' in server
+    assert 'reader.cancel()' in ui  # Only existing incomplete-reader cleanup
+    assert 'onPageHide=(evt)=>{' in ui
+    assert 'reader.cancel()' not in ui[
+        ui.index('const onPageHide=(evt)=>{'):
+        ui.index('globalThis.addEventListener?.("pagehide",onPageHide)')]
