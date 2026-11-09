@@ -475,15 +475,22 @@ class NativeContentStore:
                 # Bounded on-disk cache, independent of request_history.jsonl
                 # and existing MediaArchive retention. Max 256 / 90 days.
                 if self._persist_count % 32 == 0:
-                    saved = sorted(
-                        (p for p in self.root.glob("*.json")
-                         if SNAPSHOT_FILENAME.fullmatch(p.name)),
-                        key=lambda p: p.stat().st_mtime, reverse=True,
-                    )
-                    cutoff = time.time() - MAX_AGE_SECONDS
-                    for index, candidate in enumerate(saved):
-                        if index >= 256 or candidate.stat().st_mtime < cutoff:
-                            candidate.unlink(missing_ok=True)
+                    try:
+                        saved = sorted(
+                            (p for p in self.root.glob("*.json")
+                             if SNAPSHOT_FILENAME.fullmatch(p.name)),
+                            key=lambda p: p.stat().st_mtime, reverse=True,
+                        )
+                        cutoff = time.time() - MAX_AGE_SECONDS
+                        for index, candidate in enumerate(saved):
+                            if index >= 256 or candidate.stat().st_mtime < cutoff:
+                                candidate.unlink(missing_ok=True)
+                    except OSError:
+                        # Pruning is retention maintenance, not a second
+                        # authority for whether os.replace committed the
+                        # current native snapshot. Never report an existing
+                        # durable file as native_snapshot_persisted=False.
+                        pass
                 return True
             except OSError:
                 return False
