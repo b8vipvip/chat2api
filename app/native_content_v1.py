@@ -570,23 +570,39 @@ def native_image_identity_candidates(snapshot: dict, archived_media: list[dict])
     # Partial byte proofs are useful: verified positions may be shown while
     # every unverified position stays a placeholder. Never replace a missing
     # hash with archive order, dimensions or a different picture.
-    table={}
+    # v308: Each archived image is a distinct resource, even when two files
+    # contain identical bytes. The previous {sha256: FIRST index} table let
+    # multiple DOM slots claim the same asset while declaring *all* archival
+    # bytes verified. That could falsely pass the finality guard and display
+    # one image twice instead of the other archived image.
+    #
+    # Construct a byte-identity multiset and consume each owned asset once.
+    # The order here ONLY breaks ties between byte-identical assets: their
+    # SHA256 proves the pixels/bytes are interchangeable. The DOM order is
+    # never used to match differently hashed files, and dimensions are never
+    # promoted to identity proof.
+    pools={}
     for index,media in enumerate(archived_media):
         if not isinstance(media,dict):
             continue
         digest=media.get("sha256")
         if isinstance(digest,str) and re.fullmatch("[0-9a-f]{64}",digest):
-            table.setdefault(digest,index)
+            pools.setdefault(digest,[]).append(index)
     result=[]
     matched=0
     for index,proof in enumerate(proofs):
         if images[index].get("media_index") != index:
             return {"status":"identity-incomplete","indices":[]}
-        asset=table.get(proof) if isinstance(proof,str) and re.fullmatch("[0-9a-f]{64}",proof) else None
+        candidates=pools.get(proof) if isinstance(proof,str) and re.fullmatch("[0-9a-f]{64}",proof) else None
+        asset=candidates.pop(0) if candidates else None
         result.append(asset)
         if asset is not None:
             matched+=1
-    if matched==len(images):
+    # "verified-sha256" means a one-to-one, onto mapping between exactly
+    # this request's visible image slots and every archived image resource.
+    # Any surplus/unallocated archive or unmapped slot remains *partial*.
+    if (matched==len(images)==len(archived_media)
+            and len(set(result))==len(archived_media)):
         return {"status":"verified-sha256","indices":result}
     if matched:
         return {"status":"verified-sha256-partial","indices":result,
