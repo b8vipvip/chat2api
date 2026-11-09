@@ -684,6 +684,7 @@
       if (active.nativeEditorStateCandidateCount > 0) {
         let codeResult={text:String(event.text||""),integrated:0,
           reason:"editor-document-unavailable"};
+        let usedPreparedProof=false;
         try {
           const trustedIdentity=active.nativeMessageIdentityBound === true
             || nativeSelectionBound === true;
@@ -697,6 +698,32 @@
             } else {
               codeResult.reason="verified-editor-merge-root-unavailable";
             }
+            // v311: a React card can be replaced during the asynchronous
+            // native-snapshot server ACK. Only request-v6 may consume the
+            // *previously verified same-message* prepared code position, and
+            // only when the live DOM path failed. All original unique
+            // two-sided paragraph anchors are still mandatory. Never use a
+            // prepared proof from a different API request or Message ID.
+            const prepared=active.nativePreparedEditorMerge;
+            const currentId=String(active.nativeVerifiedReplyScope?.getAttribute?.(
+              "data-chatgpt-selection-message-id")||"");
+            if (codeResult.integrated===0 && trustedIdentity
+                && active.nativeMessageIdentityBound===true
+                && prepared?.requestId===active.requestId
+                && prepared?.messageId && prepared.messageId===currentId
+                && prepared.integrated===active.nativeEditorStateCandidateCount
+                && prepared.codeTexts?.length===prepared.integrated
+                && typeof rich?.spliceVerifiedCodeIntoCanonical==="function") {
+              const fallback=rich.spliceVerifiedCodeIntoCanonical(event.text,
+                prepared.enriched,prepared.codeTexts);
+              if (fallback.integrated===prepared.integrated) {
+                codeResult=fallback;
+                usedPreparedProof=true;
+              } else {
+                codeResult.reason=String(
+                  fallback.reason||"prepared-editor-position-unverified");
+              }
+            }
           } else if (!trustedIdentity) {
             codeResult.reason="verified-message-id-required";
           }
@@ -709,8 +736,11 @@
           && codeResult.text.length <= 300000
           && codeResult.text.length >= String(event.text||"").length;
         active.nativeCanonicalCodeIntegrated=good ? codeResult.integrated:0;
-        active.nativeCanonicalCodeReason=good ? "verified-editor-anchor-insert"
-          : String(codeResult.reason||"editor-merge-unverified").slice(0,60);
+        active.nativeCanonicalCodeReason=good
+          ? (usedPreparedProof ? "verified-editor-prepared-anchor-insert"
+              : "verified-editor-anchor-insert")
+          : String(codeResult.reason||active.nativePreparedEditorReason
+            ||"editor-merge-unverified").slice(0,60);
         if (good) {
           event={...event,text:codeResult.text};
         }
@@ -789,6 +819,8 @@
         native_editor_react_recovered:Number(active.nativeEditorReactRecovered || 0),
         native_canonical_code_integrated:Number(active.nativeCanonicalCodeIntegrated || 0),
         native_canonical_code_reason:String(active.nativeCanonicalCodeReason || "not-attempted").slice(0,60),
+        native_editor_prepared_ready:Boolean(active.nativePreparedEditorMerge),
+        native_editor_prepared_reason:String(active.nativePreparedEditorReason || "").slice(0,60),
         native_svg_charts_captured:Number(active.nativeSvgChartsCaptured || 0),
         native_graphics_unsupported:Number(active.nativeGraphicsUnsupported || 0),
         native_canvas_omitted:Number(active.nativeCanvasOmitted || 0),

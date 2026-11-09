@@ -647,3 +647,29 @@ def test_v309_canonical_editor_merge_uses_verified_same_request_reply_not_nested
     result=subprocess.run(["node","tests/native_verified_code_merge_scope_v309.mjs"],
                           cwd=root,capture_output=True,text=True,timeout=20)
     assert result.returncode==0,result.stdout+result.stderr
+
+
+
+def test_v311_one_request_v6_terminal_owns_preack_codemerge_provenance():
+    """Preparing editor bytes is not a second completion or native finality."""
+    from pathlib import Path
+    root=Path(__file__).resolve().parents[1]
+    owner=(root/"chrome_extension/content_request_v6.js").read_text("utf-8")
+    native=(root/"chrome_extension/content_native_content_v1.js").read_text("utf-8")
+    renderer=(root/"chrome_extension/content_rich_response_v69.js").read_text("utf-8")
+    broker=(root/"app/broker.py").read_text("utf-8")
+    assert "native.capture(active, true)" in owner
+    assert "prepared?.requestId===active.requestId" in owner
+    assert "prepared.messageId===currentId" in owner
+    assert "prepared.integrated===active.nativeEditorStateCandidateCount" in owner
+    assert "rich.spliceVerifiedCodeIntoCanonical(event.text," in owner
+    assert "native_editor_prepared_ready:" in owner
+    assert "native_editor_prepared_reason:" in owner
+    assert "await resolveVirtualEditorDocs(active);" in native
+    assert "prepareVerifiedEditorMarkdown(root,docs)" in native
+    assert "function prepareVerifiedEditorMarkdown(node, verifiedEditorDocs)" in renderer
+    assert 'native_editor_prepared_ready' in broker
+    assert 'native_editor_prepared_reason' in broker
+    assert 'type:"chat.completed"' not in native
+    assert 'type:"chat.error"' not in native
+    assert 'type:"chat.completed"' not in renderer

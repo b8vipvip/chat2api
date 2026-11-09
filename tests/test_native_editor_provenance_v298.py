@@ -178,3 +178,47 @@ def test_v306_react_hook_array_and_doc_evidence_is_bounded_and_content_free():
     assert "react_hook_nodes" in reader and "react_document_nodes" in reader
     assert "native_editor_react_hook_nodes:" in controller
     assert "chat.completed" not in reader
+
+
+def test_v311_frozen_same_message_editor_proof_survives_native_ack_without_code_leak():
+    from pathlib import Path
+    import subprocess
+    root=Path(__file__).resolve().parents[1]
+    request=(root/"chrome_extension/content_request_v6.js").read_text("utf8")
+    native=(root/"chrome_extension/content_native_content_v1.js").read_text("utf8")
+    rich=(root/"chrome_extension/content_rich_response_v69.js").read_text("utf8")
+    assert 'active.nativePreparedEditorMerge = null' in native
+    assert 'await resolveVirtualEditorDocs(active);' in native
+    assert "active.nativePreparedEditorMerge={" in native
+    assert "prepareVerifiedEditorMarkdown(root,docs)" in native
+    assert 'messageId,' in native
+    assert "const tree = snapshot(active);" in native
+    assert native.index("prepareVerifiedEditorMarkdown(root,docs)") < native.index(
+        "const tree = snapshot(active);")
+    assert "prepared?.requestId===active.requestId" in request
+    assert "prepared.messageId===currentId" in request
+    assert "active.nativeMessageIdentityBound===true" in request
+    assert "prepared.integrated===active.nativeEditorStateCandidateCount" in request
+    assert "rich.spliceVerifiedCodeIntoCanonical(event.text," in request
+    assert 'verified-editor-prepared-anchor-insert' in request
+    assert "function prepareVerifiedEditorMarkdown(node, verifiedEditorDocs)" in rich
+    assert 'type:"chat.completed"' not in native  # only request-v6 owns completion
+    child=subprocess.run(["node","tests/native_editor_prepared_merge_v311.mjs"],
+                         cwd=root,capture_output=True,text=True,timeout=20)
+    assert child.returncode==0,child.stdout+child.stderr
+    # Only the *fact* of prepared evidence, never the full Python source or
+    # private ChatGPT Message ID, may be retained in request-log diagnostics.
+    stage=_terminal_provenance({"diagnostics":{
+        "native_editor_prepared_ready":True,
+        "native_editor_prepared_reason":"prepared-verified-message-id",
+        "native_canonical_code_integrated":1,
+        "native_canonical_code_reason":"verified-editor-prepared-anchor-insert",
+        "raw_prepared_editor_markdown":"private source - must not log",
+        "raw_prepared_message_id":"never expose"
+    }})
+    assert stage["native_editor_prepared_ready"] is True
+    assert stage["native_editor_prepared_reason"]=="prepared-verified-message-id"
+    assert stage["native_canonical_code_integrated"]==1
+    assert stage["native_canonical_code_reason"]=="verified-editor-prepared-anchor-insert"
+    assert "raw_prepared_editor_markdown" not in stage
+    assert "raw_prepared_message_id" not in stage
