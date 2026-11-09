@@ -174,7 +174,7 @@ const onPageHide=(evt)=>{
   void persistClientTruth(lifecycleFacts(),"progress",true);
 };
 globalThis.addEventListener?.("pagehide",onPageHide);
-document.addEventListener?.("visibilitychange",onDocumentHidden);
+globalThis.document?.addEventListener?.("visibilitychange",onDocumentHidden);
 try{
 try{
 while(!done){
@@ -286,7 +286,7 @@ if(!answer.trim()){
 return {text:answer,frames,client_sse_truth:clientSseTruth};
 }finally{
   globalThis.removeEventListener?.("pagehide",onPageHide);
-  document.removeEventListener?.("visibilitychange",onDocumentHidden);
+  globalThis.document?.removeEventListener?.("visibilitychange",onDocumentHidden);
 }
 }
 const images=text=>[...text.matchAll(/!\[[^\]\n]*\]\((https:\/\/[^)\s]+)\)/g)].map(x=>({name:"picture",url:x[1]}));
