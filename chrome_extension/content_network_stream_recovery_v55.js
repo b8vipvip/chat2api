@@ -158,6 +158,27 @@
         network_stream_native_signal_abort_after_ms:
           Number.isFinite(detail.native_signal_abort_after_ms)
             ? Number(detail.native_signal_abort_after_ms) : null,
+        // Content-free page-lifecycle attribution from MAIN world. These
+        // cannot change v6's sole completion/error decision; they only show
+        // whether the actual page navigation/hidden state coincided with its
+        // ORIGINAL Fetch AbortSignal, not whether a clone was cancelled.
+        network_stream_native_pagehide_during_stream:
+          detail.native_pagehide_during_stream === true,
+        network_stream_native_pagehide_before_abort:
+          detail.native_pagehide_before_abort === true,
+        network_stream_native_pagehide_persisted:
+          detail.native_pagehide_persisted === true,
+        network_stream_native_visibility_hidden_during_stream:
+          detail.native_visibility_hidden_during_stream === true,
+        network_stream_native_abort_visibility:
+          ["visible","hidden","prerender","unknown","unobserved"]
+            .includes(detail.native_signal_abort_visibility)
+            ? detail.native_signal_abort_visibility : "unknown",
+        network_stream_native_abort_reason_kind:
+          ["AbortError","TimeoutError","NetworkError","NotAllowedError",
+            "other","unknown","not-aborted"]
+            .includes(detail.native_signal_abort_reason_kind)
+            ? detail.native_signal_abort_reason_kind : "unknown",
         network_stream_clone_last_chunk_age_ms:
           Number.isFinite(detail.clone_last_chunk_age_ms)
             ? Number(detail.clone_last_chunk_age_ms) : null,
