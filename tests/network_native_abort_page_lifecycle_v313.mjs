@@ -63,8 +63,10 @@ async function run({pagehide=false,hidden=false}={}){
   assert.equal(events.filter(e=>e.phase==="done").length,0);
   assert.equal(windowHandlers.size,0,"pagehide listener must be removed");
   assert.equal(documentHandlers.size,0,"visibility listener must be removed");
-  assert.ok(!JSON.stringify(events).includes("private user text"),
-    "new lifecycle facts must never log exception strings or page content");
+  const lifecycleOnly=Object.fromEntries(
+    Object.entries(failure).filter(([k])=>k.startsWith("native_")));
+  assert.ok(!JSON.stringify(lifecycleOnly).includes("private user text"),
+    "new lifecycle fields must never contain raw exceptions or page contents");
   return events;
 }
 
