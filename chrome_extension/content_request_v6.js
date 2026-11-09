@@ -580,6 +580,33 @@
     return { text: raw, stripped: false, pending: false };
   }
 
+  // v309: the tracked lastCandidateNode can be a nested paragraph within a
+  // verified assistant reply. Its sibling CodeMirror cards are then outside
+  // cleanClone(lastCandidateNode) even though the read-only MAIN-world probe
+  // has already recovered each full editor document. Only request-v6 may
+  // choose an already-verified whole reply container for canonical insertion.
+  // This does NOT widen the boundary to main or any other assistant/user turn.
+  function canonicalEditorReplyRoot(active, verifiedNativeSelectionRoot = null) {
+    const candidate=active?.lastCandidateNode;
+    const docs=active?.nativeEditorDocs;
+    if (!candidate?.isConnected || !(docs instanceof Map) || !docs.size) return null;
+    const editors=[...docs.keys()];
+    const roots=[
+      active.nativeVerifiedReplyScope, verifiedNativeSelectionRoot, candidate,
+    ];
+    for (const root of roots) {
+      if (!root?.isConnected || !root.contains?.(candidate)
+          || root.matches?.("main,[role='main'],#thread,[data-testid='conversation-turns']")
+          || root.closest?.("form,nav,aside,footer,[role='dialog'],[data-message-author-role='user']")
+          || root.querySelector?.("[data-message-author-role='user'],[data-testid='user-message']")
+          || hasUntrustedReplyInput(root)
+          || !editors.every(editor=>editor?.isConnected && root.contains(editor)))
+        continue;
+      return root;
+    }
+    return null;
+  }
+
   async function emit(event) {
     // Sanitize the request-correlated user-turn echo at the single Worker
     // egress, before either SSE delivery or terminal evidence capture.
@@ -614,18 +641,21 @@
       let requestScopeBound = false;
       let rolelessBound = false;
       let nativeSelectionBound = false;
+      let nativeSelectionRoot = null;
       try {
         requestScopeBound = bindNativeReplyScope(active, "terminal");
         const rolelessScope = requestScopeBound ? null :
           globalThis.__CHAT2API_NATIVE_DOM_EVIDENCE_V1__?.replyRoots?.(active);
         nativeSelectionBound = rolelessScope?.scope === "verified_native_assistant_selection"
           && rolelessScope.roots?.length === 1;
+        if (nativeSelectionBound) nativeSelectionRoot=rolelessScope.roots[0];
         rolelessBound = (rolelessScope?.scope === "roleless_reply_siblings"
             || nativeSelectionBound) && rolelessScope.roots?.length > 0;
       } catch (_) {
         requestScopeBound = false;
         rolelessBound = false;
         nativeSelectionBound = false;
+        nativeSelectionRoot = null;
         active.nativeVerifiedReplyScope = null;
         active.nativeBindingEvidence = "scope-observer-error";
       }
@@ -660,8 +690,13 @@
           if (trustedIdentity && active.nativeEditorDocs?.size ===
               active.nativeEditorStateCandidateCount &&
               typeof rich?.mergeVerifiedEditorMarkdown === "function") {
-            codeResult=rich.mergeVerifiedEditorMarkdown(event.text,
-              active.lastCandidateNode,active.nativeEditorDocs);
+            const codeRoot=canonicalEditorReplyRoot(active,nativeSelectionRoot);
+            if (codeRoot) {
+              codeResult=rich.mergeVerifiedEditorMarkdown(event.text,
+                codeRoot,active.nativeEditorDocs);
+            } else {
+              codeResult.reason="verified-editor-merge-root-unavailable";
+            }
           } else if (!trustedIdentity) {
             codeResult.reason="verified-message-id-required";
           }
