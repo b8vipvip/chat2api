@@ -738,6 +738,13 @@ def test_v314_aborted_provisional_terminal_does_not_hold_browser_lease():
     assert "networkTerminalTransportErrorAt" in worker
     assert "network_unverified_provisional_terminal_seen" in worker
     assert 'response_integrity_guard: "verified-network-terminal-v314"' in worker
+    # Real 20-table req_13338 stalled without native ID/boundary telemetry.
+    # The same request-v6 binding decision is now audited during progress
+    # without exporting any body/DOM or creating a second terminal.
+    assert 'diagnostic(active,"native-reply-scope-checkpoint"' in worker
+    assert 'native_boundary_message_identity_facts:' in worker
+    assert 'native_boundary_gate_facts:' in worker
+    assert 'Date.now()-active.nativeBoundaryAuditAt>=30000' in worker
     assert "active.networkStreamEndedWithoutTerminalAt = Date.now();" in bridge
     assert 'type: "chat.completed"' not in bridge
     result=subprocess.run(["node","tests/network_provisional_terminal_quiet_failure_v314.mjs"],
