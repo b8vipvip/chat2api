@@ -724,3 +724,22 @@ def test_v312_playground_SSE_document_lifecycle_is_evidence_only():
     assert 'reader.cancel()' not in ui[
         ui.index('const onPageHide=(evt)=>{'):
         ui.index('globalThis.addEventListener?.("pagehide",onPageHide)')]
+
+
+def test_v314_aborted_provisional_terminal_does_not_hold_browser_lease():
+    """A 34-char provisional marker is not a valid stream EOF or full answer."""
+    from pathlib import Path
+    import subprocess
+    root=Path(__file__).resolve().parents[1]
+    worker=(root/"chrome_extension/content_request_v6.js").read_text("utf8")
+    bridge=(root/"chrome_extension/content_network_stream_recovery_v55.js").read_text("utf8")
+    assert "function unverifiedNetworkFailureReady(active, now, pageWorking, generating," in worker
+    assert "confirmedTransportTerminal(active)" in worker
+    assert "networkTerminalTransportErrorAt" in worker
+    assert "network_unverified_provisional_terminal_seen" in worker
+    assert 'response_integrity_guard: "verified-network-terminal-v314"' in worker
+    assert "active.networkStreamEndedWithoutTerminalAt = Date.now();" in bridge
+    assert 'type: "chat.completed"' not in bridge
+    result=subprocess.run(["node","tests/network_provisional_terminal_quiet_failure_v314.mjs"],
+                          cwd=root,capture_output=True,text=True,timeout=20)
+    assert result.returncode==0,result.stdout+result.stderr
