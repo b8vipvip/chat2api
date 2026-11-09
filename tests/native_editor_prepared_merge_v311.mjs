@@ -22,7 +22,8 @@ class Element {
   get innerText(){return this.textContent;}
   getBoundingClientRect(){return {width:600,height:350};}
   getAttribute(key){return this.attributes[key]||null;}
-  setAttribute(key,value){this.attributes[key]=String(value);}
+  setAttribute(key,value){this.attributes[key]=String(value);
+    if(key==="class")this.className=String(value);}
   matches(selector){return selector.includes(".cm-editor")&&this.kind==="editor";}
   contains(other){for(let n=other;n;n=n.parentElement)if(n===this)return true;return false;}
   querySelector(selector){return this.querySelectorAll(selector)[0]||null;}
