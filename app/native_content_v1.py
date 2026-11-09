@@ -14,6 +14,7 @@ import os
 import re
 import threading
 import time
+import tempfile
 from collections import OrderedDict
 from pathlib import Path
 
@@ -338,7 +339,13 @@ class NativeChunkAssembler:
                 # Newer revisions can supersede incomplete older ones, but
                 # neither a different key-owner nor an older revision may do so.
                 old_owner, old_revision, *_ = state["identity"]
-                if old_owner != owner or revision < old_revision:
+                # Once a Worker has started a given revision, its byte length,
+                # chunk count and SHA256 form one immutable transfer identity.
+                # A conflicting replay of the SAME revision must not replace
+                # already ACKed chunks: otherwise a partial final snapshot
+                # disappears despite the Worker proceeding with those ACKs.
+                # Only a genuinely newer revision may supersede it.
+                if old_owner != owner or revision <= old_revision:
                     raise ValueError("Native chunk owner/revision conflict")
                 del self._sessions[key]
                 state = None
@@ -379,6 +386,11 @@ class NativeContentStore:
         self.root.chmod(0o700)
         self._persist_count = 0
         self._lock = threading.Lock()
+        # Do not let two finalization/archival paths truncate the same .tmp
+        # file or replace an older revision after a newer write. This lock
+        # exclusively serializes persistence; it owns neither request
+        # completion nor chunk receipt.
+        self._persist_lock = threading.Lock()
         self._live: OrderedDict[str, tuple[str, dict, float]] = OrderedDict()
 
     @staticmethod
@@ -426,35 +438,68 @@ class NativeContentStore:
         return None
 
     def persist(self, request_id: str, owner: str) -> bool:
-        """Save only a final, bounded snapshot. Never influence Broker status."""
-        snapshot = self.get(request_id, owner)
-        if not snapshot:
-            return False
-        path = self.root / (self._valid_id(request_id) + ".json")
-        temp = path.with_suffix(".tmp")
-        data = json.dumps({"owner": owner, "snapshot": snapshot}, ensure_ascii=False)
-        try:
-            fd = os.open(temp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                os.fchmod(handle.fileno(), 0o600)
-                handle.write(data)
-            os.replace(temp, path)
-            self._persist_count += 1
-            # Bounded on-disk cache, independent of request_history.jsonl and
-            # existing MediaArchive retention. Max 256 snapshots / 90 days.
-            if self._persist_count % 32 == 0:
-                saved = sorted(
-                    (p for p in self.root.glob("*.json") if SNAPSHOT_FILENAME.fullmatch(p.name)),
-                    key=lambda p: p.stat().st_mtime, reverse=True,
-                )
-                cutoff = time.time() - MAX_AGE_SECONDS
-                for index, candidate in enumerate(saved):
-                    if index >= 256 or candidate.stat().st_mtime < cutoff:
-                        candidate.unlink(missing_ok=True)
-            return True
-        except OSError:
-            return False
+        """Atomically save the latest complete native snapshot, never a terminal.
 
+        A fixed request_id.tmp allowed two concurrent terminal finalizations
+        to truncate each other's JSON, leaving persisted=False even when the
+        Worker ACKed a valid snapshot. Serialize same-store commits and write
+        each transaction to a fresh mode-0600 private temporary file. Neither
+        the failed attempt nor its cleanup may remove another writer's data.
+        """
+        request_id = self._valid_id(request_id)
+        if not owner:
+            return False
+        with self._persist_lock:
+            snapshot = self.get(request_id, owner)
+            if not snapshot:
+                return False
+            path = self.root / (request_id + ".json")
+            data = json.dumps({"owner": owner, "snapshot": snapshot}, ensure_ascii=False)
+            temporary: Path | None = None
+            try:
+                # NamedTemporaryFile uses O_EXCL and random suffixes, so even
+                # another server process cannot share or truncate our staged
+                # file. A successful replace is an all-or-nothing publication.
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", dir=self.root,
+                    prefix=request_id + ".", suffix=".tmp", delete=False,
+                ) as handle:
+                    temporary = Path(handle.name)
+                    os.fchmod(handle.fileno(), 0o600)
+                    handle.write(data)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                os.replace(temporary, path)
+                temporary = None
+                self._persist_count += 1
+                # Bounded on-disk cache, independent of request_history.jsonl
+                # and existing MediaArchive retention. Max 256 / 90 days.
+                if self._persist_count % 32 == 0:
+                    try:
+                        saved = sorted(
+                            (p for p in self.root.glob("*.json")
+                             if SNAPSHOT_FILENAME.fullmatch(p.name)),
+                            key=lambda p: p.stat().st_mtime, reverse=True,
+                        )
+                        cutoff = time.time() - MAX_AGE_SECONDS
+                        for index, candidate in enumerate(saved):
+                            if index >= 256 or candidate.stat().st_mtime < cutoff:
+                                candidate.unlink(missing_ok=True)
+                    except OSError:
+                        # Pruning is retention maintenance, not a second
+                        # authority for whether os.replace committed the
+                        # current native snapshot. Never report an existing
+                        # durable file as native_snapshot_persisted=False.
+                        pass
+                return True
+            except OSError:
+                return False
+            finally:
+                if temporary is not None:
+                    try:
+                        temporary.unlink(missing_ok=True)
+                    except OSError:
+                        pass
 
 def native_delivery_fingerprint(snapshot: dict | None) -> tuple | None:
     """An asset becoming ready is a new SSE state even at the same DOM revision."""
