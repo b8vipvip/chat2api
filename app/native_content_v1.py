@@ -570,29 +570,45 @@ def native_image_identity_candidates(snapshot: dict, archived_media: list[dict])
     # Partial byte proofs are useful: verified positions may be shown while
     # every unverified position stays a placeholder. Never replace a missing
     # hash with archive order, dimensions or a different picture.
-    table={}
+    # v308: SHA256 proves the IDENTITY of original bytes, not the number
+    # of archive rows. The same original image may legitimately appear in
+    # multiple verified DOM positions while the archive stores it once.
+    # Reusing that exact hash is safe; using its index for a DIFFERENT hash,
+    # or silently dropping another distinct archived hash, is not.
+    #
+    # Complete coverage requires: (a) every DOM image slot has a byte-exact
+    # archive match, (b) every distinct archived image is represented by a
+    # DOM slot, and (c) every archived row carries a valid SHA256. This
+    # explicitly rejects the old false-positive of two A slots with archives
+    # A and B -> [0, 0] "verified", with B never displayed.
+    by_digest={}
+    missing_archive_proof=False
     for index,media in enumerate(archived_media):
-        if not isinstance(media,dict):
-            continue
-        digest=media.get("sha256")
+        digest=media.get("sha256") if isinstance(media,dict) else None
         if isinstance(digest,str) and re.fullmatch("[0-9a-f]{64}",digest):
-            table.setdefault(digest,index)
+            by_digest.setdefault(digest,index)
+        else:
+            missing_archive_proof=True
     result=[]
     matched=0
+    seen_digests=set()
     for index,proof in enumerate(proofs):
         if images[index].get("media_index") != index:
             return {"status":"identity-incomplete","indices":[]}
-        asset=table.get(proof) if isinstance(proof,str) and re.fullmatch("[0-9a-f]{64}",proof) else None
+        asset=by_digest.get(proof) if isinstance(proof,str) and re.fullmatch("[0-9a-f]{64}",proof) else None
         result.append(asset)
         if asset is not None:
             matched+=1
-    if matched==len(images):
+            seen_digests.add(proof)
+    # Duplicate DOM slots are permitted ONLY when their actual original-byte
+    # digests agree. This is not a count or archive-position heuristic.
+    if (matched==len(images) and not missing_archive_proof
+            and seen_digests==set(by_digest)):
         return {"status":"verified-sha256","indices":result}
     if matched:
         return {"status":"verified-sha256-partial","indices":result,
                 "matched_count":matched}
     return {"status":"identity-incomplete","indices":[]}
-
 
 def native_public_v1_tree(root: dict) -> dict:
     """Strip new optional dimension hints for existing strict v1 consumers.

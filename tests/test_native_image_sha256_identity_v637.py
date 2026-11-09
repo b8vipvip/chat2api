@@ -25,7 +25,14 @@ def test_duplicate_dimensions_are_correctly_resolved_by_byte_digest():
         {"width":500,"height":500,"sha256":C,"id":"med_extra"},
     ]
     result=native_image_identity_candidates(node,archived)
-    assert result=={"status":"verified-sha256","indices":[1,0]}
+    # Both displayed slots are byte-matched, but a third *distinct* archive
+    # SHA C has no native location. Do not declare the whole reply 1:1.
+    assert result=={"status":"verified-sha256-partial",
+                    "indices":[1,0],"matched_count":2}
+    # Once all distinct image identities have actual DOM slots, positional
+    # matching is exact even if archive order differs and dimensions repeat.
+    assert native_image_identity_candidates(node,archived[:2])=={
+        "status":"verified-sha256","indices":[1,0]}
     assert all("source_sha256" not in item for item in
                native_public_v1_tree(node["root"])["children"])
 

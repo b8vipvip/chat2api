@@ -454,15 +454,52 @@ def test_sha256_partial_mapping_preserves_only_proven_image_positions():
         "indices": [2, None, 1, None],
         "matched_count": 2,
     }
-    # Duplicate *visible DOM positions* can legitimately reuse one owned byte
-    # identity; they must never be mapped to an arbitrary different archive.
+    # Two slots showing the same exact A original MAY share the A archive
+    # asset. But an independent archived B must also have a native slot;
+    # otherwise the source graph is incomplete even though both A slots match.
     duplicates = validate_native_snapshot({"version": 1, "revision": 1,
         "root": {"tag": "div", "children": [
             {"tag": "img", "media_index": 0, "source_sha256": proof_a},
             {"tag": "img", "media_index": 1, "source_sha256": proof_a},
         ]}})
     assert native_image_identity_candidates(duplicates, archive) == {
-        "status": "verified-sha256", "indices": [2, 2]}
+        "status": "verified-sha256-partial",
+        "indices": [2, 2], "matched_count": 2}
+    assert native_image_identity_candidates(duplicates, [
+        {"sha256": proof_a}]) == {
+            "status": "verified-sha256", "indices": [0, 0]}
+    identical = [{"sha256": proof_a}, {"sha256": proof_a}]
+    assert native_image_identity_candidates(duplicates, identical) == {
+        "status": "verified-sha256", "indices": [0, 0]}
+    # Distinct source digests map by original bytes, NOT array position.
+    mixed = validate_native_snapshot({"version": 1, "revision": 1,
+        "root": {"tag": "div", "children": [
+            {"tag": "img", "media_index": 0, "source_sha256": proof_a},
+            {"tag": "img", "media_index": 1, "source_sha256": proof_b},
+            {"tag": "img", "media_index": 2, "source_sha256": proof_a},
+        ]}})
+    assert native_image_identity_candidates(mixed, [
+        {"sha256": proof_b}, {"sha256": proof_a}, {"sha256": proof_a}
+    ]) == {"status": "verified-sha256", "indices": [1, 0, 1]}
+    # This was the actual false verification pathway: both DOM slots
+    # resolve to A, but B is an unrepresented distinct archived original.
+    incorrect = native_image_identity_candidates(duplicates, [
+        {"sha256": proof_a}, {"sha256": proof_b}])
+    assert incorrect == {"status": "verified-sha256-partial",
+                         "indices": [0, 0], "matched_count": 2}
+    # Distinct archived C is equally unrepresented when the response has
+    # one A slot, even if every *visible* slot had a valid byte identity.
+    subset = validate_native_snapshot({"version": 1, "revision": 1,
+        "root": {"tag": "img", "media_index": 0, "source_sha256": proof_a}})
+    assert native_image_identity_candidates(subset, [
+        {"sha256": proof_a}, {"sha256": proof_c}]) == {
+            "status": "verified-sha256-partial",
+            "indices": [0], "matched_count": 1}
+    # A missing archive SHA cannot be promoted by matching its dimensions.
+    assert native_image_identity_candidates(subset, [
+        {"sha256": proof_a}, {"width": 1290, "height": 860}]) == {
+            "status": "verified-sha256-partial",
+            "indices": [0], "matched_count": 1}
     unknown = validate_native_snapshot({"version": 1, "revision": 1,
         "root": {"tag": "div", "children": [
             {"tag": "img", "media_index": 0, "source_sha256": proof_c},
