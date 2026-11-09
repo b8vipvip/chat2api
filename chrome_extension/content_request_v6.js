@@ -2599,7 +2599,22 @@
   // This is ONLY the fail-closed ERROR policy; it never authorizes completed.
   function unverifiedNetworkFailureReady(active, now, pageWorking, generating, captureMedia = false) {
     const ended = Number(active?.networkStreamEndedWithoutTerminalAt || 0);
-    if (!ended || !active?.networkStreamSeen || active.networkTerminalAt || captureMedia)
+    if (!ended || !active?.networkStreamSeen || captureMedia)
+      return false;
+    // v314: A parsed assistant end-turn is PROVISIONAL until the SAME
+    // response stream ends cleanly. Real req_13338 (20 MB/583 chunks)
+    // saw an early 34-char end-turn hint, then the page-owned stream aborted
+    // with no verified reply boundary. The old "active.networkTerminalAt"
+    // early return blocked the quiet-page failure gate forever: the request
+    // stalled for 915s until the browser lease was forcibly reclaimed.
+    //
+    // A valid confirmed transport terminal still belongs to the normal
+    // reconcile path, and a still-open stream with a provisional marker
+    // MUST stay alive. Only a PROVEN transport error may let the provisional
+    // marker enter the existing quiet-page fail-closed policy.
+    if (Number(active.networkTerminalAt || 0) > 0
+        && (confirmedTransportTerminal(active)
+          || !Number(active.networkTerminalTransportErrorAt || 0)))
       return false;
     const latest = String(active.networkStreamResponseId || "");
     const failed = String(active.networkUnverifiedStreamId || "");
@@ -2613,6 +2628,11 @@
     // it may be an in-progress multi-stream or rehydrated answer.
     if (Number(active.networkObservedAt || 0) > 0
         && now - Number(active.networkObservedAt) < 12000) return false;
+    // The native page may continue to render a long code/table/graph reply
+    // after its cloned SSE transport ends. No Stop button is NOT sufficient
+    // proof of idle if the same-request DOM body is still progressing.
+    if (Number(active.lastCaptureAt || 0) > 0
+        && now - Number(active.lastCaptureAt) < 12000) return false;
     return true;
   }
 
@@ -2662,6 +2682,36 @@
       const current = currentAssistantState(active);
       active.lastCandidateNode = current.isNew ? current.latest : null;
       active.lastCandidateTextLength = current.isNew ? current.text.length : 0;
+      // v314: 21MB of upstream SSE and 20 rendered tables cannot tell the
+      // Broker which exact assistant container owns those bytes. Request A
+      // ultimately expired without any native snapshot, yet its final ZIP
+      // had no rejection reason for shared Assistant Message ID or safe
+      // roleless H4/toolbar scope. Sample the SAME request-v6 binding gate
+      // while a fresh candidate remains visible, no more than once/30s.
+      // This is a content-free forensic checkpoint, not a substitute for
+      // reply ownership or a second terminal/snapshot decision.
+      if (current.isNew && current.latest && active.networkStreamSeen
+          && !active.nativeVerifiedReplyScope?.isConnected
+          && (!active.nativeBoundaryAuditAt
+            || Date.now()-active.nativeBoundaryAuditAt>=30000)) {
+        active.nativeBoundaryAuditAt=Date.now();
+        try {
+          const scoped=bindNativeReplyScope(active,"progress");
+          await diagnostic(active,"native-reply-scope-checkpoint",{
+            native_boundary_audit_revision:314,
+            native_boundary_candidate_kind:String(current.reason||"none").slice(0,65),
+            native_boundary_candidate_chars:Math.min(300000,Number(current.text?.length||0)),
+            native_boundary_scope_bound:scoped===true,
+            native_boundary_gate_reason:String(active.nativeScopeGateReason||"unknown").slice(0,80),
+            native_boundary_gate_facts:active.nativeScopeGateFacts||null,
+            native_boundary_message_identity_reason:String(
+              active.nativeMessageIdentityReason||"unknown").slice(0,80),
+            native_boundary_message_identity_facts:active.nativeMessageIdentityFacts||null,
+            native_boundary_message_candidate_count:Math.min(32,Number(
+              active.nativeMessageIdentityCandidateCount||0)),
+          });
+        } catch (_) { /* evidence must never abort the real Worker request */ }
+      }
       const generating = isGenerating();
       const networkText = String(active.networkObservedText || "");
       const networkTerminalText = String(active.networkTerminalText || "");
@@ -3332,12 +3382,17 @@
 
       // A DOM pause or a missing Stop button cannot override an observed SSE
       // response that has not reached a verified assistant terminal.
-      if (active.networkStreamEndedWithoutTerminalAt && !networkTerminalAt && !captureMedia
+      if (active.networkStreamEndedWithoutTerminalAt && !captureMedia
+          && (!networkTerminalAt || (active.networkTerminalTransportErrorAt
+              && !confirmedTransportTerminal(active)))
           && (!active.networkUnverifiedWaitReportedAt
             || Date.now() - active.networkUnverifiedWaitReportedAt >= 15000)) {
         active.networkUnverifiedWaitReportedAt = Date.now();
         await diagnostic(active, "unverified-network-await-page-terminal", {
-          network_unverified_wait_policy: "same-request-working-ui-and-stream-grace-v307",
+          network_unverified_wait_policy: "same-request-working-ui-and-stream-grace-v314",
+          network_unverified_provisional_terminal_seen: Boolean(networkTerminalAt),
+          network_unverified_transport_error_seen:
+            Boolean(active.networkTerminalTransportErrorAt),
           network_unverified_elapsed_ms: Math.max(0,
             Date.now() - Number(active.networkStreamEndedWithoutTerminalAt || 0)),
           network_unverified_page_working: upstreamStillWorking(),
@@ -3354,7 +3409,11 @@
           type: "chat.error", request_id: active.requestId,
           error: "ChatGPT network stream ended without a verified assistant completion",
           diagnostics: {
-            response_integrity_guard: "verified-network-terminal-v307",
+            response_integrity_guard: "verified-network-terminal-v314",
+            network_unverified_provisional_terminal_seen:
+              Boolean(active.networkTerminalAt),
+            network_unverified_transport_error_seen:
+              Boolean(active.networkTerminalTransportErrorAt),
             network_stream_unverified_end: true,
             network_unverified_fail_closed_after_page_idle: true,
           },

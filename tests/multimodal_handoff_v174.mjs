@@ -55,7 +55,12 @@ assert.equal(
 assert.match(controller, /if \(networkText && !captureMedia && !fileCreationRequested && !imageCreationRequested[\s\S]*?!internalToolPayload\(networkText\)/);
 assert.match(controller, /networkTerminalText && !captureMedia[\s\S]*!promptStillPresent/);
 assert.match(controller, /imageToolArguments[\s\S]*?\|\| visibleTurnMedia \|\| visibleTurnFiles \|\| visibleTurnPreviews \|\| fileCreationRequested \|\| pageMediaFound/);
-assert.match(controller, /!networkTerminalAt && !captureMedia/);
+// v314: a provisional end-turn from an aborted SSE is NOT a clean
+// transport terminal and cannot suppress the quiet-page error gate forever.
+// Genuine confirmed clean EOF / still working UI must remain protected.
+assert.ok(controller.includes("active.networkStreamEndedWithoutTerminalAt && !captureMedia"));
+assert.ok(controller.includes("!networkTerminalAt || (active.networkTerminalTransportErrorAt"));
+assert.ok(controller.includes("confirmedTransportTerminal(active)"));
 assert.match(controller, /!generating && !captureMedia && !active\.networkStreamSeen/);
 assert.match(controller, /response_terminal_source: "verified-request-media-dom-v176"/);
 assert.match(controller, /imageHandoffObserved[\s\S]*internal_tool_handoff_without_media: true/);
