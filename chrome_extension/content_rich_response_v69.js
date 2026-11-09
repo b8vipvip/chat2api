@@ -778,23 +778,40 @@
     return {text:result,integrated:inserted,reason:"verified-editor-anchor-insert"};
   }
 
-  function mergeVerifiedEditorMarkdown(original, node, verifiedEditorDocs) {
-    if (!(verifiedEditorDocs instanceof Map) || verifiedEditorDocs.size===0)
-      return {text:String(original||""),integrated:0,reason:"no-verified-editor-state"};
+  // v311: freeze a proven code-card position immediately when the
+  // same-request MAIN-world editor read succeeds. Native capture must then
+  // ACK a sometimes multi-megabyte snapshot asynchronously; React may
+  // rehydrate/detach the original .cm-editor before request-v6's terminal
+  // callback runs. Keeping a bounded, private textual *prepared splice*
+  // avoids depending on that now-stale DOM node. No content leaves the
+  // extension except through the existing request-v6 final response.
+  function prepareVerifiedEditorMarkdown(node, verifiedEditorDocs) {
+    if (!(verifiedEditorDocs instanceof Map) || verifiedEditorDocs.size===0
+        || verifiedEditorDocs.size>8)
+      return {ok:false,reason:"no-verified-editor-state"};
     const evidence={docs:verifiedEditorDocs,found:0,integrated:0,reason:""};
     const clone=cleanClone(node,evidence);
     if (!clone || evidence.found!==verifiedEditorDocs.size ||
-        evidence.integrated!==verifiedEditorDocs.size) {
-      return {text:String(original||""),integrated:0,
-        reason:evidence.reason||"editor-reply-scope-incomplete"};
-    }
-    // Do not normalize the entire enriched Markdown: normalizeOutput()
-    // collapses 3+ newlines even INSIDE fenced Python source, so source
-    // equality fails after a correct full-editor read (or changes code).
-    // The surgical splice preserves canonical surrounding text unchanged.
+        evidence.integrated!==verifiedEditorDocs.size)
+      return {ok:false,reason:evidence.reason||"editor-reply-scope-incomplete"};
+    // Do not globally normalize newlines: Python programs legitimately
+    // contain multiple blank lines. Nor serialize DOM HTML/URLs as proofs.
     const enriched=blockMarkdown(clone);
-    return spliceVerifiedCodeIntoCanonical(original,enriched,
-      [...verifiedEditorDocs.values()].map(x=>x.text));
+    const codeTexts=[...verifiedEditorDocs.values()].map(x=>x.text);
+    if (!enriched || enriched.length>300000
+        || codeTexts.some(text=>typeof text!=="string" || !text.trim()
+          || text.length>150000)
+        || codeTexts.length!==evidence.integrated)
+      return {ok:false,reason:"editor-prepared-size-or-coverage"};
+    return {ok:true,enriched,codeTexts,integrated:evidence.integrated};
+  }
+
+  function mergeVerifiedEditorMarkdown(original, node, verifiedEditorDocs) {
+    const ready=prepareVerifiedEditorMarkdown(node,verifiedEditorDocs);
+    if (!ready.ok) return {text:String(original||""),integrated:0,
+      reason:ready.reason||"editor-reply-scope-incomplete"};
+    return spliceVerifiedCodeIntoCanonical(original,ready.enriched,
+      ready.codeTexts);
   }
 
   function blobToDataUrl(blob) {
@@ -948,6 +965,7 @@
     capturePageImages,
     extractMarkdown,
     mergeVerifiedEditorMarkdown,
+    prepareVerifiedEditorMarkdown,
     spliceVerifiedCodeIntoCanonical,
     captureFinalMarkdown,
   });
