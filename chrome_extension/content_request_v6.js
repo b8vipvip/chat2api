@@ -2677,6 +2677,36 @@
       const current = currentAssistantState(active);
       active.lastCandidateNode = current.isNew ? current.latest : null;
       active.lastCandidateTextLength = current.isNew ? current.text.length : 0;
+      // v314: 21MB of upstream SSE and 20 rendered tables cannot tell the
+      // Broker which exact assistant container owns those bytes. Request A
+      // ultimately expired without any native snapshot, yet its final ZIP
+      // had no rejection reason for shared Assistant Message ID or safe
+      // roleless H4/toolbar scope. Sample the SAME request-v6 binding gate
+      // while a fresh candidate remains visible, no more than once/30s.
+      // This is a content-free forensic checkpoint, not a substitute for
+      // reply ownership or a second terminal/snapshot decision.
+      if (current.isNew && current.latest && active.networkStreamSeen
+          && !active.nativeVerifiedReplyScope?.isConnected
+          && (!active.nativeBoundaryAuditAt
+            || Date.now()-active.nativeBoundaryAuditAt>=30000)) {
+        active.nativeBoundaryAuditAt=Date.now();
+        try {
+          const scoped=bindNativeReplyScope(active,"progress");
+          await diagnostic(active,"native-reply-scope-checkpoint",{
+            native_boundary_audit_revision:314,
+            native_boundary_candidate_kind:String(current.reason||"none").slice(0,65),
+            native_boundary_candidate_chars:Math.min(300000,Number(current.text?.length||0)),
+            native_boundary_scope_bound:scoped===true,
+            native_boundary_gate_reason:String(active.nativeScopeGateReason||"unknown").slice(0,80),
+            native_boundary_gate_facts:active.nativeScopeGateFacts||null,
+            native_boundary_message_identity_reason:String(
+              active.nativeMessageIdentityReason||"unknown").slice(0,80),
+            native_boundary_message_identity_facts:active.nativeMessageIdentityFacts||null,
+            native_boundary_message_candidate_count:Math.min(32,Number(
+              active.nativeMessageIdentityCandidateCount||0)),
+          });
+        } catch (_) { /* evidence must never abort the real Worker request */ }
+      }
       const generating = isGenerating();
       const networkText = String(active.networkObservedText || "");
       const networkTerminalText = String(active.networkTerminalText || "");
