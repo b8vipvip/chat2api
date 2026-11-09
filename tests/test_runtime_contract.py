@@ -676,6 +676,31 @@ def test_v311_one_request_v6_terminal_owns_preack_codemerge_provenance():
 
 
 
+def test_v313_original_chatgpt_abort_lifecycle_is_content_free_observer_only():
+    """No second stream terminal or native AbortController ownership."""
+    from pathlib import Path
+    import subprocess
+    root=Path(__file__).resolve().parents[1]
+    main=(root/"chrome_extension/network_stream_main_v55.js").read_text("utf8")
+    bridge=(root/"chrome_extension/content_network_stream_recovery_v55.js").read_text("utf8")
+    assert "native_signal_abort_reason_kind:" in main
+    assert "native_signal_abort_visibility:" in main
+    assert "native_pagehide_during_stream:" in main
+    assert "native_pagehide_before_abort:" in main
+    assert "native_visibility_hidden_during_stream:" in main
+    assert "removeLifecycle();" in main
+    assert "signal?.removeEventListener?.(" in main
+    assert "network_stream_native_pagehide_during_stream:" in bridge
+    assert "network_stream_native_abort_reason_kind:" in bridge
+    assert "network_stream_native_abort_visibility:" in bridge
+    assert 'network_terminal_authority: "request-v6"' in bridge
+    assert 'type:"chat.completed"' not in main
+    assert "controller.abort()" not in main
+    result=subprocess.run(["node","tests/network_native_abort_page_lifecycle_v313.mjs"],
+                          cwd=root,capture_output=True,text=True,timeout=20)
+    assert result.returncode==0,result.stdout+result.stderr
+
+
 def test_v312_playground_SSE_document_lifecycle_is_evidence_only():
     """An admin pagehide must never cancel the original production API run."""
     from pathlib import Path
