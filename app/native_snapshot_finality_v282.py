@@ -226,6 +226,46 @@ def native_finality_decision(
     if coverage in {"missing-code-block", "missing-code-lines", "missing-code-format"}:
         return decide("rejected-final", coverage)
 
+    # content_native_content_v1.js explicitly discards Canvas, iframes and
+    # unsupported SVG elements while counting the omissions in the same
+    # request's Worker terminal diagnostics. A terminal DOM ACK can therefore
+    # succeed and table/code checks can pass although a rendered chart was
+    # dropped. Those counters are evidence for THIS existing sole finality
+    # authority, not a second Worker or Broker terminal gate.
+    for counter, reason in (
+        ("native_canvas_omitted", "canvas-source-omitted"),
+        ("native_graphics_unsupported", "native-graphics-unsupported"),
+    ):
+        value = diag.get(counter)
+        if value is not None:
+            if type(value) is not int or not 0 <= value <= 30000:
+                return decide("rejected-final", "invalid-graphics-coverage-counter")
+            if value > 0:
+                return decide("rejected-final", reason)
+
+    # A large, request-owned SVG may have been observed but dropped while
+    # serializing (e.g. an empty/unsupported subtree). The terminal sidecar
+    # cannot be certified until its own safe tree contains each captured SVG
+    # root; tiny toolbar icons are not counted as chart roots by the Worker.
+    captured_svg = diag.get("native_svg_charts_captured")
+    if captured_svg is not None:
+        if type(captured_svg) is not int or not 0 <= captured_svg <= 30000:
+            return decide("rejected-final", "invalid-graphics-coverage-counter")
+        if captured_svg > 0:
+            nodes = [snapshot.get("root")]
+            observed_svg = 0
+            visited = 0
+            while nodes and visited < 30000:
+                node = nodes.pop()
+                if not isinstance(node, dict):
+                    continue
+                visited += 1
+                if node.get("tag") == "svg":
+                    observed_svg += 1
+                nodes.extend(reversed(node.get("children") or ()))
+            if visited >= 30000 or observed_svg < captured_svg:
+                return decide("rejected-final", "svg-chart-capture-gap")
+
     # Private page DOM is evidence only. Comparing structures is allowed
     # only when its request ownership AND capture completeness are proven.
     comparison = diag.get("native_capture_comparison")
