@@ -29,15 +29,54 @@ _CODE_LINE = re.compile(
 )
 
 
+def _canonical_python_fences(response: str) -> list[str]:
+    """Ordered, explicit Python fences from canonical OpenAI Markdown.
+
+    Never mistake an English paragraph mentioning Python or a fenced text
+    sample containing backticks for a source code artifact. Whitespace and
+    newlines inside each code fence are semantically significant.
+    """
+    sources: list[str] = []
+    fence_char, fence_len = "", 0
+    python_source = False
+    body: list[str] = []
+    for line in response.replace("\r\n", "\n").replace("\r", "\n").splitlines():
+        marker = _MARKDOWN_FENCE.fullmatch(line)
+        if not fence_char:
+            if marker:
+                run, suffix = marker.groups()
+                fence_char, fence_len = run[0], len(run)
+                python_source = bool(re.match(
+                    r"(?i)^(?:python(?:3(?:\.\d+)?)?|py)(?:\s|$)",
+                    suffix.strip(),
+                ))
+                body = []
+            continue
+        if (marker and marker.group(1)[0] == fence_char
+                and len(marker.group(1)) >= fence_len
+                and not marker.group(2).strip()):
+            if python_source:
+                sources.append("\n".join(body))
+            fence_char, fence_len = "", 0
+            python_source = False
+            body = []
+            continue
+        if python_source:
+            body.append(line)
+    # An unclosed source fence is not an exact canonical code artifact.
+    if fence_char and python_source:
+        sources.append("\n".join(body) + "\n<unclosed-python-fence>")
+    return sources
+
+
 def native_code_coverage(row: dict[str, Any] | None,
                          snapshot: dict[str, Any] | None) -> str:
-    """Conservative content-level gate for code that the native tree omitted.
+    """Check canonical Python source against actual native pre/code line order.
 
-    The 2026-11-07 A-scene carried 17,080 Markdown characters but the native
-    DOM tree had only 11,574 raw text characters. A visible Python heading
-    survived, while the entire editor code body (imports/functions) was absent.
-    A structurally complete/ACKed snapshot is not necessarily content complete.
-    Return no-claim when we lack enough distinct executable code signatures.
+    An ACKed native tree is not code-complete merely because it contains the
+    right import/def tokens after removing all whitespace. In the actual
+    CodeMirror failure the visible editor could omit indentation/newlines
+    while legacy token matching still reported covered.
     """
     if not isinstance(row, dict) or not isinstance(snapshot, dict):
         return "unverified"
@@ -45,7 +84,8 @@ def native_code_coverage(row: dict[str, Any] | None,
     if not isinstance(response, str) or not 1 <= len(response) <= 300000:
         return "unverified"
     signatures = list(dict.fromkeys(_CODE_LINE.findall(response)))[:32]
-    if len(signatures) < 2:
+    python_sources = _canonical_python_fences(response)
+    if len(signatures) < 2 and not python_sources:
         return "unverified"
     nodes = [snapshot.get("root")]
     pre_text: list[str] = []
@@ -56,18 +96,42 @@ def native_code_coverage(row: dict[str, Any] | None,
             continue
         visited += 1
         if node.get("tag") == "pre":
-            text_nodes = [node]
-            while text_nodes:
-                sub = text_nodes.pop()
+            # Keep children in original DOM order. An ordinary LIFO walk
+            # reverses sibling spans and cannot prove exact code placement.
+            descendants = [node]
+            pieces: list[str] = []
+            while descendants and visited < 30000:
+                sub = descendants.pop()
                 if not isinstance(sub, dict):
                     continue
+                visited += 1
                 if isinstance(sub.get("text"), str):
-                    pre_text.append(sub["text"])
-                text_nodes.extend(sub.get("children") or [])
+                    pieces.append(sub["text"])
+                descendants.extend(reversed(sub.get("children") or []))
+            pre_text.append("".join(pieces).replace("\r\n", "\n").replace("\r", "\n").rstrip("\n"))
         else:
-            nodes.extend(node.get("children") or [])
+            nodes.extend(reversed(node.get("children") or []))
     if visited >= 30000:
         return "unverified"
+    if python_sources:
+        # Each distinct fence requires a distinct, correctly ordered native
+        # pre subtree. Never let a single similar prefix/token set stand in
+        # for the full CodeMirror state or an additional missing card.
+        next_pre = 0
+        for source in python_sources:
+            exact = source.rstrip("\n")
+            if not exact:
+                return "missing-code-block"
+            found = next((i for i in range(next_pre, len(pre_text))
+                          if pre_text[i] == exact), None)
+            if found is None:
+                return "missing-code-format"
+            next_pre = found + 1
+        return "covered"
+
+    # Legacy, unlabeled source: keep the historical signature-only check
+    # explicitly distinct from a proved exact fenced source. It must not
+    # override the strict Python-fence path above.
     rendered_code = re.sub(r"\s+", "", "".join(pre_text))
     if not rendered_code:
         return "missing-code-block"
@@ -76,7 +140,6 @@ def native_code_coverage(row: dict[str, Any] | None,
         if re.sub(r"\s+", "", line) not in rendered_code
     ]
     return "missing-code-lines" if missing else "covered"
-
 
 # A real 2026-11-09 request produced an approximately 768×789 rendered
 # Mermaid visual inside the native assistant reply, but standard Markdown
@@ -160,7 +223,7 @@ def native_finality_decision(
         return decide("rejected-final", "mermaid-diagram-source-omitted")
 
     coverage = native_code_coverage(row, snapshot)
-    if coverage in {"missing-code-block", "missing-code-lines"}:
+    if coverage in {"missing-code-block", "missing-code-lines", "missing-code-format"}:
         return decide("rejected-final", coverage)
 
     # Private page DOM is evidence only. Comparing structures is allowed
