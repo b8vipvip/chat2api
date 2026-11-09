@@ -187,6 +187,12 @@ def test_v297_unmapped_archived_images_cannot_prove_visual_1_to_1():
     assert native_snapshot_finality(row, SNAP) == "rejected-final"
     row["diagnostics"]["native_image_identity_status"] = "verified-sha256"
     row["diagnostics"]["native_identity_matched_count"] = 2
+    # Inconsistent 0 DOM image slots versus 2 matched slots is not proof,
+    # even if an old caller set the ordinal completeness flag to True.
+    assert native_snapshot_finality(row, SNAP) == "rejected-final"
+    # Only a consistent same-request DOM count can promote a complete
+    # byte-verified mapping. One cannot manufacture 2 absent images.
+    row["diagnostics"]["native_layout_summary"]["images"] = 2
     assert native_snapshot_finality(row, SNAP) == "verified-final"
 
 
