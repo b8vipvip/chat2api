@@ -758,7 +758,10 @@
           const root=region?.scope==="verified_native_assistant_selection"
             && region.roots?.length===1 ? region.roots[0] : null;
           const rich=globalThis.__CHAT2API_RICH_RESPONSE_V69__;
+          const messageId=String(root?.getAttribute?.(
+            "data-chatgpt-selection-message-id")||"");
           if (root?.isConnected && root===active.nativeVerifiedReplyScope
+              && /^[A-Za-z0-9-]{12,100}$/.test(messageId)
               && [...docs.keys()].every(editor=>editor?.isConnected
                 && root.contains?.(editor))
               && typeof rich?.prepareVerifiedEditorMarkdown==="function") {
@@ -766,6 +769,7 @@
             if (prepared?.ok && prepared.integrated===docs.size) {
               active.nativePreparedEditorMerge={
                 requestId:active.requestId,
+                messageId,
                 messageScope:root,
                 codeTexts:prepared.codeTexts,
                 enriched:prepared.enriched,
