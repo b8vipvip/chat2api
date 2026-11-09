@@ -63,7 +63,11 @@ def test_generated_media_handoff_keeps_single_request_terminal_authority():
     assert '!promptStillPresent(active)' in source
     assert 'isLocalImageBuildCommand(networkTerminalText)' in source
     assert 'networkText && !captureMedia && !fileCreationRequested && !imageCreationRequested' in source
-    assert '!networkTerminalAt && !captureMedia' in source
+    # v314: an aborted page-native SSE with a PROVISIONAL end-turn has
+    # no clean EOF. Do not suppress quiet-page fail-closed for 915 seconds.
+    assert 'active.networkStreamEndedWithoutTerminalAt && !captureMedia' in source
+    assert '!networkTerminalAt || (active.networkTerminalTransportErrorAt' in source
+    assert 'confirmedTransportTerminal(active)' in source
     assert 'internal_tool_handoff_without_media: true' in source
     assert 'if (mediaOutsideMarkdown) return node;' in rich
     assert 'if (filesOutsideMarkdown) return node;' in rich
