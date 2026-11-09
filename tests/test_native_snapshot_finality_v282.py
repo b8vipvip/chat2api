@@ -350,14 +350,32 @@ def test_v310_real_mermaid_visual_cannot_be_declared_complete_from_placeholder()
     assert native_diagram_coverage({
         **base, "response_text": "## Merlin\n\nThe label Mermaid diagram was mentioned."
     }) == "no-proven-loss"
-    # Genuine Mermaid source is a materially different artifact from a
-    # placeholder. Do not reject it just because a label is also present.
+    # A real fenced Mermaid diagram elsewhere CANNOT deliver the missing
+    # diagram represented by a different standalone placeholder in this same
+    # request. The previous v310 rule incorrectly promoted this to verified.
     source = {**missing, "response_text": (
         missing["response_text"] +
         "\n\n```mermaid\nflowchart TD\n  A[Start] --> B[End]\n```"
     )}
-    assert native_diagram_coverage(source) == "no-proven-loss"
-    assert native_finality_decision(source, SNAP)["status"] == "verified-final"
+    assert native_diagram_coverage(source) == "mermaid-placeholder-without-source"
+    assert native_finality_decision(source, SNAP)["reason"] == "mermaid-diagram-source-omitted"
+    # A real diagram with NO standalone placeholder has no proven gap.
+    clean = {**base, "response_text": (
+        "## 流程图\n\n```mermaid\nflowchart TD\n  A[Start] --> B[End]\n```"
+    )}
+    assert native_diagram_coverage(clean) == "no-proven-loss"
+    assert native_finality_decision(clean, SNAP)["status"] == "verified-final"
+    # A literal label inside an ordinary fenced code sample is *source text*,
+    # not an omitted graphic, even if another fenced Mermaid chart is present.
+    embedded = {**base, "response_text": (
+        "示例标签：\n```text\nMermaid diagram\n```"
+        "\n\n~~~mermaid\nflowchart TD\n A --> B\n~~~"
+    )}
+    assert native_diagram_coverage(embedded) == "no-proven-loss"
+    assert native_finality_decision(embedded, SNAP)["status"] == "verified-final"
+    # Indented four-space code content is not a standalone Markdown diagram.
+    indented = {**base, "response_text": "    Mermaid diagram"}
+    assert native_diagram_coverage(indented) == "no-proven-loss"
     # Ordinary human text, not an entire standalone missing visual element.
     assert native_diagram_coverage({
         **base, "response_text": "Please provide a Mermaid diagram in markdown."
