@@ -445,6 +445,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if (status not in {"processing", "archived", "ready"}
                 or type(size) is not int or not 0 <= size <= 24 * 1024 * 1024):
                 continue
+            # GeneratedFileArchive.archive_reply stores the original bytes in
+            # a committed transaction before emitting its permanent file URL
+            # with status="archived". The old native sidecar mapped every
+            # "archived" record to "processing" forever; unlike the deferred
+            # pending-URL workflow, these records are ALREADY downloadable and
+            # have no manifest polling path. Normalize only permanent,
+            # syntactically validated archive URLs. An inconsistent
+            # pending URL marked archived must NOT be treated as ready.
+            if status == "archived" and "/pending/" not in url:
+                status = "ready"
             # File descriptors are immutable after the OpenAI terminal, but
             # the deferred archive continues running. Resolve the real state
             # from its durable SQLite manifest on each authenticated read.
