@@ -629,3 +629,21 @@ def test_v307_no_early_error_while_page_is_still_thinking_and_stale_streams_are_
         cwd=root, capture_output=True, text=True, timeout=20,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_v309_canonical_editor_merge_uses_verified_same_request_reply_not_nested_paragraph():
+    """Native full-code recovery may not lose a sibling editor at final egress."""
+    from pathlib import Path
+    import subprocess
+    root=Path(__file__).resolve().parents[1]
+    worker=(root/"chrome_extension/content_request_v6.js").read_text("utf-8")
+    assert "function canonicalEditorReplyRoot(active, verifiedNativeSelectionRoot" in worker
+    assert "canonicalEditorReplyRoot(active,nativeSelectionRoot)" in worker
+    assert 'codeResult.reason="verified-editor-merge-root-unavailable"' in worker
+    assert "hasUntrustedReplyInput(root)" in worker
+    assert "root.contains(editor)" in worker
+    assert "nativeSelectionRoot=rolelessScope.roots[0]" in worker
+    assert "rich.mergeVerifiedEditorMarkdown(event.text," in worker
+    result=subprocess.run(["node","tests/native_verified_code_merge_scope_v309.mjs"],
+                          cwd=root,capture_output=True,text=True,timeout=20)
+    assert result.returncode==0,result.stdout+result.stderr
