@@ -2628,6 +2628,11 @@
     // it may be an in-progress multi-stream or rehydrated answer.
     if (Number(active.networkObservedAt || 0) > 0
         && now - Number(active.networkObservedAt) < 12000) return false;
+    // The native page may continue to render a long code/table/graph reply
+    // after its cloned SSE transport ends. No Stop button is NOT sufficient
+    // proof of idle if the same-request DOM body is still progressing.
+    if (Number(active.lastCaptureAt || 0) > 0
+        && now - Number(active.lastCaptureAt) < 12000) return false;
     return true;
   }
 
