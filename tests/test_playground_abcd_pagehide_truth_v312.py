@@ -7,21 +7,30 @@ make pagehide evidence another stream terminal or mark progress as failure.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from app.config import Settings
-from app.main import create_app
-from app.playground_chat_patch import PlaygroundChatStart, _running_row, _chat_run_id
+from app.broker import RequestBroker
+from app.test_runs import TestRunStore
+from app.playground_chat_patch import (
+    PlaygroundChatStart, _running_row, _chat_run_id, install_playground_chat_patch,
+)
 
 RID="req_"+"a"*32
 
+def _test_app(tmp_path):
+    # create_app() alone does not install optional admin Playground patches.
+    # Use the same explicit installation contract as test_playground_chat_v1.
+    app=FastAPI()
+    app.state.settings=SimpleNamespace(api_key="master-key",data_dir=tmp_path)
+    app.state.playground_lifecycle_patch_installed=True
+    app.state.broker=RequestBroker()
+    app.state.test_runs=TestRunStore(tmp_path)
+    install_playground_chat_patch(app)
+    return app
+
 def test_v312_browser_pagehide_is_sticky_and_does_not_mark_progress_failed(tmp_path):
-    app=create_app(Settings(
-        CHAT2API_API_KEY="master-key", CHAT2API_PAIRING_CODE="pair-code",
-        CHAT2API_PUBLIC_URL="https://localhost.test",
-        CHAT2API_DATA_DIR=tmp_path,
-        CHAT2API_REQUEST_TIMEOUT_SECONDS=10,
-        CHAT2API_DESKTOP_WAKE_TIMEOUT_SECONDS=1,
-    ))
+    app=_test_app(tmp_path)
     run=_running_row(PlaygroundChatStart(
         request_id=RID,model="gpt-5.6-sol",prompt="safe fixture",
         transport_contract="abcd-real-sse-v293",abcd_scene="A",
@@ -92,11 +101,7 @@ def test_v312_browser_pagehide_is_sticky_and_does_not_mark_progress_failed(tmp_p
             "client_sse_truth_v293"]["client_pagehide_seen"] is True
 
 def test_v312_pagehide_evidence_requires_authorized_ABCD_run(tmp_path):
-    app=create_app(Settings(
-        CHAT2API_API_KEY="master-key",CHAT2API_PAIRING_CODE="pair-code",
-        CHAT2API_PUBLIC_URL="https://localhost.test",
-        CHAT2API_DATA_DIR=tmp_path,
-    ))
+    app=_test_app(tmp_path)
     with TestClient(app) as client:
         route="/api/admin/playground/abcd/transport-truth"
         payload={"request_id":RID,"scene":"A","phase":"progress",
