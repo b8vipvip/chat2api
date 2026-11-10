@@ -738,7 +738,7 @@ const rasterCtx={
   chrome:{runtime:{sendMessage:async message=>{
     if(message.type==="chat2api.media.hash-v2"){
       rasterRequests.push(message.url);
-      const found=message.url.match(/original-(\\d+)\\.png$/);
+      const found=message.url.match(/original-(\d+)\.png$/);
       if(!found)throw Error("Tiny/hidden raster must not be hashed");
       const n=Number(found[1]);
       if(n<4)return new Promise(()=>{});
