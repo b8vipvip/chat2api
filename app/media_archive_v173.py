@@ -445,7 +445,7 @@ class MediaArchive:
         offset = max(0, int(offset))
         with self._db() as conn:
             rows = conn.execute(
-                """SELECT id,mime,width,height,backend,object_key,thumb_key
+                """SELECT id,mime,size,sha256,width,height,backend,object_key,thumb_key
                    FROM media ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?""",
                 (limit, offset),
             ).fetchall()
@@ -477,6 +477,15 @@ class MediaArchive:
                     report["intact"] += 1
                     continue
                 original = self._read(cfg, row["backend"], row["object_key"])
+                # A missing/corrupt thumbnail must never be regenerated from
+                # source bytes that fail the digest stored on publication.
+                # For legacy SHA-less rows preserve size-only verification,
+                # explicitly without fabricating historical source identity.
+                if len(original) != row["size"]:
+                    raise ValueError("Thumbnail source original byte-length mismatch")
+                if (row["sha256"]
+                        and hashlib.sha256(original).hexdigest() != row["sha256"]):
+                    raise ValueError("Thumbnail source original SHA256 mismatch")
                 width, height, thumbnail = self._render_thumbnail(original, row["mime"])
                 if width != row["width"] or height != row["height"]:
                     raise ValueError("Archived original dimensions do not match metadata")
