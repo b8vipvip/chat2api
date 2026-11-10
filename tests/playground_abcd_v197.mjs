@@ -19,10 +19,10 @@ const frames=(text,includeDone=true)=>
 "data: "+JSON.stringify({choices:[{index:0,delta:{},finish_reason:"stop"}]})+"\n\n"+
 (includeDone?"data: [DONE]\n\n":"");
 
-function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,recoveredText=null,fetchFailure=false,httpFailureStatus=0,simulatePagehide=false}={}) {
+function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,postDoneFailure=false,postDoneStall=false,recoveredText=null,fetchFailure=false,httpFailureStatus=0,simulatePagehide=false}={}) {
   const elements=new Map(), requests=[], records=[],downloads=[],clientEvidence=[];
   let submittedReport=null;
-  let cancels=0, releases=0;
+  let cancels=0, releases=0, reads=0;
   const pageEvents=new Map(),docEvents=new Map();
   const element=key=>{
     if(!elements.has(key))elements.set(key,{
@@ -55,7 +55,11 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
       return {ok:true,body:{getReader(){
         let read=false;
         return {read:async()=>{
-          if(readerFailure){const error=Error("synthetic read error");error.name="AbortError";throw error;}
+          reads++;
+          if(readerFailure || (postDoneFailure && read)){
+            const error=Error("synthetic read error");error.name="AbortError";throw error;
+          }
+          if(postDoneStall && read) return new Promise(()=>{});
           if(simulatePagehide&&!read) {
             document.visibilityState="hidden";
             docEvents.get("visibilitychange")?.();
@@ -115,14 +119,17 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
   const context={
     document,fetch,api,crypto:{randomUUID:()=>("00000000-0000-0000-0000-"+String(++uuid).padStart(12,"0")),subtle:webcrypto.subtle},
     TextDecoder,TextEncoder,performance:{now:()=>1234},location:{origin:"https://api.test"},
-    console,setTimeout:()=>0,Blob,URL,
+    console,setTimeout:(fn,ms)=>{
+      if(postDoneStall && ms>0 && ms<=10000) queueMicrotask(fn);
+      return 0;
+    },clearTimeout:()=>{},Blob,URL,
     addEventListener(name,cb){pageEvents.set(name,cb)},
     removeEventListener(name,cb){if(pageEvents.get(name)===cb)pageEvents.delete(name)},
   };
   vm.runInNewContext(source,context);
   return {run:async()=>{
     await element("pgABCDRun").handlers.click();
-    return {status:element("pgABCDNote").textContent,requests,records,downloads,cancels,releases,report:submittedReport,clientEvidence};
+    return {status:element("pgABCDNote").textContent,requests,records,downloads,cancels,releases,reads,report:submittedReport,clientEvidence};
   }, element};
 }
 
@@ -155,11 +162,39 @@ test("A: real SSE terminal and full-length report is accepted",async()=>{
   assert.equal(r.report.turns[0].client_sse_truth.protocol_stop_seen,true);
   assert.equal(r.report.turns[0].client_sse_truth.reader_cancel_requested,false);
   assert.equal(r.report.turns[0].client_sse_truth.reader_lock_released,true);
-  assert.equal(r.report.turns[0].client_sse_truth.native_reader_eof_seen,false,
-    "reading [DONE] stops before the underlying ASGI EOF; do not invent EOF proof");
+  assert.equal(r.report.turns[0].client_sse_truth.native_reader_eof_seen,true,
+    "after [DONE] the reader MUST continue to the real HTTP EOF");
+  assert.equal(r.reads,2,"one read for protocol frames and a second for HTTP EOF");
   assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"passed");
   assert.match(r.requests[0].body.messages[0].content,/新主题A/);
 });
+test("v331: post-DONE read error is incomplete HTTP delivery, not an SSE pass",async()=>{
+  const r=await scenario("A",[FULL],{postDoneFailure:true,recoveredText:FULL}).run();
+  assert.equal(r.requests.length,1,"never submit a second model request");
+  assert.equal(r.reads,2,"read through [DONE] and attempt HTTP EOF");
+  const proof=r.report.turns[0].client_sse_truth;
+  assert.equal(proof.protocol_done_seen,true);
+  assert.equal(proof.protocol_stop_seen,true);
+  assert.equal(proof.native_reader_eof_seen,false);
+  assert.equal(proof.reader_cancel_requested,true);
+  assert.equal(proof.reader_error_name,"AbortError");
+  assert.equal(proof.reader_cancel_reason,"MissingEOF");
+  assert.equal(r.report.turns[0].recovered_after_disconnect,true);
+  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"warning");
+});
+
+test("v331: missing post-DONE HTTP EOF times out rather than hanging forever",async()=>{
+  const r=await scenario("A",[FULL],{postDoneStall:true,recoveredText:FULL}).run();
+  assert.equal(r.reads,2,"a pending second reader.read must be bounded");
+  assert.equal(r.cancels,1);
+  const proof=r.report.turns[0].client_sse_truth;
+  assert.equal(proof.protocol_done_seen,true);
+  assert.equal(proof.native_reader_eof_seen,false);
+  assert.equal(proof.reader_cancel_reason,"MissingEOF");
+  assert.equal(proof.reader_error_name,"TimeoutError");
+  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"warning");
+});
+
 test("Incomplete SSE without [DONE] must fail even with full content",async()=>{
   const r=await scenario("A",[{text:FULL,done:false}]).run();
   assert.match(r.status,/未通过/);

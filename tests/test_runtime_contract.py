@@ -277,7 +277,7 @@ def test_v250_abcd_disconnect_is_presentation_recovery_not_worker_terminal():
     assert '"/outcome?full_text=1"' in source
     assert "response_text_truncated===true" in source
     assert "recovered_after_disconnect:out.recovered===true" in source
-    assert "if(!stopped||!done)" in source
+    assert "if(!stopped||!done||!nativeEof)" in source
     assert "SSE 连接已断开，服务端仍在运行" in source
 
 

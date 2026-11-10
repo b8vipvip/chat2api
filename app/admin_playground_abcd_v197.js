@@ -127,7 +127,7 @@ if(!r.ok){
 }
 if(!r.body)throw Error("缺少SSE响应体");
 const responseHeadersAt=performance.now();
-let buffer="",answer="",stopped=false,done=false,frames=0,lastStatus="",streamError=null;
+let buffer="",answer="",stopped=false,done=false,postDoneDeadline=0,frames=0,lastStatus="",streamError=null;
 let nativeEof=false,firstChunkAt=null,lastChunkAt=null,readerCancelled=false,readerReleased=false;
 let readerErrorName=null,lastCheckpointAt=null,bodyChunks=0;
 const relative=at=>at===null?null:Math.max(0,Math.round(at-clientStarted));
@@ -177,10 +177,50 @@ globalThis.addEventListener?.("pagehide",onPageHide);
 globalThis.document?.addEventListener?.("visibilitychange",onDocumentHidden);
 try{
 try{
-while(!done){
-const chunk=await reader.read();if(chunk.done){nativeEof=true;break;}
+// [DONE] is the OpenAI application protocol marker, NOT the browser's
+// HTTP/ASGI final empty-body frame. The previous while(!done) stopped
+// pulling immediately on [DONE] and released the lock with the final
+// response body unconsumed. Real req_d6ae7268 showed DONE received
+// but native_reader_eof_seen=false and server asgi_final_body_sent=false.
+// Keep pulling until the actual read() EOF, without parsing additional
+// model content after the application terminal.
+while(!nativeEof){
+let chunk;
+if(done){
+  // The deadline is measured once from protocol [DONE], not reset for
+  // every subsequent HTTP chunk. A stream that keeps drip-feeding padding
+  // cannot pin the admin browser reader forever.
+  const remainingMs=Math.max(0,postDoneDeadline-Date.now());
+  if(remainingMs<=0){
+    const error=new Error("SSE HTTP EOF missing after [DONE]");
+    error.name="TimeoutError";
+    throw error;
+  }
+  let watchdog=null;
+  try{
+    chunk=await Promise.race([
+      reader.read(),
+      new Promise((_,reject)=>{
+        watchdog=setTimeout(()=>{
+          const error=new Error("SSE HTTP EOF missing after [DONE]");
+          error.name="TimeoutError";
+          reject(error);
+        },remainingMs);
+      })
+    ]);
+  }finally{if(watchdog!==null)clearTimeout(watchdog);}
+}else{
+  chunk=await reader.read();
+}
+if(chunk.done){nativeEof=true;break;}
 const readAt=performance.now();
 bodyChunks++;
+if(done){
+  // Application terminal already parsed; discard any post-DONE bytes
+  // while allowing the server to complete its HTTP final body.
+  lastChunkAt=readAt;
+  continue;
+}
 if(firstChunkAt===null)firstChunkAt=readAt;
 lastChunkAt=readAt;
 buffer+=decoder.decode(chunk.value,{stream:true}).replace(/\r\n/g,"\n");
@@ -190,7 +230,7 @@ while((pos=buffer.indexOf("\n\n"))>=0){
 const raw=buffer.slice(0,pos);buffer=buffer.slice(pos+2);
 const data=raw.split("\n").filter(x=>x.startsWith("data:")).map(x=>x.slice(5).trimStart()).join("\n");
 if(!data)continue;
-if(data==="[DONE]"){done=true;break;}
+if(data==="[DONE]"){done=true;postDoneDeadline=Date.now()+10000;break;}
 const event=JSON.parse(data);
 if(event.error)throw Error(String(event.error.message||"上游返回错误"));
 frames++;
@@ -230,7 +270,7 @@ finally{
   try{
     // Only the browser HTTP client records this action. The Broker has no
     // authority to infer client receipt or the cause of a server disconnect.
-    if(!streamError&&stopped&&done){
+    if(!streamError&&stopped&&done&&nativeEof){
       if(typeof reader.releaseLock==="function"){reader.releaseLock();readerReleased=true;}
     }else{
       readerCancelled=true;
@@ -258,11 +298,12 @@ const clientSseTruth={
   client_visibility_hidden_seen:visibilityHiddenSeen,
   client_visibility_hidden_after_ms:relative(visibilityHiddenAt),
   reader_cancel_reason:readerCancelled
-    ?(streamError?"StreamError":"MissingTerminal"):"None",
+    ?(stopped&&done&&!nativeEof?"MissingEOF"
+      :streamError?"StreamError":"MissingTerminal"):"None",
 };
 // Always attach this bounded, content-free client observation to the SAME
 // request's ABCD report, including the detached-Broker recovery path.
-if(!stopped||!done){
+if(!stopped||!done||!nativeEof){
   // This must be written BEFORE same-request recovery, which may continue
   // for minutes. Previously the browser facts were lost if the user left
   // during the recovery loop.
@@ -274,7 +315,9 @@ if(!stopped||!done){
     if(error&&typeof error==="object")error.clientSseTruth=clientSseTruth;
     throw error;
   }
-  const err=streamError||Error("SSE缺少stop或[DONE]，不能判为完成");
+  const err=streamError||Error(nativeEof
+    ? "SSE缺少stop或[DONE]，不能判为完成"
+    : "SSE收到协议终态但缺少真实HTTP EOF，不能证明完整交付");
   if(err&&typeof err==="object")err.clientSseTruth=clientSseTruth;
   throw err;
 }

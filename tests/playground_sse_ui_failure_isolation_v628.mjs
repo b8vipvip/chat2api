@@ -15,17 +15,20 @@ assert.ok(helperStart>0 && helperEnd>helperStart && streamStart>0 && streamEnd>s
 
 const data=chunk=>"data: "+JSON.stringify({choices:[{delta:{content:chunk},finish_reason:null}]})+"\n\n";
 const raw=[data("first"),data(" second"),"data: "+JSON.stringify({choices:[{delta:{},finish_reason:"stop"}]})+"\n\n"+"data: [DONE]\n\n"];
-let reads=0,cancelled=0,released=0,progressFailures=0;
+let reads=0,readCalls=0,cancelled=0,released=0,progressFailures=0;
 const mock={
   TextDecoder,Promise,Error,JSON,String,
   // Standalone VM does not inherit the browser's performance object.
   performance:{now:()=>1010},
   fetch:async()=>({ok:true,body:{getReader(){return {
-    async read(){return reads<raw.length?{done:false,value:new TextEncoder().encode(raw[reads++])}:{done:true}},
+    async read(){
+      readCalls++;
+      return reads<raw.length?{done:false,value:new TextEncoder().encode(raw[reads++])}:{done:true};
+    },
     async cancel(){cancelled++},
     releaseLock(){released++}, 
   }}}}),
-  setTimeout,
+  setTimeout, clearTimeout,
 };
 runInNewContext(src.slice(helperStart,helperEnd)+"\n"+src.slice(streamStart,streamEnd)+"\nthis.openStream=stream",mock);
 const result=await mock.openStream("gpt-6",{token:"test-key"},"req_progress_detached",[],()=>{
@@ -33,8 +36,11 @@ const result=await mock.openStream("gpt-6",{token:"test-key"},"req_progress_deta
 });
 assert.equal(result.text,"first second");
 assert.equal(result.frames,3);
-assert.equal(reads,3,"UI progress errors must never close SSE before [DONE]");
+assert.equal(reads,3,"all three protocol data chunks must be consumed");
+assert.equal(readCalls,4,"browser must call read one more time for the real HTTP EOF");
 assert.equal(progressFailures,3);
 assert.equal(cancelled,0,"successful stop+[DONE] must not abort underlying HTTP");
 assert.equal(released,1,"successful SSE releases the reader lock");
+assert.equal(result.client_sse_truth.native_reader_eof_seen,true,
+  "actual read().done after protocol [DONE], not a synthetic EOF");
 console.log("SSE progress presentation cannot cancel active reply delivery");
