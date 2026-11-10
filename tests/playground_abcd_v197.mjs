@@ -156,7 +156,8 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
       if((postDoneStall && ms>0 && ms<=10000) ||
           (preDoneStall && ms===90000) ||
           (hangFirstRecoveryGet && [4000,8000].includes(ms)) ||
-          ((hangRunFinalTruth||hangRunReport||hangRunRecord) && ms===8000))
+          ((hangIncompleteEvidence||hangRunFinalTruth||hangRunReport||hangRunRecord)
+            && ms===8000))
         queueMicrotask(fn);
       return 0;
     },clearTimeout:()=>{},Blob,URL,
