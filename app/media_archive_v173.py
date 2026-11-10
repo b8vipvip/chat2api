@@ -482,6 +482,15 @@ class MediaArchive:
                     raise ValueError("Archived original dimensions do not match metadata")
                 backend_cfg = {**cfg, "backend": row["backend"]}
                 self._write(backend_cfg, row["thumb_key"], thumbnail, "image/webp")
+                # A successful provider write does not mean the repaired
+                # thumbnail is available or byte-correct. A corrupt PUT must
+                # not increment the administrator's repaired counter, nor
+                # create false visual-completeness evidence for this image.
+                verified = self._read(backend_cfg, row["backend"], row["thumb_key"])
+                if (len(verified) != len(thumbnail)
+                    or hashlib.sha256(verified).digest() !=
+                       hashlib.sha256(thumbnail).digest()):
+                    raise ValueError("Repaired thumbnail storage integrity mismatch")
                 report["repaired"] += 1
             except Exception as error:
                 report["failed"] += 1
