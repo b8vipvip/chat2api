@@ -91,7 +91,17 @@ def test_since_only_export_preserves_single_request_reports_and_status(tmp_path:
                 assert artifact["http_trace"] == single["http_trace"]
                 assert "extension_snapshot" in artifact
                 assert artifact["request"]["final_prompt"] == f"customer prompt {row['request_id']}"
-                assert artifact["request"]["response_text"] == f"answer {row['request_id']}"
+                if row["status"] == "error":
+                    # An error-side response is unverified page evidence, NOT
+                    # a completed OpenAI answer. ZIP and single-log must both
+                    # retain the forensic copy without publishing false final.
+                    assert artifact["request"]["response_text"] == ""
+                    assert artifact["request"]["response_text_provisional"] == (
+                        f"answer {row['request_id']}"
+                    )
+                    assert artifact["request"]["response_text_provisional_unverified"] is True
+                else:
+                    assert artifact["request"]["response_text"] == f"answer {row['request_id']}"
                 assert "final_prompt" in artifact["request"]
             readme = bundle.read("README.txt").decode("utf-8")
             assert "起始时间（含）" in readme
