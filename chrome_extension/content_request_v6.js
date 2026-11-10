@@ -2597,9 +2597,7 @@
   // v125 guard fired chat.error after just 3 seconds, discarding an answer
   // that had not finished rendering (real req_a99b / req_157d, 2026-11-08).
   // This is ONLY the fail-closed ERROR policy; it never authorizes completed.
-  function unverifiedNetworkFailureReady(
-    active, now, pageWorking, generating, captureMedia = false, imageCreationRequested = false
-  ) {
+  function unverifiedNetworkFailureReady(active, now, pageWorking, generating, captureMedia = false, imageCreationRequested = false) {
     const ended = Number(active?.networkStreamEndedWithoutTerminalAt || 0);
     if (!ended || !active?.networkStreamSeen || captureMedia)
       return false;
@@ -2635,8 +2633,10 @@
     // allowing the page-owned image tool/new same-request stream to arrive.
     // This is NOT proof of generation or a new completion authority;
     // the normal 900s Broker lease and verified-media finality remain.
-    const idleGraceMs=imageCreationRequested ? 180000 : 20000;
-    if (now - ended < idleGraceMs) return false;
+    // Preserve the 20s text no-terminal gate and the verified 180s
+    // image-creation delay as separate explicit policy branches.
+    if (!imageCreationRequested && now - ended < 20000) return false;
+    if (imageCreationRequested && now - ended < 180000) return false;
     if (generating || pageWorking) return false;
     // Progress observed after stream failure resets the inactivity decision;
     // it may be an in-progress multi-stream or rehydrated answer.
