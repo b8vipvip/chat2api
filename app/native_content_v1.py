@@ -429,6 +429,13 @@ class NativeContentStore:
         self.root.chmod(0o700)
         self._persist_count = 0
         self._lock = threading.Lock()
+        # Native-content SSE polls every 250 ms. Cross-process rev checks must
+        # stat the durable file each time, but re-decoding/re-validating a
+        # multi-MiB snapshot on every poll is unnecessary when that inode's
+        # identity has not changed. Cache ONLY up to three validated trees;
+        # os.replace always changes file identity and forces revalidation.
+        self._disk_cache_lock = threading.Lock()
+        self._disk_cache: OrderedDict[str, tuple[tuple, str, dict]] = OrderedDict()
         # Do not let two finalization/archival paths truncate the same .tmp
         # file or replace an older revision after a newer write. This lock
         # exclusively serializes persistence; it owns neither request
@@ -521,17 +528,52 @@ class NativeContentStore:
                             and time.time() - current.st_mtime >= MAX_AGE_SECONDS):
                         path.unlink(missing_ok=True)
                         return local
+                    stat = current
             except FileNotFoundError:
                 return local
             except OSError:
                 return None
+
+        def file_identity(value: os.stat_result) -> tuple:
+            # Disk identity, not owner-provided metadata or revision guesses.
+            # Include ctime so even in-place same-size replacements with the
+            # old mtime retained cannot reuse a previously verified cache.
+            return (value.st_dev, value.st_ino, value.st_size,
+                    value.st_mtime_ns, value.st_ctime_ns)
+
+        identity = file_identity(stat)
         try:
-            saved = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(saved, dict) or saved.get("owner") != owner:
-                # An existing persistent owner conflict is NOT permission to
-                # return the different process's same-ID in-memory snapshot.
-                return None
-            durable = validate_native_snapshot(saved["snapshot"])
+            with self._disk_cache_lock:
+                cached = self._disk_cache.get(request_id)
+                if cached is not None and cached[0] == identity:
+                    durable_owner, durable = cached[1], cached[2]
+                    self._disk_cache.move_to_end(request_id)
+                else:
+                    # os.replace is atomic, but the file can still change
+                    # between stat and read. Retry ONCE for a stable file
+                    # identity instead of caching new bytes under an old key.
+                    for attempt in range(2):
+                        saved = json.loads(path.read_text(encoding="utf-8"))
+                        current = path.stat()
+                        actual = file_identity(current)
+                        if actual != identity:
+                            if attempt:
+                                return None
+                            identity = actual
+                            continue
+                        if not isinstance(saved, dict):
+                            return None
+                        durable_owner = saved.get("owner")
+                        if durable_owner != owner:
+                            return None
+                        durable = validate_native_snapshot(saved["snapshot"])
+                        self._disk_cache[request_id] = (identity, owner, durable)
+                        self._disk_cache.move_to_end(request_id)
+                        while len(self._disk_cache) > 3:
+                            self._disk_cache.popitem(last=False)
+                        break
+                if durable_owner != owner:
+                    return None
         except FileNotFoundError:
             return local
         except (OSError, ValueError, KeyError, TypeError):
