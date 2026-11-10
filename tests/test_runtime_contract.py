@@ -748,6 +748,14 @@ def test_v314_aborted_provisional_terminal_does_not_hold_browser_lease():
     # Real 20-table req_13338 stalled without native ID/boundary telemetry.
     # The same request-v6 binding decision is now audited during progress
     # without exporting any body/DOM or creating a second terminal.
+    # v346: the already-existing sidecar capture(false) is now wired to
+    # request-v6 only for a FRESH candidate in a verified same-request scope.
+    # This cannot replace the final capture ACK or create a second terminal.
+    assert "function shouldCaptureNativeProgress(active, current, now)" in worker
+    assert "scope===candidate || scope.contains?.(candidate)" in worker
+    assert "now-Number(active.nativeProgressCaptureAt||0)>=15000" in worker
+    assert "const pending=native.capture(active,false)" in worker
+    assert "await native.capture(active, true);" in worker
     assert 'diagnostic(active,"native-reply-scope-checkpoint"' in worker
     assert 'native_boundary_message_identity_facts:' in worker
     assert 'native_boundary_gate_facts:' in worker
