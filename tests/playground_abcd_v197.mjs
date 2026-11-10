@@ -19,7 +19,7 @@ const frames=(text,includeDone=true)=>
 "data: "+JSON.stringify({choices:[{index:0,delta:{},finish_reason:"stop"}]})+"\n\n"+
 (includeDone?"data: [DONE]\n\n":"");
 
-function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,postDoneFailure=false,postDoneStall=false,preDoneStall=false,cancelNeverSettles=false,recoveredText=null,fetchFailure=false,httpFailureStatus=0,simulatePagehide=false,hangIncompleteEvidence=false}={}) {
+function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,postDoneFailure=false,postDoneStall=false,preDoneStall=false,cancelNeverSettles=false,recoveredText=null,fetchFailure=false,httpFailureStatus=0,simulatePagehide=false,hangIncompleteEvidence=false,hangFirstRecoveryGet=false}={}) {
   const elements=new Map(), requests=[], records=[],downloads=[],clientEvidence=[];
   let submittedReport=null;
   let cancels=0, releases=0, reads=0;
@@ -90,7 +90,7 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
     if(corruptZip&&ext==="zip"){bytes=bytes.slice();bytes[10]^=1;}
     return {ok:true,arrayBuffer:async()=>bytes.buffer};
   };
-  let claimSerial=0;
+  let claimSerial=0,recoveryLookups=0;
   const api=async (endpoint,options)=>{
     if(endpoint.endsWith("/abcd/preview"))return {scenes:Object.fromEntries("ABCD".split("").map(k=>[k,{scene:k,title:"新主题"+k+claimSerial,serial:claimSerial}]))};
     if(endpoint.endsWith("/abcd/claim")) {
@@ -100,10 +100,21 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
       return {scene,title,serial:claimSerial-1,claim_id:options.body.claim_id,
         prompts,end_anchor:"执行任务表",keywords:[title],next:{title:"新主题"+scene+claimSerial}};
     }
-    if(endpoint.includes("/api/admin/playground/requests/"))return {
+    if(endpoint.includes("/api/admin/playground/requests/")){
+      recoveryLookups++;
+      if(hangFirstRecoveryGet && recoveryLookups===1)
+        return new Promise((_,reject)=>{
+          options?.signal?.addEventListener?.("abort",()=>{
+            const err=new Error("synthetic private network error");
+            err.name="AbortError";
+            reject(err);
+          },{once:true});
+        });
+      return {
       status:"completed",response_text:recoveredText??"",response_text_truncated:false,
       diagnostics:{network_stream_terminal_proof:true,network_stream_phase:"complete"}
-    };
+      };
+    }
     if(endpoint.includes("/api/admin/requests/"))return {
       status:"completed",requested_model:"gpt-5.6-sol",
       served_model:modelMismatch?"gpt-6":"gpt-5.6-sol",
@@ -122,11 +133,12 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
     return {};
   };
   const context={
-    document,fetch,api,crypto:{randomUUID:()=>("00000000-0000-0000-0000-"+String(++uuid).padStart(12,"0")),subtle:webcrypto.subtle},
+    document,fetch,api,AbortController,crypto:{randomUUID:()=>("00000000-0000-0000-0000-"+String(++uuid).padStart(12,"0")),subtle:webcrypto.subtle},
     TextDecoder,TextEncoder,performance:{now:()=>1234},location:{origin:"https://api.test"},
     console,setTimeout:(fn,ms)=>{
       if((postDoneStall && ms>0 && ms<=10000) ||
-          (preDoneStall && ms===90000)) queueMicrotask(fn);
+          (preDoneStall && ms===90000) ||
+          (hangFirstRecoveryGet && [4000,8000].includes(ms))) queueMicrotask(fn);
       return 0;
     },clearTimeout:()=>{},Blob,URL,
     addEventListener(name,cb){pageEvents.set(name,cb)},
@@ -269,6 +281,22 @@ test("v339: stalled incomplete-evidence upload cannot block same-ID Broker recov
   assert.ok(checkpoint,"evidence upload is initiated before recovery");
   assert.equal(checkpoint.keepalive,true,
     "incomplete diagnostic evidence survives hidden/unmounted admin view");
+});
+
+test("v341: stalled same-ID outcome GET is aborted and retried, not stuck forever",async()=>{
+  const task=scenario("A",[FULL],{
+    readerFailure:true,recoveredText:FULL,hangFirstRecoveryGet:true,
+  }).run();
+  const r=await Promise.race([
+    task,
+    new Promise((_,reject)=>setTimeout(
+      ()=>reject(Error("stalled outcome GET prevented same-ID recovery")),500)),
+  ]);
+  assert.equal(r.requests.length,1,"never retry the model POST");
+  assert.equal(r.report.turns[0].recovered_after_disconnect,true);
+  assert.equal(r.report.turns[0].client_sse_truth.reader_error_name,"AbortError");
+  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"warning");
+  assert.ok(r.clientEvidence.some(x=>x.phase==="incomplete"));
 });
 
 test("A: HTTP 500 response is reported as response-layer error with exact status",async()=>{
