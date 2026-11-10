@@ -57,7 +57,7 @@ async function exercise({overflowFirst=false}={}){
       headers:{get:k=>{
         if(k==="content-type")return MIME;
         if(k==="content-disposition")return 'attachment; filename="Report.xlsx"';
-        if(k==="content-length")return String(bodyBytes.length);
+        if(k==="content-length")return oversized?null:String(bodyBytes.length);
         return null;
       }},
       clone(){return {body:{getReader(){return reader;}}};},
