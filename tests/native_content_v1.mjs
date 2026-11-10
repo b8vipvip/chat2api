@@ -705,6 +705,72 @@ assert.equal(partialTree.get(fastIdentity),"b".repeat(64));
 assert.ok(partialIdentityRequests.includes("chat.native.snapshot"));
 assert.equal(partialIdentityActive.nativeFinalCaptureCommitted,true);
 
+// v342: Forty tiny/hidden HTML image nodes must NOT exhaust composedFind's
+// raster probe limit before the three large, real assistant image slots.
+// Also, four never-settling CDN hashes must not stop later images from being
+// SHA256-matched within the SAME 3.5-second final capture deadline.
+const icons=Array.from({length:45},(_,i)=>{
+  const e=new Element("IMG");
+  e.currentSrc="https://trusted.example/tiny-icon"+i+".png";
+  e.getBoundingClientRect=()=>({width:12,height:12});
+  return e;
+});
+const hiddenBig=new Element("IMG");
+hiddenBig.currentSrc="https://trusted.example/hidden-big.png";
+hiddenBig.hiddenInTest=true;
+const originals=Array.from({length:12},(_,i)=>{
+  const e=new Element("IMG");
+  e.currentSrc="https://trusted.example/original-"+i+".png";
+  e.naturalWidth=640;e.naturalHeight=480;
+  return e;
+});
+const extendedRoot=new Element("DIV",[
+  new Element("P",[{nodeType:3,nodeValue:"Three illustration grid"}]),
+  ...icons,hiddenBig,...originals
+]);
+const rasterRequests=[];
+const rasterCtx={
+  ...ctx,
+  getComputedStyle:el=>({
+    display:el?.hiddenInTest?"none":"block",
+    visibility:"visible",color:"black",backgroundColor:"transparent",
+  }),
+  chrome:{runtime:{sendMessage:async message=>{
+    if(message.type==="chat2api.media.hash-v2"){
+      rasterRequests.push(message.url);
+      const found=message.url.match(/original-(\d+)\.png$/);
+      if(!found)throw Error("Tiny/hidden raster must not be hashed");
+      const n=Number(found[1]);
+      if(n<4)return new Promise(()=>{});
+      return {ok:true,sha256:n.toString(16).padStart(64,"0")};
+    }
+    return {ok:true,committed:true};
+  }}},
+};
+delete rasterCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,rasterCtx);
+const rasterActive={
+  requestId:"req_manyrasteroriginalsv342",submitStartedAt:Date.now(),
+  lastCandidateNode:extendedRoot,
+};
+await rasterCtx.__CHAT2API_NATIVE_CONTENT_V1__.capture(rasterActive,true);
+assert.equal(rasterActive.nativeIdentityCandidateCount,12,
+  "the 40-cap must count eligible assistant photos, not toolbar icons");
+assert.equal(rasterActive.nativeIdentityVerifiedCount,8,
+  "a stuck first batch must not starve the following eight fast originals");
+assert.equal(rasterRequests.length,12,
+  "all eligible images get a fair chance under the eight-worker pool");
+assert.ok(rasterRequests.every(x=>x.includes("original-")));
+for(let i=0;i<12;i++){
+  const proof=rasterActive.nativeImageDigests.get(originals[i]);
+  assert.equal(proof,i<4?undefined:i.toString(16).padStart(64,"0"),
+    "one failed CDN digest cannot reassign another image's byte identity");
+}
+assert.equal(rasterActive.nativeImageDigests.has(hiddenBig),false);
+assert.ok(!rasterRequests.some(x=>x.includes("tiny-icon")||x.includes("hidden")));
+assert.equal(rasterActive.nativeFinalCaptureCommitted,true);
+assert.equal(rasterActive.nativeCanvasOmitted,0);
+
 // Prior Windows v1.0.3 vs Chrome comparison found three standalone
 // "\\n  " text nodes (9 characters) discarded inside pre/code. The formal
 // request observer must retain them, not just the independent diagnostic.
