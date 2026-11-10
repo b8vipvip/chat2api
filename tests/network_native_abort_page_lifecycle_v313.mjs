@@ -8,11 +8,11 @@ const end=source.indexOf("  globalThis.fetch = async function",start);
 assert.ok(start>0 && end>start);
 const observed=source.slice(start,end);
 
-async function run({pagehide=false,hidden=false}={}){
+async function run({pagehide=false,hidden=false,initialHidden=false}={}){
   const events=[],windowHandlers=new Map(),documentHandlers=new Map();
   const controller=new AbortController();
   const document={
-    visibilityState:"visible",
+    visibilityState:initialHidden?"hidden":"visible",
     addEventListener(name,fn){documentHandlers.set(name,fn);},
     removeEventListener(name,fn){if(documentHandlers.get(name)===fn)documentHandlers.delete(name);},
   };
@@ -55,10 +55,16 @@ async function run({pagehide=false,hidden=false}={}){
   assert.equal(failure.native_signal_initially_aborted,false);
   assert.ok(failure.native_signal_abort_after_ms>=0);
   assert.equal(failure.native_signal_abort_reason_kind,"AbortError");
-  assert.equal(failure.native_signal_abort_visibility,hidden?"hidden":"visible");
+  assert.equal(failure.native_signal_abort_visibility,
+    (hidden||initialHidden)?"hidden":"visible");
+  assert.equal(failure.native_visibility_at_stream_start,
+    initialHidden?"hidden":"visible");
+  assert.equal(failure.native_visibility_hidden_at_abort,
+    hidden||initialHidden);
   assert.equal(failure.native_pagehide_during_stream,pagehide);
   assert.equal(failure.native_pagehide_before_abort,pagehide);
-  assert.equal(failure.native_visibility_hidden_during_stream,hidden);
+  assert.equal(failure.native_visibility_hidden_during_stream,
+    hidden||initialHidden);
   assert.equal(failure.clone_reader_failure_kind,"page-fetch-signal-aborted");
   assert.equal(events.filter(e=>e.phase==="done").length,0);
   assert.equal(windowHandlers.size,0,"pagehide listener must be removed");
@@ -72,8 +78,19 @@ async function run({pagehide=false,hidden=false}={}){
 
 const active=await run({pagehide:true,hidden:true});
 const offscreen=await run({pagehide:false,hidden:false});
+const initiallyHidden=await run({pagehide:false,hidden:false,initialHidden:true});
+const initialFailure=initiallyHidden.find(e=>e.phase==="error");
+assert.equal(initialFailure.native_visibility_at_stream_start,"hidden");
+assert.equal(initialFailure.native_visibility_hidden_during_stream,true);
+assert.equal(initialFailure.native_visibility_hidden_at_abort,true);
+assert.equal(initialFailure.native_pagehide_during_stream,false);
 assert.ok(active.some(e=>e.native_pagehide_during_stream===true));
 assert.ok(offscreen.some(e=>e.native_pagehide_during_stream===false));
 assert.ok(!source.includes("signal.abort()"),
   "the extension observes the PAGE AbortSignal; it never cancels it");
-console.log("v313: page lifecycle evidence distinguishes original abort with/without pagehide, no extra terminal");
+console.log("v332: native AbortSignal evidence distinguishes initially-hidden Worker tab from a later visibility change without altering terminal");
+
+// The CONTENT observer only accepts content-free enumerated values.
+const contentSource=readFileSync("chrome_extension/content_network_stream_recovery_v55.js","utf8");
+assert.match(contentSource,/network_stream_native_visibility_at_start/);
+assert.match(contentSource,/network_stream_native_visibility_hidden_at_abort/);
