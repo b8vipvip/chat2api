@@ -248,6 +248,21 @@ class MediaArchive:
             self._write(cfg, thumb_key, preview, "image/webp")
             if stop is not None:
                 stop.checkpoint()
+            # A provider's successful PUT is not proof of byte-preserving
+            # storage. Generated-file archives already verify their complete
+            # readback before creating a download manifest; image originals
+            # need that same invariant. Otherwise a partial S3/local write
+            # can publish a valid-looking 1:1 image URL backed by WRONG bytes.
+            # Check both full-resolution original and its separate thumbnail
+            # through the exact backend read path used for downloads.
+            for key, expected in ((full_key, raw), (thumb_key, preview)):
+                stored = self._read(cfg, cfg["backend"], key)
+                if (len(stored) != len(expected)
+                    or hashlib.sha256(stored).digest() !=
+                       hashlib.sha256(expected).digest()):
+                    raise ValueError("Media storage readback integrity mismatch")
+                if stop is not None:
+                    stop.checkpoint()
             with self._db() as conn:
                 conn.execute("INSERT INTO media VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (
                     media_id, token, owner, request_id, mime, len(raw), width, height,
