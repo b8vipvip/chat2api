@@ -2597,7 +2597,7 @@
   // v125 guard fired chat.error after just 3 seconds, discarding an answer
   // that had not finished rendering (real req_a99b / req_157d, 2026-11-08).
   // This is ONLY the fail-closed ERROR policy; it never authorizes completed.
-  function unverifiedNetworkFailureReady(active, now, pageWorking, generating, captureMedia = false) {
+  function unverifiedNetworkFailureReady(active, now, pageWorking, generating, captureMedia = false, imageCreationRequested = false) {
     const ended = Number(active?.networkStreamEndedWithoutTerminalAt || 0);
     if (!ended || !active?.networkStreamSeen || captureMedia)
       return false;
@@ -2619,10 +2619,24 @@
     const latest = String(active.networkStreamResponseId || "");
     const failed = String(active.networkUnverifiedStreamId || "");
     if (latest && failed && latest !== failed) return false;
-    // A 20-second recovery window lets the existing same-request DOM/toolbar
-    // path establish completion after a clone reader failed. A quiet 3-second
-    // interval is not proof that upstream finished its reply.
-    if (now - ended < 20000) return false;
+    // A 20-second recovery window is reasonable for TEXT, but not for an
+    // explicitly requested image generation. The 2026-11-10 B request asked
+    // for three independent illustrations; its first 3561-byte network
+    // stream ended without an assistant terminal, then request-v6 emitted
+    // chat.error ~20s later while no image/tool handoff had arrived.
+    //
+    // File-generation tasks already have a first-class deferred media
+    // capture path even before their actual files appear. Image creation
+    // only activates captureMedia AFTER an image/tool handoff is visible,
+    // so it previously missed that grace. Keep the SAME original request
+    // alive for at most three minutes of quiet after the unverified stream,
+    // allowing the page-owned image tool/new same-request stream to arrive.
+    // This is NOT proof of generation or a new completion authority;
+    // the normal 900s Broker lease and verified-media finality remain.
+    // Preserve the 20s text no-terminal gate and the verified 180s
+    // image-creation delay as separate explicit policy branches.
+    if (!imageCreationRequested && now - ended < 20000) return false;
+    if (imageCreationRequested && now - ended < 180000) return false;
     if (generating || pageWorking) return false;
     // Progress observed after stream failure resets the inactivity decision;
     // it may be an in-progress multi-stream or rehydrated answer.
@@ -3389,7 +3403,9 @@
             || Date.now() - active.networkUnverifiedWaitReportedAt >= 15000)) {
         active.networkUnverifiedWaitReportedAt = Date.now();
         await diagnostic(active, "unverified-network-await-page-terminal", {
-          network_unverified_wait_policy: "same-request-working-ui-and-stream-grace-v314",
+          network_unverified_wait_policy: "same-request-working-ui-image-tool-grace-v344",
+          network_unverified_image_creation_requested: imageCreationRequested,
+          network_unverified_idle_failure_grace_ms: imageCreationRequested ? 180000 : 20000,
           network_unverified_provisional_terminal_seen: Boolean(networkTerminalAt),
           network_unverified_transport_error_seen:
             Boolean(active.networkTerminalTransportErrorAt),
@@ -3404,7 +3420,7 @@
         });
       }
       if (unverifiedNetworkFailureReady(active, Date.now(), upstreamStillWorking(),
-          generating, captureMedia)) {
+          generating, captureMedia, imageCreationRequested)) {
         await emit({
           type: "chat.error", request_id: active.requestId,
           error: "ChatGPT network stream ended without a verified assistant completion",
@@ -3416,6 +3432,8 @@
               Boolean(active.networkTerminalTransportErrorAt),
             network_stream_unverified_end: true,
             network_unverified_fail_closed_after_page_idle: true,
+            network_unverified_image_creation_requested: imageCreationRequested,
+            network_unverified_idle_failure_grace_ms: imageCreationRequested ? 180000 : 20000,
           },
         });
         return;
