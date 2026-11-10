@@ -60,11 +60,8 @@ const response=await Promise.race([
     "real model fetch blocked on optional list-refresh API")),400)),
 ]);
 assert.equal(response.marker,"production-model-response");
-assert.deepEqual(hanging.events.slice(0,2),[
-  "durable-test-create","presentation-reload"
-].includes(hanging.events[1])?[
-  "durable-test-create",hanging.events[1]
-]:["durable-test-create","model-request-dispatched"]);
+assert.equal(hanging.events[0],"durable-test-create",
+  "the test-run record must be durably created before dispatch");
 assert.equal(hanging.events.filter(x=>x==="durable-test-create").length,1);
 assert.equal(hanging.events.filter(x=>x==="model-request-dispatched").length,1);
 assert.ok(hanging.events.includes("presentation-reload"));
