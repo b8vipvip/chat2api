@@ -68,4 +68,7 @@ def test_repair_readback_missing_after_successful_put_is_not_reported_complete(
     assert result["repaired"] == 0 and result["failed"] == 1
     assert result["failures"][0]["reason"] == "FileNotFoundError"
     assert store.load(item["id"], item["token"])[0] == raw
+    # Re-run on a still-missing remote object, not on the local test fake's
+    # already-correct staged write that a broken read temporarily hid.
+    thumbnail.unlink(missing_ok=True)
     assert store.repair_thumbnails(limit=1)["repaired"] == 1
