@@ -92,6 +92,22 @@ async function recoverDisconnectedStream(requestId, update) {
   throw Error("恢复等待结束，但服务端尚无已验证终态；请按请求 ID 查看请求记录");
 }
 
+// Test-run outcome writes are bounded, request-scoped observers; a stalled
+// admin diagnostic POST must never prevent the final ABCD report or hang the
+// test Run button. The underlying Broker model terminal remains untouched.
+async function postRunEvidenceWithDeadline(endpoint,body,{keepalive=false}={}){
+  const controller=typeof AbortController==="function"
+    ?new AbortController():null;
+  const timer=controller?setTimeout(()=>controller.abort(),8000):null;
+  try{
+    return await api(endpoint,{
+      method:"POST",body,keepalive,
+      ...(controller?{signal:controller.signal}:{}),
+    });
+  }finally{
+    if(timer!==null)clearTimeout(timer);
+  }
+}
 async function stream(model,auth,requestId,messages,update,sceneId){
   // v294: save early client-side transport evidence independently of the
   // final ABCD report or multi-minute same-ID Broker recovery.
@@ -513,20 +529,29 @@ report.turns.push({request_id,prompt,text:out.text,frames:out.frames,
   client_sse_truth:out.client_sse_truth||null,
   recovered_after_disconnect:out.recovered===true,duration_ms:Math.round(performance.now()-begin)});
 try {
-  await api("/api/admin/playground/abcd/transport-truth",{method:"POST",body:{
-    request_id,scene:sceneId,client_sse_truth:out.client_sse_truth||null,failed:false
-  }});
+  // A completed Broker request recovered by ID does NOT retroactively prove
+  // that this browser received [DONE] or HTTP EOF. Preserve the actual
+  // client's incomplete delivery truth after successful same-ID recovery.
+  const receive=out.client_sse_truth||{};
+  const fullyReceived=receive.protocol_stop_seen===true
+    && receive.protocol_done_seen===true
+    && receive.native_reader_eof_seen===true;
+  await postRunEvidenceWithDeadline("/api/admin/playground/abcd/transport-truth",{
+    request_id,scene:sceneId,client_sse_truth:out.client_sse_truth||null,
+    failed:!fullyReceived,phase:fullyReceived?"complete":"incomplete",
+  },{keepalive:true});
 } catch (_) { /* evidence sink failure cannot change genuine protocol terminal */ }
 }catch(e){
 report.turns.push({request_id,prompt,text:"",frames:0,error:String(e),
   client_sse_truth:e?.clientSseTruth||null,
   duration_ms:Math.round(performance.now()-begin)});
 try {
-  // Persist bounded client-side receive facts before a later ABCD summary,
-  // page navigation or transport error prevents the full report from saving.
-  await api("/api/admin/playground/abcd/transport-truth",{method:"POST",body:{
-    request_id,scene:sceneId,client_sse_truth:e?.clientSseTruth||null,failed:true
-  }});
+  // Final evidence is valuable but secondary. Do not block report.finally
+  // if the admin sink itself hangs after an early HTTP peer disconnect.
+  await postRunEvidenceWithDeadline("/api/admin/playground/abcd/transport-truth",{
+    request_id,scene:sceneId,client_sse_truth:e?.clientSseTruth||null,
+    failed:true,phase:"incomplete",
+  },{keepalive:true});
 } catch (_) { /* never hide original stream failure */ }
 throw e;
 }
@@ -568,12 +593,12 @@ report.status=report.passed?(report.warnings.length?"warning":"passed"):"failed"
 finally{
 report.finished_at=new Date().toISOString();
 for(const turn of report.turns){
-try{await api("/api/admin/playground/chat-records",{method:"POST",body:{request_id:turn.request_id,model,prompt:turn.prompt,api_key_id:auth?.id||null,api_key_name:auth?.label||"未解析",status:report.status,duration_ms:turn.duration_ms,response_chars:turn.text.length,attachments_count:0,error:turn.error||report.error||(report.status==="passed"?null:(report.warnings.join("；")||"产物验证失败"))}});}
+try{await postRunEvidenceWithDeadline("/api/admin/playground/chat-records",{request_id:turn.request_id,model,prompt:turn.prompt,api_key_id:auth?.id||null,api_key_name:auth?.label||"未解析",status:report.status,duration_ms:turn.duration_ms,response_chars:turn.text.length,attachments_count:0,error:turn.error||report.error||(report.status==="passed"?null:(report.warnings.join("；")||"产物验证失败"))});}
 catch(e){console.warn("ABCD record persistence failed",e);}
 }
 if(report.turns.length){
 try{
-  await api("/api/admin/playground/abcd/report",{method:"POST",body:{scene:sceneId,report}});
+  await postRunEvidenceWithDeadline("/api/admin/playground/abcd/report",{scene:sceneId,report});
 }catch(error){
   report.warnings.push("ABCD 诊断报告写入请求日志失败："+String(error?.message||error));
 }
