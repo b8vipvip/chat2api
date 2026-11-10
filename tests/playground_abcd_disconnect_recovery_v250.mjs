@@ -39,5 +39,5 @@ const empty=await exercise([{status:"completed",response_text:""}]);
 assert.match(empty.error,/不能按已交付处理/);
 assert.match(source,/recovered_after_disconnect:out\.recovered===true/);
 assert.match(source,/report\.warnings\.push\("至少一条请求在 SSE 提前断开/);
-assert.match(source,/if\(!stopped\|\|!done\)/);
+assert.match(source,/if\(!stopped\|\|!done\|\|!nativeEof\)/);
 console.log("v250 ABCD disconnected SSE recovery: real terminal, failed, missing, truncated, and no-replay passed");
