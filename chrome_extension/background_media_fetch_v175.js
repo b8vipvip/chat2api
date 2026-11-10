@@ -129,16 +129,29 @@
         const reader=response.body?.getReader?.();
         if (reader) {
           const chunks=[];
-          let total=0;
+          let total=0, nativeEof=false;
           try {
             while (true) {
               const {done,value}=await reader.read();
-              if (done) break;
+              if (done) { nativeEof=true; break; }
               total+=value.byteLength;
               if (total > MAX_IDENTITY_BYTES) throw new Error("raster-size-limit");
               chunks.push(value);
             }
-          } finally { try { await reader.cancel(); } catch (_) {} }
+          } finally {
+            // The original v637 code awaited cancel() even AFTER a clean EOF,
+            // which can make an otherwise successful SHA result never ACK.
+            // On overflow/read failure, only cancel this auxiliary image
+            // reader, and never wait for a possibly unresolved cancellation
+            // Promise. Do not touch the native ChatGPT conversation fetch.
+            if(!nativeEof) {
+              try {
+                const cancellation=reader.cancel?.();
+                cancellation?.catch?.(()=>{});
+              } catch (_) {}
+            }
+            try { reader.releaseLock?.(); } catch (_) {}
+          }
           if (!total) throw new Error("raster-empty");
           bytes=new Uint8Array(total);
           let offset=0;
