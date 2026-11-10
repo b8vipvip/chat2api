@@ -268,6 +268,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             payload, mime = await asyncio.to_thread(media_archive.load, media_id, access_token, variant == "thumbnail")
         except (KeyError, FileNotFoundError):
             raise HTTPException(status_code=404, detail="Unknown media") from None
+        except (ValueError, OSError):
+            # Return explicit storage-unavailable instead of HTTP 200 with
+            # corrupt original bytes (or a raw internal exception/traceback).
+            # This is not a Worker/Broker request terminal transition.
+            raise HTTPException(
+                status_code=503, detail="Media storage integrity unavailable"
+            ) from None
         return Response(payload, media_type=mime, headers={
             "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer",
             "Content-Disposition": "inline" if mime.startswith("image/") else "attachment",
