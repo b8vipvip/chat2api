@@ -918,7 +918,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         status = actual.get("status")
                         if status in {"ready", "processing", "failed"}:
                             updated["status"] = status
-                    except (KeyError, ValueError, OSError):
+                    except (KeyError, ValueError, OSError, sqlite3.Error):
+                        # DeferredGeneratedFiles.status() reads a shared SQLite
+                        # manifest while archive workers may hold write locks.
+                        # A busy/corrupt manifest is UNKNOWN, not a reason to
+                        # return an unrelated HTTP 500 from request history,
+                        # nor evidence to mark an unfinished file "ready".
                         updated["status"] = "unavailable"
                 live.append(updated)
             current["response_generated_files"] = live
