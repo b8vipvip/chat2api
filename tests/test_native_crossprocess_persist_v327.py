@@ -87,7 +87,7 @@ def test_corrupt_disk_manifest_is_not_replaced_under_unproven_owner(tmp_path):
     assert first.persist(RID, "owner")
     old_file = tmp_path / "native_content" / (RID + ".json")
     old_file.write_text("{broken json", encoding="utf-8")
-    assert later.publish(RID, "owner", snapshot(2, "new"))
+    assert later.publish(RID, "owner", snapshot(2, "new")) is False
     assert later.persist(RID, "owner") is False
     assert old_file.read_text(encoding="utf-8") == "{broken json"
 
