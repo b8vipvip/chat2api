@@ -615,6 +615,13 @@ def test_v307_no_early_error_while_page_is_still_thinking_and_stale_streams_are_
     observer = (root / "chrome_extension/content_network_stream_recovery_v55.js").read_text("utf-8")
     assert "function unverifiedNetworkFailureReady(active, now, pageWorking, generating" in owner
     assert "now - ended < 20000" in owner
+    # A three-image tool job may emit a short, non-terminal first stream,
+    # yet no generated image is visible until minutes later. Preserve
+    # request-v6's strict text guard, but don't falsely terminal-error the
+    # same image request before its first actual image can appear.
+    assert "if (imageCreationRequested && now - ended < 180000)" in owner
+    assert "generating, captureMedia, imageCreationRequested)" in owner
+    assert "network_unverified_idle_failure_grace_ms:" in owner
     assert "if (generating || pageWorking) return false" in owner
     assert "network_unverified_fail_closed_after_page_idle: true" in owner
     assert "network_unverified_page_working: upstreamStillWorking()" in owner
