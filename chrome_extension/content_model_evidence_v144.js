@@ -177,7 +177,12 @@
       publishEvidence(row, detail).catch(() => {});
       return;
     }
-    if (detail.phase === "error" || detail.phase === "done") {
+    if (detail.phase === "error" || detail.phase === "done"
+        || detail.phase === "limit") {
+      // A bounded MAIN-world clone ending at the 16 MB evidence cap is
+      // NOT a ChatGPT-native Fetch EOF and cannot provide model terminal
+      // authority. Retain the best already-observed model facts, then
+      // release only this observer's per-stream tracking row.
       if (Object.keys(row.evidence).length) publishEvidence(row, detail).catch(() => {});
       setTimeout(() => rows.delete(row.streamId), 15000);
     }

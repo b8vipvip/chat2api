@@ -290,24 +290,58 @@
         request_rewritten: requestInfo.rewritten, authority_violation: requestInfo.authorityViolation, ...evidence });
     };
     (async () => {
+      let nativeEof = false;
+      let evidenceLimit = false;
       try {
         while (true) {
           const { value, done } = await reader.read();
-          if (done) break;
+          if (done) { nativeEof = true; break; }
           bytes += value?.byteLength || 0;
-          if (bytes > MAX_BUFFER) break;
+          if (bytes > MAX_BUFFER) {
+            evidenceLimit = true;
+            break;
+          }
           buffer += decoder.decode(value, { stream: true });
           const blocks = buffer.split(/\r?\n\r?\n/); buffer = blocks.pop() || "";
-          for (const block of blocks) { const parsed = parseEvent(block); if (parsed) { mergeNext(parsed); emitEvidence(false); } }
+          for (const block of blocks) {
+            const parsed = parseEvent(block);
+            if (parsed) { mergeNext(parsed); emitEvidence(false); }
+          }
         }
-        buffer += decoder.decode();
-        if (buffer.trim()) { const parsed = parseEvent(buffer); if (parsed) mergeNext(parsed); }
-        emitEvidence(true);
-        post({ phase: "done", stream_id: streamId, bytes });
+        if (nativeEof) {
+          buffer += decoder.decode();
+          if (buffer.trim()) {
+            const parsed = parseEvent(buffer);
+            if (parsed) mergeNext(parsed);
+          }
+        }
+        // A 16-MB observation limit is NOT an upstream EOF and cannot be
+        // published as another completed/verified stream terminal.
+        emitEvidence(nativeEof);
+        post({ phase: nativeEof ? "done" : "limit", stream_id: streamId,
+          bytes, observation_limit_hit: evidenceLimit });
       } catch (error) {
-        // Preserve the strongest evidence already seen even when an HTTP 200 stream aborts.
-        emitEvidence(true);
-        post({ phase: "error", stream_id: streamId, bytes, error: String(error?.message || error) });
+        // Preserve model facts already observed, without treating a failed
+        // clone reader as the ChatGPT application's completion.
+        emitEvidence(false);
+        post({ phase: "error", stream_id: streamId, bytes,
+          error: String(error?.message || error) });
+      } finally {
+        if (!nativeEof) {
+          // v333: response.clone() tees the REAL ChatGPT SSE. Leaving this
+          // bounded evidence branch unread after 16MB makes the tee buffer
+          // the rest of a long reply indefinitely, raising memory and
+          // backpressure. Cancel ONLY this clone's branch, NEVER the page's
+          // original response or its AbortSignal.
+          //
+          // Do NOT await the tee branch's cancel Promise: per Streams spec
+          // it may stay pending until the *other* (native page) branch ends.
+          try {
+            const cancellation = reader.cancel();
+            cancellation?.catch?.(() => {});
+          } catch (_) { /* evidence is best-effort */ }
+        }
+        try { reader.releaseLock(); } catch (_) {}
       }
     })();
   }
