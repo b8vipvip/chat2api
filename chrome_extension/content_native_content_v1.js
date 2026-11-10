@@ -504,7 +504,7 @@
   // silently left otherwise-archived originals without byte identity proof.
   const MAX_IDENTITY_BYTES = 20 * 1024 * 1024;
   const HASH_HEX = /^[a-f0-9]{64}$/;
-  async function hashVisibleRaster(img) {
+  async function hashVisibleRaster(img, signal = undefined) {
     const url=String(img.currentSrc || img.getAttribute?.("src") || "");
     if (!url) return "";
     try {
@@ -523,7 +523,7 @@
         return "";
       // Blob/data are resolved only in this already-authorized ChatGPT tab.
       // No original URL, pixel byte buffer or token is sent to telemetry.
-      const response=await fetch(url,{credentials:"omit",redirect:"error"});
+      const response=await fetch(url,{credentials:"omit",redirect:"error",...(signal?{signal}:{})});
       const size=Number(response.headers.get("content-length") || 0);
       if (!response.ok || size > MAX_IDENTITY_BYTES) return "";
       const blob=await response.blob();
@@ -541,47 +541,68 @@
        || (scoped?.scope==="verified_reply_container" || scoped?.scope==="verified_native_assistant_selection")) && scoped.roots?.length
       ? scoped.roots : [candidate];
     const images=[];
+    // Only count images which the safe native serializer could actually
+    // publish: composedFind's match LIMIT must apply AFTER eligibility.
+    // Before v342, 40 tiny/hidden icons exhausted traversal before a later
+    // true generated image could even be considered for SHA256 matching.
+    const eligible=node=>{
+      if (!(node instanceof Element) || node.tagName?.toLowerCase()!=="img")
+        return false;
+      if (node.closest?.(
+        "form,nav,aside,footer,header,[role='dialog'],[role='menu'],[data-message-author-role='user']"
+      )) return false;
+      const box=node.getBoundingClientRect?.();
+      if (!box || box.width<40 || box.height<40) return false;
+      const style=getComputedStyle(node);
+      return style.display!=="none" && style.visibility!=="hidden";
+    };
     for (const root of roots) {
       if (!(root instanceof Element) || !root.isConnected) continue;
-      const candidates=composedFind(root,
-        node=>node.tagName?.toLowerCase()==="img",40);
+      const candidates=composedFind(root,eligible,41);
       for (const img of candidates) {
-        if (!(img instanceof Element) || images.includes(img)) continue;
-        const box=img.getBoundingClientRect?.();
-        if (!box || box.width<40 || box.height<40) continue;
-        if (img.closest?.("aside,nav,footer,[data-message-author-role='user']")) continue;
+        if (images.includes(img)) continue;
+        if (images.length>=40) break;
         images.push(img);
-        if (images.length===40) break;
       }
-      if (images.length===40) break;
+      if (images.length>=40) break;
     }
     const digests=new Map();
-    // The request-v6 controller awaits final native.capture before emitting
-    // the terminal. Keep the existing 3.5-second aggregate budget/four-wide
-    // concurrency, but do NOT discard a fast image's hash because a sibling
-    // fetch stalls. Promise.all + batch timeout previously lost *every* proof
-    // from that batch on one slow CDN URL. Late results must not mutate the
-    // published snapshot after the deadline.
+    // One slow/never-resolving image hash used to stall ALL later four-wide
+    // batches until the 3.5s finality deadline. This starved real original
+    // slots later in a long reply. Run 8 bounded concurrent workers; when
+    // one image finishes, it immediately proceeds to the next slot.
+    // Never accept results after the deadline or published snapshot.
+    // Abort only auxiliary blob/data fetches, NEVER the ChatGPT page fetch.
     const deadline=Date.now()+3500;
-    for (let start=0;start<images.length && Date.now()<deadline;start+=4) {
-      const batch=images.slice(start,start+4);
-      let accepting=true, timer;
-      try {
-        const jobs=batch.map(async img=>{
-          try {
-            const digest=await hashVisibleRaster(img);
-            if (accepting && Date.now()<=deadline && HASH_HEX.test(digest))
-              digests.set(img,digest);
-          } catch (_) { /* An unavailable original must stay unverified. */ }
-        });
-        const remaining=Math.max(1,deadline-Date.now());
-        await Promise.race([
-          Promise.allSettled(jobs),
-          new Promise(resolve=>{timer=setTimeout(resolve,remaining);}),
+    const controller=typeof AbortController==="function"
+      ?new AbortController():null;
+    let accepting=true,next=0,timer=null;
+    const work=async()=>{
+      while(accepting && Date.now()<deadline){
+        const index=next++;
+        if(index>=images.length)return;
+        const img=images[index];
+        try{
+          const digest=await hashVisibleRaster(img,controller?.signal);
+          if(accepting && Date.now()<=deadline && HASH_HEX.test(digest))
+            digests.set(img,digest);
+        }catch(_){/* Only verified original bytes may be mapped. */}
+      }
+    };
+    if(images.length){
+      try{
+        const workers=Array.from({length:Math.min(8,images.length)},()=>work());
+        const completed=await Promise.race([
+          Promise.allSettled(workers).then(()=>true),
+          new Promise(resolve=>{
+            timer=setTimeout(()=>resolve(false),Math.max(1,deadline-Date.now()));
+          }),
         ]);
-      } finally {
         accepting=false;
-        if(timer)clearTimeout(timer);
+        if(!completed)controller?.abort();
+      }finally{
+        accepting=false;
+        if(timer!==null)clearTimeout(timer);
       }
     }
     active.nativeImageDigests=digests;
