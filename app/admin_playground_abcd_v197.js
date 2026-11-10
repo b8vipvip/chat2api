@@ -304,10 +304,15 @@ const clientSseTruth={
 // Always attach this bounded, content-free client observation to the SAME
 // request's ABCD report, including the detached-Broker recovery path.
 if(!stopped||!done||!nativeEof){
-  // This must be written BEFORE same-request recovery, which may continue
-  // for minutes. Previously the browser facts were lost if the user left
-  // during the recovery loop.
-  await persistClientTruth(clientSseTruth,"incomplete");
+  // Submit the final browser-side facts BEFORE same-request recovery but
+  // never AWAIT this secondary admin endpoint. Real A/B sessions sometimes
+  // kept only a progress checkpoint despite the API peer disconnecting in
+  // ~3 seconds. A stalled telemetry write must not block the ONLY recovery
+  // route back to the Broker's actual persisted request terminal. Use the
+  // browser's keepalive request to give the evidence its best chance to
+  // survive a hidden/unmounted admin panel; no model retry is ever issued.
+  // persistClientTruth already catches its own HTTP rejection.
+  void persistClientTruth(clientSseTruth,"incomplete",true);
   try{
     const recovered=await recoverDisconnectedStream(requestId,update);
     if(recovered)return {...recovered,client_sse_truth:clientSseTruth};
