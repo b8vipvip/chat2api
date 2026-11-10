@@ -46,13 +46,23 @@ class MediaArchive:
 
     def _init_db(self):
         with self._db() as conn:
+            # Serialize schema inspection/ALTER across multi-process API
+            # workers; both may open the same older image archive at startup.
+            conn.execute("BEGIN IMMEDIATE")
             conn.execute("""CREATE TABLE IF NOT EXISTS media (
                 id TEXT PRIMARY KEY, token TEXT NOT NULL UNIQUE, owner TEXT NOT NULL,
                 request_id TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL,
                 width INTEGER NOT NULL, height INTEGER NOT NULL,
                 backend TEXT NOT NULL, object_key TEXT NOT NULL,
-                thumb_key TEXT NOT NULL, created_at TEXT NOT NULL
+                thumb_key TEXT NOT NULL, created_at TEXT NOT NULL,
+                sha256 TEXT NOT NULL DEFAULT ''
             )""")
+            columns = {record["name"] for record in conn.execute("PRAGMA table_info(media)")}
+            if "sha256" not in columns:
+                # Historical rows predate digest persistence. Never invent a
+                # checksum by hashing their possibly damaged current bytes.
+                # They stay accessible under length-only legacy validation.
+                conn.execute("ALTER TABLE media ADD COLUMN sha256 TEXT NOT NULL DEFAULT ''")
             conn.execute("CREATE INDEX IF NOT EXISTS media_created_idx ON media(created_at DESC)")
 
     def _config(self):
@@ -249,9 +259,14 @@ class MediaArchive:
             if stop is not None:
                 stop.checkpoint()
             with self._db() as conn:
-                conn.execute("INSERT INTO media VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (
+                conn.execute("""INSERT INTO media
+                    (id, token, owner, request_id, mime, size, width, height,
+                     backend, object_key, thumb_key, created_at, sha256)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
                     media_id, token, owner, request_id, mime, len(raw), width, height,
-                    cfg["backend"], full_key, thumb_key, datetime.now(timezone.utc).isoformat()))
+                    cfg["backend"], full_key, thumb_key,
+                    datetime.now(timezone.utc).isoformat(),
+                    hashlib.sha256(raw).hexdigest()))
         except Exception:
             # The original, thumbnail and index are one logical publication.
             # Never strand bytes if the second upload or SQLite insert fails.
@@ -369,6 +384,19 @@ class MediaArchive:
             raise KeyError("Unknown media")
         key = row["thumb_key"] if thumbnail else row["object_key"]
         payload = self._read(self._config(), row["backend"], key)
+        if not thumbnail:
+            # The original, NOT the lossy WebP preview, is the source of
+            # truth for the archived full-resolution image. A media record
+            # proves ownership of its URL, not that bytes fetched today still
+            # match those published originally. Generated-file downloads
+            # already apply this read-time verification.
+            if len(payload) != row["size"]:
+                raise ValueError("Media original byte-length integrity mismatch")
+            checksum = row["sha256"]
+            if checksum and hashlib.sha256(payload).hexdigest() != checksum:
+                raise ValueError("Media original SHA256 integrity mismatch")
+            # checksum='' marks a pre-migration legacy record. Do not assert
+            # SHA verification for it or silently trust a computed digest.
         return payload, "image/webp" if thumbnail else row["mime"]
 
     def delete(self, media_id: str) -> bool:
