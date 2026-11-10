@@ -594,13 +594,18 @@ finally{
 report.finished_at=new Date().toISOString();
 for(const turn of report.turns){
 try{await postRunEvidenceWithDeadline("/api/admin/playground/chat-records",{request_id:turn.request_id,model,prompt:turn.prompt,api_key_id:auth?.id||null,api_key_name:auth?.label||"未解析",status:report.status,duration_ms:turn.duration_ms,response_chars:turn.text.length,attachments_count:0,error:turn.error||report.error||(report.status==="passed"?null:(report.warnings.join("；")||"产物验证失败"))});}
-catch(e){console.warn("ABCD record persistence failed",e);}
+catch(e){
+  console.warn("ABCD record persistence failed",e);
+  report.warnings.push("ABCD 请求记录提交失败，请按请求ID查看服务端原始记录");
+  if(report.status==="passed")report.status="warning";
+}
 }
 if(report.turns.length){
 try{
   await postRunEvidenceWithDeadline("/api/admin/playground/abcd/report",{scene:sceneId,report});
 }catch(error){
   report.warnings.push("ABCD 诊断报告写入请求日志失败："+String(error?.message||error));
+  if(report.status==="passed")report.status="warning";
 }
 }
 note(sceneId+" · "+(report.status==="passed"?"协议和上游终态已证实":report.status==="warning"?"内容验收有警告／上游终态未证实":"未通过")+"\n"+(report.error||report.checks.map(c=>(c.passed?"✓ ":"✗ ")+c.label).join("\n"))+"\n"+(report.warnings||[]).join("\n")+"\n此题已从待用池移除，下次自动使用新主题。图像质量、PPT页数及业务准确性仍需人工复核。");
