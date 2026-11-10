@@ -170,6 +170,12 @@
           detail.native_pagehide_persisted === true,
         network_stream_native_visibility_hidden_during_stream:
           detail.native_visibility_hidden_during_stream === true,
+        network_stream_native_visibility_at_start:
+          ["visible","hidden","prerender","unknown"]
+            .includes(detail.native_visibility_at_stream_start)
+            ? detail.native_visibility_at_stream_start : "unknown",
+        network_stream_native_visibility_hidden_at_abort:
+          detail.native_visibility_hidden_at_abort === true,
         network_stream_native_abort_visibility:
           ["visible","hidden","prerender","unknown","unobserved"]
             .includes(detail.native_signal_abort_visibility)
