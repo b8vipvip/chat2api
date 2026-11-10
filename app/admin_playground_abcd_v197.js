@@ -98,12 +98,26 @@ async function recoverDisconnectedStream(requestId, update) {
 async function postRunEvidenceWithDeadline(endpoint,body,{keepalive=false}={}){
   const controller=typeof AbortController==="function"
     ?new AbortController():null;
-  const timer=controller?setTimeout(()=>controller.abort(),8000):null;
+  let timer=null;
+  // AbortSignal is forwarded to the real browser fetch, but a wrapped API
+  // Promise can ignore cancellation. Bound the OBSERVER awaiting it as well,
+  // so even an uncooperative diagnostic sink cannot trap report.finally.
+  const timeout=new Promise((_,reject)=>{
+    timer=setTimeout(()=>{
+      try{controller?.abort();}catch(_){}
+      const error=new Error("ABCD evidence sink exceeded 8s");
+      error.name="TimeoutError";
+      reject(error);
+    },8000);
+  });
   try{
-    return await api(endpoint,{
-      method:"POST",body,keepalive,
-      ...(controller?{signal:controller.signal}:{}),
-    });
+    return await Promise.race([
+      api(endpoint,{
+        method:"POST",body,keepalive,
+        ...(controller?{signal:controller.signal}:{}),
+      }),
+      timeout,
+    ]);
   }finally{
     if(timer!==null)clearTimeout(timer);
   }
