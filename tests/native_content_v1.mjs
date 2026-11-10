@@ -271,6 +271,46 @@ assert.equal(pendingActive.nativeChunkComplete,false);
 
 await capture.capture(active,false);
 assert.equal(sent.length,1);
+
+// v346: the exact production observer already accepts incremental revisions.
+// The request-v6 monitoring loop now invokes this path for a positively
+// scoped, still-rendering assistant response. It must never claim a final
+// capture/terminal while the reply is incomplete, and later finalized text
+// must supersede the earlier partial revision without mutating that history.
+const incrementalSends=[];
+const incrementalCtx={...ctx,chrome:{runtime:{sendMessage:async message=>{
+  incrementalSends.push(message);
+  return {ok:true,committed:true};
+}}}};
+delete incrementalCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+runInNewContext(code,incrementalCtx);
+const progressText={nodeType:3,nodeValue:"Introduction before the diagram"};
+const progressNode=new Element("DIV",[progressText]);
+const progressActive={
+  requestId:"req_nativeprogressv346demo",
+  submitStartedAt:Date.now(),lastCandidateNode:progressNode,
+};
+const incremental=incrementalCtx.__CHAT2API_NATIVE_CONTENT_V1__;
+await incremental.capture(progressActive,false);
+assert.equal(progressActive.nativeRevision,1);
+assert.notEqual(progressActive.nativeFinalCaptureCommitted,true,
+  "incremental native ACK is not a final reply ACK");
+assert.equal(incrementalSends.length,1);
+assert.equal(incrementalSends[0].event.snapshot.revision,1);
+progressText.nodeValue="Introduction before the diagram and the full table";
+progressActive.nativeLastAt=0;
+await incremental.capture(progressActive,false);
+assert.equal(progressActive.nativeRevision,2);
+assert.equal(incrementalSends.length,2);
+assert.equal(incrementalSends[1].event.snapshot.revision,2);
+assert.equal(progressActive.nativeFinalCaptureCommitted,true===false);
+progressActive.nativeLastAt=0;
+await incremental.capture(progressActive,true);
+assert.equal(progressActive.nativeRevision,3);
+assert.equal(progressActive.nativeFinalCaptureCommitted,true);
+assert.equal(incrementalSends.length,3);
+assert.equal(incrementalSends[2].event.snapshot.revision,3);
+assert.ok(incrementalSends.every(x=>x.event.type==="chat.native.snapshot"));
 console.log("Native rich observer: bounded capture, no DOM URLs, independent request status");
 
 // Actual KaTeX MathML must never become HTML div descendants of <math>.
