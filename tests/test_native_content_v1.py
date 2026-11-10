@@ -13,7 +13,7 @@ def test_native_sidecar_is_versioned_and_owner_isolated(tmp_path):
     store = NativeContentStore(tmp_path)
     assert store.publish("req_12345678", "key_a", snapshot())
     assert not store.publish("req_12345678", "key_b", snapshot(2))
-    assert not store.publish("req_12345678", "key_a", snapshot())
+    assert store.publish("req_12345678", "key_a", snapshot()), "byte-identical replay must ACK idempotently"
     assert store.publish("req_12345678", "key_a", snapshot(2))
     assert store.get("req_12345678", "key_b") is None
     assert store.persist("req_12345678", "key_a")
