@@ -49,14 +49,25 @@ def _is_authoritative_test(run: dict[str, Any]) -> bool:
     )
 
 
-async def reconcile_playground_runs(test_runs: Any, telemetry: Any, limit: int = 100) -> int:
+async def reconcile_playground_runs(
+    test_runs: Any, telemetry: Any, limit: int = 100,
+    *, only_run_id: str | None = None,
+) -> int:
     """Make test-history statuses reflect backend truth, including browser fetch failures.
 
     A running backend request remains running. Never derive completion from a
     media candidate, probe status, HTTP connection lifetime, or client report.
     """
     count = 0
-    for run in test_runs.recent(limit):
+    # On a Broker terminal, update only the one previously-registered
+    # chat run instead of waiting for an operator to open the Tests page.
+    # Full list reconciliation remains available for old/recovered runs.
+    if only_run_id is not None:
+        selected = test_runs.get(only_run_id)
+        runs = [selected] if isinstance(selected, dict) else []
+    else:
+        runs = test_runs.recent(limit)
+    for run in runs:
         if not _is_authoritative_test(run):
             continue
         ids = [str(x) for x in (run.get("request_ids") or []) if x]
@@ -156,6 +167,30 @@ async def reconcile_playground_runs(test_runs: Any, telemetry: Any, limit: int =
             })
             count += 1
     return count
+
+
+async def reconcile_playground_request_terminal(
+    test_runs: Any, telemetry: Any, request_id: str,
+) -> int:
+    """Refresh a known manual Playground run from the persisted Broker terminal.
+
+    The admin UI may be closed or the direct ABCD SSE may have disconnected
+    before finalization. A run is recorded *before* dispatch under a stable
+    UUID5 derived from this same request ID. Only update that existing run;
+    never invent a test or a completion from an HTTP close.
+    """
+    import uuid
+
+    if not isinstance(request_id, str) or not request_id.startswith("req_"):
+        return 0
+    run_id = "chatrun_" + uuid.uuid5(
+        uuid.NAMESPACE_URL, f"chat2api-playground-chat:{request_id}"
+    ).hex
+    if not isinstance(test_runs.get(run_id), dict):
+        return 0
+    return await reconcile_playground_runs(
+        test_runs, telemetry, only_run_id=run_id,
+    )
 
 
 def present_playground_run(run: dict[str, Any]) -> dict[str, Any]:
