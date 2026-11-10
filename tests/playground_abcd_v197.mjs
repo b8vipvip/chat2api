@@ -120,7 +120,7 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
     document,fetch,api,crypto:{randomUUID:()=>("00000000-0000-0000-0000-"+String(++uuid).padStart(12,"0")),subtle:webcrypto.subtle},
     TextDecoder,TextEncoder,performance:{now:()=>1234},location:{origin:"https://api.test"},
     console,setTimeout:(fn,ms)=>{
-      if(postDoneStall && ms===10000) queueMicrotask(fn);
+      if(postDoneStall && ms>0 && ms<=10000) queueMicrotask(fn);
       return 0;
     },clearTimeout:()=>{},Blob,URL,
     addEventListener(name,cb){pageEvents.set(name,cb)},
