@@ -59,7 +59,7 @@ let testKeyCatalog=[];
 let activeTestReport=null;
 function key(){return sessionStorage.getItem('chat2api_admin_key')||''}
 function headers(k=key()){return{Authorization:'Bearer '+k}}
-async function api(path,opt={}){const h={...headers(opt.key||key()),...(opt.headers||{})};if(opt.body!==undefined)h['Content-Type']='application/json';const r=await fetch(path,{method:opt.method||'GET',headers:h,body:opt.body===undefined?undefined:JSON.stringify(opt.body),cache:'no-store',keepalive:opt.keepalive===true});const t=await r.text();let d={};try{d=t?JSON.parse(t):{}}catch(_){d={detail:t}}if(!r.ok)throw new Error(d.detail||`${r.status} ${t}`);return d}
+async function api(path,opt={}){const h={...headers(opt.key||key()),...(opt.headers||{})};if(opt.body!==undefined)h['Content-Type']='application/json';const r=await fetch(path,{method:opt.method||'GET',headers:h,body:opt.body===undefined?undefined:JSON.stringify(opt.body),cache:'no-store',keepalive:opt.keepalive===true,signal:opt.signal});const t=await r.text();let d={};try{d=t?JSON.parse(t):{}}catch(_){d={detail:t}}if(!r.ok)throw new Error(d.detail||`${r.status} ${t}`);return d}
 function pill(v){const c=v==='completed'||v==='passed'||v==='online'?'ok':v==='warning'||v==='skipped'||v==='busy'?'warn':'bad';return`<span class="pill ${c}">${esc(v)}</span>`}
 function status(t,c='muted'){$('status').className=c;$('status').textContent=t}
 $('adminKey').value=key();

@@ -45,8 +45,21 @@ async function recoverDisconnectedStream(requestId, update) {
   let observed=false, last=null, missed=0;
   for(let i=0;i<230;i++){
     try{
-      last=await api("/api/admin/playground/requests/"+
-        encodeURIComponent(requestId)+"/outcome?full_text=1");
+      // The same-request Broker outcome GET is a secondary, recoverable
+      // observer. It is not allowed to hang the entire recovery loop when
+      // its HTTP connection stalls. An 8-second per-attempt AbortSignal
+      // cancels only this ADMIN GET, never the original model request.
+      const outcomeController=typeof AbortController==="function"
+        ?new AbortController():null;
+      const outcomeTimeout=outcomeController
+        ?setTimeout(()=>outcomeController.abort(),8000):null;
+      try{
+        last=await api("/api/admin/playground/requests/"+
+          encodeURIComponent(requestId)+"/outcome?full_text=1",
+          outcomeController?{signal:outcomeController.signal}:{});
+      }finally{
+        if(outcomeTimeout!==null)clearTimeout(outcomeTimeout);
+      }
       if(last?.status){
         observed=true;missed=0;
         const status=String(last.status);
