@@ -2667,6 +2667,28 @@
     };
   }
 
+  // The native observer supports incremental revisions, but request-v6
+  // previously invoked it ONLY at chat.completed. A 20MB report can render
+  // thousands of verified DOM nodes before a later upstream abort or Worker
+  // disconnect, leaving the server with ZERO native layout evidence.
+  //
+  // A progress snapshot is sidecar-only, NEVER a Broker terminal. Require
+  // a fresh candidate INSIDE the same request's verified reply scope and
+  // throttle to <=1 attempt/15s independently of SSE token/frame rate.
+  function shouldCaptureNativeProgress(active, current, now) {
+    const scope=active?.nativeVerifiedReplyScope;
+    const candidate=current?.latest;
+    return Boolean(native?.capture
+      && active?.requestId && active?.submitStartedAt
+      && !active.cancelled && !active.completed
+      && active.networkStreamSeen
+      && current?.isNew && candidate?.isConnected
+      && scope?.isConnected
+      && (scope===candidate || scope.contains?.(candidate))
+      && !active.nativeTransferInFlight
+      && now-Number(active.nativeProgressCaptureAt||0)>=15000);
+  }
+
   async function monitor(active) {
     const timeoutMs = Math.max(5000, Number(active.options.timeout_seconds || 300) * 1000);
     const startedAt = Date.now();
@@ -2725,6 +2747,17 @@
               active.nativeMessageIdentityCandidateCount||0)),
           });
         } catch (_) { /* evidence must never abort the real Worker request */ }
+      }
+      // Best-effort request-owned native DOM *incremental* publication.
+      // Never await a potentially large sidecar transfer in the monitor;
+      // request-v6's final terminal still waits for its OWN final ACK.
+      const nativeProgressNow=Date.now();
+      if(shouldCaptureNativeProgress(active,current,nativeProgressNow)){
+        active.nativeProgressCaptureAt=nativeProgressNow;
+        try{
+          const pending=native.capture(active,false);
+          pending?.catch?.(()=>{});
+        }catch(_){/* optional observer must not abort a Worker request */}
       }
       const generating = isGenerating();
       const networkText = String(active.networkObservedText || "");
