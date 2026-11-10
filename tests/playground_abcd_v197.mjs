@@ -19,7 +19,7 @@ const frames=(text,includeDone=true)=>
 "data: "+JSON.stringify({choices:[{index:0,delta:{},finish_reason:"stop"}]})+"\n\n"+
 (includeDone?"data: [DONE]\n\n":"");
 
-function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,postDoneFailure=false,postDoneStall=false,recoveredText=null,fetchFailure=false,httpFailureStatus=0,simulatePagehide=false}={}) {
+function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,postDoneFailure=false,postDoneStall=false,recoveredText=null,fetchFailure=false,httpFailureStatus=0,simulatePagehide=false,hangIncompleteEvidence=false}={}) {
   const elements=new Map(), requests=[], records=[],downloads=[],clientEvidence=[];
   let submittedReport=null;
   let cancels=0, releases=0, reads=0;
@@ -110,7 +110,10 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
     };
     if(endpoint.endsWith("/abcd/transport-truth")){clientEvidence.push({
       ...options.body,keepalive:options.keepalive===true
-    });return {};}
+    });
+      if(hangIncompleteEvidence && options.body.phase==="incomplete")
+        return new Promise(()=>{});
+      return {};}
     if(endpoint.endsWith("/abcd/report")){submittedReport=options.body.report;return {};}
     if(endpoint.endsWith("/chat-runs"))records.push({kind:"start",body:options.body});
     if(endpoint.endsWith("/chat-records"))records.push({kind:"terminal",body:options.body});
@@ -224,6 +227,25 @@ test("A: failed SSE persists client reader/cancel evidence BEFORE recovery resul
   assert.equal(early.client_sse_truth.reader_cancel_requested,true);
   assert.equal(early.client_sse_truth.reader_cancel_reason,"MissingTerminal");
 });
+test("v339: stalled incomplete-evidence upload cannot block same-ID Broker recovery",async()=>{
+  const scenarioRun=scenario("A",[FULL],{
+    readerFailure:true,recoveredText:FULL,hangIncompleteEvidence:true,
+  }).run();
+  const r=await Promise.race([
+    scenarioRun,
+    new Promise((_,reject)=>setTimeout(
+      ()=>reject(Error("recovery blocked by stalled diagnostics upload")),500)),
+  ]);
+  assert.equal(r.requests.length,1,"never dispatch a second model request");
+  assert.equal(r.report.turns[0].recovered_after_disconnect,true);
+  assert.equal(r.report.turns[0].client_sse_truth.reader_error_name,"AbortError");
+  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"warning");
+  const checkpoint=r.clientEvidence.find(x=>x.phase==="incomplete");
+  assert.ok(checkpoint,"evidence upload is initiated before recovery");
+  assert.equal(checkpoint.keepalive,true,
+    "incomplete diagnostic evidence survives hidden/unmounted admin view");
+});
+
 test("A: HTTP 500 response is reported as response-layer error with exact status",async()=>{
   const r=await scenario("A",[FULL],{httpFailureStatus:500}).run();
   const terminal=r.records.find(x=>x.kind==="terminal");
