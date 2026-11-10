@@ -197,6 +197,27 @@ class TelemetryStore:
                 else:
                     record.pop("request_server_commit", None)
             record = {**(existing or {}), **record}
+            # A Worker can stream an unverified page/Markdown preview into
+            # request history before it has a trustworthy chat.completed.
+            # A failed/stalled/cancelled terminal MUST NOT expose this as the
+            # final "generated reply". Real req_b734ffd3 had completion_chars=0
+            # and status=stalled but retained a 7.4k-character response_text
+            # (including partial UI fragments) via the prior shallow merge.
+            #
+            # Retain a bounded forensic copy, clearly distinguished from
+            # final delivery, for admin diagnostics. Never re-label a partial
+            # candidate as a completed OpenAI response, and never affect the
+            # authoritative Broker terminal status.
+            if record.get("status") in {"error", "cancelled", "stalled"}:
+                candidate = record.get("response_text")
+                if isinstance(candidate, str) and candidate:
+                    if not record.get("response_text_provisional"):
+                        record["response_text_provisional"] = candidate[:50000]
+                        record["response_text_provisional_chars"] = len(candidate)
+                    record["response_text_provisional_unverified"] = True
+                record["response_text"] = ""
+                record["response_text_available"] = False
+                record["completion_chars"] = 0
             record.setdefault("recorded_at", utc_now())
             record["updated_at"] = utc_now()
             if str(record.get("status") or "") in {"completed", "error", "cancelled", "stalled"}:
@@ -325,6 +346,11 @@ class TelemetryStore:
             return True
 
         filtered = [row for row in rows if matches(row)]
+        # The list endpoint is a searchable summary, not a forensic-response
+        # download. Keep raw provisional text only in authenticated per-ID
+        # details and request-log ZIPs, never in list rows.
+        for row in filtered:
+            row.pop("response_text_provisional", None)
         if playground_request_ids is not None:
             for row in filtered:
                 row["request_source"] = (
