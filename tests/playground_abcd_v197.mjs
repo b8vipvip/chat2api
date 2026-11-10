@@ -19,7 +19,7 @@ const frames=(text,includeDone=true)=>
 "data: "+JSON.stringify({choices:[{index:0,delta:{},finish_reason:"stop"}]})+"\n\n"+
 (includeDone?"data: [DONE]\n\n":"");
 
-function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,postDoneFailure=false,postDoneStall=false,preDoneStall=false,cancelNeverSettles=false,recoveredText=null,fetchFailure=false,httpFailureStatus=0,simulatePagehide=false,hangIncompleteEvidence=false,hangFirstRecoveryGet=false}={}) {
+function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,postDoneFailure=false,postDoneStall=false,preDoneStall=false,cancelNeverSettles=false,recoveredText=null,fetchFailure=false,httpFailureStatus=0,simulatePagehide=false,hangIncompleteEvidence=false,hangFirstRecoveryGet=false,hangRunFinalTruth=false,hangRunReport=false,hangRunRecord=false}={}) {
   const elements=new Map(), requests=[], records=[],downloads=[],clientEvidence=[];
   let submittedReport=null;
   let cancels=0, releases=0, reads=0;
@@ -91,6 +91,13 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
     return {ok:true,arrayBuffer:async()=>bytes.buffer};
   };
   let claimSerial=0,recoveryLookups=0;
+  const neverUntilAbort=options=>new Promise((_,reject)=>{
+    options?.signal?.addEventListener?.("abort",()=>{
+      const err=new Error("synthetic bounded admin sink timeout");
+      err.name="AbortError";
+      reject(err);
+    },{once:true});
+  });
   const api=async (endpoint,options)=>{
     if(endpoint.endsWith("/abcd/preview"))return {scenes:Object.fromEntries("ABCD".split("").map(k=>[k,{scene:k,title:"新主题"+k+claimSerial,serial:claimSerial}]))};
     if(endpoint.endsWith("/abcd/claim")) {
@@ -122,14 +129,24 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
       diagnostics:{network_stream_terminal_proof:true,network_stream_phase:"complete"}
     };
     if(endpoint.endsWith("/abcd/transport-truth")){clientEvidence.push({
-      ...options.body,keepalive:options.keepalive===true
+      ...options.body,keepalive:options.keepalive===true,
+      scopedAbortSignal: Boolean(options.signal),
     });
+      if(hangRunFinalTruth && options.signal)
+        return neverUntilAbort(options);
       if(hangIncompleteEvidence && options.body.phase==="incomplete")
         return new Promise(()=>{});
       return {};}
-    if(endpoint.endsWith("/abcd/report")){submittedReport=options.body.report;return {};}
+    if(endpoint.endsWith("/abcd/report")){
+      submittedReport=options.body.report;
+      if(hangRunReport)return neverUntilAbort(options);
+      return {};
+    }
     if(endpoint.endsWith("/chat-runs"))records.push({kind:"start",body:options.body});
-    if(endpoint.endsWith("/chat-records"))records.push({kind:"terminal",body:options.body});
+    if(endpoint.endsWith("/chat-records")){
+      records.push({kind:"terminal",body:options.body});
+      if(hangRunRecord)return neverUntilAbort(options);
+    }
     return {};
   };
   const context={
@@ -138,7 +155,9 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
     console,setTimeout:(fn,ms)=>{
       if((postDoneStall && ms>0 && ms<=10000) ||
           (preDoneStall && ms===90000) ||
-          (hangFirstRecoveryGet && [4000,8000].includes(ms))) queueMicrotask(fn);
+          (hangFirstRecoveryGet && [4000,8000].includes(ms)) ||
+          ((hangRunFinalTruth||hangRunReport||hangRunRecord) && ms===8000))
+        queueMicrotask(fn);
       return 0;
     },clearTimeout:()=>{},Blob,URL,
     addEventListener(name,cb){pageEvents.set(name,cb)},
@@ -167,6 +186,72 @@ test("v312: pagehide persists authenticated keepalive facts without cancelling h
   assert.equal(pagehide.client_sse_truth.response_headers_received,true);
   assert.equal(pagehide.client_sse_truth.client_pagehide_persisted,false);
   assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"passed");
+});
+
+test("v345: stalled final successful transport-truth POST cannot block ABCD report",async()=>{
+  const r=await Promise.race([
+    scenario("A",[FULL],{hangRunFinalTruth:true}).run(),
+    new Promise((_,reject)=>setTimeout(()=>reject(Error(
+      "ABCD final report blocked by optional transport-truth sink")),650)),
+  ]);
+  assert.equal(r.requests.length,1,"never re-dispatch generation");
+  assert.equal(r.report.status,"passed");
+  assert.equal(r.report.turns.length,1);
+  assert.equal(r.records.filter(x=>x.kind==="terminal").length,1);
+  const truth=r.clientEvidence.find(x=>x.scopedAbortSignal===true);
+  assert.ok(truth&&truth.keepalive&&truth.phase==="complete");
+  assert.equal(truth.failed,false,"genuinely received [DONE] + EOF");
+});
+
+test("v345: after an aborted browser Fetch, stalled fatal telemetry still saves final report",async()=>{
+  const task=scenario("B",[FULL],{fetchFailure:true,hangRunFinalTruth:true}).run();
+  const r=await Promise.race([
+    task,new Promise((_,reject)=>setTimeout(()=>reject(Error(
+      "ABCD failed report blocked after fetch AbortError")),650)),
+  ]);
+  assert.equal(r.report.status,"failed");
+  assert.equal(r.report.turns.length,1);
+  assert.equal(r.report.turns[0].client_sse_truth.fetch_error_name,"AbortError");
+  assert.ok(r.clientEvidence.some(x=>x.scopedAbortSignal&&x.failed===true
+    &&x.phase==="incomplete"));
+  assert.equal(r.records.filter(x=>x.kind==="terminal").length,1);
+});
+
+test("v345: same-ID recovered Broker text never upgrades missing browser SSE to complete",async()=>{
+  const r=await scenario("A",[FULL],{
+    readerFailure:true,recoveredText:FULL,
+  }).run();
+  assert.equal(r.requests.length,1);
+  assert.equal(r.report.turns[0].recovered_after_disconnect,true);
+  assert.equal(r.report.status,"warning");
+  const lastTruth=r.clientEvidence.findLast(x=>x.scopedAbortSignal===true);
+  assert.equal(lastTruth.phase,"incomplete");
+  assert.equal(lastTruth.failed,true,"the browser missed true [DONE] and HTTP EOF");
+  assert.equal(lastTruth.client_sse_truth.native_reader_eof_seen,false);
+});
+
+test("v345: a hung final diagnostic report must reset test controls and downgrade pass",async()=>{
+  const h=scenario("A",[FULL],{hangRunReport:true});
+  const r=await Promise.race([
+    h.run(),new Promise((_,reject)=>setTimeout(()=>reject(Error(
+      "report write hung and never released ABCD run button")),650)),
+  ]);
+  assert.equal(r.requests.length,1);
+  assert.equal(r.report.status,"warning");
+  assert.ok(r.report.warnings.some(x=>x.includes("诊断报告写入")));
+  assert.equal(h.element("pgABCDRun").disabled,false);
+});
+
+test("v345: a hung terminal record must not suppress the final ABCD report",async()=>{
+  const r=await Promise.race([
+    scenario("A",[FULL],{hangRunRecord:true}).run(),
+    new Promise((_,reject)=>setTimeout(()=>reject(Error(
+      "terminal record write hung before ABCD report")),650)),
+  ]);
+  assert.equal(r.requests.length,1);
+  assert.equal(r.report.status,"warning");
+  assert.ok(r.report.warnings.some(x=>x.includes("请求记录提交失败")));
+  assert.ok(r.report.turns.length===1);
 });
 
 test("A: real SSE terminal and full-length report is accepted",async()=>{
