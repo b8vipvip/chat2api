@@ -127,7 +127,7 @@ if(!r.ok){
 }
 if(!r.body)throw Error("缺少SSE响应体");
 const responseHeadersAt=performance.now();
-let buffer="",answer="",stopped=false,done=false,frames=0,lastStatus="",streamError=null;
+let buffer="",answer="",stopped=false,done=false,postDoneDeadline=0,frames=0,lastStatus="",streamError=null;
 let nativeEof=false,firstChunkAt=null,lastChunkAt=null,readerCancelled=false,readerReleased=false;
 let readerErrorName=null,lastCheckpointAt=null,bodyChunks=0;
 const relative=at=>at===null?null:Math.max(0,Math.round(at-clientStarted));
@@ -187,6 +187,15 @@ try{
 while(!nativeEof){
 let chunk;
 if(done){
+  // The deadline is measured once from protocol [DONE], not reset for
+  // every subsequent HTTP chunk. A stream that keeps drip-feeding padding
+  // cannot pin the admin browser reader forever.
+  const remainingMs=Math.max(0,postDoneDeadline-Date.now());
+  if(remainingMs<=0){
+    const error=new Error("SSE HTTP EOF missing after [DONE]");
+    error.name="TimeoutError";
+    throw error;
+  }
   let watchdog=null;
   try{
     chunk=await Promise.race([
@@ -196,7 +205,7 @@ if(done){
           const error=new Error("SSE HTTP EOF missing after [DONE]");
           error.name="TimeoutError";
           reject(error);
-        },10000);
+        },remainingMs);
       })
     ]);
   }finally{if(watchdog!==null)clearTimeout(watchdog);}
@@ -221,7 +230,7 @@ while((pos=buffer.indexOf("\n\n"))>=0){
 const raw=buffer.slice(0,pos);buffer=buffer.slice(pos+2);
 const data=raw.split("\n").filter(x=>x.startsWith("data:")).map(x=>x.slice(5).trimStart()).join("\n");
 if(!data)continue;
-if(data==="[DONE]"){done=true;break;}
+if(data==="[DONE]"){done=true;postDoneDeadline=Date.now()+10000;break;}
 const event=JSON.parse(data);
 if(event.error)throw Error(String(event.error.message||"上游返回错误"));
 frames++;
