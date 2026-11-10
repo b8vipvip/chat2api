@@ -447,12 +447,33 @@ class NativeContentStore:
         if not owner:
             return False
         snapshot = validate_native_snapshot(payload)
+        # A browser Worker may resend an already ACKed immutable revision
+        # after its ACK was lost. That replay must be an idempotent success,
+        # not "native-transport-incomplete". Conversely, in multi-process
+        # deployments a fresh process must reject a genuinely stale Worker
+        # revision relative to the SAME owner's durable manifest.
+        #
+        # get() from v335 compares the local and durable revisions, and
+        # fails closed on corrupt/cross-owner/conflicting same-revision data.
+        existing = self.get(request_id, owner)
+        if existing is None and (self.root / (request_id + ".json")).exists():
+            return False
+        if existing is not None and existing["revision"] > snapshot["revision"]:
+            return False
         with self._lock:
             previous = self._live.get(request_id)
             if previous and previous[0] != owner:
                 return False
-            if previous and previous[1]["revision"] >= snapshot["revision"]:
+            if previous and previous[1]["revision"] > snapshot["revision"]:
                 return False
+            if previous and previous[1]["revision"] == snapshot["revision"]:
+                return previous[1] == snapshot and (
+                    existing is None or existing == snapshot
+                )
+            if existing is not None and existing["revision"] == snapshot["revision"]:
+                # Its exact revision and bytes were already published in
+                # this process or committed by a sibling; no second write.
+                return existing == snapshot
             self._live[request_id] = (owner, snapshot, time.time())
             self._live.move_to_end(request_id)
             while len(self._live) > MAX_ACTIVE:
