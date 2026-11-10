@@ -79,8 +79,13 @@
     }
     const payload = await response.json();
     if (!payload?.run?.run_id) throw new Error("测试记录创建失败：服务端未返回 run_id");
+    // The test-run row MUST be durable before dispatch, but the test-history
+    // TABLE is a presentation-only observer. Previously await loadTests()
+    // could block the actual /v1/chat/completions fetch indefinitely if the
+    // admin test-list API stalled (or its UI view was detached). Never couple
+    // a display refresh to the production model request's admission.
     if (typeof globalThis.loadTests === "function") {
-      try { await globalThis.loadTests(); } catch (_) {}
+      void Promise.resolve().then(() => globalThis.loadTests()).catch(() => {});
     }
     return payload.run;
   }
