@@ -52,7 +52,7 @@ const largeRaw=new Uint8Array(5*1024*1024);
 largeRaw[0]=137;largeRaw[largeRaw.length-1]=42;
 const tooBig=[new Uint8Array(19*1024*1024),new Uint8Array(2*1024*1024)];
 const boundedListeners=[];
-let streamWasRead=0,overflowReads=0;
+let streamWasRead=0,overflowReads=0,identityCancels=0,identityReleases=0;
 runInNewContext(source,{
   URL,AbortController,Uint8Array,setTimeout,clearTimeout,btoa,crypto:webcrypto,
   chrome:{runtime:{onMessage:{addListener(fn){boundedListeners.push(fn)}}}},
@@ -72,7 +72,14 @@ runInNewContext(source,{
           if(oversized)overflowReads++;
           return {done:false,value:chunks[index++]};
         },
-        cancel:async()=>{},
+        // A tee/HTTP body cancel can remain pending forever after a failed
+        // read. On success the reader is already EOF and must not be
+        // cancelled at all. Neither path can block the SHA response.
+        cancel:()=>{
+          identityCancels++;
+          return new Promise(()=>{});
+        },
+        releaseLock:()=>{identityReleases++;},
       })},
       arrayBuffer:async()=>{throw Error("stream must not buffer unbounded response")},
     };
@@ -92,9 +99,19 @@ assert.equal(largeIdentity.sha256,Buffer.from(
 assert.ok(!("data_url" in largeIdentity) && !("url" in largeIdentity));
 const missingLength=await sendBounded("https://media.oaiusercontent.com/unknown-length.png");
 assert.equal(missingLength.ok,true);
-const overflow=await sendBounded("https://media.oaiusercontent.com/overflow.png");
+const overflow=await Promise.race([
+  sendBounded("https://media.oaiusercontent.com/overflow.png"),
+  new Promise((_,reject)=>setTimeout(
+    ()=>reject(Error("image identity ACK incorrectly awaited reader.cancel")),600)),
+]);
 assert.equal(overflow.ok,false);
 assert.equal(overflowReads,2);
 assert.ok(streamWasRead>=4);
+assert.equal(identityCancels,1,
+  "only overflowing/failed image readers should initiate cancellation");
+assert.equal(identityReleases,3,
+  "release all three image readers, including clean EOF streams");
+assert.equal(missingLength.ok,true);
+assert.equal(largeIdentity.ok,true);
 
 console.log("Original raster SHA only; no bytes or URL leave trusted background bridge");
