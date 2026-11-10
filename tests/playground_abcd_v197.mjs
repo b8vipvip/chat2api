@@ -19,7 +19,7 @@ const frames=(text,includeDone=true)=>
 "data: "+JSON.stringify({choices:[{index:0,delta:{},finish_reason:"stop"}]})+"\n\n"+
 (includeDone?"data: [DONE]\n\n":"");
 
-function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,postDoneFailure=false,postDoneStall=false,recoveredText=null,fetchFailure=false,httpFailureStatus=0,simulatePagehide=false,hangIncompleteEvidence=false}={}) {
+function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailure=false,postDoneFailure=false,postDoneStall=false,preDoneStall=false,cancelNeverSettles=false,recoveredText=null,fetchFailure=false,httpFailureStatus=0,simulatePagehide=false,hangIncompleteEvidence=false}={}) {
   const elements=new Map(), requests=[], records=[],downloads=[],clientEvidence=[];
   let submittedReport=null;
   let cancels=0, releases=0, reads=0;
@@ -60,13 +60,15 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
             const error=Error("synthetic read error");error.name="AbortError";throw error;
           }
           if(postDoneStall && read) return new Promise(()=>{});
+          if(preDoneStall && !read) return new Promise(()=>{});
           if(simulatePagehide&&!read) {
             document.visibilityState="hidden";
             docEvents.get("visibilitychange")?.();
             pageEvents.get("pagehide")?.({persisted:false});
           }
           return read?{done:true}:(read=true,{done:false,value:new TextEncoder().encode(data)});
-        },cancel:async()=>{cancels++;},releaseLock(){releases++;}};
+        },cancel:()=>{cancels++;return cancelNeverSettles
+          ?new Promise(()=>{}) : Promise.resolve();},releaseLock(){releases++;}};
       }}};
     }
     const link=String(url).replace(/\/status$/,"");
@@ -123,7 +125,8 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
     document,fetch,api,crypto:{randomUUID:()=>("00000000-0000-0000-0000-"+String(++uuid).padStart(12,"0")),subtle:webcrypto.subtle},
     TextDecoder,TextEncoder,performance:{now:()=>1234},location:{origin:"https://api.test"},
     console,setTimeout:(fn,ms)=>{
-      if(postDoneStall && ms>0 && ms<=10000) queueMicrotask(fn);
+      if((postDoneStall && ms>0 && ms<=10000) ||
+          (preDoneStall && ms===90000)) queueMicrotask(fn);
       return 0;
     },clearTimeout:()=>{},Blob,URL,
     addEventListener(name,cb){pageEvents.set(name,cb)},
@@ -195,6 +198,28 @@ test("v331: missing post-DONE HTTP EOF times out rather than hanging forever",as
   assert.equal(proof.native_reader_eof_seen,false);
   assert.equal(proof.reader_cancel_reason,"MissingEOF");
   assert.equal(proof.reader_error_name,"TimeoutError");
+  assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"warning");
+});
+
+test("v340: silent SSE reader idle must recover exact request without blocking on cancel",async()=>{
+  const task=scenario("A",[FULL],{
+    preDoneStall:true,cancelNeverSettles:true,recoveredText:FULL,
+  }).run();
+  const r=await Promise.race([
+    task,
+    new Promise((_,reject)=>setTimeout(
+      ()=>reject(Error("idle-read recovery incorrectly awaits reader.cancel")),500)),
+  ]);
+  assert.equal(r.requests.length,1,"never issue a second generation request");
+  assert.equal(r.reads,1);
+  assert.equal(r.cancels,1,"cancel only the browser's broken SSE reader");
+  const truth=r.report.turns[0].client_sse_truth;
+  assert.equal(truth.reader_error_name,"TimeoutError");
+  assert.equal(truth.native_reader_eof_seen,false);
+  assert.equal(truth.protocol_done_seen,false);
+  assert.equal(truth.reader_cancel_requested,true);
+  assert.equal(truth.reader_cancel_reason,"StreamError");
+  assert.equal(r.report.turns[0].recovered_after_disconnect,true);
   assert.equal(r.records.find(x=>x.kind==="terminal").body.status,"warning");
 });
 
