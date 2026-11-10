@@ -45,14 +45,16 @@ def test_atomic_replace_from_second_process_invalidates_cached_revision(tmp_path
     install(source,RID,1,"first")
     reader=NativeContentStore(tmp_path)
     assert reader.get(RID,"owner")==snap(1,"first")
+    sibling=NativeContentStore(tmp_path)
+    install(sibling,RID,2,"second")
+    # Count only this reader's cache invalidation reloads, not the
+    # independent writer's legitimate manifest reads during publication.
     real=Path.read_text
     reads=[]
     def observed(path,*args,**kwargs):
         if path.name==RID+".json":reads.append(1)
         return real(path,*args,**kwargs)
     monkeypatch.setattr(Path,"read_text",observed)
-    sibling=NativeContentStore(tmp_path)
-    install(sibling,RID,2,"second")
     for _ in range(16):
         assert reader.get(RID,"owner")==snap(2,"second")
     assert len(reads)==1,"atomic sibling replace must trigger exactly one reread"
