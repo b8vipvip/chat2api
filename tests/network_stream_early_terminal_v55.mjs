@@ -62,7 +62,13 @@ for (const options of [
 const broken = await testCase({ readerFailure: true });
 assert.equal(broken.filter(frame => frame.phase === "assistant-complete").length, 0,
   "truncated streams without successful terminal evidence must not be treated as complete");
-assert.ok(broken.some(frame => frame.phase === "error" && /simulated-clone-reader-failure/.test(frame.error)));
+const errorFrame = broken.find(frame => frame.phase === "error");
+assert.ok(errorFrame, "a failed clone reader must emit bounded error evidence");
+assert.equal(errorFrame.error_name, "Error");
+assert.equal(errorFrame.failure_stage, "read");
+assert.equal(errorFrame.error, "network-observer-read-Error");
+assert.ok(!JSON.stringify(broken).includes("simulated-clone-reader-failure"),
+  "native page exception strings may contain private response or user data");
 const noMarkerEof = await testCase();
 assert.equal(noMarkerEof.filter(frame => frame.phase === "assistant-complete").length, 0,
   "SSE transport EOF without a model terminal signal is not successful");
