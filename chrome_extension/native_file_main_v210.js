@@ -253,16 +253,33 @@
           const reader = response.clone().body?.getReader();
           if (!reader) return;
           const parts = [];
-          let size = 0;
+          let size = 0, nativeEof = false;
           try {
             for (;;) {
               const {done, value} = await reader.read();
-              if (done) break;
+              if (done) { nativeEof = true; break; }
               size += value.byteLength;
-              if (size > MAX_BYTES) return;
+              if (size > MAX_BYTES) {
+                stage(session, "fetch-size-exceeded");
+                return;
+              }
               parts.push(value);
             }
-          } finally { try { await reader.cancel(); } catch (_) {} }
+          } finally {
+            // A Fetch Response.clone() reader is a tee of the page's
+            // REAL download. If cancellation waits for the other native
+            // branch to finish, waiting for cancellation can pin this observer
+            // forever and prevent valid files from being emitted/retried.
+            // Never cancel a reader after clean EOF. For overflow/read
+            // failure cancel ONLY our clone, without awaiting the promise.
+            if (!nativeEof) {
+              try {
+                const cancellation=reader.cancel?.();
+                cancellation?.catch?.(()=>{});
+              } catch (_) {}
+            }
+            try { reader.releaseLock?.(); } catch (_) {}
+          }
           const bytes = new Uint8Array(size);
           let offset = 0;
           for (const part of parts) { bytes.set(part, offset); offset += part.byteLength; }
