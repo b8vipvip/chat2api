@@ -558,11 +558,12 @@
     let chunks = 0;
     let bytes = 0;
     let stage = "read";
+    let nativeEof = false;
     try {
       while (true) {
         stage = "read";
         const result = await reader.read();
-        if (result.done) break;
+        if (result.done) { nativeEof = true; break; }
         const value = result.value;
         const byteLength = Number(value?.byteLength || value?.length || 0);
         chunks += 1;
@@ -594,6 +595,18 @@
         completion_hint: evidence.completion_hint,
       });
     } finally {
+      if (!nativeEof) {
+        // A parser/observer failure is not necessarily the page's original
+        // Fetch EOF. Abandoning a ReadableStream.tee() clone without cancel
+        // can buffer an unbounded amount while the native ChatGPT branch
+        // keeps streaming. Cancel ONLY the observer's branch.
+        // Tee cancellation can remain pending until the native branch
+        // ends; never await it or abort the original request.
+        try {
+          const cleanup = reader.cancel?.();
+          cleanup?.catch?.(() => {});
+        } catch (_) {}
+      }
       try { reader.releaseLock(); } catch (_) {}
       removeLifecycle();
     }
