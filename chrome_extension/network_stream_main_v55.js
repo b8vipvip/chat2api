@@ -449,11 +449,18 @@
     // Do not expose prompt text, URL, cookies, headers or stack traces.
     // An aborted clone is evidence-reader failure, NOT a model terminal.
     function fail(stage, error, extra = {}) {
+      const exceptionName=String(error?.name || "Error");
+      const safeName=["AbortError","TimeoutError","TypeError","NetworkError",
+        "SyntaxError","RangeError","Error"].includes(exceptionName)
+        ?exceptionName:"OtherError";
+      // Main-world browser exception messages may include page/user content.
+      // The byte/phase evidence is enough to identify the broken clone;
+      // keep only a bounded classification, never its raw error.message.
       post({
         channel: CHANNEL, phase: "error", stream_id: streamId,
         failure_stage: stage,
-        error_name: String(error?.name || "Error").slice(0, 50),
-        error: String(error?.message || error || "stream-reader-failed").slice(0, 240),
+        error_name: safeName,
+        error: "network-observer-" + stage + "-" + safeName,
         signal_aborted: signal?.aborted === true,
         response_body_used: response?.bodyUsed === true,
         response_body_locked: response?.body?.locked === true,
@@ -558,11 +565,12 @@
     let chunks = 0;
     let bytes = 0;
     let stage = "read";
+    let nativeEof = false;
     try {
       while (true) {
         stage = "read";
         const result = await reader.read();
-        if (result.done) break;
+        if (result.done) { nativeEof = true; break; }
         const value = result.value;
         const byteLength = Number(value?.byteLength || value?.length || 0);
         chunks += 1;
@@ -594,6 +602,18 @@
         completion_hint: evidence.completion_hint,
       });
     } finally {
+      if (!nativeEof) {
+        // A parser/observer failure is not necessarily the page's original
+        // Fetch EOF. Abandoning a ReadableStream.tee() clone without cancel
+        // can buffer an unbounded amount while the native ChatGPT branch
+        // keeps streaming. Cancel ONLY the observer's branch.
+        // Tee cancellation can remain pending until the native branch
+        // ends; never await it or abort the original request.
+        try {
+          const cleanup = reader.cancel?.();
+          cleanup?.catch?.(() => {});
+        } catch (_) {}
+      }
       try { reader.releaseLock(); } catch (_) {}
       removeLifecycle();
     }
