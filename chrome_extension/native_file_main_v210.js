@@ -268,7 +268,7 @@
           } finally {
             // A Fetch Response.clone() reader is a tee of the page's
             // REAL download. If cancellation waits for the other native
-            // branch to finish, await reader.cancel() can pin this observer
+            // branch to finish, waiting for cancellation can pin this observer
             // forever and prevent valid files from being emitted/retried.
             // Never cancel a reader after clean EOF. For overflow/read
             // failure cancel ONLY our clone, without awaiting the promise.
