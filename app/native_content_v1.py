@@ -15,8 +15,47 @@ import re
 import threading
 import time
 import tempfile
+from contextlib import contextmanager
 from collections import OrderedDict
 from pathlib import Path
+
+@contextmanager
+def _native_crossprocess_commit_lock(root: Path):
+    """Serialize native snapshot commits across server processes, not just threads.
+
+    Linux servers use advisory flock; Windows hosts use the standard library
+    byte-range file lock. A single private lockfile avoids unbounded per-request
+    lockfile accumulation. This is storage coordination only, never a request
+    terminal, Worker lease, or separate native-finality decision.
+    """
+    lock_path = root / ".persist.lock"
+    fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+    acquired = False
+    try:
+        if os.name == "nt":
+            import msvcrt
+            if os.fstat(fd).st_size == 0:
+                os.write(fd, b"0")
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(fd, fcntl.LOCK_EX)
+        acquired = True
+        yield
+    finally:
+        try:
+            if acquired:
+                if os.name == "nt":
+                    import msvcrt
+                    os.lseek(fd, 0, os.SEEK_SET)
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
 
 MAX_BYTES = 6 * 1024 * 1024
 MAX_NODES = 30000
@@ -442,13 +481,13 @@ class NativeContentStore:
         return None
 
     def persist(self, request_id: str, owner: str) -> bool:
-        """Atomically save the latest complete native snapshot, never a terminal.
+        """Persist a final snapshot atomically without downgrading disk revision.
 
-        A fixed request_id.tmp allowed two concurrent terminal finalizations
-        to truncate each other's JSON, leaving persisted=False even when the
-        Worker ACKed a valid snapshot. Serialize same-store commits and write
-        each transaction to a fresh mode-0600 private temporary file. Neither
-        the failed attempt nor its cleanup may remove another writer's data.
+        The per-instance lock handles concurrent tasks in one API process.
+        The cross-process lock and on-disk revision compare prevent another
+        Uvicorn worker from committing a stale snapshot *after* a newer Worker
+        revision reached durable storage. The native sidecar does not own the
+        request-v6/Broker terminal.
         """
         request_id = self._valid_id(request_id)
         if not owner:
@@ -461,41 +500,62 @@ class NativeContentStore:
             data = json.dumps({"owner": owner, "snapshot": snapshot}, ensure_ascii=False)
             temporary: Path | None = None
             try:
-                # NamedTemporaryFile uses O_EXCL and random suffixes, so even
-                # another server process cannot share or truncate our staged
-                # file. A successful replace is an all-or-nothing publication.
-                with tempfile.NamedTemporaryFile(
-                    mode="w", encoding="utf-8", dir=self.root,
-                    prefix=request_id + ".", suffix=".tmp", delete=False,
-                ) as handle:
-                    temporary = Path(handle.name)
-                    os.fchmod(handle.fileno(), 0o600)
-                    handle.write(data)
-                    handle.flush()
-                    os.fsync(handle.fileno())
-                os.replace(temporary, path)
-                temporary = None
-                self._persist_count += 1
-                # Bounded on-disk cache, independent of request_history.jsonl
-                # and existing MediaArchive retention. Max 256 / 90 days.
-                if self._persist_count % 32 == 0:
-                    try:
-                        saved = sorted(
-                            (p for p in self.root.glob("*.json")
-                             if SNAPSHOT_FILENAME.fullmatch(p.name)),
-                            key=lambda p: p.stat().st_mtime, reverse=True,
-                        )
-                        cutoff = time.time() - MAX_AGE_SECONDS
-                        for index, candidate in enumerate(saved):
-                            if index >= 256 or candidate.stat().st_mtime < cutoff:
-                                candidate.unlink(missing_ok=True)
-                    except OSError:
-                        # Pruning is retention maintenance, not a second
-                        # authority for whether os.replace committed the
-                        # current native snapshot. Never report an existing
-                        # durable file as native_snapshot_persisted=False.
-                        pass
-                return True
+                with _native_crossprocess_commit_lock(self.root):
+                    # The original v319 temp-file fix prevented collisions but
+                    # still permitted two distinct store instances to commit
+                    # rev2, then overwrite it with rev1. Compare only trusted,
+                    # same-owner persisted revisions under the SAME file lock.
+                    if path.exists() and time.time() - path.stat().st_mtime < MAX_AGE_SECONDS:
+                        try:
+                            prior = json.loads(path.read_text(encoding="utf-8"))
+                            saved = prior["snapshot"]
+                            previous_rev = saved["revision"]
+                            if (prior.get("owner") != owner
+                                    or type(previous_rev) is not int):
+                                return False
+                            if previous_rev > snapshot["revision"]:
+                                return False
+                            if previous_rev == snapshot["revision"]:
+                                # Same revision, different bytes or different
+                                # owner would otherwise mutate a previously
+                                # ACKed immutable final layout.
+                                return saved == snapshot
+                        except (OSError, ValueError, KeyError, TypeError):
+                            # A damaged existing manifest is forensic evidence;
+                            # never silently overwrite it under an assumed
+                            # owner/revision identity.
+                            return False
+                    # Unique O_EXCL staging means a failed writer cannot
+                    # truncate or delete another writer's temporary bytes.
+                    with tempfile.NamedTemporaryFile(
+                        mode="w", encoding="utf-8", dir=self.root,
+                        prefix=request_id + ".", suffix=".tmp", delete=False,
+                    ) as handle:
+                        temporary = Path(handle.name)
+                        os.fchmod(handle.fileno(), 0o600)
+                        handle.write(data)
+                        handle.flush()
+                        os.fsync(handle.fileno())
+                    os.replace(temporary, path)
+                    temporary = None
+                    self._persist_count += 1
+                    # Prune only after the current durable publication
+                    # succeeds. A retention scan error never invalidates
+                    # its already-committed snapshot ACK.
+                    if self._persist_count % 32 == 0:
+                        try:
+                            saved = sorted(
+                                (p for p in self.root.glob("*.json")
+                                 if SNAPSHOT_FILENAME.fullmatch(p.name)),
+                                key=lambda p: p.stat().st_mtime, reverse=True,
+                            )
+                            cutoff = time.time() - MAX_AGE_SECONDS
+                            for index, candidate in enumerate(saved):
+                                if index >= 256 or candidate.stat().st_mtime < cutoff:
+                                    candidate.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                    return True
             except OSError:
                 return False
             finally:
