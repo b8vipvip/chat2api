@@ -64,7 +64,8 @@ from .runtime_contract import SERVER_RUNTIME_VERSION
 from .runtime_code_identity import runtime_code_sha
 from .worker_probe_store import WorkerProbeStore
 from .test_runs import TestRunStore
-from .playground_truth_v170 import reconcile_playground_runs, compact_playground_outcome, present_playground_run
+from .playground_truth_v170 import (reconcile_playground_runs, reconcile_playground_request_terminal,
+                                  compact_playground_outcome, present_playground_run)
 from .playground_stream_contract_v293 import playground_stream_attribution
 from .playground_request_evidence_v207 import request_test_index, playground_link
 from .token_usage import usage_for
@@ -1277,6 +1278,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "error": error,
             }
         )
+        # A manual Playground run is created before the API dispatch. If its
+        # browser disappeared (real req_b734ffd3 stalled after 915s), the
+        # browser cannot call the terminal-only chat-records endpoint and
+        # the Test History incorrectly remains "running" until a separate
+        # admin Tests GET. Project the *persisted* Broker terminal onto the
+        # matching existing test record now; no second request terminal.
+        try:
+            await reconcile_playground_request_terminal(
+                test_runs, telemetry, state.request_id,
+            )
+        except Exception:
+            logger.exception(
+                "Cannot reconcile Playground terminal request_id=%s",
+                state.request_id,
+            )
         # The Broker has now persisted its authoritative terminal; completed
         # chunks were already archived and all other partial staging bytes
         # are no longer eligible to be attached to a future request.
@@ -1412,6 +1428,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "error": error,
             }
         )
+        # Early admission failures (e.g. no connected Chrome Worker) have
+        # no RequestState or later Worker finalizer. Reconcile that exact
+        # previously registered run here as well, not via an invented
+        # background Worker terminal.
+        try:
+            await reconcile_playground_request_terminal(
+                test_runs, telemetry, request_id,
+            )
+        except Exception:
+            logger.exception(
+                "Cannot reconcile early Playground failure request_id=%s",
+                request_id,
+            )
 
     def chunk_payload(
         response_id: str, model: str, delta: dict[str, object], finish_reason: str | None = None,
