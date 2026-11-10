@@ -210,7 +210,25 @@ if(done){
     ]);
   }finally{if(watchdog!==null)clearTimeout(watchdog);}
 }else{
-  chunk=await reader.read();
+  // HTTP/2 intermediaries can leave a Fetch reader pending forever with
+  // neither chunk, EOF nor rejected read(). The service normally sends
+  // content-free SSE keepalives during long Worker generations; 90 seconds
+  // without ANY received bytes is no longer a usable transport connection.
+  // This is a client-only idle timeout, NOT a Broker request timeout.
+  // Recover this exact request ID after cancelling the abandoned reader.
+  let idleTimer=null;
+  try{
+    chunk=await Promise.race([
+      reader.read(),
+      new Promise((_,reject)=>{
+        idleTimer=setTimeout(()=>{
+          const error=new Error("SSE reader idle: no HTTP bytes for 90s");
+          error.name="TimeoutError";
+          reject(error);
+        },90000);
+      }),
+    ]);
+  }finally{if(idleTimer!==null)clearTimeout(idleTimer);}
 }
 if(chunk.done){nativeEof=true;break;}
 const readAt=performance.now();
@@ -274,7 +292,12 @@ finally{
       if(typeof reader.releaseLock==="function"){reader.releaseLock();readerReleased=true;}
     }else{
       readerCancelled=true;
-      await reader.cancel();
+      // After an idle read timeout the underlying read() Promise may still
+      // be pending. Browser streams can legitimately defer cancellation
+      // completion until upstream closes. Initiate cancellation but NEVER
+      // block same-request recovery on a pending cancel Promise.
+      const cancel=reader.cancel();
+      cancel?.catch?.(()=>{});
     }
   }catch(e){/* observer cleanup never owns Broker terminal */}
 }
