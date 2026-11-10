@@ -460,25 +460,75 @@ class NativeContentStore:
         return True
 
     def get(self, request_id: str, owner: str) -> dict | None:
-        self._valid_id(request_id)
+        """Return the latest *owned* live or durable native snapshot.
+
+        A sibling Uvicorn process may have already committed revision N+1
+        while this instance still retains its own revision N in _live.
+        Returning _live unconditionally recreates the missing final layout
+        bug even after #764 prevented stale writers from downgrading disk.
+        The disk manifest is atomic, so compare revisions on every read.
+        """
+        request_id = self._valid_id(request_id)
+        now = time.time()
         with self._lock:
             record = self._live.get(request_id)
-            if record and time.time() - record[2] >= MAX_AGE_SECONDS:
+            if record and now - record[2] >= MAX_AGE_SECONDS:
                 self._live.pop(request_id, None)
                 record = None
-            if record and record[0] == owner:
-                return record[1]
+            # A same-ID live record for another owner must never fall through
+            # to a disk manifest and accidentally expose the other owner.
+            if record and record[0] != owner:
+                return None
+            local = record[1] if record else None
+
         path = self.root / (request_id + ".json")
         try:
-            if time.time() - path.stat().st_mtime >= MAX_AGE_SECONDS:
-                path.unlink(missing_ok=True)
+            stat = path.stat()
+        except FileNotFoundError:
+            return local
+        except OSError:
+            return None
+
+        if now - stat.st_mtime >= MAX_AGE_SECONDS:
+            # Do not unlink a newer snapshot published by another process
+            # between the initial stat and expiration cleanup.
+            try:
+                with _native_crossprocess_commit_lock(self.root):
+                    current = path.stat()
+                    if (current.st_ino == stat.st_ino
+                            and current.st_mtime_ns == stat.st_mtime_ns
+                            and time.time() - current.st_mtime >= MAX_AGE_SECONDS):
+                        path.unlink(missing_ok=True)
+                        return local
+            except FileNotFoundError:
+                return local
+            except OSError:
                 return None
+        try:
             saved = json.loads(path.read_text(encoding="utf-8"))
-            if saved.get("owner") == owner:
-                return validate_native_snapshot(saved["snapshot"])
+            if not isinstance(saved, dict) or saved.get("owner") != owner:
+                # An existing persistent owner conflict is NOT permission to
+                # return the different process's same-ID in-memory snapshot.
+                return None
+            durable = validate_native_snapshot(saved["snapshot"])
+        except FileNotFoundError:
+            return local
         except (OSError, ValueError, KeyError, TypeError):
-            pass
-        return None
+            # Corrupt on-disk data has unknown owner/revision. A stale local
+            # copy must not be promoted to a "verified" version over it.
+            return None
+
+        if local is None:
+            return durable
+        local_revision = local["revision"]
+        durable_revision = durable["revision"]
+        if durable_revision > local_revision:
+            return durable
+        if durable_revision == local_revision and durable != local:
+            # Two different contents claiming the same immutable revision
+            # cannot be selected by arrival order or cache locality.
+            return None
+        return local
 
     def persist(self, request_id: str, owner: str) -> bool:
         """Persist a final snapshot atomically without downgrading disk revision.
@@ -496,6 +546,14 @@ class NativeContentStore:
             snapshot = self.get(request_id, owner)
             if not snapshot:
                 return False
+            with self._lock:
+                local_record = self._live.get(request_id)
+                if local_record and local_record[0] == owner:
+                    # A stale process may READ a newer durable revision,
+                    # but may never ACK that revision as its OWN persistence.
+                    # Keep #764's stale-writer rejection semantics.
+                    if local_record[1] != snapshot:
+                        return False
             path = self.root / (request_id + ".json")
             data = json.dumps({"owner": owner, "snapshot": snapshot}, ensure_ascii=False)
             temporary: Path | None = None
