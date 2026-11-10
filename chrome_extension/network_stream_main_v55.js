@@ -467,6 +467,12 @@
         // never proof of the party that triggered AbortController.abort().
         native_signal_abort_reason_kind: abortReasonKind,
         native_signal_abort_visibility: abortVisibility,
+        // A Worker may start observing a page that is *already* hidden.
+        // The old v313 flag counted only later visibilitychange events and
+        // falsely reported "not hidden during stream" alongside
+        // native_signal_abort_visibility=hidden (Nov 10 A/B/C logs).
+        native_visibility_at_stream_start: initialVisibility,
+        native_visibility_hidden_at_abort: abortVisibility === "hidden",
         native_pagehide_during_stream: Boolean(
           pagehideAt && pagehideAt >= observerStartedAt),
         native_pagehide_before_abort: Boolean(
@@ -505,7 +511,9 @@
         return ["visible","hidden","prerender"].includes(state) ? state : "unknown";
       } catch (_) { return "unknown"; }
     };
-    let abortVisibility=signalInitiallyAborted ? pageVisibility() : "unobserved";
+    const initialVisibility = pageVisibility();
+    if (initialVisibility === "hidden") visibilityHiddenAt = observerStartedAt;
+    let abortVisibility=signalInitiallyAborted ? initialVisibility : "unobserved";
     let abortReasonKind=signalInitiallyAborted ? abortReason() : "not-aborted";
     const onNativeAbort=()=>{
       nativeSignalAbortAt ||= Date.now();
