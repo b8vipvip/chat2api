@@ -449,11 +449,18 @@
     // Do not expose prompt text, URL, cookies, headers or stack traces.
     // An aborted clone is evidence-reader failure, NOT a model terminal.
     function fail(stage, error, extra = {}) {
+      const exceptionName=String(error?.name || "Error");
+      const safeName=["AbortError","TimeoutError","TypeError","NetworkError",
+        "SyntaxError","RangeError","Error"].includes(exceptionName)
+        ?exceptionName:"OtherError";
+      // Main-world browser exception messages may include page/user content.
+      // The byte/phase evidence is enough to identify the broken clone;
+      // keep only a bounded classification, never its raw error.message.
       post({
         channel: CHANNEL, phase: "error", stream_id: streamId,
         failure_stage: stage,
-        error_name: String(error?.name || "Error").slice(0, 50),
-        error: String(error?.message || error || "stream-reader-failed").slice(0, 240),
+        error_name: safeName,
+        error: "network-observer-" + stage + "-" + safeName,
         signal_aborted: signal?.aborted === true,
         response_body_used: response?.bodyUsed === true,
         response_body_locked: response?.body?.locked === true,
