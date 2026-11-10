@@ -158,7 +158,6 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
     console,setTimeout:(fn,ms)=>{
       if((postDoneStall && ms>0 && ms<=10000) ||
           (preDoneStall && ms===90000) ||
-          (hangFirstRecoveryGet && [4000,8000].includes(ms)) ||
           (hangFirstRecoveryGet && [4000,8000].includes(ms)))
         queueMicrotask(fn);
       // Only accelerate the timeout of a truly hung secondary POST.
