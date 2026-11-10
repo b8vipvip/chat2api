@@ -90,8 +90,9 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
     if(corruptZip&&ext==="zip"){bytes=bytes.slice();bytes[10]^=1;}
     return {ok:true,arrayBuffer:async()=>bytes.buffer};
   };
-  let claimSerial=0,recoveryLookups=0;
+  let claimSerial=0,recoveryLookups=0,pendingAdminAbort=false;
   const neverUntilAbort=options=>new Promise((_,reject)=>{
+    pendingAdminAbort=true;
     options?.signal?.addEventListener?.("abort",()=>{
       const err=new Error("synthetic bounded admin sink timeout");
       err.name="AbortError";
@@ -134,8 +135,10 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
     });
       if(hangRunFinalTruth && options.signal)
         return neverUntilAbort(options);
-      if(hangIncompleteEvidence && options.body.phase==="incomplete")
+      if(hangIncompleteEvidence && options.body.phase==="incomplete"){
+        pendingAdminAbort=true;
         return new Promise(()=>{});
+      }
       return {};}
     if(endpoint.endsWith("/abcd/report")){
       submittedReport=options.body.report;
@@ -156,9 +159,16 @@ function scenario(id, outputs, {corruptZip=false,modelMismatch=false,readerFailu
       if((postDoneStall && ms>0 && ms<=10000) ||
           (preDoneStall && ms===90000) ||
           (hangFirstRecoveryGet && [4000,8000].includes(ms)) ||
-          ((hangIncompleteEvidence||hangRunFinalTruth||hangRunReport||hangRunRecord)
-            && ms===8000))
+          (hangFirstRecoveryGet && [4000,8000].includes(ms)))
         queueMicrotask(fn);
+      // Only accelerate the timeout of a truly hung secondary POST.
+      // A successful chat-record or ABCD report must not be spuriously
+      // timed out just because another sink is deliberately stalled.
+      if((hangIncompleteEvidence||hangRunFinalTruth||hangRunReport||hangRunRecord)
+          && ms===8000)
+        queueMicrotask(()=>{
+          if(pendingAdminAbort){pendingAdminAbort=false;fn();}
+        });
       return 0;
     },clearTimeout:()=>{},Blob,URL,
     addEventListener(name,cb){pageEvents.set(name,cb)},
