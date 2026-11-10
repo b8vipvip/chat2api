@@ -25,7 +25,7 @@ const mock={
     async cancel(){cancelled++},
     releaseLock(){released++}, 
   }}}}),
-  setTimeout,
+  setTimeout, clearTimeout,
 };
 runInNewContext(src.slice(helperStart,helperEnd)+"\n"+src.slice(streamStart,streamEnd)+"\nthis.openStream=stream",mock);
 const result=await mock.openStream("gpt-6",{token:"test-key"},"req_progress_detached",[],()=>{
@@ -33,8 +33,10 @@ const result=await mock.openStream("gpt-6",{token:"test-key"},"req_progress_deta
 });
 assert.equal(result.text,"first second");
 assert.equal(result.frames,3);
-assert.equal(reads,3,"UI progress errors must never close SSE before [DONE]");
+assert.equal(reads,4,"UI progress errors must not prevent reading actual HTTP EOF after [DONE]");
 assert.equal(progressFailures,3);
 assert.equal(cancelled,0,"successful stop+[DONE] must not abort underlying HTTP");
 assert.equal(released,1,"successful SSE releases the reader lock");
+assert.equal(result.client_sse_truth.native_reader_eof_seen,true,
+  "actual read().done after protocol [DONE], not a synthetic EOF");
 console.log("SSE progress presentation cannot cancel active reply delivery");
