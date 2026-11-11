@@ -30,7 +30,7 @@ def install_v17_crypto_patch(app: FastAPI) -> FastAPI:
 
     base_load = api_keys.load
 
-    async def load_with_data_key_migration() -> None:
+    async def load_with_data_key_validation() -> None:
         await base_load()
         api_keys.cipher = _fernet(data_secret)
         api_keys.keyring = data_keyring
@@ -45,6 +45,6 @@ def install_v17_crypto_patch(app: FastAPI) -> FastAPI:
         await api_keys.validate_ciphertexts()
         app.state.legacy_api_key_for_migration = ""
 
-    api_keys.load = load_with_data_key_migration
+    api_keys.load = load_with_data_key_validation
     api_keys._chat2api_v17_data_key_wrapped = True
     return app
