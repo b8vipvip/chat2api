@@ -146,7 +146,15 @@ class ApiKeyStore:
         payload = {"keys": [asdict(item) for item in self.keys.values()]}
         temporary = self.path.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            temporary.chmod(0o600)
+        except OSError:
+            pass
         temporary.replace(self.path)
+        try:
+            self.path.chmod(0o600)
+        except OSError:
+            pass
 
     def _decrypt_recoverable(self, value: str) -> bytes:
         if self.keyring and DataKeyring.looks_like_envelope(value):
@@ -231,9 +239,10 @@ class ApiKeyStore:
                 raise DataKeyringError(
                     f"{failures} stored API key secret(s) cannot be decrypted; restore the matching legacy key before migration"
                 )
-            for key_id, ciphertext in staged.items():
-                self.keys[key_id].token_ciphertext = ciphertext
             if staged:
+                DataKeyring.backup_file(self.path)
+                for key_id, ciphertext in staged.items():
+                    self.keys[key_id].token_ciphertext = ciphertext
                 await self.save()
         return len(staged)
 
