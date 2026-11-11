@@ -194,9 +194,11 @@ class DataKeyring:
     def backup_file(path: Path) -> Path | None:
         """Create a verified, restrictive, non-overwriting per-file migration backup."""
         source = Path(path)
+        if source.is_symlink():
+            raise DataKeyringError("Cannot back up a symbolic-link encrypted data file")
         if not source.exists():
             return None
-        if source.is_symlink() or not source.is_file():
+        if not source.is_file():
             raise DataKeyringError("Cannot back up a non-regular encrypted data file")
         backup = source.with_name(source.name + ".pre-keyring.bak")
         checksum_path = backup.with_name(backup.name + ".sha256")
