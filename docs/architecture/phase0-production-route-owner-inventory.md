@@ -16,7 +16,7 @@
 
 | 主体 | 认证凭据 | 主要入口 | 权威模块 | 不能混淆的身份 |
 |---|---|---|---|---|
-| OpenAI API caller | Bearer / x-api-key；managed API Key 或 master compatibility principal | /v1/* | require_chat_principal、ApiKeyStore | API Key principal 不是最终 user session，也不是 Worker ID |
+| OpenAI API caller | Bearer / x-api-key；公开调用应使用 managed API Key | /v1/* | require_chat_principal、ApiKeyStore | v17 会将历史 settings.api_key 旋转为进程内 internal compatibility token；该 token 仅用于兼容旧管理员依赖，不是公开 API 凭据。API Key principal 不是最终 user session，也不是 Worker ID |
 | 管理员 | chat2api_admin_session Cookie | /api/admin/*、/api/clients | AdminSessionStore + v17 middleware | 管理员 Session 不等于业务 API Key |
 | 用户控制台用户 | chat2api_user_session Cookie | /api/user/* | UserAccountStore | user_id 不能从 API Key 名称或 Worker ID 推断 |
 | Chrome Bridge | pairing code 注册、每个 client token / WebSocket | /api/extensions/register、/ws/extensions/{client_id} | PairingStore + ClientRegistry | ext_* 是执行节点，不是最终用户 |
@@ -79,7 +79,7 @@ v17_patch middleware 对 /api/admin/*（排除 /api/admin/auth/*）和 /api/clie
 - 媒体与生成文件：/api/admin/media-storage/*、/api/admin/media-storage/generated-files/*。
 - Worker 管理：/api/admin/linux-workers/*、/api/admin/extensions/*、/api/admin/extensions/{client_id}/capacity/*。
 - 用户商业管理：/api/admin/user-pricing、/api/admin/user-payments、/api/admin/payment-channels-v106/*。
-- 原生页面诊断：/api/admin/worker-tools/native-page/*。
+- 原生页面诊断：公开版本化工具下载 GET /bootstrap/native-page-diagnostic.py、GET /bootstrap/native-page-diagnostic.json；管理 API 位于 /api/admin/worker-tools/native-page/*。
 - 服务更新：/api/admin/server-update、/api/admin/server-update/status、/api/admin/server-update/start。
 - 管理页面资产：/assets/chat2api-admin-*.js、/assets/chat2api-v*.js。
 
