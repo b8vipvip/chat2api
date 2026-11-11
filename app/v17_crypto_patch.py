@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import FastAPI
 
 from .api_keys import _fernet
@@ -18,6 +20,7 @@ def install_v17_crypto_patch(app: FastAPI) -> FastAPI:
                 "media_archive.settings": [legacy_secret],
                 "payment_channels": [legacy_secret, "chat2api"],
             },
+            allow_empty_media_legacy=os.getenv("CHAT2API_CONFIRM_EMPTY_MEDIA_LEGACY_KEY", "").strip().lower() in {"1", "true", "yes"},
         )
         app.state.data_keyring = data_keyring
     data_secret = data_keyring.root_secret
