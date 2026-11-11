@@ -45,9 +45,14 @@ def _fernet(secret: str) -> Fernet | None:
 
 def load_or_create_data_secret(data_dir: Path, legacy_api_key: str = "") -> str:
     """Return the canonical root secret, refusing to replace a key that protects data."""
+    legacy = str(legacy_api_key or "")
     return DataKeyring(
         data_dir,
-        legacy_secrets={"api_key.recoverable": [str(legacy_api_key or "")]},
+        legacy_secrets={
+            "api_key.recoverable": [legacy],
+            "media_archive.settings": [legacy],
+            "payment_channels": [legacy, "chat2api", "chat2api-payment-v106"],
+        },
     ).root_secret
 
 
