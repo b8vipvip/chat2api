@@ -165,3 +165,21 @@ def test_payment_channels_empty_secret_fallback_requires_empty_file_evidence(tmp
     (tmp_path / ".chat2api_data_secret").write_text("", encoding="utf-8")
     keyring = DataKeyring(tmp_path)
     assert keyring.root_secret
+
+
+def test_keyring_backup_is_verified_non_overwriting_and_restorable(tmp_path: Path) -> None:
+    path = tmp_path / "settings.enc"
+    path.write_bytes(b"legacy-ciphertext")
+    backup = DataKeyring.backup_file(path)
+    assert backup == tmp_path / "settings.enc.pre-keyring.bak"
+    assert backup.read_bytes() == b"legacy-ciphertext"
+    assert backup.stat().st_mode & 0o777 == 0o600
+
+    path.write_bytes(b"new-keyring-envelope")
+    assert DataKeyring.restore_backup(path) is True
+    assert path.read_bytes() == b"legacy-ciphertext"
+    assert backup.exists()
+    assert DataKeyring.restore_backup(path) is True
+
+    with pytest.raises(DataKeyringError, match="backup already exists"):
+        DataKeyring.backup_file(path)
