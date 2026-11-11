@@ -96,7 +96,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "payment_channels": [config.api_key, "chat2api"],
         },
         allow_empty_media_legacy=os.getenv("CHAT2API_CONFIRM_EMPTY_MEDIA_LEGACY_KEY", "").strip().lower() in {"1", "true", "yes"},
-        },
     )
     api_keys = ApiKeyStore(config.data_dir, config.api_key, keyring=data_keyring)
     telemetry.usage_accounting = api_keys.account_completed_usage
