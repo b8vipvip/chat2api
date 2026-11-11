@@ -75,8 +75,8 @@ class PaymentChannelsStore:
             candidates.append(self.keyring.root_secret)
             normalized: list[str] = []
             for candidate in candidates:
-                value = str(candidate or "chat2api-payment-v106")
-                if value not in normalized:
+                value = str(candidate or "")
+                if value and value not in normalized:
                     normalized.append(value)
             self.legacy_ciphers = [DataKeyring.legacy_fernet(value) for value in normalized]
             self.cipher = self.legacy_ciphers[0] if self.legacy_ciphers else None
@@ -350,8 +350,10 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
     except OSError:
         # The historical installer fell back to settings.api_key or "chat2api".
         legacy_candidates.append("chat2api")
-    legacy_candidates.extend(data_keyring.legacy_secrets_for("payment_channels"))
-    legacy_candidates.extend([data_keyring.root_secret, "chat2api", "chat2api-payment-v106"])
+    legacy_candidates.extend(
+        value for value in data_keyring.legacy_secrets_for("payment_channels") if value
+    )
+    legacy_candidates.extend([data_keyring.root_secret, "chat2api"])
     channels = PaymentChannelsStore(data_dir, data_keyring, legacy_secrets=legacy_candidates)
     app.state.user_payment_channels_v106 = channels
 
