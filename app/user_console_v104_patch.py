@@ -15,7 +15,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from pydantic import BaseModel, Field
 
 from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
-from .api_keys import load_or_create_data_secret, token_hash
+from .api_keys import token_hash
+from .data_keyring import DataKeyring
 from .user_commerce import (
     BillingStore,
     PaymentConfigStore,
@@ -150,8 +151,10 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     accounts = UserAccountStore(data_dir)
     pricing = PricingStore(data_dir)
     billing = BillingStore(data_dir)
-    data_secret = load_or_create_data_secret(data_dir)
-    payments = PaymentConfigStore(data_dir, data_secret)
+    data_keyring = getattr(app.state, "data_keyring", None)
+    if not isinstance(data_keyring, DataKeyring):
+        raise RuntimeError("PaymentConfigStore requires the shared DataKeyring")
+    payments = PaymentConfigStore(data_dir, data_keyring)
     api_keys = app.state.api_keys
     telemetry = app.state.telemetry
     admin_sessions = getattr(app.state, "admin_sessions", None)
