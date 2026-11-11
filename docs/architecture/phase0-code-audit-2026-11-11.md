@@ -356,13 +356,25 @@ ImageGenerationRequest 当前固定 model 为 gpt-image，n 的最大值为 1，
 
 desktop_client 是单独的 Python 客户端目录，不是浏览器 Web Chat。
 
-### 7.2 模式 1
+### 7.2 模式 1：技术缺口之外，存在授权门禁
 
 本轮未发现用户面向的官方网页 reverse proxy ingress、ProxySession Store、上游 Host/Path allowlist、Cookie jar 隔离、CSP/HTML 资源重写或完整 HTTP/SSE/WebSocket 双向代理。
 
 现有 linux_worker_proxy_catalog 等模块是 Worker 出站代理配置，不是官方 ChatGPT 网页反向代理。
 
-模式 1 应保持独立子系统和默认关闭。不得把现有 Worker 的登录态或 Cookie 直接共享给多个最终用户。
+**新增的 Phase 0 结论：当前托管式多用户 Mode 1 私有网页代理为 NO-GO，不能直接进入实现。** 2026-11-04 生效的 OpenAI Sign in with ChatGPT Terms 要求 SIWC token 只能通过受支持授权流程取得，不得要求用户提交密码或 session cookie；持久化 token 必须在本地并由用户控制；plan usage 只能由该用户控制的 runtime 发起，只能服务于用户连接的应用，不得成为通用 API，也不得将 plan usage 作为付费功能门槛。OpenAI 的 SIWC developer docs 将 open-source plan usage 定位于 open-source / locally hosted apps，并要求 paid 或 remotely hosted app 走 interest/partner approval 路径。
+
+OpenAI Terms of Use 还禁止分享账户凭据、反向工程服务底层组件、自动/程序化提取数据或绕过保护措施。Mirror 虽然有可参考的私有协议代理实现，但它自述为 unofficial、依赖会变化的 private web protocol，且明确定位 local use、不适合 remote/multi-user deployment；它不能作为 Chat2API 托管 SaaS 的合规依据。
+
+详见 [Phase 0 Mode 1 feasibility and authorization gate](phase0-mode1-feasibility-and-authorization-gate.md)。
+
+建议边界：
+- 托管多租户服务端保存用户 ChatGPT session/cookie 并代理私有网页 API：保持关闭，除非获得 OpenAI 针对该架构的明确书面授权。
+- SIWC local/open-source adapter：可作为独立候选，使用官方 OAuth + PKCE、获准的 Responses API scope，并将凭据留在用户控制的 local runtime / self-hosted VM；它不是完整 ChatGPT Web UI reverse proxy。
+- 付费或远程托管 SIWC：先完成 OpenAI interest/partner approval，不把 OSS local flow 直接移植到 SaaS。
+- Mode 2 official API 继续作为当前托管产品的主路线。
+
+不得把现有 Worker 登录态或 Cookie 直接共享给多个最终用户；不得实现 session-cookie 收集、验证码/Turnstile 绕过、header fingerprint spoofing 或私有协议规避保护措施。
 
 ---
 
@@ -457,7 +469,7 @@ model_capability_routing_patch 会根据当前请求模型上下文筛选兼容 
 
 ### ADR-004：Mode Resolver 与独立 Proxy Plane
 
-建议标准 /v1/* 永远默认 mode2。mode1 只通过专用 Host/入口进入；建立 ProxySession Manager、上游 allowlist、DNS/IP 约束、Cookie jar 隔离和长连接资源治理。模式 1 默认关闭，先做单用户技术 Spike。
+标准 /v1/* 永远默认 mode2。Mode 1 不能只按技术架构拆成 Proxy Plane；必须先通过 [Mode 1 authorization gate](phase0-mode1-feasibility-and-authorization-gate.md)。当前托管多用户私有网页代理为 NO-GO。只有获得 OpenAI 明确书面授权/partner approval 后，才讨论独立 ProxySession Manager、上游 allowlist、DNS/IP 约束、Cookie jar 隔离和长连接资源治理。SIWC local/self-hosted adapter 应作为独立授权型 Responses API provider 评估，不能等同于官方网页代理。
 
 ### ADR-005：统一用户/管理员/租户身份
 
@@ -494,7 +506,9 @@ Phase 0 不以“读完代码”作为结束，而以以下交付为退出条件
 - [ ] 用户、管理员、Worker、API Key、Proxy Session、tenant 身份图。
 - [ ] JSON/JSONL/SQLite/内存 Store 的 schema 和迁移清单。
 - [ ] Chat Completions / Responses / Files / Images 的逐字段兼容矩阵。
-- [ ] 模式 1 上游身份来源与合法授权可行性结论。
+- [x] 完成模式 1 上游身份与公开授权路径核对：[phase0-mode1-feasibility-and-authorization-gate.md](phase0-mode1-feasibility-and-authorization-gate.md)；托管多用户私有网页代理当前 NO-GO。
+- [ ] 项目负责人确认是否接受 Mode 1 保持关闭，并仅评估用户控制的 SIWC local/self-hosted adapter。
+- [ ] 若目标是付费或远程托管 SIWC，先取得 OpenAI interest/partner approval。
 - [ ] 单实例/多实例架构决策。
 - [ ] Web Chat BFF 和 Conversation 数据模型。
 - [ ] RBAC 与 Plugin Registry 的授权模型。
@@ -506,7 +520,7 @@ Phase 0 不以“读完代码”作为结束，而以以下交付为退出条件
 1. **先处理 P0-01 / P0-02：** MediaArchive 与 PaymentChannelsStore 的旧密钥来源分裂，避免弱密钥保护或旧密文不可恢复。
 2. **再完成 ADR-001/002/005/006：** 身份、密钥、存储和部署边界。
 3. **然后完成 ADR-003/007：** 抽取共享请求服务并固化 API 兼容契约。
-4. **随后完成 ADR-004：** 模式 1 单用户代理 Spike，默认关闭。
+4. **随后完成 ADR-004：** 先确认 Mode 1 授权边界；托管私有网页代理保持 NO-GO，SIWC local/self-hosted adapter 仅在确认产品形态后单独 Spike。
 5. **最后进入 Web Chat 和客户端管理控制面实现。**
 
 在上述退出条件通过前，不建议重写 app.main、request-v6、Broker 或 Chrome Worker 主控制器。
