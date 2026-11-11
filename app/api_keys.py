@@ -51,7 +51,7 @@ def load_or_create_data_secret(data_dir: Path, legacy_api_key: str = "") -> str:
         legacy_secrets={
             "api_key.recoverable": [legacy],
             "media_archive.settings": [legacy],
-            "payment_channels": [legacy, "chat2api", "chat2api-payment-v106"],
+            "payment_channels": [legacy, "chat2api"],
         },
     ).root_secret
 
