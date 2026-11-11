@@ -117,3 +117,54 @@ def test_concurrent_first_start_creates_one_shared_root_key(tmp_path: Path) -> N
     assert len(set(values)) == 1
     assert (tmp_path / "data_secret.key").stat().st_mode & 0o777 == 0o600
     assert not list(tmp_path.glob(".data_secret.*.tmp"))
+
+
+def test_empty_media_legacy_key_requires_explicit_confirmation(tmp_path: Path) -> None:
+    legacy_cipher = DataKeyring.legacy_fernet("", prefix="chat2api:media:settings:v1:")
+    media_dir = tmp_path / "media_archive"
+    media_dir.mkdir()
+    (media_dir / "settings.enc").write_bytes(
+        legacy_cipher.encrypt(b'{"backend":"s3","s3":{"bucket":"legacy"}}')
+    )
+
+    with pytest.raises(DataKeyringError, match="media settings cannot be proven recoverable"):
+        DataKeyring(tmp_path, legacy_secrets={"media_archive.settings": [""]})
+    assert not (tmp_path / "data_secret.key").exists()
+
+    keyring = DataKeyring(
+        tmp_path,
+        legacy_secrets={"media_archive.settings": [""]},
+        allow_empty_media_legacy=True,
+    )
+    assert keyring.root_secret
+
+
+def test_payment_channels_chat2api_fallback_is_legacy_read_only(tmp_path: Path) -> None:
+    legacy_store = __import__("app.payment_channels_v106_patch", fromlist=["PaymentChannelsStore"]).PaymentChannelsStore(
+        tmp_path, "chat2api"
+    )
+    legacy_store.update({
+        "aggregate": {"zpay": {"enabled": True, "pid": "10001", "key": "fallback-secret"}},
+        "direct": {"paypal": {}, "usdt": {}},
+    })
+
+    keyring = DataKeyring(tmp_path)
+    assert keyring.root_secret
+
+
+def test_payment_channels_empty_secret_fallback_requires_empty_file_evidence(tmp_path: Path) -> None:
+    from app.payment_channels_v106_patch import PaymentChannelsStore
+
+    legacy_store = PaymentChannelsStore(tmp_path, "chat2api-payment-v106")
+    legacy_store.update({
+        "aggregate": {"zpay": {"enabled": True, "pid": "10001", "key": "empty-file-secret"}},
+        "direct": {"paypal": {}, "usdt": {}},
+    })
+
+    with pytest.raises(DataKeyringError, match="payment channel credentials cannot be proven recoverable"):
+        DataKeyring(tmp_path)
+    assert not (tmp_path / "data_secret.key").exists()
+
+    (tmp_path / ".chat2api_data_secret").write_text("", encoding="utf-8")
+    keyring = DataKeyring(tmp_path)
+    assert keyring.root_secret
