@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
+
+import pytest
 from pathlib import Path
 
+from app.data_keyring import DataKeyring, DataKeyringError
 from app.runtime_contract import SERVER_RUNTIME_VERSION, version_contract_payload
 from app.user_commerce import BillingStore, PaymentConfigStore, PricingStore, UserAccountStore
 from app.user_console_v104_patch import _verify_zpay, _zpay_sign
@@ -154,3 +158,46 @@ def test_user_commerce_runtime_and_production_dependencies_are_published() -> No
     assert '"user_payment_settlement_safety_v107": True' in runtime_source
     assert "python-multipart" in requirements
     assert "python-multipart" in project
+
+
+def test_payment_config_new_writes_use_purpose_scoped_keyring(tmp_path: Path) -> None:
+    keyring = DataKeyring(tmp_path)
+    store = PaymentConfigStore(tmp_path, keyring)
+    public = store.update({
+        "enabled": True,
+        "pid": "1234567890",
+        "key": "merchant-keyring-secret",
+        "public_origin": "https://api.example.com",
+    })
+    assert public["configured"] is True
+    assert store.secret_key() == "merchant-keyring-secret"
+
+    raw = json.loads((tmp_path / "user_payment_config.json").read_text(encoding="utf-8"))
+    envelope = json.loads(raw["key_ciphertext"])
+    assert envelope["format"] == DataKeyring.FORMAT
+    assert envelope["purpose"] == "payment_config"
+    assert "merchant-keyring-secret" not in str(raw)
+    assert PaymentConfigStore(tmp_path, keyring).secret_key() == "merchant-keyring-secret"
+
+
+def test_payment_config_legacy_ciphertext_requires_explicit_reencryption(tmp_path: Path) -> None:
+    keyring = DataKeyring(tmp_path)
+    legacy_store = PaymentConfigStore(tmp_path, keyring.root_secret)
+    legacy_store.update({"enabled": True, "pid": "10001", "key": "legacy-merchant-secret"})
+
+    store = PaymentConfigStore(tmp_path, keyring)
+    assert store.secret_key() == "legacy-merchant-secret"
+    assert store.migrate_legacy_ciphertext() is True
+    assert store.migrate_legacy_ciphertext() is False
+    envelope = json.loads(json.loads((tmp_path / "user_payment_config.json").read_text(encoding="utf-8"))["key_ciphertext"])
+    assert envelope["format"] == DataKeyring.FORMAT
+    assert envelope["purpose"] == "payment_config"
+
+
+def test_payment_config_wrong_legacy_key_fails_closed(tmp_path: Path) -> None:
+    keyring = DataKeyring(tmp_path)
+    legacy_store = PaymentConfigStore(tmp_path, "unrelated-secret")
+    legacy_store.update({"enabled": True, "pid": "10001", "key": "merchant-secret"})
+
+    with pytest.raises(DataKeyringError, match="cannot be decrypted"):
+        PaymentConfigStore(tmp_path, keyring)
