@@ -247,12 +247,14 @@ def test_media_settings_new_writes_use_keyring_and_keep_legacy_read_support(tmp_
     assert legacy_config["s3"]["bucket"] == "legacy-bucket"
     assert legacy_config["s3"]["credentials_configured"] is True
 
-    store.configure({"public_base_url": "https://media-v2.example.com"})
+    assert store.migrate_legacy_settings() is True
+    assert store.migrate_legacy_settings() is False
     envelope = json.loads(store.settings_path.read_text(encoding="utf-8"))
     assert envelope["format"] == DataKeyring.FORMAT
     assert envelope["purpose"] == "media_archive.settings"
     assert "legacy-secret" not in str(envelope)
 
+    store.configure({"public_base_url": "https://media-v2.example.com"})
     reloaded = MediaArchive(tmp_path, "changed-admin-api-key", keyring=keyring)
     assert reloaded.public_config()["backend"] == "s3"
     assert reloaded.public_config()["s3"]["bucket"] == "legacy-bucket"
