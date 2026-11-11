@@ -93,14 +93,14 @@ class MediaArchive:
         """Explicitly migrate settings.enc; normal reads never rewrite legacy data."""
         if not self.keyring or not self.settings_path.exists():
             return False
-        if not self._legacy_master_secret and not self.keyring.allow_empty_media_legacy:
-            raise RuntimeError(
-                "Migrating media settings encrypted with an empty legacy key requires explicit operator confirmation"
-            )
         encrypted = self.settings_path.read_bytes()
         if DataKeyring.looks_like_envelope(encrypted):
             self.keyring.decrypt(encrypted, "media_archive.settings")
             return False
+        if not self._legacy_master_secret and not self.keyring.allow_empty_media_legacy:
+            raise RuntimeError(
+                "Migrating media settings encrypted with an empty legacy key requires explicit operator confirmation"
+            )
         try:
             plaintext = self._cipher.decrypt(encrypted)
             decoded = json.loads(plaintext)
