@@ -269,7 +269,6 @@ def test_empty_legacy_media_key_requires_operator_confirmation_for_migration(tmp
         "s3": {"bucket": "empty-key-bucket", "access_key_id": "access", "secret_access_key": "secret"},
     })
     store = MediaArchive(tmp_path, "", keyring=keyring)
-    import pytest
     with pytest.raises(RuntimeError, match="explicit operator confirmation"):
         store.migrate_legacy_settings()
 
