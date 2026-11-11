@@ -19,6 +19,7 @@
 | ID | 级别 | 发现 | 直接影响 |
 |---|---|---|---|
 | P0-01 | P0 | MediaArchive 的 settings.enc 仍由 CHAT2API_API_KEY 派生密钥加密；新配置已将该变量定义为废弃迁移输入，且默认值为空 | 新安装可能使用可预测的空密钥派生值；更换旧环境变量后，已有 S3 凭据配置可能无法解密 |
+| P0-02 | P0 | PaymentChannelsStore 不使用 data_secret.key，而是读取 .chat2api_data_secret；缺失时 fallback 到公开固定字符串 chat2api | 新安装的支付商户密钥可能由公开常量推导；旧密文与密钥来源不一致时可能静默显示未配置 |
 | P1-01 | P1 | Admin Session 已安装，但默认管理员密码仍为 change-me-admin，登录入口没有发现速率限制 | 部署配置遗漏时存在弱口令和暴力尝试风险 |
 | P1-02 | P1 | Broker 和 Worker WebSocket 都是进程内状态；Docker 默认单 Uvicorn worker | 不能直接横向扩展或以多 worker 运行 |
 | P1-03 | P1 | 标准 API 兼容面有限；部分字段被 Pydantic 接受但没有被传入 Worker 执行选项 | SDK 调用可能表面成功、参数语义却未生效 |
@@ -27,7 +28,8 @@
 | P1-06 | P1 | 当前只有单管理员账号配置和 Cookie Session，没有完整管理员目录、RBAC、租户成员关系 | 无法满足多管理员、职责分离和资源级授权 |
 | P1-07 | P1 | 当前用户注册是直接开放的自助注册入口，没有服务端注册策略开关 | 无法按管理员配置开放/邀请/关闭注册 |
 | P1-08 | P1 | Responses response store 仅保存在进程内 OrderedDict，最多 256 条 | 重启后 response_id 查询不可恢复 |
-| P1-09 | P1 | MediaArchive、ApiKeyStore、PaymentConfigStore 的密钥迁移并不统一 | 不能把旧 CHAT2API_API_KEY 视为已完全退役 |
+| P1-09 | P1 | ApiKeyStore、PaymentConfigStore、MediaArchive、PaymentChannelsStore 的密钥来源、派生用途和迁移行为不统一 | 不能把旧 CHAT2API_API_KEY 或 data_secret.key 视为所有加密配置的统一根密钥 |
+| P1-11 | P1 | data_secret.key 丢失/为空时 load_or_create_data_secret 会静默生成新 key；部分 Store 解密失败返回空字符串 | 已存在的 API Key / 支付密文可能不可恢复，且错误可能被误认为配置为空 |
 | P1-10 | P1 | 当前没有独立 Web Chat、Conversation Store、Plugin Registry 或官方网页代理入口 | #784 的主要新增产品仍需建设 |
 | P2-01 | P2 | 生产 installer 链包含 92 个唯一 installer、93 次调用，历史 patch 通过包装/替换方法积累 | 新功能继续叠加 installer 会增加顺序耦合和回归成本 |
 | P2-02 | P2 | README 与 VERSIONING 文档版本号落后于代码契约 | 用户可能依据文档部署错误版本 |
@@ -170,7 +172,7 @@ B. 正式多实例前引入共享数据库、Redis/消息总线或等价协调�
 | 模型价格 | user_pricing.json | 与 Worker 实际可用模型目录是不同来源 |
 | 余额/账单/订单 | user_billing.json | 进程锁 + 文件持久化，不是统一交易数据库 |
 | 支付密钥配置 | user_payment_config.json | 使用 data_secret 派生密钥加密 |
-| 支付渠道配置 | user_payment_channels_v106.json | 使用数据密钥加密敏感字段 |
+| 支付渠道配置 | user_payment_channels_v106.json | installer 读取 .chat2api_data_secret；缺失时 fallback 到 settings.api_key 或固定值 chat2api；不是 data_secret.key |
 | 管理员 Session | admin_sessions.json（Docker/配置数据目录） | 保存 Token hash 和过期时间 |
 | Playground 测试运行 | test_runs.jsonl | 不是用户聊天会话数据库 |
 | Worker 探针策略/证据 | worker_probes/ | Worker 工具策略和运行证据，不是通用插件注册表 |
@@ -180,31 +182,52 @@ B. 正式多实例前引入共享数据库、Redis/消息总线或等价协调�
 
 代码证据：
 
-- app/main.py 初始化 MediaArchive 时传入 config.api_key。
-- app/media_archive_v173.py 使用 SHA256("chat2api:media:settings:v1:" + master_secret) 派生 Fernet 密钥。
-- media settings 存在 settings.enc，解密失败会抛出 Cannot decrypt media settings。
-- app/config.py 第 25-29 行将 CHAT2API_API_KEY 标记为 deprecated migration input，描述为仅用于迁移旧 managed-key secrets。
-- app/api_keys.py 的 load_or_create_data_secret 会生成 data_secret.key，并对文件尝试 chmod 0600。
-- app/v17_crypto_patch.py 迁移 ApiKeyStore 的 token_ciphertext，但没有看到对 MediaArchive._cipher/settings.enc 的同步迁移。
-- app.v17_patch.py 在应用启动前把 settings.api_key 改为未公开的 internal_admin_secret；MediaArchive 在此之前已用原始 config.api_key 构造并固定了 cipher。
+- app/main.py 在生产 installer 链执行前初始化 MediaArchive，并传入 config.api_key。
+- app/media_archive_v173.py 使用 SHA256("chat2api:media:settings:v1:" + master_secret) 派生 Fernet 密钥；密文位于 media_archive/settings.enc。
+- app/config.py 将 CHAT2API_API_KEY 标记为 deprecated migration input，且默认值为空。
+- app/v17_crypto_patch.py 只迁移 ApiKeyStore.token_ciphertext，没有迁移 MediaArchive._cipher/settings.enc。
+- app.v17_patch.py 后续会调整 Settings.api_key，但这不会改变 MediaArchive 已捕获的 cipher。
+- MediaArchive._config() 解密失败时会抛出 RuntimeError，不会自动回退。
 
 影响：
 
-1. 新安装若 CHAT2API_API_KEY 为空，MediaArchive 的派生密钥是可预测的固定值，不具备独立随机密钥保护。
+1. 新安装若 CHAT2API_API_KEY 为空，派生 key 仍是可预测的固定值。
 2. 旧环境变量被移除或改变后，已有 settings.enc 可能无法解密。
-3. 配置注释声称旧 API Key 只用于迁移 managed Key，但媒体 S3 凭据仍隐式依赖该值。
-4. main lifespan 中对空 CHAT2API_API_KEY 的告警检查发生在 v17 installer 修改 Settings 后，不能可靠反映 MediaArchive 实际使用的原始密钥状态。
+3. 媒体 S3 凭据并未跟随 API Key ciphertext 的 v17 migration。
+4. 空 CHAT2API_API_KEY 的启动告警发生在 v17 installer 可能修改 Settings 后，不能可靠反映 MediaArchive 实际捕获的原始密钥。
 
-**建议修复方案：**
+建议：MediaArchive 迁移到唯一 DataKeyring；对旧 settings.enc 进行显式 dry-run、备份、解密、用途隔离重加密、原子替换和回读验证。不能解密时必须 fail closed，不得清空设置或回退到 local backend。旧 key 兼容窗口和回滚备份须保留，直到完整发布周期和人工验收完成。
 
-- 将 MediaArchive 配置加密迁移到统一 Data Secret / Secret Store，明确 key_id 与 key_version。
-- 迁移前验证旧密钥是否能解密 settings.enc；解密失败必须 fail closed，不得覆盖或重置用户配置。
-- 成功解密后在临时文件中用新密钥重加密，原子替换并回读验证。
-- 保留旧密钥解密兼容窗口和可回滚备份；迁移完成后才允许移除旧环境变量依赖。
-- 新部署若无法获得强随机数据密钥，不允许启用需要保存秘密的 S3 配置。
-- API Key、支付配置、媒体配置统一由 Secret/Encryption Service 管理；业务 Store 不再自行派生不同 Fernet key。
+### 4.3 P0-02：PaymentChannelsStore 使用独立且可预测的密钥来源
 
-### 4.3 API Key 生命周期
+代码证据：
+
+- app/user_console_v104_patch.py 调用 load_or_create_data_secret(data_dir)，为 API Key migration 与 PaymentConfigStore 提供 data_secret.key。
+- app/payment_channels_v106_patch.py 的生产 installer 没有调用 load_or_create_data_secret，而是读取 data_dir/.chat2api_data_secret。
+- 该文件读取失败时，installer 使用 settings.api_key or "chat2api"；当前 Settings.api_key 默认值为空，因此新安装走固定字符串 chat2api。
+- PaymentChannelsStore.__init__ 在直接收到空字符串时还会 fallback 到 chat2api-payment-v106。
+- PaymentChannelsStore._decrypt 在 InvalidToken 时返回空字符串，而不是报告 key mismatch。
+- tests/test_payment_channels_v106.py 直接用 local-secret 构造 Store，没有覆盖真实 installer 的 key source 或迁移。
+
+影响：
+
+1. PaymentChannelsStore 与 ApiKeyStore / PaymentConfigStore 使用不同根密钥文件和派生逻辑。
+2. 新安装的支付商户密钥可能使用公开固定值 chat2api 加密，不构成安全的 at-rest secret protection。
+3. 如果旧 .chat2api_data_secret 丢失或内容变化，支付配置可能在后台静默显示未配置。
+4. 本次没有访问生产数据卷，无法确认现有 .chat2api_data_secret 是否存在、由哪个旧版本创建或与生产 ciphertext 匹配；不得在生产迁移中猜测。
+
+建议：PaymentChannelsStore 纳入 DataKeyring，先用明确的 LegacyKeyResolver 支持 .chat2api_data_secret、旧 CHAT2API_API_KEY 和已知生产 fallback 候选；只有解密和 schema 校验都成功才认定候选。任何非空 ciphertext 解密失败必须显式报错，不能返回空值。新写入禁止使用 fallback 常量。
+
+### 4.4 P1-11：根密钥丢失与解密失败可能被静默处理
+
+- load_or_create_data_secret 在 key 文件不存在或内容为空时直接生成新 key，没有先检查 api_keys.json、user_payment_config.json 等是否已有密文。
+- PaymentConfigStore.secret_key() 与 PaymentChannelsStore._decrypt() 在解密失败时返回空字符串。
+- ApiKeyStore.migrate_cipher_from 对不能由 legacy key 解密的记录选择跳过，没有统一迁移结果报告；API Key hash 认证仍可能正常，但 secret reveal 不再可用。
+- load_or_create_data_secret 使用固定 data_secret.tmp 且没有跨进程初始化锁；这与当前单实例部署相符，但不能作为未来多进程启动的安全实现。
+
+建议：首次空数据目录可以生成 key；只要检测到已有加密资产但 key 缺失/损坏，就 fail closed 并要求恢复备份。迁移必须输出仅含计数和错误类别的报告，不能记录明文或密钥。
+
+### 4.5 API Key 生命周期
 
 当前 ApiKeyStore 同时保存 token_hash 和 token_ciphertext；管理员/用户接口存在读取 secret 的 endpoint。撤销时会清除 token_ciphertext。v17_crypto_patch 已把旧 managed Key 密文迁移到 data_secret.key，但新 Key 仍是可恢复密文模式。
 
@@ -218,7 +241,7 @@ B. 正式多实例前引入共享数据库、Redis/消息总线或等价协调�
 
 此外，ApiKeyStore.account_completed_usage 在请求 completed 后才增加 tokens_used。authenticate 只检查当前已记账余额，没有请求 admission 阶段的原子预留。并发请求可同时通过额度检查，最终用量超过额度后才自动禁用 Key。当前 quota 测试覆盖的是顺序计量，不证明并发额度不会超发。
 
-### 4.4 账户、账单和支付
+### 4.6 账户、账单和支付
 
 已有 UserAccountStore、PricingStore、BillingStore、PaymentConfigStore、PaymentChannelsStore。它们是 #784 应复用的现有资产。
 
@@ -411,9 +434,9 @@ model_capability_routing_patch 会根据当前请求模型上下文筛选兼容 
 
 建议第一阶段明确支持单进程单实例，并增加启动保护，拒绝不受支持的多 worker 配置。若要多实例，先完成共享数据库、Redis/消息总线、Worker WebSocket 归属路由和分布式请求租约。
 
-### ADR-002：统一数据密钥与 MediaArchive 迁移
+### ADR-002：统一数据密钥与加密配置迁移
 
-建议使用统一版本化 Secret/Encryption Service；先迁移 MediaArchive settings.enc，再允许废弃 CHAT2API_API_KEY。API Key hash-only 迁移、支付配置和媒体设置必须共用密钥版本/轮换框架，但根据数据用途使用独立密钥用途标签。
+详见 [ADR-002：统一数据密钥与加密配置迁移](adr-002-versioned-data-encryption-keyring.md)。该 ADR 仍为 Proposed，重点处理 MediaArchive 与 PaymentChannelsStore 的 P0 密钥来源分裂，以及 key loss fail-closed、legacy resolver、备份/回滚和完整 readback 测试。
 
 ### ADR-003：共享 ChatRequestService
 
@@ -451,7 +474,9 @@ Phase 0 不以“读完代码”作为结束，而以以下交付为退出条件
 
 - [ ] 生产 app.entry 最终路由与 middleware 清单。
 - [ ] 所有核心状态 owner / wrapper / evidence-only / projection 矩阵。
-- [ ] MediaArchive data-secret 迁移 ADR 和回滚演练设计。
+- [x] 完成 DataKeyring / legacy key migration 的详细 ADR 提案（待评审）：[ADR-002](adr-002-versioned-data-encryption-keyring.md)。
+- [ ] 确认生产数据卷中 legacy key 文件与 ciphertext 的实际存在状态（仅收集脱敏文件清单/哈希，不收集密钥）。
+- [ ] 批准 DataKeyring 设计后实现迁移服务、dry-run、备份、apply、readback 和 rollback 测试。
 - [ ] 用户、管理员、Worker、API Key、Proxy Session、tenant 身份图。
 - [ ] JSON/JSONL/SQLite/内存 Store 的 schema 和迁移清单。
 - [ ] Chat Completions / Responses / Files / Images 的逐字段兼容矩阵。
@@ -464,7 +489,7 @@ Phase 0 不以“读完代码”作为结束，而以以下交付为退出条件
 
 ### 建议实施顺序
 
-1. **先处理 P0-01：** MediaArchive data-secret 不一致，避免新旧环境的 S3 配置被锁死或弱密钥保护。
+1. **先处理 P0-01 / P0-02：** MediaArchive 与 PaymentChannelsStore 的旧密钥来源分裂，避免弱密钥保护或旧密文不可恢复。
 2. **再完成 ADR-001/002/005/006：** 身份、密钥、存储和部署边界。
 3. **然后完成 ADR-003/007：** 抽取共享请求服务并固化 API 兼容契约。
 4. **随后完成 ADR-004：** 模式 1 单用户代理 Spike，默认关闭。
