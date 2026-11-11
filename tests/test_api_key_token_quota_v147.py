@@ -99,3 +99,26 @@ def test_api_key_legacy_ciphertext_is_reencrypted_without_changing_authenticatio
         assert row["token_hash"] == original_hash
 
     asyncio.run(scenario())
+
+
+def test_api_key_startup_validation_reads_legacy_without_rewriting(tmp_path):
+    async def scenario():
+        legacy_secret = "old-admin-key-readonly"
+        keyring = DataKeyring(
+            tmp_path,
+            legacy_secrets={"api_key.recoverable": [legacy_secret]},
+        )
+        legacy_store = ApiKeyStore(tmp_path, legacy_secret)
+        public, token = await legacy_store.create("legacy-readonly")
+
+        store = ApiKeyStore(tmp_path, keyring.root_secret, keyring=keyring)
+        store.legacy_ciphers = [__import__("app.api_keys", fromlist=["_fernet"])._fernet(legacy_secret)]
+        await store.load()
+        assert await store.validate_ciphertexts() == 1
+        assert store.reveal(public["key_id"]) == token
+
+        raw = json.loads((tmp_path / "api_keys.json").read_text(encoding="utf-8"))
+        ciphertext = next(row["token_ciphertext"] for row in raw["keys"] if row["key_id"] == public["key_id"])
+        assert not DataKeyring.looks_like_envelope(ciphertext)
+
+    asyncio.run(scenario())
