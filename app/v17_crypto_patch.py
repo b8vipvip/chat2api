@@ -16,7 +16,7 @@ def install_v17_crypto_patch(app: FastAPI) -> FastAPI:
             legacy_secrets={
                 "api_key.recoverable": [legacy_secret],
                 "media_archive.settings": [legacy_secret],
-                "payment_channels": [legacy_secret, "chat2api", "chat2api-payment-v106"],
+                "payment_channels": [legacy_secret, "chat2api"],
             },
         )
         app.state.data_keyring = data_keyring
