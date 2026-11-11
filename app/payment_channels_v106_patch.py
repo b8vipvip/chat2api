@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from .admin_auth import SESSION_COOKIE as ADMIN_SESSION_COOKIE
 from .timezone_utils import beijing_now_iso
+from .data_keyring import DataKeyring, DataKeyringError
 from .user_commerce import USER_SESSION_COOKIE
 from .user_console_v104_patch import _parse_json_maybe_wrapped, _safe_url, _verify_zpay, _zpay_sign
 
@@ -60,10 +61,33 @@ class PaymentChannelsStore:
     and are never returned by public/admin read APIs.
     """
 
-    def __init__(self, data_dir: Path, secret: str) -> None:
+    def __init__(
+        self,
+        data_dir: Path,
+        secret: str | DataKeyring,
+        *,
+        legacy_secrets: list[str] | tuple[str, ...] = (),
+    ) -> None:
         self.path = data_dir / "user_payment_channels_v106.json"
-        key = base64.urlsafe_b64encode(hashlib.sha256(str(secret or "chat2api-payment-v106").encode()).digest())
-        self.cipher = Fernet(key)
+        self.keyring = secret if isinstance(secret, DataKeyring) else None
+        if self.keyring:
+            candidates = list(legacy_secrets) + list(self.keyring.legacy_secrets_for("payment_channels"))
+            # v107 temporarily rebound the old Fernet cipher to data_secret.key.
+            # Keep that format decrypt-only while all new writes use the keyring.
+            candidates.append(self.keyring.root_secret)
+            normalized: list[str] = []
+            for candidate in candidates:
+                value = str(candidate or "chat2api-payment-v106")
+                if value not in normalized:
+                    normalized.append(value)
+            self.legacy_ciphers = [DataKeyring.legacy_fernet(value) for value in normalized]
+            self.cipher = self.legacy_ciphers[0] if self.legacy_ciphers else None
+        else:
+            # Direct Store construction remains compatible with existing unit
+            # callers; production always injects the shared DataKeyring.
+            value = str(secret or "chat2api-payment-v106")
+            self.cipher = DataKeyring.legacy_fernet(value)
+            self.legacy_ciphers = [self.cipher]
         self.payload: dict[str, Any] = {
             "version": 106,
             "public_origin": "",
@@ -116,18 +140,37 @@ class PaymentChannelsStore:
                 if provider in self.payload[group] and isinstance(values, dict):
                     self.payload[group][provider].update(values)
         self.payload["updated_at"] = raw.get("updated_at") or self.payload["updated_at"]
+        # A non-empty ciphertext that cannot be opened is a key mismatch or
+        # corruption, never evidence that the merchant has not configured a secret.
+        for ciphertext in (
+            self.payload["aggregate"]["zpay"].get("key_ciphertext"),
+            self.payload["direct"]["paypal"].get("client_secret_ciphertext"),
+        ):
+            if ciphertext:
+                self._decrypt(ciphertext)
 
     def _save(self) -> None:
         _atomic_json(self.path, self.payload)
+
+    def _encrypt(self, value: str) -> str:
+        if self.keyring:
+            return self.keyring.encrypt(value, "payment_channels")
+        return self.cipher.encrypt(value.encode("utf-8")).decode("ascii")
 
     def _decrypt(self, value: Any) -> str:
         text = str(value or "")
         if not text:
             return ""
-        try:
-            return self.cipher.decrypt(text.encode("ascii")).decode("utf-8")
-        except (InvalidToken, ValueError):
-            return ""
+        if self.keyring and DataKeyring.looks_like_envelope(text):
+            return self.keyring.decrypt(text, "payment_channels").decode("utf-8")
+        for cipher in self.legacy_ciphers:
+            try:
+                return cipher.decrypt(text.encode("ascii")).decode("utf-8")
+            except (InvalidToken, ValueError, UnicodeEncodeError):
+                continue
+        raise DataKeyringError(
+            "Stored payment channel credential cannot be decrypted; restore its matching legacy key before changing provider settings"
+        )
 
     def zpay_key(self) -> str:
         return self._decrypt(self.payload["aggregate"]["zpay"].get("key_ciphertext"))
@@ -199,7 +242,7 @@ class PaymentChannelsStore:
             if cid and not re.fullmatch(r"\d+(?:,\d+)*", cid):
                 raise ValueError("ZPAY 渠道 ID 只能填写数字，多个 ID 使用英文逗号分隔")
         if z_in.get("key"):
-            zpay["key_ciphertext"] = self.cipher.encrypt(str(z_in["key"]).encode()).decode("ascii")
+            zpay["key_ciphertext"] = self._encrypt(str(z_in["key"]))
         if z_in.get("clear_key"):
             zpay["key_ciphertext"] = ""
 
@@ -210,7 +253,7 @@ class PaymentChannelsStore:
             "client_id": str(p_in.get("client_id") or "").strip()[:240],
         })
         if p_in.get("client_secret"):
-            paypal["client_secret_ciphertext"] = self.cipher.encrypt(str(p_in["client_secret"]).encode()).decode("ascii")
+            paypal["client_secret_ciphertext"] = self._encrypt(str(p_in["client_secret"]))
         if p_in.get("clear_secret"):
             paypal["client_secret_ciphertext"] = ""
 
@@ -274,12 +317,20 @@ def install_payment_channels_v106_patch(app: FastAPI) -> FastAPI:
     pricing = app.state.user_pricing
     admin_sessions = getattr(app.state, "admin_sessions", None)
     data_dir = Path(settings.data_dir)
+    data_keyring = getattr(app.state, "data_keyring", None)
+    if not isinstance(data_keyring, DataKeyring):
+        raise RuntimeError("PaymentChannelsStore requires the shared DataKeyring")
+    legacy_candidates: list[str] = []
     secret_path = data_dir / ".chat2api_data_secret"
     try:
-        data_secret = secret_path.read_text(encoding="utf-8").strip()
+        legacy_value = secret_path.read_text(encoding="utf-8").strip()
+        legacy_candidates.append(legacy_value or "chat2api-payment-v106")
     except OSError:
-        data_secret = str(getattr(settings, "api_key", "") or "chat2api")
-    channels = PaymentChannelsStore(data_dir, data_secret)
+        # The historical installer fell back to settings.api_key or "chat2api".
+        legacy_candidates.append("chat2api")
+    legacy_candidates.extend(data_keyring.legacy_secrets_for("payment_channels"))
+    legacy_candidates.extend([data_keyring.root_secret, "chat2api", "chat2api-payment-v106"])
+    channels = PaymentChannelsStore(data_dir, data_keyring, legacy_secrets=legacy_candidates)
     app.state.user_payment_channels_v106 = channels
 
     original_create_order = billing.create_order
