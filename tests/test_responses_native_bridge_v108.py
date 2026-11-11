@@ -47,6 +47,24 @@ def test_responses_v108_routes_and_native_web_search_contract() -> None:
         _tool_config({"tools": [{"type": "function", "name": "fdex_smoke_echo"}]})
 
 
+def test_responses_v108_replaces_earlier_post_route_owner() -> None:
+    app = FastAPI()
+
+    @app.post("/v1/responses")
+    async def legacy_responses():
+        return {"owner": "v13"}
+
+    install_responses_v108_patch(app)
+    post_routes = [
+        route for route in app.routes
+        if getattr(route, "path", None) == "/v1/responses"
+        and "POST" in (getattr(route, "methods", None) or set())
+    ]
+    assert len(post_routes) == 1
+    assert post_routes[0].endpoint.__name__ == "create_response"
+    assert post_routes[0].endpoint.__module__ == "app.responses_v108_patch"
+
+
 def test_responses_v108_normalizes_native_web_query_and_sources() -> None:
     assert _query('slow|site:openai.com September 2025|3650|openai.com\nlength|long') == "site:openai.com September 2025"
     assert _query('search("OpenAI today")') == "OpenAI today"
