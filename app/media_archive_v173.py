@@ -39,6 +39,7 @@ class MediaArchive:
         self.settings_path = self.root / "settings.enc"
         secret_key = hashlib.sha256(("chat2api:media:settings:v1:" + str(master_secret or "")).encode()).digest()
         self._cipher = Fernet(base64.urlsafe_b64encode(secret_key))
+        self._legacy_master_secret = str(master_secret or "")
         self.keyring = keyring
         self._init_db()
 
@@ -92,6 +93,10 @@ class MediaArchive:
         """Explicitly migrate settings.enc; normal reads never rewrite legacy data."""
         if not self.keyring or not self.settings_path.exists():
             return False
+        if not self._legacy_master_secret and not self.keyring.allow_empty_media_legacy:
+            raise RuntimeError(
+                "Migrating media settings encrypted with an empty legacy key requires explicit operator confirmation"
+            )
         encrypted = self.settings_path.read_bytes()
         if DataKeyring.looks_like_envelope(encrypted):
             self.keyring.decrypt(encrypted, "media_archive.settings")
