@@ -96,12 +96,14 @@ Dockerfile 的启动命令是 Uvicorn app.entry:app。app.entry 从 app.main 导
 
 ### 2.3 Installer 测试缺口
 
-当前 runtime contract 测试确认了 runtime contract 在 v21_5 之后安装、版本资源路由唯一，以及部分 Worker 资产顺序。但没有看到一份自动生成并冻结的完整生产路由表、middleware 顺序表和所有方法包装链快照。
+已增加一份静态主要路由/身份/Owner 清单：[Phase 0 production route owner inventory](phase0-production-route-owner-inventory.md)。该清单记录核心公开 API、Worker、管理员、用户、支付、媒体与诊断入口，并标记 P1-12 Responses 重复路由。
+
+当前 runtime contract 测试确认了 runtime contract 在 v21_5 之后安装、版本资源路由唯一，以及部分 Worker 资产顺序。但尚没有从生产 app.entry:app 自动生成并冻结的完整 route table、middleware stack 和所有方法包装链快照。静态路由清单不等于运行时验证。
 
 建议增加：
 
-1. app.entry:app 的最终路由清单快照。
-2. middleware 真实执行顺序测试。
+1. app.entry:app 的最终路由清单快照，并对重复 method/path 失败。
+2. middleware 真实 outer-to-inner 执行顺序测试。
 3. 每个核心方法的 owner/wrapper 清单。
 4. installer 重复调用与导入顺序的幂等测试。
 5. 每次新增 installer 必须说明其 owner、被包装对象、上游/下游调用和失败回滚行为。
@@ -483,7 +485,8 @@ model_capability_routing_patch 会根据当前请求模型上下文筛选兼容 
 
 Phase 0 不以“读完代码”作为结束，而以以下交付为退出条件：
 
-- [ ] 生产 app.entry 最终路由与 middleware 清单。
+- [x] 主要生产路由、身份与 Owner 静态清单：[phase0-production-route-owner-inventory.md](phase0-production-route-owner-inventory.md)。
+- [ ] 从 app.entry:app 生成的最终运行时 route/middleware 快照与重复路由门禁（静态清单不能替代）。
 - [ ] 所有核心状态 owner / wrapper / evidence-only / projection 矩阵。
 - [x] 完成 DataKeyring / legacy key migration 的详细 ADR 提案（待评审）：[ADR-002](adr-002-versioned-data-encryption-keyring.md)。
 - [ ] 确认生产数据卷中 legacy key 文件与 ciphertext 的实际存在状态（仅收集脱敏文件清单/哈希，不收集密钥）。
