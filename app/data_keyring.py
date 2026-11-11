@@ -216,6 +216,33 @@ class DataKeyring:
             raise
         return backup
 
+    @staticmethod
+    def restore_backup(path: Path) -> bool:
+        """Restore the verified pre-keyring backup without deleting that backup."""
+        target = Path(path)
+        backup = target.with_name(target.name + ".pre-keyring.bak")
+        if not backup.exists():
+            return False
+        if backup.is_symlink() or not backup.is_file() or target.is_symlink():
+            raise DataKeyringError("Cannot safely restore a non-regular encrypted data backup")
+        try:
+            payload = backup.read_bytes()
+            temporary = target.with_name(f".{target.name}.{secrets.token_hex(8)}.restore")
+            try:
+                with open(temporary, "xb") as stream:
+                    os.fchmod(stream.fileno(), 0o600)
+                    stream.write(payload)
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                if hashlib.sha256(temporary.read_bytes()).digest() != hashlib.sha256(payload).digest():
+                    raise DataKeyringError("Encrypted data restore verification failed")
+                os.replace(temporary, target)
+            finally:
+                temporary.unlink(missing_ok=True)
+        except OSError as error:
+            raise DataKeyringError("Unable to restore the pre-keyring encrypted data backup") from error
+        return True
+
     def _read_json(self, path: Path, label: str) -> dict[str, Any] | None:
         if not path.exists():
             return None
