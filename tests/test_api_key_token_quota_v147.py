@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from app.api_keys import ApiKeyStore
+from app.data_keyring import DataKeyring
 from app.telemetry import TelemetryStore
 
 
@@ -53,5 +55,46 @@ def test_zero_token_quota_disables_immediately(tmp_path):
         await store.update(key["key_id"], token_quota=0)
         assert store.get_public(key["key_id"])["enabled"] is False
         assert await store.authenticate(token) is None
+
+    asyncio.run(scenario())
+
+
+def test_api_key_recoverable_ciphertext_uses_data_keyring_envelope(tmp_path):
+    async def scenario():
+        keyring = DataKeyring(tmp_path)
+        store = ApiKeyStore(tmp_path, keyring.root_secret, keyring=keyring)
+        public, token = await store.create("keyring-test")
+        raw = json.loads((tmp_path / "api_keys.json").read_text(encoding="utf-8"))
+        ciphertext = next(row["token_ciphertext"] for row in raw["keys"] if row["key_id"] == public["key_id"])
+        envelope = json.loads(ciphertext)
+        assert envelope["format"] == DataKeyring.FORMAT
+        assert envelope["purpose"] == "api_key.recoverable"
+        assert token not in ciphertext
+
+        reloaded = ApiKeyStore(tmp_path, keyring.root_secret, keyring=keyring)
+        await reloaded.load()
+        assert reloaded.reveal(public["key_id"]) == token
+
+    asyncio.run(scenario())
+
+
+def test_api_key_legacy_ciphertext_is_reencrypted_without_changing_authentication(tmp_path):
+    async def scenario():
+        keyring = DataKeyring(tmp_path)
+        legacy_secret = "legacy-admin-api-key"
+        legacy_store = ApiKeyStore(tmp_path, legacy_secret)
+        public, token = await legacy_store.create("legacy-key")
+
+        migrated = ApiKeyStore(tmp_path, keyring.root_secret, keyring=keyring)
+        await migrated.load()
+        assert await migrated.authenticate(token) is not None
+        assert await migrated.migrate_cipher_from(legacy_secret) == 1
+        assert migrated.reveal(public["key_id"]) == token
+        assert await migrated.authenticate(token) is not None
+
+        raw = json.loads((tmp_path / "api_keys.json").read_text(encoding="utf-8"))
+        row = next(row for row in raw["keys"] if row["key_id"] == public["key_id"])
+        assert json.loads(row["token_ciphertext"])["format"] == DataKeyring.FORMAT
+        assert row["token_hash"] == migrated.keys[public["key_id"]].token_hash
 
     asyncio.run(scenario())
