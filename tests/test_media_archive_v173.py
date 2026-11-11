@@ -259,3 +259,21 @@ def test_media_settings_new_writes_use_keyring_and_keep_legacy_read_support(tmp_
     assert reloaded.public_config()["backend"] == "s3"
     assert reloaded.public_config()["s3"]["bucket"] == "legacy-bucket"
     assert reloaded.public_config()["public_base_url"] == "https://media-v2.example.com"
+
+
+def test_empty_legacy_media_key_requires_operator_confirmation_for_migration(tmp_path: Path):
+    keyring = DataKeyring(tmp_path)
+    legacy = MediaArchive(tmp_path, "")
+    legacy.configure({
+        "backend": "s3",
+        "s3": {"bucket": "empty-key-bucket", "access_key_id": "access", "secret_access_key": "secret"},
+    })
+    store = MediaArchive(tmp_path, "", keyring=keyring)
+    import pytest
+    with pytest.raises(RuntimeError, match="explicit operator confirmation"):
+        store.migrate_legacy_settings()
+
+    confirmed = DataKeyring(tmp_path, allow_empty_media_legacy=True)
+    approved_store = MediaArchive(tmp_path, "", keyring=confirmed)
+    assert approved_store.migrate_legacy_settings() is True
+    assert approved_store.public_config()["s3"]["bucket"] == "empty-key-bucket"
