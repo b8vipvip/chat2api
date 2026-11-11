@@ -190,6 +190,32 @@ class DataKeyring:
         finally:
             os.close(fd)
 
+    @staticmethod
+    def backup_file(path: Path) -> Path | None:
+        """Create a verified, restrictive, non-overwriting per-file migration backup."""
+        source = Path(path)
+        if not source.exists():
+            return None
+        if source.is_symlink() or not source.is_file():
+            raise DataKeyringError("Cannot back up a non-regular encrypted data file")
+        backup = source.with_name(source.name + ".pre-keyring.bak")
+        if backup.exists() or backup.is_symlink():
+            raise DataKeyringError("A pre-keyring backup already exists; verify or restore it before retrying")
+        try:
+            payload = source.read_bytes()
+            fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.chmod(backup, 0o600)
+            if hashlib.sha256(backup.read_bytes()).digest() != hashlib.sha256(payload).digest():
+                raise DataKeyringError("Encrypted data backup verification failed")
+        except Exception:
+            backup.unlink(missing_ok=True)
+            raise
+        return backup
+
     def _read_json(self, path: Path, label: str) -> dict[str, Any] | None:
         if not path.exists():
             return None
