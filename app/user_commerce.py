@@ -14,6 +14,7 @@ from typing import Any
 from cryptography.fernet import Fernet, InvalidToken
 
 from .timezone_utils import beijing_now_iso
+from .data_keyring import DataKeyring, DataKeyringError
 
 
 USER_SESSION_COOKIE = "chat2api_user_session"
@@ -482,10 +483,15 @@ class BillingStore:
 
 
 class PaymentConfigStore:
-    def __init__(self, data_dir: Path, secret: str) -> None:
+    def __init__(self, data_dir: Path, secret: str | DataKeyring) -> None:
         self.path = data_dir / "user_payment_config.json"
-        key = base64.urlsafe_b64encode(hashlib.sha256(str(secret or "chat2api-user-payments").encode("utf-8")).digest())
-        self.cipher = Fernet(key)
+        self.keyring = secret if isinstance(secret, DataKeyring) else None
+        if self.keyring:
+            # Read-only compatibility for the pre-keyring PaymentConfigStore format.
+            self.cipher = DataKeyring.legacy_fernet(self.keyring.root_secret)
+        else:
+            key = base64.urlsafe_b64encode(hashlib.sha256(str(secret or "chat2api-user-payments").encode("utf-8")).digest())
+            self.cipher = Fernet(key)
         self.lock = threading.RLock()
         self.payload: dict[str, Any] = {
             "version": USER_COMMERCE_VERSION,
@@ -512,18 +518,48 @@ class PaymentConfigStore:
                 self.payload.update(raw)
         except (OSError, ValueError, TypeError):
             pass
+        if self.payload.get("key_ciphertext"):
+            # Do not let a key mismatch masquerade as an unconfigured provider.
+            self.secret_key()
 
     def _save(self) -> None:
         _atomic_json(self.path, self.payload)
+
+    def _encrypt_secret(self, value: str) -> str:
+        if self.keyring:
+            return self.keyring.encrypt(value, "payment_config")
+        return self.cipher.encrypt(value.encode("utf-8")).decode("ascii")
 
     def secret_key(self) -> str:
         value = str(self.payload.get("key_ciphertext") or "")
         if not value:
             return ""
         try:
+            if self.keyring and DataKeyring.looks_like_envelope(value):
+                return self.keyring.decrypt(value, "payment_config").decode("utf-8")
             return self.cipher.decrypt(value.encode("ascii")).decode("utf-8")
-        except (InvalidToken, ValueError):
-            return ""
+        except (DataKeyringError, InvalidToken, ValueError, UnicodeEncodeError) as error:
+            raise DataKeyringError(
+                "Stored payment configuration secret cannot be decrypted; restore the matching data key before editing provider settings"
+            ) from error
+
+    def migrate_legacy_ciphertext(self) -> bool:
+        """Explicitly re-encrypt the old root-key Fernet value into the v2 envelope."""
+        if not self.keyring:
+            return False
+        with self.lock:
+            value = str(self.payload.get("key_ciphertext") or "")
+            if not value or DataKeyring.looks_like_envelope(value):
+                if value:
+                    self.keyring.decrypt(value, "payment_config")
+                return False
+            try:
+                plaintext = self.cipher.decrypt(value.encode("ascii"))
+            except (InvalidToken, ValueError, UnicodeEncodeError) as error:
+                raise DataKeyringError("Legacy payment configuration secret cannot be decrypted") from error
+            self.payload["key_ciphertext"] = self.keyring.encrypt(plaintext, "payment_config")
+            self._save()
+            return True
 
     def public(self) -> dict[str, Any]:
         with self.lock:
@@ -567,7 +603,7 @@ class PaymentConfigStore:
             })
             supplied_key = data.get("key")
             if supplied_key is not None and str(supplied_key):
-                self.payload["key_ciphertext"] = self.cipher.encrypt(str(supplied_key).encode("utf-8")).decode("ascii")
+                self.payload["key_ciphertext"] = self._encrypt_secret(str(supplied_key))
             if bool(data.get("clear_key")):
                 self.payload["key_ciphertext"] = ""
             self._save()
