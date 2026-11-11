@@ -276,8 +276,7 @@ class DataKeyring:
                 except OSError:
                     # The old installer fell back to settings.api_key or "chat2api".
                     candidates.append("chat2api")
-            else:
-                candidates.append("chat2api")
+            candidates.append("chat2api")
             providers = channels_doc.get("aggregate") or {}
             direct = channels_doc.get("direct") or {}
             tokens = []
