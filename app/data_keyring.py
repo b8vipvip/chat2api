@@ -105,8 +105,8 @@ class DataKeyring:
 
     def decrypt(self, value: str | bytes, purpose: str) -> bytes:
         purpose = self._validate_purpose(purpose)
-        raw = value.decode("utf-8") if isinstance(value, bytes) else str(value or "")
         try:
+            raw = value.decode("utf-8") if isinstance(value, bytes) else str(value or "")
             envelope: Any = json.loads(raw)
         except (TypeError, ValueError, UnicodeDecodeError) as error:
             raise DataKeyringError("Encrypted value is not a valid versioned envelope") from error
