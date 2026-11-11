@@ -30,6 +30,7 @@
 | P1-08 | P1 | Responses response store 仅保存在进程内 OrderedDict，最多 256 条 | 重启后 response_id 查询不可恢复 |
 | P1-09 | P1 | ApiKeyStore、PaymentConfigStore、MediaArchive、PaymentChannelsStore 的密钥来源、派生用途和迁移行为不统一 | 不能把旧 CHAT2API_API_KEY 或 data_secret.key 视为所有加密配置的统一根密钥 |
 | P1-11 | P1 | data_secret.key 丢失/为空时 load_or_create_data_secret 会静默生成新 key；部分 Store 解密失败返回空字符串 | 已存在的 API Key / 支付密文可能不可恢复，且错误可能被误认为配置为空 |
+| P1-12 | P1 | v13_patch 与 responses_v108_patch 都注册 POST /v1/responses；v13 更早安装且没有发现移除旧路由的逻辑 | Starlette first-match 会先进入旧 v13 handler；v108 的 web_search/image_generation 与 response store 路径可能被遮蔽，GET retrieve 可能无法读取创建结果 |
 | P1-10 | P1 | 当前没有独立 Web Chat、Conversation Store、Plugin Registry 或官方网页代理入口 | #784 的主要新增产品仍需建设 |
 | P2-01 | P2 | 生产 installer 链包含 92 个唯一 installer、93 次调用，历史 patch 通过包装/替换方法积累 | 新功能继续叠加 installer 会增加顺序耦合和回归成本 |
 | P2-02 | P2 | README 与 VERSIONING 文档版本号落后于代码契约 | 用户可能依据文档部署错误版本 |
@@ -314,15 +315,25 @@ ImageGenerationRequest 当前固定 model 为 gpt-image，n 的最大值为 1，
 
 ### 6.4 Responses API
 
-- /v1/responses 与 /v1/responses/{response_id} 已安装。
+- /v1/responses 与 /v1/responses/{response_id} 均在生产安装链注册。
 - Responses 有自己的 _authenticate、_dispatch、_collect、_stream 和 response object adapter。
 - Responses _dispatch 自己选择 Worker、创建 Broker state、发送 chat.request；没有复用一个统一 Chat Request Service。
 - Responses usage 使用本地 usage_for 估算。
 - response store 是 OrderedDict，最多 256 条，进程重启后丢失。
-- 当前原生工具配置只识别 web_search；其他外部工具类型会返回 responses_external_tools_pending。
+- 当前 v108 原生工具配置识别 web_search，并通过 responses_image_tool_v182 处理 image_generation；其他外部工具类型会返回 responses_external_tools_pending。
 - ResponsesModelContextMiddleware 负责模型上下文与 Telemetry 观察，不能因此把它视为通用 Plugin Registry。
 
-**建议：** 抽取 ChatRequestService，负责 admission、principal、model resolution、Worker dispatch、request_id、Broker state 和 terminal handle。Chat Completions、Responses 和 Web BFF 只做协议转换，不再各自实现一套请求调度。
+**P1-12：生产路由注册存在重复 owner。** app/v13_patch.py 在 entry.py 的早期安装阶段注册 POST /v1/responses；app/responses_v108_patch.py 在后续阶段再次注册同一路径。当前没有发现 v108 installer 移除/替换 v13 route 的逻辑。Starlette Router 对重复路由按注册顺序进行 first-match，较早的 v13 route 会先匹配。v13 handler 明确拒绝 body.tools，因此 v108 的 web_search / image_generation handler 不会通过这条生产入口触发；v108 的 GET retrieve route 也无法读取 v13 handler 未写入的 v108 store。responses_model_routing_v108_patch 是 ASGI middleware，它设置上下文、观察响应并记录 Telemetry，但随后仍调用下层 Router，并不会改变 route matching owner。
+
+现有 tests/test_responses_native_bridge_v108.py 在单独新建的 FastAPI app 上只安装 v108 patch；没有验证完整 app.entry:app 中 POST /v1/responses 的唯一 owner，也没有端到端验证 native tools 和 response retrieve。
+
+**必须补充的生产回归：**
+1. 对 app.entry:app 枚举 POST /v1/responses，断言只有一个最终 route owner。
+2. 通过生产 ASGI app 发起 web_search tool 请求，确认走 v108 tool handler，而不是 v13 的 unsupported tools 分支。
+3. 通过生产 ASGI app 创建 response 后，使用同一 principal GET /v1/responses/{response_id}，确认 owner scope 和 retrieve 成功。
+4. 测试 streaming / non-streaming 两种路径，确认 telemetry、billing 和 request_id 只记录一次。
+
+**建议：** 抽取 ChatRequestService，负责 admission、principal、model resolution、Worker dispatch、request_id、Broker state 和 terminal handle。Chat Completions、Responses 和 Web BFF 只做协议转换，不再各自实现一套请求调度。并在 v108 统一注册/替换旧 route，保证每个 public method/path 只有一个明确 owner。
 
 ---
 
