@@ -188,9 +188,10 @@ class PaymentChannelsStore:
                 continue
             plaintext = self._decrypt(value)
             staged.append((row, field, self.keyring.encrypt(plaintext, "payment_channels")))
-        for row, field, ciphertext in staged:
-            row[field] = ciphertext
         if staged:
+            DataKeyring.backup_file(self.path)
+            for row, field, ciphertext in staged:
+                row[field] = ciphertext
             self._save()
         return len(staged)
 
