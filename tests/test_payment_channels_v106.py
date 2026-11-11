@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
+from app.data_keyring import DataKeyring, DataKeyringError
 from app.payment_channels_v106_patch import PaymentChannelsStore, _valid_tron_address
 
 
@@ -88,3 +90,60 @@ def test_usdt_manual_confirmation_is_fail_closed() -> None:
     assert "用户尚未提交有效交易哈希" in patch
     assert "billing.settle_order(order_id, txid)" in patch
     assert "confirm(" not in patch
+
+
+def test_payment_channels_legacy_ciphertext_is_read_then_new_writes_use_keyring(tmp_path: Path) -> None:
+    legacy = PaymentChannelsStore(tmp_path, "legacy-channel-secret")
+    legacy.update({
+        "aggregate": {"zpay": {"enabled": True, "pid": "10001", "key": "old-zpay-secret"}},
+        "direct": {
+            "paypal": {"enabled": True, "client_id": "old-client", "client_secret": "old-paypal-secret"},
+            "usdt": {},
+        },
+    })
+
+    keyring = DataKeyring(
+        tmp_path,
+        legacy_secrets={"payment_channels": ["legacy-channel-secret"]},
+    )
+    store = PaymentChannelsStore(
+        tmp_path,
+        keyring,
+        legacy_secrets=["legacy-channel-secret"],
+    )
+    assert store.zpay_key() == "old-zpay-secret"
+    assert store.paypal_secret() == "old-paypal-secret"
+
+    store.update({
+        "aggregate": {"zpay": {"enabled": True, "pid": "10001", "key": "new-zpay-secret"}},
+        "direct": {
+            "paypal": {"enabled": True, "client_id": "new-client", "client_secret": "new-paypal-secret"},
+            "usdt": {},
+        },
+    })
+    raw = json.loads((tmp_path / "user_payment_channels_v106.json").read_text(encoding="utf-8"))
+    zpay_envelope = json.loads(raw["aggregate"]["zpay"]["key_ciphertext"])
+    paypal_envelope = json.loads(raw["direct"]["paypal"]["client_secret_ciphertext"])
+    assert zpay_envelope["format"] == DataKeyring.FORMAT
+    assert paypal_envelope["format"] == DataKeyring.FORMAT
+    assert zpay_envelope["purpose"] == "payment_channels"
+    assert paypal_envelope["purpose"] == "payment_channels"
+    assert "new-zpay-secret" not in str(raw)
+    assert "new-paypal-secret" not in str(raw)
+    assert store.zpay_key() == "new-zpay-secret"
+    assert store.paypal_secret() == "new-paypal-secret"
+
+
+def test_payment_channels_unknown_legacy_key_fails_closed(tmp_path: Path) -> None:
+    legacy = PaymentChannelsStore(tmp_path, "actual-old-key")
+    legacy.update({
+        "aggregate": {"zpay": {"enabled": True, "pid": "10001", "key": "old-secret"}},
+        "direct": {"paypal": {}, "usdt": {}},
+    })
+
+    with pytest.raises(DataKeyringError, match="payment channel credentials cannot be proven recoverable"):
+        DataKeyring(
+            tmp_path,
+            legacy_secrets={"payment_channels": ["wrong-old-key"]},
+        )
+    assert not (tmp_path / "data_secret.key").exists()
