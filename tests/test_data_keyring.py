@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.data_keyring import DataKeyring, DataKeyringError
+from app.payment_channels_v106_patch import PaymentChannelsStore
 
 
 def test_data_keyring_writes_versioned_purpose_scoped_envelopes(tmp_path: Path) -> None:
@@ -140,9 +141,7 @@ def test_empty_media_legacy_key_requires_explicit_confirmation(tmp_path: Path) -
 
 
 def test_payment_channels_chat2api_fallback_is_legacy_read_only(tmp_path: Path) -> None:
-    legacy_store = __import__("app.payment_channels_v106_patch", fromlist=["PaymentChannelsStore"]).PaymentChannelsStore(
-        tmp_path, "chat2api"
-    )
+    legacy_store = PaymentChannelsStore(tmp_path, "chat2api")
     legacy_store.update({
         "aggregate": {"zpay": {"enabled": True, "pid": "10001", "key": "fallback-secret"}},
         "direct": {"paypal": {}, "usdt": {}},
@@ -153,8 +152,6 @@ def test_payment_channels_chat2api_fallback_is_legacy_read_only(tmp_path: Path) 
 
 
 def test_payment_channels_empty_secret_fallback_requires_empty_file_evidence(tmp_path: Path) -> None:
-    from app.payment_channels_v106_patch import PaymentChannelsStore
-
     legacy_store = PaymentChannelsStore(tmp_path, "chat2api-payment-v106")
     legacy_store.update({
         "aggregate": {"zpay": {"enabled": True, "pid": "10001", "key": "empty-file-secret"}},
