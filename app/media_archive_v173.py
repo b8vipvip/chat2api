@@ -108,6 +108,7 @@ class MediaArchive:
                 raise ValueError("Media settings document must be an object")
         except (InvalidToken, ValueError, OSError) as error:
             raise RuntimeError("Cannot migrate media settings without the matching legacy key") from error
+        DataKeyring.backup_file(self.settings_path)
         payload = self.keyring.encrypt(plaintext, "media_archive.settings").encode("utf-8")
         temporary = self.settings_path.with_name(f".{self.settings_path.name}.{secrets.token_hex(8)}.tmp")
         try:
