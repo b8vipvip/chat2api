@@ -31,7 +31,15 @@ def install_v17_crypto_patch(app: FastAPI) -> FastAPI:
         await base_load()
         api_keys.cipher = _fernet(data_secret)
         api_keys.keyring = data_keyring
-        await api_keys.migrate_cipher_from(legacy_secret)
+        legacy_values = list(data_keyring.legacy_secrets_for("api_key.recoverable"))
+        if legacy_secret and legacy_secret not in legacy_values:
+            legacy_values.append(legacy_secret)
+        api_keys.legacy_ciphers = [
+            cipher for cipher in (_fernet(value) for value in legacy_values) if cipher is not None
+        ]
+        # Startup validates every ciphertext but does not rewrite legacy files.
+        # Migration is a separate, explicit maintenance operation.
+        await api_keys.validate_ciphertexts()
         app.state.legacy_api_key_for_migration = ""
 
     api_keys.load = load_with_data_key_migration
