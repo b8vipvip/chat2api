@@ -216,9 +216,12 @@ class DataKeyring:
         api_path = self.data_dir / "api_keys.json"
         api_doc = self._read_json(api_path, "API keys")
         if api_doc is not None:
+            rows = api_doc.get("keys", [])
+            if not isinstance(rows, list):
+                raise DataKeyringError("Existing API key document has an invalid keys collection")
             tokens = [
                 str(row.get("token_ciphertext") or "")
-                for row in api_doc.get("keys", [])
+                for row in rows
                 if isinstance(row, dict) and row.get("token_ciphertext")
             ]
             candidates = self.legacy_secrets_for("api_key.recoverable")
@@ -253,7 +256,10 @@ class DataKeyring:
         channels_path = self.data_dir / "user_payment_channels_v106.json"
         channels_doc = self._read_json(channels_path, "payment channel configuration")
         if channels_doc is not None:
-            candidates = list(self.legacy_secrets_for("payment_channels"))
+            candidates = [
+                value or "chat2api-payment-v106"
+                for value in self.legacy_secrets_for("payment_channels")
+            ]
             legacy_path = self.data_dir / ".chat2api_data_secret"
             if legacy_path.exists():
                 try:
