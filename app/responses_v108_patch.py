@@ -527,6 +527,19 @@ def install_responses_v108_patch(app: FastAPI) -> FastAPI:
     app.state.responses_v108_installed = True
     app.state.responses_v108_store = OrderedDict()
 
+    # v13 registered a legacy POST /v1/responses handler earlier in the
+    # production installer chain. Starlette uses first-match routing, so merely
+    # registering v108 again would leave native tools and the v108 response
+    # store unreachable. Replace that legacy owner before registering v108.
+    app.router.routes[:] = [
+        route for route in app.router.routes
+        if not (
+            getattr(route, "path", None) == "/v1/responses"
+            and "POST" in (getattr(route, "methods", None) or set())
+        )
+    ]
+    app.openapi_schema = None
+
     @app.post("/v1/responses")
     async def create_response(request: Request):
         # An Images-only key can use the Responses hosted image tool, but not
