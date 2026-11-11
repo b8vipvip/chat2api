@@ -36,9 +36,11 @@ class DataKeyring:
         data_dir: Path,
         *,
         legacy_secrets: Mapping[str, Iterable[str]] | None = None,
+        allow_empty_media_legacy: bool = False,
     ) -> None:
         self.data_dir = Path(data_dir)
         self.path = self.data_dir / self.KEY_FILENAME
+        self.allow_empty_media_legacy = bool(allow_empty_media_legacy)
         self._legacy_secrets: dict[str, tuple[str, ...]] = {}
         for purpose, values in (legacy_secrets or {}).items():
             self._validate_purpose(purpose)
@@ -243,7 +245,9 @@ class DataKeyring:
                 encrypted = media_path.read_bytes()
             except OSError as error:
                 raise DataKeyringError("Cannot inspect existing media settings; refusing to create a replacement key") from error
-            candidates = self.legacy_secrets_for("media_archive.settings")
+            candidates = list(self.legacy_secrets_for("media_archive.settings"))
+            if not self.allow_empty_media_legacy:
+                candidates = [candidate for candidate in candidates if candidate]
             if self.looks_like_envelope(encrypted) or not self._can_decrypt(
                 encrypted.decode("ascii", errors="ignore"),
                 candidates,
@@ -257,17 +261,23 @@ class DataKeyring:
         channels_doc = self._read_json(channels_path, "payment channel configuration")
         if channels_doc is not None:
             candidates = [
-                value or "chat2api-payment-v106"
-                for value in self.legacy_secrets_for("payment_channels")
+                value for value in self.legacy_secrets_for("payment_channels") if value
             ]
             legacy_path = self.data_dir / ".chat2api_data_secret"
             if legacy_path.exists():
                 try:
                     legacy_value = legacy_path.read_text(encoding="utf-8").strip()
-                    candidates.append(legacy_value or "chat2api-payment-v106")
+                    if legacy_value:
+                        candidates.append(legacy_value)
+                    else:
+                        # The old Store used this fallback only when the legacy
+                        # secret file existed but contained no usable value.
+                        candidates.append("chat2api-payment-v106")
                 except OSError:
-                    pass
-            candidates.extend(["chat2api", "chat2api-payment-v106"])
+                    # The old installer fell back to settings.api_key or "chat2api".
+                    candidates.append("chat2api")
+            else:
+                candidates.append("chat2api")
             providers = channels_doc.get("aggregate") or {}
             direct = channels_doc.get("direct") or {}
             tokens = []
