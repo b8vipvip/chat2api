@@ -214,11 +214,12 @@ class ApiKeyStore:
         clean_name = str(name or "").strip() or "API Key"
         raw = "sk-chat2api-" + secrets.token_urlsafe(32)
         key_id = "key_" + secrets.token_urlsafe(9).replace("-", "").replace("_", "")
-        ciphertext = (
-            self.keyring.encrypt(raw, "api_key.recoverable")
-            if self.keyring
-            else self.cipher.encrypt(raw.encode("utf-8")).decode("ascii") if self.cipher else None
-        )
+        if self.keyring:
+            ciphertext = self.keyring.encrypt(raw, "api_key.recoverable")
+        elif self.cipher:
+            ciphertext = self.cipher.encrypt(raw.encode("utf-8")).decode("ascii")
+        else:
+            ciphertext = None
         item = ManagedApiKey(
             key_id=key_id,
             name=clean_name[:120],
