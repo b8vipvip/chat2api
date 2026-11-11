@@ -37,6 +37,8 @@
 | C. 托管商业 SIWC | OpenAI 认可的 website/partner integration；按批准的 scope、部署和商业条件运行 | 需要申请/等待 OpenAI partner approval；获批前不进入产品实现 |
 | D. Mode 2 官方 API | 用户/组织 API key，调用正式 API；按 Chat2API 自己的套餐和计量策略 | 继续作为当前托管产品的主路线 |
 
+SIWC 文档确实把 self-hosted VM 列为一种 agent host；但这不等于允许把所有用户 token 放在由 Chat2API 运营方控制的共享 SaaS 服务器。若采用该路径，runtime 必须由对应用户实际控制，token 在该用户控制的 runtime 本地保存；共享托管服务不能仅通过 user_id 分桶就变成“user-controlled runtime”。
+
 ## 2. 官方授权与条款核对（2026-11-11）
 
 ### 2.1 Sign in with ChatGPT Terms
@@ -145,12 +147,14 @@ Mirror 可作为协议研究参考，但不能作为 Chat2API Mode 1 的合规�
 - 使用 OpenAI 授予的 scope，而不是 session cookie。
 - 每个用户/工作区/host 使用独立的 client registration / ext_agent_host_id。
 - 凭据只保存在用户控制的 local runtime 或该用户控制的 self-hosted VM；不得复制到 Chat2API 共享 SaaS credential vault。
+- self-hosted VM 只有在该 VM 真正由该最终用户控制、token 存储在该用户控制的 VM 本地时，才是候选；由 Chat2API 运营方管理的多租户 server 不因租户隔离而自动满足该条件。
 - 只向该已连接应用提供合规的 Responses API inference，不开放为通用 OpenAI API key。
+- SIWC plan scope 不授予 ChatGPT conversation history，也不提供完整 ChatGPT Web UI；不得把它宣传成网页代理替代品。
 - 请求只由该用户的交互或明确授权的后台任务触发。
 - 不得把 SIWC plan usage 放进 Chat2API 的付费套餐门槛；用户必须能免费使用其 plan usage。
 - 对托管商业版本先完成 OpenAI interest/partner approval，再评估服务端架构。
 
-这条路线是一个新的授权型 AI provider adapter，不是当前 Mode 1 官方网页代理。
+这条路线是一个新的授权型 Responses API provider adapter，不是当前 Mode 1 官方网页代理。
 
 ### ADR-M1-003：Mode 2 保持现有官方 API 主路线
 
