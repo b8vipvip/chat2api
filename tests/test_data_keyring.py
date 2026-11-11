@@ -174,12 +174,17 @@ def test_keyring_backup_is_verified_non_overwriting_and_restorable(tmp_path: Pat
     assert backup == tmp_path / "settings.enc.pre-keyring.bak"
     assert backup.read_bytes() == b"legacy-ciphertext"
     assert backup.stat().st_mode & 0o777 == 0o600
+    checksum = backup.with_name(backup.name + ".sha256")
+    assert checksum.exists()
+    assert checksum.read_text(encoding="ascii").strip()
 
     path.write_bytes(b"new-keyring-envelope")
     assert DataKeyring.restore_backup(path) is True
     assert path.read_bytes() == b"legacy-ciphertext"
     assert backup.exists()
-    assert DataKeyring.restore_backup(path) is True
 
+    backup.write_bytes(b"tampered-backup")
+    with pytest.raises(DataKeyringError, match="checksum does not match"):
+        DataKeyring.restore_backup(path)
     with pytest.raises(DataKeyringError, match="backup already exists"):
         DataKeyring.backup_file(path)
