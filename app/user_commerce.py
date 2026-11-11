@@ -557,6 +557,7 @@ class PaymentConfigStore:
                 plaintext = self.cipher.decrypt(value.encode("ascii"))
             except (InvalidToken, ValueError, UnicodeEncodeError) as error:
                 raise DataKeyringError("Legacy payment configuration secret cannot be decrypted") from error
+            DataKeyring.backup_file(self.path)
             self.payload["key_ciphertext"] = self.keyring.encrypt(plaintext, "payment_config")
             self._save()
             return True
