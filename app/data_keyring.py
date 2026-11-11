@@ -199,20 +199,28 @@ class DataKeyring:
         if source.is_symlink() or not source.is_file():
             raise DataKeyringError("Cannot back up a non-regular encrypted data file")
         backup = source.with_name(source.name + ".pre-keyring.bak")
-        if backup.exists() or backup.is_symlink():
+        checksum_path = backup.with_name(backup.name + ".sha256")
+        if backup.exists() or backup.is_symlink() or checksum_path.exists() or checksum_path.is_symlink():
             raise DataKeyringError("A pre-keyring backup already exists; verify or restore it before retrying")
         try:
             payload = source.read_bytes()
+            digest = hashlib.sha256(payload).hexdigest()
             fd = os.open(backup, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as stream:
                 stream.write(payload)
                 stream.flush()
                 os.fsync(stream.fileno())
             os.chmod(backup, 0o600)
-            if hashlib.sha256(backup.read_bytes()).digest() != hashlib.sha256(payload).digest():
+            if hashlib.sha256(backup.read_bytes()).hexdigest() != digest:
                 raise DataKeyringError("Encrypted data backup verification failed")
+            checksum_fd = os.open(checksum_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            with os.fdopen(checksum_fd, "w", encoding="ascii") as stream:
+                stream.write(digest + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
         except Exception:
             backup.unlink(missing_ok=True)
+            checksum_path.unlink(missing_ok=True)
             raise
         return backup
 
@@ -221,12 +229,16 @@ class DataKeyring:
         """Restore the verified pre-keyring backup without deleting that backup."""
         target = Path(path)
         backup = target.with_name(target.name + ".pre-keyring.bak")
+        checksum_path = backup.with_name(backup.name + ".sha256")
         if not backup.exists():
             return False
-        if backup.is_symlink() or not backup.is_file() or target.is_symlink():
+        if backup.is_symlink() or not backup.is_file() or checksum_path.is_symlink() or not checksum_path.is_file() or target.is_symlink():
             raise DataKeyringError("Cannot safely restore a non-regular encrypted data backup")
         try:
             payload = backup.read_bytes()
+            expected_digest = checksum_path.read_text(encoding="ascii").strip()
+            if not expected_digest or hashlib.sha256(payload).hexdigest() != expected_digest:
+                raise DataKeyringError("Pre-keyring backup checksum does not match")
             temporary = target.with_name(f".{target.name}.{secrets.token_hex(8)}.restore")
             try:
                 with open(temporary, "xb") as stream:
