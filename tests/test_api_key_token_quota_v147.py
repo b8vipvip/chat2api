@@ -87,6 +87,7 @@ def test_api_key_legacy_ciphertext_is_reencrypted_without_changing_authenticatio
 
         migrated = ApiKeyStore(tmp_path, keyring.root_secret, keyring=keyring)
         await migrated.load()
+        original_hash = migrated.keys[public["key_id"]].token_hash
         assert await migrated.authenticate(token) is not None
         assert await migrated.migrate_cipher_from(legacy_secret) == 1
         assert migrated.reveal(public["key_id"]) == token
@@ -95,6 +96,6 @@ def test_api_key_legacy_ciphertext_is_reencrypted_without_changing_authenticatio
         raw = json.loads((tmp_path / "api_keys.json").read_text(encoding="utf-8"))
         row = next(row for row in raw["keys"] if row["key_id"] == public["key_id"])
         assert json.loads(row["token_ciphertext"])["format"] == DataKeyring.FORMAT
-        assert row["token_hash"] == migrated.keys[public["key_id"]].token_hash
+        assert row["token_hash"] == original_hash
 
     asyncio.run(scenario())
