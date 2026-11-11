@@ -1,9 +1,11 @@
 import base64
 import io
+import json
 from pathlib import Path
 
 import pytest
 from PIL import Image
+from app.data_keyring import DataKeyring
 from app.media_archive_v173 import MediaArchive
 
 
@@ -218,3 +220,40 @@ def test_backfill_keeps_original_backend_after_default_storage_changed(tmp_path:
     report = store.repair_thumbnails()
     assert report["repaired"] == 1 and report["failed"] == 0
     assert store.load(row["id"], row["token"], thumbnail=True)[1] == "image/webp"
+
+
+def test_media_settings_new_writes_use_keyring_and_keep_legacy_read_support(tmp_path: Path):
+    legacy_secret = "old-admin-api-key"
+    legacy_store = MediaArchive(tmp_path, legacy_secret)
+    legacy_store.configure({
+        "backend": "s3",
+        "public_base_url": "https://media.example.com",
+        "s3": {
+            "bucket": "legacy-bucket",
+            "region": "us-west-2",
+            "endpoint": "https://s3.example.com",
+            "access_key_id": "legacy-access",
+            "secret_access_key": "legacy-secret",
+        },
+    })
+
+    keyring = DataKeyring(
+        tmp_path,
+        legacy_secrets={"media_archive.settings": [legacy_secret]},
+    )
+    store = MediaArchive(tmp_path, legacy_secret, keyring=keyring)
+    legacy_config = store.public_config()
+    assert legacy_config["backend"] == "s3"
+    assert legacy_config["s3"]["bucket"] == "legacy-bucket"
+    assert legacy_config["s3"]["credentials_configured"] is True
+
+    store.configure({"public_base_url": "https://media-v2.example.com"})
+    envelope = json.loads(store.settings_path.read_text(encoding="utf-8"))
+    assert envelope["format"] == DataKeyring.FORMAT
+    assert envelope["purpose"] == "media_archive.settings"
+    assert "legacy-secret" not in str(envelope)
+
+    reloaded = MediaArchive(tmp_path, "changed-admin-api-key", keyring=keyring)
+    assert reloaded.public_config()["backend"] == "s3"
+    assert reloaded.public_config()["s3"]["bucket"] == "legacy-bucket"
+    assert reloaded.public_config()["public_base_url"] == "https://media-v2.example.com"
