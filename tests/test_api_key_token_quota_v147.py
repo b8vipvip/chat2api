@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from app.api_keys import ApiKeyStore
+from app.api_keys import ApiKeyStore, _fernet
 from app.data_keyring import DataKeyring
 from app.telemetry import TelemetryStore
 
@@ -112,7 +112,7 @@ def test_api_key_startup_validation_reads_legacy_without_rewriting(tmp_path):
         public, token = await legacy_store.create("legacy-readonly")
 
         store = ApiKeyStore(tmp_path, keyring.root_secret, keyring=keyring)
-        store.legacy_ciphers = [__import__("app.api_keys", fromlist=["_fernet"])._fernet(legacy_secret)]
+        store.legacy_ciphers = [_fernet(legacy_secret)]
         await store.load()
         assert await store.validate_ciphertexts() == 1
         assert store.reveal(public["key_id"]) == token
