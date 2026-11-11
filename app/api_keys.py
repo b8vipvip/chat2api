@@ -123,6 +123,7 @@ class ApiKeyStore:
         self.lock = asyncio.Lock()
         self.keyring = keyring
         self.cipher = _fernet(data_secret or (keyring.root_secret if keyring else ""))
+        self.legacy_ciphers: list[Fernet] = []
 
     async def load(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -147,14 +148,38 @@ class ApiKeyStore:
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(self.path)
 
-    async def migrate_cipher_from(self, legacy_secret: str) -> int:
-        """Convert recoverable legacy ciphertexts to purpose-scoped keyring envelopes.
+    def _decrypt_recoverable(self, value: str) -> bytes:
+        if self.keyring and DataKeyring.looks_like_envelope(value):
+            return self.keyring.decrypt(value, "api_key.recoverable")
+        candidates = [self.cipher, *self.legacy_ciphers]
+        for cipher in candidates:
+            if cipher is None:
+                continue
+            try:
+                return cipher.decrypt(value.encode("ascii"))
+            except (InvalidToken, ValueError, UnicodeEncodeError):
+                continue
+        raise DataKeyringError("Stored API key secret cannot be decrypted with any registered key")
+
+    async def validate_ciphertexts(self) -> int:
+        """Read-only validation of all recoverable ciphertexts during startup."""
+        checked = 0
+        async with self.lock:
+            for item in self.keys.values():
+                value = str(item.token_ciphertext or "")
+                if value:
+                    self._decrypt_recoverable(value)
+                    checked += 1
+        return checked
+
+    async def migrate_cipher_from(self, legacy_secret: str = "") -> int:
+        """Explicitly convert recoverable legacy ciphertexts to keyring envelopes.
 
         All records are validated before any record is changed. A single unknown
         ciphertext aborts the migration without partially rewriting api_keys.json.
         """
-        legacy = _fernet(str(legacy_secret or ""))
         if not self.keyring:
+            legacy = _fernet(str(legacy_secret or ""))
             if not legacy or not self.cipher:
                 return 0
             migrated = 0
@@ -177,6 +202,8 @@ class ApiKeyStore:
                     await self.save()
             return migrated
 
+        extra_legacy = _fernet(str(legacy_secret or ""))
+        candidates = [self.cipher, *self.legacy_ciphers, extra_legacy]
         staged: dict[str, str] = {}
         failures = 0
         async with self.lock:
@@ -188,7 +215,7 @@ class ApiKeyStore:
                     self.keyring.decrypt(value, "api_key.recoverable")
                     continue
                 plaintext: bytes | None = None
-                for candidate in (self.cipher, legacy):
+                for candidate in candidates:
                     if candidate is None:
                         continue
                     try:
@@ -202,7 +229,7 @@ class ApiKeyStore:
                 staged[item.key_id] = self.keyring.encrypt(plaintext, "api_key.recoverable")
             if failures:
                 raise DataKeyringError(
-                    f"{failures} stored API key secret(s) cannot be decrypted; restore the matching legacy key before startup"
+                    f"{failures} stored API key secret(s) cannot be decrypted; restore the matching legacy key before migration"
                 )
             for key_id, ciphertext in staged.items():
                 self.keys[key_id].token_ciphertext = ciphertext
@@ -267,16 +294,9 @@ class ApiKeyStore:
             raise KeyError("Unknown API key")
         if not item.token_ciphertext:
             raise ValueError("This key predates encrypted secret storage and cannot be revealed")
-        if self.keyring and DataKeyring.looks_like_envelope(item.token_ciphertext):
-            try:
-                return self.keyring.decrypt(item.token_ciphertext, "api_key.recoverable").decode("utf-8")
-            except DataKeyringError as error:
-                raise ValueError("Stored API key secret cannot be decrypted with the current data key") from error
-        if not self.cipher:
-            raise ValueError("Server data encryption key is unavailable")
         try:
-            return self.cipher.decrypt(item.token_ciphertext.encode("ascii")).decode("utf-8")
-        except (InvalidToken, ValueError) as error:
+            return self._decrypt_recoverable(item.token_ciphertext).decode("utf-8")
+        except DataKeyringError as error:
             raise ValueError("Stored API key secret cannot be decrypted with the current data key") from error
 
     async def update(self, key_id: str, *, name: str | None = None, enabled: bool | None = None,
