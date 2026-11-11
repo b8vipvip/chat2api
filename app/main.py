@@ -99,6 +99,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     telemetry.usage_accounting = api_keys.account_completed_usage
     file_store = FileStore(config.data_dir)
     media_archive = MediaArchive(config.data_dir, config.api_key, keyring=data_keyring)
+    # Validate existing encrypted media settings during application construction;
+    # a wrong/missing legacy key must fail closed before the first admin request.
+    media_archive._config()
     generated_files = GeneratedFileArchive(media_archive)
     generated_staging = GeneratedFileStaging(media_archive.root)
     generated_files.staging = generated_staging
