@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import re
 import secrets
 import sqlite3
@@ -92,7 +93,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         legacy_secrets={
             "api_key.recoverable": [config.api_key],
             "media_archive.settings": [config.api_key],
-            "payment_channels": [config.api_key, "chat2api", "chat2api-payment-v106"],
+            "payment_channels": [config.api_key, "chat2api"],
+        },
+        allow_empty_media_legacy=os.getenv("CHAT2API_CONFIRM_EMPTY_MEDIA_LEGACY_KEY", "").strip().lower() in {"1", "true", "yes"},
         },
     )
     api_keys = ApiKeyStore(config.data_dir, config.api_key, keyring=data_keyring)
