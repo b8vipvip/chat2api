@@ -172,6 +172,30 @@ class PaymentChannelsStore:
             "Stored payment channel credential cannot be decrypted; restore its matching legacy key before changing provider settings"
         )
 
+    def migrate_legacy_ciphertexts(self) -> int:
+        """Explicitly migrate all known provider secrets; never run during normal load."""
+        if not self.keyring:
+            return 0
+        fields = (
+            (self.payload["aggregate"]["zpay"], "key_ciphertext"),
+            (self.payload["direct"]["paypal"], "client_secret_ciphertext"),
+        )
+        staged: list[tuple[dict[str, Any], str, str]] = []
+        for row, field in fields:
+            value = str(row.get(field) or "")
+            if not value:
+                continue
+            if DataKeyring.looks_like_envelope(value):
+                self.keyring.decrypt(value, "payment_channels")
+                continue
+            plaintext = self._decrypt(value)
+            staged.append((row, field, self.keyring.encrypt(plaintext, "payment_channels")))
+        for row, field, ciphertext in staged:
+            row[field] = ciphertext
+        if staged:
+            self._save()
+        return len(staged)
+
     def zpay_key(self) -> str:
         return self._decrypt(self.payload["aggregate"]["zpay"].get("key_ciphertext"))
 
