@@ -88,6 +88,39 @@ class MediaArchive:
                 raise RuntimeError("Cannot decrypt media settings; restore the matching data or legacy key") from exc
         return defaults
 
+    def migrate_legacy_settings(self) -> bool:
+        """Explicitly migrate settings.enc; normal reads never rewrite legacy data."""
+        if not self.keyring or not self.settings_path.exists():
+            return False
+        encrypted = self.settings_path.read_bytes()
+        if DataKeyring.looks_like_envelope(encrypted):
+            self.keyring.decrypt(encrypted, "media_archive.settings")
+            return False
+        try:
+            plaintext = self._cipher.decrypt(encrypted)
+            decoded = json.loads(plaintext)
+            if not isinstance(decoded, dict):
+                raise ValueError("Media settings document must be an object")
+        except (InvalidToken, ValueError, OSError) as error:
+            raise RuntimeError("Cannot migrate media settings without the matching legacy key") from error
+        payload = self.keyring.encrypt(plaintext, "media_archive.settings").encode("utf-8")
+        temporary = self.settings_path.with_name(f".{self.settings_path.name}.{secrets.token_hex(8)}.tmp")
+        try:
+            with open(temporary, "xb") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.settings_path)
+            try:
+                os.chmod(self.settings_path, 0o600)
+            except OSError:
+                pass
+        finally:
+            temporary.unlink(missing_ok=True)
+        self._config()
+        return True
+
     def public_config(self):
         cfg = self._config()
         s3 = cfg.get("s3") or {}
