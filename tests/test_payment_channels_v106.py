@@ -114,13 +114,8 @@ def test_payment_channels_legacy_ciphertext_is_read_then_new_writes_use_keyring(
     assert store.zpay_key() == "old-zpay-secret"
     assert store.paypal_secret() == "old-paypal-secret"
 
-    store.update({
-        "aggregate": {"zpay": {"enabled": True, "pid": "10001", "key": "new-zpay-secret"}},
-        "direct": {
-            "paypal": {"enabled": True, "client_id": "new-client", "client_secret": "new-paypal-secret"},
-            "usdt": {},
-        },
-    })
+    assert store.migrate_legacy_ciphertexts() == 2
+    assert store.migrate_legacy_ciphertexts() == 0
     raw = json.loads((tmp_path / "user_payment_channels_v106.json").read_text(encoding="utf-8"))
     zpay_envelope = json.loads(raw["aggregate"]["zpay"]["key_ciphertext"])
     paypal_envelope = json.loads(raw["direct"]["paypal"]["client_secret_ciphertext"])
@@ -128,10 +123,10 @@ def test_payment_channels_legacy_ciphertext_is_read_then_new_writes_use_keyring(
     assert paypal_envelope["format"] == DataKeyring.FORMAT
     assert zpay_envelope["purpose"] == "payment_channels"
     assert paypal_envelope["purpose"] == "payment_channels"
-    assert "new-zpay-secret" not in str(raw)
-    assert "new-paypal-secret" not in str(raw)
-    assert store.zpay_key() == "new-zpay-secret"
-    assert store.paypal_secret() == "new-paypal-secret"
+    assert "old-zpay-secret" not in str(raw)
+    assert "old-paypal-secret" not in str(raw)
+    assert store.zpay_key() == "old-zpay-secret"
+    assert store.paypal_secret() == "old-paypal-secret"
 
 
 def test_payment_channels_unknown_legacy_key_fails_closed(tmp_path: Path) -> None:
