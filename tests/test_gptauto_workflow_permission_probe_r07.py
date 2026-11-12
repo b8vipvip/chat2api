@@ -1,9 +1,12 @@
 """R-07: fake GitHub API proves fail-closed permission probe lifecycle."""
 from __future__ import annotations
 
+import io
+import urllib.error
+
 import pytest
 
-from scripts.gptauto_workflow_write_probe_r07 import ProbeError, main, run_probe
+from scripts.gptauto_workflow_write_probe_r07 import GitHubApi, ProbeError, main, run_probe
 
 NONCE = "abcdef123456"
 PREFIX = "/repos/b8vipvip/chat2api"
@@ -67,3 +70,37 @@ def test_invalid_nonce_fails_before_any_github_calls() -> None:
     with pytest.raises(ValueError, match="nonce"):
         run_probe(api, "unsafe/branch")
     assert api.calls == []
+
+
+
+def test_http_permission_denial_never_exposes_token_or_response_body(monkeypatch) -> None:
+    token = "gptauto-secret-token-must-not-appear"
+    body = ("private response body " + token).encode("utf-8")
+
+    def denied(_request, timeout):
+        assert timeout == 15
+        raise urllib.error.HTTPError(
+            "https://api.github.com/private", 403, "forbidden",
+            hdrs=None, fp=io.BytesIO(body),
+        )
+
+    monkeypatch.setattr(
+        "scripts.gptauto_workflow_write_probe_r07.urllib.request.urlopen", denied,
+    )
+    with pytest.raises(ProbeError) as error:
+        GitHubApi(token).request("PUT", PREFIX + "/contents/.github/workflows/probe.yml", {})
+    assert "403" in str(error.value)
+    assert token not in str(error.value)
+    assert "private response body" not in str(error.value)
+
+
+def test_network_timeout_is_reported_without_raw_transport_exception(monkeypatch) -> None:
+    def timed_out(_request, timeout):
+        raise TimeoutError("socket timed out with secret header")
+
+    monkeypatch.setattr(
+        "scripts.gptauto_workflow_write_probe_r07.urllib.request.urlopen", timed_out,
+    )
+    with pytest.raises(ProbeError, match="failed to reach API") as error:
+        GitHubApi("token").request("GET", PREFIX + "/git/ref/heads/main")
+    assert "secret header" not in str(error.value)
