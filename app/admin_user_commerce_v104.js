@@ -4,10 +4,11 @@
   const content = document.querySelector(".content");
   if (!nav || !content || document.getElementById("view-user-pricing")) return;
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[ch]);
+  let adminRoleResolved = false;
   const keyHeader = () => {
-    // A delegated Session must never inherit a stale root API key left in this
-    // browser's sessionStorage from a previous administrator.
-    if (currentAdminRole && currentAdminRole !== "super_admin") return {};
+    // Never send a possibly stale root key until the current Session role is
+    // known. A delegated Session must not inherit a prior administrator key.
+    if (!adminRoleResolved || (currentAdminRole && currentAdminRole !== "super_admin")) return {};
     const value = String(document.getElementById("adminKey")?.value || "").trim();
     return value ? {"x-api-key": value} : {};
   };
@@ -38,6 +39,7 @@
     if (!currentAdminRole && String(document.getElementById("adminKey")?.value || "").trim()) {
       currentAdminRole = "super_admin";
     }
+    adminRoleResolved = true;
     pricingButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
     paymentButton.hidden = !["super_admin", "billing_admin"].includes(currentAdminRole);
     usersButton.hidden = !["super_admin", "user_admin", "system_admin", "support"].includes(currentAdminRole);
