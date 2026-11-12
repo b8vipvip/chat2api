@@ -26,6 +26,8 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     assert 'value="tenant_role"' in html
     assert '/assets/chat2api-control-plane-admin-v1.js' in html
     assert 'id="adminSessionPassword"' in html
+    assert 'id="adminSessionRotatePassword"' in html
+    assert 'id="adminPasswordDialog"' in html
     assert "api/admin/auth/session" in html
     assert "sessionStorage.removeItem('chat2api_admin_key')" in html
     assert "sessionStorage.setItem('chat2api_admin_key'" in html
@@ -45,6 +47,9 @@ def test_control_plane_ui_asset_is_served_with_safe_cache_and_content_headers():
         assert "textContent" in response.text
         assert "innerHTML" not in response.text
         assert "adminSessionPassword" in response.text
+        assert "/api/admin/control/self/password" in response.text
+        assert "new_password" in response.text
+        assert "adminSessionRotatePassword" in response.text
         assert "loadQuotaReservations" in response.text
         assert "loadInvitations" in response.text
         assert "/api/admin/control/invitations" in response.text
