@@ -30,6 +30,7 @@ assert.equal(policy.elapsedMs(500, 499), null);
 assert.equal(policy.isStable({ shortTextVerified: true }, 500, 499), false);
 assert.equal(policy.elapsedMs(Number.NaN, 1000), null);
 assert.equal(policy.elapsedMs(null, 10000), null);
+assert.equal(policy.isStable({ shortTextVerified: true }, null, 10000), false);
 monotonicNow = 4700;
 assert.equal(policy.now(), 4700);
 
@@ -55,6 +56,7 @@ assert.match(source, /response_terminal_stable_ms: abortedReplyStableElapsedMs\(
 assert.match(source, /response_terminal_required_stable_ms: abortedReplyStableThreshold\(rendered\)/);
 assert.match(source, /abortedReplyStableSince\(abortedRenderedCandidateSince, rendered\)/);
 assert.ok(!source.includes("Date.now() - abortedRenderedCandidateSince"));
+assert.ok(!source.includes("abortedRenderedCandidateSince = 0;"), "reset uses a null sentinel, never an ancient time origin");
 
 // Short timing remains confined to request-v6's aborted text-only recovery;
 // media/file/image creation, active generation, tool payloads and cancellation
