@@ -60,6 +60,8 @@ class SingleProcessRuntimeGuard:
             if self.data_dir.is_symlink():
                 raise RuntimeTopologyError("Chat2API data directory cannot be a symbolic link")
             self.data_dir.mkdir(parents=True, exist_ok=True)
+            if self.lock_path.is_symlink():
+                raise RuntimeTopologyError("Runtime lock path cannot be a symbolic link")
 
             flags = os.O_CREAT | os.O_RDWR
             flags |= getattr(os, "O_NOFOLLOW", 0)
