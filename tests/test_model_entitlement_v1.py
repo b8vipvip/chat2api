@@ -52,6 +52,12 @@ class FakeTenantMemberships:
     def tenant_for_key(self, key_id):
         return "ten_abc123" if key_id == "key_1" else None
 
+    def user_for_key(self, key_id):
+        return "usr_abcdef123" if key_id == "key_1" else None
+
+    def role_for(self, tenant_id, user_id):
+        return "owner" if tenant_id == "ten_abc123" and user_id == "usr_abcdef123" else None
+
 
 class FakeApiKeys:
     def get_public(self, key_id):
@@ -207,6 +213,18 @@ def test_admin_entitlement_api_requires_session_audits_and_validates_subjects(tm
             json={"effect": "deny", "models": ["gpt-5.5"]},
         )
         assert missing_tenant.status_code == 404
+        tenant_role = client.put(
+            "/api/admin/model-entitlements/tenant_role/owner",
+            headers=headers,
+            json={"effect": "allow", "models": ["gpt-5.5"]},
+        )
+        assert tenant_role.status_code == 200
+        invalid_tenant_role = client.put(
+            "/api/admin/model-entitlements/tenant_role/root",
+            headers=headers,
+            json={"effect": "deny", "models": ["gpt-5.5"]},
+        )
+        assert invalid_tenant_role.status_code == 400
         deleted = client.delete("/api/admin/model-entitlements/key/key_1", headers=headers)
         assert deleted.status_code == 200 and deleted.json()["deleted"] is True
         events = app.state.admin_audit.recent(20)
@@ -233,6 +251,7 @@ def test_tenant_allowlist_applies_only_through_explicit_api_key_binding(tmp_path
     registry = app.state.registry
     store.upsert("global", "default", "allow", ["gpt-5.5", "gpt-5.6-sol"])
     store.upsert("tenant", "ten_abc123", "allow", ["gpt-5.5"])
+    store.upsert("tenant_role", "owner", "allow", ["gpt-5.5"])
 
     registry.routing_key_context.set("key_1")
     assert [row["id"] for row in registry.model_catalog()] == ["gpt-5.5"]
