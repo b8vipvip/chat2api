@@ -28,6 +28,10 @@
   paymentButton.dataset.view = "user-payments";
   paymentButton.textContent = "支付配置";
   nav.appendChild(paymentButton);
+  const usersButton = document.createElement("button");
+  usersButton.dataset.view = "admin-users";
+  usersButton.textContent = "用户管理";
+  nav.appendChild(usersButton);
 
   content.insertAdjacentHTML("beforeend", `
     <section class="view" id="view-user-pricing">
@@ -70,16 +74,43 @@
         </div>
         <div class="toolbar" style="margin-top:14px"><button class="action good" id="commerceSavePayment">保存支付配置</button><button class="action" id="commerceTestPayment">测试 API 连接</button><span id="commercePaymentStatus" class="muted"></span></div>
       </div>
-    </section>`);
+    </section>
+    <section class="view" id="view-admin-users">
+      <div class="panel">
+        <h2>用户管理</h2>
+        <p class="muted">查看注册用户、账户状态、名下 API Key 和在线会话。停用用户会撤销其全部用户控制台会话，并阻止其名下 API Key 继续调用；重新启用不会恢复已撤销的会话。</p>
+        <div class="toolbar" style="margin-top:14px">
+          <input id="adminUserSearch" placeholder="搜索邮箱、昵称或用户 ID" style="min-width:260px">
+          <button class="action" id="adminUserSearchButton">搜索</button>
+          <button class="action" id="adminUserReload">刷新</button>
+          <span id="adminUserStatus" class="muted"></span>
+        </div>
+        <div class="scroll"><table>
+          <thead><tr><th>邮箱</th><th>昵称</th><th>用户 ID</th><th>状态</th><th>注册时间</th><th>API Key</th><th>会话</th><th>余额</th><th>操作</th></tr></thead>
+          <tbody id="adminUsersBody"><tr><td colspan="9" class="muted">打开用户管理后加载</td></tr></tbody>
+        </table></div>
+      </div>
+      <div class="panel" id="adminUserKeysPanel" style="display:none;margin-top:14px">
+        <div class="toolbar"><h3 id="adminUserKeysTitle" style="margin:0;flex:1">用户 API Key</h3><button class="action" id="adminUserKeysClose">关闭</button></div>
+        <div class="scroll"><table>
+          <thead><tr><th>名称</th><th>前缀</th><th>状态</th><th>权限</th><th>创建时间</th><th>最后使用</th><th>Token 额度</th></tr></thead>
+          <tbody id="adminUserKeysBody"></tbody>
+        </table></div>
+        <p class="muted">此处只显示 Key 元数据，不显示或恢复完整密钥。</p>
+      </div>
+    </section>\`);
 
   function activate(view) {
     document.querySelectorAll(".nav button").forEach((button) => button.classList.toggle("active", button.dataset.view === view));
     document.querySelectorAll(".view").forEach((section) => section.classList.toggle("active", section.id === `view-${view}`));
     const title = document.getElementById("pageTitle");
-    if (title) title.textContent = view === "user-pricing" ? "价格配置" : "支付配置";
+    const titles = {"admin-users":"用户管理","user-pricing":"价格配置","user-payments":"支付配置"};
+    if (title) title.textContent = titles[view] || view;
+    if (view === "admin-users") loadUsers().catch(showUserError);
     if (view === "user-pricing") loadPricing().catch(showPricingError);
     if (view === "user-payments") loadPayments().catch(showPaymentError);
   }
+  usersButton.addEventListener("click", (event) => { event.stopPropagation(); activate("admin-users"); });
   pricingButton.addEventListener("click", (event) => { event.stopPropagation(); activate("user-pricing"); });
   paymentButton.addEventListener("click", (event) => { event.stopPropagation(); activate("user-payments"); });
 
@@ -110,6 +141,110 @@
       };
     });
   }
+  let adminUserRows = [];
+  async function loadUsers() {
+    const status = document.getElementById("adminUserStatus");
+    status.textContent = "正在加载用户…";
+    const query = document.getElementById("adminUserSearch").value.trim();
+    const params = new URLSearchParams({limit:"100",offset:"0"});
+    if (query) params.set("q", query);
+    const payload = await adminApi("/api/admin/users?" + params.toString());
+    adminUserRows = payload.data || [];
+    renderUsers();
+    status.textContent = "共 " + (payload.total || 0) + " 个用户";
+  }
+  function renderUsers() {
+    const body = document.getElementById("adminUsersBody");
+    if (!adminUserRows.length) {
+      body.innerHTML = '<tr><td colspan="9" class="muted">暂无匹配用户</td></tr>';
+      return;
+    }
+    body.innerHTML = adminUserRows.map((user) => {
+      const enabled = Boolean(user.enabled);
+      const balance = (Number(user.balance_cents || 0) / 100).toFixed(2);
+      return '<tr>' +
+        '<td>' + esc(user.email) + '</td>' +
+        '<td>' + esc(user.display_name) + '</td>' +
+        '<td><code>' + esc(user.user_id) + '</code></td>' +
+        '<td><span class="pill ' + (enabled ? 'ok' : 'bad') + '">' + (enabled ? '正常' : '已停用') + '</span></td>' +
+        '<td>' + esc(user.created_at || '-') + '</td>' +
+        '<td>' + Number(user.key_count || 0) + '</td>' +
+        '<td>' + Number(user.active_sessions || 0) + '</td>' +
+        '<td>¥' + balance + '</td>' +
+        '<td><div class="rowactions">' +
+        '<button class="action ' + (enabled ? 'danger' : 'good') + '" data-user-action="toggle" data-user-id="' + esc(user.user_id) + '" data-enabled="' + (enabled ? 'false' : 'true') + '">' + (enabled ? '停用' : '启用') + '</button>' +
+        '<button class="action" data-user-action="revoke" data-user-id="' + esc(user.user_id) + '">撤销会话</button>' +
+        '<button class="action" data-user-action="keys" data-user-id="' + esc(user.user_id) + '">查看 Key</button>' +
+        '</div></td></tr>';
+    }).join("");
+  }
+  function showUserError(error) {
+    document.getElementById("adminUserStatus").textContent = "错误：" + error.message;
+  }
+  async function loadUserKeys(userId) {
+    const panel = document.getElementById("adminUserKeysPanel");
+    const user = adminUserRows.find((row) => row.user_id === userId);
+    document.getElementById("adminUserKeysTitle").textContent = "用户 API Key · " + (user?.email || userId);
+    const payload = await adminApi("/api/admin/users/" + encodeURIComponent(userId) + "/keys");
+    const body = document.getElementById("adminUserKeysBody");
+    body.innerHTML = (payload.data || []).map((key) => {
+      const state = key.revoked_at ? "已撤销" : key.expired ? "已过期" : key.enabled ? "正常" : "已停用";
+      return '<tr><td>' + esc(key.name) + '</td>' +
+        '<td><code>' + esc(key.prefix) + '</code></td>' +
+        '<td>' + esc(state) + '</td>' +
+        '<td>' + esc((key.scopes || []).join(", ")) + '</td>' +
+        '<td>' + esc(key.created_at || '-') + '</td>' +
+        '<td>' + esc(key.last_used_at || '-') + '</td>' +
+        '<td>' + (key.token_quota == null ? "不限" : Number(key.tokens_used || 0) + " / " + Number(key.token_quota || 0)) + '</td></tr>';
+    }).join("") || '<tr><td colspan="7" class="muted">该用户没有业务 API Key</td></tr>';
+    panel.style.display = "block";
+  }
+  document.getElementById("adminUsersBody").addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-user-action]");
+    if (!button) return;
+    const userId = button.dataset.userId;
+    const action = button.dataset.userAction;
+    const status = document.getElementById("adminUserStatus");
+    button.disabled = true;
+    try {
+      if (action === "keys") {
+        await loadUserKeys(userId);
+      } else if (action === "toggle") {
+        const enabled = button.dataset.enabled === "true";
+        const prompt = enabled
+          ? "确定重新启用该用户？已撤销的会话不会恢复。"
+          : "确定停用该用户？其所有控制台会话将被撤销，名下 API Key 将立即无法调用。";
+        if (!window.confirm(prompt)) return;
+        const result = await adminApi("/api/admin/users/" + encodeURIComponent(userId), {
+          method: "PATCH",
+          body: JSON.stringify({enabled}),
+        });
+        status.textContent = enabled ? "用户已启用" : "用户已停用；撤销会话 " + Number(result.revoked_sessions || 0) + " 个";
+        await loadUsers();
+      } else if (action === "revoke") {
+        if (!window.confirm("确定撤销该用户的全部控制台会话？")) return;
+        const result = await adminApi("/api/admin/users/" + encodeURIComponent(userId) + "/sessions/revoke", {
+          method: "POST",
+          body: "{}",
+        });
+        status.textContent = "已撤销 " + Number(result.revoked_sessions || 0) + " 个会话";
+        await loadUsers();
+      }
+    } catch (error) {
+      status.textContent = "操作失败：" + error.message;
+    } finally {
+      button.disabled = false;
+    }
+  });
+  document.getElementById("adminUserSearchButton").addEventListener("click", () => loadUsers().catch(showUserError));
+  document.getElementById("adminUserReload").addEventListener("click", () => loadUsers().catch(showUserError));
+  document.getElementById("adminUserSearch").addEventListener("keydown", (event) => {
+    if (event.key === "Enter") loadUsers().catch(showUserError);
+  });
+  document.getElementById("adminUserKeysClose").addEventListener("click", () => {
+    document.getElementById("adminUserKeysPanel").style.display = "none";
+  });
+
   async function loadPricing() {
     const payload = await adminApi("/api/admin/user-pricing");
     document.getElementById("commerceBillingEnabled").value = String(Boolean(payload.billing_enabled));
