@@ -10,6 +10,9 @@ def test_admin_console_exposes_c_views_and_one_control_plane_asset():
     html = admin_response("tenants").body.decode("utf-8")
     assert 'data-view="control-admins"' in html
     assert 'data-view="client-policy"' in html
+    assert 'data-view="registration-invitations"' in html
+    assert 'id="view-registration-invitations"' in html
+    assert 'value="invite_only"' in html
     assert 'data-view="tenants"' in html
     assert 'data-view="model-entitlements"' in html
     assert 'data-view="plugins"' in html
@@ -43,6 +46,9 @@ def test_control_plane_ui_asset_is_served_with_safe_cache_and_content_headers():
         assert "innerHTML" not in response.text
         assert "adminSessionPassword" in response.text
         assert "loadQuotaReservations" in response.text
+        assert "loadInvitations" in response.text
+        assert "/api/admin/control/invitations" in response.text
+        assert "cInviteCode" in response.text
         assert "/settings" in response.text
         assert "runtime_integration_enabled" in response.text
         assert "execute_tool" not in response.text
