@@ -37,9 +37,12 @@ def test_backup_verify_and_restore_check_hashes_json_sqlite_and_binary(tmp_path:
     assert created["ok"] is True
     assert created["file_count"] == 4
     assert not (backup / ".chat2api-runtime.lock").exists()
+    before_verify = sorted(path.relative_to(backup).as_posix() for path in backup.rglob("*"))
     assert verify_backup(backup) == {
         "ok": True, "file_count": 4, "schema_version": 1
     }
+    after_verify = sorted(path.relative_to(backup).as_posix() for path in backup.rglob("*"))
+    assert after_verify == before_verify
 
     restored = restore_backup(
         backup, target, acknowledge_plaintext_sensitive_data=True
