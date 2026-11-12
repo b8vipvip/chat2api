@@ -166,8 +166,13 @@ class ControlPlaneStore:
         with self.lock:
             next_client = {**self.client, **changes}
             self._validate_client(next_client)
+            previous = self.client
             self.client = next_client
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.client = previous
+                raise
             return self.public_client()
 
     def role_for(self, username: str | None) -> str | None:
@@ -227,7 +232,11 @@ class ControlPlaneStore:
                     "sha256", password.encode("utf-8"), salt, ITERATIONS
                 ).hex(),
             }
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                del self.admins[key]
+                raise
             return self._public_admin(self.admins[key])
 
     def update_admin(self, username: str, *, role: str | None = None, enabled: bool | None = None) -> dict[str, Any]:
@@ -241,9 +250,14 @@ class ControlPlaneStore:
             row = self.admins.get(username.casefold())
             if not row:
                 raise KeyError(username)
+            previous = dict(row)
             if role is not None:
                 row["role"] = role
             if enabled is not None:
                 row["enabled"] = enabled
-            self._save()
+            try:
+                self._save()
+            except Exception:
+                self.admins[username.casefold()] = previous
+                raise
             return self._public_admin(row)
