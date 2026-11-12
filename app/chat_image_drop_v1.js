@@ -49,7 +49,12 @@
       activate(false);
       const files = Array.from(event.dataTransfer.files || []);
       if (files.length) {
-        try { onFiles(files); } catch { /* The existing picker owns user-facing errors. */ }
+        try {
+          const result = onFiles(files);
+          if (result && typeof result.catch === "function") {
+            result.catch(() => { /* The existing picker owns user-facing errors. */ });
+          }
+        } catch { /* The existing picker owns user-facing errors. */ }
       }
     }
     function preventBrowserOpen(event) {
