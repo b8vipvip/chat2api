@@ -628,9 +628,11 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             "request_id": str(request.headers.get("x-request-id") or ""),
             "details": {"enabled": body.enabled},
         }
+        mutation_applied = False
         try:
             admin_audit.append(**audit_context)
             user, revoked_sessions = accounts.set_enabled(user_id, body.enabled)
+            mutation_applied = True
             admin_audit.append(
                 **{
                     **audit_context,
@@ -643,10 +645,12 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         except AdminAuditError as error:
-            raise HTTPException(
-                status_code=503,
-                detail="用户状态操作未能完成审计持久化；请检查服务端审计日志",
-            ) from error
+            detail = (
+                "用户状态已更新，但完成审计事件写入失败；请检查服务端审计日志"
+                if mutation_applied
+                else "审计存储不可用，用户状态未修改"
+            )
+            raise HTTPException(status_code=503, detail=detail) from error
         return {"user": user, "revoked_sessions": revoked_sessions}
 
     @app.post("/api/admin/users/{user_id}/sessions/revoke")
@@ -661,9 +665,11 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             "request_id": str(request.headers.get("x-request-id") or ""),
             "details": {},
         }
+        mutation_applied = False
         try:
             admin_audit.append(**audit_context)
             revoked = accounts.revoke_user_sessions(user_id)
+            mutation_applied = True
             admin_audit.append(
                 **{
                     **audit_context,
@@ -674,10 +680,12 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
         except KeyError as error:
             raise HTTPException(status_code=404, detail=str(error)) from error
         except AdminAuditError as error:
-            raise HTTPException(
-                status_code=503,
-                detail="会话撤销操作未能完成审计持久化；请检查服务端审计日志",
-            ) from error
+            detail = (
+                "会话已撤销，但完成审计事件写入失败；请检查服务端审计日志"
+                if mutation_applied
+                else "审计存储不可用，会话未撤销"
+            )
+            raise HTTPException(status_code=503, detail=detail) from error
         return {"user_id": user_id, "revoked_sessions": revoked}
 
     @app.get("/api/admin/users/{user_id}/keys")
