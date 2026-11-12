@@ -488,6 +488,19 @@
               await loadManagedKeys();
             } catch (error) { setStatus("cKeyStatus", error.message, true); }
           }));
+          actions.appendChild(button("编辑名称/权限", "action", async () => {
+            const name = prompt("API Key 名称", item.name || "");
+            if (name === null) return;
+            const scopes = prompt("权限范围（chat, models, files, images, audio）", (item.scopes || []).join(", "));
+            if (scopes === null) return;
+            try {
+              await sessionApi("/api/admin/keys/" + encodeURIComponent(item.key_id) + "/settings", {
+                method: "PATCH",
+                body: { name: name.trim(), scopes: scopes.split(",").map(value => value.trim()).filter(Boolean) }
+              });
+              await loadManagedKeys();
+            } catch (error) { setStatus("cKeyStatus", error.message, true); }
+          }));
           actions.appendChild(button("调整额度", "action", async () => {
             const value = prompt("输入新的 Token 额度；留空表示不限", item.token_quota == null ? "" : String(item.token_quota));
             if (value === null) return;
