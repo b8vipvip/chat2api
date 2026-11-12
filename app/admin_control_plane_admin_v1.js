@@ -5,6 +5,7 @@
   const C_ROLES = {
     "control-admins": ["super_admin"],
     "client-policy": ["super_admin", "system_admin"],
+    "registration-invitations": ["super_admin", "system_admin", "user_admin"],
     "tenants": ["super_admin", "system_admin"],
     "model-entitlements": ["super_admin", "system_admin", "support"],
     "plugins": ["super_admin", "plugin_admin"],
@@ -80,6 +81,10 @@
     ["cEntSave"].forEach((id) => { if ($(id)) $(id).hidden = !canWriteModels; });
     const canReconcileQuota = adminSession && ["super_admin", "system_admin", "api_key_admin"].includes(adminSession.role);
     if ($("cQuotaReconcile")) $("cQuotaReconcile").hidden = !canReconcileQuota;
+    const canManageInvitations = adminSession && ["super_admin", "user_admin"].includes(adminSession.role);
+    ["cInviteEmail", "cInviteTtl", "cInviteCreate"].forEach((id) => {
+      if ($(id)) $(id).disabled = !canManageInvitations;
+    });
     const canWriteKeys = adminSession && ["super_admin", "api_key_admin"].includes(adminSession.role);
     ["cKeyName", "cKeyExpiry", "cKeyQuota", "cKeyCreate"].forEach((id) => {
       if ($(id)) $(id).disabled = !canWriteKeys;
@@ -166,6 +171,7 @@
     originalShow(view);
     if (view === "control-admins") loadAdmins();
     if (view === "client-policy") loadClientPolicy();
+    if (view === "registration-invitations") loadInvitations();
     if (view === "tenants") loadTenants();
     if (view === "model-entitlements") loadEntitlements();
     if (view === "plugins") loadPlugins();
@@ -273,6 +279,60 @@
     } catch (error) { setStatus("cClientStatus", error.message, true); }
   });
   $("cClientReload")?.addEventListener("click", loadClientPolicy);
+
+  async function loadInvitations() {
+    try {
+      const result = await sessionApi("/api/admin/control/invitations?limit=100");
+      const rows = Array.isArray(result.data) ? result.data : [];
+      const body = $("cInviteRows");
+      body.replaceChildren();
+      const canManage = adminSession && ["super_admin", "user_admin"].includes(adminSession.role);
+      rows.forEach((item) => {
+        const row = document.createElement("tr");
+        cell(row, item.email);
+        cell(row, item.status);
+        cell(row, item.created_by);
+        cell(row, item.created_at ? new Date(Number(item.created_at) * 1000).toLocaleString() : "-");
+        cell(row, item.expires_at ? new Date(Number(item.expires_at) * 1000).toLocaleString() : "-");
+        const actions = cell(row, "");
+        if (canManage && item.status === "issued") {
+          actions.appendChild(button("撤销", "action danger", async () => {
+            if (!confirm("确定撤销此邀请？")) return;
+            try {
+              await sessionApi("/api/admin/control/invitations/" + encodeURIComponent(item.invitation_id) + "/revoke", {method:"POST", body:{}});
+              setStatus("cInviteStatus", "邀请已撤销");
+              await loadInvitations();
+            } catch (error) { setStatus("cInviteStatus", error.message, true); }
+          }));
+        }
+        body.appendChild(row);
+      });
+      setStatus("cInviteStatus", "已读取 " + rows.length + " 条邀请记录；原始代码不会在列表中显示");
+    } catch (error) { setStatus("cInviteStatus", error.message, true); }
+  }
+
+  $("cInviteCreate")?.addEventListener("click", async () => {
+    const email = $("cInviteEmail").value.trim();
+    if (!email) return setStatus("cInviteStatus", "请填写受邀邮箱", true);
+    try {
+      const result = await sessionApi("/api/admin/control/invitations", {
+        method: "POST",
+        body: {email, expires_in_seconds: Number($("cInviteTtl").value || 604800)}
+      });
+      $("cInviteCode").textContent = result.code || "";
+      $("cInviteCodePanel").classList.remove("hidden");
+      $("cInviteEmail").value = "";
+      setStatus("cInviteStatus", "邀请已创建。请立即复制代码；离开此页面后不会再次显示。");
+      await loadInvitations();
+    } catch (error) { setStatus("cInviteStatus", error.message, true); }
+  });
+  $("cInviteReload")?.addEventListener("click", loadInvitations);
+  $("cInviteCopy")?.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText($("cInviteCode").textContent || "");
+      setStatus("cInviteStatus", "邀请代码已复制");
+    } catch (_) { setStatus("cInviteStatus", "复制失败，请手动复制代码", true); }
+  });
 
   function selectedTenant() {
     if (!selectedTenantId) throw new Error("请先选择工作区");
