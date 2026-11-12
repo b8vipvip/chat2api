@@ -21,8 +21,12 @@ allowlisted UI contract only (not yet bound to native-content sidecars).
   is available; it is **not** mathematical formula rendering parity.
 - `renderRichBlocks(host, blocks)` supports safely named presentation types:
   text, code, math, citation, image, file, tool state, and unknown blocks.
-  Image/file entries deliberately show a non-clickable preview placeholder
-  until a separate attachment owner/authorization contract is supplied.
+  File blocks with a strictly validated `file_...` ID render a same-origin
+  download card pointing to the W-05A owner-checked download endpoint; the
+  endpoint rechecks the session and FileStore owner and returns 404 for
+  non-owned IDs. Invalid IDs never become paths or links. Image entries remain
+  non-clickable placeholders until W-01's image-content route and native
+  sidecar owner contract are integrated together.
 - Tool-state cards are read-only; they are neither tool execution permission
   nor proof of Worker completion. Citations are labeled unverified links.
 
@@ -43,6 +47,7 @@ table, code, citation and tool-fallback data are rendered as text-only nodes.
 
 The module is not yet loaded by the production `/chat` page. A dedicated
 integration PR after #793 settles must add asset serving and the script tag,
-then run real desktop/mobile browser fixtures. End-to-end native sidecar
+then run real desktop/mobile browser fixtures. File-card links also require
+W-05A's download route to be integrated before they can succeed in production. End-to-end native sidecar
 presentation integration remains a separate release gate. Do not claim
 ChatGPT 1:1 parity.
