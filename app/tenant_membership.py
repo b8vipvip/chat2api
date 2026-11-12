@@ -228,6 +228,15 @@ class TenantMembershipStore:
             ).fetchone()
         return str(row[0]) if row else None
 
+    def user_for_key(self, key_id: str) -> str | None:
+        """Return the actual UserAccountStore owner captured at key binding."""
+        with self.lock:
+            row = self.db.execute(
+                "SELECT user_id FROM tenant_api_keys WHERE key_id=?",
+                (str(key_id or ""),),
+            ).fetchone()
+        return str(row[0]) if row else None
+
     def keys_for_tenant(self, tenant_id: str) -> list[dict[str, Any]]:
         with self.lock:
             if not self.exists(tenant_id):
