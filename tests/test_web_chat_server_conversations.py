@@ -1,4 +1,5 @@
 """W-02 persistent conversation contract, owner isolation, and concurrent writes."""
+import base64
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 
@@ -159,6 +160,86 @@ def test_owner_scoped_search_finds_titles_and_message_text_without_like_wildcard
         ).json()["total"] == 0
         assert alice.get(
             "/api/user/chat/conversations", params={"q": "x" * 121}
+        ).status_code == 422
+
+
+def test_structured_image_references_are_owner_scoped_and_round_trip(tmp_path):
+    app = application(tmp_path)
+    with TestClient(app) as alice, TestClient(app) as bob:
+        register(alice, "attachment-alice@example.org")
+        register(bob, "attachment-bob@example.org")
+        key = alice.post(
+            "/api/user/keys", headers=ORIGIN, json={"name": "image owner"}
+        )
+        assert key.status_code == 200, key.text
+        token = key.json()["token"]
+        uploaded = alice.post(
+            "/v1/files",
+            headers={"Authorization": "Bearer " + token},
+            json={
+                "filename": "chart.png",
+                "mime_type": "image/png",
+                "data_base64": base64.b64encode(b"fake-png-bytes").decode("ascii"),
+                "purpose": "vision",
+            },
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        file_id = uploaded.json()["id"]
+        message = {
+            "id": "message_image01",
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this chart"},
+                {"type": "image_url", "image_url": {"url": file_id}},
+            ],
+            "createdAt": "",
+        }
+        body = {
+            **snapshot(),
+            "messages": [message],
+            "mutation_id": "mutation_image01",
+        }
+        path = "/api/user/chat/conversations/conversation_image01"
+        saved = alice.put(path, json=body, headers=ORIGIN)
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["messages"][0]["content"] == message["content"]
+
+        foreign = bob.put(
+            "/api/user/chat/conversations/conversation_image02",
+            json={**body, "mutation_id": "mutation_image02"},
+            headers=ORIGIN,
+        )
+        assert foreign.status_code == 404
+        assert foreign.headers["cache-control"] == "private, no-store"
+
+        remote = {
+            **body,
+            "mutation_id": "mutation_image03",
+            "messages": [{
+                **message,
+                "id": "message_image02",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "https://evil.example/image.png"}}
+                ],
+            }],
+        }
+        assert alice.put(
+            "/api/user/chat/conversations/conversation_image03",
+            json=remote, headers=ORIGIN,
+        ).status_code == 422
+
+        assistant_image = {
+            **body,
+            "mutation_id": "mutation_image04",
+            "messages": [{
+                **message,
+                "id": "message_image03",
+                "role": "assistant",
+            }],
+        }
+        assert alice.put(
+            "/api/user/chat/conversations/conversation_image04",
+            json=assistant_image, headers=ORIGIN,
         ).status_code == 422
 
 def test_concurrent_expected_revision_only_one_writer_wins(tmp_path):
