@@ -3321,11 +3321,11 @@
                     response_terminal_dom_reconciled: true,
                     response_integrity_evidence: rendered.rolelessRichVerified
                       ? (rendered.shortTextVerified
-                        ? "fresh-roleless-H4-pair+whole-compact-DIV+SSE-overlap+fresh-toolbar+8s-stable"
-                        : "fresh-roleless-H4-pair+whole-next-DIV+fresh-toolbar+8s-stable+aborted-sse")
+                        ? `fresh-roleless-H4-pair+whole-compact-DIV+SSE-overlap+fresh-toolbar+${abortedReplyStableThreshold(rendered)}ms-stable`
+                        : `fresh-roleless-H4-pair+whole-next-DIV+fresh-toolbar+${abortedReplyStableThreshold(rendered)}ms-stable+aborted-sse`)
                       : rendered.shortTextVerified
-                      ? "same-request-short-sse+fresh-scope-toolbar+8s-stable+aborted-sse"
-                      : "fresh-rendered-baseline+new-finish-action+8s-stable+aborted-sse",
+                      ? `same-request-short-sse+fresh-scope-toolbar+${abortedReplyStableThreshold(rendered)}ms-stable+aborted-sse`
+                      : `fresh-rendered-baseline+new-finish-action+${abortedReplyStableThreshold(rendered)}ms-stable+aborted-sse`,
                     response_epoch_candidate_reason: rendered.reason,
                     response_terminal_final_chars: finalText.length,
                     response_terminal_plain_roleless_fallback: Boolean(plainFallback),
