@@ -39,6 +39,21 @@ def test_admin_audit_is_append_only_hash_chained_and_private(tmp_path: Path) -> 
     assert "session_token" not in serialized.lower()
 
 
+def test_admin_audit_read_restores_private_permissions(tmp_path: Path) -> None:
+    store = AdminAuditStore(tmp_path)
+    store.append(
+        actor="owner",
+        action="user.status_change_completed",
+        target_type="user",
+        target_id="usr_123",
+        details={"enabled": False},
+    )
+    store.path.chmod(0o644)
+
+    assert store.recent()
+    assert store.path.stat().st_mode & 0o777 == 0o600
+
+
 def test_admin_audit_detects_modified_event_payload(tmp_path: Path) -> None:
     store = AdminAuditStore(tmp_path)
     store.append(
