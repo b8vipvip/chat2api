@@ -71,6 +71,7 @@ def test_user_image_content_is_session_authenticated_and_account_owned(tmp_path:
         assert preview.content == payload
         assert preview.headers["content-type"].startswith("image/png")
         assert preview.headers["cache-control"] == "private, no-store"
+        assert "cookie" in {value.strip().lower() for value in preview.headers["vary"].split(",")}
         assert preview.headers["x-content-type-options"] == "nosniff"
         assert preview.headers["content-security-policy"] == "default-src 'none'; sandbox"
         assert preview.headers["cross-origin-resource-policy"] == "same-origin"
@@ -151,6 +152,11 @@ def test_user_can_delete_owned_vision_image_with_session_only(tmp_path: Path) ->
 
         missing_origin = client.delete(f"/api/user/files/{file_id}")
         assert missing_origin.status_code == 403
+        malformed_origin = client.delete(
+            f"/api/user/files/{file_id}",
+            headers={"Origin": "http://[::1"},
+        )
+        assert malformed_origin.status_code == 403
         cross_origin = client.delete(
             f"/api/user/files/{file_id}",
             headers={"Origin": "https://attacker.example"},
@@ -162,6 +168,8 @@ def test_user_can_delete_owned_vision_image_with_session_only(tmp_path: Path) ->
             headers={"Origin": "http://testserver"},
         )
         assert deleted.status_code == 200
+        assert deleted.headers["cache-control"] == "private, no-store"
+        assert "cookie" in {value.strip().lower() for value in deleted.headers["vary"].split(",")}
         assert deleted.json() == {"deleted": True}
         assert client.get(f"/api/user/files/{file_id}/content").status_code == 404
         assert client.delete(
