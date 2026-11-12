@@ -18,7 +18,7 @@ from typing import Any
 from .model_catalog import normalize_concrete_model_id
 
 
-SUBJECT_TYPES = frozenset({"global", "key", "user"})
+SUBJECT_TYPES = frozenset({"global", "key", "user", "tenant"})
 EFFECTS = frozenset({"allow", "deny"})
 MAX_MODELS = 200
 SUBJECT_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
@@ -141,12 +141,16 @@ class ModelEntitlementStore:
             "models": json.loads(models), "enabled": bool(enabled), "updated_at": updated,
         } for kind, sid, effect, models, enabled, updated in rows]
 
-    def rules_for(self, *, key_id: str | None, user_id: str | None) -> list[dict[str, Any]]:
+    def rules_for(
+        self, *, key_id: str | None, user_id: str | None, tenant_id: str | None = None
+    ) -> list[dict[str, Any]]:
         pairs = [("global", "default")]
-        if key_id and key_id != "master":
-            pairs.append(("key", str(key_id)))
+        if tenant_id:
+            pairs.append(("tenant", str(tenant_id)))
         if user_id:
             pairs.append(("user", str(user_id)))
+        if key_id and key_id != "master":
+            pairs.append(("key", str(key_id)))
         clauses = " OR ".join("(subject_type=? AND subject_id=?)" for _ in pairs)
         params = [value for pair in pairs for value in pair]
         with self.lock:
@@ -166,8 +170,9 @@ class ModelEntitlementStore:
         *,
         key_id: str | None,
         user_id: str | None,
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
-        rules = self.rules_for(key_id=key_id, user_id=user_id)
+        rules = self.rules_for(key_id=key_id, user_id=user_id, tenant_id=tenant_id)
         if not rules:
             return {"allowed": True, "reason": "no_policy", "model": model_id, "matched_rules": []}
         model = normalize_concrete_model_id(model_id)
