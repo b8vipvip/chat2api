@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -25,12 +25,54 @@ def _http_error(status_code: int, detail: str) -> None:
     raise HTTPException(status_code=status_code, detail=detail, headers=_PRIVATE_HEADERS)
 
 
+class TextContentPart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["text"]
+    text: str = Field(max_length=8000)
+
+
+class ImageURLReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str = Field(min_length=14, max_length=80, pattern=r"^file_[A-Za-z0-9]{8,64}$")
+
+
+class ImageContentPart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    type: Literal["image_url"]
+    image_url: ImageURLReference
+
+
+ContentPart = Annotated[TextContentPart | ImageContentPart, Field(discriminator="type")]
+
+
 class MessageSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid")
     id: str = Field(min_length=8, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
     role: Literal["user", "assistant"]
-    content: str = Field(max_length=8000)
+    content: str | list[ContentPart]
     createdAt: str = Field(default="", max_length=48)
+
+    @field_validator("content")
+    @classmethod
+    def validate_content(cls, value):
+        if isinstance(value, str):
+            if len(value) > 8000:
+                raise ValueError("message content exceeds 8000 characters")
+            return value
+        if not value or len(value) > 8:
+            raise ValueError("structured message content must contain 1 to 8 parts")
+        text_chars = sum(len(part.text) for part in value if isinstance(part, TextContentPart))
+        image_count = sum(isinstance(part, ImageContentPart) for part in value)
+        if text_chars > 8000 or image_count > 4:
+            raise ValueError("structured message content exceeds text or image limits")
+        return value
+
+    @model_validator(mode="after")
+    def image_parts_require_user_role(self):
+        if self.role != "user" and isinstance(self.content, list):
+            if any(isinstance(part, ImageContentPart) for part in self.content):
+                raise ValueError("image attachments are only valid on user messages")
+        return self
 
 
 class ConversationPutBody(BaseModel):
@@ -84,6 +126,26 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
             _http_error(422, "invalid conversation ID")
         return conversation_id
 
+    def validate_attachment_ownership(owner: str, messages: list[MessageSnapshot]) -> None:
+        file_store = getattr(app.state, "file_store", None)
+        accounts = getattr(app.state, "user_accounts", None)
+        for message in messages:
+            if not isinstance(message.content, list):
+                continue
+            for part in message.content:
+                if not isinstance(part, ImageContentPart):
+                    continue
+                file_id = part.image_url.url
+                item = file_store.get(file_id) if file_store is not None else None
+                if (
+                    item is None
+                    or item.purpose != "vision"
+                    or not item.owner_key_id
+                    or accounts is None
+                    or not accounts.owns_key(owner, str(item.owner_key_id))
+                ):
+                    _http_error(404, "attachment not found")
+
     @app.get("/api/user/chat/conversations")
     async def list_conversations(
         request: Request,
@@ -114,6 +176,7 @@ def install_web_chat_conversations(app: FastAPI) -> FastAPI:
         response.headers["Vary"] = "Cookie"
         owner = principal(request)
         mutation_origin(request)
+        validate_attachment_ownership(owner, body.messages)
         if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
             _http_error(415, "application/json required")
         try:
