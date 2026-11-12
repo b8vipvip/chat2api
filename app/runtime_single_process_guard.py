@@ -33,6 +33,7 @@ class SingleProcessRuntimeGuard:
         self.data_dir = Path(data_dir)
         self.lock_path = self.data_dir / ".chat2api-runtime.lock"
         self._fd: int | None = None
+        self._owner_pid: int | None = None
         self._lock = threading.RLock()
 
     @classmethod
@@ -55,6 +56,10 @@ class SingleProcessRuntimeGuard:
     def acquire(self) -> None:
         with self._lock:
             if self._fd is not None:
+                if self._owner_pid != os.getpid():
+                    raise RuntimeTopologyError(
+                        "Runtime lock descriptor was inherited across fork; preloaded multi-worker startup is unsupported"
+                    )
                 return
             self._validate_worker_environment()
             if self.data_dir.is_symlink():
@@ -110,6 +115,7 @@ class SingleProcessRuntimeGuard:
                 os.write(fd, payload.encode("ascii"))
                 os.fsync(fd)
                 self._fd = fd
+                self._owner_pid = os.getpid()
             except Exception:
                 os.close(fd)
                 raise
@@ -117,8 +123,13 @@ class SingleProcessRuntimeGuard:
     def release(self) -> None:
         with self._lock:
             fd, self._fd = self._fd, None
+            owner_pid, self._owner_pid = self._owner_pid, None
             if fd is None:
                 return
+            if owner_pid != os.getpid():
+                # Never unlock a parent process's inherited open-file lock.
+                # Process exit will close this inherited descriptor safely.
+                raise RuntimeTopologyError("Cannot release a runtime lock owned by another process")
             try:
                 if os.name == "nt":
                     import msvcrt
