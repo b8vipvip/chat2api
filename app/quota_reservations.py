@@ -89,6 +89,31 @@ class QuotaReservationStore:
             ).fetchone()
         return max(0, int(row[0] or 0))
 
+    def list_reservations(
+        self, *, state: str | None = None, key_id: str | None = None, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        if state is not None and state not in {"reserved", "committing", "settled", "released", "expired"}:
+            raise QuotaReservationError("Unknown reservation state")
+        if type(limit) is not int or not 1 <= limit <= 500:
+            raise QuotaReservationError("limit must be between 1 and 500")
+        clauses = []
+        params: list[Any] = []
+        if state:
+            clauses.append("state=?")
+            params.append(state)
+        if key_id:
+            clauses.append("key_id=?")
+            params.append(key_id)
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        params.append(limit)
+        with self.lock:
+            rows = self.db.execute(
+                """SELECT request_id,key_id,reserved_tokens,actual_tokens,state,created_at,expires_at,updated_at
+                   FROM quota_reservations""" + where + " ORDER BY updated_at DESC LIMIT ?",
+                params,
+            ).fetchall()
+        return [self._row(row) for row in rows if row is not None]
+
     def reserve(
         self,
         request_id: str,
