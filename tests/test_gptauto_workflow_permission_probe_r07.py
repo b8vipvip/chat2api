@@ -142,21 +142,19 @@ def test_ambiguous_branch_create_response_reconciles_and_cleans_created_ref() ->
     assert api.calls[4][1] == PREFIX + "/git/refs/heads/diagnostics/gptauto-workflow-write-probe-" + NONCE
 
 
-def test_rejected_branch_create_with_confirmed_404_does_not_delete_unknown_ref() -> None:
+def test_definitive_403_branch_create_failure_is_not_reconciled_or_deleted() -> None:
     class NoBranchApi(FakeApi):
         def request(self, method, path, payload=None):
             if method == "POST":
                 self.calls.append((method, path, payload))
                 raise ProbeError("simulated Contents write denial", status_code=403)
-            if method == "GET" and "/git/ref/heads/diagnostics/" in path:
-                self.calls.append((method, path, payload))
-                raise ProbeError("GitHub GET rejected with HTTP 404", status_code=404)
             return super().request(method, path, payload)
 
     api = NoBranchApi()
     with pytest.raises(ProbeError, match="simulated Contents write denial"):
         run_probe(api, NONCE)
-    assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST", "GET"]
+    assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST"]
+    assert api.branch_exists is False
 
 
 
@@ -181,4 +179,21 @@ def test_ambiguous_create_with_unverifiable_ref_head_never_deletes_it() -> None:
     with pytest.raises(ProbeError, match="head cannot be verified"):
         run_probe(api, NONCE)
     assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST", "GET"]
+    assert api.branch_exists is True
+
+
+
+def test_definitive_409_ref_conflict_never_deletes_concurrent_branch() -> None:
+    class ConcurrentBranchApi(FakeApi):
+        def request(self, method, path, payload=None):
+            if method == "POST":
+                self.calls.append((method, path, payload))
+                self.branch_exists = True
+                raise ProbeError("GitHub POST rejected with HTTP 409", status_code=409)
+            return super().request(method, path, payload)
+
+    api = ConcurrentBranchApi()
+    with pytest.raises(ProbeError, match="HTTP 409"):
+        run_probe(api, NONCE)
+    assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST"]
     assert api.branch_exists is True
