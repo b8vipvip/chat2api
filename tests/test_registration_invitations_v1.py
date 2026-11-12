@@ -170,6 +170,25 @@ def test_invite_only_registration_consumes_code_only_after_success(tmp_path: Pat
         assert revoke.status_code == 404
 
 
+def test_failed_duplicate_registration_releases_invitation_for_admin_recovery(tmp_path: Path):
+    app = make_app(tmp_path)
+    with TestClient(app) as client:
+        # Create an account while registration is open, then switch to invite-only.
+        first = client.post("/api/user/register", json={
+            "email": "alice@example.com", "password": "strong-password-123"
+        })
+        assert first.status_code == 200
+        app.state.control_plane.update_client({"registration_mode": "invite_only"})
+        created = app.state.invitations.create("alice@example.com", "root")
+        duplicate = client.post("/api/user/register", json={
+            "email": "alice@example.com",
+            "password": "strong-password-456",
+            "invite_code": created["code"],
+        })
+        assert duplicate.status_code == 409
+        assert app.state.invitations.list_invitations()[0]["status"] == "issued"
+
+
 def test_invite_only_requires_code_closed_rejects_and_open_remains_compatible(tmp_path: Path):
     app = make_app(tmp_path)
     with TestClient(app) as client:
