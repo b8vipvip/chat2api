@@ -16,6 +16,7 @@ def test_file_drag_drop_depth_prevention_and_cleanup():
 const fs = require("fs");
 const vm = require("vm");
 const assert = require("assert");
+(async () => {
 const source = fs.readFileSync(process.argv[1], "utf8");
 class Target {
   constructor() { this.listeners = new Map(); }
@@ -93,7 +94,22 @@ target.dispatch("drop", afterDestroy);
 assert.strictEqual(received.length, 1);
 assert.strictEqual((target.listeners.get("drop") || []).length, 0);
 assert.strictEqual((document.listeners.get("drop") || []).length, 0);
+
+const asyncTarget = new Target();
+const asyncDocument = new Target();
+let rejectionHandled = false;
+const destroyAsync = api.install(asyncTarget, asyncDocument, {
+  onFiles: () => Promise.reject(new Error("simulated handler failure")).catch(() => {
+    rejectionHandled = true;
+  }),
+});
+asyncTarget.dispatch("drop", fileDrag());
+await Promise.resolve();
+await Promise.resolve();
+assert.strictEqual(rejectionHandled, true);
+destroyAsync();
 console.log("image-drop-harness-passed");
+})().catch(error => { console.error(error); process.exitCode = 1; });
 """
     result = subprocess.run(
         ["node", "-e", harness, str(MODULE)],
