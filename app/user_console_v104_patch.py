@@ -29,6 +29,7 @@ from .user_commerce import (
 PATCH_REVISION = 104
 USER_JS_ASSET = "/assets/chat2api-user-console-v104.js"
 ADMIN_JS_ASSET = "/assets/chat2api-admin-commerce-v104.js"
+CHAT_IMAGE_DROP_JS_ASSET = "/assets/chat2api-image-drop-v1.js"
 CHAT_CLIENT_JS_ASSET = "/assets/chat2api-chat-client-v1.js"
 CHAT_CLIENT_CSS_ASSET = "/assets/chat2api-chat-client-v1.css"
 
@@ -288,6 +289,14 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
                 "X-Content-Type-Options": "nosniff",
                 "Referrer-Policy": "no-referrer",
             },
+        )
+
+    @app.get(CHAT_IMAGE_DROP_JS_ASSET, include_in_schema=False)
+    async def chat_image_drop_v1_js() -> Response:
+        return Response(
+            Path(__file__).with_name("chat_image_drop_v1.js").read_text(encoding="utf-8"),
+            media_type="application/javascript",
+            headers={"Cache-Control": "no-store, no-cache, must-revalidate", "X-Content-Type-Options": "nosniff"},
         )
 
     @app.get(CHAT_CLIENT_JS_ASSET, include_in_schema=False)
