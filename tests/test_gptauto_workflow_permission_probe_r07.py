@@ -8,7 +8,7 @@ import pytest
 
 from scripts.gptauto_workflow_write_probe_r07 import GitHubApi, ProbeError, main, run_probe
 
-NONCE = "abcdef123456"
+NONCE = "abcdef123456abcdef123456"
 PREFIX = "/repos/b8vipvip/chat2api"
 
 
