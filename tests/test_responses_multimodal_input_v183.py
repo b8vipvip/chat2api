@@ -134,9 +134,21 @@ def test_responses_dispatch_transfers_canonical_attachments_to_one_worker(tmp_pa
     async def send(client_id, message):
         events.append((client_id, message))
     registry.send = send
+    requests = {}
+
     async def create(request_id, client_id):
-        return SimpleNamespace(request_id=request_id, client_id=client_id)
-    broker = SimpleNamespace(create=create)
+        state = SimpleNamespace(
+            request_id=request_id,
+            client_id=client_id,
+            final_future=asyncio.get_running_loop().create_future(),
+        )
+        requests[request_id] = state
+        return state
+
+    async def release(request_id):
+        requests.pop(request_id, None)
+
+    broker = SimpleNamespace(create=create, release=release, requests=requests)
     app = SimpleNamespace(state=SimpleNamespace(
         registry=registry,
         broker=broker,
