@@ -16,6 +16,9 @@ request-history table owner.
 - Model entitlements: global, tenant, user and API-key allow/deny policies.
 - Product plugin registry: manifest registration and read-only metadata
   inspection. UI always shows untrusted / execution disabled.
+- Quota reservation journal: bounded read-only reservation list and confirmed,
+  audited reconciliation action. The UI displays runtime integration status
+  and does not claim quota enforcement is active before lifecycle hooks land.
 
 ## Authentication and authorization
 
