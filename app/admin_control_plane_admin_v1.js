@@ -7,7 +7,8 @@
     "client-policy": ["super_admin", "system_admin"],
     "tenants": ["super_admin", "system_admin", "tenant_admin"],
     "model-entitlements": ["super_admin", "system_admin", "support"],
-    "plugins": ["super_admin", "plugin_admin"]
+    "plugins": ["super_admin", "plugin_admin"],
+    "quota-ledger": ["super_admin", "system_admin", "api_key_admin", "billing_admin"]
   };
   let adminSession = null;
   let roleCatalogue = {};
@@ -76,6 +77,8 @@
     if ($("connect")) $("connect").hidden = !!(adminSession && adminSession.authenticated && !root);
     const canWriteModels = adminSession && ["super_admin", "system_admin"].includes(adminSession.role);
     ["cEntSave"].forEach((id) => { if ($(id)) $(id).hidden = !canWriteModels; });
+    const canReconcileQuota = adminSession && ["super_admin", "system_admin", "api_key_admin"].includes(adminSession.role);
+    if ($("cQuotaReconcile")) $("cQuotaReconcile").hidden = !canReconcileQuota;
     ["cEntSubjectType", "cEntSubjectId", "cEntEffect", "cEntModels"].forEach((id) => {
       if ($(id)) $(id).disabled = !canWriteModels;
     });
@@ -154,6 +157,7 @@
     if (view === "tenants") loadTenants();
     if (view === "model-entitlements") loadEntitlements();
     if (view === "plugins") loadPlugins();
+    if (view === "quota-ledger") loadQuotaReservations();
   };
 
   async function loadAdmins() {
@@ -440,3 +444,40 @@
 
   refreshSession();
 })();
+
+
+  async function loadQuotaReservations() {
+    try {
+      const params = new URLSearchParams();
+      if ($("cQuotaState").value) params.set("state", $("cQuotaState").value);
+      if ($("cQuotaKeyId").value.trim()) params.set("key_id", $("cQuotaKeyId").value.trim());
+      const query = params.toString();
+      const result = await sessionApi("/api/admin/quota-reservations" + (query ? "?" + query : ""));
+      const body = $("cQuotaRows");
+      body.replaceChildren();
+      (result.data || []).forEach((item) => {
+        const row = document.createElement("tr");
+        cell(row, item.request_id);
+        cell(row, item.key_id);
+        cell(row, item.reserved_tokens);
+        cell(row, item.actual_tokens == null ? "-" : item.actual_tokens);
+        cell(row, item.state);
+        cell(row, new Date(item.created_at * 1000).toLocaleString());
+        cell(row, new Date(item.expires_at * 1000).toLocaleString());
+        body.appendChild(row);
+      });
+      const state = result.runtime_integration_enabled
+        ? "请求生命周期预留已接入"
+        : "仅安装了预留账本 API；请求准入 / 完成回调尚未接入，不能视为已强制执行配额";
+      setStatus("cQuotaStatus", state + " · " + (result.data || []).length + " 条记录 · 当前结果集预留 " + result.active_reserved_tokens_in_result + " tokens");
+    } catch (error) { setStatus("cQuotaStatus", error.message, true); }
+  }
+  $("cQuotaReload")?.addEventListener("click", loadQuotaReservations);
+  $("cQuotaState")?.addEventListener("change", loadQuotaReservations);
+  $("cQuotaReconcile")?.addEventListener("click", async () => {
+    try {
+      const result = await sessionApi("/api/admin/quota-reservations/reconcile", { method: "POST", body: {} });
+      setStatus("cQuotaStatus", "恢复完成 · " + result.settled + " 条提交状态已对账");
+      await loadQuotaReservations();
+    } catch (error) { setStatus("cQuotaStatus", error.message, true); }
+  });
