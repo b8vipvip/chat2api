@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import secrets
+import threading
 import time
 from pathlib import Path
 from types import MethodType
@@ -33,18 +34,10 @@ def _now() -> str:
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{secrets.token_hex(6)}.tmp")
-    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    try:
-        temporary.chmod(0o600)
-    except OSError:
-        pass
-    temporary.replace(path)
-    try:
-        path.chmod(0o600)
-    except OSError:
-        pass
+    DataKeyring.atomic_write(
+        path,
+        (json.dumps(payload, ensure_ascii=False, indent=2) + "\n").encode("utf-8"),
+    )
 
 
 def _valid_tron_address(value: str) -> bool:
@@ -78,14 +71,17 @@ class PaymentChannelsStore:
                 value = str(candidate or "")
                 if value and value not in normalized:
                     normalized.append(value)
+            self.legacy_secrets = tuple(normalized)
             self.legacy_ciphers = [DataKeyring.legacy_fernet(value) for value in normalized]
             self.cipher = self.legacy_ciphers[0] if self.legacy_ciphers else None
         else:
             # Direct Store construction remains compatible with existing unit
             # callers; production always injects the shared DataKeyring.
             value = str(secret or "chat2api-payment-v106")
+            self.legacy_secrets = (value,)
             self.cipher = DataKeyring.legacy_fernet(value)
             self.legacy_ciphers = [self.cipher]
+        self.lock = threading.RLock()
         self.payload: dict[str, Any] = {
             "version": 106,
             "public_origin": "",
@@ -125,9 +121,16 @@ class PaymentChannelsStore:
             return
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, TypeError):
-            return
-        if not isinstance(raw, dict):
+            if not isinstance(raw, dict):
+                raise ValueError("Invalid payment channel document shape")
+            for group in ("aggregate", "direct"):
+                if group in raw and not isinstance(raw[group], dict):
+                    raise ValueError(f"Invalid payment channel {group} shape")
+        except (OSError, ValueError, TypeError) as error:
+            if self.keyring:
+                raise DataKeyringError(
+                    "Stored payment channel document is unreadable; restore a verified backup"
+                ) from error
             return
         self.payload["public_origin"] = str(raw.get("public_origin") or "")
         for group in ("aggregate", "direct"):
