@@ -119,3 +119,43 @@ def test_missing_future_cannot_override_existing_broker_terminal() -> None:
         assert state.diagnostics["detached_stream_worker_won_timeout_race"] is True
 
     asyncio.run(exercise())
+
+
+
+def test_timeout_publish_exception_still_finalizes_and_releases_detached_request(monkeypatch) -> None:
+    async def exercise() -> None:
+        loop = asyncio.get_running_loop()
+        state = SimpleNamespace(
+            request_id="req_r03_publish_exception",
+            final_future=loop.create_future(),
+            terminal_event_type=None,
+            diagnostics={},
+        )
+        finalized = []
+        released = []
+
+        async def timeout(_future, _seconds):
+            raise asyncio.TimeoutError()
+
+        class BrokenBroker:
+            async def publish(self, *_args):
+                raise RuntimeError("simulated Broker publish outage")
+
+        async def finalize(error):
+            finalized.append(error)
+
+        async def release():
+            released.append(True)
+
+        monkeypatch.setattr(detached.asyncio, "wait_for", timeout)
+        await detached.settle_detached_stream(
+            state=state, broker=BrokenBroker(), finalize=finalize,
+            release=release, wait_seconds=1,
+        )
+        assert len(finalized) == 1
+        assert "did not reach a terminal" in finalized[0]
+        assert released == [True]
+        assert state.diagnostics["detached_stream_timeout_publish_error"] == "RuntimeError"
+        assert state.diagnostics["api_stream_detached_settled"] is True
+
+    asyncio.run(exercise())
