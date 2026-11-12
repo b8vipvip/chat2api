@@ -172,7 +172,8 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
     telemetry = app.state.telemetry
     admin_sessions = getattr(app.state, "admin_sessions", None)
 
-    admin_audit = AdminAuditStore(data_dir)
+    # Reuse one hash-chain writer/lock across administrator modules.
+    admin_audit = getattr(app.state, "admin_audit", None) or AdminAuditStore(data_dir)
     app.state.admin_audit = admin_audit
     app.state.user_accounts = accounts
     app.state.user_pricing = pricing
@@ -279,6 +280,9 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
 
     @app.get("/chat", include_in_schema=False)
     async def chat_client() -> HTMLResponse:
+        control = getattr(app.state, "control_plane", None)
+        if control is not None and not control.public_client()["web_chat_enabled"]:
+            raise HTTPException(status_code=403, detail="Web Chat is disabled by administrator policy")
         template = Path(__file__).with_name("chat_client_v1.html").read_text(encoding="utf-8")
         return HTMLResponse(
             template,
@@ -324,6 +328,9 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
 
     @app.post("/api/user/register")
     async def user_register(body: RegisterBody, request: Request) -> JSONResponse:
+        control = getattr(app.state, "control_plane", None)
+        if control is not None and control.public_client()["registration_mode"] != "open":
+            raise HTTPException(status_code=403, detail="New user registration is disabled")
         try:
             user = accounts.register(body.email, body.password, body.display_name)
             token = accounts.create_session(str(user["user_id"]))
@@ -650,8 +657,15 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             ]
         total = len(rows)
         page = rows[offset:offset + limit]
-        for row in page:
-            row["balance_cents"] = billing.balance_cents(str(row["user_id"]))
+        control = getattr(app.state, "control_plane", None)
+        actor = getattr(request.state, "admin_username", None)
+        role = control.role_for(actor) if control is not None else "super_admin"
+        # User/support/system roles may inspect account status but not wallet
+        # balances. Keep financial data restricted to the root administrator
+        # until a reviewed billing-scoped user projection exists.
+        if role == "super_admin":
+            for row in page:
+                row["balance_cents"] = billing.balance_cents(str(row["user_id"]))
         return {"data": page, "total": total, "limit": limit, "offset": offset}
 
     @app.patch("/api/admin/users/{user_id}")
