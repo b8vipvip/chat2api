@@ -64,3 +64,7 @@ def test_existing_commerce_console_is_the_single_user_and_billing_ui_owner():
     assert 'if (canReadAudit()) await loadAudit()' in source
     assert 'const canWritePaymentSecrets = currentAdminRole === "super_admin"' in source
     assert '!canWriteUsers()' in source
+    payment_source = (Path(__file__).resolve().parents[1] / "app" / "admin_payments_v106.js").read_text(encoding="utf-8")
+    assert 'currentAdminRole === "super_admin"' in payment_source
+    assert 'node.disabled = !canEditSecrets' in payment_source
+    assert 'currentAdminRole !== "super_admin"' in payment_source
