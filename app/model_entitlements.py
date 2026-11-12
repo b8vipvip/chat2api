@@ -51,7 +51,7 @@ class ModelEntitlementStore:
     """SQLite owner for global, API-key and user model policy."""
 
     def __init__(self, data_dir: Path | str) -> None:
-        self.path = Path(data_dir) / "model_entitlements_v1.sqlite3"
+        self.path = Path(data_dir) / "model_entitlements_v2.sqlite3"
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.is_symlink():
             raise ModelEntitlementError("Model entitlement store cannot be a symbolic link")
@@ -61,7 +61,7 @@ class ModelEntitlementStore:
         self.db.execute("PRAGMA busy_timeout=10000")
         self.db.execute("""
             CREATE TABLE IF NOT EXISTS model_entitlement_rules(
-              subject_type TEXT NOT NULL CHECK(subject_type IN ('global','key','user')),
+              subject_type TEXT NOT NULL CHECK(subject_type IN ('global','tenant','key','user')),
               subject_id TEXT NOT NULL,
               effect TEXT NOT NULL CHECK(effect IN ('allow','deny')),
               models_json TEXT NOT NULL,
