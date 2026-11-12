@@ -48,6 +48,10 @@ assert.ok(
     < requestScripts.indexOf("content_request_v6.js"),
   "policy must be loaded before request-v6",
 );
+assert.equal(manifest.version, "0.22.291", "policy extraction does not invent a new release");
+const runtimeContract = fs.readFileSync(new URL("../app/runtime_contract.py", import.meta.url), "utf8");
+assert.ok(runtimeContract.includes('"short_reply_stability_policy_v1": True'));
+assert.ok(runtimeContract.includes("short-reply-stability-policy-v1"));
 
 const source = fs.readFileSync(new URL("../chrome_extension/content_request_v6.js", import.meta.url), "utf8");
 assert.ok(source.includes("globalThis.__CHAT2API_SHORT_REPLY_STABILITY_POLICY_V1__"));
