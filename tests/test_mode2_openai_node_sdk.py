@@ -6,6 +6,8 @@ and error handlers are the real application code.
 """
 from __future__ import annotations
 
+import base64
+import io
 import os
 import socket
 import subprocess
@@ -15,6 +17,7 @@ from pathlib import Path
 
 import pytest
 import uvicorn
+from PIL import Image
 
 from app.config import Settings
 from app.main import create_app
@@ -40,17 +43,28 @@ def test_official_node_sdk_uses_real_mode2_routes_and_worker_dispatch(tmp_path: 
     }]
     app.state.registry.resolve_client = lambda requested: EXPECTED_WORKER
     commands: list[dict] = []
+    image_requests: list[dict] = []
+    image_buffer = io.BytesIO()
+    Image.new("RGB", (8, 8), (30, 60, 90)).save(image_buffer, format="PNG")
+    expected_image_b64 = base64.b64encode(image_buffer.getvalue()).decode("ascii")
 
     async def fake_worker_send(client_id: str, payload: dict) -> None:
-        if payload.get("type") != "chat.request":
-            return
-        assert client_id == EXPECTED_WORKER
-        commands.append(payload)
-        published = await app.state.broker.publish(payload["request_id"], {
-            "type": "chat.completed",
-            "text": "mode2-node-sdk-answer",
-        })
-        assert published
+        if payload.get("type") == "chat.request":
+            assert client_id == EXPECTED_WORKER
+            commands.append(payload)
+            published = await app.state.broker.publish(payload["request_id"], {
+                "type": "chat.completed",
+                "text": "mode2-node-sdk-answer",
+            })
+            assert published
+        elif payload.get("type") == "image.request":
+            assert client_id == EXPECTED_WORKER
+            image_requests.append(payload)
+            state = app.state.broker.requests[payload["request_id"]]
+            await state.queue.put({
+                "type": "image.completed",
+                "images": [{"b64_json": expected_image_b64, "mime_type": "image/png"}],
+            })
 
     app.state.registry.send = fake_worker_send
 
@@ -73,6 +87,7 @@ def test_official_node_sdk_uses_real_mode2_routes_and_worker_dispatch(tmp_path: 
         env = dict(os.environ)
         env["MODE2_BASE_URL"] = f"http://127.0.0.1:{port}/v1"
         env["MODE2_API_KEY"] = MASTER
+        env["MODE2_EXPECTED_IMAGE_B64"] = expected_image_b64
         result = subprocess.run(
             ["node", str(ROOT / "tests" / "mode2_sdk_node.mjs")],
             cwd=ROOT, env=env, capture_output=True, text=True, timeout=90,
@@ -80,6 +95,8 @@ def test_official_node_sdk_uses_real_mode2_routes_and_worker_dispatch(tmp_path: 
         assert result.returncode == 0, f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
 
         assert len(commands) == 5
+        assert len(image_requests) == 1
+        assert image_requests[0]["prompt"] == "Generate a small test image"
         assert "Legacy completion" in commands[0]["prompt"]
         chat_prompt = commands[1]["prompt"]
         assert chat_prompt.index("[System]") < chat_prompt.index("First turn") < chat_prompt.index("Previous reply") < chat_prompt.index("Second turn")
