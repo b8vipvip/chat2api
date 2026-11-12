@@ -132,20 +132,30 @@
           }
 
           const status = String(payload.status || "unknown");
-          if (status === "completed" && payload.terminal === true) {
-            const hasText = payload.response_text_available === true &&
-              typeof payload.response_text === "string";
-            const result = {
-              status:hasText ? "completed" : "completed_without_text",
-              terminal:true,
-              active:false,
-              response_text:hasText ? payload.response_text : "",
-            };
+          if (TERMINAL.has(status)) {
+            if (payload.terminal !== true) {
+              const result = {status:"invalid_response", active:false, terminal:false};
+              emit(safeRecord, result);
+              return result;
+            }
+            if (status === "completed") {
+              const hasText = payload.response_text_available === true &&
+                typeof payload.response_text === "string";
+              const result = {
+                status:hasText ? "completed" : "completed_without_text",
+                terminal:true,
+                active:false,
+                response_text:hasText ? payload.response_text : "",
+              };
+              emit(safeRecord, result);
+              return result;
+            }
+            const result = {status, terminal:true, active:false};
             emit(safeRecord, result);
             return result;
           }
-          if (payload.terminal === true || TERMINAL.has(status)) {
-            const result = {status:TERMINAL.has(status) ? status : "request_failed", terminal:true, active:false};
+          if (payload.terminal === true) {
+            const result = {status:"invalid_response", active:false, terminal:false};
             emit(safeRecord, result);
             return result;
           }
