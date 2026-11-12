@@ -18,7 +18,7 @@ from typing import Any
 from .model_catalog import normalize_concrete_model_id
 
 
-SUBJECT_TYPES = frozenset({"global", "key", "user", "tenant"})
+SUBJECT_TYPES = frozenset({"global", "key", "user", "tenant", "tenant_role"})
 EFFECTS = frozenset({"allow", "deny"})
 MAX_MODELS = 200
 SUBJECT_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
