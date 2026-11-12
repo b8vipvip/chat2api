@@ -36,8 +36,6 @@ def test_official_node_sdk_uses_real_mode2_routes_and_worker_dispatch(tmp_path: 
         CHAT2API_API_KEY=MASTER,
         CHAT2API_DATA_DIR=str(tmp_path),
     ))
-    install_v13_patch(app)
-    install_responses_v108_patch(app)
     app.state.registry.model_catalog = lambda online_only=True: [{
         "id": "gpt-5.6-sol", "object": "model", "created": 0, "owned_by": "chat2api",
     }]
@@ -66,7 +64,11 @@ def test_official_node_sdk_uses_real_mode2_routes_and_worker_dispatch(tmp_path: 
                 "images": [{"b64_json": expected_image_b64, "mime_type": "image/png"}],
             })
 
+    # Wrap the fake Worker transport with the real v13 model/alias adapter.
+    # Assigning registry.send after install_v13_patch would bypass that adapter.
     app.state.registry.send = fake_worker_send
+    install_v13_patch(app)
+    install_responses_v108_patch(app)
 
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
