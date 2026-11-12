@@ -279,6 +279,9 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
 
     @app.get("/chat", include_in_schema=False)
     async def chat_client() -> HTMLResponse:
+        control = getattr(app.state, "control_plane", None)
+        if control is not None and not control.public_client()["web_chat_enabled"]:
+            raise HTTPException(status_code=403, detail="Web Chat is disabled by administrator policy")
         template = Path(__file__).with_name("chat_client_v1.html").read_text(encoding="utf-8")
         return HTMLResponse(
             template,
@@ -324,6 +327,9 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
 
     @app.post("/api/user/register")
     async def user_register(body: RegisterBody, request: Request) -> JSONResponse:
+        control = getattr(app.state, "control_plane", None)
+        if control is not None and control.public_client()["registration_mode"] != "open":
+            raise HTTPException(status_code=403, detail="New user registration is disabled")
         try:
             user = accounts.register(body.email, body.password, body.display_name)
             token = accounts.create_session(str(user["user_id"]))
