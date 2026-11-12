@@ -433,6 +433,26 @@ def install_user_console_v104_patch(app: FastAPI) -> FastAPI:
             },
         )
 
+    @app.delete("/api/user/files/{file_id}")
+    async def user_delete_image(file_id: str, request: Request) -> dict[str, bool]:
+        """Delete an account-owned vision raster image without requiring a live API Key."""
+        user = current_user(request)
+        file_store = app.state.file_store
+        item = file_store.get(file_id)
+        allowed_image_types = {"image/png", "image/jpeg", "image/webp", "image/gif"}
+        if (
+            not item
+            or item.purpose != "vision"
+            or item.mime_type not in allowed_image_types
+            or not accounts.owns_key(str(user["user_id"]), str(item.owner_key_id or ""))
+        ):
+            raise HTTPException(status_code=404, detail="图片附件不存在")
+        try:
+            await file_store.delete(file_id, str(item.owner_key_id))
+        except (KeyError, PermissionError) as error:
+            raise HTTPException(status_code=404, detail="图片附件不存在") from error
+        return {"deleted": True}
+
     @app.patch("/api/user/keys/{key_id}/quota")
     async def user_update_key_quota(key_id: str, body: UserKeyQuotaBody, request: Request) -> dict[str, Any]:
         user = current_user(request)
