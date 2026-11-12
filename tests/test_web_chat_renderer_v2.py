@@ -74,7 +74,11 @@ const rich = new Element("root");
 renderer.renderRichBlocks(rich, [
   {type:"tool", status:"<script>"},
   {type:"citation", title:"not safe", url:"javascript:alert(1)"},
-  {type:"image", file_id:"file_87654321", alt:"chart"},
+  {type:"citation", title:"credential", url:"https://user:pass@evil.example/"},
+  {type:"citation", title:"protocol relative", url:"//evil.example/"},
+  {type:"citation", title:"data URL", url:"data:text/html,<script>alert(1)</script>"},
+  {type:"citation", title:"safe HTTP", url:"http://example.org/source"},
+  {type:"image", file_id:"file_87654321", alt:"chart", url:"https://evil.example/image.png"},
   {type:"image", file_id:"../../etc/passwd"},
   {type:"file", file_id:"file_12345678", filename:"report.pdf"},
   {type:"file", file_id:"../../etc/passwd", filename:"bad.html"},
@@ -84,9 +88,14 @@ renderer.renderRichBlocks(rich, [
 const rnodes = all(rich);
 assert(!rnodes.some(x => ["script", "iframe"].includes(x.tag)));
 assert(rnodes.some(x => x.tag === "img" && x.src === "/api/user/files/file_87654321/content"));
+assert(!rnodes.some(x => x.tag === "img" && x.src === "https://evil.example/image.png"));
 assert(!rnodes.some(x => x.tag === "img" && x.src.includes("../")));
 assert(rnodes.some(x => x.tag === "a" && x.href === "/api/user/chat/files/file_12345678/download"));
-assert(!rnodes.some(x => x.tag === "a" && x.href.includes("../")));
+assert(rnodes.some(x => x.tag === "a" && x.href === "http://example.org/source"));
+assert(!rnodes.some(x => x.tag === "a" && (
+  x.href.startsWith("javascript:") || x.href.startsWith("data:") ||
+  x.href.includes("evil.example") || x.href.includes("user:pass") || x.href.includes("../")
+)));
 assert(rich.textContent.includes("report.pdf"));
 assert(rich.textContent.includes("unknown"));
 assert(rich.textContent.includes("文件附件：缺少有效文件引用"));
