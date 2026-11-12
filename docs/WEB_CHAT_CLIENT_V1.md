@@ -35,7 +35,8 @@ The page sends the full ordered conversation using only standard Chat Completion
 ## Explicit limitations / not yet implemented
 
 - Conversation history is browser-local only; it does not sync across devices or persist on the server.
-- Local history is capped at 15 conversations, 30 messages per conversation and 8,000 text characters per message. Image bytes remain in the server FileStore; browser history stores only validated file IDs and metadata.
+- Local history is capped at 15 conversations, 30 messages per conversation and 8,000 text characters per message. Image bytes remain in the existing server FileStore; browser history stores only validated file IDs and metadata.
+- The existing FileStore persists file bytes on disk without application-level encryption at rest. This PR does not add an image retention/cleanup policy; deleting local chat history does not automatically erase already-sent server files. Do not treat this feature as encrypted archival storage for highly sensitive images.
 - Image attachments are tied to the API Key that uploaded them. A conversation containing images must continue using that same Key for subsequent multimodal requests; another Key may view the conversation but cannot submit it.
 - No generic document/file attachments (PDF, Office documents, etc.), generated-image cards, audio/voice, citations/reference cards, tool/function calling UI, native sidecar blocks, KaTeX/MathML rendering or complete ChatGPT component parity.
 - No stream resume/reconnect after a lost connection. The UI warns when it does not receive the terminal `[DONE]` marker.
