@@ -57,7 +57,7 @@ async def settle_detached_stream(
                     # completed, error or cancelled; finalization reads that
                     # terminal instead of fabricating an independent result.
                     terminal_error = None
-                    state.diagnostics["detached_stream_worker_won_timeout_race"] = True
+                    state.diagnostics["detached_stream_terminal_won_timeout_race"] = True
                 else:
                     # No accepted timeout and no proven Worker terminal: keep
                     # the transport outcome unknown rather than false success.
@@ -74,7 +74,7 @@ async def settle_detached_stream(
                 # second terminal authority. If Broker already owns a real
                 # terminal, preserve it even on this degraded path.
                 terminal_error = None
-                state.diagnostics["detached_stream_worker_won_timeout_race"] = True
+                state.diagnostics["detached_stream_terminal_won_timeout_race"] = True
         state.diagnostics["api_stream_detached_worker_terminal"] = state.terminal_event_type or "none"
         state.diagnostics["api_stream_detached_settled"] = True
         await finalize(terminal_error)
