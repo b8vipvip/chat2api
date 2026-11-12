@@ -128,7 +128,11 @@ def _manifest(root: Path) -> dict[str, Any]:
 
 
 def _validate_manifest(value: Any) -> list[dict[str, Any]]:
-    if not isinstance(value, dict) or value.get("schema_version") != MANIFEST_VERSION:
+    if (
+        not isinstance(value, dict)
+        or type(value.get("schema_version")) is not int
+        or value.get("schema_version") != MANIFEST_VERSION
+    ):
         raise BackupError("Unsupported or invalid backup manifest")
     entries = value.get("files")
     if not isinstance(entries, list):
@@ -154,7 +158,7 @@ def _validate_manifest(value: Any) -> list[dict[str, Any]]:
             ch not in "0123456789abcdef" for ch in entry["sha256"]
         ):
             raise BackupError("Invalid backup SHA256")
-        if entry["kind"] not in {"json", "jsonl", "sqlite", "binary"}:
+        if not isinstance(entry["kind"], str) or entry["kind"] not in {"json", "jsonl", "sqlite", "binary"}:
             raise BackupError("Invalid backup file kind")
     return entries
 
