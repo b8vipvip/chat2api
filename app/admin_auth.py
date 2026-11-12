@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import secrets
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -48,6 +49,71 @@ def same_origin_admin_request(request) -> bool:
         and not parsed.fragment
         and fetch_site in {"", "same-origin"}
     )
+
+
+class AdminLoginRateLimiter:
+    """Bound repeated admin login failures per username/IP pair and per IP.
+
+    Process-local by design; multi-instance enforcement requires a shared
+    transactional limiter and is a production/D-P gate.
+    """
+
+    def __init__(
+        self,
+        *,
+        per_identity_limit: int = 5,
+        per_ip_limit: int = 20,
+        window_seconds: int = 900,
+    ) -> None:
+        self.per_identity_limit = max(1, int(per_identity_limit))
+        self.per_ip_limit = max(1, int(per_ip_limit))
+        self.window_seconds = max(1, int(window_seconds))
+        self.lock = threading.RLock()
+        self.failures: dict[str, list[float]] = {}
+
+    @staticmethod
+    def _digest(value: str) -> str:
+        return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()
+
+    def _keys(self, username: str, remote_addr: str) -> tuple[str, str]:
+        ip = str(remote_addr or "unknown").strip()[:128]
+        user = str(username or "").strip().casefold()[:128]
+        return (
+            "identity:" + self._digest(ip + "\0" + user),
+            "ip:" + self._digest(ip),
+        )
+
+    def retry_after(self, username: str, remote_addr: str) -> int:
+        now = time.monotonic()
+        identity_key, ip_key = self._keys(username, remote_addr)
+        with self.lock:
+            for key, limit in (
+                (identity_key, self.per_identity_limit),
+                (ip_key, self.per_ip_limit),
+            ):
+                values = [stamp for stamp in self.failures.get(key, []) if now - stamp < self.window_seconds]
+                if values:
+                    self.failures[key] = values
+                else:
+                    self.failures.pop(key, None)
+                if len(values) >= limit:
+                    return max(1, int(self.window_seconds - (now - values[0]) + 0.999))
+        return 0
+
+    def record_failure(self, username: str, remote_addr: str) -> None:
+        now = time.monotonic()
+        identity_key, ip_key = self._keys(username, remote_addr)
+        with self.lock:
+            for key in (identity_key, ip_key):
+                values = [stamp for stamp in self.failures.get(key, []) if now - stamp < self.window_seconds]
+                values.append(now)
+                self.failures[key] = values
+
+    def record_success(self, username: str, remote_addr: str) -> None:
+        identity_key, ip_key = self._keys(username, remote_addr)
+        with self.lock:
+            self.failures.pop(identity_key, None)
+            self.failures.pop(ip_key, None)
 
 
 SESSION_COOKIE = "chat2api_admin_session"
