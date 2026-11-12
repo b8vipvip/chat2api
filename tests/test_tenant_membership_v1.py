@@ -134,6 +134,11 @@ def test_admin_and_user_routes_enforce_session_csrf_and_scoped_member_discovery(
             assert root.delete(f"/api/admin/tenants/{tid}/members/{uid1}", headers=ORIGIN).status_code == 409
             assert root.delete(f"/api/admin/tenants/{tid}/keys/{key_id}", headers=ORIGIN).status_code == 200
             assert app.state.tenant_memberships.tenant_for_key(key_id) is None
+            app.state.api_keys.keys[key_id].enabled = False
+            disabled_binding = root.put(f"/api/admin/tenants/{tid}/keys/{key_id}", headers=ORIGIN, json={
+                "user_id": uid1,
+            })
+            assert disabled_binding.status_code == 409
             assert root.get(f"/api/admin/tenants/{tid}/members").json()["data"][0]["user_id"] == uid1
 
         # No change to the existing Mode 2 business API's auth contract.
