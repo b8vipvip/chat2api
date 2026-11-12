@@ -19,6 +19,7 @@ from typing import Any
 
 SLUG = re.compile(r"^[a-z][a-z0-9-]{2,47}$")
 USER_ID = re.compile(r"^usr_[A-Za-z0-9_-]{5,128}$")
+KEY_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,160}$")
 ROLES = frozenset({"owner", "admin", "member", "viewer"})
 
 
@@ -182,7 +183,7 @@ class TenantMembershipStore:
 
     def bind_key(self, tenant_id: str, user_id: str, key_id: str) -> dict[str, Any]:
         """Bind an existing user-owned API key to exactly one workspace."""
-        if not isinstance(key_id, str) or not SUBJECT_ID.fullmatch(key_id):
+        if not isinstance(key_id, str) or not KEY_ID.fullmatch(key_id):
             raise TenantMembershipError("Invalid API key ID")
         with self.lock:
             with self.db:
