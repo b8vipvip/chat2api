@@ -110,7 +110,10 @@ def _validate_content(root: Path, entry: dict[str, Any]) -> None:
         except (OSError, UnicodeError, ValueError) as exc:
             raise BackupError("Backup contains invalid JSONL data") from exc
     elif kind == "sqlite":
-        uri = "file:" + quote(str(path.resolve()), safe="/:") + "?mode=ro"
+        # POSIX separators keep Windows drive paths valid SQLite URIs.
+        # immutable=1 prevents verification from creating WAL/SHM sidecars or
+        # changing the verified backup directory after its manifest is checked.
+        uri = "file:" + quote(path.resolve().as_posix(), safe="/:") + "?mode=ro&immutable=1"
         try:
             connection = sqlite3.connect(uri, uri=True, timeout=5)
             try:
