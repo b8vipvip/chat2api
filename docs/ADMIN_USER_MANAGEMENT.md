@@ -35,6 +35,6 @@ Do not place passwords, session tokens, API key values, payment secrets or user 
 ## Current limitations
 
 - There is one configured administrator identity; there are no additional administrator accounts, roles or fine-grained RBAC grants yet.
-- The user directory uses the existing JSON account store and is intended for the current single-instance deployment model. A multi-worker or multi-instance database migration is a separate design and migration task.
+- The user directory uses the existing JSON account store and is intended for the current single-process deployment model. Thread locks and atomic file replacement are not cross-process transactions; a multi-worker or multi-instance database migration is a separate design and migration task.
 - The first UI supports user search, enable/disable, session revocation and safe API key metadata inspection. It does not expose key plaintext, reset passwords, edit user email, delete accounts or perform refunds.
 - Plugin management is not part of this vertical slice.
