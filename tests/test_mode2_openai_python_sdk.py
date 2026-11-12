@@ -6,6 +6,7 @@ suite is executed with the real openai package by mode2-sdk-contract.yml.
 """
 from __future__ import annotations
 
+import base64
 import io
 import json
 from pathlib import Path
@@ -182,3 +183,25 @@ def test_python_sdk_errors_use_openai_error_envelope(sdk_transport) -> None:
     assert invalid.value.status_code == 422
     assert invalid.value.body["error"]["type"] == "invalid_request_error"
     assert invalid.value.body["error"]["param"] == "messages"
+
+
+def test_legacy_chat2api_json_file_upload_remains_available(sdk_app) -> None:
+    app, _ = sdk_app
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/files",
+            headers={"Authorization": f"Bearer {MASTER}"},
+            json={
+                "filename": "legacy.txt",
+                "data_base64": base64.b64encode(b"legacy payload").decode("ascii"),
+                "mime_type": "text/plain",
+                "purpose": "chat2api",
+            },
+        )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["object"] == "file"
+    assert payload["filename"] == "legacy.txt"
+    assert payload["purpose"] == "chat2api"
+    assert payload["bytes"] == len(b"legacy payload")
+    assert isinstance(payload["created_at"], str)
