@@ -29,6 +29,9 @@ def test_admin_audit_is_append_only_hash_chained_and_private(tmp_path: Path) -> 
     rows = store.recent(10)
     assert [row["event_id"] for row in rows] == [second["event_id"], first["event_id"]]
     assert second["previous_hash"] == first["event_hash"]
+    assert first["result"] == "requested"
+    assert second["result"] == "completed"
+    assert first["policy_version"] == 1
     assert len(first["event_hash"]) == 64
     assert store.path.stat().st_mode & 0o777 == 0o600
     serialized = store.path.read_text(encoding="utf-8")
