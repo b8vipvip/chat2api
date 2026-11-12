@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import errno
 import os
+from contextlib import asynccontextmanager
 import stat
 import threading
 from pathlib import Path
@@ -71,7 +72,10 @@ class SingleProcessRuntimeGuard:
                 metadata = os.fstat(fd)
                 if not stat.S_ISREG(metadata.st_mode):
                     raise RuntimeTopologyError("Runtime lock path must be a regular file")
-                os.fchmod(fd, 0o600)
+                if hasattr(os, "fchmod"):
+                    os.fchmod(fd, 0o600)
+                else:
+                    os.chmod(self.lock_path, 0o600)
 
                 if os.name == "nt":
                     import msvcrt
@@ -138,7 +142,22 @@ def install_single_process_runtime_guard(app: Any) -> Any:
 
     guard = SingleProcessRuntimeGuard(data_dir)
     app.state.single_process_runtime_guard = guard
+
+    # The production FastAPI app already supplies a lifespan context manager
+    # for loading its stores. FastAPI does not combine custom lifespan with
+    # legacy on_event handlers, so wrap the existing context instead of adding
+    # startup/shutdown handlers that would silently never run.
+    original_lifespan = app.router.lifespan_context
+
+    @asynccontextmanager
+    async def guarded_lifespan(application):
+        guard.acquire()
+        try:
+            async with original_lifespan(application) as state:
+                yield state
+        finally:
+            guard.release()
+
+    app.router.lifespan_context = guarded_lifespan
     app.state.single_process_runtime_guard_installed = True
-    app.add_event_handler("startup", guard.acquire)
-    app.add_event_handler("shutdown", guard.release)
     return app
