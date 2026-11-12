@@ -20,6 +20,7 @@ class FakeApi:
         self.calls = []
         self.fail_at = fail_at
         self.branch_exists = existing_branch
+        self.branch_sha = "a" * 40
         self.ambiguous_post = ambiguous_post
 
     def request(self, method, path, payload=None):
@@ -28,20 +29,23 @@ class FakeApi:
         if method == "GET" and is_branch_ref:
             if not self.branch_exists:
                 raise ProbeError("GitHub GET rejected with HTTP 404", status_code=404)
-            return {"object": {"sha": "a" * 40}}
+            return {"object": {"sha": self.branch_sha}}
         if method == "GET":
             return {"object": {"sha": "a" * 40}}
         if method == "POST":
             if self.fail_at == "POST":
                 if self.ambiguous_post:
                     self.branch_exists = True
+                    self.branch_sha = "a" * 40
                 raise ProbeError("simulated POST denial")
             self.branch_exists = True
+            self.branch_sha = "a" * 40
             return {}
         if method == "PUT":
             if self.fail_at == "PUT":
                 raise ProbeError("simulated PUT denial")
-            return {"commit": {"sha": "b" * 40}}
+            self.branch_sha = "b" * 40
+            return {"commit": {"sha": self.branch_sha}}
         if method == "DELETE":
             if self.fail_at == "DELETE":
                 raise ProbeError("simulated DELETE denial")
@@ -54,13 +58,14 @@ def test_disposable_workflow_write_is_removed_without_touching_main() -> None:
     api = FakeApi()
     result = run_probe(api, NONCE)
     methods = [item[0] for item in api.calls]
-    assert methods == ["GET", "GET", "POST", "PUT", "DELETE"]
+    assert methods == ["GET", "GET", "POST", "PUT", "GET", "DELETE"]
     assert api.calls[0][1] == PREFIX + "/git/ref/heads/main"
     assert api.calls[1][1] == PREFIX + "/git/ref/heads/" + result["branch"]
     assert api.calls[2][2]["ref"] == "refs/heads/" + result["branch"]
     assert api.calls[3][2]["branch"] == result["branch"]
     assert api.calls[3][1].startswith(PREFIX + "/contents/.github/workflows/")
-    assert api.calls[4][1] == PREFIX + "/git/refs/heads/" + result["branch"]
+    assert api.calls[4][1] == PREFIX + "/git/ref/heads/" + result["branch"]
+    assert api.calls[5][1] == PREFIX + "/git/refs/heads/" + result["branch"]
     assert result["result"] == "workflows-write-verified-and-cleaned"
     assert not any(method == "PATCH" or "main" in path and method != "GET"
                    for method, path, _payload in api.calls)
@@ -70,7 +75,7 @@ def test_denied_workflows_write_still_deletes_probe_branch() -> None:
     api = FakeApi(fail_at="PUT")
     with pytest.raises(ProbeError, match="simulated PUT denial"):
         run_probe(api, NONCE)
-    assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST", "PUT", "DELETE"]
+    assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST", "PUT", "GET", "DELETE"]
 
 
 def test_failed_cleanup_reports_exact_manual_recovery_branch() -> None:
@@ -197,3 +202,22 @@ def test_definitive_409_ref_conflict_never_deletes_concurrent_branch() -> None:
         run_probe(api, NONCE)
     assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST"]
     assert api.branch_exists is True
+
+
+
+def test_probe_preserves_branch_if_another_actor_advances_it_before_cleanup() -> None:
+    class RacingApi(FakeApi):
+        def request(self, method, path, payload=None):
+            result = super().request(method, path, payload)
+            if method == "PUT":
+                # Simulate a concurrent actor changing the ref after our
+                # workflow commit but before cleanup reads its current head.
+                self.branch_sha = "c" * 40
+            return result
+
+    api = RacingApi()
+    with pytest.raises(ProbeError, match="head changed or cannot be verified"):
+        run_probe(api, NONCE)
+    assert [method for method, _, _ in api.calls] == ["GET", "GET", "POST", "PUT", "GET"]
+    assert api.branch_exists is True
+    assert api.branch_sha == "c" * 40
